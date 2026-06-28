@@ -2363,8 +2363,22 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_new_array(
         &mut self,
         callid: CallSiteId,
+        inline: Option<(SlotId, u16)>,
         using_fpr: UsingFpr,
     ) -> bool {
+        match inline {
+            // Inline the common case (small no-splat literal) when the
+            // allocator free-list addresses were captured at startup.
+            Some((args, len)) if !self.alloc_free_head_addr.is_null() => {
+                self.new_array_inline(callid, args, len, using_fpr);
+            }
+            _ => self.new_array_runtime(callid, using_fpr),
+        }
+        true
+    }
+
+    /// rax(x0) <- Array literal (splat-aware) via the runtime call site.
+    fn new_array_runtime(&mut self, callid: CallSiteId, using_fpr: UsingFpr) {
         let lfp = GP::R14.a64().0;
         let f = runtime::gen_array as *const () as u64;
         self.emit_fpr_save(using_fpr, false);
@@ -2379,7 +2393,62 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
-        true
+    }
+
+    /// Inline allocation of a small (`1..=ARRAY_INLINE_CAPA`) no-splat array
+    /// literal: pop a recycled cell from the GC free list and initialise it
+    /// directly as an inline-storage Array, falling back to the runtime
+    /// `gen_array` when the free list is empty. See the x86_64
+    /// `new_array_inline` for the correctness argument (young object needs no
+    /// write barrier; no GC safepoint mid-build).
+    fn new_array_inline(
+        &mut self,
+        callid: CallSiteId,
+        args: SlotId,
+        len: u16,
+        using_fpr: UsingFpr,
+    ) {
+        let rax = GP::Rax.a64().0; // x0 (result)
+        let lfp = GP::R14.a64().0; // x22
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        let free_head = self.alloc_free_head_addr as u64;
+        let free_count = self.alloc_free_count_addr as u64;
+        let total = self.alloc_total_addr as u64;
+        // 8-byte object header: flag=1 | ty=ARRAY<<16 | class=ARRAY_CLASS<<32.
+        let header: u64 =
+            ((ARRAY_CLASS.u32() as u64) << 32) | ((ObjTy::ARRAY.get() as u64) << 16) | 1;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (free_head);
+            ldr x(rax), [x9];          // rax = free-list head (cell ptr, or 0 = None)
+            cbz x(rax), slow;
+            ldr x12, [x(rax)];         // x12 = (*cell).header.next (free link @ offset 0)
+            str x12, [x9];             // free = next
+            mov x9, (free_count);
+            ldr x12, [x9];
+            sub x12, x12, #1;
+            str x12, [x9];
+            mov x9, (total);
+            ldr x12, [x9];
+            add x12, x12, #1;
+            str x12, [x9];
+            mov x11, (header);
+            str x11, [x(rax)];                              // header (offset 0)
+            mov x12, #0;
+            str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
+            mov x12, (len as u64);
+            str x12, [x(rax), #(RVALUE_OFFSET_ARY_CAPA as u32)]; // inline length
+        );
+        for k in 0..len {
+            let slot = SlotId(args.0 + k);
+            let off = RVALUE_OFFSET_INLINE as u32 + (k as u32) * 8;
+            self.a64_frame_load(12, lfp, conv(slot) as u32);
+            self.a64_field_store(12, rax, off);
+        }
+        monoasm_arm64!(&mut self.jit, b cont;);
+        self.jit.bind_label(slow);
+        self.new_array_runtime(callid, using_fpr);
+        self.jit.bind_label(cont);
     }
 
     /// rax <- Hash literal via gen_hash(vm, globals, &slot[args], len).

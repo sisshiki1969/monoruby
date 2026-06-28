@@ -192,9 +192,15 @@ impl Codegen {
             AsmInst::CreateArray { src, len } => {
                 self.encode_linst(LInst::CreateArray { src, len })
             }
-            AsmInst::NewArray { callid, using_fpr } => {
-                self.encode_linst(LInst::NewArray { callid, using_fpr })
-            }
+            AsmInst::NewArray {
+                callid,
+                inline,
+                using_fpr,
+            } => self.encode_linst(LInst::NewArray {
+                callid,
+                inline,
+                using_fpr,
+            }),
             AsmInst::NewHash(args, len, using_fpr) => {
                 self.encode_linst(LInst::NewHash { args, len, using_fpr })
             }
@@ -1213,8 +1219,12 @@ impl Codegen {
             LInst::CreateArray { src, len } => {
                 self.emit_create_array(src, len);
             }
-            LInst::NewArray { callid, using_fpr } => {
-                self.emit_new_array(callid, using_fpr);
+            LInst::NewArray {
+                callid,
+                inline,
+                using_fpr,
+            } => {
+                self.emit_new_array(callid, inline, using_fpr);
             }
             LInst::NewHash { args, len, using_fpr } => {
                 self.emit_new_hash(args, len, using_fpr);

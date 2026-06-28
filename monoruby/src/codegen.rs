@@ -602,6 +602,15 @@ pub struct Codegen {
     class_version_addr: *mut u32,
     const_version_addr: *mut u64,
 
+    /// Addresses of the GC allocator's free-list state, captured once at
+    /// `Codegen::new` (the allocator is a stable single-threaded
+    /// thread-local). Baked into JIT code so small array literals can be
+    /// allocated inline from the free list without a runtime call. See
+    /// `Allocator::free_list_head_addr`.
+    alloc_free_head_addr: *mut usize,
+    alloc_free_count_addr: *mut usize,
+    alloc_total_addr: *mut usize,
+
     compilation_unit: Vec<CompilationUnitInfo>,
 
     /// return_addr => (patch_point, deopt)
@@ -926,6 +935,9 @@ impl Codegen {
             signal_stubs: HashMap::default(),
             class_version_addr,
             const_version_addr,
+            alloc_free_head_addr: std::ptr::null_mut(),
+            alloc_free_count_addr: std::ptr::null_mut(),
+            alloc_total_addr: std::ptr::null_mut(),
             compilation_unit: Vec::new(),
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
@@ -983,7 +995,14 @@ impl Codegen {
 
         let address = codegen.jit.get_label_address(&codegen.alloc_flag).as_ptr() as *mut u32;
         alloc::ALLOC.with(|alloc| {
-            alloc.borrow_mut().set_alloc_flag_address(address);
+            let mut alloc = alloc.borrow_mut();
+            alloc.set_alloc_flag_address(address);
+            // Capture the allocator's free-list state addresses for the JIT
+            // inline-allocation fast path (stable thread-local; see the
+            // Codegen field docs).
+            codegen.alloc_free_head_addr = alloc.free_list_head_addr();
+            codegen.alloc_free_count_addr = alloc.free_list_count_addr();
+            codegen.alloc_total_addr = alloc.total_allocated_addr();
         });
 
         codegen

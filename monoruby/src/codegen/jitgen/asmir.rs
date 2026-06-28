@@ -877,8 +877,17 @@ impl AsmIr {
 ///
 
 impl AsmIr {
-    pub(super) fn new_array(&mut self, using_fpr: UsingFpr, callid: CallSiteId) {
-        self.push(AsmInst::NewArray { callid, using_fpr });
+    pub(super) fn new_array(
+        &mut self,
+        using_fpr: UsingFpr,
+        callid: CallSiteId,
+        inline: Option<(SlotId, u16)>,
+    ) {
+        self.push(AsmInst::NewArray {
+            callid,
+            inline,
+            using_fpr,
+        });
     }
 
     pub(super) fn new_hash(&mut self, using_fpr: UsingFpr, args: SlotId, len: usize) {
@@ -1785,6 +1794,11 @@ pub(super) enum AsmInst {
     ///
     NewArray {
         callid: CallSiteId,
+        /// `Some((args, len))` when the literal has no splat and `1 <= len <=
+        /// ARRAY_INLINE_CAPA`, enabling the JIT inline free-list fast path
+        /// (elements live in consecutive slots starting at `args`). `None`
+        /// falls back to the runtime `gen_array` call.
+        inline: Option<(SlotId, u16)>,
         using_fpr: UsingFpr,
     },
     ///

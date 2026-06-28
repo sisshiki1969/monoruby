@@ -547,6 +547,36 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
+    /// Address of the free-list head (`self.free`), exposed so the JIT can
+    /// inline the free-list allocation fast path (pop a recycled cell)
+    /// without a runtime call. `self.free` is `Option<NonNull<T>>`, which is
+    /// pointer-sized with a null niche, so reading/writing it as `*mut usize`
+    /// is sound (`0` == `None`). The allocator is a single-threaded
+    /// thread-local whose address is stable for the process lifetime, and JIT
+    /// code only touches it between safepoints (never while Rust holds a
+    /// borrow of `ALLOC`, and never during `gc()`), so there is no aliasing.
+    ///
+    pub(crate) fn free_list_head_addr(&self) -> *mut usize {
+        &self.free as *const _ as *mut usize
+    }
+
+    ///
+    /// Address of `self.free_list_count`, kept in sync by the inline fast
+    /// path so the gc-log/gc-debug bookkeeping stays correct.
+    ///
+    pub(crate) fn free_list_count_addr(&self) -> *mut usize {
+        &self.free_list_count as *const _ as *mut usize
+    }
+
+    ///
+    /// Address of `self.total_allocated_objects`, bumped by the inline fast
+    /// path so allocation stats match the runtime path.
+    ///
+    pub(crate) fn total_allocated_addr(&self) -> *mut usize {
+        &self.total_allocated_objects as *const _ as *mut usize
+    }
+
+    ///
     /// Set allocation flag.
     ///
     fn set_alloc_flag(&self) {
