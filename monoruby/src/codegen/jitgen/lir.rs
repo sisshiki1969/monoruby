@@ -673,6 +673,7 @@ pub(in crate::codegen) enum LInst {
     },
     NewArray {
         callid: CallSiteId,
+        inline: Option<(SlotId, u16)>,
         using_fpr: UsingFpr,
     },
     NewHash {

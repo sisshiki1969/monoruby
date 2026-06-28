@@ -935,10 +935,79 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_new_array(
         &mut self,
         callid: CallSiteId,
+        inline: Option<(SlotId, u16)>,
         using_fpr: UsingFpr,
     ) -> bool {
-        self.new_array(callid, using_fpr);
+        match inline {
+            // Inline the common case (small no-splat literal) when the
+            // allocator free-list addresses were captured at startup.
+            Some((args, len)) if !self.alloc_free_head_addr.is_null() => {
+                self.new_array_inline(callid, args, len, using_fpr);
+            }
+            _ => self.new_array(callid, using_fpr),
+        }
         true
+    }
+
+    /// Inline allocation of a small (`1..=ARRAY_INLINE_CAPA`) no-splat array
+    /// literal: pop a recycled cell from the GC free list and initialise it
+    /// directly as an inline-storage Array, with no runtime call. When the
+    /// free list is empty, fall back to the runtime `gen_array` (which also
+    /// handles bump allocation, page growth, and the alloc flag).
+    ///
+    /// The elements have already been written back to consecutive stack
+    /// slots starting at `args` (see `TraceIr::Array`). A freshly allocated
+    /// young Array needs no write barrier for its elements (the barrier
+    /// guards old→young stores), and there is no GC safepoint between the
+    /// free-list pop and the field initialisation, so the partially built
+    /// object is never observed by a collection.
+    fn new_array_inline(
+        &mut self,
+        callid: CallSiteId,
+        args: SlotId,
+        len: u16,
+        using_fpr: UsingFpr,
+    ) {
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        let free_head = self.alloc_free_head_addr as u64;
+        let free_count = self.alloc_free_count_addr as u64;
+        let total = self.alloc_total_addr as u64;
+        // 8-byte object header: flag=1 (live) | ty=ARRAY<<16 | class=ARRAY_CLASS<<32.
+        let header: u64 =
+            ((ARRAY_CLASS.u32() as u64) << 32) | ((ObjTy::ARRAY.get() as u64) << 16) | 1;
+        monoasm! { &mut self.jit,
+            movq rdi, (free_head);
+            movq rax, [rdi];          // rax = free-list head (cell ptr, or 0 = None)
+            testq rax, rax;
+            jz   slow;
+            movq rcx, [rax];          // rcx = (*cell).header.next (free link @ offset 0)
+            movq [rdi], rcx;          // free = next
+            movq rdi, (free_count);
+            subq [rdi], 1;
+            movq rdi, (total);
+            addq [rdi], 1;
+            movq rdi, (header);
+            movq [rax + (RVALUE_OFFSET_FLAG)], rdi;   // header (offset 0); overwrites the free link
+            movq [rax + (RVALUE_OFFSET_VAR)], 0;      // var_table = None
+            movq [rax + (RVALUE_OFFSET_ARY_CAPA)], (len as i32);  // inline length (capa == len <= 5)
+        }
+        for k in 0..len {
+            let slot = SlotId(args.0 + k);
+            let off = RVALUE_OFFSET_INLINE as i32 + (k as i32) * 8;
+            monoasm! { &mut self.jit,
+                movq rcx, [rbp - (rbp_local(slot))];
+                movq [rax + (off)], rcx;
+            }
+        }
+        monoasm! { &mut self.jit,
+            jmp  cont;
+        slow:
+        }
+        self.new_array(callid, using_fpr);
+        monoasm! { &mut self.jit,
+        cont:
+        }
     }
 
     /// rax <- Hash literal from the `len` key/value slots at `args`.

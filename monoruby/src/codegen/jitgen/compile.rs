@@ -247,7 +247,17 @@ impl<'a> JitContext<'a> {
                 state.write_back_range(ir, args, pos_num as u16);
                 state.discard(dst);
                 let using_fpr = state.get_using_fpr(ir);
-                ir.new_array(using_fpr, callid);
+                // A no-splat literal whose length fits the array's inline
+                // storage can be allocated inline from the free list, with no
+                // runtime call. Otherwise fall back to `gen_array`.
+                let inline = if self.store[callid].splat_pos.is_empty()
+                    && (1..=ARRAY_INLINE_CAPA).contains(&pos_num)
+                {
+                    Some((args, pos_num as u16))
+                } else {
+                    None
+                };
+                ir.new_array(using_fpr, callid, inline);
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             TraceIr::Lambda { .. } => {
