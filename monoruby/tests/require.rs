@@ -11,6 +11,18 @@ fn require() {
     );
 }
 
+// `require "bundler"` must resolve to the host bundler, not the vendored
+// snapshot in `~/.monoruby/lib`. This exercises the host-precedence branch
+// in `Globals::search_lib` (the vendored entries are skipped, then the host
+// bundler is found further down `$LOAD_PATH`). The result is intentionally
+// monoruby-specific — the host bundler version differs per machine — so we
+// only assert that the require succeeds, with no CRuby diff. Requires a host
+// Ruby with bundler installed (always true in CI / dev).
+#[test]
+fn require_bundler_resolves_host_copy() {
+    run_test_no_result_check(r#"require "bundler""#);
+}
+
 #[test]
 fn require_relative() {
     run_test(
