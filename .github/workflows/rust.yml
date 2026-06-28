@@ -128,16 +128,46 @@ jobs:
         run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
 
       - name: Test (VM + AArch64 JIT, arm64-apple-darwin)
-        # The arm64 JIT/runtime intermittently hangs (a non-deterministic
-        # divergence, separate from the already-fixed optcarrot register-save
-        # bug). Left uncapped, the hang runs ~48 min until the macOS runner
-        # "loses communication" (the agent dies) and the run must be re-run by
-        # hand. A normal pass is ~11 min, so cap each attempt at 25 min and
-        # retry once: a hang is killed cleanly and fast, and the retry recovers
-        # the run automatically. Track/fix the underlying arm64 hang separately.
+        # The arm64 JIT/runtime intermittently (~a few % of runs) hangs by
+        # exhausting memory: the macOS runner OOM-dies ("loses communication")
+        # before any stack can be captured, and on-demand reproduction under
+        # instrumentation has so far failed (nextest ×5 and full bin/test ×8
+        # both ran clean). Two guards:
+        #   * retry — cap each attempt at 25 min and retry once, so a hang fails
+        #     fast (normal pass ~11 min) and the rerun recovers automatically; and
+        #   * a background memory watchdog that NAMES the culprit the next time
+        #     the hang strikes a real run: it polls every monoruby process's RSS
+        #     and, when one exceeds ~4 GB (or the parallel sum exceeds ~5 GB),
+        #     logs that process's command line (the nextest test / benchmark /
+        #     spec it is running), `sample`s its stack, and kills it before the
+        #     runner dies. It only acts above 4 GB, so normal runs are
+        #     unaffected and the retry recovers the killed attempt.
+        # The manual .github/workflows/darwin-hang-debug.yml drives the same
+        # watchdog in a loop for active reproduction.
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 25
           max_attempts: 2
-          command: bin/test
+          command: |
+            RSS_LIMIT_KB=4000000
+            SUM_LIMIT_KB=5000000
+            ( while true; do
+                snap=$(ps -Ao pid,rss,comm | awk 'NR>1 { n=split($3,a,"/"); b=a[n]; if (b ~ /^monoruby/) print $1, $2 }')
+                if [ -n "$snap" ]; then
+                  sum=$(echo "$snap" | awk '{s+=$2} END{print s+0}')
+                  set -- $(echo "$snap" | awk '{if($2>m){m=$2;p=$1}} END{print p+0, m+0}')
+                  if [ "${2:-0}" -gt "$RSS_LIMIT_KB" ] || [ "${sum:-0}" -gt "$SUM_LIMIT_KB" ]; then
+                    echo "==================== MEMORY WATCHDOG fired @ $(date -u +%H:%M:%S) ===================="
+                    echo "sum_rss_kb=$sum top_pid=$1 top_rss_kb=$2 (caps: per-proc=$RSS_LIMIT_KB sum=$SUM_LIMIT_KB)"
+                    ps -Ao pid,rss,command | awk 'NR>1 { n=split($3,a,"/"); b=a[n]; if (b ~ /^monoruby/) print }'
+                    echo "---- CULPRIT command line (pid $1) ----"; ps -p "$1" -o command= 2>/dev/null || true
+                    echo "---- sample pid $1 (2s) ----"; /usr/bin/sample "$1" 2 2>&1 | sed -n '1,160p' || true
+                    echo "---- killing pid $1 ----"; kill -9 "$1" 2>/dev/null || true
+                  fi
+                fi
+                sleep 4
+              done ) &
+            WATCHDOG_PID=$!
+            trap 'kill "$WATCHDOG_PID" 2>/dev/null || true' EXIT
+            bin/test
 
