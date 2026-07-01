@@ -21,8 +21,20 @@ pub(super) fn init(globals: &mut Globals) {
     // because the spec set that depends on the arity passes nil
     // anyway, and surfacing a more useful error later is safer than
     // an arity refusal up front.
-    globals.define_builtin_module_func_with(klass, "load", load, 1, 2, false);
-    globals.define_builtin_module_func_with(klass, "restore", load, 1, 2, false);
+    // CRuby: Marshal.load(source, proc = nil, freeze: false). With
+    // `freeze: true`, every reconstructed object (except classes and
+    // modules) is frozen in place, deeply.
+    globals.define_builtin_module_func_with_kw(klass, "load", load, 1, 2, false, &["freeze"], false);
+    globals.define_builtin_module_func_with_kw(
+        klass,
+        "restore",
+        load,
+        1,
+        2,
+        false,
+        &["freeze"],
+        false,
+    );
 }
 
 /// ### Marshal.dump
@@ -111,7 +123,10 @@ fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             4, 8, data[0], data[1]
         )));
     }
+    // `freeze:` keyword (positional slot after the optional proc).
+    let freeze = lfp.try_arg(2).is_some_and(|v| v.as_bool());
     let mut cursor = MarshalReader::new(&data[2..]);
+    cursor.freeze = freeze;
     let value = cursor.read_value(vm, globals)?;
     // CRuby's Marshal.load(src, proc): the proc is called with the
     // loaded object, and *its return value replaces* the value
@@ -137,6 +152,8 @@ struct MarshalReader<'a> {
     symbols: Vec<IdentId>,
     /// Object table for back-references ('@' tag)
     objects: Vec<Value>,
+    /// `Marshal.load(.., freeze: true)`: deep-freeze reconstructed values.
+    freeze: bool,
 }
 
 impl<'a> MarshalReader<'a> {
@@ -146,6 +163,7 @@ impl<'a> MarshalReader<'a> {
             pos: 0,
             symbols: Vec::new(),
             objects: Vec::new(),
+            freeze: false,
         }
     }
 
@@ -248,6 +266,18 @@ impl<'a> MarshalReader<'a> {
 
     /// Read and return the next marshalled value.
     fn read_value(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        let mut value = self.read_value_inner(vm, globals)?;
+        // `freeze: true` deep-freezes every reconstructed object except
+        // classes and modules (which CRuby leaves mutable). Immediates
+        // are already frozen, so skip packed values. Because this runs on
+        // every recursive `read_value`, sub-objects are frozen too.
+        if self.freeze && !value.is_packed_value() && value.is_class_or_module().is_none() {
+            value.set_frozen();
+        }
+        Ok(value)
+    }
+
+    fn read_value_inner(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let tag = self.read_byte()?;
         match tag {
             b'0' => Ok(Value::nil()),
@@ -2255,6 +2285,24 @@ mod tests {
             Marshal.dump(BadDump.new)
             "#,
         );
+    }
+
+    #[test]
+    fn marshal_load_freeze() {
+        // `freeze: true` deep-freezes reconstructed objects but leaves
+        // classes/modules mutable.
+        run_test(r#"Marshal.load(Marshal.dump("foo"), freeze: true).frozen?"#);
+        run_test(r#"Marshal.load(Marshal.dump([1, 2, 3]), freeze: true).frozen?"#);
+        run_test(r#"Marshal.load(Marshal.dump({foo: 42}), freeze: true).frozen?"#);
+        run_test(
+            r#"
+            o = Object.new
+            a = Marshal.load(Marshal.dump([o]), freeze: true)
+            [a.frozen?, a[0].frozen?]
+            "#,
+        );
+        run_test(r#"Marshal.load(Marshal.dump(String), freeze: true).frozen?"#);
+        run_test(r#"Marshal.load(Marshal.dump("bar")).frozen?"#);
     }
 
     #[test]
