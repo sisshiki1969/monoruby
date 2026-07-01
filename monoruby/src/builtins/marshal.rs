@@ -1286,13 +1286,30 @@ fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentI
     if let Some(idx) = symbols.iter().position(|&s| s == id) {
         buf.push(b';');
         marshal_write_fixnum(buf, idx as i32);
-    } else {
+        return;
+    }
+    let name = id.get_ident_name_clone();
+    let bytes = name.as_bytes();
+    let ascii_only = bytes.iter().all(|&b| b < 0x80);
+    // An ASCII-only symbol — or a binary (ASCII-8BIT) one — is written as
+    // a plain ':' with no encoding ivar. A symbol carrying non-ASCII bytes
+    // under a real encoding (UTF-8, or a named one) is wrapped in an 'I'
+    // ivar block recording that encoding, and takes its symlink slot
+    // *before* the encoding symbol.
+    let enc = id.symbol_encoding().unwrap_or(Encoding::Utf8);
+    if ascii_only || enc == Encoding::Ascii8 {
         buf.push(b':');
-        let name = id.get_name();
-        let bytes = name.as_bytes();
         marshal_write_fixnum(buf, bytes.len() as i32);
         buf.extend_from_slice(bytes);
         symbols.push(id);
+    } else {
+        buf.push(b'I');
+        buf.push(b':');
+        marshal_write_fixnum(buf, bytes.len() as i32);
+        buf.extend_from_slice(bytes);
+        symbols.push(id);
+        marshal_write_fixnum(buf, 1); // 1 ivar
+        marshal_write_encoding_ivar_pair(buf, enc, symbols);
     }
 }
 
@@ -1682,7 +1699,8 @@ fn marshal_dump_value(
                     }
                     Some(ObjTy::RANGE) => {
                         // Serialize Range as a generic 'o' object with the
-                        // three ivars CRuby uses: @begin, @end, @excl.
+                        // three ivars CRuby uses, in CRuby's order:
+                        // :excl, :begin, :end.
                         let range = obj.as_range();
                         let begin = range.start();
                         let end = range.end();
@@ -1690,12 +1708,12 @@ fn marshal_dump_value(
                         buf.push(b'o');
                         marshal_write_symbol(buf, IdentId::get_id("Range"), symbols);
                         marshal_write_fixnum(buf, 3);
+                        marshal_write_symbol(buf, IdentId::get_id("excl"), symbols);
+                        buf.push(if excl { b'T' } else { b'F' });
                         marshal_write_symbol(buf, IdentId::get_id("begin"), symbols);
                         marshal_dump_value(buf, begin, vm, globals, symbols, objects)?;
                         marshal_write_symbol(buf, IdentId::get_id("end"), symbols);
                         marshal_dump_value(buf, end, vm, globals, symbols, objects)?;
-                        marshal_write_symbol(buf, IdentId::get_id("excl"), symbols);
-                        buf.push(if excl { b'T' } else { b'F' });
                     }
                     Some(ObjTy::HASH) => {
                         // Snapshot the pairs to avoid holding a borrow into
@@ -1764,11 +1782,13 @@ fn marshal_dump_value(
                         }
                     }
                     Some(ObjTy::STRUCT) => {
-                        // Struct subclass instance: 'S' tag.
+                        // Struct subclass instance: 'S' tag, wrapped in 'I'
+                        // when it carries user ivars and preceded by 'e'
+                        // wrappers for any extended modules.
                         // Format: symbol(class_name) + member_count +
                         //         (member_sym + value)*
-                        let class_id = obj.class();
-                        let class_name = globals.get_class_name(class_id);
+                        let real = obj.real_class(&globals.store);
+                        let class_name = globals.get_class_name(real.id());
                         // CRuby raises TypeError on anonymous classes;
                         // `get_class_name` renders anonymous classes
                         // as `#<Class:0x...>`, which is not a valid
@@ -1779,7 +1799,6 @@ fn marshal_dump_value(
                             ));
                         }
                         let class_name_id = IdentId::get_id(&class_name);
-                        let class_module = globals.store[class_id].get_module();
                         // SAFETY: STRUCT-typed values are only produced
                         // via `Struct.new` (which stores `/members` on
                         // the class or an ancestor); CRuby blocks
@@ -1787,8 +1806,23 @@ fn marshal_dump_value(
                         // (`NameError`), so some ancestor in the chain
                         // is guaranteed to carry the members array of
                         // Symbols.
-                        let members =
-                            lookup_struct_members(globals, class_module).unwrap();
+                        let members = lookup_struct_members(globals, real).unwrap();
+                        let ivars = globals.get_ivars(obj);
+                        let has_ivars = !ivars.is_empty();
+                        if has_ivars {
+                            buf.push(b'I');
+                        }
+                        for m in marshal_extended_modules(globals, obj) {
+                            let name = globals.get_class_name(m);
+                            if name.starts_with("#<") {
+                                return Err(MonorubyErr::typeerr(format!(
+                                    "can't dump anonymous class {}",
+                                    name
+                                )));
+                            }
+                            buf.push(b'e');
+                            marshal_write_symbol(buf, IdentId::get_id(&name), symbols);
+                        }
                         let inner = obj.as_struct();
                         buf.push(b'S');
                         marshal_write_symbol(buf, class_name_id, symbols);
@@ -1798,6 +1832,11 @@ fn marshal_dump_value(
                             marshal_write_symbol(buf, sym, symbols);
                             let val = inner.try_get(i).unwrap_or(Value::nil());
                             marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                        }
+                        if has_ivars {
+                            marshal_write_ivar_block(
+                                buf, &ivars, vm, globals, symbols, objects,
+                            )?;
                         }
                     }
                     Some(ObjTy::REGEXP) => {
@@ -2738,6 +2777,51 @@ mod tests {
             [r, r.singleton_class.include?(MExt2)]
             "#,
         );
+    }
+
+    #[test]
+    fn marshal_range_bytes() {
+        // Range dumps as an 'o' object with :excl, :begin, :end (in that
+        // order) and round-trips.
+        run_test(r#"Marshal.dump(1..10).bytes"#);
+        run_test(r#"Marshal.dump(1...5).bytes"#);
+        run_test(
+            r#"
+            r = Marshal.load(Marshal.dump(1...5))
+            [r.begin, r.end, r.exclude_end?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_struct_ivars() {
+        // A Struct that carries user ivars dumps with an 'I' wrapper.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            s = S.new(1, 2)
+            s.instance_variable_set(:@x, 9)
+            Marshal.dump(s).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            S2 = Struct.new(:a, :b)
+            s = S2.new(1, 2)
+            s.instance_variable_set(:@x, 9)
+            r = Marshal.load(Marshal.dump(s))
+            [r.a, r.b, r.instance_variable_get(:@x)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_symbol_encoding() {
+        // A UTF-8 symbol carries an encoding ivar; a binary one does not.
+        run_test(r#"Marshal.dump("→".to_sym).bytes"#);
+        run_test(r#"Marshal.dump("→".dup.force_encoding("binary").to_sym).bytes"#);
+        run_test(r#"Marshal.dump([:"→", :"→"]).bytes"#);
+        run_test(r#"Marshal.load(Marshal.dump("→".to_sym)).to_s"#);
     }
 
     #[test]
