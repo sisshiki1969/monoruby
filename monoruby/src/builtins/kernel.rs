@@ -628,12 +628,19 @@ fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp, pc: BytecodePtr) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/loop.html]
 #[monoruby_builtin]
-fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let Some(bh) = lfp.block() else {
+        // No block: return an infinite Enumerator (size == Float::INFINITY).
+        let method = IdentId::get_id("loop");
+        let size = Value::float(f64::INFINITY);
+        return vm.generate_enumerator_with_size(method, lfp.self_val(), vec![], pc, Some(size));
+    };
     let data = vm.get_block_data(globals, bh)?;
     loop {
         if let Err(err) = vm.invoke_block(globals, &data, &[]) {
-            return if err.kind() == &MonorubyErrKind::StopIteration {
+            // `loop` swallows StopIteration and any user subclass of it, and
+            // re-raises everything else (including control-flow signals).
+            return if err.is_stop_iteration(&globals.store) {
                 Ok(Value::nil())
             } else {
                 Err(err)
