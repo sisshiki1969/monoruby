@@ -1120,7 +1120,10 @@ impl Executor {
                         }
                     } else {
                         let digits = apply_int_precision(&pos_digits.unwrap(), precision);
-                        let is_zero = digits == "0";
+                        // `apply_int_precision("0", Some(0))` is "" — so an
+                        // empty result is also "zero", and the `#` prefix is
+                        // suppressed (`"%#.0b" % 0 == ""`).
+                        let is_zero = digits.is_empty() || digits == "0";
                         let prefix = if hash_flag && !is_zero {
                             if ch == 'B' { "0B" } else { "0b" }
                         } else {
@@ -1225,7 +1228,10 @@ impl Executor {
                         }
                     } else {
                         let digits = apply_int_precision(&pos_digits.unwrap(), precision);
-                        let is_zero = digits == "0";
+                        // See the `%b` branch: precision 0 with value 0 gives
+                        // "", which is still "zero" and suppresses the prefix
+                        // (`"%#.0x" % 0 == ""`).
+                        let is_zero = digits.is_empty() || digits == "0";
                         let prefix = if hash_flag && !is_zero {
                             if upper { "0X" } else { "0x" }
                         } else {
@@ -1342,18 +1348,34 @@ impl Executor {
             format_str += &format;
         }
 
-        // With `$DEBUG` enabled, CRuby raises when sequential
-        // (unnumbered) formatting leaves arguments unused.
-        if !used_numbered
-            && !used_named
-            && arg_no < arguments.len()
-            && globals
+        // Sequential (unnumbered) formatting that leaves positional arguments
+        // unused: `$DEBUG` raises, and `$VERBOSE` warns (to `$stderr`, so
+        // captured by ruby/spec's `complain`). A trailing keyword Hash is the
+        // named-reference source, not a positional argument, so exclude it —
+        // `format("test", k: 1)` must not warn.
+        let positional_len = if arguments
+            .last()
+            .is_some_and(|v| v.try_hash_ty().is_some())
+        {
+            arguments.len() - 1
+        } else {
+            arguments.len()
+        };
+        if !used_numbered && !used_named && arg_no < positional_len {
+            if globals
                 .get_gvar(IdentId::get_id("$DEBUG"))
                 .is_some_and(|v| v.as_bool())
-        {
-            return Err(MonorubyErr::argumenterr(
-                "too many arguments for format string",
-            ));
+            {
+                return Err(MonorubyErr::argumenterr(
+                    "too many arguments for format string",
+                ));
+            }
+            if globals
+                .get_gvar(IdentId::get_id("$VERBOSE"))
+                .is_some_and(|v| v.as_bool())
+            {
+                self.ruby_warn(globals, "warning: too many arguments for format string")?;
+            }
         }
 
         Ok(format_str)
