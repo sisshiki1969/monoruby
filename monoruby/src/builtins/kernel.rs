@@ -6091,6 +6091,16 @@ mod tests {
     }
 
     #[test]
+    fn sprintf_encoding_error_and_debug() {
+        // Incompatible non-ASCII encodings raise Encoding::CompatibilityError;
+        // a non-String format operand is coerced via #to_str; excess positional
+        // args raise ArgumentError under $DEBUG.
+        run_test_once(
+            r##"[ (begin; format("hello %s".encode("utf-8"), "world".encode("UTF-16LE")); rescue => e; e.class; end), (o=Object.new; def o.to_str; "%d!"; end; format(o, 5)), (old=$DEBUG; $DEBUG=true; r=(begin; format("test", 1); rescue => e; e.class; end); $DEBUG=old; r) ]"##,
+        );
+    }
+
+    #[test]
     fn sprintf_hash_flag_zero_precision() {
         // `#` on b/B/x/X does nothing for a zero argument with zero precision.
         run_test(
