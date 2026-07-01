@@ -707,6 +707,24 @@ impl<'a> MarshalReader<'a> {
         let module = class_val.is_class_or_module().ok_or_else(|| {
             MonorubyErr::argumenterr(format!("{} is not a class", class_name))
         })?;
+        // Rational / Complex dump via #marshal_dump but are immutable
+        // numerics with no Ruby-level allocator or #marshal_load; rebuild
+        // them through their Kernel constructor (`Rational(n, d)` /
+        // `Complex(r, i)`) from the two-element payload array.
+        if class_name == "Rational" || class_name == "Complex" {
+            let idx = self.objects.len();
+            self.objects.push(Value::nil()); // reserve the link slot
+            let value = self.read_value(vm, globals)?;
+            let parts = value.try_array_ty().ok_or_else(|| {
+                MonorubyErr::argumenterr(format!("dump format error for {}", class_name))
+            })?;
+            let ctor = IdentId::get_id(&class_name);
+            let args: Vec<Value> = parts.iter().copied().collect();
+            let recv = globals.main_object;
+            let result = vm.invoke_method_inner(globals, ctor, recv, &args, None, None)?;
+            self.objects[idx] = result;
+            return Ok(result);
+        }
         // Allocate without running initialize (CRuby `allocate`
         // shape). `call_alloc_func` raises TypeError if the class
         // never declared an allocator — surface that verbatim.
@@ -1305,6 +1323,84 @@ fn marshal_emit_link(buf: &mut Vec<u8>, obj: Value, objects: &mut Vec<u64>) -> b
     }
 }
 
+/// If `obj` defines the user serialization protocol `#marshal_dump`
+/// (preferred) or `#_dump`, serialize it via the matching tag
+/// (`'U'` / `'u'`), register its link slot, and return `true`. Returns
+/// `false` when neither is defined so the caller falls back to the
+/// built-in encoding. The caller must have already resolved any
+/// back-reference for `obj`; `obj_id` is `obj.id()`.
+fn marshal_try_user_protocol(
+    buf: &mut Vec<u8>,
+    obj: Value,
+    obj_id: u64,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    symbols: &mut Vec<IdentId>,
+    objects: &mut Vec<u64>,
+) -> Result<bool> {
+    let marshal_dump_id = IdentId::get_id("marshal_dump");
+    let dump_id = IdentId::get_id("_dump");
+    if globals.check_method(obj, marshal_dump_id).is_some() {
+        // Use the *real* class (skipping any singleton/iclass) so an
+        // extended object reports e.g. `UserDefined`, matching Ruby-level
+        // `#class`, not `#<Class:#<…>>`.
+        let class_name = obj.get_real_class_name(&globals.store);
+        if class_name.starts_with("#<") {
+            return Err(MonorubyErr::typeerr(format!(
+                "can't dump anonymous class {}",
+                class_name
+            )));
+        }
+        let class_name_id = IdentId::get_id(&class_name);
+        // 'U' (TYPE_USRMARSHAL): the object takes its link slot *before*
+        // its #marshal_dump payload is serialized.
+        objects.push(obj_id);
+        let payload = vm.invoke_method_inner(globals, marshal_dump_id, obj, &[], None, None)?;
+        buf.push(b'U');
+        marshal_write_symbol(buf, class_name_id, symbols);
+        marshal_dump_value(buf, payload, vm, globals, symbols, objects)?;
+        return Ok(true);
+    }
+    if globals.check_method(obj, dump_id).is_some() {
+        let class_name = obj.get_real_class_name(&globals.store);
+        if class_name.starts_with("#<") {
+            return Err(MonorubyErr::typeerr(format!(
+                "can't dump anonymous class {}",
+                class_name
+            )));
+        }
+        let class_name_id = IdentId::get_id(&class_name);
+        // #_dump receives the recursion-depth limit (unlimited = -1 here)
+        // and must return a String.
+        let payload =
+            vm.invoke_method_inner(globals, dump_id, obj, &[Value::integer(-1)], None, None)?;
+        let s = payload
+            .is_rstring_inner()
+            .ok_or_else(|| MonorubyErr::typeerr("_dump() must return string"))?;
+        let bytes = s.as_bytes().to_vec();
+        let enc = s.encoding();
+        // 'u' (TYPE_USERDEF): the object's own link slot follows any
+        // objects embedded in the returned string.
+        objects.push(obj_id);
+        if enc == Encoding::Ascii8 {
+            buf.push(b'u');
+            marshal_write_symbol(buf, class_name_id, symbols);
+            marshal_write_fixnum(buf, bytes.len() as i32);
+            buf.extend_from_slice(&bytes);
+        } else {
+            // Wrap with 'I' to carry the payload string's encoding.
+            buf.push(b'I');
+            buf.push(b'u');
+            marshal_write_symbol(buf, class_name_id, symbols);
+            marshal_write_fixnum(buf, bytes.len() as i32);
+            buf.extend_from_slice(&bytes);
+            marshal_write_string_encoding_ivar(buf, enc, symbols);
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 fn marshal_dump_value(
     buf: &mut Vec<u8>,
     obj: Value,
@@ -1365,6 +1461,23 @@ fn marshal_dump_value(
             }
             marshal_write_string(buf, s, symbols);
         }
+        // Complex / Rational are their own RV variants but are dumped via
+        // the #marshal_dump protocol ('U' tag), so route them through the
+        // same user-protocol path as plain objects.
+        RV::Complex(_) | RV::Rational(_) => {
+            let obj_id = obj.id();
+            if let Some(idx) = objects.iter().position(|&x| x == obj_id) {
+                buf.push(b'@');
+                marshal_write_fixnum(buf, idx as i32);
+                return Ok(());
+            }
+            if !marshal_try_user_protocol(buf, obj, obj_id, vm, globals, symbols, objects)? {
+                return Err(MonorubyErr::typeerr(format!(
+                    "no _dump_data is defined for class {}",
+                    globals.get_class_name(obj.class())
+                )));
+            }
+        }
         RV::Object(_rv) => {
             let obj_id = obj.id();
             // Already dumped this object? → emit a back-reference.
@@ -1373,74 +1486,9 @@ fn marshal_dump_value(
                 marshal_write_fixnum(buf, idx as i32);
                 return Ok(());
             }
-            // User-defined serialization protocols take precedence over
-            // the built-in container/object encodings. CRuby favors
-            // #marshal_dump over #_dump.
-            let marshal_dump_id = IdentId::get_id("marshal_dump");
-            let dump_id = IdentId::get_id("_dump");
-            if globals.check_method(obj, marshal_dump_id).is_some() {
-                // Use the *real* class (skipping any singleton/iclass) so
-                // an extended object reports e.g. `UserDefined`, matching
-                // Ruby-level `#class`, not `#<Class:#<…>>`.
-                let class_name = obj.get_real_class_name(&globals.store);
-                if class_name.starts_with("#<") {
-                    return Err(MonorubyErr::typeerr(format!(
-                        "can't dump anonymous class {}",
-                        class_name
-                    )));
-                }
-                let class_name_id = IdentId::get_id(&class_name);
-                // 'U' (TYPE_USRMARSHAL): the object takes its link slot
-                // *before* its #marshal_dump payload is serialized.
-                objects.push(obj_id);
-                let payload =
-                    vm.invoke_method_inner(globals, marshal_dump_id, obj, &[], None, None)?;
-                buf.push(b'U');
-                marshal_write_symbol(buf, class_name_id, symbols);
-                marshal_dump_value(buf, payload, vm, globals, symbols, objects)?;
-                return Ok(());
-            }
-            if globals.check_method(obj, dump_id).is_some() {
-                let class_name = obj.get_real_class_name(&globals.store);
-                if class_name.starts_with("#<") {
-                    return Err(MonorubyErr::typeerr(format!(
-                        "can't dump anonymous class {}",
-                        class_name
-                    )));
-                }
-                let class_name_id = IdentId::get_id(&class_name);
-                // #_dump receives the recursion-depth limit (unlimited =
-                // -1 here) and must return a String.
-                let payload = vm.invoke_method_inner(
-                    globals,
-                    dump_id,
-                    obj,
-                    &[Value::integer(-1)],
-                    None,
-                    None,
-                )?;
-                let s = payload
-                    .is_rstring_inner()
-                    .ok_or_else(|| MonorubyErr::typeerr("_dump() must return string"))?;
-                let bytes = s.as_bytes().to_vec();
-                let enc = s.encoding();
-                // 'u' (TYPE_USERDEF): the object's own link slot follows
-                // any objects embedded in the returned string.
-                objects.push(obj_id);
-                if enc == Encoding::Ascii8 {
-                    buf.push(b'u');
-                    marshal_write_symbol(buf, class_name_id, symbols);
-                    marshal_write_fixnum(buf, bytes.len() as i32);
-                    buf.extend_from_slice(&bytes);
-                } else {
-                    // Wrap with 'I' to carry the payload string's encoding.
-                    buf.push(b'I');
-                    buf.push(b'u');
-                    marshal_write_symbol(buf, class_name_id, symbols);
-                    marshal_write_fixnum(buf, bytes.len() as i32);
-                    buf.extend_from_slice(&bytes);
-                    marshal_write_string_encoding_ivar(buf, enc, symbols);
-                }
+            // User-defined serialization protocols ('U'/'u') take
+            // precedence over the built-in container/object encodings.
+            if marshal_try_user_protocol(buf, obj, obj_id, vm, globals, symbols, objects)? {
                 return Ok(());
             }
             // Register the object in the link table *before* writing its
@@ -2323,6 +2371,22 @@ mod tests {
             t = Time.utc(2020, 1, 2, 3, 4, 5)
             r = Marshal.load(Marshal.dump(t))
             [r.year, r.month, r.day, r.hour, r.min, r.sec, r.utc?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_rational_complex() {
+        // Rational / Complex serialize via the 'U' (marshal_dump) tag and
+        // round-trip through their Kernel constructors.
+        run_test(r#"Marshal.dump(Rational(2, 3)).bytes"#);
+        run_test(r#"Marshal.dump(Complex(2, 5)).bytes"#);
+        run_test(r#"Marshal.load(Marshal.dump(Rational(2, 3)))"#);
+        run_test(r#"Marshal.load(Marshal.dump(Complex(2, 5)))"#);
+        run_test(
+            r#"
+            r = Rational(2, 3)
+            Marshal.load(Marshal.dump([r, r]))
             "#,
         );
     }
