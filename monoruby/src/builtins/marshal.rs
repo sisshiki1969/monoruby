@@ -896,6 +896,12 @@ impl<'a> MarshalReader<'a> {
         let module = class_val.is_class_or_module().ok_or_else(|| {
             MonorubyErr::argumenterr(format!("{} is not a class", class_name))
         })?;
+        // A `C :Hash` wrapper around a Hash is CRuby's marker for a
+        // compare_by_identity hash (not an actual class change).
+        if module.id() == HASH_CLASS && inner.ty() == Some(ObjTy::HASH) {
+            inner.as_hash().compare_by_identity(vm, globals)?;
+            return Ok(inner);
+        }
         // CRuby's 'C' wraps a built-in (whose RValue layout is fixed),
         // so it is safe to swap the class on the already-allocated
         // inner — the storage type does not change, only the
@@ -1803,9 +1809,13 @@ fn marshal_dump_value(
                     Some(ObjTy::HASH) => {
                         // Snapshot the pairs to avoid holding a borrow into
                         // the live hash across re-entrant user code.
-                        let (pairs, default): (Vec<(Value, Value)>, Option<Value>) = {
+                        let (pairs, default, cbi): (Vec<(Value, Value)>, Option<Value>, bool) = {
                             let inner = obj.as_hashmap_inner();
-                            (inner.iter().collect(), inner.default_value())
+                            (
+                                inner.iter().collect(),
+                                inner.default_value(),
+                                inner.is_compare_by_identity(),
+                            )
                         };
                         let ivars = globals.get_ivars(obj);
                         let has_ivars = !ivars.is_empty();
@@ -1815,6 +1825,13 @@ fn marshal_dump_value(
                         marshal_write_extended_and_class(
                             buf, globals, obj, HASH_CLASS, symbols,
                         )?;
+                        // A compare_by_identity hash is marked by a
+                        // `C :Hash` wrapper (nested inside the subclass
+                        // wrapper, if any).
+                        if cbi {
+                            buf.push(b'C');
+                            marshal_write_symbol(buf, IdentId::get_id("Hash"), symbols);
+                        }
                         // A hash with a default *value* uses the '}' tag
                         // (the default is written after the pairs); a plain
                         // hash uses '{'.
@@ -3038,6 +3055,29 @@ mod tests {
             r#"
             dump = "\x04\b[\aI:\t\xE2\x82\xACa\x06:\x06ETI:\t\xE2\x82\xACb\x06;\x06T".b
             Marshal.load(dump).map { |s| [s.to_s, s.encoding.to_s] }
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_compare_by_identity() {
+        // A compare_by_identity hash is marked with a `C :Hash` wrapper
+        // and reloads with the flag set.
+        run_test(r#"Marshal.dump({a: 1}.compare_by_identity).bytes"#);
+        run_test(
+            r#"
+            h = {a: 1}.compare_by_identity
+            Marshal.load(Marshal.dump(h)).compare_by_identity?
+            "#,
+        );
+        run_test(
+            r#"
+            class HCbi < Hash; end
+            h = HCbi.new
+            h[:a] = 1
+            h.compare_by_identity
+            r = Marshal.load(Marshal.dump(h))
+            [r.class.to_s, r.compare_by_identity?]
             "#,
         );
     }
