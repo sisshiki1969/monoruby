@@ -835,10 +835,40 @@ fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if args.is_empty() {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
-    let fmt = args[0].coerce_to_str(vm, globals)?;
+    let fmt_val = args[0];
+    let fmt = fmt_val.coerce_to_str(vm, globals)?;
     let arguments = &args[1..];
     let result = vm.format_by_args(globals, &fmt, arguments)?;
-    Ok(Value::string(result))
+    // Negotiate the result encoding across the format String and every String
+    // argument (matching String#%): the compatible union wins (so the format's
+    // encoding is preserved, or widened to an argument's), and two
+    // ASCII-incompatible non-ASCII encodings raise Encoding::CompatibilityError.
+    if let Some(fmt_inner) = fmt_val.is_rstring_inner() {
+        let mut result_inner = fmt_inner.clone();
+        for v in arguments {
+            if let Some(arg_inner) = v.is_rstring_inner() {
+                match result_inner.compatible_encoding(arg_inner) {
+                    Some(combined) if combined != result_inner.encoding() => {
+                        result_inner.set_encoding(combined);
+                    }
+                    Some(_) => {}
+                    None => {
+                        return Err(MonorubyErr::incompatible_encoding(
+                            &globals.store,
+                            result_inner.encoding(),
+                            arg_inner.encoding(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
+            result.as_bytes(),
+            result_inner.encoding(),
+        )))
+    } else {
+        Ok(Value::string(result))
+    }
 }
 
 ///
@@ -6048,6 +6078,41 @@ mod tests {
               def to_str; "num: %d"; end
             end
             "#,
+        );
+    }
+
+    #[test]
+    fn sprintf_result_encoding() {
+        // The result keeps the format String's encoding, widening to an
+        // argument's when the format encoding is more restrictive.
+        run_test_once(
+            r##"(a=format('%s'.encode(Encoding::US_ASCII), 'foobar').encoding.name; b=format('%s'.encode(Encoding::UTF_8), 'x').encoding.name; arg=[98,195,188,114].pack("C*").force_encoding(Encoding::UTF_8); c=("foo %s".dup.force_encoding(Encoding::US_ASCII) % arg).encoding.name; [a,b,c])"##,
+        );
+    }
+
+    #[test]
+    fn sprintf_encoding_error_and_debug() {
+        // Incompatible non-ASCII encodings raise Encoding::CompatibilityError;
+        // a non-String format operand is coerced via #to_str; excess positional
+        // args raise ArgumentError under $DEBUG.
+        run_test_once(
+            r##"[ (begin; format("hello %s".encode("utf-8"), "world".encode("UTF-16LE")); rescue => e; e.class; end), (o=Object.new; def o.to_str; "%d!"; end; format(o, 5)), (old=$DEBUG; $DEBUG=true; r=(begin; format("test", 1); rescue => e; e.class; end); $DEBUG=old; r) ]"##,
+        );
+    }
+
+    #[test]
+    fn sprintf_hash_flag_zero_precision() {
+        // `#` on b/B/x/X does nothing for a zero argument with zero precision.
+        run_test(
+            r##"[sprintf('%#.0b',0), sprintf('%#.0B',0), sprintf('%#.0x',0), sprintf('%#.0X',0), sprintf('%#b',0), sprintf('%#b',5), sprintf('%#x',255)]"##,
+        );
+    }
+
+    #[test]
+    fn sprintf_verbose_too_many_arguments() {
+        // With $VERBOSE, excess positional args warn to $stderr.
+        run_test_once(
+            r##"(require "stringio"; old=$VERBOSE; $VERBOSE=true; s1=StringIO.new; $stderr=s1; format("test",1); w=s1.string; $stderr=STDERR; $VERBOSE=old; w.include?("too many arguments for format string"))"##,
         );
     }
 
