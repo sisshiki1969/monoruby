@@ -87,6 +87,7 @@ pub(super) fn init(globals: &mut Globals) {
 
     globals.define_builtin_func_rest(file, "write", write);
     globals.define_builtin_func(file, "size", size, 0);
+    globals.define_builtin_func(file, "truncate", file_truncate_instance, 1);
     globals.define_builtin_func(file, "flock", flock_, 1);
 
     globals.define_builtin_class_func_with(file, "umask", umask, 0, 1, false);
@@ -1931,6 +1932,39 @@ fn file_truncate(
     file.set_len(length as u64).map_err(|e| {
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_truncate", &path_str)
     })?;
+    Ok(Value::integer(0))
+}
+
+///
+/// ### File#truncate (instance method)
+/// - truncate(length) -> 0
+///
+/// Truncates the open file to at most `length` bytes via `ftruncate(2)` on the
+/// underlying descriptor (so it works even after the path was unlinked, and
+/// does not disturb the read/write offset).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/i/truncate.html]
+#[monoruby_builtin]
+fn file_truncate_instance(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let length = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if length < 0 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "negative length {}",
+            length
+        )));
+    }
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    // SAFETY: `fd` is this File's open descriptor; `ftruncate` only resizes it.
+    let rc = unsafe { libc::ftruncate(fd, length as libc::off_t) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "ftruncate"));
+    }
     Ok(Value::integer(0))
 }
 
