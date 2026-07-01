@@ -1049,7 +1049,7 @@ impl<'a> MarshalReader<'a> {
             MonorubyErr::argumenterr(format!("undefined class/module {}", name))
         })?;
         if module.as_val().ty() == Some(ObjTy::MODULE) {
-            return Err(MonorubyErr::typeerr(format!("{} does not refer to class", name)));
+            return Err(MonorubyErr::argumenterr(format!("{} is not a class", name)));
         }
         let val = module.as_val();
         self.objects.push(val);
@@ -1064,7 +1064,7 @@ impl<'a> MarshalReader<'a> {
             MonorubyErr::argumenterr(format!("undefined class/module {}", name))
         })?;
         if module.as_val().ty() != Some(ObjTy::MODULE) {
-            return Err(MonorubyErr::typeerr(format!("{} does not refer to module", name)));
+            return Err(MonorubyErr::argumenterr(format!("{} is not a module", name)));
         }
         let val = module.as_val();
         self.objects.push(val);
@@ -3040,6 +3040,14 @@ mod tests {
             Marshal.load(dump).map { |s| [s.to_s, s.encoding.to_s] }
             "#,
         );
+    }
+
+    #[test]
+    fn marshal_class_module_ref_errors() {
+        // A 'c' (class) tag naming a Module — or an 'm' tag naming a
+        // Class — raises ArgumentError, as in CRuby.
+        run_test_error(r#"Marshal.load("\x04\bc\vKernel")"#);
+        run_test_error(r#"Marshal.load("\x04\bm\vString")"#);
     }
 
     #[test]
