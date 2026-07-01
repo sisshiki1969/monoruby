@@ -622,6 +622,40 @@ class File
   def ctime;     File.ctime(path);     end
   def birthtime; File.birthtime(path); end
 
+  # Purely lexical `dirname` (core/file/dirname_spec.rb). CRuby does *not*
+  # resolve `.`/`..` or collapse interior slashes; it only strips the last
+  # `/component` (and the slashes immediately before it), `level` times.
+  def self.dirname(path, level = 1)
+    path = path.to_path if !path.is_a?(String) && path.respond_to?(:to_path)
+    path = path.to_str  if !path.is_a?(String) && path.respond_to?(:to_str)
+    raise TypeError, "no implicit conversion of #{path.class} into String" unless path.is_a?(String)
+    unless level.is_a?(Integer)
+      unless level.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{level.class} into Integer"
+      end
+      level = level.to_int
+    end
+    raise ArgumentError, "negative level: #{level}" if level < 0
+    result = path
+    level.times do
+      prev = result
+      result = _dirname_once(result)
+      break if result == prev
+    end
+    result
+  end
+
+  def self._dirname_once(path)
+    return "/" if path =~ %r{\A/+\z}   # all slashes (incl. "/")
+    s = path.sub(%r{/+\z}, "")         # drop trailing slashes
+    return "." if s.empty?             # empty path
+    idx = s.rindex("/")
+    return "." if idx.nil?             # no directory part
+    prefix = s[0...idx].sub(%r{/+\z}, "")
+    prefix.empty? ? "/" : prefix       # empty prefix only for absolute paths
+  end
+  private_class_method :_dirname_once
+
   def self.zero?(path)
     # A missing file is not an error here (returns false), but a non-path
     # argument (nil/true/Integer/...) must still raise the TypeError that
