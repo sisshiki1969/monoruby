@@ -445,12 +445,16 @@ impl<'a> MarshalReader<'a> {
         let inner_tag = self.read_byte()?;
         match inner_tag {
             b'"' => {
-                // String with instance variables (typically encoding).
+                // String with instance variables (encoding + optional
+                // user ivars).
                 let len = self.read_fixnum()? as usize;
                 let bytes = self.read_bytes(len)?.to_vec();
-                let encoding = self.read_encoding_ivars(vm, globals)?;
+                let (encoding, user_ivars) = self.read_encoding_ivars(vm, globals)?;
                 let val = Value::string_from_inner(RStringInner::from_encoding(&bytes, encoding));
                 self.objects.push(val);
+                for (sym, ivar_val) in user_ivars {
+                    globals.set_ivar(val, sym, ivar_val)?;
+                }
                 Ok(val)
             }
             b'u' => {
@@ -460,18 +464,29 @@ impl<'a> MarshalReader<'a> {
                 let class_sym = self.read_symbol()?;
                 let len = self.read_fixnum()? as usize;
                 let bytes = self.read_bytes(len)?.to_vec();
-                let encoding = self.read_encoding_ivars(vm, globals)?;
+                let (encoding, _user_ivars) = self.read_encoding_ivars(vm, globals)?;
                 self.finish_user_marshal(vm, globals, class_sym, &bytes, encoding)
             }
             _ => {
-                // Other I-wrapped types (e.g. Regexp with encoding)
+                // Other I-wrapped types: an Array / Hash / object with
+                // user instance variables, or a Regexp carrying its
+                // encoding ivar. Read the payload with the non-freezing
+                // inner reader so the ivars can be applied before the
+                // outer `read_value` freezes the whole thing (under
+                // `freeze: true`).
                 self.pos -= 1;
-                let val = self.read_value(vm, globals)?;
-                // Read and skip instance variables
+                let val = self.read_value_inner(vm, globals)?;
                 let ivar_count = self.read_fixnum()? as usize;
                 for _ in 0..ivar_count {
-                    let _sym = self.read_symbol()?;
-                    let _val = self.read_value(vm, globals)?;
+                    let sym = self.read_symbol()?;
+                    let ivar_val = self.read_value(vm, globals)?;
+                    // `:E` / `:encoding` describe the payload's encoding
+                    // (already applied when the value was built); every
+                    // other symbol is a real user instance variable.
+                    let name = sym.get_name();
+                    if name != "E" && name != "encoding" {
+                        globals.set_ivar(val, sym, ivar_val)?;
+                    }
                 }
                 Ok(val)
             }
@@ -656,17 +671,18 @@ impl<'a> MarshalReader<'a> {
         Ok(result)
     }
 
-    /// Read a `1 ivar` encoding block (`:E T`/`:E F`/`:encoding "name"`,
-    /// or any other ivars which are read and discarded) following a
-    /// String/Regexp/userdef payload inside an `'I'` wrapper, and return
-    /// the encoding it denotes.
+    /// Read an ivar block (`:E T`/`:E F`/`:encoding "name"` plus any user
+    /// ivars) following a String/Regexp/userdef payload inside an `'I'`
+    /// wrapper. Returns the encoding it denotes and the user ivars (the
+    /// non-encoding pairs) so the caller can apply them to the value.
     fn read_encoding_ivars(
         &mut self,
         vm: &mut Executor,
         globals: &mut Globals,
-    ) -> Result<Encoding> {
+    ) -> Result<(Encoding, Vec<(IdentId, Value)>)> {
         let ivar_count = self.read_fixnum()? as usize;
         let mut encoding = Encoding::Ascii8;
+        let mut user_ivars = Vec::new();
         for _ in 0..ivar_count {
             let sym = self.read_symbol()?;
             let sym_name = sym.get_name();
@@ -691,10 +707,11 @@ impl<'a> MarshalReader<'a> {
                     encoding = Encoding::try_from_str(enc_name).unwrap_or(Encoding::Ascii8);
                 }
             } else {
-                let _ = self.read_value(vm, globals)?;
+                let val = self.read_value(vm, globals)?;
+                user_ivars.push((sym, val));
             }
         }
-        Ok(encoding)
+        Ok((encoding, user_ivars))
     }
 
     /// Read a user-marshal object ('U' tag, TYPE_USRMARSHAL).
@@ -778,7 +795,10 @@ impl<'a> MarshalReader<'a> {
     /// the inner natively and then swap its class to the named subclass.
     fn read_user_class(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let class_sym = self.read_symbol()?;
-        let mut inner = self.read_value(vm, globals)?;
+        // Read the base value without freezing it (under `freeze: true`)
+        // so its class can still be swapped; the outer `read_value`
+        // freezes the final wrapped result.
+        let mut inner = self.read_value_inner(vm, globals)?;
         let class_name = class_sym.get_name();
         let class_name_id = IdentId::get_id(&class_name);
         let class_val = globals
@@ -840,7 +860,9 @@ impl<'a> MarshalReader<'a> {
     /// inner's singleton-class ancestor chain.
     fn read_extended(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let module_sym = self.read_symbol()?;
-        let inner = self.read_value(vm, globals)?;
+        // Read without freezing so `extend` can still modify the singleton
+        // class; the outer `read_value` freezes the final result.
+        let inner = self.read_value_inner(vm, globals)?;
         let module_name = module_sym.get_name();
         let module_name_id = IdentId::get_id(&module_name);
         let module_val = globals
@@ -1254,33 +1276,6 @@ fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentI
     }
 }
 
-/// Write a String in Marshal format.
-///
-/// CRuby records a string's encoding as an instance variable, keyed on
-/// the special short symbol `:E` for the two common cases and on the
-/// full `:encoding` symbol (carrying the encoding name) otherwise:
-///
-/// - ASCII-8BIT: `'"' + int(len) + bytes` (no ivar — binary is implied)
-/// - UTF-8:      `'I' + '"' + … + 1 ivar + :E + true`
-/// - US-ASCII:   `'I' + '"' + … + 1 ivar + :E + false`
-/// - other:      `'I' + '"' + … + 1 ivar + :encoding + "<name>"`
-fn marshal_write_string(buf: &mut Vec<u8>, s: &RStringInner, symbols: &mut Vec<IdentId>) {
-    let bytes = s.as_bytes();
-    let enc = s.encoding();
-    if enc == Encoding::Ascii8 {
-        // Binary strings carry no encoding ivar, so no 'I' wrapper.
-        buf.push(b'"');
-        marshal_write_fixnum(buf, bytes.len() as i32);
-        buf.extend_from_slice(bytes);
-    } else {
-        buf.push(b'I');
-        buf.push(b'"');
-        marshal_write_fixnum(buf, bytes.len() as i32);
-        buf.extend_from_slice(bytes);
-        marshal_write_string_encoding_ivar(buf, enc, symbols);
-    }
-}
-
 /// Append the single encoding instance variable that CRuby attaches to a
 /// String / Regexp payload inside an 'I' (ivar) wrapper:
 ///
@@ -1297,6 +1292,13 @@ fn marshal_write_string_encoding_ivar(
     symbols: &mut Vec<IdentId>,
 ) {
     marshal_write_fixnum(buf, 1); // 1 ivar
+    marshal_write_encoding_ivar_pair(buf, enc, symbols);
+}
+
+/// Write just the encoding instance-variable *pair* (symbol + value),
+/// without the leading ivar count — used when other user ivars share the
+/// same `I` block.
+fn marshal_write_encoding_ivar_pair(buf: &mut Vec<u8>, enc: Encoding, symbols: &mut Vec<IdentId>) {
     match enc {
         Encoding::Utf8 | Encoding::UsAscii | Encoding::Ascii8 => {
             marshal_write_symbol(buf, IdentId::get_id("E"), symbols);
@@ -1309,6 +1311,70 @@ fn marshal_write_string_encoding_ivar(
             marshal_write_fixnum(buf, name.len() as i32);
             buf.extend_from_slice(name);
         }
+    }
+}
+
+/// Write a trailing ivar block — the ivar count followed by each
+/// (symbol, dumped value) pair — inside an already-opened `'I'` wrapper.
+fn marshal_write_ivar_block(
+    buf: &mut Vec<u8>,
+    ivars: &[(IdentId, Value)],
+    vm: &mut Executor,
+    globals: &mut Globals,
+    symbols: &mut Vec<IdentId>,
+    objects: &mut Vec<u64>,
+) -> Result<()> {
+    marshal_write_fixnum(buf, ivars.len() as i32);
+    for (name, val) in ivars {
+        marshal_write_symbol(buf, *name, symbols);
+        marshal_dump_value(buf, *val, vm, globals, symbols, objects)?;
+    }
+    Ok(())
+}
+
+/// Collect the modules `extend`ed onto `obj` — the iclasses sitting
+/// between its singleton class and its real class, nearest-first (which
+/// is the order CRuby emits the `'e'` tags in).
+fn marshal_extended_modules(globals: &Globals, obj: Value) -> Vec<ClassId> {
+    let mut mods = Vec::new();
+    let klass = globals.store[obj.class()].get_module();
+    if klass.is_singleton().is_some() {
+        let mut cur = klass.superclass();
+        while let Some(c) = cur {
+            if c.is_iclass() {
+                mods.push(c.id());
+                cur = c.superclass();
+            } else {
+                break;
+            }
+        }
+    }
+    mods
+}
+
+/// Emit the `'e'` (extended-module) and `'C'` (user-subclass) wrappers
+/// that precede a built-in object's body. `base_class` is the built-in
+/// class the tag is expected to be (`Array`, `Hash`, `String`, `Regexp`);
+/// a real class other than that triggers the `'C'` tag. The `'I'` (ivar)
+/// wrapper, when present, must already have been written by the caller —
+/// it is the outermost of the three.
+fn marshal_write_extended_and_class(
+    buf: &mut Vec<u8>,
+    globals: &Globals,
+    obj: Value,
+    base_class: ClassId,
+    symbols: &mut Vec<IdentId>,
+) {
+    for m in marshal_extended_modules(globals, obj) {
+        buf.push(b'e');
+        let name = globals.get_class_name(m);
+        marshal_write_symbol(buf, IdentId::get_id(&name), symbols);
+    }
+    let real = obj.real_class(&globals.store).id();
+    if real != base_class {
+        buf.push(b'C');
+        let name = globals.get_class_name(real);
+        marshal_write_symbol(buf, IdentId::get_id(&name), symbols);
     }
 }
 
@@ -1472,7 +1538,31 @@ fn marshal_dump_value(
             if marshal_emit_link(buf, obj, objects) {
                 return Ok(());
             }
-            marshal_write_string(buf, s, symbols);
+            let bytes = s.as_bytes().to_vec();
+            let enc = s.encoding();
+            let ivars = globals.get_ivars(obj);
+            // A binary string needs no encoding ivar; any other encoding
+            // does. User ivars share the same `I` block.
+            let has_enc_ivar = enc != Encoding::Ascii8;
+            let ivar_count = has_enc_ivar as usize + ivars.len();
+            let has_i = ivar_count > 0;
+            if has_i {
+                buf.push(b'I');
+            }
+            marshal_write_extended_and_class(buf, globals, obj, STRING_CLASS, symbols);
+            buf.push(b'"');
+            marshal_write_fixnum(buf, bytes.len() as i32);
+            buf.extend_from_slice(&bytes);
+            if has_i {
+                marshal_write_fixnum(buf, ivar_count as i32);
+                if has_enc_ivar {
+                    marshal_write_encoding_ivar_pair(buf, enc, symbols);
+                }
+                for (name, val) in ivars {
+                    marshal_write_symbol(buf, name, symbols);
+                    marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                }
+            }
         }
         // Complex / Rational are their own RV variants but are dumped via
         // the #marshal_dump protocol ('U' tag), so route them through the
@@ -1517,10 +1607,23 @@ fn marshal_dump_value(
                         // borrow into the live array.
                         let elems: Vec<Value> =
                             obj.as_array_inner().iter().copied().collect();
+                        let ivars = globals.get_ivars(obj);
+                        let has_ivars = !ivars.is_empty();
+                        if has_ivars {
+                            buf.push(b'I');
+                        }
+                        marshal_write_extended_and_class(
+                            buf, globals, obj, ARRAY_CLASS, symbols,
+                        );
                         buf.push(b'[');
                         marshal_write_fixnum(buf, elems.len() as i32);
                         for elem in elems {
                             marshal_dump_value(buf, elem, vm, globals, symbols, objects)?;
+                        }
+                        if has_ivars {
+                            marshal_write_ivar_block(
+                                buf, &ivars, vm, globals, symbols, objects,
+                            )?;
                         }
                     }
                     Some(ObjTy::CLASS) | Some(ObjTy::MODULE) => {
@@ -1566,19 +1669,39 @@ fn marshal_dump_value(
                         // the live hash across re-entrant user code.
                         let pairs: Vec<(Value, Value)> =
                             obj.as_hashmap_inner().iter().collect();
+                        let ivars = globals.get_ivars(obj);
+                        let has_ivars = !ivars.is_empty();
+                        if has_ivars {
+                            buf.push(b'I');
+                        }
+                        marshal_write_extended_and_class(
+                            buf, globals, obj, HASH_CLASS, symbols,
+                        );
                         buf.push(b'{');
                         marshal_write_fixnum(buf, pairs.len() as i32);
                         for (k, v) in pairs {
                             marshal_dump_value(buf, k, vm, globals, symbols, objects)?;
                             marshal_dump_value(buf, v, vm, globals, symbols, objects)?;
                         }
+                        if has_ivars {
+                            marshal_write_ivar_block(
+                                buf, &ivars, vm, globals, symbols, objects,
+                            )?;
+                        }
                     }
                     Some(ObjTy::OBJECT) => {
-                        // User-defined object with instance variables: 'o' tag
-                        let class_id = obj.class();
-                        let class_name = globals.get_class_name(class_id);
+                        // User-defined object with instance variables: 'o'
+                        // tag. The class is carried by the tag's symbol
+                        // (real class, skipping the singleton), and any
+                        // `extend`ed modules become 'e' wrappers.
+                        let class_name = obj.get_real_class_name(&globals.store);
                         let class_name_id = IdentId::get_id(&class_name);
                         let ivars = globals.get_ivars(obj);
+                        for m in marshal_extended_modules(globals, obj) {
+                            buf.push(b'e');
+                            let name = globals.get_class_name(m);
+                            marshal_write_symbol(buf, IdentId::get_id(&name), symbols);
+                        }
                         buf.push(b'o');
                         marshal_write_symbol(buf, class_name_id, symbols);
                         marshal_write_fixnum(buf, ivars.len() as i32);
@@ -1625,23 +1748,35 @@ fn marshal_dump_value(
                         }
                     }
                     Some(ObjTy::REGEXP) => {
-                        // Regexp: 'I' + '/' + int(len) + source + option
-                        // byte, wrapped with the encoding ivar (:E / the
-                        // full :encoding form) just like a String.
+                        // Regexp: 'I' + optional 'e'/'C' wrappers + '/' +
+                        // int(len) + source + option byte, then an ivar
+                        // block carrying the encoding ivar plus any user
+                        // ivars. A Regexp always needs the 'I' wrapper.
                         let re = obj.as_regexp_inner();
-                        let src = re.source_bytes();
+                        let src = re.source_bytes().to_vec();
                         // CRuby's dump byte uses the Ruby-level option
                         // bits: i=1, x=2, m=4, FIXEDENCODING=0x10,
                         // NOENCODING=0x20 — which `option()` already
                         // reports (onigmo's i/x/m happen to share those
                         // low bits). Mask off any internal-only bits.
                         let opt = (re.option() & 0x37) as u8;
+                        let enc = re.declared_encoding();
+                        let ivars = globals.get_ivars(obj);
                         buf.push(b'I');
+                        marshal_write_extended_and_class(
+                            buf, globals, obj, REGEXP_CLASS, symbols,
+                        );
                         buf.push(b'/');
                         marshal_write_fixnum(buf, src.len() as i32);
-                        buf.extend_from_slice(src);
+                        buf.extend_from_slice(&src);
                         buf.push(opt);
-                        marshal_write_string_encoding_ivar(buf, re.declared_encoding(), symbols);
+                        // ivar block: encoding ivar + any user ivars.
+                        marshal_write_fixnum(buf, (1 + ivars.len()) as i32);
+                        marshal_write_encoding_ivar_pair(buf, enc, symbols);
+                        for (name, val) in ivars {
+                            marshal_write_symbol(buf, name, symbols);
+                            marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                        }
                     }
                     Some(ObjTy::EXCEPTION) => {
                         // Exception: generic 'o' object whose first two
@@ -2462,6 +2597,108 @@ mod tests {
               end
             end
             Marshal.load(Marshal.dump(MShip2::Blob.new)).class.to_s
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_builtin_ivars() {
+        // Array / Hash / String carrying user instance variables dump
+        // with an 'I' wrapper and round-trip.
+        run_test(
+            r#"
+            a = [1, 2]
+            a.instance_variable_set(:@foo, 5)
+            Marshal.dump(a).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            a = [1, 2]
+            a.instance_variable_set(:@foo, 5)
+            r = Marshal.load(Marshal.dump(a))
+            [r, r.instance_variable_get(:@foo)]
+            "#,
+        );
+        run_test(
+            r#"
+            h = {a: 1}
+            h.instance_variable_set(:@foo, 5)
+            r = Marshal.load(Marshal.dump(h))
+            [r, r.instance_variable_get(:@foo)]
+            "#,
+        );
+        run_test(
+            r#"
+            s = "str"
+            s.instance_variable_set(:@foo, 5)
+            r = Marshal.load(Marshal.dump(s))
+            [r, r.instance_variable_get(:@foo)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_builtin_subclass() {
+        // A subclass of a built-in dumps with the 'C' tag and reloads as
+        // the subclass.
+        run_test(
+            r#"
+            class MyArr < Array; end
+            Marshal.dump(MyArr.new([1, 2])).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            class MyArr2 < Array; end
+            r = Marshal.load(Marshal.dump(MyArr2.new([1, 2])))
+            [r.class.to_s, r.to_a]
+            "#,
+        );
+        run_test(
+            r#"
+            class MyStr < String; end
+            r = Marshal.load(Marshal.dump(MyStr.new("hi")))
+            [r.class.to_s, r.to_s]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_extended_object() {
+        // An object extended with a module dumps with the 'e' tag and
+        // the extension survives a round-trip.
+        run_test(
+            r#"
+            module MExt; end
+            a = [9]
+            a.extend(MExt)
+            Marshal.dump(a).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            module MExt2; end
+            a = [9]
+            a.extend(MExt2)
+            r = Marshal.load(Marshal.dump(a))
+            [r, r.singleton_class.include?(MExt2)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_freeze_subclass_with_ivars() {
+        // freeze: true must freeze a built-in subclass instance that also
+        // carries instance variables (the ivars are applied before the
+        // freeze takes effect).
+        run_test(
+            r#"
+            class US < String; end
+            s = US.new("x")
+            s.instance_variable_set(:@foo, "bar")
+            r = Marshal.load(Marshal.dump(s), freeze: true)
+            [r.class.to_s, r.frozen?, r.instance_variable_get(:@foo)]
             "#,
         );
     }
