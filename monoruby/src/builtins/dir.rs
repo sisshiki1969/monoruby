@@ -1025,6 +1025,16 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn dir_methods_coverage() {
+        // Dir.home(user) via getpwnam (+ ArgumentError for an unknown user),
+        // Dir.foreach's no-block Enumerator (size == nil), Dir.fchdir's tagged
+        // SystemCallError message, and the trailing `**` glob == `*` behaviour.
+        run_test_once(
+            r##"(a=Dir.home("root"); b=(begin; Dir.home("no_such_user_zzq"); rescue => e; e.class; end); c=Dir.foreach("/").is_a?(Enumerator); d=Dir.foreach("/").size; e2=(begin; Dir.fchdir(-1); rescue => x; [x.class, x.message]; end); f=(Dir.glob("**").sort==Dir.glob("*").sort); [a,b,c,d,e2,f])"##,
+        );
+    }
+
+    #[test]
     fn exist() {
         run_tests(&[
             r#"Dir.exist?(".")"#,

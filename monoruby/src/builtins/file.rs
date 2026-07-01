@@ -1425,23 +1425,6 @@ fn extend(path: &mut std::path::PathBuf, extend: std::path::PathBuf) -> Result<(
     Ok(())
 }
 
-/// Convert `file` to canonicalized PathBuf.
-fn to_canonicalized_path(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    file: Value,
-    msg: &str,
-) -> Result<std::path::PathBuf> {
-    let path = to_path(vm, globals, file)?;
-    match path.canonicalize() {
-        Ok(file) => Ok(file),
-        Err(_) => Err(MonorubyErr::argumenterr(format!(
-            "{} is an invalid filename. {:?}",
-            msg, path
-        ))),
-    }
-}
-
 /// Convert `file` to PathBuf.
 fn to_path(vm: &mut Executor, globals: &mut Globals, file: Value) -> Result<std::path::PathBuf> {
     let file = to_path_str(vm, globals, file)?;
@@ -2573,6 +2556,24 @@ fn file_realdirpath(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn file_instance_method_coverage() {
+        // File# instance timestamps, #truncate (ftruncate on the fd), and
+        // #chmod/#chown (return 0).
+        run_test_once(
+            r##"(f="/tmp/mono_cov_#{Process.pid}.txt"; File.write(f,"hello world"); io=File.open(f,"r+"); a=(io.mtime==File.mtime(f)); b=io.atime.class; c=io.ctime.class; io.truncate(5); io.close; d=File.read(f); g=File.open(f); e2=g.chmod(0o600); h=g.chown(nil,nil); g.close; File.delete(f); [a,b,c,d,e2,h])"##,
+        );
+    }
+
+    #[test]
+    fn file_directory_and_join_coverage() {
+        // File.directory? on an IO / #to_io object and its TypeError branch,
+        // File.join array flattening + NUL check, and lexical dirname edges.
+        run_test_once(
+            r##"(a=File.directory?(STDIN); o=Object.new; def o.to_io; STDIN; end; b=File.directory?(o); c=(begin; File.directory?(1); rescue => e; e.class; end); d=(begin; File.directory?(nil); rescue => e; e.class; end); e2=File.join("a",["b","c"]); f=(begin; File.join("\x00x","y"); rescue => x; [x.class,x.message]; end); [a,b,c,d,e2,f,File.dirname("/.."),File.dirname("./b"),File.dirname("..")])"##,
+        );
+    }
 
     #[test]
     fn basename_suffix() {

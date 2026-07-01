@@ -2656,6 +2656,37 @@ mod tests {
     }
 
     #[test]
+    fn env_fetch_coverage() {
+        let _g = env_lock();
+        // key coercion (String), default arg, block, and the TypeError /
+        // KeyError branches of `env_fetch`.
+        run_test_once(
+            r##"(a=ENV.fetch("PATH").class; b=ENV.fetch("NO_SUCH_VAR_ZZ","def"); c=ENV.fetch("NO_SUCH_VAR_ZZ"){|k| "blk:#{k}"}; d=(begin; ENV.fetch(Object.new); rescue => e; e.class; end); f=(begin; ENV.fetch("NO_SUCH_VAR_ZZ"); rescue => e; e.class; end); [a,b,c,d,f])"##,
+        );
+    }
+
+    #[test]
+    fn env_to_h_block_coverage() {
+        let _g = env_lock();
+        // `env_to_hash` block form: #to_ary coercion is fine, a non-array
+        // result raises TypeError, and a wrong-length array raises
+        // ArgumentError.
+        run_test_once(
+            r##"(h=ENV.to_h{|k,v| [k.to_sym, v.length]}; a=h.keys.all?{|x| x.is_a?(Symbol)}; b=(begin; ENV.to_h{|k,v| "x"}; rescue => e; e.class; end); c=(begin; ENV.to_h{|k,v| [k]}; rescue => e; e.class; end); [a,b,c])"##,
+        );
+    }
+
+    #[test]
+    fn env_alias_and_copy_coverage() {
+        let _g = env_lock();
+        // `ENV[]` returns a frozen String, the alias identities hold, and
+        // clone/dup/except take their dedicated paths.
+        run_test_once(
+            r##"(ENV["MONO_T_ZZ"]="hi"; a=ENV["MONO_T_ZZ"].frozen?; b=ENV.method(:has_key?)==ENV.method(:include?); c=ENV.method(:key?)==ENV.method(:include?); d=ENV.method(:member?)==ENV.method(:include?); e2=ENV.method(:has_value?)==ENV.method(:value?); f=(begin; ENV.clone(freeze:1); rescue => x; x.class; end); g=(begin; ENV.clone(foo:1); rescue => x; x.class; end); h=(begin; ENV.clone; rescue => x; x.class; end); i=(begin; ENV.dup; rescue => x; x.class; end); j=ENV.except("MONO_T_ZZ").class; k=ENV.except("MONO_T_ZZ").key?("MONO_T_ZZ"); ENV.delete("MONO_T_ZZ"); [a,b,c,d,e2,f,g,h,i,j,k])"##,
+        );
+    }
+
+    #[test]
     fn env_index_assign_updates_hash() {
         let _g = env_lock();
         // Assignment is visible via ENV[]
