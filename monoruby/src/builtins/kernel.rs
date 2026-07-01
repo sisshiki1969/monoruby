@@ -214,7 +214,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "hash", hash, 0);
     globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
     globals.define_builtin_func(kernel_class, "dup", dup, 0);
-    globals.define_builtin_func_with(kernel_class, "clone", clone_val, 0, 1, false);
+    globals.define_builtin_func_with_kw(kernel_class, "clone", clone_val, 0, 0, false, &["freeze"], false);
     let init_copy_fid =
         globals.define_private_builtin_func(kernel_class, "initialize_copy", initialize_copy, 1);
     let init_clone_fid =
@@ -3210,33 +3210,60 @@ fn clone_val(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    let copy = self_val.clone_value();
+    // `freeze:` keyword (slot 0): `None` = not passed, `Some(v)` = passed
+    // (including `Some(nil)`). Only nil / true / false are accepted.
+    let freeze_arg = lfp.try_arg(0);
+    if let Some(v) = freeze_arg {
+        if !(v.is_nil() || v == Value::bool(true) || v == Value::bool(false)) {
+            return Err(MonorubyErr::argumenterr(format!(
+                "unexpected value for freeze: {}",
+                v.get_real_class_name(&globals.store)
+            )));
+        }
+    }
+    // `freeze: true`  -> copy is frozen; `freeze: false` -> copy is not frozen;
+    // `freeze: nil` / omitted -> copy inherits the original's frozen state
+    // (which `clone_value` already carried over).
+    let target_frozen = match freeze_arg {
+        Some(v) if v == Value::bool(true) => true,
+        Some(v) if v == Value::bool(false) => false,
+        _ => self_val.is_frozen(),
+    };
+
+    let mut copy = self_val.clone_value();
     copy_finalizers(globals, self_val.id(), copy.id());
     if self_val.is_class_or_module().is_some() {
         return Ok(copy);
     }
-    // Skip the no-op copy-hook dispatch when the class uses the default
-    // hooks (see `dup` / `uses_default_copy_hooks`).
+    // Keep the copy mutable while the copy hook runs (CRuby freezes only
+    // afterwards), so a hook may still initialise a to-be-frozen copy.
+    copy.clear_frozen();
+
+    // Skip the no-op copy-hook dispatch when the class uses the default hooks
+    // (see `dup` / `uses_default_copy_hooks`).
     let version = Globals::class_version();
-    if globals
-        .store
-        .uses_default_copy_hooks(copy.class(), version)
-    {
-        return Ok(copy);
+    if !globals.store.uses_default_copy_hooks(copy.class(), version) {
+        // Run the `initialize_clone` hook. When `freeze:` was passed explicitly,
+        // forward it as a keyword argument (matching CRuby), so a hook that does
+        // not accept keywords raises ArgumentError. Root `copy` across the
+        // dispatch (it allocates).
+        let temp = vm.temp_len();
+        vm.temp_push(copy);
+        let kw = if let Some(v) = freeze_arg {
+            let mut map = RubyMap::default();
+            map.insert(Value::symbol(IdentId::get_id("freeze")), v, vm, globals)?;
+            Some(Hashmap::new(Value::hash(map)))
+        } else {
+            None
+        };
+        vm.invoke_method_inner(globals, IdentId::INITIALIZE_CLONE, copy, &[self_val], None, kw)?;
+        vm.temp_clear(temp);
     }
-    // Run the `initialize_clone` hook (default validates; a subclass may
-    // override it). Root `copy` across the dispatch (it allocates).
-    let temp = vm.temp_len();
-    vm.temp_push(copy);
-    vm.invoke_method_inner(
-        globals,
-        IdentId::INITIALIZE_CLONE,
-        copy,
-        &[self_val],
-        None,
-        None,
-    )?;
-    vm.temp_clear(temp);
+    // Packed immediates (Integer/Symbol/true/…) are always frozen and have no
+    // mutable header, so only real heap values need the frozen flag applied.
+    if target_frozen && !copy.is_packed_value() {
+        copy.set_frozen();
+    }
     Ok(copy)
 }
 
