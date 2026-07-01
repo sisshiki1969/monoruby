@@ -24,17 +24,11 @@ pub(super) fn init(globals: &mut Globals) {
     // CRuby: Marshal.load(source, proc = nil, freeze: false). With
     // `freeze: true`, every reconstructed object (except classes and
     // modules) is frozen in place, deeply.
-    globals.define_builtin_module_func_with_kw(klass, "load", load, 1, 2, false, &["freeze"], false);
-    globals.define_builtin_module_func_with_kw(
-        klass,
-        "restore",
-        load,
-        1,
-        2,
-        false,
-        &["freeze"],
-        false,
-    );
+    let load_fid =
+        globals.define_builtin_module_func_with_kw(klass, "load", load, 1, 2, false, &["freeze"], false);
+    // `Marshal.restore` is a true alias of `Marshal.load` (same FuncId),
+    // so `Marshal.method(:restore) == Marshal.method(:load)`.
+    globals.define_builtin_module_func_alias(klass, "restore", load_fid);
 }
 
 /// ### Marshal.dump
@@ -2777,6 +2771,13 @@ mod tests {
             [r, r.singleton_class.include?(MExt2)]
             "#,
         );
+    }
+
+    #[test]
+    fn marshal_restore_alias() {
+        // Marshal.restore is the very same method object as Marshal.load.
+        run_test(r#"Marshal.method(:restore) == Marshal.method(:load)"#);
+        run_test(r#"Marshal.restore(Marshal.dump([1, 2, 3]))"#);
     }
 
     #[test]
