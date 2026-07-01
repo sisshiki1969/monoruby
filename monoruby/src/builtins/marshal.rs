@@ -2815,6 +2815,81 @@ mod tests {
     }
 
     #[test]
+    fn marshal_coverage_extras() {
+        // Named (non UTF-8/US-ASCII) string encoding → `:encoding "name"`.
+        run_test(r#"Marshal.dump("a".encode("EUC-JP")).bytes"#);
+        run_test(r#"Marshal.load(Marshal.dump("a".encode("EUC-JP"))).encoding.to_s"#);
+        // Struct extended with a module.
+        run_test(
+            r#"
+            module MSx; end
+            SX = Struct.new(:a)
+            s = SX.new(1)
+            s.extend(MSx)
+            r = Marshal.load(Marshal.dump(s))
+            [r.a, r.singleton_class.include?(MSx)]
+            "#,
+        );
+        // Object extended with a module, round-tripped.
+        run_test(
+            r#"
+            module MOx; end
+            o = Object.new
+            o.extend(MOx)
+            r = Marshal.load(Marshal.dump(o))
+            r.singleton_class.include?(MOx)
+            "#,
+        );
+        // Hash / Regexp subclasses reload as the subclass.
+        run_test(
+            r#"
+            class HSub < Hash; end
+            h = HSub.new
+            h[:a] = 1
+            r = Marshal.load(Marshal.dump(h))
+            [r.class.to_s, r[:a]]
+            "#,
+        );
+        run_test(
+            r#"
+            class RSub < Regexp; end
+            r = Marshal.load(Marshal.dump(RSub.new("x")))
+            [r.class.to_s, r.source]
+            "#,
+        );
+        // Anonymous Struct subclass cannot be dumped.
+        run_test_error(r#"Marshal.dump(Struct.new(:a).new(1))"#);
+    }
+
+    #[test]
+    fn marshal_load_proc_containers() {
+        // The proc visits hash keys/values and struct members, and works
+        // together with freeze: true.
+        run_test(
+            r#"
+            ret = []
+            Marshal.load(Marshal.dump({a: 1, b: 2}), proc { |o| ret << o.inspect; o })
+            ret
+            "#,
+        );
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            ret = []
+            Marshal.load(Marshal.dump(S.new(1, 2)), proc { |o| ret << o.inspect; o })
+            ret.size
+            "#,
+        );
+        run_test(
+            r#"
+            ret = []
+            r = Marshal.load(Marshal.dump([1, "x"]), proc { |o| ret << o.frozen?; o }, freeze: true)
+            [r.frozen?, ret.last]
+            "#,
+        );
+    }
+
+    #[test]
     fn marshal_load_proc() {
         // The load proc is called on every reconstructed value, children
         // before their parent.
