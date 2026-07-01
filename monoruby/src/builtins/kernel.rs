@@ -2562,8 +2562,26 @@ fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__method__.html]
 #[monoruby_builtin]
 fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let fid = vm.cfp().prev().unwrap().method_func_id();
-    if !globals.store[fid].is_method() {
+    // Skip native (builtin) caller frames such as `send`/`__send__`/
+    // `public_send` so that `send("__method__")` reports the Ruby method that
+    // invoked `send`, not `send` itself.
+    let mut cfp = vm.cfp().prev();
+    while let Some(f) = cfp {
+        if !f.lfp().meta().is_native() {
+            break;
+        }
+        cfp = f.prev();
+    }
+    let Some(caller) = cfp else {
+        return Ok(Value::nil());
+    };
+    let outer = caller.outermost_lfp();
+    let fid = outer.func_id();
+    // `__method__` yields nil outside of a method body. A `define_method`
+    // body is a Proc-typed function (not `FuncType::Method`) but runs in a
+    // frame tagged `proc_method` and carries the installed method name, so
+    // accept those too.
+    if !globals.store[fid].is_method() && !outer.meta().is_proc_method() {
         return Ok(Value::nil());
     }
     globals.store[fid]
