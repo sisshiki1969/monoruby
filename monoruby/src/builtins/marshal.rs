@@ -364,7 +364,15 @@ impl<'a> MarshalReader<'a> {
     fn read_float(&mut self) -> Result<Value> {
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?;
-        let s = std::str::from_utf8(bytes)
+        // CRuby's float payload is a NUL-terminated decimal string; any
+        // bytes after the first '\0' are a legacy mantissa extension
+        // (raw, non-UTF-8) used for exact reconstruction. We parse the
+        // textual prefix, which reproduces the value to full precision.
+        let text = match bytes.iter().position(|&b| b == 0) {
+            Some(nul) => &bytes[..nul],
+            None => bytes,
+        };
+        let s = std::str::from_utf8(text)
             .map_err(|_| MonorubyErr::argumenterr("invalid float encoding in marshal data"))?;
         let f = match s {
             "inf" => f64::INFINITY,
@@ -2245,6 +2253,28 @@ mod tests {
               def _dump(level); 123; end
             end
             Marshal.dump(BadDump.new)
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_load_float_mantissa_extension() {
+        // CRuby appends a legacy '\0' + mantissa blob after the decimal
+        // text; the load path must parse the textual prefix and ignore
+        // the trailing raw bytes.
+        run_test(r#"Marshal.load("\x04\bf\v1.3\x00\xcc\xcd")"#);
+        run_test(r#"Marshal.load(Marshal.dump(1.3)) == 1.3"#);
+    }
+
+    #[test]
+    fn marshal_time_roundtrip() {
+        // Time is serialized via its private #_dump / ._load hooks; the
+        // core wall-clock fields must survive a round-trip.
+        run_test(
+            r#"
+            t = Time.utc(2020, 1, 2, 3, 4, 5)
+            r = Marshal.load(Marshal.dump(t))
+            [r.year, r.month, r.day, r.hour, r.min, r.sec, r.utc?]
             "#,
         );
     }

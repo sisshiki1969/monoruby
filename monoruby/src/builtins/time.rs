@@ -80,7 +80,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(TIME_CLASS, "ceil", ceil_, 0, 1, false);
     globals.define_builtin_func_with(TIME_CLASS, "round", round_, 0, 1, false);
     globals.define_builtin_func_with(TIME_CLASS, "deconstruct_keys", deconstruct_keys_, 1, 1, false);
-    globals.define_private_builtin_func(TIME_CLASS, "_dump", _dump, 0);
+    // CRuby's `Time#_dump(limit=0)` accepts the marshal recursion limit;
+    // Marshal.dump passes it, so allow the optional argument (ignored).
+    globals.define_private_builtin_func_with(TIME_CLASS, "_dump", _dump, 0, 1, false);
     globals.define_builtin_class_func(TIME_CLASS, "_load", _load, 1);
     // Mark `_load` private at the metaclass level so
     // `Time.private_methods.include?(:_load)` is true and `Time._load(...)`
