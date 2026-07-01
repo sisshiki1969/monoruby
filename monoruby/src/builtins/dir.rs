@@ -82,7 +82,14 @@ fn children(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/foreach.html]
 #[monoruby_builtin]
-fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    // Without a block, return a (lazy, size-less) Enumerator that replays
+    // `Dir.foreach(path)` when iterated — matching CRuby, which defers the
+    // directory read (and any ENOENT) until enumeration.
+    let Some(bh) = lfp.block() else {
+        let method = IdentId::get_id("foreach");
+        return vm.generate_enumerator(method, lfp.self_val(), vec![lfp.arg(0)], pc);
+    };
     let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
     let mut names = vec![".".to_string(), "..".to_string()];
     for entry in std::fs::read_dir(&path)
@@ -92,17 +99,11 @@ fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             entry.map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
         names.push(entry.file_name().to_string_lossy().to_string());
     }
-    if let Some(bh) = lfp.block() {
-        let p = vm.get_block_data(globals, bh)?;
-        for name in names {
-            vm.invoke_block(globals, &p, &[Value::string(name)])?;
-        }
-        Ok(Value::nil())
-    } else {
-        Ok(Value::array_from_vec(
-            names.into_iter().map(Value::string).collect(),
-        ))
+    let p = vm.get_block_data(globals, bh)?;
+    for name in names {
+        vm.invoke_block(globals, &p, &[Value::string(name)])?;
     }
+    Ok(Value::nil())
 }
 
 ///
@@ -716,7 +717,32 @@ fn traverse_dir(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/home.html]
 #[monoruby_builtin]
-fn home(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+fn home(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // With a username argument, return that user's home directory. An unknown
+    // user raises ArgumentError (core/dir/home_spec.rb), matching CRuby.
+    if let Some(arg) = lfp.try_arg(0)
+        && !arg.is_nil()
+    {
+        let user = arg.coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
+        let c_user = std::ffi::CString::new(user.as_bytes())
+            .map_err(|_| MonorubyErr::argumenterr("user name cannot contain NUL"))?;
+        // SAFETY: `getpwnam` reads the passwd DB for the NUL-terminated name
+        // and returns a pointer into a static buffer (or null when unknown);
+        // we only read `pw_dir` immediately, before any other libc call.
+        let dir = unsafe {
+            let pw = libc::getpwnam(c_user.as_ptr());
+            if pw.is_null() {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "user {} doesn't exist",
+                    user
+                )));
+            }
+            std::ffi::CStr::from_ptr((*pw).pw_dir)
+                .to_string_lossy()
+                .to_string()
+        };
+        return Ok(Value::string(dir));
+    }
     let home = match dirs::home_dir() {
         Some(home) => home,
         None => return Ok(Value::nil()),
@@ -943,7 +969,9 @@ fn fchdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let rc = unsafe { libc::fchdir(fd) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, ""));
+        // CRuby tags the SystemCallError message with the syscall name, e.g.
+        // "Bad file descriptor - fchdir" (core/dir/fchdir_spec.rb).
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fchdir"));
     }
     if let Some(bh) = lfp.block() {
         let result = vm.invoke_block_once(globals, bh, &[]);

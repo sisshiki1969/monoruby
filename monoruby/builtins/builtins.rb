@@ -507,7 +507,11 @@ class Dir
   def each(&block)
     raise IOError, "closed directory" if @closed
     return to_enum(:each) unless block
+    # #each always yields every entry (so repeated calls give the same result),
+    # then leaves the read cursor at end-of-stream so a following #read returns
+    # nil (core/dir/each_spec.rb).
     @entries.each { |e| block.call(e) }
+    @pos = @entries.length
     self
   end
 
@@ -541,7 +545,12 @@ class Dir
     @pos = newpos
   end
 
-  alias seek pos=
+  # Unlike `pos=` (which yields the assigned value), Dir#seek returns the Dir
+  # itself (core/dir/seek_spec.rb).
+  def seek(newpos)
+    self.pos = newpos
+    self
+  end
 
   def close
     @closed = true
@@ -565,9 +574,14 @@ class Dir
   def self.each_child(path, encoding: nil, &block)
     return to_enum(:each_child, path) unless block
     children(path).each { |e| block.call(e) }
+    nil
   end
 
   def self.empty?(path)
+    # A path that exists but is not a directory is not "empty" — it returns
+    # false rather than raising (core/dir/empty_spec.rb). A missing path still
+    # raises Errno::ENOENT (surfaced by `children`/`entries`).
+    return false if File.exist?(path) && !File.directory?(path)
     children(path).empty?
   end
 end

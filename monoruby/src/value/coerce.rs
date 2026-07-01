@@ -428,7 +428,10 @@ impl Value {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<RString> {
-        coerce_to_rstring_inner(vm, globals, *self, &[IdentId::TO_STR, IdentId::TO_PATH])
+        // CRuby's path coercion (`rb_get_path`) prefers `#to_path`, only
+        // falling back to `#to_str` when `#to_path` is absent
+        // (core/dir/chdir_spec.rb "prefers #to_path over #to_str").
+        coerce_to_rstring_inner(vm, globals, *self, &[IdentId::TO_PATH, IdentId::TO_STR])
     }
 
     /// Like `expect_regexp_or_string` but tries `to_str` coercion for
