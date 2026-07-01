@@ -307,6 +307,7 @@ impl<'a> MarshalReader<'a> {
             b'I' => self.read_ivar_wrapped(vm, globals),
             b'[' => self.read_array(vm, globals),
             b'{' => self.read_hash(vm, globals),
+            b'}' => self.read_hash_default(vm, globals),
             b'@' => {
                 // Object reference
                 let idx = self.read_fixnum()? as usize;
@@ -511,8 +512,23 @@ impl<'a> MarshalReader<'a> {
     }
 
     /// Read a Hash.
-    /// Format: marshal_int(length) + (key + value) pairs
+    /// Format: marshal_int(length) + (key + value) pairs, and — for the
+    /// `'}'` (default-value) tag — a trailing default value.
     fn read_hash(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        self.read_hash_inner(vm, globals, false)
+    }
+
+    /// Read a Hash carrying a default value (`'}'` tag).
+    fn read_hash_default(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        self.read_hash_inner(vm, globals, true)
+    }
+
+    fn read_hash_inner(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        has_default: bool,
+    ) -> Result<Value> {
         let len = self.read_fixnum()? as usize;
         // Create the hash up-front and register it so a self-reference in
         // a key or value links back to this object (cyclic hashes).
@@ -523,6 +539,10 @@ impl<'a> MarshalReader<'a> {
             let key = self.read_value(vm, globals)?;
             let val = self.read_value(vm, globals)?;
             map.insert(key, val, vm, globals)?;
+        }
+        if has_default {
+            let default = self.read_value(vm, globals)?;
+            map.set_defalut_value(default);
         }
         Ok(hash)
     }
@@ -1364,18 +1384,31 @@ fn marshal_write_extended_and_class(
     obj: Value,
     base_class: ClassId,
     symbols: &mut Vec<IdentId>,
-) {
+) -> Result<()> {
     for m in marshal_extended_modules(globals, obj) {
-        buf.push(b'e');
         let name = globals.get_class_name(m);
+        if name.starts_with("#<") {
+            return Err(MonorubyErr::typeerr(format!(
+                "can't dump anonymous class {}",
+                name
+            )));
+        }
+        buf.push(b'e');
         marshal_write_symbol(buf, IdentId::get_id(&name), symbols);
     }
     let real = obj.real_class(&globals.store).id();
     if real != base_class {
-        buf.push(b'C');
         let name = globals.get_class_name(real);
+        if name.starts_with("#<") {
+            return Err(MonorubyErr::typeerr(format!(
+                "can't dump anonymous class {}",
+                name
+            )));
+        }
+        buf.push(b'C');
         marshal_write_symbol(buf, IdentId::get_id(&name), symbols);
     }
+    Ok(())
 }
 
 /// Emit an object back-reference ('@' + link index) if `obj` has
@@ -1549,7 +1582,7 @@ fn marshal_dump_value(
             if has_i {
                 buf.push(b'I');
             }
-            marshal_write_extended_and_class(buf, globals, obj, STRING_CLASS, symbols);
+            marshal_write_extended_and_class(buf, globals, obj, STRING_CLASS, symbols)?;
             buf.push(b'"');
             marshal_write_fixnum(buf, bytes.len() as i32);
             buf.extend_from_slice(&bytes);
@@ -1614,7 +1647,7 @@ fn marshal_dump_value(
                         }
                         marshal_write_extended_and_class(
                             buf, globals, obj, ARRAY_CLASS, symbols,
-                        );
+                        )?;
                         buf.push(b'[');
                         marshal_write_fixnum(buf, elems.len() as i32);
                         for elem in elems {
@@ -1667,8 +1700,10 @@ fn marshal_dump_value(
                     Some(ObjTy::HASH) => {
                         // Snapshot the pairs to avoid holding a borrow into
                         // the live hash across re-entrant user code.
-                        let pairs: Vec<(Value, Value)> =
-                            obj.as_hashmap_inner().iter().collect();
+                        let (pairs, default): (Vec<(Value, Value)>, Option<Value>) = {
+                            let inner = obj.as_hashmap_inner();
+                            (inner.iter().collect(), inner.default_value())
+                        };
                         let ivars = globals.get_ivars(obj);
                         let has_ivars = !ivars.is_empty();
                         if has_ivars {
@@ -1676,12 +1711,18 @@ fn marshal_dump_value(
                         }
                         marshal_write_extended_and_class(
                             buf, globals, obj, HASH_CLASS, symbols,
-                        );
-                        buf.push(b'{');
+                        )?;
+                        // A hash with a default *value* uses the '}' tag
+                        // (the default is written after the pairs); a plain
+                        // hash uses '{'.
+                        buf.push(if default.is_some() { b'}' } else { b'{' });
                         marshal_write_fixnum(buf, pairs.len() as i32);
                         for (k, v) in pairs {
                             marshal_dump_value(buf, k, vm, globals, symbols, objects)?;
                             marshal_dump_value(buf, v, vm, globals, symbols, objects)?;
+                        }
+                        if let Some(d) = default {
+                            marshal_dump_value(buf, d, vm, globals, symbols, objects)?;
                         }
                         if has_ivars {
                             marshal_write_ivar_block(
@@ -1695,11 +1736,23 @@ fn marshal_dump_value(
                         // (real class, skipping the singleton), and any
                         // `extend`ed modules become 'e' wrappers.
                         let class_name = obj.get_real_class_name(&globals.store);
+                        if class_name.starts_with("#<") {
+                            return Err(MonorubyErr::typeerr(format!(
+                                "can't dump anonymous class {}",
+                                class_name
+                            )));
+                        }
                         let class_name_id = IdentId::get_id(&class_name);
                         let ivars = globals.get_ivars(obj);
                         for m in marshal_extended_modules(globals, obj) {
-                            buf.push(b'e');
                             let name = globals.get_class_name(m);
+                            if name.starts_with("#<") {
+                                return Err(MonorubyErr::typeerr(format!(
+                                    "can't dump anonymous class {}",
+                                    name
+                                )));
+                            }
+                            buf.push(b'e');
                             marshal_write_symbol(buf, IdentId::get_id(&name), symbols);
                         }
                         buf.push(b'o');
@@ -1765,7 +1818,7 @@ fn marshal_dump_value(
                         buf.push(b'I');
                         marshal_write_extended_and_class(
                             buf, globals, obj, REGEXP_CLASS, symbols,
-                        );
+                        )?;
                         buf.push(b'/');
                         marshal_write_fixnum(buf, src.len() as i32);
                         buf.extend_from_slice(&src);
@@ -2683,6 +2736,35 @@ mod tests {
             a.extend(MExt2)
             r = Marshal.load(Marshal.dump(a))
             [r, r.singleton_class.include?(MExt2)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_hash_default() {
+        // A hash with a default value dumps with the '}' tag and the
+        // default survives a round-trip.
+        run_test(r#"Marshal.dump(Hash.new(0)).bytes"#);
+        run_test(
+            r#"
+            h = Hash.new(7)
+            h[:a] = 1
+            r = Marshal.load(Marshal.dump(h))
+            [r[:a], r[:missing]]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_dump_anonymous_errors() {
+        // Anonymous classes / modules cannot be dumped.
+        run_test_error(r#"Marshal.dump(Class.new(Object).new)"#);
+        run_test_error(r#"Marshal.dump(Class.new(Array).new)"#);
+        run_test_error(
+            r#"
+            o = Object.new
+            o.extend(Module.new)
+            Marshal.dump(o)
             "#,
         );
     }
