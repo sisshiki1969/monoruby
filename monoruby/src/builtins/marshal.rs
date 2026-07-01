@@ -246,8 +246,10 @@ impl<'a> MarshalReader<'a> {
         Ok(id)
     }
 
-    /// Read a symbol, handling both ':' (new symbol) and ';' (symbol reference).
-    fn read_symbol(&mut self) -> Result<IdentId> {
+    /// Read a symbol, handling `:` (new symbol), `;` (symbol reference),
+    /// and `I:` (a new symbol carrying an encoding ivar, e.g. a non-ASCII
+    /// instance-variable name).
+    fn read_symbol(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<IdentId> {
         let tag = self.read_byte()?;
         match tag {
             b':' => self.read_new_symbol(),
@@ -259,6 +261,14 @@ impl<'a> MarshalReader<'a> {
                         idx
                     ))
                 })
+            }
+            b'I' => {
+                // Encoding-wrapped symbol: reuse the 'I' reader, which
+                // interns the symbol and registers its symlink slot.
+                self.pos -= 1;
+                let v = self.read_value_inner(vm, globals)?;
+                v.try_symbol()
+                    .ok_or_else(|| MonorubyErr::argumenterr("expected symbol in marshal data"))
             }
             _ => Err(MonorubyErr::argumenterr(format!(
                 "expected symbol tag (':' or ';'), got 0x{:02x}",
@@ -506,7 +516,7 @@ impl<'a> MarshalReader<'a> {
                 // Encoding-wrapped userdef ('I' + 'u'): the payload string
                 // handed to `_load` carries the encoding recorded by the
                 // trailing ivar block.
-                let class_sym = self.read_symbol()?;
+                let class_sym = self.read_symbol(vm, globals)?;
                 let len = self.read_fixnum()? as usize;
                 let bytes = self.read_bytes(len)?.to_vec();
                 let (encoding, _user_ivars) = self.read_encoding_ivars(vm, globals)?;
@@ -523,7 +533,7 @@ impl<'a> MarshalReader<'a> {
                 let val = self.read_value_inner(vm, globals)?;
                 let ivar_count = self.read_fixnum()? as usize;
                 for _ in 0..ivar_count {
-                    let sym = self.read_symbol()?;
+                    let sym = self.read_symbol(vm, globals)?;
                     let ivar_val = self.read_value(vm, globals)?;
                     // `:E` / `:encoding` describe the payload's encoding
                     // (already applied when the value was built); every
@@ -600,7 +610,7 @@ impl<'a> MarshalReader<'a> {
     ///
     /// We create a generic object with instance variables stored as a Hash.
     fn read_user_object(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         let ivar_count = self.read_fixnum()? as usize;
         // Reserve an object slot
         let obj_idx = self.objects.len();
@@ -624,7 +634,7 @@ impl<'a> MarshalReader<'a> {
         // Read instance variables.
         let mut ivars: Vec<(IdentId, Value)> = Vec::with_capacity(ivar_count);
         for _ in 0..ivar_count {
-            let ivar_sym = self.read_symbol()?;
+            let ivar_sym = self.read_symbol(vm, globals)?;
             let val = self.read_value(vm, globals)?;
             ivars.push((ivar_sym, val));
         }
@@ -707,7 +717,7 @@ impl<'a> MarshalReader<'a> {
     /// next dispatch because `read_value` reinterpreted the length
     /// byte as a tag.
     fn read_user_marshal(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?.to_vec();
         self.finish_user_marshal(vm, globals, class_sym, &bytes, Encoding::Ascii8)
@@ -752,7 +762,7 @@ impl<'a> MarshalReader<'a> {
         let mut encoding = Encoding::Ascii8;
         let mut user_ivars = Vec::new();
         for _ in 0..ivar_count {
-            let sym = self.read_symbol()?;
+            let sym = self.read_symbol(vm, globals)?;
             let sym_name = sym.get_name();
             if sym_name == "E" {
                 match self.read_byte()? {
@@ -796,7 +806,7 @@ impl<'a> MarshalReader<'a> {
     /// then drives `instance.marshal_load(value)` — `instance` is
     /// returned (the `marshal_load` return value is ignored).
     fn read_usr_marshal(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         let class_name = class_sym.get_name();
         let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
             MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
@@ -841,7 +851,7 @@ impl<'a> MarshalReader<'a> {
     /// drives `instance._load_data(value)`. The class must define
     /// `_load_data`; otherwise CRuby raises `TypeError`.
     fn read_data(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         let value = self.read_value(vm, globals)?;
         let class_name = class_sym.get_name();
         let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
@@ -870,7 +880,7 @@ impl<'a> MarshalReader<'a> {
     /// produced by an instance of a subclass; on load we reconstruct
     /// the inner natively and then swap its class to the named subclass.
     fn read_user_class(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         // Read the base value without freezing it (under `freeze: true`)
         // so its class can still be swapped; the outer `read_value`
         // freezes the final wrapped result.
@@ -935,7 +945,7 @@ impl<'a> MarshalReader<'a> {
     /// through the standard dispatch so the module is added to the
     /// inner's singleton-class ancestor chain.
     fn read_extended(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let module_sym = self.read_symbol()?;
+        let module_sym = self.read_symbol(vm, globals)?;
         // Read without freezing so `extend` can still modify the singleton
         // class; the outer `read_value` freezes the final result.
         let inner = self.read_value_inner(vm, globals)?;
@@ -964,7 +974,7 @@ impl<'a> MarshalReader<'a> {
     /// member symbols don't match the class's actual `/members`,
     /// so we mirror that.
     fn read_struct(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         let member_count = self.read_fixnum()? as usize;
         // Reserve the object slot up front so any backrefs from member
         // values resolve to the (still-empty) instance.
@@ -997,7 +1007,7 @@ impl<'a> MarshalReader<'a> {
         let class_id = module.id();
         let mut instance = Value::struct_object(class_id, member_count);
         for i in 0..member_count {
-            let member_sym = self.read_symbol()?;
+            let member_sym = self.read_symbol(vm, globals)?;
             let val = self.read_value(vm, globals)?;
             // SAFETY: `members` was populated by `Struct.new`, which
             // validates each entry is a Symbol; CRuby blocks Ruby-
@@ -3028,6 +3038,29 @@ mod tests {
             r#"
             dump = "\x04\b[\aI:\t\xE2\x82\xACa\x06:\x06ETI:\t\xE2\x82\xACb\x06;\x06T".b
             Marshal.load(dump).map { |s| [s.to_s, s.encoding.to_s] }
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_object_non_ascii_ivar() {
+        // An instance-variable name with non-ASCII bytes is written as an
+        // encoding-wrapped symbol key and read back through `read_symbol`.
+        run_test(
+            r#"
+            o = Object.new
+            ivar = "@é".dup.force_encoding("UTF-8").to_sym
+            o.instance_variable_set(ivar, 1)
+            Marshal.dump(o).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            o = Object.new
+            ivar = "@é".dup.force_encoding("UTF-8").to_sym
+            o.instance_variable_set(ivar, 1)
+            r = Marshal.load(Marshal.dump(o))
+            [r.instance_variables.map(&:to_s), r.instance_variable_get(ivar)]
             "#,
         );
     }
