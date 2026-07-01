@@ -214,7 +214,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "hash", hash, 0);
     globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
     globals.define_builtin_func(kernel_class, "dup", dup, 0);
-    globals.define_builtin_func_with(kernel_class, "clone", clone_val, 0, 1, false);
+    globals.define_builtin_func_with_kw(kernel_class, "clone", clone_val, 0, 0, false, &["freeze"], false);
     let init_copy_fid =
         globals.define_private_builtin_func(kernel_class, "initialize_copy", initialize_copy, 1);
     let init_clone_fid =
@@ -628,12 +628,19 @@ fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp, pc: BytecodePtr) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/loop.html]
 #[monoruby_builtin]
-fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let Some(bh) = lfp.block() else {
+        // No block: return an infinite Enumerator (size == Float::INFINITY).
+        let method = IdentId::get_id("loop");
+        let size = Value::float(f64::INFINITY);
+        return vm.generate_enumerator_with_size(method, lfp.self_val(), vec![], pc, Some(size));
+    };
     let data = vm.get_block_data(globals, bh)?;
     loop {
         if let Err(err) = vm.invoke_block(globals, &data, &[]) {
-            return if err.kind() == &MonorubyErrKind::StopIteration {
+            // `loop` swallows StopIteration and any user subclass of it, and
+            // re-raises everything else (including control-flow signals).
+            return if err.is_stop_iteration(&globals.store) {
                 Ok(Value::nil())
             } else {
                 Err(err)
@@ -2562,8 +2569,26 @@ fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__method__.html]
 #[monoruby_builtin]
 fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let fid = vm.cfp().prev().unwrap().method_func_id();
-    if !globals.store[fid].is_method() {
+    // Skip native (builtin) caller frames such as `send`/`__send__`/
+    // `public_send` so that `send("__method__")` reports the Ruby method that
+    // invoked `send`, not `send` itself.
+    let mut cfp = vm.cfp().prev();
+    while let Some(f) = cfp {
+        if !f.lfp().meta().is_native() {
+            break;
+        }
+        cfp = f.prev();
+    }
+    let Some(caller) = cfp else {
+        return Ok(Value::nil());
+    };
+    let outer = caller.outermost_lfp();
+    let fid = outer.func_id();
+    // `__method__` yields nil outside of a method body. A `define_method`
+    // body is a Proc-typed function (not `FuncType::Method`) but runs in a
+    // frame tagged `proc_method` and carries the installed method name, so
+    // accept those too.
+    if !globals.store[fid].is_method() && !outer.meta().is_proc_method() {
         return Ok(Value::nil());
     }
     globals.store[fid]
@@ -3210,33 +3235,60 @@ fn clone_val(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    let copy = self_val.clone_value();
+    // `freeze:` keyword (slot 0): `None` = not passed, `Some(v)` = passed
+    // (including `Some(nil)`). Only nil / true / false are accepted.
+    let freeze_arg = lfp.try_arg(0);
+    if let Some(v) = freeze_arg {
+        if !(v.is_nil() || v == Value::bool(true) || v == Value::bool(false)) {
+            return Err(MonorubyErr::argumenterr(format!(
+                "unexpected value for freeze: {}",
+                v.get_real_class_name(&globals.store)
+            )));
+        }
+    }
+    // `freeze: true`  -> copy is frozen; `freeze: false` -> copy is not frozen;
+    // `freeze: nil` / omitted -> copy inherits the original's frozen state
+    // (which `clone_value` already carried over).
+    let target_frozen = match freeze_arg {
+        Some(v) if v == Value::bool(true) => true,
+        Some(v) if v == Value::bool(false) => false,
+        _ => self_val.is_frozen(),
+    };
+
+    let mut copy = self_val.clone_value();
     copy_finalizers(globals, self_val.id(), copy.id());
     if self_val.is_class_or_module().is_some() {
         return Ok(copy);
     }
-    // Skip the no-op copy-hook dispatch when the class uses the default
-    // hooks (see `dup` / `uses_default_copy_hooks`).
+    // Keep the copy mutable while the copy hook runs (CRuby freezes only
+    // afterwards), so a hook may still initialise a to-be-frozen copy.
+    copy.clear_frozen();
+
+    // Skip the no-op copy-hook dispatch when the class uses the default hooks
+    // (see `dup` / `uses_default_copy_hooks`).
     let version = Globals::class_version();
-    if globals
-        .store
-        .uses_default_copy_hooks(copy.class(), version)
-    {
-        return Ok(copy);
+    if !globals.store.uses_default_copy_hooks(copy.class(), version) {
+        // Run the `initialize_clone` hook. When `freeze:` was passed explicitly,
+        // forward it as a keyword argument (matching CRuby), so a hook that does
+        // not accept keywords raises ArgumentError. Root `copy` across the
+        // dispatch (it allocates).
+        let temp = vm.temp_len();
+        vm.temp_push(copy);
+        let kw = if let Some(v) = freeze_arg {
+            let mut map = RubyMap::default();
+            map.insert(Value::symbol(IdentId::get_id("freeze")), v, vm, globals)?;
+            Some(Hashmap::new(Value::hash(map)))
+        } else {
+            None
+        };
+        vm.invoke_method_inner(globals, IdentId::INITIALIZE_CLONE, copy, &[self_val], None, kw)?;
+        vm.temp_clear(temp);
     }
-    // Run the `initialize_clone` hook (default validates; a subclass may
-    // override it). Root `copy` across the dispatch (it allocates).
-    let temp = vm.temp_len();
-    vm.temp_push(copy);
-    vm.invoke_method_inner(
-        globals,
-        IdentId::INITIALIZE_CLONE,
-        copy,
-        &[self_val],
-        None,
-        None,
-    )?;
-    vm.temp_clear(temp);
+    // Packed immediates (Integer/Symbol/true/…) are always frozen and have no
+    // mutable header, so only real heap values need the frozen flag applied.
+    if target_frozen && !copy.is_packed_value() {
+        copy.set_frozen();
+    }
     Ok(copy)
 }
 
@@ -4070,6 +4122,46 @@ fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn clone_freeze_coverage() {
+        // Kernel#clone `freeze:` keyword: forced frozen state, ArgumentError on
+        // a bad value, and `freeze: nil` inheriting the original's state.
+        run_test_once(
+            r##"(o=Object.new; a=o.clone(freeze: true).frozen?; b=(x="s".freeze; x.clone(freeze: false).frozen?); c=(begin; o.clone(freeze: 1); rescue => e; e.class; end); d=o.clone(freeze: nil).frozen?; e2=("f".freeze.clone(freeze: nil).frozen?); [a,b,c,d,e2])"##,
+        );
+        // `freeze:` is forwarded to #initialize_clone as a keyword argument.
+        run_test_once(
+            r##"(class KC; def initialize_clone(orig, **kw); $rec=kw; super(orig); end; end; obj=KC.new; obj.clone(freeze: true); r1=($rec == {freeze: true}); class KC2; def initialize_clone(orig); super; end; end; r2=(begin; KC2.new.clone(freeze: true); rescue => e; e.class; end); [r1, r2])"##,
+        );
+    }
+
+    #[test]
+    fn method_callee_coverage() {
+        // __method__/__callee__ inside a define_method body, through send, and
+        // in a normal method; nil outside any method.
+        run_test_once(
+            r##"(class MC; define_method(:dm){ [__method__, __callee__] }; def from_send; send "__method__"; end; def normal; __method__; end; end; o=MC.new; [o.dm, o.from_send, o.normal, (__method__)])"##,
+        );
+    }
+
+    #[test]
+    fn loop_coverage() {
+        // No-block Enumerator (infinite size) and rescue of StopIteration
+        // subclasses / a finished iterator.
+        run_test_once(
+            r##"(a=loop.instance_of?(Enumerator); b=(loop.size == Float::INFINITY); sub=Class.new(StopIteration); c=(loop{ raise sub }; :done); e=[1,2].each; d=(loop{ e.next }; :finished); [a,b,c,d])"##,
+        );
+    }
+
+    #[test]
+    fn format_alias_coverage() {
+        // format/sprintf alias identity (instance + module method) and the
+        // private default respond_to_missing?.
+        run_test_once(
+            r##"(a=Kernel.instance_method(:format)==Kernel.instance_method(:sprintf); b=Kernel.method(:format)==Kernel.method(:sprintf); c=Kernel.private_method_defined?(:respond_to_missing?); e2=format("%03d", 7); [a,b,c,e2])"##,
+        );
+    }
 
     #[test]
     fn caller_start_length_and_range() {

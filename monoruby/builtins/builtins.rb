@@ -823,3 +823,22 @@ class << ENV
     to_h.except(*keys)
   end
 end
+
+module Kernel
+  # core/kernel/format_spec.rb: `format` is a strict alias of `sprintf`, both
+  # as the private instance method and as the module (singleton) method.
+  # monoruby registered them as separate builtins sharing one Rust fn (distinct
+  # FuncId), so re-point them as real aliases.
+  class << self
+    alias format sprintf
+  end
+  alias format sprintf
+
+  # core/kernel/respond_to_missing_spec.rb: the default
+  # `Kernel#respond_to_missing?` is a *private* instance method that returns
+  # false (and is therefore not a module/singleton method). monoruby handled the
+  # protocol internally without defining the method, so define the default here.
+  private def respond_to_missing?(name, include_all = false)
+    false
+  end
+end

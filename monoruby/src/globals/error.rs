@@ -223,6 +223,29 @@ impl MonorubyErr {
         .to_string()
     }
 
+    /// Whether this error is a `StopIteration` (or a subclass of it). Returns
+    /// `false` for the internal control-flow kinds (`return`/`throw`/`retry`/
+    /// `redo`), which have no exception class. Used by `Kernel#loop`, which
+    /// terminates on `StopIteration` and any user subclass of it.
+    pub fn is_stop_iteration(&self, store: &Store) -> bool {
+        match &self.kind {
+            MonorubyErrKind::MethodReturn(..)
+            | MonorubyErrKind::Throw(..)
+            | MonorubyErrKind::Retry
+            | MonorubyErrKind::Redo => false,
+            _ => {
+                let mut module = Some(store[self.class_id()].get_module());
+                while let Some(m) = module {
+                    if m.id() == STOP_ITERATION_CLASS {
+                        return true;
+                    }
+                    module = m.superclass();
+                }
+                false
+            }
+        }
+    }
+
     pub fn class_id(&self) -> ClassId {
         match &self.kind {
             MonorubyErrKind::Exception => EXCEPTION_CLASS,

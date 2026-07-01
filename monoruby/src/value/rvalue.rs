@@ -969,6 +969,10 @@ impl RValue {
         self.header.set_frozen()
     }
 
+    pub(crate) fn clear_frozen(&mut self) {
+        self.header.clear_frozen()
+    }
+
     pub(crate) fn is_chilled(&self) -> bool {
         self.header.is_chilled()
     }
@@ -2279,6 +2283,10 @@ impl Header {
 
     fn set_frozen(&mut self) {
         unsafe { self.meta.flag |= 0b10 }
+    }
+
+    fn clear_frozen(&mut self) {
+        unsafe { self.meta.flag &= !0b10 }
     }
 
     ///

@@ -582,6 +582,14 @@ impl Value {
         self.rvalue_mut().set_frozen()
     }
 
+    /// Clear the frozen flag on `self` (used by `clone(freeze: false)`).
+    /// No-op for packed values, which are always frozen.
+    pub(crate) fn clear_frozen(&mut self) {
+        if !self.is_packed_value() {
+            self.rvalue_mut().clear_frozen()
+        }
+    }
+
     ///
     /// Ensure `self` is not frozen. Returns FrozenError if it is.
     ///
