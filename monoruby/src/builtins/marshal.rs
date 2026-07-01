@@ -526,7 +526,7 @@ impl<'a> MarshalReader<'a> {
 
         // Look up the class by checking constants on Object
         let class_name_id = IdentId::get_id(&class_name);
-        let (obj, native_class) = match globals
+        let (obj, native_class, module) = match globals
             .get_constant(OBJECT_CLASS, class_name_id)
             .and_then(|state| state.loaded_value())
         {
@@ -541,7 +541,7 @@ impl<'a> MarshalReader<'a> {
                         .alloc_func()
                         .map(|f| f as *const () == crate::default_alloc_func as *const ())
                         .unwrap_or(true);
-                    (Value::object(module.id()), !uses_default)
+                    (Value::object(module.id()), !uses_default, module)
                 } else {
                     return Err(MonorubyErr::argumenterr(format!(
                         "undefined class/module {}",
@@ -563,15 +563,10 @@ impl<'a> MarshalReader<'a> {
             let val = self.read_value(vm, globals)?;
             ivars.push((ivar_sym, val));
         }
-        // Built-in classes with internal storage (e.g. Range) can't be
-        // represented as generic 'o' objects. If the class is Range, try to
-        // reconstruct a real Range from its @begin/@end/@excl ivars.
-        let built_obj = if native_class && class_name != "Range" {
-            return Err(MonorubyErr::argumenterr(format!(
-                "can't load instance of {} from generic marshal object",
-                class_name
-            )));
-        } else if class_name == "Range" {
+        // Built-in classes with internal storage (e.g. Range, Exception)
+        // can't be represented as generic 'o' objects; reconstruct the
+        // real value from its ivars, or raise for the ones we can't.
+        let built_obj = if class_name == "Range" {
             let mut begin = Value::nil();
             let mut end = Value::nil();
             let mut excl = false;
@@ -584,6 +579,44 @@ impl<'a> MarshalReader<'a> {
                 }
             }
             Value::range(begin, end, excl)
+        } else if is_exception_class(globals, module) {
+            // Rebuild an Exception from its `:mesg` / `:bt` ivars, then
+            // restore any user ivars and the backtrace.
+            let mut message: Option<String> = None;
+            let mut backtrace: Option<Value> = None;
+            let mut user_ivars: Vec<(IdentId, Value)> = Vec::new();
+            for (name, val) in &ivars {
+                match name.get_name().as_str() {
+                    "mesg" => {
+                        if let Some(s) = val.is_rstring_inner() {
+                            message = Some(String::from_utf8_lossy(s.as_bytes()).into_owned());
+                        }
+                    }
+                    "bt" => {
+                        if !val.is_nil() {
+                            backtrace = Some(*val);
+                        }
+                    }
+                    _ => user_ivars.push((*name, *val)),
+                }
+            }
+            // A nil `:mesg` means "no explicit message"; CRuby's default
+            // message is then the class name.
+            let msg = message.unwrap_or_else(|| class_name.clone());
+            let exc = Value::new_exception_from_with_class(msg, module.id(), module.id());
+            if let Some(bt) = backtrace {
+                let set_bt = IdentId::get_id("set_backtrace");
+                vm.invoke_method_inner(globals, set_bt, exc, &[bt], None, None)?;
+            }
+            for (name, val) in user_ivars {
+                globals.set_ivar(exc, name, val)?;
+            }
+            exc
+        } else if native_class {
+            return Err(MonorubyErr::argumenterr(format!(
+                "can't load instance of {} from generic marshal object",
+                class_name
+            )));
         } else {
             for (name, val) in &ivars {
                 globals.set_ivar(obj, *name, *val)?;
@@ -1001,6 +1034,18 @@ fn resolve_class_path(globals: &Globals, path: &str) -> Option<Module> {
 ///
 /// Mirrors `super::struct_class::get_members`, which a follow-up
 /// can consolidate once the marshal module gets access to it.
+/// Return true if `class` is `Exception` or one of its subclasses.
+fn is_exception_class(_globals: &Globals, class: Module) -> bool {
+    let mut cur = Some(class);
+    while let Some(c) = cur {
+        if c.id() == EXCEPTION_CLASS {
+            return true;
+        }
+        cur = c.superclass();
+    }
+    false
+}
+
 fn lookup_struct_members(globals: &Globals, mut class: Module) -> Option<Array> {
     loop {
         if let Some(v) = globals
@@ -1629,6 +1674,56 @@ fn marshal_dump_value(
                         buf.extend_from_slice(src);
                         buf.push(opt);
                         marshal_write_string_encoding_ivar(buf, re.declared_encoding(), symbols);
+                    }
+                    Some(ObjTy::EXCEPTION) => {
+                        // Exception: generic 'o' object whose first two
+                        // ivars are the special `:mesg` (message, or nil
+                        // when it was never given) and `:bt` (backtrace,
+                        // nil unless set), followed by any user ivars.
+                        let class_name = obj.get_real_class_name(&globals.store);
+                        if class_name.starts_with("#<") {
+                            return Err(MonorubyErr::typeerr(format!(
+                                "can't dump anonymous class {}",
+                                class_name
+                            )));
+                        }
+                        let class_name_id = IdentId::get_id(&class_name);
+                        let msg = obj
+                            .is_exception()
+                            .map(|e| e.message().to_string())
+                            .unwrap_or_default();
+                        let user_ivars = globals.get_ivars(obj);
+                        // #backtrace returns nil for a never-raised
+                        // exception, else an array of location strings.
+                        let bt = vm.invoke_method_inner(
+                            globals,
+                            IdentId::get_id("backtrace"),
+                            obj,
+                            &[],
+                            None,
+                            None,
+                        )?;
+                        buf.push(b'o');
+                        marshal_write_symbol(buf, class_name_id, symbols);
+                        marshal_write_fixnum(buf, (2 + user_ivars.len()) as i32);
+                        // :mesg — CRuby stores nil until a message is
+                        // explicitly given; monoruby always materializes
+                        // the default (the class name), so treat a message
+                        // equal to the class name as "unset".
+                        marshal_write_symbol(buf, IdentId::get_id("mesg"), symbols);
+                        if msg == class_name {
+                            buf.push(b'0'); // nil
+                        } else {
+                            let msg_val = Value::string_from_str(&msg);
+                            marshal_dump_value(buf, msg_val, vm, globals, symbols, objects)?;
+                        }
+                        // :bt
+                        marshal_write_symbol(buf, IdentId::get_id("bt"), symbols);
+                        marshal_dump_value(buf, bt, vm, globals, symbols, objects)?;
+                        for (name, val) in user_ivars {
+                            marshal_write_symbol(buf, name, symbols);
+                            marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                        }
                     }
                     _ => {
                         return Err(MonorubyErr::typeerr(format!(
@@ -2373,6 +2468,37 @@ mod tests {
             [r.year, r.month, r.day, r.hour, r.min, r.sec, r.utc?]
             "#,
         );
+    }
+
+    #[test]
+    fn marshal_exception() {
+        // Exceptions serialize as generic 'o' objects with :mesg / :bt
+        // ivars (plus any user ivars) and round-trip.
+        run_test(r#"Marshal.dump(Exception.new).bytes"#);
+        run_test(r#"Marshal.dump(Exception.new("foo")).bytes"#);
+        run_test(
+            r#"
+            e = RuntimeError.new("boom")
+            r = Marshal.load(Marshal.dump(e))
+            [r.class.to_s, r.message]
+            "#,
+        );
+        run_test(
+            r#"
+            e = Exception.new("x")
+            e.instance_variable_set(:@ivar, 7)
+            Marshal.dump(e).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            e = Exception.new
+            r = Marshal.load(Marshal.dump([e, e]))
+            r[0].equal?(r[1])
+            "#,
+        );
+        // Anonymous exception subclass cannot be dumped.
+        run_test_error(r#"Marshal.dump(Class.new(Exception).new)"#);
     }
 
     #[test]
