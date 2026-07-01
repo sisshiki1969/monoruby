@@ -507,7 +507,11 @@ class Dir
   def each(&block)
     raise IOError, "closed directory" if @closed
     return to_enum(:each) unless block
+    # #each always yields every entry (so repeated calls give the same result),
+    # then leaves the read cursor at end-of-stream so a following #read returns
+    # nil (core/dir/each_spec.rb).
     @entries.each { |e| block.call(e) }
+    @pos = @entries.length
     self
   end
 
@@ -541,7 +545,12 @@ class Dir
     @pos = newpos
   end
 
-  alias seek pos=
+  # Unlike `pos=` (which yields the assigned value), Dir#seek returns the Dir
+  # itself (core/dir/seek_spec.rb).
+  def seek(newpos)
+    self.pos = newpos
+    self
+  end
 
   def close
     @closed = true
@@ -565,9 +574,14 @@ class Dir
   def self.each_child(path, encoding: nil, &block)
     return to_enum(:each_child, path) unless block
     children(path).each { |e| block.call(e) }
+    nil
   end
 
   def self.empty?(path)
+    # A path that exists but is not a directory is not "empty" — it returns
+    # false rather than raising (core/dir/empty_spec.rb). A missing path still
+    # raises Errno::ENOENT (surfaced by `children`/`entries`).
+    return false if File.exist?(path) && !File.directory?(path)
     children(path).empty?
   end
 end
@@ -600,8 +614,63 @@ class Array
 end
 
 class File
+  # Instance timestamp readers (core/file/{atime,mtime,ctime,birthtime}_spec.rb).
+  # monoruby only defined the File.<name>(path) class methods; delegate the
+  # instance form through the receiver's #path.
+  def atime;     File.atime(path);     end
+  def mtime;     File.mtime(path);     end
+  def ctime;     File.ctime(path);     end
+  def birthtime; File.birthtime(path); end
+
+  # Instance chmod/chown (core/file/{chmod,chown}_spec.rb): only the class
+  # forms existed. Delegate through #path and return 0, as CRuby's instance
+  # forms do (the class forms return the number of files affected).
+  def chmod(mode);         File.chmod(mode, path);          0; end
+  def chown(owner, group); File.chown(owner, group, path);  0; end
+
+  # Purely lexical `dirname` (core/file/dirname_spec.rb). CRuby does *not*
+  # resolve `.`/`..` or collapse interior slashes; it only strips the last
+  # `/component` (and the slashes immediately before it), `level` times.
+  def self.dirname(path, level = 1)
+    path = path.to_path if !path.is_a?(String) && path.respond_to?(:to_path)
+    path = path.to_str  if !path.is_a?(String) && path.respond_to?(:to_str)
+    raise TypeError, "no implicit conversion of #{path.class} into String" unless path.is_a?(String)
+    unless level.is_a?(Integer)
+      unless level.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{level.class} into Integer"
+      end
+      level = level.to_int
+    end
+    raise ArgumentError, "negative level: #{level}" if level < 0
+    result = path
+    level.times do
+      prev = result
+      result = _dirname_once(result)
+      break if result == prev
+    end
+    result
+  end
+
+  def self._dirname_once(path)
+    return "/" if path =~ %r{\A/+\z}   # all slashes (incl. "/")
+    s = path.sub(%r{/+\z}, "")         # drop trailing slashes
+    return "." if s.empty?             # empty path
+    idx = s.rindex("/")
+    return "." if idx.nil?             # no directory part
+    prefix = s[0...idx].sub(%r{/+\z}, "")
+    prefix.empty? ? "/" : prefix       # empty prefix only for absolute paths
+  end
+  private_class_method :_dirname_once
+
   def self.zero?(path)
-    s = (File.size(path) rescue return false)
+    # A missing file is not an error here (returns false), but a non-path
+    # argument (nil/true/Integer/...) must still raise the TypeError that
+    # `File.size` produces — so rescue only filesystem errors, not everything.
+    begin
+      s = File.size(path)
+    rescue SystemCallError
+      return false
+    end
     s == 0
   end
 
@@ -623,12 +692,15 @@ class File
 end
 
 module FileTest
-  def self.zero?(path)
+  def self.empty?(path)
     File.zero?(path)
   end
 
-  def self.empty?(path)
-    File.zero?(path)
+  # core/filetest/zero_spec.rb: `FileTest.zero?` is a strict alias of
+  # `FileTest.empty?` (identity check `method(:zero?) == method(:empty?)`),
+  # so re-point it rather than defining a second method sharing the body.
+  class << self
+    alias zero? empty?
   end
 end
 
@@ -711,4 +783,43 @@ class Thread
   # form for both (matches CRuby's `inspect`==`to_s`).
   def to_s = super
   alias inspect to_s
+end
+
+# ENV is a singleton object (not a class), so its methods live on its
+# singleton class. ruby/spec checks several of them for strict alias identity
+# (`ENV.method(:a) == ENV.method(:b)`). monoruby registered these as separate
+# Rust builtins sharing one fn (distinct FuncId), so re-point them as real
+# aliases here. The originals (`include?`, `value?`, `[]=`, `merge!`) are all
+# registered by `hash.rs` before this file loads.
+class << ENV
+  alias has_key? include?
+  alias key? include?
+  alias member? include?
+  alias has_value? value?
+  alias store []=
+  alias update merge!
+
+  # core/env/clone_spec.rb / dup_spec.rb: unlike a plain Hash, ENV cannot be
+  # copied — CRuby raises TypeError from `#clone`/`#dup`. `#clone` still
+  # validates its `freeze:` keyword first (ArgumentError for a non-boolean
+  # value or an unknown keyword), matching Kernel#clone's signature.
+  def clone(freeze: nil, **rest)
+    unless rest.empty?
+      raise ArgumentError, "unknown keyword: #{rest.keys.first.inspect}"
+    end
+    unless freeze.nil? || freeze == true || freeze == false
+      raise ArgumentError, "unexpected value for freeze: #{freeze.class}"
+    end
+    raise TypeError, "Cannot clone ENV, use ENV.to_h to get a copy of ENV as a hash"
+  end
+
+  def dup
+    raise TypeError, "Cannot dup ENV, use ENV.to_h to get a copy of ENV as a hash"
+  end
+
+  # Hash#except is implemented via #dup, which ENV now forbids. CRuby's
+  # ENV.except returns a plain Hash snapshot, so route it through #to_h.
+  def except(*keys)
+    to_h.except(*keys)
+  end
 end

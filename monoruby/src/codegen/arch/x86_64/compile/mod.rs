@@ -386,13 +386,33 @@ impl Codegen {
                     jo   deopt;
                 );
             }
-            // Kernel#block_given?: FALSE unless [r14 - LFP_BLOCK] is set & non-nil.
+            // Kernel#block_given?: walk to the outermost method frame, then
+            // report whether its block slot is set & non-nil.
             LInst::BlockGiven { dst } => {
                 let d = dst as u64;
                 let exit = self.jit.label();
+                let walk = self.jit.label();
+                let found = self.jit.label();
+                // `block_given?` reports whether the *enclosing method* was
+                // given a block. When this runs inside a block frame, the
+                // current LFP's own block slot is that block's block param
+                // (usually nil), so we must first walk the `outer` chain up to
+                // the outermost method frame — mirroring `Lfp::outermost`
+                // (stop at a `proc_method` frame or when there is no outer).
                 monoasm!( &mut self.jit,
+                    movq rdi, r14;                              // rdi = current LFP
+                    testb [rdi - (LFP_META - META_KIND)], (0b0010_0000_u8 as i8); // is_proc_method?
+                    jnz found;
+                walk:
+                    movq rax, [rdi - (LFP_OUTER)];              // rax = outer LFP (0 = none)
+                    testq rax, rax;
+                    jz found;                                   // no outer -> rdi is outermost
+                    movq rdi, rax;
+                    testb [rdi - (LFP_META - META_KIND)], (0b0010_0000_u8 as i8);
+                    jz walk;                                    // not a method boundary -> keep walking
+                found:
                     movq R(d), (FALSE_VALUE);
-                    movq rdi, [r14 - (LFP_BLOCK)];
+                    movq rdi, [rdi - (LFP_BLOCK)];
                     testq rdi, rdi;
                     jz exit;
                     cmpq rdi, (NIL_VALUE);

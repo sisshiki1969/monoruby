@@ -971,36 +971,39 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 INTEGER_CLASS,
             ));
         }
-        // Beginless: nil start ⇒ index 0. Endless: nil end ⇒ char_length - 1
-        // (so the inclusive `end` reaches the last character; the
-        // exclusive bookkeeping below subtracts as usual). `char_length`
-        // is O(1) for ASCII-only strings (cached SevenBit code range).
+        // Resolve the Range following CRuby's `rb_range_beg_len`: normalize a
+        // negative begin/end against the length *first*, then fold
+        // `exclude_end` into an exclusive upper bound. Doing the exclusive
+        // adjustment before negative-index resolution is what previously made
+        // `"abc"[0...0]` wrap the end to -1 and return the whole string.
+        // `char_length` is O(1) for ASCII-only strings (cached SevenBit).
         let char_length = lhs.char_length() as i64;
-        let start = if info.start().is_nil() {
+        let mut beg = if info.start().is_nil() {
             0
         } else {
             info.start().coerce_to_int_i64(vm, globals)?
         };
-        let end = if info.end().is_nil() {
-            // For endless ranges we just want "everything from start".
-            // Use char_length and treat exclude_end as a no-op so the
-            // slice extends through the final character.
-            char_length - 1
+        if beg < 0 {
+            beg += char_length;
+        }
+        // A begin past the end is out of range (nil); begin == length yields "".
+        if beg < 0 || beg > char_length {
+            return Ok(Value::nil());
+        }
+        let end_excl = if info.end().is_nil() {
+            char_length
         } else {
-            info.end().coerce_to_int_i64(vm, globals)? - info.exclude_end() as i64
-        };
-        let (start, len) = match (lhs.conv_char_index(start), lhs.conv_char_index(end)) {
-            (Some(start), Some(end)) => {
-                if start > end {
-                    (start, 0)
-                } else {
-                    (start, end - start + 1)
-                }
+            let mut end = info.end().coerce_to_int_i64(vm, globals)?;
+            if end < 0 {
+                end += char_length;
             }
-            (Some(start), None) => (start, 0),
-            (None, _) => return Ok(Value::nil()),
+            if !info.exclude_end() {
+                end += 1;
+            }
+            end
         };
-        let r = lhs.get_range(start, len);
+        let len = (end_excl - beg).max(0) as usize;
+        let r = lhs.get_range(beg as usize, len);
         // Zero-copy shared substring (CoW) for long enough slices.
         Ok(string_substring(self_, r.start, r.end))
     } else if let Some(re) = lfp.arg(0).is_regex() {

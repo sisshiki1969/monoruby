@@ -87,6 +87,7 @@ pub(super) fn init(globals: &mut Globals) {
 
     globals.define_builtin_func_rest(file, "write", write);
     globals.define_builtin_func(file, "size", size, 0);
+    globals.define_builtin_func(file, "truncate", file_truncate_instance, 1);
     globals.define_builtin_func(file, "flock", flock_, 1);
 
     globals.define_builtin_class_func_with(file, "umask", umask, 0, 1, false);
@@ -496,46 +497,69 @@ fn io_try_convert(
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/join.html]
 #[monoruby_builtin]
 fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // Collect the leaf path components in order (flattening nested arrays).
     fn flatten(
         vm: &mut Executor,
         globals: &mut Globals,
-        path: &mut String,
+        parts: &mut Vec<String>,
         val: Value,
         seen: &mut Vec<u64>,
     ) -> Result<()> {
         match val.try_array_ty() {
             Some(ainfo) => {
+                // An empty array argument joins as a single empty component,
+                // so `File.join([], [])` == "/" (core/file/join_spec.rb).
+                if ainfo.len() == 0 {
+                    parts.push(String::new());
+                    return Ok(());
+                }
                 let id = val.id();
                 if seen.contains(&id) {
                     return Err(MonorubyErr::argumenterr("recursive array"));
                 }
                 seen.push(id);
                 for v in ainfo.iter().cloned() {
-                    flatten(vm, globals, path, v, seen)?;
+                    flatten(vm, globals, parts, v, seen)?;
                 }
                 seen.pop();
             }
             None => {
-                if !path.is_empty() && !path.ends_with('/') {
-                    path.push('/');
-                }
                 let s = val.coerce_to_path_rstring(vm, globals)?;
-                let s = s.to_str()?;
-                path.push_str(if !path.is_empty() && !s.is_empty() && s.starts_with('/') {
-                    &s[1..]
-                } else if path.is_empty() && s.is_empty() {
-                    "/"
-                } else {
-                    &s
-                });
+                let s = s.to_str()?.to_string();
+                if s.as_bytes().contains(&0) {
+                    return Err(MonorubyErr::argumenterr("string contains null byte"));
+                }
+                parts.push(s);
             }
         }
         Ok(())
     }
-    let mut path = String::new();
+    let mut parts = vec![];
     let mut seen = vec![];
     for v in lfp.arg(0).as_array().iter().cloned() {
-        flatten(vm, globals, &mut path, v, &mut seen)?;
+        flatten(vm, globals, &mut parts, v, &mut seen)?;
+    }
+    // Join adjacent components with a single separator. When both sides of a
+    // junction already carry a separator, CRuby keeps the right part's leading
+    // separators and drops the left part's trailing ones ("usr//" + "/bin" ->
+    // "usr/bin", "usr/" + "//bin" -> "usr//bin"); when exactly one side has one
+    // it is reused; when neither does a "/" is inserted.
+    let mut path = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        if i == 0 {
+            path.push_str(part);
+            continue;
+        }
+        let left_sep = path.ends_with('/');
+        let right_sep = part.starts_with('/');
+        if left_sep && right_sep {
+            while path.ends_with('/') {
+                path.pop();
+            }
+        } else if !left_sep && !right_sep {
+            path.push('/');
+        }
+        path.push_str(part);
     }
     Ok(Value::string(path))
 }
@@ -666,9 +690,44 @@ fn file_basename(
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/directory=3f.html]
 #[monoruby_builtin]
 fn directory_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
+    // CRuby's `rb_stat` accepts either a path (coerced via `#to_path`/`#to_str`)
+    // or an IO/fd (converted via `#to_io` and `fstat`'d). Try the path form
+    // first — this covers String and IO objects that expose `#to_path` — and
+    // fall back to `#to_io` on a coercion failure before surfacing the
+    // TypeError. `Path::is_dir` stats the path and returns false for a
+    // non-existent entry, so no canonicalization (which would swallow the
+    // TypeError for a non-path type such as Integer/nil) is needed.
+    let arg = lfp.arg(0);
+    match to_path(vm, globals, arg) {
         Ok(path) => Ok(Value::bool(path.is_dir())),
-        Err(_) => Ok(Value::bool(false)),
+        Err(e) => {
+            let to_io = IdentId::get_id("to_io");
+            if globals.check_method(arg, to_io).is_some() {
+                let io = vm.invoke_method_inner(globals, to_io, arg, &[], None, None)?;
+                if let Some(rv) = io.try_rvalue()
+                    && rv.ty() == ObjTy::IO
+                {
+                    let fd = io.as_io_inner().fileno()?;
+                    return Ok(Value::bool(fd_is_dir(fd)));
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+/// `fstat(2)` an open file descriptor and report whether it refers to a
+/// directory. A failed `fstat` (bad fd, etc.) reports `false`.
+fn fd_is_dir(fd: i32) -> bool {
+    // SAFETY: `fstat` fills a zeroed `stat` buffer for an open fd; we only
+    // read `st_mode`. On failure the buffer is unused and we return false.
+    unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut st) == 0 {
+            (st.st_mode & libc::S_IFMT) == libc::S_IFDIR
+        } else {
+            false
+        }
     }
 }
 
@@ -1366,23 +1425,6 @@ fn extend(path: &mut std::path::PathBuf, extend: std::path::PathBuf) -> Result<(
     Ok(())
 }
 
-/// Convert `file` to canonicalized PathBuf.
-fn to_canonicalized_path(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    file: Value,
-    msg: &str,
-) -> Result<std::path::PathBuf> {
-    let path = to_path(vm, globals, file)?;
-    match path.canonicalize() {
-        Ok(file) => Ok(file),
-        Err(_) => Err(MonorubyErr::argumenterr(format!(
-            "{} is an invalid filename. {:?}",
-            msg, path
-        ))),
-    }
-}
-
 /// Convert `file` to PathBuf.
 fn to_path(vm: &mut Executor, globals: &mut Globals, file: Value) -> Result<std::path::PathBuf> {
     let file = to_path_str(vm, globals, file)?;
@@ -1896,6 +1938,39 @@ fn file_truncate(
     file.set_len(length as u64).map_err(|e| {
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_truncate", &path_str)
     })?;
+    Ok(Value::integer(0))
+}
+
+///
+/// ### File#truncate (instance method)
+/// - truncate(length) -> 0
+///
+/// Truncates the open file to at most `length` bytes via `ftruncate(2)` on the
+/// underlying descriptor (so it works even after the path was unlinked, and
+/// does not disturb the read/write offset).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/i/truncate.html]
+#[monoruby_builtin]
+fn file_truncate_instance(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let length = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if length < 0 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "negative length {}",
+            length
+        )));
+    }
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    // SAFETY: `fd` is this File's open descriptor; `ftruncate` only resizes it.
+    let rc = unsafe { libc::ftruncate(fd, length as libc::off_t) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "ftruncate"));
+    }
     Ok(Value::integer(0))
 }
 
@@ -2481,6 +2556,24 @@ fn file_realdirpath(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn file_instance_method_coverage() {
+        // File# instance timestamps, #truncate (ftruncate on the fd), and
+        // #chmod/#chown (return 0).
+        run_test_once(
+            r##"(f="/tmp/mono_cov_#{Process.pid}.txt"; File.write(f,"hello world"); io=File.open(f,"r+"); a=(io.mtime==File.mtime(f)); b=io.atime.class; c=io.ctime.class; io.truncate(5); io.close; d=File.read(f); g=File.open(f); e2=g.chmod(0o600); h=g.chown(nil,nil); g.close; File.delete(f); [a,b,c,d,e2,h])"##,
+        );
+    }
+
+    #[test]
+    fn file_directory_and_join_coverage() {
+        // File.directory? on an IO / #to_io object and its TypeError branch,
+        // File.join array flattening + NUL check, and lexical dirname edges.
+        run_test_once(
+            r##"(a=File.directory?(STDIN); o=Object.new; def o.to_io; STDIN; end; b=File.directory?(o); c=(begin; File.directory?(1); rescue => e; e.class; end); d=(begin; File.directory?(nil); rescue => e; e.class; end); e2=File.join("a",["b","c"]); f=(begin; File.join("\x00x","y"); rescue => x; [x.class,x.message]; end); [a,b,c,d,e2,f,File.dirname("/.."),File.dirname("./b"),File.dirname("..")])"##,
+        );
+    }
 
     #[test]
     fn basename_suffix() {

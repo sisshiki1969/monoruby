@@ -82,7 +82,14 @@ fn children(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/foreach.html]
 #[monoruby_builtin]
-fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    // Without a block, return a (lazy, size-less) Enumerator that replays
+    // `Dir.foreach(path)` when iterated — matching CRuby, which defers the
+    // directory read (and any ENOENT) until enumeration.
+    let Some(bh) = lfp.block() else {
+        let method = IdentId::get_id("foreach");
+        return vm.generate_enumerator(method, lfp.self_val(), vec![lfp.arg(0)], pc);
+    };
     let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
     let mut names = vec![".".to_string(), "..".to_string()];
     for entry in std::fs::read_dir(&path)
@@ -92,17 +99,11 @@ fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             entry.map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
         names.push(entry.file_name().to_string_lossy().to_string());
     }
-    if let Some(bh) = lfp.block() {
-        let p = vm.get_block_data(globals, bh)?;
-        for name in names {
-            vm.invoke_block(globals, &p, &[Value::string(name)])?;
-        }
-        Ok(Value::nil())
-    } else {
-        Ok(Value::array_from_vec(
-            names.into_iter().map(Value::string).collect(),
-        ))
+    let p = vm.get_block_data(globals, bh)?;
+    for name in names {
+        vm.invoke_block(globals, &p, &[Value::string(name)])?;
     }
+    Ok(Value::nil())
 }
 
 ///
@@ -566,41 +567,47 @@ fn process_glob_pattern(
     };
 
     // Build the component list from the remaining path segments.
+    let segments: Vec<&str> = segments.collect();
+    let last_idx = segments.len().saturating_sub(1);
     let mut components: Vec<PathComponent> = vec![];
-    for seg in segments {
-        components.push(match seg {
+    for (i, seg) in segments.iter().enumerate() {
+        components.push(match *seg {
             "." => PathComponent::Current,
             ".." => PathComponent::Parent,
             "" => PathComponent::None,
+            // `**` recurses only when it is a full directory component
+            // (i.e. followed by `/`). A trailing `**` with no slash — the
+            // last segment — behaves like `*`, matching just this level
+            // (CRuby: `Dir.glob("**") == Dir.glob("*")`).
+            "**" if i == last_idx => glob_name_component("*")?,
             "**" => PathComponent::Globstar,
-            s => {
-                let normalized = normalize_glob_segment(s);
-                // macOS's default filesystem (APFS / HFS+) is
-                // case-insensitive but case-preserving. CRuby compiles
-                // with `HAVE_CASEFOLD_FILESYSTEM` and silently adds
-                // FNM_CASEFOLD to every Dir.glob there, so `glob("C*")`
-                // also matches `c.rb`. Mirror that on macOS so the
-                // monoruby/CRuby differential tests agree (e.g. the
-                // `Dir.glob("./././C*")` arm of the `glob` test).
-                // `mut` is used only on macos (`case_insensitive` below).
-                #[allow(unused_mut)]
-                let mut b = globset::GlobBuilder::new(&normalized);
-                #[cfg(target_os = "macos")]
-                b.case_insensitive(true);
-                PathComponent::Name(match b.build() {
-                    Ok(g) => g,
-                    Err(e) => {
-                        return Err(MonorubyErr::runtimeerr(format!(
-                            "invalid glob pattern {:?}: {}",
-                            s, e
-                        )));
-                    }
-                })
-            }
+            s => glob_name_component(s)?,
         });
     }
 
     traverse_dir(path, components, matches, dotmatch)
+}
+
+/// Compile a single glob path segment into a `PathComponent::Name` matcher.
+fn glob_name_component(s: &str) -> Result<PathComponent> {
+    let normalized = normalize_glob_segment(s);
+    // macOS's default filesystem (APFS / HFS+) is case-insensitive but
+    // case-preserving. CRuby compiles with `HAVE_CASEFOLD_FILESYSTEM` and
+    // silently adds FNM_CASEFOLD to every Dir.glob there, so `glob("C*")`
+    // also matches `c.rb`. Mirror that on macOS so the monoruby/CRuby
+    // differential tests agree (e.g. the `Dir.glob("./././C*")` arm of the
+    // `glob` test). `mut` is used only on macos (`case_insensitive` below).
+    #[allow(unused_mut)]
+    let mut b = globset::GlobBuilder::new(&normalized);
+    #[cfg(target_os = "macos")]
+    b.case_insensitive(true);
+    match b.build() {
+        Ok(g) => Ok(PathComponent::Name(g)),
+        Err(e) => Err(MonorubyErr::runtimeerr(format!(
+            "invalid glob pattern {:?}: {}",
+            s, e
+        ))),
+    }
 }
 
 fn traverse_dir(
@@ -716,7 +723,32 @@ fn traverse_dir(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/home.html]
 #[monoruby_builtin]
-fn home(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+fn home(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // With a username argument, return that user's home directory. An unknown
+    // user raises ArgumentError (core/dir/home_spec.rb), matching CRuby.
+    if let Some(arg) = lfp.try_arg(0)
+        && !arg.is_nil()
+    {
+        let user = arg.coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
+        let c_user = std::ffi::CString::new(user.as_bytes())
+            .map_err(|_| MonorubyErr::argumenterr("user name cannot contain NUL"))?;
+        // SAFETY: `getpwnam` reads the passwd DB for the NUL-terminated name
+        // and returns a pointer into a static buffer (or null when unknown);
+        // we only read `pw_dir` immediately, before any other libc call.
+        let dir = unsafe {
+            let pw = libc::getpwnam(c_user.as_ptr());
+            if pw.is_null() {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "user {} doesn't exist",
+                    user
+                )));
+            }
+            std::ffi::CStr::from_ptr((*pw).pw_dir)
+                .to_string_lossy()
+                .to_string()
+        };
+        return Ok(Value::string(dir));
+    }
     let home = match dirs::home_dir() {
         Some(home) => home,
         None => return Ok(Value::nil()),
@@ -943,7 +975,9 @@ fn fchdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let rc = unsafe { libc::fchdir(fd) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, ""));
+        // CRuby tags the SystemCallError message with the syscall name, e.g.
+        // "Bad file descriptor - fchdir" (core/dir/fchdir_spec.rb).
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fchdir"));
     }
     if let Some(bh) = lfp.block() {
         let result = vm.invoke_block_once(globals, bh, &[]);
@@ -989,6 +1023,16 @@ fn chroot(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn dir_methods_coverage() {
+        // Dir.home(user) via getpwnam (+ ArgumentError for an unknown user),
+        // Dir.foreach's no-block Enumerator (size == nil), Dir.fchdir's tagged
+        // SystemCallError message, and the trailing `**` glob == `*` behaviour.
+        run_test_once(
+            r##"(a=Dir.home("root"); b=(begin; Dir.home("no_such_user_zzq"); rescue => e; e.class; end); c=Dir.foreach("/").is_a?(Enumerator); d=Dir.foreach("/").size; e2=(begin; Dir.fchdir(-1); rescue => x; [x.class, x.message]; end); f=(Dir.glob("**").sort==Dir.glob("*").sort); [a,b,c,d,e2,f])"##,
+        );
+    }
 
     #[test]
     fn exist() {
