@@ -497,46 +497,69 @@ fn io_try_convert(
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/join.html]
 #[monoruby_builtin]
 fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // Collect the leaf path components in order (flattening nested arrays).
     fn flatten(
         vm: &mut Executor,
         globals: &mut Globals,
-        path: &mut String,
+        parts: &mut Vec<String>,
         val: Value,
         seen: &mut Vec<u64>,
     ) -> Result<()> {
         match val.try_array_ty() {
             Some(ainfo) => {
+                // An empty array argument joins as a single empty component,
+                // so `File.join([], [])` == "/" (core/file/join_spec.rb).
+                if ainfo.len() == 0 {
+                    parts.push(String::new());
+                    return Ok(());
+                }
                 let id = val.id();
                 if seen.contains(&id) {
                     return Err(MonorubyErr::argumenterr("recursive array"));
                 }
                 seen.push(id);
                 for v in ainfo.iter().cloned() {
-                    flatten(vm, globals, path, v, seen)?;
+                    flatten(vm, globals, parts, v, seen)?;
                 }
                 seen.pop();
             }
             None => {
-                if !path.is_empty() && !path.ends_with('/') {
-                    path.push('/');
-                }
                 let s = val.coerce_to_path_rstring(vm, globals)?;
-                let s = s.to_str()?;
-                path.push_str(if !path.is_empty() && !s.is_empty() && s.starts_with('/') {
-                    &s[1..]
-                } else if path.is_empty() && s.is_empty() {
-                    "/"
-                } else {
-                    &s
-                });
+                let s = s.to_str()?.to_string();
+                if s.as_bytes().contains(&0) {
+                    return Err(MonorubyErr::argumenterr("string contains null byte"));
+                }
+                parts.push(s);
             }
         }
         Ok(())
     }
-    let mut path = String::new();
+    let mut parts = vec![];
     let mut seen = vec![];
     for v in lfp.arg(0).as_array().iter().cloned() {
-        flatten(vm, globals, &mut path, v, &mut seen)?;
+        flatten(vm, globals, &mut parts, v, &mut seen)?;
+    }
+    // Join adjacent components with a single separator. When both sides of a
+    // junction already carry a separator, CRuby keeps the right part's leading
+    // separators and drops the left part's trailing ones ("usr//" + "/bin" ->
+    // "usr/bin", "usr/" + "//bin" -> "usr//bin"); when exactly one side has one
+    // it is reused; when neither does a "/" is inserted.
+    let mut path = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        if i == 0 {
+            path.push_str(part);
+            continue;
+        }
+        let left_sep = path.ends_with('/');
+        let right_sep = part.starts_with('/');
+        if left_sep && right_sep {
+            while path.ends_with('/') {
+                path.pop();
+            }
+        } else if !left_sep && !right_sep {
+            path.push('/');
+        }
+        path.push_str(part);
     }
     Ok(Value::string(path))
 }
