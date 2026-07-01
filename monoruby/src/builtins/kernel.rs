@@ -4124,6 +4124,46 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn clone_freeze_coverage() {
+        // Kernel#clone `freeze:` keyword: forced frozen state, ArgumentError on
+        // a bad value, and `freeze: nil` inheriting the original's state.
+        run_test_once(
+            r##"(o=Object.new; a=o.clone(freeze: true).frozen?; b=(x="s".freeze; x.clone(freeze: false).frozen?); c=(begin; o.clone(freeze: 1); rescue => e; e.class; end); d=o.clone(freeze: nil).frozen?; e2=("f".freeze.clone(freeze: nil).frozen?); [a,b,c,d,e2])"##,
+        );
+        // `freeze:` is forwarded to #initialize_clone as a keyword argument.
+        run_test_once(
+            r##"(class KC; def initialize_clone(orig, **kw); $rec=kw; super(orig); end; end; obj=KC.new; obj.clone(freeze: true); r1=($rec == {freeze: true}); class KC2; def initialize_clone(orig); super; end; end; r2=(begin; KC2.new.clone(freeze: true); rescue => e; e.class; end); [r1, r2])"##,
+        );
+    }
+
+    #[test]
+    fn method_callee_coverage() {
+        // __method__/__callee__ inside a define_method body, through send, and
+        // in a normal method; nil outside any method.
+        run_test_once(
+            r##"(class MC; define_method(:dm){ [__method__, __callee__] }; def from_send; send "__method__"; end; def normal; __method__; end; end; o=MC.new; [o.dm, o.from_send, o.normal, (__method__)])"##,
+        );
+    }
+
+    #[test]
+    fn loop_coverage() {
+        // No-block Enumerator (infinite size) and rescue of StopIteration
+        // subclasses / a finished iterator.
+        run_test_once(
+            r##"(a=loop.instance_of?(Enumerator); b=(loop.size == Float::INFINITY); sub=Class.new(StopIteration); c=(loop{ raise sub }; :done); e=[1,2].each; d=(loop{ e.next }; :finished); [a,b,c,d])"##,
+        );
+    }
+
+    #[test]
+    fn format_alias_coverage() {
+        // format/sprintf alias identity (instance + module method) and the
+        // private default respond_to_missing?.
+        run_test_once(
+            r##"(a=Kernel.instance_method(:format)==Kernel.instance_method(:sprintf); b=Kernel.method(:format)==Kernel.method(:sprintf); c=Kernel.private_method_defined?(:respond_to_missing?); e2=format("%03d", 7); [a,b,c,e2])"##,
+        );
+    }
+
+    #[test]
     fn caller_start_length_and_range() {
         // `caller(start, length)` and `caller(range)`. Assert via sizes and
         // booleans so the result is independent of file paths / the toplevel
