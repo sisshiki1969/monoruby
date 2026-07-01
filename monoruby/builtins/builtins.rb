@@ -614,6 +614,14 @@ class Array
 end
 
 class File
+  # Instance timestamp readers (core/file/{atime,mtime,ctime,birthtime}_spec.rb).
+  # monoruby only defined the File.<name>(path) class methods; delegate the
+  # instance form through the receiver's #path.
+  def atime;     File.atime(path);     end
+  def mtime;     File.mtime(path);     end
+  def ctime;     File.ctime(path);     end
+  def birthtime; File.birthtime(path); end
+
   def self.zero?(path)
     # A missing file is not an error here (returns false), but a non-path
     # argument (nil/true/Integer/...) must still raise the TypeError that

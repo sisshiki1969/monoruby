@@ -567,41 +567,47 @@ fn process_glob_pattern(
     };
 
     // Build the component list from the remaining path segments.
+    let segments: Vec<&str> = segments.collect();
+    let last_idx = segments.len().saturating_sub(1);
     let mut components: Vec<PathComponent> = vec![];
-    for seg in segments {
-        components.push(match seg {
+    for (i, seg) in segments.iter().enumerate() {
+        components.push(match *seg {
             "." => PathComponent::Current,
             ".." => PathComponent::Parent,
             "" => PathComponent::None,
+            // `**` recurses only when it is a full directory component
+            // (i.e. followed by `/`). A trailing `**` with no slash — the
+            // last segment — behaves like `*`, matching just this level
+            // (CRuby: `Dir.glob("**") == Dir.glob("*")`).
+            "**" if i == last_idx => glob_name_component("*")?,
             "**" => PathComponent::Globstar,
-            s => {
-                let normalized = normalize_glob_segment(s);
-                // macOS's default filesystem (APFS / HFS+) is
-                // case-insensitive but case-preserving. CRuby compiles
-                // with `HAVE_CASEFOLD_FILESYSTEM` and silently adds
-                // FNM_CASEFOLD to every Dir.glob there, so `glob("C*")`
-                // also matches `c.rb`. Mirror that on macOS so the
-                // monoruby/CRuby differential tests agree (e.g. the
-                // `Dir.glob("./././C*")` arm of the `glob` test).
-                // `mut` is used only on macos (`case_insensitive` below).
-                #[allow(unused_mut)]
-                let mut b = globset::GlobBuilder::new(&normalized);
-                #[cfg(target_os = "macos")]
-                b.case_insensitive(true);
-                PathComponent::Name(match b.build() {
-                    Ok(g) => g,
-                    Err(e) => {
-                        return Err(MonorubyErr::runtimeerr(format!(
-                            "invalid glob pattern {:?}: {}",
-                            s, e
-                        )));
-                    }
-                })
-            }
+            s => glob_name_component(s)?,
         });
     }
 
     traverse_dir(path, components, matches, dotmatch)
+}
+
+/// Compile a single glob path segment into a `PathComponent::Name` matcher.
+fn glob_name_component(s: &str) -> Result<PathComponent> {
+    let normalized = normalize_glob_segment(s);
+    // macOS's default filesystem (APFS / HFS+) is case-insensitive but
+    // case-preserving. CRuby compiles with `HAVE_CASEFOLD_FILESYSTEM` and
+    // silently adds FNM_CASEFOLD to every Dir.glob there, so `glob("C*")`
+    // also matches `c.rb`. Mirror that on macOS so the monoruby/CRuby
+    // differential tests agree (e.g. the `Dir.glob("./././C*")` arm of the
+    // `glob` test). `mut` is used only on macos (`case_insensitive` below).
+    #[allow(unused_mut)]
+    let mut b = globset::GlobBuilder::new(&normalized);
+    #[cfg(target_os = "macos")]
+    b.case_insensitive(true);
+    match b.build() {
+        Ok(g) => Ok(PathComponent::Name(g)),
+        Err(e) => Err(MonorubyErr::runtimeerr(format!(
+            "invalid glob pattern {:?}: {}",
+            s, e
+        ))),
+    }
 }
 
 fn traverse_dir(
