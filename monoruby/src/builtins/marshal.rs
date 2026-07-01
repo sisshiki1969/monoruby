@@ -24,17 +24,11 @@ pub(super) fn init(globals: &mut Globals) {
     // CRuby: Marshal.load(source, proc = nil, freeze: false). With
     // `freeze: true`, every reconstructed object (except classes and
     // modules) is frozen in place, deeply.
-    globals.define_builtin_module_func_with_kw(klass, "load", load, 1, 2, false, &["freeze"], false);
-    globals.define_builtin_module_func_with_kw(
-        klass,
-        "restore",
-        load,
-        1,
-        2,
-        false,
-        &["freeze"],
-        false,
-    );
+    let load_fid =
+        globals.define_builtin_module_func_with_kw(klass, "load", load, 1, 2, false, &["freeze"], false);
+    // `Marshal.restore` is a true alias of `Marshal.load` (same FuncId),
+    // so `Marshal.method(:restore) == Marshal.method(:load)`.
+    globals.define_builtin_module_func_alias(klass, "restore", load_fid);
 }
 
 /// ### Marshal.dump
@@ -125,20 +119,15 @@ fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     }
     // `freeze:` keyword (positional slot after the optional proc).
     let freeze = lfp.try_arg(2).is_some_and(|v| v.as_bool());
+    // CRuby's Marshal.load(src, proc): the proc is called with *each*
+    // reconstructed value as it is read (children before their parent),
+    // and its return value replaces that value in the parent. Threaded
+    // through the reader so every sub-object is visited.
+    let proc = lfp.try_arg(1).and_then(|v| v.is_proc());
     let mut cursor = MarshalReader::new(&data[2..]);
     cursor.freeze = freeze;
-    let value = cursor.read_value(vm, globals)?;
-    // CRuby's Marshal.load(src, proc): the proc is called with the
-    // loaded object, and *its return value replaces* the value
-    // returned by `load`. (CRuby walks every sub-object too — we
-    // only hook the top-level for now; that already covers the
-    // shape the ruby/spec arity gap was blocking on.)
-    if let Some(proc_arg) = lfp.try_arg(1)
-        && let Some(proc) = proc_arg.is_proc()
-    {
-        return vm.invoke_proc(globals, &proc, &[value]);
-    }
-    Ok(value)
+    cursor.proc = proc;
+    cursor.read_value(vm, globals)
 }
 
 // ============================================================
@@ -154,6 +143,12 @@ struct MarshalReader<'a> {
     objects: Vec<Value>,
     /// `Marshal.load(.., freeze: true)`: deep-freeze reconstructed values.
     freeze: bool,
+    /// `Marshal.load(src, proc)`: called with each reconstructed value.
+    proc: Option<Proc>,
+    /// Ids of container objects currently being built. A `'@'` link that
+    /// resolves to one of these (a self-reference into an in-progress
+    /// object) does not fire the load proc, matching CRuby.
+    building: std::collections::HashSet<u64>,
 }
 
 impl<'a> MarshalReader<'a> {
@@ -164,6 +159,8 @@ impl<'a> MarshalReader<'a> {
             symbols: Vec::new(),
             objects: Vec::new(),
             freeze: false,
+            proc: None,
+            building: std::collections::HashSet::new(),
         }
     }
 
@@ -266,6 +263,9 @@ impl<'a> MarshalReader<'a> {
 
     /// Read and return the next marshalled value.
     fn read_value(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        // A symbol back-reference (';') is not re-visited by the load
+        // proc — CRuby only fires the proc when a symbol is first defined.
+        let is_symlink = self.data.get(self.pos) == Some(&b';');
         let mut value = self.read_value_inner(vm, globals)?;
         // `freeze: true` deep-freezes every reconstructed object except
         // classes and modules (which CRuby leaves mutable). Immediates
@@ -273,6 +273,29 @@ impl<'a> MarshalReader<'a> {
         // every recursive `read_value`, sub-objects are frozen too.
         if self.freeze && !value.is_packed_value() && value.is_class_or_module().is_none() {
             value.set_frozen();
+        }
+        if is_symlink {
+            return Ok(value);
+        }
+        // Fire the load proc (post-order: this runs after the value — and
+        // recursively its children — is built). A self-reference into an
+        // object still under construction is skipped, matching CRuby.
+        self.fire_proc(vm, globals, value)
+    }
+
+    /// Run the load proc on `value` (if one was given) and return its
+    /// replacement, unless `value` is a container still under
+    /// construction (a self-reference), which CRuby does not visit.
+    fn fire_proc(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        value: Value,
+    ) -> Result<Value> {
+        if let Some(proc) = self.proc {
+            if !self.building.contains(&value.id()) {
+                return vm.invoke_proc(globals, &proc, &[value]);
+            }
         }
         Ok(value)
     }
@@ -503,11 +526,13 @@ impl<'a> MarshalReader<'a> {
         // object (CRuby resolves cyclic arrays this way).
         let arr = Value::array_from_vec(Vec::with_capacity(len));
         self.objects.push(arr);
+        self.building.insert(arr.id());
         let mut array = arr.as_array();
         for _ in 0..len {
             let val = self.read_value(vm, globals)?;
             array.push(val);
         }
+        self.building.remove(&arr.id());
         Ok(arr)
     }
 
@@ -534,12 +559,14 @@ impl<'a> MarshalReader<'a> {
         // a key or value links back to this object (cyclic hashes).
         let hash = Value::hash(RubyMap::default());
         self.objects.push(hash);
+        self.building.insert(hash.id());
         let mut map = hash.as_hash();
         for _ in 0..len {
             let key = self.read_value(vm, globals)?;
             let val = self.read_value(vm, globals)?;
             map.insert(key, val, vm, globals)?;
         }
+        self.building.remove(&hash.id());
         if has_default {
             let default = self.read_value(vm, globals)?;
             map.set_defalut_value(default);
@@ -708,8 +735,16 @@ impl<'a> MarshalReader<'a> {
             let sym_name = sym.get_name();
             if sym_name == "E" {
                 match self.read_byte()? {
-                    b'T' => encoding = Encoding::Utf8,
-                    b'F' => encoding = Encoding::UsAscii,
+                    b'T' => {
+                        encoding = Encoding::Utf8;
+                        // CRuby also passes the encoding flag value to the
+                        // load proc (its return is irrelevant here).
+                        self.fire_proc(vm, globals, Value::bool(true))?;
+                    }
+                    b'F' => {
+                        encoding = Encoding::UsAscii;
+                        self.fire_proc(vm, globals, Value::bool(false))?;
+                    }
                     _ => {
                         self.pos -= 1;
                         let enc_val = self.read_value(vm, globals)?;
@@ -1286,13 +1321,30 @@ fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentI
     if let Some(idx) = symbols.iter().position(|&s| s == id) {
         buf.push(b';');
         marshal_write_fixnum(buf, idx as i32);
-    } else {
+        return;
+    }
+    let name = id.get_ident_name_clone();
+    let bytes = name.as_bytes();
+    let ascii_only = bytes.iter().all(|&b| b < 0x80);
+    // An ASCII-only symbol — or a binary (ASCII-8BIT) one — is written as
+    // a plain ':' with no encoding ivar. A symbol carrying non-ASCII bytes
+    // under a real encoding (UTF-8, or a named one) is wrapped in an 'I'
+    // ivar block recording that encoding, and takes its symlink slot
+    // *before* the encoding symbol.
+    let enc = id.symbol_encoding().unwrap_or(Encoding::Utf8);
+    if ascii_only || enc == Encoding::Ascii8 {
         buf.push(b':');
-        let name = id.get_name();
-        let bytes = name.as_bytes();
         marshal_write_fixnum(buf, bytes.len() as i32);
         buf.extend_from_slice(bytes);
         symbols.push(id);
+    } else {
+        buf.push(b'I');
+        buf.push(b':');
+        marshal_write_fixnum(buf, bytes.len() as i32);
+        buf.extend_from_slice(bytes);
+        symbols.push(id);
+        marshal_write_fixnum(buf, 1); // 1 ivar
+        marshal_write_encoding_ivar_pair(buf, enc, symbols);
     }
 }
 
@@ -1682,7 +1734,8 @@ fn marshal_dump_value(
                     }
                     Some(ObjTy::RANGE) => {
                         // Serialize Range as a generic 'o' object with the
-                        // three ivars CRuby uses: @begin, @end, @excl.
+                        // three ivars CRuby uses, in CRuby's order:
+                        // :excl, :begin, :end.
                         let range = obj.as_range();
                         let begin = range.start();
                         let end = range.end();
@@ -1690,12 +1743,12 @@ fn marshal_dump_value(
                         buf.push(b'o');
                         marshal_write_symbol(buf, IdentId::get_id("Range"), symbols);
                         marshal_write_fixnum(buf, 3);
+                        marshal_write_symbol(buf, IdentId::get_id("excl"), symbols);
+                        buf.push(if excl { b'T' } else { b'F' });
                         marshal_write_symbol(buf, IdentId::get_id("begin"), symbols);
                         marshal_dump_value(buf, begin, vm, globals, symbols, objects)?;
                         marshal_write_symbol(buf, IdentId::get_id("end"), symbols);
                         marshal_dump_value(buf, end, vm, globals, symbols, objects)?;
-                        marshal_write_symbol(buf, IdentId::get_id("excl"), symbols);
-                        buf.push(if excl { b'T' } else { b'F' });
                     }
                     Some(ObjTy::HASH) => {
                         // Snapshot the pairs to avoid holding a borrow into
@@ -1764,11 +1817,13 @@ fn marshal_dump_value(
                         }
                     }
                     Some(ObjTy::STRUCT) => {
-                        // Struct subclass instance: 'S' tag.
+                        // Struct subclass instance: 'S' tag, wrapped in 'I'
+                        // when it carries user ivars and preceded by 'e'
+                        // wrappers for any extended modules.
                         // Format: symbol(class_name) + member_count +
                         //         (member_sym + value)*
-                        let class_id = obj.class();
-                        let class_name = globals.get_class_name(class_id);
+                        let real = obj.real_class(&globals.store);
+                        let class_name = globals.get_class_name(real.id());
                         // CRuby raises TypeError on anonymous classes;
                         // `get_class_name` renders anonymous classes
                         // as `#<Class:0x...>`, which is not a valid
@@ -1779,7 +1834,6 @@ fn marshal_dump_value(
                             ));
                         }
                         let class_name_id = IdentId::get_id(&class_name);
-                        let class_module = globals.store[class_id].get_module();
                         // SAFETY: STRUCT-typed values are only produced
                         // via `Struct.new` (which stores `/members` on
                         // the class or an ancestor); CRuby blocks
@@ -1787,8 +1841,23 @@ fn marshal_dump_value(
                         // (`NameError`), so some ancestor in the chain
                         // is guaranteed to carry the members array of
                         // Symbols.
-                        let members =
-                            lookup_struct_members(globals, class_module).unwrap();
+                        let members = lookup_struct_members(globals, real).unwrap();
+                        let ivars = globals.get_ivars(obj);
+                        let has_ivars = !ivars.is_empty();
+                        if has_ivars {
+                            buf.push(b'I');
+                        }
+                        for m in marshal_extended_modules(globals, obj) {
+                            let name = globals.get_class_name(m);
+                            if name.starts_with("#<") {
+                                return Err(MonorubyErr::typeerr(format!(
+                                    "can't dump anonymous class {}",
+                                    name
+                                )));
+                            }
+                            buf.push(b'e');
+                            marshal_write_symbol(buf, IdentId::get_id(&name), symbols);
+                        }
                         let inner = obj.as_struct();
                         buf.push(b'S');
                         marshal_write_symbol(buf, class_name_id, symbols);
@@ -1798,6 +1867,11 @@ fn marshal_dump_value(
                             marshal_write_symbol(buf, sym, symbols);
                             let val = inner.try_get(i).unwrap_or(Value::nil());
                             marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+                        }
+                        if has_ivars {
+                            marshal_write_ivar_block(
+                                buf, &ivars, vm, globals, symbols, objects,
+                            )?;
                         }
                     }
                     Some(ObjTy::REGEXP) => {
@@ -2738,6 +2812,172 @@ mod tests {
             [r, r.singleton_class.include?(MExt2)]
             "#,
         );
+    }
+
+    #[test]
+    fn marshal_coverage_extras() {
+        // Named (non UTF-8/US-ASCII) string encoding → `:encoding "name"`.
+        run_test(r#"Marshal.dump("a".encode("EUC-JP")).bytes"#);
+        run_test(r#"Marshal.load(Marshal.dump("a".encode("EUC-JP"))).encoding.to_s"#);
+        // Struct extended with a module.
+        run_test(
+            r#"
+            module MSx; end
+            SX = Struct.new(:a)
+            s = SX.new(1)
+            s.extend(MSx)
+            r = Marshal.load(Marshal.dump(s))
+            [r.a, r.singleton_class.include?(MSx)]
+            "#,
+        );
+        // Object extended with a module, round-tripped.
+        run_test(
+            r#"
+            module MOx; end
+            o = Object.new
+            o.extend(MOx)
+            r = Marshal.load(Marshal.dump(o))
+            r.singleton_class.include?(MOx)
+            "#,
+        );
+        // Hash / Regexp subclasses reload as the subclass.
+        run_test(
+            r#"
+            class HSub < Hash; end
+            h = HSub.new
+            h[:a] = 1
+            r = Marshal.load(Marshal.dump(h))
+            [r.class.to_s, r[:a]]
+            "#,
+        );
+        run_test(
+            r#"
+            class RSub < Regexp; end
+            r = Marshal.load(Marshal.dump(RSub.new("x")))
+            [r.class.to_s, r.source]
+            "#,
+        );
+        // Anonymous Struct subclass cannot be dumped.
+        run_test_error(r#"Marshal.dump(Struct.new(:a).new(1))"#);
+    }
+
+    #[test]
+    fn marshal_load_proc_containers() {
+        // The proc visits hash keys/values and struct members, and works
+        // together with freeze: true.
+        run_test(
+            r#"
+            ret = []
+            Marshal.load(Marshal.dump({a: 1, b: 2}), proc { |o| ret << o.inspect; o })
+            ret
+            "#,
+        );
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            ret = []
+            Marshal.load(Marshal.dump(S.new(1, 2)), proc { |o| ret << o.inspect; o })
+            ret.size
+            "#,
+        );
+        run_test(
+            r#"
+            ret = []
+            r = Marshal.load(Marshal.dump([1, "x"]), proc { |o| ret << o.frozen?; o }, freeze: true)
+            [r.frozen?, ret.last]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_load_proc() {
+        // The load proc is called on every reconstructed value, children
+        // before their parent.
+        run_test(
+            r#"
+            ret = []
+            Marshal.load(Marshal.dump([1, 2]), proc { |o| ret << o.inspect; o })
+            ret
+            "#,
+        );
+        run_test(
+            r#"
+            ret = []
+            Marshal.load(Marshal.dump([[1], 2]), proc { |o| ret << o.inspect; o })
+            ret
+            "#,
+        );
+        // A self-reference into an object still being built is not visited.
+        run_test(
+            r#"
+            a = [1]
+            a << a
+            ret = []
+            Marshal.load(Marshal.dump(a), proc { |o| ret << o.inspect; o })
+            ret.size
+            "#,
+        );
+        // Object links are visited; symbol links are not.
+        run_test(
+            r#"
+            s = "x"
+            ret = []
+            Marshal.load(Marshal.dump([s, s]), proc { |o| ret << o.inspect; o })
+            ret
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_restore_alias() {
+        // Marshal.restore is the very same method object as Marshal.load.
+        run_test(r#"Marshal.method(:restore) == Marshal.method(:load)"#);
+        run_test(r#"Marshal.restore(Marshal.dump([1, 2, 3]))"#);
+    }
+
+    #[test]
+    fn marshal_range_bytes() {
+        // Range dumps as an 'o' object with :excl, :begin, :end (in that
+        // order) and round-trips.
+        run_test(r#"Marshal.dump(1..10).bytes"#);
+        run_test(r#"Marshal.dump(1...5).bytes"#);
+        run_test(
+            r#"
+            r = Marshal.load(Marshal.dump(1...5))
+            [r.begin, r.end, r.exclude_end?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_struct_ivars() {
+        // A Struct that carries user ivars dumps with an 'I' wrapper.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            s = S.new(1, 2)
+            s.instance_variable_set(:@x, 9)
+            Marshal.dump(s).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            S2 = Struct.new(:a, :b)
+            s = S2.new(1, 2)
+            s.instance_variable_set(:@x, 9)
+            r = Marshal.load(Marshal.dump(s))
+            [r.a, r.b, r.instance_variable_get(:@x)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_symbol_encoding() {
+        // A UTF-8 symbol carries an encoding ivar; a binary one does not.
+        run_test(r#"Marshal.dump("→".to_sym).bytes"#);
+        run_test(r#"Marshal.dump("→".dup.force_encoding("binary").to_sym).bytes"#);
+        run_test(r#"Marshal.dump([:"→", :"→"]).bytes"#);
+        run_test(r#"Marshal.load(Marshal.dump("→".to_sym)).to_s"#);
     }
 
     #[test]

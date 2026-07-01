@@ -118,6 +118,18 @@ impl Globals {
         fid
     }
 
+    /// Bind an additional name to an already-defined module function so
+    /// the two share one `FuncId` (a true alias, as CRuby's
+    /// `Marshal.restore`/`Marshal.load` are).
+    pub(crate) fn define_builtin_module_func_alias(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        func_id: FuncId,
+    ) -> FuncId {
+        self.new_builtin_module_fn(class_id, name, func_id)
+    }
+
     fn new_builtin_module_fn(&mut self, class_id: ClassId, name: &str, func_id: FuncId) -> FuncId {
         let method_name = IdentId::get_id(name);
         self.gen_wrapper(func_id);
