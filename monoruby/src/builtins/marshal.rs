@@ -232,10 +232,16 @@ impl<'a> MarshalReader<'a> {
     /// Read a symbol (type ':') and register it in the symbol table.
     fn read_new_symbol(&mut self) -> Result<IdentId> {
         let len = self.read_fixnum()? as usize;
-        let bytes = self.read_bytes(len)?;
-        let name = std::str::from_utf8(bytes)
-            .map_err(|_| MonorubyErr::argumenterr("invalid symbol encoding in marshal data"))?;
-        let id = IdentId::get_id(name);
+        let bytes = self.read_bytes(len)?.to_vec();
+        // A plain ':' symbol with only ASCII bytes is a normal identifier;
+        // one carrying non-ASCII bytes with no encoding wrapper is binary
+        // (ASCII-8BIT), matching CRuby's `loads a binary encoded Symbol`.
+        let enc = if bytes.iter().all(|&b| b < 0x80) {
+            Encoding::UsAscii
+        } else {
+            Encoding::Ascii8
+        };
+        let id = intern_symbol_bytes(&bytes, enc);
         self.symbols.push(id);
         Ok(id)
     }
@@ -480,6 +486,21 @@ impl<'a> MarshalReader<'a> {
                     globals.set_ivar(val, sym, ivar_val)?;
                 }
                 Ok(val)
+            }
+            b':' => {
+                // Encoding-wrapped new symbol ('I' + ':'): the name bytes
+                // are interned under the encoding recorded by the ivar.
+                // Reserve the symlink slot before reading the encoding
+                // symbol so the two land in the same order they were
+                // written.
+                let len = self.read_fixnum()? as usize;
+                let bytes = self.read_bytes(len)?.to_vec();
+                let idx = self.symbols.len();
+                self.symbols.push(IdentId::get_id(""));
+                let (encoding, _user_ivars) = self.read_encoding_ivars(vm, globals)?;
+                let id = intern_symbol_bytes(&bytes, encoding);
+                self.symbols[idx] = id;
+                Ok(Value::symbol(id))
             }
             b'u' => {
                 // Encoding-wrapped userdef ('I' + 'u'): the payload string
@@ -919,10 +940,8 @@ impl<'a> MarshalReader<'a> {
         // class; the outer `read_value` freezes the final result.
         let inner = self.read_value_inner(vm, globals)?;
         let module_name = module_sym.get_name();
-        let module_name_id = IdentId::get_id(&module_name);
-        let module_val = globals
-            .get_constant(OBJECT_CLASS, module_name_id)
-            .and_then(|state| state.loaded_value())
+        let module_val = resolve_class_path(globals, &module_name)
+            .map(|m| m.as_val())
             .ok_or_else(|| {
                 MonorubyErr::argumenterr(format!("undefined module {}", module_name))
             })?;
@@ -1317,6 +1336,19 @@ fn marshal_write_float(buf: &mut Vec<u8>, f: f64) {
 ///
 /// If the symbol has been seen before, write ';' + index.
 /// Otherwise, write ':' + marshal_int(length) + bytes and record it.
+/// Intern a symbol from its raw name bytes under `enc`. UTF-8 / US-ASCII
+/// names go through the normal (String) intern path so a loaded symbol is
+/// identity-equal to the same literal symbol; other encodings (binary,
+/// UTF-16, …) intern per (bytes, encoding) to preserve the distinction.
+fn intern_symbol_bytes(bytes: &[u8], enc: Encoding) -> IdentId {
+    if matches!(enc, Encoding::Utf8 | Encoding::UsAscii) {
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            return IdentId::get_id(s);
+        }
+    }
+    IdentId::get_id_from_bytes(bytes.to_vec(), enc)
+}
+
 fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentId>) {
     if let Some(idx) = symbols.iter().position(|&s| s == id) {
         buf.push(b';');
@@ -1735,7 +1767,15 @@ fn marshal_dump_value(
                     Some(ObjTy::RANGE) => {
                         // Serialize Range as a generic 'o' object with the
                         // three ivars CRuby uses, in CRuby's order:
-                        // :excl, :begin, :end.
+                        // :excl, :begin, :end. An anonymous Range subclass
+                        // cannot be dumped.
+                        let range_class = obj.get_real_class_name(&globals.store);
+                        if range_class.starts_with("#<") {
+                            return Err(MonorubyErr::typeerr(format!(
+                                "can't dump anonymous class {}",
+                                range_class
+                            )));
+                        }
                         let range = obj.as_range();
                         let begin = range.start();
                         let end = range.end();
@@ -2969,6 +3009,44 @@ mod tests {
             [r.a, r.b, r.instance_variable_get(:@x)]
             "#,
         );
+    }
+
+    #[test]
+    fn marshal_symbol_load_encoding() {
+        // A plain non-ASCII symbol loads as binary; an 'I'-wrapped one
+        // loads under its recorded encoding (and a UTF-8 one is identity-
+        // equal to the same literal symbol).
+        run_test(r#"Marshal.load("\x04\b:\b\xE2\x86\x92".b).encoding.to_s"#);
+        run_test(
+            r#"
+            s = Marshal.load("\x04\bI:\b\xE2\x86\x92\x06:\x06ET".b)
+            [s.to_s, s.encoding.to_s, s == "→".to_sym]
+            "#,
+        );
+        // Two UTF-8 symbols sharing the encoding link.
+        run_test(
+            r#"
+            dump = "\x04\b[\aI:\t\xE2\x82\xACa\x06:\x06ETI:\t\xE2\x82\xACb\x06;\x06T".b
+            Marshal.load(dump).map { |s| [s.to_s, s.encoding.to_s] }
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_extended_nested_module() {
+        // An object extended by a namespaced module round-trips (the 'e'
+        // reader resolves the `::` path).
+        run_test(
+            r#"
+            module MNs; module Ext; end; end
+            o = Object.new
+            o.extend(MNs::Ext)
+            r = Marshal.load(Marshal.dump(o))
+            r.singleton_class.include?(MNs::Ext)
+            "#,
+        );
+        // An anonymous Range subclass cannot be dumped.
+        run_test_error(r#"Marshal.dump(Class.new(Range).new(1, 2))"#);
     }
 
     #[test]
