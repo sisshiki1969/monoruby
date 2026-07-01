@@ -56,7 +56,7 @@ fn dump(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // Object link table: every non-immediate object written takes a slot
     // in dump order; a repeated reference is emitted as a back-reference.
     let mut objects: Vec<u64> = Vec::new();
-    marshal_dump_value(&mut buf, obj, globals, &mut symbols, &mut objects)?;
+    marshal_dump_value(&mut buf, obj, vm, globals, &mut symbols, &mut objects)?;
     match port {
         None => Ok(Value::bytes(buf)),
         Some(port) => {
@@ -407,49 +407,23 @@ impl<'a> MarshalReader<'a> {
         let inner_tag = self.read_byte()?;
         match inner_tag {
             b'"' => {
-                // String with instance variables (typically encoding)
+                // String with instance variables (typically encoding).
                 let len = self.read_fixnum()? as usize;
-                let bytes = self.read_bytes(len)?;
-                let ivar_count = self.read_fixnum()? as usize;
-                let mut encoding = Encoding::Ascii8;
-                for _ in 0..ivar_count {
-                    let sym = self.read_symbol()?;
-                    let sym_name = sym.get_name();
-                    if sym_name == "E" {
-                        // Short encoding flag: T => UTF-8, F => US-ASCII.
-                        let enc_val_tag = self.read_byte()?;
-                        match enc_val_tag {
-                            b'T' => encoding = Encoding::Utf8,
-                            b'F' => encoding = Encoding::UsAscii,
-                            _ => {
-                                // Unexpected form: treat the payload as a
-                                // named encoding string.
-                                self.pos -= 1;
-                                let enc_val = self.read_value(vm, globals)?;
-                                if let Some(s) = enc_val.is_rstring_inner() {
-                                    let enc_name = std::str::from_utf8(s.as_bytes()).unwrap_or("");
-                                    encoding = Encoding::try_from_str(enc_name)
-                                        .unwrap_or(Encoding::Ascii8);
-                                }
-                            }
-                        }
-                    } else if sym_name == "encoding" {
-                        // Full `:encoding => "<name>"` form for any
-                        // encoding other than UTF-8 / US-ASCII.
-                        let enc_val = self.read_value(vm, globals)?;
-                        if let Some(s) = enc_val.is_rstring_inner() {
-                            let enc_name = std::str::from_utf8(s.as_bytes()).unwrap_or("");
-                            encoding = Encoding::try_from_str(enc_name)
-                                .unwrap_or(Encoding::Ascii8);
-                        }
-                    } else {
-                        // Skip other instance variables
-                        let _val = self.read_value(vm, globals)?;
-                    }
-                }
-                let val = Value::string_from_inner(RStringInner::from_encoding(bytes, encoding));
+                let bytes = self.read_bytes(len)?.to_vec();
+                let encoding = self.read_encoding_ivars(vm, globals)?;
+                let val = Value::string_from_inner(RStringInner::from_encoding(&bytes, encoding));
                 self.objects.push(val);
                 Ok(val)
+            }
+            b'u' => {
+                // Encoding-wrapped userdef ('I' + 'u'): the payload string
+                // handed to `_load` carries the encoding recorded by the
+                // trailing ivar block.
+                let class_sym = self.read_symbol()?;
+                let len = self.read_fixnum()? as usize;
+                let bytes = self.read_bytes(len)?.to_vec();
+                let encoding = self.read_encoding_ivars(vm, globals)?;
+                self.finish_user_marshal(vm, globals, class_sym, &bytes, encoding)
             }
             _ => {
                 // Other I-wrapped types (e.g. Regexp with encoding)
@@ -600,6 +574,21 @@ impl<'a> MarshalReader<'a> {
         let class_sym = self.read_symbol()?;
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?.to_vec();
+        self.finish_user_marshal(vm, globals, class_sym, &bytes, Encoding::Ascii8)
+    }
+
+    /// Resolve the `'u'` payload's class, hand the payload string to its
+    /// `_load` class method in the given encoding, and register the
+    /// result for `'@'` back-references. Shared by the bare `'u'` reader
+    /// and the `'I' 'u'` (encoding-wrapped) path.
+    fn finish_user_marshal(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        class_sym: IdentId,
+        bytes: &[u8],
+        encoding: Encoding,
+    ) -> Result<Value> {
         let class_name = class_sym.get_name();
         let class_name_id = IdentId::get_id(&class_name);
         let class_val = globals
@@ -611,12 +600,55 @@ impl<'a> MarshalReader<'a> {
         let module = class_val.is_class_or_module().ok_or_else(|| {
             MonorubyErr::argumenterr(format!("{} is not a class", class_name))
         })?;
-        // Hand the raw payload as a binary String to `_load` (CRuby
-        // semantics — the payload is whatever `_dump` produced, so
-        // ASCII-8BIT preserves the bytes verbatim).
-        let payload = Value::bytes(bytes);
+        // Hand the payload string to `_load` in its recorded encoding.
+        let payload = Value::string_from_inner(RStringInner::from_encoding(bytes, encoding));
         let load_id = IdentId::get_id("_load");
-        vm.invoke_method_inner(globals, load_id, module.as_val(), &[payload], None, None)
+        let result =
+            vm.invoke_method_inner(globals, load_id, module.as_val(), &[payload], None, None)?;
+        // Register the reconstructed object so later `'@'` links resolve.
+        self.objects.push(result);
+        Ok(result)
+    }
+
+    /// Read a `1 ivar` encoding block (`:E T`/`:E F`/`:encoding "name"`,
+    /// or any other ivars which are read and discarded) following a
+    /// String/Regexp/userdef payload inside an `'I'` wrapper, and return
+    /// the encoding it denotes.
+    fn read_encoding_ivars(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Encoding> {
+        let ivar_count = self.read_fixnum()? as usize;
+        let mut encoding = Encoding::Ascii8;
+        for _ in 0..ivar_count {
+            let sym = self.read_symbol()?;
+            let sym_name = sym.get_name();
+            if sym_name == "E" {
+                match self.read_byte()? {
+                    b'T' => encoding = Encoding::Utf8,
+                    b'F' => encoding = Encoding::UsAscii,
+                    _ => {
+                        self.pos -= 1;
+                        let enc_val = self.read_value(vm, globals)?;
+                        if let Some(s) = enc_val.is_rstring_inner() {
+                            let enc_name = std::str::from_utf8(s.as_bytes()).unwrap_or("");
+                            encoding =
+                                Encoding::try_from_str(enc_name).unwrap_or(Encoding::Ascii8);
+                        }
+                    }
+                }
+            } else if sym_name == "encoding" {
+                let enc_val = self.read_value(vm, globals)?;
+                if let Some(s) = enc_val.is_rstring_inner() {
+                    let enc_name = std::str::from_utf8(s.as_bytes()).unwrap_or("");
+                    encoding = Encoding::try_from_str(enc_name).unwrap_or(Encoding::Ascii8);
+                }
+            } else {
+                let _ = self.read_value(vm, globals)?;
+            }
+        }
+        Ok(encoding)
     }
 
     /// Read a user-marshal object ('U' tag, TYPE_USRMARSHAL).
@@ -626,7 +658,6 @@ impl<'a> MarshalReader<'a> {
     /// returned (the `marshal_load` return value is ignored).
     fn read_usr_marshal(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let class_sym = self.read_symbol()?;
-        let value = self.read_value(vm, globals)?;
         let class_name = class_sym.get_name();
         let class_name_id = IdentId::get_id(&class_name);
         let class_val = globals
@@ -642,6 +673,11 @@ impl<'a> MarshalReader<'a> {
         // shape). `call_alloc_func` raises TypeError if the class
         // never declared an allocator — surface that verbatim.
         let instance = crate::builtins::class::call_alloc_func(globals, module.id())?;
+        // Register the object *before* reading its payload so a
+        // self-reference inside the payload links back to it (this
+        // mirrors the dump side, which reserves the slot first).
+        self.objects.push(instance);
+        let value = self.read_value(vm, globals)?;
         // Drive `instance.marshal_load(value)`. The return value is
         // discarded; the spec checks the receiver's resulting state.
         let marshal_load_id = IdentId::get_id("marshal_load");
@@ -1234,7 +1270,8 @@ fn marshal_emit_link(buf: &mut Vec<u8>, obj: Value, objects: &mut Vec<u64>) -> b
 fn marshal_dump_value(
     buf: &mut Vec<u8>,
     obj: Value,
-    globals: &Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     symbols: &mut Vec<IdentId>,
     objects: &mut Vec<u64>,
 ) -> Result<()> {
@@ -1291,21 +1328,100 @@ fn marshal_dump_value(
             marshal_write_string(buf, s, symbols);
         }
         RV::Object(_rv) => {
+            let obj_id = obj.id();
+            // Already dumped this object? → emit a back-reference.
+            if let Some(idx) = objects.iter().position(|&x| x == obj_id) {
+                buf.push(b'@');
+                marshal_write_fixnum(buf, idx as i32);
+                return Ok(());
+            }
+            // User-defined serialization protocols take precedence over
+            // the built-in container/object encodings. CRuby favors
+            // #marshal_dump over #_dump.
+            let marshal_dump_id = IdentId::get_id("marshal_dump");
+            let dump_id = IdentId::get_id("_dump");
+            if globals.check_method(obj, marshal_dump_id).is_some() {
+                // Use the *real* class (skipping any singleton/iclass) so
+                // an extended object reports e.g. `UserDefined`, matching
+                // Ruby-level `#class`, not `#<Class:#<…>>`.
+                let class_name = obj.get_real_class_name(&globals.store);
+                if class_name.starts_with("#<") {
+                    return Err(MonorubyErr::typeerr(format!(
+                        "can't dump anonymous class {}",
+                        class_name
+                    )));
+                }
+                let class_name_id = IdentId::get_id(&class_name);
+                // 'U' (TYPE_USRMARSHAL): the object takes its link slot
+                // *before* its #marshal_dump payload is serialized.
+                objects.push(obj_id);
+                let payload =
+                    vm.invoke_method_inner(globals, marshal_dump_id, obj, &[], None, None)?;
+                buf.push(b'U');
+                marshal_write_symbol(buf, class_name_id, symbols);
+                marshal_dump_value(buf, payload, vm, globals, symbols, objects)?;
+                return Ok(());
+            }
+            if globals.check_method(obj, dump_id).is_some() {
+                let class_name = obj.get_real_class_name(&globals.store);
+                if class_name.starts_with("#<") {
+                    return Err(MonorubyErr::typeerr(format!(
+                        "can't dump anonymous class {}",
+                        class_name
+                    )));
+                }
+                let class_name_id = IdentId::get_id(&class_name);
+                // #_dump receives the recursion-depth limit (unlimited =
+                // -1 here) and must return a String.
+                let payload = vm.invoke_method_inner(
+                    globals,
+                    dump_id,
+                    obj,
+                    &[Value::integer(-1)],
+                    None,
+                    None,
+                )?;
+                let s = payload
+                    .is_rstring_inner()
+                    .ok_or_else(|| MonorubyErr::typeerr("_dump() must return string"))?;
+                let bytes = s.as_bytes().to_vec();
+                let enc = s.encoding();
+                // 'u' (TYPE_USERDEF): the object's own link slot follows
+                // any objects embedded in the returned string.
+                objects.push(obj_id);
+                if enc == Encoding::Ascii8 {
+                    buf.push(b'u');
+                    marshal_write_symbol(buf, class_name_id, symbols);
+                    marshal_write_fixnum(buf, bytes.len() as i32);
+                    buf.extend_from_slice(&bytes);
+                } else {
+                    // Wrap with 'I' to carry the payload string's encoding.
+                    buf.push(b'I');
+                    buf.push(b'u');
+                    marshal_write_symbol(buf, class_name_id, symbols);
+                    marshal_write_fixnum(buf, bytes.len() as i32);
+                    buf.extend_from_slice(&bytes);
+                    marshal_write_string_encoding_ivar(buf, enc, symbols);
+                }
+                return Ok(());
+            }
             // Register the object in the link table *before* writing its
             // body so that self-referential / cyclic structures resolve
             // to a back-reference instead of recursing forever.
-            if marshal_emit_link(buf, obj, objects) {
-                return Ok(());
-            }
+            objects.push(obj_id);
             let r = (|| -> Result<()> {
                 // Check for Array and Hash via ty()
                 match obj.ty() {
                     Some(ObjTy::ARRAY) => {
-                        let inner = obj.as_array_inner();
+                        // Snapshot the elements so re-entrant user code
+                        // invoked while dumping can't invalidate the
+                        // borrow into the live array.
+                        let elems: Vec<Value> =
+                            obj.as_array_inner().iter().copied().collect();
                         buf.push(b'[');
-                        marshal_write_fixnum(buf, inner.len() as i32);
-                        for elem in inner.iter() {
-                            marshal_dump_value(buf, *elem, globals, symbols, objects)?;
+                        marshal_write_fixnum(buf, elems.len() as i32);
+                        for elem in elems {
+                            marshal_dump_value(buf, elem, vm, globals, symbols, objects)?;
                         }
                     }
                     Some(ObjTy::CLASS) | Some(ObjTy::MODULE) => {
@@ -1340,19 +1456,22 @@ fn marshal_dump_value(
                         marshal_write_symbol(buf, IdentId::get_id("Range"), symbols);
                         marshal_write_fixnum(buf, 3);
                         marshal_write_symbol(buf, IdentId::get_id("begin"), symbols);
-                        marshal_dump_value(buf, begin, globals, symbols, objects)?;
+                        marshal_dump_value(buf, begin, vm, globals, symbols, objects)?;
                         marshal_write_symbol(buf, IdentId::get_id("end"), symbols);
-                        marshal_dump_value(buf, end, globals, symbols, objects)?;
+                        marshal_dump_value(buf, end, vm, globals, symbols, objects)?;
                         marshal_write_symbol(buf, IdentId::get_id("excl"), symbols);
                         buf.push(if excl { b'T' } else { b'F' });
                     }
                     Some(ObjTy::HASH) => {
-                        let inner = obj.as_hashmap_inner();
+                        // Snapshot the pairs to avoid holding a borrow into
+                        // the live hash across re-entrant user code.
+                        let pairs: Vec<(Value, Value)> =
+                            obj.as_hashmap_inner().iter().collect();
                         buf.push(b'{');
-                        marshal_write_fixnum(buf, inner.len() as i32);
-                        for (k, v) in inner.iter() {
-                            marshal_dump_value(buf, k, globals, symbols, objects)?;
-                            marshal_dump_value(buf, v, globals, symbols, objects)?;
+                        marshal_write_fixnum(buf, pairs.len() as i32);
+                        for (k, v) in pairs {
+                            marshal_dump_value(buf, k, vm, globals, symbols, objects)?;
+                            marshal_dump_value(buf, v, vm, globals, symbols, objects)?;
                         }
                     }
                     Some(ObjTy::OBJECT) => {
@@ -1366,7 +1485,7 @@ fn marshal_dump_value(
                         marshal_write_fixnum(buf, ivars.len() as i32);
                         for (name, val) in ivars {
                             marshal_write_symbol(buf, name, symbols);
-                            marshal_dump_value(buf, val, globals, symbols, objects)?;
+                            marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
                         }
                     }
                     Some(ObjTy::STRUCT) => {
@@ -1403,7 +1522,7 @@ fn marshal_dump_value(
                             let sym = m.try_symbol().unwrap();
                             marshal_write_symbol(buf, sym, symbols);
                             let val = inner.try_get(i).unwrap_or(Value::nil());
-                            marshal_dump_value(buf, val, globals, symbols, objects)?;
+                            marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
                         }
                     }
                     Some(ObjTy::REGEXP) => {
@@ -2062,6 +2181,70 @@ mod tests {
             h[:self] = h
             g = Marshal.load(Marshal.dump(h))
             g.equal?(g[:self])
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_dump_marshal_dump_protocol() {
+        // #marshal_dump / #marshal_load round-trip through the 'U' tag.
+        run_test(
+            r#"
+            class MDProto
+              attr_reader :x
+              def initialize(x); @x = x; end
+              def marshal_dump; [@x, "extra"]; end
+              def marshal_load(a); @x = a[0]; end
+            end
+            Marshal.load(Marshal.dump(MDProto.new(42))).x
+            "#,
+        );
+        // #marshal_dump takes precedence and shares a link slot on reuse.
+        run_test(
+            r#"
+            class MDProto2
+              def initialize(x); @x = x; end
+              def marshal_dump; @x; end
+              def marshal_load(a); @x = a; end
+            end
+            m = MDProto2.new(1)
+            Marshal.dump([m, m]).bytes
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_dump_dump_protocol() {
+        // #_dump / ._load round-trip through the 'u' tag.
+        run_test(
+            r#"
+            class UDProto
+              attr_reader :s
+              def initialize(s); @s = s; end
+              def _dump(level); @s.to_s; end
+              def self._load(str); UDProto.new(str.to_i); end
+            end
+            Marshal.load(Marshal.dump(UDProto.new(7))).s
+            "#,
+        );
+        run_test(
+            r#"
+            class UDProto2
+              def initialize(s); @s = s; end
+              def _dump(level); @s; end
+              def self._load(str); UDProto2.new(str); end
+            end
+            u = UDProto2.new("hi")
+            Marshal.dump([u, u]).bytes
+            "#,
+        );
+        // A #_dump that returns a non-String raises TypeError.
+        run_test_error(
+            r#"
+            class BadDump
+              def _dump(level); 123; end
+            end
+            Marshal.dump(BadDump.new)
             "#,
         );
     }
