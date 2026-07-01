@@ -622,6 +622,12 @@ class File
   def ctime;     File.ctime(path);     end
   def birthtime; File.birthtime(path); end
 
+  # Instance chmod/chown (core/file/{chmod,chown}_spec.rb): only the class
+  # forms existed. Delegate through #path and return 0, as CRuby's instance
+  # forms do (the class forms return the number of files affected).
+  def chmod(mode);         File.chmod(mode, path);          0; end
+  def chown(owner, group); File.chown(owner, group, path);  0; end
+
   # Purely lexical `dirname` (core/file/dirname_spec.rb). CRuby does *not*
   # resolve `.`/`..` or collapse interior slashes; it only strips the last
   # `/component` (and the slashes immediately before it), `level` times.
