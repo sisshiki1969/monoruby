@@ -524,38 +524,20 @@ impl<'a> MarshalReader<'a> {
         self.objects.push(Value::nil());
         let class_name = class_sym.get_name();
 
-        // Look up the class by checking constants on Object
-        let class_name_id = IdentId::get_id(&class_name);
-        let (obj, native_class, module) = match globals
-            .get_constant(OBJECT_CLASS, class_name_id)
-            .and_then(|state| state.loaded_value())
-        {
-            Some(class_val) => {
-                if let Some(module) = class_val.is_class_or_module() {
-                    // Classes with a custom allocator have internal storage
-                    // (e.g. Range, Time, Exception). Creating a generic
-                    // Value::object for them would violate later invariants
-                    // and cause native panics when methods run. Flag them so
-                    // we can reconstruct or raise.
-                    let uses_default = globals.store[module.id()]
-                        .alloc_func()
-                        .map(|f| f as *const () == crate::default_alloc_func as *const ())
-                        .unwrap_or(true);
-                    (Value::object(module.id()), !uses_default, module)
-                } else {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "undefined class/module {}",
-                        class_name
-                    )));
-                }
-            }
-            _ => {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "undefined class/module {}",
-                    class_name
-                )));
-            }
-        };
+        // Look up the class, walking a `::`-separated path so nested
+        // classes (e.g. `MarshalSpec::Foo`) resolve correctly.
+        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
+        })?;
+        // Classes with a custom allocator have internal storage (e.g.
+        // Range, Time, Exception). Creating a generic Value::object for
+        // them would violate later invariants and cause native panics when
+        // methods run. Flag them so we can reconstruct or raise.
+        let native_class = !globals.store[module.id()]
+            .alloc_func()
+            .map(|f| f as *const () == crate::default_alloc_func as *const ())
+            .unwrap_or(true);
+        let obj = Value::object(module.id());
         // Read instance variables.
         let mut ivars: Vec<(IdentId, Value)> = Vec::with_capacity(ivar_count);
         for _ in 0..ivar_count {
@@ -661,15 +643,8 @@ impl<'a> MarshalReader<'a> {
         encoding: Encoding,
     ) -> Result<Value> {
         let class_name = class_sym.get_name();
-        let class_name_id = IdentId::get_id(&class_name);
-        let class_val = globals
-            .get_constant(OBJECT_CLASS, class_name_id)
-            .and_then(|state| state.loaded_value())
-            .ok_or_else(|| {
-                MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
-            })?;
-        let module = class_val.is_class_or_module().ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("{} is not a class", class_name))
+        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
         })?;
         // Hand the payload string to `_load` in its recorded encoding.
         let payload = Value::string_from_inner(RStringInner::from_encoding(bytes, encoding));
@@ -730,15 +705,8 @@ impl<'a> MarshalReader<'a> {
     fn read_usr_marshal(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let class_sym = self.read_symbol()?;
         let class_name = class_sym.get_name();
-        let class_name_id = IdentId::get_id(&class_name);
-        let class_val = globals
-            .get_constant(OBJECT_CLASS, class_name_id)
-            .and_then(|state| state.loaded_value())
-            .ok_or_else(|| {
-                MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
-            })?;
-        let module = class_val.is_class_or_module().ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("{} is not a class", class_name))
+        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
         })?;
         // Rational / Complex dump via #marshal_dump but are immutable
         // numerics with no Ruby-level allocator or #marshal_load; rebuild
@@ -2466,6 +2434,34 @@ mod tests {
             t = Time.utc(2020, 1, 2, 3, 4, 5)
             r = Marshal.load(Marshal.dump(t))
             [r.year, r.month, r.day, r.hour, r.min, r.sec, r.utc?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_nested_class_roundtrip() {
+        // A '`o`'/'`u`'/'`U`'-tagged object whose class lives under a
+        // namespace must resolve via the full `::` path on load.
+        run_test(
+            r#"
+            module MShip
+              class Widget
+                attr_reader :n
+                def initialize(n); @n = n; end
+              end
+            end
+            Marshal.load(Marshal.dump(MShip::Widget.new(3))).n
+            "#,
+        );
+        run_test(
+            r#"
+            module MShip2
+              class Blob
+                def _dump(l); "z"; end
+                def self._load(s); Blob.new; end
+              end
+            end
+            Marshal.load(Marshal.dump(MShip2::Blob.new)).class.to_s
             "#,
         );
     }
