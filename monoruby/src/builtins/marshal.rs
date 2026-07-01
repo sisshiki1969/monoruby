@@ -119,20 +119,15 @@ fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     }
     // `freeze:` keyword (positional slot after the optional proc).
     let freeze = lfp.try_arg(2).is_some_and(|v| v.as_bool());
+    // CRuby's Marshal.load(src, proc): the proc is called with *each*
+    // reconstructed value as it is read (children before their parent),
+    // and its return value replaces that value in the parent. Threaded
+    // through the reader so every sub-object is visited.
+    let proc = lfp.try_arg(1).and_then(|v| v.is_proc());
     let mut cursor = MarshalReader::new(&data[2..]);
     cursor.freeze = freeze;
-    let value = cursor.read_value(vm, globals)?;
-    // CRuby's Marshal.load(src, proc): the proc is called with the
-    // loaded object, and *its return value replaces* the value
-    // returned by `load`. (CRuby walks every sub-object too — we
-    // only hook the top-level for now; that already covers the
-    // shape the ruby/spec arity gap was blocking on.)
-    if let Some(proc_arg) = lfp.try_arg(1)
-        && let Some(proc) = proc_arg.is_proc()
-    {
-        return vm.invoke_proc(globals, &proc, &[value]);
-    }
-    Ok(value)
+    cursor.proc = proc;
+    cursor.read_value(vm, globals)
 }
 
 // ============================================================
@@ -148,6 +143,12 @@ struct MarshalReader<'a> {
     objects: Vec<Value>,
     /// `Marshal.load(.., freeze: true)`: deep-freeze reconstructed values.
     freeze: bool,
+    /// `Marshal.load(src, proc)`: called with each reconstructed value.
+    proc: Option<Proc>,
+    /// Ids of container objects currently being built. A `'@'` link that
+    /// resolves to one of these (a self-reference into an in-progress
+    /// object) does not fire the load proc, matching CRuby.
+    building: std::collections::HashSet<u64>,
 }
 
 impl<'a> MarshalReader<'a> {
@@ -158,6 +159,8 @@ impl<'a> MarshalReader<'a> {
             symbols: Vec::new(),
             objects: Vec::new(),
             freeze: false,
+            proc: None,
+            building: std::collections::HashSet::new(),
         }
     }
 
@@ -260,6 +263,9 @@ impl<'a> MarshalReader<'a> {
 
     /// Read and return the next marshalled value.
     fn read_value(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        // A symbol back-reference (';') is not re-visited by the load
+        // proc — CRuby only fires the proc when a symbol is first defined.
+        let is_symlink = self.data.get(self.pos) == Some(&b';');
         let mut value = self.read_value_inner(vm, globals)?;
         // `freeze: true` deep-freezes every reconstructed object except
         // classes and modules (which CRuby leaves mutable). Immediates
@@ -267,6 +273,29 @@ impl<'a> MarshalReader<'a> {
         // every recursive `read_value`, sub-objects are frozen too.
         if self.freeze && !value.is_packed_value() && value.is_class_or_module().is_none() {
             value.set_frozen();
+        }
+        if is_symlink {
+            return Ok(value);
+        }
+        // Fire the load proc (post-order: this runs after the value — and
+        // recursively its children — is built). A self-reference into an
+        // object still under construction is skipped, matching CRuby.
+        self.fire_proc(vm, globals, value)
+    }
+
+    /// Run the load proc on `value` (if one was given) and return its
+    /// replacement, unless `value` is a container still under
+    /// construction (a self-reference), which CRuby does not visit.
+    fn fire_proc(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        value: Value,
+    ) -> Result<Value> {
+        if let Some(proc) = self.proc {
+            if !self.building.contains(&value.id()) {
+                return vm.invoke_proc(globals, &proc, &[value]);
+            }
         }
         Ok(value)
     }
@@ -497,11 +526,13 @@ impl<'a> MarshalReader<'a> {
         // object (CRuby resolves cyclic arrays this way).
         let arr = Value::array_from_vec(Vec::with_capacity(len));
         self.objects.push(arr);
+        self.building.insert(arr.id());
         let mut array = arr.as_array();
         for _ in 0..len {
             let val = self.read_value(vm, globals)?;
             array.push(val);
         }
+        self.building.remove(&arr.id());
         Ok(arr)
     }
 
@@ -528,12 +559,14 @@ impl<'a> MarshalReader<'a> {
         // a key or value links back to this object (cyclic hashes).
         let hash = Value::hash(RubyMap::default());
         self.objects.push(hash);
+        self.building.insert(hash.id());
         let mut map = hash.as_hash();
         for _ in 0..len {
             let key = self.read_value(vm, globals)?;
             let val = self.read_value(vm, globals)?;
             map.insert(key, val, vm, globals)?;
         }
+        self.building.remove(&hash.id());
         if has_default {
             let default = self.read_value(vm, globals)?;
             map.set_defalut_value(default);
@@ -702,8 +735,16 @@ impl<'a> MarshalReader<'a> {
             let sym_name = sym.get_name();
             if sym_name == "E" {
                 match self.read_byte()? {
-                    b'T' => encoding = Encoding::Utf8,
-                    b'F' => encoding = Encoding::UsAscii,
+                    b'T' => {
+                        encoding = Encoding::Utf8;
+                        // CRuby also passes the encoding flag value to the
+                        // load proc (its return is irrelevant here).
+                        self.fire_proc(vm, globals, Value::bool(true))?;
+                    }
+                    b'F' => {
+                        encoding = Encoding::UsAscii;
+                        self.fire_proc(vm, globals, Value::bool(false))?;
+                    }
                     _ => {
                         self.pos -= 1;
                         let enc_val = self.read_value(vm, globals)?;
@@ -2769,6 +2810,45 @@ mod tests {
             a.extend(MExt2)
             r = Marshal.load(Marshal.dump(a))
             [r, r.singleton_class.include?(MExt2)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_load_proc() {
+        // The load proc is called on every reconstructed value, children
+        // before their parent.
+        run_test(
+            r#"
+            ret = []
+            Marshal.load(Marshal.dump([1, 2]), proc { |o| ret << o.inspect; o })
+            ret
+            "#,
+        );
+        run_test(
+            r#"
+            ret = []
+            Marshal.load(Marshal.dump([[1], 2]), proc { |o| ret << o.inspect; o })
+            ret
+            "#,
+        );
+        // A self-reference into an object still being built is not visited.
+        run_test(
+            r#"
+            a = [1]
+            a << a
+            ret = []
+            Marshal.load(Marshal.dump(a), proc { |o| ret << o.inspect; o })
+            ret.size
+            "#,
+        );
+        // Object links are visited; symbol links are not.
+        run_test(
+            r#"
+            s = "x"
+            ret = []
+            Marshal.load(Marshal.dump([s, s]), proc { |o| ret << o.inspect; o })
+            ret
             "#,
         );
     }
