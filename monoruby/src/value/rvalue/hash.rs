@@ -254,6 +254,16 @@ impl HashmapInner {
         matches!(&self.content, HashContent::IdentMap(_))
     }
 
+    /// The hash's default *value* (`Hash.new(x)`), if one is set and it is
+    /// a plain value rather than a default proc. Returns `None` for the
+    /// nil default or a default proc.
+    pub fn default_value(&self) -> Option<Value> {
+        match self.default {
+            HashDefault::Value(v) if !v.is_nil() => Some(v),
+            _ => None,
+        }
+    }
+
     pub fn get(&self, v: Value, vm: &mut Executor, globals: &mut Globals) -> Result<Option<Value>> {
         Ok(match &self.content {
             HashContent::Map(box map) => map.get(&v, vm, globals)?.copied(),
