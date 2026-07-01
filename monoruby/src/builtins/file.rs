@@ -666,9 +666,44 @@ fn file_basename(
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/directory=3f.html]
 #[monoruby_builtin]
 fn directory_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match to_canonicalized_path(vm, globals, lfp.arg(0), "1st arg") {
+    // CRuby's `rb_stat` accepts either a path (coerced via `#to_path`/`#to_str`)
+    // or an IO/fd (converted via `#to_io` and `fstat`'d). Try the path form
+    // first — this covers String and IO objects that expose `#to_path` — and
+    // fall back to `#to_io` on a coercion failure before surfacing the
+    // TypeError. `Path::is_dir` stats the path and returns false for a
+    // non-existent entry, so no canonicalization (which would swallow the
+    // TypeError for a non-path type such as Integer/nil) is needed.
+    let arg = lfp.arg(0);
+    match to_path(vm, globals, arg) {
         Ok(path) => Ok(Value::bool(path.is_dir())),
-        Err(_) => Ok(Value::bool(false)),
+        Err(e) => {
+            let to_io = IdentId::get_id("to_io");
+            if globals.check_method(arg, to_io).is_some() {
+                let io = vm.invoke_method_inner(globals, to_io, arg, &[], None, None)?;
+                if let Some(rv) = io.try_rvalue()
+                    && rv.ty() == ObjTy::IO
+                {
+                    let fd = io.as_io_inner().fileno()?;
+                    return Ok(Value::bool(fd_is_dir(fd)));
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+/// `fstat(2)` an open file descriptor and report whether it refers to a
+/// directory. A failed `fstat` (bad fd, etc.) reports `false`.
+fn fd_is_dir(fd: i32) -> bool {
+    // SAFETY: `fstat` fills a zeroed `stat` buffer for an open fd; we only
+    // read `st_mode`. On failure the buffer is unused and we return false.
+    unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut st) == 0 {
+            (st.st_mode & libc::S_IFMT) == libc::S_IFDIR
+        } else {
+            false
+        }
     }
 }
 

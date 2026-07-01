@@ -108,7 +108,7 @@ pub(super) fn init(globals: &mut Globals) {
 
     let env = Value::hash(env_map);
     globals.set_constant_by_str(OBJECT_CLASS, "ENV", env);
-    globals.define_builtin_singleton_func_with(env, "fetch", fetch, 1, 2, false);
+    globals.define_builtin_singleton_func_with(env, "fetch", env_fetch, 1, 2, false);
     globals.define_builtin_singleton_func(env, "[]", env_index, 1);
     globals.define_builtin_singleton_func(env, "[]=", env_index_assign, 2);
     globals.define_builtin_singleton_func(env, "store", env_index_assign, 2);
@@ -1580,12 +1580,71 @@ fn env_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let s = key.coerce_to_str(vm, globals)?;
         Value::string(s)
     };
-    let val = lfp
-        .self_val()
-        .as_hash()
-        .get(key, vm, globals)?
-        .unwrap_or_default();
-    Ok(val)
+    match lfp.self_val().as_hash().get(key, vm, globals)? {
+        // ENV values are always Strings; CRuby returns a fresh *frozen* copy
+        // so a caller can never mutate the live environment through it.
+        Some(v) if v.is_str().is_some() => {
+            let s = v.expect_string(&globals.store)?;
+            let mut frozen = Value::string(s);
+            frozen.set_frozen();
+            Ok(frozen)
+        }
+        Some(v) => Ok(v),
+        None => Ok(Value::nil()),
+    }
+}
+
+///
+/// ### ENV.fetch
+///
+/// - fetch(key) -> String
+/// - fetch(key, default) -> String
+/// - fetch(key) {|key| ... } -> String
+///
+/// Like `Hash#fetch`, but the key is first coerced to a `String` (via
+/// `#to_str`). A key that is not a String and does not respond to `#to_str`
+/// raises `TypeError("no implicit conversion of <Class> into String")`,
+/// matching CRuby's `ENV.fetch`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/fetch.html]
+#[monoruby_builtin]
+fn env_fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let arg0 = lfp.arg(0);
+    let key = if arg0.is_str().is_some() {
+        arg0
+    } else {
+        let s = arg0.coerce_to_str(vm, globals)?;
+        Value::string(s)
+    };
+    let hash = lfp.self_val().as_hash();
+    let s = if let Some(bh) = lfp.block() {
+        if lfp.try_arg(1).is_some() {
+            let warn_id = IdentId::get_id("warn");
+            let msg = Value::string_from_str("warning: block supersedes default value argument");
+            vm.invoke_method_inner(globals, warn_id, lfp.self_val(), &[msg], None, None)?;
+        }
+        match hash.get(key, vm, globals)? {
+            Some(v) => v,
+            None => vm.invoke_block_once(globals, bh, &[key])?,
+        }
+    } else if let Some(arg1) = lfp.try_arg(1) {
+        match hash.get(key, vm, globals)? {
+            Some(v) => v,
+            None => arg1,
+        }
+    } else {
+        match hash.get(key, vm, globals)? {
+            Some(v) => v,
+            None => {
+                return Err(MonorubyErr::keyerr_with(
+                    format!("key not found: {}", key.inspect(&globals.store)),
+                    lfp.self_val(),
+                    key,
+                ));
+            }
+        }
+    };
+    Ok(s)
 }
 
 ///
@@ -1617,7 +1676,28 @@ fn env_to_hash(
         let mut new_map = RubyMap::default();
         for (k, v) in pairs {
             let result = vm.invoke_block(globals, &data, &[k, v])?;
-            let arr = result.expect_array_ty(globals)?;
+            // CRuby coerces the block's return value to an Array *only* via
+            // `#to_ary` (never `#to_a`); anything else raises
+            // `TypeError("wrong element type <Class> (expected array)")`.
+            let arr = if result.is_array_ty() {
+                result.as_array()
+            } else {
+                let converted = if let Some(func_id) =
+                    globals.check_method(result, IdentId::TO_ARY)
+                {
+                    vm.invoke_func_inner(globals, func_id, result, &[], None, None)?
+                } else {
+                    Value::nil()
+                };
+                if converted.is_array_ty() {
+                    converted.as_array()
+                } else {
+                    return Err(MonorubyErr::typeerr(format!(
+                        "wrong element type {} (expected array)",
+                        result.get_real_class_name(&globals.store),
+                    )));
+                }
+            };
             if arr.len() != 2 {
                 return Err(MonorubyErr::argumenterr(format!(
                     "element has wrong array length (expected 2, was {})",
