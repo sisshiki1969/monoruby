@@ -274,8 +274,13 @@ fn dst_q(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/zone.html]
 #[monoruby_builtin]
-fn zone(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match lfp.self_val().as_time() {
+fn zone(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    // A time built from a timezone object reports that object as its zone.
+    if let Some(z) = globals.store.get_ivar(self_, IdentId::get_id(ZONE_IVAR)) {
+        return Ok(z);
+    }
+    match self_.as_time() {
         TimeInner::Utc(_) => Ok(Value::string_from_str("UTC")),
         TimeInner::Local(_) => Ok(Value::nil()),
     }
@@ -748,8 +753,14 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
     // Build via the shared `from_args` path. `Time.new`'s 7th arg is
     // `utc_offset`, so we pre-extract it before calling `from_args`
-    // (which expects `usec` in slot 6). An explicit `in:` keyword
-    // takes precedence over the positional offset.
+    // (which expects `usec` in slot 6). Giving the offset both
+    // positionally and via `in:` is an error.
+    let positional_off = lfp.try_arg(6).filter(|v| !v.is_nil());
+    if in_arg.is_some() && positional_off.is_some() {
+        return Err(MonorubyErr::argumenterr(
+            "timezone argument given as positional and keyword arguments",
+        ));
+    }
     let utc_offset_arg = in_arg.or_else(|| lfp.try_arg(6));
     let naive = from_args_skip_last(vm, globals, lfp)?
         .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
@@ -764,6 +775,9 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 }
             };
             TimeInner::Local(local.into())
+        } else if let Some(t) = time_new_with_timezone(vm, globals, naive, off_arg, cls)? {
+            // A timezone object (`#local_to_utc`) rather than a utc_offset.
+            return Ok(t);
         } else {
             let offset = parse_utc_offset(vm, globals, off_arg)?;
             let dt = offset
@@ -905,6 +919,82 @@ fn parse_utc_offset(
     };
     FixedOffset::east_opt(secs)
         .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))
+}
+
+/// Reserved instance-variable slot holding a Time's timezone object (the
+/// argument that responds to `#local_to_utc` / `#utc_to_local`). Hidden
+/// from `#instance_variables` and Marshal by the `/`-prefix convention.
+const ZONE_IVAR: &str = "/zone";
+
+/// Read the epoch seconds of a Time-like value (a `Time`, a `Time`
+/// subclass, or any object with `#to_i`) returned by a timezone object's
+/// conversion method.
+fn value_epoch_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i64> {
+    let r = vm.invoke_method_inner(globals, IdentId::get_id("to_i"), v, &[], None, None)?;
+    r.coerce_to_int_i64(vm, globals)
+}
+
+/// A zoned time's derived offset must be within ±24h.
+fn zone_offset_fixed(offset: i64) -> Result<FixedOffset> {
+    if offset <= -86400 || offset >= 86400 {
+        return Err(MonorubyErr::argumenterr("utc_offset out of range"));
+    }
+    FixedOffset::east_opt(offset as i32)
+        .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))
+}
+
+/// `Time.new(y, …, tz)` with a timezone object. `tz` must respond to
+/// `#local_to_utc`; the UTC offset is the difference between the requested
+/// wall clock and `tz.local_to_utc(wall)`, and `tz` becomes the time's
+/// `#zone`. Returns `None` if `tz` is not a timezone object (so the caller
+/// falls back to treating it as a numeric/String utc_offset).
+fn time_new_with_timezone(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    naive: NaiveDateTime,
+    tz: Value,
+    cls: ClassId,
+) -> Result<Option<Value>> {
+    if globals.check_method(tz, IdentId::get_id("local_to_utc")).is_none() {
+        return Ok(None);
+    }
+    // The Time-like argument is a UTC time with the requested wall clock.
+    let wall = Value::new_time(TimeInner::Utc(naive.and_utc()));
+    let wall_i = naive.and_utc().timestamp();
+    let result =
+        vm.invoke_method_inner(globals, IdentId::get_id("local_to_utc"), tz, &[wall], None, None)?;
+    let offset = wall_i - value_epoch_i64(vm, globals, result)?;
+    let fixed = zone_offset_fixed(offset)?;
+    let dt = fixed
+        .from_local_datetime(&naive)
+        .single()
+        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+    let t = Value::new_time_with_class(TimeInner::Local(dt), cls);
+    globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
+    Ok(Some(t))
+}
+
+/// `Time.at(t, in: tz)` with a timezone object. `tz` must respond to
+/// `#utc_to_local`; the offset comes from `tz.utc_to_local(utc)`.
+fn time_at_with_timezone(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    dt: DateTime<Utc>,
+    tz: Value,
+    cls: ClassId,
+) -> Result<Option<Value>> {
+    if globals.check_method(tz, IdentId::get_id("utc_to_local")).is_none() {
+        return Ok(None);
+    }
+    let utc = Value::new_time(TimeInner::Utc(dt));
+    let epoch_i = dt.timestamp();
+    let result =
+        vm.invoke_method_inner(globals, IdentId::get_id("utc_to_local"), tz, &[utc], None, None)?;
+    let offset = value_epoch_i64(vm, globals, result)? - epoch_i;
+    let fixed = zone_offset_fixed(offset)?;
+    let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed)), cls);
+    globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
+    Ok(Some(t))
 }
 
 fn parse_utc_offset_string(s: &str) -> Result<FixedOffset> {
@@ -1283,6 +1373,10 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let time_info = if let Some(off) = lfp.try_arg(3)
         && !off.is_nil()
     {
+        if let Some(t) = time_at_with_timezone(vm, globals, dt, off, cls)? {
+            // A timezone object (`#utc_to_local`) rather than a utc_offset.
+            return Ok(t);
+        }
         let fixed = parse_utc_offset(vm, globals, off)?;
         TimeInner::Local(dt.with_timezone(&fixed))
     } else {
@@ -3081,6 +3175,62 @@ mod tests {
             r#"Time.new("2021", in: "+17:00").to_s"#,
             r#"Time.new("2020-12-25 00:57:47 +09:01:30").utc_offset"#,
         ]);
+    }
+
+    #[test]
+    fn time_new_timezone_object() {
+        // A timezone object (responding to #local_to_utc / #utc_to_local)
+        // becomes the time's #zone; #utc_offset is derived from the
+        // conversion, and the internal zone slot stays out of
+        // #instance_variables.
+        run_tests(&[
+            r#"
+            class TZ1
+              def initialize(o); @o = o; end
+              def local_to_utc(t); t - @o; end
+              def utc_to_local(t); t + @o; end
+            end
+            z = TZ1.new(5*3600+30*60)
+            t = Time.new(2000, 1, 1, 12, 0, 0, z)
+            [t.zone.equal?(z), t.utc_offset, t.wday, t.yday, t.instance_variables]
+            "#,
+            // The #local_to_utc result only needs #to_i.
+            r#"
+            z = Object.new
+            def z.local_to_utc(t); o = Object.new; i = t.to_i - 3600; o.define_singleton_method(:to_i){i}; o; end
+            Time.new(2000, 1, 1, 12, 0, 0, z).utc_offset
+            "#,
+            // Time.at with a timezone object uses #utc_to_local.
+            r#"
+            class TZ2
+              def initialize(o); @o = o; end
+              def local_to_utc(t); t - @o; end
+              def utc_to_local(t); t + @o; end
+            end
+            z = TZ2.new(-8*3600)
+            t = Time.at(1_000_000, in: z)
+            [t.zone.equal?(z), t.utc_offset]
+            "#,
+        ]);
+        // An object with only #utc_to_local is not a timezone for Time.new
+        // → treated as a utc_offset, which a plain Object can't become.
+        run_test_error(
+            r#"
+            z = Object.new
+            def z.utc_to_local(t); t; end
+            Time.new(2000, 1, 1, 12, 0, 0, z)
+            "#,
+        );
+        // A derived offset beyond ±24h is rejected.
+        run_test_error(
+            r#"
+            z = Object.new
+            def z.local_to_utc(t); Time.utc(t.year, t.mon, t.day + 1, t.hour, t.min, t.sec); end
+            Time.new(2000, 1, 1, 12, 0, 0, z)
+            "#,
+        );
+        // Offset given both positionally and via `in:` is an error.
+        run_test_error(r#"Time.new(2000, 1, 1, 12, 0, 0, "+05:00", in: "+05:00")"#);
     }
 
     #[test]

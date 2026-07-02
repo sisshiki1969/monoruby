@@ -40,6 +40,10 @@ impl Store {
         self.classes[class_id]
             .ivar_names
             .iter()
+            // Names starting with `/` are reserved internal slots (e.g. a
+            // Struct's `/members`, a Time's `/zone` timezone object) and are
+            // hidden from `#instance_variables`, Marshal, and inspection.
+            .filter(|(name, _)| !name.get_name().starts_with('/'))
             .filter_map(|(name, id)| rval.get_ivar_by_ivarid(*id).map(|v| (*name, v)))
             .collect()
     }
