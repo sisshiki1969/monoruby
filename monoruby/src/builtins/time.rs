@@ -45,11 +45,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(TIME_CLASS, "hour", hour, 0);
     globals.define_builtin_func(TIME_CLASS, "min", min_, 0);
     globals.define_builtin_func(TIME_CLASS, "sec", sec_, 0);
-    globals.define_builtin_func(TIME_CLASS, "usec", usec, 0);
+    globals.define_builtin_funcs(TIME_CLASS, "usec", &["tv_usec"], usec, 0);
     globals.define_builtin_funcs(TIME_CLASS, "nsec", &["tv_nsec"], nsec, 0);
     globals.define_builtin_func(TIME_CLASS, "subsec", subsec, 0);
     globals.define_builtin_funcs(TIME_CLASS, "to_i", &["tv_sec"], to_i, 0);
     globals.define_builtin_func(TIME_CLASS, "to_f", to_f, 0);
+    globals.define_builtin_func(TIME_CLASS, "to_r", to_r, 0);
     globals.define_builtin_funcs(TIME_CLASS, "utc_offset", &["gmt_offset", "gmtoff"], utc_offset, 0);
     globals.define_builtin_func(TIME_CLASS, "-", sub, 1);
     globals.define_builtin_func(TIME_CLASS, "+", add, 1);
@@ -1090,13 +1091,13 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         let inner = secs_val.as_time().clone();
         return Ok(Value::new_time_with_class(inner, cls));
     }
-    let (secs, nsecs) = if let Some(f) = secs_val.try_float() {
-        let s = f.floor() as i64;
-        let ns = ((f - f.floor()) * 1_000_000_000.0) as u32;
-        (s, ns)
-    } else {
-        let s = secs_val.coerce_to_int_i64(vm, globals)?;
-        (s, 0u32)
+    // The seconds argument is coerced as an exact number (CRuby
+    // `num_exact`): Integer / Rational / Float / `#to_r`-or-`#to_int`
+    // objects keep their full fractional precision; String / nil raise
+    // TypeError.
+    let (secs, nsecs) = {
+        let (num, den) = num_exact_rational(vm, globals, secs_val)?;
+        bigint_ratio_to_sec_nsec(&num, &den)?
     };
     // `Time.at(secs, sub_secs, unit = :microsecond)`. The unit
     // (positional arg 2) selects the multiplier applied to sub_secs:
@@ -1123,14 +1124,26 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     } else {
         1_000
     };
-    let usec_ns = if let Some(arg1) = lfp.try_arg(1) {
-        let u = arg1.coerce_to_int_i64(vm, globals)?;
-        ((u as u64) * unit_multiplier) as u32
+    // The sub-second argument is likewise coerced as an exact number and
+    // scaled by the unit (nanoseconds per unit), so `Time.at(0, 500.500)`
+    // and `Time.at(0, Rational(5, 2))` retain sub-microsecond precision.
+    let usec_ns: i128 = if let Some(arg1) = lfp.try_arg(1) {
+        use num::Integer;
+        let (num, den) = num_exact_rational(vm, globals, arg1)?;
+        let scaled = (num * num::BigInt::from(unit_multiplier)).div_floor(&den);
+        scaled
+            .to_i128()
+            .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?
     } else {
         0
     };
-    let total_ns = nsecs + usec_ns;
-    let dt = DateTime::from_timestamp(secs, total_ns)
+    // Normalise seconds + fractional nanoseconds, carrying any overflow
+    // from the sub-second argument into whole seconds.
+    let total_ns = secs as i128 * 1_000_000_000 + nsecs as i128 + usec_ns;
+    let norm_secs = i64::try_from(total_ns.div_euclid(1_000_000_000))
+        .map_err(|_| MonorubyErr::argumenterr("out of Time range"))?;
+    let norm_nsec = total_ns.rem_euclid(1_000_000_000) as u32;
+    let dt = DateTime::from_timestamp(norm_secs, norm_nsec)
         .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
     // `Time.at(t, ..., in: offset)` — keyword UTC offset.  The
     // `in:` keyword now sits at positional index 3 (after secs,
@@ -1434,6 +1447,102 @@ fn rational_split_sec_nsec(r: &RationalInner) -> (i64, u32) {
     let nsec_big = (&rem * num::BigInt::from(1_000_000_000i64)) / den;
     let nsec = nsec_big.to_i64().unwrap_or(0).clamp(0, 999_999_999) as u32;
     (secs, nsec)
+}
+
+/// TypeError raised by [`num_exact_rational`] when a value cannot be
+/// converted to an exact number, matching CRuby's message.
+fn exact_number_err(globals: &Globals, v: Value) -> MonorubyErr {
+    // Use the real class (skipping any singleton class a mock/`should_receive`
+    // object carries), matching CRuby's `rb_obj_classname`.
+    MonorubyErr::typeerr(format!(
+        "can't convert {} into an exact number",
+        v.get_real_class_name(&globals.store)
+    ))
+}
+
+/// CRuby `num_exact`: coerce `v` to an exact number and return its
+/// `(numerator, denominator)` as BigInts (denominator > 0). Integer and
+/// Rational pass through directly; String and nil raise TypeError.
+/// Anything else must respond to `#to_r` — and, per CRuby, also to
+/// `#to_int` — in which case `#to_r`'s (Integer/Rational) result is used;
+/// otherwise `#to_int` alone is accepted. A value satisfying none of these
+/// raises `TypeError: can't convert X into an exact number`. This is the
+/// shared coercion behind `Time.at` and `Time#+` / `Time#-`, so an object
+/// that only knows how to become a `Rational` (e.g. `Float`) still keeps
+/// full sub-microsecond precision.
+fn num_exact_rational(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<(num::BigInt, num::BigInt)> {
+    use num::BigInt;
+    fn int_ratio(v: Value) -> Option<(BigInt, BigInt)> {
+        match v.unpack() {
+            RV::Fixnum(n) => Some((BigInt::from(n), BigInt::from(1))),
+            RV::BigInt(n) => Some((n.clone(), BigInt::from(1))),
+            _ => None,
+        }
+    }
+    match v.unpack() {
+        RV::Fixnum(n) => return Ok((BigInt::from(n), BigInt::from(1))),
+        RV::BigInt(n) => return Ok((n.clone(), BigInt::from(1))),
+        RV::Rational(r) => return Ok((r.num().clone(), r.den().clone())),
+        _ => {}
+    }
+    // String / nil are never coerced (even a numeric-looking string).
+    if v.is_str().is_some() || v.is_nil() {
+        return Err(exact_number_err(globals, v));
+    }
+    let to_r = IdentId::get_id("to_r");
+    let to_int = IdentId::get_id("to_int");
+    if globals.check_method(v, to_r).is_some() {
+        // `#to_r` alone is not enough — CRuby also requires `#to_int`.
+        if globals.check_method(v, to_int).is_none() {
+            return Err(exact_number_err(globals, v));
+        }
+        let r = vm.invoke_method_inner(globals, to_r, v, &[], None, None)?;
+        if let RV::Rational(rr) = r.unpack() {
+            return Ok((rr.num().clone(), rr.den().clone()));
+        }
+        if let Some(x) = int_ratio(r) {
+            return Ok(x);
+        }
+        return Err(exact_number_err(globals, v));
+    }
+    if globals.check_method(v, to_int).is_some() {
+        let i = vm.invoke_method_inner(globals, to_int, v, &[], None, None)?;
+        if let Some(x) = int_ratio(i) {
+            return Ok(x);
+        }
+        return Err(exact_number_err(globals, v));
+    }
+    Err(exact_number_err(globals, v))
+}
+
+/// Split an exact `numerator/denominator` number of seconds into
+/// `(whole_seconds, fractional_nanoseconds)` (nsec in `0..1_000_000_000`),
+/// using floor division so the fractional part is always non-negative.
+fn bigint_ratio_to_sec_nsec(num: &num::BigInt, den: &num::BigInt) -> Result<(i64, u32)> {
+    use num::Integer;
+    let (sec_big, rem) = num.div_mod_floor(den);
+    let secs = sec_big
+        .to_i64()
+        .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
+    let nsec_big = (&rem * num::BigInt::from(1_000_000_000i64)) / den;
+    let nsec = nsec_big.to_i64().unwrap_or(0).clamp(0, 999_999_999) as u32;
+    Ok((secs, nsec))
+}
+
+/// Coerce a numeric offset (for `Time#+` / `Time#-`) to a signed count of
+/// nanoseconds via [`num_exact_rational`], so `Rational` / `Float` /
+/// `#to_r` arguments keep sub-microsecond precision instead of being
+/// truncated to whole seconds through `Float`.
+fn num_exact_total_nanos(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i64> {
+    use num::Integer;
+    let (num, den) = num_exact_rational(vm, globals, v)?;
+    let ns = (num * num::BigInt::from(1_000_000_000i64)).div_floor(&den);
+    ns.to_i64()
+        .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))
 }
 
 /// Coerce a `usec` argument (microseconds) to nanoseconds for the
@@ -2018,6 +2127,31 @@ fn to_f(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 }
 
 ///
+/// ### Time#to_r
+///
+/// - to_r -> Rational
+///
+/// Returns the value as a `Rational` number of seconds since the epoch,
+/// including sub-second precision (nanosecond resolution).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Time/i/to_r.html]
+#[monoruby_builtin]
+fn to_r(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    let (secs, nsec) = match t {
+        TimeInner::Local(t) => (t.timestamp(), t.nanosecond()),
+        TimeInner::Utc(t) => (t.timestamp(), t.nanosecond()),
+    };
+    let num = num::BigInt::from(secs) * num::BigInt::from(1_000_000_000i64)
+        + num::BigInt::from(nsec);
+    Ok(Value::rational_from_bigint(
+        num,
+        num::BigInt::from(1_000_000_000i64),
+    ))
+}
+
+///
 /// ### Time#utc_offset
 #[monoruby_builtin]
 fn utc_offset(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
@@ -2044,11 +2178,11 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let res = ((lhs - rhs).num_nanoseconds().unwrap() as f64) / 1_000_000_000.0;
         Ok(Value::float(res))
     } else {
-        // Time - numeric (seconds)
-        let secs = rhs_rv.coerce_to_f64(vm, globals)?;
-        let nanos = (secs * 1_000_000_000.0) as i64;
-        let duration = chrono::Duration::nanoseconds(nanos);
-        let result = lhs - duration;
+        // Time - numeric (seconds). The offset is coerced as an exact
+        // number so Rational / Float / `#to_r` arguments keep
+        // sub-microsecond precision; String / nil raise TypeError.
+        let nanos = num_exact_total_nanos(vm, globals, rhs_rv)?;
+        let result = lhs - chrono::Duration::nanoseconds(nanos);
         Ok(Value::new_time(result))
     }
 }
@@ -2065,10 +2199,11 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let self_ = lfp.self_val();
     let lhs = self_.as_time().clone();
     let rhs_rv = lfp.arg(0);
-    let secs = rhs_rv.coerce_to_f64(vm, globals)?;
-    let nanos = (secs * 1_000_000_000.0) as i64;
-    let duration = chrono::Duration::nanoseconds(nanos);
-    let result = lhs + duration;
+    // The offset is coerced as an exact number so Rational / Float /
+    // `#to_r` arguments keep sub-microsecond precision; a Time (which has
+    // `#to_r` but no `#to_int`), String, and nil all raise TypeError.
+    let nanos = num_exact_total_nanos(vm, globals, rhs_rv)?;
+    let result = lhs + chrono::Duration::nanoseconds(nanos);
     Ok(Value::new_time(result))
 }
 
@@ -3022,6 +3157,42 @@ mod tests {
             "Time.utc(1970) >= Time.utc(1970)",
             "Time.utc(1971) >= Time.utc(1970)",
         ]);
+    }
+
+    #[test]
+    fn time_numeric_coercion() {
+        // `Time.at` / `Time#to_r` keep exact sub-microsecond precision for
+        // Integer / Float / Rational and objects that coerce via
+        // `#to_r` / `#to_int`.
+        run_tests(&[
+            "Time.at(Rational(11, 10)).to_r == Rational(11, 10)",
+            "Time.at(2).to_r == Rational(2)",
+            "Time.at(Rational(1_486_570_508_539_759, 1_000_000)).usec",
+            "Time.at(Rational(1_486_570_508_539_759, 1_000_000)).nsec",
+            "Time.at(Rational(1_486_570_508_539_759_123, 1_000_000_000)).nsec",
+            "Time.at(10.5).usec",
+            // Second (sub-second) argument: Float / Rational / unit.
+            "Time.at(10, 500.500).nsec",
+            "Time.at(0, Rational(5, 2)).nsec",
+            "Time.at(0, 123456, :millisecond).nsec",
+            // `#to_int`-only and `#to_r`+`#to_int` objects both coerce.
+            "o = Object.new; def o.to_int; 7; end; Time.at(o).to_i",
+            "o = Object.new; def o.to_r; Rational(5, 2); end; def o.to_int; 2; end; Time.at(o).to_r == Rational(5, 2)",
+            // `tv_usec` is an alias of `usec`.
+            "Time.at(0, 500000).tv_usec",
+            // `Time#+` / `Time#-` keep Rational precision.
+            "(Time.at(Rational(11, 10)) + Rational(9, 10)) == Time.at(2)",
+            "t = Time.at(Rational(777_777, 1_000_000)); t -= Rational(654_321, 1_000_000); t.usec",
+            "(Time.at(100) + Rational(123_456, 1_000_000)).usec",
+        ]);
+        // `#to_r` without `#to_int`, String, nil, and Time all raise
+        // TypeError (not an exact number / can't add a Time).
+        run_test_error("o = Object.new; def o.to_r; Rational(5, 2); end; Time.at(o)");
+        run_test_error(r#"Time.at("0")"#);
+        run_test_error("Time.at(nil)");
+        run_test_error("Time.now + Time.now");
+        run_test_error(r#"Time.now + "1""#);
+        run_test_error("Time.now - nil");
     }
 
     #[test]
