@@ -771,7 +771,7 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 LocalResult::Single(t) => t,
                 LocalResult::Ambiguous(t, _) => t,
                 LocalResult::None => {
-                    return Err(MonorubyErr::argumenterr("argument out of range"))
+                    return Err(MonorubyErr::argumenterr("argument out of range."))
                 }
             };
             TimeInner::Local(local.into())
@@ -783,7 +783,7 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             let dt = offset
                 .from_local_datetime(&naive)
                 .single()
-                .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
+                .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
             TimeInner::Local(dt)
         }
     } else {
@@ -791,7 +791,7 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             LocalResult::Single(t) => t,
             LocalResult::Ambiguous(t, _) => t,
             LocalResult::None => {
-                return Err(MonorubyErr::argumenterr("argument out of range"))
+                return Err(MonorubyErr::argumenterr("argument out of range."))
             }
         };
         TimeInner::Local(local.into())
