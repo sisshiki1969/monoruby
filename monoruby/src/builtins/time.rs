@@ -763,7 +763,7 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
     let utc_offset_arg = in_arg.or_else(|| lfp.try_arg(6));
     let naive = from_args_skip_last(vm, globals, lfp)?
-        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
     let time_info = if let Some(off_arg) = utc_offset_arg {
         if off_arg.is_nil() {
             // Same shape as `Time.local(year, …)` — local-zone time.
@@ -911,12 +911,18 @@ fn parse_utc_offset(
             return parse_utc_offset_string(s);
         }
     }
-    let secs = match i32::try_from(v.coerce_to_int_i64(vm, globals)?) {
-        Ok(s) => s,
-        Err(_) => {
-            return Err(MonorubyErr::argumenterr("utc_offset out of range"));
-        }
-    };
+    // Integer / `#to_int` / `#to_r` → an exact number, rounded to whole
+    // seconds (chrono offsets are whole-second). A value that is not an
+    // exact number raises `can't convert X into an exact number`, matching
+    // CRuby's `utc_offset` coercion.
+    let (num, den) = num_exact_rational(vm, globals, v)?;
+    let secs = num
+        .to_f64()
+        .zip(den.to_f64())
+        .map(|(n, d)| (n / d).round())
+        .filter(|r| r.is_finite() && *r >= i32::MIN as f64 && *r <= i32::MAX as f64)
+        .map(|r| r as i32)
+        .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))?;
     FixedOffset::east_opt(secs)
         .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))
 }
@@ -968,7 +974,7 @@ fn time_new_with_timezone(
     let dt = fixed
         .from_local_datetime(&naive)
         .single()
-        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
     let t = Value::new_time_with_class(TimeInner::Local(dt), cls);
     globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
     Ok(Some(t))
@@ -1263,7 +1269,7 @@ fn build_time_string(
     off_str: &str,
     in_arg: Option<Value>,
 ) -> Result<TimeInner> {
-    let bad = || MonorubyErr::argumenterr("argument out of range.");
+    let bad = || MonorubyErr::argumenterr("argument out of range");
     let date = NaiveDate::from_ymd_opt(year as i32, mon, day).ok_or_else(bad)?;
     let time = NaiveTime::from_hms_opt(hh, mi, ss).ok_or_else(bad)?;
     let naive = NaiveDateTime::new(date, time);
@@ -1528,13 +1534,13 @@ fn build_naive_datetime(
     nsec: u32,
 ) -> Result<NaiveDateTime> {
     if !(1..=12).contains(&mon) {
-        return Err(MonorubyErr::argumenterr("argument out of range."));
+        return Err(MonorubyErr::argumenterr("argument out of range"));
     }
     if !(1..=31).contains(&day) {
-        return Err(MonorubyErr::argumenterr("argument out of range."));
+        return Err(MonorubyErr::argumenterr("argument out of range"));
     }
     if hour > 23 || min > 59 || sec > 60 || nsec >= 1_000_000_000 {
-        return Err(MonorubyErr::argumenterr("argument out of range."));
+        return Err(MonorubyErr::argumenterr("argument out of range"));
     }
     // `sec == 60` builds with sec=0 and then adds one minute, matching
     // CRuby's leap-second normalisation. Carrying past midnight cascades
@@ -1548,7 +1554,7 @@ fn build_naive_datetime(
             let dim = days_in_month(year, mon);
             if day <= dim {
                 // shouldn't happen — `from_ymd_opt` only fails for invalid combos.
-                return Err(MonorubyErr::argumenterr("argument out of range."));
+                return Err(MonorubyErr::argumenterr("argument out of range"));
             }
             let excess = day - dim;
             let (next_year, next_mon) = if mon == 12 {
@@ -1557,16 +1563,16 @@ fn build_naive_datetime(
                 (year, mon + 1)
             };
             NaiveDate::from_ymd_opt(next_year, next_mon, excess)
-                .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?
+                .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?
         }
     };
     let time = NaiveTime::from_hms_nano_opt(hour, min, sec_real, nsec)
-        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
     let mut dt = NaiveDateTime::new(date, time);
     if leap_carry {
         dt = dt
             .checked_add_signed(Duration::minutes(1))
-            .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+            .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
     }
     Ok(dt)
 }
@@ -1811,10 +1817,10 @@ fn month_name_to_num(s: &str) -> Option<i64> {
 
 fn generate_time<Tz: TimeZone>(vm: &mut Executor, globals: &mut Globals, tz: Tz, lfp: Lfp) -> Result<DateTime<Tz>> {
     let naive =
-        from_args(vm, globals, lfp)?.ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+        from_args(vm, globals, lfp)?.ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
     Ok(match naive.and_local_timezone(tz) {
         LocalResult::Single(t) => t,
-        _ => return Err(MonorubyErr::argumenterr("argument out of range.")),
+        _ => return Err(MonorubyErr::argumenterr("argument out of range")),
     })
 }
 
@@ -3231,6 +3237,25 @@ mod tests {
         );
         // Offset given both positionally and via `in:` is an error.
         run_test_error(r#"Time.new(2000, 1, 1, 12, 0, 0, "+05:00", in: "+05:00")"#);
+    }
+
+    #[test]
+    fn time_new_offset_coercion_messages() {
+        run_tests(&[
+            // A non-numeric utc_offset raises CRuby's exact-number message.
+            "(Time.new(2000, 1, 1, 0, 0, 0, Object.new) rescue $!.message)",
+            // Out-of-range second: message matches `/(sec|argument) out of range/`.
+            "(Time.new(2000, 1, 1, 0, 0, 61) rescue $!.message) =~ /(sec|argument) out of range/ ? true : false",
+            // `#to_int` and `#to_r`+`#to_int` offset objects coerce.
+            "o = Object.new; def o.to_int; 123; end; Time.new(2000, 1, 1, 0, 0, 0, o).utc_offset",
+            "o = Object.new; def o.to_int; 3600; end; def o.to_r; 3600r; end; Time.new(2000, 1, 1, 0, 0, 0, o).utc_offset",
+        ]);
+        // Offsets out of the whole-second ±24h range are ArgumentError:
+        // one overflowing i32 (the coercion filter) and ones that fit i32
+        // but exceed FixedOffset's ±86400 range (the `east_opt` guard).
+        run_test_error("Time.new(2000, 1, 1, 0, 0, 0, 10**12)");
+        run_test_error("Time.new(2000, 1, 1, 0, 0, 0, 100000)");
+        run_test_error("Time.new(2000, 1, 1, 0, 0, 0, -90000)");
     }
 
     #[test]
