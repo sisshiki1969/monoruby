@@ -11,7 +11,7 @@ use chrono::{
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Time", TIME_CLASS, ObjTy::TIME);
     globals.define_builtin_class_func_with_kw(
-        TIME_CLASS, "new", time_now, 0, 7, false, &["in"], false,
+        TIME_CLASS, "new", time_now, 0, 7, false, &["in", "precision"], false,
     );
     globals.define_builtin_class_funcs_with(
         TIME_CLASS,
@@ -734,20 +734,16 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         };
         return Ok(Value::new_time_with_class(time_info, cls));
     }
-    // `Time.new("2020-12-25 00:56:17 +09:00")` — single String
-    // argument is parsed as a date-time, optionally with a trailing
-    // offset (else the `in:` keyword, else local).
-    if let Some(s) = lfp.arg(0).is_str()
-        && (1..6).all(|i| lfp.try_arg(i).is_none())
-        && {
-            // Only the `YYYY-MM-DD…` shape is a date-time string;
-            // a bare numeric string (`"2020"`) is a year argument
-            // and falls through to the normal component path.
-            let b = s.trim().as_bytes();
-            b.len() >= 10 && b[4] == b'-' && b[7] == b'-'
-        }
-    {
-        let time_info = parse_time_string(vm, globals, s, in_arg)?;
+    // `Time.new("2020-12-25 00:56:17 +09:00")` — a single String
+    // argument is parsed as a date-time (bare `"2021"` is a year), with a
+    // trailing offset winning over the `in:` keyword, else local. Every
+    // single-String form routes through `parse_time_string` so malformed
+    // inputs raise the proper parse error rather than being mis-read as a
+    // numeric year.
+    if lfp.arg(0).is_str().is_some() && (1..6).all(|i| lfp.try_arg(i).is_none()) {
+        // The `precision:` keyword truncates the sub-second part.
+        let precision = precision_keyword(vm, globals, lfp.try_arg(8))?;
+        let time_info = parse_time_string(vm, globals, lfp.arg(0), in_arg, precision)?;
         return Ok(Value::new_time_with_class(time_info, cls));
     }
     // Build via the shared `from_args` path. `Time.new`'s 7th arg is
@@ -973,73 +969,214 @@ fn parse_utc_offset_string(s: &str) -> Result<FixedOffset> {
         .ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))
 }
 
+/// Coerce the `precision:` keyword of `Time.new(string, …)`. `nil` (and an
+/// absent keyword) mean "no truncation"; an Integer / Float / Rational /
+/// `#to_int` object gives the number of sub-second digits to keep; a String
+/// (or anything else) raises `TypeError: no implicit conversion of X into
+/// Integer`.
+fn precision_keyword(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Option<Value>,
+) -> Result<Option<i64>> {
+    let Some(v) = v else { return Ok(None) };
+    if v.is_nil() {
+        return Ok(None);
+    }
+    let p = match v.unpack() {
+        RV::Fixnum(i) => i,
+        RV::BigInt(b) => b.to_i64().unwrap_or(i64::MAX),
+        RV::Float(f) => f as i64,
+        RV::Rational(r) => r.to_i().to_i64().unwrap_or(0),
+        _ => {
+            let to_int = IdentId::get_id("to_int");
+            if globals.check_method(v, to_int).is_some() {
+                let i = vm.invoke_method_inner(globals, to_int, v, &[], None, None)?;
+                i.coerce_to_int_i64(vm, globals)?
+            } else {
+                return Err(MonorubyErr::no_implicit_conversion(
+                    &globals.store,
+                    v,
+                    INTEGER_CLASS,
+                ));
+            }
+        }
+    };
+    Ok(Some(p))
+}
+
+/// Truncate `nsec` to `precision` sub-second digits. `None` (or a
+/// precision ≥ 9 / < 0) keeps full nanosecond resolution.
+fn truncate_subsec(nsec: u32, precision: Option<i64>) -> u32 {
+    match precision {
+        Some(p) if (0..9).contains(&p) => {
+            let div = 10u32.pow(9 - p as u32);
+            (nsec / div) * div
+        }
+        _ => nsec,
+    }
+}
+
 /// Parse `Time.new`'s single-String form:
-/// `YYYY-MM-DD[ T]HH:MM:SS[.frac][ ]?[offset]`. A trailing offset
-/// (`+HH:MM`, `+HHMM`, `Z`, military letter, …) wins; otherwise the
-/// `in:` keyword, otherwise local time. CRuby messages:
-/// `no time information` (date only) / `can't parse: "<s>"`.
+/// `YYYY-MM-DD[ T]HH:MM:SS[.frac][offset]`, or a bare `"2021"` year. A
+/// trailing offset (`+HH:MM`, `+HHMM`, `Z`, military letter, …) wins;
+/// otherwise the `in:` keyword, otherwise local time. Malformed input
+/// raises `no time information` (date-only) / `year must be 4 or more
+/// digits` / `can't parse: "<s>"`, matching CRuby.
 fn parse_time_string(
     vm: &mut Executor,
     globals: &mut Globals,
-    s: &str,
+    arg: Value,
+    in_arg: Option<Value>,
+    precision: Option<i64>,
+) -> Result<TimeInner> {
+    // The time string must be in an ASCII-compatible encoding.
+    if let Some(inner) = arg.is_rstring_inner()
+        && !inner.encoding().is_ascii_compatible()
+    {
+        return Err(MonorubyErr::argumenterr(
+            "time string should have ASCII compatible encoding",
+        ));
+    }
+    let s = arg.is_str().unwrap();
+    let b = s.as_bytes();
+    let cant = || MonorubyErr::argumenterr(format!("can't parse: {s:?}"));
+    let digits = |p: &mut usize| -> &str {
+        let start = *p;
+        while *p < b.len() && b[*p].is_ascii_digit() {
+            *p += 1;
+        }
+        &s[start..*p]
+    };
+
+    // Year: a leading run of digits.
+    let mut p = 0;
+    let year_str = digits(&mut p);
+    if year_str.is_empty() {
+        return Err(cant());
+    }
+    // A bare integer string is a year → Jan 1 00:00:00.
+    if p == b.len() {
+        let year: i64 = year_str.parse().map_err(|_| cant())?;
+        return build_time_string(vm, globals, year, 1, 1, 0, 0, 0, "", in_arg);
+    }
+    if year_str.len() < 4 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "year must be 4 or more digits: {year_str}"
+        )));
+    }
+    let year: i64 = year_str.parse().map_err(|_| cant())?;
+    // `-MM`
+    if b[p] != b'-' {
+        return Err(cant());
+    }
+    p += 1;
+    let mon_str = digits(&mut p);
+    // Month / day / time fields are exactly two digits in CRuby.
+    if mon_str.len() != 2 {
+        return Err(cant());
+    }
+    let mon: u32 = mon_str.parse().map_err(|_| cant())?;
+    if p == b.len() {
+        return Err(MonorubyErr::argumenterr("no time information"));
+    }
+    // `-DD`
+    if b[p] != b'-' {
+        return Err(cant());
+    }
+    p += 1;
+    let day_str = digits(&mut p);
+    if day_str.len() != 2 {
+        return Err(cant());
+    }
+    let day: u32 = day_str.parse().map_err(|_| cant())?;
+    // Date only → no time information.
+    if p == b.len() {
+        return Err(MonorubyErr::argumenterr("no time information"));
+    }
+    // Separator + `HH:MM:SS`.
+    if b[p] != b' ' && b[p] != b'T' {
+        return Err(cant());
+    }
+    p += 1;
+    while p < b.len() && b[p] == b' ' {
+        p += 1;
+    }
+    let hh_str = digits(&mut p);
+    if hh_str.len() != 2 || p >= b.len() || b[p] != b':' {
+        return Err(cant());
+    }
+    let hh: u32 = hh_str.parse().map_err(|_| cant())?;
+    p += 1;
+    let mi_str = digits(&mut p);
+    if mi_str.len() != 2 || p >= b.len() || b[p] != b':' {
+        // Missing (or malformed) second part.
+        return Err(cant());
+    }
+    let mi: u32 = mi_str.parse().map_err(|_| cant())?;
+    p += 1;
+    let ss_str = digits(&mut p);
+    if ss_str.len() != 2 {
+        return Err(cant());
+    }
+    let ss: u32 = ss_str.parse().map_err(|_| cant())?;
+    // Optional `.frac`.
+    let mut nsec: u32 = 0;
+    if p < b.len() && b[p] == b'.' {
+        p += 1;
+        let frac = digits(&mut p);
+        if frac.is_empty() {
+            // A dot must be followed by sub-second digits.
+            return Err(cant());
+        }
+        let mut f = frac.to_string();
+        f.truncate(9);
+        while f.len() < 9 {
+            f.push('0');
+        }
+        nsec = f.parse().unwrap_or(0);
+    }
+    nsec = truncate_subsec(nsec, precision);
+    // Optional trailing offset. Trailing whitespace with no offset, or
+    // extra text after the offset, is a parse error.
+    let rest = &s[p..];
+    let off_str = rest.trim();
+    if (off_str.is_empty() && !rest.is_empty()) || off_str.split_whitespace().count() > 1 {
+        return Err(cant());
+    }
+    build_time_string(vm, globals, year, mon, day, hh, mi, ss, off_str, in_arg)
+        .map(|t| set_nsec(t, nsec))
+}
+
+/// Replace the sub-second part of a parsed local time.
+fn set_nsec(t: TimeInner, nsec: u32) -> TimeInner {
+    match t {
+        TimeInner::Local(dt) => {
+            TimeInner::Local(dt.with_nanosecond(nsec).unwrap_or(dt))
+        }
+        TimeInner::Utc(dt) => TimeInner::Utc(dt.with_nanosecond(nsec).unwrap_or(dt)),
+    }
+}
+
+/// Build a `TimeInner` for `parse_time_string` from parsed components and a
+/// trailing offset string (empty ⇒ use the `in:` keyword, else local).
+#[allow(clippy::too_many_arguments)]
+fn build_time_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    year: i64,
+    mon: u32,
+    day: u32,
+    hh: u32,
+    mi: u32,
+    ss: u32,
+    off_str: &str,
     in_arg: Option<Value>,
 ) -> Result<TimeInner> {
-    let cant = || MonorubyErr::argumenterr(format!("can't parse: {s:?}"));
-    let t = s.trim();
-    let b = t.as_bytes();
-    if t.len() < 10 || b[4] != b'-' || b[7] != b'-' {
-        return Err(cant());
-    }
-    let num = |a: usize, c: usize| -> Result<i64> {
-        t.get(a..c)
-            .and_then(|x| x.parse::<i64>().ok())
-            .ok_or_else(cant)
-    };
-    let year = num(0, 4)?;
-    let mon = num(5, 7)? as u32;
-    let day = num(8, 10)? as u32;
-    let after = &t[10..];
-    if after.is_empty() {
-        return Err(MonorubyErr::argumenterr("no time information"));
-    }
-    let sep = after.as_bytes()[0];
-    if sep != b' ' && sep != b'T' {
-        return Err(cant());
-    }
-    let tpart = after[1..].trim_start();
-    let tb = tpart.as_bytes();
-    if tpart.len() < 8 || tb[2] != b':' || tb[5] != b':' {
-        return Err(MonorubyErr::argumenterr("no time information"));
-    }
-    let hh: u32 = tpart[0..2].parse().map_err(|_| cant())?;
-    let mi: u32 = tpart[3..5].parse().map_err(|_| cant())?;
-    let ss: u32 = tpart[6..8].parse().map_err(|_| cant())?;
-    let mut idx = 8;
-    let mut nsec: u32 = 0;
-    if tpart.as_bytes().get(idx) == Some(&b'.') {
-        idx += 1;
-        let start = idx;
-        while tpart.as_bytes().get(idx).is_some_and(|c| c.is_ascii_digit()) {
-            idx += 1;
-        }
-        let frac = &tpart[start..idx];
-        if !frac.is_empty() {
-            // Left-justify to 9 digits (truncate beyond nanoseconds).
-            let mut f = frac.to_string();
-            f.truncate(9);
-            while f.len() < 9 {
-                f.push('0');
-            }
-            nsec = f.parse().unwrap_or(0);
-        }
-    }
-    let off_str = tpart[idx..].trim();
-    let date = NaiveDate::from_ymd_opt(year as i32, mon, day)
-        .ok_or_else(|| MonorubyErr::argumenterr(format!("argument out of range: {s:?}")))?;
-    let time = NaiveTime::from_hms_nano_opt(hh, mi, ss, nsec)
-        .ok_or_else(|| MonorubyErr::argumenterr(format!("argument out of range: {s:?}")))?;
+    let bad = || MonorubyErr::argumenterr("argument out of range.");
+    let date = NaiveDate::from_ymd_opt(year as i32, mon, day).ok_or_else(bad)?;
+    let time = NaiveTime::from_hms_opt(hh, mi, ss).ok_or_else(bad)?;
     let naive = NaiveDateTime::new(date, time);
-
     let fixed = if !off_str.is_empty() {
         Some(parse_utc_offset_string(off_str)?)
     } else if let Some(off) = in_arg {
@@ -1049,19 +1186,14 @@ fn parse_time_string(
     };
     match fixed {
         Some(fixed) => {
-            let dt = fixed
-                .from_local_datetime(&naive)
-                .single()
-                .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+            let dt = fixed.from_local_datetime(&naive).single().ok_or_else(bad)?;
             Ok(TimeInner::Local(dt))
         }
         None => {
             let local = match Local.from_local_datetime(&naive) {
                 LocalResult::Single(d) => d,
                 LocalResult::Ambiguous(d, _) => d,
-                LocalResult::None => {
-                    return Err(MonorubyErr::argumenterr("argument out of range."))
-                }
+                LocalResult::None => return Err(bad()),
             };
             Ok(TimeInner::Local(local.into()))
         }
@@ -2917,6 +3049,38 @@ mod tests {
         run_test_error(r#"Time.new("2020-12-25 1:2")"#);
         run_test_error(r#"Time.new("2020-12-25x00:00:00")"#);
         run_test_error(r#"Time.new("2020-12-25 00:00:00 bogusoffset")"#);
+    }
+
+    #[test]
+    fn time_new_string_parse_errors_and_precision() {
+        // Malformed date strings raise ArgumentError (proper parse errors,
+        // not a mis-read numeric year).
+        run_test_error(r#"Time.new("2020-12")"#);
+        run_test_error("Time.new(\"a\\nb\")");
+        run_test_error(r#"Time.new("2020-012-25 00:56:17 +0900")"#); // 3-digit month
+        run_test_error(r#"Time.new("021-12-25 00:00:00 +09:00")"#); // short year
+        run_test_error(r#"Time.new("2020-12-25 00:56:17. +0900")"#); // dot, no frac
+        run_test_error(r#"Time.new("2020-12-25 00:00:00 ")"#); // trailing space
+        run_test_error(r#"Time.new("2020-12-25 00:00:00 bogus")"#); // bad offset
+        // Out-of-range date / time / offset components.
+        run_test_error(r#"Time.new("2020-13-25 00:00:00")"#); // month 13
+        run_test_error(r#"Time.new("2020-12-32 00:00:00")"#); // day 32
+        run_test_error(r#"Time.new("2020-12-25 25:00:00")"#); // hour 25
+        run_test_error(r#"Time.new("2020-12-25 00:00:00 +99:00")"#); // offset out of range
+        // `precision:` truncates the sub-second part; a non-Integer-ish
+        // value raises TypeError.
+        run_test_error(r#"Time.new("2021-12-25 00:00:00.1 +09:00", precision: "")"#);
+        run_tests(&[
+            // Fixed-offset forms keep the parsed value regardless of host TZ.
+            r#"Time.new("2021-12-25 00:00:00.123456789 +09:00", precision: 3).nsec"#,
+            // `precision:` coerced from Rational / Bignum / #to_int.
+            r#"Time.new("2021-12-25 00:00:00.123456789 +09:00", precision: 3r).nsec"#,
+            r#"Time.new("2021-12-25 00:00:00.123456789 +09:00", precision: 2**40).nsec"#,
+            r#"o = Object.new; def o.to_int; 6; end; Time.new("2021-12-25 00:00:00.123456789 +09:00", precision: o).nsec"#,
+            r#"Time.new("2020-12-25T00:56:17.123456+09:00").nsec"#,
+            r#"Time.new("2021", in: "+17:00").to_s"#,
+            r#"Time.new("2020-12-25 00:57:47 +09:01:30").utc_offset"#,
+        ]);
     }
 
     #[test]
