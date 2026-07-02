@@ -2115,15 +2115,51 @@ fn time_cmp_opt(self_: Value, other: Value) -> Option<std::cmp::Ordering> {
     Some(lhs.cmp(rhs))
 }
 
-/// `Time#<=>` — returns -1/0/1 against another Time, nil otherwise.
+/// `Time#<=>` — returns -1/0/1 against another Time. For a non-Time
+/// argument, CRuby falls back to the *inverse* comparison: it asks the
+/// argument `other <=> self` and negates the outcome, so a value that
+/// knows how to compare itself against a Time still orders correctly.
+/// `nil` (no comparison) stays `nil`, and a reciprocal loop
+/// (`other <=> self` re-entering `self <=> other`) is broken by the
+/// recursion guard, also yielding `nil`.
 #[monoruby_builtin]
-fn cmp(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(match time_cmp_opt(lfp.self_val(), lfp.arg(0)) {
-        Some(std::cmp::Ordering::Less) => Value::integer(-1),
-        Some(std::cmp::Ordering::Equal) => Value::integer(0),
-        Some(std::cmp::Ordering::Greater) => Value::integer(1),
-        None => Value::nil(),
-    })
+fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    if let Some(ord) = time_cmp_opt(self_val, other) {
+        return Ok(Value::integer(match ord {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }));
+    }
+    crate::value::exec_recursive_paired(
+        self_val.id(),
+        other.id(),
+        || {
+            // cmp = other <=> self; nil ⇒ nil, else -1 if cmp > 0,
+            // 1 if cmp < 0, else 0.
+            let cmp = vm.invoke_method_inner(globals, IdentId::_CMP, other, &[self_val], None, None)?;
+            if cmp.is_nil() {
+                return Ok(Value::nil());
+            }
+            let zero = Value::integer(0);
+            if vm
+                .invoke_method_inner(globals, IdentId::_GT, cmp, &[zero], None, None)?
+                .as_bool()
+            {
+                Ok(Value::integer(-1))
+            } else if vm
+                .invoke_method_inner(globals, IdentId::_LT, cmp, &[zero], None, None)?
+                .as_bool()
+            {
+                Ok(Value::integer(1))
+            } else {
+                Ok(Value::integer(0))
+            }
+        },
+        Value::nil(),
+    )
 }
 
 #[monoruby_builtin]
@@ -2985,6 +3021,22 @@ mod tests {
             "Time.utc(1970) > Time.utc(1971)",
             "Time.utc(1970) >= Time.utc(1970)",
             "Time.utc(1971) >= Time.utc(1970)",
+        ]);
+    }
+
+    #[test]
+    fn time_comparison_non_time() {
+        // A non-Time argument falls back to the inverse comparison:
+        // `time <=> other` asks `other <=> time` and negates the sign
+        // (positive ⇒ -1, negative ⇒ 1, zero ⇒ 0, nil ⇒ nil).
+        run_tests(&[
+            "o = Object.new; def o.<=>(x); 1; end; Time.now <=> o",
+            "o = Object.new; def o.<=>(x); -1; end; Time.now <=> o",
+            "o = Object.new; def o.<=>(x); 0; end; Time.now <=> o",
+            "o = Object.new; def o.<=>(x); nil; end; Time.now <=> o",
+            // A reciprocal `<=>` (other delegates back to `self <=> other`)
+            // is broken by the recursion guard and yields nil.
+            "o = Object.new; def o.<=>(x); x <=> self; end; Time.now <=> o",
         ]);
     }
 
