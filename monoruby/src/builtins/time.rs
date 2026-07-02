@@ -3250,8 +3250,12 @@ mod tests {
             "o = Object.new; def o.to_int; 123; end; Time.new(2000, 1, 1, 0, 0, 0, o).utc_offset",
             "o = Object.new; def o.to_int; 3600; end; def o.to_r; 3600r; end; Time.new(2000, 1, 1, 0, 0, 0, o).utc_offset",
         ]);
-        // A huge offset is out of range (ArgumentError, not TypeError).
+        // Offsets out of the whole-second ±24h range are ArgumentError:
+        // one overflowing i32 (the coercion filter) and ones that fit i32
+        // but exceed FixedOffset's ±86400 range (the `east_opt` guard).
         run_test_error("Time.new(2000, 1, 1, 0, 0, 0, 10**12)");
+        run_test_error("Time.new(2000, 1, 1, 0, 0, 0, 100000)");
+        run_test_error("Time.new(2000, 1, 1, 0, 0, 0, -90000)");
     }
 
     #[test]
