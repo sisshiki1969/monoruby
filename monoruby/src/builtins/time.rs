@@ -1672,8 +1672,28 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/inspect.html]
 #[monoruby_builtin]
 fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let time = lfp.self_val().as_time().to_string();
-    Ok(Value::string(time))
+    let self_ = lfp.self_val();
+    let t = self_.as_time();
+    // Unlike `to_s`, `inspect` shows sub-second precision (nanosecond
+    // resolution) with trailing zeros trimmed: `.123456`, `.1`,
+    // `.123456789`; nothing when the fraction is zero.
+    let nsec = t.nanosecond();
+    let frac = if nsec == 0 {
+        String::new()
+    } else {
+        format!(".{}", format!("{:09}", nsec).trim_end_matches('0'))
+    };
+    let body = match t {
+        TimeInner::Local(dt) => {
+            format!("{}{} {}", dt.format("%Y-%m-%d %H:%M:%S"), frac, dt.format("%z"))
+        }
+        TimeInner::Utc(dt) => format!("{}{} UTC", dt.format("%Y-%m-%d %H:%M:%S"), frac),
+    };
+    let mut v = Value::string(body);
+    // CRuby returns `Time#inspect` as a US-ASCII string.
+    v.as_rstring_inner_mut()
+        .set_encoding(crate::value::Encoding::UsAscii);
+    Ok(v)
 }
 
 ///
@@ -1688,7 +1708,8 @@ fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/strftime.html]
 #[monoruby_builtin]
 fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let fmt_str = lfp.arg(0).coerce_to_str(vm, globals)?;
+    let arg0 = lfp.arg(0);
+    let fmt_str = arg0.coerce_to_str(vm, globals)?;
     let inner = lfp.self_val().as_time().clone();
     let pre = preprocess_strftime(&inner, &fmt_str);
     use std::fmt::Write;
@@ -1704,7 +1725,12 @@ fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             result
         }
     };
-    Ok(Value::string(s))
+    // CRuby gives the result the format string's encoding.
+    Ok(if arg0.is_str().is_some() {
+        Value::string_from_str_with_encoding_of(&s, arg0)
+    } else {
+        Value::string(s)
+    })
 }
 
 /// Walks the format string, replacing Ruby-specific specifiers with
@@ -1729,8 +1755,15 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] != b'%' {
-            out.push(bytes[i] as char);
-            i += 1;
+            // Copy the literal run up to the next '%' verbatim. Pushing
+            // raw bytes as `char` would re-encode each byte of a multibyte
+            // UTF-8 sequence, double-encoding non-ASCII literals; `%` is
+            // ASCII so the slice stays on char boundaries.
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'%' {
+                i += 1;
+            }
+            out.push_str(&fmt[start..i]);
             continue;
         }
         // Parse the directive: optional flag chars `-`, `_`, `0`, `^`, `#`,
@@ -3087,6 +3120,27 @@ mod tests {
         // Slot 7 is the C-style trigger only; counts 8/9 fall through
         // to the standard "wrong number of arguments" path.
         run_test_error(r#"Time.gm(2024, 1, 1, 0, 0, 0, 0, 0)"#);
+    }
+
+    #[test]
+    fn time_inspect_and_strftime_encoding() {
+        // `Time#inspect` shows sub-second precision (trailing zeros
+        // trimmed) and returns a US-ASCII string; `to_s` stays plain.
+        run_tests(&[
+            "Time.utc(2007, 11, 1, 15, 25, 0, 123456).inspect",
+            "Time.utc(2007, 11, 1, 15, 25, 0, 100000).inspect",
+            "Time.utc(2007, 11, 1, 15, 25, 0, 123456.789r).inspect",
+            "Time.utc(2000, 1, 1, 20, 15, 1).inspect",
+            "Time.new(2000, 1, 1, 20, 15, 1, 3600).inspect",
+            "Time.utc(2000, 1, 1).localtime(9 * 3600).inspect",
+            "Time.now.inspect.encoding.to_s",
+            "Time.utc(2007, 11, 1, 15, 25, 0).to_s",
+            // `strftime` copies a multibyte literal verbatim (no
+            // double-encoding) and keeps the format's encoding.
+            r#"Time.utc(2010, 3, 8).strftime("%d. März %Y").bytes"#,
+            r#"Time.utc(2010, 3, 8).strftime("%d. März %Y").encoding.to_s"#,
+            r#"Time.utc(2010, 3, 8).strftime("äbc").bytes"#,
+        ]);
     }
 
     #[test]
