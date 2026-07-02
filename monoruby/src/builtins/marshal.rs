@@ -515,12 +515,46 @@ impl<'a> MarshalReader<'a> {
             b'u' => {
                 // Encoding-wrapped userdef ('I' + 'u'): the payload string
                 // handed to `_load` carries the encoding recorded by the
-                // trailing ivar block.
+                // trailing ivar block. For Time the block also carries the
+                // `:offset` / `:zone` (and any user) ivars.
                 let class_sym = self.read_symbol(vm, globals)?;
                 let len = self.read_fixnum()? as usize;
                 let bytes = self.read_bytes(len)?.to_vec();
-                let (encoding, _user_ivars) = self.read_encoding_ivars(vm, globals)?;
-                self.finish_user_marshal(vm, globals, class_sym, &bytes, encoding)
+                let (encoding, user_ivars) = self.read_encoding_ivars(vm, globals)?;
+                let result = self.finish_user_marshal(vm, globals, class_sym, &bytes, encoding)?;
+                // Apply the extra ivars: `:offset` restores a Time's fixed
+                // offset (the payload only recovers the wall clock), `:zone`
+                // is informational, everything else is a real user ivar.
+                if result.ty() == Some(ObjTy::TIME) {
+                    let mut nano_num: i64 = 0;
+                    for (sym, val) in user_ivars {
+                        match sym.get_name().as_str() {
+                            "offset" => {
+                                if let Some(off) = val.try_fixnum() {
+                                    crate::builtins::time::time_reinterpret_offset(
+                                        result, off as i32,
+                                    );
+                                }
+                            }
+                            "zone" => {}
+                            "nano_num" => nano_num = val.try_fixnum().unwrap_or(0),
+                            "nano_den" => {}
+                            _ => {
+                                globals.set_ivar(result, sym, val)?;
+                            }
+                        }
+                    }
+                    // Restore sub-microsecond precision after any offset
+                    // reinterpretation.
+                    if nano_num != 0 {
+                        crate::builtins::time::time_add_nanos(result, nano_num);
+                    }
+                } else {
+                    for (sym, val) in user_ivars {
+                        globals.set_ivar(result, sym, val)?;
+                    }
+                }
+                Ok(result)
             }
             _ => {
                 // Other I-wrapped types: an Array / Hash / object with
@@ -1591,6 +1625,76 @@ fn marshal_try_user_protocol(
             .ok_or_else(|| MonorubyErr::typeerr("_dump() must return string"))?;
         let bytes = s.as_bytes().to_vec();
         let enc = s.encoding();
+        // Time: CRuby wraps the 8-byte `_dump` payload in an 'I' block
+        // carrying `:offset` (for non-UTC times) and `:zone` ivars (plus
+        // any user ivars), since the payload alone can't recover the zone.
+        if obj.ty() == Some(ObjTy::TIME) {
+            let (is_utc, offset, sub_ns) = {
+                let t = obj.as_time();
+                (
+                    crate::builtins::time::time_is_utc(t),
+                    crate::builtins::time::time_utc_offset(t),
+                    crate::builtins::time::time_subsec_nanos(t),
+                )
+            };
+            let user_ivars = globals.get_ivars(obj);
+            buf.push(b'I');
+            buf.push(b'u');
+            marshal_write_symbol(buf, class_name_id, symbols);
+            marshal_write_fixnum(buf, bytes.len() as i32);
+            buf.extend_from_slice(&bytes);
+            // ivar count: user ivars + optional sub-microsecond
+            // (:nano_num/:nano_den) + optional :offset + :zone.
+            let has_nano = sub_ns != 0;
+            let count = user_ivars.len()
+                + if has_nano { 2 } else { 0 }
+                + if is_utc { 1 } else { 2 };
+            marshal_write_fixnum(buf, count as i32);
+            // CRuby order: user ivars first, then the sub-microsecond
+            // nanoseconds, then :offset (non-UTC), then :zone.
+            for (name, val) in user_ivars {
+                marshal_write_symbol(buf, name, symbols);
+                marshal_dump_value(buf, val, vm, globals, symbols, objects)?;
+            }
+            if has_nano {
+                marshal_write_symbol(buf, IdentId::get_id("nano_num"), symbols);
+                marshal_dump_value(
+                    buf,
+                    Value::integer(sub_ns as i64),
+                    vm,
+                    globals,
+                    symbols,
+                    objects,
+                )?;
+                marshal_write_symbol(buf, IdentId::get_id("nano_den"), symbols);
+                marshal_dump_value(buf, Value::integer(1), vm, globals, symbols, objects)?;
+            }
+            if !is_utc {
+                marshal_write_symbol(buf, IdentId::get_id("offset"), symbols);
+                marshal_dump_value(
+                    buf,
+                    Value::integer(offset as i64),
+                    vm,
+                    globals,
+                    symbols,
+                    objects,
+                )?;
+            }
+            marshal_write_symbol(buf, IdentId::get_id("zone"), symbols);
+            if is_utc {
+                // Zone "UTC" as a US-ASCII string (CRuby's `:E false`).
+                let zone =
+                    Value::string_from_inner(RStringInner::from_encoding(b"UTC", Encoding::UsAscii));
+                marshal_dump_value(buf, zone, vm, globals, symbols, objects)?;
+            } else {
+                // monoruby has no zone *name* for fixed-offset times.
+                buf.push(b'0'); // nil
+            }
+            // TYPE_USERDEF: the object's own link slot follows the objects
+            // embedded in its ivars.
+            objects.push(obj_id);
+            return Ok(true);
+        }
         // 'u' (TYPE_USERDEF): the object's own link slot follows any
         // objects embedded in the returned string.
         objects.push(obj_id);
@@ -3092,6 +3196,55 @@ mod tests {
         run_test(r#"Marshal.load(Marshal.dump(-0.0)).to_s"#);
         run_test(r#"Marshal.load(Marshal.dump(10 ** 100)) == 10 ** 100"#);
         run_test(r#"Marshal.load(Marshal.dump(-(2 ** 80))) == -(2 ** 80)"#);
+    }
+
+    #[test]
+    fn marshal_time_zone_offset() {
+        // A UTC time dumps `:zone "UTC"` and reloads as UTC.
+        run_test(
+            r#"
+            t = Time.utc(2012, 1, 1)
+            r = Marshal.load(Marshal.dump(t))
+            [r.utc?, r.year, r.month, r.day]
+            "#,
+        );
+        // A fixed-offset time records `:offset` and keeps it on reload.
+        run_test(
+            r#"
+            t = Time.new(2007, 11, 1, 15, 25, 0, "+09:00")
+            Marshal.load(Marshal.dump(t)).utc_offset
+            "#,
+        );
+        // Sub-microsecond nanoseconds survive via the :nano_num ivar.
+        run_test(
+            r#"
+            t = Time.now
+            Marshal.load(Marshal.dump(t)).nsec == t.nsec
+            "#,
+        );
+        // Time carrying a user ivar round-trips it, without leaking the
+        // internal :offset/:zone ivars.
+        run_test(
+            r#"
+            t = Time.now
+            t.instance_variable_set(:@foo, "bar")
+            r = Marshal.load(Marshal.dump(t))
+            [r.instance_variable_get(:@foo), r.instance_variables.include?(:@zone)]
+            "#,
+        );
+        run_test(
+            r#"
+            Marshal.load(Marshal.dump(Time.now)).instance_variables.empty?
+            "#,
+        );
+        // A UTC time also keeps its nanoseconds (Utc branch of the loader).
+        run_test(
+            r#"
+            t = Time.now.utc
+            r = Marshal.load(Marshal.dump(t))
+            [r.utc?, r.nsec == t.nsec]
+            "#,
+        );
     }
 
     #[test]
