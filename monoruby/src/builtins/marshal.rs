@@ -232,16 +232,24 @@ impl<'a> MarshalReader<'a> {
     /// Read a symbol (type ':') and register it in the symbol table.
     fn read_new_symbol(&mut self) -> Result<IdentId> {
         let len = self.read_fixnum()? as usize;
-        let bytes = self.read_bytes(len)?;
-        let name = std::str::from_utf8(bytes)
-            .map_err(|_| MonorubyErr::argumenterr("invalid symbol encoding in marshal data"))?;
-        let id = IdentId::get_id(name);
+        let bytes = self.read_bytes(len)?.to_vec();
+        // A plain ':' symbol with only ASCII bytes is a normal identifier;
+        // one carrying non-ASCII bytes with no encoding wrapper is binary
+        // (ASCII-8BIT), matching CRuby's `loads a binary encoded Symbol`.
+        let enc = if bytes.iter().all(|&b| b < 0x80) {
+            Encoding::UsAscii
+        } else {
+            Encoding::Ascii8
+        };
+        let id = intern_symbol_bytes(&bytes, enc);
         self.symbols.push(id);
         Ok(id)
     }
 
-    /// Read a symbol, handling both ':' (new symbol) and ';' (symbol reference).
-    fn read_symbol(&mut self) -> Result<IdentId> {
+    /// Read a symbol, handling `:` (new symbol), `;` (symbol reference),
+    /// and `I:` (a new symbol carrying an encoding ivar, e.g. a non-ASCII
+    /// instance-variable name).
+    fn read_symbol(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<IdentId> {
         let tag = self.read_byte()?;
         match tag {
             b':' => self.read_new_symbol(),
@@ -253,6 +261,14 @@ impl<'a> MarshalReader<'a> {
                         idx
                     ))
                 })
+            }
+            b'I' => {
+                // Encoding-wrapped symbol: reuse the 'I' reader, which
+                // interns the symbol and registers its symlink slot.
+                self.pos -= 1;
+                let v = self.read_value_inner(vm, globals)?;
+                v.try_symbol()
+                    .ok_or_else(|| MonorubyErr::argumenterr("expected symbol in marshal data"))
             }
             _ => Err(MonorubyErr::argumenterr(format!(
                 "expected symbol tag (':' or ';'), got 0x{:02x}",
@@ -481,11 +497,26 @@ impl<'a> MarshalReader<'a> {
                 }
                 Ok(val)
             }
+            b':' => {
+                // Encoding-wrapped new symbol ('I' + ':'): the name bytes
+                // are interned under the encoding recorded by the ivar.
+                // Reserve the symlink slot before reading the encoding
+                // symbol so the two land in the same order they were
+                // written.
+                let len = self.read_fixnum()? as usize;
+                let bytes = self.read_bytes(len)?.to_vec();
+                let idx = self.symbols.len();
+                self.symbols.push(IdentId::get_id(""));
+                let (encoding, _user_ivars) = self.read_encoding_ivars(vm, globals)?;
+                let id = intern_symbol_bytes(&bytes, encoding);
+                self.symbols[idx] = id;
+                Ok(Value::symbol(id))
+            }
             b'u' => {
                 // Encoding-wrapped userdef ('I' + 'u'): the payload string
                 // handed to `_load` carries the encoding recorded by the
                 // trailing ivar block.
-                let class_sym = self.read_symbol()?;
+                let class_sym = self.read_symbol(vm, globals)?;
                 let len = self.read_fixnum()? as usize;
                 let bytes = self.read_bytes(len)?.to_vec();
                 let (encoding, _user_ivars) = self.read_encoding_ivars(vm, globals)?;
@@ -502,7 +533,7 @@ impl<'a> MarshalReader<'a> {
                 let val = self.read_value_inner(vm, globals)?;
                 let ivar_count = self.read_fixnum()? as usize;
                 for _ in 0..ivar_count {
-                    let sym = self.read_symbol()?;
+                    let sym = self.read_symbol(vm, globals)?;
                     let ivar_val = self.read_value(vm, globals)?;
                     // `:E` / `:encoding` describe the payload's encoding
                     // (already applied when the value was built); every
@@ -579,7 +610,7 @@ impl<'a> MarshalReader<'a> {
     ///
     /// We create a generic object with instance variables stored as a Hash.
     fn read_user_object(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         let ivar_count = self.read_fixnum()? as usize;
         // Reserve an object slot
         let obj_idx = self.objects.len();
@@ -603,7 +634,7 @@ impl<'a> MarshalReader<'a> {
         // Read instance variables.
         let mut ivars: Vec<(IdentId, Value)> = Vec::with_capacity(ivar_count);
         for _ in 0..ivar_count {
-            let ivar_sym = self.read_symbol()?;
+            let ivar_sym = self.read_symbol(vm, globals)?;
             let val = self.read_value(vm, globals)?;
             ivars.push((ivar_sym, val));
         }
@@ -686,7 +717,7 @@ impl<'a> MarshalReader<'a> {
     /// next dispatch because `read_value` reinterpreted the length
     /// byte as a tag.
     fn read_user_marshal(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         let len = self.read_fixnum()? as usize;
         let bytes = self.read_bytes(len)?.to_vec();
         self.finish_user_marshal(vm, globals, class_sym, &bytes, Encoding::Ascii8)
@@ -731,7 +762,7 @@ impl<'a> MarshalReader<'a> {
         let mut encoding = Encoding::Ascii8;
         let mut user_ivars = Vec::new();
         for _ in 0..ivar_count {
-            let sym = self.read_symbol()?;
+            let sym = self.read_symbol(vm, globals)?;
             let sym_name = sym.get_name();
             if sym_name == "E" {
                 match self.read_byte()? {
@@ -775,7 +806,7 @@ impl<'a> MarshalReader<'a> {
     /// then drives `instance.marshal_load(value)` — `instance` is
     /// returned (the `marshal_load` return value is ignored).
     fn read_usr_marshal(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         let class_name = class_sym.get_name();
         let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
             MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
@@ -820,7 +851,7 @@ impl<'a> MarshalReader<'a> {
     /// drives `instance._load_data(value)`. The class must define
     /// `_load_data`; otherwise CRuby raises `TypeError`.
     fn read_data(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         let value = self.read_value(vm, globals)?;
         let class_name = class_sym.get_name();
         let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
@@ -849,7 +880,7 @@ impl<'a> MarshalReader<'a> {
     /// produced by an instance of a subclass; on load we reconstruct
     /// the inner natively and then swap its class to the named subclass.
     fn read_user_class(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         // Read the base value without freezing it (under `freeze: true`)
         // so its class can still be swapped; the outer `read_value`
         // freezes the final wrapped result.
@@ -865,6 +896,12 @@ impl<'a> MarshalReader<'a> {
         let module = class_val.is_class_or_module().ok_or_else(|| {
             MonorubyErr::argumenterr(format!("{} is not a class", class_name))
         })?;
+        // A `C :Hash` wrapper around a Hash is CRuby's marker for a
+        // compare_by_identity hash (not an actual class change).
+        if module.id() == HASH_CLASS && inner.ty() == Some(ObjTy::HASH) {
+            inner.as_hash().compare_by_identity(vm, globals)?;
+            return Ok(inner);
+        }
         // CRuby's 'C' wraps a built-in (whose RValue layout is fixed),
         // so it is safe to swap the class on the already-allocated
         // inner — the storage type does not change, only the
@@ -914,15 +951,13 @@ impl<'a> MarshalReader<'a> {
     /// through the standard dispatch so the module is added to the
     /// inner's singleton-class ancestor chain.
     fn read_extended(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let module_sym = self.read_symbol()?;
+        let module_sym = self.read_symbol(vm, globals)?;
         // Read without freezing so `extend` can still modify the singleton
         // class; the outer `read_value` freezes the final result.
         let inner = self.read_value_inner(vm, globals)?;
         let module_name = module_sym.get_name();
-        let module_name_id = IdentId::get_id(&module_name);
-        let module_val = globals
-            .get_constant(OBJECT_CLASS, module_name_id)
-            .and_then(|state| state.loaded_value())
+        let module_val = resolve_class_path(globals, &module_name)
+            .map(|m| m.as_val())
             .ok_or_else(|| {
                 MonorubyErr::argumenterr(format!("undefined module {}", module_name))
             })?;
@@ -945,7 +980,7 @@ impl<'a> MarshalReader<'a> {
     /// member symbols don't match the class's actual `/members`,
     /// so we mirror that.
     fn read_struct(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-        let class_sym = self.read_symbol()?;
+        let class_sym = self.read_symbol(vm, globals)?;
         let member_count = self.read_fixnum()? as usize;
         // Reserve the object slot up front so any backrefs from member
         // values resolve to the (still-empty) instance.
@@ -978,7 +1013,7 @@ impl<'a> MarshalReader<'a> {
         let class_id = module.id();
         let mut instance = Value::struct_object(class_id, member_count);
         for i in 0..member_count {
-            let member_sym = self.read_symbol()?;
+            let member_sym = self.read_symbol(vm, globals)?;
             let val = self.read_value(vm, globals)?;
             // SAFETY: `members` was populated by `Struct.new`, which
             // validates each entry is a Symbol; CRuby blocks Ruby-
@@ -1020,7 +1055,7 @@ impl<'a> MarshalReader<'a> {
             MonorubyErr::argumenterr(format!("undefined class/module {}", name))
         })?;
         if module.as_val().ty() == Some(ObjTy::MODULE) {
-            return Err(MonorubyErr::typeerr(format!("{} does not refer to class", name)));
+            return Err(MonorubyErr::argumenterr(format!("{} is not a class", name)));
         }
         let val = module.as_val();
         self.objects.push(val);
@@ -1035,7 +1070,7 @@ impl<'a> MarshalReader<'a> {
             MonorubyErr::argumenterr(format!("undefined class/module {}", name))
         })?;
         if module.as_val().ty() != Some(ObjTy::MODULE) {
-            return Err(MonorubyErr::typeerr(format!("{} does not refer to module", name)));
+            return Err(MonorubyErr::argumenterr(format!("{} is not a module", name)));
         }
         let val = module.as_val();
         self.objects.push(val);
@@ -1317,6 +1352,19 @@ fn marshal_write_float(buf: &mut Vec<u8>, f: f64) {
 ///
 /// If the symbol has been seen before, write ';' + index.
 /// Otherwise, write ':' + marshal_int(length) + bytes and record it.
+/// Intern a symbol from its raw name bytes under `enc`. UTF-8 / US-ASCII
+/// names go through the normal (String) intern path so a loaded symbol is
+/// identity-equal to the same literal symbol; other encodings (binary,
+/// UTF-16, …) intern per (bytes, encoding) to preserve the distinction.
+fn intern_symbol_bytes(bytes: &[u8], enc: Encoding) -> IdentId {
+    if matches!(enc, Encoding::Utf8 | Encoding::UsAscii) {
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            return IdentId::get_id(s);
+        }
+    }
+    IdentId::get_id_from_bytes(bytes.to_vec(), enc)
+}
+
 fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentId>) {
     if let Some(idx) = symbols.iter().position(|&s| s == id) {
         buf.push(b';');
@@ -1735,7 +1783,15 @@ fn marshal_dump_value(
                     Some(ObjTy::RANGE) => {
                         // Serialize Range as a generic 'o' object with the
                         // three ivars CRuby uses, in CRuby's order:
-                        // :excl, :begin, :end.
+                        // :excl, :begin, :end. An anonymous Range subclass
+                        // cannot be dumped.
+                        let range_class = obj.get_real_class_name(&globals.store);
+                        if range_class.starts_with("#<") {
+                            return Err(MonorubyErr::typeerr(format!(
+                                "can't dump anonymous class {}",
+                                range_class
+                            )));
+                        }
                         let range = obj.as_range();
                         let begin = range.start();
                         let end = range.end();
@@ -1753,9 +1809,13 @@ fn marshal_dump_value(
                     Some(ObjTy::HASH) => {
                         // Snapshot the pairs to avoid holding a borrow into
                         // the live hash across re-entrant user code.
-                        let (pairs, default): (Vec<(Value, Value)>, Option<Value>) = {
+                        let (pairs, default, cbi): (Vec<(Value, Value)>, Option<Value>, bool) = {
                             let inner = obj.as_hashmap_inner();
-                            (inner.iter().collect(), inner.default_value())
+                            (
+                                inner.iter().collect(),
+                                inner.default_value(),
+                                inner.is_compare_by_identity(),
+                            )
                         };
                         let ivars = globals.get_ivars(obj);
                         let has_ivars = !ivars.is_empty();
@@ -1765,6 +1825,13 @@ fn marshal_dump_value(
                         marshal_write_extended_and_class(
                             buf, globals, obj, HASH_CLASS, symbols,
                         )?;
+                        // A compare_by_identity hash is marked by a
+                        // `C :Hash` wrapper (nested inside the subclass
+                        // wrapper, if any).
+                        if cbi {
+                            buf.push(b'C');
+                            marshal_write_symbol(buf, IdentId::get_id("Hash"), symbols);
+                        }
                         // A hash with a default *value* uses the '}' tag
                         // (the default is written after the pairs); a plain
                         // hash uses '{'.
@@ -2969,6 +3036,98 @@ mod tests {
             [r.a, r.b, r.instance_variable_get(:@x)]
             "#,
         );
+    }
+
+    #[test]
+    fn marshal_symbol_load_encoding() {
+        // A plain non-ASCII symbol loads as binary; an 'I'-wrapped one
+        // loads under its recorded encoding (and a UTF-8 one is identity-
+        // equal to the same literal symbol).
+        run_test(r#"Marshal.load("\x04\b:\b\xE2\x86\x92".b).encoding.to_s"#);
+        run_test(
+            r#"
+            s = Marshal.load("\x04\bI:\b\xE2\x86\x92\x06:\x06ET".b)
+            [s.to_s, s.encoding.to_s, s == "→".to_sym]
+            "#,
+        );
+        // Two UTF-8 symbols sharing the encoding link.
+        run_test(
+            r#"
+            dump = "\x04\b[\aI:\t\xE2\x82\xACa\x06:\x06ETI:\t\xE2\x82\xACb\x06;\x06T".b
+            Marshal.load(dump).map { |s| [s.to_s, s.encoding.to_s] }
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_compare_by_identity() {
+        // A compare_by_identity hash is marked with a `C :Hash` wrapper
+        // and reloads with the flag set.
+        run_test(r#"Marshal.dump({a: 1}.compare_by_identity).bytes"#);
+        run_test(
+            r#"
+            h = {a: 1}.compare_by_identity
+            Marshal.load(Marshal.dump(h)).compare_by_identity?
+            "#,
+        );
+        run_test(
+            r#"
+            class HCbi < Hash; end
+            h = HCbi.new
+            h[:a] = 1
+            h.compare_by_identity
+            r = Marshal.load(Marshal.dump(h))
+            [r.class.to_s, r.compare_by_identity?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_class_module_ref_errors() {
+        // A 'c' (class) tag naming a Module — or an 'm' tag naming a
+        // Class — raises ArgumentError, as in CRuby.
+        run_test_error(r#"Marshal.load("\x04\bc\vKernel")"#);
+        run_test_error(r#"Marshal.load("\x04\bm\vString")"#);
+    }
+
+    #[test]
+    fn marshal_object_non_ascii_ivar() {
+        // An instance-variable name with non-ASCII bytes is written as an
+        // encoding-wrapped symbol key and read back through `read_symbol`.
+        run_test(
+            r#"
+            o = Object.new
+            ivar = "@é".dup.force_encoding("UTF-8").to_sym
+            o.instance_variable_set(ivar, 1)
+            Marshal.dump(o).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            o = Object.new
+            ivar = "@é".dup.force_encoding("UTF-8").to_sym
+            o.instance_variable_set(ivar, 1)
+            r = Marshal.load(Marshal.dump(o))
+            [r.instance_variables.map(&:to_s), r.instance_variable_get(ivar)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_extended_nested_module() {
+        // An object extended by a namespaced module round-trips (the 'e'
+        // reader resolves the `::` path).
+        run_test(
+            r#"
+            module MNs; module Ext; end; end
+            o = Object.new
+            o.extend(MNs::Ext)
+            r = Marshal.load(Marshal.dump(o))
+            r.singleton_class.include?(MNs::Ext)
+            "#,
+        );
+        // An anonymous Range subclass cannot be dumped.
+        run_test_error(r#"Marshal.dump(Class.new(Range).new(1, 2))"#);
     }
 
     #[test]
