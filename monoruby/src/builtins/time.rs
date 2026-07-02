@@ -3062,12 +3062,20 @@ mod tests {
         run_test_error(r#"Time.new("2020-12-25 00:56:17. +0900")"#); // dot, no frac
         run_test_error(r#"Time.new("2020-12-25 00:00:00 ")"#); // trailing space
         run_test_error(r#"Time.new("2020-12-25 00:00:00 bogus")"#); // bad offset
+        // Out-of-range date / time / offset components.
+        run_test_error(r#"Time.new("2020-13-25 00:00:00")"#); // month 13
+        run_test_error(r#"Time.new("2020-12-32 00:00:00")"#); // day 32
+        run_test_error(r#"Time.new("2020-12-25 25:00:00")"#); // hour 25
+        run_test_error(r#"Time.new("2020-12-25 00:00:00 +99:00")"#); // offset out of range
         // `precision:` truncates the sub-second part; a non-Integer-ish
         // value raises TypeError.
         run_test_error(r#"Time.new("2021-12-25 00:00:00.1 +09:00", precision: "")"#);
         run_tests(&[
             // Fixed-offset forms keep the parsed value regardless of host TZ.
             r#"Time.new("2021-12-25 00:00:00.123456789 +09:00", precision: 3).nsec"#,
+            // `precision:` coerced from Rational / Bignum / #to_int.
+            r#"Time.new("2021-12-25 00:00:00.123456789 +09:00", precision: 3r).nsec"#,
+            r#"Time.new("2021-12-25 00:00:00.123456789 +09:00", precision: 2**40).nsec"#,
             r#"o = Object.new; def o.to_int; 6; end; Time.new("2021-12-25 00:00:00.123456789 +09:00", precision: o).nsec"#,
             r#"Time.new("2020-12-25T00:56:17.123456+09:00").nsec"#,
             r#"Time.new("2021", in: "+17:00").to_s"#,
