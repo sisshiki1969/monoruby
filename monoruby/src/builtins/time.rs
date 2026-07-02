@@ -481,6 +481,61 @@ fn _load(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
 }
 
+/// Marshal support: whether this time is UTC.
+pub(crate) fn time_is_utc(t: &TimeInner) -> bool {
+    matches!(t, TimeInner::Utc(_))
+}
+
+/// Marshal support: the UTC offset in seconds (0 for a UTC time).
+pub(crate) fn time_utc_offset(t: &TimeInner) -> i32 {
+    match t {
+        TimeInner::Local(dt) => dt.offset().local_minus_utc(),
+        TimeInner::Utc(_) => 0,
+    }
+}
+
+/// Marshal support: the sub-microsecond part of this time's nanoseconds
+/// (`nanosecond % 1000`), which the 8-byte payload (microsecond
+/// resolution) cannot carry.
+pub(crate) fn time_subsec_nanos(t: &TimeInner) -> u32 {
+    let ns = match t {
+        TimeInner::Local(dt) => dt.nanosecond(),
+        TimeInner::Utc(dt) => dt.nanosecond(),
+    };
+    ns % 1000
+}
+
+/// Marshal support: add `ns` nanoseconds to a loaded time, restoring the
+/// sub-microsecond precision recorded in the `:nano_num` ivar.
+pub(crate) fn time_add_nanos(mut time: Value, ns: i64) {
+    let dur = chrono::Duration::nanoseconds(ns);
+    let inner = match time.as_time() {
+        TimeInner::Local(dt) => TimeInner::Local(*dt + dur),
+        TimeInner::Utc(dt) => TimeInner::Utc(*dt + dur),
+    };
+    *time.as_time_mut() = inner;
+}
+
+/// Marshal support: reinterpret a just-loaded time's wall clock at the
+/// given fixed offset (seconds east of UTC). `Time#_load` can only
+/// recover the wall-clock components (the payload has no zone), so
+/// Marshal records the offset in a `:offset` ivar and this reattaches it,
+/// preserving the wall clock (and thus shifting the absolute instant).
+pub(crate) fn time_reinterpret_offset(mut time: Value, offset_secs: i32) {
+    let naive = match time.as_time() {
+        TimeInner::Local(dt) => dt.naive_local(),
+        TimeInner::Utc(dt) => dt.naive_utc(),
+    };
+    let fixed =
+        FixedOffset::east_opt(offset_secs).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap());
+    let dt = match fixed.from_local_datetime(&naive) {
+        LocalResult::Single(t) => t,
+        LocalResult::Ambiguous(t, _) => t,
+        LocalResult::None => fixed.from_utc_datetime(&naive),
+    };
+    *time.as_time_mut() = TimeInner::Local(dt);
+}
+
 ///
 /// ### Time#iso8601
 ///
