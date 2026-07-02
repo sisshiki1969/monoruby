@@ -3184,7 +3184,15 @@ mod tests {
             "(Time.at(Rational(11, 10)) + Rational(9, 10)) == Time.at(2)",
             "t = Time.at(Rational(777_777, 1_000_000)); t -= Rational(654_321, 1_000_000); t.usec",
             "(Time.at(100) + Rational(123_456, 1_000_000)).usec",
+            // `#to_r` may return an Integer (not only a Rational).
+            "o = Object.new; def o.to_r; 10; end; def o.to_int; 10; end; Time.at(o).to_i",
+            // A Bignum sub-second argument flows through the exact path.
+            "Time.at(0, 10**19, :nanosecond).to_i",
         ]);
+        // A `#to_r` that returns a non-numeric, and a `#to_int` that returns
+        // a non-Integer, are both rejected as not an exact number.
+        run_test_error("o = Object.new; def o.to_r; \"x\"; end; def o.to_int; 1; end; Time.at(o)");
+        run_test_error("o = Object.new; def o.to_int; \"x\"; end; Time.at(o)");
         // `#to_r` without `#to_int`, String, nil, and Time all raise
         // TypeError (not an exact number / can't add a Time).
         run_test_error("o = Object.new; def o.to_r; Rational(5, 2); end; Time.at(o)");
