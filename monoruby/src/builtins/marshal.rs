@@ -1776,9 +1776,21 @@ fn marshal_dump_value(
                         }
                         let tag = if is_module { b'm' } else { b'c' };
                         let name_bytes = class_name.as_bytes();
+                        // A name with non-ASCII (UTF-8) bytes is wrapped in
+                        // an 'I' block recording its encoding, like a
+                        // String/Symbol.
+                        let ascii = name_bytes.iter().all(|&b| b < 0x80);
+                        if !ascii {
+                            buf.push(b'I');
+                        }
                         buf.push(tag);
                         marshal_write_fixnum(buf, name_bytes.len() as i32);
                         buf.extend_from_slice(name_bytes);
+                        if !ascii {
+                            marshal_write_fixnum(buf, 1);
+                            marshal_write_symbol(buf, IdentId::get_id("E"), symbols);
+                            buf.push(b'T'); // class names are UTF-8
+                        }
                     }
                     Some(ObjTy::RANGE) => {
                         // Serialize Range as a generic 'o' object with the
@@ -3055,6 +3067,30 @@ mod tests {
             r#"
             dump = "\x04\b[\aI:\t\xE2\x82\xACa\x06:\x06ETI:\t\xE2\x82\xACb\x06;\x06T".b
             Marshal.load(dump).map { |s| [s.to_s, s.encoding.to_s] }
+            "#,
+        );
+    }
+
+    #[test]
+    fn marshal_multibyte_class_name() {
+        // A class/module whose name has non-ASCII bytes is dumped with an
+        // 'I' encoding wrapper (`I c … :E T`) and round-trips.
+        run_test(
+            r#"
+            module MBSpec; end
+            name = "WideあClass"
+            MBSpec.const_set(name, Class.new)
+            k = MBSpec.const_get(name)
+            Marshal.dump(k).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            module MBSpec2; end
+            name = "Wideあmod"
+            MBSpec2.const_set(name, Module.new)
+            m = MBSpec2.const_get(name)
+            Marshal.load(Marshal.dump(m)).equal?(m)
             "#,
         );
     }
