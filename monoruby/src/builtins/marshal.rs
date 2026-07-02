@@ -3072,6 +3072,29 @@ mod tests {
     }
 
     #[test]
+    fn marshal_load_malformed() {
+        // Reader error paths: unsupported tag, truncated data, wrong
+        // version header, bad symbol/object back-references.
+        run_test_error(r#"Marshal.load("\x04\bx".b)"#);
+        run_test_error(r#"Marshal.load("\x04".b)"#);
+        run_test_error(r#"Marshal.load("\x03\bi\x06".b)"#);
+        run_test_error(r#"Marshal.load("\x04\b;\x00".b)"#);
+        run_test_error(r#"Marshal.load("\x04\b@\x00".b)"#);
+    }
+
+    #[test]
+    fn marshal_numeric_edges() {
+        // Float special values and a large Bignum round-trip.
+        run_test(r#"Marshal.load(Marshal.dump(Float::INFINITY)) == Float::INFINITY"#);
+        run_test(r#"Marshal.load(Marshal.dump(-Float::INFINITY)) == -Float::INFINITY"#);
+        run_test(r#"Marshal.load(Marshal.dump(Float::NAN)).nan?"#);
+        run_test(r#"Marshal.load(Marshal.dump(0.0)) == 0.0"#);
+        run_test(r#"Marshal.load(Marshal.dump(-0.0)).to_s"#);
+        run_test(r#"Marshal.load(Marshal.dump(10 ** 100)) == 10 ** 100"#);
+        run_test(r#"Marshal.load(Marshal.dump(-(2 ** 80))) == -(2 ** 80)"#);
+    }
+
+    #[test]
     fn marshal_multibyte_class_name() {
         // A class/module whose name has non-ASCII bytes is dumped with an
         // 'I' encoding wrapper (`I c … :E T`) and round-trips.
