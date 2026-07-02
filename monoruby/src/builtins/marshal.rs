@@ -1506,6 +1506,24 @@ fn marshal_extended_modules(globals: &Globals, obj: Value) -> Vec<ClassId> {
     mods
 }
 
+/// CRuby refuses to serialize an object whose singleton class carries
+/// state of its own — any singleton method, or any instance variable set
+/// on the singleton class itself (`class << obj; @v = …; end`). Merely
+/// *having* a singleton class (from `obj.singleton_class` or `extend`,
+/// whose module methods live on an iclass, not the singleton class) is
+/// fine and dumps normally. Returns a `TypeError` matching CRuby's
+/// `"singleton can't be dumped"` when the object cannot be dumped.
+fn marshal_check_singleton(globals: &Globals, obj: Value) -> Result<()> {
+    if let Some(singleton) = globals.store.has_singleton(obj) {
+        let has_methods = !globals.store.get_method_names(singleton.id()).is_empty();
+        let has_ivars = !globals.get_ivars(singleton.as_val()).is_empty();
+        if has_methods || has_ivars {
+            return Err(MonorubyErr::typeerr("singleton can't be dumped"));
+        }
+    }
+    Ok(())
+}
+
 /// Emit the `'e'` (extended-module) and `'C'` (user-subclass) wrappers
 /// that precede a built-in object's body. `base_class` is the built-in
 /// class the tag is expected to be (`Array`, `Hash`, `String`, `Regexp`);
@@ -1971,6 +1989,9 @@ fn marshal_dump_value(
                         // tag. The class is carried by the tag's symbol
                         // (real class, skipping the singleton), and any
                         // `extend`ed modules become 'e' wrappers.
+                        // A singleton class carrying methods or ivars of its
+                        // own cannot be dumped.
+                        marshal_check_singleton(globals, obj)?;
                         let class_name = obj.get_real_class_name(&globals.store);
                         if class_name.starts_with("#<") {
                             return Err(MonorubyErr::typeerr(format!(
@@ -3425,6 +3446,65 @@ mod tests {
         );
         // Anonymous exception subclass cannot be dumped.
         run_test_error(r#"Marshal.dump(Class.new(Exception).new)"#);
+    }
+
+    #[test]
+    fn marshal_singleton() {
+        // An object that merely *has* a singleton class (created by calling
+        // `singleton_class`, with no singleton methods or ivars) dumps as a
+        // plain object.
+        run_test(
+            r#"
+            o = Object.new
+            o.singleton_class
+            Marshal.dump(o).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            o = Object.new
+            o.singleton_class
+            Marshal.load(Marshal.dump(o)).class == Object
+            "#,
+        );
+        // A singleton method makes the object undumpable.
+        run_test_error(
+            r#"
+            o = Object.new
+            def o.foo; end
+            Marshal.dump(o)
+            "#,
+        );
+        // A singleton-class instance variable likewise.
+        run_test_error(
+            r#"
+            o = Object.new
+            class << o
+              @v = 1
+            end
+            Marshal.dump(o)
+            "#,
+        );
+        // The singleton class itself cannot be dumped.
+        run_test_error(r#"Marshal.dump(class << Object.new; self; end)"#);
+        // `extend`ed modules keep dumping via the 'e' wrapper — a singleton
+        // class whose methods live on an iclass is not "singleton state".
+        run_test(
+            r#"
+            module MarshalSingletonExt; def hi; end; end
+            o = Object.new
+            o.extend(MarshalSingletonExt)
+            Marshal.dump(o).bytes
+            "#,
+        );
+        run_test(
+            r#"
+            module MarshalSingletonExt2; def hi; end; end
+            o = Object.new
+            o.extend(MarshalSingletonExt2)
+            Marshal.load(Marshal.dump(o)).singleton_class.include?(MarshalSingletonExt2)
+            "#,
+        );
     }
 
     #[test]
