@@ -1382,9 +1382,13 @@ pub(super) extern "C" fn defined_method(
         ) {
             Ok(v) if v.as_bool() => return,
             Ok(_) => {}
-            // `defined?` never propagates an exception; discard it.
+            // `defined?` never propagates an exception raised by
+            // `respond_to_missing?`; discard it and report nil. The error
+            // is carried in the `Err` value (not the executor's slot), so
+            // use `discard_error` rather than `take_error` (which would
+            // unwrap an empty slot and panic).
             Err(_) => {
-                let _ = vm.take_error();
+                vm.discard_error();
             }
         }
     }

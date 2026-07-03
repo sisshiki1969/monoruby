@@ -497,9 +497,53 @@ mod tests {
     }
 
     #[test]
+    fn defined_scoped_constant_resolution() {
+        // Qualified constants: direct, nested-qualifier walk, top-level
+        // qualified, and the negative paths (undefined leaf / undefined
+        // qualifier — the latter must not fire `const_missing`).
+        run_test(
+            r#"
+            module CovM
+              CONST = 1
+              module Inner; DEEP = 2; end
+            end
+            [
+              defined?(CovM::CONST),        # "constant"
+              defined?(CovM::Inner),        # "constant"
+              defined?(CovM::Inner::DEEP),  # "constant" (prefix walk)
+              defined?(CovM::Inner::Nope),  # nil
+              defined?(CovM::Missing::X),   # nil (undefined qualifier)
+              defined?(::CovM::CONST),      # "constant" (top-level qualified)
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn defined_method_negative_visibility_and_raising_respond_to_missing() {
+        // Private methods are not defined via an explicit receiver, an
+        // `undef`ined method is not defined, and an exception raised by
+        // `respond_to_missing?` is swallowed to nil (never propagated).
+        run_test(
+            r#"
+            class CovP; def pm; end; private :pm; end
+            class CovU; def m; end; undef_method :m; end
+            class CovR; def respond_to_missing?(n, i); raise "boom"; end; end
+            [
+              defined?(CovP.new.pm),   # private via explicit recv => nil
+              defined?(CovU.new.m),    # undef'd => nil
+              defined?(CovR.new.x),    # respond_to_missing? raises => nil
+            ]
+            "#,
+        );
+    }
+
+    #[test]
     fn defined_last_paren_match_and_not_operator() {
         // `$+` is the last non-empty captured group.
         run_test(r#""mis-matched" =~ /s(-)m(.)/; [defined?($+), $+]"#);
+        // A match with no capture groups leaves `$+` undefined.
+        run_test(r#""abc" =~ /b/; [defined?($+), $+]"#);
         // `defined?(not X)` / `defined?(!X)` evaluate a method operand as
         // the operator's receiver — executing its side effects and
         // reporting "method".
@@ -508,6 +552,15 @@ mod tests {
             $dlog = []
             def dse; $dlog << :se; 1; end
             [[defined?(not dse), defined?(!dse)], $dlog]
+            "#,
+        );
+        // When the evaluated operand raises, the exception is swallowed to
+        // nil, but its side effects still run.
+        run_test(
+            r#"
+            $clog = []
+            def craise; $clog << :r; raise "x"; end
+            [defined?(not craise), $clog]
             "#,
         );
     }
