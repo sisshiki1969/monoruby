@@ -1096,7 +1096,10 @@ fn is_valid_const_name(name: &str) -> bool {
         Some(c) => c,
         None => return false,
     };
-    if !first.is_ascii_uppercase() {
+    // The first character must be uppercase — Unicode-aware, so non-ASCII
+    // uppercase letters (e.g. Greek `Ἅ`) are valid constant-name starts,
+    // matching CRuby's `rb_enc_isupper`.
+    if !first.is_uppercase() {
         return false;
     }
     chars.all(|c| c.is_alphanumeric() || c == '_')
@@ -6886,6 +6889,62 @@ mod tests {
             c.constants.sort
             "#,
         );
+    }
+
+    #[test]
+    fn qualified_constant_no_toplevel_fallback() {
+        // `A::X` does not fall through to Object's own top-level constants
+        // (`String::Hash` raises NameError), but the walk still continues
+        // into modules mixed into Object and normal ancestors resolve.
+        run_tests(&[
+            r#"begin; String::Hash; :no; rescue NameError; :nme; end"#,
+            r#"begin; Enumerable::Hash; :no; rescue NameError; :nme; end"#,
+        ]);
+        run_test(
+            r#"
+            module QTopA; X = 1; module Inner; Y = 2; end; end
+            [QTopA::X, QTopA::Inner::Y, defined?(QTopA::X)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_missing_message_uses_name_then_inspect() {
+        // A qualified miss crafts its prefix from the module's `#name`,
+        // falling back to `#inspect` for an anonymous module.
+        run_test(
+            r#"
+            m = Module.new { def self.name; "MdName"; end }
+            begin; m::NOPE; rescue NameError => e; e.message; end
+            "#,
+        );
+    }
+
+    #[test]
+    fn private_constant_qualified_access() {
+        // A `private_constant` is not `defined?` through the `A::B` form and
+        // cannot be reopened with a qualified `class`/`module` keyword, but
+        // stays reachable lexically.
+        run_test(
+            r#"
+            module PrivC
+              class Sec; end
+              private_constant :Sec
+              REACH = (Sec.equal?(const_get(:Sec)))
+            end
+            [
+              defined?(PrivC::Sec),
+              (begin; class PrivC::Sec; end; :no; rescue NameError; :nme; end),
+              PrivC::REACH,
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_set_allows_non_ascii_uppercase_name() {
+        // Unicode uppercase (e.g. Greek `Ἅ`) is a valid constant-name start.
+        run_test(r#"m = Module.new; m.const_set("ἍBB", 5); m.const_get("ἍBB")"#);
     }
 
     // -- module_function eval-boundary isolation --------------------------

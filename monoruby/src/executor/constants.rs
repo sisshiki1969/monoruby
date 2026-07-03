@@ -204,16 +204,50 @@ impl Executor {
         Err(MonorubyErr::uninitialized_constant(name))
     }
 
+    /// Ancestor-chain lookup for the segment of a **qualified** reference
+    /// (`A::B`). Like [`Self::get_constant_superclass`] but the walk stops
+    /// before Object unless the qualifier itself is Object: a qualified
+    /// reference does not fall through to top-level constants
+    /// (`String::Hash` raises `NameError` even though `Hash` is a top-level
+    /// constant). Mirrors CRuby's `rb_const_search` skipping `rb_cObject`.
+    fn get_constant_superclass_qualified(
+        &mut self,
+        globals: &mut Globals,
+        mut module: Module,
+        name: IdentId,
+    ) -> Result<Option<Value>> {
+        let start = module.id();
+        loop {
+            let cid = module.id();
+            // A qualified reference does not see Object's *own* top-level
+            // constants (`String::Hash` ⇒ NameError), but the walk still
+            // continues past Object into its included modules / BasicObject
+            // (`ChildA::CONST` where `CONST` lives in a module mixed into
+            // Object is still found). So skip only Object's own table.
+            let skip_own = cid == OBJECT_CLASS && start != OBJECT_CLASS;
+            if !skip_own {
+                if let Some(v) = self.get_constant(globals, cid, name)? {
+                    return Ok(Some(v));
+                }
+            }
+            match module.superclass() {
+                Some(superclass) => module = superclass,
+                None => return Ok(None),
+            }
+        }
+    }
+
     /// Walk the ancestor chain of *module* to find *name*; if missing, fall
     /// back to `module.const_missing(name)` so user-defined hooks fire for
-    /// qualified `Foo::Bar` access (matching CRuby's `rb_const_get`).
+    /// qualified `Foo::Bar` access (matching CRuby's `rb_const_get`). The
+    /// walk does not fall through to top-level constants on Object.
     pub(crate) fn get_qualified_constant_with_missing(
         &mut self,
         globals: &mut Globals,
         module: Module,
         name: IdentId,
     ) -> Result<Value> {
-        if let Some(v) = self.get_constant_superclass(globals, module, name)? {
+        if let Some(v) = self.get_constant_superclass_qualified(globals, module, name)? {
             return Ok(v);
         }
         self.invoke_const_missing(globals, module, name)
@@ -398,13 +432,14 @@ impl Executor {
         let mut module = module;
         loop {
             let cid = module.id();
-            if cid == OBJECT_CLASS && start != OBJECT_CLASS {
-                // Reached Object via a qualified lookup: top-level
-                // constants are not visible here.
-                return false;
-            }
-            if Self::probe_constant_at(globals, cid, name) {
-                return true;
+            // Skip only Object's *own* constant table for a qualified
+            // lookup; keep walking into Object's included modules /
+            // BasicObject (see `get_constant_superclass_qualified`).
+            let skip_own = cid == OBJECT_CLASS && start != OBJECT_CLASS;
+            if !skip_own && Self::probe_constant_at(globals, cid, name) {
+                // A qualified reference to a `private_constant` is not
+                // considered defined (`defined?(A::PrivConst)` ⇒ nil).
+                return !globals.store[cid].is_constant_private(name);
             }
             match module.superclass() {
                 Some(superclass) => module = superclass,

@@ -288,7 +288,14 @@ class Module
   def const_missing(name)
     # Drop the implicit `Object::` prefix so a top-level miss reads
     # `uninitialized constant Foo` (not `Object::Foo`), matching CRuby.
-    qual = self.equal?(Object) ? name.to_s : "#{self}::#{name}"
+    # For a qualified miss, CRuby crafts the prefix from the module's
+    # `#name`, falling back to `#inspect` when the module is anonymous.
+    if self.equal?(Object)
+      qual = name.to_s
+    else
+      prefix = self.name || self.inspect
+      qual = "#{prefix}::#{name}"
+    end
     raise NameError.new("uninitialized constant #{qual}", name)
   end
 
