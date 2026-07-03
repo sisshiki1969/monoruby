@@ -1145,6 +1145,17 @@ impl<'a> BytecodeGen<'a> {
         self.emit_literal(dst, Value::string_from_source_str(&s, enc));
     }
 
+    /// Emit a shared, frozen string literal (e.g. the result of
+    /// `defined?`, which CRuby returns as a frozen String). Unlike
+    /// `emit_string` this does not deep-copy on each execution.
+    pub(crate) fn emit_frozen_string(&mut self, dst: BcReg, s: &str) {
+        let enc = self.source_encoding();
+        let mut v = Value::string_from_source_str(s, enc);
+        v.set_frozen();
+        self.iseq_mut().literals.push(v);
+        self.emit(BytecodeInst::FrozenLiteral(dst, v), Loc::default());
+    }
+
     fn emit_bytes(&mut self, dst: BcReg, b: Vec<u8>) {
         // `NodeKind::Bytes` comes from source literals containing `\xNN`
         // escapes. Tag with the file's `# encoding:` magic-comment value

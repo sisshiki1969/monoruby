@@ -21,7 +21,8 @@ impl<'a> BytecodeGen<'a> {
             }
             _ => {
                 let res = defined_str(&node);
-                self.emit_string(dst, res.to_string());
+                // CRuby returns a frozen String from `defined?`.
+                self.emit_frozen_string(dst, res);
                 let exit_label = self.new_label();
                 let nil_label = self.new_label();
                 self.check_defined(node, nil_label, dst, true)?;
@@ -135,6 +136,10 @@ impl<'a> BytecodeGen<'a> {
                 self.check_defined(r, nil_label, ret, false)?;
             }
             NodeKind::Ident(name) => {
+                // `__ENCODING__` is a pseudo-variable, always defined.
+                if name == "__ENCODING__" {
+                    return Ok(());
+                }
                 let name = IdentId::get_id_from_string(name);
                 self.emit(
                     BytecodeInst::DefinedMethod {
@@ -336,10 +341,23 @@ fn defined_str(node: &Node) -> &'static str {
         NodeKind::LocalVar(..) => "local-variable",
         NodeKind::InstanceVar(..) => "instance-variable",
         NodeKind::GlobalVar(..) => "global-variable",
-        NodeKind::ClassVar(..) => "class-variable",
+        // CRuby uses a space (not a hyphen) for class variables.
+        NodeKind::ClassVar(..) => "class variable",
         NodeKind::Const { .. } => "constant",
-        // `&&` / `||` are expressions, not method calls.
-        NodeKind::BinOp(BinOp::LAnd | BinOp::LOr, ..) => "expression",
+        // `target ||= value` / `&&=` desugar to
+        // `BinOp(LOr/LAnd, target, MulAssign([target], [value]))`;
+        // `defined?` reports these as "assignment". A plain `a || b`
+        // (RHS is not an inline assignment) stays "expression".
+        NodeKind::BinOp(BinOp::LAnd | BinOp::LOr, _, r) => {
+            if matches!(r.kind, NodeKind::MulAssign(..)) {
+                "assignment"
+            } else {
+                "expression"
+            }
+        }
+        // `__ENCODING__` is a pseudo-variable (parsed as a bare Ident),
+        // not a method call.
+        NodeKind::Ident(name) if name == "__ENCODING__" => "expression",
         NodeKind::BinOp(..)
         | NodeKind::FuncCall { .. }
         | NodeKind::MethodCall { .. }
@@ -374,5 +392,41 @@ mod tests {
         run_test(r#"defined?(1 =~ 2).inspect"#);
         run_test(r#"defined?(1 !~ 2)"#);
         run_test(r#"defined?(undef_x =~ /a/).inspect"#);
+    }
+
+    #[test]
+    fn defined_frozen_and_assignment() {
+        // `defined?` returns a frozen String.
+        run_tests(&[
+            r#"defined?(self)"#,
+            r#"defined?(self).frozen?"#,
+            r#"defined?(nil).frozen?"#,
+            r#"defined?(true)"#,
+            r#"defined?(false)"#,
+            r#"defined?([Object, Array])"#,
+            r#"defined?([Object, Array]).frozen?"#,
+            r#"$g = 5; [defined?($g), defined?($g).frozen?]"#,
+            r#"$n = nil; defined?($n)"#,
+            r#"defined?(__ENCODING__)"#,
+            // `||=` / `&&=` are "assignment" for every target kind.
+            r#"x = 1; defined?(x ||= 2)"#,
+            r#"x = 1; defined?(x &&= 2)"#,
+            r#"@i = 1; defined?(@i ||= 2)"#,
+            r#"$g2 = 1; defined?($g2 ||= 2)"#,
+            r#"a = [0]; defined?(a[0] ||= 2)"#,
+            // A plain `a || b` stays "expression".
+            r#"a = 1; b = 2; defined?(a || b)"#,
+        ]);
+        // Class variables report "class variable" (a space, not a hyphen),
+        // frozen.
+        run_test(
+            r#"
+            class DefCV
+              @@v = 1
+              def t; [defined?(@@v), defined?(@@v).frozen?]; end
+            end
+            DefCV.new.t
+            "#,
+        );
     }
 }

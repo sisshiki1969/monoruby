@@ -1293,13 +1293,20 @@ pub(super) extern "C" fn defined_const(
 ///
 /// Set `dst`` to `nil` if not exists.
 ///
+/// `defined?` returns a frozen String — build one for the runtime checks.
+fn defined_frozen_str(s: &str) -> Value {
+    let mut v = Value::string_from_str(s);
+    v.set_frozen();
+    v
+}
+
 pub(super) extern "C" fn defined_gvar(
     vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
 ) -> Value {
     if GvarTable::defined_runtime(vm, globals, name) {
-        Value::string_from_str("global-variable")
+        defined_frozen_str("global-variable")
     } else {
         Value::nil()
     }
@@ -1311,7 +1318,7 @@ pub(super) extern "C" fn defined_cvar(
     name: IdentId,
 ) -> Value {
     if vm.find_class_variable(globals, name).is_ok() {
-        Value::string_from_str("class variable")
+        defined_frozen_str("class variable")
     } else {
         Value::nil()
     }
@@ -1353,7 +1360,7 @@ pub(super) extern "C" fn defined_super(vm: &mut Executor, globals: &mut Globals)
     let name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
     if globals.check_super(self_class, func_id, name).is_some() {
-        Value::string_from_str("super")
+        defined_frozen_str("super")
     } else {
         Value::nil()
     }
@@ -1366,7 +1373,7 @@ pub(super) extern "C" fn defined_super(vm: &mut Executor, globals: &mut Globals)
 ///
 pub(super) extern "C" fn defined_yield(vm: &mut Executor, _globals: &mut Globals) -> Value {
     if vm.cfp().block_given() {
-        Value::string_from_str("yield")
+        defined_frozen_str("yield")
     } else {
         Value::nil()
     }
