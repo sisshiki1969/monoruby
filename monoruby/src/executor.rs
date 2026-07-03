@@ -1018,12 +1018,30 @@ impl Executor {
                     .unwrap();
                 v
             }
-            MonorubyErrKind::Name(Some(name)) => {
+            MonorubyErrKind::Name(name, receiver) => {
                 let name = *name;
+                let receiver = *receiver;
+                let v = Value::new_exception(err);
+                if let Some(name) = name {
+                    globals
+                        .store
+                        .set_ivar(v, IdentId::_NAME, Value::symbol(name))
+                        .unwrap();
+                }
+                if let Some(receiver) = receiver {
+                    globals
+                        .store
+                        .set_ivar(v, IdentId::get_id("/receiver"), Value::from_u64(receiver))
+                        .unwrap();
+                }
+                v
+            }
+            MonorubyErrKind::Frozen(Some(receiver)) => {
+                let receiver = *receiver;
                 let v = Value::new_exception(err);
                 globals
                     .store
-                    .set_ivar(v, IdentId::_NAME, Value::symbol(name))
+                    .set_ivar(v, IdentId::get_id("/receiver"), Value::from_u64(receiver))
                     .unwrap();
                 v
             }
@@ -2832,11 +2850,18 @@ pub(crate) fn check_constant_visibility(
     name: IdentId,
 ) -> Result<()> {
     if globals.store[class_id].is_constant_private(name) {
-        return Err(MonorubyErr::nameerr(format!(
-            "private constant {}::{} referenced",
-            class_id.get_name(&globals.store),
-            name
-        )));
+        // CRuby's `NameError` for a private constant exposes the *defining*
+        // class as `#receiver` and the constant symbol as `#name`.
+        let receiver = globals.store[class_id].get_module().get();
+        return Err(MonorubyErr::nameerr_with_name_receiver(
+            format!(
+                "private constant {}::{} referenced",
+                class_id.get_name(&globals.store),
+                name
+            ),
+            name,
+            receiver,
+        ));
     }
     Ok(())
 }

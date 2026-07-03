@@ -98,6 +98,10 @@ impl MonorubyErr {
                 Value::from_u64(*recv).mark(alloc);
                 Value::from_u64(*key).mark(alloc);
             }
+            // Packed receiver Value for NameError / FrozenError.
+            MonorubyErrKind::Name(_, Some(id)) | MonorubyErrKind::Frozen(Some(id)) => {
+                Value::from_u64(*id).mark(alloc);
+            }
             // Non-local return: carries the return value and the
             // captured frame pointer it must return to.
             MonorubyErrKind::MethodReturn(v, lfp) => {
@@ -198,13 +202,13 @@ impl MonorubyErr {
             MonorubyErrKind::Arguments => "ArgumentError",
             MonorubyErrKind::Syntax => "SyntaxError",
             MonorubyErrKind::Unimplemented => "RuntimeError",
-            MonorubyErrKind::Name(_) => "NameError",
+            MonorubyErrKind::Name(..) => "NameError",
             MonorubyErrKind::DivideByZero => "ZeroDivisionError",
             MonorubyErrKind::LocalJump => "LocalJumpError",
             MonorubyErrKind::Range => "RangeError",
             MonorubyErrKind::Type => "TypeError",
             MonorubyErrKind::Index => "IndexError",
-            MonorubyErrKind::Frozen => "FrozenError",
+            MonorubyErrKind::Frozen(_) => "FrozenError",
             MonorubyErrKind::Load(_) => "LoadError",
             MonorubyErrKind::Regex => "RegexpError",
             MonorubyErrKind::Runtime => "RuntimeError",
@@ -253,13 +257,13 @@ impl MonorubyErr {
             MonorubyErrKind::Arguments => ARGUMENTS_ERROR_CLASS,
             MonorubyErrKind::Syntax => SYNTAX_ERROR_CLASS,
             MonorubyErrKind::Unimplemented => UNIMPLEMENTED_ERROR_CLASS,
-            MonorubyErrKind::Name(_) => NAME_ERROR_CLASS,
+            MonorubyErrKind::Name(..) => NAME_ERROR_CLASS,
             MonorubyErrKind::DivideByZero => ZERO_DIVISION_ERROR_CLASS,
             MonorubyErrKind::LocalJump => LOCAL_JUMP_ERROR_CLASS,
             MonorubyErrKind::Range => RANGE_ERROR_CLASS,
             MonorubyErrKind::Type => TYPE_ERROR_CLASS,
             MonorubyErrKind::Index => INDEX_ERROR_CLASS,
-            MonorubyErrKind::Frozen => FROZEN_ERROR_CLASS,
+            MonorubyErrKind::Frozen(_) => FROZEN_ERROR_CLASS,
             MonorubyErrKind::Load(_) => LOAD_ERROR_CLASS,
             MonorubyErrKind::Regex => REGEX_ERROR_CLASS,
             MonorubyErrKind::Runtime => RUNTIME_ERROR_CLASS,
@@ -497,14 +501,28 @@ impl MonorubyErr {
     }
 
     pub(crate) fn nameerr(msg: impl ToString) -> MonorubyErr {
-        Self::new(MonorubyErrKind::Name(None), msg)
+        Self::new(MonorubyErrKind::Name(None, None), msg)
     }
 
     /// Like [`nameerr`], but additionally records the missing-name
     /// symbol so the resulting `NameError`'s `#name` Ruby method returns
     /// it (matches CRuby's `rb_name_err_new`).
     pub(crate) fn nameerr_with_name(msg: impl ToString, name: IdentId) -> MonorubyErr {
-        Self::new(MonorubyErrKind::Name(Some(name)), msg)
+        Self::new(MonorubyErrKind::Name(Some(name), None), msg)
+    }
+
+    /// Like [`nameerr_with_name`], but also records the receiver `Value`
+    /// (the object the missing name was looked up on) so the resulting
+    /// `NameError`'s `#receiver` Ruby method returns it.
+    pub(crate) fn nameerr_with_name_receiver(
+        msg: impl ToString,
+        name: IdentId,
+        receiver: Value,
+    ) -> MonorubyErr {
+        Self::new(
+            MonorubyErrKind::Name(Some(name), Some(receiver.id())),
+            msg,
+        )
     }
 
     pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
@@ -757,15 +775,18 @@ impl MonorubyErr {
     }
 
     pub(crate) fn frozenerr(msg: impl ToString) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Frozen, msg)
+        MonorubyErr::new(MonorubyErrKind::Frozen(None), msg)
     }
 
     pub(crate) fn cant_modify_frozen(store: &Store, val: Value) -> MonorubyErr {
-        MonorubyErr::frozenerr(format!(
-            "can't modify frozen {}: {}",
-            val.get_real_class_name(store),
-            val.inspect(store),
-        ))
+        MonorubyErr::new(
+            MonorubyErrKind::Frozen(Some(val.id())),
+            format!(
+                "can't modify frozen {}: {}",
+                val.get_real_class_name(store),
+                val.inspect(store),
+            ),
+        )
     }
 
     pub(crate) fn loaderr(msg: impl ToString, path: PathBuf) -> MonorubyErr {
@@ -926,14 +947,17 @@ pub enum MonorubyErrKind {
     Unimplemented,
     /// `NameError` with an optional `name` symbol that the
     /// `NameError#name` Ruby method exposes (e.g. the missing constant
-    /// or method name passed to `Module#instance_method`).
-    Name(Option<IdentId>),
+    /// or method name passed to `Module#instance_method`) and an optional
+    /// packed `Value::id()` of the receiver surfaced by `NameError#receiver`.
+    Name(Option<IdentId>, Option<u64>),
     DivideByZero,
     LocalJump,
     Range,
     Type,
     Index,
-    Frozen,
+    /// `FrozenError` with an optional packed `Value::id()` of the frozen
+    /// receiver, surfaced by `FrozenError#receiver`.
+    Frozen(Option<u64>),
     Load(PathBuf),
     Regex,
     Runtime,
@@ -972,13 +996,13 @@ impl MonorubyErrKind {
             ARGUMENTS_ERROR_CLASS => MonorubyErrKind::Arguments,
             SYNTAX_ERROR_CLASS => MonorubyErrKind::Syntax,
             UNIMPLEMENTED_ERROR_CLASS => MonorubyErrKind::Unimplemented,
-            NAME_ERROR_CLASS => MonorubyErrKind::Name(None),
+            NAME_ERROR_CLASS => MonorubyErrKind::Name(None, None),
             ZERO_DIVISION_ERROR_CLASS => MonorubyErrKind::DivideByZero,
             LOCAL_JUMP_ERROR_CLASS => MonorubyErrKind::LocalJump,
             RANGE_ERROR_CLASS => MonorubyErrKind::Range,
             TYPE_ERROR_CLASS => MonorubyErrKind::Type,
             INDEX_ERROR_CLASS => MonorubyErrKind::Index,
-            FROZEN_ERROR_CLASS => MonorubyErrKind::Frozen,
+            FROZEN_ERROR_CLASS => MonorubyErrKind::Frozen(None),
             LOAD_ERROR_CLASS => MonorubyErrKind::Load(PathBuf::new()),
             REGEX_ERROR_CLASS => MonorubyErrKind::Regex,
             RUNTIME_ERROR_CLASS => MonorubyErrKind::Runtime,

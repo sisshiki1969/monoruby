@@ -79,6 +79,8 @@ pub(super) fn init(globals: &mut Globals) {
     let nameerr =
         globals.define_builtin_exception_class("NameError", NAME_ERROR_CLASS, standarderr);
     globals.define_builtin_func(NAME_ERROR_CLASS, "name", nameerr_name, 0);
+    // `NameError#receiver` (inherited by NoMethodError).
+    globals.define_builtin_func(NAME_ERROR_CLASS, "receiver", exc_receiver, 0);
     globals.define_builtin_func_with(
         NAME_ERROR_CLASS,
         "initialize",
@@ -88,11 +90,12 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_exception_class("NoMethodError", NO_METHOD_ERROR_CLASS, nameerr);
-    globals.define_builtin_func(NO_METHOD_ERROR_CLASS, "receiver", nomethoderr_receiver, 0);
 
     let runtimeerr =
         globals.define_builtin_exception_class("RuntimeError", RUNTIME_ERROR_CLASS, standarderr);
     globals.define_builtin_exception_class("FrozenError", FROZEN_ERROR_CLASS, runtimeerr);
+    // `FrozenError#receiver` — the frozen object that was modified.
+    globals.define_builtin_func(FROZEN_ERROR_CLASS, "receiver", exc_receiver, 0);
 
     globals.define_builtin_exception_class("RangeError", RANGE_ERROR_CLASS, standarderr);
     globals.define_builtin_exception_class("RegexpError", REGEX_ERROR_CLASS, standarderr);
@@ -120,9 +123,10 @@ pub(super) fn init(globals: &mut Globals) {
     );
 }
 
-/// ### NoMethodError#receiver
+/// Shared reader for the `/receiver` ivar — `NameError#receiver` /
+/// `NoMethodError#receiver` / `FrozenError#receiver`.
 #[monoruby_builtin]
-fn nomethoderr_receiver(
+fn exc_receiver(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
@@ -608,6 +612,44 @@ fn cause(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn error_receiver_attributes() {
+        // `NameError#receiver` / `#name` for a private-constant access
+        // expose the *defining* class and the constant symbol;
+        // `FrozenError#receiver` is the frozen object; `NoMethodError`
+        // inherits `#receiver`.
+        run_test(
+            r#"
+            module RcvV
+              class Base; PRIV = 1; private_constant :PRIV; end
+              class Child < Base; end
+            end
+            begin
+              RcvV::Child::PRIV
+            rescue NameError => e
+              [e.receiver.equal?(RcvV::Base), e.name]
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            o = Object.new
+            o.freeze
+            begin
+              def o.x; end
+            rescue FrozenError => e
+              [e.receiver.equal?(o), e.message.include?("can't modify frozen Object")]
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            obj = Object.new
+            begin; obj.nope_method; rescue NoMethodError => e; e.receiver.equal?(obj); end
+            "#,
+        );
+    }
 
     #[test]
     fn exception() {
