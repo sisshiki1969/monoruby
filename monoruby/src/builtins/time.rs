@@ -317,11 +317,15 @@ fn getutc(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 #[monoruby_builtin]
 fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let new = if let Some(arg0) = lfp.try_arg(0) {
-        // CRuby's `Time#getlocal(arg)` accepts the same offset shapes as
+        // A timezone object (responding to `#utc_to_local`) re-zones the
+        // time and becomes its `#zone`.
+        let utc_dt = time_utc_instant(lfp.self_val().as_time());
+        if let Some(t) = time_at_with_timezone(vm, globals, utc_dt, arg0, TIME_CLASS)? {
+            return Ok(t);
+        }
+        // Otherwise `getlocal(arg)` takes the same offset shapes as
         // `Time.new`'s `utc_offset` slot: Integer / Rational / Float
-        // seconds, or `"+HH:MM"` / `"+HH:MM:SS"` String. Also accepts
-        // a `to_int` Mock object (handled by `parse_utc_offset` falling
-        // through to `coerce_to_int_i64`).
+        // seconds, or `"+HH:MM"` / `"+HH:MM:SS"` String / `#to_int`.
         let fixed = parse_utc_offset(vm, globals, arg0)?;
         match lfp.self_val().as_time() {
             TimeInner::Local(t) => TimeInner::Local(t.with_timezone(&fixed)),
@@ -989,18 +993,55 @@ fn time_at_with_timezone(
     tz: Value,
     cls: ClassId,
 ) -> Result<Option<Value>> {
+    let Some(fixed) = utc_to_local_fixed(vm, globals, dt, tz)? else {
+        return Ok(None);
+    };
+    let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed)), cls);
+    globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
+    Ok(Some(t))
+}
+
+/// The UTC instant of a Time.
+fn time_utc_instant(t: &TimeInner) -> DateTime<Utc> {
+    match t {
+        TimeInner::Local(dt) => dt.with_timezone(&Utc),
+        TimeInner::Utc(dt) => *dt,
+    }
+}
+
+/// Derive the fixed offset for `tz.utc_to_local(utc)` — used by
+/// `Time.at(t, in: tz)`, `Time#getlocal(tz)`, and `Time#localtime(tz)`.
+/// Returns `None` when `tz` is not a timezone object (no `#utc_to_local`).
+///
+/// The offset is the returned local time's wall clock read as UTC seconds
+/// (`#to_i` + `#utc_offset`) minus the UTC instant. Reading the wall clock
+/// — rather than the raw `#to_i` — is what distinguishes a re-zoned time
+/// (same instant, shifted display) from one whose instant moved.
+fn utc_to_local_fixed(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    dt: DateTime<Utc>,
+    tz: Value,
+) -> Result<Option<FixedOffset>> {
     if globals.check_method(tz, IdentId::get_id("utc_to_local")).is_none() {
         return Ok(None);
     }
     let utc = Value::new_time(TimeInner::Utc(dt));
-    let epoch_i = dt.timestamp();
     let result =
         vm.invoke_method_inner(globals, IdentId::get_id("utc_to_local"), tz, &[utc], None, None)?;
-    let offset = value_epoch_i64(vm, globals, result)? - epoch_i;
-    let fixed = zone_offset_fixed(offset)?;
-    let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed)), cls);
-    globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
-    Ok(Some(t))
+    let wall = value_epoch_i64(vm, globals, result)?;
+    let uoff = if globals
+        .check_method(result, IdentId::get_id("utc_offset"))
+        .is_some()
+    {
+        vm.invoke_method_inner(globals, IdentId::get_id("utc_offset"), result, &[], None, None)?
+            .coerce_to_int_i64(vm, globals)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let offset = wall + uoff - dt.timestamp();
+    Ok(Some(zone_offset_fixed(offset)?))
 }
 
 fn parse_utc_offset_string(s: &str) -> Result<FixedOffset> {
@@ -1876,6 +1917,17 @@ fn gmtime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
     if let Some(arg0) = lfp.try_arg(0) {
+        // A timezone object (`#utc_to_local`) re-zones the receiver in
+        // place and becomes its `#zone`.
+        let utc_dt = time_utc_instant(self_val.as_time());
+        if let Some(fixed) = utc_to_local_fixed(vm, globals, utc_dt, arg0)? {
+            self_val.ensure_not_frozen(&globals.store)?;
+            *self_val.as_time_mut() = TimeInner::Local(utc_dt.with_timezone(&fixed));
+            globals
+                .store
+                .set_ivar(self_val, IdentId::get_id(ZONE_IVAR), arg0)?;
+            return Ok(self_val);
+        }
         let target = parse_utc_offset(vm, globals, arg0)?;
         // Already in the requested zone? No-op (matches CRuby's
         // short-circuit before the frozen check).
@@ -3181,6 +3233,41 @@ mod tests {
             r#"Time.new("2021", in: "+17:00").to_s"#,
             r#"Time.new("2020-12-25 00:57:47 +09:01:30").utc_offset"#,
         ]);
+    }
+
+    #[test]
+    fn time_getlocal_localtime_timezone_object() {
+        run_tests(&[
+            // getlocal(zone) re-zones the instant and adopts the zone.
+            r#"
+            class GZ
+              def initialize(o); @o = o; end
+              def local_to_utc(t); t - @o; end
+              def utc_to_local(t); t + @o; end
+            end
+            z = GZ.new(5*3600+30*60)
+            t = Time.utc(2000, 1, 1, 12, 0, 0).getlocal(z)
+            [t.zone.equal?(z), t.utc_offset]
+            "#,
+            // localtime(zone) mutates the receiver; a #utc_to_local result
+            // whose wall clock (not instant) carries the offset is honoured.
+            r#"
+            o = Object.new
+            def o.utc_to_local(tm); Time.new(2007, 1, 9, 13, 0, 0, 3600); end
+            t = Time.gm(2007, 1, 9, 12, 0, 0)
+            t.localtime(o)
+            [t.utc_offset, t.hour]
+            "#,
+        ]);
+        // getlocal needs #utc_to_local; an object with only #local_to_utc
+        // is not a timezone → treated as a utc_offset it can't become.
+        run_test_error(
+            r#"
+            z = Object.new
+            def z.local_to_utc(x); x; end
+            Time.utc(2000, 1, 1).getlocal(z)
+            "#,
+        );
     }
 
     #[test]
