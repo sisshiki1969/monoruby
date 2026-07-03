@@ -942,7 +942,7 @@ impl Globals {
 /// `initialize_dup`) and `respond_to_missing?`. The spec
 /// `Module#alias_method "aliasing special methods keeps … private"`
 /// exercises this for the alias path.
-fn is_always_private_method(name: IdentId) -> bool {
+pub(crate) fn is_always_private_method(name: IdentId) -> bool {
     name == IdentId::INITIALIZE
         || name == IdentId::INITIALIZE_COPY
         || name == IdentId::INITIALIZE_CLONE

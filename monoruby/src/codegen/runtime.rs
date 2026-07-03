@@ -1185,6 +1185,16 @@ pub(super) extern "C" fn singleton_define_method(
         };
         globals.store[iseq].lexical_context = parent_ctx;
     }
+    // `def obj.foo` on a frozen object raises FrozenError — except for the
+    // special singletons nil / true / false, which accept singleton methods
+    // (they are defined on NilClass / TrueClass / FalseClass) despite being
+    // frozen.
+    if !obj.is_nil() && obj != Value::bool(true) && obj != Value::bool(false) {
+        if let Err(err) = obj.ensure_not_frozen(&globals.store) {
+            vm.set_error(err);
+            return None;
+        }
+    }
     let class_id = match obj.get_singleton(&mut globals.store) {
         Ok(val) => val.as_class_id(),
         Err(err) => {
