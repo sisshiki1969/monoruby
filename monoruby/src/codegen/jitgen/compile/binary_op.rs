@@ -501,8 +501,8 @@ impl AbstractFrame {
         // divide-by-zero side-exit (Mul `sarq`s it; Div's idiv sequence too).
         let rhs_clobbered = matches!(kind, BinOpK::Mul | BinOpK::Div);
         // 1. Load the operands into registers (reusing a resident copy).
-        let (lhs_gp, lhs_fresh) = self.gp_ensure(ir, lhs, &[]);
-        let (rhs_gp, rhs_fresh) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
+        let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
         // 1b. For `Mul`/`Div`: if `rhs` is a dirty resident, write it to its home
         //     and mark it clean *before* the deopt snapshot. The op clobbers
         //     `rhs_gp` before the side-exit, so the snapshot must re-home `rhs`
@@ -549,16 +549,15 @@ impl AbstractFrame {
         if let Some((reg, slot)) = spill {
             ir.reg2stack(reg, slot);
         }
-        // A `fresh` operand is only speculatively an integer (the resident is a
-        // general `Value`, or it was just loaded from its home), so guard it; the
-        // guard then *proves* it a fixnum, so refine its abstract type in place
-        // (keeping the resident) — a later integer op on the same slot reuses it
-        // guard-free via `is_fixnum`.
-        if lhs_fresh {
+        // An operand not yet proven a fixnum is only speculatively an integer,
+        // so guard it; the guard then *proves* it a fixnum, so refine its
+        // abstract type in place (keeping the resident) — a later integer op on
+        // the same slot consumes it guard-free via `is_fixnum`, resident or not.
+        if lhs_guard {
             ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
             self.refine_S_fixnum(lhs);
         }
-        if rhs_fresh {
+        if rhs_guard {
             ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
             self.refine_S_fixnum(rhs);
         }
@@ -575,9 +574,13 @@ impl AbstractFrame {
         }
     }
 
-    /// Bring `slot` into a GP register: reuse its resident copy (returning
-    /// `fresh = false`, no reload/guard) or materialize it to its stack home,
-    /// load it, and report `fresh = true` so the caller emits the fixnum guard.
+    /// Bring `slot` into a GP register, reusing its resident copy when present
+    /// (no reload) and otherwise materializing it to its stack home and loading
+    /// it. The returned bool asks the caller to emit a fixnum guard; it is
+    /// decided by the slot's abstract type (`is_fixnum`), never by residency —
+    /// a reloaded slot that an earlier guard/def already proved a fixnum (e.g.
+    /// an evicted binop result) is consumed guard-free, exactly like a resident
+    /// one.
     fn gp_ensure(&mut self, ir: &mut AsmIr, slot: SlotId, pinned: &[GP]) -> (GP, bool) {
         if let Some(gp) = self.gp_regfile.reg_of(slot) {
             // Reuse the resident copy. Whether it needs a fixnum class guard is
@@ -591,8 +594,7 @@ impl AbstractFrame {
         // Compile-time fixnum constant: load the tagged immediate straight into a
         // register, skipping the stack-home round-trip (`%1 = %2 + 1` loads `1`
         // as `movabs gp, 0x3` rather than materializing it to a slot and reading
-        // it back). The value is a known fixnum, so it needs no guard — report
-        // `fresh = false`.
+        // it back). The value is a known fixnum, so it needs no guard.
         if let Some(v) = self.fixnum_literal_value(slot) {
             let (gp, spill) = self.gp_regfile.alloc_reg(pinned);
             if let Some((reg, s)) = spill {
@@ -610,10 +612,12 @@ impl AbstractFrame {
             ir.reg2stack(reg, s);
         }
         ir.stack2reg(slot, gp);
-        // `fresh = true`: the caller emits a fixnum guard, after which this
-        // resident is a known fixnum.
         self.gp_regfile.bind(gp, slot, /* dirty */ false);
-        (gp, true)
+        // Guard iff the slot is not already a proven fixnum — the same criterion
+        // as the resident path above. An `S(Fixnum)` slot's stack home always
+        // holds the proven-fixnum value, so reloading it (after an eviction or
+        // a flush) needs no re-guard.
+        (gp, !self.is_fixnum(slot))
     }
 
     /// prepare the GP register file for a float op that keeps
@@ -702,8 +706,8 @@ impl AbstractFrame {
         lhs: SlotId,
         rhs: SlotId,
     ) {
-        let (lhs_gp, lhs_fresh) = self.gp_ensure(ir, lhs, &[]);
-        let (rhs_gp, rhs_fresh) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
+        let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
         // Snapshot the deopt write-back before clearing (the guards side-exit to
         // a point where the interpreter re-reads the operands from their homes).
         let deopt = ir.new_deopt(self);
@@ -715,11 +719,16 @@ impl AbstractFrame {
         // their registers.
         let next_sp = self.next_sp();
         self.gp_regfile.free_above_sp(next_sp);
-        if lhs_fresh {
+        // Guard-then-refine, as in `binop_integer_gp`: the guard proves the
+        // operand a fixnum, so record that on the slot and later integer ops
+        // consume it guard-free.
+        if lhs_guard {
             ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+            self.refine_S_fixnum(lhs);
         }
-        if rhs_fresh {
+        if rhs_guard {
             ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
+            self.refine_S_fixnum(rhs);
         }
         ir.integer_cmp_reg(kind, dst, lhs_gp, rhs_gp);
         if let Some(dst) = dst {
@@ -763,16 +772,21 @@ impl AbstractFrame {
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
-        let (lhs_gp, lhs_fresh) = self.gp_ensure(ir, lhs, &[]);
-        let (rhs_gp, rhs_fresh) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
+        let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
         // Snapshot the deopt write-back before the flush/branch (the guards
         // side-exit to a point where the interpreter re-reads the operands).
         let deopt = ir.new_deopt(self);
-        if lhs_fresh {
+        // Guard-then-refine, as in `binop_integer_gp`. The refinement is
+        // recorded on the slot (not the register file), so it survives the
+        // block-terminator flush below and propagates to the successor blocks.
+        if lhs_guard {
             ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+            self.refine_S_fixnum(lhs);
         }
-        if rhs_fresh {
+        if rhs_guard {
             ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
+            self.refine_S_fixnum(rhs);
         }
         // Block terminator: spill the dirty residents to their stack homes before
         // the branch (the operands' registers still hold their values for the
