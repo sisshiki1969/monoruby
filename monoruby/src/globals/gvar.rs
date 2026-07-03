@@ -333,6 +333,14 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         vm.sp_pre_match()
     }
 
+    fn get_last_paren_match(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+    ) -> Option<Value> {
+        vm.sp_last_paren_match()
+    }
+
     /// `$1`, `$2`, ... — `name` is of the form `$n`. Strip the `$` and parse
     /// the decimal digits; any non-numeric suffix yields `None`.
     fn get_match_nth(
@@ -354,6 +362,8 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
     globals.define_hooked_variable(IdentId::get_id("$&"), get_last_match, None);
     globals.define_hooked_variable(IdentId::get_id("$'"), get_post_match, None);
     globals.define_hooked_variable(IdentId::get_id("$`"), get_pre_match, None);
+    // `$+` — the last non-empty captured group of the current match.
+    globals.define_hooked_variable(IdentId::get_id("$+"), get_last_paren_match, None);
 
     // `$_` (last line read by `gets` / `readline`) is frame-local in
     // CRuby — it lives in `vm_svar.lastline` alongside `$~`. monoruby
