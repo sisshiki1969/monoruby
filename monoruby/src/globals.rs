@@ -10,7 +10,7 @@ use super::*;
 mod dump;
 mod error;
 mod gvar;
-mod method;
+pub(crate) mod method;
 mod prng;
 mod require;
 mod store;

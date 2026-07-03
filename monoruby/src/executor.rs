@@ -1519,6 +1519,14 @@ impl Executor {
         func: FuncId,
     ) -> Result<Value> {
         let cref = self.get_class_context();
+        // A `def` executed directly inside a *method* body is a nested
+        // definition: its default definee is the enclosing method's
+        // lexical class (not the runtime cref, which may be a caller's
+        // `instance_eval` / `class_eval` context leaking in through the
+        // shared cref stack), and its visibility resets to public. A `def`
+        // in any other frame (class/module body, `class_eval` /
+        // `instance_eval` block, or the top level) uses the runtime cref.
+        let in_method_body = globals.store[self.cfp().lfp().func_id()].is_method();
         let current_func = self.definition_func_id(globals);
         if let Some(iseq) = globals.store[func].is_iseq() {
             // Inherit the enclosing method's lexical context. The
@@ -1538,16 +1546,57 @@ impl Executor {
                 (func.get() as u64) + ((name.get() as u64) << 32)
             )));
         }
-        let class_id = match cref.context {
-            DefinitionContext::Class(class_id) => class_id,
-            DefinitionContext::Receiver(receiver) => globals.store.get_singleton(receiver)?.id(),
+        let class_id = if in_method_body {
+            // The definee is the class that owns the enclosing method
+            // (CRuby's method cref class). For a method defined via
+            // `Class.new do … end` / `class_exec` / `instance_eval` / an
+            // `eval`ed body this is the dynamic class, not the lexically
+            // enclosing scope — so prefer the owner, falling back to the
+            // lexical class only when no owner is recorded.
+            match globals.store[self.method_func_id()].owner_class().last() {
+                Some(&owner) => owner,
+                None => self.lexical_context_class_id(globals),
+            }
+        } else {
+            match cref.context {
+                DefinitionContext::Class(class_id) => class_id,
+                DefinitionContext::Receiver(receiver) => {
+                    globals.store.get_singleton(receiver)?.id()
+                }
+            }
         };
+        // Defining a method modifies the target class/module; a frozen one
+        // raises FrozenError. For a singleton class (`class << obj`), the
+        // attached object's frozen state is what matters.
+        let target = globals.store[class_id].get_module();
+        target.get().ensure_not_frozen(&globals.store)?;
+        if let Some(attached) = target.is_singleton() {
+            attached.ensure_not_frozen(&globals.store)?;
+        }
         Codegen::check_bop_redefine(self.cfp());
         if cref.module_function {
             self.add_method(globals, class_id, name, func, Visibility::Private)?;
             self.add_singleton_method(globals, class_id, name, func, cref.visibility)?;
         } else {
-            self.add_method(globals, class_id, name, func, cref.visibility)?;
+            // A nested `def` inside a method body resets the visibility to
+            // public (CRuby resets the def-visibility scope on method
+            // entry); every other frame keeps the current default (a
+            // class-body toggle, or the top-level `private` default).
+            let default_visibility = if in_method_body {
+                Visibility::Public
+            } else {
+                cref.visibility
+            };
+            // Object-lifecycle hooks (`initialize`, `initialize_copy`, …)
+            // and `respond_to_missing?` are always private when defined,
+            // regardless of the current default visibility (CRuby's
+            // `def` forces this via `rb_method_entry_make`).
+            let visibility = if crate::globals::method::is_always_private_method(name) {
+                Visibility::Private
+            } else {
+                default_visibility
+            };
+            self.add_method(globals, class_id, name, func, visibility)?;
         }
         Ok(Value::nil())
     }

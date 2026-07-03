@@ -148,11 +148,24 @@ fn bo_method_missing(
 ) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     let name = args[0].expect_symbol_or_string(globals)?;
-    Err(MonorubyErr::method_not_found(
-        &globals.store,
-        name,
-        lfp.self_val(),
-    ))
+    let recv = lfp.self_val();
+    // Reaching the default `method_missing` while the method actually
+    // exists means the call violated visibility (a private method called
+    // with an explicit receiver, or an inaccessible protected method).
+    // CRuby reports these as "private/protected method … called" rather
+    // than "undefined method".
+    use crate::executor::Visibility;
+    let err = match globals.store.check_method_for_class(recv.class(), name) {
+        Some(entry) if entry.func_id().is_some() => match entry.visibility() {
+            Visibility::Private => MonorubyErr::private_method_called(&globals.store, name, recv),
+            Visibility::Protected => {
+                MonorubyErr::protected_method_called(&globals.store, name, recv)
+            }
+            _ => MonorubyErr::method_not_found(&globals.store, name, recv),
+        },
+        _ => MonorubyErr::method_not_found(&globals.store, name, recv),
+    };
+    Err(err)
 }
 
 ///

@@ -559,10 +559,21 @@ fn wrong_number_of_arg_with_kw(
         .filter(|(i, _)| callee.kw_is_required(*i))
         .map(|(_, name)| name.to_string())
         .collect();
+    // An explicit `*rest` lifts the upper bound: CRuby reports the required
+    // count with a `+` suffix (`expected 2+`) rather than a bounded range.
+    // This branch is only reached for the too-few-args case (a too-many
+    // error is not raised when an explicit rest is present).
+    let has_rest = callee.is_explicit_rest();
     if required.is_empty() {
-        return MonorubyErr::wrong_number_of_arg_range(given, range);
+        return if has_rest {
+            MonorubyErr::wrong_number_of_arg_min(given, *range.start())
+        } else {
+            MonorubyErr::wrong_number_of_arg_range(given, range)
+        };
     }
-    let expected = if range.start() == range.end() {
+    let expected = if has_rest {
+        format!("{}+", range.start())
+    } else if range.start() == range.end() {
         format!("{}", range.start())
     } else {
         format!("{}..{}", range.start(), range.end())

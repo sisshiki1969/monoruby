@@ -3086,6 +3086,75 @@ mod tests {
     }
 
     #[test]
+    fn def_forces_private_lifecycle_hooks() {
+        // `initialize`, `initialize_copy/dup/clone`, and
+        // `respond_to_missing?` are always private when defined via `def`.
+        run_test(
+            r#"
+            class DefLifecycle
+              def initialize; end
+              def initialize_copy(o); end
+              def respond_to_missing?(n, i); end
+            end
+            DefLifecycle.private_instance_methods(false).sort
+            "#,
+        );
+    }
+
+    #[test]
+    fn def_on_frozen_raises_frozen_error() {
+        // Defining a method on a frozen class / module / object raises
+        // FrozenError; nil/true/false still accept singleton methods.
+        run_test(
+            r#"
+            klass = Class.new; klass.freeze
+            r1 = begin; klass.class_eval { def a; end }; :no; rescue FrozenError; :frozen; end
+            o = Object.new; o.freeze
+            r2 = begin; def o.b; end; :no; rescue FrozenError; :frozen; end
+            def nil.gg; 1; end   # allowed despite nil being frozen
+            [r1, r2, nil.gg]
+            "#,
+        );
+    }
+
+    #[test]
+    fn nested_def_targets_owning_class() {
+        // A nested `def` inside a method body defines on the enclosing
+        // method's class and is public, whether that class comes from the
+        // `class` keyword or a dynamic `Class.new`/`class_exec` block.
+        run_test(
+            r#"
+            class NestOuter
+              def build; def built; 42; end; end
+            end
+            NestOuter.new.build
+            a = NestOuter.new.built                       # public, callable
+            cls = Class.new { def build2; def built2; 7; end; end }
+            cls.new.build2
+            b = cls.new.built2
+            c = begin; Object.new.built2; :no; rescue NoMethodError; :nme; end
+            [a, b, c]
+            "#,
+        );
+    }
+
+    #[test]
+    fn wrong_number_of_args_with_rest_uses_plus() {
+        // A method with an explicit `*rest` reports the required count with
+        // a `+` suffix; a private method called with an explicit receiver
+        // reports "private method … called".
+        run_test(
+            r#"
+            def rq(a, b, *c); end
+            m1 = begin; rq(1); rescue ArgumentError => e; e.message; end
+            class PrivRcv; private; def secret; end; end
+            m2 = begin; PrivRcv.new.secret; rescue NoMethodError => e; e.message.include?("private"); end
+            [m1, m2]
+            "#,
+        );
+    }
+
+    #[test]
     fn toplevel_private_public() {
         // Top-level `private`/`public`/`protected` target Object, and
         // Object's own private instance methods surface in
