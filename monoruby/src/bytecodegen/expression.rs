@@ -342,6 +342,9 @@ impl<'a> BytecodeGen<'a> {
                 | NodeKind::RImaginary(..)
                 | NodeKind::String(_)
                 | NodeKind::EncodedString(..) => return Ok(()),
+                // `__ENCODING__` is a pure pseudo-variable; in void
+                // context it has no effect.
+                NodeKind::Ident(name) if name == "__ENCODING__" => return Ok(()),
                 _ => {}
             }
         }
@@ -374,6 +377,23 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::GlobalVar(_) => {
                 let ret = self.push().into();
                 self.gen_store_expr(ret, expr)?;
+            }
+            // `__ENCODING__` — parsed as a bare `Ident`; evaluate to the
+            // source-encoding `Encoding` object. Load it as the constant
+            // `::Encoding::<NAME>` (rather than a baked literal) so it keeps
+            // object identity with the registered `Encoding` singleton.
+            NodeKind::Ident(method) if method == "__ENCODING__" => {
+                let ret = self.push().into();
+                let const_name =
+                    crate::builtins::encoding::encoding_constant_name(self.source_encoding());
+                self.emit_load_const(
+                    Some(ret),
+                    None,
+                    true,
+                    const_name.to_string(),
+                    vec!["Encoding".to_string()],
+                    loc,
+                );
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
                 self.gen_binop(op, lhs, rhs, use_mode, loc)?;
@@ -1447,5 +1467,20 @@ mod tests {
             c.new.respond_to?(:bar)
         "##,
         );
+    }
+
+    #[test]
+    fn source_encoding_pseudo_variable() {
+        // `__ENCODING__` evaluates to the source `Encoding` object (UTF-8
+        // for this harness), usable in every expression position.
+        run_test(r#"__ENCODING__.name"#);
+        run_test(r#"__ENCODING__.is_a?(Encoding)"#);
+        run_test(r#"x = __ENCODING__; x.name"#);
+        run_test(r#"[__ENCODING__].first.name"#);
+        run_test(r#"def f(e); e.name; end; f(__ENCODING__)"#);
+        // Identity: same object as the corresponding Encoding constant.
+        run_test(r#"__ENCODING__.equal?(Encoding::UTF_8)"#);
+        // Void context is a no-op.
+        run_test(r#"__ENCODING__; 42"#);
     }
 }
