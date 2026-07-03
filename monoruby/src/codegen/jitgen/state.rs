@@ -443,11 +443,14 @@ impl AbstractFrame {
 
     /// Flush the per-block local GP register file (the local GP allocator): spill every
     /// dirty resident to its stack home and clear the file. Called up front by
-    /// every non-`IntegerBinOp` instruction — only that op is GP-aware so far —
-    /// and at block boundaries, so the rest of codegen always observes a slot in
-    /// its canonical stack home. A no-op when the file is empty (the default
-    /// build never populates it, and even with the feature on most instructions
-    /// see an empty file), so the emitted code is unchanged there.
+    /// every instruction that is not GP-aware, and at block boundaries, so the
+    /// rest of codegen always observes a slot in its canonical stack home. The
+    /// GP-aware operations that keep the file live across instructions are the
+    /// integer binops (`binop_integer_gp`), the integer compares /
+    /// compare-branches (`gen_cmp_integer_gp` / `gen_cmpbr_integer`),
+    /// call/yield-result parking (`def_rax2gp`) and concrete-literal defs
+    /// (`def_lit2gp`); generic slot reads and write-backs consult the residents
+    /// without flushing. A no-op when the file is empty.
     pub(in crate::codegen::jitgen) fn flush_gp(&mut self, ir: &mut AsmIr) {
         if self.gp_regfile.is_empty() {
             return;

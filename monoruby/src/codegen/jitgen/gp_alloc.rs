@@ -1,10 +1,14 @@
-//! Per-basic-block **local GP register allocator** (Layer-② first cut).
+//! Per-basic-block **local GP register allocator** (Layer-②).
 //!
-//! This is the first slice of the register-allocation pass discussed in
-//! `doc/regalloc_separation.md` §3: a *local* (single basic block) allocator
-//! that scans the typed IR and assigns physical GP registers to the fixnum
-//! binop operands and results, **reusing** a register across instructions when
-//! a slot it already caches is read again. For
+//! The register-allocation pass discussed in `doc/regalloc_separation.md` §3:
+//! a *local* (single basic block) allocator that assigns physical GP registers
+//! to fixnum operands and results, **reusing** a register across instructions
+//! when a slot it already caches is read again. The GP-aware operations that
+//! drive it online are the integer binops (`binop_integer_gp`), the integer
+//! compares / compare-branches (`gen_cmp_integer_gp` / `gen_cmpbr_integer`),
+//! call/yield-result parking (`def_rax2gp`) and concrete-literal defs
+//! (`def_lit2gp`); generic slot reads and write-backs consult the residents,
+//! and dirty residents are threaded into deopt / GC write-backs. For
 //!
 //! ```text
 //! %1 = %2 + %3
@@ -39,16 +43,18 @@
 //!
 //! The register file is reset at basic-block entry and *flushed* — every dirty
 //! resident spilled to its stack home — at the block boundary and before any
-//! non-binop operation, so the rest of codegen always observes a slot in its
-//! canonical stack home. Being strictly per-block and never part of a
+//! non-GP-aware operation, so the rest of codegen always observes a slot in
+//! its canonical stack home. Being strictly per-block and never part of a
 //! cross-block merge, it avoids the loop-back-edge placement coupling that made
 //! the old analysis-fused `LinkMode::G` load-bearing (doc §13.8).
 //!
-//! This module is the **pure allocator**: it consumes a list of binop records
-//! (each tagged with the post-instruction `next_sp`) and produces a list of
-//! [`GpAction`]s. It is codegen-independent and unit-tested in isolation;
-//! wiring the actions into the AsmIR→LIR lowering (and threading dirty
-//! residents into the deopt write-back) is the next step.
+//! This module holds the register file ([`GpRegFile`], driven online by the
+//! codegen paths above) plus a **pure reference allocator** ([`allocate_run`]):
+//! the latter consumes a list of binop records (each tagged with the
+//! post-instruction `next_sp`), produces a list of [`GpAction`]s, and is
+//! unit-tested in isolation. Unlike the online driver it does not model the
+//! slot-side abstract types, so it guards every fresh load; the online driver
+//! keys guards off `is_fixnum(slot)` instead (see `gp_ensure`).
 
 use crate::bytecodegen::BinOpK;
 use crate::codegen::GP;
@@ -80,8 +86,10 @@ pub(in crate::codegen::jitgen) struct BinOpInst {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::codegen::jitgen) enum GpAction {
     /// Load `slot` from its stack home into `reg`. `guard` requests a fixnum
-    /// type guard (needed for a value freshly read from the stack; a value
-    /// produced by a prior binop is already a known fixnum and skips it).
+    /// type guard. In this pure reference every fresh stack read is guarded;
+    /// the online driver (`gp_ensure`) instead decides the guard from the
+    /// slot's abstract type (`is_fixnum`), so a slot a prior guard/def already
+    /// proved a fixnum reloads guard-free.
     Load { slot: SlotId, reg: GP, guard: bool },
     /// `dst = lhs <kind> rhs`, all three already in registers. The overflow /
     /// type side-exit is the consumer's responsibility (it is a deopt point).
@@ -115,9 +123,11 @@ struct Holder {
 /// `FprAllocator`.
 ///
 /// Held in the abstract state and driven online during the basic-block walk:
-/// `IntegerBinOp` reuses/allocates registers through it, while every other
-/// instruction calls [`Self::take_dirty_spills`] up front to flush the live GP
-/// residents back to their stack homes (only `IntegerBinOp` is GP-aware so far).
+/// the GP-aware operations (integer binops, integer compares/compare-branches,
+/// call/yield-result parking, concrete-literal defs) reuse/allocate registers
+/// through it, while every other instruction flushes the live GP residents
+/// back to their stack homes up front (via `flush_gp` →
+/// [`Self::take_dirty_spills`]).
 ///
 /// It is flushed empty at every basic-block boundary, so although it rides
 /// inside the cloned/merged `SlotState` it never actually carries state across a
