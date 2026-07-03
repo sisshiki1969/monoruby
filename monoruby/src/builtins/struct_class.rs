@@ -1808,4 +1808,41 @@ mod tests {
         run_test_with_prelude(r#"M.new(1, "m").with("amount" => 9).to_h"#, prelude);
         run_test_with_prelude(r#"M.new(1, "m").with(amount: 9).frozen?"#, prelude);
     }
+
+    #[test]
+    fn data_initialize_keywords() {
+        let prelude = r#"M = Data.define(:amount, :unit)"#;
+        // Positional, keyword, String-keyword, and `[]` construction.
+        run_test_with_prelude(r#"M.new(42, "km").to_h"#, prelude);
+        run_test_with_prelude(r#"M.new(amount: 42, unit: "km").to_h"#, prelude);
+        run_test_with_prelude(r#"M.new("amount" => 42, "unit" => "km").to_h"#, prelude);
+        run_test_with_prelude(r#"M[42, "km"].to_h"#, prelude);
+        run_test_with_prelude(r#"M.new(42, "km", **{}).to_h"#, prelude);
+        run_test_with_prelude(r#"M.new(42, "km").frozen?"#, prelude);
+        // A String and Symbol key for the same member: the last wins.
+        run_test_with_prelude(r#"M.new("amount" => 1, amount: 9, unit: "m").amount"#, prelude);
+        // An overridden initialize is called with keyword arguments even
+        // for positional construction, and can `super`.
+        run_test(
+            r#"
+            D = Data.define(:a, :b) do
+              def initialize(*rest, **kw); super; $log = [rest, kw]; end
+            end
+            D.new(1, 2)
+            $log
+            "#,
+        );
+        // deconstruct_keys with Symbol / String / nil keys.
+        run_test_with_prelude(r#"M.new(1, "m").deconstruct_keys([:amount])"#, prelude);
+        run_test_with_prelude(r#"M.new(1, "m").deconstruct_keys(["amount"])"#, prelude);
+        run_test_with_prelude(r#"M.new(1, "m").deconstruct_keys(nil)"#, prelude);
+        run_test_with_prelude(r#"M.new(1, "m").deconstruct_keys([:amount, :x, :unit])"#, prelude);
+        // Argument-validation errors.
+        run_test_with_prelude(r#"begin; M.new; rescue ArgumentError => e; e.message; end"#, prelude);
+        run_test_with_prelude(r#"begin; M.new(unit: "km"); rescue ArgumentError => e; e.message; end"#, prelude);
+        run_test_with_prelude(
+            r#"begin; M.new(amount: 1, unit: "m", system: "x"); rescue ArgumentError => e; e.message; end"#,
+            prelude,
+        );
+    }
 }
