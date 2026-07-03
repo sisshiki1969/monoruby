@@ -1135,6 +1135,7 @@ impl<'a> BytecodeGen<'a> {
         }
     }
 
+
     fn emit_string(&mut self, dst: BcReg, s: String) {
         // String literals become long-lived templates: `Literal`
         // dispatch `deep_copy`s the template into a fresh RValue on
