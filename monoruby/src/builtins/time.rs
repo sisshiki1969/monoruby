@@ -783,12 +783,27 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             // A timezone object (`#local_to_utc`) rather than a utc_offset.
             return Ok(t);
         } else {
-            let offset = parse_utc_offset(vm, globals, off_arg)?;
-            let dt = offset
-                .from_local_datetime(&naive)
-                .single()
-                .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
-            TimeInner::Local(dt)
+            match parse_utc_offset(vm, globals, off_arg) {
+                Ok(offset) => {
+                    let dt = offset
+                        .from_local_datetime(&naive)
+                        .single()
+                        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range."))?;
+                    TimeInner::Local(dt)
+                }
+                // A String that isn't a valid offset is resolved through the
+                // class's `.find_timezone`, if defined, to a timezone object.
+                Err(e) => {
+                    if off_arg.is_str().is_some()
+                        && let Some(tz) =
+                            find_timezone(vm, globals, lfp.self_val(), off_arg)?
+                        && let Some(t) = time_new_with_timezone(vm, globals, naive, tz, cls)?
+                    {
+                        return Ok(t);
+                    }
+                    return Err(e);
+                }
+            }
         }
     } else {
         let local = match Local.from_local_datetime(&naive) {
@@ -999,6 +1014,23 @@ fn time_at_with_timezone(
     let t = Value::new_time_with_class(TimeInner::Local(dt.with_timezone(&fixed)), cls);
     globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
     Ok(Some(t))
+}
+
+/// Resolve a String zone name to a timezone object via the receiver
+/// class's `.find_timezone` singleton method, if it defines one. Returns
+/// `None` when the class has no `.find_timezone`, so the caller re-raises
+/// the original offset-parse error.
+fn find_timezone(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    class: Value,
+    name: Value,
+) -> Result<Option<Value>> {
+    let id = IdentId::get_id("find_timezone");
+    if globals.check_method(class, id).is_none() {
+        return Ok(None);
+    }
+    Ok(Some(vm.invoke_method_inner(globals, id, class, &[name], None, None)?))
 }
 
 /// The UTC instant of a Time.
@@ -1994,8 +2026,19 @@ fn inspect(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg0 = lfp.arg(0);
     let fmt_str = arg0.coerce_to_str(vm, globals)?;
-    let inner = lfp.self_val().as_time().clone();
-    let pre = preprocess_strftime(&inner, &fmt_str);
+    let self_val = lfp.self_val();
+    let inner = self_val.as_time().clone();
+    // `%Z` on a timezone-object time uses the zone's `#abbr(self)`.
+    let zone_abbr = if let Some(zone) = globals.store.get_ivar(self_val, IdentId::get_id(ZONE_IVAR))
+        && globals.check_method(zone, IdentId::get_id("abbr")).is_some()
+    {
+        vm.invoke_method_inner(globals, IdentId::get_id("abbr"), zone, &[self_val], None, None)?
+            .is_str()
+            .map(|s| s.to_string())
+    } else {
+        None
+    };
+    let pre = preprocess_strftime(&inner, &fmt_str, zone_abbr.as_deref());
     use std::fmt::Write;
     let s = match &inner {
         TimeInner::Local(t) => {
@@ -2033,7 +2076,7 @@ fn strftime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// - `%^b` / `%^B` → uppercase abbreviated / full month name;
 /// - `%[1..12]N` → arbitrary-width sub-second digits (right-pads
 ///   `%9N` with zeros for `>9`).
-fn preprocess_strftime(inner: &TimeInner, fmt: &str) -> String {
+fn preprocess_strftime(inner: &TimeInner, fmt: &str, zone_abbr: Option<&str>) -> String {
     let mut out = String::new();
     let bytes = fmt.as_bytes();
     let mut i = 0;
@@ -2110,12 +2153,15 @@ fn preprocess_strftime(inner: &TimeInner, fmt: &str) -> String {
                 continue;
             }
             (b'Z', 0) => {
-                // CRuby: empty for fixed-offset / unnamed zones,
-                // "UTC" for UTC times. Local-zone names aren't
-                // tracked in monoruby.
-                let txt = match inner {
-                    TimeInner::Utc(_) => "UTC".to_string(),
-                    TimeInner::Local(_) => String::new(),
+                // CRuby: a timezone object's `#abbr` wins; otherwise "UTC"
+                // for UTC times and empty for fixed-offset / unnamed zones
+                // (local-zone names aren't tracked in monoruby).
+                let txt = match zone_abbr {
+                    Some(a) => a.to_string(),
+                    None => match inner {
+                        TimeInner::Utc(_) => "UTC".to_string(),
+                        TimeInner::Local(_) => String::new(),
+                    },
                 };
                 out.push_str(&txt);
                 i = directive_end;
@@ -3233,6 +3279,41 @@ mod tests {
             r#"Time.new("2021", in: "+17:00").to_s"#,
             r#"Time.new("2020-12-25 00:57:47 +09:01:30").utc_offset"#,
         ]);
+    }
+
+    #[test]
+    fn time_timezone_abbr_and_find_timezone() {
+        // `%Z` uses the timezone object's `#abbr`; a Time subclass with
+        // `.find_timezone` resolves a String zone name to a zone object.
+        run_tests(&[
+            r#"
+            Z = Struct.new(:offset, :abbr)
+            Zone = Struct.new(:std, :dst, :dst_range)
+            ZONES = { "Asia/Colombo" => Zone[Z[5*3600+30*60, "MMT"], nil, nil] }
+            class TZN
+              attr_reader :name
+              def initialize(name); @name = name; @std, @dst, @dst_range = *ZONES[name]; end
+              def dst?(t); @dst_range&.cover?(t.mon); end
+              def zone(t); dst?(t) ? @dst : @std; end
+              def utc_offset(t); zone(t)&.offset || 0; end
+              def abbr(t); zone(t)&.abbr; end
+              def local_to_utc(t); t - utc_offset(t); end
+              def utc_to_local(t); t + utc_offset(t); end
+            end
+            Time.new(2000, 1, 1, 12, 0, 0, TZN.new("Asia/Colombo")).strftime("%Z")
+            "#,
+            r#"
+            class TZFind < Time
+              def self.find_timezone(name); TZN.new(name.to_s); end
+            end
+            t = TZFind.new(2000, 1, 1, 12, 0, 0, "Asia/Colombo")
+            [t.zone.is_a?(TZN), t.zone.name, t.utc_offset]
+            "#,
+            // An unresolved String name still yields the zone object.
+            r#"TZFind.new(2000, 1, 1, 12, 0, 0, "some invalid zone name").utc_offset"#,
+        ]);
+        // A non-String, non-timezone argument never calls `.find_timezone`.
+        run_test_error(r#"TZFind.new(2000, 1, 1, 12, 0, 0, Object.new)"#);
     }
 
     #[test]
