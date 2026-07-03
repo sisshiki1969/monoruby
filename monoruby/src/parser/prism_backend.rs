@@ -1836,12 +1836,23 @@ impl<'pr> Lowerer<'pr> {
                             None => Some(Box::new(self.lower_node(&parent)?)),
                         }
                     }
-                    // `class ::Foo; end`: matches the ruruby backend,
-                    // which discards the toplevel marker and lowers
-                    // this as a base-less ClassDef. At top level the
-                    // current lexical scope already *is* the toplevel
-                    // so the resulting class binds in the right place.
-                    None => None,
+                    // `class ::Foo; end`: the leading `::` binds `Foo` at
+                    // the top level (on Object) regardless of the enclosing
+                    // lexical scope, so give it an explicit `Object` base.
+                    // Without this, `module M; class ::Foo; end; end` would
+                    // wrongly create `M::Foo`.
+                    None => {
+                        let path_loc = location_to_loc(&path.location());
+                        Some(Box::new(Node {
+                            kind: NodeKind::Const {
+                                toplevel: true,
+                                parent: None,
+                                prefix: vec![],
+                                name: "Object".to_string(),
+                            },
+                            loc: path_loc,
+                        }))
+                    }
                 };
                 Ok((base, name))
             }
