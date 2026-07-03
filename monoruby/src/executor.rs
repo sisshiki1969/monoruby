@@ -2653,6 +2653,23 @@ impl Executor {
         None
     }
 
+    /// `$+` reader — the last (highest-numbered) capture group that
+    /// actually matched, or `None` when there is no current match / no
+    /// group matched. Mirrors CRuby's `last_paren_match_getter`.
+    pub(crate) fn sp_last_paren_match(&self) -> Option<Value> {
+        let v = self.current_match_data()?;
+        let md = v.as_match_data();
+        let len = md.len();
+        // Walk the captures ($1..$N) from the end and return the last
+        // one that participated in the match.
+        for idx in (1..len).rev() {
+            if let Some(bytes) = md.at(idx) {
+                return Some(Value::string_from_str(&String::from_utf8_lossy(bytes)));
+            }
+        }
+        None
+    }
+
     /// `$~` reader — returns the MatchData `Value` from the current
     /// LEP, or `nil` if no match has been recorded in this scope.
     pub(crate) fn get_last_matchdata(&self) -> Value {

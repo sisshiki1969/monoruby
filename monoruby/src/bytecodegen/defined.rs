@@ -78,9 +78,45 @@ impl<'a> BytecodeGen<'a> {
                     self.check_defined(s, nil_label, ret, false)?;
                 }
             }
-            NodeKind::Splat(box n)
-            | NodeKind::Begin { body: box n, .. }
-            | NodeKind::UnOp(_, box n) => self.check_defined(n, nil_label, ret, false)?,
+            NodeKind::Splat(box n) | NodeKind::Begin { body: box n, .. } => {
+                self.check_defined(n, nil_label, ret, false)?
+            }
+            NodeKind::UnOp(_, box n) => {
+                // `defined?(not X)` / `defined?(!X)` / `defined?(-X)` parse
+                // the operator as a method call `X.op`. When the operand `X`
+                // is itself a method call, CRuby *evaluates* it (as the
+                // receiver of the operator) — executing its side effects and
+                // reporting "method", or swallowing any exception it raises
+                // to `nil`. A bare variable/const operand keeps the ordinary
+                // definedness recursion (an undefined operand ⇒ `nil`).
+                let evaluate_operand = top
+                    && matches!(
+                        n.kind,
+                        NodeKind::FuncCall { .. }
+                            | NodeKind::MethodCall { .. }
+                            | NodeKind::Index { .. }
+                            | NodeKind::BinOp(..)
+                            | NodeKind::UnOp(..)
+                    );
+                if evaluate_operand {
+                    let body_start = self.new_label();
+                    let body_end = self.new_label();
+                    self.apply_label(body_start);
+                    let _ = self.gen_temp_expr(n)?;
+                    self.apply_label(body_end);
+                    self.exception_table.push(ExceptionEntry {
+                        range: body_start..body_end,
+                        rescue: Some(nil_label),
+                        ensure: None,
+                        err_reg: None,
+                    });
+                    // `ret` already holds "method"; the operator method
+                    // (`!`, `-@`, …) is defined on every object, so there is
+                    // nothing more to check.
+                } else {
+                    self.check_defined(n, nil_label, ret, false)?;
+                }
+            }
             NodeKind::BinOp(op, box l, box r) => {
                 // `&&` / `||` (and `and`/`or`) are not method calls:
                 // CRuby `defined?(a && b)` is always "expression" and
@@ -426,6 +462,52 @@ mod tests {
               def t; [defined?(@@v), defined?(@@v).frozen?]; end
             end
             DefCV.new.t
+            "#,
+        );
+    }
+
+    #[test]
+    fn defined_method_respond_to_missing_and_protected() {
+        // `defined?(recv.meth)` consults `respond_to_missing?`, honours
+        // protected-method visibility (checked against the *defining*
+        // class), and a qualified constant does not fall through to a
+        // top-level constant.
+        run_test(
+            r#"
+            module DefM1; end
+            class DefR
+              def respond_to_missing?(name, inc); name == :foo; end
+            end
+            class DefPB
+              def m; end
+              protected :m
+              def chk(o); defined?(o.m); end
+            end
+            class DefPS < DefPB; end
+            [
+              defined?(DefR.new.foo),      # respond_to_missing? => "method"
+              defined?(DefR.new.bar),      # => nil
+              DefPB.new.chk(DefPS.new),    # protected, subclass recv => "method"
+              DefPB.new.chk(DefPB.new),    # protected, base recv => "method"
+              defined?(DefM1::String),     # no top-level fallback => nil
+              defined?(Integer::String),   # no top-level fallback => nil
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn defined_last_paren_match_and_not_operator() {
+        // `$+` is the last non-empty captured group.
+        run_test(r#""mis-matched" =~ /s(-)m(.)/; [defined?($+), $+]"#);
+        // `defined?(not X)` / `defined?(!X)` evaluate a method operand as
+        // the operator's receiver — executing its side effects and
+        // reporting "method".
+        run_test(
+            r#"
+            $dlog = []
+            def dse; $dlog << :se; 1; end
+            [[defined?(not dse), defined?(!dse)], $dlog]
             "#,
         );
     }

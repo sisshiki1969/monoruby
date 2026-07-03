@@ -1343,10 +1343,52 @@ pub(super) extern "C" fn defined_method(
     recv: Value,
     name: IdentId,
 ) {
+    use crate::executor::Visibility;
     let is_func_call = vm.cfp().lfp().self_val() == recv;
-    if vm.find_method(globals, recv, name, is_func_call).is_err() {
-        unsafe { *reg = Value::nil() }
+    if let Some(entry) = globals.store.check_method_for_class(recv.class(), name) {
+        if entry.func_id().is_some() {
+            let visible = match entry.visibility() {
+                Visibility::Public => true,
+                // A private method counts as defined only through an
+                // implicit (function-call) receiver.
+                Visibility::Private => is_func_call,
+                // A protected method counts as defined when the caller's
+                // `self` is a kind of the class/module that *owns* the
+                // method — CRuby checks the defining class, not the
+                // receiver's class.
+                Visibility::Protected => {
+                    let caller_self = vm.cfp().lfp().self_val();
+                    caller_self.is_kind_of(&globals.store, entry.owner())
+                }
+                // An explicitly `undef`ined method is not defined.
+                Visibility::Undefined => false,
+            };
+            if visible {
+                return;
+            }
+        }
     }
+    // CRuby's `defined?(recv.meth)` also consults `respond_to_missing?`
+    // (with `include_private` = the func-call form). A truthy result
+    // reports the call as "method".
+    if let Some(fid) = globals.check_method(recv, IdentId::RESPOND_TO_MISSING_) {
+        match vm.invoke_func_inner(
+            globals,
+            fid,
+            recv,
+            &[Value::symbol(name), Value::bool(is_func_call)],
+            None,
+            None,
+        ) {
+            Ok(v) if v.as_bool() => return,
+            Ok(_) => {}
+            // `defined?` never propagates an exception; discard it.
+            Err(_) => {
+                let _ = vm.take_error();
+            }
+        }
+    }
+    unsafe { *reg = Value::nil() }
 }
 
 ///

@@ -250,17 +250,63 @@ impl Executor {
         name: IdentId,
         current_func: FuncId,
     ) -> Result<Value> {
+        match self.search_constant_no_missing(globals, name, current_func)? {
+            Some(v) => Ok(v),
+            None => {
+                // CRuby invokes `const_missing` on the innermost lexical
+                // class when unqualified constant lookup fails; user-defined
+                // hooks (e.g. `Delegator.const_missing` delegating to
+                // `::Object.const_get`) can resolve the reference. The
+                // default `Module#const_missing` raises NameError,
+                // preserving the previous behaviour for classes without a
+                // custom hook.
+                let lexical_class = self.const_missing_lexical_class(globals, current_func);
+                let module = globals[lexical_class].get_module();
+                self.invoke_const_missing(globals, module, name)
+            }
+        }
+    }
+
+    /// Innermost lexical class used as the `const_missing` receiver when
+    /// unqualified lookup fails.
+    fn const_missing_lexical_class(
+        &mut self,
+        globals: &mut Globals,
+        current_func: FuncId,
+    ) -> ClassId {
+        let frame_func = self.cfp().lfp().func_id();
+        if frame_func != current_func {
+            let fc = frame_func.lexical_class(globals);
+            if fc != OBJECT_CLASS {
+                return fc;
+            }
+        }
+        current_func.lexical_class(globals)
+    }
+
+    /// The lexical + ancestor-chain resolution of an *unqualified* constant
+    /// reference, triggering autoload but **without** falling back to
+    /// `const_missing`. Returns `Ok(None)` when the constant simply does
+    /// not exist. Used both by [`Self::search_constant_checked`] (which then
+    /// invokes `const_missing`) and by `defined?`'s qualifier resolution
+    /// (which must not fire `const_missing`).
+    pub(super) fn search_constant_no_missing(
+        &mut self,
+        globals: &mut Globals,
+        name: IdentId,
+        current_func: FuncId,
+    ) -> Result<Option<Value>> {
         // Search the current frame's lexical_context first (covers string
         // eval where the eval's ISeqInfo has the receiver's class set).
         let frame_func = self.cfp().lfp().func_id();
         if frame_func != current_func {
             if let Some(v) = self.search_lexical_stack(globals, name, frame_func)? {
-                return Ok(v);
+                return Ok(Some(v));
             }
         }
         // Then search the enclosing method's lexical_context.
         if let Some(v) = self.search_lexical_stack(globals, name, current_func)? {
-            return Ok(v);
+            return Ok(Some(v));
         }
         // For superclass fallback, prefer the frame's lexical class if the
         // frame has its own lexical_context (i.e. string eval), otherwise
@@ -277,25 +323,19 @@ impl Executor {
         };
         let module = globals[lexical_class].get_module();
         match self.get_constant_superclass(globals, module, name)? {
-            Some(v) => return Ok(v),
+            Some(v) => return Ok(Some(v)),
             None => {
                 // Fall back to Object class, matching CRuby's implicit
                 // top-level cref.  This ensures that classes inheriting from
                 // BasicObject can still resolve top-level constants.
                 if lexical_class == BASIC_OBJECT_CLASS {
                     if let Some(v) = self.get_constant(globals, OBJECT_CLASS, name)? {
-                        return Ok(v);
+                        return Ok(Some(v));
                     }
                 }
             }
         }
-        // CRuby invokes `const_missing` on the innermost lexical class when
-        // unqualified constant lookup fails; user-defined hooks (e.g.
-        // `Delegator.const_missing` delegating to `::Object.const_get`) can
-        // resolve the reference. The default `Module#const_missing` raises
-        // NameError, preserving the previous behaviour for classes without
-        // a custom hook.
-        self.invoke_const_missing(globals, module, name)
+        Ok(None)
     }
 
     /// Non-triggering probe of a constant directly on `class_id` —
@@ -333,6 +373,37 @@ impl Executor {
     ) -> bool {
         loop {
             if Self::probe_constant_at(globals, module.id(), name) {
+                return true;
+            }
+            match module.superclass() {
+                Some(superclass) => module = superclass,
+                None => return false,
+            }
+        }
+    }
+
+    /// Non-triggering walk of the ancestor chain for the *final* segment
+    /// of a **qualified** reference (`A::B`). Unlike
+    /// [`Self::probe_constant_superclass`], the walk stops before Object
+    /// unless the qualifier itself is Object: a qualified reference does
+    /// not fall through to top-level constants (`defined?(Foo::String)` is
+    /// `nil` even though `String` is a top-level constant). Mirrors
+    /// CRuby's `rb_const_search` skipping `rb_cObject` for `klass != Object`.
+    pub(crate) fn probe_constant_superclass_qualified(
+        globals: &Globals,
+        module: Module,
+        name: IdentId,
+    ) -> bool {
+        let start = module.id();
+        let mut module = module;
+        loop {
+            let cid = module.id();
+            if cid == OBJECT_CLASS && start != OBJECT_CLASS {
+                // Reached Object via a qualified lookup: top-level
+                // constants are not visible here.
+                return false;
+            }
+            if Self::probe_constant_at(globals, cid, name) {
                 return true;
             }
             match module.superclass() {
@@ -447,15 +518,17 @@ impl Executor {
             }
             return false;
         } else {
-            // Resolve the leading qualifier with the normal triggering
-            // path; we need the actual class to walk further.
+            // Resolve the leading qualifier. `defined?` must not fire
+            // `const_missing` for an undefined qualifier (e.g.
+            // `defined?(Undefined::Object)` leaves `Object.const_missing`
+            // untouched), so use the no-missing search.
             let parent = prefix.remove(0);
-            match self.search_constant_checked(globals, parent, current_func) {
-                Ok(v) => match v.is_class_or_module() {
+            match self.search_constant_no_missing(globals, parent, current_func) {
+                Ok(Some(v)) => match v.is_class_or_module() {
                     Some(m) => m.id(),
                     None => return false,
                 },
-                Err(_) => return false,
+                Ok(None) | Err(_) => return false,
             }
         };
         let mut parent = parent;
@@ -472,7 +545,9 @@ impl Executor {
                 Err(_) => return false,
             }
         }
-        Self::probe_constant_superclass(globals, globals.store[parent].get_module(), name)
+        // Qualified final segment: does not fall through to top-level
+        // constants on Object (unless the qualifier is Object itself).
+        Self::probe_constant_superclass_qualified(globals, globals.store[parent].get_module(), name)
     }
 
     fn search_lexical_stack(
