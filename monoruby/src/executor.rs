@@ -2327,6 +2327,13 @@ impl Executor {
             }
             found
         };
+        // A qualified definition (`class A::B`) is a qualified constant
+        // access, so `private_constant`-marked names are rejected — CRuby
+        // raises "private constant A::B referenced". An unqualified `class
+        // B` is a lexical access and stays exempt.
+        if base.is_some() {
+            check_constant_visibility(globals, parent, name)?;
+        }
         let (self_val, is_new) = match self.get_constant(globals, parent, name)? {
             Some(val) => {
                 let val = val.expect_class_or_module(&globals.store)?;
