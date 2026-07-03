@@ -271,7 +271,7 @@ impl Executor {
             None,
         ) {
             Ok(v) => Ok(v),
-            Err(e) if matches!(e.kind, MonorubyErrKind::Name(_)) => {
+            Err(e) if matches!(e.kind, MonorubyErrKind::Name(..)) => {
                 Err(MonorubyErr::nameerr_with_name(e.message, name))
             }
             Err(e) => Err(e),

@@ -1065,7 +1065,7 @@ fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                     None,
                 ) {
                     Ok(v) => Ok(v),
-                    Err(e) if matches!(e.kind, MonorubyErrKind::Name(_)) => {
+                    Err(e) if matches!(e.kind, MonorubyErrKind::Name(..)) => {
                         Err(MonorubyErr::nameerr_with_name(e.message, sym))
                     }
                     Err(e) => Err(e),
