@@ -256,7 +256,7 @@ impl Executor {
     /// Invoke `module.const_missing(name)` and rewrap a NameError so its
     /// `name` attribute is preserved across `raise ex_obj` (which otherwise
     /// rebuilds the error and drops the constructor-set name).
-    fn invoke_const_missing(
+    pub(crate) fn invoke_const_missing(
         &mut self,
         globals: &mut Globals,
         module: Module,

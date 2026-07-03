@@ -6942,6 +6942,54 @@ mod tests {
     }
 
     #[test]
+    fn toplevel_class_binds_on_object_inside_module() {
+        // `class ::Foo` / `module ::Foo` bind at the top level (Object)
+        // regardless of the enclosing lexical scope, so reopening a nested
+        // class through `class ::Object; module ...` reaches the same class.
+        run_test(
+            r#"
+            module TlWrap
+              class Cont; class Child; end; end
+              class ::Object
+                TL_TOP = :tl_top
+                module TlWrap
+                  class Cont
+                    class Child
+                      def self.m; TL_TOP; end
+                    end
+                  end
+                end
+              end
+            end
+            [TlWrap::Cont::Child.m, Object.const_defined?(:TL_TOP)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn private_constant_routes_through_const_missing() {
+        // A private constant access invokes `const_missing`, so a custom
+        // hook can intercept it; the default hook surfaces the "private
+        // constant" NameError.
+        run_test(
+            r#"
+            module PcMiss
+              X = 1
+              private_constant :X
+              def self.const_missing(n); n == :X ? :intercepted : super; end
+            end
+            r1 = PcMiss::X
+            module PcMiss2
+              Y = 1
+              private_constant :Y
+            end
+            r2 = (begin; PcMiss2::Y; rescue NameError => e; e.message.include?("private"); end)
+            [r1, r2]
+            "#,
+        );
+    }
+
+    #[test]
     fn const_set_allows_non_ascii_uppercase_name() {
         // Unicode uppercase (e.g. Greek `Ἅ`) is a valid constant-name start.
         run_test(r#"m = Module.new; m.const_set("ἍBB", 5); m.const_get("ἍBB")"#);

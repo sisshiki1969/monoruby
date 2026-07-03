@@ -1219,7 +1219,27 @@ impl Executor {
         }
         let module = globals[parent].get_module();
         if let Some(defining) = Self::probe_constant_superclass_with_class(globals, module, name) {
-            check_constant_visibility(globals, defining, name)?;
+            if globals.store[defining].is_constant_private(name) {
+                // A private constant routes through `const_missing` (CRuby
+                // calls it), so a custom hook may intercept. If the hook
+                // (default or `super`) raises, surface the "private
+                // constant" NameError carrying the defining class and name.
+                return match self.invoke_const_missing(globals, module, name) {
+                    Ok(v) => Ok((v, base)),
+                    Err(_) => {
+                        let receiver = globals.store[defining].get_module().get();
+                        Err(MonorubyErr::nameerr_with_name_receiver(
+                            format!(
+                                "private constant {}::{} referenced",
+                                defining.get_name(&globals.store),
+                                name
+                            ),
+                            name,
+                            receiver,
+                        ))
+                    }
+                };
+            }
         }
         let v = self.get_qualified_constant_with_missing(globals, module, name)?;
         Ok((v, base))
