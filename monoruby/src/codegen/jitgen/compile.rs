@@ -609,11 +609,14 @@ impl<'a> JitContext<'a> {
                 dst: (dst, len, rest_pos),
             } => {
                 state.flush_gp(ir);
-                state.load(ir, src, GP::Rdi);
+                // `expand_array` may dispatch `#to_ary` and raise, so guard it.
+                state.load(ir, src, GP::Rdx);
+                let error = ir.new_error(state);
                 for reg in dst.0..dst.0 + len {
                     state.def_S(SlotId(reg));
                 }
                 ir.expand_array(state, dst, len, rest_pos);
+                ir.handle_error(error);
             }
             TraceIr::UndefMethod { undef } => {
                 state.flush_gp(ir);

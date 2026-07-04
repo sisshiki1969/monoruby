@@ -926,23 +926,28 @@ impl Codegen {
         p
     }
 
-    /// op 173 `ExpandArray`: expand_array(src `[pc+4]`, &dst `[pc+2]`,
-    /// len `[pc+0]`, rest `[pc+8]`). No result.
+    /// op 173 `ExpandArray`: expand_array(vm, globals, src `[pc+4]`,
+    /// &dst `[pc+2]`, len `[pc+0]`, rest `[pc+8]`). May dispatch `#to_ary`
+    /// and raise, so the `X0 == 0` error path branches to `entry_raise`.
     pub(in crate::codegen) fn a64_op_expand_array(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
         monoasm_arm64!(&mut self.jit,
-            ldrh x0, [x(PC.0), #(4)];
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(4)];
         );
-        self.a64_slot_value(X0); // src (an Array Value)
+        self.a64_slot_value(X2); // src
         monoasm_arm64!(&mut self.jit,
-            ldrh x1, [x(PC.0), #(2)];
+            ldrh x3, [x(PC.0), #(2)];
         );
-        self.a64_slot_addr(X1); // &dst
+        self.a64_slot_addr(X3); // &dst
         monoasm_arm64!(&mut self.jit,
-            ldrh x2, [x(PC.0)];  // len
-            ldrh x3, [x(PC.0), #(8)];  // rest
+            ldrh x4, [x(PC.0)];  // len
+            ldrh x5, [x(PC.0), #(8)];  // rest
             mov x9, (runtime::expand_array as *const () as u64);
             blr x9;
+            cbz x0, raise;
             add x(PC.0), x(PC.0), #(16);
         );
         self.a64_fetch_and_dispatch();

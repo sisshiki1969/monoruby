@@ -3713,11 +3713,13 @@ impl Codegen {
         true
     }
 
-    /// Multiple-assignment array expansion via runtime::expand_array(src, dst,
-    /// len, rest). `src` is already in GP::Rdi (x4) from the preceding load;
-    /// `dst` is the (descending) destination base x22-conv(dst). aarch64 C-args:
-    /// x0=src, x1=&dst, x2=len, x3=rest (rest = rest_pos+1, or 0 for none).
-    /// Bails on a live xmm pool reg or an out-of-range frame offset.
+    /// Multiple-assignment array expansion via
+    /// runtime::expand_array(vm, globals, src, &dst, len, rest). `src` is
+    /// already in GP::Rdx (x2) — the C-arg slot for `src` — from the
+    /// preceding load; `dst` is the (descending) destination base
+    /// x22-conv(dst). aarch64 C-args: x0=vm, x1=globals, x2=src, x3=&dst,
+    /// x4=len, x5=rest (rest = rest_pos+1, or 0 for none). May dispatch
+    /// `#to_ary` and raise — the caller emits a `HandleError` after this.
     pub(in crate::codegen::jitgen) fn emit_expand_array(
         &mut self,
         dst: SlotId,
@@ -3732,14 +3734,18 @@ impl Codegen {
         };
         let lfp = GP::R14.a64().0; // x22
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
-        let rdi = GP::Rdi.a64().0; // x4 holds src
         let f = runtime::expand_array as *const () as u64;
         self.emit_fpr_save(using_fpr, false);
-        monoasm_arm64!(&mut self.jit, mov x0, x(rdi);); // src (from GP::Rdi)
-        self.a64_addr_sub(1, lfp, off);  // x1 = &dst (descending base)
+        // x2 already holds `src` (GP::Rdx). Fill the remaining C-args.
+        // x19 = EXEC (&mut Executor), x20 = GLOBALS (&mut Globals).
         monoasm_arm64!(&mut self.jit,
-            mov x2, (len as u64);        // len
-            mov x3, (rest);              // rest (0 = none)
+            mov x0, x19;   // &mut Executor
+            mov x1, x20;   // &mut Globals
+        );
+        self.a64_addr_sub(3, lfp, off);  // x3 = &dst (descending base)
+        monoasm_arm64!(&mut self.jit,
+            mov x4, (len as u64);        // len
+            mov x5, (rest);              // rest (0 = none)
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
