@@ -505,9 +505,41 @@ fn handle_keyword(
     callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
+    // `**nil` accepts no keywords: any actual keyword raises.
+    if globals[callee].forbid_keyword() {
+        if any_keyword_passed(globals, caller, caller_lfp)? {
+            return Err(MonorubyErr::argumenterr("no keywords accepted"));
+        }
+        return Ok(());
+    }
     ordinary_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
     hash_splat_and_kw_rest(vm, globals, callee, caller, callee_lfp, caller_lfp)?;
     check_missing_keyword(&globals.store[callee], callee_lfp)
+}
+
+/// Whether the call site actually supplies at least one keyword — either a
+/// literal `k: v` pair or a non-empty `**hash` splat. An empty `**{}` splat
+/// supplies none.
+fn any_keyword_passed(
+    globals: &Globals,
+    caller: CallSiteId,
+    caller_lfp: Lfp,
+) -> Result<bool> {
+    let cs = &globals[caller];
+    if !cs.kw_args.is_empty() {
+        return Ok(true);
+    }
+    for pos in cs.hash_splat_pos.iter() {
+        let h = caller_lfp.register(*pos).unwrap();
+        if h.is_nil() {
+            continue;
+        }
+        match h.try_hash_ty() {
+            Some(hash) if hash.len() == 0 => {}
+            _ => return Ok(true),
+        }
+    }
+    Ok(false)
 }
 
 fn handle_keyword_simple(callee: &FuncInfo, mut callee_lfp: Lfp) -> Result<()> {
@@ -834,6 +866,11 @@ fn invoker_arguments_inner(
         None
     };
 
+    // `**nil` accepts no keywords: any remaining keyword raises.
+    if info.forbid_keyword() && kw_arg.is_some() {
+        return Err(MonorubyErr::argumenterr("no keywords accepted"));
+    }
+
     // keyword rest
     let ex = if let Some(kw_rest) = info.kw_rest() {
         let v = if let Some(kw_arg) = kw_arg {
@@ -876,6 +913,40 @@ fn invoker_arguments_inner(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn no_keywords_parameter() {
+        // `**nil` accepts no keywords: passing any keyword raises
+        // ArgumentError("no keywords accepted"), while no keywords / an
+        // empty `**{}` splat is fine. Applies to lambdas and methods.
+        run_test(
+            r#"
+            def rescue_msg
+              yield; :no_error
+            rescue ArgumentError => e
+              e.message
+            end
+            l1 = ->(**nil) { :ok }
+            l2 = lambda { |a, **nil| a }
+            def m(**nil); :mok; end
+            full = { a: 1 }
+            empty = {}
+            [
+              rescue_msg { l1.call(a: 1) },
+              l1.call,
+              l1.call(**{}),
+              l1.call(**empty),
+              rescue_msg { l1.call(**full) },   # non-empty hash splat
+              l2.call(3),
+              rescue_msg { l2.call(3, b: 4) },
+              m,                                 # method dispatch, no kw
+              rescue_msg { m(x: 1) },            # method dispatch, literal kw
+              rescue_msg { m(**full) },          # method dispatch, hash splat
+              m(**empty),                        # method dispatch, empty splat
+            ]
+            "#,
+        );
+    }
 
     #[test]
     fn zsuper_reassigned_scalar_rest() {

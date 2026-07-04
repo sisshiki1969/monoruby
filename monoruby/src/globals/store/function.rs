@@ -1098,6 +1098,11 @@ impl FuncInfo {
         self.kw_names().is_empty() && self.kw_rest().is_none()
     }
 
+    /// `**nil` — the definition explicitly forbids keyword arguments.
+    pub(crate) fn forbid_keyword(&self) -> bool {
+        self.ext.params.forbid_keyword()
+    }
+
     pub(crate) fn is_rest(&self) -> bool {
         self.ext.params.is_rest().is_some()
     }
@@ -1331,7 +1336,7 @@ impl Store {
         if pos_num == 1 && info.single_arg_expand() {
             return false;
         };
-        if info.no_keyword() && callsite.kw_may_exists() {
+        if (info.no_keyword() || info.forbid_keyword()) && callsite.kw_may_exists() {
             return false;
         };
         // A callsite that statically lacks a required keyword must take
