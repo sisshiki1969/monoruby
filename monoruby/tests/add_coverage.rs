@@ -547,6 +547,52 @@ fn cache_invalidation_define_method() {
 //
 
 #[test]
+fn super_no_superclass_method() {
+    // A `super` with no superclass method raises a `super`-specific
+    // NoMethodError, not the ordinary "undefined method" message.
+    run_test_with_prelude(
+        r##"
+        begin
+          B.new.foo
+        rescue NoMethodError => e
+          # Only the `super` prefix is portable; the receiver rendering
+          # differs from CRuby, so don't compare the whole message.
+          e.message.start_with?("super: no superclass method")
+        end
+        "##,
+        r##"
+        class A; end
+        class B < A
+          def foo; super; end
+        end
+        "##,
+    );
+}
+
+#[test]
+fn class_module_reopen_type_error() {
+    // Reopening a constant with the wrong keyword names the *constant*
+    // (`X is not a class` / `is not a module`) and rejects class<->module.
+    run_test(
+        r##"
+        Nc = 1
+        module RM1; end
+        RM2 = Class.new
+        msgs = []
+        # CRuby appends a "previous definition" line; compare only the prefix.
+        begin; class Nc; end;             rescue TypeError => e; msgs << e.message.start_with?("Nc is not a class"); end
+        begin; eval("class RM1; end");    rescue TypeError => e; msgs << e.message.start_with?("RM1 is not a class"); end
+        begin; eval("module RM2; end");   rescue TypeError => e; msgs << e.message.start_with?("RM2 is not a module"); end
+        # same-kind reopen is fine
+        class GoodC; end; class GoodC; X = 1; end
+        module GoodM; end; module GoodM; Y = 2; end
+        msgs << [GoodC::X, GoodM::Y]
+        msgs
+        "##,
+    );
+}
+
+#[test]
 fn super_with_block() {
     run_test_with_prelude(
         r##"

@@ -61,7 +61,9 @@ fn find_super(vm: &mut Executor, globals: &mut Globals) -> Result<FuncId> {
     let self_class = self_val.class();
     match globals.store.check_super(self_class, func_id, func_name) {
         Some(func_id) => Ok(func_id),
-        None => Err(MonorubyErr::method_not_found(globals, func_name, self_val)),
+        None => Err(MonorubyErr::super_method_not_found(
+            globals, func_name, self_val,
+        )),
     }
 }
 
@@ -657,7 +659,20 @@ pub(crate) extern "C" fn invoke_method_missing(
 ) -> Option<Value> {
     if globals[callsite].name.is_none() {
         // A super call: CRuby never falls through to method_missing when no
-        // superclass method is found. The error is already set; return None.
+        // superclass method is found.
+        //
+        // On the first (uncached) miss, `find_super` has just set the error.
+        // But once the inline cache is warm (class matches, fid slot = 0),
+        // the VM fast path jumps straight here without calling `find_method`,
+        // so no error is set yet — set it now, mirroring `find_super`.
+        if vm.exception().is_none() {
+            let func_id = vm.method_func_id();
+            let self_val = vm.cfp().lfp().self_val();
+            let func_name = globals.store[func_id].name().unwrap();
+            vm.set_error(MonorubyErr::super_method_not_found(
+                globals, func_name, self_val,
+            ));
+        }
         return None;
     }
     vm.discard_error();
