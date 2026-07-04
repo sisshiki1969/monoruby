@@ -929,14 +929,20 @@ mod tests {
             l1 = ->(**nil) { :ok }
             l2 = lambda { |a, **nil| a }
             def m(**nil); :mok; end
+            full = { a: 1 }
+            empty = {}
             [
               rescue_msg { l1.call(a: 1) },
               l1.call,
               l1.call(**{}),
+              l1.call(**empty),
+              rescue_msg { l1.call(**full) },   # non-empty hash splat
               l2.call(3),
               rescue_msg { l2.call(3, b: 4) },
-              m,
-              rescue_msg { m(x: 1) },
+              m,                                 # method dispatch, no kw
+              rescue_msg { m(x: 1) },            # method dispatch, literal kw
+              rescue_msg { m(**full) },          # method dispatch, hash splat
+              m(**empty),                        # method dispatch, empty splat
             ]
             "#,
         );
