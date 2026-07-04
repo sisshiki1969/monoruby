@@ -403,11 +403,17 @@ pub(crate) struct DestructureInfo {
     src: usize,
     dst: usize,
     len: usize,
+    rest_pos: Option<usize>,
 }
 
 impl DestructureInfo {
-    pub fn new(src: usize, dst: usize, len: usize) -> Self {
-        Self { src, dst, len }
+    pub fn new(src: usize, dst: usize, len: usize, rest_pos: Option<usize>) -> Self {
+        Self {
+            src,
+            dst,
+            len,
+            rest_pos,
+        }
     }
 }
 
@@ -620,8 +626,14 @@ impl<'a> BytecodeGen<'a> {
                 Loc::default(),
             );
         }
-        for DestructureInfo { src, dst, len } in info.destruct_info {
-            self.gen_expand_array(src, dst, len, None);
+        for DestructureInfo {
+            src,
+            dst,
+            len,
+            rest_pos,
+        } in info.destruct_info
+        {
+            self.gen_expand_array(src, dst, len, rest_pos);
         }
         for OptionalInfo { local, initializer } in info.optional_info {
             let local = local.into();

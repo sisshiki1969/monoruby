@@ -243,13 +243,20 @@ impl FormalParam {
     pub(crate) fn forwarding(loc: Loc) -> Self {
         FormalParam::new(ParamKind::Forwarding, loc)
     }
+}
 
-    pub(crate) fn destruct_param(params: Vec<(String, Loc)>) -> Self {
-        let loc = params
-            .iter()
-            .fold(params[0].1, |acc, elem| acc.merge(elem.1));
-        FormalParam::new(ParamKind::Destruct(params), loc)
-    }
+/// One element of a destructuring block/lambda parameter (`|(a, *b, (c, d))|`).
+/// A whole destructure target is a `Vec<DestructEntry>` with at most one
+/// `Rest` entry; entries before it are the "pre" targets, after it the
+/// "post" targets.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DestructEntry {
+    /// A named leaf target (`a`).
+    Param(String, Loc),
+    /// A splat target — `*a` (named) or `*` (anonymous).
+    Rest(Option<String>, Loc),
+    /// A nested destructure — `(c, d)` inside a larger target.
+    Nested(Vec<DestructEntry>, Loc),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -275,7 +282,11 @@ pub enum ParamKind {
     KWRest(Option<String>),
     Block(Option<String>),
     Forwarding,
-    Destruct(Vec<(String, Loc)>),
+    Destruct(Vec<DestructEntry>),
+    /// A destructuring parameter appearing *after* a rest (`*c, (*d, e)`).
+    /// Same shape as `Destruct` but occupies a post slot (counts toward
+    /// `post_num`, not `required_num`).
+    PostDestruct(Vec<DestructEntry>),
 }
 
 impl std::default::Default for ParamKind {

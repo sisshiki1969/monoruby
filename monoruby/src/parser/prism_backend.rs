@@ -31,8 +31,8 @@ use ruby_prism::{
 };
 
 use crate::ast::{
-    BinOp, BlockInfo, CmpKind, Loc, LvarCollector, NReal, Node, NodeKind, ParamKind, ParseResult,
-    SourceInfoRef, UnOp,
+    BinOp, BlockInfo, CmpKind, DestructEntry, Loc, LvarCollector, NReal, Node, NodeKind, ParamKind,
+    ParseResult, SourceInfoRef, UnOp,
 };
 use crate::globals::{ExternalContext, MonorubyErr};
 use crate::id_table::IdentId;
@@ -3102,6 +3102,75 @@ impl<'pr> Lowerer<'pr> {
         }
     }
 
+    /// Recursively lowers a destructuring block/lambda parameter
+    /// (`MultiTargetNode`) into a `Vec<DestructEntry>`. Leaves are
+    /// `RequiredParameterNode` (`Param`), the optional `rest` is a
+    /// `SplatNode` (`Rest`, named or anonymous), and nested groups are
+    /// `MultiTargetNode` (`Nested`). Entries are emitted in source
+    /// order: `lefts`, then `rest`, then `rights`.
+    fn lower_destruct_el(
+        &mut self,
+        entries: &mut Vec<DestructEntry>,
+        el: &prism::Node<'pr>,
+    ) -> Result<(), MonorubyErr> {
+        match el {
+            prism::Node::RequiredParameterNode { .. } => {
+                let inner = el.as_required_parameter_node().unwrap();
+                let name = constant_name(&inner.name())?;
+                self.lvars.insert(&name);
+                entries.push(DestructEntry::Param(name, location_to_loc(&inner.location())));
+            }
+            prism::Node::MultiTargetNode { .. } => {
+                let nested = el.as_multi_target_node().unwrap();
+                let nested_loc = location_to_loc(&el.location());
+                let sub = self.lower_destruct(&nested)?;
+                entries.push(DestructEntry::Nested(sub, nested_loc));
+            }
+            other => {
+                return Err(self.unsupported("destructure param leaf", other));
+            }
+        }
+        Ok(())
+    }
+
+    fn lower_destruct(
+        &mut self,
+        mt: &prism::MultiTargetNode<'pr>,
+    ) -> Result<Vec<DestructEntry>, MonorubyErr> {
+        let mut entries: Vec<DestructEntry> = Vec::new();
+        for el in mt.lefts().iter() {
+            self.lower_destruct_el(&mut entries, &el)?;
+        }
+        if let Some(rest) = mt.rest() {
+            match rest {
+                prism::Node::SplatNode { .. } => {
+                    let inner = rest.as_splat_node().unwrap();
+                    let rest_loc = location_to_loc(&inner.location());
+                    let name = match inner.expression() {
+                        Some(e) => match e {
+                            prism::Node::RequiredParameterNode { .. } => {
+                                let rp = e.as_required_parameter_node().unwrap();
+                                let name = constant_name(&rp.name())?;
+                                self.lvars.insert(&name);
+                                Some(name)
+                            }
+                            other => {
+                                return Err(self.unsupported("destructure splat target", &other));
+                            }
+                        },
+                        None => None,
+                    };
+                    entries.push(DestructEntry::Rest(name, rest_loc));
+                }
+                other => return Err(self.unsupported("destructure rest", &other)),
+            }
+        }
+        for el in mt.rights().iter() {
+            self.lower_destruct_el(&mut entries, &el)?;
+        }
+        Ok(entries)
+    }
+
     /// Lowers a `ParametersNode` (the typed parameter cluster shared by
     /// method definitions and block parameters) into ruruby's flat
     /// `Vec<FormalParam>` AND threads each parameter into the current
@@ -3129,51 +3198,22 @@ impl<'pr> Lowerer<'pr> {
                         loc: location_to_loc(&inner.location()),
                     });
                 }
-                // `|(a, b)|` block-destructure: Prism wraps it in a
-                // `MultiTargetNode` whose `lefts` list holds the
-                // individual `RequiredParameterNode` leaves. ruruby's
-                // shape is `ParamKind::Destruct(Vec<(name, loc)>)` —
-                // flat, no splat / post entries — so we reject nested
-                // destructure (`|((a, b), c)|`) and `|(*rest)|` for
-                // now.
+                // `|(a, *b, (c, d))|` block-destructure: Prism wraps it
+                // in a `MultiTargetNode` whose `lefts`/`rest`/`rights`
+                // lists hold the individual leaves (`RequiredParameterNode`),
+                // an optional splat (`SplatNode`), and nested destructures
+                // (`MultiTargetNode`). We lower this recursively into a
+                // `Vec<DestructEntry>` supporting splat + nesting.
                 prism::Node::MultiTargetNode { .. } => {
                     let mt = n.as_multi_target_node().unwrap();
                     let mt_loc = location_to_loc(&n.location());
-                    if mt.rest().is_some() {
-                        return Err(self.unsupported_node("destructure param with splat", mt_loc));
-                    }
-                    if mt.rights().iter().next().is_some() {
-                        return Err(
-                            self.unsupported_node("destructure param with post element", mt_loc)
-                        );
-                    }
-                    let mut destruct: Vec<(String, Loc)> = Vec::new();
-                    for el in mt.lefts().iter() {
-                        match el {
-                            prism::Node::RequiredParameterNode { .. } => {
-                                let inner = el.as_required_parameter_node().unwrap();
-                                let name = constant_name(&inner.name())?;
-                                self.lvars.insert(&name);
-                                destruct.push((name, location_to_loc(&inner.location())));
-                            }
-                            other => {
-                                return Err(self.unsupported("destructure param leaf", &other));
-                            }
-                        }
-                    }
-                    if destruct.is_empty() {
+                    let entries = self.lower_destruct(&mt)?;
+                    if entries.is_empty() {
                         return Err(self.unsupported_node("empty destructure param", mt_loc));
                     }
-                    // Match ruruby's loc-merging convention so
-                    // bytecodegen reports matching source spans.
-                    let merged = destruct
-                        .iter()
-                        .map(|(_, l)| *l)
-                        .reduce(|a, b| a.merge(b))
-                        .unwrap();
                     out.push(crate::ast::FormalParam {
-                        kind: ParamKind::Destruct(destruct),
-                        loc: merged,
+                        kind: ParamKind::Destruct(entries),
+                        loc: mt_loc,
                     });
                 }
                 other => return Err(self.unsupported("required param", &other)),
@@ -3243,6 +3283,19 @@ impl<'pr> Lowerer<'pr> {
                     out.push(crate::ast::FormalParam {
                         kind: ParamKind::Post(Some(name)),
                         loc: location_to_loc(&inner.location()),
+                    });
+                }
+                // `|*c, (*d, e)|` — a destructure in post position.
+                prism::Node::MultiTargetNode { .. } => {
+                    let mt = n.as_multi_target_node().unwrap();
+                    let mt_loc = location_to_loc(&n.location());
+                    let entries = self.lower_destruct(&mt)?;
+                    if entries.is_empty() {
+                        return Err(self.unsupported_node("empty destructure param", mt_loc));
+                    }
+                    out.push(crate::ast::FormalParam {
+                        kind: ParamKind::PostDestruct(entries),
+                        loc: mt_loc,
                     });
                 }
                 other => return Err(self.unsupported("post param", &other)),

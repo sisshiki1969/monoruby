@@ -757,6 +757,42 @@ fn destruct() {
 }
 
 #[test]
+fn destruct_nested() {
+    // Splat inside a destructure target, both leading, middle, and trailing.
+    run_test(r#"->((a, *b, c)) { [a, b, c] }.call([1, 2, 3, 4, 5])"#);
+    run_test(r#"->((*a, b)) { [a, b] }.call([1, 2, 3])"#);
+    run_test(r#"->((*a, b)) { [a, b] }.call([1])"#);
+    run_test(r#"->((a, *)) { a }.call([1, 2, 3])"#);
+    run_test(r#"->((*, a)) { a }.call([1, 2, 3])"#);
+    // Nested destructure groups.
+    run_test(r#"->((a, (b, c))) { [a, b, c] }.call([1, [2, 3]])"#);
+    run_test(r#"lambda { |((*a, b))| [a, b] }.call([[1, 2, 3]])"#);
+    // Deeply nested with splats at several levels.
+    run_test(
+        r#"
+        f = ->(a, (b, (c, *d, (e, (*f)), g), (h, (i, j)))) { [a, b, c, d, e, f, g, h, i, j] }
+        f.call(1, [2, [3, 4, 5, [6, [7]], 8], [9, [10, 11]]])
+        "#,
+    );
+    // Multiple top-level destructure params, each with splat.
+    run_test(
+        r#"
+        f = ->((a, b, *c, d), (*e, f, g), (*h)) { [a, b, c, d, e, f, g, h] }
+        f.call([1, 2, 3, 4, 5], [6, 7, 8], [9, 10])
+        "#,
+    );
+    // Destructure in post position (after a rest), mixed with kwargs/block.
+    run_test(
+        r#"
+        f = ->(a, b = 1, *c, (*d, (e)), f: 2, g:, h:, **k, &l) do
+          [a, b, c, d, e, f, g, h, k, l]
+        end
+        f.call(9, 8, 7, 6, [5, 4, [3]], g: 2, h: 1)
+        "#,
+    );
+}
+
+#[test]
 fn block_param() {
     run_test_with_prelude(
         r#"
