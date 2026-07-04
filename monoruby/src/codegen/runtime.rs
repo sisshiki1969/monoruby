@@ -479,7 +479,37 @@ pub(super) extern "C" fn concatenate_regexp(
     Some(Value::regexp(inner))
 }
 
-pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize, rest: usize) {
+pub(super) extern "C" fn expand_array(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: Value,
+    dst: *mut Value,
+    len: usize,
+    rest: usize,
+) -> Option<Value> {
+    // Destructuring (multiple assignment and block/proc `|(a, b)|` params)
+    // coerces a non-Array `src` once via `#to_ary`: an Array result is
+    // expanded, `nil` or a missing `#to_ary` leaves `src` a scalar, and any
+    // other result raises `TypeError`. Returns `None` (a null in `rax`) so
+    // the VM / JIT error path fires.
+    let src = if src.is_array_ty() {
+        src
+    } else if let Some(func_id) = globals.check_method(src, IdentId::TO_ARY) {
+        match vm.invoke_func_inner(globals, func_id, src, &[], None, None) {
+            Ok(v) if v.is_array_ty() => v,
+            Ok(v) if v.is_nil() => src,
+            Ok(v) => {
+                vm.set_error(MonorubyErr::cant_convert_error_ary(globals, src, v));
+                return None;
+            }
+            Err(err) => {
+                vm.set_error(err);
+                return None;
+            }
+        }
+    } else {
+        src
+    };
     let rest_pos: Option<usize> = if rest == 0 { None } else { Some(rest - 1) };
     match src.try_array_ty() {
         Some(ary) => {
@@ -565,6 +595,7 @@ pub(super) extern "C" fn expand_array(src: Value, dst: *mut Value, len: usize, r
             }
         }
     }
+    Some(Value::nil())
 }
 
 pub(crate) extern "C" fn create_array(src: *mut Value, len: usize) -> Value {

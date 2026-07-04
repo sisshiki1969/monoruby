@@ -793,6 +793,56 @@ fn destruct_nested() {
 }
 
 #[test]
+fn destruct_to_ary() {
+    // Destructuring a single non-Array argument coerces it via `#to_ary`:
+    // an Array result is expanded; `nil` / no `#to_ary` leaves it a scalar.
+    // `#to_ary`-returning objects yield deterministic arrays; the nil /
+    // no-`#to_ary` cases fall back to `[obj, nil]` — checked by identity to
+    // avoid address-dependent `inspect` output.
+    run_test_with_prelude(
+        r#"
+        nily = Nily.new
+        none = None.new
+        [
+          proc { |(a, b)| [a, b] }.call(Ary.new),
+          proc { |(a, b)| [a.equal?(nily), b] }.call(nily),
+          proc { |(a, b)| [a.equal?(none), b] }.call(none),
+          proc { |(a, b)| [a, b] }.call(42),
+          proc { |(a, (b, c))| [a, b, c] }.call([0, Ary.new]),
+          (x, y = Ary.new; [x, y]),
+          ((p1, q) = nily; [p1.equal?(nily), q]),
+          (m, *n = Ary.new; [m, n]),
+        ]
+        "#,
+        r#"
+        class Ary;  def to_ary; [1, 2]; end; end
+        class Nily; def to_ary; nil;    end; end
+        class None; end
+        "#,
+    );
+    // A `#to_ary` returning a non-Array raises TypeError.
+    run_test_error(
+        r#"
+        class Bad; def to_ary; 42; end; end
+        proc { |(a, b)| [a, b] }.call(Bad.new)
+        "#,
+    );
+    run_test_error(
+        r#"
+        class Bad; def to_ary; 42; end; end
+        a, b = Bad.new
+        "#,
+    );
+    // An error raised *inside* `#to_ary` propagates.
+    run_test_error(
+        r#"
+        class Boom; def to_ary; raise "boom"; end; end
+        proc { |(a, b)| [a, b] }.call(Boom.new)
+        "#,
+    );
+}
+
+#[test]
 fn block_param() {
     run_test_with_prelude(
         r#"

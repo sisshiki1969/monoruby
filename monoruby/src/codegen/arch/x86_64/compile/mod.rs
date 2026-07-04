@@ -1865,10 +1865,15 @@ impl Codegen {
             0
         };
         self.fpr_save(using_fpr);
+        // `src` is already in rdx (loaded by the caller). Args:
+        // rdi = &mut Executor, rsi = &mut Globals, rdx = src, rcx = &dst,
+        // r8 = len, r9 = rest.
         monoasm!( &mut self.jit,
-            lea rsi, [rbp - (rbp_local(dst))];
-            movq rdx, (len);
-            movq rcx, (rest);
+            lea rcx, [rbp - (rbp_local(dst))];
+            movq r8, (len);
+            movq r9, (rest);
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (runtime::expand_array);
             call rax;
         );

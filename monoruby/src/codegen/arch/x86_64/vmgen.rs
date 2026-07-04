@@ -620,19 +620,23 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.fetch3();
         monoasm! { &mut self.jit,
-            // rcx <- rst
-            movzxw rcx, [r13 - 8];
-            // rdx <- len
-            movq rdx, rsi;
-            // rsi <- dst
+            // r9 <- rst
+            movzxw r9, [r13 - 8];
+            // r8 <- len
+            movq r8, rsi;
+            // rcx <- dst
             negq rdi;
-            lea rsi, [r14 + rdi * 8 - (LFP_SELF)];
-            // rdi <- *src
+            lea rcx, [r14 + rdi * 8 - (LFP_SELF)];
+            // rdx <- *src
             negq r15;
-            movq rdi, [r14 + r15 * 8 - (LFP_SELF)];
+            movq rdx, [r14 + r15 * 8 - (LFP_SELF)];
+            // rdi <- &mut Executor, rsi <- &mut Globals
+            movq rdi, rbx;
+            movq rsi, r12;
             movq rax, (runtime::expand_array);
             call rax;
         };
+        self.vm_handle_error();
         self.fetch_and_dispatch();
         label
     }
