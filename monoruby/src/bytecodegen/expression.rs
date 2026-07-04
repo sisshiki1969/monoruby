@@ -10,6 +10,17 @@ use super::*;
 ///
 const LITERAL_CHUNK_LEN: usize = 256;
 
+///
+/// A single target of a multiple assignment: either a resolved leaf
+/// lvalue, or a deferred nested destructure group (`(b, c)` in
+/// `(a, (b, c)) = ...`) whose targets are expanded once its parent array
+/// element is available.
+///
+enum MulLhs {
+    Leaf(LvalueKind),
+    Nested(Vec<Node>),
+}
+
 impl<'a> BytecodeGen<'a> {
     ///
     /// Evaluate *expr*, push the result, and return the register.
@@ -181,9 +192,21 @@ impl<'a> BytecodeGen<'a> {
                     } else {
                         let temp = self.temp;
                         let (lhs, rest) = self.eval_lvalue(&lhs)?;
-                        assert!(!rest);
-                        self.gen_store_expr(dst, rhs)?;
-                        self.emit_assign(dst, lhs, Some(temp), loc);
+                        if rest {
+                            // `*a = rhs` used as a value (`x = (*a = ...)`):
+                            // the expression evaluates to `rhs` itself, while
+                            // `a` receives the splatted form (an Array
+                            // distributes, a scalar/`nil` is wrapped). Put
+                            // `rhs` in `dst`, then splat a copy into `a`.
+                            self.gen_store_expr(dst, rhs)?;
+                            let tmp = self.push().into();
+                            self.emit_mov(tmp, dst);
+                            self.emit(BytecodeInst::ExpandArray(tmp, tmp, 1, Some(0)), loc);
+                            self.emit_assign(tmp, lhs, Some(temp), loc);
+                        } else {
+                            self.gen_store_expr(dst, rhs)?;
+                            self.emit_assign(dst, lhs, Some(temp), loc);
+                        }
                     }
                 } else {
                     self.gen_mul_assign(mlhs, mrhs, UseMode2::Push)?;
@@ -446,15 +469,28 @@ impl<'a> BytecodeGen<'a> {
                     let temp = self.temp;
                     let (lhs, rest) = self.eval_lvalue(&lhs)?;
                     if rest {
-                        // `*a = rhs`: splat `rhs` into `a`. An Array `rhs`
-                        // distributes its elements (`*a = [1, 2]` ⇒ `[1, 2]`),
-                        // a non-Array is wrapped (`*a = 1` ⇒ `[1]`,
-                        // `*a = nil` ⇒ `[nil]`). `ExpandArray` with a lone
-                        // rest slot performs exactly this — unlike a blind
-                        // 1-element array build, which double-wrapped arrays.
-                        let src = self.gen_expr_reg(rhs)?;
-                        self.emit(BytecodeInst::ExpandArray(src, src, 1, Some(0)), loc);
-                        return self.assign_with_mode(use_mode, src, lhs, temp, loc);
+                        // `*a = rhs`: `a` receives the splatted `rhs` — an
+                        // Array distributes its elements (`*a = [1, 2]` ⇒
+                        // `[1, 2]`), a non-Array is wrapped (`*a = 1` ⇒ `[1]`,
+                        // `*a = nil` ⇒ `[nil]`) — via `ExpandArray` with a
+                        // lone rest slot. As a *value*, though, the whole
+                        // expression is `rhs` itself (`x = (*a = 1)` ⇒ `1`),
+                        // so when the result is used we keep the original and
+                        // splat a copy into `a`.
+                        if matches!(use_mode, UseMode2::NotUse) {
+                            let src = self.gen_expr_reg(rhs)?;
+                            self.emit(BytecodeInst::ExpandArray(src, src, 1, Some(0)), loc);
+                            self.emit_assign(src, lhs, Some(temp), loc);
+                            return Ok(());
+                        }
+                        let rhs_reg = self.push_expr(rhs)?.into();
+                        let tmp = self.push().into();
+                        self.emit_mov(tmp, rhs_reg);
+                        self.emit(BytecodeInst::ExpandArray(tmp, tmp, 1, Some(0)), loc);
+                        self.emit_assign(tmp, lhs, None, loc);
+                        self.temp = temp;
+                        self.handle_mode(use_mode, rhs_reg)?;
+                        return Ok(());
                     } else {
                         let src = self.gen_expr_reg(rhs)?;
                         return self.assign_with_mode(use_mode, src, lhs, temp, loc);
@@ -846,7 +882,9 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Splat(..) => {
                 return Err(self.unsupported_lhs(&expr));
             }
-            NodeKind::DiscardLhs => unreachable!(),
+            // Only ever appears as an LHS element of a `MulAssign`, where
+            // `gen_mul_assign` consumes it directly.
+            NodeKind::DiscardLhs | NodeKind::MulAssignNested(..) => unreachable!(),
         }
         match use_mode {
             UseMode2::Ret => {
@@ -929,14 +967,25 @@ impl<'a> BytecodeGen<'a> {
         let temp = self.temp;
 
         // At first, we evaluate lvalues and save their info(LhsKind).
-        let mut lhs_kind = vec![];
+        // A nested destructure group (`(b, c)` in `(a, (b, c)) = ...`)
+        // is deferred as `MulLhs::Nested`: its own targets are expanded
+        // with a chained `ExpandArray` once the parent array element is
+        // in hand.
+        let mut lhs_kind: Vec<MulLhs> = vec![];
         let mut rest_pos = None;
-        for (i, lhs) in mlhs.iter().enumerate() {
-            let (lhs, rest) = self.eval_lvalue(&lhs)?;
-            if rest {
-                rest_pos = Some(i as u16)
+        for (i, lhs) in mlhs.into_iter().enumerate() {
+            match lhs.kind {
+                NodeKind::MulAssignNested(targets) => {
+                    lhs_kind.push(MulLhs::Nested(targets));
+                }
+                _ => {
+                    let (kind, rest) = self.eval_lvalue(&lhs)?;
+                    if rest {
+                        rest_pos = Some(i as u16)
+                    }
+                    lhs_kind.push(MulLhs::Leaf(kind));
+                }
             }
-            lhs_kind.push(lhs);
         }
 
         // Next, we evaluate rvalues and save them in temporary registers which start from temp_reg.
@@ -946,7 +995,7 @@ impl<'a> BytecodeGen<'a> {
             let rhs_reg = self.sp();
             let lhs_len = lhs_kind
                 .iter()
-                .filter(|kind| kind != &&LvalueKind::Discard)
+                .filter(|kind| !matches!(kind, MulLhs::Leaf(LvalueKind::Discard)))
                 .count();
             for _ in 0..lhs_len {
                 self.push();
@@ -983,7 +1032,10 @@ impl<'a> BytecodeGen<'a> {
         // Finally, assign rvalues to lvalue.
         for (i, lhs) in lhs_kind.into_iter().enumerate() {
             let src = (rhs_reg + i).into();
-            self.emit_assign(src, lhs, None, loc);
+            match lhs {
+                MulLhs::Leaf(kind) => self.emit_assign(src, kind, None, loc),
+                MulLhs::Nested(targets) => self.gen_destructure(src, targets, loc)?,
+            }
         }
 
         self.temp = temp;
@@ -1017,6 +1069,45 @@ impl<'a> BytecodeGen<'a> {
             UseMode2::NotUse => {}
         }
 
+        Ok(())
+    }
+
+    ///
+    /// Destructure the array in register `src` into `targets`, recursing
+    /// into nested groups with a chained `ExpandArray`. Backs nested
+    /// multiple-assignment targets (`(a, (b, c)) = ...`).
+    ///
+    /// `src` holds the array element to split; `targets` is this group's
+    /// own target list (each a leaf, a `Splat` rest, `DiscardLhs`, or a
+    /// further `MulAssignNested`). New registers are pushed above the
+    /// caller's stack and left in place — the top-level caller restores
+    /// `temp` once the whole assignment is emitted.
+    ///
+    fn gen_destructure(&mut self, src: BcReg, targets: Vec<Node>, loc: Loc) -> Result<()> {
+        let len = targets.len();
+        let rest_pos = targets.iter().position(|t| t.is_splat()).map(|p| p as u16);
+        let base = self.sp();
+        for _ in 0..len {
+            self.push();
+        }
+        self.emit(
+            BytecodeInst::ExpandArray(src, base.into(), len as u16, rest_pos),
+            loc,
+        );
+        for (i, t) in targets.into_iter().enumerate() {
+            let elem = (base + i).into();
+            match t.kind {
+                NodeKind::MulAssignNested(sub) => {
+                    self.gen_destructure(elem, sub, loc)?;
+                }
+                _ => {
+                    // Plain leaf or `Splat(target)` rest slot; `eval_lvalue`
+                    // unwraps the splat and returns the inner lvalue kind.
+                    let (kind, _rest) = self.eval_lvalue(&t)?;
+                    self.emit_assign(elem, kind, None, loc);
+                }
+            }
+        }
         Ok(())
     }
 

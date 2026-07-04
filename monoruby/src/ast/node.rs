@@ -65,6 +65,12 @@ pub enum NodeKind {
     Splat(Box<Node>),
     AssignOp(BinOp, Box<Node>, Box<Node>),
     MulAssign(Vec<Node>, Vec<Node>), // mlhs, mrhs
+    /// A nested destructuring target group appearing inside an `mlhs`
+    /// (`(b, c)` in `(a, (b, c)) = ...`). Holds this group's own target
+    /// list, each element itself an assign target (possibly `Splat`,
+    /// `DiscardLhs`, or a further `MulAssignNested`). Only valid as an
+    /// LHS element; never a standalone expression.
+    MulAssignNested(Vec<Node>),
 
     CompStmt(Vec<Node>),
     If {
