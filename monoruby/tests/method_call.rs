@@ -770,6 +770,30 @@ fn anonymous_block_forwarding4() {
 }
 
 #[test]
+fn anonymous_rest_forwarding() {
+    // `def m(*)` / `def m(**)` bind reserved locals that `foo(*)` / `foo(**)`
+    // forward, matching CRuby (incl. `#parameters` reporting them as :* / :**).
+    run_test_with_prelude(
+        r##"
+        [
+          d_rest(1, 2, 3),
+          d_kw(a: 1, b: 2),
+          d_both(9, x: 3),
+          d_pre(1, 2, 3),
+          method(:d_both).parameters,
+        ]
+        "##,
+        r##"
+        def target(*a, **k); [a, k]; end
+        def d_rest(*); target(*); end
+        def d_kw(**); target(**); end
+        def d_both(*, **); target(*, **); end
+        def d_pre(a, *); target(a, *); end
+        "##,
+    );
+}
+
+#[test]
 fn destruct() {
     run_test_with_prelude(
         r#"
