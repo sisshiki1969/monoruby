@@ -530,6 +530,22 @@ fn fill_positional_args(
     Ok(())
 }
 
+///
+/// Build the `ArgumentError` for keyword arguments a method didn't declare
+/// (and that no `**kwrest` can absorb). CRuby lists *every* unknown key,
+/// using the singular `unknown keyword:` for one and the plural
+/// `unknown keywords:` for several. Each entry is pre-formatted
+/// (`:name` for a Symbol key, the key's `#inspect` otherwise).
+///
+fn unknown_keyword_err(unknowns: Vec<String>) -> MonorubyErr {
+    let word = if unknowns.len() == 1 {
+        "keyword"
+    } else {
+        "keywords"
+    };
+    MonorubyErr::argumenterr(format!("unknown {word}: {}", unknowns.join(", ")))
+}
+
 fn positional_simple(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -594,9 +610,18 @@ fn handle_keyword(
         }
         return Ok(());
     }
-    ordinary_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
-    hash_splat_and_kw_rest(vm, globals, callee, caller, callee_lfp, caller_lfp)?;
-    check_missing_keyword(&globals.store[callee], callee_lfp)
+    let mut unknowns = ordinary_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
+    unknowns.extend(hash_splat_and_kw_rest(
+        vm, globals, callee, caller, callee_lfp, caller_lfp,
+    )?);
+    // A missing required keyword is reported before any unknown keyword,
+    // matching CRuby (`m(a: 1)` for `def m(x:)` raises "missing keyword: :x",
+    // not "unknown keyword: :a").
+    check_missing_keyword(&globals.store[callee], callee_lfp)?;
+    if !unknowns.is_empty() {
+        return Err(unknown_keyword_err(unknowns));
+    }
+    Ok(())
 }
 
 /// Whether the call site actually supplies at least one keyword — either a
@@ -725,13 +750,18 @@ fn missing_keyword_err(missing: &[IdentId]) -> Result<()> {
     }
 }
 
+/// Assigns literal `k: v` keyword arguments to the callee's keyword
+/// parameters and returns any keys the callee doesn't declare (empty when
+/// it has a `**kwrest` to absorb them). The caller reports these *after*
+/// the missing-keyword check so a missing required keyword wins, as in
+/// CRuby.
 fn ordinary_keyword(
     globals: &Globals,
     info: FuncId,
     callsite: CallSiteId,
     mut callee_lfp: Lfp,
     caller_lfp: Lfp,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let CallSiteInfo {
         kw_pos, kw_args, ..
     } = &globals[callsite];
@@ -750,17 +780,19 @@ fn ordinary_keyword(
         }
     }
     if used < kw_args.len() && globals[info].kw_rest().is_none() {
-        for (k, _) in kw_args.iter() {
-            if !globals[info].kw_names().contains(k) {
-                return Err(MonorubyErr::argumenterr(format!("unknown keyword: :{k}")));
-            }
-        }
+        return Ok(kw_args
+            .iter()
+            .filter(|(k, _)| !globals[info].kw_names().contains(k))
+            .map(|(k, _)| format!(":{k}"))
+            .collect());
     }
-    Ok(())
+    Ok(vec![])
 }
 
 ///
-/// Handle hash splat arguments and a keyword rest parameter.
+/// Handle hash splat arguments and a keyword rest parameter. Returns any
+/// `**hash` keys the callee doesn't declare (empty when it has a
+/// `**kwrest`); reported by the caller after the missing-keyword check.
 ///
 fn hash_splat_and_kw_rest(
     vm: &mut Executor,
@@ -769,9 +801,9 @@ fn hash_splat_and_kw_rest(
     caller: CallSiteId,
     mut callee_lfp: Lfp,
     caller_lfp: Lfp,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     if globals[callee].no_keyword() {
-        return Ok(());
+        return Ok(vec![]);
     }
 
     let CallSiteInfo {
@@ -782,6 +814,7 @@ fn hash_splat_and_kw_rest(
 
     let callee_kw_pos = globals[callee].kw_reg_pos();
     let kw_names = globals[callee].kw_names().to_vec();
+    let mut unknowns = Vec::new();
 
     for h in hash_splat_pos
         .iter()
@@ -809,24 +842,15 @@ fn hash_splat_and_kw_rest(
             }
         }
         if unused > 0 && globals[callee].kw_rest().is_none() {
+            // A non-Symbol key (e.g. a String) can never name a keyword
+            // parameter, so it is always "unknown" here. CRuby reports it via
+            // the key's `inspect` (`unknown keyword: "b"`); a Symbol key uses
+            // `:name`. Collected and reported together, after missing keys.
             for (k, _) in h.iter() {
-                // A non-Symbol key (e.g. a String) can never name a
-                // keyword parameter, so it is always "unknown" here.
-                // CRuby reports it via the key's `inspect`
-                // (`unknown keyword: "b"`); a Symbol key uses `:name`.
                 match k.try_symbol() {
                     Some(sym) if globals[callee].kw_names().contains(&sym) => {}
-                    Some(sym) => {
-                        return Err(MonorubyErr::argumenterr(format!(
-                            "unknown keyword: :{sym}"
-                        )));
-                    }
-                    None => {
-                        return Err(MonorubyErr::argumenterr(format!(
-                            "unknown keyword: {}",
-                            k.inspect(&globals.store)
-                        )));
-                    }
+                    Some(sym) => unknowns.push(format!(":{sym}")),
+                    None => unknowns.push(k.inspect(&globals.store)),
                 }
             }
         }
@@ -870,7 +894,7 @@ fn hash_splat_and_kw_rest(
             unsafe { callee_lfp.set_register(rest, Some(Value::hash(kw_rest))) }
         }
     }
-    Ok(())
+    Ok(unknowns)
 }
 
 ///
