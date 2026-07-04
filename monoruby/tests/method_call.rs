@@ -261,6 +261,34 @@ fn keyword() {
 }
 
 #[test]
+fn keyword_error_message() {
+    // Every unknown keyword is listed (singular / plural), and a missing
+    // required keyword is reported before any unknown one — as in CRuby.
+    run_test(
+        r#"
+        def one(a:); end
+        def two(x:, y:); end
+        msgs = []
+        [
+          ->{ one(a: 1, b: 2, c: 3) },   # unknown keywords: :b, :c
+          ->{ one(a: 1, z: 2) },         # unknown keyword: :z
+          ->{ one(**{b: 1, c: 2}) },     # unknown keywords: :b, :c
+          ->{ two(x: 1) },               # missing keyword: :y
+          ->{ two(z: 1) },               # missing keywords: :x, :y (before unknown :z)
+          ->{ one(z: 1) },               # missing keyword: :a (before unknown :z)
+        ].each do |blk|
+          begin
+            blk.call
+          rescue ArgumentError => e
+            msgs << e.message
+          end
+        end
+        msgs
+        "#,
+    );
+}
+
+#[test]
 fn keyword_fatarrow() {
     run_test_with_prelude(
         r##"
