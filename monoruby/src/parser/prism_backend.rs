@@ -2296,13 +2296,23 @@ impl<'pr> Lowerer<'pr> {
     /// multi-RHS form `[1, 2]`. `a, b = [1, 2]` -> explicit -> single-
     /// element RHS `[Array([1,2])]`. Any non-array RHS (`a, b = c`)
     /// goes in unwrapped as a single-element RHS.
-    fn lower_multi_write(&mut self, node: &MultiWriteNode<'pr>) -> Result<Node, MonorubyErr> {
-        let loc = location_to_loc(&node.location());
+    /// Builds a flat `Vec<Node>` of assign targets from a
+    /// `lefts` / optional `rest` / `rights` triple, the shared shape of
+    /// both `MultiWriteNode` (top-level `a, b = ...`) and a nested
+    /// `MultiTargetNode` (`(b, c)` inside a larger LHS). The rest is
+    /// lowered to `Splat(target)` (`*a` / `*` → `Splat(DiscardLhs)`) or
+    /// a bare `DiscardLhs` for a trailing-comma `ImplicitRestNode`.
+    fn lower_target_list(
+        &mut self,
+        lefts: &[prism::Node<'pr>],
+        rest: Option<prism::Node<'pr>>,
+        rights: &[prism::Node<'pr>],
+    ) -> Result<Vec<Node>, MonorubyErr> {
         let mut lhs: Vec<Node> = Vec::new();
-        for n in node.lefts().iter() {
-            lhs.push(self.lower_assign_target(&n)?);
+        for n in lefts {
+            lhs.push(self.lower_assign_target(n)?);
         }
-        if let Some(rest) = node.rest() {
+        if let Some(rest) = rest {
             match rest {
                 prism::Node::SplatNode { .. } => {
                     let inner = rest.as_splat_node().unwrap();
@@ -2339,9 +2349,17 @@ impl<'pr> Lowerer<'pr> {
                 other => return Err(self.unsupported("multi-write rest", &other)),
             }
         }
-        for n in node.rights().iter() {
-            lhs.push(self.lower_assign_target(&n)?);
+        for n in rights {
+            lhs.push(self.lower_assign_target(n)?);
         }
+        Ok(lhs)
+    }
+
+    fn lower_multi_write(&mut self, node: &MultiWriteNode<'pr>) -> Result<Node, MonorubyErr> {
+        let loc = location_to_loc(&node.location());
+        let lefts: Vec<_> = node.lefts().iter().collect();
+        let rights: Vec<_> = node.rights().iter().collect();
+        let lhs = self.lower_target_list(&lefts, node.rest(), &rights)?;
 
         let value = node.value();
         let rhs: Vec<Node> = match value {
@@ -2519,8 +2537,21 @@ impl<'pr> Lowerer<'pr> {
                     loc,
                 }
             }
-            // Nested destructure (`((a, b), c) = ...`) needs its own
-            // per-shape lowering. Defer.
+            // Nested destructure (`(a, (b, c)) = ...`): Prism nests a
+            // `MultiTargetNode` inside the LHS. Lower its own
+            // lefts/rest/rights recursively and wrap in
+            // `MulAssignNested`, which bytecodegen expands with a
+            // chained `ExpandArray`.
+            prism::Node::MultiTargetNode { .. } => {
+                let mt = node.as_multi_target_node().unwrap();
+                let lefts: Vec<_> = mt.lefts().iter().collect();
+                let rights: Vec<_> = mt.rights().iter().collect();
+                let targets = self.lower_target_list(&lefts, mt.rest(), &rights)?;
+                Node {
+                    kind: NodeKind::MulAssignNested(targets),
+                    loc,
+                }
+            }
             other => return Err(self.unsupported("assign target", &other)),
         })
     }
