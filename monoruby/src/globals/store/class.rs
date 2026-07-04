@@ -825,6 +825,10 @@ impl ClassInfoTable {
         {
             assert_eq!(singleton.id(), obj.class());
         }
+        // The singleton class of a frozen object is itself frozen.
+        if obj.is_frozen() {
+            singleton.as_val().set_frozen();
+        }
         Ok(singleton)
     }
 

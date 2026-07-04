@@ -593,6 +593,49 @@ fn class_module_reopen_type_error() {
 }
 
 #[test]
+fn singleton_class_not_instantiable() {
+    // A singleton class (metaclass) cannot be instantiated: both `new`
+    // and `allocate` raise TypeError, even though it inherits an
+    // allocator through its attached object's class.
+    run_test(
+        r##"
+        o = Object.new
+        msgs = []
+        begin; o.singleton_class.new;      rescue TypeError => e; msgs << e.message; end
+        begin; o.singleton_class.allocate; rescue TypeError => e; msgs << e.message; end
+        # Ordinary classes still allocate normally.
+        msgs << String.new("ok")
+        msgs << Class.new.new.is_a?(Object)
+        msgs
+        "##,
+    );
+}
+
+#[test]
+fn singleton_class_frozen_propagation() {
+    // The singleton class of a frozen object is frozen; freezing an object
+    // freezes its already-created singleton class.
+    run_test(
+        r##"
+        res = []
+        o = Object.new
+        o.freeze
+        res << o.singleton_class.frozen?          # created from a frozen object
+        o2 = Object.new
+        sc = o2.singleton_class
+        res << sc.frozen?                          # not yet frozen
+        o2.freeze
+        res << sc.frozen?                          # freezing the object freezes it
+        # clone(freeze: false) yields an unfrozen singleton class
+        a = Object.new
+        a.freeze
+        res << a.clone(freeze: false).singleton_class.frozen?
+        res
+        "##,
+    );
+}
+
+#[test]
 fn super_with_block() {
     run_test_with_prelude(
         r##"

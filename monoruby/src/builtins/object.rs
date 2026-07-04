@@ -116,10 +116,15 @@ fn bo_noop_hook(_: &mut Executor, _: &mut Globals, _lfp: Lfp, _: BytecodePtr) ->
 /// Freezes the object, preventing further modification.
 ///
 #[monoruby_builtin]
-fn freeze(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn freeze(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
     if !self_val.is_packed_value() {
         self_val.set_frozen();
+        // Freezing an object also freezes its singleton class, if one has
+        // already been created (CRuby "Frozen properties").
+        if let Some(singleton) = globals.store.has_singleton(self_val) {
+            singleton.as_val().set_frozen();
+        }
     }
     Ok(self_val)
 }
