@@ -189,6 +189,30 @@ impl<'a> BytecodeGen<'a> {
                     if let Some(src) = self.is_assign_local(&lhs) {
                         self.gen_store_expr(src.into(), rhs)?;
                         self.emit_mov(dst, src.into());
+                    } else if matches!(&lhs.kind,
+                        NodeKind::MethodCall { arglist, safe_nav: true, .. }
+                            if arglist.args.is_empty()
+                                && arglist.block.is_none()
+                                && arglist.kw_args.is_empty())
+                    {
+                        // `recv&.attr = rhs` in value context (see the
+                        // `gen_expr` twin for the short-circuit rationale).
+                        let NodeKind::MethodCall {
+                            box receiver,
+                            method,
+                            ..
+                        } = lhs.kind
+                        else {
+                            unreachable!()
+                        };
+                        let setter = IdentId::get_id_from_string(format!("{method}="));
+                        self.gen_safe_nav_attr_assign(
+                            receiver,
+                            setter,
+                            rhs,
+                            UseMode2::Store(dst),
+                            loc,
+                        )?;
                     } else {
                         let temp = self.temp;
                         let (lhs, rest) = self.eval_lvalue(&lhs)?;
@@ -447,6 +471,26 @@ impl<'a> BytecodeGen<'a> {
                     self.handle_mode(use_mode, local.into())?;
                     return Ok(());
                 }
+                // Safe-navigation op-assign `recv&.attr op= rhs`: nil recv
+                // short-circuits to nil. Reuse the ordinary op-assign codegen
+                // (which handles `+=`, `||=`, `&&=`, ...) on the safe_nav-
+                // stripped lhs, wrapped in a nil guard on the receiver.
+                if matches!(&lhs.kind,
+                    NodeKind::MethodCall { arglist, safe_nav: true, .. }
+                        if arglist.args.is_empty()
+                            && arglist.block.is_none()
+                            && arglist.kw_args.is_empty())
+                {
+                    let receiver = match &lhs.kind {
+                        NodeKind::MethodCall { receiver, .. } => (**receiver).clone(),
+                        _ => unreachable!(),
+                    };
+                    let mut lhs = lhs;
+                    if let NodeKind::MethodCall { safe_nav, .. } = &mut lhs.kind {
+                        *safe_nav = false;
+                    }
+                    return self.gen_safe_nav_op_assign(receiver, op, lhs, rhs, use_mode, loc);
+                }
                 let lhs_loc = lhs.loc;
                 let temp = self.temp;
                 // First, evaluate lvalue.
@@ -465,6 +509,28 @@ impl<'a> BytecodeGen<'a> {
                         self.gen_store_expr(local.into(), rhs)?;
                         self.handle_mode(use_mode, local.into())?;
                         return Ok(());
+                    }
+                    // Safe-navigation attribute assignment `recv&.attr = rhs`:
+                    // when `recv` is nil the whole thing is nil and the rhs is
+                    // NOT evaluated. This short-circuit doesn't fit the generic
+                    // eval_lvalue path (which always evaluates the rhs), so
+                    // handle it directly.
+                    if matches!(&lhs.kind,
+                        NodeKind::MethodCall { arglist, safe_nav: true, .. }
+                            if arglist.args.is_empty()
+                                && arglist.block.is_none()
+                                && arglist.kw_args.is_empty())
+                    {
+                        let NodeKind::MethodCall {
+                            box receiver,
+                            method,
+                            ..
+                        } = lhs.kind
+                        else {
+                            unreachable!()
+                        };
+                        let setter = IdentId::get_id_from_string(format!("{method}="));
+                        return self.gen_safe_nav_attr_assign(receiver, setter, rhs, use_mode, loc);
                     }
                     let temp = self.temp;
                     let (lhs, rest) = self.eval_lvalue(&lhs)?;
@@ -955,6 +1021,91 @@ impl<'a> BytecodeGen<'a> {
     ///
     /// This func always use a new temporary register for rhs even if the number of rhs is 1.
     ///
+    ///
+    /// Generate `recv&.attr = rhs` (safe-navigation attribute assignment).
+    ///
+    /// When `recv` is nil, the result is nil and `rhs` is left unevaluated;
+    /// otherwise `recv.attr=(rhs)` runs and the assignment evaluates to `rhs`.
+    ///
+    fn gen_safe_nav_attr_assign(
+        &mut self,
+        receiver: Node,
+        setter: IdentId,
+        rhs: Node,
+        use_mode: UseMode2,
+        loc: Loc,
+    ) -> Result<()> {
+        let old_temp = self.temp;
+        // recv and the result slot must survive across the nil branch.
+        let recv: BcReg = self.push_expr(receiver)?.into();
+        let res: BcReg = self.push().into();
+        let merge_sp = self.temp;
+
+        let nil_exit = self.new_label();
+        let exit = self.new_label();
+
+        // If recv is nil, skip evaluating rhs and the setter call.
+        self.emit_nilbr(recv, nil_exit, merge_sp);
+
+        // Non-nil path: evaluate rhs, call the setter, result is rhs.
+        let rhs_reg: BcReg = self.push_expr(rhs)?.into();
+        let callsite = CallSite::simple(setter, 1, rhs_reg, recv, None);
+        self.emit_method_assign(callsite, loc);
+        self.emit_mov(res, rhs_reg);
+        self.temp = merge_sp;
+        self.emit_br(exit);
+
+        // Nil path: the whole expression is nil.
+        self.apply_label(nil_exit);
+        self.emit_nil(res);
+
+        self.apply_label(exit);
+        self.temp = old_temp;
+        self.handle_mode(use_mode, res)?;
+        Ok(())
+    }
+
+    ///
+    /// Generate `recv&.attr op= rhs` (safe-navigation op-assignment).
+    ///
+    /// `lhs` is the `recv.attr` getter with `safe_nav` already cleared. When
+    /// `recv` is nil the result is nil and nothing else runs; otherwise the
+    /// ordinary op-assign codegen handles the read/modify/write.
+    ///
+    fn gen_safe_nav_op_assign(
+        &mut self,
+        receiver: Node,
+        op: BinOp,
+        lhs: Node,
+        rhs: Node,
+        use_mode: UseMode2,
+        loc: Loc,
+    ) -> Result<()> {
+        let old_temp = self.temp;
+        let recv: BcReg = self.push_expr(receiver)?.into();
+        let res: BcReg = self.push().into();
+        let merge_sp = self.temp;
+
+        let nil_exit = self.new_label();
+        let exit = self.new_label();
+
+        self.emit_nilbr(recv, nil_exit, merge_sp);
+
+        // Non-nil path: run the ordinary `lhs op= rhs` and keep its value.
+        let assign = Node::new(NodeKind::AssignOp(op, Box::new(lhs), Box::new(rhs)), loc);
+        self.gen_store_expr(res, assign)?;
+        self.temp = merge_sp;
+        self.emit_br(exit);
+
+        self.apply_label(nil_exit);
+        self.emit_nil(res);
+
+        self.apply_label(exit);
+        self.temp = old_temp;
+        self.handle_mode(use_mode, res)?;
+        Ok(())
+    }
+
     fn gen_mul_assign(
         &mut self,
         mlhs: Vec<Node>,

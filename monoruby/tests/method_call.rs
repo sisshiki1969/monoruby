@@ -2763,3 +2763,73 @@ fn method_call_on_fresh_class_each_iteration() {
         "##,
     );
 }
+
+#[test]
+fn safe_nav_attr_assign() {
+    // `recv&.attr = rhs`: nil receiver yields nil (rhs unevaluated),
+    // otherwise the setter runs and the assignment evaluates to rhs.
+    run_test_with_prelude(
+        r##"
+        res = []
+        o = C.new
+        res << (o&.x = 5)
+        res << o.x
+        n = nil
+        res << (n&.x = (res << :evaluated; 9))
+        # value in a statement position
+        o&.x = 7
+        res << o.x
+        res
+        "##,
+        "class C; attr_accessor :x; end",
+    );
+}
+
+#[test]
+fn safe_nav_op_assign() {
+    // `recv&.attr op= rhs` for arithmetic / `||=` / `&&=`, with nil recv
+    // short-circuiting to nil (and never evaluating the operator).
+    run_test_with_prelude(
+        r##"
+        res = []
+        o = C.new
+        o.m = 1
+        res << (o&.m += 10)
+        res << o.m
+        o.m = nil
+        res << (o&.m ||= 5)
+        o.m = 3
+        res << (o&.m ||= 9)
+        o.m = 7
+        res << (o&.m &&= 8)
+        n = nil
+        res << (n&.m += 100)
+        res << (n&.m ||= true)
+        res << (n&.m &&= false)
+        res
+        "##,
+        "class C; attr_accessor :m; end",
+    );
+}
+
+#[test]
+fn safe_nav_assign_jit() {
+    // Exercise the JIT path for safe-nav assignment in a hot loop.
+    run_test_with_prelude(
+        r##"
+        o = C.new
+        o.x = 0
+        n = nil
+        sum = 0
+        i = 0
+        while i < 200
+          o&.x += 1
+          r = (n&.x = i)
+          sum += (r || 0)
+          i += 1
+        end
+        [o.x, sum]
+        "##,
+        "class C; attr_accessor :x; end",
+    );
+}
