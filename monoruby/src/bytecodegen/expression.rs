@@ -712,7 +712,11 @@ impl<'a> BytecodeGen<'a> {
                         }
                     }
                 };
-                self.emit(BytecodeInst::Br(*redo_dest), loc);
+                // Use the `Redo` op (a `goto` via the error path) rather than a
+                // plain `Br`: its target can sit in the middle of the loop body
+                // (skipping the condition) without the JIT seeing a second
+                // back-edge into the loop, which its loop analysis can't merge.
+                self.emit(BytecodeInst::Redo(*redo_dest), loc);
                 return Ok(());
             }
             NodeKind::Retry => {
