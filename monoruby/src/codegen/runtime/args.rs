@@ -484,11 +484,24 @@ fn fill_positional_args(
             (post_pos, opt_pos + args_num..buf_len),
             buf_len..buf_len,
         )
-    } else {
+    } else if callee.is_rest() {
+        // More args than fit the fixed params, with a `*rest` to absorb the
+        // middle: pre + optionals fill from the front, post takes the last
+        // `post_num`, and the rest gets everything in between.
         (
             (0, 0..rest_pos),
             (post_pos, buf_len + post_pos - end_pos..buf_len),
             rest_pos..buf_len + post_pos - end_pos,
+        )
+    } else {
+        // More args than the params accept and no rest to absorb them —
+        // only reachable for block-style (loose) binding. CRuby fills
+        // positionally and drops the tail, so the post params sit right
+        // after the (fully-filled) optionals rather than at the very end.
+        (
+            (0, 0..rest_pos),
+            (post_pos, rest_pos..end_pos),
+            rest_pos..rest_pos,
         )
     };
 
