@@ -335,6 +335,11 @@ struct LoopInfo {
     next_dest: Label,
     redo_dest: Label,
     ret: Option<BcReg>,
+    /// Depth of the `ensure` stack when the loop was entered. A `break` /
+    /// `next` that jumps out of `begin/ensure` blocks nested inside the
+    /// loop body must run those `ensure` clauses (the ones at indices
+    /// `>= ensure_depth`) before branching.
+    ensure_depth: usize,
 }
 
 #[derive(Debug)]
@@ -754,7 +759,23 @@ impl<'a> BytecodeGen<'a> {
             next_dest,
             redo_dest,
             ret,
+            ensure_depth: self.ensure.len(),
         });
+    }
+
+    /// Emit the `ensure` clauses currently active *inside* the innermost
+    /// loop (those pushed after the loop was entered), innermost first.
+    /// Used by `break` / `next` so exiting the loop iteration still runs
+    /// the `ensure` blocks it jumps out of.
+    fn gen_loop_pending_ensures(&mut self, ensure_depth: usize) -> Result<()> {
+        let pending: Vec<Option<Node>> =
+            self.ensure[ensure_depth..].iter().rev().cloned().collect();
+        for ensure in pending {
+            if let Some(ensure) = ensure {
+                self.gen_expr(ensure, UseMode2::NotUse)?;
+            }
+        }
+        Ok(())
     }
 
     fn loop_pop(&mut self) {

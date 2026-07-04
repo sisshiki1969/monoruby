@@ -446,9 +446,14 @@ impl<'a> BytecodeGen<'a> {
                     let temp = self.temp;
                     let (lhs, rest) = self.eval_lvalue(&lhs)?;
                     if rest {
-                        let rhs_loc = rhs.loc;
+                        // `*a = rhs`: splat `rhs` into `a`. An Array `rhs`
+                        // distributes its elements (`*a = [1, 2]` ⇒ `[1, 2]`),
+                        // a non-Array is wrapped (`*a = 1` ⇒ `[1]`,
+                        // `*a = nil` ⇒ `[nil]`). `ExpandArray` with a lone
+                        // rest slot performs exactly this — unlike a blind
+                        // 1-element array build, which double-wrapped arrays.
                         let src = self.gen_expr_reg(rhs)?;
-                        self.emit_array(src, src, 1, vec![], rhs_loc);
+                        self.emit(BytecodeInst::ExpandArray(src, src, 1, Some(0)), loc);
                         return self.assign_with_mode(use_mode, src, lhs, temp, loc);
                     } else {
                         let src = self.gen_expr_reg(rhs)?;
@@ -597,7 +602,10 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::Break(box val) => {
                 let LoopInfo {
-                    break_dest, ret, ..
+                    break_dest,
+                    ret,
+                    ensure_depth,
+                    ..
                 } = match self.loops.last() {
                     Some(data) => data.clone(),
                     None => {
@@ -619,6 +627,8 @@ impl<'a> BytecodeGen<'a> {
                 } else {
                     self.gen_expr(val, UseMode2::NotUse)?;
                 }
+                // Run `ensure` blocks nested inside the loop before exiting.
+                self.gen_loop_pending_ensures(ensure_depth)?;
                 self.emit(BytecodeInst::Br(break_dest), loc);
                 if use_mode == UseMode2::Push {
                     self.push();
@@ -626,7 +636,11 @@ impl<'a> BytecodeGen<'a> {
                 return Ok(());
             }
             NodeKind::Next(box val) => {
-                let LoopInfo { next_dest, .. } = match self.loops.last() {
+                let LoopInfo {
+                    next_dest,
+                    ensure_depth,
+                    ..
+                } = match self.loops.last() {
                     Some(data) => data.clone(),
                     None => {
                         if self.is_block() {
@@ -638,6 +652,9 @@ impl<'a> BytecodeGen<'a> {
                     }
                 };
                 self.gen_expr(val, UseMode2::NotUse)?;
+                // Run `ensure` blocks nested inside the loop before
+                // continuing to the next iteration.
+                self.gen_loop_pending_ensures(ensure_depth)?;
                 self.emit(BytecodeInst::Br(next_dest), loc);
                 if use_mode == UseMode2::Push {
                     self.push();
@@ -1432,6 +1449,63 @@ impl<'a> BytecodeGen<'a> {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn next_and_break_run_loop_ensures() {
+        // `next` / `break` inside `begin/ensure` nested in a `while`/`until`
+        // loop must run the enclosing `ensure` blocks (innermost first).
+        run_test(
+            r#"
+            log = []; x = true
+            while x
+              begin
+                log << :outer_begin; x = false
+                begin
+                  log << :inner_begin; next
+                ensure
+                  log << :inner_ensure
+                end
+              ensure
+                log << :outer_ensure
+              end
+            end
+            log
+            "#,
+        );
+        run_test(
+            r#"
+            log = []; x = 1
+            until false
+              begin
+                log << :b
+                break if x > 1
+                x += 1; next
+              ensure
+                log << :e
+              end
+            end
+            log
+            "#,
+        );
+    }
+
+    #[test]
+    fn splat_target_assignment_distributes_array() {
+        // `*a = rhs` splats an Array `rhs` into `a` and wraps a non-Array
+        // (previously an Array `rhs` was double-wrapped into `[[...]]`).
+        run_test(
+            r#"
+            def r; *a = yield; a; end
+            [r{[1,2]}, r{1}, r{nil}, r{[]}, r{[*[3,4]]}]
+            "#,
+        );
+        run_tests(&[
+            r#"*a = [1, 2]; a"#,
+            r#"*a = 1; a"#,
+            r#"*a = nil; a"#,
+            r#"a, *b = [1, 2, 3]; [a, b]"#,
+        ]);
+    }
 
     #[test]
     fn undef_dynamic_name() {
