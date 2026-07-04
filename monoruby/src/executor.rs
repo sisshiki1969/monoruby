@@ -2374,7 +2374,17 @@ impl Executor {
         }
         let (self_val, is_new) = match self.get_constant(globals, parent, name)? {
             Some(val) => {
-                let val = val.expect_class_or_module(&globals.store)?;
+                // Reopening an existing constant: `class X` requires `X` to be
+                // a Class, `module X` a Module. CRuby names the *constant*
+                // (`X is not a class`), not the current value, and rejects
+                // reopening a Module as a Class (and vice versa).
+                let val = if is_module {
+                    val.is_module()
+                        .ok_or_else(|| MonorubyErr::is_not_module(name.to_string()))?
+                } else {
+                    val.is_class()
+                        .ok_or_else(|| MonorubyErr::is_not_class(name.to_string()))?
+                };
                 if let Some(superclass) = superclass {
                     assert!(!is_module);
                     let superclass_id = superclass.expect_class(globals)?.id();

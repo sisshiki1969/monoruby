@@ -415,6 +415,21 @@ impl MonorubyErr {
         )
     }
 
+    ///
+    /// `NoMethodError` for a `super` call whose superclass chain has no
+    /// method of the current name — CRuby phrases this differently from an
+    /// ordinary missing method (`super: no superclass method '<name>' …`).
+    ///
+    pub(crate) fn super_method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
+        MonorubyErr::new(
+            MonorubyErrKind::NotMethod(Some(obj.id())),
+            format!(
+                "super: no superclass method `{name}' for {}",
+                obj.to_s(store)
+            ),
+        )
+    }
+
     pub(crate) fn method_not_found_for_class(
         store: &Store,
         name: IdentId,
@@ -573,6 +588,10 @@ impl MonorubyErr {
 
     pub(crate) fn is_not_class(name: String) -> MonorubyErr {
         MonorubyErr::typeerr(format!("{name} is not a class"))
+    }
+
+    pub(crate) fn is_not_module(name: String) -> MonorubyErr {
+        MonorubyErr::typeerr(format!("{name} is not a module"))
     }
 
     pub(crate) fn superclass_mismatch(name: IdentId) -> MonorubyErr {

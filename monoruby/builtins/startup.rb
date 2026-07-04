@@ -425,7 +425,7 @@ module Kernel
   module_function :warn
 end
 
-class Process
+module Process
   CLOCK_REALTIME = 0
   CLOCK_MONOTONIC = 1
   CLOCK_PROCESS_CPUTIME_ID = 2
@@ -978,7 +978,7 @@ class NilClass
   end
 end
 
-class Marshal
+module Marshal
   MAJOR_VERSION = 4
   MINOR_VERSION = 8
 end
@@ -1124,7 +1124,7 @@ module Kernel
   end
 end
 
-class GC
+module GC
   # `GC.count` and `GC.start` are implemented in Rust (they read the
   # allocator's collection counter / force a full collection).
 
