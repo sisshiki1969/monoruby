@@ -176,6 +176,16 @@ enum LvalueKind {
         // the number of indices
         num: usize,
     },
+    /// base[index1, ..., *splat, ...] = src   (index list contains a splat)
+    /// The index args occupy `num` registers starting at `index1` (some of
+    /// them splatted per `splat_pos`); `src` is the trailing register at
+    /// `index1 + num`, and the whole thing lowers to a `[]=` call.
+    IndexSplat {
+        base: BcReg,
+        index1: BcTemp,
+        num: usize,
+        splat_pos: Vec<usize>,
+    },
     Send {
         recv: BcReg,
         method: IdentId,
@@ -1470,7 +1480,21 @@ impl<'a> BytecodeGen<'a> {
                 LvalueKind::DynamicVar { outer, dst }
             }
             NodeKind::Index { box base, index } => {
-                if index.len() == 1 {
+                if index.iter().any(|i| i.is_splat()) {
+                    // `a[*idx] = v` / `a[i, *idx, j] = v`: the index list
+                    // expands at runtime, so lower it like a `[]=` call whose
+                    // trailing argument is the assigned value.
+                    let base = self.push_expr(base.clone())?.into();
+                    let index1 = self.sp();
+                    let (_, num, splat_pos) = self.ordinary_args(index.clone())?;
+                    self.push(); // register for src.
+                    LvalueKind::IndexSplat {
+                        base,
+                        index1,
+                        num,
+                        splat_pos,
+                    }
+                } else if index.len() == 1 {
                     let base = self.push_expr(base.clone())?.into();
                     let index = self.push_expr(index[0].clone())?;
                     self.push(); // register for src.
@@ -1557,6 +1581,30 @@ impl<'a> BytecodeGen<'a> {
             LvalueKind::Index2 { base, index1, num } => {
                 let callsite =
                     CallSite::simple(IdentId::_INDEX_ASSIGN, num + 1, index1.into(), base, None);
+                self.emit_mov((index1 + num).into(), src);
+                self.set_temp(old_temp);
+                self.emit_call(callsite, loc);
+            }
+            LvalueKind::IndexSplat {
+                base,
+                index1,
+                num,
+                splat_pos,
+            } => {
+                // `[]=` with `num` (possibly splatted) index args plus the
+                // trailing assigned value at `index1 + num`.
+                let callsite = CallSite::new(
+                    IdentId::_INDEX_ASSIGN,
+                    num + 1,
+                    None,
+                    splat_pos,
+                    None,
+                    None,
+                    index1.into(),
+                    base,
+                    None,
+                    false,
+                );
                 self.emit_mov((index1 + num).into(), src);
                 self.set_temp(old_temp);
                 self.emit_call(callsite, loc);
