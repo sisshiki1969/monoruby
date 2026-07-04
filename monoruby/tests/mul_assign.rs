@@ -159,3 +159,35 @@ fn nested_assign() {
         "def g; (*a = [3, 4]); end; g",
     ]);
 }
+
+#[test]
+fn index_assign_with_splat() {
+    // `a[*idx] = v` and friends: the index list is expanded at runtime and
+    // the whole thing lowers to a `[]=` call whose trailing arg is `v`.
+    run_tests(&[
+        // Single splat index.
+        "a = []; a[*[0]] = 10; a",
+        "a = []; x = [2]; a[*x] = 99; a",
+        // Splat mixed with fixed indices (front / middle / back).
+        r##"
+        class Obj
+          attr_reader :result
+          def []=(*args); @result = args; end
+        end
+        b = Obj.new
+        b[1, *[2, 3], 4] = 5
+        b.result
+        "##,
+        // Multiple assignment, both targets are splat-indexed.
+        "a = []; a[*[1]], a[*[2]] = 1, 2; a",
+        // Nested / mixed with a plain-index target.
+        "c = []; d = []; c[*[0]], d[0] = :a, :b; [c, d]",
+        // The splat expression is a method call.
+        "def idx; [2]; end; e = []; e[*idx] = :hit; e",
+        // Value of an index-splat assignment is the RHS, not the `[]=` result.
+        "d = []; (d[*[0]] = 7)",
+        // Op-assign through a splat index.
+        "a = [10, 20, 30]; a[*[1]] += 5; a",
+        "h = Hash.new(0); k = [:x]; h[*k] += 1; h[*k] += 1; h[:x]",
+    ]);
+}
