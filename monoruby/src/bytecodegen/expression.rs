@@ -1150,7 +1150,7 @@ impl<'a> BytecodeGen<'a> {
         Ok(())
     }
 
-    fn gen_array(&mut self, ret: BcReg, nodes: Vec<Node>, loc: Loc) -> Result<()> {
+    pub(super) fn gen_array(&mut self, ret: BcReg, nodes: Vec<Node>, loc: Loc) -> Result<()> {
         if nodes.len() <= LITERAL_CHUNK_LEN {
             let (src, len, splat) = self.ordinary_args(nodes)?;
             self.popn(len);

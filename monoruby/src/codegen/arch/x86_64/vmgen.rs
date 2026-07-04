@@ -278,6 +278,7 @@ impl Codegen {
             lambda: self.vm_lambda(),
             array: self.vm_array(),
             array_teq: self.vm_array_teq(),
+            array_any: self.vm_array_any(),
             array_concat: self.vm_array_concat(),
             hash_insert: self.vm_hash_insert(),
             defined_yield: self.vm_defined_yield(),
@@ -836,6 +837,26 @@ impl Codegen {
             call rax;
         };
         self.vm_handle_error();
+        self.vm_store_r15(GP::Rax);
+        self.fetch_and_dispatch();
+        label
+    }
+
+    fn vm_array_any(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        monoasm! { &mut self.jit,
+            movzxw rdi, [r13 - 14];     // rdi <- :2 (reg, also dst)
+            movl   r15, rdi;
+        }
+        self.vm_get_slot_value(GP::Rdi);
+        monoasm! { &mut self.jit,
+            movq rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::array_any);
+            call rax;
+        };
+        // array_any returns a plain `Value` and cannot raise.
         self.vm_store_r15(GP::Rax);
         self.fetch_and_dispatch();
         label

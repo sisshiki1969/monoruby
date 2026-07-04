@@ -235,3 +235,46 @@ fn case_opt5() {
         "#,
     );
 }
+
+#[test]
+fn case_when_splat() {
+    // Subject-less `case` with a splat `when *arr`: matches when any
+    // element of `arr` is truthy.
+    run_tests(&[
+        r#"
+        def t(arr)
+          case
+          when *arr then "match"
+          else "no"
+          end
+        end
+        [t([false, nil]), t([false, 3]), t([]), t([nil]), t([true])]
+        "#,
+        // Splat combined with an ordinary condition (boolean disjunction).
+        r#"
+        def u(x)
+          case
+          when *[false], x then "y"
+          else "n"
+          end
+        end
+        [u(true), u(false)]
+        "#,
+        // Multiple splat `when` clauses pick the first truthy one.
+        r#"
+        case
+        when *[false] then "a"
+        when *[nil, 7] then "b"
+        else "c"
+        end
+        "#,
+        // With-subject splat still works (=== against each element).
+        r#"
+        case 3
+        when *[1, 2] then "lo"
+        when *[3, 4] then "hi"
+        else "no"
+        end
+        "#,
+    ]);
+}

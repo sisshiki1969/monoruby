@@ -138,6 +138,7 @@ impl Codegen {
             | AsmInst::DefinedCvar { .. }
             | AsmInst::GenericBinOp { .. }
             | AsmInst::ArrayTEq { .. }
+            | AsmInst::ArrayAny { .. }
             | AsmInst::ConcatRegexp { .. }
             | AsmInst::CheckKwRest(..)
             | AsmInst::ExpandArray { .. }
@@ -1181,6 +1182,20 @@ impl Codegen {
         self.fpr_restore(using_fpr);
     }
 
+    /// `any element truthy` for the array in `reg` via runtime::array_any
+    /// (rdi=vm, rsi=globals, rdx=val); result Value in rax. Cannot raise.
+    fn array_any(&mut self, reg: SlotId, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
+        self.load_rdx(reg);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (runtime::array_any);
+            call rax;
+        );
+        self.fpr_restore(using_fpr);
+    }
+
     ///
     /// Call a generic `BinaryOpFn` C helper with no receiver-class
     /// guard. Mirrors the VM's `call_binop` calling convention
@@ -1812,6 +1827,15 @@ impl Codegen {
         using_fpr: UsingFpr,
     ) -> bool {
         self.array_teq(lhs, rhs, using_fpr);
+        true
+    }
+
+    pub(in crate::codegen::jitgen) fn emit_array_any(
+        &mut self,
+        reg: SlotId,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        self.array_any(reg, using_fpr);
         true
     }
 

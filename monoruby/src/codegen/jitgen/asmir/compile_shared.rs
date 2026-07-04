@@ -806,6 +806,9 @@ impl Codegen {
             AsmInst::ArrayTEq { lhs, rhs, using_fpr } => {
                 self.encode_linst(LInst::ArrayTEq { lhs, rhs, using_fpr })
             }
+            AsmInst::ArrayAny { reg, using_fpr } => {
+                self.encode_linst(LInst::ArrayAny { reg, using_fpr })
+            }
             // Regexp interpolation / keyword-rest fixup runtime calls.
             AsmInst::ConcatRegexp { arg, len, using_fpr } => {
                 self.encode_linst(LInst::ConcatRegexp { arg, len, using_fpr })
@@ -1291,6 +1294,9 @@ impl Codegen {
             }
             LInst::ArrayTEq { lhs, rhs, using_fpr } => {
                 self.emit_array_teq(lhs, rhs, using_fpr);
+            }
+            LInst::ArrayAny { reg, using_fpr } => {
+                self.emit_array_any(reg, using_fpr);
             }
             LInst::ConcatRegexp { arg, len, using_fpr } => {
                 self.emit_concat_regexp(arg, len, using_fpr);

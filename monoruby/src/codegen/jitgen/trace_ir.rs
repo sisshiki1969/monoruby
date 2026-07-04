@@ -194,6 +194,9 @@ pub(crate) enum TraceIr {
         lhs: SlotId,
         rhs: SlotId,
     },
+    ArrayAny {
+        reg: SlotId,
+    },
     Index {
         _dst: SlotId,
         base: SlotId,
@@ -482,6 +485,12 @@ impl TraceIr {
                     TraceIr::ArrayTEq {
                         lhs: SlotId::new(op1_w2),
                         rhs: SlotId::new(op1_w3),
+                    }
+                }
+                43 => {
+                    let (_, op1_w2, _) = dec_www(op1);
+                    TraceIr::ArrayAny {
+                        reg: SlotId::new(op1_w2),
                     }
                 }
                 41 => {
@@ -1001,6 +1010,10 @@ impl TraceIr {
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")
+            }
+
+            TraceIr::ArrayAny { reg } => {
+                format!("{reg:?} = any_truthy(*{reg:?})")
             }
 
             TraceIr::Ret(reg) => format!("ret {:?}", reg),

@@ -787,6 +787,10 @@ pub(in crate::codegen) enum LInst {
         rhs: SlotId,
         using_fpr: UsingFpr,
     },
+    ArrayAny {
+        reg: SlotId,
+        using_fpr: UsingFpr,
+    },
     ConcatRegexp {
         arg: SlotId,
         len: u16,
