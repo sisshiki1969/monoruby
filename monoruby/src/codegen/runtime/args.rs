@@ -26,9 +26,9 @@ pub(crate) fn set_frame_arguments_simple(
     pos_num: usize,
 ) -> Result<()> {
     let callee_fid = callee_lfp.func_id();
-    let callee = &globals.store[callee_fid];
 
-    positional_simple(callee, src, pos_num, callee_lfp)?;
+    positional_simple(vm, globals, callee_fid, src, pos_num, callee_lfp)?;
+    let callee = &globals.store[callee_fid];
     if !callee.no_keyword() {
         handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp)?;
     }
@@ -185,6 +185,32 @@ pub(crate) extern "C" fn jit_forwarded_set_arguments(
     }
 }
 
+///
+/// Block auto-splat coercion of a single non-Array argument.
+///
+/// When a block taking multiple parameters is passed a single argument
+/// that is not already an Array, CRuby coerces it once via `#to_ary`:
+/// an Array result is splatted into the parameters, `nil` or a missing
+/// `#to_ary` leaves the argument a scalar, and any other result raises
+/// `TypeError`. Returns `Ok(Some(array))` when coerced (the caller must
+/// keep the returned `Value` alive while filling from its buffer),
+/// `Ok(None)` to leave the value as a single scalar argument.
+///
+fn block_arg_to_ary(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Option<Value>> {
+    if let Some(func_id) = globals.check_method(v, IdentId::TO_ARY) {
+        let res = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
+        if res.is_array_ty() {
+            Ok(Some(res))
+        } else if res.is_nil() {
+            Ok(None)
+        } else {
+            Err(MonorubyErr::cant_convert_error_ary(globals, v, res))
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 fn check_single_arg_expand(
     splat_pos: &[usize],
     pos_args: usize,
@@ -256,8 +282,30 @@ fn set_callee_frame_arguments(
         None
     };
 
+    // Block auto-splat: a single non-Array argument to a multi-param block
+    // is coerced via `#to_ary` (kept alive here while its buffer is read).
+    // Done before binding `splat_pos` so its mutable `globals` borrow ends.
+    let coerced = if globals[callee_fid].single_arg_expand()
+        && pos_args == 1
+        && ex.is_none()
+        && globals[callid].splat_pos.is_empty()
+        && !unsafe { *src }.is_array_ty()
+    {
+        block_arg_to_ary(vm, globals, unsafe { *src })?
+    } else {
+        None
+    };
     let splat_pos = &globals[callid].splat_pos;
-    if globals[callee_fid].single_arg_expand()
+    if let Some(coerced) = coerced {
+        let ary = coerced.try_array_ty().unwrap();
+        fill_positional_args(
+            dst,
+            &globals[callee_fid],
+            ary.as_ref().as_ptr(),
+            ary.len(),
+            true,
+        )?;
+    } else if globals[callee_fid].single_arg_expand()
         && let Some((ptr, len)) = check_single_arg_expand(splat_pos, pos_args, src, ex)
     {
         // single array argument expansion for blocks
@@ -470,7 +518,9 @@ fn fill_positional_args(
 }
 
 fn positional_simple(
-    callee: &FuncInfo,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callee_fid: FuncId,
     src: *const Value,
     pos_num: usize,
     callee_lfp: Lfp,
@@ -478,6 +528,25 @@ fn positional_simple(
     let dst = callee_lfp.register_ptr(SlotId(1));
     let pos_args = pos_num;
 
+    // Block auto-splat: a single non-Array argument to a multi-param block
+    // is coerced via `#to_ary` (kept alive while its buffer is read).
+    if globals.store[callee_fid].single_arg_expand()
+        && pos_args == 1
+        && !unsafe { *src }.is_array_ty()
+    {
+        if let Some(coerced) = block_arg_to_ary(vm, globals, unsafe { *src })? {
+            let ary = coerced.try_array_ty().unwrap();
+            return fill_positional_args(
+                dst,
+                &globals.store[callee_fid],
+                ary.as_ref().as_ptr(),
+                ary.len(),
+                true,
+            );
+        }
+    }
+
+    let callee = &globals.store[callee_fid];
     // single array argument expansion for blocks
     if callee.single_arg_expand()
         && let Some((ptr, len)) = check_single_arg_expand(&[], pos_args, src, None)

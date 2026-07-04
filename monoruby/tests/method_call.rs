@@ -843,6 +843,49 @@ fn destruct_to_ary() {
 }
 
 #[test]
+fn block_autosplat_to_ary() {
+    // A single non-Array argument yielded to a multi-parameter block is
+    // auto-splatted via `#to_ary`: an Array result is distributed, `nil` /
+    // no `#to_ary` leaves it a scalar, other results raise `TypeError`.
+    run_test_with_prelude(
+        r#"
+        def m(a) yield a end
+        nily = Nily.new
+        none = None.new
+        [
+          m(Ary.new) { |a, b, c| [a, b, c] },
+          m(nily) { |a, b| [a.equal?(nily), b] },
+          m(none) { |a, b| [a.equal?(none), b] },
+          m(42) { |a, b| [a, b] },
+          # single argument / single rest do NOT auto-splat (no #to_ary).
+          m(Ary.new) { |a| a.class.name },
+          m(Ary.new) { |*a| [a[0].class.name, a.size] },
+          # the Rust-side invoke_block path (Array#each / #map).
+          [Ary.new].map { |a, b, c| [a, b, c] },
+        ]
+        "#,
+        r#"
+        class Ary;  def to_ary; [1, 2]; end; end
+        class Nily; def to_ary; nil;    end; end
+        class None; end
+        "#,
+    );
+    run_test_error(
+        r#"
+        class Bad; def to_ary; 42; end; end
+        def m(a) yield a end
+        m(Bad.new) { |a, b| [a, b] }
+        "#,
+    );
+    run_test_error(
+        r#"
+        class Boom; def to_ary; raise "boom"; end; end
+        [Boom.new].each { |a, b| [a, b] }
+        "#,
+    );
+}
+
+#[test]
 fn block_param() {
     run_test_with_prelude(
         r#"
