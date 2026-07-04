@@ -962,11 +962,8 @@ impl<'a> BytecodeGen<'a> {
         use_mode: UseMode2,
     ) -> Result<()> {
         let mlhs_len = mlhs.len();
-        let mut mrhs_len = mrhs.len();
+        let mrhs_len = mrhs.len();
         let loc = mlhs[0].loc().merge(mrhs.last().unwrap().loc());
-        if mlhs_len != mrhs_len && mrhs_len != 1 {
-            return Err(self.unsupported_feature("mlhs_len != mrhs_len", loc));
-        };
 
         let temp = self.temp;
 
@@ -993,30 +990,45 @@ impl<'a> BytecodeGen<'a> {
         }
 
         // Next, we evaluate rvalues and save them in temporary registers which start from temp_reg.
-        let (rhs_reg, ret_val) = if mlhs_len != 1 && mrhs_len == 1 {
-            let rhs = self.push_expr(std::mem::take(&mut mrhs[0]))?.into();
-            mrhs_len = mlhs_len;
+        //
+        // When the mlhs has a rest target (`a, *b = ...`) or the arities
+        // differ, CRuby collects the whole rhs into one array and
+        // destructures it (distributing to the rest, truncating extras, or
+        // nil-filling shortfalls). Only a rest-free, equal-arity mlhs uses a
+        // true parallel assignment (which keeps `a, b = b, a` swap
+        // semantics). The whole assignment expression evaluates to the rhs
+        // array in either case.
+        let use_expand = rest_pos.is_some() || mlhs_len != mrhs_len;
+        let (rhs_reg, ret_val) = if use_expand {
+            // A single source value to expand: the lone rhs itself when
+            // there is one, otherwise the collected `[rhs0, rhs1, ..]` array.
+            let src: BcReg = if mrhs_len == 1 {
+                self.push_expr(std::mem::take(&mut mrhs[0]))?.into()
+            } else {
+                let arr: BcReg = self.push().into();
+                self.gen_array(arr, mrhs, loc)?;
+                arr
+            };
             let rhs_reg = self.sp();
-            let lhs_len = lhs_kind
-                .iter()
-                .filter(|kind| !matches!(kind, MulLhs::Leaf(LvalueKind::Discard)))
-                .count();
-            for _ in 0..lhs_len {
+            // One expanded slot per mlhs target (including discards), so the
+            // per-target indices below line up with the `ExpandArray` output.
+            let expand_len = lhs_kind.len();
+            for _ in 0..expand_len {
                 self.push();
             }
             self.emit(
-                BytecodeInst::ExpandArray(rhs, rhs_reg.into(), lhs_len as u16, rest_pos),
+                BytecodeInst::ExpandArray(src, rhs_reg.into(), expand_len as u16, rest_pos),
                 Loc::default(),
             );
-            // lhs0, lhs1, .. = rhs
+            // lhs0, lhs1, .. = src
             //
-            //   temp               rhs   rhs_reg         sp
-            //   v                  v     v               v
-            // -+-----------------+-----+---------------+--
-            //  | lhs working reg | rhs | lhs * lhs_len |
-            // -+-----------------+-----+---------------+--
+            //   temp               src   rhs_reg              sp
+            //   v                  v     v                    v
+            // -+-----------------+-----+--------------------+--
+            //  | lhs working reg | src | lhs * expand_len   |
+            // -+-----------------+-----+--------------------+--
             //
-            (rhs_reg, Some(rhs))
+            (rhs_reg, Some(src))
         } else {
             let rhs_reg = self.sp();
             for rhs in mrhs {

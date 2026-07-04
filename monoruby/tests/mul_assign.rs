@@ -161,6 +161,50 @@ fn nested_assign() {
 }
 
 #[test]
+fn multi_assign_arity_mismatch() {
+    // A multiple assignment whose lhs has a rest target, or whose arities
+    // differ, collects the rhs into an array and destructures it:
+    // extras truncate, shortfalls nil-fill, and a rest slot soaks up the
+    // middle. The expression evaluates to the whole rhs array.
+    run_tests(&[
+        // Too many rhs values: extras are dropped.
+        "a, b = 1, 2, 3; [a, b]",
+        "a, b, c = 1, 2, 3, 4, 5; [a, b, c]",
+        // Too few: missing targets become nil.
+        "a, b, c = 1, 2; [a, b, c]",
+        "a, b, c = 1; [a, b, c]",
+        // Rest target with equal / longer / shorter rhs.
+        "a, *b = 1, 2; [a, b]",
+        "a, *b = 1, 2, 3, 4; [a, b]",
+        "a, *b = 1; [a, b]",
+        "a, *b = 5; [a, b]",
+        // Rest in the head / middle / with a trailing target.
+        "*a, z = 1, 2, 3; [a, z]",
+        "a, *b, c = 1, 2, 3, 4, 5; [a, b, c]",
+        "a, *b, c = 1, 2; [a, b, c]",
+        // Lone splat lhs collects everything.
+        "*a = 1, 2, 3; a",
+        // Anonymous rest / trailing splat discard the collected part.
+        "*, z = 1, 2, 3; z",
+        "a, * = 1, 2, 3; a",
+        // Splats inside the rhs are flattened before distribution.
+        "a, b, c = 1, *[2, 3]; [a, b, c]",
+        "a, *b = 0, *[1, 2, 3]; [a, b]",
+        "x, y, z = *[1, 2], 3; [x, y, z]",
+        // Index / attr targets, mixed with a rest.
+        "arr = [0, 0, 0]; arr[0], arr[1] = 1, 2, 3; arr",
+        "h = {}; h[:a], *h[:b] = 1, 2, 3; [h[:a], h[:b]]",
+        // Value of the assignment is the whole rhs array.
+        "x = (a, b, c = 1, 2); [x, a, b, c]",
+        "(a, b = 1, 2, 3)",
+        "(a, *b = 1, 2)",
+        "def f; a, *b = 1, 2, 3; end; f",
+        // Equal arity, no rest: still a plain parallel assignment (swaps).
+        "x, y = 5, 6; x, y = y, x; [x, y]",
+    ]);
+}
+
+#[test]
 fn index_assign_with_splat() {
     // `a[*idx] = v` and friends: the index list is expanded at runtime and
     // the whole thing lowers to a `[]=` call whose trailing arg is `v`.
