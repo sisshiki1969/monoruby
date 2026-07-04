@@ -59,3 +59,15 @@ fn it_param_lambda() {
 fn it_param_shadowed_by_local() {
     run_test("it = 5; it + 1");
 }
+
+#[test]
+fn numbered_param_lambda() {
+    // Numbered parameters in a `->`/`lambda` body, like in a block.
+    run_test("f = ->{ _1 }; f.call(5)");
+    run_test("f = ->{ _1 + _2 }; f.call(3, 4)");
+    run_test("f = lambda { _1 * 10 }; f.call(2)");
+    run_test("[->{ _1 }.arity, ->{ _1 + _2 }.arity]");
+    run_test("f = ->{ [_1, _2, _3] }; f.call(1, 2, 3)");
+    // JIT warm-up loop.
+    run_test("f = ->{ _1 + _2 }; s = 0; i = 0; while i < 200; s += f.call(i, 1); i += 1; end; s");
+}

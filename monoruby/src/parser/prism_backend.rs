@@ -3007,6 +3007,28 @@ impl<'pr> Lowerer<'pr> {
                                 loc: ip_loc,
                             }]
                         }
+                        prism::Node::NumberedParametersNode { .. } => {
+                            // `-> { _1 + _2 }` — numbered params in a
+                            // lambda behave exactly like in a block; mirror
+                            // the block-form arm.
+                            let np = p.as_numbered_parameters_node().unwrap();
+                            let max = np.maximum() as usize;
+                            let np_loc = location_to_loc(&np.location());
+                            let mut out = Vec::with_capacity(max);
+                            for i in 1..=max {
+                                let name = format!("_{i}");
+                                this.lvars.insert(&name);
+                                out.push(crate::ast::FormalParam {
+                                    kind: ParamKind::Param(name),
+                                    loc: np_loc,
+                                });
+                            }
+                            if max > 0 {
+                                this.lvars.numbered_param = Some(np_loc);
+                                this.lvars.numbered_param_max = max as u8;
+                            }
+                            out
+                        }
                         other => return Err(this.unsupported("lambda parameters", &other)),
                     },
                 };
