@@ -151,17 +151,24 @@ impl<'a> BytecodeGen<'a> {
         use_value: bool,
     ) -> Result<()> {
         let loop_start = self.new_label();
+        let body_start = self.new_label();
         let succ_pos = self.new_label();
         let loop_exit = self.new_label();
         let ret = match use_value {
             true => Some(self.push_nil()),
             false => None,
         };
-        self.loop_push(loop_exit, loop_start, loop_start, ret);
+        // `next` re-checks the condition (→ `loop_start`); `redo` restarts the
+        // body without re-evaluating it (→ `body_start`, after the condition).
+        // `redo` is emitted as a `Redo` op — a `goto` routed through the error
+        // path that the JIT treats as a bail — not a plain back-edge branch, so
+        // the JIT never sees a second back-edge into the loop body.
+        self.loop_push(loop_exit, loop_start, body_start, ret);
         let loc = body.loc;
         self.apply_label(loop_start);
         self.emit(BytecodeInst::LoopStart, loc);
         self.gen_opt_condbr(!cond_op, cond, succ_pos)?;
+        self.apply_label(body_start);
         self.gen_expr(body, UseMode2::NotUse)?;
         self.emit_br(loop_start);
         self.apply_label(succ_pos);
@@ -538,6 +545,27 @@ mod test {
             "a = []; i = 42; 1.times { for i in 0..3; a << i; end }; a << i; a",
             "a = []; for i in 0..2; a << i; i = i + 10; end; [a, i]",
             "a = []; i = 42; 1.times { for i in 0..2; a << i; i = i + 10; end }; [a, i]",
+        ]);
+    }
+
+    #[test]
+    fn redo_loop() {
+        // `redo` restarts the loop body without re-evaluating the condition
+        // (so a side-effecting condition like `(i += 1)` does not re-run).
+        // The `run_tests` harness wraps each snippet in a hot `for` loop, so
+        // these also exercise a `while`-redo nested inside a loop-JIT'd loop.
+        run_tests(&[
+            "a=[]; i=0; j=0; while (i+=1)<3; a<<i; j+=1; redo if j<3; end; a",
+            "a=[]; i=0; j=0; until (i+=1)>=3; a<<i; j+=1; redo if j<3; end; a",
+            // `next` still re-checks the condition; `break` still exits.
+            "i=0; r=[]; while (i+=1)<6; next if i==2; break if i==5; r<<i; end; r",
+            // nested while, `redo` on the inner loop only
+            "o=[]; x=0; while (x+=1)<3; y=0; k=0; while (y+=1)<3; k+=1; o<<[x,y]; redo if k<3 && x==1; end; end; o",
+            // postfix / do-while form
+            "a=[]; i=0; j=0; begin; a<<i; i+=1; j+=1; redo if j<3 && i==1; end while i<3; a",
+            // a method-JIT'd body: a `while`-redo nested inside a `for` loop
+            // (the redo must not corrupt the enclosing loop's counter).
+            "def rr; o=[]; for k in 0..3; a=[]; i=0; j=0; while (i+=1)<3; a<<i; j+=1; redo if j<3; end; o<<a; end; o; end; rr",
         ]);
     }
 }

@@ -289,6 +289,23 @@ impl ISeqInfo {
     }
 
     ///
+    /// Whether this iseq contains a `Redo` op (opcode 87), i.e. a `redo`
+    /// targeting a `while`/`until` loop body.
+    ///
+    /// The loop (partial) JIT declines to compile such an iseq: a `redo`
+    /// resumes the interpreter in the current native frame (the error
+    /// path's `goto` does not tear the frame down), and re-entering a
+    /// loop-JIT'd loop from there corrupts the native stack. The method
+    /// JIT and the interpreter both run `redo` correctly, so only the
+    /// loop JIT opts out.
+    ///
+    pub(crate) fn contains_redo(&self) -> bool {
+        self.bytecode
+            .as_ref()
+            .is_some_and(|bc| bc.iter().any(|b| (b.op1() >> 48) as u8 == 87))
+    }
+
+    ///
     /// Get a number of registers.
     ///
     pub(crate) fn total_reg_num(&self) -> usize {

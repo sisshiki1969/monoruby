@@ -163,6 +163,17 @@ impl Codegen {
         if position.is_none() && globals.store[iseq_id].jit_invalidated() {
             return None;
         }
+        // A `while`/`until` `redo` (the `Redo` op) bails through the error
+        // path, whose `goto` resumes the interpreter in the current native
+        // frame without flushing JIT register state or tearing the frame
+        // down. Inside a JIT'd enclosing loop that corrupts the enclosing
+        // loop's state (method JIT) or re-enters the loop-JIT and overflows
+        // the stack (loop JIT). Decline to JIT any iseq containing one —
+        // both the method and loop JIT opt out; the interpreter runs `redo`
+        // correctly.
+        if globals.store[iseq_id].contains_redo() {
+            return None;
+        }
         #[cfg(feature = "profile")]
         {
             if let Some(reason) = &_is_recompile {
