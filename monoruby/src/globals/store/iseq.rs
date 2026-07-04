@@ -685,6 +685,9 @@ pub(crate) struct ParamsInfo {
     /// `true` when the sole parameter is the implicit `it` (Ruby 3.4).
     /// `#parameters` then reports it without a name.
     it_param: bool,
+    /// `true` for `**nil` — the definition explicitly accepts no keywords,
+    /// so passing any keyword raises `ArgumentError("no keywords accepted")`.
+    forbid_keyword: bool,
 }
 
 impl ParamsInfo {
@@ -701,6 +704,7 @@ impl ParamsInfo {
         block_param: Option<IdentId>,
         forwarding: bool,
         it_param: bool,
+        forbid_keyword: bool,
     ) -> Self {
         ParamsInfo {
             required_num,
@@ -715,7 +719,13 @@ impl ParamsInfo {
             block_param,
             forwarding,
             it_param,
+            forbid_keyword,
         }
+    }
+
+    /// `**nil` — the definition explicitly forbids keyword arguments.
+    pub(crate) fn forbid_keyword(&self) -> bool {
+        self.forbid_keyword
     }
 
     /// Whether the sole parameter is the implicit `it` (reported
@@ -742,6 +752,7 @@ impl ParamsInfo {
             block_param: None,
             forwarding: false,
             it_param: false,
+            forbid_keyword: false,
         }
     }
 
@@ -776,6 +787,7 @@ impl ParamsInfo {
             block_param: None,
             forwarding: false,
             it_param: false,
+            forbid_keyword: false,
         }
     }
 

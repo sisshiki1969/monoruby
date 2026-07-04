@@ -1051,6 +1051,7 @@ impl Store {
         let mut for_param_info = vec![];
         let mut forwarding = false;
         let mut it_param = false;
+        let mut forbid_keyword = false;
         for (dst_outer, dst_reg, _name) in for_params {
             for_param_info.push(ForParamInfo::new(dst_outer, dst_reg, args_names.len()));
             args_names.push(None);
@@ -1124,6 +1125,12 @@ impl Store {
                     keyword_initializers.push(init);
                 }
                 ParamKind::KWRest(name) => {
+                    // `**nil` is lowered to a kwrest literally named `nil`
+                    // (an impossible real variable name), which flags a
+                    // keyword-forbidding definition.
+                    if name.as_deref() == Some("nil") {
+                        forbid_keyword = true;
+                    }
                     let name = name.map(IdentId::get_id_from_string);
                     assert!(kw_rest_param.is_none());
                     kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
@@ -1160,6 +1167,7 @@ impl Store {
             block_param,
             forwarding,
             it_param,
+            forbid_keyword,
         );
         let compile_info = CompileInfo::new(
             body,
