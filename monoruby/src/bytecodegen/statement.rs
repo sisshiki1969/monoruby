@@ -233,6 +233,35 @@ impl<'a> BytecodeGen<'a> {
         }
     }
 
+    /// Emit the condition test for one `when` value of a *subjectless*
+    /// `case` (`case; when cond; ...`), where each `when` value is tested
+    /// for plain truthiness rather than `===`.
+    fn gen_case_cond_condbr(
+        &mut self,
+        when: Node,
+        cont_pos: Label,
+        jmp_if_true: bool,
+    ) -> Result<()> {
+        if when.is_splat() {
+            // `when *arr` with no subject matches when any element of `arr`
+            // is truthy. `when` is the `Splat` node itself, so wrapping it in
+            // an array literal expands the splat (mirroring CRuby's
+            // `splatarray`); `ArrayAny` then tests truthiness of any element
+            // (CRuby's `checkmatch` with `VM_CHECKMATCH_TYPE_WHEN`), without
+            // any user-visible method call.
+            let loc = when.loc;
+            let old = self.temp;
+            let arr: BcReg = self.push().into();
+            self.gen_array(arr, vec![when], loc)?;
+            self.emit(BytecodeInst::ArrayAny { reg: arr }, loc);
+            self.temp = old;
+            self.emit_condbr(arr, cont_pos, jmp_if_true, false);
+            Ok(())
+        } else {
+            self.gen_opt_condbr(jmp_if_true, when, cont_pos)
+        }
+    }
+
     pub(super) fn gen_case(
         &mut self,
         cond: Option<Box<Node>>,
@@ -340,11 +369,11 @@ impl<'a> BytecodeGen<'a> {
                 let succ_pos = self.new_label();
                 if when.len() == 1 {
                     let when = when.remove(0);
-                    self.gen_opt_condbr(false, when, succ_pos)?;
+                    self.gen_case_cond_condbr(when, succ_pos, false)?;
                 } else {
                     let then_pos = self.new_label();
                     for when in when {
-                        self.gen_opt_condbr(true, when, then_pos)?;
+                        self.gen_case_cond_condbr(when, then_pos, true)?;
                     }
                     self.emit_br(succ_pos);
                     self.apply_label(then_pos);

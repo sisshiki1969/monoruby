@@ -166,6 +166,11 @@ pub(super) enum BytecodeInst {
         lhs: BcReg,
         rhs: BcReg,
     },
+    /// Subject-less `case`/`when *arr` match: set `reg` to `true` if any
+    /// element of the array in `reg` is truthy, `false` otherwise.
+    ArrayAny {
+        reg: BcReg,
+    },
     Cmp(CmpKind, Option<BcReg>, (BcReg, BcReg), bool), // kind, dst, (lhs, rhs), optimizable
     Mov(BcReg, BcReg),                                 // dst, offset
     ToA {

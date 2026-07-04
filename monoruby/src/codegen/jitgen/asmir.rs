@@ -681,6 +681,14 @@ impl AsmIr {
         });
     }
 
+    ///
+    /// Set rax to true iff any element of the array in `reg` is truthy.
+    ///
+    pub(super) fn array_any(&mut self, state: &AbstractFrame, reg: SlotId) {
+        let using_fpr = state.using_fpr_offset();
+        self.push(AsmInst::ArrayAny { reg, using_fpr });
+    }
+
     pub(crate) fn generic_binop(
         &mut self,
         state: &AbstractFrame,
@@ -1752,6 +1760,15 @@ pub(super) enum AsmInst {
     ArrayTEq {
         lhs: SlotId,
         rhs: SlotId,
+        using_fpr: UsingFpr,
+    },
+
+    ///
+    /// Subject-less `when *arr`: rax = true iff any element of the array in
+    /// `reg` is truthy.
+    ///
+    ArrayAny {
+        reg: SlotId,
         using_fpr: UsingFpr,
     },
 

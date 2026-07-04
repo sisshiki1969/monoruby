@@ -571,6 +571,17 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
 
+            TraceIr::ArrayAny { reg } => {
+                state.flush_gp(ir);
+                state.write_back_slots(ir, &[reg]);
+                state.discard(reg);
+                // `array_any` performs no user-visible call and cannot raise,
+                // so no error edge is needed.
+                ir.array_any(state, reg);
+                state.def_rax2acc(ir, reg);
+                state.unset_side_effect_guard();
+            }
+
             TraceIr::ToA { dst, src } => {
                 state.flush_gp(ir);
                 let error = ir.new_error(state);

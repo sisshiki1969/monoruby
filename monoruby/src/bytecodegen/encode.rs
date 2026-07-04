@@ -573,6 +573,10 @@ impl<'a> BytecodeGen<'a> {
                 let op2 = self.slot_id(&rhs);
                 Bytecode::from(enc_www(40, 0, op1.0, op2.0))
             }
+            BytecodeInst::ArrayAny { reg } => {
+                let op1 = self.slot_id(&reg);
+                Bytecode::from(enc_www(43, 0, op1.0, 0))
+            }
             BytecodeInst::LoadDynVar { dst, src, outer } => {
                 let op1 = self.slot_id(&dst);
                 let op2 = self.slot_id(&src);

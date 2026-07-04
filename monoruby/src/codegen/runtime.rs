@@ -245,6 +245,21 @@ pub(super) extern "C" fn array_teq(
     }
 }
 
+/// Subject-less `case`/`when *arr` match: true iff any element of `arr` is
+/// truthy. Mirrors CRuby's `checkmatch` with `VM_CHECKMATCH_TYPE_WHEN |
+/// VM_CHECKMATCH_ARRAY` — plain truthiness (`RTEST`) of each element, with
+/// no `===` and no user-visible method call. `val` is always an Array here
+/// (the caller wraps the splat in an array literal); a non-Array is treated
+/// as its own truthiness for safety.
+pub(super) extern "C" fn array_any(_vm: &mut Executor, _globals: &mut Globals, val: Value) -> Value {
+    let any = if let Some(ary) = val.try_array_ty() {
+        ary.iter().any(|e| e.as_bool())
+    } else {
+        val.as_bool()
+    };
+    Value::bool(any)
+}
+
 pub(super) extern "C" fn gen_lambda(
     vm: &mut Executor,
     _: &mut Globals,

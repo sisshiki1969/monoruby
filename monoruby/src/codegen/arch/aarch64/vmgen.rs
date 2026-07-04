@@ -103,6 +103,7 @@ impl Codegen {
         // literal constructors / aggregate ops
         let array = self.a64_op_array();
         let array_teq = self.a64_op_array_teq();
+        let array_any = self.a64_op_array_any();
         let array_concat = self.a64_op_array_concat();
         let hash = self.a64_op_hash();
         let hash_insert = self.a64_op_hash_insert();
@@ -188,6 +189,7 @@ impl Codegen {
             lambda,
             array,
             array_teq,
+            array_any,
             array_concat,
             hash_insert,
             defined_yield,
@@ -804,6 +806,36 @@ impl Codegen {
             blr x9;
             cbz x0, raise;
         // dst slot = lhs slot from [PC+2]
+            ldrh x10, [x(PC.0), #(2)];
+            cbz x10, skip;
+            neg x10, x10;
+            add x11, x(LFP.0), x10, lsl #(3);
+            stur x0, [x11, #(-(LFP_SELF as i32))];
+            skip:
+            add x(PC.0), x(PC.0), #(16);
+        );
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
+    /// op 43 `ArrayAny`: %reg = any element of the array in %reg is truthy.
+    /// The result overwrites the reg slot. Bytecode: `+2` reg (also dst).
+    /// `array_any` returns a plain `Value` and cannot raise.
+    pub(in crate::codegen) fn a64_op_array_any(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let skip = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            ldrh x11, [x(PC.0), #(2)];  // reg slot (also dst)
+        );
+        self.a64_load_slot(X11, X3, X12); // X3 = val
+        // array_any(vm, globals, val) -> Value
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x3;  // val (arg #3)
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (runtime::array_any as *const () as u64);
+            blr x9;
+        // dst slot = reg slot from [PC+2]
             ldrh x10, [x(PC.0), #(2)];
             cbz x10, skip;
             neg x10, x10;

@@ -3655,6 +3655,32 @@ impl Codegen {
         true
     }
 
+    /// `any element truthy` for the array in `reg` via runtime::array_any
+    /// (x0=vm, x1=globals, x2=val); Value result in x0. Cannot raise.
+    pub(in crate::codegen::jitgen) fn emit_array_any(
+        &mut self,
+        reg: SlotId,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = reg.0 as u32 * 8 + LFP_SELF as u32;
+        let f = runtime::array_any as *const () as u64;
+        self.emit_fpr_save(using_fpr, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm
+            mov x1, x20;                 // globals
+        );
+        self.a64_frame_load(2, lfp, off); // x2 = val
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        true
+    }
+
     /// Build a Regexp from the `len` interpolated parts based at slot `arg` via
     /// runtime::concatenate_regexp (x0=vm, x1=globals, x2=&arg, x3=len);
     /// Option<Value> result in x0. The runtime reads `arg, arg-1, …` (descending
