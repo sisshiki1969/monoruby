@@ -347,6 +347,14 @@ fn allocate(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// Look up the receiver class's `alloc_func` and invoke it; raise the
 /// standard "allocator undefined" TypeError when None.
 pub(crate) fn call_alloc_func(globals: &mut Globals, class_id: ClassId) -> Result<Value> {
+    // A singleton class (metaclass) can never be instantiated: `new` and
+    // `allocate` both raise TypeError in CRuby, even though the singleton
+    // inherits an allocator through its attached object's class.
+    if globals.store[class_id].get_module().is_singleton().is_some() {
+        return Err(MonorubyErr::typeerr(
+            "can't create instance of singleton class",
+        ));
+    }
     match globals.store[class_id].alloc_func() {
         Some(f) => Ok(f(class_id, globals)),
         None => Err(MonorubyErr::typeerr(format!(
@@ -387,6 +395,12 @@ pub(super) fn gen_class_new_inline(
         self_module = origin.as_class();
     }
     let class_id = self_module.id();
+
+    // Instantiating a singleton class raises TypeError; bail to the slow
+    // path (Rust `new` → `call_alloc_func`) so it does the raising.
+    if store[class_id].get_module().is_singleton().is_some() {
+        return false;
+    }
 
     let alloc_func = match store[class_id].alloc_func() {
         Some(f) => f,
