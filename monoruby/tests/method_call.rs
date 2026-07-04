@@ -172,6 +172,34 @@ fn method_post() {
 }
 
 #[test]
+fn block_pre_opt_post() {
+    // Block-style (loose) binding of required-pre + optional + required-post
+    // with NO rest, across arg counts up to and beyond the maximum. When
+    // there are more args than params, CRuby fills positionally and drops
+    // the tail — the post params sit right after the filled optionals, not
+    // at the very end.
+    run_test_with_prelude(
+        r#"
+        [
+          t([1])             { |a, b=5, c=6, d, e| [a,b,c,d,e] },
+          t([1,2])           { |a, b=5, c=6, d, e| [a,b,c,d,e] },
+          t([1,2,3])         { |a, b=5, c=6, d, e| [a,b,c,d,e] },
+          t([1,2,3,4])       { |a, b=5, c=6, d, e| [a,b,c,d,e] },
+          t([1,2,3,4,5])     { |a, b=5, c=6, d, e| [a,b,c,d,e] },
+          t([1,2,3,4,5,6])   { |a, b=5, c=6, d, e| [a,b,c,d,e] },
+          t([1,2,3,4,5,6,7]) { |a, b=5, c=6, d, e| [a,b,c,d,e] },
+          # with a rest to absorb the middle excess
+          t([1,2,3,4,5,6])   { |a, b=5, c=6, *r, d, e| [a,b,c,r,d,e] },
+          t([1,2,3])         { |a, b=5, c=6, *r, d, e| [a,b,c,r,d,e] },
+        ]
+        "#,
+        r#"
+        def t(a) yield a end
+        "#,
+    );
+}
+
+#[test]
 fn keyword() {
     run_test_with_prelude(
         r#"
