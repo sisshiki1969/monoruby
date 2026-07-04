@@ -37,6 +37,13 @@ use crate::ast::{
 use crate::globals::{ExternalContext, MonorubyErr};
 use crate::id_table::IdentId;
 
+/// Reserved, unspellable local names bound to anonymous `*` / `**`
+/// parameters so their forwarding forms (`foo(*)` / `foo(**)`) can
+/// reference them. Neither is a valid Ruby identifier, so they can't
+/// collide with a user variable (mirrors the empty name used for `&`).
+const ANON_REST_NAME: &str = "*";
+const ANON_KWREST_NAME: &str = "**";
+
 pub(super) fn parse_program(code: String, path: PathBuf) -> Result<ParseResult, MonorubyErr> {
     try_prism_inner(&code, path, None, None, 0)
 }
@@ -381,8 +388,10 @@ impl<'pr> Lowerer<'pr> {
                 let inner = node.as_splat_node().unwrap();
                 let expr = match inner.expression() {
                     Some(e) => self.lower_node(&e)?,
+                    // Anonymous `*` (forwarding `foo(*)`): splat the reserved
+                    // anonymous-rest local bound by the enclosing `def m(*)`.
                     None => Node {
-                        kind: NodeKind::Nil,
+                        kind: NodeKind::LocalVar(0, ANON_REST_NAME.to_owned()),
                         loc,
                     },
                 };
@@ -2169,8 +2178,11 @@ impl<'pr> Lowerer<'pr> {
                             let s = elem.as_assoc_splat_node().unwrap();
                             let inner = match s.value() {
                                 Some(v) => self.lower_node(&v)?,
+                                // Anonymous `**` (forwarding `foo(**)`): splat
+                                // the reserved anonymous-kwrest local bound by
+                                // the enclosing `def m(**)`.
                                 None => Node {
-                                    kind: NodeKind::Nil,
+                                    kind: NodeKind::LocalVar(0, ANON_KWREST_NAME.to_owned()),
                                     loc: location_to_loc(&s.location()),
                                 },
                             };
@@ -3275,7 +3287,9 @@ impl<'pr> Lowerer<'pr> {
                     let inner = rest.as_rest_parameter_node().unwrap();
                     let name = match inner.name() {
                         Some(id) => Some(constant_name(&id)?),
-                        None => None,
+                        // Anonymous `*`: bind a reserved, unspellable local
+                        // so `foo(*)` forwarding can splat it.
+                        None => Some(ANON_REST_NAME.to_owned()),
                     };
                     if let Some(n) = &name {
                         self.lvars.insert(n);
@@ -3369,7 +3383,9 @@ impl<'pr> Lowerer<'pr> {
                     let loc = location_to_loc(&inner.location());
                     let name_opt = match inner.name() {
                         Some(id) => Some(constant_name(&id)?),
-                        None => None,
+                        // Anonymous `**`: bind a reserved, unspellable local
+                        // so `foo(**)` forwarding can splat it.
+                        None => Some(ANON_KWREST_NAME.to_owned()),
                     };
                     if let Some(n) = &name_opt {
                         self.lvars.insert_kwrest_param(n.clone());
