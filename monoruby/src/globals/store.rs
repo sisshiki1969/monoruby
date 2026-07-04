@@ -1,7 +1,7 @@
 use inline::InlineTable;
 use monoasm::DestLabel;
 
-use crate::ast::{LvarCollector, ParseResult};
+use crate::ast::{DestructEntry, LvarCollector, ParseResult};
 use crate::bytecodegen::{BcLocal, CompileInfo, DestructureInfo, ForParamInfo, OptionalInfo};
 
 use super::*;
@@ -1024,6 +1024,59 @@ impl Store {
     }
 }
 
+/// Where the source array of an `ExpandArray` lives while `handle_args`
+/// is still building the parameter layout. `Surface` slots are already
+/// absolute (allocated among the visible params); `Destruct` slots are
+/// offsets into the yet-to-be-appended `destruct_args` region and are
+/// rebased once its start is known.
+enum ExpandSrc {
+    Surface(usize),
+    Destruct(usize),
+}
+
+/// Recursively flattens a destructuring parameter (`|(a, *b, (c, d))|`)
+/// into a sequence of `ExpandArray` descriptors. `src` names the slot
+/// holding the array to split; each direct child gets a consecutive slot
+/// in `destruct_args`, and every `Nested` child recurses with its own
+/// slot as the source (a chained `ExpandArray` fills it in). Parent
+/// descriptors are pushed before their children so the prologue emits
+/// them in dependency order.
+fn flatten_destruct(
+    entries: &[DestructEntry],
+    src: ExpandSrc,
+    expand: &mut Vec<(ExpandSrc, usize, usize, Option<usize>)>,
+    destruct_args: &mut Vec<Option<IdentId>>,
+) {
+    let len = entries.len();
+    let dst_start = destruct_args.len();
+    let mut rest_pos = None;
+    let mut child_slots = Vec::with_capacity(len);
+    for (i, entry) in entries.iter().enumerate() {
+        child_slots.push(destruct_args.len());
+        match entry {
+            DestructEntry::Param(name, _) => {
+                destruct_args.push(Some(IdentId::get_id_from_string(name.clone())));
+            }
+            DestructEntry::Rest(name, _) => {
+                rest_pos = Some(i);
+                destruct_args
+                    .push(name.as_ref().map(|n| IdentId::get_id_from_string(n.clone())));
+            }
+            DestructEntry::Nested(_, _) => {
+                // Temp slot: the parent `ExpandArray` writes the sub-array
+                // here, then the recursive descriptor splits it further.
+                destruct_args.push(None);
+            }
+        }
+    }
+    expand.push((src, dst_start, len, rest_pos));
+    for (i, entry) in entries.iter().enumerate() {
+        if let DestructEntry::Nested(sub, _) = entry {
+            flatten_destruct(sub, ExpandSrc::Destruct(child_slots[i]), expand, destruct_args);
+        }
+    }
+}
+
 impl Store {
     pub(crate) fn handle_args(
         info: BlockInfo,
@@ -1071,13 +1124,25 @@ impl Store {
                     required_num += 1;
                     it_param = true;
                 }
-                ParamKind::Destruct(names) => {
-                    expand.push((args_names.len(), destruct_args.len(), names.len()));
+                ParamKind::Destruct(entries) => {
+                    // The whole destructured argument is bound to an
+                    // anonymous surface slot; `flatten_destruct` records
+                    // the `ExpandArray` that splits it into `destruct_args`
+                    // slots, recursing into nested groups (chained
+                    // `ExpandArray`s) and honoring an optional splat.
+                    let src = args_names.len();
                     args_names.push(None);
                     required_num += 1;
-                    names.into_iter().for_each(|(name, _)| {
-                        destruct_args.push(Some(IdentId::get_id_from_string(name)));
-                    });
+                    flatten_destruct(&entries, ExpandSrc::Surface(src), &mut expand, &mut destruct_args);
+                }
+                ParamKind::PostDestruct(entries) => {
+                    // Same as `Destruct`, but the surface slot lives in the
+                    // post region (after the rest), so it counts toward
+                    // `post_num` rather than `required_num`.
+                    let src = args_names.len();
+                    args_names.push(None);
+                    post_num += 1;
+                    flatten_destruct(&entries, ExpandSrc::Surface(src), &mut expand, &mut destruct_args);
                 }
                 ParamKind::Optional(name, box initializer) => {
                     let local = BcLocal(args_names.len() as u16);
@@ -1145,9 +1210,20 @@ impl Store {
             }
         }
 
+        // `destruct_args` is appended after all surface params, so the
+        // destruct region begins at the current `args_names.len()`.
+        // Surface srcs are already absolute; destruct-relative srcs and
+        // all dsts are rebased onto that region here.
+        let base = args_names.len();
         let expand_info: Vec<_> = expand
             .into_iter()
-            .map(|(src, dst, len)| DestructureInfo::new(src, args_names.len() + dst, len))
+            .map(|(src, dst, len, rest_pos)| {
+                let src = match src {
+                    ExpandSrc::Surface(i) => i,
+                    ExpandSrc::Destruct(o) => base + o,
+                };
+                DestructureInfo::new(src, base + dst, len, rest_pos)
+            })
             .collect();
         args_names.append(&mut destruct_args);
         let kw_required: Vec<bool> = keyword_initializers
