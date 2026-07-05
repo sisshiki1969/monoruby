@@ -1520,3 +1520,116 @@ fn fp_spill_loop() {
         "#,
     );
 }
+
+#[test]
+fn op_assign_evaluates_receiver_once() {
+    // `recv.attr op= v` and `base[idx] op= v` must evaluate the
+    // receiver / index expression exactly once, sharing it between the
+    // implicit getter and setter. A side-effecting receiver run twice
+    // would corrupt the log below.
+    run_test_with_prelude(
+        r#"
+        $log = []
+        c = C.new
+        c.v = 10
+        c.v += 5          # attr arithmetic
+        c[c.key] = 1
+        c[c.key] += 10    # index arithmetic: key evaluated once here
+        c.w ||= 7         # attr ||=
+        c.w &&= 3         # attr &&=
+        arr = [nil, 2]
+        arr[c.side] ||= 99  # index ||=
+        arr[c.side] &&= 77  # index &&=
+        [c.v, c[:k], c.w, arr, $log]
+        "#,
+        r#"
+        class C
+          def initialize; @h = {}; @w = nil; end
+          def key; $log << :key; :k; end
+          def side; $log << :side; 0; end
+          def [](k); @h[k]; end
+          def []=(k, v); @h[k] = v; end
+          attr_accessor :v, :w
+        end
+        "#,
+    );
+}
+
+#[test]
+fn op_assign_all_operators_on_receiver() {
+    // Every arithmetic / bitwise op-assign operator applied to an
+    // attribute target, exercising each `BinOpK` on the single-eval
+    // getter/setter path.
+    run_test_with_prelude(
+        r#"
+        c = C.new
+        res = []
+        c.v = 20;  c.v += 5;  res << c.v
+        c.v = 20;  c.v -= 5;  res << c.v
+        c.v = 20;  c.v *= 5;  res << c.v
+        c.v = 20;  c.v /= 5;  res << c.v
+        c.v = 20;  c.v %= 6;  res << c.v
+        c.v = 2;   c.v **= 5; res << c.v
+        c.v = 12;  c.v |= 3;  res << c.v
+        c.v = 14;  c.v &= 6;  res << c.v
+        c.v = 10;  c.v ^= 6;  res << c.v
+        c.v = 1;   c.v <<= 4; res << c.v
+        c.v = 256; c.v >>= 3; res << c.v
+        res
+        "#,
+        r#"
+        class C
+          attr_accessor :v
+        end
+        "#,
+    );
+}
+
+#[test]
+fn op_assign_multi_and_splat_index() {
+    // Multi-argument index (`m[i, j] op= v`) and splatted index
+    // (`m[*idx] op= v`) op-assign, including `||=` / `&&=`, must
+    // evaluate the index arguments once and reuse them for get + set.
+    run_test_with_prelude(
+        r#"
+        m = M.new
+        m[1, 2] = 10
+        m[1, 2] += 5
+        idx = [3, 4]
+        m[*idx] = 100
+        m[*idx] *= 2
+        m[7, 8] ||= 42
+        m[7, 8] &&= 9
+        [m[1, 2], m[3, 4], m[7, 8]]
+        "#,
+        r#"
+        class M
+          def initialize; @h = {}; end
+          def [](*k); @h[k]; end
+          def []=(*args); v = args.pop; @h[args] = v; end
+        end
+        "#,
+    );
+}
+
+#[test]
+fn op_assign_target_kinds() {
+    // Op-assign over the non-attribute target kinds keeps short-circuit
+    // semantics (`||=` / `&&=` store only when needed) and value results.
+    run_test(
+        r#"
+        res = []
+        a = 1; a += 2; res << a
+        b = nil; b ||= 5; res << b
+        cc = 3; cc &&= 7; res << cc
+        d = nil; d &&= 9; res << d
+        $g = 10; $g -= 3; res << $g
+        $h = nil; $h ||= 42; res << $h
+        x = {a: 1}
+        res << (x[:a] += 100)
+        res << (x[:b] ||= :new)
+        res << x
+        res
+        "#,
+    );
+}
