@@ -450,10 +450,39 @@ impl<'a> BytecodeGen<'a> {
             } in rescue
             {
                 if let Some(box assign) = assign {
-                    let (lhs, rest) = self.eval_lvalue(&assign)?;
-                    assert!(!rest);
                     let loc = assign.loc;
-                    self.emit_assign(err_reg, lhs, None, loc);
+                    // `rescue => recv&.attr`: assign the caught exception via a
+                    // safe-navigation setter — skip the store when `recv` is nil.
+                    if matches!(&assign.kind,
+                        NodeKind::MethodCall { arglist, safe_nav: true, .. }
+                            if arglist.args.is_empty()
+                                && arglist.block.is_none()
+                                && arglist.kw_args.is_empty())
+                    {
+                        let NodeKind::MethodCall {
+                            box receiver,
+                            method,
+                            ..
+                        } = assign.kind
+                        else {
+                            unreachable!()
+                        };
+                        let setter = IdentId::get_id_from_string(format!("{method}="));
+                        let old = self.temp;
+                        let recv = self.push_expr(receiver)?.into();
+                        let skip = self.new_label();
+                        self.emit_nilbr(recv, skip, old);
+                        let arg = self.push().into();
+                        self.emit_mov(arg, err_reg);
+                        let callsite = CallSite::simple(setter, 1, arg, recv, None);
+                        self.emit_method_assign(callsite, loc);
+                        self.temp = old;
+                        self.apply_label(skip);
+                    } else {
+                        let (lhs, rest) = self.eval_lvalue(&assign)?;
+                        assert!(!rest);
+                        self.emit_assign(err_reg, lhs, None, loc);
+                    }
                 };
                 let cont_pos = self.new_label();
                 let next_pos = self.new_label();
