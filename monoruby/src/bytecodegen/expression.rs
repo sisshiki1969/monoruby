@@ -18,7 +18,14 @@ const LITERAL_CHUNK_LEN: usize = 256;
 ///
 enum MulLhs {
     Leaf(LvalueKind),
-    Nested(Vec<Node>),
+    /// A nested destructure group (`(b, c)` in `(a, (b, c)) = ...`). Its
+    /// members' lvalues are already evaluated (receivers / indices captured
+    /// left-to-right, before the rhs); `rest_pos` records the splat slot for
+    /// the group's own `ExpandArray`.
+    Nested {
+        targets: Vec<MulLhs>,
+        rest_pos: Option<u16>,
+    },
 }
 
 impl<'a> BytecodeGen<'a> {
@@ -1264,16 +1271,18 @@ impl<'a> BytecodeGen<'a> {
         let temp = self.temp;
 
         // At first, we evaluate lvalues and save their info(LhsKind).
-        // A nested destructure group (`(b, c)` in `(a, (b, c)) = ...`)
-        // is deferred as `MulLhs::Nested`: its own targets are expanded
-        // with a chained `ExpandArray` once the parent array element is
-        // in hand.
+        // The receiver / index subexpressions of every target — including
+        // those inside a nested destructure group (`(b, c)` in
+        // `(a, (b, c)) = ...`) — are evaluated here, left-to-right and
+        // BEFORE the rhs, matching CRuby's evaluation order. Only the
+        // `ExpandArray` + store of a nested group is deferred (it needs the
+        // parent array element), carrying the pre-evaluated lvalues.
         let mut lhs_kind: Vec<MulLhs> = vec![];
         let mut rest_pos = None;
         for (i, lhs) in mlhs.into_iter().enumerate() {
             match lhs.kind {
                 NodeKind::MulAssignNested(targets) => {
-                    lhs_kind.push(MulLhs::Nested(targets));
+                    lhs_kind.push(self.eval_nested_lvalues(targets)?);
                 }
                 _ => {
                     let (kind, rest) = self.eval_lvalue(&lhs)?;
@@ -1346,7 +1355,9 @@ impl<'a> BytecodeGen<'a> {
             let src = (rhs_reg + i).into();
             match lhs {
                 MulLhs::Leaf(kind) => self.emit_assign(src, kind, None, loc),
-                MulLhs::Nested(targets) => self.gen_destructure(src, targets, loc)?,
+                MulLhs::Nested { targets, rest_pos } => {
+                    self.assign_prepared(src, targets, rest_pos, loc)?
+                }
             }
         }
 
@@ -1385,19 +1396,52 @@ impl<'a> BytecodeGen<'a> {
     }
 
     ///
-    /// Destructure the array in register `src` into `targets`, recursing
-    /// into nested groups with a chained `ExpandArray`. Backs nested
-    /// multiple-assignment targets (`(a, (b, c)) = ...`).
+    /// Evaluate the lvalues of a nested destructure group's `targets`,
+    /// recursing into further groups. Receivers / indices are evaluated
+    /// here (left-to-right, before the rhs); the actual `ExpandArray` +
+    /// store is deferred to [`Self::assign_prepared`]. `rest_pos` records
+    /// the splat slot (`(a, *b)`) for the group's own `ExpandArray`.
     ///
-    /// `src` holds the array element to split; `targets` is this group's
-    /// own target list (each a leaf, a `Splat` rest, `DiscardLhs`, or a
-    /// further `MulAssignNested`). New registers are pushed above the
-    /// caller's stack and left in place — the top-level caller restores
-    /// `temp` once the whole assignment is emitted.
-    ///
-    fn gen_destructure(&mut self, src: BcReg, targets: Vec<Node>, loc: Loc) -> Result<()> {
-        let len = targets.len();
+    fn eval_nested_lvalues(&mut self, targets: Vec<Node>) -> Result<MulLhs> {
         let rest_pos = targets.iter().position(|t| t.is_splat()).map(|p| p as u16);
+        let mut kinds = vec![];
+        for t in targets.into_iter() {
+            match t.kind {
+                NodeKind::MulAssignNested(sub) => {
+                    kinds.push(self.eval_nested_lvalues(sub)?);
+                }
+                _ => {
+                    // Plain leaf or `Splat(target)` rest slot; `eval_lvalue`
+                    // unwraps the splat and returns the inner lvalue kind.
+                    let (kind, _rest) = self.eval_lvalue(&t)?;
+                    kinds.push(MulLhs::Leaf(kind));
+                }
+            }
+        }
+        Ok(MulLhs::Nested {
+            targets: kinds,
+            rest_pos,
+        })
+    }
+
+    ///
+    /// Destructure the array in register `src` into the pre-evaluated
+    /// `targets`, recursing into nested groups with a chained
+    /// `ExpandArray`. Backs nested multiple-assignment targets
+    /// (`(a, (b, c)) = ...`). The targets' receivers / indices were already
+    /// captured by [`Self::eval_nested_lvalues`]; here we only expand and
+    /// store. New registers are pushed above the caller's stack and left in
+    /// place — the top-level caller restores `temp` once the whole
+    /// assignment is emitted.
+    ///
+    fn assign_prepared(
+        &mut self,
+        src: BcReg,
+        targets: Vec<MulLhs>,
+        rest_pos: Option<u16>,
+        loc: Loc,
+    ) -> Result<()> {
+        let len = targets.len();
         let base = self.sp();
         for _ in 0..len {
             self.push();
@@ -1408,15 +1452,10 @@ impl<'a> BytecodeGen<'a> {
         );
         for (i, t) in targets.into_iter().enumerate() {
             let elem = (base + i).into();
-            match t.kind {
-                NodeKind::MulAssignNested(sub) => {
-                    self.gen_destructure(elem, sub, loc)?;
-                }
-                _ => {
-                    // Plain leaf or `Splat(target)` rest slot; `eval_lvalue`
-                    // unwraps the splat and returns the inner lvalue kind.
-                    let (kind, _rest) = self.eval_lvalue(&t)?;
-                    self.emit_assign(elem, kind, None, loc);
+            match t {
+                MulLhs::Leaf(kind) => self.emit_assign(elem, kind, None, loc),
+                MulLhs::Nested { targets, rest_pos } => {
+                    self.assign_prepared(elem, targets, rest_pos, loc)?;
                 }
             }
         }

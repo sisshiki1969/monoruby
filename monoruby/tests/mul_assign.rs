@@ -237,6 +237,54 @@ fn index_assign_with_splat() {
 }
 
 #[test]
+fn multi_assign_evaluation_order() {
+    // CRuby evaluates every target's receiver / index subexpression
+    // left-to-right BEFORE the rhs — including inside nested destructure
+    // groups. `$s` records the order so a wrong nested order (rhs before a
+    // nested receiver) is caught.
+    run_tests(&[
+        // Flat accessor targets: receivers, then rhs.
+        r#"$s = []; o = Object.new; def o.a=(v); end
+           (($s << :a); o).a, (($s << :b); o).a = (($s << :c); 1), (($s << :d); 2); $s"#,
+        // Nested accessor: the nested receiver is evaluated before the rhs.
+        r#"$s = []; o = Object.new; def o.a=(v); end
+           ((($s << :a); o).a, foo), bar = [(($s << :b); 1)]; $s"#,
+        // Deeply nested accessors: full left-to-right, then the rhs value.
+        r#"$s = []; o = Object.new
+           def o.a=(v); end; def o.b=(v); end; def o.c=(v); end
+           def o.d=(v); end; def o.e=(v); end; def o.f=(v); end
+           (($s << :a); o).a,
+             ((($s << :b); o).b,
+             ((($s << :c); o).c, (($s << :d); o).d),
+             (($s << :e); o).e),
+           (($s << :f); o).f = (($s << :v); :v)
+           $s"#,
+        // Nested #[]=: receiver, index, then rhs.
+        r#"$s = []; o = Object.new; def o.[]=(_, _); end
+           ((($s << :a); o)[(($s << :b); 0)], foo), bar = [(($s << :c); 1)]; $s"#,
+        // Deeply nested #[]=.
+        r#"$s = []; o = Object.new; def o.[]=(_, _); end
+           (($s << :ra); o)[(($s << :aa); 0)],
+             ((($s << :rb); o)[(($s << :ab); 1)],
+             ((($s << :rc); o)[(($s << :ac); 2)], (($s << :rd); o)[(($s << :ad); 3)]),
+             (($s << :re); o)[(($s << :ae); 4)]),
+           (($s << :rf); o)[(($s << :af); 5)] = (($s << :v); :v)
+           $s"#,
+    ]);
+}
+
+#[test]
+fn multi_assign_nested_values() {
+    // Correctness of nested destructuring (values, not just order).
+    run_tests(&[
+        "((a, b), c), d = [[1, 2], 3], 4; [a, b, c, d]",
+        "(x, (y, z)), *w = [10, [20, 30]], 40, 50; [x, y, z, w]",
+        "(a, *b), (c, d) = [1, 2, 3], [4, 5]; [a, b, c, d]",
+        "arr = []; (arr[0], (arr[1], arr[2])), arr[3] = [1, [2, 3]], 4; arr",
+    ]);
+}
+
+#[test]
 fn for_loop_destructuring_index() {
     // `for` with a splat / post / nested / non-local index target
     // destructures each element, and the targets still leak to the
