@@ -44,6 +44,14 @@ use crate::id_table::IdentId;
 const ANON_REST_NAME: &str = "*";
 const ANON_KWREST_NAME: &str = "**";
 
+/// Reserved, unspellable local bound to the hidden single loop variable
+/// synthesized for a `for <complex-target> in ...` loop (one whose index
+/// has a splat / post element / nested or non-local target). The body is
+/// prefixed with `<target> = <this>` so the ordinary multiple-assignment
+/// machinery destructures each element while the targets still leak to the
+/// enclosing scope. Not a valid Ruby identifier, so it can't collide.
+const FOR_INDEX_NAME: &str = "(for)";
+
 pub(super) fn parse_program(code: String, path: PathBuf) -> Result<ParseResult, MonorubyErr> {
     try_prism_inner(&code, path, None, None, 0)
 }
@@ -905,10 +913,17 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ForNode { .. } => {
                 let n = node.as_for_node().unwrap();
                 let index = n.index();
-                let param: Vec<(usize, String)> = match index {
+                // `prepend` is a destructuring assignment to run at the top
+                // of the body when the index can't be expressed as a flat
+                // list of leaked loop variables (splat / post / nested /
+                // non-local targets).
+                let (param, prepend): (Vec<(usize, String)>, Option<Node>) = match index {
                     prism::Node::LocalVariableTargetNode { .. } => {
                         let inner = index.as_local_variable_target_node().unwrap();
-                        vec![(inner.depth() as usize, constant_name(&inner.name())?)]
+                        (
+                            vec![(inner.depth() as usize, constant_name(&inner.name())?)],
+                            None,
+                        )
                     }
                     // `for a, b in ...` / `for (a, b) in ...` lands
                     // as MultiTargetNode. ruruby flattens this into
@@ -916,32 +931,57 @@ impl<'pr> Lowerer<'pr> {
                     prism::Node::MultiTargetNode { .. } => {
                         let mt = index.as_multi_target_node().unwrap();
                         let mt_loc = location_to_loc(&index.location());
-                        if mt.rest().is_some() {
-                            return Err(self.unsupported_node("for index with splat", mt_loc));
-                        }
-                        if mt.rights().iter().next().is_some() {
-                            return Err(
-                                self.unsupported_node("for index with post element", mt_loc)
-                            );
-                        }
-                        let mut out: Vec<(usize, String)> = Vec::new();
-                        for tgt in mt.lefts().iter() {
-                            match tgt {
-                                prism::Node::LocalVariableTargetNode { .. } => {
-                                    let inner = tgt.as_local_variable_target_node().unwrap();
-                                    out.push((
-                                        inner.depth() as usize,
-                                        constant_name(&inner.name())?,
-                                    ));
-                                }
-                                other => {
-                                    return Err(self.unsupported("for index target", &other));
-                                }
+                        // Fast path: a flat list of plain locals maps directly
+                        // to leaked loop variables.
+                        let flat = mt.rest().is_none()
+                            && mt.rights().iter().next().is_none()
+                            && mt.lefts().iter().all(|t| {
+                                matches!(t, prism::Node::LocalVariableTargetNode { .. })
+                            });
+                        if flat {
+                            let mut out: Vec<(usize, String)> = Vec::new();
+                            for tgt in mt.lefts().iter() {
+                                let inner = tgt.as_local_variable_target_node().unwrap();
+                                out.push((
+                                    inner.depth() as usize,
+                                    constant_name(&inner.name())?,
+                                ));
                             }
+                            (out, None)
+                        } else {
+                            // Desugar to a single hidden loop variable plus a
+                            // destructuring assignment; the ordinary MulAssign
+                            // machinery handles rest / post / nested targets.
+                            let lefts: Vec<_> = mt.lefts().iter().collect();
+                            let rights: Vec<_> = mt.rights().iter().collect();
+                            let mlhs = self.lower_target_list(&lefts, mt.rest(), &rights)?;
+                            let read = Node {
+                                kind: NodeKind::LocalVar(0, FOR_INDEX_NAME.to_owned()),
+                                loc: mt_loc,
+                            };
+                            let assign = Node {
+                                kind: NodeKind::MulAssign(mlhs, vec![read]),
+                                loc: mt_loc,
+                            };
+                            (vec![(0, FOR_INDEX_NAME.to_owned())], Some(assign))
                         }
-                        out
                     }
-                    other => return Err(self.unsupported("for index", &other)),
+                    // A single non-local target (`for @x in ...`,
+                    // `for CONST in ...`, `for a[i] in ...`): desugar to the
+                    // hidden loop variable plus a plain assignment.
+                    other => {
+                        let tgt = self.lower_assign_target(&other)?;
+                        let t_loc = tgt.loc;
+                        let read = Node {
+                            kind: NodeKind::LocalVar(0, FOR_INDEX_NAME.to_owned()),
+                            loc: t_loc,
+                        };
+                        let assign = Node {
+                            kind: NodeKind::MulAssign(vec![tgt], vec![read]),
+                            loc: t_loc,
+                        };
+                        (vec![(0, FOR_INDEX_NAME.to_owned())], Some(assign))
+                    }
                 };
                 let iter = self.lower_node(&n.collection())?;
                 let body_loc = match n.statements() {
@@ -954,6 +994,13 @@ impl<'pr> Lowerer<'pr> {
                         kind: NodeKind::Nil,
                         loc: body_loc,
                     },
+                };
+                let body = match prepend {
+                    Some(assign) => Node {
+                        kind: NodeKind::CompStmt(vec![assign, body]),
+                        loc: body_loc,
+                    },
+                    None => body,
                 };
                 // ruruby's `for` body lives in a `BlockInfo` whose
                 // own LvarCollector is empty — the loop variable is

@@ -235,3 +235,33 @@ fn index_assign_with_splat() {
         "h = Hash.new(0); k = [:x]; h[*k] += 1; h[*k] += 1; h[:x]",
     ]);
 }
+
+#[test]
+fn for_loop_destructuring_index() {
+    // `for` with a splat / post / nested / non-local index target
+    // destructures each element, and the targets still leak to the
+    // enclosing scope.
+    run_tests(&[
+        // Trailing comma / anonymous splat.
+        "r = []; for i, in [[1, 2]]; r << i; end; r",
+        "r = []; for i, * in [[1, 2, 3]]; r << i; end; r",
+        // Rest in head / middle / tail.
+        "r = []; for a, *b in [[1, 2, 3], [4, 5]]; r << [a, b]; end; r",
+        "r = []; for *a, z in [[1, 2, 3]]; r << [a, z]; end; r",
+        "r = []; for a, *b, c in [[1, 2, 3, 4]]; r << [a, b, c]; end; r",
+        // Scalar elements (single-value multiple assignment).
+        "r = []; for a, *b in [1, 2]; r << [a, b]; end; r",
+        // Nested destructure target.
+        "r = []; for a, (b, c) in [[1, [2, 3]]]; r << [a, b, c]; end; r",
+        // Targets leak to the enclosing scope.
+        "for a, *b in [[1, 2, 3]]; end; [a, b]",
+        // Single non-local targets.
+        "@x = nil; for @x in [1, 2, 3]; end; @x",
+        "arr = [0, 0]; for arr[1] in [7, 8, 9]; end; arr",
+        "r = []; for @y in [[1, 2]]; r << @y; end; r",
+        // Nested for-loops with destructuring reuse the hidden variable.
+        "r = []; for i, * in [[10, 20]]; for j, *k in [[1, 2, 3]]; r << [i, j, k]; end; end; r",
+        // Plain (flat) destructure still works unchanged.
+        "r = []; for a, b in [[1, 2], [3, 4]]; r << [a, b]; end; r",
+    ]);
+}
