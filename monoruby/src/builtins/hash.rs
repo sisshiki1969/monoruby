@@ -729,16 +729,8 @@ fn index_assign(
     // preservation is handled by the underlying RubyMap. A
     // compare_by_identity hash keys on object identity, so it stores
     // the caller's String as-is (no copy, no freeze).
-    if key.is_str().is_some()
-        && !key.is_frozen()
-        && !lfp.self_val().as_hash().is_compare_by_identity()
-    {
-        // Build a fresh String value from the bytes so the duplicate
-        // does NOT inherit singleton methods from the caller's key.
-        let inner = key.as_rstring_inner().clone();
-        let mut dup = Value::string_from_inner(inner);
-        dup.set_frozen();
-        key = dup;
+    if !lfp.self_val().as_hash().is_compare_by_identity() {
+        key = key.frozen_hash_key();
     }
     lfp.self_val()
         .as_hash_mut(&globals.store)?
@@ -4107,6 +4099,24 @@ mod tests {
         run_tests(&[
             "{nil: 1, false: 2, true: 3}",
             "{nil: 1}.keys",
+        ]);
+    }
+
+    #[test]
+    fn hash_literal_freezes_string_keys() {
+        // A String key in a hash *literal* is stored as a frozen dup (like
+        // `Hash#[]=`), so later mutation of the source String can't corrupt
+        // the hash. Frozen keys and non-String keys are stored as-is.
+        run_tests(&[
+            r#"s = "x"; h = { s => 1 }; [h.keys.first.frozen?, h.keys.first.equal?(s)]"#,
+            // The classic mutate-the-source case: the stored key is unaffected.
+            r#"key = +"foo"; h = { key => "bar" }; key.reverse!; [h["foo"], h.keys.first, key]"#,
+            // An already-frozen String key is stored without copying.
+            r#"s = "x".freeze; h = { s => 1 }; h.keys.first.equal?(s)"#,
+            // Non-String keys are never dup'd.
+            r#"k = [1]; h = { k => 1 }; h.keys.first.equal?(k)"#,
+            // Duplicate string keys in a literal still collapse (last wins).
+            r#"{ "a" => 1, "a" => 2 }"#,
         ]);
     }
 

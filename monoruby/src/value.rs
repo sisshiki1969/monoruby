@@ -1027,6 +1027,27 @@ impl Value {
         RValue::new_string_from_inner_with_class(inner, class_id).pack()
     }
 
+    ///
+    /// Return the value to store as a Hash key: a mutable String is dup'd
+    /// and frozen (CRuby freezes String keys so later mutation of the
+    /// source String can't corrupt the hash), while frozen Strings and
+    /// non-String keys are returned unchanged. The dup is built from the
+    /// bytes so it does not inherit any singleton methods from the source.
+    ///
+    /// Callers storing into a `compare_by_identity` Hash must skip this
+    /// (identity hashes key on the original object).
+    ///
+    pub(crate) fn frozen_hash_key(self) -> Value {
+        if self.is_str().is_some() && !self.is_frozen() {
+            let inner = self.as_rstring_inner().clone();
+            let mut dup = Value::string_from_inner(inner);
+            dup.set_frozen();
+            dup
+        } else {
+            self
+        }
+    }
+
     pub fn array(ary: ArrayInner) -> Self {
         RValue::new_array(ary).pack()
     }
