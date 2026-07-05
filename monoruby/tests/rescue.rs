@@ -456,6 +456,36 @@ fn raise_no_args_without_current_exception() {
 }
 
 #[test]
+fn rescue_safe_nav_target() {
+    // `rescue => recv&.attr`: the caught exception is stored via a
+    // safe-navigation setter; a nil receiver skips the store (the
+    // exception is still rescued).
+    run_test_with_prelude(
+        r##"
+        res = []
+        t = T.new
+        begin; raise "boom"; rescue => t&.e; end
+        res << t.e.message
+        n = nil
+        begin; raise "x"; rescue => n&.e; end
+        res << n
+        # with an explicit exception class, and as a value.
+        r = begin; raise TypeError, "z"; rescue TypeError => t&.e; :done; end
+        res << [r, t.e.class.name]
+        # JIT warm-up.
+        i = 0
+        while i < 200
+          begin; raise "b#{i}"; rescue => t&.e; end
+          i += 1
+        end
+        res << t.e.message
+        res
+        "##,
+        "class T; attr_accessor :e; end",
+    );
+}
+
+#[test]
 fn eval_custom_filename_and_lineno() {
     run_tests(&[
         r#"
