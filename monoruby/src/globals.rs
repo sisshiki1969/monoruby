@@ -634,11 +634,35 @@ impl Globals {
     }
 
     pub fn run(&mut self, code: impl Into<String>, path: &std::path::Path) -> Result<Value> {
+        self.run_with_requires(&[], code, path)
+    }
+
+    ///
+    /// Run *code* after `require`-ing each library in *requires* (the
+    /// command-line `-r` option).
+    ///
+    /// The libraries are required inside the same `Executor` that runs
+    /// *code*, so any `at_exit` handlers they register are drained exactly
+    /// once — after *code* finishes — rather than at the end of a separate
+    /// run. *code* itself is left untouched (nothing is prepended), so a
+    /// source-encoding magic comment stays on its first line.
+    ///
+    pub fn run_with_requires(
+        &mut self,
+        requires: &[String],
+        code: impl Into<String>,
+        path: &std::path::Path,
+    ) -> Result<Value> {
         let code = code.into();
         let program_name = path.to_string_lossy().to_string();
         let mut executor = Executor::init(self, &program_name)?;
         executor.init_stack_limit(self);
-        let res = executor.exec_script(self, code, path);
+        let res = (|| {
+            for lib in requires {
+                executor.require(self, std::path::Path::new(lib), false)?;
+            }
+            executor.exec_script(self, code, path)
+        })();
         // Run `at_exit` handlers and `ObjectSpace` finalizers before the
         // process leaves. This must happen even when `res` is a
         // `SystemExit` (raised by `Kernel#exit`) or an uncaught
