@@ -1598,15 +1598,22 @@ impl<'a> BytecodeGen<'a> {
             self.emit_mov(ret, tmp);
         }
         if !splat.is_empty() {
-            // For each splat, call merge! on the hash
+            // For each `**` operand, merge it into the hash. A nil operand
+            // contributes nothing (`{**nil}` == `{}`, `{a: 1, **nil}` ==
+            // `{a: 1}`), matching CRuby, so guard the `merge!` with a nil
+            // check. This is nil-specific: a non-nil, non-Hash operand
+            // (`{**1}`, `{**false}`) still raises via `merge!`/`#to_hash`.
             let merge_id = IdentId::get_id("merge!");
             for s in splat {
                 let old_reg2 = self.temp;
                 let splat_arg = self.sp();
                 self.push_expr(s)?;
+                let skip = self.new_label();
+                self.emit_nilbr(splat_arg.into(), skip, old_reg2);
                 self.temp = old_reg2;
                 let callsite = CallSite::simple(merge_id, 1, splat_arg.into(), ret, Some(ret));
                 self.emit_call(callsite, loc);
+                self.apply_label(skip);
             }
         }
         Ok(())
