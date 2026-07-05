@@ -43,6 +43,9 @@ struct CommandLineArgs {
     /// dump the parsed ruby-prism AST and exit.
     #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "prism", value_name = "PARSER")]
     ast: Option<ParserKind>,
+    /// require the library before executing your script.
+    #[arg(short = 'r', value_name = "library")]
+    require: Vec<String>,
     /// specify $LOAD_PATH directory (may be used more than once).
     #[arg(short = 'I')]
     directory: Vec<String>,
@@ -115,15 +118,17 @@ fn main() {
                 dump_ast(&code, path, kind, &globals);
             }
         } else {
-            for code in args.exec {
-                match globals.run(code, path) {
-                    Ok(_val) => {
-                        #[cfg(debug_assertions)]
-                        eprintln!("=> {:?}", _val)
-                    }
-                    Err(err) => {
-                        handle_error(err, &globals);
-                    }
+            // Multiple `-e` options form a single program (joined by
+            // newlines), matching CRuby, so `-r` libraries and `at_exit`
+            // handlers are processed once around the combined script.
+            let code = args.exec.join("\n");
+            match globals.run_with_requires(&args.require, code, path) {
+                Ok(_val) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("=> {:?}", _val)
+                }
+                Err(err) => {
+                    handle_error(err, &globals);
                 }
             }
         }
@@ -161,7 +166,7 @@ fn main() {
     };
     if let Some(kind) = args.ast {
         dump_ast(&code, &path, kind, &globals);
-    } else if let Err(err) = globals.run(code, &path) {
+    } else if let Err(err) = globals.run_with_requires(&args.require, code, &path) {
         handle_error(err, &globals);
     }
 }
