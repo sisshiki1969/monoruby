@@ -2542,23 +2542,27 @@ impl<'pr> Lowerer<'pr> {
                         prefix: vec![],
                         name,
                     },
-                    Some(p) => {
-                        let mut inner = self.collect_const_chain(&p)?.ok_or_else(|| {
-                            self.unsupported_node(
-                                "non-constant constant path target prefix",
-                                location_to_loc(&p.location()),
-                            )
-                        })?;
-                        if inner.parent.is_some() {
-                            return Err(self.unsupported_node(
-                                "constant path target nested under non-constant parent",
-                                loc,
-                            ));
+                    Some(p) => match self.collect_const_chain(&p)? {
+                        // A constant chain, possibly already rooted on a
+                        // non-constant base (`(expr)::A::B`): slide the inner
+                        // leaf into `prefix` and take this target's name,
+                        // exactly as the read-side `collect_const_chain` does.
+                        Some(mut inner) => {
+                            inner.prefix.push(std::mem::take(&mut inner.name));
+                            inner.name = name;
+                            inner
                         }
-                        inner.prefix.push(std::mem::take(&mut inner.name));
-                        inner.name = name;
-                        inner
-                    }
+                        // `(expr)::A = value` — a non-constant prefix. Lower
+                        // it as an ordinary expression and use it as the
+                        // constant's base scope (bytecodegen evaluates it),
+                        // mirroring the read-side `ConstantPathNode` path.
+                        None => ConstChain {
+                            toplevel: false,
+                            parent: Some(Box::new(self.lower_node(&p)?)),
+                            prefix: vec![],
+                            name,
+                        },
+                    },
                 };
                 Node {
                     kind: NodeKind::Const {
