@@ -662,8 +662,25 @@ impl Store {
             }
             iseq = outer;
         }
-        map.into_iter().map(Value::symbol).collect()
+        // Drop reserved, unspellable slots (anonymous `*` / `**` / `&`, the
+        // hidden `for`-loop index, …) that are not real local variables.
+        map.into_iter()
+            .filter(|id| is_local_variable_name(&id.get_name()))
+            .map(Value::symbol)
+            .collect()
     }
+}
+
+/// Whether `name` is spellable as a Ruby local variable — i.e. begins with a
+/// lowercase letter or `_` and consists only of word characters. Filters out
+/// the compiler's reserved slots (`*`, `**`, `&`'s empty name, `(for)`, …).
+fn is_local_variable_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c == '_' || (!c.is_ascii()) || c.is_lowercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || !c.is_ascii() || c.is_alphanumeric())
 }
 
 ///

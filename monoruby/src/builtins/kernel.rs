@@ -52,6 +52,15 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         false,
         Effect::CAPTURE | Effect::BINDING,
     );
+    globals.define_builtin_module_func_with_effect(
+        kernel_class,
+        "local_variables",
+        local_variables,
+        0,
+        0,
+        false,
+        Effect::CAPTURE,
+    );
     globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);
     globals.define_builtin_module_func_with_kw(
         kernel_class,
@@ -619,6 +628,24 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 #[monoruby_builtin]
 fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp, pc: BytecodePtr) -> Result<Value> {
     Ok(vm.generate_binding(pc).as_val())
+}
+
+///
+/// ### Kernel.#local_variables
+///
+/// - local_variables -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/local_variables.html]
+#[monoruby_builtin]
+fn local_variables(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    // Report the caller's local variables (the frame that invoked us).
+    let caller_cfp = vm.cfp().prev().unwrap();
+    let fid = caller_cfp.lfp().func_id();
+    let v = match globals.store[fid].is_iseq() {
+        Some(iseq) => globals.store.local_variables(iseq),
+        None => vec![],
+    };
+    Ok(Value::array_from_vec(v))
 }
 
 ///
@@ -6629,6 +6656,21 @@ mod tests {
         run_test_error(r#"ObjectSpace.define_finalizer(:sym){ 1 }"#);
         // undefine on a frozen object raises FrozenError
         run_test_error(r#"o = Object.new; o.freeze; ObjectSpace.undefine_finalizer(o)"#);
+    }
+
+    #[test]
+    fn kernel_local_variables() {
+        // Method-wrapped so the test harness's own locals don't leak in.
+        run_test(r#"def m; a = 1; b = 2; local_variables.sort; end; m"#);
+        run_test(r#"def m(x, y); z = 3; local_variables.sort; end; m(1, 2)"#);
+        run_test(r#"def m; local_variables; end; m"#);
+        run_test(r#"def m; [1].each { |i| j = i * 2; return local_variables.sort }; end; m"#);
+        // Anonymous / reserved parameter slots and the hidden `for`-loop
+        // index must not appear.
+        run_test(r#"def m(*args, **kw, &blk); local_variables.sort; end; m(1)"#);
+        run_test(r#"def m; for a, *b in [[1, 2, 3]]; end; local_variables.sort; end; m"#);
+        // `Binding#local_variables` shares the same filtering.
+        run_test(r#"def m; a = 1; b = 2; binding.local_variables.sort; end; m"#);
     }
 
     #[test]
