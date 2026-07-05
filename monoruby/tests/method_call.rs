@@ -516,6 +516,52 @@ fn splat2() {
 }
 
 #[test]
+fn splat_to_a_coercion() {
+    // Splatting a non-Array object coerces it via `#to_a`:
+    //   - `#to_a` returning an Array  -> that Array's elements
+    //   - `#to_a` returning nil       -> the object wrapped in `[obj]`
+    //     (treated like a missing `#to_a`)
+    //   - no `#to_a` at all           -> the object wrapped in `[obj]`
+    //   - `#to_a` returning a non-Array, non-nil -> TypeError
+    run_test_with_prelude(
+        r#"
+        arr  = Obj.new([10, 20])
+        nl   = Obj.new(nil)
+        bare = BareObj.new
+        # `to_a` returning an Array expands its elements.
+        r_arr  = m(*arr)
+        r_mid  = m(0, *arr, 9)
+        # `to_a` returning nil wraps the object itself (like no `to_a`).
+        r_nl   = m(*nl)
+        r_nl2  = m(1, *nl)
+        # No `to_a` at all also wraps the object.
+        r_bare = m(*bare)
+        # A non-Array, non-nil `to_a` result is a TypeError.
+        r_bad  = (begin; m(*Bad.new); rescue TypeError; :type_error; end)
+        [
+          r_arr, r_mid,
+          r_nl.size, r_nl.first.equal?(nl),
+          r_nl2.size, r_nl2[0], r_nl2[1].equal?(nl),
+          r_bare.size, r_bare.first.equal?(bare),
+          r_bad,
+        ]
+        "#,
+        r#"
+        def m(*a) = a
+        class Obj
+          def initialize(v) = @v = v
+          def to_a = @v
+        end
+        class BareObj
+        end
+        class Bad
+          def to_a = 42
+        end
+        "#,
+    );
+}
+
+#[test]
 fn hash_splat() {
     run_test_with_prelude(
         r##"
