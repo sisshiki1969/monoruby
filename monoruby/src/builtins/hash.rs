@@ -4111,6 +4111,25 @@ mod tests {
     }
 
     #[test]
+    fn hash_literal_double_splat_nil() {
+        // `**nil` in a hash literal contributes nothing (CRuby treats a
+        // nil operand as empty), whether the operand is a literal nil or a
+        // variable that holds nil at runtime.
+        run_tests(&[
+            "{**nil}",
+            "x = nil; {**x}",
+            "{a: 1, **nil, b: 2}",
+            "h = {a: 1}; {**h, **nil}",
+            "{**nil}.empty?",
+            // A non-nil, non-Hash operand still raises TypeError.
+            "begin; {**1}; rescue TypeError; :te; end",
+            "begin; {**false}; rescue TypeError; :te; end",
+            // A `#to_hash` object still expands normally alongside `**nil`.
+            "o = Object.new; def o.to_hash; {z: 9}; end; {**o, **nil}",
+        ]);
+    }
+
+    #[test]
     fn hash_each_block_trailing_comma() {
         // PR #361 follow-up: a trailing comma in a block parameter list
         // (`|k,|`) injects a synthetic anonymous post param, bumping the
