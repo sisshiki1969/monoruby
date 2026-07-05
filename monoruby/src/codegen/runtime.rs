@@ -1580,6 +1580,11 @@ pub(super) extern "C" fn to_a(
         let ary = vm.invoke_func(globals, func_id, src, &[], None, None)?;
         if ary.is_array_ty() {
             Some(ary)
+        } else if ary.is_nil() {
+            // `#to_a` returning nil is treated like a missing `#to_a`:
+            // the splatted object is wrapped in a one-element array,
+            // matching CRuby (`m(*o)` with `o.to_a == nil` -> `[o]`).
+            Some(Value::array1(src))
         } else {
             let src_class = src.class().get_name(&globals.store);
             //let res_class = ary.class().get_name(&globals.store);
