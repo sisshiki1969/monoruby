@@ -491,6 +491,31 @@ impl<'a> BytecodeGen<'a> {
                     }
                     return self.gen_safe_nav_op_assign(receiver, op, lhs, rhs, use_mode, loc);
                 }
+                // Attribute (`recv.attr op= rhs`) and index (`base[idx] op=
+                // rhs`) targets have a receiver / index expression that may
+                // carry side effects, so it must be evaluated exactly once and
+                // reused for both the getter and the setter. Every other target
+                // (const / ivar / cvar / gvar / dynamic var) is side-effect-free
+                // to re-read, so the simpler re-evaluating path stays correct.
+                if matches!(&lhs.kind,
+                    NodeKind::MethodCall { .. } | NodeKind::Index { .. })
+                {
+                    return self.gen_op_assign_with_receiver(op, lhs, rhs, use_mode, loc);
+                }
+                match op {
+                    BinOp::LOr | BinOp::LAnd => {
+                        // `target ||= rhs` / `target &&= rhs`: short-circuit so
+                        // the store only fires when needed. Re-reading a
+                        // side-effect-free target is fine, so lower to the
+                        // ordinary short-circuit binop over an inline assign.
+                        let assign = Node::new(
+                            NodeKind::MulAssign(vec![lhs.clone()], vec![rhs]),
+                            loc,
+                        );
+                        return self.gen_binop(op, lhs, assign, use_mode, loc);
+                    }
+                    _ => {}
+                }
                 let lhs_loc = lhs.loc;
                 let temp = self.temp;
                 // First, evaluate lvalue.
@@ -995,6 +1020,126 @@ impl<'a> BytecodeGen<'a> {
             _ => unreachable!(),
         }
         Ok(())
+    }
+
+    ///
+    /// Generate an op-assign whose target has a side-effecting receiver or
+    /// index (`recv.attr op= rhs`, `base[idx] op= rhs`).
+    ///
+    /// `eval_lvalue` evaluates the receiver / index exactly once (into temp
+    /// registers); the current value is then read through the matching getter,
+    /// combined with `rhs`, and written back through the setter — reusing that
+    /// single evaluation. For `||=` / `&&=` the setter fires only when the
+    /// current value is falsy / truthy respectively.
+    ///
+    fn gen_op_assign_with_receiver(
+        &mut self,
+        op: BinOp,
+        lhs: Node,
+        rhs: Node,
+        use_mode: UseMode2,
+        loc: Loc,
+    ) -> Result<()> {
+        let temp = self.temp;
+        // The getter name for an attribute target (`recv.attr`); `eval_lvalue`
+        // turns the `Send` lvalue's method into the setter (`attr=`), so keep
+        // the original method name for the read.
+        let getter = if let NodeKind::MethodCall { method, .. } = &lhs.kind {
+            Some(IdentId::get_id(method))
+        } else {
+            None
+        };
+        let (lhs_kind, rest) = self.eval_lvalue(&lhs)?;
+        assert!(!rest);
+        // Read the current value.
+        let cur = self.push().into();
+        self.emit_op_assign_getter(&lhs_kind, getter, cur, loc);
+        match op {
+            BinOp::LOr | BinOp::LAnd => {
+                let exit = self.new_label();
+                // `||=`: skip the store when the current value is truthy.
+                // `&&=`: skip the store when the current value is falsy.
+                let jmp_if_true = matches!(op, BinOp::LOr);
+                self.emit_condbr(cur, exit, jmp_if_true, false);
+                self.gen_store_expr(cur, rhs)?;
+                self.emit_assign(cur, lhs_kind, None, loc);
+                self.apply_label(exit);
+            }
+            _ => {
+                let binopk = Self::binop_to_binopk(op);
+                let old = self.temp;
+                let rhs_reg = self.gen_expr_reg(rhs)?;
+                self.temp = old;
+                self.emit(BytecodeInst::BinOp(binopk, Some(cur), (cur, rhs_reg)), loc);
+                self.emit_assign(cur, lhs_kind, None, loc);
+            }
+        }
+        self.temp = temp;
+        self.handle_mode(use_mode, cur)?;
+        Ok(())
+    }
+
+    ///
+    /// Emit the getter for an already-evaluated attribute / index lvalue,
+    /// storing the read value into `dst`.
+    ///
+    fn emit_op_assign_getter(
+        &mut self,
+        lhs_kind: &LvalueKind,
+        getter: Option<IdentId>,
+        dst: BcReg,
+        loc: Loc,
+    ) {
+        let callsite = match lhs_kind {
+            LvalueKind::Send { recv, .. } => CallSite::unary(getter.unwrap(), *recv, Some(dst)),
+            LvalueKind::Index { base, index } => {
+                CallSite::binary(IdentId::_INDEX, *base, (*index).into(), Some(dst))
+            }
+            LvalueKind::Index2 { base, index1, num } => {
+                CallSite::simple(IdentId::_INDEX, *num, (*index1).into(), *base, Some(dst))
+            }
+            LvalueKind::IndexSplat {
+                base,
+                index1,
+                num,
+                splat_pos,
+            } => CallSite::new(
+                IdentId::_INDEX,
+                *num,
+                None,
+                splat_pos.clone(),
+                None,
+                None,
+                (*index1).into(),
+                *base,
+                Some(dst),
+                false,
+            ),
+            _ => unreachable!(),
+        };
+        self.emit_call(callsite, loc);
+    }
+
+    ///
+    /// Map an arithmetic / bitwise op-assign operator to its `BinOpK`.
+    /// `||=` / `&&=` are handled separately (short-circuit) and never reach
+    /// here.
+    ///
+    fn binop_to_binopk(op: BinOp) -> BinOpK {
+        match op {
+            BinOp::Add => BinOpK::Add,
+            BinOp::Sub => BinOpK::Sub,
+            BinOp::Mul => BinOpK::Mul,
+            BinOp::Div => BinOpK::Div,
+            BinOp::Rem => BinOpK::Rem,
+            BinOp::Exp => BinOpK::Exp,
+            BinOp::BitOr => BinOpK::BitOr,
+            BinOp::BitAnd => BinOpK::BitAnd,
+            BinOp::BitXor => BinOpK::BitXor,
+            BinOp::Shl => BinOpK::Shl,
+            BinOp::Shr => BinOpK::Shr,
+            _ => unreachable!("non-arithmetic op-assign operator: {:?}", op),
+        }
     }
 
     fn handle_mode(&mut self, use_mode: UseMode2, src: BcReg) -> Result<()> {

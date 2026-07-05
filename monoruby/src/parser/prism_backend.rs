@@ -2323,11 +2323,15 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
-    /// `target ||= value` -> `BinOp(LOr, target, MulAssign([target],
-    /// [value]))` and likewise for `&&=` -> `LAnd`. Prism reports
-    /// these via `*OrWriteNode` / `*AndWriteNode`; we collapse them
-    /// into the same shape ruruby's parser produces (a short-circuit
-    /// binop wrapped around an inline assignment).
+    /// `target ||= value` -> `AssignOp(LOr, target, value)` and likewise
+    /// for `&&=` -> `LAnd`. Prism reports these via `*OrWriteNode` /
+    /// `*AndWriteNode`. Routing them through `AssignOp` (rather than a
+    /// `BinOp(LOr, target, MulAssign([target], [value]))` wrapper) lets
+    /// bytecodegen evaluate an attribute/index receiver exactly once for
+    /// both the read and the conditional write — the wrapper form
+    /// re-evaluated the receiver, so `a[side_effect] ||= v` ran the index
+    /// twice. Bytecodegen still short-circuits: the setter fires only when
+    /// the current value is falsy (`||=`) / truthy (`&&=`).
     fn build_short_circuit_assign(
         &mut self,
         op: BinOp,
@@ -2336,12 +2340,8 @@ impl<'pr> Lowerer<'pr> {
         loc: Loc,
     ) -> Result<Node, MonorubyErr> {
         let value = self.lower_node(value)?;
-        let assign = Node {
-            kind: NodeKind::MulAssign(vec![target.clone()], vec![value]),
-            loc,
-        };
         Ok(Node {
-            kind: NodeKind::BinOp(op, Box::new(target), Box::new(assign)),
+            kind: NodeKind::AssignOp(op, Box::new(target), Box::new(value)),
             loc,
         })
     }
