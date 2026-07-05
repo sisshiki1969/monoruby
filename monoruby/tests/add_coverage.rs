@@ -236,6 +236,40 @@ fn const_dynamic_access() {
 }
 
 #[test]
+fn const_path_assign_dynamic_base() {
+    // Constant assignment whose path prefix is a runtime expression rather
+    // than a static constant chain. Single assignment goes through the
+    // constant-path write path; a multiple-assignment target goes through
+    // `lower_assign_target` (the branch this test guards).
+    run_test(
+        r##"
+        res = []
+        m = Module.new
+        (m)::X = 7
+        res << m::X
+        # Multiple-assignment const-path targets with a non-constant base.
+        (m)::A, (m)::B = 1, 2
+        res << [m::A, m::B]
+        x, (m)::C = 10, 20
+        res << [x, m::C]
+        (m::D, m::E), c = [:d, :e], nil
+        res << [m::D, m::E, c]
+        # ...and with a static constant-chain base.
+        Fo = Module.new
+        Fo::P, Fo::Q = 3, 4
+        res << [Fo::P, Fo::Q]
+        (Fo::R, Fo::S), d = [5, 6], 7
+        res << [Fo::R, Fo::S, d]
+        # ...and a nested path already rooted on a non-constant base.
+        m::N = Module.new
+        (m)::N::Deep, e = 8, 9
+        res << [m::N::Deep, e]
+        res
+        "##,
+    );
+}
+
+#[test]
 fn const_inherited() {
     run_test_with_prelude(
         r#"
