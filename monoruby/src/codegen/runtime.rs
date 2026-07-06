@@ -708,7 +708,9 @@ pub(crate) extern "C" fn vm_check_constant(
             return Some(cache.value);
         };
     }
-    match vm.find_constant(globals, site_id) {
+    // The `||=` / `&&=` definedness check must not fire `const_missing`
+    // (CRuby checks definedness only), so use the no-missing resolver.
+    match vm.find_constant_no_missing(globals, site_id) {
         Ok((value, base_class)) => {
             globals.store[site_id].cache = Some(ConstCache {
                 version: const_version,

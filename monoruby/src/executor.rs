@@ -1197,6 +1197,32 @@ impl Executor {
         globals: &mut Globals,
         site_id: ConstSiteId,
     ) -> Result<(Value, Option<Value>)> {
+        self.find_constant_impl(globals, site_id, true)
+    }
+
+    ///
+    /// Like [`Self::find_constant`], but the *final* constant name is resolved
+    /// without falling back to `const_missing` — an undefined constant yields
+    /// a `NameError` (mapped to `nil` by the `||=` / `&&=` check path) instead
+    /// of invoking a user `const_missing` hook. The scope (module part) is
+    /// still resolved normally, since evaluating `A::B` in `A::B::C ||= v` is
+    /// an ordinary read that may legitimately fire `const_missing`. Matches
+    /// CRuby, whose constant op-assign checks definedness without `const_missing`.
+    ///
+    pub(crate) fn find_constant_no_missing(
+        &mut self,
+        globals: &mut Globals,
+        site_id: ConstSiteId,
+    ) -> Result<(Value, Option<Value>)> {
+        self.find_constant_impl(globals, site_id, false)
+    }
+
+    fn find_constant_impl(
+        &mut self,
+        globals: &mut Globals,
+        site_id: ConstSiteId,
+        final_missing: bool,
+    ) -> Result<(Value, Option<Value>)> {
         let ConstSiteInfo {
             name,
             toplevel,
@@ -1216,7 +1242,14 @@ impl Executor {
             // Lexical access (`Foo` with no qualifier): visibility is not
             // enforced. Constants are reachable from their own lexical
             // scope regardless of `private_constant`.
-            let v = self.search_constant_checked(globals, name, current_func)?;
+            let v = if final_missing {
+                self.search_constant_checked(globals, name, current_func)?
+            } else {
+                match self.search_constant_no_missing(globals, name, current_func)? {
+                    Some(v) => v,
+                    None => return Ok((Value::nil(), None)),
+                }
+            };
             return Ok((v, None));
         } else {
             let parent = prefix.remove(0);
@@ -1243,6 +1276,18 @@ impl Executor {
             parent = val.expect_class_or_module(&globals.store)?.id();
         }
         let module = globals[parent].get_module();
+        if !final_missing {
+            // `||=` / `&&=` definedness check on the (already-resolved) scope:
+            // return the value if the constant exists on the ancestor chain,
+            // otherwise `nil` — without invoking `const_missing`, and without
+            // enforcing `private_constant` visibility (a bare op-assign target
+            // is reachable like a definedness probe).
+            let v = match self.get_constant_superclass_qualified(globals, module, name)? {
+                Some(v) => v,
+                None => Value::nil(),
+            };
+            return Ok((v, base));
+        }
         if let Some(defining) = Self::probe_constant_superclass_with_class(globals, module, name) {
             if globals.store[defining].is_constant_private(name) {
                 // A private constant routes through `const_missing` (CRuby
