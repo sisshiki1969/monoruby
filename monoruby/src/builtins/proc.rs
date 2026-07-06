@@ -1173,6 +1173,24 @@ mod tests {
         );
     }
 
+    /// `&obj` where `obj` is not a Proc is coerced via `#to_proc`; a
+    /// missing `#to_proc` or a non-Proc result raises TypeError (matching
+    /// CRuby), rather than the old "not yet implemented" RuntimeError.
+    #[test]
+    fn block_arg_to_proc_type_errors() {
+        run_tests(&[
+            // No `#to_proc`: "no implicit conversion of Object into Proc".
+            r#"o = Object.new; def mk(&b); b; end
+               begin; mk(&o); rescue TypeError => e; e.message; end"#,
+            // `#to_proc` returning a non-Proc raises TypeError (the exact
+            // message wording varies by CRuby version, so check the class).
+            r#"class R; def to_proc; 42; end; end; def mk(&b); b; end
+               begin; mk(&R.new); rescue => e; e.class; end"#,
+            // A well-behaved `#to_proc` (Symbol / Method) still works.
+            r#"def mk(&b); b; end; mk(&:to_s).call(42)"#,
+        ]);
+    }
+
     /// `&:sym` forwarded as `&b` through a middle Proc and
     /// re-dispatched must behave the same as a direct `&:sym`
     /// block arg.
