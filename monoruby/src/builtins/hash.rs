@@ -4171,6 +4171,28 @@ mod tests {
     }
 
     #[test]
+    fn hash_literal_double_splat_order() {
+        // A hash literal is built strictly left-to-right: every element
+        // (ordinary `k: v` pair or `**` splat) is applied in source order,
+        // and a later element overwrites an earlier key while preserving
+        // the key's first-seen insertion position. An explicit pair after a
+        // `**` splat must overwrite a key the splat contributed.
+        run_tests(&[
+            r#"h = {b: 2, c: 3}; ({a: 1, **h, c: 4}).to_a"#,
+            r#"h = {b: 2, c: 3}; ({**h, a: 1}).to_a"#,
+            r#"h = {b: 2, c: 3}; ({a: 1, **h}).to_a"#,
+            r#"({x: 0, **{a: 1}, a: 9, y: 5}).to_a"#,
+            // Two interleaved splats with pairs before, between, and after.
+            r#"({**{a: 1}, b: 2, **{a: 3, c: 4}, b: 5}).to_a"#,
+            // `**nil` interleaved between pairs contributes nothing but must
+            // not disturb ordering.
+            r#"({a: 1, **nil, b: 2}).to_a"#,
+            // A `#to_hash` operand overwritten by a trailing explicit pair.
+            r#"o = Object.new; def o.to_hash; {k: 1}; end; ({**o, k: 2}).to_a"#,
+        ]);
+    }
+
+    #[test]
     fn hash_each_block_trailing_comma() {
         // PR #361 follow-up: a trailing comma in a block parameter list
         // (`|k,|`) injects a synthetic anonymous post param, bumping the

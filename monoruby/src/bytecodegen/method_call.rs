@@ -383,7 +383,7 @@ impl<'a> BytecodeGen<'a> {
                     self.level_down(n1, level);
                     self.level_down(n2, level);
                 });
-                splat.iter_mut().for_each(|n| self.level_down(n, level));
+                splat.iter_mut().for_each(|(_, n)| self.level_down(n, level));
             }
             NodeKind::FuncCall { arglist, .. } | NodeKind::Yield(arglist) => {
                 self.level_down_arglist(arglist, level);
