@@ -92,6 +92,13 @@ pub struct Store {
     /// during JIT compilation); the borrow never outlives a single
     /// cache probe/fill.
     method_cache: RefCell<GlobalMethodCache>,
+    /// Warnings produced during bytecode compilation (e.g. a hash literal
+    /// with a duplicated literal key). Bytecodegen has no `Executor`, so it
+    /// can't route a warning through the redirectable `$stderr`; the
+    /// messages are buffered here and flushed by
+    /// `Executor::flush_compile_warnings` right after compilation, before
+    /// the compiled code runs.
+    pub(crate) compile_warnings: Vec<String>,
 }
 
 impl std::ops::Deref for Store {
@@ -207,6 +214,7 @@ impl Store {
             default_neq: None,
             default_copy_hooks: None,
             method_cache: RefCell::new(GlobalMethodCache::default()),
+            compile_warnings: vec![],
         }
     }
 

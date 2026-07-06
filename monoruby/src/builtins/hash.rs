@@ -4103,6 +4103,37 @@ mod tests {
     }
 
     #[test]
+    fn hash_literal_duplicated_key_warning() {
+        // A hash literal that repeats a *literal* key warns "key ... is
+        // duplicated and overwritten" through `$stderr` (so a redirected
+        // `$stderr` captures it, as CRuby's compile-time warning does).
+        // Only literal keys are checked; a runtime key (`{k => 1, k => 2}`)
+        // does not warn. The message carries an `(eval at ...)` path prefix
+        // that differs from CRuby's, so match the stable part by regex.
+        run_test(
+            r#"
+            require 'stringio'
+            def cap; $stderr = StringIO.new; yield; s = $stderr.string; $stderr = STDERR; s; end
+            [
+              !!(cap { eval("{foo: :bar, foo: :foo}") } =~ /key :foo is duplicated/),
+              !!(cap { eval(%q[{"a" => 1, "a" => 2}]) } =~ /key "a" is duplicated/),
+              !!(cap { eval("{1000 => :a, 1000 => :b}") } =~ /key 1000 is duplicated/),
+              !!(cap { eval("{1.0 => :a, 1.0 => :b}") } =~ /key 1.0 is duplicated/),
+              !!(cap { eval("{true => 1, true => 2}") } =~ /key true is duplicated/),
+              !!(cap { eval("{nil => 1, nil => 2}") } =~ /key nil is duplicated/),
+              !!(cap { eval("{100000000000000000000 => 1, 100000000000000000000 => 2}") } =~ /is duplicated/),
+              # A runtime (non-literal) key never warns.
+              cap { k = 1; eval("{k => 1, k => 2}", binding) }.empty?,
+              # No duplicate: no warning.
+              cap { eval("{a: 1, b: 2}") }.empty?,
+              # The overwrite still happens (last value wins).
+              eval("{a: 1, a: 2}"),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
     fn hash_literal_freezes_string_keys() {
         // A String key in a hash *literal* is stored as a frozen dup (like
         // `Hash#[]=`), so later mutation of the source String can't corrupt

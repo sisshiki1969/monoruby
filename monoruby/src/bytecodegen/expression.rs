@@ -1550,6 +1550,7 @@ impl<'a> BytecodeGen<'a> {
         splat: Vec<Node>,
         loc: Loc,
     ) -> Result<()> {
+        self.warn_duplicated_hash_keys(&nodes);
         if nodes.len() <= LITERAL_CHUNK_LEN {
             let len = nodes.len();
             let old_reg = self.temp;
@@ -1617,6 +1618,54 @@ impl<'a> BytecodeGen<'a> {
             }
         }
         Ok(())
+    }
+
+    ///
+    /// Buffer CRuby's "key ... is duplicated and overwritten" warning for a
+    /// hash literal that repeats a *literal* key (`{a: 1, a: 2}`). Only
+    /// constant keys (symbol / string / integer / bignum / float / true /
+    /// false / nil) are checked — runtime-computed keys (`{k => 1, k => 2}`)
+    /// are not — matching CRuby's compile-time check. Silenced at warning
+    /// level 0 (`-W0`). The message is buffered on `Store` and flushed
+    /// through `$stderr` by `Executor::flush_compile_warnings` once
+    /// compilation finishes.
+    ///
+    fn warn_duplicated_hash_keys(&mut self, nodes: &[(Node, Node)]) {
+        use std::sync::atomic::Ordering;
+        if crate::globals::WARNING.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        fn literal_key(kind: &NodeKind) -> Option<(String, String)> {
+            // (equality key, inspect string)
+            match kind {
+                NodeKind::Symbol(s) => Some((format!("sym:{s}"), format!(":{s}"))),
+                NodeKind::String(s) => Some((format!("str:{s}"), format!("{s:?}"))),
+                NodeKind::Integer(i) => Some((format!("int:{i}"), format!("{i}"))),
+                NodeKind::Bignum(n) => Some((format!("int:{n}"), format!("{n}"))),
+                NodeKind::Float(f) => {
+                    Some((format!("flt:{f}"), crate::value::ruby_float_to_s(*f)))
+                }
+                NodeKind::Bool(b) => Some((format!("bool:{b}"), format!("{b}"))),
+                NodeKind::Nil => Some(("nil".to_string(), "nil".to_string())),
+                _ => None,
+            }
+        }
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (k, _) in nodes {
+            if let Some((eq, inspect)) = literal_key(&k.kind) {
+                if !seen.insert(eq) {
+                    let line = self.sourceinfo.get_line(&k.loc);
+                    let msg = format!(
+                        "{}:{}: warning: key {} is duplicated and overwritten on line {}",
+                        self.sourceinfo.path.to_string_lossy(),
+                        line,
+                        inspect,
+                        line,
+                    );
+                    self.store.compile_warnings.push(msg);
+                }
+            }
+        }
     }
 
     fn gen_regexp(&mut self, ret: BcReg, nodes: Vec<Node>, option: String, loc: Loc) -> Result<()> {

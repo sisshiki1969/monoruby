@@ -377,6 +377,7 @@ fn instance_eval_inner(
         };
         let fid =
             globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()), lineno)?;
+        vm.flush_compile_warnings(globals);
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
