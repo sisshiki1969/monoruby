@@ -2122,11 +2122,13 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         globals
             .compile_script_binding(expr, fname, binding, lineno)
             .map_err(downgrade_eval_fatal)?;
+        vm.flush_compile_warnings(globals);
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
         let fid = globals
             .compile_script_eval(expr, fname, caller_cfp, None, lineno)
             .map_err(downgrade_eval_fatal)?;
+        vm.flush_compile_warnings(globals);
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         // Isolate the eval's cref so toggles like `module_function`,
         // `private`, … set inside the eval'd source don't leak to

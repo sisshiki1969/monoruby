@@ -451,7 +451,32 @@ impl Executor {
             Ok(res) => bytecodegen::bytecode_compile_script(globals, res),
             Err(err) => Err(err),
         }?;
+        self.flush_compile_warnings(globals);
         self.eval_toplevel(globals, fid)
+    }
+
+    ///
+    /// Emit warnings buffered during bytecode compilation
+    /// (`Store::compile_warnings`, e.g. a duplicated hash-literal key)
+    /// through the current `$stderr`, so they honour a redirected
+    /// `$stderr` (as CRuby's compile-time warnings do). Must be called
+    /// after compilation and before the compiled code runs.
+    ///
+    pub(crate) fn flush_compile_warnings(&mut self, globals: &mut Globals) {
+        if globals.store.compile_warnings.is_empty() {
+            return;
+        }
+        let msgs = std::mem::take(&mut globals.store.compile_warnings);
+        let stderr = globals
+            .get_gvar(IdentId::get_id("$stderr"))
+            .unwrap_or_default();
+        let write_id = IdentId::get_id("write");
+        for m in msgs {
+            let msg_val = Value::string(format!("{m}\n"));
+            // Ignore errors (e.g. a nil / broken `$stderr` during early
+            // bootstrap): a warning must never mask the program's result.
+            let _ = self.invoke_method_inner(globals, write_id, stderr, &[msg_val], None, None);
+        }
     }
 
     ///
