@@ -2503,18 +2503,31 @@ impl Executor {
             let outer = outer.move_frame_to_heap();
             return Ok(Proc::from_outer(outer, fid, pc));
         }
-        // `to_proc` fallback. If the value responds, use the resulting
-        // Proc; otherwise propagate the original "not yet implemented"
-        // diagnostic so unrecognised cases stay loud.
+        // `to_proc` fallback (Method#to_proc, user classes with #to_proc,
+        // ...). Matches CRuby's `&obj` coercion: a non-Proc `#to_proc`
+        // result and a missing `#to_proc` both raise TypeError.
         if let Some(result) =
             self.invoke_method_if_exists(globals, IdentId::TO_PROC, bh.0, &[], None, None)?
-            && let Some(proc) = result.is_proc()
         {
-            return Ok(proc);
+            if let Some(proc) = result.is_proc() {
+                return Ok(proc);
+            }
+            // `#to_proc` returned a non-Proc:
+            // `can't convert X into Proc (X#to_proc gives Y)`.
+            return Err(MonorubyErr::cant_convert_error(
+                &globals.store,
+                bh.0,
+                result,
+                "Proc",
+                IdentId::TO_PROC,
+            ));
         }
-        Err(MonorubyErr::runtimeerr(format!(
-            "not yet implemented: block handler {bh:?}"
-        )))
+        // No `#to_proc`: `no implicit conversion of X into Proc`.
+        Err(MonorubyErr::no_implicit_conversion(
+            &globals.store,
+            bh.0,
+            PROC_CLASS,
+        ))
     }
 
     pub(crate) fn generate_lambda(&mut self, func_id: FuncId, pc: BytecodePtr) -> Proc {
