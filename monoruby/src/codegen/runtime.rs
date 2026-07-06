@@ -1578,6 +1578,18 @@ pub(super) extern "C" fn to_a(
     globals: &mut Globals,
     src: Value,
 ) -> Option<Value> {
+    // A splat of a value that is already an Array (including an Array
+    // subclass) uses it directly — `#to_a` is NOT invoked (`a, b = *ary`
+    // and `m(*ary)` must not call a user-defined `Array#to_a`). The
+    // downstream array build makes the copy / normalizes to a plain Array.
+    if src.is_array_ty() {
+        return Some(src);
+    }
+    // A splat of `nil` yields an empty array without invoking any method
+    // (`*nil` ⇒ `[]`; CRuby special-cases nil rather than calling `to_a`).
+    if src.is_nil() {
+        return Some(Value::array_empty());
+    }
     if let Some(func_id) = globals.check_method(src, IdentId::TO_A) {
         let ary = vm.invoke_func(globals, func_id, src, &[], None, None)?;
         if ary.is_array_ty() {

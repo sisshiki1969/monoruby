@@ -285,6 +285,66 @@ fn multi_assign_nested_values() {
 }
 
 #[test]
+fn splat_rhs_does_not_call_to_a_on_array() {
+    // A splatted value that is already an Array is used directly — `#to_a`
+    // must NOT be invoked. `$flag` is reset each run so the assertion is
+    // idempotent under the 25-iteration warm-up loop.
+    run_test(
+        r#"
+        arr = [1, 2]
+        def arr.to_a; $flag = true; super; end
+        $flag = false
+        a, b = *arr
+        [$flag, a, b]
+        "#,
+    );
+    // Array subclass RHS: to_a must not run; the result is a plain Array.
+    run_test(
+        r#"
+        class MyArr < Array; def to_a; $flag = true; super; end; end
+        $flag = false
+        arr = MyArr.new([1, 2])
+        x = *arr
+        [$flag, x, x.class]
+        "#,
+    );
+    // Call-site splat of an Array must not call to_a either.
+    run_test(
+        r#"
+        arr = [1, 2]
+        def arr.to_a; $flag = true; super; end
+        $flag = false
+        def f(*a); a; end
+        r = f(*arr)
+        [$flag, r]
+        "#,
+    );
+    // `x = *arr` copies (result is not the same object).
+    run_test("arr = [1, 2]; x = *arr; x.equal?(arr)");
+    // `*nil` ⇒ `[]` without invoking any method on nil.
+    run_test(
+        r#"
+        class NilClass; def to_a; $flag = true; super; end; end
+        $flag = false
+        a, b = *nil
+        [$flag, a, b]
+        "#,
+    );
+    run_test("x = *nil; x");
+    run_test("def g(*a); a; end; g(*nil)");
+    // A genuine non-Array value is still converted via #to_a.
+    run_test(
+        r#"
+        o = Object.new
+        def o.to_a; $flag = true; [7, 8]; end
+        $flag = false
+        a, b = *o
+        [$flag, a, b]
+        "#,
+    );
+}
+
+#[test]
 fn for_loop_destructuring_index() {
     // `for` with a splat / post / nested / non-local index target
     // destructures each element, and the targets still leak to the
