@@ -210,7 +210,7 @@ impl Executor {
     /// reference does not fall through to top-level constants
     /// (`String::Hash` raises `NameError` even though `Hash` is a top-level
     /// constant). Mirrors CRuby's `rb_const_search` skipping `rb_cObject`.
-    fn get_constant_superclass_qualified(
+    pub(super) fn get_constant_superclass_qualified(
         &mut self,
         globals: &mut Globals,
         mut module: Module,

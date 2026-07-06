@@ -1556,6 +1556,97 @@ fn op_assign_evaluates_receiver_once() {
 }
 
 #[test]
+fn scoped_const_op_assign_evaluates_scope_once() {
+    // `Scope::CONST op= rhs` must evaluate the scope (module part)
+    // expression exactly once, sharing it between the read and the store.
+    // A side-effecting scope run twice would bump the counter to 2.
+    run_test(
+        r#"
+        module M1; end
+        x = 0
+        (x += 1; M1)::C ||= :assigned
+        [x, M1::C]
+        "#,
+    );
+    run_test(
+        r#"
+        module M2; C = nil; end
+        x = 0
+        (x += 1; M2)::C ||= :a
+        [x, M2::C]
+        "#,
+    );
+    run_test(
+        r#"
+        module M3; C = 1; end
+        x = 0
+        (x += 1; M3)::C &&= :a
+        [x, M3::C]
+        "#,
+    );
+    run_test(
+        r#"
+        module M4; C = 10; end
+        x = 0
+        (x += 1; M4)::C += 5
+        [x, M4::C]
+        "#,
+    );
+    // The rhs must not be evaluated when the scope expression raises.
+    run_test(
+        r#"
+        module M5; C = nil; end
+        x = 0; y = 0
+        begin
+          (x += 1; raise "boom"; M5)::C ||= (y += 1; :a)
+        rescue
+        end
+        [x, y]
+        "#,
+    );
+}
+
+#[test]
+fn const_op_assign_does_not_invoke_const_missing() {
+    // `CONST ||= v` / `Scope::CONST ||= v` check definedness like CRuby —
+    // they must NOT trigger `const_missing` (which could make an undefined
+    // constant read back as truthy and skip the assignment).
+    run_test(
+        r#"
+        module MM
+          def self.const_missing(c); c; end
+        end
+        MM::NOSUCH ||= :assigned
+        MM::NOSUCH
+        "#,
+    );
+    // A bare `CONST ||=` at top level with a custom Object const_missing.
+    run_test(
+        r#"
+        class Object
+          def self.const_missing(c); c; end
+        end
+        NO_SUCH_TOP ||= :assigned
+        NO_SUCH_TOP
+        "#,
+    );
+    // A normal read still fires const_missing.
+    run_test(
+        r#"
+        module MN
+          def self.const_missing(c); "missing:#{c}"; end
+        end
+        MN::WHATEVER
+        "#,
+    );
+    // Defined constants are kept; nil constants are (re)assigned.
+    run_tests(&[
+        "Y_KEEP = 3; Y_KEEP ||= 9; Y_KEEP",
+        "Z_NIL = nil; Z_NIL ||= 5; Z_NIL",
+    ]);
+}
+
+#[test]
 fn op_assign_all_operators_on_receiver() {
     // Every arithmetic / bitwise op-assign operator applied to an
     // attribute target, exercising each `BinOpK` on the single-eval

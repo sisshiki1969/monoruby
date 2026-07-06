@@ -509,6 +509,15 @@ impl<'a> BytecodeGen<'a> {
                 {
                     return self.gen_op_assign_with_receiver(op, lhs, rhs, use_mode, loc);
                 }
+                // A scoped constant `Scope::CONST op= rhs` has a scope
+                // (module part) expression that may carry side effects
+                // (`(x += 1; M)::C ||= v`), so it must be evaluated exactly
+                // once and reused for both the read and the store. A bare
+                // constant (`CONST op= rhs`, no parent) is side-effect-free
+                // to re-read, so it stays on the simpler path below.
+                if matches!(&lhs.kind, NodeKind::Const { parent: Some(_), .. }) {
+                    return self.gen_scoped_const_op_assign(op, lhs, rhs, use_mode, loc);
+                }
                 match op {
                     BinOp::LOr | BinOp::LAnd => {
                         // `target ||= rhs` / `target &&= rhs`: short-circuit so
@@ -1073,6 +1082,94 @@ impl<'a> BytecodeGen<'a> {
                 self.apply_label(exit);
             }
             _ => {
+                let binopk = Self::binop_to_binopk(op);
+                let old = self.temp;
+                let rhs_reg = self.gen_expr_reg(rhs)?;
+                self.temp = old;
+                self.emit(BytecodeInst::BinOp(binopk, Some(cur), (cur, rhs_reg)), loc);
+                self.emit_assign(cur, lhs_kind, None, loc);
+            }
+        }
+        self.temp = temp;
+        self.handle_mode(use_mode, cur)?;
+        Ok(())
+    }
+
+    ///
+    /// Op-assign to a scoped constant `Scope::CONST op= rhs`.
+    ///
+    /// The scope (module part) is evaluated exactly once — `eval_lvalue`
+    /// reserves it as `base` — and reused for both the read and the store,
+    /// so a side-effecting scope (`(x += 1; M)::C ||= v`) fires only once.
+    ///
+    fn gen_scoped_const_op_assign(
+        &mut self,
+        op: BinOp,
+        lhs: Node,
+        rhs: Node,
+        use_mode: UseMode2,
+        loc: Loc,
+    ) -> Result<()> {
+        let temp = self.temp;
+        // Evaluates the scope once and keeps it reserved as `base`.
+        let (lhs_kind, rest) = self.eval_lvalue(&lhs)?;
+        assert!(!rest);
+        let (toplevel, base, prefix, name) = match &lhs_kind {
+            LvalueKind::Const {
+                toplevel,
+                parent,
+                prefix,
+                name,
+            } => (*toplevel, *parent, prefix.clone(), *name),
+            _ => unreachable!(),
+        };
+        let cur = self.push().into();
+        match op {
+            BinOp::LOr | BinOp::LAnd => {
+                let exit = self.new_label();
+                // `Scope::C ||= rhs` reads the constant without raising when
+                // it is undefined (nil ⇒ store fires); `&&=` uses the plain
+                // load (undefined ⇒ NameError), matching CRuby.
+                if matches!(op, BinOp::LOr) {
+                    self.emit(
+                        BytecodeInst::CheckConst {
+                            dst: cur,
+                            base,
+                            toplevel,
+                            prefix,
+                            name,
+                        },
+                        loc,
+                    );
+                } else {
+                    self.emit(
+                        BytecodeInst::LoadConst {
+                            dst: cur,
+                            base,
+                            toplevel,
+                            prefix,
+                            name,
+                        },
+                        loc,
+                    );
+                }
+                let jmp_if_true = matches!(op, BinOp::LOr);
+                self.emit_condbr(cur, exit, jmp_if_true, false);
+                self.gen_store_expr(cur, rhs)?;
+                self.emit_assign(cur, lhs_kind, None, loc);
+                self.apply_label(exit);
+            }
+            _ => {
+                self.emit(
+                    BytecodeInst::LoadConst {
+                        dst: cur,
+                        base,
+                        toplevel,
+                        prefix,
+                        name,
+                    },
+                    loc,
+                );
                 let binopk = Self::binop_to_binopk(op);
                 let old = self.temp;
                 let rhs_reg = self.gen_expr_reg(rhs)?;
