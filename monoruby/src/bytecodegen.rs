@@ -645,6 +645,15 @@ impl<'a> BytecodeGen<'a> {
         {
             self.gen_expand_array(src, dst, len, rest_pos);
         }
+        // A trivial-method hint (`ConstReturn` / `SelfReturn`) makes the
+        // native wrapper return immediately, skipping the whole parameter
+        // prologue below. That is only sound when the prologue has no
+        // observable side effects. Optional- and keyword-parameter default
+        // expressions can run arbitrary user code (e.g.
+        // `def f(a = ($x = 1)); 1; end` — calling `f` must still assign
+        // `$x`), so their presence disqualifies the method from the hint.
+        let prologue_has_side_effects = !info.optional_info.is_empty()
+            || info.keyword_initializers.iter().any(|i| i.is_some());
         for OptionalInfo { local, initializer } in info.optional_info {
             let local = local.into();
             let next = self.new_label();
@@ -682,7 +691,9 @@ impl<'a> BytecodeGen<'a> {
         }
 
         let ast = info.ast;
-        if let Some(hint) = self.hint(&ast) {
+        if !prologue_has_side_effects
+            && let Some(hint) = self.hint(&ast)
+        {
             self.store[self.iseq_id].hint = hint;
         }
         self.apply_label(self.redo_label);
