@@ -297,7 +297,7 @@ fn gen_hash_inner(
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            map.insert(chunk[0], chunk[1], vm, globals)?;
+            map.insert(chunk[0].frozen_hash_key(), chunk[1], vm, globals)?;
         }
     }
     Ok(map)
@@ -324,7 +324,7 @@ pub(super) extern "C" fn hash_insert(
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            if let Err(err) = h.insert(chunk[0], chunk[1], vm, globals) {
+            if let Err(err) = h.insert(chunk[0].frozen_hash_key(), chunk[1], vm, globals) {
                 vm.set_error(err);
                 return None;
             }
