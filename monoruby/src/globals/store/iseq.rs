@@ -646,24 +646,28 @@ impl Store {
     ///
     pub(crate) fn local_variables(&self, mut iseq: ISeqId) -> Vec<Value> {
         let mut map = indexmap::IndexSet::<IdentId>::default();
-        self[iseq].locals.keys().for_each(|id| {
-            map.insert(*id);
-        });
-        if let Some(id) = self[iseq].block_param() {
-            map.insert(id);
-        }
-
-        while let Some(outer) = self[iseq].outer {
-            self[outer].locals.keys().for_each(|id| {
+        loop {
+            // The implicit `it` block parameter (Ruby 3.4) is not a reportable
+            // local variable, while an explicit `it = ...` local is — so only
+            // skip `it` in the iseq that actually takes the implicit parameter.
+            let it_param = self[iseq].args.it_param();
+            self[iseq].locals.keys().for_each(|id| {
+                if it_param && id.get_name() == "it" {
+                    return;
+                }
                 map.insert(*id);
             });
-            if let Some(id) = self[outer].block_param() {
+            if let Some(id) = self[iseq].block_param() {
                 map.insert(id);
             }
-            iseq = outer;
+            match self[iseq].outer {
+                Some(outer) => iseq = outer,
+                None => break,
+            }
         }
         // Drop reserved, unspellable slots (anonymous `*` / `**` / `&`, the
-        // hidden `for`-loop index, …) that are not real local variables.
+        // hidden `for`-loop index, the numbered block parameters `_1`..`_9`, …)
+        // that are not real local variables.
         map.into_iter()
             .filter(|id| is_local_variable_name(&id.get_name()))
             .map(Value::symbol)
@@ -672,9 +676,18 @@ impl Store {
 }
 
 /// Whether `name` is spellable as a Ruby local variable — i.e. begins with a
-/// lowercase letter or `_` and consists only of word characters. Filters out
-/// the compiler's reserved slots (`*`, `**`, `&`'s empty name, `(for)`, …).
+/// lowercase letter or `_` and consists only of word characters, and is not a
+/// numbered block parameter (`_1`..`_9`, which Ruby reserves and never reports
+/// as a local variable). Filters out the compiler's reserved slots (`*`, `**`,
+/// `&`'s empty name, `(for)`, …).
 fn is_local_variable_name(name: &str) -> bool {
+    // Numbered block parameters `_1`..`_9`.
+    if let Some(rest) = name.strip_prefix('_')
+        && rest.len() == 1
+        && matches!(rest.as_bytes()[0], b'1'..=b'9')
+    {
+        return false;
+    }
     let mut chars = name.chars();
     match chars.next() {
         Some(c) if c == '_' || (!c.is_ascii()) || c.is_lowercase() => {}

@@ -6673,6 +6673,15 @@ mod tests {
         run_test(r#"def m; for a, *b in [[1, 2, 3]]; end; local_variables.sort; end; m"#);
         // `Binding#local_variables` shares the same filtering.
         run_test(r#"def m; a = 1; b = 2; binding.local_variables.sort; end; m"#);
+        // The implicit `it` block parameter and numbered parameters
+        // (`_1`..`_9`) are not reported as local variables...
+        run_test(r#"def m; [1].map { it; local_variables }; end; m"#);
+        run_test(r#"def m; [[1, 2]].map { _1 + _2; local_variables }; end; m"#);
+        run_test(r#"def m; [1].map { it; binding.local_variables }; end; m"#);
+        // ...but an explicit `it` local, or an explicit `|it|` block
+        // parameter, still is.
+        run_test(r#"def m; it = 5; local_variables; end; m"#);
+        run_test(r#"def m; [1].map { |it| j = it; local_variables.sort }; end; m"#);
     }
 
     #[test]
