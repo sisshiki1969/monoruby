@@ -26,6 +26,80 @@ fn test_method_optional() {
 }
 
 #[test]
+fn optional_default_side_effect_trivial_body() {
+    // A method whose body is a single constant literal (or `self`) used to
+    // be optimized into an immediate "constant return" wrapper that skipped
+    // the whole parameter prologue. When such a method also had an optional
+    // (or keyword) parameter with a side-effecting default expression, that
+    // default was silently dropped on a call that omitted the argument.
+    // Each body below (`1`, `nil`, `self`, empty) is trivial, so the
+    // optional default `$x = ...` must still run.
+    run_test(
+        r#"
+        def f(a = ($x = 1)); 1; end
+        f
+        $x
+        "#,
+    );
+    run_test(
+        r#"
+        def f(a = ($x = 2)); nil; end
+        f
+        $x
+        "#,
+    );
+    run_test(
+        r#"
+        class C
+          def f(a = ($x = 3)); self; end
+        end
+        C.new.f
+        $x
+        "#,
+    );
+    run_test(
+        r#"
+        def f(a = ($x = 4)); end
+        f
+        $x
+        "#,
+    );
+    // Two optional params, both defaults must fire.
+    run_test(
+        r#"
+        def f(a = ($x = 1), b = ($y = 2)); 7; end
+        f
+        [$x, $y]
+        "#,
+    );
+    // A leading required param plus a trivial body; the optional default
+    // still runs when only the required arg is supplied.
+    run_test(
+        r#"
+        def f(r, a = ($x = 10)); 0; end
+        f(9)
+        [$x]
+        "#,
+    );
+    // Keyword-parameter default with a side effect and a trivial body.
+    run_test(
+        r#"
+        def f(k: ($x = 5)); true; end
+        f
+        $x
+        "#,
+    );
+    // When the argument IS supplied, the default must NOT run.
+    run_test(
+        r#"
+        def f(a = ($x = 1)); 1; end
+        f(99)
+        $x.inspect
+        "#,
+    );
+}
+
+#[test]
 fn method_rest() {
     run_test_with_prelude(
         r#"
