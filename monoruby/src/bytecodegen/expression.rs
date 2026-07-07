@@ -1644,75 +1644,124 @@ impl<'a> BytecodeGen<'a> {
         &mut self,
         ret: BcReg,
         nodes: Vec<(Node, Node)>,
-        splat: Vec<Node>,
+        splat: Vec<(usize, Node)>,
         loc: Loc,
     ) -> Result<()> {
         self.warn_duplicated_hash_keys(&nodes);
-        if nodes.len() <= LITERAL_CHUNK_LEN {
-            let len = nodes.len();
-            let old_reg = self.temp;
+        if splat.is_empty() {
+            if nodes.len() <= LITERAL_CHUNK_LEN {
+                let len = nodes.len();
+                let old_reg = self.temp;
+                let args = self.sp();
+                for (k, v) in nodes {
+                    self.push_expr(k)?;
+                    self.push_expr(v)?;
+                }
+                self.temp = old_reg;
+                self.emit_hash(ret, args.into(), len, loc);
+            } else {
+                // Chunked construction for large Hash literals (see
+                // `gen_array`): keeps register usage bounded regardless of
+                // the literal's size (issue #706).
+                let old_reg = self.temp;
+                let hash: BcReg = self.push().into();
+                let base = self.temp;
+                let count = nodes.len();
+                let mut iter = nodes.into_iter();
+                self.emit_hash_pairs(hash, &mut iter, count, true, base, loc)?;
+                self.temp = old_reg;
+                self.emit_mov(ret, hash);
+            }
+            return Ok(());
+        }
+        // At least one `**` splat: replay the elements strictly
+        // left-to-right so later entries overwrite earlier ones
+        // (`{a: 1, **h, c: 4}` ⇒ `{a: 1, b: 2, c: 4}` when `h == {b: 2,
+        // c: 3}`). `splat[j].0` records how many ordinary pairs precede
+        // splat `j`, so the source order is
+        //   pairs[0..p0], splat0, pairs[p0..p1], splat1, …, pairs[p(n-1)..]
+        let total_pairs = nodes.len();
+        let positions: Vec<usize> = splat.iter().map(|(p, _)| *p).collect();
+        let merge_id = IdentId::get_id("merge!");
+        let old_reg = self.temp;
+        let hash: BcReg = self.push().into();
+        let base = self.temp;
+        let mut iter = nodes.into_iter();
+        // Leading run of pairs before the first splat (may be empty, in
+        // which case an empty hash is created to merge into).
+        self.emit_hash_pairs(hash, &mut iter, positions[0], true, base, loc)?;
+        for (j, (pos, snode)) in splat.into_iter().enumerate() {
+            // Merge the `**` operand. A nil operand contributes nothing
+            // (`{a: 1, **nil}` == `{a: 1}`), so guard `merge!` with a nil
+            // check; a non-nil, non-Hash operand still raises via
+            // `merge!` / `#to_hash`.
+            let old_reg2 = self.temp;
+            let splat_arg = self.sp();
+            self.push_expr(snode)?;
+            let skip = self.new_label();
+            self.emit_nilbr(splat_arg.into(), skip, old_reg2);
+            self.temp = old_reg2;
+            let callsite = CallSite::simple(merge_id, 1, splat_arg.into(), hash, Some(hash));
+            self.emit_call(callsite, loc);
+            self.apply_label(skip);
+            // Pairs between this splat and the next one (or the tail).
+            let end = positions.get(j + 1).copied().unwrap_or(total_pairs);
+            self.emit_hash_pairs(hash, &mut iter, end - pos, false, base, loc)?;
+        }
+        self.temp = old_reg;
+        self.emit_mov(ret, hash);
+        Ok(())
+    }
+
+    ///
+    /// Build (`create == true`, first run) or merge-insert (`create ==
+    /// false`) a run of `count` key/value pairs drawn from `iter` into the
+    /// hash register `hash`, chunked at `LITERAL_CHUNK_LEN` to keep register
+    /// pressure bounded. `base` is the temp watermark restored after each
+    /// chunk (the hash register itself must already be reserved below it).
+    ///
+    fn emit_hash_pairs(
+        &mut self,
+        hash: BcReg,
+        iter: &mut impl Iterator<Item = (Node, Node)>,
+        count: usize,
+        create: bool,
+        base: u16,
+        loc: Loc,
+    ) -> Result<()> {
+        if count == 0 {
+            if create {
+                // Empty leading run (`{**h}`): start from an empty hash.
+                let args = self.sp();
+                self.emit_hash(hash, args.into(), 0, loc);
+            }
+            return Ok(());
+        }
+        let mut remaining = count;
+        let mut create = create;
+        while remaining > 0 {
+            let take = remaining.min(LITERAL_CHUNK_LEN);
             let args = self.sp();
-            for (k, v) in nodes {
+            for _ in 0..take {
+                let (k, v) = iter.next().unwrap();
                 self.push_expr(k)?;
                 self.push_expr(v)?;
             }
-            self.temp = old_reg;
-            self.emit_hash(ret, args.into(), len, loc);
-        } else {
-            // Chunked construction for large Hash literals (see `gen_array`):
-            // the first chunk becomes an ordinary Hash instruction; each
-            // following chunk evaluates its key/value pairs into the same
-            // temporary registers and merges them with HashInsert, keeping
-            // register usage bounded regardless of the literal's size.
-            let old_reg = self.temp;
-            let tmp: BcReg = self.push().into();
-            let base = self.temp;
-            let mut first = true;
-            let mut iter = nodes.into_iter().peekable();
-            while iter.peek().is_some() {
-                let args = self.sp();
-                let mut len = 0;
-                for (k, v) in iter.by_ref().take(LITERAL_CHUNK_LEN) {
-                    self.push_expr(k)?;
-                    self.push_expr(v)?;
-                    len += 1;
-                }
-                self.temp = base;
-                if first {
-                    self.emit_hash(tmp, args.into(), len, loc);
-                    first = false;
-                } else {
-                    self.emit(
-                        BytecodeInst::HashInsert {
-                            hash: tmp,
-                            args: args.into(),
-                            len: len as u16,
-                        },
-                        loc,
-                    );
-                }
+            self.temp = base;
+            if create {
+                self.emit_hash(hash, args.into(), take, loc);
+                create = false;
+            } else {
+                self.emit(
+                    BytecodeInst::HashInsert {
+                        hash,
+                        args: args.into(),
+                        len: take as u16,
+                    },
+                    loc,
+                );
             }
-            self.temp = old_reg;
-            self.emit_mov(ret, tmp);
-        }
-        if !splat.is_empty() {
-            // For each `**` operand, merge it into the hash. A nil operand
-            // contributes nothing (`{**nil}` == `{}`, `{a: 1, **nil}` ==
-            // `{a: 1}`), matching CRuby, so guard the `merge!` with a nil
-            // check. This is nil-specific: a non-nil, non-Hash operand
-            // (`{**1}`, `{**false}`) still raises via `merge!`/`#to_hash`.
-            let merge_id = IdentId::get_id("merge!");
-            for s in splat {
-                let old_reg2 = self.temp;
-                let splat_arg = self.sp();
-                self.push_expr(s)?;
-                let skip = self.new_label();
-                self.emit_nilbr(splat_arg.into(), skip, old_reg2);
-                self.temp = old_reg2;
-                let callsite = CallSite::simple(merge_id, 1, splat_arg.into(), ret, Some(ret));
-                self.emit_call(callsite, loc);
-                self.apply_label(skip);
-            }
+            remaining -= take;
         }
         Ok(())
     }

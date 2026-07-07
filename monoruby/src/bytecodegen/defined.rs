@@ -74,7 +74,7 @@ impl<'a> BytecodeGen<'a> {
                     self.check_defined(k, nil_label, ret, false)?;
                     self.check_defined(v, nil_label, ret, false)?;
                 }
-                for s in splat {
+                for (_, s) in splat {
                     self.check_defined(s, nil_label, ret, false)?;
                 }
             }

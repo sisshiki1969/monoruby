@@ -1597,7 +1597,7 @@ impl<'pr> Lowerer<'pr> {
                 let kh = n.as_keyword_hash_node().unwrap();
                 let kh_loc = location_to_loc(&kh.location());
                 let mut pairs: Vec<(Node, Node)> = Vec::new();
-                let mut splat: Vec<Node> = Vec::new();
+                let mut splat: Vec<(usize, Node)> = Vec::new();
                 for elem in kh.elements().iter() {
                     match elem {
                         prism::Node::AssocNode { .. } => {
@@ -1615,7 +1615,7 @@ impl<'pr> Lowerer<'pr> {
                                     loc: location_to_loc(&s.location()),
                                 },
                             };
-                            splat.push(inner);
+                            splat.push((pairs.len(), inner));
                         }
                         other => return Err(self.unsupported("array kwarg element", &other)),
                     }
@@ -1641,7 +1641,10 @@ impl<'pr> Lowerer<'pr> {
     fn lower_hash(&mut self, node: &HashNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let mut pairs: Vec<(Node, Node)> = Vec::new();
-        let mut splat: Vec<Node> = Vec::new();
+        // Each `**` operand records how many ordinary `k: v` pairs precede
+        // it, so `gen_hash` can replay the elements strictly left-to-right
+        // (later entries overwrite earlier ones — `{a: 1, **h, c: 4}`).
+        let mut splat: Vec<(usize, Node)> = Vec::new();
         for elem in node.elements().iter() {
             match elem {
                 prism::Node::AssocNode { .. } => {
@@ -1659,7 +1662,7 @@ impl<'pr> Lowerer<'pr> {
                             loc: location_to_loc(&s.location()),
                         },
                     };
-                    splat.push(inner);
+                    splat.push((pairs.len(), inner));
                 }
                 other => return Err(self.unsupported("hash element", &other)),
             }
@@ -2172,7 +2175,7 @@ impl<'pr> Lowerer<'pr> {
                     // `**kw` slot (or, if there is none, falls
                     // back to a trailing positional hash).
                     let mut pairs: Vec<(Node, Node)> = Vec::new();
-                    let mut inner_splat: Vec<Node> = Vec::new();
+                    let mut inner_splat: Vec<(usize, Node)> = Vec::new();
                     for elem in kh.elements().iter() {
                         match elem {
                             prism::Node::AssocNode { .. } => {
@@ -2190,7 +2193,7 @@ impl<'pr> Lowerer<'pr> {
                                         loc: location_to_loc(&s.location()),
                                     },
                                 };
-                                inner_splat.push(inner);
+                                inner_splat.push((pairs.len(), inner));
                             }
                             other => return Err(self.unsupported("kwarg element", &other)),
                         }
