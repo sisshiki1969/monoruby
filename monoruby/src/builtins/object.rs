@@ -704,6 +704,46 @@ mod tests {
     }
 
     #[test]
+    fn self_index_private_visibility() {
+        // An explicit-`self` receiver ignores method visibility, so a
+        // private `#[]` / `#[]=` is reachable through `self[k]`,
+        // `self[k] = v`, and `self[k] op= v` — matching CRuby.
+        run_test(
+            r#"
+            class A
+              def initialize(h) @a = h end
+              def get(k); self[k] end
+              def set(k, v); self[k] = v end
+              def opset(k, v); self[k] ||= v end
+              def andset(k, v); self[k] &&= v end
+              def plusset(k); self[k] += 100 end
+              private
+              def [](k) @a[k] end
+              def []=(k, v) @a[k] = v; 42 end
+            end
+            a = A.new(k: false, n: 1)
+            [a.get(:n), a.set(:x, 9), a.opset(:k, 10), a.andset(:n, 7), a.plusset(:n)]
+            "#,
+        );
+        // Multi-index and splat-index forms on `self` also bypass privacy.
+        run_test(
+            r#"
+            class B
+              def initialize() @h = {} end
+              def set2(a, b, v); self[a, b] = v end
+              def get2(a, b); self[a, b] end
+              def setsplat(ks, v); self[*ks] = v end
+              private
+              def [](a, b = nil) @h[[a, b]] end
+              def []=(*args) @h[args[0..-2]] = args[-1]; :ok end
+            end
+            b = B.new
+            [b.set2(1, 2, :v), b.get2(1, 2), b.setsplat([3, 4], :w)]
+            "#,
+        );
+    }
+
+    #[test]
     fn method_missing_splat() {
         // splat arguments should be expanded and forwarded
         run_test(

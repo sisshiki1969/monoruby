@@ -151,7 +151,11 @@ impl<'a> BytecodeGen<'a> {
                 box base,
                 mut index,
             } => {
-                if index.len() == 1 && !index[0].is_splat() {
+                // A `self[..]` read must go through the general `#[]` call
+                // site (not the `Index` fast-path opcode, which always
+                // enforces visibility) so a private `#[]` is reachable via
+                // the explicit-`self` receiver, matching CRuby.
+                if index.len() == 1 && !index[0].is_splat() && base.kind != NodeKind::SelfValue {
                     self.gen_index(Some(dst), base, index.remove(0), loc)?;
                 } else {
                     let arglist = ArgList::from_args(index);
@@ -457,7 +461,11 @@ impl<'a> BytecodeGen<'a> {
                 box base,
                 mut index,
             } => {
-                if index.len() == 1 && !index[0].is_splat() {
+                // A `self[..]` read must go through the general `#[]` call
+                // site (not the `Index` fast-path opcode, which always
+                // enforces visibility) so a private `#[]` is reachable via
+                // the explicit-`self` receiver, matching CRuby.
+                if index.len() == 1 && !index[0].is_splat() && base.kind != NodeKind::SelfValue {
                     self.gen_index(None, base, index.remove(0), loc)?;
                 } else {
                     let arglist = ArgList::from_args(index);

@@ -1435,6 +1435,21 @@ impl<'a> BytecodeGen<'a> {
     /// +-----------------+
     ///
     /// ```
+    /// Evaluate the receiver of an index target `base[..]`.
+    ///
+    /// A literal `self` base is returned as `BcReg::Self_` (occupying no
+    /// temp) so the emitted `#[]` / `#[]=` call site is recognised as a
+    /// self-call and may reach a *private* `#[]` / `#[]=` — matching
+    /// CRuby's rule that an explicit-`self` receiver ignores method
+    /// visibility. Any other base is evaluated onto a fresh temp.
+    fn eval_index_base(&mut self, base: &Node) -> Result<BcReg> {
+        if base.kind == NodeKind::SelfValue {
+            Ok(BcReg::Self_)
+        } else {
+            Ok(self.push_expr(base.clone())?.into())
+        }
+    }
+
     fn eval_lvalue(&mut self, lhs: &Node) -> Result<(LvalueKind, bool)> {
         let lhs = match &lhs.kind {
             NodeKind::Const {
@@ -1495,7 +1510,7 @@ impl<'a> BytecodeGen<'a> {
                     // `a[*idx] = v` / `a[i, *idx, j] = v`: the index list
                     // expands at runtime, so lower it like a `[]=` call whose
                     // trailing argument is the assigned value.
-                    let base = self.push_expr(base.clone())?.into();
+                    let base = self.eval_index_base(base)?;
                     let index1 = self.sp();
                     let (_, num, splat_pos) = self.ordinary_args(index.clone())?;
                     self.push(); // register for src.
@@ -1506,12 +1521,25 @@ impl<'a> BytecodeGen<'a> {
                         splat_pos,
                     }
                 } else if index.len() == 1 {
-                    let base = self.push_expr(base.clone())?.into();
+                    let base = self.eval_index_base(base)?;
                     let index = self.push_expr(index[0].clone())?;
                     self.push(); // register for src.
-                    LvalueKind::Index { base, index }
+                    if base == BcReg::Self_ {
+                        // `self[i] = v` must reach a private `#[]=` via the
+                        // explicit-`self` receiver. Route it through the
+                        // general `#[]=` call site (`Index2`) rather than the
+                        // `StoreIndex` fast-path opcode, which always enforces
+                        // visibility.
+                        LvalueKind::Index2 {
+                            base,
+                            index1: index,
+                            num: 1,
+                        }
+                    } else {
+                        LvalueKind::Index { base, index }
+                    }
                 } else {
-                    let base = self.push_expr(base.clone())?.into();
+                    let base = self.eval_index_base(base)?;
                     let index1 = self.push_expr(index[0].clone())?;
                     let num = index.len();
                     for i in 1..index.len() {
