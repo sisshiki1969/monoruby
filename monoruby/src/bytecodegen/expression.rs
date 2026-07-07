@@ -1023,6 +1023,13 @@ impl<'a> BytecodeGen<'a> {
                 self.push_nil();
             }
             NodeKind::Defined(box node) => {
+                // `defined?` in a void (statement) context evaluates nothing:
+                // CRuby elides the whole expression, so the operand's
+                // receiver side effects never fire. In a value context the
+                // operand is still probed by `gen_defined`.
+                if use_mode == UseMode2::NotUse {
+                    return Ok(());
+                }
                 self.gen_defined(node)?;
             }
             NodeKind::Splat(..) => {

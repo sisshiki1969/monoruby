@@ -431,6 +431,32 @@ mod tests {
     }
 
     #[test]
+    fn defined_void_context_does_not_evaluate() {
+        // `defined?` in a void (statement) context must not evaluate its
+        // operand — the receiver's side effects never fire — while a value
+        // context still probes it.
+        run_test(
+            r#"
+            $log = []
+            def se; $log << :ran; 1; end
+            defined?(se / 2)          # void: must not call `se`
+            a = $log.dup
+            x = defined?(se / 2)      # value: does call `se`
+            [a, x, $log]
+            "#,
+        );
+        // Void `defined?` on an undefined name is likewise a no-op.
+        run_test(
+            r#"
+            $c = 0
+            def bump; $c += 1; self; end
+            defined?(bump.no_such_method)
+            $c
+            "#,
+        );
+    }
+
+    #[test]
     fn defined_frozen_and_assignment() {
         // `defined?` returns a frozen String.
         run_tests(&[
