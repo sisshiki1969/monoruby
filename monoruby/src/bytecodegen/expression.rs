@@ -670,8 +670,35 @@ impl<'a> BytecodeGen<'a> {
                 return self.gen_super(arglist.map(|arglist| *arglist), use_mode, loc);
             }
             NodeKind::Command(box expr) => {
-                let arglist = ArgList::from_args(vec![expr]);
                 let method = IdentId::get_id("`");
+                // A non-interpolated command literal (`` `cmd` `` / `%x{…}`)
+                // passes its command string to the `` ` `` method FROZEN,
+                // matching CRuby (which freezes it regardless of any
+                // `frozen_string_literal` pragma). Build the call directly so
+                // the argument is a frozen literal; an interpolated form
+                // (`` `cmd #{x}` ``) builds a fresh, unfrozen string and takes
+                // the ordinary method-call path below.
+                if let NodeKind::String(s) = expr.kind {
+                    let (dst, push_flag) = match use_mode {
+                        UseMode2::NotUse => (None, false),
+                        UseMode2::Push | UseMode2::Ret => (Some(self.sp().into()), true),
+                        UseMode2::Store(dst) => (Some(dst), false),
+                    };
+                    let old_temp = self.temp;
+                    let arg = self.push().into();
+                    self.emit_frozen_string(arg, &s);
+                    self.temp = old_temp;
+                    if push_flag {
+                        self.push();
+                    }
+                    let callsite = CallSite::simple(method, 1, arg, BcReg::Self_, dst);
+                    self.emit_call(callsite, loc);
+                    if use_mode.is_ret() {
+                        self.emit_ret(None)?;
+                    }
+                    return Ok(());
+                }
+                let arglist = ArgList::from_args(vec![expr]);
                 return self.gen_method_call(method, None, arglist, false, use_mode, loc);
             }
             NodeKind::Yield(arglist) => {
