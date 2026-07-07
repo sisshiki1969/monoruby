@@ -90,7 +90,9 @@ impl MonorubyErr {
         match &self.kind {
             // Packed `Value::id()` of the receiver that triggered the
             // NoMethodError (set by `MonorubyErr::no_method_for_*`).
-            MonorubyErrKind::NotMethod(Some(id)) => {
+            MonorubyErrKind::NotMethod {
+                receiver: Some(id), ..
+            } => {
                 Value::from_u64(*id).mark(alloc);
             }
             // Receiver / key Values (packed) for KeyError.
@@ -198,7 +200,7 @@ impl MonorubyErr {
     pub fn class_name(&self, store: &Store) -> String {
         match &self.kind {
             MonorubyErrKind::Exception => "Exception",
-            MonorubyErrKind::NotMethod(_) => "NoMethodError",
+            MonorubyErrKind::NotMethod { .. } => "NoMethodError",
             MonorubyErrKind::Arguments => "ArgumentError",
             MonorubyErrKind::Syntax => "SyntaxError",
             MonorubyErrKind::Unimplemented => "RuntimeError",
@@ -253,7 +255,7 @@ impl MonorubyErr {
     pub fn class_id(&self) -> ClassId {
         match &self.kind {
             MonorubyErrKind::Exception => EXCEPTION_CLASS,
-            MonorubyErrKind::NotMethod(_) => NO_METHOD_ERROR_CLASS,
+            MonorubyErrKind::NotMethod { .. } => NO_METHOD_ERROR_CLASS,
             MonorubyErrKind::Arguments => ARGUMENTS_ERROR_CLASS,
             MonorubyErrKind::Syntax => SYNTAX_ERROR_CLASS,
             MonorubyErrKind::Unimplemented => UNIMPLEMENTED_ERROR_CLASS,
@@ -305,7 +307,7 @@ impl MonorubyErr {
     }
 
     pub fn is_no_method_error(&self) -> bool {
-        matches!(self.kind, MonorubyErrKind::NotMethod(_))
+        matches!(self.kind, MonorubyErrKind::NotMethod { .. })
     }
 }
 
@@ -410,7 +412,10 @@ impl MonorubyErr {
 
     pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod(Some(obj.id())),
+            MonorubyErrKind::NotMethod {
+                name: Some(name),
+                receiver: Some(obj.id()),
+            },
             format!("undefined method `{name}' for {}", obj.to_s(store)),
         )
     }
@@ -422,7 +427,10 @@ impl MonorubyErr {
     ///
     pub(crate) fn super_method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod(Some(obj.id())),
+            MonorubyErrKind::NotMethod {
+                name: Some(name),
+                receiver: Some(obj.id()),
+            },
             format!(
                 "super: no superclass method `{name}' for {}",
                 obj.to_s(store)
@@ -436,7 +444,10 @@ impl MonorubyErr {
         class: ClassId,
     ) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod(None),
+            MonorubyErrKind::NotMethod {
+                name: Some(name),
+                receiver: None,
+            },
             format!(
                 "undefined method `{name}' for {}",
                 store.get_class_name(class)
@@ -446,7 +457,10 @@ impl MonorubyErr {
 
     pub(crate) fn private_method_called(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod(Some(obj.id())),
+            MonorubyErrKind::NotMethod {
+                name: Some(name),
+                receiver: Some(obj.id()),
+            },
             format!(
                 "private method `{name}' called for {}:{}",
                 obj.to_s(store),
@@ -457,7 +471,10 @@ impl MonorubyErr {
 
     pub(crate) fn protected_method_called(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
-            MonorubyErrKind::NotMethod(Some(obj.id())),
+            MonorubyErrKind::NotMethod {
+                name: Some(name),
+                receiver: Some(obj.id()),
+            },
             format!(
                 "protected method `{name}' called for {}:{}",
                 obj.to_s(store),
@@ -960,7 +977,14 @@ impl MonorubyErr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MonorubyErrKind {
     Exception,
-    NotMethod(Option<u64>),
+    /// `NoMethodError`. `name` is the missing method name (surfaced as
+    /// `NoMethodError#name`); `receiver` is the packed `Value::id()` of the
+    /// receiver (surfaced as `#receiver`). Either may be absent for errors
+    /// built without that context.
+    NotMethod {
+        name: Option<IdentId>,
+        receiver: Option<u64>,
+    },
     Arguments,
     Syntax,
     Unimplemented,
@@ -1011,7 +1035,10 @@ impl MonorubyErrKind {
     pub fn from_class_id(class_id: ClassId) -> Self {
         match class_id {
             EXCEPTION_CLASS => MonorubyErrKind::Exception,
-            NO_METHOD_ERROR_CLASS => MonorubyErrKind::NotMethod(None),
+            NO_METHOD_ERROR_CLASS => MonorubyErrKind::NotMethod {
+                name: None,
+                receiver: None,
+            },
             ARGUMENTS_ERROR_CLASS => MonorubyErrKind::Arguments,
             SYNTAX_ERROR_CLASS => MonorubyErrKind::Syntax,
             UNIMPLEMENTED_ERROR_CLASS => MonorubyErrKind::Unimplemented,

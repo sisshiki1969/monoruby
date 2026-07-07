@@ -982,6 +982,31 @@ mod tests {
     }
 
     #[test]
+    fn nomethoderror_name() {
+        // `NoMethodError#name` (inherited from NameError) returns the missing
+        // method's name — for an ordinary missing method, an operator, a
+        // private/protected call, and a failed `super`.
+        run_tests(&[
+            r#"begin; nil.foobar; rescue NoMethodError => e; e.name; end"#,
+            r#"begin; nil + 3; rescue NoMethodError => e; e.name; end"#,
+            r#"
+            class C; private def sec; end; end
+            begin; C.new.sec; rescue NoMethodError => e; e.name; end
+            "#,
+            r#"
+            class A; end
+            class B < A; def m; super; end; end
+            begin; B.new.m; rescue NoMethodError => e; e.name; end
+            "#,
+            // `name` and `receiver` are both populated.
+            r#"
+            o = Object.new
+            begin; o.nope; rescue NoMethodError => e; [e.name, e.receiver.equal?(o)]; end
+            "#,
+        ]);
+    }
+
+    #[test]
     fn nomethoderror_class() {
         run_test(
             r#"
