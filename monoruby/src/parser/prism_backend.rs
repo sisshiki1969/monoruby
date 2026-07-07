@@ -549,19 +549,62 @@ impl<'pr> Lowerer<'pr> {
                 // `/(?<name>...)/ =~ value` — Prism wraps the `=~`
                 // CallNode with a list of `LocalVariableTargetNode`
                 // targets that should receive each named capture.
-                // monoruby (matching the ruruby backend) doesn't
-                // implement the named-capture binding, so lower to
-                // just the inner call. The targets are already on
-                // the surrounding scope's `locals` list (Prism
-                // declares them at parse time), so reading them
-                // afterwards yields `nil` rather than parsing as a
-                // method call. That's the no-match path; the match
-                // path leaves them at `nil` instead of the captured
-                // string, which is wrong but lets bundler/rubygems
-                // load on x86_64-linux where the relevant `if`
-                // guards never fire.
+                // Prism only produces a `MatchWriteNode` for the exact
+                // syntactic form of a *regexp literal* with named
+                // captures on the *left* of `=~`; every other shape
+                // (`str =~ /re/`, a regexp *variable*, an explicit
+                // `.=~` / `.send` call) is a plain `CallNode` and binds
+                // nothing. Prism has also already declared each target
+                // on its owning scope's `locals` list (at the right
+                // depth), so `local_variables` reports them and outer
+                // scopes are reused rather than shadowed.
+                //
+                // Desugar to:
+                //   %match = (/re/ =~ value)                # run the match, set `$~`
+                //   name1  = Regexp.last_match(:name1)       # capture or nil
+                //   name2  = Regexp.last_match(:name2)
+                //   %match                                   # value == `=~` result
+                //
+                // The trailing `%match` read preserves the expression's
+                // value (the match position, or `nil`) so uses like
+                // `if /re/ =~ s` keep the correct truthiness even when a
+                // capture is `nil`. `%match` starts with `%`, which is
+                // not a spellable local-variable name, so it never
+                // surfaces in `local_variables`. `Regexp.last_match`
+                // returns `nil` when the match failed, giving every
+                // capture the `nil` no-match value for free.
                 let n = node.as_match_write_node().unwrap();
-                self.lower_call(&n.call(), location_to_loc(&n.call().location()))?
+                let call = n.call();
+                let call_node = self.lower_call(&call, location_to_loc(&call.location()))?;
+                let temp_name = "%match".to_string();
+                let mut stmts = vec![Node::new_mul_assign(
+                    vec![Node {
+                        kind: NodeKind::LocalVar(0, temp_name.clone()),
+                        loc,
+                    }],
+                    vec![call_node],
+                )];
+                for target in n.targets().iter() {
+                    let tgt = self.lower_assign_target(&target)?;
+                    let cap_name = match &tgt.kind {
+                        NodeKind::LocalVar(_, name) => name.clone(),
+                        _ => unreachable!("MatchWriteNode target is not a local variable"),
+                    };
+                    let regexp = Node::new_const("Regexp".to_string(), false, None, vec![], loc);
+                    let arglist =
+                        crate::ast::ArgList::from_args(vec![Node::new_symbol(cap_name, loc)]);
+                    let last_match =
+                        Node::new_mcall(regexp, "last_match".to_string(), arglist, false, loc);
+                    stmts.push(Node::new_mul_assign(vec![tgt], vec![last_match]));
+                }
+                stmts.push(Node {
+                    kind: NodeKind::LocalVar(0, temp_name),
+                    loc,
+                });
+                Node {
+                    kind: NodeKind::CompStmt(stmts),
+                    loc,
+                }
             }
             prism::Node::BeginNode { .. } => self.lower_begin(&node.as_begin_node().unwrap())?,
             // `BEGIN { ... }` / `END { ... }`. Full Ruby semantics hoist

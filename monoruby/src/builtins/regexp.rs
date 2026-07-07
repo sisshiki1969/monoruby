@@ -1530,6 +1530,85 @@ mod tests {
     }
 
     #[test]
+    fn match_named_capture_locals() {
+        // `/literal/ =~ str` with named captures binds each capture to a
+        // local variable named after it (the value, or `nil` when that
+        // group did not participate in the match). The snippets that
+        // inspect `local_variables` are wrapped in a method so the scope
+        // is isolated from the test harness's own top-level locals.
+        run_test(
+            r#"
+            def m
+              /(?<matched>foo)(?<unmatched>bar)?/ =~ "foofoo"
+              [local_variables, matched, unmatched]
+            end
+            m
+        "#,
+        );
+        // No match: every named-capture local becomes `nil`, but is
+        // still declared.
+        run_test(
+            r#"
+            def m
+              /(?<a>foo)/ =~ "nope"
+              [local_variables, a]
+            end
+            m
+        "#,
+        );
+        // The whole expression evaluates to the `=~` result (match
+        // position or `nil`), independent of any `nil` capture value.
+        run_test(r#"/(?<z>foo)/ =~ "foofoo""#);
+        run_test(r#"/(?<z>foo)(?<opt>bar)?/ =~ "foofoo""#);
+        run_test(r#"/(?<z>foo)/ =~ "nope""#);
+        // A capture matching an existing local in an enclosing scope
+        // assigns to that outer local rather than a fresh block-local.
+        run_test(
+            r#"
+            def m
+              a = 42
+              1.times { /(?<a>foo)/ =~ "foofoo" }
+              a
+            end
+            m
+        "#,
+        );
+        // Regexp on the *right*, a regexp *variable*, and an explicit
+        // method call all bind no locals.
+        run_test(
+            r#"
+            def m
+              "foofoo" =~ /(?<matched>foo)/
+              local_variables
+            end
+            m
+        "#,
+        );
+        run_test(
+            r#"
+            def m
+              re = /(?<matched>foo)/
+              re =~ "foofoo"
+              local_variables
+            end
+            m
+        "#,
+        );
+        run_test(
+            r#"
+            def m
+              /(?<matched>foo)/.=~("foofoo")
+              local_variables
+            end
+            m
+        "#,
+        );
+        // Used as a condition: a match is truthy, a no-match falsy.
+        run_test(r#"if /(?<w>foo)/ =~ "foofoo" then "hit" else "miss" end"#);
+        run_test(r#"if /(?<w>foo)/ =~ "nope" then "hit" else "miss" end"#);
+    }
+
+    #[test]
     fn regexp_new_invalid_flag_string_raises() {
         // `e` is *not* accepted in the string-form flag arg.
         run_test_error(r#"Regexp.new("Hi", "e")"#);
