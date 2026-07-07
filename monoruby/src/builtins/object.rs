@@ -744,6 +744,46 @@ mod tests {
     }
 
     #[test]
+    fn non_self_index_private_visibility() {
+        // A private `#[]` / `#[]=` reached through a *non-`self`* receiver
+        // (a plain object, or a local variable that merely holds `self`)
+        // must raise `NoMethodError` — the JIT index fast path must not
+        // bypass the visibility check the interpreter enforces. `run_test`
+        // warms the JIT (25 iterations under a JITted loop), so this also
+        // covers the compiled path.
+        run_test(
+            r#"
+            class D
+              def initialize() @a = {k: 1} end
+              private
+              def [](k) @a[k] end
+              def []=(k, v) @a[k] = v end
+            end
+            obj = D.new
+            g = (obj[:k] rescue :get_raised)
+            s = begin; obj[:k] = 9; :set_ok; rescue NoMethodError; :set_raised; end
+            [g, s]
+            "#,
+        );
+        // A local variable holding `self` is not the literal `self`
+        // keyword, so it must respect visibility too.
+        run_test(
+            r#"
+            class E
+              def initialize() @a = {k: 1} end
+              def viaval
+                x = self
+                x[:k] rescue :raised
+              end
+              private
+              def [](k) @a[k] end
+            end
+            E.new.viaval
+            "#,
+        );
+    }
+
+    #[test]
     fn method_missing_splat() {
         // splat arguments should be expanded and forwarded
         run_test(

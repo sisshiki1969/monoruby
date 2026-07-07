@@ -1086,6 +1086,31 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Whether *name* resolves to a **public** method on *class_id* at compile
+    /// time (or is not defined at all, i.e. no visibility constraint applies
+    /// here — that case is handled elsewhere).
+    ///
+    /// The `Index` / `IndexAssign` fast paths call the resolved `#[]` / `#[]=`
+    /// directly, without the `is_func_call = false` visibility gate that the
+    /// VM's `get_index` / `set_index` apply. A non-public `#[]` / `#[]=` must
+    /// therefore not be compiled inline (it would be reachable from JIT while
+    /// the interpreter correctly raises `NoMethodError`); such sites bail to
+    /// the interpreter instead.
+    ///
+    fn jit_index_method_is_public(&self, class_id: ClassId, name: IdentId) -> bool {
+        let class_version = self.class_version();
+        match self
+            .store
+            .check_method_for_class_with_version(class_id, name, class_version)
+        {
+            Some(entry) => entry.visibility() == Visibility::Public,
+            // Not defined here: let the ordinary `MethodNotFound` path handle
+            // it rather than forcing a deopt.
+            None => true,
+        }
+    }
+
+    ///
     /// Check whether `super` of class *class_id* exists in compile time.
     ///
     fn jit_check_super(&mut self, recv_class: ClassId) -> Option<FuncId> {
