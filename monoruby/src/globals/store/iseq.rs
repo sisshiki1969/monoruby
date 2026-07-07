@@ -681,6 +681,13 @@ impl Store {
 /// as a local variable). Filters out the compiler's reserved slots (`*`, `**`,
 /// `&`'s empty name, `(for)`, …).
 fn is_local_variable_name(name: &str) -> bool {
+    // `**nil` (a keyword-forbidding definition) is modeled internally as a
+    // kwrest slot literally named `nil` so `#parameters` can report it as
+    // `[:nokey]`. `nil` is a reserved word and can never be a real local
+    // variable, so it must not surface in `local_variables`.
+    if name == "nil" {
+        return false;
+    }
     // Numbered block parameters `_1`..`_9`.
     if let Some(rest) = name.strip_prefix('_')
         && rest.len() == 1
