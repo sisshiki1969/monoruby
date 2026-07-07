@@ -253,6 +253,17 @@ fn set_callee_frame_arguments(
     let dst = callee_lfp.register_ptr(SlotId(1));
     let pos_args = globals[callid].pos_num;
 
+    // `**nil` forbids keywords: reject any passed keyword up front, before
+    // positional binding, so the error is "no keywords accepted" rather than
+    // a positional arity error — `def m(a, **nil); end; m(a: 1)` must raise
+    // the former, not "wrong number of arguments" (the keyword is not
+    // silently reinterpreted as the positional `a`).
+    if globals[callee_fid].forbid_keyword()
+        && any_keyword_passed(globals, callid, caller_lfp)?
+    {
+        return Err(MonorubyErr::argumenterr("no keywords accepted"));
+    }
+
     let ex = if globals[callee_fid].no_keyword() && globals[callid].kw_may_exists() {
         // handle excessive keyword arguments
         let mut h = RubyMap::default();
@@ -1050,6 +1061,50 @@ mod tests {
               rescue_msg { m(**full) },          # method dispatch, hash splat
               m(**empty),                        # method dispatch, empty splat
             ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn no_keywords_parameter_with_positional() {
+        // With a required positional param, `**nil` still rejects keywords
+        // with "no keywords accepted" — the keyword must NOT be reinterpreted
+        // as the positional argument (which would raise a bogus "wrong
+        // number of arguments"). A hash passed positionally still binds.
+        run_test(
+            r#"
+            def rescue_msg
+              yield; :no_error
+            rescue ArgumentError => e
+              e.message
+            end
+            def m(a, **nil); a; end
+            [
+              m({a: 1}),                       # positional hash binds to `a`
+              m({"a" => 1}),                   # string-key positional hash
+              rescue_msg { m(a: 1) },          # literal keyword -> rejected
+              rescue_msg { m(**{a: 1}) },      # hash splat -> rejected
+              rescue_msg { m("a" => 1) },      # non-symbol keyword -> rejected
+              m(7),                            # plain positional
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn no_keywords_parameter_local_variables_and_parameters() {
+        // `**nil` binds no local (it must not appear in `local_variables`)
+        // but `#parameters` still reports it as `[:nokey]`.
+        run_test(
+            r#"
+            def m(a, **nil); local_variables; end
+            m(1)
+            "#,
+        );
+        run_test(
+            r#"
+            def m(a, **nil); end
+            method(:m).parameters
             "#,
         );
     }
