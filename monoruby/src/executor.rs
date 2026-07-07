@@ -1059,13 +1059,22 @@ impl Executor {
                     .unwrap();
                 v
             }
-            MonorubyErrKind::NotMethod(Some(receiver)) => {
+            MonorubyErrKind::NotMethod { name, receiver } => {
+                let name = *name;
                 let receiver = *receiver;
                 let v = Value::new_exception(err);
-                globals
-                    .store
-                    .set_ivar(v, IdentId::get_id("/receiver"), Value::from_u64(receiver))
-                    .unwrap();
+                if let Some(name) = name {
+                    globals
+                        .store
+                        .set_ivar(v, IdentId::_NAME, Value::symbol(name))
+                        .unwrap();
+                }
+                if let Some(receiver) = receiver {
+                    globals
+                        .store
+                        .set_ivar(v, IdentId::get_id("/receiver"), Value::from_u64(receiver))
+                        .unwrap();
+                }
                 v
             }
             MonorubyErrKind::Name(name, receiver) => {
