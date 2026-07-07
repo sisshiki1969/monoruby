@@ -848,6 +848,31 @@ impl Executor {
             })
     }
 
+    ///
+    /// The class that `alias` / `undef` target from the innermost runtime
+    /// cref, resolving an `instance_eval` receiver context to the receiver's
+    /// *singleton* class. That resolution raises `TypeError` for an immediate
+    /// value (Integer / Symbol / …) which cannot own a singleton class —
+    /// `1.instance_eval { alias :foo :to_s }` must raise, mirroring `def`.
+    /// Returns `Ok(None)` when no runtime cref is active so the caller applies
+    /// its own lexical-class fallback.
+    ///
+    /// Unlike [`Self::class_context_id_opt`] — which reports a receiver
+    /// context as `val.class()`, the receiver's ordinary class — this is the
+    /// definition definee and so must not silently target the ordinary class.
+    ///
+    pub(crate) fn definee_class_id_opt(&self, globals: &mut Globals) -> Result<Option<ClassId>> {
+        match self.lexical_class.last().unwrap().last().copied() {
+            Some(cref) => match cref.context {
+                DefinitionContext::Class(class_id) => Ok(Some(class_id)),
+                DefinitionContext::Receiver(receiver) => {
+                    Ok(Some(globals.store.get_singleton(receiver)?.id()))
+                }
+            },
+            None => Ok(None),
+        }
+    }
+
     /// Lexical parent for `module Foo; end` / `class Foo; end` /
     /// `X = ...`. Walks the runtime cref stack (top-down) and returns
     /// the first entry tagged as a lexical push — i.e. one introduced
