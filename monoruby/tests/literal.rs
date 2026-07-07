@@ -295,11 +295,34 @@ fn command_literal_frozen_argument() {
         `echo #{x}`
         "#,
     );
-    // The result value flows through discard / return / argument positions.
+    // The result value flows through argument positions.
     run_test(
         r#"
         def `(cmd); cmd.upcase; end
         [`ab`, `cd`]
+        "#,
+    );
+    // …and through assignment (Store), a discarded statement (NotUse), and a
+    // method's return value (Ret) — each `use_mode` of the command literal.
+    run_test(
+        r#"
+        def `(cmd); cmd.frozen?; end
+        x = `ab`
+        x
+        "#,
+    );
+    run_test(
+        r#"
+        def `(cmd); $g = cmd.frozen?; end
+        `ab`
+        $g
+        "#,
+    );
+    run_test(
+        r#"
+        def `(cmd); cmd.frozen?; end
+        def m; `ab`; end
+        m
         "#,
     );
 }
