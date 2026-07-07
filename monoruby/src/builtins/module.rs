@@ -5019,6 +5019,39 @@ mod tests {
     }
 
     #[test]
+    fn alias_undef_keyword_on_immediate_raises() {
+        // The `alias` / `undef` keywords inside `instance_eval` target the
+        // receiver's singleton class. An immediate (Integer / Symbol) cannot
+        // own a singleton class, so it must raise `TypeError` — matching
+        // `def` and CRuby.
+        run_test(
+            r#"begin; 1.instance_eval { alias :foo :to_s }; :no; rescue TypeError; :te; end"#,
+        );
+        run_test(
+            r#"begin; :sym.instance_eval { alias :foo :to_s }; :no; rescue TypeError; :te; end"#,
+        );
+        run_test(r#"begin; 1.instance_eval { undef to_s }; :no; rescue TypeError; :te; end"#);
+        // A String instance *can* own a singleton class, so `alias` there
+        // succeeds and defines the alias only on that object.
+        run_test(
+            r#"
+            s = "abc"
+            s.instance_eval { alias my_len length }
+            [s.my_len, "other".respond_to?(:my_len)]
+            "#,
+        );
+        // The `alias` keyword in a `class_eval` block and a class body still
+        // targets the class itself.
+        run_test(
+            r#"
+            c = Class.new { def orig; 5; end }
+            c.class_eval { alias al orig }
+            c.new.al
+            "#,
+        );
+    }
+
+    #[test]
     fn alias_method_keeps_special_methods_private() {
         // Aliasing TO a special method name (`initialize`, `initialize_copy`,
         // `initialize_clone`, `initialize_dup`, `respond_to_missing?`) forces

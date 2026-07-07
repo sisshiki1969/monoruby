@@ -1286,9 +1286,14 @@ pub(super) extern "C" fn undef_method(
     // plain method body (`def self.x; undef foo; end`) where the method
     // frame is empty — fall back to the iseq's lexical class, matching
     // CRuby's `cref->klass`.
-    let class_id = vm
-        .class_context_id_opt()
-        .unwrap_or_else(|| vm.cfp().lfp().func_id().lexical_class(globals));
+    let class_id = match vm.definee_class_id_opt(globals) {
+        Ok(Some(class_id)) => class_id,
+        Ok(None) => vm.cfp().lfp().func_id().lexical_class(globals),
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
     match globals.undef_method_for_class(class_id, method) {
         Err(err) => {
             vm.set_error(err);
@@ -1330,8 +1335,18 @@ pub(super) extern "C" fn alias_method(
     // block created at top level and run inside
     // `Module.new do … end` still has Object as its lexical class.
     // `alias` should target the module that's currently being
-    // defined, matching CRuby's `cref->klass`.
-    let class_id = vm.context_class_id();
+    // defined, matching CRuby's `cref->klass`. An `instance_eval`
+    // receiver context resolves to the receiver's singleton class,
+    // which raises `TypeError` for an immediate (`1.instance_eval {
+    // alias … }`), matching `def`.
+    let class_id = match vm.definee_class_id_opt(globals) {
+        Ok(Some(class_id)) => class_id,
+        Ok(None) => OBJECT_CLASS,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
     // `Executor::alias_method_for_class` already fires the
     // `method_added` hook, so the alias-keyword path matches
     // `Module#alias_method`'s behaviour for it.
