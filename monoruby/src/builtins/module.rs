@@ -2490,7 +2490,18 @@ fn class_variable_set(
     let class_id = self_val.as_class_id();
     let name = coerce_to_class_var_name(vm, globals, lfp.arg(0))?;
     let val = lfp.arg(1);
-    globals.set_class_variable(class_id, name, val);
+    // A class variable is shared with ancestors: if a superclass already
+    // defines it, update *that* definition instead of shadowing a fresh copy
+    // on the receiver (CRuby's `rb_cvar_set` walks to the defining class).
+    // This mirrors the `@@x = v` assignment path
+    // (`Executor::set_class_variable`); shadowing would otherwise make a
+    // later `class_variable_get` raise "class variable … is overtaken".
+    let module = globals.store[class_id].get_module();
+    let target = match globals.search_class_variables_superclass(module, name) {
+        Some((m, _)) => m.id(),
+        None => class_id,
+    };
+    globals.set_class_variable(target, name, val);
     Ok(val)
 }
 
@@ -4940,6 +4951,38 @@ mod tests {
             r#"
             class D; end
             D.class_variable_get(:@@missing)
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_variable_set_updates_ancestor() {
+        // `class_variable_set` on a subclass updates the class variable
+        // defined on an ancestor rather than shadowing a fresh copy — a
+        // shadow would make a later `class_variable_get` raise "class
+        // variable … is overtaken". The variable stays undefined on the
+        // superclass above the definer.
+        run_test(
+            r#"
+            a = Class.new
+            b = Class.new(a)
+            c = Class.new(b)
+            b.class_variable_set(:@@cv, :value)
+            c.class_variable_set(:@@cv, :next)
+            [
+              b.class_variable_get(:@@cv),
+              c.class_variable_get(:@@cv),
+              (a.class_variable_get(:@@cv) rescue :nameerror),
+            ]
+            "#,
+        );
+        // A fresh receiver with no ancestor definition defines it on itself.
+        run_test(
+            r#"
+            c = Class.new
+            c.class_variable_set(:@@x, 1)
+            c.class_variable_set(:@@x, 2)
+            c.class_variable_get(:@@x)
             "#,
         );
     }
