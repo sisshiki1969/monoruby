@@ -268,3 +268,38 @@ fn literal_regexp_format() {
         r#"format("%02d:%02d:%02d", 1, 2, 3)"#,
     ]);
 }
+
+#[test]
+fn command_literal_frozen_argument() {
+    // A non-interpolated command literal (`` `cmd` `` / `%x{...}`) passes its
+    // command string to `Kernel#\`` FROZEN, matching CRuby (regardless of any
+    // frozen_string_literal pragma). An interpolated command builds a fresh,
+    // unfrozen string. `Kernel#\`` is redefined so the tests don't spawn a
+    // real process.
+    run_test(
+        r#"
+        def `(cmd); [cmd, cmd.frozen?]; end
+        `echo hello`
+        "#,
+    );
+    run_test(
+        r#"
+        def `(cmd); [cmd, cmd.frozen?]; end
+        %x{echo hello}
+        "#,
+    );
+    run_test(
+        r#"
+        def `(cmd); [cmd, cmd.frozen?]; end
+        x = "hi"
+        `echo #{x}`
+        "#,
+    );
+    // The result value flows through discard / return / argument positions.
+    run_test(
+        r#"
+        def `(cmd); cmd.upcase; end
+        [`ab`, `cd`]
+        "#,
+    );
+}
