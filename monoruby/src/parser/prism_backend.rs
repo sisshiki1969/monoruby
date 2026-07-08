@@ -142,6 +142,75 @@ enum CallBlock {
     Delegate,
 }
 
+/// Extract the source-encoding name declared by a `# coding:` /
+/// `# encoding:` magic comment, following CRuby's placement rules:
+///
+/// * The directive must be on the first line, or the second line when
+///   the first line is a shebang (`#!...`).
+/// * That line must be a comment from its first token — only ASCII
+///   whitespace may precede the `#` (so `1 + 1 # encoding: x` does not
+///   count).
+/// * Within the comment the name is whatever follows `coding` (as a
+///   substring, so both `coding` and `encoding` match — and `fileencoding`
+///   in a vim modeline) immediately followed by `:` or `=`. The match is
+///   case-insensitive. Emacs `-*- coding: X -*-` and vim
+///   `fileencoding=X` fall out of the same scan.
+///
+/// Returns the raw declared name (e.g. `"big5"`); the caller maps it to an
+/// [`crate::value::Encoding`] via `Encoding::try_from_str`.
+fn detect_source_encoding(code: &[u8]) -> Option<String> {
+    let mut lines = code.split(|&b| b == b'\n');
+    let first = lines.next().unwrap_or(&[]);
+    let candidate: &[u8] = if first.starts_with(b"#!") {
+        lines.next().unwrap_or(&[])
+    } else {
+        first
+    };
+    // Only ASCII whitespace may precede the `#`.
+    let mut i = 0;
+    while i < candidate.len()
+        && matches!(candidate[i], b' ' | b'\t' | b'\r' | 0x0b | 0x0c)
+    {
+        i += 1;
+    }
+    let comment = candidate.get(i..)?.strip_prefix(b"#")?;
+    let comment = std::str::from_utf8(comment).ok()?;
+    parse_coding_directive(comment)
+}
+
+/// Scan a comment body for `coding` immediately followed (after optional
+/// blanks) by `:` or `=` and an encoding name. See `detect_source_encoding`.
+fn parse_coding_directive(comment: &str) -> Option<String> {
+    let lower = comment.to_ascii_lowercase();
+    let lb = lower.as_bytes();
+    let cb = comment.as_bytes();
+    let mut from = 0;
+    while let Some(off) = lower[from..].find("coding") {
+        let mut j = from + off + "coding".len();
+        while j < lb.len() && matches!(lb[j], b' ' | b'\t') {
+            j += 1;
+        }
+        if j < lb.len() && matches!(lb[j], b':' | b'=') {
+            j += 1;
+            while j < lb.len() && matches!(lb[j], b' ' | b'\t') {
+                j += 1;
+            }
+            let start = j;
+            while j < cb.len()
+                && (cb[j].is_ascii_alphanumeric() || cb[j] == b'_' || cb[j] == b'-')
+            {
+                j += 1;
+            }
+            if j > start {
+                // Preserve the declared case; `try_from_str` normalizes.
+                return Some(comment[start..j].to_string());
+            }
+        }
+        from += off + 1;
+    }
+    None
+}
+
 fn try_prism_inner(
     code: &str,
     path: PathBuf,
@@ -156,16 +225,14 @@ fn try_prism_inner(
         None => prism::parse(code.as_bytes()),
     };
 
-    // Pull `# encoding: NAME` / `# coding: NAME` (also Emacs-style
-    // `# -*- coding: NAME -*-`) out of the magic comment list before
-    // we touch any string literals. Prism normalises all of these
-    // into one entry per key=value pair, so we just look for the
-    // canonical key. If both are present (rare), the first wins —
-    // matching CRuby's "first magic comment line" semantics.
-    let source_encoding: Option<String> = result
-        .magic_comments()
-        .find(|c| matches!(c.key(), b"encoding" | b"coding"))
-        .and_then(|c| std::str::from_utf8(c.value()).ok().map(str::to_owned));
+    // Detect the source encoding from the `# coding:` / `# encoding:`
+    // magic comment ourselves rather than via prism's `magic_comments()`
+    // list: prism reports every `key: value` comment regardless of
+    // position, whereas CRuby only honours an encoding directive on the
+    // first line (or the second line when the first is a shebang) and
+    // only when the line is a comment from its first token. See
+    // `detect_source_encoding`.
+    let source_encoding: Option<String> = detect_source_encoding(code.as_bytes());
 
     let source_info: SourceInfoRef = std::rc::Rc::new(
         crate::ast::SourceInfo::new_eval(path, code.to_owned(), line_offset)
@@ -4478,6 +4545,58 @@ $1
     fn magic_comment_default_is_utf8() {
         let enc = run_encoding_query("\"abc\".encoding.to_s\n");
         assert_eq!(enc, "UTF-8");
+    }
+
+    /// ASCII-compatible national byte encodings (Big5, GBK, …) are now
+    /// name-preserved via `Encoding::NamedByte` rather than folded onto
+    /// ASCII-8BIT, so `# encoding: big5` reports "Big5".
+    #[test]
+    fn magic_comment_named_byte_encoding_preserves_name() {
+        assert_eq!(
+            run_encoding_query("# encoding: big5\n\"abc\".encoding.to_s\n"),
+            "Big5"
+        );
+        assert_eq!(
+            run_encoding_query("# encoding: GBK\n\"abc\".encoding.to_s\n"),
+            "GBK"
+        );
+        // ASCII-only content stays SevenBit and inspects normally
+        // (not \xHH-escaped) — Big5 is ASCII-compatible.
+        assert_eq!(run_encoding_query("# encoding: big5\n\"abc\"\n"), "abc");
+    }
+
+    /// `detect_source_encoding` follows CRuby's placement rules.
+    #[test]
+    fn magic_comment_placement_rules() {
+        // Case-insensitive key, mixed-case value.
+        assert_eq!(parse_coding_directive(" CoDiNg: bIg5"), Some("bIg5".into()));
+        // `=` separator and a junk prefix are allowed.
+        assert_eq!(
+            parse_coding_directive(" foo encoding = big5"),
+            Some("big5".into())
+        );
+        // `coding` must be immediately followed by `:`/`=`; `encodings:`
+        // does not match.
+        assert_eq!(parse_coding_directive(" encodings: big5"), None);
+        // `fileencoding=` inside a vim modeline is caught by the same scan.
+        assert_eq!(
+            parse_coding_directive(" vim: filetype=ruby, fileencoding=big5, tabsize=3"),
+            Some("big5".into())
+        );
+
+        // Only the first line (or the second after a shebang) counts, and
+        // only when the line is a comment from its first token.
+        assert_eq!(
+            detect_source_encoding(b"# encoding: big5\nx = 1\n"),
+            Some("big5".into())
+        );
+        assert_eq!(
+            detect_source_encoding(b"#!/usr/bin/ruby\n# encoding: big5\n"),
+            Some("big5".into())
+        );
+        assert_eq!(detect_source_encoding(b"\n# encoding: big5\n"), None);
+        assert_eq!(detect_source_encoding(b"1 + 1 # encoding: big5\n"), None);
+        assert_eq!(detect_source_encoding(b"x = 1\n"), None);
     }
 
     /// `\xNN` byte escapes in a `# encoding: binary` source come out

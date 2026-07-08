@@ -663,13 +663,27 @@ class Thread
   # concurrently. Only Thread.current (the main thread) is meaningful.
   # Methods that require actual concurrency raise NoMethodError.
 
+  # Deferred thread bodies that have not run yet, oldest first. monoruby
+  # runs `Thread.new` blocks lazily (on `#value`/`#join`), so a main-thread
+  # busy-wait like `Thread.pass until flag` — where `flag` is set by a
+  # thread body — would otherwise spin forever. `Thread.pass` drains this
+  # queue one entry at a time to emulate cooperative scheduling.
+  @@pending = []
+
   def self.current
     @@current
   end
 
-  # Thread.pass is a native sched_yield(2) wrapper (see builtins/thread.rs).
-  # Genuine single-thread blocking is surfaced at the blocking call sites,
-  # not by an artificial Thread.pass call-count guard.
+  # `Thread.pass` runs the oldest not-yet-run deferred thread (so
+  # `Thread.pass until cond` makes progress), then delegates the CPU-yield
+  # hint to the native helper. With no pending thread it is just the
+  # sched_yield(2) wrapper (see builtins/thread.rs).
+  def self.pass
+    t = @@pending.shift
+    t.__send__(:__run) if t
+    __native_yield
+    nil
+  end
 
   def initialize(*args, &block)
     @block = block
@@ -680,6 +694,9 @@ class Thread
     @alive = !@ran
     @keys = {}
     @thread_local = {}
+    # Register runnable (block-bearing) threads so `Thread.pass` can drive
+    # them; `Thread.new` with no block (e.g. the main thread) is already ran.
+    @@pending << self unless @ran
   end
 
   @@current = Thread.new
@@ -687,9 +704,13 @@ class Thread
 
   def __run
     return if @ran
+    @@pending.delete(self)
     @ran = true
     begin
-      @value = @block.call(*@args)
+      # Route through the native helper so a bare top-level `return` in the
+      # thread body raises LocalJumpError (as in CRuby) instead of performing
+      # a non-local return that escapes the synchronously-run block.
+      @value = __invoke_body(@block, @args)
     rescue => e
       @exception = e
     ensure
@@ -698,6 +719,7 @@ class Thread
     self
   end
   private :__run
+  private :__invoke_body
 
   def value
     __run

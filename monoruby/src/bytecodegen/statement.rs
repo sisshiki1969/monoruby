@@ -566,7 +566,18 @@ impl<'a> BytecodeGen<'a> {
             self.apply_label(no_match_pos);
             // no rescue branch was matched.
             if let Some(box ensure) = &ensure {
+                // Keep `err_reg` reserved while emitting the `ensure` body: the
+                // re-raise below reads the in-flight exception back out of
+                // `err_reg`, so the body's scratch temps must not reuse that
+                // slot. `match_temp` sits one slot above `err_reg` (only
+                // `err_reg` is live here), so generating the body from there
+                // leaves the exception intact. (Without this the body would
+                // start at `finish`, which can alias `err_reg` and cause a
+                // non-exception value — e.g. a `puts` string — to be re-raised.)
+                let saved = self.temp;
+                self.temp = match_temp;
                 self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
+                self.temp = saved;
             }
             self.emit(BytecodeInst::Raise(err_reg), Loc::default());
 
@@ -754,6 +765,55 @@ mod test {
               end
             end
             [m, $log]
+            "#,
+        );
+    }
+
+    #[test]
+    fn reraise_through_ensure_preserves_exception() {
+        // Regression: `err_reg` (the slot the exception dispatcher stashes the
+        // in-flight exception in, re-raised after the `ensure`) must not be
+        // reused as a scratch temp by the `ensure` body. When it was, an
+        // `ensure` that built a string (e.g. via `puts`/interpolation) left a
+        // String in `err_reg`, so the re-raise handed a non-exception value to
+        // the runtime and aborted the process. Here the outer `rescue` must
+        // receive the original exception object, not the ensure's string.
+        run_test(
+            r#"
+            o = StandardError.new "outer"
+            i = StandardError.new "inner"
+            begin
+              raise o
+            rescue
+              begin
+                begin
+                  raise i
+                rescue
+                  raise i
+                ensure
+                  s = "ensure: #{i.message}"
+                end
+              rescue => e
+                [e.class.name, e.message, e.equal?(i)]
+              end
+            end
+            "#,
+        );
+        // Same shape without an outer pending exception, re-raising the bare
+        // `$!` through an `ensure` whose body allocates scratch temps.
+        run_test(
+            r#"
+            begin
+              begin
+                raise ArgumentError, "boom"
+              rescue
+                raise
+              ensure
+                _ = "x" * 4
+              end
+            rescue => e
+              [e.class.name, e.message]
+            end
             "#,
         );
     }

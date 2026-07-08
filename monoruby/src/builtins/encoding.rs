@@ -495,7 +495,9 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
         E::Sjis(_) => b"shift_jis",
         E::Iso2022Jp => b"iso-2022-jp",
         // Handled by callers as fast paths / no native codec.
-        E::Utf32Le | E::Utf32Be | E::Ascii8 | E::UsAscii | E::Other(_) => return None,
+        E::Utf32Le | E::Utf32Be | E::Ascii8 | E::UsAscii | E::Other(_) | E::NamedByte(_) => {
+            return None
+        }
     };
     encoding_rs::Encoding::for_label(label)
 }
@@ -1294,6 +1296,7 @@ pub(crate) fn encoding_constant_name(enc: Encoding) -> &'static str {
             4 => "UTF_32",
             _ => "ASCII_8BIT",
         },
+        Encoding::NamedByte(i) => crate::value::named_byte_const_name(i),
     }
 }
 

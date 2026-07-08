@@ -1584,7 +1584,15 @@ pub(super) extern "C" fn ensure_end(vm: &mut Executor) -> usize {
 pub(super) extern "C" fn raise_err(vm: &mut Executor, err_val: Value) {
     match err_val.is_exception() {
         Some(ex) => vm.set_error(MonorubyErr::new_from_exception(ex).with_original(err_val)),
-        None => unimplemented!(),
+        // The `Raise` opcode only re-raises an in-flight exception object
+        // stashed in `err_reg` by the exception dispatcher, so a
+        // non-exception value here means an internal invariant was
+        // violated (e.g. `err_reg` was clobbered before the re-raise).
+        // Surface it as an uncatchable `FatalError` rather than panicking
+        // across the `extern "C"` boundary, which would abort the process.
+        None => vm.set_error(MonorubyErr::fatal(
+            "raise: re-raised value is not an exception object (internal error)",
+        )),
     }
 }
 

@@ -160,8 +160,16 @@ fn main() {
         if finish_flag {
             return;
         }
-        let mut code = String::new();
-        std::io::stdin().read_to_string(&mut code).unwrap();
+        // Read stdin as raw bytes: a script piped in may contain
+        // non-UTF-8 bytes (e.g. a `# encoding:`-tagged source with
+        // high bytes in a string literal). monoruby stores source as
+        // UTF-8 and cannot round-trip arbitrary bytes, but it must not
+        // abort — decode lossily rather than `unwrap`-ing.
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut bytes)
+            .expect("failed to read stdin");
+        let code = String::from_utf8_lossy(&bytes).into_owned();
         (code, std::path::PathBuf::from("-"))
     };
     if let Some(kind) = args.ast {

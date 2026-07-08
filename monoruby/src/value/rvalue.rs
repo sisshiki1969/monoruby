@@ -31,7 +31,7 @@ pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
 pub use string::{CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET};
 pub(crate) use string::{check_string_not_modified, string_snapshot, string_substring, STRING_SHARED_TAG};
-pub(crate) use string::{eucjp_char_width, sjis_char_width};
+pub(crate) use string::{eucjp_char_width, named_byte_const_name, sjis_char_width};
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
 
 mod arithmetic_sequence;
