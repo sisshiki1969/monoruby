@@ -740,7 +740,7 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit, stur x9, [sp, #(-(off as i32))];);
     }
 
-    /// Lower `SetupMethodFrame`: write the callee frame's outer/meta/svar/cme
+    /// Lower `SetupMethodFrame`: write the callee frame's outer/meta/svar
     /// and block fields at `[sp - (RSP_LOCAL_FRAME + LFP_*)]`. Mirrors x86
     /// `setup_method_frame`.
     fn a64_setup_method_frame(
@@ -760,7 +760,6 @@ impl Codegen {
         self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_META) as u32);
         monoasm_arm64!(&mut self.jit, mov x9, (0u64););
         self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
-        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_CME) as u32);
         self.a64_set_block(block_fid, block_arg);
     }
 
@@ -1154,7 +1153,7 @@ impl Codegen {
     /// `SetupYieldFrame`: build the callee **block** frame for a specialized
     /// `yield` before `SpecializedYield` branches into it. Walks `outer - 1`
     /// outer-LFP links to the block's defining frame, then writes the callee
-    /// frame's outer/meta/svar/cme/block/self slots. A literal translation of
+    /// frame's outer/meta/svar/block/self slots. A literal translation of
     /// x86 `setup_yield_frame` (x29-free; uses x9 = outer LFP, x11 = value
     /// scratch — neither of which is GP-mapped; `stur`/`ldur` address the
     /// frame fields directly off sp/x9 with no address-scratch register). The cfp
@@ -1179,11 +1178,10 @@ impl Codegen {
             // frame.meta
             mov x11, (meta.get());
             stur x11, [sp, #(-((RSP_LOCAL_FRAME + LFP_META) as i32))];
-            // svar / cme / block = 0 (block callee resolves via outer chain;
+            // svar / block = 0 (block callee resolves via outer chain;
             // zeroed so the GC mark walker stays sound)
             mov x11, (0u64);
             stur x11, [sp, #(-((RSP_LOCAL_FRAME + LFP_SVAR) as i32))];
-            stur x11, [sp, #(-((RSP_LOCAL_FRAME + LFP_CME) as i32))];
             stur x11, [sp, #(-((RSP_LOCAL_FRAME + LFP_BLOCK) as i32))];
             // frame.self = [outer LFP - LFP_SELF]
             ldur x11, [x9, #(-(LFP_SELF as i32))];
@@ -1249,10 +1247,9 @@ impl Codegen {
             stur x10, [sp, #(-((RSP_LOCAL_FRAME + LFP_META) as i32))];
             stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_BLOCK) as i32))];
             stur x25, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];
-            // set_method_outer: outer/svar/cme = 0
+            // set_method_outer: outer/svar = 0
             stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_OUTER) as i32))];
             stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_SVAR) as i32))];
-            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_CME) as i32))];
             // call_funcdata (fdata in x26): push frame, set callee LFP/PC, call.
             ldr x10, [x19, #(EXECUTOR_CFP as u32)];
             sub x11, sp, #(RSP_CFP as u32);
@@ -4781,15 +4778,13 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit, mov x2, x1;);
         self.a64_get_func_data_x2(); // x9 = &FuncData (clobbers x10, x11)
         monoasm_arm64!(&mut self.jit, mov x26, x9;);
-        // Build the callee block frame fields below sp (outer/svar/cme/block/
+        // Build the callee block frame fields below sp (outer/svar/block/
         // self/meta). self is inherited from the outer frame.
         monoasm_arm64!(&mut self.jit,
             mov x12, (0u64);
             sub x11, sp, #((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
             str x25, [x11];
             sub x11, sp, #((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
-            str x12, [x11];
-            sub x11, sp, #((RSP_LOCAL_FRAME + LFP_CME) as u32);
             str x12, [x11];
             sub x11, sp, #((RSP_LOCAL_FRAME + LFP_BLOCK) as u32);
             str x12, [x11];
