@@ -555,6 +555,15 @@ impl<'a> BytecodeGen<'a> {
             }
             self.retry_labels.pop();
             self.temp = finish;
+            // `no_match_pos` is reached both by fall-through (no rescue clause
+            // matched) and — when there is an `ensure` — as the exception
+            // handler for the rescue-matching / rescue-body region below: on a
+            // raise there the runtime stores the new exception into `err_reg`,
+            // so running the `ensure` and re-raising `err_reg` propagates it
+            // (the `ensure` body's own `raise`/`return`/`throw` still overrides
+            // via `defer_unwind` / `EnsureEnd`).
+            let no_match_pos = self.new_label();
+            self.apply_label(no_match_pos);
             // no rescue branch was matched.
             if let Some(box ensure) = &ensure {
                 self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
@@ -571,6 +580,20 @@ impl<'a> BytecodeGen<'a> {
                 },
                 err_reg: Some(err_reg),
             });
+            // An exception (or `return` / `throw`) raised while matching a
+            // rescue clause or running a matched clause's body must still run
+            // this frame's `ensure`. The begin-body exception entry above only
+            // covers `range` (the body), so cover the rescue region too — but
+            // only when there is an `ensure` to run (otherwise such an
+            // exception simply propagates, which is already correct).
+            if ensure.is_some() {
+                self.exception_table.push(ExceptionEntry {
+                    range: rescue_pos..no_match_pos,
+                    rescue: Some(no_match_pos),
+                    ensure: Some(ensure_label),
+                    err_reg: Some(err_reg),
+                });
+            }
         } else {
             if let Some(else_) = else_ {
                 return Err(
@@ -638,6 +661,101 @@ mod test {
             "a = []; for i in 0..2; a << i; i = i + 10; end; [a, i]",
             "a = []; i = 42; 1.times { for i in 0..2; a << i; i = i + 10; end }; [a, i]",
         ]);
+    }
+
+    #[test]
+    fn ensure_runs_when_rescue_clause_exits() {
+        // An `ensure` must run — and its own `return` / `raise` must override
+        // — when a rescue clause re-raises, raises a new exception, returns,
+        // or throws. The rescue region (not just the begin body) is covered
+        // by the ensure handler.
+        run_test(
+            r#"
+            def m
+              raise "orig"
+            rescue
+              raise "from rescue"
+            ensure
+              return "from ensure"
+            end
+            m
+            "#,
+        );
+        run_test(
+            r#"
+            def m
+              raise "orig"
+            rescue
+              raise "from rescue"
+            ensure
+              raise "from ensure"
+            end
+            begin; m; rescue => e; e.message; end
+            "#,
+        );
+        // The ensure runs (side effect) even when the rescue body raises, and
+        // a normally-completing ensure lets the rescue's exception propagate.
+        run_test(
+            r#"
+            $log = []
+            def m
+              raise "orig"
+            rescue
+              raise "reraised"
+            ensure
+              $log << :ensure_ran
+            end
+            msg = (begin; m; rescue => e; e.message; end)
+            [$log, msg]
+            "#,
+        );
+        // return / throw / retry through rescue + ensure still behave.
+        run_test(
+            r#"
+            $log = []
+            def m
+              raise "x"
+            rescue
+              return :from_rescue
+            ensure
+              $log << :ens
+            end
+            [m, $log]
+            "#,
+        );
+        run_test(
+            r#"
+            $log = []
+            r = catch(:t) do
+              begin
+                raise "x"
+              rescue
+                throw :t, :thrown
+              ensure
+                $log << :ens
+              end
+            end
+            [r, $log]
+            "#,
+        );
+        run_test(
+            r#"
+            $log = []
+            def m
+              n = 0
+              begin
+                n += 1
+                raise "x" if n < 3
+                n
+              rescue
+                retry if n < 3
+              ensure
+                $log << n
+              end
+            end
+            [m, $log]
+            "#,
+        );
     }
 
     #[test]
