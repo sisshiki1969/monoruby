@@ -565,10 +565,9 @@ impl Lfp {
         // Push slots in **ascending memory order**, finishing with
         // LFP_OUTER at the highest index = lfp_addr.
         // Order: locals[0..N], self (LFP_SELF), block (LFP_BLOCK),
-        // cme (LFP_CME), svar (LFP_SVAR), meta (LFP_META), outer (LFP_OUTER).
+        // svar (LFP_SVAR), meta (LFP_META), outer (LFP_OUTER).
         v.push(self_val.id()); // -> LFP_SELF
         v.push(0); //               -> LFP_BLOCK
-        v.push(0); //               -> LFP_CME (unused; zero sentinel)
         v.push(0); //               -> LFP_SVAR (unused; zero sentinel)
         v.push(meta.get()); //      -> LFP_META
         v.push(0); //               -> LFP_OUTER (no outer)
@@ -586,17 +585,15 @@ impl Lfp {
     }
 
     pub fn dummy_heap_frame_with_self(self_val: Value) -> Self {
-        // Same slot order as `heap_frame` (locals.., self, block, cme,
-        // svar, meta, outer) with zero locals. Eight u64 slots: 1 self
-        // + 5 zero header slots (block/cme/svar/meta/outer) padded out
-        // to two extra zeros so the LFP layout stays self-consistent
-        // with the new (post-SVAR/CME) header size.
+        // Same slot order as `heap_frame` (locals.., self, block,
+        // svar, meta, outer) with zero locals. Over-allocated with
+        // padding so the LFP layout stays self-consistent with the
+        // header size (LFP_SELF).
         let v: Box<[u64]> = vec![
             0,                  // padding (matches the historical extra slot)
             0,                  // padding
             self_val.id(),      // LFP_SELF
             0,                  // LFP_BLOCK
-            0,                  // LFP_CME
             0,                  // LFP_SVAR
             0,                  // LFP_META — set via `set_reg_num` below
             0,                  // LFP_OUTER

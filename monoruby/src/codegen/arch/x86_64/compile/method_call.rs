@@ -137,7 +137,6 @@ impl Codegen {
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
             movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
             movq rax, [rdi - (LFP_SELF)];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
@@ -177,12 +176,10 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rax, (meta.get());
             movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
-            // SVAR / CME slots — zero-fill so the GC mark walker
-            // never dereferences uninitialised stack memory. Lazy
-            // `$~` allocation rewrites SVAR on first MatchData; CME
-            // stays zero pending its own migration.
+            // SVAR slot — zero-fill so the GC mark walker never
+            // dereferences uninitialised stack memory. Lazy `$~`
+            // allocation rewrites SVAR on first MatchData.
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
         }
         self.set_block(block_fid, block_arg);
         monoasm! { &mut self.jit,
@@ -216,11 +213,10 @@ impl Codegen {
             movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], rdi;
             movq  rax, (meta.get());
             movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
-            // Yield builds a block frame — SVAR/CME are unused by
+            // Yield builds a block frame — SVAR is unused by
             // block-style callees (they resolve via outer chain),
-            // but zero them so the GC mark walker stays sound.
+            // but zero it so the GC mark walker stays sound.
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
             movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
             movq rax, [rdi - (LFP_SELF)];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
@@ -445,10 +441,9 @@ impl Codegen {
             movq [rsp - (RSP_LOCAL_FRAME + LFP_OUTER)], 0;
             movq rax, [r15 + (FUNCDATA_META)];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_META)], rax;
-            // Zero SVAR/CME — method-introducing frame's lazy `$~`
+            // Zero SVAR — method-introducing frame's lazy `$~`
             // container is allocated on first MatchData write.
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
-            movq [rsp - (RSP_LOCAL_FRAME + LFP_CME)], 0;
         };
         self.set_block(block_fid, block_arg);
         monoasm!( &mut self.jit,

@@ -65,14 +65,8 @@ pub(crate) const LFP_FUNCID: i32 = LFP_META + META_FUNCID as i32;
 /// `Array` `Value` container `[$~, $_]` (see `SVAR_BACKREF` /
 /// `SVAR_LASTLINE`).
 pub(crate) const LFP_SVAR: i32 = 16;
-/// Callable Method Entry — reserved for the upcoming CME slot. CRuby
-/// uses `cref_or_me` at the same position in `vm_svar`; monoruby keeps
-/// the slot separate so the SVAR migration above can land without
-/// blocking on the larger CME redesign. Initialised to `0`; no reads
-/// or writes wired up yet.
-pub(crate) const LFP_CME: i32 = 24;
-pub(crate) const LFP_BLOCK: i32 = 32;
-pub(crate) const LFP_SELF: i32 = 40;
+pub(crate) const LFP_BLOCK: i32 = 24;
+pub(crate) const LFP_SELF: i32 = 32;
 pub const LFP_ARG0: i32 = LFP_SELF + 8;
 
 /// Index of `$~` (the MatchData backref) inside the `LFP_SVAR`

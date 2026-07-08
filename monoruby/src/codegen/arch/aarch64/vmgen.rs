@@ -1303,11 +1303,10 @@ impl Codegen {
             sub sp, sp, #(16);
             str x(PC.0), [sp];
             str x(ACC.0), [sp, #(8)];
-        // frame setup: zero outer/svar/cme/block; self = class; meta.
+        // frame setup: zero outer/svar/block; self = class; meta.
             mov x12, (0);
             stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_OUTER) as i32))];
             stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_SVAR) as i32))];
-            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_CME) as i32))];
             stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_BLOCK) as i32))];
             stur x25, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];  // self = class
             ldr x10, [x26, #(FUNCDATA_META as u32)];
@@ -1454,11 +1453,10 @@ impl Codegen {
             ldr x11, [x11];
             add x10, x10, x11;
             add x15, x10, #(FUNCINFO_DATA as u32);
-        // set_method_outer: zero outer/svar/cme; set meta (kept in X14).
+        // set_method_outer: zero outer/svar; set meta (kept in X14).
             mov x12, (0);
             stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_OUTER) as i32))];
             stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_SVAR) as i32))];
-            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_CME) as i32))];
             ldr x14, [x15, #(FUNCDATA_META as u32)];
             stur x14, [sp, #(-((RSP_LOCAL_FRAME + LFP_META) as i32))];
         // Simple-send opcodes (no block/splat/kw at the call site) may take
@@ -1730,11 +1728,10 @@ impl Codegen {
             ldr x11, [x11];
             add x10, x10, x11;
             add x15, x10, #(FUNCINFO_DATA as u32);
-        // block frame setup: outer = X25, self = outer.self, svar/cme/block 0.
+        // block frame setup: outer = X25, self = outer.self, svar/block 0.
             mov x12, (0);
             stur x25, [sp, #(-((RSP_LOCAL_FRAME + LFP_OUTER) as i32))];
             stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_SVAR) as i32))];
-            stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_CME) as i32))];
             stur x12, [sp, #(-((RSP_LOCAL_FRAME + LFP_BLOCK) as i32))];
             ldur x10, [x25, #(-(LFP_SELF as i32))];  // self = outer.self
             stur x10, [sp, #(-((RSP_LOCAL_FRAME + LFP_SELF) as i32))];

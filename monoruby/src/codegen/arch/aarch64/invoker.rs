@@ -242,11 +242,10 @@ impl JitModule {
             mov x13, (0);
             str x3, [x(fb.0)];  // LFP_SELF  = self
             str x6, [x(fb.0), #(8)];  // LFP_BLOCK = block
-            str x13, [x(fb.0), #(16)];  // LFP_CME   = 0
-            str x13, [x(fb.0), #(24)];  // LFP_SVAR  = 0
+            str x13, [x(fb.0), #(16)];  // LFP_SVAR  = 0
             ldr x14, [x(fdata.0), #(FUNCDATA_META as u32)];
-            str x14, [x(fb.0), #(32)];  // LFP_META  = funcdata.meta
-            str x13, [x(fb.0), #(40)];  // LFP_OUTER = 0
+            str x14, [x(fb.0), #(24)];  // LFP_META  = funcdata.meta
+            str x13, [x(fb.0), #(32)];  // LFP_OUTER = 0
         );
         self.a64_invoker_args_and_call(true);
         self.a64_invoker_epilogue();
@@ -270,11 +269,10 @@ impl JitModule {
             mov x7, (0);                // no keyword args
             str x3, [x(fb.0)];          // LFP_SELF  = self
             str x13, [x(fb.0), #(8)];   // LFP_BLOCK = 0
-            str x13, [x(fb.0), #(16)];  // LFP_CME   = 0
-            str x13, [x(fb.0), #(24)];  // LFP_SVAR  = 0
+            str x13, [x(fb.0), #(16)];  // LFP_SVAR  = 0
             ldr x14, [x(fdata.0), #(FUNCDATA_META as u32)];
-            str x14, [x(fb.0), #(32)];  // LFP_META  = funcdata.meta
-            str x13, [x(fb.0), #(40)];  // LFP_OUTER = 0
+            str x14, [x(fb.0), #(24)];  // LFP_META  = funcdata.meta
+            str x13, [x(fb.0), #(32)];  // LFP_OUTER = 0
         );
         self.a64_invoker_args_and_call(false);
         self.a64_invoker_epilogue();
@@ -288,7 +286,7 @@ impl JitModule {
     /// TODO(aarch64): resolve_invalidated_outer (heap-promoted outer frames).
     /// Set up the callee block frame from a `&ProcData` in x2 (self in x3 when
     /// `with_self`). Produces fdata in X9 and meta in X14, and writes self /
-    /// outer / block / cme / svar / meta into the new frame. Shared by the
+    /// outer / block / svar / meta into the new frame. Shared by the
     /// block and fiber invokers.
     /// TODO(aarch64): resolve_invalidated_outer (heap-promoted outer frames).
     pub(in crate::codegen) fn a64_block_frame_setup(&mut self, with_self: bool) {
@@ -336,11 +334,10 @@ impl JitModule {
             );
         }
         monoasm_arm64!(&mut self.jit,
-            str x13, [x(fb.0), #(16)];  // LFP_CME = 0
-            str x13, [x(fb.0), #(24)];  // LFP_SVAR = 0
+            str x13, [x(fb.0), #(16)];  // LFP_SVAR = 0
             ldr x14, [x(fdata.0), #(FUNCDATA_META as u32)];
-            str x14, [x(fb.0), #(32)];  // LFP_META
-            str x3, [x(fb.0), #(40)];  // LFP_OUTER = outer
+            str x14, [x(fb.0), #(24)];  // LFP_META
+            str x3, [x(fb.0), #(32)];  // LFP_OUTER = outer
         );
     }
 
