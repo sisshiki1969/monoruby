@@ -11,7 +11,10 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_class_under_obj("Thread").id();
-    globals.define_builtin_class_func(klass, "pass", pass, 0);
+    // `Thread.pass` is reopened in startup.rb to first run a pending
+    // deferred thread (cooperative scheduling); it delegates the actual
+    // CPU-yield hint to this native helper.
+    globals.define_builtin_class_func(klass, "__native_yield", pass, 0);
     globals.define_builtin_func(klass, "__invoke_body", invoke_body, 2);
 }
 
@@ -124,6 +127,44 @@ mod tests {
             rescue => e
               e.message
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_pass_drives_deferred_thread_bodies() {
+        // `Thread.new` runs its block lazily, so a main-thread busy-wait on a
+        // flag set by a thread body must still make progress: `Thread.pass`
+        // runs the oldest pending thread. Without this the loop would hang.
+        run_test_once(
+            r#"
+            running = false
+            thr = Thread.new { running = true }
+            Thread.pass until running
+            thr.join
+            running
+            "#,
+        );
+        // Multiple pending threads are drained oldest-first across passes.
+        run_test_once(
+            r#"
+            a = []
+            t1 = Thread.new { a << 1 }
+            t2 = Thread.new { a << 2 }
+            Thread.pass until a.size == 2
+            t1.join
+            t2.join
+            a.sort
+            "#,
+        );
+        // A thread run directly via #value is not re-run by a later pass.
+        run_test_once(
+            r#"
+            n = 0
+            t = Thread.new { n += 1 }
+            t.value
+            Thread.pass
+            n
             "#,
         );
     }
