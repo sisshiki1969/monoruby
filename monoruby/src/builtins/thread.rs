@@ -12,6 +12,40 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_class_under_obj("Thread").id();
     globals.define_builtin_class_func(klass, "pass", pass, 0);
+    globals.define_builtin_func(klass, "__invoke_body", invoke_body, 2);
+}
+
+///
+/// ### Thread#__invoke_body(block, args)
+///
+/// Runs a thread body block, translating a top-level non-local `return`
+/// into a `LocalJumpError`. Used by `Thread#__run` in startup.rb.
+///
+/// CRuby runs each thread on its own stack, so a `return` written directly
+/// in a `Thread.new { ... }` block has no enclosing method frame to return
+/// to and raises `LocalJumpError: unexpected return`. monoruby is
+/// single-threaded and runs thread bodies synchronously on the caller's
+/// stack (see `Thread#__run`), so the block's home frame is still live and
+/// the `return` would otherwise perform a real non-local return, escaping
+/// the thread body entirely (and, under mspec, corrupting the harness).
+/// Catch that escaping `MethodReturn` here and convert it, matching
+/// CRuby's observable behavior for the common (uncaught) case.
+#[monoruby_builtin]
+fn invoke_body(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let block = Proc::new(lfp.arg(0));
+    let args = lfp.arg(1).as_array();
+    match vm.invoke_proc(globals, &block, &args) {
+        Ok(v) => Ok(v),
+        Err(err) if matches!(err.kind(), MonorubyErrKind::MethodReturn(..)) => {
+            Err(MonorubyErr::localjumperr("unexpected return"))
+        }
+        Err(err) => Err(err),
+    }
 }
 
 ///
@@ -47,6 +81,51 @@ mod tests {
     fn thread_pass_returns_nil() {
         run_test("Thread.pass");
         run_test("Thread.pass.nil?");
+    }
+
+    #[test]
+    fn thread_body_bare_return_raises_localjumperror() {
+        // A bare top-level `return` in a thread body is a LocalJumpError in
+        // CRuby (the thread has no enclosing method frame). monoruby runs the
+        // body synchronously, so without the `__invoke_body` conversion the
+        // `return` would escape the block entirely. Observe it at `#value`.
+        run_test(
+            r#"
+            begin
+              Thread.new { return }.value
+              :no_error
+            rescue LocalJumpError => e
+              e.message
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            begin
+              Thread.new { return 5 }.value
+              :no_error
+            rescue LocalJumpError
+              :local_jump
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_body_normal_paths_unaffected() {
+        // The return-conversion wrapper must not disturb ordinary thread
+        // bodies: plain values, arguments, and normal exceptions.
+        run_test("Thread.new { 40 + 2 }.value");
+        run_test("Thread.new(3, 4) { |a, b| a * b }.value");
+        run_test(
+            r#"
+            begin
+              Thread.new { raise "boom" }.value
+            rescue => e
+              e.message
+            end
+            "#,
+        );
     }
 
     #[test]

@@ -689,7 +689,10 @@ class Thread
     return if @ran
     @ran = true
     begin
-      @value = @block.call(*@args)
+      # Route through the native helper so a bare top-level `return` in the
+      # thread body raises LocalJumpError (as in CRuby) instead of performing
+      # a non-local return that escapes the synchronously-run block.
+      @value = __invoke_body(@block, @args)
     rescue => e
       @exception = e
     ensure
@@ -698,6 +701,7 @@ class Thread
     self
   end
   private :__run
+  private :__invoke_body
 
   def value
     __run
