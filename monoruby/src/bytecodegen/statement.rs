@@ -411,6 +411,26 @@ impl<'a> BytecodeGen<'a> {
     ) -> Result<()> {
         self.ensure.push(ensure.as_deref().cloned());
         let base = self.temp;
+        // When this begin has rescue clauses, capture the `$!` active on
+        // entry into a hidden local. CRuby restores `$!` to its previous
+        // value when a rescue clause completes normally — for a nested
+        // rescue that is the *outer* exception, not nil — so a matched
+        // clause restores from this slot instead of clearing to nil. An
+        // anonymous local (not a temp) survives the whole begin/rescue/
+        // ensure region without being reused as scratch.
+        let errinfo_save: Option<BcReg> = if !rescue.is_empty() {
+            let reg: BcReg = self.add_local(None).into();
+            self.emit(
+                BytecodeInst::LoadGvar {
+                    dst: reg,
+                    name: IdentId::get_id("$!"),
+                },
+                Loc::default(),
+            );
+            Some(reg)
+        } else {
+            None
+        };
         let ensure_label = self.new_label();
         let body_use = if else_.is_some() {
             // if else_ exists, rescue must also exists.
@@ -537,17 +557,17 @@ impl<'a> BytecodeGen<'a> {
                 self.gen_expr(body, rescue_use)?;
                 self.rescue_depth -= 1;
                 if !rescue_use.is_ret() {
-                    // Clear $! when leaving rescue block (CRuby restores $! to nil).
-                    let tmp = self.push().into();
-                    self.emit_nil(tmp);
+                    // Restore `$!` to the value active before this begin when
+                    // the rescue clause completes normally. CRuby restores the
+                    // previous exception (nil at the top level, the outer
+                    // exception when nested), rather than always clearing to nil.
                     self.emit(
                         BytecodeInst::StoreGvar {
-                            val: tmp,
+                            val: errinfo_save.expect("rescue clause without errinfo save slot"),
                             name: IdentId::get_id("$!"),
                         },
                         Loc::default(),
                     );
-                    self.pop();
                     self.emit_br(ensure_label);
                 }
                 self.temp = base + 1;
@@ -814,6 +834,71 @@ mod test {
             rescue => e
               [e.class.name, e.message]
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn errinfo_restored_after_rescue() {
+        // CRuby restores `$!` when a rescue clause completes normally: to nil
+        // at the top level, but to the *outer* exception inside a nested
+        // rescue. Previously monoruby always cleared `$!` to nil.
+        run_test(
+            r#"
+            log = []
+            begin
+              raise "outer"
+            rescue
+              begin
+                raise "inner"
+              rescue
+                log << $!.message   # inner
+              end
+              log << $!.message     # outer (restored)
+            end
+            log << $!.inspect       # nil (restored at top level)
+            log
+            "#,
+        );
+        // Three levels deep, plus an `ensure` on the innermost.
+        run_test(
+            r#"
+            log = []
+            begin
+              raise "L1"
+            rescue
+              begin
+                raise "L2"
+              rescue
+                begin
+                  raise "L3"
+                rescue
+                  log << $!.message
+                ensure
+                  log << $!.message
+                end
+                log << $!.message
+              end
+              log << $!.message
+            end
+            log << $!.inspect
+            log
+            "#,
+        );
+        // A re-raise that propagates out and is caught by the outer rescue
+        // still leaves `$!` restored to nil at the top afterwards.
+        run_test(
+            r#"
+            r = begin
+              begin
+                raise "a"
+              rescue
+                raise "b"
+              end
+            rescue => e
+              e.message
+            end
+            [r, $!.inspect]
             "#,
         );
     }
