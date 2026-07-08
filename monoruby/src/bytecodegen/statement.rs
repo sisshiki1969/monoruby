@@ -489,11 +489,22 @@ impl<'a> BytecodeGen<'a> {
                 if !exception_list.is_empty() {
                     for ex in exception_list {
                         if ex.is_splat() {
-                            // TODO: support splat in rescue exception list
-                            // For now, skip splat entries (e.g. rescue Foo, *bar)
-                            continue;
+                            // `rescue *list` / `rescue Foo, *list`: expand the
+                            // operand into an Array (splatarray semantics —
+                            // `#to_a` on a non-Array), then match `err` against
+                            // any element via `ArrayTEq` (the same primitive
+                            // `case ... when *arr` uses). Wrapping the splat
+                            // node in a one-element Array literal performs the
+                            // expansion.
+                            let loc = ex.loc;
+                            let old = self.temp;
+                            let ary = self.push_expr(Node::new_array(vec![ex], loc))?.into();
+                            self.emit(BytecodeInst::ArrayTEq { lhs: ary, rhs: err_reg }, loc);
+                            self.temp = old;
+                            self.emit_condbr(ary, cont_pos, true, false);
+                        } else {
+                            self.gen_teq_condbr(ex, err_reg, cont_pos, true)?;
                         }
-                        self.gen_teq_condbr(ex, err_reg, cont_pos, true)?;
                     }
                     self.emit_br(next_pos);
                 };
@@ -604,6 +615,39 @@ mod test {
             "a = []; for i in 0..2; a << i; i = i + 10; end; [a, i]",
             "a = []; i = 42; 1.times { for i in 0..2; a << i; i = i + 10; end }; [a, i]",
         ]);
+    }
+
+    #[test]
+    fn rescue_splat_exception_list() {
+        // `rescue *list` matches the raised exception against every element
+        // of the splatted list; `rescue Foo, *list` combines a literal entry
+        // with the splat, and the operand is coerced with `#to_a`.
+        run_test(
+            r#"
+            class E1 < StandardError; end
+            class E2 < StandardError; end
+            list = [E1, E2]
+            r1 = begin; raise E2, "x"; rescue *list; :a; end
+            r2 = begin; raise E1, "y"; rescue ArgumentError, *list; :b; end
+            r3 = begin
+                   begin; raise TypeError, "z"; rescue *list; :wrong; end
+                 rescue TypeError
+                   :propagated
+                 end
+            [r1, r2, r3]
+            "#,
+        );
+        // `#to_a` coercion of a non-Array splat operand, and a single-class
+        // (non-Array) operand handled as itself.
+        run_test(
+            r#"
+            class E1 < StandardError; end
+            class Custom; def to_a; [E1]; end; end
+            r1 = begin; raise E1, "x"; rescue *Custom.new; :toa; end
+            r2 = begin; raise E1, "y"; rescue *E1; :single; end
+            [r1, r2]
+            "#,
+        );
     }
 
     #[test]
