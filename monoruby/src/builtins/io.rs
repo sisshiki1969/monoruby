@@ -1839,7 +1839,7 @@ fn read_one_char(io: &mut IoInner) -> Result<Vec<u8>> {
 fn char_width_from_lead(enc: crate::value::Encoding, b: u8) -> usize {
     use crate::value::Encoding as E;
     match enc {
-        E::Ascii8 | E::UsAscii | E::Iso8859(_) | E::Other(_) | E::Iso2022Jp => 1,
+        E::Ascii8 | E::UsAscii | E::Iso8859(_) | E::Other(_) | E::NamedByte(_) | E::Iso2022Jp => 1,
         E::EucJp => match b {
             0x8e => 2,
             0x8f => 3,

@@ -74,6 +74,7 @@ impl<'a> Iterator for CharByteIter<'a> {
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
             | Encoding::Other(_)
+            | Encoding::NamedByte(_)
             // ISO-2022-JP groups bytes 1-at-a-time at the codepoint
             // iterator level — the actual char-vs-ESC-sequence
             // chunking happens further up via `encoding_rs`. This
@@ -199,6 +200,15 @@ pub enum Encoding {
     /// bytes); only `#name`, `#inspect` and ASCII-incompatibility
     /// differ.
     Other(u8),
+    /// An ASCII-*compatible* byte-oriented national encoding monoruby
+    /// has no native codec for (Big5, GBK, GB18030, EUC-KR, the
+    /// Windows-125x / IBM / KOI8 / TIS-620 family, …). Unlike
+    /// [`Encoding::Other`] these keep bytes < 0x80 as ASCII, so they
+    /// behave like `ASCII-8BIT` for storage/iteration but preserve
+    /// their declared name (so `# encoding: big5` makes
+    /// `__ENCODING__.name == "Big5"`). The payload indexes
+    /// [`NAMED_BYTE_ENCODINGS`].
+    NamedByte(u8),
 }
 
 /// Canonical names for [`Encoding::Other`] variants (stateful /
@@ -206,6 +216,66 @@ pub enum Encoding {
 /// index is the `Encoding::Other` payload.
 pub(crate) const OTHER_ENC_NAMES: &[&str] =
     &["UTF-7", "CP50220", "CP50221", "UTF-16", "UTF-32"];
+
+/// `(display name, `Encoding::<CONST>` suffix)` for
+/// [`Encoding::NamedByte`] variants — ASCII-compatible byte
+/// encodings monoruby name-preserves but has no native codec for.
+/// The index is the `Encoding::NamedByte` payload. The constant
+/// suffix must match a registered `Encoding::*` constant so
+/// `__ENCODING__` can load it.
+pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
+    ("Big5", "Big5"),
+    ("Big5-HKSCS", "Big5_HKSCS"),
+    ("Big5-UAO", "Big5_UAO"),
+    ("GBK", "GBK"),
+    ("GB2312", "GB2312"),
+    ("GB18030", "GB18030"),
+    ("GB12345", "GB12345"),
+    ("EUC-KR", "EUC_KR"),
+    ("EUC-TW", "EUC_TW"),
+    ("CP949", "CP949"),
+    ("TIS-620", "TIS_620"),
+    ("KOI8-R", "KOI8_R"),
+    ("KOI8-U", "KOI8_U"),
+    ("Windows-1250", "Windows_1250"),
+    ("Windows-1251", "Windows_1251"),
+    ("Windows-1252", "Windows_1252"),
+    ("Windows-1253", "Windows_1253"),
+    ("Windows-1254", "Windows_1254"),
+    ("Windows-1255", "Windows_1255"),
+    ("Windows-1256", "Windows_1256"),
+    ("Windows-1257", "Windows_1257"),
+    ("Windows-1258", "Windows_1258"),
+    ("IBM437", "IBM437"),
+    ("IBM737", "IBM737"),
+    ("IBM775", "IBM775"),
+    ("IBM850", "IBM850"),
+    ("IBM852", "IBM852"),
+    ("IBM855", "IBM855"),
+    ("IBM857", "IBM857"),
+    ("IBM860", "IBM860"),
+    ("IBM861", "IBM861"),
+    ("IBM862", "IBM862"),
+    ("IBM863", "IBM863"),
+    ("IBM864", "IBM864"),
+    ("IBM865", "IBM865"),
+    ("IBM866", "IBM866"),
+    ("IBM869", "IBM869"),
+];
+
+/// Look up a [`Encoding::NamedByte`] index by its normalized
+/// (uppercased, `-`/`.`→`_`) constant suffix.
+pub(crate) fn named_byte_index(normalized_const: &str) -> Option<u8> {
+    NAMED_BYTE_ENCODINGS
+        .iter()
+        .position(|(_, konst)| konst.eq_ignore_ascii_case(normalized_const))
+        .map(|i| i as u8)
+}
+
+/// The `Encoding::<CONST>` suffix for a [`Encoding::NamedByte`] payload.
+pub(crate) fn named_byte_const_name(index: u8) -> &'static str {
+    NAMED_BYTE_ENCODINGS[index as usize].1
+}
 
 impl Encoding {
     /// True if the encoding is a strict superset of US-ASCII for
@@ -244,6 +314,7 @@ impl Encoding {
     pub fn name(self) -> &'static str {
         match self {
             Encoding::Other(i) => OTHER_ENC_NAMES[i as usize],
+            Encoding::NamedByte(i) => NAMED_BYTE_ENCODINGS[i as usize].0,
             Encoding::Ascii8 => "ASCII-8BIT",
             Encoding::Utf8 => "UTF-8",
             Encoding::UsAscii => "US-ASCII",
@@ -311,7 +382,7 @@ impl Encoding {
             },
             Encoding::Ascii8 => CodeRange::Valid, // every byte is "valid"
             // No native codec: raw bytes, every sequence "valid".
-            Encoding::Other(_) => CodeRange::Valid,
+            Encoding::Other(_) | Encoding::NamedByte(_) => CodeRange::Valid,
             Encoding::Iso8859(_) => CodeRange::Valid, // every byte 0..256 represents a glyph
             // For encodings we don't decode natively, treat any
             // sequence as Valid unless its byte count contradicts
@@ -429,23 +500,76 @@ impl Encoding {
             "SHIFT_JIS" | "SJIS" | "MACJAPANESE" | "MACJAPAN" => Ok(Encoding::Sjis(0)),
             "WINDOWS_31J" | "CP932" | "CSWINDOWS31J" | "WINDOWS31J" => Ok(Encoding::Sjis(1)),
 
-            // Other byte-oriented encodings without native support
-            // are stored as ASCII-8BIT but the name isn't preserved
-            // (consistent with monoruby's prior behaviour). Includes
-            // dummy encodings that Ruby exposes by name for round-
-            // trip purposes (UTF-7, Emacs-Mule, CP50220/CP50221).
-            "WINDOWS_1250" | "CP1250" | "WINDOWS_1251" | "CP1251" | "WINDOWS_1252" | "CP1252"
-            | "WINDOWS_1253" | "CP1253" | "WINDOWS_1254" | "CP1254" | "WINDOWS_1255" | "CP1255"
-            | "WINDOWS_1256" | "CP1256" | "WINDOWS_1257" | "CP1257" | "WINDOWS_1258" | "CP1258"
-            | "IBM437" | "CP437" | "IBM737" | "CP737" | "IBM775" | "CP775" | "IBM850" | "CP850"
-            | "IBM852" | "CP852" | "IBM855" | "CP855" | "IBM857" | "CP857" | "IBM860" | "CP860"
-            | "IBM861" | "CP861" | "IBM862" | "CP862" | "IBM863" | "CP863" | "IBM864" | "CP864"
-            | "IBM865" | "CP865" | "IBM866" | "CP866" | "IBM869" | "CP869" | "KOI8_R"
-            | "KOI8_U" | "GB2312" | "EUC_CN" | "GBK" | "CP936" | "GB18030" | "BIG5"
-            | "BIG5_HKSCS" | "BIG5_UAO" | "EUC_KR" | "EUCKR" | "CP949" | "EUC_TW" | "EUCTW"
-            | "TIS_620" | "TIS620" | "EMACS_MULE" | "GB12345"
-            | "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN" | "MACROMANIA" | "MACTHAI"
-            | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
+            // ASCII-compatible national byte encodings without a native
+            // codec: bytes are stored raw (like ASCII-8BIT) but the
+            // declared name is preserved via `Encoding::NamedByte`, so
+            // `# encoding: big5` reports `__ENCODING__.name == "Big5"`.
+            "BIG5" | "CP950" => Ok(Encoding::NamedByte(named_byte_index("Big5").unwrap())),
+            "BIG5_HKSCS" | "BIG5HKSCS" | "CP951" => {
+                Ok(Encoding::NamedByte(named_byte_index("Big5_HKSCS").unwrap()))
+            }
+            "BIG5_UAO" => Ok(Encoding::NamedByte(named_byte_index("Big5_UAO").unwrap())),
+            "GBK" | "CP936" => Ok(Encoding::NamedByte(named_byte_index("GBK").unwrap())),
+            "GB2312" | "EUC_CN" | "EUCCN" => {
+                Ok(Encoding::NamedByte(named_byte_index("GB2312").unwrap()))
+            }
+            "GB18030" => Ok(Encoding::NamedByte(named_byte_index("GB18030").unwrap())),
+            "GB12345" => Ok(Encoding::NamedByte(named_byte_index("GB12345").unwrap())),
+            "EUC_KR" | "EUCKR" | "CP949" => {
+                Ok(Encoding::NamedByte(named_byte_index("EUC_KR").unwrap()))
+            }
+            "EUC_TW" | "EUCTW" => Ok(Encoding::NamedByte(named_byte_index("EUC_TW").unwrap())),
+            "TIS_620" | "TIS620" => Ok(Encoding::NamedByte(named_byte_index("TIS_620").unwrap())),
+            "KOI8_R" => Ok(Encoding::NamedByte(named_byte_index("KOI8_R").unwrap())),
+            "KOI8_U" => Ok(Encoding::NamedByte(named_byte_index("KOI8_U").unwrap())),
+            "WINDOWS_1250" | "CP1250" => {
+                Ok(Encoding::NamedByte(named_byte_index("Windows_1250").unwrap()))
+            }
+            "WINDOWS_1251" | "CP1251" => {
+                Ok(Encoding::NamedByte(named_byte_index("Windows_1251").unwrap()))
+            }
+            "WINDOWS_1252" | "CP1252" => {
+                Ok(Encoding::NamedByte(named_byte_index("Windows_1252").unwrap()))
+            }
+            "WINDOWS_1253" | "CP1253" => {
+                Ok(Encoding::NamedByte(named_byte_index("Windows_1253").unwrap()))
+            }
+            "WINDOWS_1254" | "CP1254" => {
+                Ok(Encoding::NamedByte(named_byte_index("Windows_1254").unwrap()))
+            }
+            "WINDOWS_1255" | "CP1255" => {
+                Ok(Encoding::NamedByte(named_byte_index("Windows_1255").unwrap()))
+            }
+            "WINDOWS_1256" | "CP1256" => {
+                Ok(Encoding::NamedByte(named_byte_index("Windows_1256").unwrap()))
+            }
+            "WINDOWS_1257" | "CP1257" => {
+                Ok(Encoding::NamedByte(named_byte_index("Windows_1257").unwrap()))
+            }
+            "WINDOWS_1258" | "CP1258" => {
+                Ok(Encoding::NamedByte(named_byte_index("Windows_1258").unwrap()))
+            }
+            "IBM437" | "CP437" => Ok(Encoding::NamedByte(named_byte_index("IBM437").unwrap())),
+            "IBM737" | "CP737" => Ok(Encoding::NamedByte(named_byte_index("IBM737").unwrap())),
+            "IBM775" | "CP775" => Ok(Encoding::NamedByte(named_byte_index("IBM775").unwrap())),
+            "IBM850" | "CP850" => Ok(Encoding::NamedByte(named_byte_index("IBM850").unwrap())),
+            "IBM852" | "CP852" => Ok(Encoding::NamedByte(named_byte_index("IBM852").unwrap())),
+            "IBM855" | "CP855" => Ok(Encoding::NamedByte(named_byte_index("IBM855").unwrap())),
+            "IBM857" | "CP857" => Ok(Encoding::NamedByte(named_byte_index("IBM857").unwrap())),
+            "IBM860" | "CP860" => Ok(Encoding::NamedByte(named_byte_index("IBM860").unwrap())),
+            "IBM861" | "CP861" => Ok(Encoding::NamedByte(named_byte_index("IBM861").unwrap())),
+            "IBM862" | "CP862" => Ok(Encoding::NamedByte(named_byte_index("IBM862").unwrap())),
+            "IBM863" | "CP863" => Ok(Encoding::NamedByte(named_byte_index("IBM863").unwrap())),
+            "IBM864" | "CP864" => Ok(Encoding::NamedByte(named_byte_index("IBM864").unwrap())),
+            "IBM865" | "CP865" => Ok(Encoding::NamedByte(named_byte_index("IBM865").unwrap())),
+            "IBM866" | "CP866" => Ok(Encoding::NamedByte(named_byte_index("IBM866").unwrap())),
+            "IBM869" | "CP869" => Ok(Encoding::NamedByte(named_byte_index("IBM869").unwrap())),
+
+            // Byte encodings we still fold onto ASCII-8BIT without
+            // name preservation (dummy / stateful, or Mac* — kept as
+            // the prior behaviour to avoid ASCII-compat edge cases).
+            "EMACS_MULE" | "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN"
+            | "MACROMANIA" | "MACTHAI" | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
 
             _ => Err(MonorubyErr::argumenterr(format!(
                 "unknown encoding name - {s}"
@@ -1213,7 +1337,8 @@ impl RStringInner {
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
-            | Encoding::Other(_) => self.len(),
+            | Encoding::Other(_)
+            | Encoding::NamedByte(_) => self.len(),
             // UTF-16 / UTF-32 with one extra unit per broken trailing
             // byte. CRuby's `String#length` for these reports the
             // number of *complete* code units plus one per stray byte
@@ -1602,9 +1727,10 @@ impl RStringInner {
             CodeRange::Valid => match parent.encoding() {
                 // Single-byte encodings: every byte position is a
                 // character boundary; Valid trivially propagates.
-                Encoding::Ascii8 | Encoding::Iso8859(_) | Encoding::Other(_) => {
-                    CodeRange::Valid
-                }
+                Encoding::Ascii8
+                | Encoding::Iso8859(_)
+                | Encoding::Other(_)
+                | Encoding::NamedByte(_) => CodeRange::Valid,
                 // UTF-8: the cut points must land on character
                 // boundaries (a non-continuation byte or one-past-the-
                 // end). When both endpoints align, the byte sequence
@@ -1799,7 +1925,8 @@ impl RStringInner {
             Encoding::Ascii8
             | Encoding::UsAscii
             | Encoding::Iso8859(_)
-            | Encoding::Other(_) => Some(1),
+            | Encoding::Other(_)
+            | Encoding::NamedByte(_) => Some(1),
             Encoding::Utf16Le | Encoding::Utf16Be => Some(2),
             Encoding::Utf32Le | Encoding::Utf32Be => Some(4),
             // ISO-2022-JP still iterates byte-wise (stateful decode
