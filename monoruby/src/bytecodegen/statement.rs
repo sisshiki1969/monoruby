@@ -439,6 +439,11 @@ impl<'a> BytecodeGen<'a> {
             }
             self.temp = base;
             let err_reg = self.push().into();
+            // The balanced stack level while matching a rescue clause: only
+            // `err_reg` is live. A clause's `=> target` capture may leave
+            // scratch temps above this (e.g. `rescue => self[:error]` reserves
+            // base/index/src), so the match code below resets to it.
+            let match_temp = self.temp;
             let rescue_pos = self.new_label();
             self.apply_label(rescue_pos);
             self.retry_labels.push(body_start);
@@ -484,6 +489,9 @@ impl<'a> BytecodeGen<'a> {
                         self.emit_assign(err_reg, lhs, None, loc);
                     }
                 };
+                // Reclaim any scratch temps the capture target reserved so the
+                // exception-match branches below all record the same stack sp.
+                self.temp = match_temp;
                 let cont_pos = self.new_label();
                 let next_pos = self.new_label();
                 if !exception_list.is_empty() {
@@ -506,6 +514,21 @@ impl<'a> BytecodeGen<'a> {
                             self.gen_teq_condbr(ex, err_reg, cont_pos, true)?;
                         }
                     }
+                    self.emit_br(next_pos);
+                } else {
+                    // A bare `rescue` (no exception list, with or without a
+                    // `=> e` capture) is `rescue StandardError`: only
+                    // StandardError and its subclasses are caught, so a
+                    // non-StandardError (Exception, SignalException,
+                    // SystemExit, …) propagates instead of being swallowed.
+                    let std_err = Node::new_const(
+                        "StandardError".to_string(),
+                        false,
+                        None,
+                        vec![],
+                        Loc::default(),
+                    );
+                    self.gen_teq_condbr(std_err, err_reg, cont_pos, true)?;
                     self.emit_br(next_pos);
                 };
                 self.apply_label(cont_pos);

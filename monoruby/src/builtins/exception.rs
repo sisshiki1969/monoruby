@@ -37,19 +37,26 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(system_exit_id, "status", system_exit_status, 0);
     globals.define_builtin_func(system_exit_id, "success?", system_exit_success_p, 0);
 
-    globals.define_class("NoMemoryError", standarderr, OBJECT_CLASS);
-    globals.define_class("SecurityError", standarderr, OBJECT_CLASS);
+    // These all inherit directly from `Exception`, not `StandardError`, so a
+    // bare `rescue` (== `rescue StandardError`) does not catch them — matching
+    // CRuby's hierarchy.
+    globals.define_class("NoMemoryError", exception_class, OBJECT_CLASS);
+    globals.define_class("SecurityError", exception_class, OBJECT_CLASS);
+    // `SystemStackError` is raised on stack overflow.
+    globals.define_class("SystemStackError", exception_class, OBJECT_CLASS);
     let signal_exception = globals.define_builtin_exception_class(
         "SignalException",
         SIGNAL_EXCEPTION_CLASS,
-        standarderr,
+        exception_class,
     );
     // `Interrupt` is the Ruby class raised on SIGINT (Ctrl-C). It is a
     // subclass of SignalException — `rescue SignalException` catches it
     // but a bare `rescue` (StandardError) does not.
     globals.define_builtin_exception_class("Interrupt", INTERRUPT_CLASS, signal_exception);
 
-    let scripterr = globals.define_class("ScriptError", standarderr, OBJECT_CLASS);
+    // `ScriptError` (and its `LoadError` / `SyntaxError` /
+    // `NotImplementedError` subclasses) inherits directly from `Exception`.
+    let scripterr = globals.define_class("ScriptError", exception_class, OBJECT_CLASS);
     let loaderr = globals.define_builtin_exception_class("LoadError", LOAD_ERROR_CLASS, scripterr);
     globals.define_builtin_func(loaderr.id(), "path", loaderror_path, 0);
     globals.define_builtin_exception_class("SyntaxError", SYNTAX_ERROR_CLASS, scripterr);
@@ -1211,6 +1218,76 @@ mod tests {
               (begin; raise Interrupt; rescue Exception => e; e.class.name; end),
             ]
             "##,
+        );
+    }
+
+    #[test]
+    fn non_standard_error_hierarchy() {
+        // These classes inherit directly from `Exception`, not
+        // `StandardError`, so a bare `rescue` must not catch them.
+        run_test(
+            r#"
+            [
+              NoMemoryError, ScriptError, SecurityError, SignalException,
+              SystemStackError, LoadError, SyntaxError, NotImplementedError
+            ].map { |k| [k.name, k < StandardError, k < Exception] }
+            "#,
+        );
+    }
+
+    #[test]
+    fn bare_rescue_only_catches_standard_error() {
+        // A bare `rescue` (== `rescue StandardError`) catches StandardError
+        // and its subclasses, but a non-StandardError propagates.
+        run_test(
+            r#"
+            def caught?(k)
+              begin
+                begin
+                  raise k
+                rescue
+                  :caught
+                end
+              rescue Exception
+                :propagated
+              end
+            end
+            [
+              caught?(StandardError), caught?(RuntimeError), caught?(ArgumentError),
+              caught?(Exception), caught?(NoMemoryError), caught?(ScriptError),
+              caught?(SecurityError), caught?(SystemStackError), caught?(NotImplementedError)
+            ]
+            "#,
+        );
+        // Inline (modifier) `rescue` also only rescues StandardError.
+        run_test(r#"raise(StandardError) rescue 1"#);
+        run_test(
+            r#"
+            begin
+              raise(Exception) rescue 1
+              :not_reached
+            rescue Exception
+              :reraised
+            end
+            "#,
+        );
+        // A bare `rescue` with a non-local capture target (regression: the
+        // capture target's scratch temps must not corrupt the match stack).
+        run_test(
+            r#"
+            class C
+              def initialize; @h = {}; end
+              def []=(k, v); @h[k] = v; end
+              def [](k); @h[k]; end
+              def capture(msg)
+                raise msg
+              rescue => self[:error]
+                :caught
+              end
+            end
+            c = C.new
+            [c.capture("boom"), c[:error].message]
+            "#,
         );
     }
 }
