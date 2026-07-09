@@ -234,6 +234,10 @@ impl Executor {
         globals.set_gvar(IdentId::get_id("$VERBOSE"), verbose);
         globals.alias_global_variable(IdentId::get_id("$-v"), IdentId::get_id("$VERBOSE"));
         globals.alias_global_variable(IdentId::get_id("$-w"), IdentId::get_id("$VERBOSE"));
+        // `$DEBUG` defaults to false (monoruby has no `-d` switch);
+        // `$-d` is its alias.
+        globals.set_gvar(IdentId::get_id("$DEBUG"), Value::bool(false));
+        globals.alias_global_variable(IdentId::get_id("$-d"), IdentId::get_id("$DEBUG"));
         let mut executor = Self::default();
         // Bring-up/testing aid (used by the in-progress aarch64 VM port): skip
         // loading startup.rb + gems so a trivial program can exercise the VM
@@ -2754,7 +2758,7 @@ impl Executor {
 
     /// Write `$~` (a MatchData `Value` or nil) into the current MFP's
     /// svar container.
-    fn set_backref(&mut self, val: Value) {
+    pub(crate) fn set_backref(&mut self, val: Value) {
         if let Some(c) = self.svar_container_create() {
             c.as_array()[SVAR_BACKREF] = val;
         }

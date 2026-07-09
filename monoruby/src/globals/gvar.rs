@@ -162,6 +162,7 @@ impl GvarTable {
         name: IdentId,
         val: Value,
     ) -> Result<()> {
+        let val = write_special_check(vm, globals, name, val)?;
         // Intern the entry first so we can assign to plain globals without
         // going through the hook path.
         let id = globals.gvars.entry_id(name);
@@ -175,8 +176,7 @@ impl GvarTable {
             GvarEntry::Hooked { setter, .. } => match *setter {
                 Some(setter) => setter(vm, globals, name, val),
                 None => Err(MonorubyErr::nameerr(format!(
-                    "can't set variable {}",
-                    name
+                    "{name} is a read-only variable"
                 ))),
             },
         }
@@ -268,6 +268,118 @@ impl GvarTable {
     }
 }
 
+/// CRuby installs setter hooks on a number of special globals that
+/// validate or coerce the assigned value, or reject the write outright.
+/// monoruby keeps most of them as plain [`GvarEntry::Simple`] storage
+/// because Rust-side writers update them through `set_simple` (which
+/// must stay hook-free), so the Ruby-level assignment path applies the
+/// equivalent checks by name here instead. Returns the (possibly
+/// coerced) value to store.
+fn write_special_check(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+    val: Value,
+) -> Result<Value> {
+    /// `$/`-style setter (Ruby 4.0 semantics): the value must be a
+    /// String or nil. Unless it is already a frozen bare String, it is
+    /// replaced by a frozen plain-String copy (subclass and instance
+    /// variables are dropped, like CRuby's `rb_str_new_frozen`).
+    fn frozen_string_or_nil(name: &str, val: Value) -> Result<Value> {
+        if val.is_nil() {
+            return Ok(val);
+        }
+        let Some(s) = val.is_rstring_inner() else {
+            return Err(MonorubyErr::typeerr(format!(
+                "value of {name} must be String"
+            )));
+        };
+        if val.is_frozen() && val.class() == STRING_CLASS {
+            return Ok(val);
+        }
+        let mut v = Value::string_from_inner(s.clone());
+        v.set_frozen();
+        Ok(v)
+    }
+
+    let n = name.get_name();
+    match n.as_str() {
+        // Read-only variables backed by plain storage: `$?` is updated
+        // from Rust via `set_simple` (which bypasses this check), the
+        // others have no writer at all. `$!` is read-only in CRuby
+        // too, but monoruby's rescue bookkeeping bytecode stores to it
+        // through this path, so it cannot be listed.
+        "$?" | "$<" | "$FILENAME" => Err(MonorubyErr::nameerr(format!(
+            "{n} is a read-only variable"
+        ))),
+        // The input record separator: String or nil, stored as a
+        // frozen plain-String copy. `$-0` is an alias of `$/`
+        // (registered in `init_builtin_gvars`), but the alias name
+        // still reaches this check, so match it too for the error
+        // message's sake.
+        "$/" | "$-0" => frozen_string_or_nil(&n, val),
+        // Output record / field separators: String or nil, stored
+        // as-is (CRuby does not copy these).
+        "$\\" | "$," => {
+            if val.is_nil() || val.is_rstring().is_some() {
+                Ok(val)
+            } else {
+                Err(MonorubyErr::typeerr(format!(
+                    "value of {n} must be String"
+                )))
+            }
+        }
+        // The input field separator additionally accepts a Regexp.
+        "$;" => {
+            if val.is_nil() || val.is_rstring().is_some() || val.is_regex().is_some() {
+                Ok(val)
+            } else {
+                Err(MonorubyErr::typeerr(format!(
+                    "value of {n} must be String or Regexp"
+                )))
+            }
+        }
+        // `$.` (last input line number) coerces via `#to_int`.
+        "$." => Ok(Value::integer(val.coerce_to_int_i64(vm, globals)?)),
+        // `$stdout` / `$stderr` accept any object with a `write`
+        // method.
+        "$stdout" | "$stderr" => {
+            if globals
+                .store
+                .check_method_for_class(val.class(), IdentId::get_id("write"))
+                .is_some()
+            {
+                Ok(val)
+            } else {
+                Err(MonorubyErr::typeerr(format!(
+                    "{n} must have write method, {} given",
+                    val.get_real_class_name(&globals.store)
+                )))
+            }
+        }
+        // `$VERBOSE` normalizes any truthy assignment to `true`
+        // (nil and false are stored as-is).
+        "$VERBOSE" | "$-v" | "$-w" => Ok(if val.as_bool() {
+            Value::bool(true)
+        } else {
+            val
+        }),
+        // `$0` requires a String.
+        "$0" | "$PROGRAM_NAME" => {
+            if val.is_rstring().is_some() {
+                Ok(val)
+            } else {
+                Err(MonorubyErr::no_implicit_conversion(
+                    &globals.store,
+                    val,
+                    STRING_CLASS,
+                ))
+            }
+        }
+        _ => Ok(val),
+    }
+}
+
 ///
 /// Register hook-based special variables at `Globals::new` time.
 ///
@@ -292,17 +404,29 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
 
     fn set_match_data(
         vm: &mut Executor,
-        _globals: &mut Globals,
+        globals: &mut Globals,
         _name: IdentId,
         val: Value,
     ) -> Result<()> {
-        // CRuby only allows `$~ = nil | MatchData`. We mirror the previous
-        // behaviour: nil clears the capture state, anything else is a no-op
-        // for now (see TODO in original runtime::set_special_var).
+        // CRuby only allows `$~ = nil | MatchData`: nil clears the
+        // capture state, a MatchData replaces it (so the derived
+        // globals `$&`, `$1`, ... immediately reflect it), anything
+        // else is a TypeError.
         if val.is_nil() {
             vm.clear_capture_special_variables();
+            Ok(())
+        } else if val
+            .try_rvalue()
+            .is_some_and(|rv| rv.ty() == ObjTy::MATCHDATA)
+        {
+            vm.set_backref(val);
+            Ok(())
+        } else {
+            Err(MonorubyErr::typeerr(format!(
+                "wrong argument type {} (expected MatchData)",
+                val.get_real_class_name(&globals.store)
+            )))
         }
-        Ok(())
     }
 
     // $&, $', $`, $1..$N are derived from $~ and CRuby parses them as
@@ -420,8 +544,9 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         get_load_path_hook,
         None,
     );
-    // `$:` is an alias of `$LOAD_PATH`.
+    // `$:` and `$-I` are aliases of `$LOAD_PATH`.
     globals.alias_global_variable(IdentId::get_id("$:"), IdentId::get_id("$LOAD_PATH"));
+    globals.alias_global_variable(IdentId::get_id("$-I"), IdentId::get_id("$LOAD_PATH"));
 
     // --- Loaded features ----------------------------------------------------
 
@@ -448,8 +573,83 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
     // `$/` (the input record separator, used as the default argument of
     // `String#chomp`, `IO#gets`, `String#lines`, …) defaults to "\n" in
     // CRuby. It is a plain, assignable global; seed the default value so
-    // reads return "\n" before any assignment.
-    globals.set_gvar(IdentId::get_id("$/"), Value::string_from_str("\n"));
+    // reads return "\n" before any assignment. `$-0` is its alias.
+    let mut sep = Value::string_from_str("\n");
+    sep.set_frozen();
+    globals.set_gvar(IdentId::get_id("$/"), sep);
+    globals.alias_global_variable(IdentId::get_id("$-0"), IdentId::get_id("$/"));
+
+    // --- Exception backtrace --------------------------------------------------
+
+    // `$@` delegates to `$!`: reading returns `$!.backtrace` (nil when
+    // no exception is set), writing calls `$!.set_backtrace` (which
+    // validates the value) and raises ArgumentError when `$!` is not
+    // set. CRuby reports `defined?($@)` as "global-variable"
+    // unconditionally, so the getter always returns `Some`.
+    fn get_errinfo_backtrace(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        _name: IdentId,
+    ) -> Option<Value> {
+        let err = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
+        if err.is_nil() {
+            return Some(Value::nil());
+        }
+        match vm.invoke_method_simple(globals, IdentId::get_id("backtrace"), err, &[]) {
+            Some(v) => Some(v),
+            None => {
+                // Don't leave a pending error behind a plain read.
+                let _ = vm.take_error();
+                Some(Value::nil())
+            }
+        }
+    }
+
+    fn set_errinfo_backtrace(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        _name: IdentId,
+        val: Value,
+    ) -> Result<()> {
+        let err = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
+        if err.is_nil() {
+            return Err(MonorubyErr::argumenterr("$! not set"));
+        }
+        match vm.invoke_method_simple(globals, IdentId::get_id("set_backtrace"), err, &[val]) {
+            Some(_) => Ok(()),
+            None => Err(vm.take_error()),
+        }
+    }
+
+    globals.define_hooked_variable(
+        IdentId::get_id("$@"),
+        get_errinfo_backtrace,
+        Some(set_errinfo_backtrace),
+    );
+
+    // `$.` (last input line number) defaults to 0 in CRuby. Seeding it
+    // matters beyond fidelity: its Ruby-level setter coerces with
+    // `#to_int`, and code like rubygems' StubSpecification saves and
+    // restores `$.` verbatim — a nil default would blow up the
+    // restore.
+    globals.set_gvar(IdentId::get_id("$."), Value::integer(0));
+
+    // --- Command-line flag mirrors -------------------------------------------
+
+    // `$-a`, `$-l`, `$-p` mirror the corresponding CLI switches, none of
+    // which monoruby implements, so they read as `false` and are
+    // read-only like in CRuby.
+    fn get_false(
+        _vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+    ) -> Option<Value> {
+        Some(Value::bool(false))
+    }
+
+    for flag in ["$-a", "$-l", "$-p"] {
+        globals.define_hooked_variable(IdentId::get_id(flag), get_false, None);
+    }
 }
 
 // ============================================================================
