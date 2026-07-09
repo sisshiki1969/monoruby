@@ -373,3 +373,44 @@ fn for_loop_destructuring_index() {
         "r = []; for a, b in [[1, 2], [3, 4]]; r << [a, b]; end; r",
     ]);
 }
+
+#[test]
+fn massign_respects_overridden_respond_to() {
+    // CRuby gates the `#to_ary` / `#to_a` coercion in destructuring on the
+    // dynamic `respond_to?(:to_ary, true)` / `respond_to?(:to_a, true)`
+    // predicate. An object whose `respond_to?` returns false must be left a
+    // scalar even if it defines `#to_ary` / `#to_a`.
+    run_tests(&[
+        // `respond_to?` false -> `#to_ary` not consulted, RHS stays scalar.
+        r#"
+        class X
+          def respond_to?(m, inc = false); false; end
+          def to_ary; raise "should not be called"; end
+        end
+        a, b, c = X.new
+        [a.class.name, b, c]
+        "#,
+        // `respond_to?` is called with (:to_ary, true) before `#to_ary`.
+        r#"
+        $log = []
+        class Z
+          def respond_to?(m, inc = false); $log << [m, inc]; super; end
+          def to_ary; $log << :to_ary; [10, 20]; end
+        end
+        a, b = Z.new
+        [$log, a, b]
+        "#,
+        // Splat consults `respond_to?(:to_a, true)`.
+        r#"
+        class W
+          def respond_to?(m, inc = false); false; end
+          def to_a; raise "should not be called"; end
+        end
+        a, b = *W.new
+        [a.class.name, b]
+        "#,
+        // A genuine `#to_ary` / `#to_a` still expands.
+        "class Y; def to_ary; [7, 8]; end; end; a, b = Y.new; [a, b]",
+        "class V; def to_a; [1, 2, 3]; end; end; a, b, c = *V.new; [a, b, c]",
+    ]);
+}
