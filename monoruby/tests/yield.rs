@@ -208,3 +208,22 @@ fn block_auto_splat_gates_to_ary_on_respond_to() {
         "#,
     ]);
 }
+
+#[test]
+fn block_auto_splat_to_ary_type_error() {
+    // `#to_ary` returning a non-Array, non-nil value from the block
+    // auto-splat coercion raises `TypeError`, matching CRuby.
+    run_test(
+        r#"
+        class BadAry
+          def to_ary; 42; end
+        end
+        begin
+          [BadAry.new].each { |a, b| }
+          :no_raise
+        rescue TypeError
+          :type_error
+        end
+        "#,
+    );
+}
