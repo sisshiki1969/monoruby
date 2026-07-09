@@ -373,3 +373,81 @@ fn for_loop_destructuring_index() {
         "r = []; for a, b in [[1, 2], [3, 4]]; r << [a, b]; end; r",
     ]);
 }
+
+#[test]
+fn massign_respects_overridden_respond_to() {
+    // CRuby gates the `#to_ary` / `#to_a` coercion in destructuring on the
+    // dynamic `respond_to?(:to_ary, true)` / `respond_to?(:to_a, true)`
+    // predicate. An object whose `respond_to?` returns false must be left a
+    // scalar even if it defines `#to_ary` / `#to_a`.
+    run_tests(&[
+        // `respond_to?` false -> `#to_ary` not consulted, RHS stays scalar.
+        r#"
+        class X
+          def respond_to?(m, inc = false); false; end
+          def to_ary; raise "should not be called"; end
+        end
+        a, b, c = X.new
+        [a.class.name, b, c]
+        "#,
+        // `respond_to?` is called with (:to_ary, true) before `#to_ary`.
+        r#"
+        $log = []
+        class Z
+          def respond_to?(m, inc = false); $log << [m, inc]; super; end
+          def to_ary; $log << :to_ary; [10, 20]; end
+        end
+        a, b = Z.new
+        [$log, a, b]
+        "#,
+        // Splat consults `respond_to?(:to_a, true)`.
+        r#"
+        class W
+          def respond_to?(m, inc = false); false; end
+          def to_a; raise "should not be called"; end
+        end
+        a, b = *W.new
+        [a.class.name, b]
+        "#,
+        // A genuine `#to_ary` / `#to_a` still expands.
+        "class Y; def to_ary; [7, 8]; end; end; a, b = Y.new; [a, b]",
+        "class V; def to_a; [1, 2, 3]; end; end; a, b, c = *V.new; [a, b, c]",
+    ]);
+}
+
+#[test]
+fn massign_to_ary_to_a_coercion_edge_cases() {
+    // Exercises the `#to_ary` / `#to_a` result handling in destructuring:
+    // a non-Array result raises TypeError, a raised error propagates, and a
+    // `nil` result leaves the value a scalar (`#to_ary`) or wraps it
+    // (`#to_a`).
+    // NOTE: `run_tests` concatenates every snippet into one program and runs
+    // it 25×, so each snippet must use a *distinct* class name — a reused
+    // class carrying an overridden (e.g. raising) `respond_to?` from one
+    // snippet would otherwise break another on the second iteration.
+    run_tests(&[
+        // `#to_ary` returning a non-Array -> TypeError.
+        r#"class ToAryNonArray; def to_ary; 5; end; end
+           begin; a, b = ToAryNonArray.new; :no_raise; rescue TypeError; :type_error; end"#,
+        // `#to_ary` raising -> the error propagates.
+        r#"class ToAryRaise; def to_ary; raise "boom"; end; end
+           begin; a, b = ToAryRaise.new; :no_raise; rescue => e; e.message; end"#,
+        // `#to_ary` returning nil -> the value stays a scalar.
+        r#"class ToAryNil; def to_ary; nil; end; end
+           a, b = ToAryNil.new; [a.class.name, b]"#,
+        // Splat `#to_a` returning a non-Array -> TypeError.
+        r#"class ToANonArray; def to_a; 5; end; end
+           begin; a, b = *ToANonArray.new; :no_raise; rescue TypeError; :type_error; end"#,
+        // Splat `#to_a` raising -> the error propagates.
+        r#"class ToARaise; def to_a; raise "boom2"; end; end
+           begin; a, b = *ToARaise.new; :no_raise; rescue => e; e.message; end"#,
+        // Splat `#to_a` returning nil -> the value is wrapped in `[value]`.
+        r#"class ToANil; def to_a; nil; end; end
+           a, b = *ToANil.new; [a.class.name, b]"#,
+        // A raising `respond_to?` propagates out of the destructure / splat.
+        r#"class RespToAryRaise; def respond_to?(m, i = false); raise "rr"; end; def to_ary; [1]; end; end
+           begin; a, b = RespToAryRaise.new; :no_raise; rescue => e; e.message; end"#,
+        r#"class RespToARaise; def respond_to?(m, i = false); raise "rr2"; end; def to_a; [1]; end; end
+           begin; a, b = *RespToARaise.new; :no_raise; rescue => e; e.message; end"#,
+    ]);
+}

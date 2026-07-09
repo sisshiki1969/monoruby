@@ -509,10 +509,27 @@ pub(super) extern "C" fn expand_array(
     // expanded, `nil` or a missing `#to_ary` leaves `src` a scalar, and any
     // other result raises `TypeError`. Returns `None` (a null in `rax`) so
     // the VM / JIT error path fires.
+    //
+    // CRuby gates the `#to_ary` call on `respond_to?(:to_ary, true)` — the
+    // *dynamic* predicate, which a user may override — rather than a raw
+    // method-table lookup, so honour an overridden `respond_to?` here too.
     let src = if src.is_array_ty() {
         src
-    } else if let Some(func_id) = globals.check_method(src, IdentId::TO_ARY) {
-        match vm.invoke_func_inner(globals, func_id, src, &[], None, None) {
+    } else if match vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("respond_to?"),
+        src,
+        &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
+        None,
+        None,
+    ) {
+        Ok(v) => v.as_bool(),
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    } {
+        match vm.invoke_method_inner(globals, IdentId::TO_ARY, src, &[], None, None) {
             Ok(v) if v.is_array_ty() => v,
             Ok(v) if v.is_nil() => src,
             Ok(v) => {
@@ -1613,8 +1630,31 @@ pub(super) extern "C" fn to_a(
     if src.is_nil() {
         return Some(Value::array_empty());
     }
-    if let Some(func_id) = globals.check_method(src, IdentId::TO_A) {
-        let ary = vm.invoke_func(globals, func_id, src, &[], None, None)?;
+    // Like `#to_ary` destructuring above, CRuby gates the `#to_a` call on
+    // `respond_to?(:to_a, true)` (a user may override it), not a raw
+    // method-table lookup.
+    let responds = match vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("respond_to?"),
+        src,
+        &[Value::symbol(IdentId::TO_A), Value::bool(true)],
+        None,
+        None,
+    ) {
+        Ok(v) => v.as_bool(),
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    if responds {
+        let ary = match vm.invoke_method_inner(globals, IdentId::TO_A, src, &[], None, None) {
+            Ok(v) => v,
+            Err(err) => {
+                vm.set_error(err);
+                return None;
+            }
+        };
         if ary.is_array_ty() {
             Some(ary)
         } else if ary.is_nil() {
@@ -1624,7 +1664,6 @@ pub(super) extern "C" fn to_a(
             Some(Value::array1(src))
         } else {
             let src_class = src.class().get_name(&globals.store);
-            //let res_class = ary.class().get_name(&globals.store);
             vm.set_error(MonorubyErr::typeerr(format!(
                 "can't convert {src_class} into Array"
             )));
