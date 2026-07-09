@@ -19,7 +19,7 @@ class StringIO
   # `close`d after the block returns (raising or not), and returns
   # the block's value. Without a block, returns a StringIO -- in
   # which case the caller is responsible for closing it.
-  def self.open(string = "", mode = "r+", &block)
+  def self.open(string = nil, mode = "r+", &block)
     io = new(string, mode)
     return io unless block
     begin
@@ -29,8 +29,21 @@ class StringIO
     end
   end
 
-  def initialize(string = "", mode = "r+")
-    @string = string.is_a?(String) ? string : string.to_s
+  def initialize(string = nil, mode = "r+")
+    # When no backing string is supplied, StringIO owns a fresh, mutable
+    # buffer. Under this file's `# frozen_string_literal: true` a bare
+    # `""` literal is the shared frozen object, so `#write` (which
+    # mutates `@string` in place) must start from an explicitly mutable
+    # string — hence `"".dup`. A caller-supplied string is used as-is,
+    # matching CRuby: writing through a StringIO mutates the original
+    # (and raises FrozenError if the caller passed a frozen string).
+    @string = if string.nil?
+      "".dup
+    elsif string.is_a?(String)
+      string
+    else
+      string.to_s
+    end
     @pos = 0
     @lineno = 0
     @closed_read = false
@@ -553,7 +566,7 @@ class StringIO
     when 'r'
       @closed_write = true
     when 'w', 'w+'
-      @string = "" if mode == 'w'
+      @string = "".dup if mode == 'w'
     when 'a', 'a+'
       @pos = @string.length
     when 'r+', 'r+b', 'rb+'

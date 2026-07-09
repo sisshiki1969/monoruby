@@ -48,6 +48,11 @@ pub struct SourceInfo {
     /// Stored verbatim as written in the source so consumers can
     /// resolve aliases through their own normaliser.
     pub source_encoding: Option<String>,
+    /// Value of the `# frozen_string_literal:` magic comment, if present
+    /// (`None` = not specified → string literals are mutable, Ruby's
+    /// default). When `Some(true)`, every string literal in the file is a
+    /// shared, frozen, deduplicated object.
+    pub frozen_string_literal: Option<bool>,
 }
 
 impl Default for SourceInfo {
@@ -70,6 +75,7 @@ impl SourceInfo {
             code,
             line_offset: 0,
             source_encoding: None,
+            frozen_string_literal: None,
         }
     }
 
@@ -87,6 +93,7 @@ impl SourceInfo {
             code,
             line_offset,
             source_encoding: None,
+            frozen_string_literal: None,
         }
     }
 
@@ -95,6 +102,12 @@ impl SourceInfo {
     /// source encoding after the source has already been wrapped.
     pub fn with_source_encoding(mut self, enc: Option<String>) -> Self {
         self.source_encoding = enc;
+        self
+    }
+
+    /// Builder: attach the `# frozen_string_literal:` magic-comment value.
+    pub fn with_frozen_string_literal(mut self, frozen: Option<bool>) -> Self {
+        self.frozen_string_literal = frozen;
         self
     }
 

@@ -99,6 +99,14 @@ pub struct Store {
     /// `Executor::flush_compile_warnings` right after compilation, before
     /// the compiled code runs.
     pub(crate) compile_warnings: Vec<String>,
+    /// Intern pool for frozen string literals emitted under a
+    /// `# frozen_string_literal: true` file. Keyed by `(bytes, encoding)`
+    /// so literals with identical content share one shared, frozen object
+    /// across the whole program — including across `require`d files, since
+    /// `Store` outlives any single compilation. Matches CRuby's behaviour
+    /// where `"abc".equal?("abc")` is true under the magic comment. Rooted
+    /// for GC in [`Store::mark`].
+    frozen_str_pool: HashMap<(Vec<u8>, crate::value::Encoding), Value>,
 }
 
 impl std::ops::Deref for Store {
@@ -198,6 +206,7 @@ impl alloc::GC<RValue> for Store {
         self.iseqs.iter().for_each(|info| info.mark(alloc));
         self.constsite_info.iter().for_each(|info| info.mark(alloc));
         self.classes.table.iter().for_each(|info| info.mark(alloc));
+        self.frozen_str_pool.values().for_each(|v| v.mark(alloc));
     }
 }
 
@@ -215,7 +224,24 @@ impl Store {
             default_copy_hooks: None,
             method_cache: RefCell::new(GlobalMethodCache::default()),
             compile_warnings: vec![],
+            frozen_str_pool: HashMap::default(),
         }
+    }
+
+    ///
+    /// Intern a frozen string literal for a `# frozen_string_literal: true`
+    /// file. Returns the shared, frozen `Value` for `(bytes, enc)`, creating
+    /// and caching it on first use so identical literals (in the same or a
+    /// different file) resolve to the same object.
+    ///
+    pub(crate) fn intern_frozen_str(&mut self, bytes: &[u8], enc: crate::value::Encoding) -> Value {
+        if let Some(v) = self.frozen_str_pool.get(&(bytes.to_vec(), enc)) {
+            return *v;
+        }
+        let mut v = Value::string_from_source_bytes(bytes, enc);
+        v.set_frozen();
+        self.frozen_str_pool.insert((bytes.to_vec(), enc), v);
+        v
     }
 
     pub fn iseq(&self, func_id: FuncId) -> &ISeqInfo {
