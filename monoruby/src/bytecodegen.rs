@@ -1190,13 +1190,32 @@ impl<'a> BytecodeGen<'a> {
     }
 
 
+    /// Whether this file declared `# frozen_string_literal: true`, in which
+    /// case every string literal is emitted as a shared, frozen, interned
+    /// object rather than a per-execution mutable copy.
+    fn frozen_string_literal(&self) -> bool {
+        self.sourceinfo.frozen_string_literal == Some(true)
+    }
+
+    /// Emit a shared, frozen, deduplicated string literal for a
+    /// `# frozen_string_literal: true` file. Literals with identical
+    /// `(bytes, encoding)` resolve to the same object program-wide.
+    fn emit_frozen_interned(&mut self, dst: BcReg, bytes: &[u8], enc: crate::value::Encoding) {
+        let v = self.store.intern_frozen_str(bytes, enc);
+        self.emit(BytecodeInst::FrozenLiteral(dst, v), Loc::default());
+    }
+
     fn emit_string(&mut self, dst: BcReg, s: String) {
+        let enc = self.source_encoding();
+        if self.frozen_string_literal() {
+            self.emit_frozen_interned(dst, s.as_bytes(), enc);
+            return;
+        }
         // String literals become long-lived templates: `Literal`
         // dispatch `deep_copy`s the template into a fresh RValue on
         // every execution, and the clone preserves the template's
         // `cr`. Pre-classify here so each clone gets `cr` for free
         // instead of re-running classify on first use.
-        let enc = self.source_encoding();
         self.emit_literal(dst, Value::string_from_source_str(&s, enc));
     }
 
@@ -1219,6 +1238,10 @@ impl<'a> BytecodeGen<'a> {
         // invalid under the declared encoding `valid_encoding?` returns
         // false but byte-level operations still work, matching CRuby.
         let enc = self.source_encoding();
+        if self.frozen_string_literal() {
+            self.emit_frozen_interned(dst, &b, enc);
+            return;
+        }
         self.emit_literal(dst, Value::string_from_source_bytes(&b, enc));
     }
 
@@ -1231,6 +1254,10 @@ impl<'a> BytecodeGen<'a> {
     fn emit_encoded_string(&mut self, dst: BcReg, b: Vec<u8>, enc_name: &'static str) {
         let enc = crate::value::Encoding::try_from_str(enc_name)
             .unwrap_or(crate::value::Encoding::Utf8);
+        if self.frozen_string_literal() {
+            self.emit_frozen_interned(dst, &b, enc);
+            return;
+        }
         self.emit_literal(dst, Value::string_from_source_bytes(&b, enc));
     }
 

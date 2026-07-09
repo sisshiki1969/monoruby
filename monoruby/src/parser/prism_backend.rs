@@ -211,6 +211,75 @@ fn parse_coding_directive(comment: &str) -> Option<String> {
     None
 }
 
+/// Detect a `# frozen_string_literal: true|false` magic comment.
+///
+/// Unlike the encoding directive (which CRuby honours only on the very
+/// first line), the `frozen_string_literal` pragma may appear on any of the
+/// leading comment lines — CRuby scans the contiguous comment block at the
+/// top of the file (after an optional shebang) and stops at the first line
+/// that is not a comment. Returns `Some(true)`/`Some(false)` for the last
+/// matching directive, or `None` when the pragma is absent.
+fn detect_frozen_string_literal(code: &[u8]) -> Option<bool> {
+    let mut result = None;
+    for (idx, line) in code.split(|&b| b == b'\n').enumerate() {
+        // Only ASCII whitespace may precede the `#`.
+        let mut i = 0;
+        while i < line.len() && matches!(line[i], b' ' | b'\t' | b'\r' | 0x0b | 0x0c) {
+            i += 1;
+        }
+        let rest = &line[i..];
+        // A shebang is allowed only on the first line and does not end the
+        // magic-comment block.
+        if idx == 0 && rest.starts_with(b"#!") {
+            continue;
+        }
+        match rest.strip_prefix(b"#") {
+            Some(comment) => {
+                if let Ok(s) = std::str::from_utf8(comment) {
+                    if let Some(v) = parse_frozen_directive(s) {
+                        result = Some(v);
+                    }
+                }
+            }
+            // First non-comment line (code or blank) ends the block.
+            None => break,
+        }
+    }
+    result
+}
+
+/// Scan a comment body for `frozen_string_literal` immediately followed
+/// (after optional blanks) by `:` or `=` and a `true`/`false` value.
+fn parse_frozen_directive(comment: &str) -> Option<bool> {
+    let lower = comment.to_ascii_lowercase();
+    let lb = lower.as_bytes();
+    let key = "frozen_string_literal";
+    let mut from = 0;
+    while let Some(off) = lower[from..].find(key) {
+        let mut j = from + off + key.len();
+        while j < lb.len() && matches!(lb[j], b' ' | b'\t') {
+            j += 1;
+        }
+        if j < lb.len() && matches!(lb[j], b':' | b'=') {
+            j += 1;
+            while j < lb.len() && matches!(lb[j], b' ' | b'\t') {
+                j += 1;
+            }
+            let start = j;
+            while j < lb.len() && (lb[j].is_ascii_alphanumeric() || lb[j] == b'_') {
+                j += 1;
+            }
+            match &lower[start..j] {
+                "true" => return Some(true),
+                "false" => return Some(false),
+                _ => {}
+            }
+        }
+        from += off + 1;
+    }
+    None
+}
+
 fn try_prism_inner(
     code: &str,
     path: PathBuf,
@@ -233,10 +302,12 @@ fn try_prism_inner(
     // only when the line is a comment from its first token. See
     // `detect_source_encoding`.
     let source_encoding: Option<String> = detect_source_encoding(code.as_bytes());
+    let frozen_string_literal: Option<bool> = detect_frozen_string_literal(code.as_bytes());
 
     let source_info: SourceInfoRef = std::rc::Rc::new(
         crate::ast::SourceInfo::new_eval(path, code.to_owned(), line_offset)
-            .with_source_encoding(source_encoding),
+            .with_source_encoding(source_encoding)
+            .with_frozen_string_literal(frozen_string_literal),
     );
 
     if let Some(diag) = result.errors().next() {
@@ -4514,6 +4585,26 @@ $1
             .to_owned()
     }
 
+    /// Under `# frozen_string_literal: true`, every string literal is a
+    /// shared frozen object, so two literals with the same content are
+    /// `equal?` (interned) and each is frozen.
+    #[test]
+    fn frozen_string_literal_interns_and_freezes() {
+        let (_g, val) = run_prism_source(
+            "# frozen_string_literal: true\n\"abc\".frozen? && \"abc\".equal?(\"abc\")\n",
+        );
+        assert_eq!(val, crate::Value::bool(true));
+    }
+
+    /// Without the pragma, literals stay mutable and each evaluation is a
+    /// fresh object.
+    #[test]
+    fn without_frozen_string_literal_literals_are_mutable() {
+        let (_g, val) =
+            run_prism_source("!\"abc\".frozen? && !\"abc\".equal?(\"abc\")\n");
+        assert_eq!(val, crate::Value::bool(true));
+    }
+
     /// `# encoding: binary` makes every string literal in the file
     /// ASCII-8BIT. Without honouring the comment, `pack`-style spec
     /// files (which all open with `# encoding: binary`) compare a
@@ -4597,6 +4688,48 @@ $1
         assert_eq!(detect_source_encoding(b"\n# encoding: big5\n"), None);
         assert_eq!(detect_source_encoding(b"1 + 1 # encoding: big5\n"), None);
         assert_eq!(detect_source_encoding(b"x = 1\n"), None);
+    }
+
+    /// `detect_frozen_string_literal` follows CRuby's magic-comment rules
+    /// for the `frozen_string_literal` pragma.
+    #[test]
+    fn frozen_string_literal_placement_rules() {
+        // Case-insensitive key, `:` or `=` separator, true/false values.
+        assert_eq!(parse_frozen_directive(" frozen_string_literal: true"), Some(true));
+        assert_eq!(parse_frozen_directive(" Frozen_String_Literal = FALSE"), Some(false));
+        // Missing or non-boolean value does not match.
+        assert_eq!(parse_frozen_directive(" frozen_string_literal:"), None);
+        assert_eq!(parse_frozen_directive(" frozen_string_literal: yes"), None);
+        // Key must be followed by `:`/`=`.
+        assert_eq!(parse_frozen_directive(" frozen_string_literal true"), None);
+
+        // First line, or after a shebang.
+        assert_eq!(
+            detect_frozen_string_literal(b"# frozen_string_literal: true\nx = 1\n"),
+            Some(true)
+        );
+        assert_eq!(
+            detect_frozen_string_literal(b"#!/usr/bin/ruby\n# frozen_string_literal: true\n"),
+            Some(true)
+        );
+        // May appear on a later comment line in the leading block (e.g.
+        // below an `# encoding:` directive).
+        assert_eq!(
+            detect_frozen_string_literal(
+                b"# encoding: euc-jp\n# frozen_string_literal: true\n\nx = 1\n"
+            ),
+            Some(true)
+        );
+        // Absent, or after the leading comment block, yields None.
+        assert_eq!(detect_frozen_string_literal(b"x = 1\n"), None);
+        assert_eq!(
+            detect_frozen_string_literal(b"\n# frozen_string_literal: true\n"),
+            None
+        );
+        assert_eq!(
+            detect_frozen_string_literal(b"x = 1\n# frozen_string_literal: true\n"),
+            None
+        );
     }
 
     /// `\xNN` byte escapes in a `# encoding: binary` source come out
