@@ -520,6 +520,9 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ArrayNode { .. } => self.lower_array(&node.as_array_node().unwrap())?,
             prism::Node::HashNode { .. } => self.lower_hash(&node.as_hash_node().unwrap())?,
             prism::Node::RangeNode { .. } => self.lower_range(&node.as_range_node().unwrap())?,
+            prism::Node::FlipFlopNode { .. } => {
+                self.lower_flip_flop(&node.as_flip_flop_node().unwrap())?
+            }
             prism::Node::ParenthesesNode { .. } => {
                 let inner = node.as_parentheses_node().unwrap();
                 match inner.body() {
@@ -1887,6 +1890,100 @@ impl<'pr> Lowerer<'pr> {
             },
             loc,
         })
+    }
+
+    /// Lower a flip-flop (`(a)..(b)` in a conditional) by desugaring
+    /// it into an `if` chain over a hidden global variable that
+    /// carries the per-site on/off state:
+    ///
+    /// ```text
+    /// if $__flip_flop_N          # currently on
+    ///   $__flip_flop_N = false if (b)
+    ///   true
+    /// elsif (a)                  # currently off, begin-condition hit
+    ///   $__flip_flop_N = <`..`: !(b), `...`: true>
+    ///   true
+    /// else
+    ///   false
+    /// end
+    /// ```
+    ///
+    /// Each lowered flip-flop draws a fresh id from a process-global
+    /// counter, so distinct sites — including re-`eval`s of the same
+    /// source — get independent state, while every evaluation of one
+    /// parsed site shares it (an unset global reads as nil = off).
+    /// CRuby instead keeps the state in the frame's special storage;
+    /// the observable difference (thread isolation) doesn't matter in
+    /// monoruby's single-threaded runtime.
+    fn lower_flip_flop(
+        &mut self,
+        node: &prism::FlipFlopNode<'pr>,
+    ) -> Result<Node, MonorubyErr> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT_FLIP_FLOP_ID: AtomicUsize = AtomicUsize::new(0);
+        let loc = location_to_loc(&node.location());
+        let state = format!(
+            "$__flip_flop_{}",
+            NEXT_FLIP_FLOP_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let left = self.lower_flip_flop_operand(node.left(), loc)?;
+        let right = self.lower_flip_flop_operand(node.right(), loc)?;
+        let state_var = || Node::new_global_var(state.clone(), loc);
+        let set_state = |value: Node| Node::new_mul_assign(vec![state_var()], vec![value]);
+        // On: evaluate the end condition; a hit turns the flip-flop
+        // off after this (still truthy) evaluation.
+        let on_arm = Node::new_comp_stmt(
+            vec![
+                Node::new_if(
+                    right.clone(),
+                    set_state(Node::new_bool(false, loc)),
+                    Node::new_nil(loc),
+                    loc,
+                ),
+                Node::new_bool(true, loc),
+            ],
+            loc,
+        );
+        // Off + begin-condition hit: `..` also evaluates the end
+        // condition immediately (a simultaneous hit keeps it off),
+        // `...` defers it to the next evaluation.
+        let turn_on = if node.is_exclude_end() {
+            Node::new_bool(true, loc)
+        } else {
+            Node::new_unop(UnOp::Not, right, loc)
+        };
+        let off_arm = Node::new_if(
+            left,
+            Node::new_comp_stmt(vec![set_state(turn_on), Node::new_bool(true, loc)], loc),
+            Node::new_bool(false, loc),
+            loc,
+        );
+        Ok(Node::new_if(state_var(), on_arm, off_arm, loc))
+    }
+
+    /// A bare Integer literal as a flip-flop operand compares against
+    /// `$.` (the last input line number) in CRuby, not its own
+    /// truthiness. A missing operand can never hit (nil).
+    fn lower_flip_flop_operand(
+        &mut self,
+        node: Option<prism::Node<'pr>>,
+        loc: Loc,
+    ) -> Result<Node, MonorubyErr> {
+        let Some(node) = node else {
+            return Ok(Node::new_nil(loc));
+        };
+        let lowered = self.lower_node(&node)?;
+        Ok(
+            if matches!(lowered.kind, NodeKind::Integer(_) | NodeKind::Bignum(_)) {
+                Node::new_binop(
+                    BinOp::Cmp(CmpKind::Eq),
+                    lowered,
+                    Node::new_global_var("$.".to_string(), loc),
+                )
+            } else {
+                lowered
+            },
+        )
     }
 
     /// Lower a `StatementsNode`-shaped body to ruruby-parse's compact
