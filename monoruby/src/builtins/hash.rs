@@ -4124,10 +4124,19 @@ mod tests {
               !!(cap { eval("{100000000000000000000 => 1, 100000000000000000000 => 2}") } =~ /is duplicated/),
               # A runtime (non-literal) key never warns.
               cap { k = 1; eval("{k => 1, k => 2}", binding) }.empty?,
+              # A duplicate spanning a literal `**{...}` splat is detected
+              # (a compile-time check, so the splat operand's keys count).
+              !!(cap { eval("{a: 1, **{a: 2, b: 3, c: 1}, c: 3}") } =~ /key :a is duplicated/),
+              !!(cap { eval("{a: 1, **{a: 2, b: 3, c: 1}, c: 3}") } =~ /key :c is duplicated/),
+              # Nested literal splats are flattened recursively.
+              !!(cap { eval("{a: 1, **{a: 2, **{d: 5}}, **{d: 6}}") } =~ /key :d is duplicated/),
+              # A runtime `**h` splat is opaque: no compile-time warning.
+              cap { h = {a: 2}; eval("{a: 1, **h}", binding) }.empty?,
               # No duplicate: no warning.
               cap { eval("{a: 1, b: 2}") }.empty?,
               # The overwrite still happens (last value wins).
               eval("{a: 1, a: 2}"),
+              eval("{a: 1, **{a: 2, b: 3, c: 1}, c: 3}"),
             ]
             "#,
         );

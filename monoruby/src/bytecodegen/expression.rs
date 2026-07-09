@@ -1689,7 +1689,7 @@ impl<'a> BytecodeGen<'a> {
         splat: Vec<(usize, Node)>,
         loc: Loc,
     ) -> Result<()> {
-        self.warn_duplicated_hash_keys(&nodes);
+        self.warn_duplicated_hash_keys(&nodes, &splat);
         if splat.is_empty() {
             if nodes.len() <= LITERAL_CHUNK_LEN {
                 let len = nodes.len();
@@ -1818,41 +1818,82 @@ impl<'a> BytecodeGen<'a> {
     /// through `$stderr` by `Executor::flush_compile_warnings` once
     /// compilation finishes.
     ///
-    fn warn_duplicated_hash_keys(&mut self, nodes: &[(Node, Node)]) {
+    fn warn_duplicated_hash_keys(&mut self, nodes: &[(Node, Node)], splat: &[(usize, Node)]) {
         use std::sync::atomic::Ordering;
         if crate::globals::WARNING.load(Ordering::Relaxed) == 0 {
             return;
         }
+        // Flatten the literal's statically-known keys into source order,
+        // descending into `**{...}` splats whose operand is itself a
+        // literal hash, then warn on every re-occurrence.
+        let mut keys: Vec<(String, String, Loc)> = vec![];
+        Self::collect_hash_literal_keys(nodes, splat, &mut keys);
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (eq, inspect, loc) in keys {
+            if !seen.insert(eq) {
+                let line = self.sourceinfo.get_line(&loc);
+                let msg = format!(
+                    "{}:{}: warning: key {} is duplicated and overwritten on line {}",
+                    self.sourceinfo.path.to_string_lossy(),
+                    line,
+                    inspect,
+                    line,
+                );
+                self.store.compile_warnings.push(msg);
+            }
+        }
+    }
+
+    ///
+    /// Collect a hash literal's *statically known* keys into `out` in
+    /// source order. Descends into `**{...}` splats whose operand is
+    /// itself a literal hash (recursively), so a duplicate spanning a
+    /// literal splat (`{a: 1, **{a: 2}}`) is detected — matching CRuby's
+    /// compile-time check. Runtime splats (`**h`) and runtime-computed
+    /// keys (`{k => 1}`) are opaque and contribute nothing.
+    ///
+    /// `splat[j].0` is the number of ordinary pairs that precede splat
+    /// `j`, so the source order is
+    ///   pairs[0..p0], splat0, pairs[p0..p1], splat1, …, trailing pairs
+    /// — the same interleaving `gen_hash` replays.
+    ///
+    fn collect_hash_literal_keys(
+        nodes: &[(Node, Node)],
+        splat: &[(usize, Node)],
+        out: &mut Vec<(String, String, Loc)>,
+    ) {
+        // (equality key, inspect string)
         fn literal_key(kind: &NodeKind) -> Option<(String, String)> {
-            // (equality key, inspect string)
             match kind {
                 NodeKind::Symbol(s) => Some((format!("sym:{s}"), format!(":{s}"))),
                 NodeKind::String(s) => Some((format!("str:{s}"), format!("{s:?}"))),
                 NodeKind::Integer(i) => Some((format!("int:{i}"), format!("{i}"))),
                 NodeKind::Bignum(n) => Some((format!("int:{n}"), format!("{n}"))),
-                NodeKind::Float(f) => {
-                    Some((format!("flt:{f}"), crate::value::ruby_float_to_s(*f)))
-                }
+                NodeKind::Float(f) => Some((format!("flt:{f}"), crate::value::ruby_float_to_s(*f))),
                 NodeKind::Bool(b) => Some((format!("bool:{b}"), format!("{b}"))),
                 NodeKind::Nil => Some(("nil".to_string(), "nil".to_string())),
                 _ => None,
             }
         }
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for (k, _) in nodes {
-            if let Some((eq, inspect)) = literal_key(&k.kind) {
-                if !seen.insert(eq) {
-                    let line = self.sourceinfo.get_line(&k.loc);
-                    let msg = format!(
-                        "{}:{}: warning: key {} is duplicated and overwritten on line {}",
-                        self.sourceinfo.path.to_string_lossy(),
-                        line,
-                        inspect,
-                        line,
-                    );
-                    self.store.compile_warnings.push(msg);
+        let mut pi = 0usize;
+        for (pos, snode) in splat {
+            while pi < *pos && pi < nodes.len() {
+                let k = &nodes[pi].0;
+                if let Some((eq, inspect)) = literal_key(&k.kind) {
+                    out.push((eq, inspect, k.loc));
                 }
+                pi += 1;
             }
+            if let NodeKind::Hash(inner, inner_splat) = &snode.kind {
+                Self::collect_hash_literal_keys(inner, inner_splat, out);
+            }
+        }
+        while pi < nodes.len() {
+            let k = &nodes[pi].0;
+            if let Some((eq, inspect)) = literal_key(&k.kind) {
+                out.push((eq, inspect, k.loc));
+            }
+            pi += 1;
         }
     }
 
