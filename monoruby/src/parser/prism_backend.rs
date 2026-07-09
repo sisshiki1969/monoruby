@@ -362,6 +362,27 @@ struct Lowerer<'pr> {
     /// frame instead of starting back at 1 inside the eval body.
     line_offset: i64,
     lvars: LvarCollector,
+    /// Number of prism scopes (program → def/class/block/lambda
+    /// nesting) currently entered. Maintained by
+    /// `enter_prism_scope` / `exit_prism_scope` and consumed by
+    /// `adjust_lvar_depth`.
+    prism_scope_level: u32,
+    /// Prism scope levels at which the lowerer synthesized a closure
+    /// scope prism doesn't know about (currently only the hidden
+    /// `at_exit` block wrapping an `END { ... }` body). A local
+    /// variable reference whose target scope lies at or outside such
+    /// a level must hop one extra scope per crossed wrap; the crossed
+    /// names are collected so the wrap site can anchor them in their
+    /// home scope.
+    scope_wraps: Vec<ScopeWrap>,
+}
+
+/// See [`Lowerer::scope_wraps`].
+struct ScopeWrap {
+    /// Prism scope level the wrap was inserted at.
+    level: u32,
+    /// Names of locals referenced across this wrap.
+    escaped: Vec<String>,
 }
 
 impl<'pr> Lowerer<'pr> {
@@ -372,7 +393,50 @@ impl<'pr> Lowerer<'pr> {
             source_info,
             line_offset: 0,
             lvars: LvarCollector::new(),
+            prism_scope_level: 0,
+            scope_wraps: Vec::new(),
         }
+    }
+
+    /// Enter a prism scope (def/class/block/lambda body): bumps the
+    /// scope level and hands out a fresh `LvarCollector`, returning
+    /// the outer one for `exit_prism_scope` to restore.
+    fn enter_prism_scope(&mut self) -> LvarCollector {
+        self.prism_scope_level += 1;
+        std::mem::take(&mut self.lvars)
+    }
+
+    /// Leave a prism scope: restores the outer `LvarCollector` and
+    /// returns the scope's own collector (used by block/def lowering
+    /// to attach it to the produced `BlockInfo`).
+    fn exit_prism_scope(&mut self, saved: LvarCollector) -> LvarCollector {
+        self.prism_scope_level -= 1;
+        std::mem::replace(&mut self.lvars, saved)
+    }
+
+    /// Translate a prism-reported local variable depth into a
+    /// monoruby-AST depth, adding one hop for every synthesized
+    /// closure scope (`scope_wraps`) between the reference and its
+    /// target scope. Every crossing is also recorded on the crossed
+    /// wraps so `lower_post_execution` can anchor the variable in its
+    /// home scope (bytecodegen materializes local slots lazily on
+    /// first depth-0 reference, which a variable only ever referenced
+    /// from inside the synthesized block would otherwise never get).
+    fn adjust_lvar_depth(&mut self, depth: usize, name: &str) -> usize {
+        if self.scope_wraps.is_empty() {
+            return depth;
+        }
+        let target = self.prism_scope_level - depth as u32;
+        let mut hops = 0;
+        for wrap in self.scope_wraps.iter_mut() {
+            if target <= wrap.level {
+                hops += 1;
+                if !wrap.escaped.iter().any(|n| n == name) {
+                    wrap.escaped.push(name.to_string());
+                }
+            }
+        }
+        depth + hops
     }
 
     fn into_lvars(self) -> LvarCollector {
@@ -427,7 +491,22 @@ impl<'pr> Lowerer<'pr> {
         // would have produced (bytecodegen reads `LvarCollector` to
         // assign register slots before walking the tree).
         self.collect_locals(&node.locals())?;
-        let stmts = self.lower_statements_into_vec(&node.statements())?;
+        // `BEGIN { ... }` blocks run before the rest of the code
+        // unit, in source order: CRuby hoists them to the top of the
+        // program, and their bodies share the toplevel scope, so
+        // simply lowering the hoisted statements first is enough.
+        let body = node.statements();
+        let mut stmts = Vec::new();
+        for n in body.body().iter() {
+            if n.as_pre_execution_node().is_some() {
+                stmts.push(self.lower_node(&n)?);
+            }
+        }
+        for n in body.body().iter() {
+            if n.as_pre_execution_node().is_none() {
+                stmts.push(self.lower_node(&n)?);
+            }
+        }
         Ok(Node {
             kind: NodeKind::CompStmt(stmts),
             loc,
@@ -520,6 +599,9 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ArrayNode { .. } => self.lower_array(&node.as_array_node().unwrap())?,
             prism::Node::HashNode { .. } => self.lower_hash(&node.as_hash_node().unwrap())?,
             prism::Node::RangeNode { .. } => self.lower_range(&node.as_range_node().unwrap())?,
+            prism::Node::FlipFlopNode { .. } => {
+                self.lower_flip_flop(&node.as_flip_flop_node().unwrap())?
+            }
             prism::Node::ParenthesesNode { .. } => {
                 let inner = node.as_parentheses_node().unwrap();
                 match inner.body() {
@@ -552,13 +634,13 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::SingletonClassNode { .. } => {
                 let n = node.as_singleton_class_node().unwrap();
                 let singleton = self.lower_node(&n.expression())?;
-                let saved = std::mem::take(&mut self.lvars);
+                let saved = self.enter_prism_scope();
                 if let Err(e) = self.collect_locals(&n.locals()) {
-                    self.lvars = saved;
+                    self.exit_prism_scope(saved);
                     return Err(e);
                 }
                 let info_res = self.lower_class_body(n.body(), loc);
-                self.lvars = saved;
+                self.exit_prism_scope(saved);
                 let info = info_res?;
                 Node {
                     kind: NodeKind::SingletonClassDef {
@@ -745,11 +827,12 @@ impl<'pr> Lowerer<'pr> {
                 }
             }
             prism::Node::BeginNode { .. } => self.lower_begin(&node.as_begin_node().unwrap())?,
-            // `BEGIN { ... }` / `END { ... }`. Full Ruby semantics hoist
-            // the body before / after the program; for the common cases
-            // (notably `eval("BEGIN { ... }")`) lowering the body inline
-            // at its source position is sufficient and avoids the
-            // unsupported-node path entirely.
+            // `BEGIN { ... }`: hoisted to the top of the code unit by
+            // `lower_program`, so by the time this arm runs the node is
+            // already in first position and its body (which shares the
+            // toplevel scope) can be lowered inline. `END { ... }`
+            // registers its body as a once-only at_exit handler (see
+            // `lower_post_execution`).
             prism::Node::PreExecutionNode { .. } => {
                 let n = node.as_pre_execution_node().unwrap();
                 match n.statements() {
@@ -762,13 +845,7 @@ impl<'pr> Lowerer<'pr> {
             }
             prism::Node::PostExecutionNode { .. } => {
                 let n = node.as_post_execution_node().unwrap();
-                match n.statements() {
-                    Some(stmts) => self.lower_statements_compact(&stmts, loc)?,
-                    None => Node {
-                        kind: NodeKind::Nil,
-                        loc,
-                    },
-                }
+                self.lower_post_execution(&n, loc)?
             }
             prism::Node::MultiWriteNode { .. } => {
                 self.lower_multi_write(&node.as_multi_write_node().unwrap())?
@@ -776,7 +853,11 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::LocalVariableOperatorWriteNode { .. } => {
                 let n = node.as_local_variable_operator_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::LocalVar(n.depth() as usize, constant_name(&n.name())?),
+                    kind: {
+                        let name = constant_name(&n.name())?;
+                        let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
+                        NodeKind::LocalVar(depth, name)
+                    },
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
@@ -784,7 +865,11 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::LocalVariableOrWriteNode { .. } => {
                 let n = node.as_local_variable_or_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::LocalVar(n.depth() as usize, constant_name(&n.name())?),
+                    kind: {
+                        let name = constant_name(&n.name())?;
+                        let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
+                        NodeKind::LocalVar(depth, name)
+                    },
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
@@ -792,7 +877,11 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::LocalVariableAndWriteNode { .. } => {
                 let n = node.as_local_variable_and_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::LocalVar(n.depth() as usize, constant_name(&n.name())?),
+                    kind: {
+                        let name = constant_name(&n.name())?;
+                        let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
+                        NodeKind::LocalVar(depth, name)
+                    },
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
@@ -1102,7 +1191,12 @@ impl<'pr> Lowerer<'pr> {
                     prism::Node::LocalVariableTargetNode { .. } => {
                         let inner = index.as_local_variable_target_node().unwrap();
                         (
-                            vec![(inner.depth() as usize, constant_name(&inner.name())?)],
+                            {
+                                let name = constant_name(&inner.name())?;
+                                let depth =
+                                    self.adjust_lvar_depth(inner.depth() as usize, &name);
+                                vec![(depth, name)]
+                            },
                             None,
                         )
                     }
@@ -1123,10 +1217,12 @@ impl<'pr> Lowerer<'pr> {
                             let mut out: Vec<(usize, String)> = Vec::new();
                             for tgt in mt.lefts().iter() {
                                 let inner = tgt.as_local_variable_target_node().unwrap();
-                                out.push((
-                                    inner.depth() as usize,
-                                    constant_name(&inner.name())?,
-                                ));
+                                out.push({
+                                    let name = constant_name(&inner.name())?;
+                                    let depth = self
+                                        .adjust_lvar_depth(inner.depth() as usize, &name);
+                                    (depth, name)
+                                });
                             }
                             (out, None)
                         } else {
@@ -1598,10 +1694,10 @@ impl<'pr> Lowerer<'pr> {
         }
     }
 
-    fn lower_local_var_read(&self, node: &LocalVariableReadNode<'pr>) -> Result<Node, MonorubyErr> {
+    fn lower_local_var_read(&mut self, node: &LocalVariableReadNode<'pr>) -> Result<Node, MonorubyErr> {
         let name = constant_name(&node.name())?;
         Ok(Node {
-            kind: NodeKind::LocalVar(node.depth() as usize, name),
+            kind: NodeKind::LocalVar(self.adjust_lvar_depth(node.depth() as usize, &name), name),
             loc: location_to_loc(&node.location()),
         })
     }
@@ -1611,7 +1707,7 @@ impl<'pr> Lowerer<'pr> {
         node: &LocalVariableWriteNode<'pr>,
     ) -> Result<Node, MonorubyErr> {
         let name = constant_name(&node.name())?;
-        let depth = node.depth() as usize;
+        let depth = self.adjust_lvar_depth(node.depth() as usize, &name);
         let target = Node {
             kind: NodeKind::LocalVar(depth, name),
             loc: location_to_loc(&node.name_loc()),
@@ -1889,6 +1985,189 @@ impl<'pr> Lowerer<'pr> {
         })
     }
 
+    /// Lower a flip-flop (`(a)..(b)` in a conditional) by desugaring
+    /// it into an `if` chain over a hidden global variable that
+    /// carries the per-site on/off state:
+    ///
+    /// ```text
+    /// if $__flip_flop_N          # currently on
+    ///   $__flip_flop_N = false if (b)
+    ///   true
+    /// elsif (a)                  # currently off, begin-condition hit
+    ///   $__flip_flop_N = <`..`: !(b), `...`: true>
+    ///   true
+    /// else
+    ///   false
+    /// end
+    /// ```
+    ///
+    /// Each lowered flip-flop draws a fresh id from a process-global
+    /// counter, so distinct sites — including re-`eval`s of the same
+    /// source — get independent state, while every evaluation of one
+    /// parsed site shares it (an unset global reads as nil = off).
+    /// CRuby instead keeps the state in the frame's special storage;
+    /// the observable difference (thread isolation) doesn't matter in
+    /// monoruby's single-threaded runtime.
+    fn lower_flip_flop(
+        &mut self,
+        node: &prism::FlipFlopNode<'pr>,
+    ) -> Result<Node, MonorubyErr> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT_FLIP_FLOP_ID: AtomicUsize = AtomicUsize::new(0);
+        let loc = location_to_loc(&node.location());
+        let state = format!(
+            "$__flip_flop_{}",
+            NEXT_FLIP_FLOP_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let left = self.lower_flip_flop_operand(node.left(), loc)?;
+        let right = self.lower_flip_flop_operand(node.right(), loc)?;
+        let state_var = || Node::new_global_var(state.clone(), loc);
+        let set_state = |value: Node| Node::new_mul_assign(vec![state_var()], vec![value]);
+        // On: evaluate the end condition; a hit turns the flip-flop
+        // off after this (still truthy) evaluation.
+        let on_arm = Node::new_comp_stmt(
+            vec![
+                Node::new_if(
+                    right.clone(),
+                    set_state(Node::new_bool(false, loc)),
+                    Node::new_nil(loc),
+                    loc,
+                ),
+                Node::new_bool(true, loc),
+            ],
+            loc,
+        );
+        // Off + begin-condition hit: `..` also evaluates the end
+        // condition immediately (a simultaneous hit keeps it off),
+        // `...` defers it to the next evaluation.
+        let turn_on = if node.is_exclude_end() {
+            Node::new_bool(true, loc)
+        } else {
+            Node::new_unop(UnOp::Not, right, loc)
+        };
+        let off_arm = Node::new_if(
+            left,
+            Node::new_comp_stmt(vec![set_state(turn_on), Node::new_bool(true, loc)], loc),
+            Node::new_bool(false, loc),
+            loc,
+        );
+        Ok(Node::new_if(state_var(), on_arm, off_arm, loc))
+    }
+
+    /// A bare Integer literal as a flip-flop operand compares against
+    /// `$.` (the last input line number) in CRuby, not its own
+    /// truthiness. A missing operand can never hit (nil).
+    fn lower_flip_flop_operand(
+        &mut self,
+        node: Option<prism::Node<'pr>>,
+        loc: Loc,
+    ) -> Result<Node, MonorubyErr> {
+        let Some(node) = node else {
+            return Ok(Node::new_nil(loc));
+        };
+        let lowered = self.lower_node(&node)?;
+        Ok(
+            if matches!(lowered.kind, NodeKind::Integer(_) | NodeKind::Bignum(_)) {
+                Node::new_binop(
+                    BinOp::Cmp(CmpKind::Eq),
+                    lowered,
+                    Node::new_global_var("$.".to_string(), loc),
+                )
+            } else {
+                lowered
+            },
+        )
+    }
+
+    /// Lower `END { body }`: register the body to run at process
+    /// exit, once per site even if the END statement is executed
+    /// repeatedly:
+    ///
+    /// ```text
+    /// unless $__end_block_N   # once-only gate, fresh id per site
+    ///   $__end_block_N = true
+    ///   at_exit { <body> }
+    /// end
+    /// ```
+    ///
+    /// CRuby compiles the body as a block sharing the enclosing
+    /// scope; the hidden `at_exit` block does the same, with the
+    /// `scope_wraps` bookkeeping re-aiming local variable references
+    /// across the synthesized closure scope (prism reports depths
+    /// that don't know about it).
+    fn lower_post_execution(
+        &mut self,
+        node: &prism::PostExecutionNode<'pr>,
+        loc: Loc,
+    ) -> Result<Node, MonorubyErr> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT_END_BLOCK_ID: AtomicUsize = AtomicUsize::new(0);
+        let gate = format!(
+            "$__end_block_{}",
+            NEXT_END_BLOCK_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        self.scope_wraps.push(ScopeWrap {
+            level: self.prism_scope_level,
+            escaped: Vec::new(),
+        });
+        let body = match node.statements() {
+            Some(stmts) => self.lower_statements_compact(&stmts, loc),
+            None => Ok(Node::new_nil(loc)),
+        };
+        let escaped = self.scope_wraps.pop().unwrap().escaped;
+        let body = body?;
+        let block = Node::new(
+            NodeKind::Lambda(Box::new(BlockInfo::new(
+                Vec::new(),
+                body,
+                LvarCollector::new(),
+                loc,
+            ))),
+            loc,
+        );
+        let arglist = crate::ast::ArgList {
+            block: Some(Box::new(block)),
+            ..Default::default()
+        };
+        let register = Node::new_comp_stmt(
+            vec![
+                Node::new_mul_assign(
+                    vec![Node::new_global_var(gate.clone(), loc)],
+                    vec![Node::new_bool(true, loc)],
+                ),
+                Node::new_fcall("at_exit".to_string(), arglist, false, loc),
+                Node::new_nil(loc),
+            ],
+            loc,
+        );
+        let gated = Node::new_if(
+            Node::new_global_var(gate, loc),
+            Node::new_nil(loc),
+            register,
+            loc,
+        );
+        if escaped.is_empty() {
+            return Ok(gated);
+        }
+        // Anchor every local the body referenced across the wrap with
+        // a bare read at the END statement's position: bytecodegen
+        // materializes local slots lazily on first same-scope
+        // reference, and these variables' home scope is out here, not
+        // inside the hidden block. The reads evaluate to nil and are
+        // discarded. Re-adjusting the depth (0 = home scope in
+        // prism's model) also re-records the names on any still-open
+        // outer wrap, propagating anchors for nested END bodies.
+        let mut stmts: Vec<Node> = escaped
+            .into_iter()
+            .map(|name| {
+                let depth = self.adjust_lvar_depth(0, &name);
+                Node::new_lvar(name, depth, loc)
+            })
+            .collect();
+        stmts.push(gated);
+        Ok(Node::new_comp_stmt(stmts, loc))
+    }
+
     /// Lower a `StatementsNode`-shaped body to ruruby-parse's compact
     /// shape:
     ///
@@ -1944,7 +2223,7 @@ impl<'pr> Lowerer<'pr> {
         body: Option<prism::Node<'pr>>,
         loc: Loc,
     ) -> Result<BlockInfo, MonorubyErr> {
-        let saved = std::mem::take(&mut self.lvars);
+        let saved = self.enter_prism_scope();
         let body_res = self.lower_compact_body(body, loc);
         match body_res {
             Ok(body_inner) => {
@@ -1957,7 +2236,7 @@ impl<'pr> Lowerer<'pr> {
                     },
                     loc,
                 };
-                let class_lvars = std::mem::replace(&mut self.lvars, saved);
+                let class_lvars = self.exit_prism_scope(saved);
                 Ok(BlockInfo {
                     params: vec![],
                     body: Box::new(body),
@@ -1967,7 +2246,7 @@ impl<'pr> Lowerer<'pr> {
                 })
             }
             Err(e) => {
-                self.lvars = saved;
+                self.exit_prism_scope(saved);
                 Err(e)
             }
         }
@@ -1983,15 +2262,15 @@ impl<'pr> Lowerer<'pr> {
         // The class body's `locals` list lives on the ClassNode itself
         // (Prism scopes it to the class definition). Seed the lowerer
         // with those before lowering the body.
-        let saved = std::mem::take(&mut self.lvars);
+        let saved = self.enter_prism_scope();
         if let Err(e) = self.collect_locals(&node.locals()) {
-            self.lvars = saved;
+            self.exit_prism_scope(saved);
             return Err(e);
         }
         let info_res = self.lower_class_body(node.body(), loc);
         // `lower_class_body` already swapped lvars back — restore the
         // outer scope from `saved` here regardless of outcome.
-        self.lvars = saved;
+        self.exit_prism_scope(saved);
         let info = info_res?;
         Ok(Node {
             kind: NodeKind::ClassDef {
@@ -2008,13 +2287,13 @@ impl<'pr> Lowerer<'pr> {
     fn lower_module(&mut self, node: &ModuleNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let (base, name) = self.split_class_path(&node.constant_path())?;
-        let saved = std::mem::take(&mut self.lvars);
+        let saved = self.enter_prism_scope();
         if let Err(e) = self.collect_locals(&node.locals()) {
-            self.lvars = saved;
+            self.exit_prism_scope(saved);
             return Err(e);
         }
         let info_res = self.lower_class_body(node.body(), loc);
-        self.lvars = saved;
+        self.exit_prism_scope(saved);
         let info = info_res?;
         Ok(Node {
             kind: NodeKind::ClassDef {
@@ -2663,7 +2942,11 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::LocalVariableTargetNode { .. } => {
                 let n = node.as_local_variable_target_node().unwrap();
                 Node {
-                    kind: NodeKind::LocalVar(n.depth() as usize, constant_name(&n.name())?),
+                    kind: {
+                        let name = constant_name(&n.name())?;
+                        let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
+                        NodeKind::LocalVar(depth, name)
+                    },
                     loc,
                 }
             }
@@ -3139,7 +3422,7 @@ impl<'pr> Lowerer<'pr> {
             None => None,
         };
 
-        let saved = std::mem::take(&mut self.lvars);
+        let saved = self.enter_prism_scope();
         let result =
             (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
                 // Parameters first so the LvarCollector's special
@@ -3176,7 +3459,7 @@ impl<'pr> Lowerer<'pr> {
 
         match result {
             Ok((params, body)) => {
-                let method_lvars = std::mem::replace(&mut self.lvars, saved);
+                let method_lvars = self.exit_prism_scope(saved);
                 let info = Box::new(BlockInfo {
                     params,
                     body: Box::new(body),
@@ -3191,7 +3474,7 @@ impl<'pr> Lowerer<'pr> {
                 Ok(Node { kind, loc })
             }
             Err(e) => {
-                self.lvars = saved;
+                self.exit_prism_scope(saved);
                 Err(e)
             }
         }
@@ -3207,7 +3490,7 @@ impl<'pr> Lowerer<'pr> {
     /// proc depending on how it's used.
     fn lower_lambda(&mut self, node: &LambdaNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
-        let saved = std::mem::take(&mut self.lvars);
+        let saved = self.enter_prism_scope();
         let result =
             (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
                 let params = match node.parameters() {
@@ -3280,7 +3563,7 @@ impl<'pr> Lowerer<'pr> {
 
         match result {
             Ok((params, body)) => {
-                let lambda_lvars = std::mem::replace(&mut self.lvars, saved);
+                let lambda_lvars = self.exit_prism_scope(saved);
                 Ok(Node {
                     kind: NodeKind::Lambda(Box::new(BlockInfo {
                         params,
@@ -3293,7 +3576,7 @@ impl<'pr> Lowerer<'pr> {
                 })
             }
             Err(e) => {
-                self.lvars = saved;
+                self.exit_prism_scope(saved);
                 Err(e)
             }
         }
@@ -3305,7 +3588,7 @@ impl<'pr> Lowerer<'pr> {
         // and install a fresh table for the block body. The body
         // lowering is wrapped so an error inside it doesn't leak the
         // partially-built block scope into the outer lowerer.
-        let saved = std::mem::take(&mut self.lvars);
+        let saved = self.enter_prism_scope();
         let result =
             (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
                 // Parameters first (see comment on the def-node lowerer for
@@ -3383,7 +3666,7 @@ impl<'pr> Lowerer<'pr> {
 
         match result {
             Ok((params, body)) => {
-                let block_lvars = std::mem::replace(&mut self.lvars, saved);
+                let block_lvars = self.exit_prism_scope(saved);
                 Ok(Node {
                     kind: NodeKind::Lambda(Box::new(BlockInfo {
                         params,
@@ -3396,7 +3679,7 @@ impl<'pr> Lowerer<'pr> {
                 })
             }
             Err(e) => {
-                self.lvars = saved;
+                self.exit_prism_scope(saved);
                 Err(e)
             }
         }
