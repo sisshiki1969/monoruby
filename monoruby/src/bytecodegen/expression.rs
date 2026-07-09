@@ -1239,7 +1239,16 @@ impl<'a> BytecodeGen<'a> {
         let callsite = match lhs_kind {
             LvalueKind::Send { recv, .. } => CallSite::unary(getter.unwrap(), *recv, Some(dst)),
             LvalueKind::Index { base, index } => {
-                CallSite::binary(IdentId::_INDEX, *base, (*index).into(), Some(dst))
+                // The receiver and index are already evaluated exactly once
+                // into temps by `eval_lvalue`, so read through the
+                // specialized `Index` bytecode — the same opcode an ordinary
+                // `base[idx]` read uses. Its inline cache feeds the JIT's
+                // array/hash/integer index fast path; lowering this getter to
+                // a generic `#[]` method call instead compiles to a full
+                // (non-inlined) call in JIT code and costs ~2x on
+                // index-op-assign-heavy loops (matmul, sudoku).
+                self.emit(BytecodeInst::Index(dst, *base, (*index).into()), loc);
+                return;
             }
             LvalueKind::Index2 { base, index1, num } => {
                 CallSite::simple(IdentId::_INDEX, *num, (*index1).into(), *base, Some(dst))
