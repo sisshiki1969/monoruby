@@ -669,7 +669,7 @@ impl Globals {
         // exception — CRuby runs both on any normal-ish termination.
         // `Kernel#exit!` / `Process.exit!` bypass this by calling
         // `std::process::exit` directly and never returning here.
-        executor.run_exit_handlers(self);
+        let handler_status = executor.run_exit_handlers(self);
         let _ = self.flush_stdout();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();
@@ -688,7 +688,25 @@ impl Globals {
                 eprintln!("active pages:            {}", alloc.pages_len());
             });
         }
-        res
+        // An exit status chosen by the handlers themselves (a
+        // `SystemExit` raised in one, or status 1 after an uncaught
+        // handler exception) overrides the script's own. The script's
+        // non-SystemExit error is still reported first, as CRuby
+        // prints both.
+        match handler_status {
+            Some(status) => {
+                if let Err(err) = res
+                    && !matches!(err.kind(), MonorubyErrKind::SystemExit(_))
+                {
+                    err.show_error_message_and_all_loc(&self.store);
+                }
+                Err(MonorubyErr::new(
+                    MonorubyErrKind::SystemExit(status as u8),
+                    "exit",
+                ))
+            }
+            None => res,
+        }
     }
 
     pub(crate) fn compile_script_eval(
