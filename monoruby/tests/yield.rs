@@ -158,3 +158,72 @@ fn opt_eq_cmp_with_live_float() {
         "#,
     );
 }
+
+#[test]
+fn block_auto_splat_gates_to_ary_on_respond_to() {
+    // Block auto-splat (a single non-Array argument to a multi-param block)
+    // coerces via `#to_ary`, but CRuby gates that on the dynamic
+    // `respond_to?(:to_ary, true)` predicate — which a user may override,
+    // and which a dynamically-defined `#to_ary` satisfies through
+    // `respond_to_missing?`. An object whose `#respond_to?` returns false is
+    // passed through as a single scalar even if it defines `#to_ary`.
+    run_tests(&[
+        // `respond_to?` false -> `#to_ary` not consulted, object stays scalar.
+        r#"
+        $log = []
+        class X
+          def respond_to?(m, inc = false); $log << [:rt, m]; false; end
+          def to_ary; $log << :to_ary; [1, 2]; end
+        end
+        [X.new].each { |a, b| $log << [a.class.name, b] }
+        $log
+        "#,
+        // `respond_to?` true -> `#to_ary` is consulted and its result splat.
+        r#"
+        $log = []
+        class Y
+          def respond_to?(m, inc = false); $log << [:rt, m]; super; end
+          def to_ary; $log << :to_ary; [10, 20]; end
+        end
+        [Y.new].each { |a, b| $log << [a, b] }
+        $log
+        "#,
+        // A dynamically-defined `#to_ary` (via `respond_to_missing?` +
+        // `method_missing`) is honoured.
+        r#"
+        class Z
+          def respond_to_missing?(m, inc = false); m == :to_ary; end
+          def method_missing(m, *) ; m == :to_ary ? [7, 8] : super; end
+        end
+        r = nil
+        [Z.new].each { |a, b| r = [a, b] }
+        r
+        "#,
+        // A bare BasicObject (no `#respond_to?`) is passed through, not an error.
+        r#"
+        o = BasicObject.new
+        r = nil
+        [o].each { |a, b| r = [Object.instance_method(:class).bind(a).call.name, b] }
+        r
+        "#,
+    ]);
+}
+
+#[test]
+fn block_auto_splat_to_ary_type_error() {
+    // `#to_ary` returning a non-Array, non-nil value from the block
+    // auto-splat coercion raises `TypeError`, matching CRuby.
+    run_test(
+        r#"
+        class BadAry
+          def to_ary; 42; end
+        end
+        begin
+          [BadAry.new].each { |a, b| }
+          :no_raise
+        rescue TypeError
+          :type_error
+        end
+        "#,
+    );
+}

@@ -197,17 +197,43 @@ pub(crate) extern "C" fn jit_forwarded_set_arguments(
 /// `Ok(None)` to leave the value as a single scalar argument.
 ///
 fn block_arg_to_ary(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Option<Value>> {
-    if let Some(func_id) = globals.check_method(v, IdentId::TO_ARY) {
-        let res = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
-        if res.is_array_ty() {
-            Ok(Some(res))
-        } else if res.is_nil() {
-            Ok(None)
-        } else {
-            Err(MonorubyErr::cant_convert_error_ary(globals, v, res))
-        }
-    } else {
+    // Block auto-splat coerces a single non-Array argument via `#to_ary`.
+    // CRuby gates that call on the *dynamic* predicate
+    // `respond_to?(:to_ary, true)` — which a user may override, and which a
+    // dynamically-defined `#to_ary` satisfies through `respond_to_missing?`
+    // — rather than a raw method-table lookup. Mirror `expand_array`'s
+    // multiple-assignment path and dispatch `#to_ary` through the normal
+    // method-resolution machinery (so `method_missing` is honoured too).
+    //
+    // An object that does not even respond to `#respond_to?` (a bare
+    // `BasicObject`) cannot be coerced: pass it through as a single scalar
+    // argument rather than raising `NoMethodError`, matching CRuby.
+    if globals
+        .check_method(v, IdentId::get_id("respond_to?"))
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let responds = vm
+        .invoke_method_inner(
+            globals,
+            IdentId::get_id("respond_to?"),
+            v,
+            &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
+            None,
+            None,
+        )?
+        .as_bool();
+    if !responds {
+        return Ok(None);
+    }
+    let res = vm.invoke_method_inner(globals, IdentId::TO_ARY, v, &[], None, None)?;
+    if res.is_array_ty() {
+        Ok(Some(res))
+    } else if res.is_nil() {
         Ok(None)
+    } else {
+        Err(MonorubyErr::cant_convert_error_ary(globals, v, res))
     }
 }
 

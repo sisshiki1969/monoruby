@@ -451,3 +451,24 @@ fn massign_to_ary_to_a_coercion_edge_cases() {
            begin; a, b = *RespToARaise.new; :no_raise; rescue => e; e.message; end"#,
     ]);
 }
+
+#[test]
+fn massign_basic_object_passes_through() {
+    // A bare `BasicObject` does not respond to `#respond_to?`, so the
+    // destructuring gate cannot even be asked. CRuby passes the object
+    // through — as a scalar for `a, b = o` (`#to_ary` path) and wrapped in
+    // a one-element array for `a, b = *o` (`#to_a` path) — rather than
+    // raising `NoMethodError` from the gate itself.
+    run_tests(&[
+        r#"
+        o = BasicObject.new
+        a, b = o
+        [Object.instance_method(:class).bind(a).call.name, b]
+        "#,
+        r#"
+        o = BasicObject.new
+        a, b = *o
+        [Object.instance_method(:class).bind(a).call.name, b]
+        "#,
+    ]);
+}
