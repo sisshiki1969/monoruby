@@ -162,8 +162,14 @@ fn local_variable_defined(
     let arg = lfp.arg(0);
     let name = arg_to_local_name(arg, vm, globals)?
         .ok_or_else(|| name_not_local_err(arg, &globals.store))?;
+    if let Some(err) = numbered_param_error(name) {
+        return Err(err);
+    }
     let self_val = lfp.self_val();
     let inner = self_val.as_binding_inner();
+    if name.get_name() == "it" && it_is_implicit_param(globals, inner) {
+        return Ok(Value::bool(false));
+    }
     Ok(Value::bool(
         lookup_local_in_binding(globals, inner, name).is_some(),
     ))
@@ -185,19 +191,27 @@ fn local_variable_get(
     let arg = lfp.arg(0);
     let name = arg_to_local_name(arg, vm, globals)?
         .ok_or_else(|| name_not_local_err(arg, &globals.store))?;
+    if let Some(err) = numbered_param_error(name) {
+        return Err(err);
+    }
     let self_val = lfp.self_val();
     let inner = self_val.as_binding_inner();
-    match lookup_local_in_binding(globals, inner, name) {
-        Some((host, slot)) => Ok(host.register(slot).unwrap_or_default()),
-        None => Err(MonorubyErr::nameerr_with_name(
-            format!(
-                "local variable `{}' is not defined for {}",
-                name,
-                self_val.to_s(&globals.store)
-            ),
-            name,
-        )),
+    // The implicit `it` parameter is not a local variable — report it as
+    // undefined rather than returning the parameter's value.
+    let it_implicit = name.get_name() == "it" && it_is_implicit_param(globals, inner);
+    if !it_implicit
+        && let Some((host, slot)) = lookup_local_in_binding(globals, inner, name)
+    {
+        return Ok(host.register(slot).unwrap_or_default());
     }
+    Err(MonorubyErr::nameerr_with_name(
+        format!(
+            "local variable '{}' is not defined for {}",
+            name,
+            self_val.to_s(&globals.store)
+        ),
+        name,
+    ))
 }
 
 ///
@@ -216,9 +230,18 @@ fn local_variable_set(
     let arg = lfp.arg(0);
     let name = arg_to_local_name(arg, vm, globals)?
         .ok_or_else(|| name_not_local_err(arg, &globals.store))?;
+    if let Some(err) = numbered_param_error(name) {
+        return Err(err);
+    }
     let val = lfp.arg(1);
     let self_val = lfp.self_val();
     let inner = self_val.as_binding_inner();
+    // Assigning `:it` when `it` is the implicit block parameter does not
+    // touch the parameter (it is not a real local); match CRuby by leaving
+    // it unchanged and returning the value.
+    if name.get_name() == "it" && it_is_implicit_param(globals, inner) {
+        return Ok(val);
+    }
     if let Some((mut host, slot)) = lookup_local_in_binding(globals, inner, name) {
         // SAFETY: `slot` came from this iseq's `locals` table, so it is
         // a valid register slot for `host`.
@@ -268,6 +291,50 @@ fn name_not_local_err(arg: Value, store: &Store) -> MonorubyErr {
         arg.to_s(store),
         "Binding"
     ))
+}
+
+/// Whether `it` resolves to the implicit block parameter (Ruby 3.4) in this
+/// binding's scope — as opposed to a real `it = ...` local. The implicit
+/// parameter is not a reportable/settable local variable, so
+/// `Binding#local_variable_*` treat it as absent. Walks to the iseq that
+/// hosts `it` and reports whether that iseq takes the implicit parameter.
+fn it_is_implicit_param(globals: &Globals, inner: &BindingInner) -> bool {
+    let it = IdentId::get_id("it");
+    let mut lfp = match inner.binding() {
+        Some(l) => l,
+        None => inner.outer_lfp(),
+    };
+    loop {
+        let fid = lfp.func_id();
+        if let Some(iseq_id) = globals.store[fid].is_iseq() {
+            let iseq = &globals.store[iseq_id];
+            if iseq.locals.get(&it).is_some() {
+                return iseq.args.it_param();
+            }
+        }
+        match lfp.outer() {
+            Some(outer) => lfp = outer,
+            None => return false,
+        }
+    }
+}
+
+/// `_1`..`_9` are reserved numbered block parameters, never reportable as
+/// local variables. `Binding#local_variable_get` / `_set` / `_defined?`
+/// raise a specific NameError for them regardless of whether the block
+/// actually uses numbered parameters (matching CRuby). `_0` and `_10`+ are
+/// ordinary names.
+fn numbered_param_error(name: IdentId) -> Option<MonorubyErr> {
+    let s = name.get_name();
+    let b = s.as_bytes();
+    if b.len() == 2 && b[0] == b'_' && (b'1'..=b'9').contains(&b[1]) {
+        Some(MonorubyErr::nameerr_with_name(
+            format!("numbered parameter '{s}' is not a local variable"),
+            name,
+        ))
+    } else {
+        None
+    }
 }
 
 fn is_valid_local_name(name: &str) -> bool {
@@ -696,5 +763,27 @@ mod tests {
             binding.local_variable_set(:$0, "x")
             "#,
         );
+    }
+
+    #[test]
+    fn binding_it_and_numbered_params_are_not_locals() {
+        // The implicit `it` parameter is not a reportable/settable local:
+        // `defined?` is false, `get` raises, and `set` leaves it untouched.
+        run_test(r#"-> { a = it; binding.local_variable_defined?(:it) }.call("x")"#);
+        run_test(r#"-> { a = it; binding.local_variable_set(:it, :b); [a, it] }.call(:a)"#);
+        run_test(
+            r#"-> { it; (binding.local_variable_get(:it) rescue [$!.class.name, $!.message.start_with?("local variable 'it' is not defined")]) }.call("x")"#,
+        );
+        // A real `it = ...` local is an ordinary variable.
+        run_test(r#"it = 5; binding.local_variable_set(:it, 9); [binding.local_variable_get(:it), binding.local_variable_defined?(:it), it]"#);
+        // `_1`..`_9` are reserved numbered parameters — all three operations
+        // raise, regardless of whether numbered parameters are used.
+        run_test(r#"-> { _1; (binding.local_variable_get(:_1) rescue $!.message) }.call("x")"#);
+        run_test(r#"-> { _1; (binding.local_variable_set(:_1, 1) rescue $!.message) }.call("x")"#);
+        run_test(r#"-> { _1; (binding.local_variable_defined?(:_1) rescue $!.message) }.call("x")"#);
+        run_test(r#"(binding.local_variable_defined?(:_9) rescue $!.message)"#);
+        // `_0` and `_10` are ordinary (not numbered) names.
+        run_test(r#"binding.local_variable_defined?(:_0)"#);
+        run_test(r#"binding.local_variable_defined?(:_10)"#);
     }
 }
