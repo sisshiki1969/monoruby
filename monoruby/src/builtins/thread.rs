@@ -21,18 +21,26 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// ### Thread#__invoke_body(block, args)
 ///
-/// Runs a thread body block, translating a top-level non-local `return`
-/// into a `LocalJumpError`. Used by `Thread#__run` in startup.rb.
+/// Runs a thread body block. Used by `Thread#__run` in startup.rb. Emulates
+/// two thread semantics that monoruby's synchronous, single-threaded model
+/// would otherwise break:
 ///
-/// CRuby runs each thread on its own stack, so a `return` written directly
-/// in a `Thread.new { ... }` block has no enclosing method frame to return
-/// to and raises `LocalJumpError: unexpected return`. monoruby is
-/// single-threaded and runs thread bodies synchronously on the caller's
-/// stack (see `Thread#__run`), so the block's home frame is still live and
-/// the `return` would otherwise perform a real non-local return, escaping
-/// the thread body entirely (and, under mspec, corrupting the harness).
-/// Catch that escaping `MethodReturn` here and convert it, matching
-/// CRuby's observable behavior for the common (uncaught) case.
+/// 1. **`return` → `LocalJumpError`.** CRuby runs each thread on its own
+///    stack, so a `return` written directly in a `Thread.new { ... }` block
+///    has no enclosing method frame to return to and raises
+///    `LocalJumpError: unexpected return`. monoruby runs the body
+///    synchronously on the caller's stack, so the block's home frame is
+///    still live and the `return` would otherwise perform a real non-local
+///    return, escaping the body (and, under mspec, corrupting the harness).
+///    Catch the escaping `MethodReturn` here and convert it.
+///
+/// 2. **Thread-local `$~` / `$_`.** These special variables are frame-local,
+///    stored on the block's lexical home method frame — which, run
+///    synchronously, is shared with the code that spawned the thread. Save
+///    that frame's svar container, run the body against a fresh (empty) one,
+///    and restore it, so the body's `$~` / `$_` neither leak out to nor
+///    inherit from the spawning thread (matching CRuby's thread-local
+///    semantics).
 #[monoruby_builtin]
 fn invoke_body(
     vm: &mut Executor,
@@ -42,7 +50,29 @@ fn invoke_body(
 ) -> Result<Value> {
     let block = Proc::new(lfp.arg(0));
     let args = lfp.arg(1).as_array();
-    match vm.invoke_proc(globals, &block, &args) {
+
+    // Isolate the block's home method frame's `$~`/`$_` container for the
+    // duration of the body (item 2 above). The saved container is kept
+    // reachable for the GC via the temp stack while it is off the frame.
+    let home_mfp = block.outer_lfp().map(|o| o.mfp());
+    let saved = home_mfp.and_then(|m| m.svar_slot_value());
+    if let Some(m) = home_mfp {
+        if let Some(s) = saved {
+            vm.temp_push(s);
+        }
+        m.restore_svar_slot(None);
+    }
+
+    let result = vm.invoke_proc(globals, &block, &args);
+
+    if let Some(m) = home_mfp {
+        m.restore_svar_slot(saved);
+        if saved.is_some() {
+            vm.temp_pop();
+        }
+    }
+
+    match result {
         Ok(v) => Ok(v),
         Err(err) if matches!(err.kind(), MonorubyErrKind::MethodReturn(..)) => {
             Err(MonorubyErr::localjumperr("unexpected return"))
@@ -165,6 +195,42 @@ mod tests {
             t.value
             Thread.pass
             n
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_body_special_vars_are_thread_local() {
+        // `$~` / `$_` are frame-local special variables; a thread body must
+        // not leak them to the thread that spawned it, and must start with a
+        // fresh (nil) view — matching CRuby's thread-local semantics.
+        // `$_` set in a body does not leak out.
+        run_test_once(
+            r#"
+            $_ = nil
+            running = false
+            thr = Thread.new { $_ = "line"; running = true }
+            Thread.pass until running
+            r = $_
+            thr.join
+            r
+            "#,
+        );
+        // `$~` set in a body does not disturb the outer match.
+        run_test_once(
+            r#"
+            "x" =~ /x/
+            before = $~[0]
+            Thread.new { "y" =~ /y/ }.join
+            [$~[0], before]
+            "#,
+        );
+        // The body sees a fresh `$_` (not the spawner's), and can still use
+        // `$~` / `$1` internally.
+        run_test_once(
+            r#"
+            $_ = "outer"
+            Thread.new { r = ("abc" =~ /(b)/; $1); [$_, r] }.value
             "#,
         );
     }
