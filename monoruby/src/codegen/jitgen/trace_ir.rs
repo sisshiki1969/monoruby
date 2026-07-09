@@ -190,6 +190,16 @@ pub(crate) enum TraceIr {
         ic: Option<(ClassId, ClassId)>,
         polymorphic: bool,
     },
+    /// Rescue-clause match fused with the following conditional
+    /// branch (opcode 157 + CondBr). Always lowered through the
+    /// generic runtime helper: the clause must be validated as a
+    /// Class/Module even when both operands look like integers.
+    RescueTEqBr {
+        lhs: SlotId,
+        rhs: SlotId,
+        disp: i32,
+        brkind: BrKind,
+    },
     ArrayTEq {
         lhs: SlotId,
         rhs: SlotId,
@@ -660,6 +670,20 @@ impl TraceIr {
                         polymorphic: pc.opcode_sub() == 1,
                     }
                 }
+                157 => {
+                    let lhs = SlotId::new(op2_w2);
+                    let rhs = SlotId::new(op3_w3);
+                    let (disp, brkind) = match TraceIr::from_pc(pc + 1, store) {
+                        TraceIr::CondBr(_, dest, true, brkind) => (dest + 1, brkind),
+                        _ => unreachable!(),
+                    };
+                    TraceIr::RescueTEqBr {
+                        lhs,
+                        rhs,
+                        disp,
+                        brkind,
+                    }
+                }
                 160..=170 => {
                     let kind = BinOpK::from(opcode - 160);
                     let dst = SlotId::from(op1_w1);
@@ -1007,6 +1031,10 @@ impl TraceIr {
                 polymorphic,
                 ..
             } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), true, polymorphic),
+
+            TraceIr::RescueTEqBr { lhs, rhs, .. } => {
+                format!("{lhs:?} = {lhs:?} ===(rescue) {rhs:?}; condbr")
+            }
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")

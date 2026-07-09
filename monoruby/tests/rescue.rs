@@ -514,3 +514,53 @@ fn eval_custom_filename_and_lineno() {
         "#,
     ]);
 }
+
+#[test]
+fn rescue_clause_requires_class_or_module() {
+    run_test(
+        r#"
+        res = []
+        rescuer = 42
+        3.times do
+          begin
+            begin
+              raise "error"
+            rescue rescuer
+              res << "wrong"
+            end
+          rescue TypeError => e
+            res << e.message
+          rescue RuntimeError => e
+            res << "runtime: #{e.message}"
+          end
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn rescue_clause_private_teq() {
+    // The rescue-clause `===` dispatch has funcall semantics once the
+    // clause passes the Class/Module check.
+    run_test(
+        r#"
+        klass = Class.new(StandardError)
+        class << klass
+          def ===(e); e.message == "yes"; end
+          private :===
+        end
+        res = []
+        [["yes", :caught], ["no", :other]].map do |msg, _|
+          begin
+            raise StandardError, msg
+          rescue klass
+            res << "special #{msg}"
+          rescue StandardError
+            res << "plain #{msg}"
+          end
+        end
+        res
+        "#,
+    );
+}

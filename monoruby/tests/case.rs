@@ -278,3 +278,32 @@ fn case_when_splat() {
         "#,
     ]);
 }
+
+#[test]
+fn case_calls_private_teq() {
+    // case/when dispatches `===` with funcall semantics (a private
+    // `===` is allowed), unlike an explicit `a === b`.
+    run_test(
+        r#"
+        klass = Class.new do
+          def ===(o); o == 1; end
+          private :===
+        end
+        matcher = klass.new
+        res = []
+        3.times do |i|
+          case i
+          when matcher then res << "match #{i}"
+          else res << "no #{i}"
+          end
+        end
+        begin
+          matcher === 1
+          res << "no error"
+        rescue NoMethodError
+          res << "NoMethodError"
+        end
+        res
+        "#,
+    );
+}

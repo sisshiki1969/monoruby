@@ -531,7 +531,7 @@ impl<'a> BytecodeGen<'a> {
                             self.temp = old;
                             self.emit_condbr(ary, cont_pos, true, false);
                         } else {
-                            self.gen_teq_condbr(ex, err_reg, cont_pos, true)?;
+                            self.gen_rescue_teq_condbr(ex, err_reg, cont_pos, true)?;
                         }
                     }
                     self.emit_br(next_pos);
