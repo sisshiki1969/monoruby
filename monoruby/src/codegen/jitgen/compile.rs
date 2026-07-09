@@ -505,15 +505,6 @@ impl<'a> JitContext<'a> {
                     bc_pos,
                 )
             }
-            TraceIr::RescueTEqBr {
-                lhs,
-                rhs,
-                disp,
-                brkind,
-            } => {
-                let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
-                return self.rescue_teq_br(state, ir, lhs, rhs, dest_bb, brkind, bc_pos);
-            }
             TraceIr::BinCmpBr {
                 kind,
                 _dst: _,

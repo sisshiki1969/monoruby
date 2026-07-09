@@ -225,37 +225,6 @@ impl<'a> JitContext<'a> {
         state.unset_side_effect_guard();
     }
 
-    /// Rescue-clause match + branch: always the generic runtime call
-    /// (`cmp_teq_rescue_values` validates the clause and dispatches
-    /// `===` with funcall semantics), never a typed fast path — a
-    /// non-Module clause must raise TypeError even for
-    /// integer-looking operand pairs.
-    pub(super) fn rescue_teq_br(
-        &mut self,
-        state: &mut AbstractState,
-        ir: &mut AsmIr,
-        lhs: SlotId,
-        rhs: SlotId,
-        dest_bb: BasicBlockId,
-        brkind: BrKind,
-        bc_pos: BcIndex,
-    ) -> JitResult<CompileResult> {
-        state.flush_gp(ir);
-        state.write_back_slots(ir, &[lhs, rhs]);
-        self.guard_class_version(state, ir, true);
-        let error = ir.new_error(state);
-        ir.generic_binop(state, lhs, rhs, crate::executor::op::cmp_teq_rescue_values);
-        ir.handle_error(error);
-        // The helper can run arbitrary Ruby (a user-defined `===`);
-        // invalidate cached guards like the generic cmp path does.
-        state.unset_class_version_guard();
-        state.unset_const_version_guard();
-        state.unset_side_effect_guard();
-        let src_idx = bc_pos + 1;
-        self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
-        Ok(CompileResult::Continue)
-    }
-
     pub(super) fn binary_cmp_br(
         &mut self,
         state: &mut AbstractState,

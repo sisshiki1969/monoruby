@@ -564,3 +564,41 @@ fn rescue_clause_private_teq() {
         "#,
     );
 }
+
+// Rescue-clause matching in a JIT-hot method: the method is called
+// more than 20 times (the production method-JIT threshold used by
+// integration-test binaries), so its happy path is JIT-compiled,
+// while every exception dispatch side-exits to the interpreter,
+// whose opcode-157 handler validates the clause and dispatches `===`
+// with funcall semantics. The JIT deliberately has no lowering for
+// the rescue-clause match — its BB graph never enters exception
+// handlers — and this test pins the tier hand-off behavior.
+#[test]
+fn rescue_clause_match_jit() {
+    run_test(
+        r#"
+        def rescue_match(exc_msg, clause)
+          begin
+            begin
+              raise RuntimeError, exc_msg
+            rescue clause => e
+              "caught #{e.message}"
+            rescue RuntimeError => e
+              "unmatched #{e.message}"
+            end
+          rescue TypeError => e
+            "type: #{e.message}"
+          end
+        end
+
+        special = Class.new(RuntimeError)
+        res = []
+        30.times do |i|
+          res << rescue_match("m#{i}", RuntimeError)   # clause matches
+          res << rescue_match("n#{i}", special)        # clause misses
+          res << rescue_match("o#{i}", 42)             # clause invalid -> TypeError
+        end
+        res
+        "#,
+    );
+}

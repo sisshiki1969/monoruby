@@ -190,16 +190,6 @@ pub(crate) enum TraceIr {
         ic: Option<(ClassId, ClassId)>,
         polymorphic: bool,
     },
-    /// Rescue-clause match fused with the following conditional
-    /// branch (opcode 157 + CondBr). Always lowered through the
-    /// generic runtime helper: the clause must be validated as a
-    /// Class/Module even when both operands look like integers.
-    RescueTEqBr {
-        lhs: SlotId,
-        rhs: SlotId,
-        disp: i32,
-        brkind: BrKind,
-    },
     ArrayTEq {
         lhs: SlotId,
         rhs: SlotId,
@@ -671,18 +661,17 @@ impl TraceIr {
                     }
                 }
                 157 => {
-                    let lhs = SlotId::new(op2_w2);
-                    let rhs = SlotId::new(op3_w3);
-                    let (disp, brkind) = match TraceIr::from_pc(pc + 1, store) {
-                        TraceIr::CondBr(_, dest, true, brkind) => (dest + 1, brkind),
-                        _ => unreachable!(),
-                    };
-                    TraceIr::RescueTEqBr {
-                        lhs,
-                        rhs,
-                        disp,
-                        brkind,
-                    }
+                    // RescueTEq: the rescue-clause match. It only ever
+                    // executes inside an exception handler, and the
+                    // JIT's BB graph has no edge into handler blocks
+                    // (see `taint_for_unmodeled_rescue`), so the
+                    // compiler can never reach this opcode — exception
+                    // dispatch always side-exits to the interpreter,
+                    // whose opcode-157 handler does the clause
+                    // validation and funcall-`===`.
+                    unreachable!(
+                        "RescueTEq is handler-side only; the JIT does not visit exception-handler blocks"
+                    )
                 }
                 160..=170 => {
                     let kind = BinOpK::from(opcode - 160);
@@ -1031,10 +1020,6 @@ impl TraceIr {
                 polymorphic,
                 ..
             } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), true, polymorphic),
-
-            TraceIr::RescueTEqBr { lhs, rhs, .. } => {
-                format!("{lhs:?} = {lhs:?} ===(rescue) {rhs:?}; condbr")
-            }
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")
