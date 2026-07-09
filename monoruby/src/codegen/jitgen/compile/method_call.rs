@@ -62,7 +62,23 @@ impl<'a> JitContext<'a> {
                 _ => return Ok(CompileResult::Recompile(RecompileReason::NotCached)),
             }
         };
-        self.compile_method_call(state, ir, recv_class, None, func_id, callid, false)
+        // Feed the class of a single positional argument — when the abstract
+        // state has *proven* it — to the inline generators. `array_index` and
+        // the String `==`/`!=` constant folds gate on the argument class;
+        // a generic call site (e.g. an explicit `a.[](i)` spelling) always
+        // arrived here with `None` and fell back to a full non-inlined call
+        // even when the argument was a known Fixnum. Restricted to simple
+        // 1-positional-argument sites: the `[]=` inliner asserts `dst` is
+        // absent, which only the specialized IndexAssign path guarantees.
+        let arg_class = {
+            let callsite = &self.store[callid];
+            if callsite.is_simple() && callsite.pos_num == 1 {
+                state.class(callsite.args)
+            } else {
+                None
+            }
+        };
+        self.compile_method_call(state, ir, recv_class, arg_class, func_id, callid, false)
     }
 
     ///
