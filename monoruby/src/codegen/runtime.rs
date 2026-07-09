@@ -515,6 +515,14 @@ pub(super) extern "C" fn expand_array(
     // method-table lookup, so honour an overridden `respond_to?` here too.
     let src = if src.is_array_ty() {
         src
+    } else if globals
+        .check_method(src, IdentId::get_id("respond_to?"))
+        .is_none()
+    {
+        // An object that does not even respond to `#respond_to?` (a bare
+        // `BasicObject`) cannot be coerced: leave it a scalar rather than
+        // raising `NoMethodError`, matching CRuby.
+        src
     } else if match vm.invoke_method_inner(
         globals,
         IdentId::get_id("respond_to?"),
@@ -1629,6 +1637,16 @@ pub(super) extern "C" fn to_a(
     // (`*nil` ⇒ `[]`; CRuby special-cases nil rather than calling `to_a`).
     if src.is_nil() {
         return Some(Value::array_empty());
+    }
+    // An object that does not even respond to `#respond_to?` (a bare
+    // `BasicObject`) cannot be coerced: treat it like a value without
+    // `#to_a` and wrap it in a one-element array, matching CRuby, rather
+    // than raising `NoMethodError`.
+    if globals
+        .check_method(src, IdentId::get_id("respond_to?"))
+        .is_none()
+    {
+        return Some(Value::array1(src));
     }
     // Like `#to_ary` destructuring above, CRuby gates the `#to_a` call on
     // `respond_to?(:to_a, true)` (a user may override it), not a raw
