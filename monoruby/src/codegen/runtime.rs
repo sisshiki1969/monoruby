@@ -35,7 +35,7 @@ pub(super) extern "C" fn find_method(
         let is_func_call = globals[callid].is_func_call();
         vm.find_method(globals, recv, func_name, is_func_call)
     } else {
-        find_super(vm, globals)
+        find_super(vm, globals, callid)
     }
     .map_err(|err| vm.set_error(err))
     .ok();
@@ -54,8 +54,20 @@ pub(super) extern "C" fn find_method(
     ((cache_class.u32() as u64) << 32) | fid.map_or(0, |f| f.get()) as u64
 }
 
-fn find_super(vm: &mut Executor, globals: &mut Globals) -> Result<FuncId> {
+fn find_super(vm: &mut Executor, globals: &mut Globals, callid: CallSiteId) -> Result<FuncId> {
     let func_id = vm.method_func_id();
+    // zsuper (implicit-argument `super`) forwards the frame's
+    // arguments by the *definition-time* parameter layout, which is
+    // meaningless for a method created by define_method (the block's
+    // captured outer frame is not this call's frame). CRuby raises
+    // RuntimeError at call time; `super()` / explicit arguments are
+    // fine. zsuper is the only super shape compiled with the
+    // `forwarding` flag set on its callsite.
+    if globals[callid].forwarding && globals.store[func_id].is_block_style() {
+        return Err(MonorubyErr::runtimeerr(
+            "implicit argument passing of super from method defined by define_method() is not supported. Specify all arguments explicitly.",
+        ));
+    }
     let self_val = vm.cfp().lfp().self_val();
     let func_name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
@@ -721,22 +733,18 @@ pub(crate) extern "C" fn invoke_method_missing(
     callsite: CallSiteId,
 ) -> Option<Value> {
     if globals[callsite].name.is_none() {
-        // A super call: CRuby never falls through to method_missing when no
-        // superclass method is found.
-        //
-        // On the first (uncached) miss, `find_super` has just set the error.
-        // But once the inline cache is warm (class matches, fid slot = 0),
-        // the VM fast path jumps straight here without calling `find_method`,
-        // so no error is set yet — set it now, mirroring `find_super`.
-        if vm.exception().is_none() {
-            let func_id = vm.method_func_id();
-            let self_val = vm.cfp().lfp().self_val();
-            let func_name = globals.store[func_id].name().unwrap();
-            vm.set_error(MonorubyErr::super_method_not_found(
-                globals, func_name, self_val,
-            ));
+        // A super call that found no superclass method: like CRuby,
+        // fall through to method_missing with the calling method's
+        // name (the default method_missing then raises the
+        // super-flavored NoMethodError). One exception: the
+        // define_method-zsuper RuntimeError from `find_super` is a
+        // hard error, not a missing method.
+        if vm
+            .exception()
+            .is_some_and(|err| !matches!(err.kind(), MonorubyErrKind::NotMethod { .. }))
+        {
+            return None;
         }
-        return None;
     }
     vm.discard_error();
     vm.invoke_method_missing(globals, receiver, lfp, callsite)

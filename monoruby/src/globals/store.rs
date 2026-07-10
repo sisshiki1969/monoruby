@@ -581,7 +581,10 @@ impl Store {
         // a lambda). eval bodies and lambdas are otherwise both
         // method-style (no own params), so this flag is what keeps their
         // non-local-vs-local `return` semantics apart.
-        self.new_block(outer, compile_info, true, loc, result.source_info)
+        let fid = self.new_block(outer, compile_info, true, loc, result.source_info)?;
+        let iseq = self[fid].is_iseq().unwrap();
+        self[iseq].is_eval = true;
+        Ok(fid)
     }
 
     pub(crate) fn new_builtin_func(
