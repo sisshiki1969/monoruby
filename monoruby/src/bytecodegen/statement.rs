@@ -416,7 +416,6 @@ impl<'a> BytecodeGen<'a> {
         ensure: Option<Box<Node>>,
         use_mode: UseMode2,
     ) -> Result<()> {
-        self.ensure.push(ensure.as_deref().cloned());
         let base = self.temp;
         // When this begin has rescue clauses, capture the `$!` active on
         // entry into a hidden local. CRuby restores `$!` to its previous
@@ -438,6 +437,7 @@ impl<'a> BytecodeGen<'a> {
         } else {
             None
         };
+        self.ensure.push((ensure.as_deref().cloned(), errinfo_save));
         let ensure_label = self.new_label();
         let body_use = if else_.is_some() {
             // if else_ exists, rescue must also exists.

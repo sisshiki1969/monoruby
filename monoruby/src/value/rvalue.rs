@@ -609,7 +609,13 @@ impl RValue {
                 ObjTy::EXCEPTION => {
                     let class_name = store.get_class_name(self.class());
                     let msg = self.as_exception().message();
-                    format!("#<{class_name}: {msg}>")
+                    // CRuby: an empty message inspects as just the
+                    // class name.
+                    if msg.is_empty() {
+                        class_name
+                    } else {
+                        format!("#<{class_name}: {msg}>")
+                    }
                 }
                 ObjTy::REGEXP => self.as_regex().inspect(),
                 ObjTy::MATCHDATA => self.as_match_data().inspect(),

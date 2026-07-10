@@ -682,3 +682,129 @@ fn caught_throw_restores_errinfo() {
         "#,
     );
 }
+
+#[test]
+fn return_from_rescue_restores_errinfo() {
+    // A return leaving a rescue clause restores `$!` to each crossed
+    // begin region's entry value, innermost first, running ensure
+    // bodies against the restored value — so implicit exception-cause
+    // chaining keeps working after the method returns.
+    run_test(
+        r#"
+        def restore_check(log)
+          outer = StandardError.new "outer"
+          inner = StandardError.new "inner"
+          begin
+            raise outer
+          rescue
+            log << ($! == outer)
+            begin
+              raise inner
+            rescue
+              log << ($! == inner)
+              return
+            ensure
+              log << ($! == outer ? :outer : :wrong)
+            end
+          end
+        end
+        log = []
+        restore_check(log)
+        log << $!.inspect
+        begin
+          raise "original"
+        rescue
+          helper = proc do
+            begin
+              Object.new.missing_thing
+            rescue Exception => e
+              e
+            end
+          end
+          e1 = helper.call
+          log << [e1.class.to_s, e1.cause.class.to_s]
+          begin
+            no_such()
+          rescue NoMethodError => e2
+            log << e2.cause.class.to_s
+          end
+        end
+        log
+        "#,
+    );
+}
+
+#[test]
+fn exception_inspect_formats() {
+    run_test(
+        r#"
+        res = []
+        begin; raise; rescue => e; res << e.inspect << e.message; end
+        begin; raise RuntimeError; rescue => e; res << e.inspect; end
+        begin; raise RuntimeError, ""; rescue => e; res << e.inspect; end
+        begin; raise "msg"; rescue => e; res << e.inspect; end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn break_next_from_rescue_in_while_restores_errinfo() {
+    // break / next leaving a rescue clause inside a `while` loop use
+    // the same per-region restore protocol as return: the region's
+    // ensure runs against the restored (outer) `$!`.
+    run_test(
+        r#"
+        def brk_while(log)
+          outer = StandardError.new "outer"
+          begin
+            raise outer
+          rescue
+            i = 0
+            while i < 3
+              begin
+                raise "inner #{i}"
+              rescue
+                break if i == 2
+                i += 1
+                next
+              ensure
+                log << $!&.message
+              end
+            end
+            log << $!.message
+          end
+        end
+        log = []
+        brk_while(log)
+        log << $!.inspect
+        log
+        "#,
+    );
+}
+
+#[test]
+fn defined_probe_leaves_errinfo_untouched() {
+    // A raising receiver inside defined? is swallowed by the probe's
+    // exception entry; the VM's rescue-entry path must not leak the
+    // swallowed exception into `$!` (a later bare `raise` would
+    // re-raise it).
+    run_test(
+        r#"
+        h = {}
+        res = [defined?(h[]), $!.inspect]
+        begin
+          raise "outer"
+        rescue
+          res << defined?(1.zzz_probe.chain) << $!.message
+        end
+        err = begin
+          Object.new.instance_eval("raise", "a_file", 10)
+        rescue => e
+          e
+        end
+        res << err.backtrace.first.split(":")[0..1]
+        res
+        "#,
+    );
+}

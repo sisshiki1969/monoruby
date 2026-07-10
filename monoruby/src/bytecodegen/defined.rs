@@ -23,6 +23,22 @@ impl<'a> BytecodeGen<'a> {
                 let res = defined_str(&node);
                 // CRuby returns a frozen String from `defined?`.
                 self.emit_frozen_string(dst, res);
+                // The definedness probes below may raise-and-swallow
+                // (a raising receiver evaluates under an exception
+                // entry that routes to `nil_label`), and the VM's
+                // rescue-entry path sets `$!` as a side effect. CRuby
+                // leaves `$!` untouched by `defined?`, so save it
+                // around the whole expression and restore on both
+                // exits. An anonymous local (not a temp) survives the
+                // probe region without being reused as scratch.
+                let errinfo_save: BcReg = self.add_local(None).into();
+                self.emit(
+                    BytecodeInst::LoadGvar {
+                        dst: errinfo_save,
+                        name: IdentId::get_id("$!"),
+                    },
+                    Loc::default(),
+                );
                 let exit_label = self.new_label();
                 let nil_label = self.new_label();
                 self.check_defined(node, nil_label, dst, true)?;
@@ -30,6 +46,13 @@ impl<'a> BytecodeGen<'a> {
                 self.apply_label(nil_label);
                 self.emit_nil(dst);
                 self.apply_label(exit_label);
+                self.emit(
+                    BytecodeInst::StoreGvar {
+                        val: errinfo_save,
+                        name: IdentId::get_id("$!"),
+                    },
+                    Loc::default(),
+                );
             }
         }
         Ok(())
