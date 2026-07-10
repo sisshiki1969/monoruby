@@ -110,6 +110,10 @@ impl MonorubyErr {
                 v.mark(alloc);
                 lfp.mark(alloc);
             }
+            MonorubyErrKind::BlockBreak(v, _, lfp) => {
+                v.mark(alloc);
+                lfp.mark(alloc);
+            }
             // Kernel#throw: carries the tag and value.
             MonorubyErrKind::Throw(tag, val) => {
                 tag.mark(alloc);
@@ -221,6 +225,7 @@ impl MonorubyErr {
             MonorubyErrKind::SystemExit(..) => "SystemExit",
             MonorubyErrKind::Other(class_id) => return class_id.get_name(store),
             MonorubyErrKind::MethodReturn(..) => "MethodReturn",
+            MonorubyErrKind::BlockBreak(..) => "BlockBreak",
             MonorubyErrKind::Throw(..) => "UncaughtThrowError",
             MonorubyErrKind::Retry => "Retry",
             MonorubyErrKind::Redo => "Redo",
@@ -236,6 +241,7 @@ impl MonorubyErr {
     pub fn is_stop_iteration(&self, store: &Store) -> bool {
         match &self.kind {
             MonorubyErrKind::MethodReturn(..)
+            | MonorubyErrKind::BlockBreak(..)
             | MonorubyErrKind::Throw(..)
             | MonorubyErrKind::Retry
             | MonorubyErrKind::Redo => false,
@@ -277,6 +283,7 @@ impl MonorubyErr {
             MonorubyErrKind::Other(class_id) => *class_id,
             MonorubyErrKind::Fatal => FATAL_ERROR_CLASS,
             MonorubyErrKind::MethodReturn(..)
+            | MonorubyErrKind::BlockBreak(..)
             | MonorubyErrKind::Throw(..)
             | MonorubyErrKind::Retry
             | MonorubyErrKind::Redo => {
@@ -389,6 +396,13 @@ impl MonorubyErr {
     pub(crate) fn method_return(val: Value, target_lfp: Lfp) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::MethodReturn(val, target_lfp),
+            String::new(),
+        )
+    }
+
+    pub(crate) fn block_break(val: Value, block_fid: FuncId, outer: Lfp) -> MonorubyErr {
+        MonorubyErr::new(
+            MonorubyErrKind::BlockBreak(val, block_fid, outer),
             String::new(),
         )
     }
@@ -1012,6 +1026,14 @@ pub enum MonorubyErrKind {
     SystemExit(u8),
     Other(ClassId),
     MethodReturn(Value, Lfp),
+    /// `break` escaping a block: carries the break value, the block's
+    /// FuncId, and the block's outer (defining) frame. The unwinder
+    /// resumes the defining frame's in-progress call *if* that call is
+    /// the one that received this block literal (checked against the
+    /// frame's current call site); otherwise it degrades to
+    /// LocalJumpError ("break from proc-closure"). Mirrors CRuby's
+    /// BREAK catch-table mechanism.
+    BlockBreak(Value, FuncId, Lfp),
     Retry,
     Redo,
     /// Kernel#throw — carries (tag, value). Not catchable by `rescue`;

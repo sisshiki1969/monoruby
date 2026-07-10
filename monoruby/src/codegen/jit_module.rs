@@ -94,6 +94,7 @@ pub(super) extern "C" fn handle_error(
             }
             let pc = pc - bc_base;
             let mut lfp = vm.cfp().lfp();
+            let iseq_id = *info;
             let info = &globals.store[*info];
             // check exception table.
             // First, we check method_return.
@@ -134,6 +135,74 @@ pub(super) extern "C" fn handle_error(
                     ErrorReturn::return_err()
                 };
             }
+            // `break` escaping a block (see `MonorubyErrKind::BlockBreak`):
+            // stop at the block's defining frame. If that frame's
+            // in-progress call site is the one that received this block
+            // literal, resume it with the call returning the break value
+            // (CRuby's BREAK catch table). Otherwise the block escaped as
+            // a Proc — degrade to LocalJumpError and let the normal
+            // rescue machinery below handle it in this very frame.
+            let block_break = match vm.exception().unwrap().kind() {
+                MonorubyErrKind::BlockBreak(val, block_fid, outer) => {
+                    Some((*val, *block_fid, *outer))
+                }
+                _ => None,
+            };
+            if let Some((val, block_fid, outer)) = block_break {
+                if lfp != outer {
+                    // An intermediate frame: run its ensure body (the
+                    // break passes through it), then keep unwinding.
+                    if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
+                        vm.defer_unwind(lfp);
+                        return ErrorReturn::goto(bc_base + ensure);
+                    }
+                    vm.discard_deferred_unwind(lfp);
+                    return ErrorReturn::return_err();
+                }
+                // The defining frame: check the call site *before* any
+                // ensure handling — a matching break resumes right after
+                // the call, still inside the same begin region, so this
+                // frame's ensure must NOT run now (it runs when control
+                // leaves the region normally).
+                // The suspended pc may point at the call instruction or
+                // its trailing InlineCache slot — check both.
+                let mut candidates = vec![pc];
+                if pc.to_usize() > 0 {
+                    candidates.push(pc + (-1i64));
+                }
+                let call_pos = candidates.into_iter().find(|cand| {
+                    globals.store.get_callsite_id(iseq_id, *cand).is_some_and(|id| {
+                        globals.store[id].block_fid == Some(block_fid)
+                    })
+                });
+                if let Some(call_pos) = call_pos {
+                    let dst = {
+                        let id = globals.store.get_callsite_id(iseq_id, call_pos).unwrap();
+                        globals.store[id].dst
+                    };
+                    vm.take_error();
+                    vm.discard_deferred_unwind(lfp);
+                    if let Some(dst) = dst {
+                        unsafe { lfp.set_register(dst, Some(val)) };
+                    }
+                    // Skip the call instruction + its InlineCache slot.
+                    return ErrorReturn::goto(bc_base + call_pos + 2isize);
+                }
+                // Defining frame reached via a materialized Proc: the
+                // original receiving call is gone.
+                #[cfg(feature = "emit-bc")]
+                eprintln!(
+                    "block-break no-match: pc={pc:?} candidates checked, block_fid={block_fid:?}, map={:?}",
+                    (0..40).filter_map(|i| globals.store.get_callsite_id(iseq_id, crate::bytecodegen::BcIndex::from(i)).map(|id| (i, globals.store[id].block_fid))).collect::<Vec<_>>()
+                );
+                vm.take_error();
+                vm.set_error(MonorubyErr::new(
+                    MonorubyErrKind::LocalJump,
+                    "break from proc-closure".to_string(),
+                ));
+                // fall through to the ordinary exception handling below
+                // (rescue table of this frame, or propagate).
+            }
             let sourceinfo = info.sourceinfo.clone();
             let loc = info.sourcemap[pc.to_usize()];
             let fid = info.func_id();
@@ -167,7 +236,9 @@ pub(super) extern "C" fn handle_error(
                     ErrorReturn::return_err()
                 };
             }
-            if let MonorubyErrKind::Throw(..) = vm.exception().unwrap().kind() {
+            if let MonorubyErrKind::Throw(..) | MonorubyErrKind::BlockBreak(..) =
+                vm.exception().unwrap().kind()
+            {
                 return ErrorReturn::return_err();
             }
             vm.push_internal_error_location(meta.func_id());
