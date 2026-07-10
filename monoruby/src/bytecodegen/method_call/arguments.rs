@@ -230,6 +230,27 @@ impl<'a> BytecodeGen<'a> {
     /// Handle ordinary arguments.
     ///
     fn positional_args(&mut self, arglist: &mut ArgList) -> Result<(BcReg, usize, Vec<usize>)> {
+        // Splat expansion is deferred to dispatch (the arg register
+        // holds the array itself), but a `&expr` block argument
+        // evaluates *after* the positionals and may mutate a splatted
+        // array in between (`m(*args, &args.pop)` — CRuby expands the
+        // splat eagerly, so the pop is invisible). Take an eager copy
+        // by rewriting `*expr` to `*[*expr]` when the block argument
+        // is a real expression (literal blocks and bare proc locals
+        // can't run code before dispatch).
+        let risky_block = matches!(
+            arglist.block.as_deref(),
+            Some(node) if !matches!(node.kind, NodeKind::Lambda(_) | NodeKind::LocalVar(..))
+        );
+        if risky_block {
+            for arg in arglist.args.iter_mut() {
+                if matches!(arg.kind, NodeKind::Splat(_)) {
+                    let loc = arg.loc;
+                    let inner = std::mem::replace(arg, Node::new_nil(loc));
+                    *arg = Node::new_splat(Node::new_array(vec![inner], loc), loc);
+                }
+            }
+        }
         if arglist.args.len() == 1
             //&& arglist.block.is_none()
             && arglist.kw_args.is_empty()

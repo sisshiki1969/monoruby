@@ -39,6 +39,9 @@ pub(super) extern "C" fn find_method(
     }
     .map_err(|err| vm.set_error(err))
     .ok();
+    if let Some(f) = fid {
+        warn_unused_block(vm, globals, callid, f);
+    }
     let cache_class = {
         let ic_class = recv.class_for_ic();
         if ic_class == BOOL_CLASS {
@@ -52,6 +55,103 @@ pub(super) extern "C" fn find_method(
         }
     };
     ((cache_class.u32() as u64) << 32) | fid.map_or(0, |f| f.get()) as u64
+}
+
+/// CRuby's Ruby-3.4 "unused block" warning: calling a method with a
+/// literal block when the callee's body neither declares a block
+/// parameter (named, anonymous, or `...`) nor uses the block (`yield` /
+/// `super`; `block_given?` alone does not count). Gated on `$VERBOSE ==
+/// true` or the `Warning[:strict_unused_block]` category. Running only
+/// on the inline-cache-miss path also gives CRuby's once-per-call-site
+/// behavior — subsequent calls hit the cache and skip this.
+fn warn_unused_block(vm: &mut Executor, globals: &mut Globals, callid: CallSiteId, fid: FuncId) {
+    let site = &globals[callid];
+    if site.name.is_none() || site.block_fid.is_none() {
+        return;
+    }
+    let callee = &globals.store[fid];
+    if !callee.is_method() {
+        return;
+    }
+    let Some(iseq_id) = callee.is_iseq() else {
+        return;
+    };
+    let iseq = &globals.store[iseq_id];
+    if iseq.uses_block || iseq.block_param().is_some() || iseq.args.forwarding() {
+        return;
+    }
+    // CRuby dedup: once per callee method. The method is recorded even
+    // when the gate below suppresses the printing — a later gated-on
+    // call of an already-seen method stays silent (observable in
+    // ruby/spec's strict_unused_block examples).
+    if !globals.unused_block_warned.insert(fid.get() as u64) {
+        return;
+    }
+    let verbose = globals
+        .get_gvar(IdentId::get_id("$VERBOSE"))
+        .is_some_and(|v| v.as_bool());
+    if !verbose && !strict_unused_block_category(vm, globals) {
+        return;
+    }
+    // Re-borrow after the potential Ruby invocation above.
+    let iseq = &globals.store[iseq_id];
+    let defined_at = format!(
+        "{}:{}",
+        iseq.sourceinfo.file_name(),
+        iseq.sourceinfo.get_line(&iseq.loc)
+    );
+    let caller = {
+        let caller_fid = vm.cfp().lfp().func_id();
+        let Some(caller_iseq) = globals.store[caller_fid].is_iseq() else {
+            return;
+        };
+        let caller_iseq = &globals.store[caller_iseq];
+        let bc_pos = globals[callid].bc_pos.to_usize();
+        let Some(loc) = caller_iseq.sourcemap.get(bc_pos).copied() else {
+            return;
+        };
+        format!(
+            "{}:{}",
+            caller_iseq.sourceinfo.file_name(),
+            caller_iseq.sourceinfo.get_line(&loc)
+        )
+    };
+    // CRuby names the callee in the qualified `Owner#name` form (bare
+    // name for a plain object's singleton method) — same rule as
+    // backtrace entries, so reuse func_description.
+    let name = globals.store.func_description(fid);
+    let msg = format!(
+        "{caller}: warning: the block passed to '{name}' defined at {defined_at} may be ignored\n"
+    );
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or_default();
+    // A warning must never mask the call's result — ignore errors from
+    // a broken/replaced $stderr.
+    let _ = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[Value::string(msg)],
+        None,
+        None,
+    );
+}
+
+/// `Warning[:strict_unused_block]` — `false` when the Warning module
+/// isn't loaded yet (bootstrap) or the lookup fails.
+fn strict_unused_block_category(vm: &mut Executor, globals: &mut Globals) -> bool {
+    let Some(warning_val) = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
+    else {
+        return false;
+    };
+    let sym = Value::symbol(IdentId::get_id("strict_unused_block"));
+    match vm.invoke_method_inner(globals, IdentId::_INDEX, warning_val, &[sym], None, None) {
+        Ok(v) => v.as_bool(),
+        Err(_) => false,
+    }
 }
 
 fn find_super(vm: &mut Executor, globals: &mut Globals, callid: CallSiteId) -> Result<FuncId> {
