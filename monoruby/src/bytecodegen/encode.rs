@@ -573,10 +573,15 @@ impl<'a> BytecodeGen<'a> {
                 Bytecode::from(enc_www(86, op1.0, op2.0, len as u16))
             }
 
-            BytecodeInst::ArrayTEq { lhs, rhs } => {
+            BytecodeInst::ArrayTEq {
+                lhs,
+                rhs,
+                rescue_clause,
+            } => {
                 let op1 = self.slot_id(&lhs);
                 let op2 = self.slot_id(&rhs);
-                Bytecode::from(enc_www(40, 0, op1.0, op2.0))
+                let opcode = if rescue_clause { 44 } else { 40 };
+                Bytecode::from(enc_www(opcode, 0, op1.0, op2.0))
             }
             BytecodeInst::ArrayAny { reg } => {
                 let op1 = self.slot_id(&reg);
@@ -699,6 +704,7 @@ impl<'a> BytecodeGen<'a> {
             dst,
             forwarding,
             bypass_visibility,
+            vcall,
         } = callsite;
 
         let args = self.slot_id(&args);
@@ -735,6 +741,7 @@ impl<'a> BytecodeGen<'a> {
             dst,
             forwarding,
             bypass_visibility,
+            vcall,
         ))
     }
 }

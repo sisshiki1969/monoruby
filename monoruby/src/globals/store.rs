@@ -404,10 +404,14 @@ impl Store {
         match info.owner_class().get(0) {
             Some(owner) => {
                 if let Some(obj) = self[*owner].get_module().is_singleton() {
-                    if let Some(class) = obj.is_class() {
+                    if let Some(class) = obj.is_class_or_module() {
                         format!("{}.{name}", class.id().get_name(self))
                     } else {
-                        format!("{}.{name}", obj.debug_tos(self))
+                        // CRuby names a plain object's singleton
+                        // method by the bare method name (only
+                        // class/module singletons get the
+                        // `Owner.name` form).
+                        name
                     }
                 } else {
                     format!("{}#{name}", owner.get_name(self))
@@ -665,6 +669,7 @@ impl Store {
         dst: Option<SlotId>,
         forwarding: bool,
         bypass_visibility: bool,
+        vcall: bool,
     ) -> CallSiteId {
         let id = CallSiteId(self.callsite_info.len() as u32);
         self.callsite_info.push(CallSiteInfo {
@@ -683,6 +688,7 @@ impl Store {
             dst,
             forwarding,
             bypass_visibility,
+            vcall,
         });
         id
     }
@@ -1476,6 +1482,10 @@ pub struct CallSiteInfo {
     /// `initialize` while keeping the natural forwarding-call shape
     /// (which the D1 forwarding-rest deferral can specialize).
     pub(crate) bypass_visibility: bool,
+    /// A "variable call" (bare identifier, no receiver / args /
+    /// parens): a failed lookup raises NameError instead of
+    /// NoMethodError.
+    pub(crate) vcall: bool,
 }
 
 impl CallSiteInfo {

@@ -40,6 +40,9 @@ impl<'a> BytecodeGen<'a> {
         receiver: Option<Node>,
         arglist: ArgList,
         safe_nav: bool,
+        // Bare-identifier call (`foo` with no receiver/args/parens):
+        // a failed lookup raises NameError instead of NoMethodError.
+        vcall: bool,
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
@@ -94,6 +97,7 @@ impl<'a> BytecodeGen<'a> {
         if builtin_initialize {
             callid.bypass_visibility = true;
         }
+        callid.vcall = vcall;
 
         self.temp = old_temp;
         if push_flag {
@@ -213,6 +217,15 @@ impl<'a> BytecodeGen<'a> {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
+        // CRuby rejects `yield` at parse time unless the surrounding
+        // non-block scope is a method body: yield in a class/module
+        // body, at the top level, or in a block belonging to either
+        // is a SyntaxError. (`defined?(yield)` compiles to its own
+        // instruction and never reaches here.)
+        let mother_fid = self.store[self.mother.0].func_id();
+        if !self.store[mother_fid].is_method() {
+            return Err(self.syntax_error("Invalid yield", loc));
+        }
         let dst = match use_mode {
             UseMode2::NotUse => None,
             UseMode2::Push | UseMode2::Ret => Some(self.push().into()),

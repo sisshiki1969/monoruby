@@ -602,3 +602,57 @@ fn rescue_clause_match_jit() {
         "#,
     );
 }
+
+#[test]
+fn rescue_splat_clause_requires_class_or_module() {
+    run_test(
+        r#"
+        res = []
+        [[42], [RuntimeError], [TypeError, RuntimeError], []].each do |list|
+          begin
+            begin
+              raise "boom"
+            rescue *list
+              res << "caught"
+            rescue RuntimeError
+              res << "unmatched"
+            end
+          rescue TypeError => e
+            res << e.message
+          end
+        end
+        # An empty rescue body plus no exception: the clause list is
+        # never evaluated, so an invalid element does not raise.
+        begin
+          res << :fine
+        rescue *[42]
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn singleton_method_backtrace_naming() {
+    // CRuby names a plain object's singleton method by the bare
+    // method name in backtraces; class/module singletons get the
+    // `Owner.name` form. Compare only the method-name part (paths
+    // and line numbers of the harness temp files differ).
+    run_test(
+        r#"
+        res = []
+        o = Object.new
+        def o.sing_meth = raise("x")
+        module BTM; def self.mod_meth = raise("y"); end
+        class BTC; def self.cls_meth = raise("z"); end
+        [proc { o.sing_meth }, proc { BTM.mod_meth }, proc { BTC.cls_meth }].each do |p|
+          begin
+            p.call
+          rescue => e
+            res << e.backtrace.first.split(":in ").last
+          end
+        end
+        res
+        "#,
+    );
+}

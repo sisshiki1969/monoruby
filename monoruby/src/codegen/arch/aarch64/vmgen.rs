@@ -109,7 +109,8 @@ impl Codegen {
 
         // literal constructors / aggregate ops
         let array = self.a64_op_array();
-        let array_teq = self.a64_op_array_teq();
+        let array_teq = self.a64_op_array_teq(runtime::array_teq as *const () as u64);
+        let rescue_array_teq = self.a64_op_array_teq(runtime::rescue_array_teq as *const () as u64);
         let array_any = self.a64_op_array_any();
         let array_concat = self.a64_op_array_concat();
         let hash = self.a64_op_hash();
@@ -196,6 +197,7 @@ impl Codegen {
             lambda,
             array,
             array_teq,
+            rescue_array_teq,
             array_any,
             array_concat,
             hash_insert,
@@ -795,7 +797,9 @@ impl Codegen {
     /// op 40 `ArrayTEq`: %lhs = (%lhs === %rhs). If %lhs is an Array, returns
     /// true iff some element matches %rhs (via `===`). The result overwrites
     /// the lhs slot. Bytecode: `+0` rhs, `+2` lhs (also dst).
-    pub(in crate::codegen) fn a64_op_array_teq(&mut self) -> CodePtr {
+    /// Shared generator for op 40 (`ArrayTEq`, `f` = runtime::array_teq)
+    /// and op 44 (rescue-splat variant, `f` = runtime::rescue_array_teq).
+    pub(in crate::codegen) fn a64_op_array_teq(&mut self, f: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         let skip = self.jit.label();
@@ -805,13 +809,13 @@ impl Codegen {
         );
         self.a64_load_slot(X11, X3, X12); // X3 = lhs value
         self.a64_load_slot(X10, X4, X12); // X4 = rhs value
-        // array_teq(vm, globals, lhs, rhs) -> Option<Value>
+        // array_teq / rescue_array_teq (vm, globals, lhs, rhs) -> Option<Value>
         monoasm_arm64!(&mut self.jit,
             mov x2, x3;  // lhs (arg #3)
             mov x3, x4;  // rhs (arg #4)
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
-            mov x9, (runtime::array_teq as *const () as u64);
+            mov x9, (f);
             blr x9;
             cbz x0, raise;
         // dst slot = lhs slot from [PC+2]

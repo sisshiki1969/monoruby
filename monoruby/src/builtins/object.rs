@@ -146,7 +146,7 @@ fn frozen(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
 ///
 #[monoruby_builtin]
 fn bo_method_missing(
-    _: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -154,6 +154,18 @@ fn bo_method_missing(
     let args = lfp.arg(0).as_array();
     let name = args[0].expect_symbol_or_string(globals)?;
     let recv = lfp.self_val();
+    // A failed "variable call" (bare identifier — could as well have
+    // been a local variable) raises NameError, not NoMethodError,
+    // mirroring CRuby's default method_missing on a VCALL.
+    if vm.take_method_missing_vcall() {
+        return Err(MonorubyErr::nameerr_with_name(
+            format!(
+                "undefined local variable or method `{name}' for {}",
+                recv.to_s(&globals.store)
+            ),
+            name,
+        ));
+    }
     // Reaching the default `method_missing` while the method actually
     // exists means the call violated visibility (a private method called
     // with an explicit receiver, or an inaccessible protected method).

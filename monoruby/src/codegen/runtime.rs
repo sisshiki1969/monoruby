@@ -233,15 +233,38 @@ pub(super) extern "C" fn array_teq(
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
+    array_teq_impl(vm, globals, lhs, rhs, op::cmp_teq_case_values)
+}
+
+/// `rescue *list` clause match (opcode 44): like `array_teq`, but each
+/// element must be a Class or Module — `cmp_teq_rescue_values` raises
+/// CRuby's "class or module required for rescue clause" TypeError
+/// otherwise.
+pub(super) extern "C" fn rescue_array_teq(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    array_teq_impl(vm, globals, lhs, rhs, op::cmp_teq_rescue_values)
+}
+
+fn array_teq_impl(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+    teq: extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>,
+) -> Option<Value> {
     if let Some(lhs_ary) = lhs.try_array_ty() {
         for lhs in lhs_ary.iter().cloned() {
-            if op::cmp_teq_case_values(vm, globals, lhs, rhs)?.as_bool() {
+            if teq(vm, globals, lhs, rhs)?.as_bool() {
                 return Some(Value::bool(true));
             }
         }
         Some(Value::bool(false))
     } else {
-        op::cmp_teq_case_values(vm, globals, lhs, rhs)
+        teq(vm, globals, lhs, rhs)
     }
 }
 
@@ -1028,6 +1051,7 @@ pub(super) extern "C" fn get_index(
             let method = base.as_method();
             let receiver = method.receiver();
             if let Some(target) = method.method_missing_name() {
+                vm.reset_method_missing_vcall();
                 return vm.invoke_method(
                     globals,
                     IdentId::METHOD_MISSING,

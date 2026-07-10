@@ -165,6 +165,10 @@ pub(super) enum BytecodeInst {
     ArrayTEq {
         lhs: BcReg,
         rhs: BcReg,
+        /// Splatted `rescue *list` clause: each element must be a
+        /// Class or Module (TypeError otherwise) and `===` dispatches
+        /// with funcall semantics. Encoded as opcode 44 instead of 40.
+        rescue_clause: bool,
     },
     /// `rescue` clause match: `lhs = lhs === rhs` where `lhs` (the
     /// clause) must be a Class or Module (TypeError otherwise) and

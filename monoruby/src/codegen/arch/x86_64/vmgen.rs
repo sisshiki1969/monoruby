@@ -314,7 +314,8 @@ impl Codegen {
             nilbr: self.vm_nilbr(&branch),
             lambda: self.vm_lambda(),
             array: self.vm_array(),
-            array_teq: self.vm_array_teq(),
+            array_teq: self.vm_array_teq(runtime::array_teq as _),
+            rescue_array_teq: self.vm_array_teq(runtime::rescue_array_teq as _),
             array_any: self.vm_array_any(),
             array_concat: self.vm_array_concat(),
             hash_insert: self.vm_hash_insert(),
@@ -858,7 +859,9 @@ impl Codegen {
         label
     }
 
-    fn vm_array_teq(&mut self) -> CodePtr {
+    /// Shared generator for op 40 (`ArrayTEq`, `f` = runtime::array_teq)
+    /// and op 44 (rescue-splat variant, `f` = runtime::rescue_array_teq).
+    fn vm_array_teq(&mut self, f: u64) -> CodePtr {
         let label = self.jit.get_current_address();
         monoasm! { &mut self.jit,
             movzxw rdi, [r13 - 14];     // rdi <- :2
@@ -872,7 +875,7 @@ impl Codegen {
             movq rcx, rsi;
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (runtime::array_teq);
+            movq rax, (f);
             call rax;
         };
         self.vm_handle_error();
