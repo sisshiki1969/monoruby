@@ -185,6 +185,16 @@ pub struct ISeqInfo {
     /// Optimization hint detected during bytecode compilation.
     ///
     pub(crate) hint: ISeqHint,
+    ///
+    /// `true` when this method's body (including nested blocks) uses
+    /// its implicit block: a `yield`, or any form of `super` (which
+    /// forwards the block). Set during bytecode compilation on the
+    /// *mother* method's ISeq. Together with a declared block
+    /// parameter / `...`, this suppresses the "block passed to ... may
+    /// be ignored" warning (`block_given?` alone does NOT count as a
+    /// use — CRuby still warns).
+    ///
+    pub(crate) uses_block: bool,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -244,6 +254,7 @@ impl ISeqInfo {
             bb_info: BasicBlockInfo::default(),
             callsite_map: HashMap::default(),
             hint: ISeqHint::Normal,
+            uses_block: false,
         }
     }
 

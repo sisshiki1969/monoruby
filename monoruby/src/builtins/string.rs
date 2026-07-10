@@ -872,6 +872,9 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // offset, not a byte offset, so multibyte subjects match CRuby).
     if other.is_regex().is_some() {
         let given = self_val.expect_str(globals)?;
+        // Enable zero-copy $~ haystack snapshots (CoW), which also
+        // propagate the subject's encoding to $&/$`/$'/$1..$N.
+        vm.set_match_haystack(self_val);
         let regex = &other.coerce_to_regexp_or_string(vm, globals)?;
         let res = match regex.find_one(vm, given)? {
             Some(r) => {

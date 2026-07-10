@@ -92,13 +92,15 @@ pub struct Store {
     /// during JIT compilation); the borrow never outlives a single
     /// cache probe/fill.
     method_cache: RefCell<GlobalMethodCache>,
-    /// Warnings produced during bytecode compilation (e.g. a hash literal
-    /// with a duplicated literal key). Bytecodegen has no `Executor`, so it
-    /// can't route a warning through the redirectable `$stderr`; the
-    /// messages are buffered here and flushed by
-    /// `Executor::flush_compile_warnings` right after compilation, before
-    /// the compiled code runs.
-    pub(crate) compile_warnings: Vec<String>,
+    /// Warnings produced during parsing / bytecode compilation (e.g. a
+    /// hash literal with a duplicated literal key, or prism parse
+    /// warnings forwarded via `ParseResult::warnings`). Bytecodegen has
+    /// no `Executor`, so it can't route a warning through the
+    /// redirectable `$stderr`; the messages are buffered here and
+    /// flushed by `Executor::flush_compile_warnings` right after
+    /// compilation, before the compiled code runs. The `bool` marks
+    /// verbose-level warnings, printed only when `$VERBOSE` is `true`.
+    pub(crate) compile_warnings: Vec<(String, bool)>,
     /// Intern pool for frozen string literals emitted under a
     /// `# frozen_string_literal: true` file. Keyed by `(bytes, encoding)`
     /// so literals with identical content share one shared, frozen object

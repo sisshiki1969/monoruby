@@ -178,6 +178,12 @@ pub struct Globals {
     pub(crate) loaded_features: Value,
     /// cache for Symbol#name (frozen strings keyed by IdentId).
     pub(crate) symbol_names: HashMap<IdentId, Value>,
+    /// Dedup table for the Ruby-3.4 "block may be ignored" warning.
+    /// CRuby warns once per callee *method* normally, once per call
+    /// site under `Warning[:strict_unused_block]` — the key is the
+    /// callee `FuncId` (low 32 bits) with the `CallSiteId` in the high
+    /// bits for the strict form. See `runtime::warn_unused_block`.
+    pub(crate) unused_block_warned: std::collections::HashSet<u64>,
     /// address of invokers.
     pub(crate) invokers: Invokers,
     /// Stack of the *user* block arities for the `Enumerator`s
@@ -420,6 +426,7 @@ impl Globals {
             random: Box::new(Prng::new()),
             loaded_features,
             symbol_names: HashMap::default(),
+            unused_block_warned: std::collections::HashSet::default(),
             // signo runs 1..=32; index by signo directly (slot 0 unused).
             // Every signal starts at the OS default ("SYSTEM_DEFAULT"),
             // except the default-installed set (SIGINT), whose runtime

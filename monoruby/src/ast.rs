@@ -55,6 +55,13 @@ pub struct ParseResult {
     pub node: Node,
     pub lvar_collector: LvarCollector,
     pub source_info: SourceInfoRef,
+    /// Parse-time warnings forwarded from prism, already formatted as
+    /// `path:line: warning: message`. The `bool` is `true` for
+    /// verbose-level warnings (printed only when `$VERBOSE` is `true`,
+    /// like CRuby's `rb_warning`), `false` for default-level ones.
+    /// Transferred into `Store::compile_warnings` by the bytecodegen
+    /// entry points and emitted by `Executor::flush_compile_warnings`.
+    pub warnings: Vec<(String, bool)>,
 }
 
 /// One `rescue` clause of a `begin`/`rescue` (or modifier `rescue`).

@@ -319,8 +319,43 @@ fn try_prism_inner(
         }));
     }
 
+    // Forward a vetted subset of prism's parse warnings, formatted the
+    // way CRuby prints them. Only messages whose wording *and* CRuby
+    // warning level we have verified are forwarded — the Rust prism
+    // wrapper does not expose the diagnostic level, so an allowlist
+    // (message → verbose-only flag) stands in for it. Everything else
+    // is dropped rather than risking warnings CRuby would not print
+    // (e.g. prism flags an eval's final literal as "useless use of a
+    // literal in void context"; CRuby does not, since that literal is
+    // the eval's value).
+    let warnings: Vec<(String, bool)> = result
+        .warnings()
+        .filter_map(|w| {
+            let msg = w.message();
+            let verbose_only = if msg == "END in method; use at_exit"
+                || msg == "integer literal in flip-flop"
+            {
+                false
+            } else if msg == "possibly useless use of defined? in void context"
+                || (msg.starts_with("'when' clause on line ")
+                    && msg.ends_with(" and is ignored"))
+            {
+                true
+            } else {
+                return None;
+            };
+            let loc = location_to_loc(&w.location());
+            let line = source_info.get_line(&loc);
+            Some((
+                format!("{}:{}: warning: {}", path_display, line, msg),
+                verbose_only,
+            ))
+        })
+        .collect();
+
     let mut lowerer = Lowerer::new(code.as_bytes(), path_display, source_info.clone());
     lowerer.line_offset = line_offset;
+    lowerer.eval_parse = options.is_some();
     if let Some(seed) = seed_lvars {
         // For `binding.eval`, monoruby preloads a `LvarCollector`
         // with the binding's existing locals so any *new* names the
@@ -336,12 +371,15 @@ fn try_prism_inner(
     // able — a single unsupported construct only fails its own
     // example instead of aborting the whole process.
     let body = lowerer.lower_top(&result.node())?;
+    let mut warnings = warnings;
+    warnings.append(&mut lowerer.warnings);
     let lvar_collector = lowerer.into_lvars();
 
     Ok(ParseResult {
         node: body,
         lvar_collector,
         source_info,
+        warnings,
     })
 }
 
@@ -375,6 +413,16 @@ struct Lowerer<'pr> {
     /// names are collected so the wrap site can anchor them in their
     /// home scope.
     scope_wraps: Vec<ScopeWrap>,
+    /// Parse warnings raised by the lowerer itself (in addition to
+    /// prism's own diagnostics), merged into `ParseResult::warnings`
+    /// by `try_prism_inner`. Same shape: (formatted message,
+    /// verbose-only flag).
+    warnings: Vec<(String, bool)>,
+    /// `true` for `eval` / `binding.eval` parses. Suppresses warnings
+    /// that only apply to a script file's top level (e.g. "argument of
+    /// top-level return is ignored" — a return in an eval belongs to
+    /// the surrounding frame, not the script's top level).
+    eval_parse: bool,
 }
 
 /// See [`Lowerer::scope_wraps`].
@@ -395,6 +443,8 @@ impl<'pr> Lowerer<'pr> {
             lvars: LvarCollector::new(),
             prism_scope_level: 0,
             scope_wraps: Vec::new(),
+            warnings: Vec::new(),
+            eval_parse: false,
         }
     }
 
@@ -3402,6 +3452,7 @@ impl<'pr> Lowerer<'pr> {
 
     fn lower_return(&mut self, node: &ReturnNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
+        let has_args = node.arguments().is_some();
         let mut values: Vec<Node> = Vec::new();
         if let Some(arglist) = node.arguments() {
             for arg in arglist.arguments().iter() {
@@ -3409,10 +3460,33 @@ impl<'pr> Lowerer<'pr> {
             }
         }
         let inner = jump_value_node(values, loc);
-        Ok(Node {
+        let ret = Node {
             kind: NodeKind::Return(Box::new(inner)),
             loc,
-        })
+        };
+        // `return <arg>` directly at a script file's top level (not
+        // inside a def/block/class; if/begin are fine): CRuby warns —
+        // the value is discarded — at *runtime*, only when the return
+        // actually executes, with a path-only (no line) prefix, at
+        // the default warning level (silenced by -W0). Desugar to
+        //   (__warn_toplevel_return("<path>"); return <arg>)
+        // so the enclosing control flow gates the warning naturally.
+        if self.prism_scope_level == 0 && !self.eval_parse && has_args {
+            let warn_call = Node::new_fcall(
+                "__warn_toplevel_return".to_string(),
+                crate::ast::ArgList {
+                    args: vec![Node {
+                        kind: NodeKind::String(self.path.clone()),
+                        loc,
+                    }],
+                    ..Default::default()
+                },
+                false,
+                loc,
+            );
+            return Ok(Node::new_comp_stmt(vec![warn_call, ret], loc));
+        }
+        Ok(ret)
     }
 
     fn lower_constant_write(&mut self, node: &ConstantWriteNode<'pr>) -> Result<Node, MonorubyErr> {

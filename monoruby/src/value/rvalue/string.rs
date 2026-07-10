@@ -2295,7 +2295,22 @@ pub(crate) fn string_snapshot(mut receiver: Value) -> Value {
         inner.is_shared() || inner.owned_spilled()
     };
     if shareable {
-        ensure_shared_root(&mut receiver).0
+        let (root, base) = ensure_shared_root(&mut receiver);
+        let view_len = receiver.as_rstring_inner().len();
+        let root_inner = root.as_rstring_inner();
+        if base == root_inner.as_ptr() && view_len == root_inner.len() {
+            root
+        } else {
+            // The receiver is a sharer viewing a sub-range of the
+            // root's buffer (e.g. a CoW substring handed out by a
+            // MatchData accessor). The snapshot must present exactly
+            // that window — returning the bare root would hand callers
+            // the whole original buffer.
+            let start = base as usize - root_inner.as_ptr() as usize;
+            let mut snap = string_substring(root, start, start + view_len);
+            snap.set_frozen();
+            snap
+        }
     } else {
         let mut dup = Value::string_from_inner(receiver.as_rstring_inner().clone());
         dup.set_frozen();

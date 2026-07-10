@@ -3096,3 +3096,105 @@ fn def_in_eval_uses_eval_site_scope() {
         "#,
     );
 }
+
+#[test]
+fn unused_block_warning() {
+    // Ruby 3.4 "the block passed to ... may be ignored": warns for a
+    // literal block passed to a method that neither declares a block
+    // parameter nor yields/supers (block_given? alone still warns).
+    // Once per callee method normally; strict category enables the
+    // non-verbose form. Compared against CRuby including the
+    // qualified-name format ('Owner#name').
+    run_test_once(
+        r#"
+        def cap
+          saved = $stderr
+          buf = +""
+          io = Object.new
+          io.define_singleton_method(:write) { |*a| a.each { |x| buf << x.to_s }; nil }
+          $stderr = io
+          yield
+          buf
+        ensure
+          $stderr = saved
+        end
+        res = []
+        class UBWarn
+          def unused; 42; end
+          def with_param(&b); 42; end
+          def with_anon(&); 42; end
+          def with_yield; yield if block_given?; end
+          def with_bg; block_given?; end
+          def with_super; super rescue nil; end
+        end
+        u = UBWarn.new
+        $VERBOSE = true
+        res << cap { u.unused { } }.gsub(/^.*?:\d+: /, "").gsub(/ defined at .*?:\d+/, "")
+        res << cap { u.unused { } }  # deduped: once per method
+        res << cap { u.with_param { } }
+        res << cap { u.with_anon { } }
+        res << cap { u.with_yield { } }
+        res << (cap { u.with_bg { } } =~ /may be ignored/ ? "warn-bg" : "silent-bg")
+        res << cap { u.with_super { } }
+        $VERBOSE = false
+        class UBWarn2; def unused; 42; end; end
+        u2 = UBWarn2.new
+        res << cap { u2.unused { } }
+        Warning[:strict_unused_block] = true
+        res << (cap { u2.unused { } } =~ /may be ignored/ ? "warn-strict" : "silent-strict")
+        Warning[:strict_unused_block] = false
+        res
+        "#,
+    );
+}
+
+#[test]
+fn toplevel_return_argument_warns() {
+    use std::io::Write;
+    // `return <arg>` at the main script's top level warns at runtime
+    // (only when executed), does not affect the exit status, and is
+    // silenced by -W0.
+    let dir = std::env::temp_dir().join(format!("mr_tlr_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("tlr.rb");
+    let mut f = std::fs::File::create(&script).unwrap();
+    writeln!(f, "return 10 if false\nreturn 10\nputs :unreachable").unwrap();
+    drop(f);
+    for bin in ["ruby", env!("CARGO_BIN_EXE_monoruby")] {
+        let out = std::process::Command::new(bin)
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{bin} exited nonzero");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("warning: argument of top-level return is ignored"),
+            "{bin}: missing warning: {err}"
+        );
+        assert_eq!(err.matches("top-level return").count(), 1, "{bin}");
+        assert!(String::from_utf8_lossy(&out.stdout).is_empty(), "{bin}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn splat_expands_before_block_argument() {
+    run_test_once(
+        r#"
+        def m(*args, &block); [args, block]; end
+        res = []
+        args = [1, nil]
+        res << m(*args, &args.pop)
+        args = [1, nil]
+        order = []
+        res << m(*(order << :args; args), &(order << :block; args.pop))
+        res << order
+        args = [1, nil]
+        res << m(*args, 2, &args.pop)
+        a = [1, 2]
+        res << m(*a) { :blk }.first
+        res << m(*a, &nil)
+        res
+        "#,
+    );
+}

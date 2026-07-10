@@ -1853,7 +1853,7 @@ impl<'a> BytecodeGen<'a> {
                     inspect,
                     line,
                 );
-                self.store.compile_warnings.push(msg);
+                self.store.compile_warnings.push((msg, false));
             }
         }
     }

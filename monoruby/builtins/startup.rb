@@ -431,6 +431,15 @@ module Kernel
     warn(msg, category: :deprecated)
   end
   module_function :__warn_deprecated
+
+  # Internal: the prism lowerer desugars a top-level `return <arg>`
+  # into a call to this helper followed by the return, so the warning
+  # fires only when the return actually executes (CRuby behavior).
+  # rb_warn-level: silenced by -W0 ($VERBOSE == nil), not by default.
+  def __warn_toplevel_return(path)
+    warn("#{path}: warning: argument of top-level return is ignored") unless $VERBOSE.nil?
+  end
+  module_function :__warn_toplevel_return
 end
 
 module Process
