@@ -217,7 +217,9 @@ class StringIO
 
   def gets(sep = "\n", limit = nil)
     _check_readable
-    return nil if eof?
+    # CRuby's StringIO#gets publishes the line it read (or nil at EOF)
+    # as the caller's `$_`, like Kernel#gets.
+    return __set_lastline_in_caller(nil) if eof?
 
     if sep.is_a?(Integer)
       limit = sep
@@ -233,7 +235,7 @@ class StringIO
       while @pos < @string.length && @string[@pos] == "\n"
         @pos += 1
       end
-      return nil if eof?
+      return __set_lastline_in_caller(nil) if eof?
       idx = @string.index("\n\n", @pos)
       if idx
         line = @string[@pos..idx]
@@ -263,11 +265,13 @@ class StringIO
     end
 
     @lineno += 1
-    line
+    __set_lastline_in_caller(line)
   end
 
   def readline(*args)
     line = gets(*args)
+    # `gets` set `$_` in *this* frame; re-publish it to our caller.
+    __set_lastline_in_caller(line)
     raise EOFError, "end of file reached" if line.nil?
     line
   end

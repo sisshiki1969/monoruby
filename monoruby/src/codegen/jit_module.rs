@@ -221,7 +221,7 @@ pub(super) extern "C" fn handle_error(
             }
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
                 let err_val = vm.take_ex_obj(globals);
-                globals.set_gvar(IdentId::get_id("$!"), err_val);
+                vm.set_errinfo(err_val);
                 if let Some(err_reg) = err_reg {
                     unsafe { lfp.set_register(err_reg, Some(err_val)) };
                 }

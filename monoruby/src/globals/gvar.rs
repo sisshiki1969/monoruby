@@ -460,6 +460,40 @@ fn write_special_check(
 /// names by hand.
 ///
 pub fn init_builtin_gvars(globals: &mut Globals) {
+    // --- Exception being handled (`$!`) ---------------------------------------
+
+    // `$!` is per execution context in CRuby — each Fiber sees its own
+    // errinfo — so it is backed by `Executor::errinfo` rather than the
+    // process-global gvar table, and it is read-only from Ruby. The VM's
+    // rescue-entry path writes the field directly; the bytecodegen
+    // save/restore protocol (rescue-exit restore, `defined?` probes)
+    // writes it through the internal `$(errinfo)` hook, whose name cannot
+    // be spelled in Ruby source.
+    fn get_errinfo(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+    ) -> Option<Value> {
+        Some(vm.errinfo())
+    }
+
+    fn set_errinfo_internal(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+        val: Value,
+    ) -> Result<()> {
+        vm.set_errinfo(val);
+        Ok(())
+    }
+
+    globals.define_hooked_variable(IdentId::get_id("$!"), get_errinfo, None);
+    globals.define_hooked_variable(
+        IdentId::get_id(crate::globals::ERRINFO_INTERNAL_GVAR),
+        get_errinfo,
+        Some(set_errinfo_internal),
+    );
+
     // --- Regexp-related special variables -----------------------------------
 
     // $~ is always considered defined (CRuby parses it as a regular global
@@ -662,7 +696,7 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         globals: &mut Globals,
         _name: IdentId,
     ) -> Option<Value> {
-        let err = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
+        let err = vm.errinfo();
         if err.is_nil() {
             return Some(Value::nil());
         }
@@ -682,7 +716,7 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         _name: IdentId,
         val: Value,
     ) -> Result<()> {
-        let err = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
+        let err = vm.errinfo();
         if err.is_nil() {
             return Err(MonorubyErr::argumenterr("$! not set"));
         }

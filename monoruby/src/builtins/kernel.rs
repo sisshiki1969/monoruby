@@ -203,6 +203,12 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "__instance_ty", instance_ty, 0);
     globals.define_builtin_func(
         kernel_class,
+        "__set_lastline_in_caller",
+        set_lastline_in_caller,
+        1,
+    );
+    globals.define_builtin_func(
+        kernel_class,
         "__enum_yield",
         super::enumerator::yielder_yield,
         1,
@@ -558,6 +564,26 @@ fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
 }
 
 ///
+/// ### Kernel.#__set_lastline_in_caller (monoruby intrinsic)
+///
+/// Sets `$_` in the method scope of the frame that called the invoking
+/// Ruby method. Used by Ruby-implemented IO-like stubs (`stringio.rb`)
+/// whose `gets`/`readline` must publish `$_` to their caller the way
+/// CRuby's C readers do via `rb_lastline_set`. Returns its argument.
+///
+#[monoruby_builtin]
+fn set_lastline_in_caller(
+    vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let val = lfp.arg(0);
+    vm.set_last_read_line_in_caller(val);
+    Ok(val)
+}
+
+///
 /// ### Kernel.#print
 ///
 /// - print(*arg) -> nil
@@ -700,7 +726,7 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 "only cause is given with no arguments",
             ));
         }
-        let ex = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
+        let ex = vm.errinfo();
         if let Some(inner) = ex.is_exception() {
             return Err(MonorubyErr::new_from_exception(inner).with_original(ex));
         } else {
@@ -2667,7 +2693,7 @@ fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         None => Value::object(OBJECT_CLASS),
     };
     let bh = lfp.expect_block()?;
-    let saved_errinfo = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
+    let saved_errinfo = vm.errinfo();
     vm.push_catch_tag(tag);
     let res = vm.invoke_block_once(globals, bh, &[tag]);
     vm.pop_catch_tag();
@@ -2679,7 +2705,7 @@ fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                     // A caught throw restores `$!` to its value at
                     // catch entry: throwing from inside a rescue must
                     // not leak the in-flight exception.
-                    globals.set_gvar(IdentId::get_id("$!"), saved_errinfo);
+                    vm.set_errinfo(saved_errinfo);
                     return Ok(*throw_val);
                 }
             }
