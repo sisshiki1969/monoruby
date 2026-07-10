@@ -660,6 +660,13 @@ impl TraceIr {
                         polymorphic: pc.opcode_sub() == 1,
                     }
                 }
+                44 => {
+                    // Rescue-splat clause match: handler-side only,
+                    // same invariant as opcode 157 below.
+                    unreachable!(
+                        "rescue-splat ArrayTEq is handler-side only; the JIT does not visit exception-handler blocks"
+                    )
+                }
                 157 => {
                     // RescueTEq: the rescue-clause match. It only ever
                     // executes inside an exception handler, and the

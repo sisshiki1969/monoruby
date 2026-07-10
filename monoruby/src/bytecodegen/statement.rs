@@ -224,7 +224,14 @@ impl<'a> BytecodeGen<'a> {
             let loc = when.loc;
             let old = self.temp;
             let lhs = self.push_expr(when)?.into();
-            self.emit(BytecodeInst::ArrayTEq { lhs, rhs: reg }, loc);
+            self.emit(
+                BytecodeInst::ArrayTEq {
+                    lhs,
+                    rhs: reg,
+                    rescue_clause: false,
+                },
+                loc,
+            );
             self.temp = old;
             self.emit_condbr(lhs, cont_pos, jmp_if_true, false);
             Ok(())
@@ -527,7 +534,14 @@ impl<'a> BytecodeGen<'a> {
                             let loc = ex.loc;
                             let old = self.temp;
                             let ary = self.push_expr(Node::new_array(vec![ex], loc))?.into();
-                            self.emit(BytecodeInst::ArrayTEq { lhs: ary, rhs: err_reg }, loc);
+                            self.emit(
+                                BytecodeInst::ArrayTEq {
+                                    lhs: ary,
+                                    rhs: err_reg,
+                                    rescue_clause: true,
+                                },
+                                loc,
+                            );
                             self.temp = old;
                             self.emit_condbr(ary, cont_pos, true, false);
                         } else {
