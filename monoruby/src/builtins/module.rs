@@ -1630,7 +1630,19 @@ fn define_method(
         return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
     }
     let class_id = self_val.as_class_id();
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    // The name accepts Symbol / String and anything `to_str`-convertible
+    // (CRuby's `define_method(obj)` with `obj.to_str`).
+    let name_val = lfp.arg(0);
+    let name = if name_val.is_str().is_some() || name_val.try_symbol().is_some() {
+        name_val.expect_symbol_or_string(globals)?
+    } else if let Some(coerced) =
+        vm.invoke_method_if_exists(globals, IdentId::TO_STR, name_val, &[], None, None)?
+        && coerced.is_str().is_some()
+    {
+        coerced.expect_symbol_or_string(globals)?
+    } else {
+        name_val.expect_symbol_or_string(globals)?
+    };
     // For proc-based define_method, the runtime LFP has the *block*'s
     // FuncId (the wrapper jumps directly to the block code, only
     // tagging the meta with `PROC_METHOD_MASK`). For `super` to work
@@ -1734,6 +1746,23 @@ fn define_method(
         // once JIT compilation kicks in (manifested as
         // `undefined method '/main'` from `super`).
         globals.store[block_fid].set_proc_method();
+        // The installed body's cref is the scope the block/proc was
+        // *written* in (its lexical class) — a nested `def` inside it
+        // lands there, not on the define target (CRuby: a Proc created
+        // in class T and installed on class C still defines nested
+        // methods in T). See `ISeqInfo::nested_definee`.
+        if let Some(iseq) = globals.store[block_fid].is_iseq() {
+            // Block iseqs carry no lexical_context of their own; the
+            // write-site scope is the mother iseq's (main, a class
+            // body, or an enclosing method).
+            let mother = globals.store[iseq].mother().0;
+            let cref_class = globals.store[mother]
+                .lexical_context
+                .last()
+                .copied()
+                .unwrap_or(OBJECT_CLASS);
+            globals.store[iseq].nested_definee = Some(cref_class);
+        }
     }
     Ok(Value::symbol(name))
 }

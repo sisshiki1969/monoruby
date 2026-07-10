@@ -3520,6 +3520,21 @@ fn define_singleton_method(
             globals.store[block_fid].set_owner_class(class_id);
         }
         globals.store[block_fid].set_proc_method();
+        // The body's cref is the scope the block was *written* in (its
+        // lexical class), not the receiver's singleton: a nested `def`
+        // inside it lands there. See `ISeqInfo::nested_definee`.
+        if let Some(iseq) = globals.store[block_fid].is_iseq() {
+            // Block iseqs carry no lexical_context of their own; the
+            // write-site scope is the mother iseq's (main, a class
+            // body, or an enclosing method).
+            let mother = globals.store[iseq].mother().0;
+            let cref_class = globals.store[mother]
+                .lexical_context
+                .last()
+                .copied()
+                .unwrap_or(OBJECT_CLASS);
+            globals.store[iseq].nested_definee = Some(cref_class);
+        }
     }
     Ok(Value::symbol(name))
 }

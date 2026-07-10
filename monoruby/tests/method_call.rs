@@ -3303,3 +3303,67 @@ fn dup_drops_singleton_clone_keeps() {
         "#,
     );
 }
+
+#[test]
+fn define_method_nested_def_and_break() {
+    // A define_method body's cref is the scope the block/proc was
+    // written in; break inside it behaves like a lambda (local).
+    run_test_once(
+        r#"
+        res = []
+        class DMNest
+          define_method(:dm) { def dm_nested; :ok; end }
+        end
+        DMNest.new.dm
+        res << DMNest.method_defined?(:dm_nested, false)
+        res << DMNest.new.dm_nested
+        res << Class.new { define_method(:foo) { break 42 } }.new.foo
+        res << Class.new { define_method(:foo) { next 42 } }.new.foo
+        obj = Object.new
+        o2 = Object.new
+        def o2.to_str = "coerced_name"
+        klass = Class.new { define_method(o2, -> { :called }) }
+        res << klass.new.coerced_name
+        res
+        "#,
+    );
+}
+
+#[test]
+fn return_in_thread_and_class_block() {
+    run_test_once(
+        r#"
+        res = []
+        t = Thread.new do
+          begin
+            return :x
+          rescue LocalJumpError => e
+            e
+          end
+        end
+        res << t.value.class.to_s
+        # a return whose home chain crosses a class body is invalid
+        begin
+          eval("class RetClsA; 1.times { return }; end")
+          res << :no_error
+        rescue LocalJumpError
+          res << :lje
+        end
+        # legitimate non-local returns keep working
+        def ret_m; 1.times { return :m }; :bad; end
+        res << ret_m
+        # a closure's return passes *through* a define_method frame
+        class ThroughDM
+          define_method(:pass, proc { |x| x.call })
+          def mp(&b) = b
+          def outer
+            pr = mp { return :good }
+            pass(pr)
+            :bad
+          end
+        end
+        res << ThroughDM.new.outer
+        res
+        "#,
+    );
+}
