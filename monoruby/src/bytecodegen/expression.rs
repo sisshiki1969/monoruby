@@ -319,7 +319,7 @@ impl<'a> BytecodeGen<'a> {
                 self.gen_method_call(method, None, arglist, safe_nav, false, UseMode2::Store(dst), loc)?;
             }
             NodeKind::Return(box val) => {
-                if self.is_escaping_block() {
+                if self.return_escapes() {
                     return self.gen_method_return(val, UseMode2::Store(dst));
                 } else {
                     return self.gen_return(val, UseMode2::Store(dst));
@@ -847,10 +847,19 @@ impl<'a> BytecodeGen<'a> {
                 if use_mode == UseMode2::Push {
                     self.push();
                 }
-                let LoopInfo { redo_dest, .. } = match self.loops.last() {
-                    Some(data) => data,
+                let LoopInfo {
+                    redo_dest,
+                    ensure_depth,
+                    ..
+                } = match self.loops.last() {
+                    Some(data) => data.clone(),
                     None => {
                         if self.is_block() {
+                            // Restarting the block body exits every open
+                            // begin/ensure region — run their ensure
+                            // bodies first (same unwinding protocol as a
+                            // block-local return).
+                            self.gen_all_pending_ensures()?;
                             self.emit(BytecodeInst::Redo(self.redo_label), loc);
                             return Ok(());
                         } else {
@@ -858,11 +867,14 @@ impl<'a> BytecodeGen<'a> {
                         }
                     }
                 };
+                // Run `ensure` blocks nested inside the loop before
+                // re-executing the body.
+                self.gen_loop_pending_ensures(ensure_depth)?;
                 // Use the `Redo` op (a `goto` via the error path) rather than a
                 // plain `Br`: its target can sit in the middle of the loop body
                 // (skipping the condition) without the JIT seeing a second
                 // back-edge into the loop, which its loop analysis can't merge.
-                self.emit(BytecodeInst::Redo(*redo_dest), loc);
+                self.emit(BytecodeInst::Redo(redo_dest), loc);
                 return Ok(());
             }
             NodeKind::Retry => {
@@ -880,7 +892,7 @@ impl<'a> BytecodeGen<'a> {
                 return Ok(());
             }
             NodeKind::Return(box val) => {
-                if self.is_escaping_block() {
+                if self.return_escapes() {
                     self.gen_method_return(val, use_mode)?;
                 } else {
                     self.gen_return(val, use_mode)?;
@@ -2084,7 +2096,7 @@ impl<'a> BytecodeGen<'a> {
             None
         };
         let compile_info = Store::handle_args(info, vec![])?;
-        let func_id = self.add_classdef(Some(name), compile_info, loc)?;
+        let func_id = self.add_classdef(Some(name), compile_info, loc, false)?;
         let superclass = match superclass {
             Some(box superclass) => Some(self.push_expr(superclass)?.into()),
             None => None,
@@ -2129,7 +2141,7 @@ impl<'a> BytecodeGen<'a> {
         loc: Loc,
     ) -> Result<()> {
         let compile_info = Store::handle_args(info, vec![])?;
-        let func_id = self.add_classdef(None, compile_info, loc)?;
+        let func_id = self.add_classdef(None, compile_info, loc, true)?;
         let old = self.temp;
         let base = self.gen_expr_reg(base)?;
         self.temp = old;

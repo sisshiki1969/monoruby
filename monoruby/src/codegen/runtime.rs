@@ -1705,7 +1705,22 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Glob
     // is decided here from the frame's *current* style: a real block
     // returns non-locally to its home method (`outermost_lfp`), a lambda
     // returns from its own frame.
-    let cfp = vm.cfp();
+    let mut cfp = vm.cfp();
+    // A `return` written in a singleton-class body (`class << obj`) —
+    // the only class-body position bytecodegen compiles to a
+    // method-return — exits the method executing the sclass expression.
+    // The body runs as a direct call from that frame, so hop to the
+    // caller (skipping nested class bodies and native trampolines) and
+    // resolve the target as if the return were written there.
+    while globals[cfp.lfp().func_id()].is_classdef() {
+        let Some(prev) = cfp.prev() else { break };
+        cfp = prev;
+        while cfp.lfp().meta().is_native() {
+            let Some(prev) = cfp.prev() else { break };
+            cfp = prev;
+        }
+    }
+    let cfp = cfp;
     let target_lfp = if globals[cfp.lfp().func_id()].is_block_style() {
         let target = cfp.outermost_lfp();
         // A synchronous thread-body boundary (see
@@ -1844,31 +1859,30 @@ pub(super) extern "C" fn to_a(
     if src.is_nil() {
         return Some(Value::array_empty());
     }
-    // An object that does not even respond to `#respond_to?` (a bare
-    // `BasicObject`) cannot be coerced: treat it like a value without
-    // `#to_a` and wrap it in a one-element array, matching CRuby, rather
-    // than raising `NoMethodError`.
-    if globals
+    // Like `#to_ary` destructuring above, CRuby gates the `#to_a` call on
+    // `respond_to?(:to_a, true)` (a user may override it), not a raw
+    // method-table lookup. An object without `#respond_to?` (a bare
+    // `BasicObject`) falls back to the raw lookup — CRuby's
+    // `rb_check_funcall` still calls a `to_a` defined on it.
+    let responds = if globals
         .check_method(src, IdentId::get_id("respond_to?"))
         .is_none()
     {
-        return Some(Value::array1(src));
-    }
-    // Like `#to_ary` destructuring above, CRuby gates the `#to_a` call on
-    // `respond_to?(:to_a, true)` (a user may override it), not a raw
-    // method-table lookup.
-    let responds = match vm.invoke_method_inner(
-        globals,
-        IdentId::get_id("respond_to?"),
-        src,
-        &[Value::symbol(IdentId::TO_A), Value::bool(true)],
-        None,
-        None,
-    ) {
-        Ok(v) => v.as_bool(),
-        Err(err) => {
-            vm.set_error(err);
-            return None;
+        globals.check_method(src, IdentId::TO_A).is_some()
+    } else {
+        match vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("respond_to?"),
+            src,
+            &[Value::symbol(IdentId::TO_A), Value::bool(true)],
+            None,
+            None,
+        ) {
+            Ok(v) => v.as_bool(),
+            Err(err) => {
+                vm.set_error(err);
+                return None;
+            }
         }
     };
     if responds {

@@ -534,6 +534,9 @@ struct BytecodeGen<'a> {
     /// method (non-local); a lambda's are local. Both have an `outer`,
     /// so this is what distinguishes them.
     block_style: bool,
+    /// Whether this iseq is a singleton-class body (`class << obj`),
+    /// whose `return` exits the enclosing method like a block's.
+    singleton_classdef: bool,
     /// bytecode IR.
     ir: Vec<(BytecodeInst, Loc)>,
     /// the temp stack pointer for each bytecode instruction.
@@ -596,6 +599,7 @@ impl<'a> BytecodeGen<'a> {
         let func_id = info.func_id();
         let sourceinfo = info.sourceinfo.clone();
         let outer = info.outer;
+        let singleton_classdef = info.singleton_classdef;
         let block_style = store[func_id].is_block_style();
         let mut codegen = Self {
             store,
@@ -604,6 +608,7 @@ impl<'a> BytecodeGen<'a> {
             mother: (mother, mother_params, mother_outer),
             outer,
             block_style,
+            singleton_classdef,
             ir: vec![],
             sp: vec![],
             labels: BytecodeLabels::new(), // The first label is for redo.
@@ -771,6 +776,14 @@ impl<'a> BytecodeGen<'a> {
         self.outer.is_some() && self.block_style
     }
 
+    /// `return` transfers control out of the enclosing method rather
+    /// than this frame: true in a real block and in a singleton-class
+    /// body (`class << obj; return; end` returns from the method
+    /// executing the sclass expression — CRuby).
+    fn return_escapes(&self) -> bool {
+        self.is_escaping_block() || self.singleton_classdef
+    }
+
     fn add_method(
         &mut self,
         name: Option<IdentId>,
@@ -787,9 +800,11 @@ impl<'a> BytecodeGen<'a> {
         name: Option<IdentId>,
         compile_info: CompileInfo,
         loc: Loc,
+        is_singleton: bool,
     ) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        self.store.new_classdef(name, compile_info, loc, sourceinfo)
+        self.store
+            .new_classdef(name, compile_info, loc, sourceinfo, is_singleton)
     }
 
     fn add_block(&mut self, outer: ISeqId, compile_info: CompileInfo, loc: Loc) -> Result<FuncId> {
@@ -1073,11 +1088,14 @@ impl<'a> BytecodeGen<'a> {
         self.sp.push(BcTemp(self.temp));
     }
 
-    fn emit_ret(&mut self, src: Option<BcReg>) -> Result<()> {
+    /// Emit every currently-open `ensure` body (innermost first) with
+    /// the `$!` restore protocol — for exits that leave all of this
+    /// frame's begin regions at once (`return`, block-level `redo`).
+    fn gen_all_pending_ensures(&mut self) -> Result<()> {
         // Temporarily take the ensure stack to avoid infinite recursion when
-        // a `return` appears inside an `ensure` block.  Without this, the
-        // `return` in the ensure body would call `emit_ret` again, which would
-        // re-generate the same ensure block, leading to unbounded recursion.
+        // the exit appears inside an `ensure` block.  Without this, a
+        // `return` in the ensure body would recurse into the same ensure
+        // block, leading to unbounded regeneration.
         let in_rescue = self.rescue_depth > 0;
         let ensures: Vec<_> = std::mem::take(&mut self.ensure);
         let pending: Vec<_> = ensures.iter().rev().cloned().collect();
@@ -1104,6 +1122,11 @@ impl<'a> BytecodeGen<'a> {
             }
         }
         self.ensure = ensures;
+        Ok(())
+    }
+
+    fn emit_ret(&mut self, src: Option<BcReg>) -> Result<()> {
+        self.gen_all_pending_ensures()?;
 
         let ret = match src {
             Some(ret) => ret,
