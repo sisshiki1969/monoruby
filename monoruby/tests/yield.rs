@@ -227,3 +227,32 @@ fn block_auto_splat_to_ary_type_error() {
         "#,
     );
 }
+
+#[test]
+fn yield_outside_method_is_a_syntax_error() {
+    run_test_once(
+        r#"
+        res = []
+        obj = Object.new
+        ["class << obj; yield; end",
+         "module YSM; yield; end",
+         "class YSC; yield; end",
+         "1.times { yield }",
+         "yield"].each do |code|
+          begin
+            eval(code)
+            res << "no error"
+          rescue SyntaxError
+            res << "SyntaxError"
+          rescue LocalJumpError
+            res << "LocalJumpError"
+          end
+        end
+        # yield in a method (and in a block inside a method) stays legal.
+        eval("def ytm1; yield; end")
+        eval("def ytm2; 1.times { yield }; end")
+        res << eval("defined?(yield)").inspect
+        res
+        "#,
+    );
+}
