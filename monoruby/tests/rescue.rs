@@ -656,3 +656,29 @@ fn singleton_method_backtrace_naming() {
         "#,
     );
 }
+
+#[test]
+fn caught_throw_restores_errinfo() {
+    run_test(
+        r#"
+        res = []
+        catch(:a) do
+          begin
+            raise "boom"
+          rescue
+            throw :a
+          end
+        end
+        res << $!.inspect
+        # An uncaught tag propagating out of an inner catch leaves the
+        # in-flight exception alone until the matching catch.
+        begin
+          raise "outer"
+        rescue
+          catch(:m) { catch(:inner) { throw :m } }
+          res << $!.message
+        end
+        res
+        "#,
+    );
+}

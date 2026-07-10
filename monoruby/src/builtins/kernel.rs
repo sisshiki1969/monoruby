@@ -2667,6 +2667,7 @@ fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         None => Value::object(OBJECT_CLASS),
     };
     let bh = lfp.expect_block()?;
+    let saved_errinfo = globals.get_gvar(IdentId::get_id("$!")).unwrap_or_default();
     vm.push_catch_tag(tag);
     let res = vm.invoke_block_once(globals, bh, &[tag]);
     vm.pop_catch_tag();
@@ -2675,6 +2676,10 @@ fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         Err(err) => {
             if let MonorubyErrKind::Throw(throw_tag, throw_val) = err.kind() {
                 if tag.id() == throw_tag.id() {
+                    // A caught throw restores `$!` to its value at
+                    // catch entry: throwing from inside a rescue must
+                    // not leak the in-flight exception.
+                    globals.set_gvar(IdentId::get_id("$!"), saved_errinfo);
                     return Ok(*throw_val);
                 }
             }
