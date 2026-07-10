@@ -15,7 +15,11 @@ mod statement;
 pub(crate) use super::bytecode::BcIndex;
 use inst::*;
 
-pub fn bytecode_compile_script(globals: &mut Globals, result: ParseResult) -> Result<FuncId> {
+pub fn bytecode_compile_script(globals: &mut Globals, mut result: ParseResult) -> Result<FuncId> {
+    globals
+        .store
+        .compile_warnings
+        .append(&mut result.warnings);
     let main_fid = globals.store.new_main(result)?;
     bytecode_compile(globals, main_fid, None)?;
     Ok(main_fid)
@@ -23,11 +27,15 @@ pub fn bytecode_compile_script(globals: &mut Globals, result: ParseResult) -> Re
 
 pub fn bytecode_compile_eval(
     globals: &mut Globals,
-    result: ParseResult,
+    mut result: ParseResult,
     outer: ISeqId,
     loc: Loc,
     binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
+    globals
+        .store
+        .compile_warnings
+        .append(&mut result.warnings);
     let main_fid = globals.store.new_eval(outer, result, loc)?;
     bytecode_compile(globals, main_fid, binding)?;
     Ok(main_fid)

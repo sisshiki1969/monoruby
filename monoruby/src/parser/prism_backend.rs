@@ -319,6 +319,40 @@ fn try_prism_inner(
         }));
     }
 
+    // Forward a vetted subset of prism's parse warnings, formatted the
+    // way CRuby prints them. Only messages whose wording *and* CRuby
+    // warning level we have verified are forwarded — the Rust prism
+    // wrapper does not expose the diagnostic level, so an allowlist
+    // (message → verbose-only flag) stands in for it. Everything else
+    // is dropped rather than risking warnings CRuby would not print
+    // (e.g. prism flags an eval's final literal as "useless use of a
+    // literal in void context"; CRuby does not, since that literal is
+    // the eval's value).
+    let warnings: Vec<(String, bool)> = result
+        .warnings()
+        .filter_map(|w| {
+            let msg = w.message();
+            let verbose_only = if msg == "END in method; use at_exit"
+                || msg == "integer literal in flip-flop"
+            {
+                false
+            } else if msg == "possibly useless use of defined? in void context"
+                || (msg.starts_with("'when' clause on line ")
+                    && msg.ends_with(" and is ignored"))
+            {
+                true
+            } else {
+                return None;
+            };
+            let loc = location_to_loc(&w.location());
+            let line = source_info.get_line(&loc);
+            Some((
+                format!("{}:{}: warning: {}", path_display, line, msg),
+                verbose_only,
+            ))
+        })
+        .collect();
+
     let mut lowerer = Lowerer::new(code.as_bytes(), path_display, source_info.clone());
     lowerer.line_offset = line_offset;
     if let Some(seed) = seed_lvars {
@@ -342,6 +376,7 @@ fn try_prism_inner(
         node: body,
         lvar_collector,
         source_info,
+        warnings,
     })
 }
 

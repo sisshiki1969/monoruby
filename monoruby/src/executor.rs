@@ -438,26 +438,23 @@ impl Executor {
     pub fn sp_last_match(&self) -> Option<Value> {
         let v = self.current_match_data()?;
         let md = v.as_match_data();
-        let bytes = md.at(0)?;
-        Some(Value::string_from_str(&String::from_utf8_lossy(bytes)))
+        md.at_value(0)
     }
 
     /// `$\`` — the substring before the last match.
     pub fn sp_pre_match(&self) -> Option<Value> {
         let v = self.current_match_data()?;
         let md = v.as_match_data();
-        let (start, _) = md.pos(0)?;
-        let bytes = &md.string().as_bytes()[..start];
-        Some(Value::string_from_str(&String::from_utf8_lossy(bytes)))
+        md.pos(0)?;
+        Some(md.pre_match_value())
     }
 
     /// `$'` — the substring after the last match.
     pub fn sp_post_match(&self) -> Option<Value> {
         let v = self.current_match_data()?;
         let md = v.as_match_data();
-        let (_, end) = md.pos(0)?;
-        let bytes = &md.string().as_bytes()[end..];
-        Some(Value::string_from_str(&String::from_utf8_lossy(bytes)))
+        md.pos(0)?;
+        Some(md.post_match_value())
     }
 }
 
@@ -488,11 +485,19 @@ impl Executor {
             return;
         }
         let msgs = std::mem::take(&mut globals.store.compile_warnings);
+        // Verbose-level warnings (CRuby's `rb_warning`) print only when
+        // `$VERBOSE` is exactly `true` at flush time.
+        let verbose = globals
+            .get_gvar(IdentId::get_id("$VERBOSE"))
+            .is_some_and(|v| v.as_bool());
         let stderr = globals
             .get_gvar(IdentId::get_id("$stderr"))
             .unwrap_or_default();
         let write_id = IdentId::get_id("write");
-        for m in msgs {
+        for (m, verbose_only) in msgs {
+            if verbose_only && !verbose {
+                continue;
+            }
             let msg_val = Value::string(format!("{m}\n"));
             // Ignore errors (e.g. a nil / broken `$stderr` during early
             // bootstrap): a warning must never mask the program's result.
@@ -2937,8 +2942,7 @@ impl Executor {
         if nth >= 0 {
             let idx = nth as usize;
             if idx < len {
-                let bytes = md.at(idx)?;
-                return Some(Value::string_from_str(&String::from_utf8_lossy(bytes)));
+                return md.at_value(idx);
             }
         }
         None
@@ -2954,8 +2958,8 @@ impl Executor {
         // Walk the captures ($1..$N) from the end and return the last
         // one that participated in the match.
         for idx in (1..len).rev() {
-            if let Some(bytes) = md.at(idx) {
-                return Some(Value::string_from_str(&String::from_utf8_lossy(bytes)));
+            if let Some(v) = md.at_value(idx) {
+                return Some(v);
             }
         }
         None

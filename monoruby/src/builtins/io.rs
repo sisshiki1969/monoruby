@@ -2960,7 +2960,12 @@ fn read_io_encoding(globals: &mut Globals, io: Value, internal: bool) -> Value {
         None => {
             // IOs not created through our path (pipe/popen/stdio):
             // external defaults to default_external, internal to nil.
-            if internal {
+            // Exception: the write-only stdio streams — CRuby reports
+            // `nil` for STDOUT/STDERR's external encoding until one is
+            // set explicitly with `#set_encoding`.
+            let write_only_stdio = io.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::IO)
+                && matches!(io.as_io_inner(), IoInner::Stdout | IoInner::Stderr);
+            if internal || write_only_stdio {
                 Value::nil()
             } else {
                 enc_default_external_obj(globals)
@@ -3488,9 +3493,11 @@ mod tests {
     fn external_encoding() {
         run_test_no_result_check(
             r#"
-            enc = $stdout.external_encoding
-            raise "should be Encoding" unless enc.is_a?(Encoding)
-            enc.name
+            # CRuby: STDOUT/STDERR have no external encoding until one
+            # is set explicitly; STDIN defaults to default_external.
+            raise "stdout should be nil" unless $stdout.external_encoding.nil?
+            raise "stderr should be nil" unless $stderr.external_encoding.nil?
+            raise "stdin should be Encoding" unless $stdin.external_encoding.is_a?(Encoding)
             "#,
         );
     }

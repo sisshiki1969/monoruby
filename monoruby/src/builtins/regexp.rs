@@ -818,31 +818,45 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     // CRuby returns false (without matching) for nil / Regexp
     // and other non-string-like args. For string-like args
     // (responds to `to_str`), it coerces and matches.
-    let given = if let Some(s) = arg0.is_str() {
-        s.to_string()
+    let subject = if arg0.is_rstring().is_some() {
+        arg0
     } else if let Some(sym) = arg0.try_symbol() {
-        sym.to_string()
+        Value::string(sym.to_string())
     } else if let Some(func_id) = globals.check_method(arg0, IdentId::TO_STR) {
         // `to_str` coercion path: call the method, then accept the
         // result iff it's a String. CRuby raises TypeError on a
         // non-String return value (`can't convert X to String
         // (X#to_str gives Y)`); we mirror that.
         let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
-        match result.is_str() {
-            Some(s) => s.to_string(),
-            None => {
-                let class = arg0.get_real_class_name(&globals.store);
-                let res_class = result.get_real_class_name(&globals.store);
-                return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {class} to String ({class}#to_str gives {res_class})"
-                )));
-            }
+        if result.is_str().is_none() {
+            let class = arg0.get_real_class_name(&globals.store);
+            let res_class = result.get_real_class_name(&globals.store);
+            return Err(MonorubyErr::typeerr(format!(
+                "can't convert {class} to String ({class}#to_str gives {res_class})"
+            )));
         }
+        result
     } else {
         return Ok(Value::bool(false));
     };
+    // Stash a UTF-8-valid String subject so the MatchData snapshot is
+    // zero-copy and carries the subject's encoding into $&/$1..$N;
+    // non-UTF-8 subjects fall back to the owned lossy copy as before.
+    let given_owned;
+    let given: &str = match subject.is_rstring() {
+        Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
+            vm.set_match_haystack(subject);
+            // SAFETY: just validated as UTF-8.
+            unsafe { std::str::from_utf8_unchecked(subject.as_rstring_inner().as_bytes()) }
+        }
+        _ => {
+            given_owned =
+                String::from_utf8_lossy(subject.as_rstring_inner().as_bytes()).into_owned();
+            &given_owned
+        }
+    };
     vm.set_match_regex(self_);
-    let res = Value::bool(regex.find_one(vm, &given)?.is_some());
+    let res = Value::bool(regex.find_one(vm, given)?.is_some());
     Ok(res)
 }
 
@@ -867,9 +881,25 @@ fn regexp_match(
     if !regex.initialized() {
         return Err(MonorubyErr::typeerr("uninitialized Regexp"));
     }
-    let given = lfp.arg(0).expect_symbol_or_string(globals)?.to_string();
+    // Borrow the subject's bytes directly (and stash the Value for the
+    // zero-copy MatchData snapshot, which also propagates the subject's
+    // encoding to $&/$`/$'/$1..$N) when it is a UTF-8-valid String;
+    // Symbols and non-UTF-8 subjects fall back to the owned conversion.
+    let arg0 = lfp.arg(0);
+    let given_owned;
+    let given: &str = match arg0.is_rstring() {
+        Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
+            vm.set_match_haystack(arg0);
+            // SAFETY: just validated as UTF-8.
+            unsafe { std::str::from_utf8_unchecked(arg0.as_rstring_inner().as_bytes()) }
+        }
+        _ => {
+            given_owned = arg0.expect_symbol_or_string(globals)?.to_string();
+            &given_owned
+        }
+    };
     vm.set_match_regex(self_);
-    let res = match regex.find_one(vm, &given)? {
+    let res = match regex.find_one(vm, given)? {
         Some(mat) => Value::integer(mat.start as i64),
         None => Value::nil(),
     };
@@ -1039,6 +1069,12 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     } else {
         Value::nil()
     };
+    if !md.is_nil() {
+        // `$~` must be the very MatchData object this call returns
+        // (CRuby: `regexp.match(s).equal?($~)`), not the separate one
+        // `captures_from_pos` saved while matching.
+        vm.set_backref(md);
+    }
     // `Regexp#match(str) { |m| … }` block form: yield the
     // MatchData (or skip the block when there's no match) and
     // return whatever the block returned. CRuby calls the block

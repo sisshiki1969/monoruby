@@ -207,3 +207,80 @@ fn gvar_warnings() {
         "#,
     );
 }
+
+#[test]
+fn match_globals_inherit_subject_encoding() {
+    run_test_once(
+        r#"
+        res = []
+        "abc".dup.force_encoding(Encoding::EUC_JP) =~ /b/
+        res << $~[0].encoding.to_s
+        res << $&.encoding.to_s
+        res << $`.encoding.to_s
+        res << $'.encoding.to_s
+        "abc".dup.force_encoding(Encoding::ISO_8859_1) =~ /a/
+        res << $`.encoding.to_s
+        res << $'.encoding.to_s
+        /(b)(c)?/ =~ "abc".dup.force_encoding(Encoding::EUC_JP)
+        res << $1.encoding.to_s
+        res << $+.encoding.to_s
+        res << Regexp.last_match(1).encoding.to_s
+        /b/ === "abc".dup.force_encoding(Encoding::EUC_JP)
+        res << $&.encoding.to_s
+        res
+        "#,
+    );
+}
+
+#[test]
+fn regexp_match_backref_identity() {
+    run_test_once(
+        r#"
+        md = /foo/.match 'foo'
+        res = [md.is_a?(MatchData), $~.equal?(md)]
+        /bar/ =~ 'bar'
+        res << $~.equal?(md) << $~.is_a?(MatchData)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn stdio_external_encoding() {
+    run_test_once(
+        r#"
+        [STDOUT.external_encoding, STDERR.external_encoding,
+         STDOUT.internal_encoding, STDERR.internal_encoding].map(&:inspect)
+        "#,
+    );
+}
+
+#[test]
+fn parse_time_warnings() {
+    run_test_once(
+        r#"
+        require "stringio"
+        res = []
+        capture = proc do |verbose, code|
+          orig_err, orig_v = $stderr, $VERBOSE
+          $stderr = StringIO.new
+          $VERBOSE = verbose
+          begin
+            eval(code)
+          ensure
+            out = $stderr.string
+            $stderr = orig_err
+            $VERBOSE = orig_v
+          end
+          out
+        end
+        res << (capture.call(true, "case 1\nwhen 2\n :foo\nwhen 2\n :bar\nend") =~ /warning: 'when' clause on line \d+ duplicates 'when' clause on line \d+ and is ignored/ ? "warned" : "silent")
+        res << (capture.call(false, "case 1\nwhen 2\n :foo\nwhen 2\n :bar\nend") == "" ? "silent" : "warned")
+        res << (capture.call(true, "defined?(Object.to_s); 42") =~ /warning: possibly useless use of defined\? in void context/ ? "warned" : "silent")
+        res << (capture.call(false, "defined?(Object.to_s); 42") == "" ? "silent" : "warned")
+        res << (capture.call(true, "$. = 0\n1.times { |i| i if 4..5 }") =~ /warning: integer literal in flip-flop/ ? "warned" : "silent")
+        res << (capture.call(false, "$. = 0\n1.times { |i| i if 4..5 }") == "" ? "silent" : "warned")
+        res
+        "#,
+    );
+}
