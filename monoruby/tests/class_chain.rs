@@ -123,3 +123,27 @@ fn singleton_classdef_with_live_float() {
     );
 }
 
+
+#[test]
+fn superclass_must_be_a_class() {
+    run_test_once(
+        r#"
+        res = []
+        [42, "s", :sym, Module.new, Object.new.singleton_class].each do |sup|
+          begin
+            Class.new(sup)
+            res << "no error"
+          rescue TypeError => e
+            res << e.message
+          end
+          begin
+            eval("class SuperclassCheckSpec < sup; end")
+            res << "no error"
+          rescue TypeError => e
+            res << e.message
+          end
+        end
+        res
+        "#,
+    );
+}

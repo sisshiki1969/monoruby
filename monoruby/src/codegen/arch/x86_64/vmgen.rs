@@ -60,6 +60,43 @@ macro_rules! vm_cmp_opt {
 impl Codegen {
     vm_cmp_opt!(eq, ne, gt, ge, lt, le, teq);
 
+    /// RescueTEq: no fixnum fast path (a non-Module clause must raise
+    /// TypeError, so every operand pair goes through the runtime
+    /// helper).
+    fn vm_teq_rescue_rr(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let generic = self.jit.label();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi);
+        self.vm_get_slot_value(GP::Rsi);
+        self.vm_save_binary_integer();
+        self.vm_generic_binop(&generic, cmp_teq_rescue_values as _);
+        self.fetch_and_dispatch();
+        label
+    }
+
+    /// Same shape as the macro-generated `vm_teq_opt_rr`, but backed
+    /// by `cmp_teq_case_values` (funcall semantics) — the handler for
+    /// the optimizable TEq opcode, which only case/when emits.
+    fn vm_teq_case_opt_rr(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        let generic = self.jit.label();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi);
+        self.vm_get_slot_value(GP::Rsi);
+        self.guard_rdi_rsi_fixnum(&generic);
+        self.vm_save_binary_integer();
+
+        self.icmp_eq();
+        self.vm_store_r15(GP::Rax);
+        self.fetch_and_dispatch();
+
+        self.vm_generic_binop(&generic, cmp_teq_case_values as _);
+        self.fetch_and_dispatch();
+
+        label
+    }
+
     ///
     /// Emit the VM entry and every bytecode-opcode handler, returning their
     /// entry points. The arch-neutral [`Codegen::construct_vm`] lays the
@@ -311,6 +348,8 @@ impl Codegen {
             gt: self.vm_gt_opt_rr(),
             ge: self.vm_ge_opt_rr(),
             teq: self.vm_teq_opt_rr(),
+            teq_case: self.vm_teq_case_opt_rr(),
+            teq_rescue: self.vm_teq_rescue_rr(),
             load_dvar: self.vm_load_dvar(),
             store_dvar: self.vm_store_dvar(),
             add: add_rr,

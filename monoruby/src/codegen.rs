@@ -763,7 +763,13 @@ pub(crate) struct VmHandlers {
     pub le: CodePtr,                  // 143, 153
     pub gt: CodePtr,                  // 144, 154
     pub ge: CodePtr,                  // 145, 155
-    pub teq: CodePtr,                 // 146, 156
+    pub teq: CodePtr,                 // 146
+    /// TEq with case/when's funcall semantics (opcode 156 only —
+    /// the optimizable TEq that case/when emits).
+    pub teq_case: CodePtr,
+    /// TEq for rescue-clause matching (opcode 157): validates that
+    /// the clause is a Class/Module, then dispatches like `teq_case`.
+    pub teq_rescue: CodePtr,
     pub load_dvar: CodePtr,           // 148
     pub store_dvar: CodePtr,          // 149
     pub add: CodePtr,                 // 160
@@ -887,7 +893,10 @@ impl Codegen {
         self.dispatch[153] = h.le;
         self.dispatch[154] = h.gt;
         self.dispatch[155] = h.ge;
-        self.dispatch[156] = h.teq;
+        // The optimizable TEq opcode is only emitted for case/when and
+        // rescue matching, whose `===` uses funcall semantics.
+        self.dispatch[156] = h.teq_case;
+        self.dispatch[157] = h.teq_rescue;
 
         self.dispatch[160] = h.add;
         self.dispatch[161] = h.sub;

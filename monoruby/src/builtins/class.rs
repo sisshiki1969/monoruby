@@ -193,16 +193,18 @@ pub(crate) extern "C" fn class_alloc_func(_class_id: ClassId, globals: &mut Glob
 
 /// Validate a value used as a superclass for `Class.new`/`Class#initialize`.
 /// Raises TypeError with a CRuby-compatible message when the value is not a
-/// real (non-singleton) Class.
+/// real (non-singleton) Class. Same rules as the `class X < expr` keyword
+/// (see `Executor::expect_superclass`).
 fn expect_class_for_superclass(val: Value, globals: &Globals) -> Result<Module> {
     match val.is_class() {
         Some(class) if class.is_singleton().is_none() => Ok(class),
-        _ => {
-            let name = val.inspect(&globals.store);
-            Err(MonorubyErr::typeerr(format!(
-                "superclass must be an instance of Class (given an instance of {name})"
-            )))
-        }
+        Some(_) => Err(MonorubyErr::typeerr(
+            "can't make subclass of singleton class",
+        )),
+        None => Err(MonorubyErr::typeerr(format!(
+            "superclass must be an instance of Class (given an instance of {})",
+            val.get_real_class_name(&globals.store)
+        ))),
     }
 }
 

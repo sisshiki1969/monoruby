@@ -62,6 +62,13 @@ impl Codegen {
         let gt = self.a64_op_cmp(Cond::Gt, cmp_gt_values as *const () as u64);
         let ge = self.a64_op_cmp(Cond::Ge, cmp_ge_values as *const () as u64);
         let teq = self.a64_op_cmp(Cond::Eq, cmp_teq_values as *const () as u64);
+        // Funcall-semantics TEq for the optimizable opcode (case/when
+        // and rescue matching).
+        let teq_case = self.a64_op_cmp(Cond::Eq, cmp_teq_case_values as *const () as u64);
+        // RescueTEq: no fixnum fast path (a non-Module clause must
+        // raise TypeError, so everything goes through the runtime
+        // helper).
+        let teq_rescue = self.a64_op_cmp_no_opt(cmp_teq_rescue_values as *const () as u64);
         let method_def = self.a64_op_method_def();
         let send_simple = self.a64_op_send(true);
         let send = self.a64_op_send(false);
@@ -222,6 +229,8 @@ impl Codegen {
             gt,
             ge,
             teq,
+            teq_case,
+            teq_rescue,
             load_dvar,
             store_dvar,
             add: add_rr,

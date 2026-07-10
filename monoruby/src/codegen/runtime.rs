@@ -235,13 +235,13 @@ pub(super) extern "C" fn array_teq(
 ) -> Option<Value> {
     if let Some(lhs_ary) = lhs.try_array_ty() {
         for lhs in lhs_ary.iter().cloned() {
-            if op::cmp_teq_values(vm, globals, lhs, rhs)?.as_bool() {
+            if op::cmp_teq_case_values(vm, globals, lhs, rhs)?.as_bool() {
                 return Some(Value::bool(true));
             }
         }
         Some(Value::bool(false))
     } else {
-        op::cmp_teq_values(vm, globals, lhs, rhs)
+        op::cmp_teq_case_values(vm, globals, lhs, rhs)
     }
 }
 

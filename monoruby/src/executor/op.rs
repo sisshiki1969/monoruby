@@ -404,6 +404,49 @@ pub(crate) extern "C" fn cmp_teq_values(
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
+    cmp_teq_values_impl(vm, globals, lhs, rhs, false)
+}
+
+/// `===` dispatch for the *optimizable* TEq opcode, which bytecodegen
+/// only emits for case/when and rescue matching: CRuby dispatches
+/// those `===` calls with funcall semantics, so a private `===` is
+/// allowed (an explicit `a === b` compiles to the non-optimizable
+/// opcode and stays a public-only call).
+pub(crate) extern "C" fn cmp_teq_case_values(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    cmp_teq_values_impl(vm, globals, lhs, rhs, true)
+}
+
+/// `===` dispatch for rescue-clause matching (the RescueTEq opcode):
+/// the clause must be a Class or Module — CRuby raises TypeError
+/// before any `===` dispatch — and the call itself has funcall
+/// semantics like case/when.
+pub(crate) extern "C" fn cmp_teq_rescue_values(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    if lhs.is_class_or_module().is_none() {
+        vm.set_error(MonorubyErr::typeerr(
+            "class or module required for rescue clause",
+        ));
+        return None;
+    }
+    cmp_teq_values_impl(vm, globals, lhs, rhs, true)
+}
+
+fn cmp_teq_values_impl(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+    private_ok: bool,
+) -> Option<Value> {
     let b = match (lhs.unpack(), rhs.unpack()) {
         (RV::Nil, RV::Nil) => true,
         (RV::Nil, _) => false,
@@ -437,7 +480,7 @@ pub(crate) extern "C" fn cmp_teq_values(
             return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
         }
         _ => {
-            return vm.invoke_method_simple(globals, IdentId::_TEQ, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_TEQ, private_ok, lhs, &[rhs], None, None);
         }
     };
     Some(Value::bool(b))

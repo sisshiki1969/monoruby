@@ -160,7 +160,7 @@ impl<'a> JitContext<'a> {
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
                 state.flush_gp(ir);
                 if polymorphic {
-                    self.emit_generic_cmp(state, ir, kind, lhs, rhs);
+                    self.emit_generic_cmp(state, ir, kind, lhs, rhs, false);
                     state.def_rax2acc(ir, dst);
                     Ok(CompileResult::Continue)
                 } else {
@@ -194,6 +194,10 @@ impl<'a> JitContext<'a> {
         kind: CmpKind,
         lhs: SlotId,
         rhs: SlotId,
+        // `BinCmpBr` (the optimizable opcode: case/when and rescue
+        // matching) dispatches `===` with funcall semantics; a plain
+        // `BinCmp` (`a === b`) is a public-only call.
+        case_semantics: bool,
     ) {
         state.write_back_slots(ir, &[lhs, rhs]);
         // §9 9d-B: the generic comparison emits a C-ABI call; flush any
@@ -206,6 +210,9 @@ impl<'a> JitContext<'a> {
         match kind {
             CmpKind::Eq | CmpKind::Ne => {
                 ir.opt_eq_cmp(state, lhs, rhs, kind, cmp_generic_fn(kind))
+            }
+            CmpKind::TEq if case_semantics => {
+                ir.generic_binop(state, lhs, rhs, crate::executor::op::cmp_teq_case_values)
             }
             _ => ir.generic_binop(state, lhs, rhs, cmp_generic_fn(kind)),
         }
@@ -266,7 +273,7 @@ impl<'a> JitContext<'a> {
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
                 state.flush_gp(ir);
                 if polymorphic {
-                    self.emit_generic_cmp(state, ir, kind, lhs, rhs);
+                    self.emit_generic_cmp(state, ir, kind, lhs, rhs, true);
                     let src_idx = bc_pos + 1;
                     self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
                     return Ok(CompileResult::Continue);

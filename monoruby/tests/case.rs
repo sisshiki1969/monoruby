@@ -278,3 +278,101 @@ fn case_when_splat() {
         "#,
     ]);
 }
+
+#[test]
+fn case_calls_private_teq() {
+    // case/when dispatches `===` with funcall semantics (a private
+    // `===` is allowed), unlike an explicit `a === b`.
+    run_test(
+        r#"
+        klass = Class.new do
+          def ===(o); o == 1; end
+          private :===
+        end
+        matcher = klass.new
+        res = []
+        3.times do |i|
+          case i
+          when matcher then res << "match #{i}"
+          else res << "no #{i}"
+          end
+        end
+        begin
+          matcher === 1
+          res << "no error"
+        rescue NoMethodError
+          res << "NoMethodError"
+        end
+        res
+        "#,
+    );
+}
+
+// Drive the case/when `===` dispatch through the JIT tier: the
+// integration-test binaries use the production JIT thresholds, so the
+// construct lives in a method called >20 times. The two matcher
+// classes at the same call site make the comparison polymorphic,
+// forcing the generic-cmp lowering (which must use funcall semantics
+// for case/when: private `===` is still reachable).
+#[test]
+fn case_private_teq_jit() {
+    run_test(
+        r#"
+        matcher_a = Class.new do
+          def ===(x); x == :a; end
+          private :===
+        end.new
+        matcher_b = Class.new do
+          def ===(x); x == :b; end
+        end.new
+
+        def case_match(x, m)
+          case x
+          when m then "matcher"
+          when Symbol then "symbol"
+          else "other"
+          end
+        end
+
+        res = []
+        30.times do
+          res << case_match(:a, matcher_a)
+          res << case_match(:b, matcher_a)
+          res << case_match(:b, matcher_b)
+          res << case_match(1, matcher_b)
+        end
+        res
+        "#,
+    );
+}
+
+// Same for the splat form: `when *arr` goes through the array_teq
+// runtime helper, which must also dispatch `===` with funcall
+// semantics under the JIT.
+#[test]
+fn case_splat_teq_jit() {
+    run_test(
+        r#"
+        private_matcher = Class.new do
+          def ===(x); x == :hit; end
+          private :===
+        end.new
+
+        def case_splat(x, arr)
+          case x
+          when *arr then "in"
+          else "out"
+          end
+        end
+
+        res = []
+        list = [private_matcher, Integer]
+        30.times do
+          res << case_splat(:hit, list)
+          res << case_splat(7, list)
+          res << case_splat(:miss, list)
+        end
+        res
+        "#,
+    );
+}

@@ -660,6 +660,19 @@ impl TraceIr {
                         polymorphic: pc.opcode_sub() == 1,
                     }
                 }
+                157 => {
+                    // RescueTEq: the rescue-clause match. It only ever
+                    // executes inside an exception handler, and the
+                    // JIT's BB graph has no edge into handler blocks
+                    // (see `taint_for_unmodeled_rescue`), so the
+                    // compiler can never reach this opcode — exception
+                    // dispatch always side-exits to the interpreter,
+                    // whose opcode-157 handler does the clause
+                    // validation and funcall-`===`.
+                    unreachable!(
+                        "RescueTEq is handler-side only; the JIT does not visit exception-handler blocks"
+                    )
+                }
                 160..=170 => {
                     let kind = BinOpK::from(opcode - 160);
                     let dst = SlotId::from(op1_w1);

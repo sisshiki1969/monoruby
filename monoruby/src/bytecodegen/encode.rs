@@ -459,6 +459,11 @@ impl<'a> BytecodeGen<'a> {
                     .new_callsite_map_entry(self.iseq_id, bc_pos, callid);
                 Bytecode::from_with_class2(enc_www(160 + kind as u16, op1.0, op2.0, op3.0))
             }
+            BytecodeInst::RescueTEq { lhs, rhs } => {
+                let op1 = self.slot_id(&lhs);
+                let op2 = self.slot_id(&rhs);
+                Bytecode::from_with_class2(enc_www(157, op1.0, op1.0, op2.0))
+            }
             BytecodeInst::Cmp(kind, ret, (lhs, rhs), optimizable) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 let op2 = self.slot_id(&lhs);

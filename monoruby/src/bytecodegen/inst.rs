@@ -166,6 +166,13 @@ pub(super) enum BytecodeInst {
         lhs: BcReg,
         rhs: BcReg,
     },
+    /// `rescue` clause match: `lhs = lhs === rhs` where `lhs` (the
+    /// clause) must be a Class or Module (TypeError otherwise) and
+    /// `===` is dispatched with funcall semantics.
+    RescueTEq {
+        lhs: BcReg,
+        rhs: BcReg,
+    },
     /// Subject-less `case`/`when *arr` match: set `reg` to `true` if any
     /// element of the array in `reg` is truthy, `false` otherwise.
     ArrayAny {

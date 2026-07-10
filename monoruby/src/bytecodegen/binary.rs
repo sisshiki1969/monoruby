@@ -81,6 +81,28 @@ impl<'a> BytecodeGen<'a> {
         Ok(())
     }
 
+    ///
+    /// Generate a rescue-clause match + conditional branch (same shape
+    /// as `gen_teq_condbr`, but through the RescueTEq opcode, which
+    /// validates that the clause is a Class/Module and dispatches
+    /// `===` with funcall semantics).
+    ///
+    pub(super) fn gen_rescue_teq_condbr(
+        &mut self,
+        lhs: Node,
+        rhs: BcReg,
+        cont_pos: Label,
+        jmp_if_true: bool,
+    ) -> Result<()> {
+        let loc = lhs.loc;
+        let old = self.temp;
+        let lhs = self.push_expr(lhs)?.into();
+        self.emit(BytecodeInst::RescueTEq { lhs, rhs }, loc);
+        self.temp = old;
+        self.emit_condbr(lhs, cont_pos, jmp_if_true, true);
+        Ok(())
+    }
+
     pub(super) fn gen_opt_condbr(
         &mut self,
         jmp_if_true: bool,

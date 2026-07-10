@@ -2425,6 +2425,21 @@ impl Executor {
             .expect_string(globals)
     }
 
+    /// Validate the `class X < expr` superclass operand: it must be a
+    /// Class (not merely a Module), and not a singleton class.
+    fn expect_superclass(globals: &Globals, superclass: Value) -> Result<Module> {
+        let m = superclass.is_class().ok_or_else(|| {
+            MonorubyErr::typeerr(format!(
+                "superclass must be an instance of Class (given an instance of {})",
+                superclass.get_real_class_name(&globals.store)
+            ))
+        })?;
+        if m.is_singleton().is_some() {
+            return Err(MonorubyErr::typeerr("can't make subclass of singleton class"));
+        }
+        Ok(m)
+    }
+
     pub(crate) fn define_class(
         &mut self,
         globals: &mut Globals,
@@ -2489,7 +2504,7 @@ impl Executor {
                 };
                 if let Some(superclass) = superclass {
                     assert!(!is_module);
-                    let superclass_id = superclass.expect_class(globals)?.id();
+                    let superclass_id = Self::expect_superclass(globals, superclass)?.id();
                     if Some(superclass_id) != val.get_real_superclass().map(|m| m.id()) {
                         return Err(MonorubyErr::superclass_mismatch(name));
                     }
@@ -2500,7 +2515,7 @@ impl Executor {
                 let superclass = match superclass {
                     Some(superclass) => {
                         assert!(!is_module);
-                        superclass.expect_class(globals)?
+                        Self::expect_superclass(globals, superclass)?
                     }
                     None => globals.store.object_class(),
                 };
