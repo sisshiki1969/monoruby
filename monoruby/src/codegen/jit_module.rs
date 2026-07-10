@@ -109,12 +109,16 @@ pub(super) extern "C" fn handle_error(
                     // empty-exception guard; `EnsureEnd` restores it.
                     vm.defer_unwind(lfp);
                     ErrorReturn::goto(bc_base + ensure)
-                } else if lfp == target_lfp || meta.is_proc_method() {
-                    // Stop unwinding either at the matching target LFP
-                    // or at a `define_method` proc-method boundary, so
-                    // that `return` inside a wrapped block exits the
-                    // method rather than escaping to the block's
-                    // lexical enclosing scope.
+                } else if lfp == target_lfp {
+                    // Stop unwinding at the matching target LFP. (A
+                    // `return` written inside a `define_method` body
+                    // already targets that frame — `Lfp::outermost`
+                    // stops at the proc-method boundary — so a
+                    // MethodReturn merely *passing through* a
+                    // define_method frame toward an outer target, e.g.
+                    // a closure's `return` routed through
+                    // `define_method(:m) { |&b| b.call }`, must NOT be
+                    // stopped here.)
                     vm.take_error();
                     // This frame returns now; abandon any deferral it owns.
                     vm.discard_deferred_unwind(lfp);

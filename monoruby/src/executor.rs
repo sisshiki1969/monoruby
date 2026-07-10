@@ -1715,7 +1715,10 @@ impl Executor {
         {
             fid = globals.store[outer].func_id();
         }
-        globals.store[fid].is_method()
+        // A `define_method` body is a block-style func promoted to a
+        // method (its static Meta carries the proc-method bit): a `def`
+        // inside it is a nested definition too.
+        globals.store[fid].is_method() || globals.store[fid].meta().is_proc_method()
     }
 
     /// The definee a plain `def` at the current execution point

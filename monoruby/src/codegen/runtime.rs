@@ -1707,18 +1707,62 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Glob
     // returns from its own frame.
     let cfp = vm.cfp();
     let target_lfp = if globals[cfp.lfp().func_id()].is_block_style() {
-        cfp.outermost_lfp()
+        let target = cfp.outermost_lfp();
+        // A synchronous thread-body boundary (see
+        // `Executor::break_barriers`) also stops non-local returns: a
+        // bare `return` in a thread body raises LocalJumpError at the
+        // return site, rescuable inside the body (CRuby).
+        if !lfp_reachable_within_barrier(vm, target) {
+            vm.set_error(MonorubyErr::localjumperr_with_val("unexpected return", val));
+            return;
+        }
+        // A return whose home chain crosses a class/module body is
+        // invalid (CRuby: `class A; 1.times { return }; end` raises
+        // LocalJumpError at runtime).
+        let mut hop = cfp.lfp();
+        loop {
+            if globals[hop.func_id()].is_classdef() {
+                vm.set_error(MonorubyErr::localjumperr_with_val("unexpected return", val));
+                return;
+            }
+            if hop == target {
+                break;
+            }
+            match hop.outer() {
+                Some(outer) => hop = outer,
+                None => break,
+            }
+        }
+        target
     } else {
         cfp.lfp()
     };
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 
+/// Whether `target` is on the current stack, without crossing the
+/// innermost break barrier (a synchronous thread-body boundary).
+fn lfp_reachable_within_barrier(vm: &Executor, target: Lfp) -> bool {
+    let barrier = vm.break_barrier();
+    let mut cfp = Some(vm.cfp());
+    while let Some(f) = cfp {
+        if Some(f) == barrier {
+            return false;
+        }
+        if f.lfp() == target {
+            return true;
+        }
+        cfp = f.prev();
+    }
+    false
+}
+
 pub(super) extern "C" fn err_block_break(vm: &mut Executor, globals: &mut Globals, val: Value) {
-    // In a lambda (including a block promoted by Kernel#lambda), break
-    // is local: it exits the lambda itself, like return.
+    // In a lambda (including a block promoted by Kernel#lambda) and in
+    // a `define_method` body (which behaves exactly like a lambda),
+    // break is local: it exits the frame itself, like return.
     let lfp = vm.cfp().lfp();
-    if !globals[lfp.func_id()].is_block_style() {
+    if !globals[lfp.func_id()].is_block_style() || lfp.meta().is_proc_method() {
         vm.set_error(MonorubyErr::method_return(val, lfp));
         return;
     }
@@ -1731,24 +1775,8 @@ pub(super) extern "C" fn err_block_break(vm: &mut Executor, globals: &mut Global
     // frame is on this stack at all, so a proc whose creation scope has
     // returned (or lives on another thread/fiber stack) fails fast.
     let block_fid = lfp.func_id();
-    let outer_reachable = |vm: &Executor, outer: Lfp| {
-        let barrier = vm.break_barrier();
-        let mut cfp = Some(vm.cfp());
-        while let Some(f) = cfp {
-            if Some(f) == barrier {
-                // Crossing a synchronous thread-body boundary: the
-                // defining frame belongs to the spawning "thread".
-                return false;
-            }
-            if f.lfp() == outer {
-                return true;
-            }
-            cfp = f.prev();
-        }
-        false
-    };
     if let Some(outer) = lfp.outer()
-        && outer_reachable(vm, outer)
+        && lfp_reachable_within_barrier(vm, outer)
     {
         vm.set_error(MonorubyErr::block_break(val, block_fid, outer));
     } else {
