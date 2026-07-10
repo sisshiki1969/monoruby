@@ -535,7 +535,17 @@ struct BytecodeGen<'a> {
     /// loop information.
     loops: Vec<LoopInfo>, // (kind, label for exit, return register)
     /// ensure clause information.
-    ensure: Vec<Option<Node>>,
+    /// Lexical nesting depth of rescue clauses currently being
+    /// compiled: non-local exits restore `$!` only when they leave a
+    /// rescue clause (`$!` cannot have changed elsewhere).
+    rescue_depth: usize,
+    /// One entry per enclosing `begin` region (innermost last): the
+    /// region's `ensure` body (if any) and its `$!`-on-entry save slot
+    /// (present when the region has rescue clauses). Non-local exits
+    /// (`return`, `break`, `next`) crossing a region restore `$!` from
+    /// the slot and run the ensure body, innermost first — mirroring
+    /// CRuby's per-frame errinfo restore during unwinding.
+    ensure: Vec<(Option<Node>, Option<BcReg>)>,
     /// The name of the block param.
     block_param: Option<IdentId>,
     /// The label for redo.
@@ -550,7 +560,7 @@ struct BytecodeGen<'a> {
     /// Source info.
     sourceinfo: SourceInfoRef,
     /// Nesting depth of rescue blocks (for clearing $! on return).
-    rescue_depth: usize,
+
     /// Exception jump table.
     exception_table: Vec<ExceptionEntry>,
     /// Merge info.
@@ -591,13 +601,14 @@ impl<'a> BytecodeGen<'a> {
             labels: BytecodeLabels::new(), // The first label is for redo.
             loops: vec![],
             ensure: vec![],
+            rescue_depth: 0,
             block_param,
             redo_label: Label(0),
             retry_labels: vec![],
             temp: 0,
             temp_num: 0,
             sourceinfo,
-            rescue_depth: 0,
+
             exception_table: vec![],
             merge_info: HashMap::default(),
         };
@@ -806,9 +817,22 @@ impl<'a> BytecodeGen<'a> {
     /// Used by `break` / `next` so exiting the loop iteration still runs
     /// the `ensure` blocks it jumps out of.
     fn gen_loop_pending_ensures(&mut self, ensure_depth: usize) -> Result<()> {
-        let pending: Vec<Option<Node>> =
-            self.ensure[ensure_depth..].iter().rev().cloned().collect();
-        for ensure in pending {
+        let in_rescue = self.rescue_depth > 0;
+        let pending: Vec<_> = self.ensure[ensure_depth..].iter().rev().cloned().collect();
+        for (ensure, errinfo_save) in pending {
+            // Same unwinding protocol as `emit_ret`: restore the
+            // region's `$!` before running its ensure body.
+            if let Some(save) = errinfo_save
+                && in_rescue
+            {
+                self.emit(
+                    BytecodeInst::StoreGvar {
+                        val: save,
+                        name: IdentId::get_id("$!"),
+                    },
+                    Loc::default(),
+                );
+            }
             if let Some(ensure) = ensure {
                 self.gen_expr(ensure, UseMode2::NotUse)?;
             }
@@ -1046,25 +1070,33 @@ impl<'a> BytecodeGen<'a> {
         // a `return` appears inside an `ensure` block.  Without this, the
         // `return` in the ensure body would call `emit_ret` again, which would
         // re-generate the same ensure block, leading to unbounded recursion.
+        let in_rescue = self.rescue_depth > 0;
         let ensures: Vec<_> = std::mem::take(&mut self.ensure);
-        let ensure_nodes: Vec<_> = ensures.iter().rev().filter_map(|e| e.clone()).collect();
-        for ensure in ensure_nodes.into_iter() {
-            self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
+        let pending: Vec<_> = ensures.iter().rev().cloned().collect();
+        for (ensure, errinfo_save) in pending {
+            // When leaving a rescue clause, restore `$!` to the
+            // region's entry value *before* its ensure body runs (a
+            // nested region's ensure must see the outer exception, not
+            // the one just rescued), and emit it even without an
+            // ensure body so the value is right after this method
+            // returns. Exits from elsewhere can't have changed `$!`.
+            if let Some(save) = errinfo_save
+                && in_rescue
+            {
+                self.emit(
+                    BytecodeInst::StoreGvar {
+                        val: save,
+                        name: IdentId::get_id("$!"),
+                    },
+                    Loc::default(),
+                );
+            }
+            if let Some(ensure) = ensure {
+                self.gen_expr(ensure, UseMode2::NotUse)?;
+            }
         }
         self.ensure = ensures;
-        // Clear $! when returning from within a rescue block.
-        if self.rescue_depth > 0 {
-            let tmp = self.push().into();
-            self.emit_nil(tmp);
-            self.emit(
-                BytecodeInst::StoreGvar {
-                    val: tmp,
-                    name: IdentId::get_id("$!"),
-                },
-                Loc::default(),
-            );
-            self.pop();
-        }
+
         let ret = match src {
             Some(ret) => ret,
             None => self.pop().into(),

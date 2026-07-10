@@ -682,3 +682,68 @@ fn caught_throw_restores_errinfo() {
         "#,
     );
 }
+
+#[test]
+fn return_from_rescue_restores_errinfo() {
+    // A return leaving a rescue clause restores `$!` to each crossed
+    // begin region's entry value, innermost first, running ensure
+    // bodies against the restored value — so implicit exception-cause
+    // chaining keeps working after the method returns.
+    run_test(
+        r#"
+        def restore_check(log)
+          outer = StandardError.new "outer"
+          inner = StandardError.new "inner"
+          begin
+            raise outer
+          rescue
+            log << ($! == outer)
+            begin
+              raise inner
+            rescue
+              log << ($! == inner)
+              return
+            ensure
+              log << ($! == outer ? :outer : :wrong)
+            end
+          end
+        end
+        log = []
+        restore_check(log)
+        log << $!.inspect
+        begin
+          raise "original"
+        rescue
+          helper = proc do
+            begin
+              Object.new.missing_thing
+            rescue Exception => e
+              e
+            end
+          end
+          e1 = helper.call
+          log << [e1.class.to_s, e1.cause.class.to_s]
+          begin
+            no_such()
+          rescue NoMethodError => e2
+            log << e2.cause.class.to_s
+          end
+        end
+        log
+        "#,
+    );
+}
+
+#[test]
+fn exception_inspect_formats() {
+    run_test(
+        r#"
+        res = []
+        begin; raise; rescue => e; res << e.inspect << e.message; end
+        begin; raise RuntimeError; rescue => e; res << e.inspect; end
+        begin; raise RuntimeError, ""; rescue => e; res << e.inspect; end
+        begin; raise "msg"; rescue => e; res << e.inspect; end
+        res
+        "#,
+    );
+}
