@@ -93,6 +93,7 @@ impl<'a> BytecodeGen<'a> {
                     && matches!(
                         n.kind,
                         NodeKind::FuncCall { .. }
+                            | NodeKind::Ident(_)
                             | NodeKind::MethodCall { .. }
                             | NodeKind::Index { .. }
                             | NodeKind::BinOp(..)
