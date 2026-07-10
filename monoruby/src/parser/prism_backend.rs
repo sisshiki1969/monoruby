@@ -334,6 +334,7 @@ fn try_prism_inner(
             let msg = w.message();
             let verbose_only = if msg == "END in method; use at_exit"
                 || msg == "integer literal in flip-flop"
+                || msg == "regex literal in condition"
             {
                 false
             } else if msg == "possibly useless use of defined? in void context"
