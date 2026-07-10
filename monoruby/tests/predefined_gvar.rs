@@ -284,3 +284,25 @@ fn parse_time_warnings() {
         "#,
     );
 }
+
+#[test]
+fn shared_substring_snapshot_window() {
+    // Regression: `string_snapshot` on a CoW shared substring (as
+    // handed out by $' / $N / MatchData#[]) must present exactly the
+    // substring's window, not the root's whole buffer — String#scan
+    // and String#gsub-with-block snapshot their receiver.
+    run_test_once(
+        r#"
+        s = "HEADER-LINE\nmiddle\ntail-line\n" + "pad" * 20
+        s =~ /middle\n/
+        post = $'
+        res = [post.gsub(/^(.+)$/) { "X" + $1 }]
+        res << post.scan(/\w+/)
+        res << post.sub(/tail/) { "T" }
+        md = /middle\n/.match(s)
+        res << md.post_match.gsub(/^(.+)$/) { "Y" + $1 }
+        res << ("if " + "@c" + post.gsub(/^(.+)$/) { "  " + $1 } + "end\n")
+        res
+        "#,
+    );
+}
