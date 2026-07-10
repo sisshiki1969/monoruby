@@ -170,6 +170,10 @@ fn metaclass_is_classed_by_class_metaclass() {
           Class.singleton_class.class == Class.singleton_class,
           MCA.singleton_class.is_a?(Class),
           MCA.new.singleton_class.is_a?(Class),
+          # Metaclass of a metaclass: keeps the one-level class
+          # pointer and must neither loop nor recreate on each call.
+          MCA.singleton_class.singleton_class.to_s,
+          MCA.singleton_class.singleton_class.equal?(MCA.singleton_class.singleton_class),
         ]
         "#,
     );
