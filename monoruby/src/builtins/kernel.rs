@@ -3242,7 +3242,14 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let dup_module = globals.store.duplicate_module(module.id());
         return Ok(dup_module.as_val());
     }
-    let copy = self_val.dup();
+    let mut copy = self_val.dup();
+    // `dup` yields an instance of the receiver's *real* class: the
+    // singleton class and its contents (methods, constants) are not
+    // carried over — only `clone` copies them (CRuby semantics).
+    let real = self_val.real_class(&globals.store).id();
+    if copy.class() != real {
+        copy.change_class(real);
+    }
     copy_finalizers(globals, self_val.id(), copy.id());
     // When the class uses the default (no-op) copy hooks, skip the hook
     // dispatch entirely and return the raw shallow copy — `dup` always

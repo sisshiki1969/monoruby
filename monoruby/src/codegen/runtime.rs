@@ -1404,6 +1404,13 @@ pub(super) extern "C" fn singleton_define_method(
             None => Vec::new(),
         };
         globals.store[iseq].lexical_context = parent_ctx;
+        // `def expr.m` captures the *surrounding* cref, not the
+        // receiver's singleton: a plain nested `def` in its body
+        // targets the scope this definition appears in (CRuby:
+        // `def T.m; def nested; end; end` in class C defines C#nested).
+        if let Ok(cref_class) = vm.plain_def_definee(globals) {
+            globals.store[iseq].nested_definee = Some(cref_class);
+        }
     }
     // `def obj.foo` on a frozen object raises FrozenError — except for the
     // special singletons nil / true / false, which accept singleton methods
@@ -1415,13 +1422,22 @@ pub(super) extern "C" fn singleton_define_method(
             return None;
         }
     }
-    let class_id = match obj.get_singleton(&mut globals.store) {
-        Ok(val) => val.as_class_id(),
+    let singleton = match obj.get_singleton(&mut globals.store) {
+        Ok(val) => val,
         Err(err) => {
             vm.set_error(err);
             return None;
         }
     };
+    // The class actually being modified is the receiver's *singleton
+    // class* — it can be frozen independently of the receiver
+    // (`c.singleton_class.freeze; def c.foo`). CRuby names the
+    // receiver in the message: "can't modify frozen Class: #{obj}".
+    if singleton.is_frozen() {
+        vm.set_error(MonorubyErr::cant_modify_frozen(&globals.store, obj));
+        return None;
+    }
+    let class_id = singleton.as_class_id();
     match vm.add_public_method(globals, class_id, name, func) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {

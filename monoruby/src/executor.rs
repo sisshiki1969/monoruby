@@ -1699,35 +1699,81 @@ impl Executor {
         }
     }
 
+    /// Whether the current execution point sits directly inside a
+    /// *method* body (walking out of def-transparent eval frames), so
+    /// a `def` here is a nested definition.
+    fn def_in_method_body(&self, globals: &Globals) -> bool {
+        let mut fid = self.cfp().lfp().func_id();
+        // A `def` in eval'd source behaves as if written at the
+        // eval site, so walk out of def-transparent eval frames
+        // (receiver-anchored `class_eval` / `instance_eval`
+        // string bodies are not transparent — see
+        // `ISeqInfo::is_eval`).
+        while let Some(iseq) = globals.store[fid].is_iseq()
+            && globals.store[iseq].is_eval
+            && let Some(outer) = globals.store[iseq].outer
+        {
+            fid = globals.store[outer].func_id();
+        }
+        globals.store[fid].is_method()
+    }
+
+    /// The definee a plain `def` at the current execution point
+    /// targets — CRuby's cref class. Inside a method body, this is the
+    /// cref captured when that method was installed
+    /// (`ISeqInfo::nested_definee`); elsewhere it is the runtime class
+    /// context (class/module body, `class_eval` / `instance_eval`
+    /// receiver, or Object at the top level).
+    pub(crate) fn plain_def_definee(&mut self, globals: &mut Globals) -> Result<ClassId> {
+        let cref = self.get_class_context();
+        // A `def` executed directly inside a *method* body is a nested
+        // definition: its definee is the cref captured at the enclosing
+        // method's definition (not the runtime cref, which may be a
+        // caller's `instance_eval` / `class_eval` context leaking in
+        // through the shared cref stack). A `def` in any other frame
+        // (class/module body, `class_eval` / `instance_eval` block, or
+        // the top level) uses the runtime cref.
+        let in_method_body = self.def_in_method_body(globals);
+        Ok(if in_method_body {
+            let method_fid = self.method_func_id();
+            if let Some(iseq) = globals.store[method_fid].is_iseq()
+                && let Some(cref_class) = globals.store[iseq].nested_definee
+            {
+                cref_class
+            } else {
+                // No captured cref (a body installed outside the normal
+                // def paths, e.g. an UnboundMethod re-bound elsewhere):
+                // approximate with the owner class, falling back to the
+                // lexical class — and never a singleton owner, since a
+                // `def expr.m` body's cref is its surrounding scope.
+                match globals.store[method_fid].owner_class().last() {
+                    Some(&owner)
+                        if globals.store[owner]
+                            .get_module()
+                            .is_singleton()
+                            .is_none() =>
+                    {
+                        owner
+                    }
+                    _ => self.lexical_context_class_id(globals),
+                }
+            }
+        } else {
+            match cref.context {
+                DefinitionContext::Class(class_id) => class_id,
+                DefinitionContext::Receiver(receiver) => {
+                    globals.store.get_singleton(receiver)?.id()
+                }
+            }
+        })
+    }
+
     pub(crate) fn define_method(
         &mut self,
         globals: &mut Globals,
         name: IdentId,
         func: FuncId,
     ) -> Result<Value> {
-        let cref = self.get_class_context();
-        // A `def` executed directly inside a *method* body is a nested
-        // definition: its default definee is the enclosing method's
-        // lexical class (not the runtime cref, which may be a caller's
-        // `instance_eval` / `class_eval` context leaking in through the
-        // shared cref stack), and its visibility resets to public. A `def`
-        // in any other frame (class/module body, `class_eval` /
-        // `instance_eval` block, or the top level) uses the runtime cref.
-        let in_method_body = {
-            let mut fid = self.cfp().lfp().func_id();
-            // A `def` in eval'd source behaves as if written at the
-            // eval site, so walk out of def-transparent eval frames
-            // (receiver-anchored `class_eval` / `instance_eval`
-            // string bodies are not transparent — see
-            // `ISeqInfo::is_eval`).
-            while let Some(iseq) = globals.store[fid].is_iseq()
-                && globals.store[iseq].is_eval
-                && let Some(outer) = globals.store[iseq].outer
-            {
-                fid = globals.store[outer].func_id();
-            }
-            globals.store[fid].is_method()
-        };
         let current_func = self.definition_func_id(globals);
         if let Some(iseq) = globals.store[func].is_iseq() {
             // Inherit the enclosing method's lexical context. The
@@ -1747,25 +1793,14 @@ impl Executor {
                 (func.get() as u64) + ((name.get() as u64) << 32)
             )));
         }
-        let class_id = if in_method_body {
-            // The definee is the class that owns the enclosing method
-            // (CRuby's method cref class). For a method defined via
-            // `Class.new do … end` / `class_exec` / `instance_eval` / an
-            // `eval`ed body this is the dynamic class, not the lexically
-            // enclosing scope — so prefer the owner, falling back to the
-            // lexical class only when no owner is recorded.
-            match globals.store[self.method_func_id()].owner_class().last() {
-                Some(&owner) => owner,
-                None => self.lexical_context_class_id(globals),
-            }
-        } else {
-            match cref.context {
-                DefinitionContext::Class(class_id) => class_id,
-                DefinitionContext::Receiver(receiver) => {
-                    globals.store.get_singleton(receiver)?.id()
-                }
-            }
-        };
+        let cref = self.get_class_context();
+        let in_method_body = self.def_in_method_body(globals);
+        let class_id = self.plain_def_definee(globals)?;
+        // The freshly installed method captures this cref: a nested
+        // `def` in its body lands in the same class.
+        if let Some(iseq) = globals.store[func].is_iseq() {
+            globals.store[iseq].nested_definee = Some(class_id);
+        }
         // Defining a method modifies the target class/module; a frozen one
         // raises FrozenError. For a singleton class (`class << obj`), the
         // attached object's frozen state is what matters.

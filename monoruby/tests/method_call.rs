@@ -3198,3 +3198,108 @@ fn splat_expands_before_block_argument() {
         "#,
     );
 }
+
+#[test]
+fn nested_def_captures_cref() {
+    // A nested `def` targets the cref captured when the enclosing
+    // method was installed: `def T.m` captures the surrounding scope,
+    // a `def` inside `instance_eval` captures the receiver's
+    // singleton, `class << obj` bodies capture the singleton.
+    run_test_once(
+        r#"
+        res = []
+        class CrefCtx
+          T = Object.new
+          def T.defs_method
+            def inherited_method; :surrounding; end
+          end
+        end
+        CrefCtx::T.defs_method
+        res << CrefCtx.method_defined?(:inherited_method, false)
+        res << CrefCtx::T.respond_to?(:inherited_method)
+
+        obj = Object.new
+        class << obj
+          def m
+            def nested_in_sclass; :sclass; end
+          end
+        end
+        obj.m
+        res << obj.respond_to?(:nested_in_sclass)
+        res << Object.method_defined?(:nested_in_sclass)
+
+        class CrefCtx2
+          def self.cm
+            def nested_from_self; :c2; end
+          end
+        end
+        CrefCtx2.cm
+        res << CrefCtx2.method_defined?(:nested_from_self, false)
+
+        ie_obj = Object.new
+        ie_obj.instance_eval do
+          def create_in_ie(a = (def ie_arg_method; end))
+            def ie_body_method; end
+          end
+        end
+        ie_obj.create_in_ie
+        res << ie_obj.respond_to?(:ie_arg_method)
+        res << ie_obj.respond_to?(:ie_body_method)
+        res << Object.method_defined?(:ie_body_method)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frozen_singleton_class_def_raises() {
+    run_test_once(
+        r#"
+        res = []
+        c = Class.new
+        sc = c.singleton_class
+        sc.singleton_class.freeze
+        begin
+          def sc.foo; end
+          res << :no_error
+        rescue FrozenError => e
+          res << e.message.gsub(/0x[0-9a-f]+/, "0xX")
+        end
+        obj = Object.new
+        obj.freeze
+        begin
+          def obj.foo; end
+        rescue FrozenError => e
+          res << e.message.gsub(/0x[0-9a-f]+/, "0xX")
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn dup_drops_singleton_clone_keeps() {
+    run_test_once(
+        r#"
+        res = []
+        obj = Object.new
+        class << obj
+          DUP_CONST = 42
+        end
+        def obj.sm; :sm; end
+        d = obj.dup
+        res << d.respond_to?(:sm)
+        begin
+          class << d; DUP_CONST; end
+          res << :found
+        rescue NameError
+          res << :name_error
+        end
+        c = obj.clone
+        res << c.respond_to?(:sm) << c.sm
+        res << (class << c; DUP_CONST; end)
+        res << d.class.to_s << (d.frozen? == false)
+        res
+        "#,
+    );
+}
