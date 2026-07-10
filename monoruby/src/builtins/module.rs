@@ -2812,8 +2812,20 @@ fn ruby2_keywords(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let args = lfp.arg(0).as_array();
-    for arg in args.iter() {
+    let names = lfp.arg(0).as_array().iter().cloned().collect::<Vec<_>>();
+    ruby2_keywords_mark(vm, globals, class_id, &names)
+}
+
+/// Shared body of `Module#ruby2_keywords` and `main.ruby2_keywords`:
+/// validate each name, mark compatible methods (and the underlying
+/// block of a define_method proc-method), warn about incompatible ones.
+pub(super) fn ruby2_keywords_mark(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    class_id: ClassId,
+    names: &[Value],
+) -> Result<Value> {
+    for arg in names.iter() {
         // expect_symbol_or_string accepts Symbol and String (and rejects
         // anything else with TypeError "<obj> is not a symbol nor a
         // string"). We don't honour `to_str` here — CRuby's
@@ -2826,20 +2838,30 @@ fn ruby2_keywords(
                 class_id.get_name(&globals.store)
             )));
         }
-        // Even though we don't track the ruby2_keywords flag, we still
-        // emit the CRuby compatibility warning when the target method
-        // signature is incompatible (i.e. the method has no positional
-        // splat, has explicit keywords, or has a keyword splat — none
-        // of which can be marked ruby2_keywords by CRuby either). The
-        // message format mirrors CRuby's "Skipping set of
-        // ruby2_keywords flag for <name> (...)".
-        if let Ok((func_id, _, _)) = globals.store.find_method_for_class(class_id, name)
-            && let Some(reason) = ruby2_keywords_skip_reason(globals, func_id)
-        {
-            let msg = format!(
-                "Skipping set of ruby2_keywords flag for {name} ({reason})",
-            );
-            crate::value::emit_verbose_warning(vm, globals, &msg)?;
+        // Mark the method when its signature is compatible (a `*rest`,
+        // no keyword params / `**kw`, no post-rest requireds);
+        // otherwise emit CRuby's "Skipping set of ruby2_keywords flag
+        // for <name> (...)" compatibility warning.
+        if let Ok((func_id, _, _)) = globals.store.find_method_for_class(class_id, name) {
+            match ruby2_keywords_skip_reason(globals, func_id) {
+                Some(reason) => {
+                    let msg = format!(
+                        "Skipping set of ruby2_keywords flag for {name} ({reason})",
+                    );
+                    crate::value::emit_verbose_warning(vm, globals, &msg)?;
+                }
+                None => {
+                    globals.store[func_id].set_ruby2_keywords();
+                    // A define_method proc-method dispatches with the
+                    // *block's* FuncId in the frame (the wrapper jumps
+                    // straight to the block code), so the argument
+                    // marshaler consults that FuncInfo — mark it too.
+                    if let crate::globals::FuncKind::Proc(proc) = &globals.store[func_id].kind {
+                        let block_fid = proc.func_id();
+                        globals.store[block_fid].set_ruby2_keywords();
+                    }
+                }
+            }
         }
     }
     Ok(Value::nil())

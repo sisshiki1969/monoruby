@@ -128,18 +128,17 @@ fn main_using(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// - ruby2_keywords(*method_names) -> nil
 ///
-/// CRuby uses this to flag a method as a ruby2_keywords-style
-/// keyword-passthrough method. monoruby doesn't propagate keyword
-/// splat metadata, so this is a private no-op — the spec only asserts
-/// that `main` responds to a private `ruby2_keywords` method.
+/// A top-level `ruby2_keywords def m(*args)` marks the method (defined
+/// as a private method of Object) exactly like `Module#ruby2_keywords`.
 #[monoruby_builtin]
 fn main_ruby2_keywords(
-    _: &mut Executor,
-    _: &mut Globals,
-    _lfp: Lfp,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::nil())
+    let names = lfp.arg(0).as_array().iter().cloned().collect::<Vec<_>>();
+    super::module::ruby2_keywords_mark(vm, globals, OBJECT_CLASS, &names)
 }
 
 ///

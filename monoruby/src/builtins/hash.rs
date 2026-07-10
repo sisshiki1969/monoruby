@@ -13,6 +13,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.store[HASH_CLASS].set_alloc_func(hash_alloc_func);
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
     globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
+    globals.define_builtin_class_func(HASH_CLASS, "ruby2_keywords_hash", ruby2_keywords_hash, 1);
+    globals.define_builtin_class_func(HASH_CLASS, "ruby2_keywords_hash?", ruby2_keywords_hash_p, 1);
 
     globals.define_private_builtin_func_with(HASH_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func_with(HASH_CLASS, "default", default, 0, 1, false);
@@ -347,6 +349,58 @@ fn hash_from_array_pairs(
 /// Tries to convert obj into a Hash, using to_hash method.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/try_convert.html]
+///
+/// ### Hash.ruby2_keywords_hash
+/// - ruby2_keywords_hash(hash) -> Hash
+///
+/// Returns a duplicate of `hash` carrying the ruby2_keywords flag
+/// (a `*rest` splat whose final element carries the flag turns it
+/// back into keywords at dispatch).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/ruby2_keywords_hash.html]
+#[monoruby_builtin]
+fn ruby2_keywords_hash(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let h = lfp.arg(0);
+    if h.try_hash_ty().is_none() {
+        return Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into Hash",
+            h.get_real_class_name(&globals.store)
+        )));
+    }
+    // A full dup: preserves the receiver's class (Hash subclass) and
+    // instance variables, exactly like the generic Object#dup path.
+    let dup = h.dup();
+    dup.try_hash_ty().unwrap().set_ruby2_keywords_flag();
+    Ok(dup)
+}
+
+///
+/// ### Hash.ruby2_keywords_hash?
+/// - ruby2_keywords_hash?(hash) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/ruby2_keywords_hash=3f.html]
+#[monoruby_builtin]
+fn ruby2_keywords_hash_p(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let h = lfp.arg(0);
+    if h.try_hash_ty().is_none() {
+        return Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into Hash",
+            h.get_real_class_name(&globals.store)
+        )));
+    }
+    Ok(Value::bool(h.as_hashmap_inner().ruby2_keywords_flag()))
+}
+
 #[monoruby_builtin]
 fn try_convert(
     vm: &mut Executor,

@@ -60,6 +60,16 @@ impl Hashmap {
         *self.0.as_hashmap_inner_mut() = inner;
         self.0.write_barrier_bulk();
     }
+
+    /// Set / clear the ruby2_keywords flag (a plain bool — no GC edge,
+    /// so no write barrier is needed).
+    pub(crate) fn set_ruby2_keywords_flag(&mut self) {
+        self.0.as_hashmap_inner_mut().set_ruby2_keywords_flag();
+    }
+
+    pub(crate) fn unset_ruby2_keywords_flag(&mut self) {
+        self.0.as_hashmap_inner_mut().unset_ruby2_keywords_flag();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +100,13 @@ pub struct HashmapInner {
     /// a traversal holding a shared borrow of the hash (for iteration) can
     /// still record its presence here.
     iter_lev: std::cell::Cell<u32>,
+    /// CRuby's Hash ruby2_keywords flag: set on the hash a
+    /// `ruby2_keywords`-marked method packs its keywords into (and by
+    /// `Hash.ruby2_keywords_hash`). A later `*args` splat whose final
+    /// element carries this flag turns it back into keywords at
+    /// dispatch. Cleared by `clone` (`Hash#dup` drops the flag, as
+    /// CRuby; `Hash.ruby2_keywords_hash` re-sets it on its dup).
+    r2k: bool,
 }
 
 impl Clone for HashmapInner {
@@ -100,6 +117,7 @@ impl Clone for HashmapInner {
             default: self.default.clone(),
             content: self.content.clone(),
             iter_lev: std::cell::Cell::new(0),
+            r2k: false,
         }
     }
 }
@@ -172,6 +190,7 @@ impl HashmapInner {
             default: HashDefault::default(),
             content: HashContent::new(map),
             iter_lev: std::cell::Cell::new(0),
+            r2k: false,
         }
     }
 
@@ -180,6 +199,7 @@ impl HashmapInner {
             default: HashDefault::Value(default),
             content: HashContent::new(map),
             iter_lev: std::cell::Cell::new(0),
+            r2k: false,
         }
     }
 
@@ -188,7 +208,21 @@ impl HashmapInner {
             default: HashDefault::Proc(default_proc),
             content: HashContent::new(map),
             iter_lev: std::cell::Cell::new(0),
+            r2k: false,
         }
+    }
+
+    /// CRuby's Hash ruby2_keywords flag (see the field doc).
+    pub(crate) fn ruby2_keywords_flag(&self) -> bool {
+        self.r2k
+    }
+
+    pub(crate) fn set_ruby2_keywords_flag(&mut self) {
+        self.r2k = true;
+    }
+
+    pub(crate) fn unset_ruby2_keywords_flag(&mut self) {
+        self.r2k = false;
     }
 
     pub fn defalut_value(&self) -> Option<Value> {
