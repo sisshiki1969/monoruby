@@ -50,14 +50,19 @@ fn sclass_return_exits_enclosing_method() {
           end
           :outer
         end
-        def m2(flag)
+        def m2
           obj = Object.new
+          # A class body opens a fresh local scope, so gate on a global.
           class << obj
-            return :early if flag
+            return :early if $sclass_flag
           end
           :late
         end
-        [m1, m2(true), m2(false)]
+        $sclass_flag = true
+        a = m2
+        $sclass_flag = false
+        b = m2
+        [m1, a, b]
         "#,
     );
 }
