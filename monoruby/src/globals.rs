@@ -760,6 +760,11 @@ impl Globals {
                 if let Some(class_id) = receiver_class {
                     if let Some(info) = self.store.iseq_mut(fid) {
                         info.lexical_context.push(class_id);
+                        // A receiver-anchored eval (`class_eval` /
+                        // `instance_eval` with a string) defines
+                        // methods on its receiver through the runtime
+                        // cref, not at the eval site.
+                        info.is_eval = false;
                     }
                 }
                 #[cfg(feature = "emit-bc")]

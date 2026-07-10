@@ -3052,3 +3052,47 @@ fn zsuper_from_define_method_is_a_runtime_error() {
         "#,
     );
 }
+
+#[test]
+fn def_in_eval_uses_eval_site_scope() {
+    // A def in eval'd source behaves as if written at the eval site:
+    // inside a method it defines a public method on the method's
+    // owner (even when the whole thing runs under instance_exec,
+    // whose receiver cref must not capture it), while class_eval /
+    // instance_eval string bodies keep anchoring to their receiver.
+    run_test(
+        r#"
+        res = []
+        class EvalDefIM
+          def make
+            eval "def eval_defined_m; self; end", binding
+            eval_defined_m
+          end
+        end
+        env = Object.new
+        env.instance_exec do
+          o = EvalDefIM.new
+          res = [o.make == o, EvalDefIM.new.eval_defined_m.class.to_s,
+                 EvalDefIM.public_method_defined?(:eval_defined_m)]
+        end
+        class EvalDefCM
+          class << self
+            def make_c
+              eval "def eval_defined_cm; self; end"
+              eval_defined_cm
+            end
+          end
+        end
+        res << (EvalDefCM.make_c == EvalDefCM)
+        class EvalDefTarget; end
+        EvalDefTarget.class_eval "def ce_string_m; :ce; end"
+        res << EvalDefTarget.new.ce_string_m
+        obj = Object.new
+        obj.instance_eval "def ie_string_m; :ie; end"
+        res << obj.ie_string_m
+        eval "def toplevel_eval_def_m; :t; end"
+        res << Object.private_method_defined?(:toplevel_eval_def_m)
+        res
+        "#,
+    );
+}

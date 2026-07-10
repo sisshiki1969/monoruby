@@ -1700,7 +1700,21 @@ impl Executor {
         // shared cref stack), and its visibility resets to public. A `def`
         // in any other frame (class/module body, `class_eval` /
         // `instance_eval` block, or the top level) uses the runtime cref.
-        let in_method_body = globals.store[self.cfp().lfp().func_id()].is_method();
+        let in_method_body = {
+            let mut fid = self.cfp().lfp().func_id();
+            // A `def` in eval'd source behaves as if written at the
+            // eval site, so walk out of def-transparent eval frames
+            // (receiver-anchored `class_eval` / `instance_eval`
+            // string bodies are not transparent — see
+            // `ISeqInfo::is_eval`).
+            while let Some(iseq) = globals.store[fid].is_iseq()
+                && globals.store[iseq].is_eval
+                && let Some(outer) = globals.store[iseq].outer
+            {
+                fid = globals.store[outer].func_id();
+            }
+            globals.store[fid].is_method()
+        };
         let current_func = self.definition_func_id(globals);
         if let Some(iseq) = globals.store[func].is_iseq() {
             // Inherit the enclosing method's lexical context. The

@@ -93,6 +93,16 @@ pub struct ISeqInfo {
     ///
     pub outer: Option<ISeqId>,
     ///
+    /// Whether this ISeq is a `def`-transparent eval frame: a `def`
+    /// in `eval`'d (or `binding.eval`'d) source behaves as if written
+    /// at the eval site, so the definee search walks out of this
+    /// frame. `class_eval` / `instance_eval` string bodies are *not*
+    /// transparent — they anchor `def` to their receiver (via the
+    /// runtime cref the builtin pushes), and reset this flag in
+    /// `compile_script_eval`.
+    ///
+    pub(crate) is_eval: bool,
+    ///
     /// Name of this function.
     ///
     name: Option<IdentId>,
@@ -212,6 +222,7 @@ impl ISeqInfo {
             func_id: id,
             mother,
             outer,
+            is_eval: false,
             name,
             bytecode: None,
             loc,
