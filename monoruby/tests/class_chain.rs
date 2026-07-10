@@ -147,3 +147,30 @@ fn superclass_must_be_a_class() {
         "#,
     );
 }
+
+#[test]
+fn metaclass_is_classed_by_class_metaclass() {
+    // MRI's eigenclass model (one level deep): the class of a class's
+    // metaclass is Class's metaclass, a module's metaclass is classed
+    // by Module's metaclass, and Class's own metaclass is its own
+    // class. `.class` still reports Class everywhere (it skips
+    // singletons), and plain objects' singleton classes are untouched.
+    run_test(
+        r#"
+        class MCA; end
+        class MCH < MCA; end
+        module MCM; end
+        [
+          MCA.singleton_class.is_a?(Class.singleton_class),
+          MCM.singleton_class.is_a?(Module.singleton_class),
+          MCH.singleton_class.superclass == MCA.singleton_class,
+          MCA.singleton_class.class.to_s,
+          MCM.singleton_class.class.to_s,
+          Object.new.singleton_class.class.to_s,
+          Class.singleton_class.class == Class.singleton_class,
+          MCA.singleton_class.is_a?(Class),
+          MCA.new.singleton_class.is_a?(Class),
+        ]
+        "#,
+    );
+}

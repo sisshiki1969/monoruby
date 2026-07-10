@@ -770,7 +770,13 @@ impl ClassInfoTable {
         let original_obj = self.get_module(original);
         if original_obj.as_val().ty() == Some(ObjTy::CLASS) {
             let class = self[original_obj.as_val().class()].get_module();
-            if original_obj.is_singleton().is_none() && class.is_singleton().is_some() {
+            // The metaclass exists iff the class field already points
+            // at a singleton attached to us. (Checking attachment —
+            // not just singleton-ness — matters for metaclasses of
+            // metaclasses, whose class field starts out pointing at a
+            // singleton attached to something else.)
+            if class.is_singleton().is_some_and(|attached| attached.id() == original_obj.as_val().id())
+            {
                 return class;
             }
             let super_singleton = match original_obj.superclass_id() {
@@ -780,10 +786,21 @@ impl ClassInfoTable {
             let mut original_obj = original_obj.as_val();
             let mut singleton = self.new_singleton_class(super_singleton, original_obj, class.id());
             original_obj.change_class(singleton.id());
+            // MRI's eigenclass model: the class of a metaclass is the
+            // metaclass of the class's class — so S(A).class is
+            // S(Class), which is what makes
+            // `A.singleton_class.is_a?(Class.singleton_class)` hold.
+            // Class's own metaclass is its own class (the
+            // self-referential root that terminates the recursion).
             let class_class = if class.id() == original {
                 singleton.id()
+            } else if class.is_singleton().is_some() {
+                // Building a metaclass of a metaclass: keep the
+                // previous one-level model (MRI's full
+                // meta-metaclass tower is not modeled).
+                class.id()
             } else {
-                self.get_module(class.id()).id()
+                self.get_metaclass(class.id()).id()
             };
             singleton.change_class(class_class);
             #[cfg(debug_assertions)]
@@ -819,7 +836,15 @@ impl ClassInfoTable {
         }
         let mut singleton = self.new_singleton_class(org_class, obj, org_class.id());
         obj.change_class(singleton.id());
-        let singleton_meta = org_class.get_real_class().as_val().class();
+        // MRI's eigenclass model: a module's metaclass is classed by
+        // Module's metaclass (classes route through `get_metaclass`,
+        // which does the same with Class). A plain object's singleton
+        // class keeps pointing at the receiver's real class's class.
+        let singleton_meta = if obj.is_class_or_module().is_some() {
+            self.get_metaclass(org_class.id()).id()
+        } else {
+            org_class.get_real_class().as_val().class()
+        };
         singleton.change_class(singleton_meta);
         #[cfg(debug_assertions)]
         {
