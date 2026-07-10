@@ -248,6 +248,10 @@ struct CallSite {
     /// Bypass `private` visibility. Set for the privileged
     /// `recv.__builtin_initialize__(...)` intrinsic spelling.
     bypass_visibility: bool,
+    /// A "variable call" (bare identifier, no receiver / args /
+    /// parens): a failed lookup raises NameError instead of
+    /// NoMethodError.
+    vcall: bool,
 }
 
 impl CallSite {
@@ -276,6 +280,7 @@ impl CallSite {
             dst,
             forwarding,
             bypass_visibility: false,
+            vcall: false,
         }
     }
 

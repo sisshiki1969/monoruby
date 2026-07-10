@@ -2953,3 +2953,37 @@ fn safe_nav_assign_jit() {
         "class C; attr_accessor :x; end",
     );
 }
+
+#[test]
+fn vcall_raises_name_error() {
+    // A bare identifier (a "variable call" — could as well have been
+    // a local variable) raises NameError when undefined; an
+    // unambiguous method call raises NoMethodError.
+    run_test(
+        r#"
+        res = []
+        check = proc do |blk|
+          begin
+            blk.call
+            "no error"
+          rescue NoMethodError => e
+            "NoMethodError"
+          rescue NameError => e
+            "NameError: #{e.name}"
+          end
+        end
+        res << check.call(proc { some_undefined_bare_name })
+        res << check.call(proc { some_undefined_bare_name() })
+        res << check.call(proc { self.some_undefined_bare_name })
+        res << check.call(proc { eval("_9999") })
+        # A user-defined method_missing still catches vcalls.
+        o = Object.new
+        def o.method_missing(name, *args) = "mm:#{name}"
+        res << o.instance_eval { completely_undefined }
+        # ...and the default method_missing after it stays NoMethodError
+        # for a plain call shape.
+        res << check.call(proc { self.another_undefined_one })
+        res
+        "#,
+    );
+}

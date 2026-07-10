@@ -164,6 +164,7 @@ impl<'a> BytecodeGen<'a> {
                         Some(base),
                         arglist,
                         false,
+                        false,
                         UseMode2::Store(dst),
                         loc,
                     )?;
@@ -304,6 +305,7 @@ impl<'a> BytecodeGen<'a> {
                     Some(receiver),
                     arglist,
                     safe_nav,
+                    false,
                     UseMode2::Store(dst),
                     loc,
                 )?;
@@ -314,7 +316,7 @@ impl<'a> BytecodeGen<'a> {
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                self.gen_method_call(method, None, arglist, safe_nav, UseMode2::Store(dst), loc)?;
+                self.gen_method_call(method, None, arglist, safe_nav, false, UseMode2::Store(dst), loc)?;
             }
             NodeKind::Return(box val) => {
                 if self.is_escaping_block() {
@@ -473,6 +475,7 @@ impl<'a> BytecodeGen<'a> {
                         IdentId::_INDEX,
                         Some(base),
                         arglist,
+                        false,
                         false,
                         use_mode,
                         loc,
@@ -662,6 +665,7 @@ impl<'a> BytecodeGen<'a> {
                     Some(receiver),
                     arglist,
                     safe_nav,
+                    false,
                     use_mode,
                     loc,
                 );
@@ -672,7 +676,7 @@ impl<'a> BytecodeGen<'a> {
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                return self.gen_method_call(method, None, arglist, safe_nav, use_mode, loc);
+                return self.gen_method_call(method, None, arglist, safe_nav, false, use_mode, loc);
             }
             NodeKind::Super(arglist) => {
                 return self.gen_super(arglist.map(|arglist| *arglist), use_mode, loc);
@@ -707,7 +711,7 @@ impl<'a> BytecodeGen<'a> {
                     return Ok(());
                 }
                 let arglist = ArgList::from_args(vec![expr]);
-                return self.gen_method_call(method, None, arglist, false, use_mode, loc);
+                return self.gen_method_call(method, None, arglist, false, false, use_mode, loc);
             }
             NodeKind::Yield(arglist) => {
                 return self.gen_yield(*arglist, use_mode, loc);
@@ -715,7 +719,7 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
                 let method = IdentId::get_id_from_string(method);
-                return self.gen_method_call(method, None, arglist, false, use_mode, loc);
+                return self.gen_method_call(method, None, arglist, false, true, use_mode, loc);
             }
             NodeKind::If {
                 box cond,
@@ -1015,6 +1019,7 @@ impl<'a> BytecodeGen<'a> {
                         IdentId::get_id("undef_method"),
                         None,
                         arglist,
+                        false,
                         false,
                         UseMode2::NotUse,
                         loc,

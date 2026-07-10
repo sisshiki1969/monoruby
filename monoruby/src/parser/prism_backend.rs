@@ -4139,6 +4139,15 @@ impl<'pr> Lowerer<'pr> {
             });
         }
 
+        // A "variable call" — a bare identifier with no receiver,
+        // arguments, or parentheses (`foo` as opposed to `foo()` /
+        // `self.foo`). Lowered to its own node kind because a failed
+        // lookup must raise NameError ("undefined local variable or
+        // method ...") instead of NoMethodError.
+        if node.is_variable_call() {
+            return Ok(Node::new_identifier(method, loc));
+        }
+
         let mut arglist = crate::ast::ArgList::default();
         arglist.args = args;
         arglist.kw_args = kw_args;

@@ -123,6 +123,14 @@ pub struct Executor {
     /// never mis-attribute a haystack — it only falls back to copying.
     sp_match_haystack: Option<Value>,
     temp_stack: Vec<Value>,
+    /// Whether the method_missing dispatch currently being set up came
+    /// from a "variable call" (bare identifier). Consumed
+    /// (read-and-cleared) by the default `BasicObject#method_missing`,
+    /// which raises NameError for a vcall and NoMethodError otherwise,
+    /// mirroring CRuby's call-status VCALL flag. Every method_missing
+    /// dispatch site overwrites it, so it never carries stale state
+    /// into a later dispatch.
+    method_missing_vcall: bool,
     require_level: usize,
     /// Stack of canonical paths currently being executed via `require` /
     /// autoload. Used so that `Module#autoload :Foo, path` can detect
@@ -162,6 +170,7 @@ impl std::default::Default for Executor {
             sp_match_regex: None,
             sp_match_haystack: None,
             temp_stack: vec![],
+            method_missing_vcall: false,
             require_level: 0,
             loading_paths: vec![],
             catch_tags: vec![],
@@ -1023,6 +1032,18 @@ impl Executor {
         self.exception.as_ref()
     }
 
+    /// Read-and-clear the vcall marker for the method_missing dispatch
+    /// currently being executed (see the field docs).
+    pub(crate) fn take_method_missing_vcall(&mut self) -> bool {
+        std::mem::take(&mut self.method_missing_vcall)
+    }
+
+    /// Mark the method_missing dispatch being set up as a plain
+    /// (non-vcall) one.
+    pub(crate) fn reset_method_missing_vcall(&mut self) {
+        self.method_missing_vcall = false;
+    }
+
     pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
         let mut err = self.take_error();
         let explicit_cause = err.explicit_cause;
@@ -1819,6 +1840,7 @@ impl Executor {
             Ok(id) => id,
             Err(original_err) => {
                 // Fall back to method_missing, matching CRuby behavior.
+                self.method_missing_vcall = false;
                 match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
                     Ok(mm_func_id) => {
                         let mut mm_args = Vec::with_capacity(args.len() + 1);
@@ -1866,6 +1888,7 @@ impl Executor {
             Ok(func_id) => self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args),
             Err(original_err) => {
                 // Fall back to method_missing, matching CRuby behavior.
+                self.method_missing_vcall = false;
                 match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
                     Ok(mm_func_id) => {
                         let mut mm_args = Vec::with_capacity(args.len() + 1);
@@ -1908,6 +1931,7 @@ impl Executor {
     ) -> Option<Value> {
         // Extract all needed fields from callsite before we mutably borrow self/globals.
         let cs = &globals.store[callsite];
+        self.method_missing_vcall = cs.vcall;
         let cs_name = cs.name;
         let cs_args = cs.args;
         let cs_pos_num = cs.pos_num;

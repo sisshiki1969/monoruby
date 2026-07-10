@@ -490,6 +490,7 @@ pub(crate) fn method_to_proc_body(
     if let Some(target) = method.method_missing_name() {
         // Mirror `Method#call`: dispatch `receiver.method_missing(name, …)`
         // by name so a later `method_missing` redefinition is honored.
+        vm.reset_method_missing_vcall();
         let mut mm_args = vec![Value::symbol(target)];
         mm_args.extend(args);
         return vm.invoke_method_inner(
