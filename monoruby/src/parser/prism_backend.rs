@@ -1338,7 +1338,23 @@ impl<'pr> Lowerer<'pr> {
             },
             prism::Node::DefinedNode { .. } => {
                 let n = node.as_defined_node().unwrap();
-                let inner = self.lower_node(&n.value())?;
+                let value = n.value();
+                // `defined?($x ||= v)` must classify as "assignment", so
+                // lower the or-write directly (without the definedness
+                // guard used for evaluation, which would make it an If
+                // node and classify as "expression"). defined? never
+                // evaluates assignments, so the uninitialized-global
+                // warning the guard suppresses cannot fire here.
+                let inner = if let Some(gw) = value.as_global_variable_or_write_node() {
+                    let target = Node {
+                        kind: NodeKind::GlobalVar(constant_name(&gw.name())?),
+                        loc: location_to_loc(&gw.name_loc()),
+                    };
+                    let inner_loc = location_to_loc(&value.location());
+                    self.build_short_circuit_assign(BinOp::LOr, target, &gw.value(), inner_loc)?
+                } else {
+                    self.lower_node(&value)?
+                };
                 Node {
                     kind: NodeKind::Defined(Box::new(inner)),
                     loc,
