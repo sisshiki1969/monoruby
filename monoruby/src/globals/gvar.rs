@@ -114,7 +114,31 @@ impl GvarTable {
     /// This takes `&mut Executor` and `&mut Globals` because hooked variables
     /// may need to mutate runtime state (e.g. `$~` writes).
     pub fn get(vm: &mut Executor, globals: &mut Globals, name: IdentId) -> Value {
-        Self::lookup(vm, globals, name).unwrap_or_default()
+        match Self::lookup(vm, globals, name) {
+            Some(v) => v,
+            None => {
+                // Reading a never-assigned ordinary global warns in
+                // verbose mode. Restricted to plain identifier names:
+                // punctuation/dash specials read as nil silently, and
+                // hidden internals (`$__flip_flop_N`, …) and hooked
+                // entries whose getter reported "not present" (`$1`
+                // with no match) must not warn either.
+                if !globals.gvars.index.contains_key(&name) {
+                    let n = name.get_name();
+                    if !n.starts_with("$__")
+                        && n[1..].starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                        && n != "$FILENAME"
+                        && verbose_mode(globals)
+                    {
+                        let _ = vm.ruby_warn(
+                            globals,
+                            &format!("warning: global variable '{n}' not initialized"),
+                        );
+                    }
+                }
+                Value::nil()
+            }
+        }
     }
 
     /// Internal lookup that propagates the hook getter's "exists or not"
@@ -268,6 +292,47 @@ impl GvarTable {
     }
 }
 
+/// `$VERBOSE` is exactly `true` (nil = quiet, false = normal).
+fn verbose_mode(globals: &mut Globals) -> bool {
+    globals
+        .get_gvar(IdentId::get_id("$VERBOSE"))
+        .is_some_and(|v| v.as_bool())
+}
+
+/// Deprecation warning for the record/field separator globals (nil
+/// assignments are fine).
+fn warn_deprecated_separator(vm: &mut Executor, globals: &mut Globals, name: &str, val: Value) {
+    if !val.is_nil() {
+        warn_deprecated(vm, globals, &format!("warning: non-nil '{name}' is deprecated"));
+    }
+}
+
+/// Emit a deprecation warning through `Kernel#__warn_deprecated` so
+/// CRuby's gating applies: silent unless `Warning[:deprecated]` is
+/// enabled or `$VERBOSE` is true, and a user-overridden Warning.warn
+/// takes effect. The helper lives in startup.rb, so warnings during
+/// bootstrap (before it exists) stay silent, and a failing warning
+/// never turns the triggering operation into an error.
+fn warn_deprecated(vm: &mut Executor, globals: &mut Globals, msg: &str) {
+    let main = globals.main_object;
+    if globals
+        .store
+        .check_method(main, IdentId::get_id("__warn_deprecated"))
+        .is_none()
+    {
+        return;
+    }
+    let msg = Value::string(msg.to_string());
+    let _ = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("__warn_deprecated"),
+        main,
+        &[msg],
+        None,
+        None,
+    );
+}
+
 /// CRuby installs setter hooks on a number of special globals that
 /// validate or coerce the assigned value, or reject the write outright.
 /// monoruby keeps most of them as plain [`GvarEntry::Simple`] storage
@@ -317,11 +382,16 @@ fn write_special_check(
         // (registered in `init_builtin_gvars`), but the alias name
         // still reaches this check, so match it too for the error
         // message's sake.
-        "$/" | "$-0" => frozen_string_or_nil(&n, val),
+        "$/" | "$-0" => {
+            let val = frozen_string_or_nil(&n, val)?;
+            warn_deprecated_separator(vm, globals, &n, val);
+            Ok(val)
+        }
         // Output record / field separators: String or nil, stored
         // as-is (CRuby does not copy these).
         "$\\" | "$," => {
             if val.is_nil() || val.is_rstring().is_some() {
+                warn_deprecated_separator(vm, globals, &n, val);
                 Ok(val)
             } else {
                 Err(MonorubyErr::typeerr(format!(
@@ -332,6 +402,7 @@ fn write_special_check(
         // The input field separator additionally accepts a Regexp.
         "$;" => {
             if val.is_nil() || val.is_rstring().is_some() || val.is_regex().is_some() {
+                warn_deprecated_separator(vm, globals, &n, val);
                 Ok(val)
             } else {
                 Err(MonorubyErr::typeerr(format!(
@@ -633,6 +704,38 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
     // restores `$.` verbatim — a nil default would blow up the
     // restore.
     globals.set_gvar(IdentId::get_id("$."), Value::integer(0));
+
+    // `$=` (the pre-1.9 case-insensitivity toggle) is a defunct
+    // special: it reads as false and assignments are ignored, with a
+    // verbose-mode warning on both, matching CRuby.
+    fn get_ignorecase(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        _name: IdentId,
+    ) -> Option<Value> {
+        warn_deprecated(vm, globals, "warning: variable $= is no longer effective");
+        Some(Value::bool(false))
+    }
+
+    fn set_ignorecase(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        _name: IdentId,
+        _val: Value,
+    ) -> Result<()> {
+        warn_deprecated(
+            vm,
+            globals,
+            "warning: variable $= is no longer effective; ignored",
+        );
+        Ok(())
+    }
+
+    globals.define_hooked_variable(
+        IdentId::get_id("$="),
+        get_ignorecase,
+        Some(set_ignorecase),
+    );
 
     // --- Command-line flag mirrors -------------------------------------------
 

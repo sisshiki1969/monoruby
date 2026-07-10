@@ -924,7 +924,23 @@ impl<'pr> Lowerer<'pr> {
                     kind: NodeKind::GlobalVar(constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
-                self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
+                // `$x ||= v` must not fire the verbose-mode
+                // "uninitialized global" warning for its read (CRuby
+                // treats lazy initialization as fine), so guard the
+                // short-circuit read behind a definedness check:
+                // if defined?($x) then $x ||= v else $x = v end
+                let assign = Node::new_mul_assign(
+                    vec![target.clone()],
+                    vec![self.lower_node(&n.value())?],
+                );
+                let or_assign =
+                    self.build_short_circuit_assign(BinOp::LOr, target.clone(), &n.value(), loc)?;
+                Node::new_if(
+                    Node::new(NodeKind::Defined(Box::new(target)), loc),
+                    or_assign,
+                    assign,
+                    loc,
+                )
             }
             prism::Node::GlobalVariableAndWriteNode { .. } => {
                 let n = node.as_global_variable_and_write_node().unwrap();
@@ -1322,7 +1338,23 @@ impl<'pr> Lowerer<'pr> {
             },
             prism::Node::DefinedNode { .. } => {
                 let n = node.as_defined_node().unwrap();
-                let inner = self.lower_node(&n.value())?;
+                let value = n.value();
+                // `defined?($x ||= v)` must classify as "assignment", so
+                // lower the or-write directly (without the definedness
+                // guard used for evaluation, which would make it an If
+                // node and classify as "expression"). defined? never
+                // evaluates assignments, so the uninitialized-global
+                // warning the guard suppresses cannot fire here.
+                let inner = if let Some(gw) = value.as_global_variable_or_write_node() {
+                    let target = Node {
+                        kind: NodeKind::GlobalVar(constant_name(&gw.name())?),
+                        loc: location_to_loc(&gw.name_loc()),
+                    };
+                    let inner_loc = location_to_loc(&value.location());
+                    self.build_short_circuit_assign(BinOp::LOr, target, &gw.value(), inner_loc)?
+                } else {
+                    self.lower_node(&value)?
+                };
                 Node {
                     kind: NodeKind::Defined(Box::new(inner)),
                     loc,
