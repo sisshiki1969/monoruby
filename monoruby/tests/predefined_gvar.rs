@@ -168,3 +168,42 @@ fn load_path_aliases_share_identity() {
         "#,
     );
 }
+
+#[test]
+fn gvar_warnings() {
+    // Deprecation warnings for the separator globals and $= are gated
+    // on Warning[:deprecated] (or $VERBOSE == true); the
+    // uninitialized-global warning on $VERBOSE only. `||=` lazy
+    // initialization never warns. Warnings are routed through
+    // Kernel#warn / Warning.warn, so a captured $stderr sees them.
+    run_test_once(
+        r#"
+        def cap
+          saved = $stderr
+          buf = +""
+          io = Object.new
+          io.define_singleton_method(:write) { |*a| a.each { |x| buf << x.to_s } }
+          $stderr = io
+          yield
+          buf
+        ensure
+          $stderr = saved
+        end
+        res = []
+        Warning[:deprecated] = true
+        res << cap { $/ = "x"; $/ = "\n" }.scan(/warning: [^\n]+/)
+        res << cap { $, = "y"; $, = nil }.scan(/warning: [^\n]+/)
+        res << cap { $; = "z"; $; = nil }.scan(/warning: [^\n]+/)
+        res << cap { a = $= }.scan(/no longer effective[^\n]*/)
+        res << cap { $= = 1 }.scan(/no longer effective[^\n]*/)
+        Warning[:deprecated] = false
+        res << cap { $\ = "w"; $\ = nil }.empty?
+        saved_verbose = $VERBOSE
+        $VERBOSE = true
+        res << cap { $completely_uninit_gvar_zz }.scan(/warning: [^\n]+/)
+        res << cap { $lazy_init_gvar_zz ||= 5 }.empty?
+        $VERBOSE = saved_verbose
+        res
+        "#,
+    );
+}

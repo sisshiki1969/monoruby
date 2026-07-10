@@ -924,7 +924,23 @@ impl<'pr> Lowerer<'pr> {
                     kind: NodeKind::GlobalVar(constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
-                self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
+                // `$x ||= v` must not fire the verbose-mode
+                // "uninitialized global" warning for its read (CRuby
+                // treats lazy initialization as fine), so guard the
+                // short-circuit read behind a definedness check:
+                // if defined?($x) then $x ||= v else $x = v end
+                let assign = Node::new_mul_assign(
+                    vec![target.clone()],
+                    vec![self.lower_node(&n.value())?],
+                );
+                let or_assign =
+                    self.build_short_circuit_assign(BinOp::LOr, target.clone(), &n.value(), loc)?;
+                Node::new_if(
+                    Node::new(NodeKind::Defined(Box::new(target)), loc),
+                    or_assign,
+                    assign,
+                    loc,
+                )
             }
             prism::Node::GlobalVariableAndWriteNode { .. } => {
                 let n = node.as_global_variable_and_write_node().unwrap();

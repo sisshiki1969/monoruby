@@ -423,6 +423,14 @@ module Kernel
     nil
   end
   module_function :warn
+
+  # Internal: deprecation warnings raised from the Rust runtime (e.g.
+  # assigning non-nil to $/). Routed through Kernel#warn so the
+  # :deprecated category gating and Warning.warn overrides apply.
+  def __warn_deprecated(msg)
+    warn(msg, category: :deprecated)
+  end
+  module_function :__warn_deprecated
 end
 
 module Process
