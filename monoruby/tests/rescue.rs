@@ -747,3 +747,38 @@ fn exception_inspect_formats() {
         "#,
     );
 }
+
+#[test]
+fn break_next_from_rescue_in_while_restores_errinfo() {
+    // break / next leaving a rescue clause inside a `while` loop use
+    // the same per-region restore protocol as return: the region's
+    // ensure runs against the restored (outer) `$!`.
+    run_test(
+        r#"
+        def brk_while(log)
+          outer = StandardError.new "outer"
+          begin
+            raise outer
+          rescue
+            i = 0
+            while i < 3
+              begin
+                raise "inner #{i}"
+              rescue
+                break if i == 2
+                i += 1
+                next
+              ensure
+                log << $!&.message
+              end
+            end
+            log << $!.message
+          end
+        end
+        log = []
+        brk_while(log)
+        log << $!.inspect
+        log
+        "#,
+    );
+}
