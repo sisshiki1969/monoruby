@@ -782,3 +782,29 @@ fn break_next_from_rescue_in_while_restores_errinfo() {
         "#,
     );
 }
+
+#[test]
+fn defined_probe_leaves_errinfo_untouched() {
+    // A raising receiver inside defined? is swallowed by the probe's
+    // exception entry; the VM's rescue-entry path must not leak the
+    // swallowed exception into `$!` (a later bare `raise` would
+    // re-raise it).
+    run_test(
+        r#"
+        h = {}
+        res = [defined?(h[]), $!.inspect]
+        begin
+          raise "outer"
+        rescue
+          res << defined?(1.zzz_probe.chain) << $!.message
+        end
+        err = begin
+          Object.new.instance_eval("raise", "a_file", 10)
+        rescue => e
+          e
+        end
+        res << err.backtrace.first.split(":")[0..1]
+        res
+        "#,
+    );
+}
