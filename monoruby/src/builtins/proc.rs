@@ -248,10 +248,27 @@ pub(crate) fn proc_curry_body(
     }
 }
 
-/// `Proc#ruby2_keywords` — no-op marker that returns self.
+/// `Proc#ruby2_keywords` — mark the proc's underlying function so its
+/// `*rest` packs passed keywords as a ruby2_keywords-flagged trailing
+/// hash. The flag lives on the shared function, so it applies across
+/// `dup` (CRuby behavior). Incompatible signatures (no `*rest`,
+/// keywords, `**kw`, or post-rest params) get CRuby's single combined
+/// "Skipping set of ruby2_keywords flag for proc (...)" warning.
 #[monoruby_builtin]
-fn ruby2_keywords(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(lfp.self_val())
+fn ruby2_keywords(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let fid = self_.as_proc_inner().func_id();
+    let info = &globals.store[fid];
+    if info.no_keyword() && info.is_rest() && info.post_num() == 0 {
+        globals.store[fid].set_ruby2_keywords();
+    } else {
+        crate::value::emit_verbose_warning(
+            vm,
+            globals,
+            "Skipping set of ruby2_keywords flag for proc (proc accepts keywords or post arguments or proc does not accept argument splat)",
+        )?;
+    }
+    Ok(self_)
 }
 
 ///

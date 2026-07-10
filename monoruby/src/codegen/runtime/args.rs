@@ -30,7 +30,7 @@ pub(crate) fn set_frame_arguments_simple(
     positional_simple(vm, globals, callee_fid, src, pos_num, callee_lfp)?;
     let callee = &globals.store[callee_fid];
     if !callee.no_keyword() {
-        handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp)?;
+        handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp, None)?;
     }
 
     Ok(())
@@ -313,7 +313,14 @@ fn set_callee_frame_arguments(
         if h.is_empty() {
             None
         } else {
-            Some(Value::hash(h))
+            let mut inner = crate::value::rvalue::HashmapInner::new(h);
+            // A ruby2_keywords-marked callee packs its keywords as a
+            // *flagged* trailing hash, so a later `*rest` splat can
+            // restore them as keywords.
+            if globals[callee_fid].ruby2_keywords() {
+                inner.set_ruby2_keywords_flag();
+            }
+            Some(Value::hash_from_inner(inner))
         }
     } else {
         None
@@ -332,6 +339,26 @@ fn set_callee_frame_arguments(
     } else {
         None
     };
+    // ruby2_keywords handling: when the call site passes no keywords of
+    // its own and a splat's expanded tail ends with a ruby2_keywords-
+    // flagged hash, that hash is "keywords in flight" (CRuby):
+    //   - a callee accepting keywords binds it as its keywords;
+    //   - a ruby2_keywords-marked callee keeps it as the flagged
+    //     trailing positional (same object — the chain continues);
+    //   - any other callee receives an *unflagged copy* as the trailing
+    //     positional (the chain ends).
+    let r2k_promote = !globals[callid].kw_may_exists();
+    let callee_takes_kw = !globals[callee_fid].no_keyword();
+    let callee_r2k = globals[callee_fid].ruby2_keywords();
+    let mut r2k_kw: Option<Value> = None;
+    fn r2k_hash(v: Value) -> bool {
+        v.try_hash_ty().is_some() && v.as_hashmap_inner().ruby2_keywords_flag()
+    }
+    fn r2k_unflagged_copy(v: Value) -> Value {
+        let dup = v.dup();
+        dup.try_hash_ty().unwrap().unset_ruby2_keywords_flag();
+        dup
+    }
     let splat_pos = &globals[callid].splat_pos;
     if let Some(coerced) = coerced {
         let ary = coerced.try_array_ty().unwrap();
@@ -354,7 +381,22 @@ fn set_callee_frame_arguments(
         && splat_pos == &[0]
         && let Some(ary) = unsafe { *src }.try_array_ty()
     {
-        fill_positional_args1(dst, &globals[callee_fid], ary.as_ref())?;
+        let slice: &[Value] = ary.as_ref();
+        if r2k_promote && let [head @ .., last] = slice && r2k_hash(*last) {
+            if callee_takes_kw {
+                r2k_kw = Some(*last);
+                fill_positional_args1(dst, &globals[callee_fid], head)?;
+            } else if callee_r2k {
+                fill_positional_args1(dst, &globals[callee_fid], slice)?;
+            } else {
+                let mut buf: smallvec::SmallVec<[Value; 8]> =
+                    smallvec::SmallVec::from_slice(head);
+                buf.push(r2k_unflagged_copy(*last));
+                fill_positional_args1(dst, &globals[callee_fid], &buf)?;
+            }
+        } else {
+            fill_positional_args1(dst, &globals[callee_fid], slice)?;
+        }
     } else {
         // Forwarding (`g(x, ...)` / `super(x, ...)`) and other splat
         // calls land here. The expanded positional sequence is almost
@@ -381,6 +423,21 @@ fn set_callee_frame_arguments(
         if let Some(v) = ex {
             buf.push(v);
         }
+        // Only a hash that arrived via a splat expansion is "in
+        // flight" (`ex` is only built when the call site passes its
+        // own keywords, which `r2k_promote` already excludes).
+        if r2k_promote
+            && !splat_pos.is_empty()
+            && let Some(&last) = buf.last()
+            && r2k_hash(last)
+        {
+            if callee_takes_kw {
+                r2k_kw = Some(last);
+                buf.pop();
+            } else if !callee_r2k {
+                *buf.last_mut().unwrap() = r2k_unflagged_copy(last);
+            }
+        }
 
         fill_positional_args1(dst, &globals[callee_fid], &buf)?;
     }
@@ -389,7 +446,7 @@ fn set_callee_frame_arguments(
     let callee = &globals.store[callee_fid];
     let caller = &globals.store[callid];
     if !callee.no_keyword() || !caller.kw_may_exists() {
-        handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp)?;
+        handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp, r2k_kw)?;
     }
     Ok(())
 }
@@ -639,6 +696,7 @@ fn handle_keyword(
     caller: CallSiteId,
     callee_lfp: Lfp,
     caller_lfp: Lfp,
+    r2k_kw: Option<Value>,
 ) -> Result<()> {
     // `**nil` accepts no keywords: any actual keyword raises.
     if globals[callee].forbid_keyword() {
@@ -649,7 +707,7 @@ fn handle_keyword(
     }
     let mut unknowns = ordinary_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;
     unknowns.extend(hash_splat_and_kw_rest(
-        vm, globals, callee, caller, callee_lfp, caller_lfp,
+        vm, globals, callee, caller, callee_lfp, caller_lfp, r2k_kw,
     )?);
     // A missing required keyword is reported before any unknown keyword,
     // matching CRuby (`m(a: 1)` for `def m(x:)` raises "missing keyword: :x",
@@ -831,6 +889,9 @@ fn ordinary_keyword(
 /// `**hash` keys the callee doesn't declare (empty when it has a
 /// `**kwrest`); reported by the caller after the missing-keyword check.
 ///
+/// `r2k_kw` is an additional keyword-hash source: a ruby2_keywords-
+/// flagged hash promoted from the tail of a `*args` splat. It behaves
+/// exactly like one more `**hash` at the call site.
 fn hash_splat_and_kw_rest(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -838,6 +899,7 @@ fn hash_splat_and_kw_rest(
     caller: CallSiteId,
     mut callee_lfp: Lfp,
     caller_lfp: Lfp,
+    r2k_kw: Option<Value>,
 ) -> Result<Vec<String>> {
     if globals[callee].no_keyword() {
         return Ok(vec![]);
@@ -856,6 +918,7 @@ fn hash_splat_and_kw_rest(
     for h in hash_splat_pos
         .iter()
         .map(|pos| caller_lfp.register(*pos).unwrap())
+        .chain(r2k_kw)
     {
         if h.is_nil() {
             continue;
@@ -894,7 +957,7 @@ fn hash_splat_and_kw_rest(
     }
 
     if let Some(rest) = globals[callee].kw_rest() {
-        if !globals[caller].kw_may_exists() {
+        if !globals[caller].kw_may_exists() && r2k_kw.is_none() {
             // no keyword arguments
             unsafe { callee_lfp.set_register(rest, Some(Value::nil())) }
         } else {
@@ -910,6 +973,7 @@ fn hash_splat_and_kw_rest(
             for h in hash_splat_pos
                 .iter()
                 .map(|pos| caller_lfp.register(*pos).unwrap())
+                .chain(r2k_kw)
             {
                 // A nil hash-splat is `**nil` — no keyword arguments.
                 // (The other hash-splat readers already skip nil; this
@@ -1028,7 +1092,14 @@ fn invoker_arguments_inner(
     } else if info.kw_names().is_empty()
         && let Some(kw_arg) = kw_arg
     {
-        Some(kw_arg.into())
+        // Folding the keywords into a trailing positional hash: a
+        // ruby2_keywords-marked callee flags it so a later `*rest`
+        // splat can restore them as keywords.
+        let v: Value = kw_arg.into();
+        if info.ruby2_keywords() {
+            v.try_hash_ty().unwrap().set_ruby2_keywords_flag();
+        }
+        Some(v)
     } else if let Some(kw_arg) = kw_arg {
         let mut s = "unknown keywords: ".to_string();
         for (i, (name, _)) in kw_arg.iter().enumerate() {

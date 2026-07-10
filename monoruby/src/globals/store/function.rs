@@ -735,6 +735,11 @@ struct FuncExt {
     params: ParamsInfo,
     /// the `Effect`` of this function.
     effect: Effect,
+    /// Marked by `Module#ruby2_keywords` / `Proc#ruby2_keywords`: the
+    /// method's `*rest` packs any passed keywords as a trailing Hash
+    /// carrying the ruby2_keywords flag, so a later `*rest` splat can
+    /// turn them back into keywords.
+    ruby2_keywords: bool,
     #[cfg(feature = "perf")]
     wrapper: Option<(monoasm::CodePtr, usize, monoasm::CodePtr, usize)>,
 }
@@ -797,6 +802,7 @@ impl FuncInfo {
                 entry: None,
                 params,
                 effect,
+                ruby2_keywords: false,
                 #[cfg(feature = "perf")]
                 wrapper: None,
             }),
@@ -1097,6 +1103,15 @@ impl FuncInfo {
 
     pub(crate) fn no_keyword(&self) -> bool {
         self.kw_names().is_empty() && self.kw_rest().is_none()
+    }
+
+    /// See `FuncExt::ruby2_keywords`.
+    pub(crate) fn ruby2_keywords(&self) -> bool {
+        self.ext.ruby2_keywords
+    }
+
+    pub(crate) fn set_ruby2_keywords(&mut self) {
+        self.ext.ruby2_keywords = true;
     }
 
     /// `**nil` — the definition explicitly forbids keyword arguments.

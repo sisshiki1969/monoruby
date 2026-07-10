@@ -304,15 +304,6 @@ class Hash
     self
   end
 
-  def self.ruby2_keywords_hash?(h)
-    raise TypeError, "no implicit conversion of #{h.class} into Hash" unless h.is_a?(Hash)
-    false
-  end
-
-  def self.ruby2_keywords_hash(h)
-    raise TypeError, "no implicit conversion of #{h.class} into Hash" unless h.is_a?(Hash)
-    h.dup
-  end
 end
 
 
