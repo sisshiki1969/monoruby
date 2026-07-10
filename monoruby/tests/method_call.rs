@@ -2987,3 +2987,68 @@ fn vcall_raises_name_error() {
         "#,
     );
 }
+
+#[test]
+fn super_forwards_callers_block() {
+    // `super(args)` with no explicit block forwards the calling
+    // method's block, exactly like zsuper; a literal block or an
+    // explicit `&nil` overrides it.
+    run_test(
+        r#"
+        c1 = Class.new { def m; block_given? ? yield : :noblock; end }
+        c2 = Class.new(c1) { def m(v); super(); end }
+        c3 = Class.new(c1) { def m(v); ary = []; 1.times { ary << super() }; ary; end }
+        c4 = Class.new(c1) { def m(v); super(&nil); end }
+        c5 = Class.new(c1) { def m(v); super() { :literal }; end }
+        [
+          c2.new.m(1) { :b1 },
+          c3.new.m(1) { :b2 },
+          c4.new.m(1) { :b3 },
+          c5.new.m(1) { :b4 },
+        ]
+        "#,
+    );
+}
+
+#[test]
+fn super_miss_calls_method_missing() {
+    run_test(
+        r#"
+        res = []
+        klass = Class.new do
+          def method_missing(name, *args) = "mm: #{name} #{args.inspect}"
+          def probe(x) = super
+        end
+        res << klass.new.probe(7)
+        plain = Class.new { def probe(x) = super }
+        begin
+          plain.new.probe(1)
+        rescue NoMethodError => e
+          # monoruby quotes method names backtick-style; normalize.
+          res << e.message.lines.first.split(" for ").first.tr("`", "'")
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn zsuper_from_define_method_is_a_runtime_error() {
+    run_test(
+        r#"
+        parent = Class.new { def m(a) = "parent #{a}" }
+        res = []
+        c1 = Class.new(parent)
+        c1.send(:define_method, :m) { |x| begin; super; rescue RuntimeError => e; "RuntimeError"; end }
+        res << c1.new.m(1)
+        # Explicit arguments stay allowed.
+        c2 = Class.new(parent)
+        c2.send(:define_method, :m) { |x| super(x * 2) }
+        res << c2.new.m(21)
+        # zsuper in a plain block inside a normal method is still fine.
+        c3 = Class.new(parent) { def m(a); r = nil; 1.times { r = super }; r; end }
+        res << c3.new.m(5)
+        res
+        "#,
+    );
+}

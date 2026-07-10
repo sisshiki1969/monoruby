@@ -22,7 +22,14 @@ impl<'a> BytecodeGen<'a> {
         dst: Option<BcReg>,
         loc: Loc,
     ) -> Result<CallSite> {
-        if let Some(arglist) = arglist {
+        if let Some(mut arglist) = arglist {
+            // `super(args)` with no explicit block still forwards the
+            // calling method's block, exactly like zsuper — only a
+            // literal block or an explicit `&blk` / `&nil` argument
+            // overrides it.
+            if arglist.block.is_none() && !arglist.delegate_block {
+                arglist.delegate_block = true;
+            }
             self.handle_arguments(arglist, None, BcReg::Self_, dst, loc)
         } else {
             Ok(self.handle_super_forward(dst, loc))
