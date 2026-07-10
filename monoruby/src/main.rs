@@ -153,6 +153,15 @@ fn main() {
                 // (`ruby: No such file or directory -- t.rb (LoadError)`).
                 // `io::Error`'s Display appends ` (os error N)`, which
                 // CRuby's strerror-based message doesn't have — strip it.
+                // A source that is not valid UTF-8 (e.g. UTF-16 with a
+                // BOM) is CRuby's `invalid multibyte char` SyntaxError,
+                // not an IO-level message.
+                if err.kind() == std::io::ErrorKind::InvalidData {
+                    eprintln!(
+                        "monoruby: {file_name}: invalid multibyte char (UTF-8) (SyntaxError)"
+                    );
+                    std::process::exit(1);
+                }
                 let msg = err.to_string();
                 let msg = msg.split(" (os error ").next().unwrap();
                 eprintln!("monoruby: {msg} -- {file_name} (LoadError)");

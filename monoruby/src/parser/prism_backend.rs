@@ -334,6 +334,7 @@ fn try_prism_inner(
             let msg = w.message();
             let verbose_only = if msg == "END in method; use at_exit"
                 || msg == "integer literal in flip-flop"
+                || msg == "regex literal in condition"
             {
                 false
             } else if msg == "possibly useless use of defined? in void context"
@@ -791,29 +792,31 @@ impl<'pr> Lowerer<'pr> {
                     &node.as_interpolated_regular_expression_node().unwrap(),
                 )?,
             prism::Node::MatchLastLineNode { .. } => {
-                // `if /pat/` (implicit match against `$_`) — ruruby
-                // doesn't have a dedicated node for this either; the
-                // regex literal is parsed the same way and the
-                // implicit match is recognised at bytecodegen.
+                // `if /pat/` — a regexp literal in a conditional matches
+                // the last read line implicitly. Desugar to
+                // `/pat/ =~ $_` (nil / position result gives the
+                // conditional its truthiness, and `$~` is set).
                 let n = node.as_match_last_line_node().unwrap();
                 let part = Node {
                     kind: regex_body_to_string(n.unescaped(), location_to_loc(&n.location()))?,
                     loc: location_to_loc(&n.location()),
                 };
                 let flags = regex_flags_from_closing(&n.closing_loc());
-                Node {
+                let regex = Node {
                     kind: NodeKind::RegExp(vec![part], flags, true),
                     loc,
-                }
+                };
+                match_last_line(regex, loc)
             }
             prism::Node::InterpolatedMatchLastLineNode { .. } => {
                 let n = node.as_interpolated_match_last_line_node().unwrap();
                 let parts = self.lower_interp_parts(n.parts())?;
                 let flags = regex_flags_from_closing(&n.closing_loc());
-                Node {
+                let regex = Node {
                     kind: NodeKind::RegExp(parts, flags, false),
                     loc,
-                }
+                };
+                match_last_line(regex, loc)
             }
             prism::Node::MatchWriteNode { .. } => {
                 // `/(?<name>...)/ =~ value` — Prism wraps the `=~`
@@ -4429,6 +4432,28 @@ fn regex_flags_from_closing(closing: &Location<'_>) -> String {
         .filter(|b| matches!(b, b'i' | b'm' | b'x' | b'n' | b'u' | b'e' | b's'))
         .map(|b| b as char)
         .collect()
+}
+
+/// Wrap a regexp-literal node as `<regex> =~ $_` — the implicit
+/// last-read-line match a bare regexp literal performs in a conditional
+/// (prism's `MatchLastLineNode` / `InterpolatedMatchLastLineNode`).
+fn match_last_line(regex: Node, loc: crate::ast::Loc) -> Node {
+    let lastline = Node {
+        kind: NodeKind::GlobalVar("$_".to_string()),
+        loc,
+    };
+    Node {
+        kind: NodeKind::MethodCall {
+            receiver: Box::new(regex),
+            method: "=~".to_owned(),
+            arglist: Box::new(crate::ast::ArgList {
+                args: vec![lastline],
+                ..Default::default()
+            }),
+            safe_nav: false,
+        },
+        loc,
+    }
 }
 
 fn binop_from_name(name: &str) -> Option<BinOp> {

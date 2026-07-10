@@ -501,10 +501,11 @@ impl Store {
         compile_info: CompileInfo,
         loc: Loc,
         sourceinfo: SourceInfoRef,
+        is_singleton: bool,
     ) -> Result<FuncId> {
         let func_id = self.functions.next_func_id();
         self.functions.add_compile_info(compile_info);
-        let info = ISeqInfo::new_method(
+        let mut info = ISeqInfo::new_method(
             func_id,
             self.next_iseq_id(),
             name,
@@ -512,6 +513,7 @@ impl Store {
             loc,
             sourceinfo,
         );
+        info.singleton_classdef = is_singleton;
         let iseq = self.new_iseq(info);
         let info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
         self.functions.info.push(info);

@@ -203,6 +203,13 @@ pub struct ISeqInfo {
     /// use — CRuby still warns).
     ///
     pub(crate) uses_block: bool,
+    ///
+    /// `true` when this iseq is a singleton-class body (`class << obj`).
+    /// A `return` written in such a body exits the *enclosing method*
+    /// (CRuby), so bytecodegen emits a method-return there — unlike a
+    /// plain class/module body, where `return` is invalid.
+    ///
+    pub(crate) singleton_classdef: bool,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -264,6 +271,7 @@ impl ISeqInfo {
             hint: ISeqHint::Normal,
             uses_block: false,
             nested_definee: None,
+            singleton_classdef: false,
         }
     }
 
