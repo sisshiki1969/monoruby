@@ -63,7 +63,9 @@ fn invoke_body(
         m.restore_svar_slot(None);
     }
 
+    vm.push_break_barrier(vm.cfp());
     let result = vm.invoke_proc(globals, &block, &args);
+    vm.pop_break_barrier();
 
     if let Some(m) = home_mfp {
         m.restore_svar_slot(saved);
@@ -76,6 +78,9 @@ fn invoke_body(
         Ok(v) => Ok(v),
         Err(err) if matches!(err.kind(), MonorubyErrKind::MethodReturn(..)) => {
             Err(MonorubyErr::localjumperr("unexpected return"))
+        }
+        Err(err) if matches!(err.kind(), MonorubyErrKind::BlockBreak(..)) => {
+            Err(MonorubyErr::localjumperr("break from proc-closure"))
         }
         Err(err) => Err(err),
     }

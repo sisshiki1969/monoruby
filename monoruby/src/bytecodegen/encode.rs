@@ -673,6 +673,8 @@ impl<'a> BytecodeGen<'a> {
             Some(ret) => self.slot_id(&ret).0,
         };
         let callid = self.new_callsite(callsite, bc_pos)?;
+        self.store
+            .new_callsite_map_entry(self.iseq_id, bc_pos, callid);
         let op1 = enc_wl(opcode, ret, callid.get());
         let op2 = enc_www(
             0,

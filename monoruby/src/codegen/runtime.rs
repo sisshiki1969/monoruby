@@ -1698,19 +1698,49 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Glob
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
 }
 
-pub(super) extern "C" fn err_block_break(vm: &mut Executor, _globals: &mut Globals, val: Value) {
-    let caller = match vm.cfp().caller() {
-        Some(caller) => caller,
-        None => {
-            vm.set_error(MonorubyErr::new(
-                MonorubyErrKind::LocalJump,
-                "illegal break from block".to_string(),
-            ));
-            return;
+pub(super) extern "C" fn err_block_break(vm: &mut Executor, globals: &mut Globals, val: Value) {
+    // In a lambda (including a block promoted by Kernel#lambda), break
+    // is local: it exits the lambda itself, like return.
+    let lfp = vm.cfp().lfp();
+    if !globals[lfp.func_id()].is_block_style() {
+        vm.set_error(MonorubyErr::method_return(val, lfp));
+        return;
+    }
+    // `break` escapes to the invocation of the call that received this
+    // block literal (CRuby's BREAK catch-table semantics): the unwinder
+    // stops at the block's *defining* frame and resumes it only when
+    // its in-progress call site is the one carrying this block; any
+    // other route (a materialized Proc invoked later, a re-yield of a
+    // captured proc) is a LocalJumpError. Pre-check that the defining
+    // frame is on this stack at all, so a proc whose creation scope has
+    // returned (or lives on another thread/fiber stack) fails fast.
+    let block_fid = lfp.func_id();
+    let outer_reachable = |vm: &Executor, outer: Lfp| {
+        let barrier = vm.break_barrier();
+        let mut cfp = Some(vm.cfp());
+        while let Some(f) = cfp {
+            if Some(f) == barrier {
+                // Crossing a synchronous thread-body boundary: the
+                // defining frame belongs to the spawning "thread".
+                return false;
+            }
+            if f.lfp() == outer {
+                return true;
+            }
+            cfp = f.prev();
         }
+        false
     };
-    let target_lfp = caller.lfp();
-    vm.set_error(MonorubyErr::method_return(val, target_lfp));
+    if let Some(outer) = lfp.outer()
+        && outer_reachable(vm, outer)
+    {
+        vm.set_error(MonorubyErr::block_break(val, block_fid, outer));
+    } else {
+        vm.set_error(MonorubyErr::new(
+            MonorubyErrKind::LocalJump,
+            "break from proc-closure".to_string(),
+        ));
+    }
 }
 
 pub(super) extern "C" fn err_retry(vm: &mut Executor) {

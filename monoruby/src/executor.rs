@@ -135,6 +135,13 @@ pub struct Executor {
     /// actually borrows from this Value's buffer, so a stale stash can
     /// never mis-attribute a haystack — it only falls back to copying.
     sp_match_haystack: Option<Value>,
+    /// Stack of `break` barriers: the CFP at each synchronous
+    /// thread-body invocation (`Thread#__invoke_body`). A `break`
+    /// escaping a block must not resolve its defining frame *across*
+    /// such a boundary — the body runs on the spawning code's machine
+    /// stack, but semantically it is another thread's stack (CRuby:
+    /// break in a thread body is an immediate LocalJumpError).
+    break_barriers: Vec<Cfp>,
     temp_stack: Vec<Value>,
     /// How the method_missing dispatch currently being set up was
     /// called. Consumed (read-and-cleared) by the default
@@ -183,6 +190,7 @@ impl std::default::Default for Executor {
             toplevel_visibility: Visibility::Private,
             sp_match_regex: None,
             sp_match_haystack: None,
+            break_barriers: Vec::new(),
             temp_stack: vec![],
             method_missing_style: MethodMissingStyle::Plain,
             require_level: 0,
@@ -2856,6 +2864,18 @@ impl Executor {
     /// call should associate with the captures.
     pub(crate) fn set_match_regex(&mut self, regex: Value) {
         self.sp_match_regex = Some(regex);
+    }
+
+    pub(crate) fn push_break_barrier(&mut self, cfp: Cfp) {
+        self.break_barriers.push(cfp);
+    }
+
+    pub(crate) fn pop_break_barrier(&mut self) {
+        self.break_barriers.pop();
+    }
+
+    pub(crate) fn break_barrier(&self) -> Option<Cfp> {
+        self.break_barriers.last().copied()
     }
 
     /// Stash the subject String `Value` about to be matched, enabling
