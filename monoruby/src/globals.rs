@@ -99,6 +99,12 @@ pub(crate) fn noinline_gen(
 pub(crate) const GLOBALS_FUNCINFO: usize =
     std::mem::offset_of!(Globals, store.functions.info) + MONOVEC_PTR;
 
+/// Internal gvar name used by bytecodegen to save/restore `$!`
+/// (`Executor::errinfo`). `$!` itself is read-only from Ruby, so the
+/// generated save/restore code writes through this hooked alias instead;
+/// the parentheses make the name unspellable in Ruby source.
+pub(crate) const ERRINFO_INTERNAL_GVAR: &str = "$(errinfo)";
+
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {
     scope: Vec<(

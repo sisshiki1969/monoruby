@@ -836,7 +836,7 @@ impl<'a> BytecodeGen<'a> {
                 self.emit(
                     BytecodeInst::StoreGvar {
                         val: save,
-                        name: IdentId::get_id("$!"),
+                        name: IdentId::get_id(crate::globals::ERRINFO_INTERNAL_GVAR),
                     },
                     Loc::default(),
                 );
@@ -1094,7 +1094,7 @@ impl<'a> BytecodeGen<'a> {
                 self.emit(
                     BytecodeInst::StoreGvar {
                         val: save,
-                        name: IdentId::get_id("$!"),
+                        name: IdentId::get_id(crate::globals::ERRINFO_INTERNAL_GVAR),
                     },
                     Loc::default(),
                 );

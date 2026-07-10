@@ -593,7 +593,7 @@ impl Executor {
                 // `$!.message` at_exit specs rely on).
                 self.set_error(err);
                 let err_val = self.take_ex_obj(globals);
-                globals.set_gvar(IdentId::get_id("$!"), err_val);
+                self.set_errinfo(err_val);
                 handler_failed = true;
             }
         }

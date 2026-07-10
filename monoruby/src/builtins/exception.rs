@@ -118,6 +118,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
+    // Internal alias: `startup.rb` redefines `set_backtrace` with a Ruby
+    // wrapper that also accepts `Thread::Backtrace::Location` arrays
+    // (CRuby 3.4+) by converting them to strings, then delegates here.
+    globals.define_builtin_func(EXCEPTION_CLASS, "__set_backtrace", set_backtrace, 1);
     globals.define_builtin_func(EXCEPTION_CLASS, "cause", cause, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "==", exception_eq, 1);
     globals.define_builtin_func_with(
@@ -361,14 +365,14 @@ fn set_backtrace(
         for elem in ary.iter() {
             if elem.is_str().is_none() {
                 return Err(MonorubyErr::typeerr(
-                    "backtrace must be an Array of String",
+                    "backtrace must be an Array of String or an Array of Thread::Backtrace::Location",
                 ));
             }
         }
         arg
     } else {
         return Err(MonorubyErr::typeerr(
-            "backtrace must be an Array of String or a String",
+            "backtrace must be an Array of String or an Array of Thread::Backtrace::Location",
         ));
     };
     globals

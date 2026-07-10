@@ -888,12 +888,37 @@ class Thread
   class Backtrace
     class Location
       def initialize(frame)
-        @frame = frame
+        @frame = frame.to_s
+        if @frame =~ /\A(.+):(\d+):in ['`](.+)'\z/
+          @path = $1
+          @lineno = $2.to_i
+          @label = $3
+        else
+          @path = @frame
+          @lineno = 0
+          @label = ""
+        end
       end
 
-      def path
+      attr_reader :path, :lineno, :label
+
+      def base_label
+        l = @label
+        l = $1 while l =~ /\Ablock (?:\(\d+ levels\) )?in (.+)\z/
+        l
+      end
+
+      # CRuby returns nil for frames without a real file (eval'd code,
+      # internal frames).
+      def absolute_path
+        return nil if @path.start_with?("(") || @path.start_with?("<")
+        File.expand_path(@path)
+      end
+
+      def to_s
         @frame
       end
+      alias inspect to_s
     end
   end
 end
@@ -910,6 +935,18 @@ class Exception
     return nil if bt.nil?
     bt.map do |frame|
       Thread::Backtrace::Location.new(frame)
+    end
+  end
+
+  # CRuby 3.4+: `set_backtrace` (and thus `$@ =`) also accepts an Array
+  # of `Thread::Backtrace::Location`, stored as their string forms. Mixed
+  # or otherwise invalid arrays fall through to the native checker, which
+  # raises the usual TypeError.
+  def set_backtrace(bt)
+    if bt.is_a?(Array) && !bt.empty? && bt.all? { |e| Thread::Backtrace::Location === e }
+      __set_backtrace(bt.map(&:to_s))
+    else
+      __set_backtrace(bt)
     end
   end
 

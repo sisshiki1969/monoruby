@@ -306,3 +306,135 @@ fn shared_substring_snapshot_window() {
         "#,
     );
 }
+
+#[test]
+fn errinfo_fiber_local_and_read_only() {
+    // `$!` is backed by the per-fiber Executor: an exception rescued
+    // (and suspended) inside a Fiber must not leak into the parent
+    // fiber's `$!`, and assigning `$!` raises NameError.
+    run_test_once(
+        r#"
+        res = []
+        Fiber.new do
+          raise "hi"
+        rescue
+          Fiber.yield
+        end.resume
+        res << $!
+        Fiber.new do
+          raise "yo"
+        rescue
+          Fiber.yield
+        end.resume
+        res << $@
+        begin
+          eval("$! = []")
+        rescue NameError => e
+          res << e.message
+        end
+        res << ($! ? "leaked" : "clean")
+        res
+        "#,
+    );
+}
+
+#[test]
+fn errinfo_rescue_save_restore() {
+    // The bytecodegen `$!` save/restore protocol (now routed through the
+    // internal errinfo hook) still restores the outer exception when a
+    // nested rescue completes, when a rescue exits via `return`, and
+    // around `ensure` bodies; bare `raise` re-raises `$!`.
+    run_test(
+        r#"
+        res = []
+        def f(res)
+          begin
+            raise "x"
+          rescue
+            return 1
+          ensure
+            res << $!.class.to_s
+          end
+        end
+        f(res)
+        res << $!.inspect
+        begin
+          raise "outer"
+        rescue
+          begin
+            raise "inner"
+          rescue
+          end
+          res << $!.message
+        end
+        begin
+          begin
+            raise "again"
+          rescue
+            raise
+          end
+        rescue => e
+          res << e.message
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn lastline_set_by_stringio_gets() {
+    // StringIO#gets / #readline publish `$_` to their caller's method
+    // scope (CRuby sets it via rb_lastline_set from C), including nil at
+    // EOF, and a read inside a block lands on the enclosing method scope.
+    run_test_once(
+        r#"
+        require 'stringio'
+        res = []
+        sio = StringIO.new("foo\nbar\n", "r")
+        res << sio.gets
+        res << $_
+        res << sio.gets
+        res << $_
+        res << sio.gets
+        res << $_
+        obj = Object.new
+        def obj.run; yield; end
+        sio2 = StringIO.new("a\nb\n", "r")
+        obj.run { sio2.gets }
+        res << $_
+        sio3 = StringIO.new("x\n", "r")
+        sio3.readline
+        res << $_
+        res
+        "#,
+    );
+}
+
+#[test]
+fn set_backtrace_accepts_locations() {
+    // CRuby 3.4+: `Exception#set_backtrace` (and `$@ =`) accept an Array
+    // of `Thread::Backtrace::Location`, stored as their string forms;
+    // mixed / invalid arrays raise TypeError with CRuby's message.
+    run_test_once(
+        r#"
+        def probe = caller_locations
+        locs = probe
+        e = RuntimeError.new("x")
+        e.set_backtrace(locs)
+        res = [e.backtrace == locs.map(&:to_s)]
+        res << (e.backtrace_locations.map(&:lineno) == locs.map(&:lineno))
+        begin
+          e.set_backtrace(["a", :b])
+        rescue TypeError => te
+          res << te.message
+        end
+        begin
+          raise "z"
+        rescue
+          $@ = locs
+          res << ($!.backtrace == locs.map(&:to_s))
+        end
+        res
+        "#,
+    );
+}

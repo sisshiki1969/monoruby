@@ -142,7 +142,10 @@ fn main() {
     globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
     let (code, path) = if let Some(file_name) = first {
         match read_source_file(&std::path::PathBuf::from(&file_name)) {
-            Ok(res) => res,
+            // Keep the path exactly as given on the command line: CRuby
+            // reports `$0` / `__FILE__` for the main script verbatim
+            // (relative stays relative), not canonicalized.
+            Ok((code, _resolved)) => (code, std::path::PathBuf::from(&file_name)),
             Err(err) => {
                 // No VM frame exists yet, so a `MonorubyErr` here would
                 // carry no trace and cannot be displayed as a normal

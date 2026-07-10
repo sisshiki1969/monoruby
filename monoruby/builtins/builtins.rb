@@ -4,36 +4,15 @@ class Enumerator
   include Enumerable
 end
 
-class CallerLocation
-  def initialize(path, lineno, label)
-    @path = path
-    @lineno = lineno
-    @label = label
-  end
-  attr_reader :path, :lineno, :label
-
-  def base_label
-    l = @label
-    l = $1 while l =~ /\Ablock in (.+)\z/
-    l
-  end
-
-  def to_s
-    "#{@path}:#{@lineno}:in '#{@label}'"
-  end
-  alias inspect to_s
-end
-
+# `caller_locations` returns the same `Thread::Backtrace::Location`
+# objects as `Exception#backtrace_locations` (defined in startup.rb),
+# each parsed lazily from its `caller` frame string.
 def caller_locations(start = 1, length = nil)
   frames = caller(start + 1)
   return nil if frames.nil?
   frames = frames[0, length] if length
   frames.map do |frame|
-    if frame =~ /\A(.+):(\d+):in ['`](.+)'\z/
-      CallerLocation.new($1, $2.to_i, $3)
-    else
-      CallerLocation.new(frame, 0, "")
-    end
+    Thread::Backtrace::Location.new(frame)
   end
 end
 
