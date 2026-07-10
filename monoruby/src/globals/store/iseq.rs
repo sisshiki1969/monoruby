@@ -186,6 +186,14 @@ pub struct ISeqInfo {
     ///
     pub(crate) hint: ISeqHint,
     ///
+    /// The cref class captured when this iseq was installed as a
+    /// method: the definee a plain nested `def` in its body targets
+    /// (CRuby's cref). `def T.m` captures the surrounding lexical
+    /// scope; a `def` inside `instance_eval` captures the receiver's
+    /// singleton class. `None` until the iseq is installed.
+    ///
+    pub(crate) nested_definee: Option<ClassId>,
+    ///
     /// `true` when this method's body (including nested blocks) uses
     /// its implicit block: a `yield`, or any form of `super` (which
     /// forwards the block). Set during bytecode compilation on the
@@ -255,6 +263,7 @@ impl ISeqInfo {
             callsite_map: HashMap::default(),
             hint: ISeqHint::Normal,
             uses_block: false,
+            nested_definee: None,
         }
     }
 
