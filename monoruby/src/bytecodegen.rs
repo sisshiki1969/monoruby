@@ -792,6 +792,22 @@ impl<'a> BytecodeGen<'a> {
         self.is_escaping_block() || self.singleton_classdef
     }
 
+    /// The lexical chain of the iseq currently being compiled passes
+    /// through a `class << obj` body. Propagated onto every nested
+    /// def/classdef/block so runtime constant lookup knows when the
+    /// statically stamped cref can be stale.
+    fn in_singleton_lexical(&self) -> bool {
+        self.singleton_classdef || self.iseq().in_singleton_lexical
+    }
+
+    fn propagate_singleton_lexical(&mut self, fid: FuncId) {
+        if self.in_singleton_lexical() {
+            if let Some(iseq) = self.store[fid].is_iseq() {
+                self.store[iseq].in_singleton_lexical = true;
+            }
+        }
+    }
+
     fn add_method(
         &mut self,
         name: Option<IdentId>,
@@ -799,8 +815,11 @@ impl<'a> BytecodeGen<'a> {
         loc: Loc,
     ) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        self.store
-            .new_iseq_method(name, compile_info, loc, sourceinfo, false)
+        let fid = self
+            .store
+            .new_iseq_method(name, compile_info, loc, sourceinfo, false)?;
+        self.propagate_singleton_lexical(fid);
+        Ok(fid)
     }
 
     fn add_classdef(
@@ -811,20 +830,29 @@ impl<'a> BytecodeGen<'a> {
         is_singleton: bool,
     ) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        self.store
-            .new_classdef(name, compile_info, loc, sourceinfo, is_singleton)
+        let fid = self
+            .store
+            .new_classdef(name, compile_info, loc, sourceinfo, is_singleton)?;
+        self.propagate_singleton_lexical(fid);
+        Ok(fid)
     }
 
     fn add_block(&mut self, outer: ISeqId, compile_info: CompileInfo, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        self.store
-            .new_block(outer, compile_info, true, loc, sourceinfo)
+        let fid = self
+            .store
+            .new_block(outer, compile_info, true, loc, sourceinfo)?;
+        self.propagate_singleton_lexical(fid);
+        Ok(fid)
     }
 
     fn add_lambda(&mut self, outer: ISeqId, compile_info: CompileInfo, loc: Loc) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        self.store
-            .new_block(outer, compile_info, false, loc, sourceinfo)
+        let fid = self
+            .store
+            .new_block(outer, compile_info, false, loc, sourceinfo)?;
+        self.propagate_singleton_lexical(fid);
+        Ok(fid)
     }
 
     fn loop_push(

@@ -220,6 +220,16 @@ pub struct ISeqInfo {
     /// plain class/module body, where `return` is invalid.
     ///
     pub(crate) singleton_classdef: bool,
+    ///
+    /// `true` when this iseq's *lexical* chain passes through a
+    /// singleton-class body (`class << obj`) — the iseq itself, or a
+    /// def/classdef/block nested (at any depth) inside one. Only such
+    /// code can observe a stale statically-stamped `lexical_context`
+    /// (each execution of `class << obj` yields a distinct class while
+    /// the shared iseq's stamp is last-write-wins), so the runtime
+    /// cref recovery in constant lookup is gated on this flag.
+    ///
+    pub(crate) in_singleton_lexical: bool,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -282,6 +292,7 @@ impl ISeqInfo {
             uses_block: false,
             nested_definee: None,
             singleton_classdef: false,
+            in_singleton_lexical: false,
         }
     }
 
