@@ -397,11 +397,11 @@ pub(super) extern "C" fn array_any(_vm: &mut Executor, _globals: &mut Globals, v
 
 pub(super) extern "C" fn gen_lambda(
     vm: &mut Executor,
-    _: &mut Globals,
+    globals: &mut Globals,
     func_id: FuncId,
     pc: BytecodePtr,
 ) -> Value {
-    vm.generate_lambda(func_id, pc).into()
+    vm.generate_lambda(globals, func_id, pc).into()
 }
 
 pub(super) extern "C" fn gen_hash(

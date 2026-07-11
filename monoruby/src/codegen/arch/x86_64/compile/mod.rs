@@ -394,23 +394,20 @@ impl Codegen {
                 let exit = self.jit.label();
                 let walk = self.jit.label();
                 let found = self.jit.label();
-                // `block_given?` reports whether the *enclosing method* was
-                // given a block. When this runs inside a block frame, the
-                // current LFP's own block slot is that block's block param
-                // (usually nil), so we must first walk the `outer` chain up to
-                // the outermost method frame — mirroring `Lfp::outermost`
-                // (stop at a `proc_method` frame or when there is no outer).
+                // `block_given?` reports whether the frame `yield` would
+                // read its block from was given one. That is the *end* of
+                // the outer chain — mirroring `Lfp::yield_home`: unlike
+                // `Lfp::outermost` there is NO stop at a `proc_method`
+                // (define_method body) boundary; yield keeps block
+                // semantics there and ignores the call-site block (CRuby).
                 monoasm!( &mut self.jit,
                     movq rdi, r14;                              // rdi = current LFP
-                    testb [rdi - (LFP_META - META_KIND)], (0b0010_0000_u8 as i8); // is_proc_method?
-                    jnz found;
                 walk:
                     movq rax, [rdi - (LFP_OUTER)];              // rax = outer LFP (0 = none)
                     testq rax, rax;
-                    jz found;                                   // no outer -> rdi is outermost
+                    jz found;                                   // no outer -> rdi is the home
                     movq rdi, rax;
-                    testb [rdi - (LFP_META - META_KIND)], (0b0010_0000_u8 as i8);
-                    jz walk;                                    // not a method boundary -> keep walking
+                    jmp walk;
                 found:
                     movq R(d), (FALSE_VALUE);
                     movq rdi, [rdi - (LFP_BLOCK)];

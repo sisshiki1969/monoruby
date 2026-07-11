@@ -1513,32 +1513,24 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit, adds x(r), x(r), #(2u32););
                 self.jit.bcond_label(monoasm::Cond::Vs, &deopt);
             }
-            // Kernel#block_given?: walk to the outermost method frame, then
-            // report whether its block slot is set & non-nil. Running inside a
-            // block frame, the current LFP's own block slot is that block's
-            // block param (usually nil), so first follow the `outer` chain up
-            // to the outermost method — mirroring `Lfp::outermost` (stop at a
-            // `proc_method` frame or when there is no outer).
+            // Kernel#block_given?: walk to the frame `yield` would read its
+            // block from, then report whether its block slot is set &
+            // non-nil. That is the *end* of the outer chain — mirroring
+            // `Lfp::yield_home`: unlike `Lfp::outermost` there is NO stop at
+            // a `proc_method` (define_method body) boundary; yield keeps
+            // block semantics there and ignores the call-site block (CRuby).
             LInst::BlockGiven { dst } => {
                 let (d, lfp, rdi) = (dst.a64().0, GP::R14.a64().0, GP::Rdi.a64().0);
-                // Byte offset (from an LFP) of the meta `kind` byte holding the
-                // `proc_method` flag (bit 5).
-                let kind_off = (LFP_META - META_KIND as i32) as u32;
                 let exit = self.jit.label();
                 let walk = self.jit.label();
                 let found = self.jit.label();
                 monoasm_arm64!(&mut self.jit,
                     mov x(rdi), x(lfp);              // rdi = current LFP
-                    sub x9, x(rdi), #(kind_off);
-                    ldrb w10, [x9];
-                    tbnz x10, #(5), found;           // is_proc_method -> stop
                 walk:
                     ldr x9, [x(rdi)];                // outer LFP (LFP_OUTER == 0)
-                    cbz x9, found;                   // no outer -> rdi is outermost
+                    cbz x9, found;                   // no outer -> rdi is the home
                     mov x(rdi), x9;
-                    sub x9, x(rdi), #(kind_off);
-                    ldrb w10, [x9];
-                    tbz x10, #(5), walk;             // not a method boundary -> keep walking
+                    b walk;
                 found:
                     mov x(d), #(FALSE_VALUE);
                     sub x9, x(rdi), #(LFP_BLOCK as u32);
