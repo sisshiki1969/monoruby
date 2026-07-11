@@ -337,6 +337,15 @@ impl Executor {
             if let Some(v) = self.search_lexical_stack(globals, name, frame_func)? {
                 return Ok(Some(v));
             }
+            // instance_eval("...") checks the receiver's class between
+            // the singleton class and the caller's lexical scopes.
+            if let Some(c) = Self::instance_eval_class(globals, frame_func) {
+                if globals.store.get_constant(c, name).is_some() {
+                    if let Some(v) = self.get_constant(globals, c, name)? {
+                        return Ok(Some(v));
+                    }
+                }
+            }
         }
         // Then search the enclosing method's lexical_context.
         if let Some(v) = self.search_lexical_stack(globals, name, current_func)? {
@@ -372,6 +381,14 @@ impl Executor {
             }
         }
         Ok(None)
+    }
+
+    /// The receiver's class for an `instance_eval("...")` frame func —
+    /// see `ISeqInfo::instance_eval_class`.
+    fn instance_eval_class(globals: &Globals, frame_func: FuncId) -> Option<ClassId> {
+        globals.store[frame_func]
+            .is_iseq()
+            .and_then(|iseq| globals.store[iseq].instance_eval_class)
     }
 
     /// Non-triggering probe of a constant directly on `class_id` —
@@ -534,8 +551,17 @@ impl Executor {
             // contexts (innermost first), then the enclosing class's
             // ancestor chain — all non-triggering.
             let frame_func = self.cfp().lfp().func_id();
-            if frame_func != current_func && self.probe_lexical_stack(globals, name, frame_func) {
-                return true;
+            if frame_func != current_func {
+                if self.probe_lexical_stack(globals, name, frame_func) {
+                    return true;
+                }
+                // instance_eval("...") checks the receiver's class
+                // between the singleton class and the caller's scopes.
+                if let Some(c) = Self::instance_eval_class(globals, frame_func) {
+                    if Self::probe_constant_at(globals, c, name) {
+                        return true;
+                    }
+                }
             }
             if self.probe_lexical_stack(globals, name, current_func) {
                 return true;

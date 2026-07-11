@@ -249,6 +249,43 @@ fn interpolation_and_eval_source_encoding() {
 }
 
 #[test]
+fn eval_cref_semantics() {
+    // Class-variable and constant crefs of receiver-anchored string
+    // evals: class_eval sees the module's cvars; instance_eval skips
+    // its singleton cref for cvars (caller's scope wins) but checks
+    // the receiver's class for constants between the singleton class
+    // and the caller's lexical scopes; a `class << obj` body at the
+    // toplevel has no cvar scope at all.
+    run_test_once(
+        r##"
+        $r = []
+        m = Module.new
+        $r << m.class_eval("@@cv1 = 39; @@cv1")
+        class ECS_Recv; FOO9 = :receiver_class; end
+        module ECS_CS
+          @@cv2 = :caller
+          FOO9 = :caller_class
+          class C
+            def get_const(obj) = obj.instance_eval("FOO9")
+            def get_cvar(obj) = obj.instance_eval("@@cv2") rescue :err
+          end
+        end
+        $r << ECS_CS::C.new.get_const(ECS_Recv.new)
+        obj2 = Object.new
+        begin
+          class << obj2
+            @@cv3 = 1
+          end
+          $r << :sclass_ok
+        rescue RuntimeError => e
+          $r << e.message
+        end
+        $r
+        "##,
+    );
+}
+
+#[test]
 fn pattern_matching_desugar() {
     // case/in, `expr => pat`, and `expr in pat` are desugared in the
     // prism lowerer to ===/deconstruct/deconstruct_keys calls, local

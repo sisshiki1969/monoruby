@@ -1543,13 +1543,22 @@ impl Executor {
     /// a receiver-anchored eval body (`class_eval("...")`) carries its
     /// own stamped `lexical_context` even though it *runs* as a block,
     /// so the runtime method frame must not be consulted directly.
+    ///
+    /// Singleton-class cref entries are skipped (CRuby's
+    /// `vm_get_cvar_base`): `class << obj` bodies, `def self.f`, and
+    /// `instance_eval("...")` — whose eval iseq is stamped with the
+    /// receiver's singleton class — all resolve class variables in the
+    /// enclosing non-singleton scope (or fail with the toplevel error).
     fn get_parent(&self, globals: &Globals) -> Result<Module> {
         let fid = self.cfp().lfp().func_id();
         if let Some(mut iseq_id) = globals.store[fid].is_iseq() {
             loop {
                 let iseq = &globals.store[iseq_id];
-                if let Some(parent) = iseq.lexical_context.last() {
-                    return Ok(globals[*parent].get_module());
+                for parent in iseq.lexical_context.iter().rev() {
+                    let module = globals[*parent].get_module();
+                    if module.is_singleton().is_none() {
+                        return Ok(module);
+                    }
                 }
                 let (mother, _) = iseq.mother();
                 if mother == iseq_id {
