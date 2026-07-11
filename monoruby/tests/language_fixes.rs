@@ -103,3 +103,46 @@ fn redo_runs_pending_ensures() {
         "#,
     );
 }
+
+#[test]
+fn yield_reaches_lexical_home_through_escaped_frames() {
+    // `yield` / `block_given?` in a define_method body (and in a Proc
+    // whose defining method has returned) refer to the block of the
+    // lexical home method — the call-site block of the defined method
+    // is ignored, and the home's block survives frame escape via
+    // handler materialization.
+    run_test_once(
+        r#"
+        res = []
+        class Y
+          def self.define_deep(&blk)
+            define_method('deep') do |v|
+              yield v
+            end
+          end
+          define_deep { |v| v * 2 }
+        end
+        res << Y.new.deep(2)
+        class Z
+          define_method(:bg) { block_given? }
+        end
+        res << (Z.new.bg { :ignored })
+        def esc
+          proc { yield }
+        end
+        res << esc { :from_block }.call
+        def escl
+          lambda { yield }
+        end
+        res << escl { :lam }.call
+        def make_proc
+          Proc.new { yield }
+        end
+        def with_block
+          make_proc { 99 }
+        end
+        res << with_block.call
+        res
+        "#,
+    );
+}

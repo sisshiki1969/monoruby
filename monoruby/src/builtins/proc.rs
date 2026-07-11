@@ -1005,9 +1005,11 @@ mod tests {
 
     #[test]
     fn proc_yield_detached_context() {
-        // yield in Proc whose enclosing method was called with a block but has
-        // already returned should raise LocalJumpError, not panic.
-        run_test_error(
+        // yield in a Proc whose enclosing method has already returned
+        // still reaches that method's block: the handler is
+        // materialized into a Proc when the frame escapes to the heap
+        // (`materialize_escaped_block_handlers`), matching CRuby.
+        run_test_once(
             r#"
         def make_proc
           Proc.new { yield }

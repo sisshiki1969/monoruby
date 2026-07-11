@@ -99,7 +99,7 @@ impl Cfp {
     }
 
     pub(crate) fn block_given(&self) -> bool {
-        self.outermost_lfp().block().is_some()
+        self.lfp().yield_home().block().is_some()
     }
 
     pub(crate) fn caller(&self) -> Option<Cfp> {
@@ -154,7 +154,7 @@ impl Executor {
     ///
     pub fn get_block(&self) -> Option<BlockHandler> {
         let cfp = self.cfp();
-        let lfp = cfp.outermost_lfp();
+        let lfp = cfp.lfp().yield_home();
         let bh = lfp.block()?;
         Some(match bh.0.try_fixnum() {
             Some(mut i) => {
@@ -476,6 +476,22 @@ impl Lfp {
 
     pub(crate) fn method_func_id(&self) -> FuncId {
         self.outermost().0.func_id()
+    }
+
+    ///
+    /// Walk the outer chain to the frame whose block `yield` /
+    /// `block_given?` refer to. Unlike [`Self::outermost`], this does
+    /// NOT stop at a `define_method` proc-method boundary: a
+    /// define_method body keeps block semantics for yield — it refers
+    /// to the block of the method whose frame it captured, and the
+    /// block passed at its own call site is ignored (CRuby).
+    ///
+    pub(crate) fn yield_home(&self) -> Lfp {
+        let mut lfp = *self;
+        while let Some(outer) = lfp.outer() {
+            lfp = outer;
+        }
+        lfp
     }
 
     ///

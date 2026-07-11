@@ -2745,6 +2745,7 @@ impl Executor {
             // the stack frame so the Proc can be used past the current
             // call.
             let outer = outer.move_frame_to_heap();
+            self.materialize_escaped_block_handlers(globals, outer, pc);
             return Ok(Proc::from_outer(outer, fid, pc));
         }
         // `to_proc` fallback (Method#to_proc, user classes with #to_proc,
@@ -2774,9 +2775,52 @@ impl Executor {
         ))
     }
 
-    pub(crate) fn generate_lambda(&mut self, func_id: FuncId, pc: BytecodePtr) -> Proc {
+    pub(crate) fn generate_lambda(
+        &mut self,
+        globals: &mut Globals,
+        func_id: FuncId,
+        pc: BytecodePtr,
+    ) -> Proc {
         let outer_lfp = self.cfp().lfp().move_frame_to_heap();
+        self.materialize_escaped_block_handlers(globals, outer_lfp, pc);
         Proc::from_outer(outer_lfp, func_id, pc)
+    }
+
+    /// A caller-relative (fixnum-encoded) block handler stored in a
+    /// frame becomes unresolvable once the frame escapes to the heap
+    /// and its defining call returns — but `yield` written in a
+    /// `define_method` body or a long-lived Proc must still reach the
+    /// captured method's block. Walk a freshly promoted outer chain
+    /// and materialize such handlers into `Proc`s while the defining
+    /// calls are still on the stack. Best-effort: a handler whose call
+    /// frame is already gone (or whose coercion fails) is left as-is,
+    /// preserving the previous behavior.
+    fn materialize_escaped_block_handlers(
+        &mut self,
+        globals: &mut Globals,
+        outer: Lfp,
+        pc: BytecodePtr,
+    ) {
+        let mut frame = Some(outer);
+        while let Some(f) = frame {
+            if let Some(bh) = f.block()
+                && bh.0.try_fixnum().is_some()
+            {
+                // Find the still-live call frame owning `f` (promotion
+                // redirected its cfp to the heap copy).
+                let mut cfp = Some(self.cfp());
+                while let Some(c) = cfp {
+                    if c.lfp() == f {
+                        if let Ok(proc) = self.generate_proc_inner(globals, c, bh, pc) {
+                            f.set_block(Some(BlockHandler::new(proc.into())));
+                        }
+                        break;
+                    }
+                    cfp = c.prev();
+                }
+            }
+            frame = f.outer();
+        }
     }
 
     pub(crate) fn generate_binding(&mut self, pc: BytecodePtr) -> Binding {
