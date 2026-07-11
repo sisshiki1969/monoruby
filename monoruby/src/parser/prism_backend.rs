@@ -440,6 +440,10 @@ struct Lowerer<'pr> {
     /// top-level return is ignored" — a return in an eval belongs to
     /// the surrounding frame, not the script's top level).
     eval_parse: bool,
+    /// Monotonic counter for hidden locals synthesized by the pattern
+    /// matching desugar (`%pm<n>` — `%` is not spellable, so they never
+    /// surface in `local_variables`).
+    pm_temp: usize,
 }
 
 /// See [`Lowerer::scope_wraps`].
@@ -462,7 +466,14 @@ impl<'pr> Lowerer<'pr> {
             scope_wraps: Vec::new(),
             warnings: Vec::new(),
             eval_parse: false,
+            pm_temp: 0,
         }
+    }
+
+    /// A fresh hidden local name for the pattern-matching desugar.
+    fn pm_temp_name(&mut self) -> String {
+        self.pm_temp += 1;
+        format!("%pm{}", self.pm_temp)
     }
 
     /// Enter a prism scope (def/class/block/lambda body): bumps the
@@ -1538,6 +1549,58 @@ impl<'pr> Lowerer<'pr> {
                     },
                     loc,
                 }
+            }
+            prism::Node::CaseMatchNode { .. } => {
+                let n = node.as_case_match_node().unwrap();
+                self.lower_case_match(&n, loc)?
+            }
+            prism::Node::MatchPredicateNode { .. } => {
+                // `expr in pattern` — strict boolean result.
+                let n = node.as_match_predicate_node().unwrap();
+                let subj_name = self.pm_temp_name();
+                let subj_assign = pm_assign(
+                    pm_lvar(&subj_name, loc),
+                    self.lower_node(&n.value())?,
+                );
+                let subject = pm_lvar(&subj_name, loc);
+                let matched = self.lower_pattern(&n.pattern(), &subject, None)?;
+                Node::new_comp_stmt(
+                    vec![
+                        subj_assign,
+                        Node::new_if(
+                            matched,
+                            Node::new_bool(true, loc),
+                            Node::new_bool(false, loc),
+                            loc,
+                        ),
+                    ],
+                    loc,
+                )
+            }
+            prism::Node::MatchRequiredNode { .. } => {
+                // `expr => pattern` — raises NoMatchingPatternError on
+                // mismatch, evaluates to nil.
+                let n = node.as_match_required_node().unwrap();
+                let subj_name = self.pm_temp_name();
+                let subj_assign = pm_assign(
+                    pm_lvar(&subj_name, loc),
+                    self.lower_node(&n.value())?,
+                );
+                let subject = pm_lvar(&subj_name, loc);
+                let matched = self.lower_pattern(&n.pattern(), &subject, None)?;
+                Node::new_comp_stmt(
+                    vec![
+                        subj_assign,
+                        Node::new_if(
+                            matched,
+                            Node::new_nil(loc),
+                            pm_raise_no_matching_pattern(&subject, loc),
+                            loc,
+                        ),
+                        Node::new_nil(loc),
+                    ],
+                    loc,
+                )
             }
             prism::Node::InstanceVariableReadNode { .. } => {
                 let n = node.as_instance_variable_read_node().unwrap();
@@ -3037,6 +3100,506 @@ impl<'pr> Lowerer<'pr> {
     /// `Local/Instance/Global/ClassVar/Const` shapes ruruby's parser
     /// would have produced for the LHS. Used by both `MultiWriteNode`
     /// and the rescue-target lowerer.
+    // ----------------------------------------------------------------
+    // Pattern matching (`case/in`, `expr => pat`, `expr in pat`)
+    //
+    // Desugared entirely into the core AST: `===` dispatch for value
+    // patterns, `deconstruct` / `deconstruct_keys` calls for array and
+    // hash patterns, local assignments for bindings, and
+    // `raise NoMatchingPatternError` for exhaustion. Each pattern
+    // compiles to a boolean expression (side-effecting bindings on the
+    // way), so the whole construct becomes an if/elsif chain and JITs
+    // like ordinary code — no VM support needed.
+    // ----------------------------------------------------------------
+
+    fn lower_case_match(
+        &mut self,
+        n: &prism::CaseMatchNode<'pr>,
+        loc: Loc,
+    ) -> Result<Node, MonorubyErr> {
+        let subj_name = self.pm_temp_name();
+        let cache_name = self.pm_temp_name();
+        let subject = pm_lvar(&subj_name, loc);
+        // `case/in` always has a predicate (a case-less `case` cannot
+        // have `in` branches).
+        let predicate = n.predicate().unwrap();
+        let subj_assign = pm_assign(pm_lvar(&subj_name, loc), self.lower_node(&predicate)?);
+        // Reset the per-case `deconstruct` cache: the hidden local
+        // survives across executions of an enclosing loop.
+        let cache_reset = pm_assign(pm_lvar(&cache_name, loc), Node::new_nil(loc));
+        let mut chain = match n.else_clause() {
+            Some(e) => {
+                let stmts = e.statements();
+                self.lower_optional_statements(stmts.as_ref(), location_to_loc(&e.location()))?
+            }
+            None => pm_raise_no_matching_pattern(&subject, loc),
+        };
+        let conditions: Vec<_> = n.conditions().iter().collect();
+        for c in conditions.into_iter().rev() {
+            let in_node = match &c {
+                prism::Node::InNode { .. } => c.as_in_node().unwrap(),
+                other => return Err(self.unsupported("case/in branch", other)),
+            };
+            let branch_loc = location_to_loc(&c.location());
+            let pattern = in_node.pattern();
+            let mut cond = self.lower_in_pattern(&pattern, &subject, Some(&cache_name))?;
+            if let Some((guard, positive)) = split_pattern_guard(&pattern) {
+                let mut g = self.lower_node(&guard)?;
+                if !positive {
+                    g = Node::new_unop(UnOp::Not, g, location_to_loc(&guard.location()));
+                }
+                cond = pm_and(cond, g);
+            }
+            let body = match in_node.statements() {
+                Some(s) => {
+                    let body_loc = location_to_loc(&s.location());
+                    self.lower_statements_compact(&s, body_loc)?
+                }
+                None => Node::new_nil(branch_loc),
+            };
+            chain = Node::new_if(cond, body, chain, branch_loc);
+        }
+        Ok(Node::new_comp_stmt(
+            vec![subj_assign, cache_reset, chain],
+            loc,
+        ))
+    }
+
+    /// Lower an `in` clause's pattern, skipping over a guard wrapper
+    /// (handled separately by the caller).
+    fn lower_in_pattern(
+        &mut self,
+        pattern: &prism::Node<'pr>,
+        subject: &Node,
+        cache: Option<&str>,
+    ) -> Result<Node, MonorubyErr> {
+        match pattern_guard_body(pattern) {
+            Some(inner) => self.lower_pattern(&inner, subject, cache),
+            None => self.lower_pattern(pattern, subject, cache),
+        }
+    }
+
+    /// Compile one pattern against `subject` (a re-readable expression:
+    /// a hidden local or an element access) into a boolean expression.
+    /// `cache` names the per-case hidden local memoizing the top-level
+    /// subject's `deconstruct` result across branches (CRuby calls
+    /// `#deconstruct` once per case subject but `#deconstruct_keys`
+    /// per pattern).
+    fn lower_pattern(
+        &mut self,
+        pat: &prism::Node<'pr>,
+        subject: &Node,
+        cache: Option<&str>,
+    ) -> Result<Node, MonorubyErr> {
+        let loc = location_to_loc(&pat.location());
+        Ok(match pat {
+            prism::Node::ArrayPatternNode { .. } => {
+                let n = pat.as_array_pattern_node().unwrap();
+                self.lower_array_pattern(&n, subject, cache, loc)?
+            }
+            prism::Node::FindPatternNode { .. } => {
+                let n = pat.as_find_pattern_node().unwrap();
+                self.lower_find_pattern(&n, subject, cache, loc)?
+            }
+            prism::Node::HashPatternNode { .. } => {
+                let n = pat.as_hash_pattern_node().unwrap();
+                self.lower_hash_pattern(&n, subject, loc)?
+            }
+            prism::Node::CapturePatternNode { .. } => {
+                // `pat => name` — match, then bind.
+                let n = pat.as_capture_pattern_node().unwrap();
+                let matched = self.lower_pattern(&n.value(), subject, cache)?;
+                let target = self.lower_assign_target(&n.target().as_node())?;
+                pm_and(matched, pm_bind(target, subject.clone(), loc))
+            }
+            prism::Node::AlternationPatternNode { .. } => {
+                let n = pat.as_alternation_pattern_node().unwrap();
+                let l = self.lower_pattern(&n.left(), subject, cache)?;
+                let r = self.lower_pattern(&n.right(), subject, cache)?;
+                pm_or(l, r)
+            }
+            prism::Node::PinnedVariableNode { .. } => {
+                let n = pat.as_pinned_variable_node().unwrap();
+                pm_teq(self.lower_node(&n.variable())?, subject.clone())
+            }
+            prism::Node::PinnedExpressionNode { .. } => {
+                let n = pat.as_pinned_expression_node().unwrap();
+                pm_teq(self.lower_node(&n.expression())?, subject.clone())
+            }
+            prism::Node::LocalVariableTargetNode { .. } => {
+                // `in name` — binds unconditionally.
+                let target = self.lower_assign_target(pat)?;
+                pm_bind(target, subject.clone(), loc)
+            }
+            prism::Node::ImplicitNode { .. } => {
+                let n = pat.as_implicit_node().unwrap();
+                self.lower_pattern(&n.value(), subject, cache)?
+            }
+            // Value pattern: any literal/const/range/regexp/pin —
+            // `pattern === subject`.
+            _ => pm_teq(self.lower_node(pat)?, subject.clone()),
+        })
+    }
+
+    /// `subject.deconstruct` with the TypeError contract, optionally
+    /// memoized in the per-case cache local. Produces a check node
+    /// that assigns the hidden local `d_name` and evaluates truthy
+    /// (or raises TypeError).
+    fn pm_deconstructed(
+        &mut self,
+        subject: &Node,
+        d_name: &str,
+        cache: Option<&str>,
+        loc: Loc,
+    ) -> Node {
+        let decon = Node::new_mcall_noarg(subject.clone(), "deconstruct".to_string(), false, loc);
+        let type_check = |d: Node| {
+            Node::new_if(
+                pm_teq(pm_const("Array", loc), d),
+                Node::new_bool(true, loc),
+                pm_raise_type_error("deconstruct must return Array", loc),
+                loc,
+            )
+        };
+        match cache {
+            Some(c) => {
+                // if %cache.nil?
+                //   %d = subject.deconstruct
+                //   (TypeError check)
+                //   %cache = %d
+                // else
+                //   %d = %cache
+                // end
+                // true
+                let fill = Node::new_comp_stmt(
+                    vec![
+                        pm_assign(pm_lvar(d_name, loc), decon),
+                        type_check(pm_lvar(d_name, loc)),
+                        pm_assign(pm_lvar(c, loc), pm_lvar(d_name, loc)),
+                    ],
+                    loc,
+                );
+                let reuse = pm_assign(pm_lvar(d_name, loc), pm_lvar(c, loc));
+                Node::new_comp_stmt(
+                    vec![
+                        Node::new_if(
+                            Node::new_mcall_noarg(pm_lvar(c, loc), "nil?".to_string(), false, loc),
+                            fill,
+                            reuse,
+                            loc,
+                        ),
+                        Node::new_bool(true, loc),
+                    ],
+                    loc,
+                )
+            }
+            None => Node::new_comp_stmt(
+                vec![
+                    pm_assign(pm_lvar(d_name, loc), decon),
+                    type_check(pm_lvar(d_name, loc)),
+                ],
+                loc,
+            ),
+        }
+    }
+
+    fn lower_array_pattern(
+        &mut self,
+        n: &prism::ArrayPatternNode<'pr>,
+        subject: &Node,
+        cache: Option<&str>,
+        loc: Loc,
+    ) -> Result<Node, MonorubyErr> {
+        let mut checks: Vec<Node> = vec![];
+        if let Some(c) = n.constant() {
+            checks.push(pm_teq(self.lower_node(&c)?, subject.clone()));
+        }
+        checks.push(pm_respond_to(subject, "deconstruct", loc));
+        let d_name = self.pm_temp_name();
+        checks.push(self.pm_deconstructed(subject, &d_name, cache, loc));
+        let d = |loc| pm_lvar(&d_name, loc);
+        let req_len = n.requireds().iter().count();
+        let posts_len = n.posts().iter().count();
+        let fixed = (req_len + posts_len) as i64;
+        let has_rest = n.rest().is_some();
+        let size = Node::new_mcall_noarg(d(loc), "size".to_string(), false, loc);
+        checks.push(Node::new_binop(
+            BinOp::Cmp(if has_rest { CmpKind::Ge } else { CmpKind::Eq }),
+            size,
+            Node::new_integer(fixed, loc),
+        ));
+        for (i, p) in n.requireds().iter().enumerate() {
+            let elem = Node::new_array_member(d(loc), vec![Node::new_integer(i as i64, loc)], loc);
+            checks.push(self.lower_pattern(&p, &elem, None)?);
+        }
+        if let Some(rest) = n.rest() {
+            // `*name` binds the middle slice; a bare `*` and the
+            // trailing-comma `ImplicitRestNode` just allow extra
+            // elements.
+            if let prism::Node::SplatNode { .. } = &rest {
+                let sp = rest.as_splat_node().unwrap();
+                if let Some(expr) = sp.expression() {
+                    let target = self.lower_assign_target(&expr)?;
+                    let size =
+                        Node::new_mcall_noarg(d(loc), "size".to_string(), false, loc);
+                    let slice_len = Node::new_binop(
+                        BinOp::Sub,
+                        size,
+                        Node::new_integer(fixed, loc),
+                    );
+                    let slice = Node::new_array_member(
+                        d(loc),
+                        vec![Node::new_integer(req_len as i64, loc), slice_len],
+                        loc,
+                    );
+                    checks.push(pm_bind(target, slice, loc));
+                }
+            }
+        }
+        for (j, p) in n.posts().iter().enumerate() {
+            let size = Node::new_mcall_noarg(d(loc), "size".to_string(), false, loc);
+            let idx = Node::new_binop(
+                BinOp::Sub,
+                size,
+                Node::new_integer((posts_len - j) as i64, loc),
+            );
+            let elem = Node::new_array_member(d(loc), vec![idx], loc);
+            checks.push(self.lower_pattern(&p, &elem, None)?);
+        }
+        Ok(pm_and_all(checks, loc))
+    }
+
+    fn lower_find_pattern(
+        &mut self,
+        n: &prism::FindPatternNode<'pr>,
+        subject: &Node,
+        cache: Option<&str>,
+        loc: Loc,
+    ) -> Result<Node, MonorubyErr> {
+        let mut checks: Vec<Node> = vec![];
+        if let Some(c) = n.constant() {
+            checks.push(pm_teq(self.lower_node(&c)?, subject.clone()));
+        }
+        checks.push(pm_respond_to(subject, "deconstruct", loc));
+        let d_name = self.pm_temp_name();
+        checks.push(self.pm_deconstructed(subject, &d_name, cache, loc));
+        let d = |loc| pm_lvar(&d_name, loc);
+        let k = n.requireds().iter().count() as i64;
+        // %i = 0
+        // %found = false
+        // while %i <= %d.size - K
+        //   if (required matches at offset %i)
+        //     pre = %d[0, %i]; post = %d[%i + K, %d.size]
+        //     %found = true
+        //     break
+        //   end
+        //   %i = %i + 1
+        // end
+        // %found
+        let i_name = self.pm_temp_name();
+        let found_name = self.pm_temp_name();
+        let i = |loc| pm_lvar(&i_name, loc);
+        let found = |loc| pm_lvar(&found_name, loc);
+        let mut arm: Vec<Node> = vec![];
+        let mut elem_checks: Vec<Node> = vec![];
+        for (j, p) in n.requireds().iter().enumerate() {
+            let idx = if j == 0 {
+                i(loc)
+            } else {
+                Node::new_binop(BinOp::Add, i(loc), Node::new_integer(j as i64, loc))
+            };
+            let elem = Node::new_array_member(d(loc), vec![idx], loc);
+            elem_checks.push(self.lower_pattern(&p, &elem, None)?);
+        }
+        if let Some(expr) = n.left().expression() {
+            let target = self.lower_assign_target(&expr)?;
+            let slice =
+                Node::new_array_member(d(loc), vec![Node::new_integer(0, loc), i(loc)], loc);
+            arm.push(pm_assign(target, slice));
+        }
+        if let prism::Node::SplatNode { .. } = &n.right() {
+            let sp = n.right().as_splat_node().unwrap();
+            if let Some(expr) = sp.expression() {
+                let target = self.lower_assign_target(&expr)?;
+                let from = Node::new_binop(BinOp::Add, i(loc), Node::new_integer(k, loc));
+                let size = Node::new_mcall_noarg(d(loc), "size".to_string(), false, loc);
+                let slice = Node::new_array_member(d(loc), vec![from, size], loc);
+                arm.push(pm_assign(target, slice));
+            }
+        }
+        arm.push(pm_assign(found(loc), Node::new_bool(true, loc)));
+        arm.push(Node {
+            kind: NodeKind::Break(Box::new(Node::new_nil(loc))),
+            loc,
+        });
+        let size = Node::new_mcall_noarg(d(loc), "size".to_string(), false, loc);
+        let while_cond = Node::new_binop(
+            BinOp::Cmp(CmpKind::Le),
+            i(loc),
+            Node::new_binop(BinOp::Sub, size, Node::new_integer(k, loc)),
+        );
+        let body = Node::new_comp_stmt(
+            vec![
+                Node::new_if(
+                    pm_and_all(elem_checks, loc),
+                    Node::new_comp_stmt(arm, loc),
+                    Node::new_nil(loc),
+                    loc,
+                ),
+                pm_assign(
+                    i(loc),
+                    Node::new_binop(BinOp::Add, i(loc), Node::new_integer(1, loc)),
+                ),
+            ],
+            loc,
+        );
+        checks.push(Node::new_comp_stmt(
+            vec![
+                pm_assign(i(loc), Node::new_integer(0, loc)),
+                pm_assign(found(loc), Node::new_bool(false, loc)),
+                Node::new_while(while_cond, body, true, loc),
+                found(loc),
+            ],
+            loc,
+        ));
+        Ok(pm_and_all(checks, loc))
+    }
+
+    fn lower_hash_pattern(
+        &mut self,
+        n: &prism::HashPatternNode<'pr>,
+        subject: &Node,
+        loc: Loc,
+    ) -> Result<Node, MonorubyErr> {
+        // Collect (symbol-name, value-pattern) pairs first — the keys
+        // double as the `deconstruct_keys` argument.
+        let mut pairs: Vec<(String, Option<prism::Node<'pr>>)> = vec![];
+        for e in n.elements().iter() {
+            let assoc = match &e {
+                prism::Node::AssocNode { .. } => e.as_assoc_node().unwrap(),
+                other => return Err(self.unsupported("hash pattern element", other)),
+            };
+            let key = assoc.key();
+            let name = match &key {
+                prism::Node::SymbolNode { .. } => {
+                    let sym = key.as_symbol_node().unwrap();
+                    String::from_utf8_lossy(sym.unescaped()).into_owned()
+                }
+                other => return Err(self.unsupported("hash pattern key", other)),
+            };
+            // `a:` alone wraps its implicit binding in ImplicitNode.
+            pairs.push((name, Some(assoc.value())));
+        }
+        // rest: None | AssocSplatNode (`**` / `**rest`) |
+        // NoKeywordsParameterNode (`**nil`).
+        let mut no_extra_keys = false;
+        let mut rest_target: Option<prism::Node<'pr>> = None;
+        let mut pass_nil = pairs.is_empty();
+        if let Some(rest) = n.rest() {
+            match &rest {
+                prism::Node::AssocSplatNode { .. } => {
+                    let sp = rest.as_assoc_splat_node().unwrap();
+                    if let Some(v) = sp.value() {
+                        // `**rest` — deconstruct_keys receives nil.
+                        rest_target = Some(v);
+                        pass_nil = true;
+                    }
+                    // bare `**` — keys are still passed (CRuby).
+                }
+                prism::Node::NoKeywordsParameterNode { .. } => {
+                    no_extra_keys = true;
+                    pass_nil = true;
+                }
+                other => return Err(self.unsupported("hash pattern rest", other)),
+            }
+        } else if pairs.is_empty() {
+            // `in {}` matches only an empty hash.
+            no_extra_keys = true;
+        }
+        let mut checks: Vec<Node> = vec![];
+        if let Some(c) = n.constant() {
+            checks.push(pm_teq(self.lower_node(&c)?, subject.clone()));
+        }
+        checks.push(pm_respond_to(subject, "deconstruct_keys", loc));
+        let h_name = self.pm_temp_name();
+        let h = |loc| pm_lvar(&h_name, loc);
+        let keys_arg = if pass_nil {
+            Node::new_nil(loc)
+        } else {
+            Node::new_array(
+                pairs
+                    .iter()
+                    .map(|(name, _)| Node::new_symbol(name.clone(), loc))
+                    .collect(),
+                loc,
+            )
+        };
+        let decon = Node::new_mcall(
+            subject.clone(),
+            "deconstruct_keys".to_string(),
+            crate::ast::ArgList::from_args(vec![keys_arg]),
+            false,
+            loc,
+        );
+        checks.push(Node::new_comp_stmt(
+            vec![
+                pm_assign(h(loc), decon),
+                Node::new_if(
+                    pm_teq(pm_const("Hash", loc), h(loc)),
+                    Node::new_bool(true, loc),
+                    pm_raise_type_error("deconstruct_keys must return Hash", loc),
+                    loc,
+                ),
+            ],
+            loc,
+        ));
+        for (name, value) in &pairs {
+            checks.push(Node::new_mcall(
+                h(loc),
+                "key?".to_string(),
+                crate::ast::ArgList::from_args(vec![Node::new_symbol(name.clone(), loc)]),
+                false,
+                loc,
+            ));
+            if let Some(v) = value {
+                let elem = Node::new_array_member(
+                    h(loc),
+                    vec![Node::new_symbol(name.clone(), loc)],
+                    loc,
+                );
+                checks.push(self.lower_pattern(v, &elem, None)?);
+            }
+        }
+        if no_extra_keys {
+            checks.push(Node::new_binop(
+                BinOp::Cmp(CmpKind::Eq),
+                Node::new_mcall_noarg(h(loc), "size".to_string(), false, loc),
+                Node::new_integer(pairs.len() as i64, loc),
+            ));
+        }
+        if let Some(target) = rest_target {
+            // rest = %h.dup minus the matched keys.
+            let target = self.lower_assign_target(&target)?;
+            let rest_read = target.clone();
+            let mut stmts = vec![pm_assign(
+                target,
+                Node::new_mcall_noarg(h(loc), "dup".to_string(), false, loc),
+            )];
+            for (name, _) in &pairs {
+                stmts.push(Node::new_mcall(
+                    rest_read.clone(),
+                    "delete".to_string(),
+                    crate::ast::ArgList::from_args(vec![Node::new_symbol(name.clone(), loc)]),
+                    false,
+                    loc,
+                ));
+            }
+            stmts.push(Node::new_bool(true, loc));
+            checks.push(Node::new_comp_stmt(stmts, loc));
+        }
+        Ok(pm_and_all(checks, loc))
+    }
+
     fn lower_assign_target(&mut self, node: &prism::Node<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         Ok(match node {
@@ -4470,6 +5033,110 @@ fn match_last_line(regex: Node, loc: crate::ast::Loc) -> Node {
         },
         loc,
     }
+}
+
+// ---- pattern-matching desugar helpers ----
+
+fn pm_lvar(name: &str, loc: Loc) -> Node {
+    Node::new_lvar(name.to_string(), 0, loc)
+}
+
+fn pm_assign(target: Node, value: Node) -> Node {
+    Node::new_mul_assign(vec![target], vec![value])
+}
+
+/// An unconditional binding as a truthy check: `(target = value; true)`.
+fn pm_bind(target: Node, value: Node, loc: Loc) -> Node {
+    Node::new_comp_stmt(vec![pm_assign(target, value), Node::new_bool(true, loc)], loc)
+}
+
+fn pm_and(l: Node, r: Node) -> Node {
+    Node::new_binop(BinOp::LAnd, l, r)
+}
+
+fn pm_or(l: Node, r: Node) -> Node {
+    Node::new_binop(BinOp::LOr, l, r)
+}
+
+fn pm_and_all(checks: Vec<Node>, loc: Loc) -> Node {
+    let mut it = checks.into_iter();
+    match it.next() {
+        Some(first) => it.fold(first, pm_and),
+        None => Node::new_bool(true, loc),
+    }
+}
+
+/// `pattern === subject`.
+fn pm_teq(pattern: Node, subject: Node) -> Node {
+    Node::new_binop(BinOp::Cmp(CmpKind::TEq), pattern, subject)
+}
+
+fn pm_const(name: &str, loc: Loc) -> Node {
+    Node::new_const(name.to_string(), false, None, vec![], loc)
+}
+
+fn pm_respond_to(subject: &Node, method: &str, loc: Loc) -> Node {
+    Node::new_mcall(
+        subject.clone(),
+        "respond_to?".to_string(),
+        crate::ast::ArgList::from_args(vec![Node::new_symbol(method.to_string(), loc)]),
+        false,
+        loc,
+    )
+}
+
+fn pm_raise_no_matching_pattern(subject: &Node, loc: Loc) -> Node {
+    let msg = Node::new_mcall_noarg(subject.clone(), "inspect".to_string(), false, loc);
+    Node::new_fcall(
+        "raise".to_string(),
+        crate::ast::ArgList::from_args(vec![pm_const("NoMatchingPatternError", loc), msg]),
+        false,
+        loc,
+    )
+}
+
+fn pm_raise_type_error(msg: &str, loc: Loc) -> Node {
+    Node::new_fcall(
+        "raise".to_string(),
+        crate::ast::ArgList::from_args(vec![
+            pm_const("TypeError", loc),
+            Node {
+                kind: NodeKind::String(msg.to_string()),
+                loc,
+            },
+        ]),
+        false,
+        loc,
+    )
+}
+
+/// A guard on an `in` clause reaches us as an `IfNode` / `UnlessNode`
+/// wrapping the pattern (patterns proper cannot contain conditionals,
+/// so the wrapper is unambiguous). Returns the guard predicate and its
+/// polarity, if present.
+fn split_pattern_guard<'pr>(pattern: &prism::Node<'pr>) -> Option<(prism::Node<'pr>, bool)> {
+    match pattern {
+        prism::Node::IfNode { .. } => {
+            let n = pattern.as_if_node().unwrap();
+            Some((n.predicate(), true))
+        }
+        prism::Node::UnlessNode { .. } => {
+            let n = pattern.as_unless_node().unwrap();
+            Some((n.predicate(), false))
+        }
+        _ => None,
+    }
+}
+
+/// The actual pattern inside a guard wrapper (see
+/// [`split_pattern_guard`]); `None` when the node is not a guard.
+fn pattern_guard_body<'pr>(pattern: &prism::Node<'pr>) -> Option<prism::Node<'pr>> {
+    let statements = match pattern {
+        prism::Node::IfNode { .. } => pattern.as_if_node().unwrap().statements(),
+        prism::Node::UnlessNode { .. } => pattern.as_unless_node().unwrap().statements(),
+        _ => return None,
+    };
+    statements.and_then(|s| s.body().iter().next())
 }
 
 fn binop_from_name(name: &str) -> Option<BinOp> {
