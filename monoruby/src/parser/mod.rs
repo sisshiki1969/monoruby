@@ -16,15 +16,18 @@ use crate::globals::MonorubyErr;
 
 mod prism_backend;
 
-pub fn parse_program(code: String, path: impl Into<PathBuf>) -> Result<ParseResult, MonorubyErr> {
-    prism_backend::parse_program(code, path.into())
+pub fn parse_program(
+    code: impl Into<Vec<u8>>,
+    path: impl Into<PathBuf>,
+) -> Result<ParseResult, MonorubyErr> {
+    prism_backend::parse_program(code.into(), path.into())
 }
 
 /// `eval` / `instance_eval` / `class_eval`. The Prism backend receives
 /// the surrounding scopes via the vendored ruby-prism's
 /// `parse_with_options` (see `vendor/ruby-prism/src/lib.rs`).
 pub(crate) fn parse_program_eval(
-    code: String,
+    code: Vec<u8>,
     path: impl Into<PathBuf>,
     extern_context: Option<&crate::globals::ExternalContext>,
     line_offset: i64,
@@ -42,7 +45,7 @@ pub(crate) fn parse_program_eval(
 /// `binding.eval` / `eval(code, binding)`. The binding's frame locals
 /// are pushed as the innermost surrounding scope.
 pub(crate) fn parse_program_binding(
-    code: String,
+    code: Vec<u8>,
     path: impl Into<PathBuf>,
     context: Option<LvarCollector>,
     extern_context: Option<&crate::globals::ExternalContext>,

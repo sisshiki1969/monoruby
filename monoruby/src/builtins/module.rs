@@ -895,7 +895,7 @@ fn class_eval(
         }
         vm.module_eval(globals, module, bh)
     } else if supplied >= 1 {
-        let expr = args[0].coerce_to_string(vm, globals)?;
+        let expr = crate::builtins::eval_source_bytes(vm, globals, args[0])?;
         let cfp = vm.cfp();
         let caller_cfp = cfp.prev().unwrap();
         let path = if supplied >= 2 {

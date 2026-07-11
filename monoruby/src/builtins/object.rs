@@ -385,7 +385,7 @@ fn instance_eval_inner(
         let data = vm.get_block_data(globals, bh)?;
         vm.invoke_block_with_self(globals, &data, self_val, &[self_val])
     } else if argc >= 1 && argc <= 3 {
-        let expr = args[0].coerce_to_str(vm, globals)?;
+        let expr = crate::builtins::eval_source_bytes(vm, globals, args[0])?;
         let cfp = vm.cfp();
         let caller_cfp = cfp.prev().unwrap();
         let path = if argc >= 2 {

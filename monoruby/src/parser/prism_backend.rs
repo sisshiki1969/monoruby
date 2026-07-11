@@ -52,12 +52,12 @@ const ANON_KWREST_NAME: &str = "**";
 /// enclosing scope. Not a valid Ruby identifier, so it can't collide.
 const FOR_INDEX_NAME: &str = "(for)";
 
-pub(super) fn parse_program(code: String, path: PathBuf) -> Result<ParseResult, MonorubyErr> {
+pub(super) fn parse_program(code: Vec<u8>, path: PathBuf) -> Result<ParseResult, MonorubyErr> {
     try_prism_inner(&code, path, None, None, 0, None)
 }
 
 pub(super) fn parse_program_eval(
-    code: String,
+    code: Vec<u8>,
     path: PathBuf,
     extern_context: Option<&ExternalContext>,
     line_offset: i64,
@@ -68,7 +68,7 @@ pub(super) fn parse_program_eval(
 }
 
 pub(super) fn parse_program_binding(
-    code: String,
+    code: Vec<u8>,
     path: PathBuf,
     context: Option<LvarCollector>,
     extern_context: Option<&ExternalContext>,
@@ -283,7 +283,7 @@ fn parse_frozen_directive(comment: &str) -> Option<bool> {
 }
 
 fn try_prism_inner(
-    code: &str,
+    code: &[u8],
     path: PathBuf,
     options: Option<prism::Options>,
     seed_lvars: Option<LvarCollector>,
@@ -293,8 +293,8 @@ fn try_prism_inner(
     let path_display = path.display().to_string();
 
     let result = match options.as_ref() {
-        Some(opts) => prism::parse_with_options(code.as_bytes(), opts),
-        None => prism::parse(code.as_bytes()),
+        Some(opts) => prism::parse_with_options(code, opts),
+        None => prism::parse(code),
     };
 
     // Detect the source encoding from the `# coding:` / `# encoding:`
@@ -308,13 +308,22 @@ fn try_prism_inner(
     // default (the eval'd string's own encoding — CRuby uses it as the
     // eval source encoding when no `# encoding:` comment is present).
     let source_encoding: Option<String> =
-        detect_source_encoding(code.as_bytes()).or(default_encoding);
-    let frozen_string_literal: Option<bool> = detect_frozen_string_literal(code.as_bytes());
+        detect_source_encoding(code).or(default_encoding);
+    let frozen_string_literal: Option<bool> = detect_frozen_string_literal(code);
 
+    // SourceInfo's copy of the source is display-only (error carets,
+    // `get_line`), so a binary source with invalid UTF-8 bytes is
+    // stored lossily; the parse and the lowerer above work on the raw
+    // bytes. For valid-UTF-8 sources (the overwhelming case) the lossy
+    // conversion is the identity.
     let source_info: SourceInfoRef = std::rc::Rc::new(
-        crate::ast::SourceInfo::new_eval(path, code.to_owned(), line_offset)
-            .with_source_encoding(source_encoding)
-            .with_frozen_string_literal(frozen_string_literal),
+        crate::ast::SourceInfo::new_eval(
+            path,
+            String::from_utf8_lossy(code).into_owned(),
+            line_offset,
+        )
+        .with_source_encoding(source_encoding)
+        .with_frozen_string_literal(frozen_string_literal),
     );
 
     if let Some(diag) = result.errors().next() {
@@ -361,7 +370,7 @@ fn try_prism_inner(
         })
         .collect();
 
-    let mut lowerer = Lowerer::new(code.as_bytes(), path_display, source_info.clone());
+    let mut lowerer = Lowerer::new(code, path_display, source_info.clone());
     lowerer.line_offset = line_offset;
     lowerer.eval_parse = options.is_some();
     if let Some(seed) = seed_lvars {
@@ -4750,7 +4759,7 @@ mod tests {
     #[test]
     fn shareable_constant_value_literal_parses() {
         let source = "# shareable_constant_value: literal\nFOO = [1, 2, 3]\n".to_owned();
-        let result = parse_program(source, PathBuf::from("test.rb"));
+        let result = parse_program(source.into(), PathBuf::from("test.rb"));
         assert!(
             result.is_ok(),
             "parse_program should succeed; got {:?}",
@@ -5189,7 +5198,7 @@ $1
     #[test]
     fn parse_program_extracts_source_encoding_from_magic_comment() {
         let result = parse_program(
-            "# encoding: binary\nx = 1\n".to_owned(),
+            "# encoding: binary\nx = 1\n".to_owned().into(),
             PathBuf::from("test.rb"),
         )
         .expect("parse_program");
@@ -5199,7 +5208,7 @@ $1
         );
 
         let result =
-            parse_program("x = 1\n".to_owned(), PathBuf::from("test.rb")).expect("parse_program");
+            parse_program("x = 1\n".to_owned().into(), PathBuf::from("test.rb")).expect("parse_program");
         assert_eq!(result.source_info.source_encoding, None);
     }
 

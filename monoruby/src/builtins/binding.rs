@@ -105,7 +105,7 @@ fn source_location(
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let src_encoding = crate::builtins::eval_src_encoding(lfp.arg(0));
-    let expr = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let expr = crate::builtins::eval_source_bytes(vm, globals, lfp.arg(0))?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
     let fname = if let Some(f) = lfp.try_arg(1) {
@@ -253,7 +253,7 @@ fn local_variable_set(
     // compiling a stub `<name> = nil`, then write the actual value.
     let binding = Binding::try_new(self_val).expect("self is Binding");
     let stub = format!("{} = nil", name);
-    globals.compile_script_binding(stub, "(local_variable_set)", binding, 1, None)?;
+    globals.compile_script_binding(stub.into_bytes(), "(local_variable_set)", binding, 1, None)?;
     vm.invoke_binding(globals, binding.binding().unwrap())?;
     let inner = self_val.as_binding_inner();
     let (mut host, slot) = lookup_local_in_binding(globals, inner, name)

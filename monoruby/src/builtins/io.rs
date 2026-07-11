@@ -1331,12 +1331,24 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let cmd_val = args[0];
 
     // Build the command from either a String or an Array of strings.
+    // Array elements pass their BYTES through verbatim (OsString): an
+    // argv entry may legitimately hold non-UTF-8 bytes (e.g. a
+    // `# encoding: big5` script passed via `-e`), and `to_s` would
+    // mangle them.
+    fn arg_os(v: Value, globals: &Globals) -> std::ffi::OsString {
+        use std::os::unix::ffi::OsStringExt;
+        if let Some(inner) = v.is_rstring_inner() {
+            std::ffi::OsString::from_vec(inner.as_bytes().to_vec())
+        } else {
+            v.to_s(globals).into()
+        }
+    }
     let (mut command, cmd_name) = if let Some(ary) = cmd_val.try_array_ty() {
-        let parts: Vec<String> = ary.iter().map(|v| v.to_s(globals)).collect();
+        let parts: Vec<std::ffi::OsString> = ary.iter().map(|v| arg_os(*v, globals)).collect();
         if parts.is_empty() {
             return Err(MonorubyErr::argumenterr("popen: empty command array"));
         }
-        let name = parts[0].clone();
+        let name = parts[0].to_string_lossy().into_owned();
         let mut cmd = Command::new(&parts[0]);
         for part in &parts[1..] {
             cmd.arg(part);

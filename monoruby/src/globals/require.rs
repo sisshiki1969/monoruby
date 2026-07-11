@@ -10,7 +10,7 @@ impl Globals {
         &mut self,
         file_name: &std::path::Path,
         is_relative: bool,
-    ) -> Result<Option<(String, std::path::PathBuf)>> {
+    ) -> Result<Option<(Vec<u8>, std::path::PathBuf)>> {
         let path_str = file_name.to_string_lossy();
 
         // Absolute path: try to load directly.
@@ -198,7 +198,7 @@ impl Globals {
     fn require_lib_file(
         &mut self,
         path: std::path::PathBuf,
-    ) -> Result<Option<(String, std::path::PathBuf)>> {
+    ) -> Result<Option<(Vec<u8>, std::path::PathBuf)>> {
         // CRuby stores the path as passed to `require`, not its
         // symlink-resolved form. `Path::canonicalize` resolves every
         // symlink (e.g. on macOS where `/tmp` is a symlink to
@@ -259,7 +259,7 @@ impl Globals {
     pub(crate) fn find_for_load(
         &mut self,
         file_name: &std::path::Path,
-    ) -> Result<(String, std::path::PathBuf)> {
+    ) -> Result<(Vec<u8>, std::path::PathBuf)> {
         let path_str = file_name.to_string_lossy();
 
         // Absolute path: load directly.
@@ -336,7 +336,7 @@ fn lexically_normalize(path: &std::path::Path) -> std::path::PathBuf {
     out
 }
 
-pub fn load_file(path: &std::path::Path) -> Result<(String, std::path::PathBuf)> {
+pub fn load_file(path: &std::path::Path) -> Result<(Vec<u8>, std::path::PathBuf)> {
     read_source_file(path).map_err(|err| MonorubyErr::cant_load(Some(err), path))
 }
 
@@ -350,11 +350,16 @@ pub fn load_file(path: &std::path::Path) -> Result<(String, std::path::PathBuf)>
 ///
 pub fn read_source_file(
     path: &std::path::Path,
-) -> std::io::Result<(String, std::path::PathBuf)> {
-    // Read the file first; this gives a clear error if the file doesn't exist.
-    let mut file_body = String::new();
+) -> std::io::Result<(Vec<u8>, std::path::PathBuf)> {
+    // Read the file first; this gives a clear error if the file doesn't
+    // exist. Raw bytes, NOT UTF-8-validated: a `# encoding: binary`
+    // source may legitimately contain non-UTF-8 bytes in its literals,
+    // and prism parses arbitrary bytes under the declared encoding
+    // (invalid sequences surface as prism's own "invalid multibyte
+    // char" SyntaxError, matching CRuby).
+    let mut file_body = Vec::new();
     let mut file = std::fs::OpenOptions::new().read(true).open(path)?;
-    file.read_to_string(&mut file_body)?;
+    file.read_to_end(&mut file_body)?;
     // Try to canonicalize the path for dedup tracking;
     // fall back to the original path if canonicalize fails.
     let resolved_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());

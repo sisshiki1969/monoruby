@@ -26,8 +26,10 @@ enum ParserKind {
 #[command(author, about, long_about = None)]
 struct CommandLineArgs {
     /// one line of script. several -e's allowed. Omit [programfile]
+    /// (OsString so a `# encoding:`-tagged script with non-UTF-8 bytes
+    /// in its literals reaches the parser unmangled).
     #[arg(short, num_args = 0..)]
-    exec: Vec<String>,
+    exec: Vec<std::ffi::OsString>,
     /// print the version number, then exit
     #[arg(short, long)]
     version: bool,
@@ -57,10 +59,15 @@ struct CommandLineArgs {
     file: Vec<String>,
 }
 
-fn dump_ast(code: &str, _path: &std::path::Path, kind: ParserKind, _globals: &Globals) {
+/// Raw bytes of an OS-native CLI argument (Unix: no conversion).
+fn os_bytes(s: &std::ffi::OsStr) -> &[u8] {
+    std::os::unix::ffi::OsStrExt::as_bytes(s)
+}
+
+fn dump_ast(code: &[u8], _path: &std::path::Path, kind: ParserKind, _globals: &Globals) {
     match kind {
         ParserKind::Prism => {
-            let result = ruby_prism::parse(code.as_bytes());
+            let result = ruby_prism::parse(code);
             for diag in result.errors() {
                 eprintln!(
                     "prism error at {}..{}: {}",
@@ -115,13 +122,18 @@ fn main() {
         globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
         if let Some(kind) = args.ast {
             for code in args.exec {
-                dump_ast(&code, path, kind, &globals);
+                dump_ast(os_bytes(&code), path, kind, &globals);
             }
         } else {
             // Multiple `-e` options form a single program (joined by
             // newlines), matching CRuby, so `-r` libraries and `at_exit`
             // handlers are processed once around the combined script.
-            let code = args.exec.join("\n");
+            let code: Vec<u8> = args
+                .exec
+                .iter()
+                .map(|s| os_bytes(s))
+                .collect::<Vec<_>>()
+                .join(&b'\n');
             match globals.run_with_requires(&args.require, code, path) {
                 Ok(_val) => {
                     #[cfg(debug_assertions)]
@@ -153,15 +165,6 @@ fn main() {
                 // (`ruby: No such file or directory -- t.rb (LoadError)`).
                 // `io::Error`'s Display appends ` (os error N)`, which
                 // CRuby's strerror-based message doesn't have — strip it.
-                // A source that is not valid UTF-8 (e.g. UTF-16 with a
-                // BOM) is CRuby's `invalid multibyte char` SyntaxError,
-                // not an IO-level message.
-                if err.kind() == std::io::ErrorKind::InvalidData {
-                    eprintln!(
-                        "monoruby: {file_name}: invalid multibyte char (UTF-8) (SyntaxError)"
-                    );
-                    std::process::exit(1);
-                }
                 let msg = err.to_string();
                 let msg = msg.split(" (os error ").next().unwrap();
                 eprintln!("monoruby: {msg} -- {file_name} (LoadError)");
@@ -174,15 +177,13 @@ fn main() {
         }
         // Read stdin as raw bytes: a script piped in may contain
         // non-UTF-8 bytes (e.g. a `# encoding:`-tagged source with
-        // high bytes in a string literal). monoruby stores source as
-        // UTF-8 and cannot round-trip arbitrary bytes, but it must not
-        // abort — decode lossily rather than `unwrap`-ing.
+        // high bytes in a string literal); the whole source pipeline
+        // carries bytes, so they round-trip into literals verbatim.
         let mut bytes = Vec::new();
         std::io::stdin()
             .read_to_end(&mut bytes)
             .expect("failed to read stdin");
-        let code = String::from_utf8_lossy(&bytes).into_owned();
-        (code, std::path::PathBuf::from("-"))
+        (bytes, std::path::PathBuf::from("-"))
     };
     if let Some(kind) = args.ast {
         dump_ast(&code, &path, kind, &globals);
