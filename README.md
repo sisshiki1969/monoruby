@@ -75,22 +75,31 @@ steps:
   - run: monoruby my_script.rb
 ```
 
-Since no prebuilt binaries are published yet, the action builds monoruby from
-source on the first run for each monoruby revision × runner OS/arch and caches
-the resulting binary and runtime tree with `actions/cache`, so subsequent runs
-restore in seconds. Pinning a release tag keeps the cache stable; tracking
-`@master` rebuilds on every upstream push. Linux (x64/arm64) and macOS
-(Apple Silicon) hosted runners are supported.
+The action first tries to download a prebuilt binary attached to a GitHub
+release (built by the `release binaries` workflow), which installs in seconds:
+release tags use their own release's assets, while `@master` / `@latest` use
+the rolling `latest` nightly prerelease, rebuilt on every master push (so it
+can lag a just-pushed HEAD by one build, ~15 min). Automatic builds cover
+x86-64 Linux only; assets for Linux arm64 and macOS arm64 are published on
+demand by dispatching the `release binaries` workflow with the wanted tag and
+targets. When no asset exists for the ref/platform — or
+`prefer-prebuilt: 'false'` is set — the action falls back to building monoruby
+from source on the first run for each monoruby revision × runner OS/arch and
+caches the resulting binary and runtime tree with `actions/cache`, so
+subsequent runs restore in seconds. Linux (x64/arm64) and macOS (Apple
+Silicon) hosted runners are supported either way.
 
 Inputs and outputs:
 
-| Name                     | Kind   | Description                                                     |
-| ------------------------ | ------ | --------------------------------------------------------------- |
-| `cache` (`'true'`)       | input  | Set to `'false'` to always build from source                    |
-| `cache-version` (`'v1'`) | input  | Mixed into the cache key; bump to discard existing caches       |
-| `cache-hit`              | output | `'true'` if the binary was restored from cache                  |
-| `monoruby-version`       | output | Output of `monoruby --version`                                  |
-| `ruby-version`           | output | `RUBY_VERSION` reported by the installed monoruby               |
+| Name                        | Kind   | Description                                                            |
+| --------------------------- | ------ | ---------------------------------------------------------------------- |
+| `prefer-prebuilt` (`'true'`)| input  | Set to `'false'` to skip release assets and build the exact ref        |
+| `cache` (`'true'`)          | input  | Set to `'false'` to disable the source-build cache                     |
+| `cache-version` (`'v1'`)    | input  | Mixed into the cache key; bump to discard existing caches              |
+| `prebuilt`                  | output | `'true'` if a prebuilt release asset was used                          |
+| `cache-hit`                 | output | `'true'` if the built binary was restored from cache                   |
+| `monoruby-version`          | output | Output of `monoruby --version`                                         |
+| `ruby-version`              | output | `RUBY_VERSION` reported by the installed monoruby                      |
 
 ## Benchmark
 
