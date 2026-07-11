@@ -104,6 +104,7 @@ fn source_location(
 /// [https://docs.ruby-lang.org/ja/latest/method/Binding/i/eval.html]
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let src_encoding = crate::builtins::eval_src_encoding(lfp.arg(0));
     let expr = lfp.arg(0).coerce_to_string(vm, globals)?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
@@ -123,7 +124,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     // binding-form. The cast can't fail; `Module#define_builtin_func`
     // guarantees `lfp.self_val()` matches `BINDING_CLASS`.
     let binding = Binding::try_new(lfp.self_val()).expect("self is Binding");
-    globals.compile_script_binding(expr, fname, binding, lineno)?;
+    globals.compile_script_binding(expr, fname, binding, lineno, src_encoding)?;
     vm.flush_compile_warnings(globals);
     vm.invoke_binding(globals, binding.binding().unwrap())
 }
@@ -252,7 +253,7 @@ fn local_variable_set(
     // compiling a stub `<name> = nil`, then write the actual value.
     let binding = Binding::try_new(self_val).expect("self is Binding");
     let stub = format!("{} = nil", name);
-    globals.compile_script_binding(stub, "(local_variable_set)", binding, 1)?;
+    globals.compile_script_binding(stub, "(local_variable_set)", binding, 1, None)?;
     vm.invoke_binding(globals, binding.binding().unwrap())?;
     let inner = self_val.as_binding_inner();
     let (mut host, slot) = lookup_local_in_binding(globals, inner, name)

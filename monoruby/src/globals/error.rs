@@ -660,10 +660,18 @@ impl MonorubyErr {
         a: crate::value::Encoding,
         b: crate::value::Encoding,
     ) -> MonorubyErr {
+        // CRuby spells binary as "BINARY (ASCII-8BIT)" in this message.
+        fn disp(e: crate::value::Encoding) -> &'static str {
+            if e == crate::value::Encoding::Ascii8 {
+                "BINARY (ASCII-8BIT)"
+            } else {
+                e.name()
+            }
+        }
         let msg = format!(
             "incompatible character encodings: {} and {}",
-            a.name(),
-            b.name()
+            disp(a),
+            disp(b)
         );
         Self::encoding_compatibility_error_with_store(store, msg)
     }

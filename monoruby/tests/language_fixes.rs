@@ -222,3 +222,28 @@ fn eigenclass_tower() {
         "#,
     );
 }
+
+#[test]
+fn interpolation_and_eval_source_encoding() {
+    // Interpolation seeds its result from the source encoding and
+    // negotiates each piece like `<<` (raising CompatibilityError on
+    // an incompatible mix); an eval'd string with no magic comment
+    // contributes its own encoding as the source encoding.
+    run_test_once(
+        r##"
+        res = []
+        res << eval('"a#{"b"}c"'.dup.force_encoding("us-ascii")).encoding.to_s
+        res << eval("__ENCODING__".dup.force_encoding("us-ascii")).to_s
+        res << eval("# encoding: utf-8\n__ENCODING__".dup.force_encoding("us-ascii")).to_s
+        a = "あ"
+        b = "\xff".dup.force_encoding "binary"
+        begin
+          "#{a} #{b}"
+        rescue Encoding::CompatibilityError => e
+          res << e.message
+        end
+        res << "x#{"あ"}".encoding.to_s
+        res
+        "##,
+    );
+}

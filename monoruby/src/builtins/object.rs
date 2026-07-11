@@ -399,8 +399,15 @@ fn instance_eval_inner(
         } else {
             1
         };
-        let fid =
-            globals.compile_script_eval(expr, path, caller_cfp, Some(self_val.class()), lineno)?;
+        let src_encoding = crate::builtins::eval_src_encoding(args[0]);
+        let fid = globals.compile_script_eval(
+            expr,
+            path,
+            caller_cfp,
+            Some(self_val.class()),
+            lineno,
+            src_encoding,
+        )?;
         vm.flush_compile_warnings(globals);
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])

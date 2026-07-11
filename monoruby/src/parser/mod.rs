@@ -28,8 +28,15 @@ pub(crate) fn parse_program_eval(
     path: impl Into<PathBuf>,
     extern_context: Option<&crate::globals::ExternalContext>,
     line_offset: i64,
+    default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
-    prism_backend::parse_program_eval(code, path.into(), extern_context, line_offset)
+    prism_backend::parse_program_eval(
+        code,
+        path.into(),
+        extern_context,
+        line_offset,
+        default_encoding,
+    )
 }
 
 /// `binding.eval` / `eval(code, binding)`. The binding's frame locals
@@ -40,6 +47,14 @@ pub(crate) fn parse_program_binding(
     context: Option<LvarCollector>,
     extern_context: Option<&crate::globals::ExternalContext>,
     line_offset: i64,
+    default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
-    prism_backend::parse_program_binding(code, path.into(), context, extern_context, line_offset)
+    prism_backend::parse_program_binding(
+        code,
+        path.into(),
+        context,
+        extern_context,
+        line_offset,
+        default_encoding,
+    )
 }

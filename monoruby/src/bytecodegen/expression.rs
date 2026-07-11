@@ -939,8 +939,23 @@ impl<'a> BytecodeGen<'a> {
                 return Ok(());
             }
             NodeKind::InterporatedString(nodes) => {
-                let len = nodes.len();
+                // The interpolation result takes the SOURCE encoding as its
+                // starting point (CRuby: a dstr begins with its first
+                // literal segment). When the first part is an embedded
+                // expression (`"#{a}"`), seed with an empty literal so the
+                // runtime concat negotiates from the source encoding.
+                let seed = !matches!(
+                    nodes.first().map(|n| &n.kind),
+                    Some(NodeKind::String(_))
+                        | Some(NodeKind::Bytes(_))
+                        | Some(NodeKind::EncodedString(..))
+                );
+                let len = nodes.len() + seed as usize;
                 let arg = self.sp();
+                if seed {
+                    let r = self.push().into();
+                    self.emit_string(r, String::new());
+                }
                 for expr in nodes {
                     self.push_expr(expr)?;
                 }

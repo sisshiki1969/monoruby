@@ -541,23 +541,30 @@ fn concatenate_string_inner(
     // Build the result as raw bytes so invalid byte sequences in any
     // operand survive interpolation (going through a Rust `String`
     // would silently rewrite them as U+FFFD via `from_utf8_lossy`).
-    // The result encoding is the rolling combination of each
-    // operand's encoding under CRuby's `compatible_encoding` rules,
-    // defaulting to UTF-8 when there are no string operands.
+    // The result seeds its encoding from the FIRST string operand —
+    // bytecodegen guarantees an interpolation starts with a (possibly
+    // empty) literal segment carrying the source encoding — and each
+    // further operand negotiates under CRuby's `compatible_encoding`
+    // rules; an incompatible mix (two non-ASCII operands in different
+    // encodings) raises Encoding::CompatibilityError like `<<`.
     let mut bytes: Vec<u8> = Vec::new();
     let mut enc: Option<Encoding> = None;
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
         let s_val = vm.invoke_tos(globals, v)?;
         if let Some(inner) = s_val.is_rstring_inner() {
-            if !inner.as_bytes().is_empty() {
-                enc = Some(match enc {
-                    None => inner.encoding(),
-                    Some(prev) => RStringInner::from_encoding(&bytes, prev)
-                        .compatible_encoding(&inner)
-                        .unwrap_or(prev),
-                });
-            }
+            enc = Some(match enc {
+                None => inner.encoding(),
+                Some(prev) => RStringInner::from_encoding(&bytes, prev)
+                    .compatible_encoding(&inner)
+                    .ok_or_else(|| {
+                        MonorubyErr::incompatible_encoding(
+                            &globals.store,
+                            prev,
+                            inner.encoding(),
+                        )
+                    })?,
+            });
             bytes.extend_from_slice(inner.as_bytes());
         } else {
             // `invoke_tos` returns the user-defined `to_s` result

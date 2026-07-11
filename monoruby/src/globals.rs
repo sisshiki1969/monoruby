@@ -729,6 +729,7 @@ impl Globals {
         caller_cfp: Cfp,
         receiver_class: Option<ClassId>,
         lineno: i64,
+        src_encoding: Option<String>,
     ) -> Result<FuncId> {
         let line_offset = lineno - 1;
         // Walk the CFP chain to find the nearest *iseq* (Ruby) frame.
@@ -766,7 +767,13 @@ impl Globals {
         };
         let external_context = self.store.scoped_locals(outer);
 
-        match crate::parser::parse_program_eval(code, path, Some(&external_context), line_offset) {
+        match crate::parser::parse_program_eval(
+            code,
+            path,
+            Some(&external_context),
+            line_offset,
+            src_encoding,
+        ) {
             Ok(result) => {
                 let fid =
                     bytecodegen::bytecode_compile_eval(self, result, outer, Loc::default(), None)?;
@@ -794,6 +801,7 @@ impl Globals {
         path: impl Into<PathBuf>,
         binding: Binding,
         lineno: i64,
+        src_encoding: Option<String>,
     ) -> Result<()> {
         let line_offset = lineno - 1;
         let outer_fid = binding.outer_fid();
@@ -823,6 +831,7 @@ impl Globals {
             context.clone(),
             Some(&external_context),
             line_offset,
+            src_encoding,
         ) {
             Ok(res) => {
                 let res =
