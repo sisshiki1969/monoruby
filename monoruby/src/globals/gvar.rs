@@ -435,9 +435,11 @@ fn write_special_check(
         } else {
             val
         }),
-        // `$0` requires a String.
+        // `$0` requires a String — and actually renames the process
+        // (CRuby's setproctitle), so `ps` shows the new title.
         "$0" | "$PROGRAM_NAME" => {
-            if val.is_rstring().is_some() {
+            if let Some(inner) = val.is_rstring_inner() {
+                set_process_title(inner.as_bytes());
                 Ok(val)
             } else {
                 Err(MonorubyErr::no_implicit_conversion(
@@ -448,6 +450,60 @@ fn write_special_check(
             }
         }
         _ => Ok(val),
+    }
+}
+
+/// Overwrite the process's argv area so `ps -ocommand` shows *title* —
+/// what CRuby's `$0 =` does via setproctitle. Linux-only: the argv
+/// range comes from `/proc/self/stat`'s `arg_start`/`arg_end` fields
+/// (48/49, Linux ≥ 3.5); a no-op elsewhere or when they are
+/// unavailable. Also sets the comm name (`PR_SET_NAME`) so
+/// `ps -ocomm` follows, like CRuby.
+fn set_process_title(title: &[u8]) {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(stat) = std::fs::read_to_string("/proc/self/stat") else {
+            return;
+        };
+        // The comm field (2nd) may contain spaces/parens; fields are
+        // reliable only after the LAST ')'.
+        let Some(rest) = stat.rfind(')').map(|i| &stat[i + 2..]) else {
+            return;
+        };
+        let fields: Vec<&str> = rest.split(' ').collect();
+        // `rest` starts at field 3 (state), so arg_start/arg_end
+        // (fields 48/49) sit at indices 45/46.
+        let (Some(start), Some(end)) = (
+            fields.get(45).and_then(|s| s.parse::<usize>().ok()),
+            fields.get(46).and_then(|s| s.parse::<usize>().ok()),
+        ) else {
+            return;
+        };
+        if start == 0 || end <= start {
+            return;
+        }
+        let len = end - start;
+        let n = title.len().min(len - 1);
+        // SAFETY: [arg_start, arg_end) is this process's own argv
+        // area, mapped writable; we never write past `end`.
+        unsafe {
+            let p = start as *mut u8;
+            std::ptr::copy_nonoverlapping(title.as_ptr(), p, n);
+            std::ptr::write_bytes(p.add(n), 0, len - n);
+        }
+        // comm is capped at 15 bytes + NUL.
+        let mut comm = [0u8; 16];
+        let cn = title.len().min(15);
+        comm[..cn].copy_from_slice(&title[..cn]);
+        // SAFETY: PR_SET_NAME reads a NUL-terminated string of at most
+        // 16 bytes from the pointer; `comm` satisfies that.
+        unsafe {
+            libc::prctl(libc::PR_SET_NAME, comm.as_ptr());
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = title;
     }
 }
 
@@ -486,6 +542,12 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         vm.set_errinfo(val);
         Ok(())
     }
+
+    // `$$` — the current process id, read-only.
+    fn get_pid(_vm: &mut Executor, _globals: &mut Globals, _name: IdentId) -> Option<Value> {
+        Some(Value::integer(std::process::id() as i64))
+    }
+    globals.define_hooked_variable(IdentId::get_id("$$"), get_pid, None);
 
     globals.define_hooked_variable(IdentId::get_id("$!"), get_errinfo, None);
     globals.define_hooked_variable(

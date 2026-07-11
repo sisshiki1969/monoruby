@@ -499,3 +499,33 @@ fn errinfo_cleared_on_non_local_return() {
         "#,
     );
 }
+
+#[test]
+fn dollar_zero_sets_process_title_and_pid() {
+    // `$0 =` rewrites the process's argv area (Linux) so `ps` shows
+    // the new title, `$$` is the process id, and the default
+    // $LOAD_PATH tail carries @gem_prelude_index from sitelibdir on.
+    run_test_once(
+        r#"
+        res = []
+        res << ($$ == Process.pid)
+        title = "mrb-title-test-#{$$}"
+        $0 = title
+        res << $0
+        # The argv rewrite is Linux-only (/proc); on other platforms
+        # compare a constant so monoruby and CRuby still agree.
+        res << (RUBY_PLATFORM.include?("linux") ? `ps -ocommand= -p#{$$}`.include?(title) : true)
+        begin
+          eval("$$ = 1")
+        rescue NameError => e
+          res << e.message
+        end
+        require "rbconfig"
+        idx = $:.index(RbConfig::CONFIG['sitelibdir'])
+        res << !idx.nil?
+        res << $:[idx..-1].all? { |p| p.instance_variable_defined?(:@gem_prelude_index) }
+        res << $:[0...idx].all? { |p| !p.instance_variable_defined?(:@gem_prelude_index) }
+        res.map(&:to_s).join("|").sub(title, "TITLE")
+        "#,
+    );
+}
