@@ -1383,6 +1383,12 @@ impl ClassInfoTable {
 pub struct ConstCache {
     pub version: usize,
     pub base_class: Option<Value>,
+    /// `Some` when the resolution depended on the receiver (the frame's
+    /// `self` had a singleton class — a `def` in a `class << obj` body
+    /// resolves constants against the *runtime* singleton cref, see
+    /// `Executor::substitute_singleton_cref`). The cache only hits for
+    /// the same self class.
+    pub self_class: Option<ClassId>,
     pub value: Value,
 }
 

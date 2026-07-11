@@ -249,6 +249,64 @@ fn interpolation_and_eval_source_encoding() {
 }
 
 #[test]
+fn sclass_constants_resolve_per_object() {
+    // A `def` inside `class << obj` shares its iseq across executions
+    // while each execution owns a distinct singleton class. Constant
+    // lookup must use the *runtime* cref (the receiver's singleton
+    // class / the per-execution nested class), not the last-stamped
+    // static one — including through the inline constant cache and
+    // the JIT (run_test warms both).
+    run_test(
+        r##"
+        $r = []
+        # Constants stored directly in the singleton class.
+        2.times do |i|
+          $i = i
+          obj = Object.new
+          class << obj
+            CONST = ($i + 1)
+            def foo
+              CONST
+            end
+          end
+          10.times { $r << obj.foo }
+        end
+        # A class nested inside `class << obj` is distinct per
+        # execution; its methods must see their own class's constants.
+        $classes = []
+        2.times do |i|
+          $i = i
+          obj = Object.new
+          class << obj
+            class X
+              $classes << self
+              CONST2 = ($i + 1)
+              def foo
+                CONST2
+              end
+            end
+            10.times { $r << X.new.foo }
+          end
+        end
+        $r << ($classes[0] != $classes[1])
+        # A singleton def (`def a.meth`) still resolves through its
+        # lexical scope, not the receiver's ancestry.
+        module CSPO_M
+          CONST3 = :lexical
+          class CSPO_A
+            CONST3 = :receiver
+          end
+          a = CSPO_A.new
+          def a.bar; CONST3; end
+          CSPO_OBJ = a
+        end
+        10.times { $r << CSPO_M::CSPO_OBJ.bar }
+        $r
+        "##,
+    );
+}
+
+#[test]
 fn binary_source_bytes_survive_load_and_eval() {
     // The source pipeline carries raw bytes: a `# encoding: big5`
     // source whose literals hold non-UTF-8 bytes round-trips through

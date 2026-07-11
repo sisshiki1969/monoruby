@@ -355,6 +355,8 @@ impl Executor {
         } else {
             current_func.lexical_class(globals)
         };
+        // Ancestor-phase lookup starts at the *runtime* cref too.
+        let lexical_class = self.runtime_innermost_cref(globals, lexical_class, current_func);
         let module = globals[lexical_class].get_module();
         match self.get_constant_superclass(globals, module, name)? {
             Some(v) => return Ok(Some(v)),
@@ -482,7 +484,14 @@ impl Executor {
             Some(iseq) => iseq,
             None => return false,
         };
+        let mut first = true;
         for module in globals.store[iseq].lexical_context.iter().rev().copied() {
+            let module = if first {
+                first = false;
+                self.runtime_innermost_cref(globals, module, current_func)
+            } else {
+                module
+            };
             if Self::probe_constant_at(globals, module, name) {
                 return true;
             }
@@ -585,6 +594,100 @@ impl Executor {
         Self::probe_constant_superclass_qualified(globals, globals.store[parent].get_module(), name)
     }
 
+    /// Recover the *runtime* innermost cref when the statically stamped
+    /// one is stale. A `def` inside a re-executed class body (most
+    /// notably inside `class << obj`, or a `class X` nested in one)
+    /// shares its iseq across executions while `enter_classdef`
+    /// re-stamps the static `lexical_context` per execution (last write
+    /// wins) — so the recorded innermost class may belong to a
+    /// *different* execution. Detection: the stamped class is no longer
+    /// on the receiver's ancestor chain. Recovery: the runtime cref is
+    /// the ancestor that owns the executing method (for a plain `def`
+    /// in a class body, the innermost cref IS the defining class).
+    pub(crate) fn runtime_innermost_cref(
+        &self,
+        globals: &Globals,
+        statically: ClassId,
+        current_func: FuncId,
+    ) -> ClassId {
+        // Staleness is only possible when the def is lexically nested
+        // (at any depth) inside a `class << obj` body — every other
+        // classdef form re-opens the same class on re-execution, so
+        // the stamp cannot go stale. Never substitute otherwise: a
+        // singleton def (`def a.meth`) legitimately has a cref that is
+        // unrelated to the receiver's ancestry.
+        if !globals.store[current_func]
+            .is_iseq()
+            .is_some_and(|iseq| globals.store[iseq].in_singleton_lexical)
+        {
+            return statically;
+        }
+        let self_val = self.cfp().lfp().self_val();
+        if Self::static_cref_plausible(globals, self_val, statically) {
+            return statically;
+        }
+        let self_class = self_val.class();
+        let mut module = Some(globals.store[self_class].get_module());
+        while let Some(m) = module {
+            if globals.store.class_owns_func(m.id(), current_func) {
+                return m.id();
+            }
+            module = m.superclass();
+        }
+        statically
+    }
+
+    /// Is `statically` a plausible innermost cref for this receiver?
+    /// True when it lies on the receiver's class ancestry (a plain
+    /// `def` in a class body), or — for a class/module receiver — on
+    /// the receiver's *own* ancestry: a singleton method (`def M.f`,
+    /// `class << self` inside `module M`) runs with self == M while
+    /// its cref is M or an enclosing module, neither of which appears
+    /// among the metaclass's ancestors.
+    fn static_cref_plausible(globals: &Globals, self_val: Value, statically: ClassId) -> bool {
+        if Self::class_in_ancestors(globals, self_val.class(), statically) {
+            return true;
+        }
+        if let Some(m) = self_val.is_class_or_module() {
+            if Self::class_in_ancestors(globals, m.id(), statically) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn class_in_ancestors(globals: &Globals, start: ClassId, target: ClassId) -> bool {
+        let mut module = Some(globals.store[start].get_module());
+        while let Some(m) = module {
+            if m.id() == target {
+                return true;
+            }
+            module = m.superclass();
+        }
+        false
+    }
+
+    /// The self-dependence key for the constant cache: `Some(self's
+    /// class)` when [`Self::runtime_innermost_cref`] would substitute —
+    /// the cached result is then only valid for the same self class.
+    pub(crate) fn const_lexical_self_key(
+        &self,
+        globals: &Globals,
+        current_func: FuncId,
+    ) -> Option<ClassId> {
+        let iseq = globals.store[current_func].is_iseq()?;
+        if !globals.store[iseq].in_singleton_lexical {
+            return None;
+        }
+        let statically = *globals.store[iseq].lexical_context.last()?;
+        let self_val = self.cfp().lfp().self_val();
+        if Self::static_cref_plausible(globals, self_val, statically) {
+            None
+        } else {
+            Some(self_val.class())
+        }
+    }
+
     fn search_lexical_stack(
         &mut self,
         globals: &mut Globals,
@@ -602,12 +705,15 @@ impl Executor {
             Some(iseq) => iseq,
             None => return Ok(None),
         };
-        let stack = globals.store[iseq]
+        let mut stack = globals.store[iseq]
             .lexical_context
             .iter()
             .rev()
             .cloned()
             .collect::<Vec<_>>();
+        if let Some(first) = stack.first_mut() {
+            *first = self.runtime_innermost_cref(globals, *first, current_func);
+        }
         for module in stack {
             if globals.store.get_constant(module, name).is_some() {
                 // Trigger autoload / read the value. If the autoload

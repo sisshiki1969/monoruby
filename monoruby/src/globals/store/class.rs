@@ -863,6 +863,17 @@ impl ClassInfoTable {
     ///
     /// If not exists, create a new singleton class.
     ///
+
+    /// Whether *class_id*'s own method table contains an entry bound to
+    /// *fid* (under any name). Used to recover the runtime cref of a
+    /// method whose static lexical stamp went stale.
+    pub(crate) fn class_owns_func(&self, class_id: ClassId, fid: FuncId) -> bool {
+        self[class_id]
+            .methods
+            .values()
+            .any(|e| e.func_id() == Some(fid))
+    }
+
     pub(crate) fn has_singleton(&self, obj: Value) -> Option<Module> {
         let org_class = self[obj.class()].get_module();
         if org_class.is_singleton().is_some() {

@@ -78,6 +78,14 @@ impl<'a> JitContext<'a> {
             if cache.version as u64 != self.const_version() {
                 return Ok(CompileResult::Recompile(RecompileReason::NotCached));
             }
+            // A self-dependent resolution (singleton-cref frame) is only
+            // foldable when this compilation's self class matches — the
+            // dispatch guard then pins it at runtime.
+            if let Some(sc) = cache.self_class {
+                if sc != self.self_class() {
+                    return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+                }
+            }
             let base_slot = self.store[id].base;
             if let Some(slot) = base_slot {
                 if let Some(base_class) = cache.base_class {

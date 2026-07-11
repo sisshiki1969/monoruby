@@ -863,11 +863,15 @@ pub(crate) extern "C" fn vm_check_constant(
     site_id: ConstSiteId,
     const_version: usize,
 ) -> Option<Value> {
+    let self_key = const_self_key(vm, globals);
     if let Some(cache) = &globals.store[site_id].cache {
         let base_class = globals.store[site_id]
             .base
             .map(|base| unsafe { vm.get_slot(base) }.unwrap());
-        if cache.version == const_version && cache.base_class == base_class {
+        if cache.version == const_version
+            && cache.base_class == base_class
+            && cache.self_class == self_key
+        {
             return Some(cache.value);
         };
     }
@@ -878,6 +882,7 @@ pub(crate) extern "C" fn vm_check_constant(
             globals.store[site_id].cache = Some(ConstCache {
                 version: const_version,
                 base_class,
+                self_class: self_key,
                 value,
             });
             Some(value)
@@ -886,17 +891,27 @@ pub(crate) extern "C" fn vm_check_constant(
     }
 }
 
+/// The self-dependence key for the constant cache — see
+/// `Executor::const_lexical_self_key`.
+fn const_self_key(vm: &Executor, globals: &Globals) -> Option<ClassId> {
+    vm.const_lexical_self_key(globals, vm.method_func_id())
+}
+
 pub(crate) extern "C" fn vm_get_constant(
     vm: &mut Executor,
     globals: &mut Globals,
     site_id: ConstSiteId,
     const_version: usize,
 ) -> Option<Value> {
+    let self_key = const_self_key(vm, globals);
     if let Some(cache) = &globals.store[site_id].cache {
         let base_class = globals.store[site_id]
             .base
             .map(|base| unsafe { vm.get_slot(base) }.unwrap());
-        if cache.version == const_version && cache.base_class == base_class {
+        if cache.version == const_version
+            && cache.base_class == base_class
+            && cache.self_class == self_key
+        {
             return Some(cache.value);
         };
     }
@@ -905,6 +920,7 @@ pub(crate) extern "C" fn vm_get_constant(
             globals.store[site_id].cache = Some(ConstCache {
                 version: const_version,
                 base_class,
+                self_class: self_key,
                 value,
             });
             Some(value)
