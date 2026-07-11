@@ -512,7 +512,9 @@ fn dollar_zero_sets_process_title_and_pid() {
         title = "mrb-title-test-#{$$}"
         $0 = title
         res << $0
-        res << `ps -ocommand= -p#{$$}`.include?(title)
+        # The argv rewrite is Linux-only (/proc); on other platforms
+        # compare a constant so monoruby and CRuby still agree.
+        res << (RUBY_PLATFORM.include?("linux") ? `ps -ocommand= -p#{$$}`.include?(title) : true)
         begin
           eval("$$ = 1")
         rescue NameError => e
