@@ -841,8 +841,12 @@ impl<'a> BytecodeGen<'a> {
     /// the `ensure` blocks it jumps out of.
     fn gen_loop_pending_ensures(&mut self, ensure_depth: usize) -> Result<()> {
         let in_rescue = self.rescue_depth > 0;
-        let pending: Vec<_> = self.ensure[ensure_depth..].iter().rev().cloned().collect();
-        for (ensure, errinfo_save) in pending {
+        let ensures: Vec<_> = std::mem::take(&mut self.ensure);
+        for idx in (ensure_depth..ensures.len()).rev() {
+            let (ensure, errinfo_save) = ensures[idx].clone();
+            // Regions outside the body being generated stay active —
+            // same truncation protocol as `gen_all_pending_ensures`.
+            self.ensure = ensures[..idx].to_vec();
             // Same unwinding protocol as `emit_ret`: restore the
             // region's `$!` before running its ensure body.
             if let Some(save) = errinfo_save
@@ -860,6 +864,7 @@ impl<'a> BytecodeGen<'a> {
                 self.gen_expr(ensure, UseMode2::NotUse)?;
             }
         }
+        self.ensure = ensures;
         Ok(())
     }
 
@@ -1091,15 +1096,19 @@ impl<'a> BytecodeGen<'a> {
     /// Emit every currently-open `ensure` body (innermost first) with
     /// the `$!` restore protocol — for exits that leave all of this
     /// frame's begin regions at once (`return`, block-level `redo`).
+    ///
+    /// While the body of the region at stack index `idx` is being
+    /// generated, `self.ensure` is truncated to the regions *outside*
+    /// it: a `return` written inside that ensure body must not re-run
+    /// the body itself (unbounded regeneration), but it still runs the
+    /// outer ensure bodies — and thereby supersedes this exit, so
+    /// `begin return 1 ensure return 2 end` returns 2 (CRuby).
     fn gen_all_pending_ensures(&mut self) -> Result<()> {
-        // Temporarily take the ensure stack to avoid infinite recursion when
-        // the exit appears inside an `ensure` block.  Without this, a
-        // `return` in the ensure body would recurse into the same ensure
-        // block, leading to unbounded regeneration.
         let in_rescue = self.rescue_depth > 0;
         let ensures: Vec<_> = std::mem::take(&mut self.ensure);
-        let pending: Vec<_> = ensures.iter().rev().cloned().collect();
-        for (ensure, errinfo_save) in pending {
+        for idx in (0..ensures.len()).rev() {
+            let (ensure, errinfo_save) = ensures[idx].clone();
+            self.ensure = ensures[..idx].to_vec();
             // When leaving a rescue clause, restore `$!` to the
             // region's entry value *before* its ensure body runs (a
             // nested region's ensure must see the outer exception, not
