@@ -90,6 +90,56 @@ if host_rubylibprefix && !host_rubylibprefix.empty? && ruby_api_version && !ruby
   RbConfig::CONFIG['ENABLE_SHARED']  = 'yes' if host_configured
 end
 
+# CRuby's default $LOAD_PATH ends with the "gem prelude" tail — the
+# site_ruby / vendor_ruby / rubylib directories derived from RbConfig,
+# each entry carrying @gem_prelude_index (rubygems uses it to splice
+# gem paths ahead of the defaults). monoruby's load path is built from
+# the runtime host probe instead, so append the RbConfig-derived tail
+# here (skipping entries already present) and tag it. Non-existent
+# directories are harmless — CRuby also keeps them in $LOAD_PATH.
+begin
+  arch = RbConfig::CONFIG['arch']
+  ver  = RbConfig::CONFIG['ruby_version']
+  prelude = []
+  if (site = RbConfig::CONFIG['sitedir'])
+    prelude << File.join(site, ver) << File.join(site, ver, arch) << site
+  end
+  if (vendor = RbConfig::CONFIG['vendordir'])
+    prelude << File.join(vendor, ver) << File.join(vendor, ver, arch) << vendor
+  end
+  if (rubylib = RbConfig::CONFIG['rubylibdir'])
+    prelude << rubylib << File.join(rubylib, arch)
+  end
+  # CRuby's order puts sitelibdir/sitearchdir (== sitedir/ver{,/arch})
+  # first; make sure the exact CONFIG values are covered too.
+  prelude.unshift(RbConfig::CONFIG['sitearchdir']) if RbConfig::CONFIG['sitearchdir']
+  prelude.unshift(RbConfig::CONFIG['sitelibdir']) if RbConfig::CONFIG['sitelibdir']
+  prelude.uniq!
+  # The prelude must form a CONTIGUOUS tail (everything from sitelibdir
+  # to the end carries the ivar, nothing before it does — the spec
+  # checks both sides), so a prelude dir already present earlier in
+  # $LOAD_PATH is MOVED to the tail. That also matches CRuby's layout:
+  # gem dirs come before the default directories.
+  # Enumerable is not loaded yet at this point in startup; plain loops.
+  i = 0
+  while i < prelude.size
+    dir = prelude[i]
+    entry = nil
+    j = 0
+    while j < $LOAD_PATH.size
+      if $LOAD_PATH[j] == dir
+        entry = $LOAD_PATH.delete_at(j)
+        break
+      end
+      j += 1
+    end
+    entry = dir.dup unless entry
+    $LOAD_PATH << entry
+    entry.instance_variable_set(:@gem_prelude_index, i)
+    i += 1
+  end
+end
+
 # The vendored rbconfig.rb hard-codes `target_os` / `target_cpu` to
 # `linux` / `x86_64` (it is a snapshot of an x86_64-linux CRuby build).
 # Platform-aware gems — most notably the `ffi` gem's
