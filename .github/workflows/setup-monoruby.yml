@@ -1,0 +1,64 @@
+# Smoke-tests the root action.yml (the "Setup monoruby" composite action) on
+# both hosted-runner architectures. Runs when the action or this workflow
+# changes, and on demand.
+name: setup-monoruby action
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - action.yml
+      - .github/workflows/setup-monoruby.yml
+  pull_request:
+    branches: [master]
+    paths:
+      - action.yml
+      - .github/workflows/setup-monoruby.yml
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # First run per revision × OS builds from source; cached runs finish in
+    # a couple of minutes.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup monoruby
+        id: setup
+        uses: ./
+
+      - name: Report action outputs
+        run: |
+          echo "cache-hit:        ${{ steps.setup.outputs.cache-hit }}"
+          echo "monoruby-version: ${{ steps.setup.outputs.monoruby-version }}"
+          echo "ruby-version:     ${{ steps.setup.outputs.ruby-version }}"
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+
+          # The binary is on PATH and identifies itself as monoruby.
+          monoruby --version | grep -q '^monoruby '
+          monoruby -e 'puts RUBY_DESCRIPTION' | grep -q '^monoruby '
+
+          # The vendored stdlib was installed alongside the binary
+          # (pure-Ruby json replacement ships in monoruby/stdlib).
+          test "$(monoruby -e 'require "json"; puts JSON.generate({"a" => 1})')" = '{"a":1}'
+
+          # Run something hot enough to go through the JIT tier.
+          cat > fib.rb <<'RUBY'
+          def fib(n)
+            n < 2 ? n : fib(n - 1) + fib(n - 2)
+          end
+          puts fib(28)
+          RUBY
+          test "$(monoruby fib.rb)" = "317811"
+
+          # Script arguments arrive in ARGV.
+          test "$(monoruby -e 'puts ARGV.join(",")' -- one two)" = "one,two"
