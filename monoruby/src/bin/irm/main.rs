@@ -70,6 +70,7 @@ fn main() {
                     std::path::Path::new(&format!("(irm):{script_line}")),
                     binding,
                     1,
+                    None,
                 ) {
                     Ok(_) => {}
                     Err(err) => {

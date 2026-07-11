@@ -910,7 +910,15 @@ fn class_eval(
             1
         };
 
-        let fid = globals.compile_script_eval(expr, path, caller_cfp, Some(module.id()), lineno)?;
+        let src_encoding = crate::builtins::eval_src_encoding(args[0]);
+        let fid = globals.compile_script_eval(
+            expr,
+            path,
+            caller_cfp,
+            Some(module.id()),
+            lineno,
+            src_encoding,
+        )?;
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         // class_eval "..." string form: runtime-only push, just like
         // the block form. The compiled eval body itself receives the

@@ -53,7 +53,7 @@ const ANON_KWREST_NAME: &str = "**";
 const FOR_INDEX_NAME: &str = "(for)";
 
 pub(super) fn parse_program(code: String, path: PathBuf) -> Result<ParseResult, MonorubyErr> {
-    try_prism_inner(&code, path, None, None, 0)
+    try_prism_inner(&code, path, None, None, 0, None)
 }
 
 pub(super) fn parse_program_eval(
@@ -61,9 +61,10 @@ pub(super) fn parse_program_eval(
     path: PathBuf,
     extern_context: Option<&ExternalContext>,
     line_offset: i64,
+    default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
     let options = build_prism_options(extern_context, None, line_offset);
-    try_prism_inner(&code, path, Some(options), None, line_offset)
+    try_prism_inner(&code, path, Some(options), None, line_offset, default_encoding)
 }
 
 pub(super) fn parse_program_binding(
@@ -72,9 +73,10 @@ pub(super) fn parse_program_binding(
     context: Option<LvarCollector>,
     extern_context: Option<&ExternalContext>,
     line_offset: i64,
+    default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
     let options = build_prism_options(extern_context, context.as_ref(), line_offset);
-    try_prism_inner(&code, path, Some(options), context, line_offset)
+    try_prism_inner(&code, path, Some(options), context, line_offset, default_encoding)
 }
 
 /// Build a `prism::Options` for an eval/binding parse. Prism's
@@ -286,6 +288,7 @@ fn try_prism_inner(
     options: Option<prism::Options>,
     seed_lvars: Option<LvarCollector>,
     line_offset: i64,
+    default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
     let path_display = path.display().to_string();
 
@@ -301,7 +304,11 @@ fn try_prism_inner(
     // first line (or the second line when the first is a shebang) and
     // only when the line is a comment from its first token. See
     // `detect_source_encoding`.
-    let source_encoding: Option<String> = detect_source_encoding(code.as_bytes());
+    // A magic comment wins; otherwise fall back to the caller-supplied
+    // default (the eval'd string's own encoding — CRuby uses it as the
+    // eval source encoding when no `# encoding:` comment is present).
+    let source_encoding: Option<String> =
+        detect_source_encoding(code.as_bytes()).or(default_encoding);
     let frozen_string_literal: Option<bool> = detect_frozen_string_literal(code.as_bytes());
 
     let source_info: SourceInfoRef = std::rc::Rc::new(

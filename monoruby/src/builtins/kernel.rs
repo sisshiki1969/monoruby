@@ -2123,6 +2123,7 @@ fn downgrade_eval_fatal(err: MonorubyErr) -> MonorubyErr {
 
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let src_encoding = crate::builtins::eval_src_encoding(lfp.arg(0));
     let expr = lfp.arg(0).coerce_to_string(vm, globals)?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
@@ -2146,13 +2147,13 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
             return Err(MonorubyErr::typeerr("Binding expected"));
         };
         globals
-            .compile_script_binding(expr, fname, binding, lineno)
+            .compile_script_binding(expr, fname, binding, lineno, src_encoding)
             .map_err(downgrade_eval_fatal)?;
         vm.flush_compile_warnings(globals);
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
         let fid = globals
-            .compile_script_eval(expr, fname, caller_cfp, None, lineno)
+            .compile_script_eval(expr, fname, caller_cfp, None, lineno, src_encoding)
             .map_err(downgrade_eval_fatal)?;
         vm.flush_compile_warnings(globals);
         let proc = ProcData::new(caller_cfp.lfp(), fid);

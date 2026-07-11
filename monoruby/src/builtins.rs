@@ -67,6 +67,20 @@ pub use time::TimeInner;
 // Builtin methods.
 //
 
+/// The default source encoding an `eval`'d String contributes when it
+/// has no `# encoding:` magic comment: the string's own encoding
+/// (CRuby). `None` for UTF-8 (the default anyway) and non-String
+/// receivers, so callers can pass the result straight through.
+pub(crate) fn eval_src_encoding(code: Value) -> Option<String> {
+    let inner = code.is_rstring_inner()?;
+    let enc = inner.encoding();
+    if enc == crate::value::rvalue::Encoding::Utf8 {
+        None
+    } else {
+        Some(enc.name().to_string())
+    }
+}
+
 pub(crate) fn init_builtins(globals: &mut Globals) {
     object::init(globals);
     let module = globals.define_builtin_class_under_obj("Module", MODULE_CLASS, ObjTy::MODULE);
