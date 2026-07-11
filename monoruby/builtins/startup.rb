@@ -281,6 +281,21 @@ class Regexp
   NOENCODING = 32
 end
 
+# Raised when a `case/in` exhausts its branches or an `expr => pattern`
+# match fails (the pattern-matching desugar references these by name).
+class NoMatchingPatternError < StandardError
+end
+
+class NoMatchingPatternKeyError < NoMatchingPatternError
+  def initialize(message = nil, matchee: nil, key: nil)
+    @matchee = matchee
+    @key = key
+    super(message)
+  end
+
+  attr_reader :matchee, :key
+end
+
 class Module
   # Partial ordering on the include / inherit graph, matching CRuby's
   # `rb_mod_cmp`:

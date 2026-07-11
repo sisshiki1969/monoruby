@@ -400,14 +400,26 @@ fn instance_eval_inner(
             1
         };
         let src_encoding = crate::builtins::eval_src_encoding(args[0]);
+        // CRuby's instance_eval cref is the receiver's *singleton*
+        // class: `def` inside the string lands there, and class
+        // variables skip it (singleton cref) and resolve in the
+        // caller's scope.
+        let receiver_class = globals.store.get_singleton(self_val)?.id();
         let fid = globals.compile_script_eval(
             expr,
             path,
             caller_cfp,
-            Some(self_val.class()),
+            Some(receiver_class),
             lineno,
             src_encoding,
         )?;
+        // Constant lookup inside the body checks the receiver's class
+        // between the singleton class and the caller's lexical scopes
+        // (CRuby); see `ISeqInfo::instance_eval_class`.
+        let real_class = self_val.real_class(&globals.store).id();
+        if let Some(info) = globals.store.iseq_mut(fid) {
+            info.instance_eval_class = Some(real_class);
+        }
         vm.flush_compile_warnings(globals);
         let proc = ProcData::new(caller_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])

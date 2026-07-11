@@ -230,6 +230,16 @@ pub struct ISeqInfo {
     /// cref recovery in constant lookup is gated on this flag.
     ///
     pub(crate) in_singleton_lexical: bool,
+    ///
+    /// `Some(receiver.class)` for an `instance_eval("...")` body.
+    /// CRuby resolves unqualified constants there in a blended order:
+    /// receiver singleton class → **receiver class** → caller lexical
+    /// scopes → receiver ancestors. The middle step exists only for
+    /// string instance_eval (a plain `class << obj` body skips it), so
+    /// it is carried here rather than in `lexical_context`, which
+    /// keeps it invisible to class-variable resolution as well.
+    ///
+    pub(crate) instance_eval_class: Option<ClassId>,
 }
 
 impl std::fmt::Debug for ISeqInfo {
@@ -293,6 +303,7 @@ impl ISeqInfo {
             nested_definee: None,
             singleton_classdef: false,
             in_singleton_lexical: false,
+            instance_eval_class: None,
         }
     }
 

@@ -249,6 +249,122 @@ fn interpolation_and_eval_source_encoding() {
 }
 
 #[test]
+fn eval_cref_semantics() {
+    // Class-variable and constant crefs of receiver-anchored string
+    // evals: class_eval sees the module's cvars; instance_eval skips
+    // its singleton cref for cvars (caller's scope wins) but checks
+    // the receiver's class for constants between the singleton class
+    // and the caller's lexical scopes; a `class << obj` body at the
+    // toplevel has no cvar scope at all.
+    run_test_once(
+        r##"
+        $r = []
+        m = Module.new
+        $r << m.class_eval("@@cv1 = 39; @@cv1")
+        class ECS_Recv; FOO9 = :receiver_class; end
+        module ECS_CS
+          @@cv2 = :caller
+          FOO9 = :caller_class
+          class C
+            def get_const(obj) = obj.instance_eval("FOO9")
+            def get_cvar(obj) = obj.instance_eval("@@cv2") rescue :err
+          end
+        end
+        $r << ECS_CS::C.new.get_const(ECS_Recv.new)
+        # The defined? probe takes the same blended route.
+        recv = ECS_Recv.new
+        $r << recv.instance_eval("defined?(FOO9)")
+        $r << recv.instance_eval("defined?(NOT_DEFINED_ANYWHERE9)").inspect
+        $r << recv.instance_eval("FOO9") rescue $r << :e1
+        obj2 = Object.new
+        begin
+          class << obj2
+            @@cv3 = 1
+          end
+          $r << :sclass_ok
+        rescue RuntimeError => e
+          $r << e.message
+        end
+        $r
+        "##,
+    );
+}
+
+#[test]
+fn pattern_matching_desugar() {
+    // case/in, `expr => pat`, and `expr in pat` are desugared in the
+    // prism lowerer to ===/deconstruct/deconstruct_keys calls, local
+    // bindings, and NoMatchingPatternError raises. run_test warms the
+    // JIT, so the generated code is exercised in both tiers.
+    run_test(
+        r##"
+        $r = []
+        # array / find / hash / alternation / pin / capture / guard
+        [[0, 1, 2], {name: "Alice", age: 30}, 5, [1, 2, 3, 4, 5], "s"].each do |v|
+          case v
+          in [0, *rest]
+            $r << [:arr, rest]
+          in {name: String => n, age: Integer => a}
+            $r << [:hash, n, a]
+          in Integer | Float if v > 4
+            $r << :num
+          in [*pre, 3, *post]
+            $r << [:find, pre, post]
+          in String => s
+            $r << [:str, s]
+          end
+        end
+        # one-line forms
+        $r << (1 in Integer)
+        $r << ({a: 1} in {a: 0.. => x})
+        {b: 7} => {b:}
+        $r << b
+        # pin expression, deconstruct_keys arguments, **rest
+        obj = Object.new
+        def obj.deconstruct_keys(keys)
+          $r << keys
+          {a: 1, b: 2, c: 3}
+        end
+        case obj
+        in {a: ^(2 - 1), **rest}
+          $r << rest
+        end
+        # exhaustion raises with the subject's inspect in the message
+        begin
+          case [9, 9]
+          in [0]
+          end
+        rescue NoMatchingPatternError => e
+          $r << e.message.include?("[9, 9]")
+        end
+        # deconstruct is cached across branches of one case, but the
+        # cache resets between executions of the enclosing loop
+        $decon_calls = 0
+        arr = Object.new
+        def arr.deconstruct
+          $decon_calls += 1
+          [1]
+        end
+        2.times do
+          case arr
+          in [0]
+            $r << :zero
+          in [1, *]
+            $r << :one
+          end
+        end
+        $r << $decon_calls
+        # nested patterns and variable scope after the case
+        case {status: [:ok, 200]}
+        in {status: [Symbol => s, Integer => code]} if code < 300
+          $r << [s, code]
+        end
+        $r
+        "##,
+    );
+}
+
+#[test]
 fn sclass_constants_resolve_per_object() {
     // A `def` inside `class << obj` shares its iseq across executions
     // while each execution owns a distinct singleton class. Constant
