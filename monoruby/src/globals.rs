@@ -47,8 +47,18 @@ pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| 
 /// builds and multiple checkouts from clobbering one shared tree. The
 /// host-derived runtime caches (`library_path` / `gem_path`) live at the
 /// top-level `~/.monoruby/` instead, since they are version-independent.
+///
+/// The baked path embeds the *build* machine's `$HOME`, so a prebuilt
+/// binary running under a different home (distributed release binaries,
+/// containers) would point at a tree that doesn't exist there. Setting
+/// `MONORUBY_INSTALL_ROOT` in the *runtime* environment overrides the
+/// baked path and makes the binary relocatable: point it at wherever the
+/// matching `v<version>` tree was extracted.
 pub(crate) fn install_root() -> PathBuf {
-    PathBuf::from(env!("MONORUBY_INSTALL_ROOT"))
+    match std::env::var_os("MONORUBY_INSTALL_ROOT") {
+        Some(root) if !root.is_empty() => PathBuf::from(root),
+        _ => PathBuf::from(env!("MONORUBY_INSTALL_ROOT")),
+    }
 }
 
 pub(crate) fn ruby_platform() -> &'static str {

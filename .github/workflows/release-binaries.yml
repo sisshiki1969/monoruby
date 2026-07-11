@@ -1,0 +1,100 @@
+# Builds prebuilt monoruby binaries and attaches them to a GitHub release,
+# so the setup-monoruby action (root action.yml) can download them instead of
+# compiling from source. Runs automatically when a release is published, and
+# manually via workflow_dispatch to backfill an existing release tag.
+#
+# Each asset is a tarball named monoruby-<tag>-<target>.tar.gz containing:
+#
+#   bin/monoruby, bin/irm      release binaries
+#   monoruby-home/v<version>/  the runtime tree build.rs installed
+#                              (vendored stdlib + Ruby builtins + stubs)
+#
+# The binary bakes in the *build* machine's install-root path
+# (~/.monoruby/v<version>); binaries built after the runtime
+# MONORUBY_INSTALL_ROOT override landed are relocatable via that env var,
+# and the action sets it after extraction. GitHub-hosted runners share the
+# same $HOME per OS anyway, so even override-less binaries (backfills of
+# older tags) work there.
+name: release binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build assets for (e.g. v3.0.1)"
+        required: true
+
+permissions:
+  contents: write # upload assets to the release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04 keeps the glibc floor low enough for every
+          # currently-hosted Linux runner image.
+          - os: ubuntu-22.04
+          - os: ubuntu-22.04-arm
+          - os: macos-latest # arm64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+
+      - name: Install pinned Rust toolchain
+        run: |
+          channel=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal --no-self-update
+
+      - name: Install libffi + pkg-config (macOS)
+        # The aarch64-macOS dep block in monoruby/Cargo.toml builds libffi-sys
+        # against the system libffi; the Homebrew keg is keg-only, so
+        # pkg-config needs its prefix.
+        if: runner.os == 'macOS'
+        run: |
+          brew install libffi pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix libffi)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Build monoruby
+        run: cargo install --path monoruby --locked --force
+
+      - name: Package tarball
+        id: package
+        run: |
+          set -euo pipefail
+          target=$(rustc -vV | sed -n 's/^host: //p')
+          asset="monoruby-${TAG}-${target}.tar.gz"
+
+          pkg="$RUNNER_TEMP/pkg"
+          mkdir -p "$pkg/bin" "$pkg/monoruby-home"
+          cp "$HOME/.cargo/bin/monoruby" "$HOME/.cargo/bin/irm" "$pkg/bin/"
+          # The per-version runtime tree build.rs just installed; exclude the
+          # version-independent host-probe caches (library_path/gem_path),
+          # which consumers regenerate at runtime.
+          cp -R "$HOME"/.monoruby/v* "$pkg/monoruby-home/"
+
+          tar -C "$pkg" -czf "$RUNNER_TEMP/$asset" bin monoruby-home
+          echo "asset=$RUNNER_TEMP/$asset" >> "$GITHUB_OUTPUT"
+
+          # Sanity-check the packaged pair the way the action will consume it:
+          # extracted to a fresh location, wired up via MONORUBY_INSTALL_ROOT.
+          check="$RUNNER_TEMP/check"
+          mkdir -p "$check"
+          tar -C "$check" -xzf "$RUNNER_TEMP/$asset"
+          vdir=$(basename "$check"/monoruby-home/v*)
+          out=$(MONORUBY_INSTALL_ROOT="$check/monoruby-home/$vdir" \
+                "$check/bin/monoruby" -e 'require "json"; puts JSON.generate({"ok" => 1})')
+          test "$out" = '{"ok":1}'
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "${{ steps.package.outputs.asset }}" --clobber

@@ -6,14 +6,21 @@
 #     - uses: sisshiki1969/monoruby@v3.0.1   # or @master for the latest
 #     - run: monoruby my_script.rb
 #
-# No prebuilt binaries are published yet, so the action builds monoruby from
-# the very source tree GitHub checked out for the action itself
-# (`$GITHUB_ACTION_PATH`) and installs it with `cargo install`. The built
-# binary and its runtime tree (`~/.monoruby/v*`, laid down by build.rs) are
-# cached keyed on the source fingerprint, so only the first run for a given
-# monoruby revision × runner OS/arch pays the compile time (~10-20 min);
-# subsequent runs restore in seconds. Pinning a tag keeps the cache stable;
-# tracking `@master` rebuilds on every upstream push.
+# Install strategy, in order:
+#
+# 1. Prebuilt release asset — when the action ref is a release tag (v*), try
+#    downloading monoruby-<tag>-<target>.tar.gz from that GitHub release
+#    (uploaded by .github/workflows/release-binaries.yml). Extraction takes
+#    seconds and needs no toolchain.
+# 2. Source build with caching — otherwise (branch/SHA refs, releases
+#    without assets for this platform, or a failed download), build monoruby
+#    from the very source tree GitHub checked out for the action itself
+#    (`$GITHUB_ACTION_PATH`) and install it with `cargo install`. The built
+#    binary and its runtime tree (`~/.monoruby/v*`, laid down by build.rs)
+#    are cached keyed on the source fingerprint, so only the first run for a
+#    given monoruby revision × runner OS/arch pays the compile time;
+#    subsequent runs restore in seconds. Pinning a tag keeps the cache
+#    stable; tracking `@master` rebuilds on every upstream push.
 #
 # Works on Linux (x64/arm64) and macOS (Apple Silicon) hosted runners. The
 # runner needs `rustup` and (on macOS) Homebrew, both preinstalled on GitHub
@@ -43,10 +50,15 @@ inputs:
     default: "v1"
 
 outputs:
+  prebuilt:
+    description: >
+      'true' if a prebuilt release asset was downloaded instead of building
+      from source.
+    value: ${{ steps.prebuilt.outputs.ok }}
   cache-hit:
     description: >
-      'true' if the prebuilt binary was restored from cache ('' when caching
-      is disabled).
+      'true' if the built binary was restored from cache ('' when caching is
+      disabled or a prebuilt asset was used).
     value: ${{ steps.cache.outputs.cache-hit }}
   monoruby-version:
     description: The installed monoruby crate version (output of `monoruby --version`).
@@ -58,7 +70,61 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: Try prebuilt release asset
+      id: prebuilt
+      shell: bash
+      env:
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_REPO: ${{ github.action_repository }}
+      run: |
+        set -euo pipefail
+        ok=false
+        repo="${ACTION_REPO:-sisshiki1969/monoruby}"
+
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64)    target=x86_64-unknown-linux-gnu ;;
+          Linux-ARM64)  target=aarch64-unknown-linux-gnu ;;
+          macOS-ARM64)  target=aarch64-apple-darwin ;;
+          macOS-X64)    target=x86_64-apple-darwin ;;
+          *)            target= ;;
+        esac
+
+        # Only release tags have assets; branch/SHA refs go straight to the
+        # source build. A missing asset (older release, unbuilt platform)
+        # 404s and falls through the same way.
+        if [[ -n "$target" && "${ACTION_REF:-}" =~ ^v[0-9] ]]; then
+          asset="monoruby-${ACTION_REF}-${target}.tar.gz"
+          url="https://github.com/${repo}/releases/download/${ACTION_REF}/${asset}"
+          tmp="$RUNNER_TEMP/setup-monoruby-prebuilt"
+          mkdir -p "$tmp"
+          echo "Trying prebuilt asset: $url"
+          if curl -fsSL --retry 3 -o "$tmp/$asset" "$url"; then
+            tar -C "$tmp" -xzf "$tmp/$asset"
+            mkdir -p "$HOME/.cargo/bin" "$HOME/.monoruby"
+            install -m 755 "$tmp/bin/monoruby" "$HOME/.cargo/bin/monoruby"
+            install -m 755 "$tmp/bin/irm" "$HOME/.cargo/bin/irm"
+            cp -R "$tmp"/monoruby-home/v* "$HOME/.monoruby/"
+            vdir=$(basename "$tmp"/monoruby-home/v*)
+            # Relocate the baked install root to this machine's tree (a
+            # runtime override; no-op on binaries predating it, which rely
+            # on hosted runners sharing the same $HOME per OS instead).
+            export MONORUBY_INSTALL_ROOT="$HOME/.monoruby/$vdir"
+            if out=$("$HOME/.cargo/bin/monoruby" -e 'require "json"; puts 1' 2>/dev/null) \
+               && [[ "$out" == "1" ]]; then
+              echo "MONORUBY_INSTALL_ROOT=$MONORUBY_INSTALL_ROOT" >> "$GITHUB_ENV"
+              ok=true
+              echo "Prebuilt asset works; skipping source build."
+            else
+              echo "Prebuilt asset failed its sanity check; falling back to source build."
+            fi
+          else
+            echo "No prebuilt asset for this release/platform; falling back to source build."
+          fi
+        fi
+        echo "ok=$ok" >> "$GITHUB_OUTPUT"
+
     - name: Compute source fingerprint
+      if: steps.prebuilt.outputs.ok != 'true'
       id: key
       shell: bash
       run: |
@@ -80,7 +146,7 @@ runs:
 
     - name: Restore cached monoruby
       id: cache
-      if: inputs.cache == 'true'
+      if: inputs.cache == 'true' && steps.prebuilt.outputs.ok != 'true'
       uses: actions/cache@v4
       with:
         # ~/.monoruby/v* is the per-version runtime tree (vendored stdlib +
@@ -95,7 +161,7 @@ runs:
         key: setup-monoruby-${{ inputs.cache-version }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.key.outputs.fingerprint }}
 
     - name: Build and install monoruby
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: steps.prebuilt.outputs.ok != 'true' && steps.cache.outputs.cache-hit != 'true'
       shell: bash
       working-directory: ${{ github.action_path }}
       run: |

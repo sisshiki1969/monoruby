@@ -35,6 +35,7 @@ jobs:
 
       - name: Report action outputs
         run: |
+          echo "prebuilt:         ${{ steps.setup.outputs.prebuilt }}"
           echo "cache-hit:        ${{ steps.setup.outputs.cache-hit }}"
           echo "monoruby-version: ${{ steps.setup.outputs.monoruby-version }}"
           echo "ruby-version:     ${{ steps.setup.outputs.ruby-version }}"
