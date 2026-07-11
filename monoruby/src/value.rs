@@ -756,6 +756,18 @@ impl Value {
         Value::symbol(id)
     }
 
+    /// A symbol literal takes its source file's encoding: a non-ASCII
+    /// symbol in a non-UTF-8 source (e.g. `# encoding: binary`) is
+    /// interned per (bytes, encoding) — distinct from the same bytes
+    /// in a UTF-8 source — and `Symbol#{to_s,encoding}` report the
+    /// recorded encoding (CRuby).
+    pub(crate) fn symbol_from_source_str(s: &str, src_enc: Encoding) -> Self {
+        if s.is_ascii() || matches!(src_enc, Encoding::Utf8 | Encoding::UsAscii) {
+            return Self::symbol_from_str(s);
+        }
+        Value::symbol(IdentId::get_id_from_bytes(s.as_bytes().to_vec(), src_enc))
+    }
+
     fn fixnum(num: i64) -> Self {
         Immediate::fixnum(num).into()
     }
@@ -2732,7 +2744,7 @@ impl Value {
             }
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
+            NodeKind::Symbol(sym) => Value::symbol_from_source_str(sym, src_enc),
             NodeKind::String(s) => Value::string_from_source_str(s, src_enc),
             NodeKind::Bytes(b) => Value::string_from_source_bytes(b, src_enc),
             NodeKind::EncodedString(b, name) => {
@@ -2860,7 +2872,7 @@ impl Value {
             }
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::symbol_from_str(sym),
+            NodeKind::Symbol(sym) => Value::symbol_from_source_str(sym, src_enc),
             NodeKind::String(s) => Value::string_from_source_str(s, src_enc),
             NodeKind::Bytes(b) => Value::string_from_source_bytes(b, src_enc),
             NodeKind::EncodedString(b, name) => {
