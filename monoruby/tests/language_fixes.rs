@@ -146,3 +146,41 @@ fn yield_reaches_lexical_home_through_escaped_frames() {
         "#,
     );
 }
+
+#[test]
+fn return_in_ensure_supersedes_and_swallows() {
+    // A `return` in an ensure body supersedes the in-flight return
+    // (running the *outer* ensure bodies, whose returns supersede
+    // again), and swallows an in-flight exception — restoring `$!` to
+    // its value at region entry.
+    run_test_once(
+        r#"
+        $pad = []
+        def f
+          begin
+            begin
+              $pad << :inner_begin
+              return :inner_begin
+            ensure
+              $pad << :inner_ensure
+              return :inner_ensure
+            end
+          ensure
+            $pad << :outer_ensure
+            return :outer_ensure
+          end
+        end
+        r1 = f
+        def g
+          begin
+            raise "x"
+          ensure
+            $pad << :before_return
+            return :swallowed
+          end
+        end
+        r2 = g
+        [r1, r2, $!, $pad]
+        "#,
+    );
+}

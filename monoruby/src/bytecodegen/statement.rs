@@ -424,7 +424,7 @@ impl<'a> BytecodeGen<'a> {
         // clause restores from this slot instead of clearing to nil. An
         // anonymous local (not a temp) survives the whole begin/rescue/
         // ensure region without being reused as scratch.
-        let errinfo_save: Option<BcReg> = if !rescue.is_empty() {
+        let errinfo_save: Option<BcReg> = if !rescue.is_empty() || ensure.is_some() {
             let reg: BcReg = self.add_local(None).into();
             self.emit(
                 BytecodeInst::LoadGvar {
@@ -610,7 +610,18 @@ impl<'a> BytecodeGen<'a> {
                 // non-exception value — e.g. a `puts` string — to be re-raised.)
                 let saved = self.temp;
                 self.temp = match_temp;
+                // This inline copy IS the region's ensure body: a `return`
+                // written in it must not replay it (only the outer regions
+                // run), but it must still restore the region's `$!` save —
+                // the runtime set `$!` to the in-flight exception when it
+                // jumped here. Blank the body (keeping the save slot) and
+                // bump `rescue_depth` so `gen_all_pending_ensures` emits
+                // the restores.
+                let region_body = self.ensure.last_mut().unwrap().0.take();
+                self.rescue_depth += 1;
                 self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
+                self.rescue_depth -= 1;
+                self.ensure.last_mut().unwrap().0 = region_body;
                 self.temp = saved;
             }
             self.emit(BytecodeInst::Raise(err_reg), Loc::default());
@@ -651,7 +662,16 @@ impl<'a> BytecodeGen<'a> {
                 let err_reg = self.push().into();
                 let rescue_pos = self.new_label();
                 self.apply_label(rescue_pos);
+                // Same protocol as the rescue+ensure exception copy above:
+                // blank the region's body (a `return` inside must not
+                // replay it) but keep its `$!` save slot restorable, and
+                // mark the context as exception-path so the restores are
+                // emitted.
+                let region_body = self.ensure.last_mut().unwrap().0.take();
+                self.rescue_depth += 1;
                 self.gen_expr(ensure.clone(), UseMode2::NotUse)?;
+                self.rescue_depth -= 1;
+                self.ensure.last_mut().unwrap().0 = region_body;
                 self.emit(BytecodeInst::Raise(err_reg), Loc::default());
                 self.pop();
 
