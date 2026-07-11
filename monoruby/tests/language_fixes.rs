@@ -184,3 +184,41 @@ fn return_in_ensure_supersedes_and_swallows() {
         "#,
     );
 }
+
+#[test]
+fn eigenclass_tower() {
+    // MRI's full eigenclass tower: a meta-metaclass is classed by the
+    // meta-metaclass of Class, methods on an ancestor's meta-metaclass
+    // dispatch through `singleton_class` (which, like MRI's
+    // rb_singleton_class, ensures the exposed eigenclass belongs to
+    // its own eigenclass), and `class << obj` re-linking still works.
+    run_test_once(
+        r#"
+        module MM
+          class C
+            class << self
+              class << self
+                def ham; 'iberico'; end
+              end
+            end
+          end
+          class D < C; end
+          class A; end
+        end
+        res = [MM::D.singleton_class.ham]
+        res << MM::A.singleton_class.singleton_class.is_a?(Class.singleton_class.singleton_class)
+        class << Class
+          def self.ex_cm; :cm; end
+        end
+        res << MM::A.singleton_class.singleton_class.respond_to?(:ex_cm)
+        def metaclass_of(obj)
+          class << obj; self; end
+        end
+        class BB; def self.cheese; 'stilton'; end; end
+        metaclass_of(metaclass_of(BB)).send(:define_method, :cheese) { 'gouda' }
+        res << metaclass_of(BB).cheese
+        res << BB.cheese
+        res
+        "#,
+    );
+}

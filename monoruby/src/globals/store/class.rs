@@ -794,12 +794,13 @@ impl ClassInfoTable {
             // self-referential root that terminates the recursion).
             let class_class = if class.id() == original {
                 singleton.id()
-            } else if class.is_singleton().is_some() {
-                // Building a metaclass of a metaclass: keep the
-                // previous one-level model (MRI's full
-                // meta-metaclass tower is not modeled).
-                class.id()
             } else {
+                // MRI's full eigenclass tower: the class of a
+                // metaclass is the metaclass of the previous class —
+                // also when that previous class is itself a metaclass
+                // (S(S(A)).class == S(S(Class))). The recursion
+                // terminates at Class, whose metaclass is
+                // self-referential (the branch above).
                 self.get_metaclass(class.id()).id()
             };
             singleton.change_class(class_class);
