@@ -81,6 +81,22 @@ pub(crate) fn eval_src_encoding(code: Value) -> Option<String> {
     }
 }
 
+/// The source bytes of an `eval` argument. A String's bytes are taken
+/// verbatim — non-UTF-8 bytes in its literals (a `# encoding:`-tagged
+/// eval source) must reach the parser unmangled, and `coerce_to_string`
+/// would escape them. Non-String receivers keep the `to_str` coercion.
+pub(crate) fn eval_source_bytes(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    code: Value,
+) -> Result<Vec<u8>> {
+    if let Some(inner) = code.is_rstring_inner() {
+        Ok(inner.as_bytes().to_vec())
+    } else {
+        Ok(code.coerce_to_string(vm, globals)?.into_bytes())
+    }
+}
+
 pub(crate) fn init_builtins(globals: &mut Globals) {
     object::init(globals);
     let module = globals.define_builtin_class_under_obj("Module", MODULE_CLASS, ObjTy::MODULE);

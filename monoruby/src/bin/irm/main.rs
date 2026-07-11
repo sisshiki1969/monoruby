@@ -66,7 +66,7 @@ fn main() {
                 };
 
                 match globals.compile_script_binding(
-                    buf.clone(),
+                    buf.clone().into_bytes(),
                     std::path::Path::new(&format!("(irm):{script_line}")),
                     binding,
                     1,

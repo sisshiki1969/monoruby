@@ -2124,7 +2124,7 @@ fn downgrade_eval_fatal(err: MonorubyErr) -> MonorubyErr {
 #[monoruby_builtin]
 fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let src_encoding = crate::builtins::eval_src_encoding(lfp.arg(0));
-    let expr = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let expr = crate::builtins::eval_source_bytes(vm, globals, lfp.arg(0))?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
     let fname = if let Some(f) = lfp.try_arg(2) {

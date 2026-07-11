@@ -247,3 +247,29 @@ fn interpolation_and_eval_source_encoding() {
         "##,
     );
 }
+
+#[test]
+fn binary_source_bytes_survive_load_and_eval() {
+    // The source pipeline carries raw bytes: a `# encoding: big5`
+    // source whose literals hold non-UTF-8 bytes round-trips through
+    // `load` and `eval` without mangling, and the literal takes the
+    // declared encoding.
+    run_test_once(
+        r##"
+        require "tmpdir"
+        path = File.join(Dir.tmpdir, "mrb_bytes_magic_#{Process.pid}.rb")
+        src = (+"# encoding: big5\n").force_encoding("binary") +
+              "$bytes_result = '\xA7A\xA6n'.bytes\n".b +
+              "$enc_result = '\xA7A'.encoding.to_s\n".b
+        File.binwrite(path, src)
+        load path
+        r1 = [$bytes_result, $enc_result]
+        code = File.read(path, encoding: "utf-8")
+        $bytes_result = nil
+        eval(code)
+        r2 = $bytes_result
+        File.delete(path)
+        [r1, r2]
+        "##,
+    );
+}

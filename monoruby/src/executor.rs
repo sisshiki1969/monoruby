@@ -482,7 +482,7 @@ impl Executor {
     pub fn exec_script(
         &mut self,
         globals: &mut Globals,
-        code: String,
+        code: impl Into<Vec<u8>>,
         path: &std::path::Path,
     ) -> Result<Value> {
         let fid = match crate::parser::parse_program(code, path) {
@@ -727,7 +727,7 @@ impl Executor {
     fn load_impl(
         &mut self,
         globals: &mut Globals,
-        file_body: String,
+        file_body: Vec<u8>,
         path: &std::path::Path,
         wrap: Option<Module>,
     ) -> Result<()> {

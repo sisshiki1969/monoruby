@@ -646,7 +646,7 @@ impl Globals {
         }
     }
 
-    pub fn run(&mut self, code: impl Into<String>, path: &std::path::Path) -> Result<Value> {
+    pub fn run(&mut self, code: impl Into<Vec<u8>>, path: &std::path::Path) -> Result<Value> {
         self.run_with_requires(&[], code, path)
     }
 
@@ -663,10 +663,10 @@ impl Globals {
     pub fn run_with_requires(
         &mut self,
         requires: &[String],
-        code: impl Into<String>,
+        code: impl Into<Vec<u8>>,
         path: &std::path::Path,
     ) -> Result<Value> {
-        let code = code.into();
+        let code: Vec<u8> = code.into();
         let program_name = path.to_string_lossy().to_string();
         let mut executor = Executor::init(self, &program_name)?;
         executor.init_stack_limit(self);
@@ -724,7 +724,7 @@ impl Globals {
 
     pub(crate) fn compile_script_eval(
         &mut self,
-        code: String,
+        code: Vec<u8>,
         path: impl Into<PathBuf>,
         caller_cfp: Cfp,
         receiver_class: Option<ClassId>,
@@ -797,7 +797,7 @@ impl Globals {
 
     pub fn compile_script_binding(
         &mut self,
-        code: String,
+        code: Vec<u8>,
         path: impl Into<PathBuf>,
         binding: Binding,
         lineno: i64,
