@@ -118,8 +118,8 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::SelfValue => self.emit_mov(dst, BcReg::Self_),
             NodeKind::Integer(i) => self.emit_integer(dst, i),
             NodeKind::Symbol(sym) => {
-                let sym = IdentId::get_id_from_string(sym);
-                self.emit_symbol(dst, sym)
+                let val = Value::symbol_from_source_str(&sym, self.source_encoding());
+                self.emit_symbol(dst, val.as_symbol())
             }
             NodeKind::Bignum(bigint) => self.emit_bigint(dst, bigint),
             NodeKind::Float(f) => self.emit_float(dst, f),

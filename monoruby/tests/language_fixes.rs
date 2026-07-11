@@ -249,6 +249,28 @@ fn interpolation_and_eval_source_encoding() {
 }
 
 #[test]
+fn symbol_literal_takes_source_encoding() {
+    // A non-ASCII symbol literal in a binary-encoded source reports
+    // ASCII-8BIT and is a distinct symbol from the same bytes in a
+    // UTF-8 source (per-(bytes, encoding) identity — CRuby).
+    run_test_once(
+        r##"
+        require "tmpdir"
+        path = File.join(Dir.tmpdir, "mrb_binsym_#{Process.pid}.rb")
+        File.binwrite(path, (+"# encoding: binary\n").force_encoding("binary") +
+          "$binsym = :il_était\n".b +
+          "$binsym_frozen = [:il_était].first\n".b)
+        load path
+        File.delete(path)
+        utf8 = :il_était
+        [$binsym.encoding.name, $binsym.to_s.bytes,
+         $binsym_frozen.encoding.name,
+         utf8.encoding.name, ($binsym == utf8)]
+        "##,
+    );
+}
+
+#[test]
 fn eval_cref_semantics() {
     // Class-variable and constant crefs of receiver-anchored string
     // evals: class_eval sees the module's cvars; instance_eval skips
