@@ -1,0 +1,134 @@
+# Setup monoruby — a composite GitHub Action, modeled after ruby/setup-ruby.
+#
+# Usage (the ref after `@` selects the monoruby version to install):
+#
+#   steps:
+#     - uses: sisshiki1969/monoruby@v3.0.1   # or @master for the latest
+#     - run: monoruby my_script.rb
+#
+# No prebuilt binaries are published yet, so the action builds monoruby from
+# the very source tree GitHub checked out for the action itself
+# (`$GITHUB_ACTION_PATH`) and installs it with `cargo install`. The built
+# binary and its runtime tree (`~/.monoruby/v*`, laid down by build.rs) are
+# cached keyed on the source fingerprint, so only the first run for a given
+# monoruby revision × runner OS/arch pays the compile time (~10-20 min);
+# subsequent runs restore in seconds. Pinning a tag keeps the cache stable;
+# tracking `@master` rebuilds on every upstream push.
+#
+# Works on Linux (x64/arm64) and macOS (Apple Silicon) hosted runners. The
+# runner needs `rustup` and (on macOS) Homebrew, both preinstalled on GitHub
+# hosted images.
+
+name: "Setup monoruby"
+description: >
+  Build (with caching) and install monoruby, a Ruby implementation written in
+  Rust with a JIT compiler, and add it to PATH.
+author: "sisshiki1969"
+branding:
+  icon: "zap"
+  color: "red"
+
+inputs:
+  cache:
+    description: >
+      Cache the built monoruby binary and its runtime tree with actions/cache.
+      Set to 'false' to always build from source.
+    required: false
+    default: "true"
+  cache-version:
+    description: >
+      Arbitrary string mixed into the cache key. Bump it to discard existing
+      caches (e.g. after a runner image change).
+    required: false
+    default: "v1"
+
+outputs:
+  cache-hit:
+    description: >
+      'true' if the prebuilt binary was restored from cache ('' when caching
+      is disabled).
+    value: ${{ steps.cache.outputs.cache-hit }}
+  monoruby-version:
+    description: The installed monoruby crate version (output of `monoruby --version`).
+    value: ${{ steps.verify.outputs.monoruby-version }}
+  ruby-version:
+    description: The RUBY_VERSION the installed monoruby reports.
+    value: ${{ steps.verify.outputs.ruby-version }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Compute source fingerprint
+      id: key
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_ACTION_PATH"
+        # `uses: owner/repo@ref` extracts a tarball without .git, so fall back
+        # to hashing every build input (sources + lockfile + toolchain pin).
+        if fp=$(git rev-parse HEAD 2>/dev/null); then
+          :
+        else
+          sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }
+          fp=$(find Cargo.lock Cargo.toml rust-toolchain.toml \
+                    monoruby monoruby_attr rubymap hashbrown ruby_traits \
+                    -type f -not -path '*/target/*' -print0 \
+               | LC_ALL=C sort -z | xargs -0 cat | sha | cut -d' ' -f1)
+        fi
+        echo "fingerprint=$fp" >> "$GITHUB_OUTPUT"
+        echo "monoruby source fingerprint: $fp"
+
+    - name: Restore cached monoruby
+      id: cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@v4
+      with:
+        # ~/.monoruby/v* is the per-version runtime tree (vendored stdlib +
+        # Ruby-level builtins) that build.rs installs; the binary bakes in its
+        # absolute path, so both must travel together. The version-independent
+        # host-gem caches (~/.monoruby/{library_path,gem_path}) are left out —
+        # ruby_probe.rs regenerates them at runtime against the runner's own
+        # host Ruby.
+        path: |
+          ~/.cargo/bin/monoruby
+          ~/.monoruby/v*
+        key: setup-monoruby-${{ inputs.cache-version }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.key.outputs.fingerprint }}
+
+    - name: Build and install monoruby
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        # Install the nightly toolchain pinned by rust-toolchain.toml; the
+        # rustup shim then picks it up automatically because cargo runs from
+        # the source tree.
+        channel=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+        echo "Installing Rust toolchain: $channel"
+        rustup toolchain install "$channel" --profile minimal --no-self-update
+
+        # aarch64-macOS builds libffi-sys against the system libffi; the
+        # Homebrew keg is keg-only, so pkg-config needs its prefix.
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          brew install libffi pkg-config
+          export PKG_CONFIG_PATH="$(brew --prefix libffi)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+        fi
+
+        # build.rs installs the vendored stdlib + Ruby builtins into
+        # ~/.monoruby/v<version>/ as part of this build.
+        cargo install --path monoruby --locked --force
+
+    - name: Add monoruby to PATH
+      shell: bash
+      run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+    - name: Verify installation
+      id: verify
+      shell: bash
+      run: |
+        set -euo pipefail
+        monoruby --version
+        monoruby -e 'puts RUBY_DESCRIPTION'
+        echo "monoruby-version=$(monoruby --version)" >> "$GITHUB_OUTPUT"
+        echo "ruby-version=$(monoruby -e 'puts RUBY_VERSION')" >> "$GITHUB_OUTPUT"

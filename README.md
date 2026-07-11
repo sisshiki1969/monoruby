@@ -63,6 +63,35 @@ or
 > bin/irm
 ```
 
+## Using monoruby in GitHub Actions
+
+This repository doubles as a `setup-monoruby` action (see `action.yml`),
+modeled after [ruby/setup-ruby](https://github.com/ruby/setup-ruby). The ref
+after `@` selects the monoruby version to install:
+
+```yaml
+steps:
+  - uses: sisshiki1969/monoruby@master # or a release tag
+  - run: monoruby my_script.rb
+```
+
+Since no prebuilt binaries are published yet, the action builds monoruby from
+source on the first run for each monoruby revision × runner OS/arch and caches
+the resulting binary and runtime tree with `actions/cache`, so subsequent runs
+restore in seconds. Pinning a release tag keeps the cache stable; tracking
+`@master` rebuilds on every upstream push. Linux (x64/arm64) and macOS
+(Apple Silicon) hosted runners are supported.
+
+Inputs and outputs:
+
+| Name                     | Kind   | Description                                                     |
+| ------------------------ | ------ | --------------------------------------------------------------- |
+| `cache` (`'true'`)       | input  | Set to `'false'` to always build from source                    |
+| `cache-version` (`'v1'`) | input  | Mixed into the cache key; bump to discard existing caches       |
+| `cache-hit`              | output | `'true'` if the binary was restored from cache                  |
+| `monoruby-version`       | output | Output of `monoruby --version`                                  |
+| `ruby-version`           | output | `RUBY_VERSION` reported by the installed monoruby               |
+
 ## Benchmark
 
 ### 1. Optcarrot banechmark
