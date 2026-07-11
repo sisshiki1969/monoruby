@@ -438,3 +438,64 @@ fn set_backtrace_accepts_locations() {
         "#,
     );
 }
+
+#[test]
+fn errinfo_cleared_on_non_local_return() {
+    // A non-local exit (`return` from a block, `break`) leaving a
+    // frame suspended inside a rescue clause restores `$!` to the
+    // region-entry save at runtime; a `break` that *resumes* inside
+    // the rescue clause keeps the caught exception in `$!`.
+    run_test_once(
+        r#"
+        res = []
+        obj = Class.new do
+          def method_missing(*args)
+            yield
+          end
+          def bar
+            e = StandardError.new 'foo'
+            begin
+              raise e
+            rescue
+              foo(e) { return }
+            end
+          end
+        end.new
+        obj.bar
+        res << $!
+        def foo2
+          [1].each do
+            begin
+              raise StandardError.new('err')
+            rescue => e
+              return
+            end
+          end
+        end
+        foo2
+        res << $!
+        def brk
+          [1].each do
+            begin
+              raise "b"
+            rescue
+              break
+            end
+          end
+        end
+        brk
+        res << $!
+        def keep
+          begin
+            raise "k"
+          rescue
+            [1].each { break }
+            return $!.message
+          end
+        end
+        res << keep
+        res << $!
+        res
+        "#,
+    );
+}

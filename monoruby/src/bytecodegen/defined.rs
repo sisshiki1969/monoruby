@@ -77,7 +77,9 @@ impl<'a> BytecodeGen<'a> {
                                 rescue: Some(nil_label),
                                 ensure: None,
                                 err_reg: None,
-                            });
+                rescue_range: None,
+                errinfo_save: None,
+            });
                         } else {
                             self.check_defined(b, nil_label, ret, false)?;
                         }
@@ -133,7 +135,9 @@ impl<'a> BytecodeGen<'a> {
                         rescue: Some(nil_label),
                         ensure: None,
                         err_reg: None,
-                    });
+                rescue_range: None,
+                errinfo_save: None,
+            });
                     // `ret` already holds "method"; the operator method
                     // (`!`, `-@`, …) is defined on every object, so there is
                     // nothing more to check.
@@ -189,7 +193,9 @@ impl<'a> BytecodeGen<'a> {
                         rescue: Some(nil_label),
                         ensure: None,
                         err_reg: None,
-                    });
+                rescue_range: None,
+                errinfo_save: None,
+            });
                 } else {
                     self.check_defined(l, nil_label, ret, false)?;
                 }
@@ -245,7 +251,9 @@ impl<'a> BytecodeGen<'a> {
                         rescue: Some(nil_label),
                         ensure: None,
                         err_reg: None,
-                    });
+                rescue_range: None,
+                errinfo_save: None,
+            });
                 } else {
                     self.check_defined(r, nil_label, ret, false)?;
                 }
@@ -282,7 +290,9 @@ impl<'a> BytecodeGen<'a> {
                         rescue: Some(nil_label),
                         ensure: None,
                         err_reg: None,
-                    });
+                rescue_range: None,
+                errinfo_save: None,
+            });
                 } else {
                     self.check_defined(b, nil_label, ret, false)?;
                 }
@@ -313,7 +323,9 @@ impl<'a> BytecodeGen<'a> {
                         rescue: Some(nil_label),
                         ensure: None,
                         err_reg: None,
-                    });
+                rescue_range: None,
+                errinfo_save: None,
+            });
                     Some(base)
                 } else {
                     None

@@ -65,6 +65,23 @@ impl ErrorReturn {
     }
 }
 
+/// Restore `$!` from the region-entry saves of every rescue clause the
+/// suspended *pc* sits inside (innermost first; the outermost save
+/// wins) — used when a non-local exit (`return` from a block, `break`)
+/// leaves a frame whose execution stopped inside a rescue clause.
+fn restore_errinfo_on_exit(
+    vm: &mut Executor,
+    info: &crate::globals::ISeqInfo,
+    pc: crate::bytecodegen::BcIndex,
+    lfp: Lfp,
+) {
+    for slot in info.errinfo_restore_slots(pc) {
+        if let Some(v) = lfp.register(slot) {
+            vm.set_errinfo(v);
+        }
+    }
+}
+
 pub(super) extern "C" fn handle_error(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -103,6 +120,13 @@ pub(super) extern "C" fn handle_error(
                 _ => None,
             };
             if let Some((val, target_lfp)) = method_return {
+                // Leaving a frame suspended inside a rescue clause
+                // (whether passing through or returning from it)
+                // restores `$!` to the region-entry save — the inline
+                // bytecodegen restore only covers local exits. Not
+                // needed on the error path: a propagating exception
+                // overwrites `$!` wherever it is caught.
+                restore_errinfo_on_exit(vm, info, pc, lfp);
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     // Suspend the non-local return across the ensure body so
                     // the body can `raise` (set_error) without tripping the
@@ -156,6 +180,11 @@ pub(super) extern "C" fn handle_error(
                 if lfp != outer {
                     // An intermediate frame: run its ensure body (the
                     // break passes through it), then keep unwinding.
+                    // Same `$!` restore as the MethodReturn path — but
+                    // only for frames being *exited*; the defining
+                    // frame below resumes inside its rescue clause and
+                    // must keep the caught exception in `$!`.
+                    restore_errinfo_on_exit(vm, info, pc, lfp);
                     if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                         vm.defer_unwind(lfp);
                         return ErrorReturn::goto(bc_base + ensure);
