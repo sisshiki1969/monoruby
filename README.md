@@ -78,13 +78,16 @@ steps:
 The action first tries to download a prebuilt binary attached to a GitHub
 release (built by the `release binaries` workflow), which installs in seconds:
 release tags use their own release's assets, while `@master` / `@latest` use
-the rolling `latest` nightly prerelease, whose assets are rebuilt on every
-master push (so they can lag a just-pushed HEAD by one build, ~15 min). When
-no asset exists for the ref/platform — or `prefer-prebuilt: 'false'` is set —
-it falls back to building monoruby from source on the first run for each
-monoruby revision × runner OS/arch and caches the resulting binary and runtime
-tree with `actions/cache`, so subsequent runs restore in seconds. Linux
-(x64/arm64) and macOS (Apple Silicon) hosted runners are supported.
+the rolling `latest` nightly prerelease, rebuilt on every master push (so it
+can lag a just-pushed HEAD by one build, ~15 min). Automatic builds cover
+x86-64 Linux only; assets for Linux arm64 and macOS arm64 are published on
+demand by dispatching the `release binaries` workflow with the wanted tag and
+targets. When no asset exists for the ref/platform — or
+`prefer-prebuilt: 'false'` is set — the action falls back to building monoruby
+from source on the first run for each monoruby revision × runner OS/arch and
+caches the resulting binary and runtime tree with `actions/cache`, so
+subsequent runs restore in seconds. Linux (x64/arm64) and macOS (Apple
+Silicon) hosted runners are supported either way.
 
 Inputs and outputs:
 

@@ -6,7 +6,13 @@
 #                        the pushed commit and the assets on the `latest`
 #                        prerelease are replaced (serves `@master`/`@latest`)
 #   * release published — assets for that release tag (serves `@v…`)
-#   * workflow_dispatch — backfill an existing release tag
+#   * workflow_dispatch — build assets for an existing tag on demand
+#
+# Automatic triggers (push / release) build x86-64 Linux only, to keep the
+# per-push runner cost at one job. Other architectures (Linux arm64, macOS
+# arm64) are built on demand: dispatch the workflow with the wanted tag
+# (`latest` or a release tag) and target selection. Platforms without an
+# asset simply fall back to the action's source-build path.
 #
 # Each asset is a tarball named monoruby-<tag>-<target>.tar.gz containing:
 #
@@ -30,8 +36,17 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to build assets for (e.g. v3.0.1)"
+        description: "Tag to build assets for: a release tag (e.g. v3.0.1) or `latest`"
         required: true
+      targets:
+        description: "Which architectures to build"
+        type: choice
+        default: all
+        options:
+          - all
+          - x86_64-linux
+          - aarch64-linux
+          - aarch64-macos
 
 permissions:
   contents: write # move the latest tag, create/edit the release, upload assets
@@ -65,6 +80,18 @@ jobs:
             gh release create latest --prerelease --title "Nightly build (latest master)" --notes "$notes"
           fi
 
+          # Only the x86-64 Linux asset is rebuilt per push; drop other-arch
+          # assets (from earlier on-demand dispatches) so a stale binary is
+          # never served for the new commit — those platforms fall back to
+          # the action's source build until re-dispatched. The x86-64 asset
+          # stays up (one-build lag) until the build job clobbers it.
+          for a in $(gh release view latest --json assets -q '.assets[].name'); do
+            case "$a" in
+              monoruby-latest-x86_64-unknown-linux-gnu.tar.gz) ;;
+              *) gh release delete-asset latest "$a" -y ;;
+            esac
+          done
+
   build:
     needs: prepare-latest
     # Run when prepare-latest succeeded (push) or was skipped (release /
@@ -77,12 +104,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # ubuntu-22.04 keeps the glibc floor low enough for every
-          # currently-hosted Linux runner image.
-          - os: ubuntu-22.04
-          - os: ubuntu-22.04-arm
-          - os: macos-latest # arm64-apple-darwin
+        # Automatic triggers (push / release) build x86-64 Linux only;
+        # workflow_dispatch picks runners from its `targets` input.
+        # ubuntu-22.04 keeps the glibc floor low enough for every
+        # currently-hosted Linux runner image; macos-latest is
+        # arm64-apple-darwin.
+        os: ${{ fromJSON(
+          github.event_name != 'workflow_dispatch' && '["ubuntu-22.04"]'
+          || inputs.targets == 'x86_64-linux'      && '["ubuntu-22.04"]'
+          || inputs.targets == 'aarch64-linux'     && '["ubuntu-22.04-arm"]'
+          || inputs.targets == 'aarch64-macos'     && '["macos-latest"]'
+          ||                                          '["ubuntu-22.04", "ubuntu-22.04-arm", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
