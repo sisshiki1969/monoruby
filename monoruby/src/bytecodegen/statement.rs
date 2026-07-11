@@ -635,6 +635,12 @@ impl<'a> BytecodeGen<'a> {
                     None
                 },
                 err_reg: Some(err_reg),
+                // A frame suspended anywhere in the rescue-clause span
+                // (matching code + clause bodies) has `$!` set to the
+                // caught exception; a non-local exit passing through
+                // must restore it from the region-entry save.
+                rescue_range: Some(rescue_pos..no_match_pos),
+                errinfo_save,
             });
             // An exception (or `return` / `throw`) raised while matching a
             // rescue clause or running a matched clause's body must still run
@@ -648,6 +654,8 @@ impl<'a> BytecodeGen<'a> {
                     rescue: Some(no_match_pos),
                     ensure: Some(ensure_label),
                     err_reg: Some(err_reg),
+                    rescue_range: None,
+                    errinfo_save: None,
                 });
             }
         } else {
@@ -680,6 +688,8 @@ impl<'a> BytecodeGen<'a> {
                     rescue: Some(rescue_pos),
                     ensure: Some(ensure_label),
                     err_reg: Some(err_reg),
+                    rescue_range: None,
+                    errinfo_save: None,
                 });
             } else {
                 self.exception_table.push(ExceptionEntry {
@@ -687,6 +697,8 @@ impl<'a> BytecodeGen<'a> {
                     rescue: None,
                     ensure: None,
                     err_reg: None,
+                    rescue_range: None,
+                    errinfo_save: None,
                 });
             }
         }

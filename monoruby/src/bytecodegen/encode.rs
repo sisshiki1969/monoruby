@@ -67,6 +67,8 @@ impl<'a> BytecodeGen<'a> {
             rescue,
             ensure,
             err_reg,
+            rescue_range,
+            errinfo_save,
         } in std::mem::take(&mut self.exception_table)
         {
             if rescue.is_none() && ensure.is_none() {
@@ -77,8 +79,10 @@ impl<'a> BytecodeGen<'a> {
             let rescue = rescue.map(|l| self[l]);
             let ensure = ensure.map(|l| self[l]);
             let err_reg = err_reg.map(|reg| self.slot_id(&reg));
+            let rescue_range = rescue_range.map(|r| self[r.start]..self[r.end]);
+            let errinfo_save = errinfo_save.map(|reg| self.slot_id(&reg));
             self.iseq_mut()
-                .exception_push(start..end, rescue, ensure, err_reg);
+                .exception_push(start..end, rescue, ensure, err_reg, rescue_range, errinfo_save);
         }
 
         let sp: Vec<_> = std::mem::take(&mut self.sp)

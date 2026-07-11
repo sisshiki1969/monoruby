@@ -12,6 +12,12 @@ struct ExceptionMapEntry {
     rescue_pc: Option<BcIndex>,      // rescue destination pc
     ensure_pc: Option<BcIndex>,      // ensure destination pc
     error_slot: Option<SlotId>,      // a slot where an error object is assigned
+    // The region's rescue-clause span (matching code + clause bodies).
+    // A frame suspended in it has `$!` set to the caught exception; a
+    // non-local exit (block `return` / `break`) unwinding this frame
+    // restores `$!` from `errinfo_slot` (the region-entry save).
+    rescue_range: Option<std::ops::Range<BcIndex>>,
+    errinfo_slot: Option<SlotId>,
 }
 
 impl ExceptionMapEntry {
@@ -20,12 +26,16 @@ impl ExceptionMapEntry {
         rescue_pc: Option<BcIndex>,
         ensure_pc: Option<BcIndex>,
         error_slot: Option<SlotId>,
+        rescue_range: Option<std::ops::Range<BcIndex>>,
+        errinfo_slot: Option<SlotId>,
     ) -> Self {
         ExceptionMapEntry {
             range,
             rescue_pc,
             ensure_pc,
             error_slot,
+            rescue_range,
+            errinfo_slot,
         }
     }
 }
@@ -491,9 +501,34 @@ impl ISeqInfo {
         rescue: Option<BcIndex>,
         ensure: Option<BcIndex>,
         err_reg: Option<SlotId>,
+        rescue_range: Option<std::ops::Range<BcIndex>>,
+        errinfo_slot: Option<SlotId>,
     ) {
+        self.exception_map.push(ExceptionMapEntry::new(
+            range,
+            rescue,
+            ensure,
+            err_reg,
+            rescue_range,
+            errinfo_slot,
+        ));
+    }
+
+    /// `$!` save slots of every rescue-clause span covering *pc*,
+    /// innermost first (entries are pushed inner regions first).
+    /// A non-local exit unwinding a frame suspended at *pc* restores
+    /// them in order — the last (outermost) save wins.
+    pub(crate) fn errinfo_restore_slots(&self, pc: BcIndex) -> Vec<SlotId> {
         self.exception_map
-            .push(ExceptionMapEntry::new(range, rescue, ensure, err_reg));
+            .iter()
+            .filter_map(|e| {
+                if e.rescue_range.as_ref().is_some_and(|r| r.contains(&pc)) {
+                    e.errinfo_slot
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub(crate) fn has_exception_handler(&self) -> bool {

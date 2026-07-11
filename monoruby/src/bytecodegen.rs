@@ -371,6 +371,14 @@ struct ExceptionEntry {
     rescue: Option<Label>,
     ensure: Option<Label>,
     err_reg: Option<BcReg>,
+    /// The code range of this region's rescue clauses (matching code +
+    /// clause bodies). A non-local exit (`return` from a block /
+    /// `break`) whose frame is suspended inside this range must restore
+    /// `$!` from `errinfo_save` at runtime — the bytecodegen inline
+    /// restore only covers local exits.
+    rescue_range: Option<std::ops::Range<Label>>,
+    /// The hidden local holding `$!` as of region entry.
+    errinfo_save: Option<BcReg>,
 }
 
 ///
