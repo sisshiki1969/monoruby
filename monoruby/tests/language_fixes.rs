@@ -271,6 +271,11 @@ fn eval_cref_semantics() {
           end
         end
         $r << ECS_CS::C.new.get_const(ECS_Recv.new)
+        # The defined? probe takes the same blended route.
+        recv = ECS_Recv.new
+        $r << recv.instance_eval("defined?(FOO9)")
+        $r << recv.instance_eval("defined?(NOT_DEFINED_ANYWHERE9)").inspect
+        $r << recv.instance_eval("FOO9") rescue $r << :e1
         obj2 = Object.new
         begin
           class << obj2
