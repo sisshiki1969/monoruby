@@ -10,9 +10,14 @@
 #
 # 1. Prebuilt release asset — when the action ref is a release tag (v*), try
 #    downloading monoruby-<tag>-<target>.tar.gz from that GitHub release
-#    (uploaded by .github/workflows/release-binaries.yml). Extraction takes
-#    seconds and needs no toolchain.
-# 2. Source build with caching — otherwise (branch/SHA refs, releases
+#    (uploaded by .github/workflows/release-binaries.yml). `@master` and
+#    `@latest` map to the rolling `latest` nightly prerelease, whose assets
+#    are replaced on every master push — so a `@master` consumer gets the
+#    most recent nightly binary, which can lag the just-pushed HEAD by one
+#    build (~15 min). Extraction takes seconds and needs no toolchain; set
+#    the `prefer-prebuilt: 'false'` input to skip this tier and build the
+#    exact checked-out ref instead.
+# 2. Source build with caching — otherwise (other branch/SHA refs, releases
 #    without assets for this platform, or a failed download), build monoruby
 #    from the very source tree GitHub checked out for the action itself
 #    (`$GITHUB_ACTION_PATH`) and install it with `cargo install`. The built
@@ -36,6 +41,13 @@ branding:
   color: "red"
 
 inputs:
+  prefer-prebuilt:
+    description: >
+      Try a prebuilt release asset before building from source. Set to
+      'false' to always build the exact checked-out ref (e.g. when `@master`
+      must not lag behind the rolling nightly binary).
+    required: false
+    default: "true"
   cache:
     description: >
       Cache the built monoruby binary and its runtime tree with actions/cache.
@@ -76,6 +88,7 @@ runs:
       env:
         ACTION_REF: ${{ github.action_ref }}
         ACTION_REPO: ${{ github.action_repository }}
+        PREFER_PREBUILT: ${{ inputs.prefer-prebuilt }}
       run: |
         set -euo pipefail
         ok=false
@@ -89,12 +102,21 @@ runs:
           *)            target= ;;
         esac
 
-        # Only release tags have assets; branch/SHA refs go straight to the
-        # source build. A missing asset (older release, unbuilt platform)
-        # 404s and falls through the same way.
-        if [[ -n "$target" && "${ACTION_REF:-}" =~ ^v[0-9] ]]; then
-          asset="monoruby-${ACTION_REF}-${target}.tar.gz"
-          url="https://github.com/${repo}/releases/download/${ACTION_REF}/${asset}"
+        # Map the action ref to a release tag carrying assets: release tags
+        # map to themselves, master/latest to the rolling `latest` nightly
+        # prerelease (replaced on every master push). Other branch/SHA refs
+        # go straight to the source build, as does a missing asset (older
+        # release, unbuilt platform), which 404s and falls through.
+        tag=
+        if [[ "${ACTION_REF:-}" =~ ^v[0-9] ]]; then
+          tag="$ACTION_REF"
+        elif [[ "${ACTION_REF:-}" == "master" || "${ACTION_REF:-}" == "latest" ]]; then
+          tag="latest"
+        fi
+
+        if [[ "$PREFER_PREBUILT" == "true" && -n "$target" && -n "$tag" ]]; then
+          asset="monoruby-${tag}-${target}.tar.gz"
+          url="https://github.com/${repo}/releases/download/${tag}/${asset}"
           tmp="$RUNNER_TEMP/setup-monoruby-prebuilt"
           mkdir -p "$tmp"
           echo "Trying prebuilt asset: $url"

@@ -1,7 +1,12 @@
 # Builds prebuilt monoruby binaries and attaches them to a GitHub release,
 # so the setup-monoruby action (root action.yml) can download them instead of
-# compiling from source. Runs automatically when a release is published, and
-# manually via workflow_dispatch to backfill an existing release tag.
+# compiling from source. Three triggers:
+#
+#   * push to master   — rolling nightly: the `latest` tag is force-moved to
+#                        the pushed commit and the assets on the `latest`
+#                        prerelease are replaced (serves `@master`/`@latest`)
+#   * release published — assets for that release tag (serves `@v…`)
+#   * workflow_dispatch — backfill an existing release tag
 #
 # Each asset is a tarball named monoruby-<tag>-<target>.tar.gz containing:
 #
@@ -18,6 +23,8 @@
 name: release binaries
 
 on:
+  push:
+    branches: [master]
   release:
     types: [published]
   workflow_dispatch:
@@ -27,10 +34,46 @@ on:
         required: true
 
 permissions:
-  contents: write # upload assets to the release
+  contents: write # move the latest tag, create/edit the release, upload assets
+
+# One run per target tag; a newer master push supersedes an in-flight
+# nightly build.
+concurrency:
+  group: release-binaries-${{ github.event_name == 'push' && 'latest' || github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: true
 
 jobs:
+  # Rolling nightly bookkeeping (push events only): move the `latest` tag to
+  # the pushed commit and make sure the `latest` prerelease exists, so the
+  # matrix jobs have a release to upload onto.
+  prepare-latest:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Move latest tag and upsert the nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin latest
+          notes="Rolling nightly build of master, replaced on every push. Currently ${GITHUB_SHA}. Consumed by the setup-monoruby action (see action.yml) for \`@master\` / \`@latest\` refs."
+          if gh release view latest --json id >/dev/null 2>&1; then
+            gh release edit latest --prerelease --title "Nightly build (latest master)" --notes "$notes"
+          else
+            gh release create latest --prerelease --title "Nightly build (latest master)" --notes "$notes"
+          fi
+
   build:
+    needs: prepare-latest
+    # Run when prepare-latest succeeded (push) or was skipped (release /
+    # dispatch), but never build the `latest` tag from a release event — the
+    # nightly is owned by the push path.
+    if: >-
+      always() &&
+      (needs.prepare-latest.result == 'success' || needs.prepare-latest.result == 'skipped') &&
+      !(github.event_name == 'release' && github.event.release.tag_name == 'latest')
     strategy:
       fail-fast: false
       matrix:
@@ -43,11 +86,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+      TAG: ${{ github.event_name == 'push' && 'latest' || github.event.release.tag_name || inputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+          # Nightly builds pin the pushed commit (not the moving tag);
+          # release/dispatch builds check out the release tag.
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.release.tag_name || inputs.tag }}
 
       - name: Install pinned Rust toolchain
         run: |
