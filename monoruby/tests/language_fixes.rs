@@ -307,6 +307,99 @@ fn sclass_constants_resolve_per_object() {
 }
 
 #[test]
+fn sclass_constants_cover_lookup_paths() {
+    // Exercises every runtime-cref recovery path: `defined?` (the
+    // probe/check-constant route), the ancestor-chain fallback when
+    // the constant lives on the receiver's class rather than the
+    // lexical scope, `def self.f` inside a class nested under
+    // `class << obj` (owner is the metaclass, cref is the attached
+    // class), and three receivers interleaved so the JIT compiles
+    // against a constant cache filled for a different self class.
+    run_test(
+        r##"
+        $r = []
+        TOPC9 = :top
+        # defined?(CONST) resolves through the runtime cref too. The
+        # calls happen AFTER the loop so the earlier receivers see a
+        # stale static stamp. The TOPC9 probe misses the singleton
+        # class and walks out to the enclosing lexical scope.
+        dobjs = []
+        2.times do |i|
+          $i = i
+          obj = Object.new
+          class << obj
+            CONST_D = $i + 10
+            def dcheck
+              [defined?(CONST_D), CONST_D, defined?(TOPC9)]
+            end
+          end
+          dobjs << obj
+        end
+        10.times { dobjs.each { |o| $r << o.dcheck } }
+        # Lexical miss falls back to the runtime singleton class's
+        # ancestors: the constant lives on each receiver's class. A
+        # body-level read takes the same route without any `def`.
+        class CCLP_A; CONST_F = :a; end
+        class CCLP_B; CONST_F = :b; end
+        fobjs = [CCLP_A.new, CCLP_B.new]
+        fobjs.each do |obj|
+          class << obj
+            $r << CONST_F
+            def fb; CONST_F; end
+          end
+        end
+        10.times { fobjs.each { |o| $r << o.fb } }
+        # `def self.f` in a class nested under `class << obj`: the
+        # method's owner is the metaclass, but constants resolve in
+        # the attached per-execution class.
+        $classes2 = []
+        2.times do |i|
+          $i = i
+          obj = Object.new
+          class << obj
+            CONST_OUTER = :o
+            class Y
+              $classes2 << self
+              CONST_S = $i + 100
+              def self.sfoo
+                # The probe misses Y and hits the enclosing singleton
+                # class, one lexical level out.
+                [CONST_S, defined?(CONST_OUTER)]
+              end
+            end
+          end
+        end
+        10.times { $classes2.each { |c| $r << c.sfoo } }
+        $r << ($classes2[0] != $classes2[1])
+        # `||=` on a constant in the body takes the definedness-check
+        # route; re-opening the same singleton class hits its cache.
+        qobj = Object.new
+        3.times do
+          class << qobj
+            CONST_Q ||= :q
+            $r << CONST_Q
+          end
+        end
+        # Three receivers interleaved: the constant cache flips
+        # between self classes while each method body gets JIT
+        # compiled, forcing the cache-key mismatch recompile path.
+        objs = []
+        3.times do |i|
+          $i = i
+          o = Object.new
+          class << o
+            CONST_J = $i
+            def jfoo; CONST_J; end
+          end
+          objs << o
+        end
+        30.times { objs.each_with_index { |o, i| $r << (o.jfoo == i) } }
+        $r
+        "##,
+    );
+}
+
+#[test]
 fn binary_source_bytes_survive_load_and_eval() {
     // The source pipeline carries raw bytes: a `# encoding: big5`
     // source whose literals hold non-UTF-8 bytes round-trips through

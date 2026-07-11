@@ -874,6 +874,65 @@ impl ClassInfoTable {
             .any(|e| e.func_id() == Some(fid))
     }
 
+    /// Is `target` on the superclass chain of `start` (including
+    /// `start` itself)?
+    pub(crate) fn class_in_ancestors(&self, start: ClassId, target: ClassId) -> bool {
+        let mut module = Some(self[start].get_module());
+        while let Some(m) = module {
+            if m.id() == target {
+                return true;
+            }
+            module = m.superclass();
+        }
+        false
+    }
+
+    /// The JIT-side counterpart of `Executor::const_lexical_self_key`'s
+    /// key computation: the VM keys a class/module receiver by the
+    /// module's own id, and such a receiver reaches the JIT as its
+    /// singleton class — map it back through the attachment. Any
+    /// other class keys as itself.
+    pub(crate) fn const_self_key_for_class(&self, self_class: ClassId) -> ClassId {
+        match self[self_class]
+            .get_module()
+            .is_singleton()
+            .and_then(|v| v.is_class_or_module())
+        {
+            Some(attached) => attached.id(),
+            None => self_class,
+        }
+    }
+
+    /// Class-keyed variant of the runtime-cref plausibility check:
+    /// the statically stamped innermost cref is plausible for a
+    /// receiver of class `self_class` when it lies on that class's
+    /// ancestry, or — when `self_class` is the singleton class of a
+    /// class/module — on the attached module's own ancestry (a
+    /// singleton method runs with self == the module while its cref
+    /// is the module or an enclosing scope). Receivers that find the
+    /// stamp plausible all resolve constants identically, so the JIT
+    /// may fold a cache entry filled through the static cref exactly
+    /// when this holds for the compiled self class.
+    pub(crate) fn static_cref_plausible_for_class(
+        &self,
+        self_class: ClassId,
+        statically: ClassId,
+    ) -> bool {
+        if self.class_in_ancestors(self_class, statically) {
+            return true;
+        }
+        if let Some(attached) = self[self_class]
+            .get_module()
+            .is_singleton()
+            .and_then(|v| v.is_class_or_module())
+        {
+            if self.class_in_ancestors(attached.id(), statically) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub(crate) fn has_singleton(&self, obj: Value) -> Option<Module> {
         let org_class = self[obj.class()].get_module();
         if org_class.is_singleton().is_some() {

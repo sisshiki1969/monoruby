@@ -81,9 +81,22 @@ impl<'a> JitContext<'a> {
             // A self-dependent resolution (singleton-cref frame) is only
             // foldable when this compilation's self class matches — the
             // dispatch guard then pins it at runtime.
-            if let Some(sc) = cache.self_class {
-                if sc != self.self_class() {
-                    return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+            match cache.self_class {
+                Some(sc) => {
+                    if sc != self.store.const_self_key_for_class(self.self_class()) {
+                        return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+                    }
+                }
+                None => {
+                    // Constant sites in singleton-lexical methods are
+                    // always filled with a Some key (resolution there is
+                    // self-class dependent), so a None entry can only
+                    // predate this receiver's resolution — let the VM
+                    // re-resolve rather than fold a value whose validity
+                    // rests on a re-stampable static cref.
+                    if self.iseq().in_singleton_lexical {
+                        return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+                    }
                 }
             }
             let base_slot = self.store[id].base;

@@ -514,6 +514,11 @@ impl Store {
             sourceinfo,
         );
         info.singleton_classdef = is_singleton;
+        // The body itself resolves constants through a per-execution
+        // singleton class, so it needs the self-keyed constant cache
+        // just like defs nested inside it (bytecodegen additionally
+        // propagates the flag onto those).
+        info.in_singleton_lexical = is_singleton;
         let iseq = self.new_iseq(info);
         let info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
         self.functions.info.push(info);

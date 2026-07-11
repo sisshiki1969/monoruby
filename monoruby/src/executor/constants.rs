@@ -630,6 +630,21 @@ impl Executor {
         let mut module = Some(globals.store[self_class].get_module());
         while let Some(m) = module {
             if globals.store.class_owns_func(m.id(), current_func) {
+                // For a plain `def` the owner IS the cref. For a
+                // singleton def (`def self.f` in a class body nested
+                // under `class << obj`) the owner is the metaclass
+                // while the cref is the attached class itself — the
+                // stamped entry being a non-singleton class tells the
+                // two forms apart.
+                if globals.store[statically].get_module().is_singleton().is_none() {
+                    if let Some(attached) = globals.store[m.id()]
+                        .get_module()
+                        .is_singleton()
+                        .and_then(|v| v.is_class_or_module())
+                    {
+                        return attached.id();
+                    }
+                }
                 return m.id();
             }
             module = m.superclass();
@@ -645,31 +660,33 @@ impl Executor {
     /// its cref is M or an enclosing module, neither of which appears
     /// among the metaclass's ancestors.
     fn static_cref_plausible(globals: &Globals, self_val: Value, statically: ClassId) -> bool {
-        if Self::class_in_ancestors(globals, self_val.class(), statically) {
+        if globals
+            .store
+            .static_cref_plausible_for_class(self_val.class(), statically)
+        {
             return true;
         }
+        // Checked directly on the value as well: a class/module
+        // receiver whose metaclass has not been materialized has a
+        // plain class (`Class`/`Module`) that carries no attachment.
         if let Some(m) = self_val.is_class_or_module() {
-            if Self::class_in_ancestors(globals, m.id(), statically) {
+            if globals.store.class_in_ancestors(m.id(), statically) {
                 return true;
             }
-        }
-        false
-    }
-
-    fn class_in_ancestors(globals: &Globals, start: ClassId, target: ClassId) -> bool {
-        let mut module = Some(globals.store[start].get_module());
-        while let Some(m) = module {
-            if m.id() == target {
-                return true;
-            }
-            module = m.superclass();
         }
         false
     }
 
     /// The self-dependence key for the constant cache: `Some(self's
-    /// class)` when [`Self::runtime_innermost_cref`] would substitute —
-    /// the cached result is then only valid for the same self class.
+    /// class)` for any method lexically nested under `class << obj`.
+    /// Resolution there goes through [`Self::runtime_innermost_cref`],
+    /// which depends only on self's class, so the cached result is
+    /// valid exactly for the same self class. The key must NOT be
+    /// weakened to `None` when the static stamp happens to be
+    /// plausible for the current receiver: plausibility is relative
+    /// to the *current* stamp, and a later re-execution of the
+    /// `class << obj` body re-stamps it, silently invalidating what a
+    /// `None`-keyed entry resolved against.
     pub(crate) fn const_lexical_self_key(
         &self,
         globals: &Globals,
@@ -679,13 +696,15 @@ impl Executor {
         if !globals.store[iseq].in_singleton_lexical {
             return None;
         }
-        let statically = *globals.store[iseq].lexical_context.last()?;
+        // For a class/module receiver (a classdef body, or `def
+        // self.f`), key by the module's own id: its metaclass may be
+        // unmaterialized, in which case `.class()` is the shared
+        // `Class`/`Module` and would alias distinct receivers.
         let self_val = self.cfp().lfp().self_val();
-        if Self::static_cref_plausible(globals, self_val, statically) {
-            None
-        } else {
-            Some(self_val.class())
-        }
+        Some(match self_val.is_class_or_module() {
+            Some(m) => m.id(),
+            None => self_val.class(),
+        })
     }
 
     fn search_lexical_stack(
