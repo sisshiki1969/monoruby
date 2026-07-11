@@ -3986,7 +3986,17 @@ fn singleton_class(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    lfp.self_val().get_singleton(&mut globals.store)
+    let s = lfp.self_val().get_singleton(&mut globals.store)?;
+    // MRI's `rb_singleton_class`: for a Class receiver, the exposed
+    // eigenclass is made to belong to its *own* eigenclass — building
+    // S(S(C)) re-links S(C)'s class pointer, so class methods defined
+    // on the meta-metaclass (of this class or an ancestor) dispatch on
+    // it (`D.singleton_class.ham`).
+    if lfp.self_val().is_class_or_module().is_some() {
+        let sid = s.as_class_id();
+        globals.store.get_metaclass(sid);
+    }
+    Ok(s)
 }
 
 ///
