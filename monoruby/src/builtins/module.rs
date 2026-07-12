@@ -2149,7 +2149,7 @@ fn instance_method(
         .map_err(|_| {
             MonorubyErr::nameerr_with_name(
                 format!(
-                    "undefined method `{}' for class `{}'",
+                    "undefined method '{}' for class '{}'",
                     method_name.get_name(),
                     klass.id().get_name(&globals.store),
                 ),
@@ -2182,7 +2182,7 @@ fn public_instance_method(
             .map_err(|_| {
                 MonorubyErr::nameerr_with_name(
                     format!(
-                        "undefined method `{}' for class `{}'",
+                        "undefined method '{}' for class '{}'",
                         method_name.get_name(),
                         klass.id().get_name(&globals.store),
                     ),
@@ -2325,7 +2325,7 @@ fn undefined_method_for_kind(
         class_id.get_name(&globals.store)
     };
     MonorubyErr::nameerr(format!(
-        "undefined method `{}' for {kind} `{display}'",
+        "undefined method '{}' for {kind} '{display}'",
         method.get_name(),
     ))
 }

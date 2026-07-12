@@ -979,10 +979,11 @@ fn main() {
     match globals.run_with_prelude(&requires, &prelude, code, &path) {
         Ok(_val) => {
             // Debug builds echo the result value of `-e` one-liners to
-            // stderr (script files stay silent, as before, so specs
-            // that capture stderr aren't polluted).
+            // stderr — but only on an interactive terminal, so test
+            // harnesses (mspec, `diff`-based CI checks) that capture a
+            // piped stderr never see it.
             #[cfg(debug_assertions)]
-            if from_exec {
+            if from_exec && std::io::IsTerminal::is_terminal(&std::io::stderr()) {
                 eprintln!("=> {:?}", _val)
             }
             #[cfg(not(debug_assertions))]

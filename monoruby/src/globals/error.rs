@@ -431,13 +431,38 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Redo, String::new())
     }
 
+    ///
+    /// CRuby 3.4+ receiver description for NoMethodError messages
+    /// (unchanged in 4.0; verified against CRuby 4.0.2):
+    /// `nil` / `true` / `false` verbatim, `class Foo` / `module Foo`
+    /// (anonymous ones fall back to their `#<Class:0x…>` display), and
+    /// `an instance of Foo` for everything else.
+    ///
+    fn receiver_description(store: &Store, obj: Value) -> String {
+        if obj.is_nil() {
+            "nil".to_string()
+        } else if obj == Value::bool(true) {
+            "true".to_string()
+        } else if obj == Value::bool(false) {
+            "false".to_string()
+        } else if let Some(m) = obj.is_class_or_module() {
+            let kind = if m.is_module() { "module" } else { "class" };
+            format!("{kind} {}", obj.to_s(store))
+        } else {
+            format!("an instance of {}", obj.get_real_class_name(store))
+        }
+    }
+
     pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod {
                 name: Some(name),
                 receiver: Some(obj.id()),
             },
-            format!("undefined method `{name}' for {}", obj.to_s(store)),
+            format!(
+                "undefined method '{name}' for {}",
+                Self::receiver_description(store, obj)
+            ),
         )
     }
 
@@ -453,8 +478,8 @@ impl MonorubyErr {
                 receiver: Some(obj.id()),
             },
             format!(
-                "super: no superclass method `{name}' for {}",
-                obj.to_s(store)
+                "super: no superclass method '{name}' for {}",
+                Self::receiver_description(store, obj)
             ),
         )
     }
@@ -470,7 +495,7 @@ impl MonorubyErr {
                 receiver: None,
             },
             format!(
-                "undefined method `{name}' for {}",
+                "undefined method '{name}' for {}",
                 store.get_class_name(class)
             ),
         )
@@ -483,9 +508,8 @@ impl MonorubyErr {
                 receiver: Some(obj.id()),
             },
             format!(
-                "private method `{name}' called for {}:{}",
-                obj.to_s(store),
-                obj.get_real_class_name(store)
+                "private method '{name}' called for {}",
+                Self::receiver_description(store, obj)
             ),
         )
     }
@@ -497,9 +521,8 @@ impl MonorubyErr {
                 receiver: Some(obj.id()),
             },
             format!(
-                "protected method `{name}' called for {}:{}",
-                obj.to_s(store),
-                obj.get_real_class_name(store)
+                "protected method '{name}' called for {}",
+                Self::receiver_description(store, obj)
             ),
         )
     }
@@ -594,7 +617,7 @@ impl MonorubyErr {
 
     pub(crate) fn undefined_method(method_name: IdentId, class_name: String) -> MonorubyErr {
         Self::nameerr(format!(
-            "undefined method `{}' for class `{}'",
+            "undefined method '{}' for class '{}'",
             method_name.get_name(),
             class_name,
         ))
