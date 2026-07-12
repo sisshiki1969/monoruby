@@ -1368,3 +1368,25 @@ fn method_with_all_param_types() {
         "#,
     );
 }
+
+#[test]
+fn caller_reports_suspended_lines() {
+    // Each backtrace entry shows the line the frame is currently
+    // executing (its pc saved in the callee's cont-frame slot), not
+    // the method's first line — including inside rescue/ensure.
+    run_test_once(
+        r##"
+        def crsl_foo
+          begin
+            raise "oops"
+          rescue
+            return caller(0, 2).map { |s| s[/:(\d+):/, 1] }
+          end
+        end
+        def crsl_bar
+          crsl_foo
+        end
+        crsl_bar
+        "##,
+    );
+}

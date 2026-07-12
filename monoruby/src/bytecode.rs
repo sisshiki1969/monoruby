@@ -320,6 +320,13 @@ impl BytecodePtr {
         Self(std::ptr::NonNull::new(ptr).unwrap())
     }
 
+    /// Reconstruct from a raw address (e.g. a cont-frame slot). Returns
+    /// `None` for null. The caller must range-validate the result
+    /// against an ISeq's bytecode span before dereferencing.
+    pub(crate) unsafe fn from_raw(ptr: *mut Bytecode) -> Option<Self> {
+        Some(Self(std::ptr::NonNull::new(ptr)?))
+    }
+
     pub fn opcode(&self) -> u8 {
         (self.op1 >> 48) as u8
     }

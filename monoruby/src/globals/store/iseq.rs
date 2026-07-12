@@ -470,6 +470,16 @@ impl ISeqInfo {
         addr >= top && addr < end
     }
 
+    /// Like [`Self::contains_pc`] but accepts the one-past-the-end
+    /// address (a suspended pc saved as call-site + 1 when the call is
+    /// the final instruction).
+    pub(crate) fn contains_pc_one_past(&self, pc: BytecodePtr) -> bool {
+        let Some(bc) = self.bytecode.as_ref() else {
+            return false;
+        };
+        pc.as_ptr() as usize == bc.as_ptr() as usize + bc.len() * std::mem::size_of::<Bytecode>()
+    }
+
     ///
     /// Get an instruction index(*usize*) corresponding to pc(*BytecodePtr*).
     ///
