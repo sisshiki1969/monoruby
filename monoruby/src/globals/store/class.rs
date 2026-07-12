@@ -1824,6 +1824,7 @@ impl Store {
                 visibility,
                 is_basic_op,
                 original_name,
+                visibility_shadow: false,
             },
         );
         #[cfg(feature = "perf")]
@@ -1854,6 +1855,7 @@ impl Store {
                 visibility,
                 is_basic_op: false,
                 original_name: name,
+                visibility_shadow: false,
             },
         );
     }
@@ -2000,9 +2002,24 @@ impl Store {
             // friends treat as "no method present" — so the spec's
             // `m.private_instance_methods.include?(:foo)` would be false.
             let (func_id, inherited_vis, _) = self.find_method_for_class(class_id, *name)?;
+            // A visibility shadow copies the *inherited* func_id, which goes
+            // stale if the inherited method has since been redefined. Resolve
+            // the current inherited definition from the superclass (the
+            // shadow's own entry would just resolve to itself) so a repeated
+            // visibility declaration re-syncs the copy.
+            let inherited_fid = self
+                .get_module(class_id)
+                .superclass()
+                .and_then(|sup| self.search_method(sup, *name))
+                .and_then(|e| e.func_id());
             match self.classes[class_id].methods.get_mut(name) {
                 Some(entry) => {
                     entry.visibility = visibility;
+                    if entry.visibility_shadow
+                        && let Some(fid) = inherited_fid
+                    {
+                        entry.func_id = Some(fid);
+                    }
                     Globals::class_version_inc();
                 }
                 None => {
@@ -2038,6 +2055,7 @@ impl Store {
                             visibility,
                             is_basic_op: false,
                             original_name,
+                            visibility_shadow: true,
                         },
                     );
                 }
@@ -2135,21 +2153,33 @@ impl Store {
     }
 
     ///
-    /// Whether *class_id*'s own method table dispatches *name* to the method
-    /// body *fid* — directly, or through a proc-method wrapper (a
-    /// `define_method`-installed entry whose wrapper jumps straight into the
-    /// block body, so the running frame carries the block's FuncId).
+    /// Whether *class_id* is a *definition position* of the method body *fid*
+    /// under *name*: its own method table dispatches *name* to the body —
+    /// directly, or through a proc-method wrapper (a `define_method`-installed
+    /// entry whose wrapper jumps straight into the block body, so the running
+    /// frame carries the block's FuncId).
     ///
     /// This identifies the ancestor-chain positions that "own" an executing
-    /// frame for `super` purposes. Matching on the *name*'s own entry (rather
-    /// than any registration of the fid) mirrors CRuby's alias semantics: an
-    /// `alias_method`-created entry re-registers the fid in the aliasing
-    /// class, but `super` from the aliased method still resolves from the
-    /// *original* definition's position (the alias entry maps the alias name,
-    /// not the original name searched here).
+    /// frame for `super` purposes:
+    /// - Matching on the *name*'s own entry (rather than any registration of
+    ///   the fid) mirrors CRuby's alias semantics: an `alias_method`-created
+    ///   entry re-registers the fid in the aliasing class, but `super` from
+    ///   the aliased method still resolves from the *original* definition's
+    ///   position (the alias entry maps the alias name, not the original name
+    ///   searched here).
+    /// - A *visibility-shadow* entry (`public :inherited_method` in a
+    ///   subclass shares the inherited fid in the subclass's table purely to
+    ///   re-declare visibility) is not a position — or `super` in the
+    ///   inherited method would re-enter itself.
     ///
     fn body_dispatched_by(&self, class_id: ClassId, name: IdentId, fid: FuncId) -> bool {
-        let Some(entry_fid) = self[class_id].methods.get(&name).and_then(|e| e.func_id()) else {
+        let Some(entry) = self[class_id].methods.get(&name) else {
+            return false;
+        };
+        if entry.is_visibility_shadow() {
+            return false;
+        }
+        let Some(entry_fid) = entry.func_id() else {
             return false;
         };
         entry_fid == fid
@@ -2252,16 +2282,39 @@ impl Store {
             }
             module = m.superclass();
         }
-        // The method's defining module is not in the receiver's
-        // ancestor chain — e.g. a Module's UnboundMethod bound to an
-        // unrelated object via `#bind` / `#bind_call`. CRuby resolves
-        // `super` against the receiver's actual class hierarchy here.
-        if matched == 0
-            && let Some(entry) = self.search_method(self.get_module(self_class), name)
-            && let Some(fid) = entry.func_id()
-            && fid != current_func_id
-        {
-            return Some(fid);
+        if matched == 0 {
+            // No name-based position matched. This happens when the *entry*
+            // that dispatched the frame no longer maps the name to the body —
+            // e.g. a visibility shadow whose copied func_id went stale after
+            // the inherited method was redefined. Fall back to the legacy
+            // owner-registration walk, which tolerates such staleness.
+            let owner = self[current_func_id].owner_class();
+            let mut owner_matched = false;
+            let mut module = Some(self.get_module(self_class));
+            while let Some(m) = module {
+                if !m.has_origin() && owner.contains(&m.id()) {
+                    owner_matched = true;
+                    if let Some(super_module) = m.superclass()
+                        && let Some(entry) = self.search_method(super_module, name)
+                        && let Some(super_fid) = entry.func_id()
+                        && super_fid != current_func_id
+                    {
+                        return Some(super_fid);
+                    }
+                }
+                module = m.superclass();
+            }
+            // The method's defining module is not in the receiver's
+            // ancestor chain — e.g. a Module's UnboundMethod bound to an
+            // unrelated object via `#bind` / `#bind_call`. CRuby resolves
+            // `super` against the receiver's actual class hierarchy here.
+            if !owner_matched
+                && let Some(entry) = self.search_method(self.get_module(self_class), name)
+                && let Some(fid) = entry.func_id()
+                && fid != current_func_id
+            {
+                return Some(fid);
+            }
         }
         None
     }

@@ -26,6 +26,12 @@ pub(crate) struct MethodTableEntry {
     /// `Method#inspect` can recover it. For a plainly-defined method
     /// (`def`, `attr_*`, builtin) this equals the entry's own name.
     original_name: IdentId,
+    /// This entry only re-declares an *inherited* method's visibility
+    /// (`public :inherited_method` in a subclass): it shares the
+    /// inherited `func_id` so visibility introspection works, but it is
+    /// not a definition — `super` resolution must not treat the class
+    /// as a position of the method body (`Store::body_dispatched_by`).
+    visibility_shadow: bool,
 }
 
 impl MethodTableEntry {
@@ -47,6 +53,10 @@ impl MethodTableEntry {
 
     pub fn is_basic_op(&self) -> bool {
         self.is_basic_op
+    }
+
+    pub fn is_visibility_shadow(&self) -> bool {
+        self.visibility_shadow
     }
 
     pub fn is_public(&self) -> bool {

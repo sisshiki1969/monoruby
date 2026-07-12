@@ -1548,3 +1548,38 @@ fn super_from_alias_resolves_from_original_position() {
         "##,
     );
 }
+
+#[test]
+fn super_skips_visibility_shadow_entries() {
+    // `public :derp` in the including class shares the inherited fid in
+    // its own method table purely to re-declare visibility. That shadow
+    // is not a definition position: super from the inherited method must
+    // resolve from the defining module's position, not re-enter itself.
+    // (core/method/super_method_spec.rb "after changing an inherited
+    // methods visibility".)
+    run_test(
+        r##"
+        module SVSE_A
+          private
+          def derp(message)
+            'A'
+          end
+        end
+        module SVSE_B
+          private
+          def derp
+            'B' + super('superclass')
+          end
+        end
+        class SVSE_C
+          include SVSE_A
+          include SVSE_B
+          public :derp
+          alias_method :meow, :derp
+        end
+        r = []
+        20.times { r << SVSE_C.new.derp }
+        r.uniq
+        "##,
+    );
+}
