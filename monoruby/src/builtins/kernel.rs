@@ -997,24 +997,11 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                         let pc = unsafe {
                             crate::bytecode::BytecodePtr::from_raw(slot as *mut _)?
                         };
-                        // The saved value's convention differs per arch:
-                        // x86-64 pushes r13 pointing one instruction past
-                        // the call site, aarch64 saves the call site pc
-                        // itself (see push_cont_frame in each vmgen).
-                        #[cfg(target_arch = "x86_64")]
-                        let idx = if info.contains_pc(pc) {
-                            info.get_pc_index(Some(pc)).to_usize().checked_sub(1)?
-                        } else if info.contains_pc_one_past(pc) {
-                            info.sourcemap.len().checked_sub(1)?
-                        } else {
+                        // Both backends store the *call-site* pc.
+                        if !info.contains_pc(pc) {
                             return None;
-                        };
-                        #[cfg(target_arch = "aarch64")]
-                        let idx = if info.contains_pc(pc) {
-                            info.get_pc_index(Some(pc)).to_usize()
-                        } else {
-                            return None;
-                        };
+                        }
+                        let idx = info.get_pc_index(Some(pc)).to_usize();
                         let loc = info.sourcemap[idx];
                         // CRuby prints the path as the file was loaded
                         // (absolute for absolute requires) — match it.
