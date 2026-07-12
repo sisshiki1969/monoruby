@@ -1391,6 +1391,75 @@ impl Executor {
             None => unreachable!(),
         };
     }
+
+    ///
+    /// Complete the pending exception's backtrace with the frames that
+    /// are *above* the rescuing frame.
+    ///
+    /// The incremental `push_error_location` path only records the
+    /// frames the exception actually unwinds through — from the raise
+    /// site down to the frame whose `rescue` catches it. CRuby's
+    /// backtrace additionally includes that frame's callers (the rest
+    /// of the live stack at raise time). When an exception is raised and
+    /// rescued within the same method those callers would otherwise be
+    /// missing entirely.
+    ///
+    /// This is called once, at the catch point (`take_ex_obj` in
+    /// `handle_error`'s rescue branch), while the caller frames are
+    /// still live on the stack. It only walks the cheap
+    /// `(loc, sourceinfo, fid)` tuples — no string formatting, which
+    /// stays lazy in `Exception#backtrace`. Control-flow pseudo-errors
+    /// (`MethodReturn` / `BlockBreak` / `Throw`) never reach this path,
+    /// so they pay nothing.
+    ///
+    pub(crate) fn complete_backtrace_for_rescue(&mut self, store: &Store) {
+        if self.exception.is_none() {
+            return;
+        }
+        // Start at the rescuing frame (already recorded); walk its
+        // callers via each inner frame's saved call-site pc, exactly
+        // like `Kernel#caller`.
+        let rescue_cfp = self.cfp();
+        let mut inner_cfp = rescue_cfp;
+        let mut cfp = match rescue_cfp.prev() {
+            Some(prev) => prev,
+            None => return,
+        };
+        loop {
+            let func_id = cfp.lfp().func_id();
+            if let Some(iseq_id) = store[func_id].is_iseq() {
+                let info = &store[iseq_id];
+                // The caller's suspended line: the call-site pc it saved
+                // into its callee's cont-frame slot. Fall back to the
+                // method's definition location when the slot is absent
+                // or out of range (invoker boundary, unaudited path).
+                let loc = {
+                    let slot = inner_cfp.caller_pc_slot();
+                    if slot != 0
+                        && slot % 8 == 0
+                        && let Some(pc) = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _) }
+                        && info.contains_pc(pc)
+                    {
+                        let idx = info.get_pc_index(Some(pc)).to_usize();
+                        Some(info.sourcemap[idx])
+                    } else {
+                        None
+                    }
+                }
+                .unwrap_or(info.loc);
+                if let Some(err) = &mut self.exception {
+                    err.push_trace(loc, info.sourceinfo.clone(), func_id);
+                }
+            }
+            match cfp.prev() {
+                Some(prev) => {
+                    inner_cfp = cfp;
+                    cfp = prev;
+                }
+                None => break,
+            }
+        }
+    }
 }
 
 //

@@ -137,6 +137,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
+    globals.define_builtin_func(EXCEPTION_CLASS, "__raise_backtrace", raise_backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
     // Internal alias: `startup.rb` redefines `set_backtrace` with a Ruby
     // wrapper that also accepts `Thread::Backtrace::Location` arrays
@@ -483,6 +484,37 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     if traces.is_empty() {
         // Exception was constructed (e.g. `Exception.new`) but never
         // raised, so there is no backtrace to report.
+        return Ok(Value::nil());
+    }
+    // Memoize the built array so repeated `#backtrace` calls return the
+    // *same* object (CRuby: `e.backtrace.unshift(...)` is visible on the
+    // next `#backtrace`, and `e.dup.backtrace.equal?(e.backtrace)`).
+    let array = Value::array_from_iter(traces.into_iter().map(|s| Value::string(s)));
+    globals
+        .store
+        .set_ivar(self_, IdentId::get_id("/backtrace"), array)?;
+    Ok(array)
+}
+
+///
+/// ### Exception#__raise_backtrace (monoruby intrinsic)
+///
+/// The raise-time captured backtrace strings (nil if the exception was
+/// never raised), *independent* of any string backtrace installed via
+/// `#set_backtrace`. `#backtrace_locations` builds on this so a
+/// `set_backtrace(strings)` on a never-raised exception keeps
+/// `#backtrace_locations` nil, matching CRuby.
+///
+#[monoruby_builtin]
+fn raise_backtrace(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let traces: Vec<String> = self_.is_exception().unwrap().trace_location(globals);
+    if traces.is_empty() {
         return Ok(Value::nil());
     }
     Ok(Value::array_from_iter(

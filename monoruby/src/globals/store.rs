@@ -427,11 +427,22 @@ impl Store {
                 String::new()
             }
         };
+        // CRuby renders the owner with its *fully-qualified* name
+        // (`ExceptionSpecs::Backtrace.foo`, not `Backtrace.foo`).
+        // `qualified_name` returns "" for Object, where the legacy
+        // display is the bare "Object", so special-case it.
+        let qual = |this: &Self, id: ClassId| {
+            if id == OBJECT_CLASS {
+                "Object".to_string()
+            } else {
+                this.qualified_name(id)
+            }
+        };
         match info.owner_class().get(0) {
             Some(owner) => {
                 if let Some(obj) = self[*owner].get_module().is_singleton() {
                     if let Some(class) = obj.is_class_or_module() {
-                        format!("{}.{name}", class.id().get_name(self))
+                        format!("{}.{name}", qual(self, class.id()))
                     } else {
                         // CRuby names a plain object's singleton
                         // method by the bare method name (only
@@ -440,7 +451,7 @@ impl Store {
                         name
                     }
                 } else {
-                    format!("{}#{name}", owner.get_name(self))
+                    format!("{}#{name}", qual(self, *owner))
                 }
             }
             None => name,
