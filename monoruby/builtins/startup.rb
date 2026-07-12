@@ -996,11 +996,17 @@ ConditionVariable = Thread::ConditionVariable
 
 class Exception
   def backtrace_locations
-    bt = backtrace
-    return nil if bt.nil?
-    bt.map do |frame|
-      Thread::Backtrace::Location.new(frame)
-    end
+    # Locations come from the raise-time capture, independent of any
+    # string backtrace installed via #set_backtrace (CRuby: after
+    # `set_backtrace(strings)` on a never-raised exception,
+    # #backtrace_locations stays nil). Memoized so repeated calls
+    # return the same, mutable Array.
+    # A prior #backtrace_locations memo, or locations installed via
+    # set_backtrace(locations), win over re-deriving from the capture.
+    return @backtrace_locations if defined?(@backtrace_locations) && @backtrace_locations
+    frames = __raise_backtrace
+    return nil if frames.nil?
+    @backtrace_locations = frames.map { |f| Thread::Backtrace::Location.new(f) }
   end
 
   # CRuby 3.4+: `set_backtrace` (and thus `$@ =`) also accepts an Array
@@ -1009,8 +1015,13 @@ class Exception
   # raises the usual TypeError.
   def set_backtrace(bt)
     if bt.is_a?(Array) && !bt.empty? && bt.all? { |e| Thread::Backtrace::Location === e }
+      # CRuby 3.4+: an Array of Locations sets both the string backtrace
+      # and #backtrace_locations.
       __set_backtrace(bt.map(&:to_s))
+      @backtrace_locations = bt
     else
+      # Setting a string backtrace leaves #backtrace_locations as it was
+      # (the raise-time capture, or nil), so don't touch the memo here.
       __set_backtrace(bt)
     end
   end

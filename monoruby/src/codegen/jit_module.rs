@@ -249,6 +249,11 @@ pub(super) extern "C" fn handle_error(
                 return ErrorReturn::return_err();
             }
             if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
+                // Fill in the callers of this rescuing frame so the
+                // backtrace matches CRuby's raise-time stack even when
+                // the exception is raised and rescued in the same
+                // method. Cheap tuple walk; formatting stays lazy.
+                vm.complete_backtrace_for_rescue(&globals.store);
                 let err_val = vm.take_ex_obj(globals);
                 vm.set_errinfo(err_val);
                 if let Some(err_reg) = err_reg {
