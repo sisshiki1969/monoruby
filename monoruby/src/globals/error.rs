@@ -844,12 +844,19 @@ impl MonorubyErr {
     }
 
     pub(crate) fn cant_modify_frozen(store: &Store, val: Value) -> MonorubyErr {
+        // Under --debug-frozen-string-literal, point at the string
+        // literal's creation site (CRuby: `..., created at file:line`).
+        let created = match crate::value::string_origin(val.id()) {
+            Some(origin) => format!(", created at {origin}"),
+            None => String::new(),
+        };
         MonorubyErr::new(
             MonorubyErrKind::Frozen(Some(val.id())),
             format!(
-                "can't modify frozen {}: {}",
+                "can't modify frozen {}: {}{}",
                 val.get_real_class_name(store),
                 val.inspect(store),
+                created,
             ),
         )
     }

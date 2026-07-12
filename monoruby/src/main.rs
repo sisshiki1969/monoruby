@@ -121,6 +121,8 @@ struct Opts {
     kcode: Option<char>,
     /// `--backtrace-limit=N`.
     backtrace_limit: Option<i64>,
+    /// `--debug-frozen-string-literal` (also implied by `--debug`/`-d`).
+    debug_frozen_string_literal: bool,
     /// `--enable[-=]FEATURE` / `--disable[-=]FEATURE`, in order.
     features: Vec<(String, bool)>,
     /// monoruby-specific switches.
@@ -254,6 +256,7 @@ fn parse_long(
         && !matches!(
             name.as_str(),
             "--debug"
+                | "--debug-frozen-string-literal"
                 | "--verbose"
                 | "--encoding"
                 | "--external-encoding"
@@ -268,6 +271,7 @@ fn parse_long(
         "--help" => opts.help = true,
         "--verbose" => opts.verbose = true,
         "--debug" => opts.debug = true,
+        "--debug-frozen-string-literal" => opts.debug_frozen_string_literal = true,
         "--no-jit" => opts.no_jit = true,
         "--no-gc" => opts.no_gc = true,
         "--ast" => {
@@ -694,6 +698,13 @@ fn main() {
     Globals::gc_enable(!opts.no_gc);
     if let Some(limit) = opts.backtrace_limit.or(ropts.backtrace_limit) {
         Globals::set_backtrace_limit(limit);
+    }
+    if opts.debug
+        || ropts.debug
+        || opts.debug_frozen_string_literal
+        || ropts.debug_frozen_string_literal
+    {
+        monoruby::set_debug_frozen_string_log();
     }
 
     if opts.help {
