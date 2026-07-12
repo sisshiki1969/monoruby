@@ -19,6 +19,12 @@ pub struct MonorubyErr {
     /// When set, `take_ex_obj` records it as the exception's cause and
     /// suppresses the implicit `$!` chaining.
     pub explicit_cause: Option<Value>,
+    /// Kind-specific extra data, surfaced as hidden ivars when the
+    /// exception object is materialized (`take_ex_obj`): for
+    /// `LocalJumpError` the packed jump value + reason (`"return"`, …)
+    /// → `#exit_value` / `#reason`; for `StopIteration` the packed
+    /// iterator return value + `"result"` → `#result`.
+    pub(crate) payload: Option<(u64, &'static str)>,
 }
 
 impl MonorubyErr {
@@ -29,6 +35,7 @@ impl MonorubyErr {
             trace: vec![],
             original: None,
             explicit_cause: None,
+            payload: None,
         }
     }
 
@@ -42,6 +49,7 @@ impl MonorubyErr {
             trace,
             original: None,
             explicit_cause: None,
+            payload: None,
         }
     }
 
@@ -66,6 +74,7 @@ impl MonorubyErr {
             trace: vec![(Some((loc, sourceinfo)), func_id)],
             original: None,
             explicit_cause: None,
+            payload: None,
         }
     }
 
@@ -86,6 +95,9 @@ impl MonorubyErr {
         }
         if let Some(cause) = &self.explicit_cause {
             cause.mark(alloc);
+        }
+        if let Some((val, _)) = &self.payload {
+            Value::from_u64(*val).mark(alloc);
         }
         match &self.kind {
             // Packed `Value::id()` of the receiver that triggered the
@@ -859,6 +871,14 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::StopIteration, msg)
     }
 
+    /// `StopIteration` carrying the iterated method's return value
+    /// (`StopIteration#result`).
+    pub(crate) fn stopiterationerr_with_result(msg: String, result: Value) -> MonorubyErr {
+        let mut err = MonorubyErr::new(MonorubyErrKind::StopIteration, msg);
+        err.payload = Some((result.id(), "result"));
+        err
+    }
+
     pub(crate) fn index_too_small(actual: i64, minimum: i64) -> MonorubyErr {
         MonorubyErr::indexerr(format!(
             "index {} too small for array; minimum: {}",
@@ -1031,9 +1051,10 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::LocalJump, msg)
     }
 
-    pub(crate) fn localjumperr_with_val(msg: impl ToString, _val: Value) -> MonorubyErr {
-        // TODO: store val as exit_value on the LocalJumpError exception object
-        MonorubyErr::new(MonorubyErrKind::LocalJump, msg)
+    pub(crate) fn localjumperr_with_val(msg: impl ToString, val: Value) -> MonorubyErr {
+        let mut err = MonorubyErr::new(MonorubyErrKind::LocalJump, msg);
+        err.payload = Some((val.id(), "return"));
+        err
     }
 }
 

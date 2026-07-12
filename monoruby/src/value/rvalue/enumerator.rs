@@ -151,8 +151,11 @@ impl Enumerator {
         let mut internal = self.internal.unwrap();
         let v = internal.enum_yield_values(vm, globals, *self, Value::nil())?;
         if internal.is_terminated() {
-            return Err(MonorubyErr::stopiterationerr(
+            // `v` is the iterated method's own return value here —
+            // surfaced by `StopIteration#result`.
+            return Err(MonorubyErr::stopiterationerr_with_result(
                 "iteration reached an end".to_string(),
+                v,
             ));
         }
         Ok(v.as_array())

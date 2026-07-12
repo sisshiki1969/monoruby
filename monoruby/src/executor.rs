@@ -1161,6 +1161,54 @@ impl Executor {
                 }
                 v
             }
+            MonorubyErrKind::LocalJump => {
+                let payload = err.payload;
+                let v = Value::new_exception(err);
+                if let Some((val, reason)) = payload {
+                    globals
+                        .store
+                        .set_ivar(v, IdentId::get_id("/exit_value"), Value::from_u64(val))
+                        .unwrap();
+                    globals
+                        .store
+                        .set_ivar(
+                            v,
+                            IdentId::get_id("/reason"),
+                            Value::symbol(IdentId::get_id(reason)),
+                        )
+                        .unwrap();
+                }
+                v
+            }
+            MonorubyErrKind::StopIteration => {
+                let payload = err.payload;
+                let v = Value::new_exception(err);
+                if let Some((val, _)) = payload {
+                    globals
+                        .store
+                        .set_ivar(v, IdentId::get_id("/result"), Value::from_u64(val))
+                        .unwrap();
+                }
+                v
+            }
+            MonorubyErrKind::Syntax => {
+                // `SyntaxError#path`: the file the error was raised in,
+                // taken from the first trace frame (nil for a directly
+                // constructed SyntaxError, which has no trace).
+                let path = err
+                    .trace
+                    .first()
+                    .and_then(|(source_loc, _)| source_loc.as_ref())
+                    .map(|(_, source)| Value::string(source.file_name().to_string()));
+                let v = Value::new_exception(err);
+                if let Some(path) = path {
+                    globals
+                        .store
+                        .set_ivar(v, IdentId::get_id("/path"), path)
+                        .unwrap();
+                }
+                v
+            }
             MonorubyErrKind::Frozen(Some(receiver)) => {
                 let receiver = *receiver;
                 let v = Value::new_exception(err);

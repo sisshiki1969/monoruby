@@ -60,6 +60,8 @@ pub(super) fn init(globals: &mut Globals) {
     let loaderr = globals.define_builtin_exception_class("LoadError", LOAD_ERROR_CLASS, scripterr);
     globals.define_builtin_func(loaderr.id(), "path", loaderror_path, 0);
     globals.define_builtin_exception_class("SyntaxError", SYNTAX_ERROR_CLASS, scripterr);
+    // `SyntaxError#path` — the source file the error was raised in.
+    globals.define_builtin_func(SYNTAX_ERROR_CLASS, "path", loaderror_path, 0);
     globals.define_builtin_exception_class(
         "NotImplementedError",
         UNIMPLEMENTED_ERROR_CLASS,
@@ -79,9 +81,17 @@ pub(super) fn init(globals: &mut Globals) {
     let keyerr = globals.define_builtin_exception_class("KeyError", KEY_ERROR_CLASS, indexerr);
     globals.define_builtin_func(keyerr.id(), "receiver", keyerror_receiver, 0);
     globals.define_builtin_func(keyerr.id(), "key", keyerror_key, 0);
-    globals.define_builtin_exception_class("StopIteration", STOP_ITERATION_CLASS, indexerr);
+    let stopiter =
+        globals.define_builtin_exception_class("StopIteration", STOP_ITERATION_CLASS, indexerr);
+    // `Queue#close` + pop on an empty closed queue. Subclass of
+    // StopIteration so `loop { q.pop }` terminates cleanly.
+    globals.define_class("ClosedQueueError", stopiter, OBJECT_CLASS);
+    // `StopIteration#result` — the iterated method's return value.
+    globals.define_builtin_func(STOP_ITERATION_CLASS, "result", stopiteration_result, 0);
 
     globals.define_builtin_exception_class("LocalJumpError", LOCAL_JUMP_ERROR_CLASS, standarderr);
+    globals.define_builtin_func(LOCAL_JUMP_ERROR_CLASS, "exit_value", localjump_exit_value, 0);
+    globals.define_builtin_func(LOCAL_JUMP_ERROR_CLASS, "reason", localjump_reason, 0);
 
     let nameerr =
         globals.define_builtin_exception_class("NameError", NAME_ERROR_CLASS, standarderr);
@@ -93,10 +103,19 @@ pub(super) fn init(globals: &mut Globals) {
         "initialize",
         nameerr_initialize,
         0,
-        2,
+        3,
         false,
     );
     globals.define_builtin_exception_class("NoMethodError", NO_METHOD_ERROR_CLASS, nameerr);
+    globals.define_builtin_func_with(
+        NO_METHOD_ERROR_CLASS,
+        "initialize",
+        nomethoderr_initialize,
+        0,
+        4,
+        false,
+    );
+    globals.define_builtin_func(NO_METHOD_ERROR_CLASS, "args", nomethoderr_args, 0);
 
     let runtimeerr =
         globals.define_builtin_exception_class("RuntimeError", RUNTIME_ERROR_CLASS, standarderr);
@@ -149,6 +168,51 @@ fn exc_receiver(
         .get_ivar(self_val, IdentId::get_id("/receiver"))
         .unwrap_or_default();
     Ok(v)
+}
+
+/// `StopIteration#result` — the return value of the method whose
+/// iteration the enumerator exhausted.
+#[monoruby_builtin]
+fn stopiteration_result(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("/result"))
+        .unwrap_or_default())
+}
+
+/// `LocalJumpError#exit_value` — the value the failed jump carried
+/// (e.g. the argument of the escaping `return`).
+#[monoruby_builtin]
+fn localjump_exit_value(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("/exit_value"))
+        .unwrap_or_default())
+}
+
+/// `LocalJumpError#reason` — the jump kind (`:return`, `:break`, …);
+/// `:noreason` when unknown, like CRuby's default.
+#[monoruby_builtin]
+fn localjump_reason(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("/reason"))
+        .unwrap_or_else(|| Value::symbol(IdentId::get_id("noreason"))))
 }
 
 /// `NameError#name` — returns the missing-name Symbol that was passed
@@ -204,7 +268,69 @@ fn nameerr_initialize(
                 .set_ivar(self_, IdentId::_NAME, name)?;
         }
     }
+    // Trailing keyword hash (`receiver:`).
+    if let Some(kwargs) = lfp.try_arg(2)
+        && kwargs.try_hash_ty().is_some()
+    {
+        store_exception_kwargs(vm, globals, self_, kwargs)?;
+    }
     Ok(Value::nil())
+}
+
+/// `NoMethodError.new(msg = nil, name = nil, args = nil, receiver: …)`.
+#[monoruby_builtin]
+fn nomethoderr_initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let class_id = self_.real_class(&globals.store).id();
+    let message = if let Some(msg) = lfp.try_arg(0)
+        && !msg.is_nil()
+    {
+        msg.coerce_to_string(vm, globals)?
+    } else {
+        globals.store.get_class_name(class_id)
+    };
+    self_.is_exception_mut().unwrap().set_message(message);
+    if let Some(name) = lfp.try_arg(1)
+        && !name.is_nil()
+    {
+        globals.store.set_ivar(self_, IdentId::_NAME, name)?;
+    }
+    if let Some(args) = lfp.try_arg(2)
+        && !args.is_nil()
+        && args.try_hash_ty().is_none()
+    {
+        globals
+            .store
+            .set_ivar(self_, IdentId::get_id("/args"), args)?;
+    }
+    // The keyword hash (`receiver:`) lands in the last given slot.
+    for i in 2..4 {
+        if let Some(kwargs) = lfp.try_arg(i)
+            && kwargs.try_hash_ty().is_some()
+        {
+            store_exception_kwargs(vm, globals, self_, kwargs)?;
+        }
+    }
+    Ok(Value::nil())
+}
+
+/// `NoMethodError#args` — the arguments of the failed call.
+#[monoruby_builtin]
+fn nomethoderr_args(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("/args"))
+        .unwrap_or_else(|| Value::array_empty()))
 }
 
 /// Allocator for `Exception` and its subclasses. The exception is created
@@ -254,7 +380,9 @@ fn exception_new(
 fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
-    let message = if let Some(msg) = lfp.try_arg(0) {
+    let message = if let Some(msg) = lfp.try_arg(0)
+        && !msg.is_nil()
+    {
         if msg.try_hash_ty().is_some() {
             // Keyword arguments hash passed as positional arg; use default message.
             store_exception_kwargs(vm, globals, self_, msg)?;
