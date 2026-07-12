@@ -1824,6 +1824,7 @@ impl Store {
                 visibility,
                 is_basic_op,
                 original_name,
+                visibility_shadow: false,
             },
         );
         #[cfg(feature = "perf")]
@@ -1854,6 +1855,7 @@ impl Store {
                 visibility,
                 is_basic_op: false,
                 original_name: name,
+                visibility_shadow: false,
             },
         );
     }
@@ -2000,9 +2002,24 @@ impl Store {
             // friends treat as "no method present" — so the spec's
             // `m.private_instance_methods.include?(:foo)` would be false.
             let (func_id, inherited_vis, _) = self.find_method_for_class(class_id, *name)?;
+            // A visibility shadow copies the *inherited* func_id, which goes
+            // stale if the inherited method has since been redefined. Resolve
+            // the current inherited definition from the superclass (the
+            // shadow's own entry would just resolve to itself) so a repeated
+            // visibility declaration re-syncs the copy.
+            let inherited_fid = self
+                .get_module(class_id)
+                .superclass()
+                .and_then(|sup| self.search_method(sup, *name))
+                .and_then(|e| e.func_id());
             match self.classes[class_id].methods.get_mut(name) {
                 Some(entry) => {
                     entry.visibility = visibility;
+                    if entry.visibility_shadow
+                        && let Some(fid) = inherited_fid
+                    {
+                        entry.func_id = Some(fid);
+                    }
                     Globals::class_version_inc();
                 }
                 None => {
@@ -2038,6 +2055,7 @@ impl Store {
                             visibility,
                             is_basic_op: false,
                             original_name,
+                            visibility_shadow: true,
                         },
                     );
                 }
@@ -2135,15 +2153,77 @@ impl Store {
     }
 
     ///
+    /// Whether *class_id* is a *definition position* of the method body *fid*
+    /// under *name*: its own method table dispatches *name* to the body —
+    /// directly, or through a proc-method wrapper (a `define_method`-installed
+    /// entry whose wrapper jumps straight into the block body, so the running
+    /// frame carries the block's FuncId).
+    ///
+    /// This identifies the ancestor-chain positions that "own" an executing
+    /// frame for `super` purposes:
+    /// - Matching on the *name*'s own entry (rather than any registration of
+    ///   the fid) mirrors CRuby's alias semantics: an `alias_method`-created
+    ///   entry re-registers the fid in the aliasing class, but `super` from
+    ///   the aliased method still resolves from the *original* definition's
+    ///   position (the alias entry maps the alias name, not the original name
+    ///   searched here).
+    /// - A *visibility-shadow* entry (`public :inherited_method` in a
+    ///   subclass shares the inherited fid in the subclass's table purely to
+    ///   re-declare visibility) is not a position — or `super` in the
+    ///   inherited method would re-enter itself.
+    ///
+    fn body_dispatched_by(&self, class_id: ClassId, name: IdentId, fid: FuncId) -> bool {
+        let Some(entry) = self[class_id].methods.get(&name) else {
+            return false;
+        };
+        if entry.is_visibility_shadow() {
+            return false;
+        }
+        let Some(entry_fid) = entry.func_id() else {
+            return false;
+        };
+        entry_fid == fid
+            || matches!(&self[entry_fid].kind, FuncKind::Proc(p) if p.func_id() == fid)
+    }
+
+    ///
+    /// Count how many positions in *self_class*'s ancestor chain dispatch
+    /// *name* to the method body *current_func_id* from their own method
+    /// table.
+    ///
+    /// A count > 1 means a frame-independent `super` resolution for this
+    /// method is ambiguous: the same method body appears more than once in
+    /// the chain (e.g. two anonymous modules built from the same `def`
+    /// bytecode, or one module both prepended and included), and each
+    /// occurrence must resolve `super` to a different target. Cached /
+    /// compile-time resolvers must decline in that case; the runtime resolves
+    /// per call via `check_super_at` with the frame's occurrence index.
+    ///
+    pub(crate) fn super_occurrences(
+        &self,
+        self_class: ClassId,
+        current_func_id: FuncId,
+        name: IdentId,
+    ) -> usize {
+        let mut n = 0;
+        let mut module = Some(self.get_module(self_class));
+        while let Some(m) = module {
+            if !m.has_origin() && self.body_dispatched_by(m.id(), name, current_func_id) {
+                n += 1;
+            }
+            module = m.superclass();
+        }
+        n
+    }
+
+    ///
     /// Check whether a super method for *current_func_id* exists in the ancestor chain.
     ///
-    /// Walks the ancestor chain of *self_class* to find the module with *owner* ClassId,
-    /// then searches for the method *name* starting from its superclass.
-    ///
-    /// When the same module appears multiple times in the ancestor chain (e.g., through
-    /// include + include-via-module, or include + prepend), this method skips duplicate
-    /// entries by checking if the found super method has the same func_id as the current
-    /// method being executed.
+    /// Frame-independent (cacheable) variant: returns `None` when the method
+    /// body occupies more than one position in the chain, because the correct
+    /// target then depends on which occurrence the calling frame is executing
+    /// (see `super_occurrences`) — the runtime resolves those via
+    /// `check_super_at`.
     ///
     pub(crate) fn check_super(
         &self,
@@ -2151,35 +2231,90 @@ impl Store {
         current_func_id: FuncId,
         name: IdentId,
     ) -> Option<FuncId> {
-        let owner = self[current_func_id].owner_class();
+        if self.super_occurrences(self_class, current_func_id, name) > 1 {
+            return None;
+        }
+        self.check_super_at(self_class, current_func_id, name, None)
+    }
+
+    ///
+    /// Check whether a super method for *current_func_id* exists in the ancestor chain.
+    ///
+    /// Walks the ancestor chain of *self_class* to find the modules where the
+    /// current method is registered, then searches for the method *name*
+    /// starting from the superclass of the matched position.
+    ///
+    /// `occurrence`:
+    /// - `Some(k)` — positional resolution: the calling frame is the k-th
+    ///   consecutive super-linked frame executing this method body, so search
+    ///   from the k-th matched position's superclass. The result may be
+    ///   *current_func_id* itself — that is the legitimate next occurrence of
+    ///   the same body in the chain (e.g. a chain of anonymous modules built
+    ///   from one `def`).
+    /// - `None` — the frame's occurrence could not be determined: fall back to
+    ///   the legacy heuristic that skips a same-func_id hit and keeps walking
+    ///   to the next matched position (guarantees progress, may skip a
+    ///   legitimate duplicate hop).
+    ///
+    pub(crate) fn check_super_at(
+        &self,
+        self_class: ClassId,
+        current_func_id: FuncId,
+        name: IdentId,
+        occurrence: Option<usize>,
+    ) -> Option<FuncId> {
         let mut module = Some(self.get_module(self_class));
-        let mut matched_owner = false;
+        let mut matched = 0usize;
         while let Some(m) = module {
-            if !m.has_origin() && owner.contains(&m.id()) {
-                matched_owner = true;
-                if let Some(super_module) = m.superclass()
+            if !m.has_origin() && self.body_dispatched_by(m.id(), name, current_func_id) {
+                matched += 1;
+                if occurrence.is_none_or(|k| matched >= k)
+                    && let Some(super_module) = m.superclass()
                     && let Some(entry) = self.search_method(super_module, name)
                     && let Some(super_fid) = entry.func_id()
-                    && super_fid != current_func_id
+                    && (occurrence.is_some() || super_fid != current_func_id)
                 {
                     return Some(super_fid);
                 }
-                // Same func_id as the current method: a duplicate iclass
-                // of the same module in the chain — keep walking to the
-                // next occurrence.
+                // Legacy mode found the same func_id: a duplicate position of
+                // the same body in the chain — keep walking to the next
+                // occurrence.
             }
             module = m.superclass();
         }
-        // The method's defining module is not in the receiver's
-        // ancestor chain — e.g. a Module's UnboundMethod bound to an
-        // unrelated object via `#bind` / `#bind_call`. CRuby resolves
-        // `super` against the receiver's actual class hierarchy here.
-        if !matched_owner
-            && let Some(entry) = self.search_method(self.get_module(self_class), name)
-            && let Some(fid) = entry.func_id()
-            && fid != current_func_id
-        {
-            return Some(fid);
+        if matched == 0 {
+            // No name-based position matched. This happens when the *entry*
+            // that dispatched the frame no longer maps the name to the body —
+            // e.g. a visibility shadow whose copied func_id went stale after
+            // the inherited method was redefined. Fall back to the legacy
+            // owner-registration walk, which tolerates such staleness.
+            let owner = self[current_func_id].owner_class();
+            let mut owner_matched = false;
+            let mut module = Some(self.get_module(self_class));
+            while let Some(m) = module {
+                if !m.has_origin() && owner.contains(&m.id()) {
+                    owner_matched = true;
+                    if let Some(super_module) = m.superclass()
+                        && let Some(entry) = self.search_method(super_module, name)
+                        && let Some(super_fid) = entry.func_id()
+                        && super_fid != current_func_id
+                    {
+                        return Some(super_fid);
+                    }
+                }
+                module = m.superclass();
+            }
+            // The method's defining module is not in the receiver's
+            // ancestor chain — e.g. a Module's UnboundMethod bound to an
+            // unrelated object via `#bind` / `#bind_call`. CRuby resolves
+            // `super` against the receiver's actual class hierarchy here.
+            if !owner_matched
+                && let Some(entry) = self.search_method(self.get_module(self_class), name)
+                && let Some(fid) = entry.func_id()
+                && fid != current_func_id
+            {
+                return Some(fid);
+            }
         }
         None
     }
