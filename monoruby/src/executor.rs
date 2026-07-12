@@ -293,6 +293,20 @@ impl Executor {
                 executor.load_gems(globals);
             }
         }
+        // TOPLEVEL_BINDING: a Binding over an empty, outer-less heap frame
+        // on the main object. The main script is executed *inside* this
+        // binding (`exec_main_script`), which is what gives it CRuby's
+        // semantics: empty while `-r` requires run, then exactly the main
+        // script's locals — live, and shared with dynamically-set Binding
+        // variables. Created here (not in startup.rb) so no startup locals
+        // leak into its scope chain.
+        {
+            let res = crate::parser::parse_program("", "(toplevel)")?;
+            let fid = bytecodegen::bytecode_compile_script(globals, res)?;
+            let lfp = Lfp::heap_frame(globals.main_object, globals.store[fid].meta());
+            let binding = Value::new_binding(lfp, None);
+            globals.set_constant_by_str(OBJECT_CLASS, "TOPLEVEL_BINDING", binding);
+        }
         // Clear stale $! that may have been set during startup/gem loading.
         executor.set_errinfo(Value::nil());
         // Same for $~ (and the back-ref family $&/$'/$`/$N derived from
@@ -485,10 +499,76 @@ impl Executor {
         code: impl Into<Vec<u8>>,
         path: &std::path::Path,
     ) -> Result<Value> {
-        let fid = match crate::parser::parse_program(code, path) {
-            Ok(res) => bytecodegen::bytecode_compile_script(globals, res),
-            Err(err) => Err(err),
-        }?;
+        self.exec_script_inner(globals, code, path, false)
+    }
+
+    ///
+    /// Execute the *main* script. In addition to `exec_script`, when the
+    /// source contains `__END__` this defines the `DATA` constant: a
+    /// read-only `File` on the script, positioned just past the `__END__`
+    /// line. Only the main script does this — a required file's `__END__`
+    /// must not (re)define `DATA` — hence the separate entry point.
+    ///
+    pub fn exec_main_script(
+        &mut self,
+        globals: &mut Globals,
+        code: impl Into<Vec<u8>>,
+        path: &std::path::Path,
+    ) -> Result<Value> {
+        // Execute inside TOPLEVEL_BINDING (see `Executor::init`), so the
+        // binding exposes the main script's locals. Falls back to a plain
+        // toplevel run when the constant is unavailable
+        // (MONORUBY_SKIP_STARTUP bring-up).
+        let binding = globals
+            .store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("TOPLEVEL_BINDING"))
+            .and_then(crate::value::rvalue::Binding::try_new);
+        let Some(binding) = binding else {
+            return self.exec_script_inner(globals, code, path, true);
+        };
+        let code: Vec<u8> = code.into();
+        let data_offset = globals.compile_main_script_binding(
+            code,
+            path.to_string_lossy().into_owned(),
+            binding,
+        )?;
+        self.flush_compile_warnings(globals);
+        self.define_data(globals, path, data_offset);
+        self.invoke_binding(globals, binding.binding().unwrap())
+    }
+
+    /// Define the `DATA` constant: a read-only `File` on the main script,
+    /// positioned at *offset* (just past its `__END__` line). No-op when
+    /// the source has no `__END__` or no backing file (`-e`, stdin),
+    /// matching CRuby.
+    fn define_data(
+        &mut self,
+        globals: &mut Globals,
+        path: &std::path::Path,
+        data_offset: Option<usize>,
+    ) {
+        if let Some(offset) = data_offset
+            && let Ok(mut file) = std::fs::File::open(path)
+        {
+            use std::io::Seek;
+            let _ = file.seek(std::io::SeekFrom::Start(offset as u64));
+            let data = Value::new_file(file, path.to_string_lossy().into_owned(), true, false);
+            globals.set_constant_by_str(OBJECT_CLASS, "DATA", data);
+        }
+    }
+
+    fn exec_script_inner(
+        &mut self,
+        globals: &mut Globals,
+        code: impl Into<Vec<u8>>,
+        path: &std::path::Path,
+        is_main: bool,
+    ) -> Result<Value> {
+        let res = crate::parser::parse_program(code, path)?;
+        if is_main {
+            self.define_data(globals, path, res.data_offset);
+        }
+        let fid = bytecodegen::bytecode_compile_script(globals, res)?;
         self.flush_compile_warnings(globals);
         self.eval_toplevel(globals, fid)
     }

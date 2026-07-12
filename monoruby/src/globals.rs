@@ -721,7 +721,7 @@ impl Globals {
             for lib in requires {
                 executor.require(self, std::path::Path::new(lib), false)?;
             }
-            executor.exec_script(self, code, path)
+            executor.exec_main_script(self, code, path)
         })();
         // Run `at_exit` handlers and `ObjectSpace` finalizers before the
         // process leaves. This must happen even when `res` is a
@@ -842,6 +842,9 @@ impl Globals {
         }
     }
 
+    /// Returns the byte offset of the source's `DATA` content (just past
+    /// its `__END__` line) when present — used by the main-script runner;
+    /// other callers ignore it.
     pub fn compile_script_binding(
         &mut self,
         code: Vec<u8>,
@@ -849,7 +852,35 @@ impl Globals {
         binding: Binding,
         lineno: i64,
         src_encoding: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<Option<usize>> {
+        self.compile_script_binding_inner(code, path, binding, lineno, src_encoding, false)
+    }
+
+    /// `compile_script_binding` for the *main script* run inside
+    /// TOPLEVEL_BINDING (`Executor::exec_main_script`). The compiled body
+    /// gets a method-style, proc-method Meta — like a `define_method`
+    /// body — so a toplevel `return` (bare or from a block) unwinds to
+    /// the script frame and terminates the script, instead of walking the
+    /// binding's outer chain to a frame that is not on the stack and
+    /// raising LocalJumpError.
+    pub(crate) fn compile_main_script_binding(
+        &mut self,
+        code: Vec<u8>,
+        path: impl Into<PathBuf>,
+        binding: Binding,
+    ) -> Result<Option<usize>> {
+        self.compile_script_binding_inner(code, path, binding, 1, None, true)
+    }
+
+    fn compile_script_binding_inner(
+        &mut self,
+        code: Vec<u8>,
+        path: impl Into<PathBuf>,
+        binding: Binding,
+        lineno: i64,
+        src_encoding: Option<String>,
+        main_style: bool,
+    ) -> Result<Option<usize>> {
         let line_offset = lineno - 1;
         let outer_fid = binding.outer_fid();
         let outer = match self.store[outer_fid].is_iseq() {
@@ -872,25 +903,31 @@ impl Globals {
             None
         };
 
-        let fid = match crate::parser::parse_program_binding(
+        let (fid, data_offset) = match crate::parser::parse_program_binding(
             code,
             path,
             context.clone(),
             Some(&external_context),
             line_offset,
             src_encoding,
+            main_style,
         ) {
             Ok(res) => {
+                let data_offset = res.data_offset;
                 let res =
                     bytecodegen::bytecode_compile_eval(self, res, outer, Loc::default(), context);
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
-                res
+                res.map(|fid| (fid, data_offset))
             }
             Err(err) => Err(err),
         }?;
+        if main_style {
+            self.store[fid].set_method_style();
+            self.store[fid].set_proc_method();
+        }
         self.new_binding_frame(fid, binding.self_val(), binding);
-        Ok(())
+        Ok(data_offset)
     }
 
     pub(crate) fn get_func_data(&mut self, func_id: FuncId) -> &FuncData {

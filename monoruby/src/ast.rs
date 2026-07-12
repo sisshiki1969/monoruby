@@ -62,6 +62,10 @@ pub struct ParseResult {
     /// Transferred into `Store::compile_warnings` by the bytecodegen
     /// entry points and emitted by `Executor::flush_compile_warnings`.
     pub warnings: Vec<(String, bool)>,
+    /// Byte offset of the first byte after the `__END__` line, when the
+    /// source has one (prism's `data_loc`). The main-script runner uses
+    /// it to define the `DATA` constant; ignored everywhere else.
+    pub data_offset: Option<usize>,
 }
 
 /// One `rescue` clause of a `begin`/`rescue` (or modifier `rescue`).
