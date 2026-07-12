@@ -95,6 +95,7 @@ impl Codegen {
             | AsmInst::BlockBreak(..)
             | AsmInst::ImmediateEvict { .. }
             | AsmInst::GuardClassVersion { .. }
+            | AsmInst::ContFramePc { .. }
             | AsmInst::SetupMethodFrame { .. }
             | AsmInst::SetArguments { .. }
             | AsmInst::CheckBOP { .. }
@@ -1124,16 +1125,27 @@ impl Codegen {
         true
     }
 
+    /// Store the call-site pc into the outgoing cont-frame slot
+    /// (`[rsp]` = the callee frame's CFP+24). The 16-byte region was
+    /// reserved by the preceding cont-mode `FprSave`, whose xmm saves
+    /// sit above it — so this is a plain store, no rsp adjustment.
+    /// See `AsmInst::ContFramePc`.
+    pub(in crate::codegen) fn emit_cont_frame_pc(&mut self, call_site_pc: u64) {
+        monoasm! { &mut self.jit,
+            movq r11, (call_site_pc);
+            movq [rsp], r11;
+        }
+    }
+
     pub(super) fn set_deopt_with_return_addr(
         &mut self,
         return_addr: CodePtr,
         evict: AsmEvict,
         evict_label: &DestLabel,
-        call_site_pc: u64,
     ) {
         self.asm_return_addr_table.insert(evict, return_addr);
         self.return_addr_table
-            .insert(return_addr, (None, evict_label.clone(), call_site_pc));
+            .insert(return_addr, (None, evict_label.clone()));
     }
 
     ///
@@ -2001,8 +2013,7 @@ impl Codegen {
         evict_label: &DestLabel,
     ) -> bool {
         let return_addr = self.gen_yield(callid, error);
-        // Yield sites do not record a call-site pc (lazy readers fall back).
-        self.set_deopt_with_return_addr(return_addr, evict, evict_label, 0);
+        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
         true
     }
 

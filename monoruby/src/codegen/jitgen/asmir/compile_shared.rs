@@ -417,6 +417,9 @@ impl Codegen {
                     deopt,
                 });
             }
+            AsmInst::ContFramePc { call_site_pc } => {
+                self.encode_linst(LInst::ContFramePc { call_site_pc });
+            }
             AsmInst::SetupMethodFrame {
                 meta,
                 callid,
@@ -919,14 +922,13 @@ impl Codegen {
                 entry,
                 patch_point,
                 evict,
-                call_site_pc,
             } => {
                 let patch_point =
                     patch_point.map(|label| frame.resolve_label(&mut self.jit, label));
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
                 self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, labels, _| {
                     let return_addr = cg.do_specialized_call(entry_label, patch_point);
-                    cg.set_deopt_with_return_addr(return_addr, evict, &labels[evict], call_site_pc);
+                    cg.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
                 });
             }
             // Specialized `yield`: build the block frame, then branch into the
@@ -936,11 +938,11 @@ impl Codegen {
                     cg.setup_yield_frame(meta, outer);
                 });
             }
-            AsmInst::SpecializedYield { entry, evict, call_site_pc } => {
+            AsmInst::SpecializedYield { entry, evict } => {
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
                 self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, labels, _| {
                     let return_addr = cg.do_specialized_call(entry_label, None);
-                    cg.set_deopt_with_return_addr(return_addr, evict, &labels[evict], call_site_pc);
+                    cg.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
                 });
             }
             // Inlined builtin method body: lower to `LInst::Inline`, the
@@ -1419,6 +1421,9 @@ impl Codegen {
                 error,
             } => {
                 self.singleton_class_def(base, dst, func_id, using_fpr, &error);
+            }
+            LInst::ContFramePc { call_site_pc } => {
+                self.emit_cont_frame_pc(call_site_pc);
             }
             LInst::SetupMethodFrame {
                 meta,

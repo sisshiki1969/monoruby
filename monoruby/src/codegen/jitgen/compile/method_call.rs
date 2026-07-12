@@ -427,6 +427,9 @@ impl<'a> JitContext<'a> {
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
+        ir.push(AsmInst::ContFramePc {
+            call_site_pc: state.pc().as_ptr() as u64,
+        });
         state.set_arguments(&self.store, ir, callid, callee_fid, false);
         state.discard(dst);
         state.clear_above_next_sp();
@@ -434,7 +437,7 @@ impl<'a> JitContext<'a> {
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
-        ir.push(AsmInst::SpecializedYield { entry, evict, call_site_pc: state.pc().as_ptr() as u64 });
+        ir.push(AsmInst::SpecializedYield { entry, evict });
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         let res = state.def_rax2acc_return(ir, dst, return_state);
@@ -855,6 +858,9 @@ impl AbstractState {
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
+        ir.push(AsmInst::ContFramePc {
+            call_site_pc: self.pc().as_ptr() as u64,
+        });
         self.set_arguments(store, ir, callid, callee_fid, false);
         self.discard(dst);
         self.clear_above_next_sp();
@@ -915,6 +921,9 @@ impl AbstractState {
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
+        ir.push(AsmInst::ContFramePc {
+            call_site_pc: self.pc().as_ptr() as u64,
+        });
         self.set_arguments(store, ir, callid, callee_fid, defer_rest);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
@@ -929,7 +938,6 @@ impl AbstractState {
             entry: inlined_entry,
             patch_point,
             evict,
-            call_site_pc: self.pc().as_ptr() as u64,
         });
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
@@ -947,6 +955,9 @@ impl AbstractState {
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
+        ir.push(AsmInst::ContFramePc {
+            call_site_pc: self.pc().as_ptr() as u64,
+        });
         ir.push(AsmInst::Yield {
             callid,
             error,
