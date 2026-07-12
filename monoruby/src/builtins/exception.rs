@@ -334,7 +334,8 @@ fn nomethoderr_initialize(
     Ok(Value::nil())
 }
 
-/// `NoMethodError#args` — the arguments of the failed call.
+/// `NoMethodError#args` — the arguments of the failed call (nil when
+/// the exception was constructed without them).
 #[monoruby_builtin]
 fn nomethoderr_args(
     _vm: &mut Executor,
@@ -345,7 +346,7 @@ fn nomethoderr_args(
     Ok(globals
         .store
         .get_ivar(lfp.self_val(), IdentId::get_id("/args"))
-        .unwrap_or_else(|| Value::array_empty()))
+        .unwrap_or_default())
 }
 
 /// Allocator for `Exception` and its subclasses. The exception is created

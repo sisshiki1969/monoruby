@@ -1066,13 +1066,22 @@ class Exception
         trailer = "\t ... #{rest.size - limit} levels...\n"
         rest = rest[0, limit]
       end
-      lines = rest.map { |l| "\tfrom #{l}\n" }
-      lines << trailer if trailer
       out = if order == :bottom
         header = highlight ? "\e[1mTraceback\e[m (most recent call last):\n"
                            : "Traceback (most recent call last):\n"
-        header + lines.reverse.join + "#{bt[0]}: #{msg}\n"
+        # CRuby numbers the reversed frames by their distance from the
+        # error line: `\tN: from <frame>` counting down to 1.
+        numbered = []
+        i = rest.size
+        rest.each do |l|
+          numbered << "\t#{i}: from #{l}\n"
+          i -= 1
+        end
+        numbered << trailer if trailer
+        header + numbered.reverse.join + "#{bt[0]}: #{msg}\n"
       else
+        lines = rest.map { |l| "\tfrom #{l}\n" }
+        lines << trailer if trailer
         "#{bt[0]}: #{msg}\n" + lines.join
       end
     else

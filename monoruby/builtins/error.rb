@@ -87,41 +87,44 @@ class SystemCallError
       raise ArgumentError, "wrong number of arguments (given 0, expected 1..3)"
     end
     if args.size >= 2
-      msg, errno, loc = args[0], args[1], args[2]
-      errno = __coerce_errno(errno) unless errno.nil?
+      msg, orig, loc = args[0], args[1], args[2]
     elsif args[0].is_a?(String) || args[0].nil?
-      msg, errno, loc = args[0], nil, nil
+      msg, orig, loc = args[0], nil, nil
     else
-      errno, msg, loc = __coerce_errno(args[0]), nil, nil
+      msg, orig, loc = nil, args[0], nil
     end
+    errno = orig.nil? ? nil : __coerce_errno(orig)
     klass = errno.nil? ? nil : __errno_class(errno)
     obj = (klass || self).allocate
-    obj.__send__(:__syserr_init, msg, errno, loc)
+    # #errno reports the errno as given (2.9 stays 2.9); only the
+    # class lookup and the message use the Integer coercion.
+    obj.__send__(:__syserr_init, msg, errno, loc, orig)
     obj
   end
 
   # CRuby reports arity -1 for SystemCallError#initialize.
   def initialize(*args)
     if args.size >= 2
-      msg, errno, loc = args[0], args[1], args[2]
-      errno = SystemCallError.__coerce_errno(errno) unless errno.nil?
+      msg, orig, loc = args[0], args[1], args[2]
     elsif args[0].is_a?(String) || args[0].nil?
-      msg, errno, loc = args[0], nil, nil
+      msg, orig, loc = args[0], nil, nil
     else
-      errno, msg, loc = SystemCallError.__coerce_errno(args[0]), nil, nil
+      msg, orig, loc = nil, args[0], nil
     end
+    errno = orig.nil? ? nil : SystemCallError.__coerce_errno(orig)
     if errno.nil? && self.class.const_defined?(:Errno)
       e = self.class.const_get(:Errno)
       errno = e if e.is_a?(Integer)
+      orig = errno
     end
-    __syserr_init(msg, errno, loc)
+    __syserr_init(msg, errno, loc, orig)
   end
 
   def errno
     defined?(@__errno) ? @__errno : nil
   end
 
-  private def __syserr_init(msg, errno, loc)
+  private def __syserr_init(msg, errno, loc, reported_errno = nil)
     unless msg.nil? || msg.is_a?(String)
       if msg.respond_to?(:to_str)
         msg = msg.to_str
@@ -129,7 +132,7 @@ class SystemCallError
         raise TypeError, "no implicit conversion of #{msg.class} into String"
       end
     end
-    @__errno = errno
+    @__errno = reported_errno.nil? ? errno : reported_errno
     # Walk the ancestors so a user subclass of Errno::ENOENT inherits
     # "No such file or directory" rather than the unknown-errno text.
     base = nil
@@ -155,7 +158,8 @@ class Errno
     k.class_eval do
       def initialize(msg = nil, loc = nil)
         e = self.class.const_defined?(:Errno) ? self.class.const_get(:Errno) : nil
-        __syserr_init(msg, e.is_a?(Integer) ? e : nil, loc)
+        e = nil unless e.is_a?(Integer)
+        __syserr_init(msg, e, loc, e)
       end
     end
   end
