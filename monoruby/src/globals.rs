@@ -925,6 +925,9 @@ impl Globals {
         if main_style {
             self.store[fid].set_method_style();
             self.store[fid].set_proc_method();
+            // Backtraces must label the main script `<main>`, not
+            // `block in <main>` (see `func_description`).
+            self.store[fid].set_name(IdentId::_MAIN);
         }
         self.new_binding_frame(fid, binding.self_val(), binding);
         Ok(data_offset)
