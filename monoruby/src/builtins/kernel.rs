@@ -2991,10 +2991,10 @@ fn throw_(
             .store
             .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("UncaughtThrowError"))
         {
-            return Err(MonorubyErr::new(
-                MonorubyErrKind::Other(klass.as_class_id()),
-                msg,
-            ));
+            let mut err = MonorubyErr::new(MonorubyErrKind::Other(klass.as_class_id()), msg);
+            // Surfaced as `UncaughtThrowError#tag`.
+            err.payload = Some((tag.id(), "tag"));
+            return Err(err);
         }
         return Err(MonorubyErr::argumenterr(msg));
     }

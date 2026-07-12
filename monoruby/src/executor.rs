@@ -1231,7 +1231,23 @@ impl Executor {
                     .unwrap();
                 v
             }
-            _ => Value::new_exception(err),
+            _ => {
+                // Generic payload: the tag string names the hidden ivar
+                // (e.g. `UncaughtThrowError#tag`).
+                let payload = err.payload;
+                let v = Value::new_exception(err);
+                if let Some((val, name)) = payload {
+                    globals
+                        .store
+                        .set_ivar(
+                            v,
+                            IdentId::get_id(&format!("/{name}")),
+                            Value::from_u64(val),
+                        )
+                        .unwrap();
+                }
+                v
+            }
         };
         self.chain_cause(globals, v, explicit_cause)
     }

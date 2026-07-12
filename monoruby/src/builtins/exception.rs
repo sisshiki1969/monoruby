@@ -70,7 +70,8 @@ pub(super) fn init(globals: &mut Globals) {
 
     let argerr =
         globals.define_builtin_exception_class("ArgumentError", ARGUMENTS_ERROR_CLASS, standarderr);
-    globals.define_class("UncaughtThrowError", argerr, OBJECT_CLASS);
+    let uncaught_throw = globals.define_class("UncaughtThrowError", argerr, OBJECT_CLASS);
+    globals.define_builtin_func(uncaught_throw.id(), "tag", uncaught_throw_tag, 0);
     globals.define_class("EncodingError", standarderr, OBJECT_CLASS);
     globals.define_builtin_exception_class("FiberError", FIBER_ERROR_CLASS, standarderr);
     let ioerr = globals.define_builtin_exception_class("IOError", IO_ERROR_CLASS, standarderr);
@@ -168,6 +169,20 @@ fn exc_receiver(
         .get_ivar(self_val, IdentId::get_id("/receiver"))
         .unwrap_or_default();
     Ok(v)
+}
+
+/// `UncaughtThrowError#tag` — the tag object of the uncaught `throw`.
+#[monoruby_builtin]
+fn uncaught_throw_tag(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("/tag"))
+        .unwrap_or_default())
 }
 
 /// `StopIteration#result` — the return value of the method whose
@@ -394,7 +409,14 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                     store_exception_kwargs(vm, globals, self_, kwargs)?;
                 }
             }
-            msg.coerce_to_string(vm, globals)?
+            if msg.is_rstring().is_some() {
+                msg.coerce_to_string(vm, globals)?
+            } else {
+                // CRuby accepts any message object and stringifies it
+                // via #to_s (`Exception#to_s calls #to_s on the message`).
+                let s = vm.invoke_method_inner(globals, IdentId::TO_S, msg, &[], None, None)?;
+                s.coerce_to_string(vm, globals)?
+            }
         }
     } else {
         globals.store.get_class_name(class_id)

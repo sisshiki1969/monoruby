@@ -459,7 +459,10 @@ impl MonorubyErr {
             "false".to_string()
         } else if let Some(m) = obj.is_class_or_module() {
             let kind = if m.is_module() { "module" } else { "class" };
-            format!("{kind} {}", obj.to_s(store))
+            // `get_class_name` resolves names assigned via constant
+            // assignment (`MyClass = Class.new`) too, unlike the raw
+            // `to_s`, and falls back to `#<Class:0x…>` when anonymous.
+            format!("{kind} {}", store.get_class_name(m.id()))
         } else if store[obj.class()].get_module().is_singleton().is_some() {
             // A receiver with a singleton class keeps the address form
             // (`for #<Object:0x…>`) in CRuby, not `an instance of …`.

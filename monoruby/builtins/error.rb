@@ -63,18 +63,38 @@ class SystemCallError
   # constructs the matching `Errno::*` subclass; an unknown errno stays
   # a plain SystemCallError. Subclasses (including user-defined ones)
   # construct normally through their own #initialize.
+  # CRuby coercion for the errno argument: Integers pass through,
+  # other Numerics truncate (a Complex must have zero imaginary part),
+  # anything else needs #to_int.
+  def self.__coerce_errno(errno)
+    return errno if errno.is_a?(Integer)
+    if errno.is_a?(Complex)
+      unless errno.imaginary == 0
+        raise RangeError, "can't convert #{errno} into Integer"
+      end
+      return errno.real.to_i
+    end
+    return errno.to_i if errno.is_a?(Numeric)
+    unless errno.respond_to?(:to_int)
+      raise TypeError, "no implicit conversion of #{errno.class} into Integer"
+    end
+    errno.to_int
+  end
+
   def self.new(*args)
     return super unless self.equal?(SystemCallError)
     if args.empty?
       raise ArgumentError, "wrong number of arguments (given 0, expected 1..3)"
     end
-    if args[0].is_a?(String)
+    if args.size >= 2
       msg, errno, loc = args[0], args[1], args[2]
+      errno = __coerce_errno(errno) unless errno.nil?
+    elsif args[0].is_a?(String) || args[0].nil?
+      msg, errno, loc = args[0], nil, nil
     else
-      errno, msg, loc = args[0], nil, nil
+      errno, msg, loc = __coerce_errno(args[0]), nil, nil
     end
-    errno = errno.to_int if errno.is_a?(Float)
-    klass = __errno_class(errno)
+    klass = errno.nil? ? nil : __errno_class(errno)
     obj = (klass || self).allocate
     obj.__send__(:__syserr_init, msg, errno, loc)
     obj
@@ -82,12 +102,14 @@ class SystemCallError
 
   # CRuby reports arity -1 for SystemCallError#initialize.
   def initialize(*args)
-    if args[0].is_a?(String)
+    if args.size >= 2
       msg, errno, loc = args[0], args[1], args[2]
+      errno = SystemCallError.__coerce_errno(errno) unless errno.nil?
+    elsif args[0].is_a?(String) || args[0].nil?
+      msg, errno, loc = args[0], nil, nil
     else
-      errno, msg, loc = args[0], nil, nil
+      errno, msg, loc = SystemCallError.__coerce_errno(args[0]), nil, nil
     end
-    errno = errno.to_int if errno.is_a?(Float)
     if errno.nil? && self.class.const_defined?(:Errno)
       e = self.class.const_get(:Errno)
       errno = e if e.is_a?(Integer)
@@ -100,10 +122,24 @@ class SystemCallError
   end
 
   private def __syserr_init(msg, errno, loc)
+    unless msg.nil? || msg.is_a?(String)
+      if msg.respond_to?(:to_str)
+        msg = msg.to_str
+      else
+        raise TypeError, "no implicit conversion of #{msg.class} into String"
+      end
+    end
     @__errno = errno
-    name = self.class.name.to_s.split("::").last
-    base = STRERROR[name]
-    base ||= errno ? "Unknown error #{errno}" : (name.empty? ? "unknown error" : name)
+    # Walk the ancestors so a user subclass of Errno::ENOENT inherits
+    # "No such file or directory" rather than the unknown-errno text.
+    base = nil
+    self.class.ancestors.each do |a|
+      next unless a.is_a?(Class) && a.name
+      base = STRERROR[a.name.split("::").last]
+      break if base
+      break if a.equal?(SystemCallError)
+    end
+    base ||= errno ? "Unknown error #{errno}" : "unknown error"
     base = "#{base} @ #{loc}" unless loc.nil?
     base = "#{base} - #{msg}" unless msg.nil?
     ::Exception.instance_method(:initialize).bind(self).call(base)
