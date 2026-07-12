@@ -187,24 +187,80 @@ fn bo_method_missing(
     // CRuby reports these as "private/protected method … called" rather
     // than "undefined method".
     use crate::executor::Visibility;
-    let err = match globals.store.check_method_for_class(recv.class(), name) {
+    // `undefined` marks a genuine missing method (as opposed to a
+    // visibility violation), which alone gets the Ruby-`#name`-based
+    // receiver rendering and the `#args` payload.
+    let (err, undefined) = match globals.store.check_method_for_class(recv.class(), name) {
         Some(entry) if entry.func_id().is_some() => match entry.visibility() {
-            Visibility::Private => MonorubyErr::private_method_called(&globals.store, name, recv),
-            Visibility::Protected => {
-                MonorubyErr::protected_method_called(&globals.store, name, recv)
+            Visibility::Private => {
+                (MonorubyErr::private_method_called(&globals.store, name, recv), false)
             }
-            _ => MonorubyErr::method_not_found(&globals.store, name, recv),
+            Visibility::Protected => (
+                MonorubyErr::protected_method_called(&globals.store, name, recv),
+                false,
+            ),
+            _ => (MonorubyErr::method_not_found(&globals.store, name, recv), true),
         },
-        _ => MonorubyErr::method_not_found(&globals.store, name, recv),
+        _ => (MonorubyErr::method_not_found(&globals.store, name, recv), true),
     };
-    // A genuine NoMethodError (not a visibility NameError) carries the
-    // call arguments on `#args`. `args[0]` is the method name; the rest
-    // are the arguments the missing method was called with.
-    if matches!(err.kind(), MonorubyErrKind::NotMethod { .. }) {
+    // A genuine NoMethodError carries the call arguments on `#args`
+    // (`args[0]` is the method name; the rest are the call arguments)
+    // and renders the receiver via its Ruby-level `#name` — CRuby calls
+    // it, so a class with an overridden `def self.name` shows that name.
+    if undefined {
+        let mut err = err;
+        if let Ok(desc) = nme_receiver_description(vm, globals, recv) {
+            err.set_msg(format!("undefined method '{name}' for {desc}"));
+        }
         let call_args = Value::array_from_iter(args.iter().skip(1).cloned());
         return Err(no_method_error_with_args(globals, err, call_args));
     }
     Err(err)
+}
+
+/// CRuby's receiver rendering for a NoMethodError message, using the
+/// Ruby-level `#name` (never `#inspect`): `class <Name>` / `module
+/// <Name>` for a named class/module (anonymous → its `#<Class:0x…>`
+/// form), the object's own string form for a receiver that has a
+/// singleton class, and `an instance of <Class#name>` otherwise.
+fn nme_receiver_description(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+) -> Result<String> {
+    if recv.is_nil() {
+        return Ok("nil".to_string());
+    } else if recv == Value::bool(true) {
+        return Ok("true".to_string());
+    } else if recv == Value::bool(false) {
+        return Ok("false".to_string());
+    }
+    let name_id = IdentId::get_id("name");
+    if let Some(m) = recv.is_class_or_module() {
+        let kind = if m.is_module() { "module" } else { "class" };
+        let name = vm.invoke_method_inner(globals, name_id, recv, &[], None, None)?;
+        let s = match name.is_str() {
+            Some(s) => s.to_string(),
+            None => globals.store.get_class_name(m.id()),
+        };
+        return Ok(format!("{kind} {s}"));
+    }
+    // A receiver with its own singleton class renders as its object form.
+    if globals.store[recv.class()]
+        .get_module()
+        .is_singleton()
+        .is_some()
+    {
+        return Ok(recv.to_s(&globals.store));
+    }
+    let cls = recv.class();
+    let cls_val = globals.store[cls].get_module().as_val();
+    let name = vm.invoke_method_inner(globals, name_id, cls_val, &[], None, None)?;
+    let s = match name.is_str() {
+        Some(s) => s.to_string(),
+        None => globals.store.get_class_name(cls),
+    };
+    Ok(format!("an instance of {s}"))
 }
 
 /// Re-materialize a NoMethodError so it also carries `#args`. The
