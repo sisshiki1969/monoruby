@@ -266,7 +266,7 @@ impl Codegen {
         let return_addr = self.jit.get_current_address();
 
         self.pop_frame();
-        self.set_deopt_with_return_addr(return_addr, evict, evict_label, call_site_bc_ptr.as_ptr() as u64);
+        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
     }
 
     pub(in crate::codegen::jitgen) fn do_specialized_call(

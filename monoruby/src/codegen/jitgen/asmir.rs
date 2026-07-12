@@ -1531,9 +1531,16 @@ pub(super) enum AsmInst {
         entry: JitLabel,
         patch_point: Option<JitLabel>,
         evict: AsmEvict,
-        /// The call-site bytecode pc, recorded in the deopt table so
-        /// the cont-frame slot (not written eagerly by specialized
-        /// calls) can be materialized lazily at deopt/read time.
+    },
+    /// Store the call-site bytecode pc into the outgoing cont-frame
+    /// slot (`[rsp]` / `[sp]` == the callee frame's CFP+24, the slot
+    /// Kernel#caller reads). The 16-byte cont-frame region itself is
+    /// reserved by the preceding `FprSave(_, cont: true)` — whose xmm
+    /// saves live *above* that region precisely so this store cannot
+    /// clobber a live saved float — so this emits a plain store with
+    /// no stack-pointer adjustment, keeping every frame-size /
+    /// specialized-frame-distance computation unchanged.
+    ContFramePc {
         call_site_pc: u64,
     },
     Yield {
@@ -1544,7 +1551,6 @@ pub(super) enum AsmInst {
     SpecializedYield {
         entry: JitLabel,
         evict: AsmEvict,
-        call_site_pc: u64,
     },
     Inline(InlineProcedure),
     /// §20 (B): array integer-index **read** (`ary[idx]`), a typed data record

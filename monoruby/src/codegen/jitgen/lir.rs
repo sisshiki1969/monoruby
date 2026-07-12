@@ -924,6 +924,11 @@ pub(in crate::codegen) enum LInst {
     // Store/frame-dependent values are pre-resolved by the dispatcher (which
     // holds `&Store` / `&mut AsmInfo`) and carried here, so the encoder stays
     // store-free. They delegate to the existing per-arch helpers.
+    /// Store the call-site pc into the cont-frame slot at `[rsp]`/`[sp]`
+    /// (reserved by the preceding cont-mode `FprSave`). No sp adjustment.
+    ContFramePc {
+        call_site_pc: u64,
+    },
     SetupMethodFrame {
         meta: Meta,
         outer_lfp: Option<Lfp>,

@@ -989,17 +989,7 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 // boundary, unaudited dispatch path) or out of range.
                 let loc = inner_cfp
                     .and_then(|inner| {
-                        let mut slot = inner.caller_pc_slot();
-                        // A specialized JIT call skips the eager slot
-                        // store; resolve its recorded call-site pc from
-                        // the deopt table and write it lazily.
-                        if let Some(pc) = crate::codegen::CODEGEN.with(|cg| {
-                            let ret = unsafe { inner.return_addr() }?;
-                            cg.borrow().specialized_caller_pc(ret)
-                        }) {
-                            inner.set_caller_pc_slot(pc);
-                            slot = pc;
-                        }
+                        let slot = inner.caller_pc_slot();
                         if slot == 0 || slot % 8 != 0 {
                             return None;
                         }
@@ -1009,6 +999,13 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                         };
                         // Both backends store the *call-site* pc.
                         if !info.contains_pc(pc) {
+                            if std::env::var_os("MONORUBY_DEBUG_CALLERPC").is_some() {
+                                eprintln!(
+                                    "CALLERPC REJECT slot={slot:#x} fid={func_id:?} iseq_top={:#x}+{}",
+                                    info.get_top_pc().as_ptr() as usize,
+                                    info.sourcemap.len() * 16,
+                                );
+                            }
                             return None;
                         }
                         let idx = info.get_pc_index(Some(pc)).to_usize();

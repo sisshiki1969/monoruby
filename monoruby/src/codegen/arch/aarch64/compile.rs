@@ -2664,18 +2664,22 @@ impl Codegen {
     // base.
 
     /// Save the live FP pool registers (D2..) below sp before a C-call.
+    /// With `cont`, the 16-byte continuation frame is reserved at the
+    /// bottom (`[sp, sp+16)`) and the fp saves are placed *above* it,
+    /// so the call-site pc store (`ContFramePc`, `[sp]`) and the
+    /// callee never touch a live saved float.
     pub(in crate::codegen::jitgen) fn emit_fpr_save(&mut self, using_fpr: UsingFpr, cont: bool) -> bool {
         if using_fpr.not_any() && !cont {
             return true;
         }
-        let sp_offset =
-            (using_fpr.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
+        let pad = if cont { CONTINUATION_FRAME_SIZE } else { 0 } as u32;
+        let sp_offset = using_fpr.offset() as u32 + pad;
         monoasm_arm64!(&mut self.jit, sub sp, sp, #(sp_offset););
         let mut i = 0u32;
         for (xi, b) in using_fpr.iter().enumerate() {
             if *b {
                 let pr = xi as u32 + 2;
-                let ofs = 8 * i;
+                let ofs = pad + 8 * i;
                 monoasm_arm64!(&mut self.jit, str d(pr), [sp, #(ofs)];);
                 i += 1;
             }
@@ -2688,13 +2692,13 @@ impl Codegen {
         if using_fpr.not_any() && !cont {
             return true;
         }
-        let sp_offset =
-            (using_fpr.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 }) as u32;
+        let pad = if cont { CONTINUATION_FRAME_SIZE } else { 0 } as u32;
+        let sp_offset = using_fpr.offset() as u32 + pad;
         let mut i = 0u32;
         for (xi, b) in using_fpr.iter().enumerate() {
             if *b {
                 let pr = xi as u32 + 2;
-                let ofs = 8 * i;
+                let ofs = pad + 8 * i;
                 monoasm_arm64!(&mut self.jit, ldr d(pr), [sp, #(ofs)];);
                 i += 1;
             }
@@ -2813,16 +2817,27 @@ impl Codegen {
     /// Register a specialized call's return address so `immediate_eviction` can
     /// find and patch it. Identical to the x86 helper (the tables are arch-
     /// neutral fields on `Codegen`).
+    /// Store the call-site pc into the outgoing cont-frame slot
+    /// (`[sp]` = the callee frame's CFP+24). The 16-byte region was
+    /// reserved by the preceding cont-mode `FprSave`, whose fp saves
+    /// sit above it — so this is a plain store, no sp adjustment.
+    /// See `AsmInst::ContFramePc`.
+    pub(in crate::codegen) fn emit_cont_frame_pc(&mut self, call_site_pc: u64) {
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (call_site_pc);
+            str x10, [sp];
+        );
+    }
+
     pub(super) fn set_deopt_with_return_addr(
         &mut self,
         return_addr: CodePtr,
         evict: AsmEvict,
         evict_label: &DestLabel,
-        call_site_pc: u64,
     ) {
         self.asm_return_addr_table.insert(evict, return_addr);
         self.return_addr_table
-            .insert(return_addr, (None, evict_label.clone(), call_site_pc));
+            .insert(return_addr, (None, evict_label.clone()));
     }
 
     /// Inline-cache class-version guard: deopt if the global class version moved

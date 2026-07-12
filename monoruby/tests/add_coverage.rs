@@ -1391,13 +1391,7 @@ fn caller_reports_suspended_lines() {
     );
 }
 
-// TODO(aarch64): the lazy caller-pc resolution for suspended
-// specialized frames does not yet produce correct lines on
-// aarch64 (its return-address/table plumbing needs its own
-// audit); the VM-tier behavior is covered on both arches by
-// caller_reports_suspended_lines.
 #[test]
-#[cfg(target_arch = "x86_64")]
 fn caller_lines_through_specialized_jit_calls() {
     // A specialized JIT call skips the eager cont-frame pc store; the
     // pc recorded in the deopt table is materialized lazily when a
@@ -1421,13 +1415,7 @@ fn caller_lines_through_specialized_jit_calls() {
     );
 }
 
-// TODO(aarch64): the lazy caller-pc resolution for suspended
-// specialized frames does not yet produce correct lines on
-// aarch64 (its return-address/table plumbing needs its own
-// audit); the VM-tier behavior is covered on both arches by
-// caller_reports_suspended_lines.
 #[test]
-#[cfg(target_arch = "x86_64")]
 fn caller_lines_survive_specialized_frame_eviction() {
     // Redefining a basic op from inside the callee evicts the
     // suspended specialized caller frames (immediate_eviction): the

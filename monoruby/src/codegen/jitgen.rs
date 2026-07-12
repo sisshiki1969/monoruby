@@ -627,11 +627,17 @@ impl JitModule {
     /// ### stack pointer adjustment
     /// - -`using_fpr`.offset()
     ///
+    /// With `cont`, additionally reserve the 16-byte continuation
+    /// frame at the bottom (`[rsp, rsp+16)` = the callee frame's
+    /// CFP+16..+32 region) and place the xmm saves *above* it, so the
+    /// call-site pc store (`ContFramePc`, `[rsp]`) and the callee
+    /// never touch a live saved float.
     fn fpr_save_with_cont(&mut self, using_fpr: UsingFpr, cont: bool) {
         if using_fpr.not_any() && !cont {
             return;
         }
-        let sp_offset = using_fpr.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
+        let pad = if cont { CONTINUATION_FRAME_SIZE as i32 } else { 0 };
+        let sp_offset = using_fpr.offset() + pad as usize;
         monoasm!( &mut self.jit,
             subq rsp, (sp_offset);
         );
@@ -639,7 +645,7 @@ impl JitModule {
         for (x, b) in using_fpr.iter().enumerate() {
             if *b {
                 monoasm!( &mut self.jit,
-                    movq [rsp + (8 * i)], xmm(x as u64 + 2);
+                    movq [rsp + (pad + 8 * i)], xmm(x as u64 + 2);
                 );
                 i += 1;
             }
@@ -657,12 +663,13 @@ impl JitModule {
         if using_fpr.not_any() && !cont {
             return;
         }
-        let sp_offset = using_fpr.offset() + if cont { CONTINUATION_FRAME_SIZE } else { 0 };
+        let pad = if cont { CONTINUATION_FRAME_SIZE as i32 } else { 0 };
+        let sp_offset = using_fpr.offset() + pad as usize;
         let mut i = 0;
         for (x, b) in using_fpr.iter().enumerate() {
             if *b {
                 monoasm!( &mut self.jit,
-                    movq xmm(x as u64 + 2), [rsp + (8 * i)];
+                    movq xmm(x as u64 + 2), [rsp + (pad + 8 * i)];
                 );
                 i += 1;
             }
