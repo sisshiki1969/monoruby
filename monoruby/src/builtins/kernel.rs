@@ -208,6 +208,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         1,
     );
     globals.define_builtin_func(kernel_class, "__backtrace_limit", backtrace_limit, 0);
+    globals.define_builtin_module_func_with(kernel_class, "chomp", chomp, 0, 1, false);
+    globals.define_builtin_module_func(kernel_class, "chop", chop, 0);
     globals.define_builtin_func(
         kernel_class,
         "__enum_yield",
@@ -705,6 +707,52 @@ fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
     let s = Value::string_from_vec(buffer);
     vm.set_last_read_line(s);
     Ok(s)
+}
+
+///
+/// ### Kernel.#chomp / Kernel.#chop
+///
+/// - chomp(rs = $/) -> String
+/// - chop -> String
+///
+/// `$_ = $_.chomp(rs)` / `$_ = $_.chop` in the calling scope — the
+/// `-n`/`-p` loop companions. `$_` must hold a String (TypeError
+/// otherwise, like CRuby).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/chomp.html]
+#[monoruby_builtin]
+fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let line = vm.get_last_read_line();
+    if line.is_rstring().is_none() {
+        return Err(MonorubyErr::typeerr(format!(
+            "$_ value need to be String ({} given)",
+            line.get_real_class_name(&globals.store)
+        )));
+    }
+    let rs = match lfp.try_arg(0) {
+        Some(rs) => rs,
+        None => globals
+            .get_gvar(IdentId::get_id("$/"))
+            .unwrap_or_else(|| Value::string_from_str("\n")),
+    };
+    let res = vm.invoke_method_inner(globals, IdentId::get_id("chomp"), line, &[rs], None, None)?;
+    vm.set_last_read_line(res);
+    Ok(res)
+}
+
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/chop.html]
+#[monoruby_builtin]
+fn chop(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let line = vm.get_last_read_line();
+    if line.is_rstring().is_none() {
+        return Err(MonorubyErr::typeerr(format!(
+            "$_ value need to be String ({} given)",
+            line.get_real_class_name(&globals.store)
+        )));
+    }
+    let res = vm.invoke_method_inner(globals, IdentId::get_id("chop"), line, &[], None, None)?;
+    vm.set_last_read_line(res);
+    Ok(res)
 }
 
 ///
