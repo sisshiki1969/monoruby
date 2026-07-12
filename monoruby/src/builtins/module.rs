@@ -2525,7 +2525,7 @@ fn class_variable_set(
     let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let class_id = self_val.as_class_id();
-    let name = coerce_to_class_var_name(vm, globals, lfp.arg(0))?;
+    let name = coerce_to_class_var_name(vm, globals, lfp.self_val(), lfp.arg(0))?;
     let val = lfp.arg(1);
     // A class variable is shared with ancestors: if a superclass already
     // defines it, update *that* definition instead of shadowing a fresh copy
@@ -2556,7 +2556,7 @@ fn class_variable_get(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let name = coerce_to_class_var_name(vm, globals, lfp.arg(0))?;
+    let name = coerce_to_class_var_name(vm, globals, lfp.self_val(), lfp.arg(0))?;
     let module = globals.store[class_id].get_module();
     globals.get_class_variable(module, name).map(|(_, v)| v)
 }
@@ -2575,7 +2575,7 @@ fn class_variable_defined(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let name = coerce_to_class_var_name(vm, globals, lfp.arg(0))?;
+    let name = coerce_to_class_var_name(vm, globals, lfp.self_val(), lfp.arg(0))?;
     let module = globals.store[class_id].get_module();
     Ok(Value::bool(globals.get_class_variable(module, name).is_ok()))
 }
@@ -2587,14 +2587,20 @@ fn class_variable_defined(
 fn coerce_to_class_var_name(
     vm: &mut Executor,
     globals: &mut Globals,
+    receiver: Value,
     name_arg: Value,
 ) -> Result<IdentId> {
     let id = name_arg.coerce_to_symbol_or_string(vm, globals)?;
     let s = id.get_name();
     if !s.starts_with("@@") || s.len() <= 2 {
-        return Err(MonorubyErr::nameerr(format!(
-            "`{s}' is not allowed as a class variable name"
-        )));
+        // CRuby carries the given name (the exact argument object, so the
+        // spec's `equal?` holds) and the receiver on this NameError.
+        return Err(crate::builtins::kernel::name_error_reflection(
+            globals,
+            format!("`{s}' is not allowed as a class variable name"),
+            name_arg,
+            receiver,
+        ));
     }
     Ok(id)
 }

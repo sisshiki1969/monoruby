@@ -621,13 +621,26 @@ impl MonorubyErr {
     }
 
     pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
-        Self::nameerr(format!("uninitialized constant {name}"))
+        Self::nameerr_with_name(format!("uninitialized constant {name}"), name)
     }
 
-    pub(crate) fn uninitialized_cvar(name: IdentId, class_name: String) -> MonorubyErr {
-        Self::nameerr(format!(
-            "uninitialized class variable {name} in {class_name}"
-        ))
+    /// As [`Self::uninitialized_constant`], but also records the module
+    /// the constant was looked up on as `NameError#receiver` (CRuby
+    /// reports the namespace class, or `Object` for a bare reference).
+    pub(crate) fn uninitialized_constant_in(name: IdentId, receiver: Value) -> MonorubyErr {
+        Self::nameerr_with_name_receiver(format!("uninitialized constant {name}"), name, receiver)
+    }
+
+    pub(crate) fn uninitialized_cvar(
+        name: IdentId,
+        class_name: String,
+        receiver: Value,
+    ) -> MonorubyErr {
+        Self::nameerr_with_name_receiver(
+            format!("uninitialized class variable {name} in {class_name}"),
+            name,
+            receiver,
+        )
     }
 
     pub(crate) fn identifier_must_be_constant(name: &str) -> MonorubyErr {

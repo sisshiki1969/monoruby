@@ -161,12 +161,15 @@ fn bo_method_missing(
     use crate::executor::MethodMissingStyle;
     match vm.take_method_missing_style() {
         MethodMissingStyle::VCall => {
-            return Err(MonorubyErr::nameerr_with_name(
+            // CRuby 4.0: `undefined local variable or method 'name' for
+            // <recv>` (single quotes), carrying the receiver on `#receiver`.
+            return Err(MonorubyErr::nameerr_with_name_receiver(
                 format!(
-                    "undefined local variable or method `{name}' for {}",
+                    "undefined local variable or method '{name}' for {}",
                     recv.to_s(&globals.store)
                 ),
                 name,
+                recv,
             ));
         }
         MethodMissingStyle::Super => {
@@ -194,7 +197,38 @@ fn bo_method_missing(
         },
         _ => MonorubyErr::method_not_found(&globals.store, name, recv),
     };
+    // A genuine NoMethodError (not a visibility NameError) carries the
+    // call arguments on `#args`. `args[0]` is the method name; the rest
+    // are the arguments the missing method was called with.
+    if matches!(err.kind(), MonorubyErrKind::NotMethod { .. }) {
+        let call_args = Value::array_from_iter(args.iter().skip(1).cloned());
+        return Err(no_method_error_with_args(globals, err, call_args));
+    }
     Err(err)
+}
+
+/// Re-materialize a NoMethodError so it also carries `#args`. The
+/// `NotMethod` error's name / receiver are transferred onto a
+/// pre-built exception object (via `take_ex_obj`'s standard path) and
+/// the arguments array is attached as the hidden `/args` ivar.
+fn no_method_error_with_args(globals: &mut Globals, err: MonorubyErr, call_args: Value) -> MonorubyErr {
+    let (name, receiver) = match err.kind() {
+        MonorubyErrKind::NotMethod { name, receiver } => (*name, *receiver),
+        _ => (None, None),
+    };
+    let exc = Value::new_exception_from(err.message().to_string(), NO_METHOD_ERROR_CLASS);
+    if let Some(name) = name {
+        let _ = globals.store.set_ivar(exc, IdentId::_NAME, Value::symbol(name));
+    }
+    if let Some(receiver) = receiver {
+        let _ = globals
+            .store
+            .set_ivar(exc, IdentId::get_id("/receiver"), Value::from_u64(receiver));
+    }
+    let _ = globals
+        .store
+        .set_ivar(exc, IdentId::get_id("/args"), call_args);
+    err.with_original(exc)
 }
 
 ///
