@@ -90,6 +90,13 @@ impl Cfp {
         unsafe { *(self.as_ptr() as *const u64).add(3) }
     }
 
+    /// Lazily materialize the caller's call-site pc into the
+    /// cont-frame slot — used when a *specialized* JIT call (which
+    /// skips the eager store) is deopted or observed by a reader.
+    pub(crate) fn set_caller_pc_slot(&self, pc: u64) {
+        unsafe { *(self.as_ptr() as *mut u64).add(3) = pc }
+    }
+
     ///
     /// Get LFP.
     ///

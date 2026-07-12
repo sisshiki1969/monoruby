@@ -614,7 +614,7 @@ pub struct Codegen {
     compilation_unit: Vec<CompilationUnitInfo>,
 
     /// return_addr => (patch_point, deopt)
-    return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
+    return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel, u64)>,
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
     pub(crate) specialized_info: Vec<(ISeqId, ClassId, DestLabel)>,
     pub(crate) specialized_base: usize,
@@ -1289,13 +1289,31 @@ impl Codegen {
         while let Some(prev_cfp) = cfp.prev() {
             let ret = return_addr.unwrap();
             if !self.check_vm_address(ret) {
-                if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
+                if let Some((patch_point, deopt, call_site_pc)) =
+                    self.get_deopt_with_return_addr(ret)
+                {
                     let patch_point = patch_point.unwrap();
                     self.patch_return_to_deopt(patch_point, &deopt);
+                    // Deopting a suspended specialized frame: lazily
+                    // materialize the caller pc the specialized call
+                    // skipped writing at call time.
+                    if call_site_pc != 0 {
+                        cfp.set_caller_pc_slot(call_site_pc);
+                    }
                 }
             }
             cfp = prev_cfp;
             return_addr = unsafe { cfp.return_addr() };
+        }
+    }
+
+    /// The call-site pc recorded for a specialized JIT call whose
+    /// return address is `ret` — the lazy source for the cont-frame
+    /// slot that specialized calls do not write eagerly.
+    pub(crate) fn specialized_caller_pc(&self, ret: CodePtr) -> Option<u64> {
+        match self.return_addr_table.get(&ret) {
+            Some((_, _, pc)) if *pc != 0 => Some(*pc),
+            _ => None,
         }
     }
 
@@ -1331,7 +1349,7 @@ impl Codegen {
     fn get_deopt_with_return_addr(
         &self,
         return_addr: CodePtr,
-    ) -> Option<(Option<CodePtr>, DestLabel)> {
+    ) -> Option<(Option<CodePtr>, DestLabel, u64)> {
         self.return_addr_table.get(&return_addr).cloned()
     }
 

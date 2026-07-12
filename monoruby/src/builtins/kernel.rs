@@ -989,7 +989,17 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 // boundary, unaudited dispatch path) or out of range.
                 let loc = inner_cfp
                     .and_then(|inner| {
-                        let slot = inner.caller_pc_slot();
+                        let mut slot = inner.caller_pc_slot();
+                        // A specialized JIT call skips the eager slot
+                        // store; resolve its recorded call-site pc from
+                        // the deopt table and write it lazily.
+                        if let Some(pc) = crate::codegen::CODEGEN.with(|cg| {
+                            let ret = unsafe { inner.return_addr() }?;
+                            cg.borrow().specialized_caller_pc(ret)
+                        }) {
+                            inner.set_caller_pc_slot(pc);
+                            slot = pc;
+                        }
                         if slot == 0 || slot % 8 != 0 {
                             return None;
                         }

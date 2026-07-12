@@ -434,7 +434,7 @@ impl<'a> JitContext<'a> {
         let evict = ir.new_evict();
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
-        ir.push(AsmInst::SpecializedYield { entry, evict });
+        ir.push(AsmInst::SpecializedYield { entry, evict, call_site_pc: state.pc().as_ptr() as u64 });
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         let res = state.def_rax2acc_return(ir, dst, return_state);
@@ -929,6 +929,7 @@ impl AbstractState {
             entry: inlined_entry,
             patch_point,
             evict,
+            call_site_pc: self.pc().as_ptr() as u64,
         });
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
