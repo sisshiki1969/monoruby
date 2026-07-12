@@ -2932,6 +2932,10 @@ fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) 
     }
     globals.store[fid]
         .name()
+        // The main script's body carries the internal `/main` label (and,
+        // running inside TOPLEVEL_BINDING, a proc_method-tagged frame) —
+        // but the top level is not a method: report nil, as CRuby does.
+        .filter(|sym| *sym != IdentId::_MAIN)
         .map_or(Ok(Value::nil()), |sym| Ok(Value::symbol(sym)))
 }
 

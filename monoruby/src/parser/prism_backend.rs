@@ -53,7 +53,7 @@ const ANON_KWREST_NAME: &str = "**";
 const FOR_INDEX_NAME: &str = "(for)";
 
 pub(super) fn parse_program(code: Vec<u8>, path: PathBuf) -> Result<ParseResult, MonorubyErr> {
-    try_prism_inner(&code, path, None, None, 0, None)
+    try_prism_inner(&code, path, None, None, 0, None, false)
 }
 
 pub(super) fn parse_program_eval(
@@ -64,7 +64,7 @@ pub(super) fn parse_program_eval(
     default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
     let options = build_prism_options(extern_context, None, line_offset);
-    try_prism_inner(&code, path, Some(options), None, line_offset, default_encoding)
+    try_prism_inner(&code, path, Some(options), None, line_offset, default_encoding, false)
 }
 
 pub(super) fn parse_program_binding(
@@ -74,9 +74,18 @@ pub(super) fn parse_program_binding(
     extern_context: Option<&ExternalContext>,
     line_offset: i64,
     default_encoding: Option<String>,
+    main_script: bool,
 ) -> Result<ParseResult, MonorubyErr> {
     let options = build_prism_options(extern_context, context.as_ref(), line_offset);
-    try_prism_inner(&code, path, Some(options), context, line_offset, default_encoding)
+    try_prism_inner(
+        &code,
+        path,
+        Some(options),
+        context,
+        line_offset,
+        default_encoding,
+        main_script,
+    )
 }
 
 /// Build a `prism::Options` for an eval/binding parse. Prism's
@@ -292,6 +301,7 @@ fn try_prism_inner(
     seed_lvars: Option<LvarCollector>,
     line_offset: i64,
     default_encoding: Option<String>,
+    main_script: bool,
 ) -> Result<ParseResult, MonorubyErr> {
     let path_display = path.display().to_string();
     // `-n` / `-p`: the main script (and only the main script) gets its
@@ -304,6 +314,7 @@ fn try_prism_inner(
         Some(opts) => prism::parse_with_options(code, opts),
         None => prism::parse(code),
     };
+    let data_loc_start = result.data_loc().map(|loc| loc.start_offset());
 
     // Detect the source encoding from the `# coding:` / `# encoding:`
     // magic comment ourselves rather than via prism's `magic_comments()`
@@ -384,7 +395,10 @@ fn try_prism_inner(
 
     let mut lowerer = Lowerer::new(code, path_display, source_info.clone());
     lowerer.line_offset = line_offset;
-    lowerer.eval_parse = options.is_some();
+    // The main script parses with binding scopes (it executes inside
+    // TOPLEVEL_BINDING) but *is* a script top level — keep script-level
+    // warnings like "argument of top-level return is ignored".
+    lowerer.eval_parse = options.is_some() && !main_script;
     lowerer.cli_loop_wrap = cli_loop_wrap;
     if let Some(seed) = seed_lvars {
         // For `binding.eval`, monoruby preloads a `LvarCollector`
@@ -405,11 +419,22 @@ fn try_prism_inner(
     warnings.append(&mut lowerer.warnings);
     let lvar_collector = lowerer.into_lvars();
 
+    // `data_loc` spans from the `__END__` marker to EOF; `DATA` content
+    // starts after the marker's line terminator (or at EOF when the file
+    // ends right at `__END__` with no newline).
+    let data_offset = data_loc_start.map(|start| {
+        match code[start..].iter().position(|&b| b == b'\n') {
+            Some(i) => start + i + 1,
+            None => code.len(),
+        }
+    });
+
     Ok(ParseResult {
         node: body,
         lvar_collector,
         source_info,
         warnings,
+        data_offset,
     })
 }
 

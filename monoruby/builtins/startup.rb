@@ -1680,7 +1680,10 @@ class Encoding
   end
 end
 
-TOPLEVEL_BINDING = binding
+# TOPLEVEL_BINDING is defined by the runtime (Executor::init): a Binding
+# over an empty, outer-less frame that the *main script* is then executed
+# in (Executor::exec_main_script), so it exposes exactly the main script's
+# locals — not this file's.
 
 require_relative 'comparable'
 

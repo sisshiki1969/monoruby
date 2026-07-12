@@ -121,6 +121,7 @@ pub(crate) fn parse_program_binding(
     extern_context: Option<&crate::globals::ExternalContext>,
     line_offset: i64,
     default_encoding: Option<String>,
+    main_script: bool,
 ) -> Result<ParseResult, MonorubyErr> {
     prism_backend::parse_program_binding(
         code,
@@ -129,5 +130,6 @@ pub(crate) fn parse_program_binding(
         extern_context,
         line_offset,
         default_encoding,
+        main_script,
     )
 }

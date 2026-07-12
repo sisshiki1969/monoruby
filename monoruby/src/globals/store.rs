@@ -402,6 +402,13 @@ impl Store {
             let iseq = &self[iseq_id];
             let mother = iseq.mother().0;
             if mother != iseq_id {
+                // The main script executes inside TOPLEVEL_BINDING, so its
+                // body is technically a block of the empty toplevel frame —
+                // but it *is* the program's top level. It is the only block
+                // fid stamped `_MAIN` (`compile_main_script_binding`).
+                if info.name() == Some(IdentId::_MAIN) {
+                    return "<main>".to_string();
+                }
                 return format!("block in {}", self.func_description(self[mother].func_id()));
             } else {
                 // The toplevel frame's internal name is `/main`
