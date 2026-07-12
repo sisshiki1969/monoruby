@@ -1446,3 +1446,105 @@ fn caller_lines_survive_specialized_frame_eviction() {
         "##,
     );
 }
+
+#[test]
+fn super_uses_called_name_for_multi_name_define_method() {
+    // One block body installed under two names via define_method:
+    // `super()` must dispatch under the name the method was *called*
+    // with, recovered from the caller's callsite via the cont-frame pc
+    // (the body's stamped name is whichever define_method ran first).
+    // run_test warms the JIT: such super sites must stay uncached /
+    // deopt to the VM, or one target would be reused for both names.
+    run_test(
+        r##"
+        sup = Class.new do
+          def a; "a"; end
+          def b; "b"; end
+        end
+        sub = Class.new(sup) do
+          [:a, :b].each do |name|
+            define_method name do
+              super()
+            end
+          end
+        end
+        r = []
+        20.times do
+          r << sub.new.a
+          r << sub.new.b
+        end
+        r.uniq
+        "##,
+    );
+}
+
+#[test]
+fn super_chains_through_duplicate_method_bodies() {
+    // Two anonymous modules built by re-running the same `def` bytecode
+    // share one FuncId, so the body occupies two ancestor-chain
+    // positions. Each frame's occurrence index (counted over the
+    // consecutive super-linked frames via the cont-frame pc) selects
+    // the position to continue from — super must visit *both* modules
+    // before the base class, on every (JIT-warmed) call.
+    // run_test re-executes the snippet in one interpreter; guard the
+    // definitions so the chain doesn't grow two modules per repeat.
+    run_test(
+        r##"
+        unless defined?(SCDMB_Twice)
+          class SCDMB_Base
+            def self.whatever
+              mod = Module.new do
+                def a(array)
+                  array << "anon"
+                  super
+                end
+              end
+              include mod
+            end
+            def a(array)
+              array << "non-anon"
+            end
+          end
+          class SCDMB_Twice < SCDMB_Base
+            whatever
+            whatever
+          end
+        end
+        r = []
+        20.times do
+          r << SCDMB_Twice.new.a([])
+        end
+        r.uniq
+        "##,
+    );
+}
+
+#[test]
+fn super_from_alias_resolves_from_original_position() {
+    // `alias_method` re-registers the body in the aliasing class, but
+    // super from the aliased method must resolve from the *original*
+    // definition's chain position (the called name maps through the
+    // alias entry's original_name) — not re-enter the same body.
+    run_test(
+        r##"
+        class SFAR_A
+          def name
+            [:alias1]
+          end
+        end
+        class SFAR_B < SFAR_A
+          def name
+            [:alias2] + super
+          end
+        end
+        class SFAR_C < SFAR_B
+          alias_method :name3, :name
+        end
+        r = []
+        20.times do
+          r << SFAR_C.new.name3
+        end
+        r.uniq
+        "##,
+    );
+}

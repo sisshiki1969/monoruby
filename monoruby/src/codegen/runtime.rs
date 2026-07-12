@@ -31,16 +31,30 @@ pub(super) extern "C" fn find_method(
     recv: Value,
 ) -> u64 {
     let name = globals[callid].name;
+    let mut cacheable = true;
     let fid = if let Some(func_name) = name {
         let is_func_call = globals[callid].is_func_call();
         vm.find_method(globals, recv, func_name, is_func_call)
     } else {
-        find_super(vm, globals, callid)
+        find_super(vm, globals, callid).map(|(fid, c)| {
+            cacheable = c;
+            fid
+        })
     }
     .map_err(|err| vm.set_error(err))
     .ok();
     if let Some(f) = fid {
         warn_unused_block(vm, globals, callid, f);
+    }
+    // A super target can be frame-dependent, not just receiver-class-
+    // dependent: when the method body occupies several positions in the
+    // receiver's ancestor chain (each occurrence supers to the next), or
+    // when the body is a define_method block (its super name follows the
+    // name the method was *called* under, and one body may be installed
+    // under several names). Tag the cache with 0 — never a valid ClassId
+    // — so the callsite re-resolves on every execution.
+    if !cacheable {
+        return fid.map_or(0, |f| f.get()) as u64;
     }
     let cache_class = {
         let ic_class = recv.class_for_ic();
@@ -154,7 +168,135 @@ fn strict_unused_block_category(vm: &mut Executor, globals: &mut Globals) -> boo
     }
 }
 
-fn find_super(vm: &mut Executor, globals: &mut Globals, callid: CallSiteId) -> Result<FuncId> {
+/// Classify the call instruction that created the frame `cfp`: read the
+/// frame's cont-frame slot (the caller's suspended call-site pc, written
+/// eagerly by both the VM and the JIT), validate it against the caller
+/// frame's bytecode span, and decode the send-family opcode there.
+///
+/// Returns `(is_super, callid)`, or `None` when the slot is absent or
+/// garbage (invoker boundary, native caller) or the instruction is not a
+/// send/super (e.g. a yield).
+fn entered_by(globals: &Globals, cfp: executor::Cfp) -> Option<(bool, CallSiteId)> {
+    let slot = cfp.caller_pc_slot();
+    if slot == 0 || slot % 8 != 0 {
+        return None;
+    }
+    let caller = cfp.prev()?;
+    let iseq = globals.store[caller.lfp().func_id()].is_iseq()?;
+    // SAFETY: validated against the bytecode span below.
+    let pc = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _)? };
+    if !globals.store[iseq].contains_pc(pc) {
+        return None;
+    }
+    // Send-family opcodes (bytecodegen/encode.rs): 30/31 = method call,
+    // 32/33 = super, 34/35 = yield. op1's low 32 bits carry the CallSiteId.
+    match pc.opcode() {
+        30..=31 => Some((false, CallSiteId(pc.op1() as u32))),
+        32..=33 => Some((true, CallSiteId(pc.op1() as u32))),
+        _ => None,
+    }
+}
+
+/// The calling frame's 1-based position in the run of consecutive
+/// super-linked frames executing the same method body on the same
+/// receiver — i.e. which occurrence of the body in the receiver's
+/// ancestor chain this frame corresponds to — plus the send callsite
+/// that entered the bottom of the run.
+///
+/// Returns `(k, entry_callid, exact)`. `entry_callid` is `Some` only
+/// when the run's bottom frame was entered by a plain method call
+/// (its callsite name is the name the method was invoked under).
+/// `exact` is `false` when a link could not be decoded (invoker
+/// boundary etc.), in which case `k` is a lower bound and callers
+/// should fall back to frame-independent resolution.
+fn super_run(vm: &Executor, globals: &Globals, method_fid: FuncId) -> (usize, Option<CallSiteId>, bool) {
+    // `super` in a block resolves against the enclosing method: locate
+    // the frame executing the method body (the outermost lfp, stopping
+    // at a proc-method boundary, mirroring `method_func_id`).
+    let home = vm.cfp().lfp().outermost().0;
+    let mut cfp = vm.cfp();
+    while cfp.lfp() != home {
+        match cfp.prev() {
+            Some(prev) => cfp = prev,
+            None => return (1, None, false),
+        }
+    }
+    let self_val = home.self_val();
+    let mut k = 1;
+    loop {
+        match entered_by(globals, cfp) {
+            Some((true, _)) => {
+                // Entered via `super`. If the caller frame executes the
+                // same body on the same receiver, this frame is the next
+                // occurrence of that body in the ancestor chain.
+                let Some(caller) = cfp.prev() else {
+                    return (k, None, false);
+                };
+                if caller.method_func_id() == method_fid && caller.lfp().self_val() == self_val {
+                    k += 1;
+                    cfp = caller;
+                    continue;
+                }
+                // `super` from a different method (an ordinary super
+                // chain hop): the run ends here; the called name is not
+                // recoverable from this link.
+                return (k, None, true);
+            }
+            Some((false, callid)) => return (k, Some(callid), true),
+            None => return (k, None, false),
+        }
+    }
+}
+
+/// Resolve the name and chain position for a `super` dispatch from the
+/// current frame.
+///
+/// - The *name*: CRuby resolves `super` under the method entry's
+///   original name for the name the method was **called** with — which
+///   differs from the `FuncInfo`-stamped name when one body is
+///   installed under several names (`define_method` in a loop) or
+///   aliased. Recover the called name from the caller's callsite (via
+///   the cont-frame pc), map it through the method table (accepting a
+///   proc-method wrapper whose inner proc is the running body), and
+///   take that entry's original name. Falls back to the stamped name.
+/// - The *occurrence*: `Some(k)` when the frame's position among
+///   consecutive same-body super frames could be decoded exactly (see
+///   `super_run`), for positional resolution in `check_super_at`.
+fn super_resolution(
+    vm: &Executor,
+    globals: &Globals,
+    func_id: FuncId,
+    self_class: ClassId,
+) -> (IdentId, Option<usize>) {
+    let (k, entry_callid, exact) = super_run(vm, globals, func_id);
+    let func_name = entry_callid
+        .and_then(|callid| globals.store[callid].name)
+        .and_then(|called| {
+            let entry = globals.store.check_method_for_class(self_class, called)?;
+            let entry_fid = entry.func_id()?;
+            let dispatches_here = entry_fid == func_id
+                || matches!(&globals.store[entry_fid].kind,
+                    crate::globals::FuncKind::Proc(p) if p.func_id() == func_id);
+            if dispatches_here {
+                Some(entry.original_name())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| globals.store[func_id].name().unwrap());
+    (func_name, exact.then_some(k))
+}
+
+/// Resolve a `super` dispatch from the current frame. The second element
+/// of the result is whether the resolution is *frame-independent* (safe to
+/// stamp into the callsite's inline cache): false for a define_method body
+/// (the super name follows the called name) or a body occupying several
+/// ancestor-chain positions (each occurrence supers to a different target).
+fn find_super(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+) -> Result<(FuncId, bool)> {
     let func_id = vm.method_func_id();
     // zsuper (implicit-argument `super`) forwards the frame's
     // arguments by the *definition-time* parameter layout, which is
@@ -169,10 +311,18 @@ fn find_super(vm: &mut Executor, globals: &mut Globals, callid: CallSiteId) -> R
         ));
     }
     let self_val = vm.cfp().lfp().self_val();
-    let func_name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
-    match globals.store.check_super(self_class, func_id, func_name) {
-        Some(func_id) => Ok(func_id),
+    let (func_name, occurrence) = super_resolution(vm, globals, func_id, self_class);
+    let cacheable = !globals.store[func_id].is_block_style()
+        && globals
+            .store
+            .super_occurrences(self_class, func_id, func_name)
+            <= 1;
+    match globals
+        .store
+        .check_super_at(self_class, func_id, func_name, occurrence)
+    {
+        Some(func_id) => Ok((func_id, cacheable)),
         None => Err(MonorubyErr::super_method_not_found(
             globals, func_name, self_val,
         )),
@@ -1687,9 +1837,12 @@ pub(super) extern "C" fn defined_method(
 pub(super) extern "C" fn defined_super(vm: &mut Executor, globals: &mut Globals) -> Value {
     let func_id = vm.method_func_id();
     let self_val = vm.cfp().lfp().self_val();
-    let name = globals.store[func_id].name().unwrap();
     let self_class = self_val.class();
-    if globals.check_super(self_class, func_id, name).is_some() {
+    let (name, occurrence) = super_resolution(vm, globals, func_id, self_class);
+    if globals
+        .check_super_at(self_class, func_id, name, occurrence)
+        .is_some()
+    {
         defined_frozen_str("super")
     } else {
         Value::nil()

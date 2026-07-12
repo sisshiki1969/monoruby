@@ -18,6 +18,26 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<CompileResult> {
         let callsite = &self.store[callid];
         let recv_class = state.class(callsite.recv);
+        // A frame-dependent `super` site (the method body occupies several
+        // positions in the receiver's ancestor chain, or is a define_method
+        // block whose super name follows the called name) cannot be resolved
+        // to one target at compile time — and the VM never warms its inline
+        // cache for such sites (see `runtime::find_method`). Plain-deopt to
+        // the VM, which re-resolves per call; recompiling would never
+        // stabilize.
+        if callsite.name.is_none() {
+            let mother_fid = self.store[self.iseq().mother().0].func_id();
+            let ambiguous = self.store[mother_fid].is_block_style()
+                || match (recv_class, self.store[mother_fid].name()) {
+                    (Some(rc), Some(name)) => {
+                        self.store.super_occurrences(rc, mother_fid, name) > 1
+                    }
+                    _ => false,
+                };
+            if ambiguous {
+                return Ok(CompileResult::Deopt);
+            }
+        }
         let (recv_class, func_id) = if let Some(recv_class) = recv_class {
             // the receiver class is known.
             if let Some(func_id) = self.jit_check_call(recv_class, callsite.name) {
