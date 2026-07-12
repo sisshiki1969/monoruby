@@ -394,7 +394,14 @@ impl Store {
             if mother != iseq_id {
                 return format!("block in {}", self.func_description(self[mother].func_id()));
             } else {
-                iseq.name()
+                // The toplevel frame's internal name is `/main`
+                // (`IdentId::_MAIN`); CRuby displays it as `<main>`.
+                let name = iseq.name();
+                if name == "/main" {
+                    "<main>".to_string()
+                } else {
+                    name
+                }
             }
         } else {
             if let Some(name) = info.name() {

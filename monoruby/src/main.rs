@@ -119,8 +119,7 @@ struct Opts {
     set_internal_utf8: bool,
     /// `-K<code>`.
     kcode: Option<char>,
-    /// `--backtrace-limit=N` (accepted; truncation not yet implemented).
-    #[allow(dead_code)]
+    /// `--backtrace-limit=N`.
     backtrace_limit: Option<i64>,
     /// `--enable[-=]FEATURE` / `--disable[-=]FEATURE`, in order.
     features: Vec<(String, bool)>,
@@ -693,6 +692,9 @@ fn main() {
 
     let mut globals = Globals::new(warning_level, opts.no_jit, !gems);
     Globals::gc_enable(!opts.no_gc);
+    if let Some(limit) = opts.backtrace_limit.or(ropts.backtrace_limit) {
+        Globals::set_backtrace_limit(limit);
+    }
 
     if opts.help {
         print_usage();

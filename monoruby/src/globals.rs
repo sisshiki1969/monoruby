@@ -24,6 +24,18 @@ pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
+/// `--backtrace-limit=N` (-1 = unlimited). Read by the uncaught-error
+/// reporter and `Exception#full_message`.
+static BACKTRACE_LIMIT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+
+/// The `--backtrace-limit` value, if one was given on the command line.
+pub(crate) fn backtrace_limit() -> Option<usize> {
+    match BACKTRACE_LIMIT.load(std::sync::atomic::Ordering::Relaxed) {
+        n if n >= 0 => Some(n as usize),
+        _ => None,
+    }
+}
+
 /// The `<arch>-<os>` platform string monoruby reports as `RUBY_PLATFORM`.
 ///
 /// This is also the name of the arch-specific subdirectory inside the
@@ -1011,6 +1023,12 @@ impl Globals {
 
     pub fn get_load_path(&self) -> Value {
         self.load_path
+    }
+
+    /// Cap the number of backtrace frames printed for uncaught errors
+    /// and `Exception#full_message` (`--backtrace-limit=N`).
+    pub fn set_backtrace_limit(limit: i64) {
+        BACKTRACE_LIMIT.store(limit, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The `RUBY_DESCRIPTION` string (e.g. `monoruby 0.3.0 [x86_64-linux]`),

@@ -207,6 +207,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         set_lastline_in_caller,
         1,
     );
+    globals.define_builtin_func(kernel_class, "__backtrace_limit", backtrace_limit, 0);
     globals.define_builtin_func(
         kernel_class,
         "__enum_yield",
@@ -704,6 +705,26 @@ fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
     let s = Value::string_from_vec(buffer);
     vm.set_last_read_line(s);
     Ok(s)
+}
+
+///
+/// ### Kernel.#__backtrace_limit (monoruby intrinsic)
+///
+/// The `--backtrace-limit=N` command-line value, or nil. Used by
+/// `Exception#full_message` (startup.rb) to truncate caller frames the
+/// way the top-level uncaught-error report does.
+///
+#[monoruby_builtin]
+fn backtrace_limit(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(match crate::globals::backtrace_limit() {
+        Some(n) => Value::integer(n as i64),
+        None => Value::nil(),
+    })
 }
 
 ///
