@@ -27,6 +27,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.store[STRING_CLASS].set_alloc_func(string_alloc_func);
     globals.define_builtin_class_func(STRING_CLASS, "try_convert", string_try_convert, 1);
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
+    globals.define_builtin_func(STRING_CLASS, "+@", uplus, 0);
     globals.define_builtin_func(STRING_CLASS, "*", mul, 1);
     globals.define_builtin_func(STRING_CLASS, "hash", hash, 0);
     globals.define_builtin_inline_funcs(
@@ -326,6 +327,28 @@ fn string_try_convert(
 /// ### String#+
 ///
 /// - self + other -> String
+///
+/// ### String#+@
+///
+/// - +self -> String
+///
+/// Frozen receiver: a mutable dup. Chilled receiver (a literal from a
+/// pragma-less file): a dup with the chill cleared, so the recommended
+/// `+"literal"` migration idiom mutates without warning, like CRuby.
+/// Otherwise: self.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b=40.html]
+#[monoruby_builtin]
+fn uplus(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let s = lfp.self_val();
+    if s.is_frozen() || s.is_chilled() {
+        // `dup` clears both the frozen and chilled flags.
+        Ok(s.dup())
+    } else {
+        Ok(s)
+    }
+}
+
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2b.html]
 #[monoruby_builtin]

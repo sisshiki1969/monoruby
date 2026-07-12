@@ -202,9 +202,8 @@ class String
     self
   end
 
-  def +@
-    frozen? ? dup : self
-  end
+  # +@ is a Rust builtin (it must detect chilled strings, which have
+  # no Ruby-level predicate).
   def -@
     frozen? ? self : dup.freeze
   end
