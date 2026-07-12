@@ -962,10 +962,18 @@ fn main() {
         }
     }
 
+    let from_exec = !opts.exec.is_empty();
     match globals.run_with_prelude(&requires, &prelude, code, &path) {
         Ok(_val) => {
+            // Debug builds echo the result value of `-e` one-liners to
+            // stderr (script files stay silent, as before, so specs
+            // that capture stderr aren't polluted).
             #[cfg(debug_assertions)]
-            eprintln!("=> {:?}", _val)
+            if from_exec {
+                eprintln!("=> {:?}", _val)
+            }
+            #[cfg(not(debug_assertions))]
+            let _ = from_exec;
         }
         Err(err) => {
             handle_error(err, &globals);

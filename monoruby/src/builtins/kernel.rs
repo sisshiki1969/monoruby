@@ -587,7 +587,6 @@ fn read_record(
     sep: &Option<Vec<u8>>,
     buffer: &mut Vec<u8>,
 ) -> std::io::Result<usize> {
-    use std::io::Read;
     match sep {
         None => reader.read_to_end(buffer),
         Some(sep) if sep.is_empty() => {
