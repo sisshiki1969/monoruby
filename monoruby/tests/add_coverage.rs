@@ -1414,3 +1414,35 @@ fn caller_lines_through_specialized_jit_calls() {
         "##,
     );
 }
+
+#[test]
+fn caller_lines_survive_specialized_frame_eviction() {
+    // Redefining a basic op from inside the callee evicts the
+    // suspended specialized caller frames (immediate_eviction): the
+    // deopt path must lazily write the recorded call-site pc into the
+    // cont-frame slot, so caller() lines stay correct afterwards.
+    run_test(
+        r##"
+        class CLSE_Probe; end
+        def clse_leaf(i)
+          if i == 15
+            Float.class_eval do
+              def %(o)
+                42
+              end
+            end
+          end
+          ls = caller(0, 3).map { |s| s[/:(\d+):/, 1].to_i }
+          ls.map { |l| l - ls[0] }
+        end
+        def clse_mid(i)
+          clse_leaf(i)
+        end
+        $r = []
+        20.times do |i|
+          $r << clse_mid(i)
+        end
+        $r.uniq
+        "##,
+    );
+}
