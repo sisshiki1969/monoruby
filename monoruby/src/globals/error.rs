@@ -153,20 +153,22 @@ impl MonorubyErr {
     }
 
     pub fn show_error_message_and_all_loc(&self, store: &Store) {
-        let mut loc_flag = self.show_error_message_and_loc(store);
+        self.show_error_message_and_loc(store);
         if self.trace.len() > 1 {
-            for (source_loc, func_id) in &self.trace[1..] {
+            // CRuby prints each caller frame as `\tfrom <location>`,
+            // honouring `--backtrace-limit=N`: after N frames the rest
+            // collapse into `\t ... K levels...`.
+            let rest = &self.trace[1..];
+            let limit = crate::globals::backtrace_limit().unwrap_or(usize::MAX);
+            for (i, (source_loc, func_id)) in rest.iter().enumerate() {
+                if i >= limit {
+                    eprintln!("\t ... {} levels...", rest.len() - i);
+                    break;
+                }
                 if let Some((loc, source)) = source_loc {
-                    eprintln!(
-                        "        from: {}",
-                        store.location(func_id.clone(), source, *loc)
-                    );
-                    if !loc_flag {
-                        source.show_loc(loc);
-                        loc_flag = true;
-                    }
+                    eprintln!("\tfrom {}", store.location(func_id.clone(), source, *loc));
                 } else {
-                    eprintln!("        {}", store.internal_location(func_id.unwrap()))
+                    eprintln!("\tfrom {}", store.internal_location(func_id.unwrap()))
                 }
             }
         }
@@ -181,8 +183,13 @@ impl MonorubyErr {
                     "{}: {error_message}",
                     store.location(func_id.clone(), source, *loc),
                 );
-                source.show_loc(loc);
-                loc_flag = true;
+                // CRuby's runtime-error report is the compact
+                // `file:line:in 'method': message` form; only syntax
+                // errors keep the source excerpt with a caret.
+                if matches!(self.kind, MonorubyErrKind::Syntax) {
+                    source.show_loc(loc);
+                    loc_flag = true;
+                }
             } else if let Some(func_id) = func_id {
                 eprintln!("{}: {error_message}", store.internal_location(*func_id),);
             } else {
@@ -424,13 +431,42 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Redo, String::new())
     }
 
+    ///
+    /// CRuby 3.4+ receiver description for NoMethodError messages
+    /// (unchanged in 4.0; verified against CRuby 4.0.2):
+    /// `nil` / `true` / `false` verbatim, `class Foo` / `module Foo`
+    /// (anonymous ones fall back to their `#<Class:0x…>` display), and
+    /// `an instance of Foo` for everything else.
+    ///
+    fn receiver_description(store: &Store, obj: Value) -> String {
+        if obj.is_nil() {
+            "nil".to_string()
+        } else if obj == Value::bool(true) {
+            "true".to_string()
+        } else if obj == Value::bool(false) {
+            "false".to_string()
+        } else if let Some(m) = obj.is_class_or_module() {
+            let kind = if m.is_module() { "module" } else { "class" };
+            format!("{kind} {}", obj.to_s(store))
+        } else if store[obj.class()].get_module().is_singleton().is_some() {
+            // A receiver with a singleton class keeps the address form
+            // (`for #<Object:0x…>`) in CRuby, not `an instance of …`.
+            obj.to_s(store)
+        } else {
+            format!("an instance of {}", obj.get_real_class_name(store))
+        }
+    }
+
     pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod {
                 name: Some(name),
                 receiver: Some(obj.id()),
             },
-            format!("undefined method `{name}' for {}", obj.to_s(store)),
+            format!(
+                "undefined method '{name}' for {}",
+                Self::receiver_description(store, obj)
+            ),
         )
     }
 
@@ -446,8 +482,8 @@ impl MonorubyErr {
                 receiver: Some(obj.id()),
             },
             format!(
-                "super: no superclass method `{name}' for {}",
-                obj.to_s(store)
+                "super: no superclass method '{name}' for {}",
+                Self::receiver_description(store, obj)
             ),
         )
     }
@@ -463,7 +499,7 @@ impl MonorubyErr {
                 receiver: None,
             },
             format!(
-                "undefined method `{name}' for {}",
+                "undefined method '{name}' for {}",
                 store.get_class_name(class)
             ),
         )
@@ -476,9 +512,8 @@ impl MonorubyErr {
                 receiver: Some(obj.id()),
             },
             format!(
-                "private method `{name}' called for {}:{}",
-                obj.to_s(store),
-                obj.get_real_class_name(store)
+                "private method '{name}' called for {}",
+                Self::receiver_description(store, obj)
             ),
         )
     }
@@ -490,9 +525,8 @@ impl MonorubyErr {
                 receiver: Some(obj.id()),
             },
             format!(
-                "protected method `{name}' called for {}:{}",
-                obj.to_s(store),
-                obj.get_real_class_name(store)
+                "protected method '{name}' called for {}",
+                Self::receiver_description(store, obj)
             ),
         )
     }
@@ -587,7 +621,7 @@ impl MonorubyErr {
 
     pub(crate) fn undefined_method(method_name: IdentId, class_name: String) -> MonorubyErr {
         Self::nameerr(format!(
-            "undefined method `{}' for class `{}'",
+            "undefined method '{}' for class '{}'",
             method_name.get_name(),
             class_name,
         ))
@@ -837,12 +871,19 @@ impl MonorubyErr {
     }
 
     pub(crate) fn cant_modify_frozen(store: &Store, val: Value) -> MonorubyErr {
+        // Under --debug-frozen-string-literal, point at the string
+        // literal's creation site (CRuby: `..., created at file:line`).
+        let created = match crate::value::string_origin(val.id()) {
+            Some(origin) => format!(", created at {origin}"),
+            None => String::new(),
+        };
         MonorubyErr::new(
             MonorubyErrKind::Frozen(Some(val.id())),
             format!(
-                "can't modify frozen {}: {}",
+                "can't modify frozen {}: {}{}",
                 val.get_real_class_name(store),
                 val.inspect(store),
+                created,
             ),
         )
     }

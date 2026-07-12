@@ -621,6 +621,19 @@ impl Value {
         self.rvalue_mut().clear_chilled()
     }
 
+    /// True for chilled strings born from source literals (as opposed
+    /// to `Symbol#to_s` results) — their mutation warning differs.
+    pub(crate) fn is_chilled_literal(&self) -> bool {
+        match self.try_rvalue() {
+            Some(rv) => rv.is_chilled_literal(),
+            None => false,
+        }
+    }
+
+    pub(crate) fn set_chilled_literal(&mut self) {
+        self.rvalue_mut().set_chilled_literal()
+    }
+
     ///
     /// Ensure `self` (a String) is mutable. If it is "chilled", emit a
     /// one-shot deprecation warning (gated by `Warning[:deprecated]`), clear
@@ -633,9 +646,17 @@ impl Value {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<()> {
-        if self.is_chilled() {
+        // A chilled string that was later `freeze`d raises FrozenError
+        // without the chilled warning (CRuby behaves the same).
+        if self.is_chilled() && !self.is_frozen() {
+            let literal_born = self.is_chilled_literal();
+            let origin = string_origin(self.id());
             self.clear_chilled();
-            emit_chilled_string_mutation_warning(vm, globals, *self)?;
+            if literal_born {
+                emit_chilled_literal_mutation_warning(vm, globals, origin)?;
+            } else {
+                emit_chilled_string_mutation_warning(vm, globals, *self)?;
+            }
         }
         self.ensure_not_frozen(&globals.store)
     }
@@ -703,7 +724,19 @@ impl Value {
     }
 
     pub(crate) extern "C" fn value_deep_copy(val: Value) -> Self {
-        val.deep_copy()
+        let mut v = val.deep_copy();
+        // A string-literal template in a pragma-less file is marked
+        // chilled; each per-execution copy inherits the mark (and,
+        // under --debug-frozen-string-literal, the creation site).
+        if val.is_chilled_literal() {
+            v.set_chilled_literal();
+            if debug_frozen_string_log()
+                && let Some(origin) = string_origin(val.id())
+            {
+                record_string_origin(v.id(), origin);
+            }
+        }
+        v
     }
 
     pub(crate) fn dup(&self) -> Self {
@@ -1407,6 +1440,107 @@ impl Value {
         }
         s
     }
+}
+
+/// `--debug` / `--debug-frozen-string-literal`: record where frozen and
+/// chilled string literals were created so mutation errors/warnings can
+/// point at the definition site.
+static DEBUG_FROZEN_STRING_LOG: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Creation sites (`file:line`) of frozen/chilled string literals,
+/// keyed by `Value::id()`. Only populated under
+/// `--debug-frozen-string-literal`, so unbounded growth is confined to
+/// debug runs.
+static STRING_LITERAL_ORIGIN: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<u64, String>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Turn on frozen/chilled-literal creation-site tracking
+/// (`--debug` / `--debug-frozen-string-literal`).
+pub fn set_debug_frozen_string_log() {
+    DEBUG_FROZEN_STRING_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn debug_frozen_string_log() -> bool {
+    DEBUG_FROZEN_STRING_LOG.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn record_string_origin(id: u64, origin: String) {
+    STRING_LITERAL_ORIGIN.lock().unwrap().insert(id, origin);
+}
+
+pub(crate) fn string_origin(id: u64) -> Option<String> {
+    if !debug_frozen_string_log() {
+        return None;
+    }
+    STRING_LITERAL_ORIGIN.lock().unwrap().get(&id).cloned()
+}
+
+///
+/// Emit the CRuby-compatible warning for mutating a chilled string
+/// literal (a literal in a file without a `frozen_string_literal`
+/// pragma). Gated by `Warning[:deprecated]`, like CRuby's
+/// `rb_category_warn(RB_WARN_CATEGORY_DEPRECATED, ...)`. Under
+/// `--debug-frozen-string-literal` a second line points at the
+/// literal's creation site.
+///
+pub(crate) fn emit_chilled_literal_mutation_warning(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    origin: Option<String>,
+) -> Result<()> {
+    if !warning_deprecated_on(vm, globals)? {
+        return Ok(());
+    }
+    let msg = if debug_frozen_string_log() {
+        let mut msg = "warning: literal string will be frozen in the future\n".to_string();
+        if let Some(origin) = origin {
+            msg.push_str(&format!("{origin}: warning: the string was created here\n"));
+        }
+        msg
+    } else {
+        "warning: literal string will be frozen in the future \
+         (run with --debug-frozen-string-literal for more information)\n"
+            .to_string()
+    };
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or(Value::nil());
+    if stderr.is_nil() {
+        return Ok(());
+    }
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[Value::string(msg)],
+        None,
+        None,
+    )?;
+    Ok(())
+}
+
+/// `Warning[:deprecated]`, or `false` when the Warning module isn't
+/// loaded yet (bootstrap).
+fn warning_deprecated_on(vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
+    let warning_val = match globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"))
+    {
+        Some(v) => v,
+        None => return Ok(false),
+    };
+    let dep_sym = Value::symbol(IdentId::get_id("deprecated"));
+    let dep = vm.invoke_method_inner(
+        globals,
+        IdentId::_INDEX,
+        warning_val,
+        &[dep_sym],
+        None,
+        None,
+    )?;
+    Ok(!(dep.is_nil() || dep == Value::bool(false)))
 }
 
 ///

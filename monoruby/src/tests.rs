@@ -238,7 +238,9 @@ fn run_ruby(globals: &mut Globals, code: &str) -> Value {
     let res = match std::process::Command::new(&*RUBY)
         .arg("-E")
         .arg("UTF-8")
-        .arg("--disable-gem")
+        // Skip rubygems boot (~5x faster startup across ~4000 differential
+        // spawns) and ignore any ambient RUBYOPT for hermeticity.
+        .arg("--disable=gems,rubyopt")
         .arg(tmpfile.path())
         .output()
     {

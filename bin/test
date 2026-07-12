@@ -151,10 +151,10 @@ fi
 if [ -d "../spec" ] && [ -d "../mspec" ]; then
   echo "Running ruby/spec for coverage..."
   cd ../spec
-  for cat in basicobject true false nil integer float comparable math builtin_constants class numeric rational struct symbol range set systemexit method unboundmethod; do
-    phase "ruby/spec core/$cat"
-    echo "=== core/$cat ==="
-    ../mspec/bin/mspec core/$cat -t "$MONORUBY"
+  for cat in core/basicobject core/true core/false core/nil core/integer core/float core/comparable core/math core/builtin_constants core/class core/numeric core/rational core/struct core/symbol core/range core/set core/systemexit core/method core/unboundmethod command_line; do
+    phase "ruby/spec $cat"
+    echo "=== $cat ==="
+    ../mspec/bin/mspec $cat -t "$MONORUBY"
   done
   cd "$OLDPWD"
 fi

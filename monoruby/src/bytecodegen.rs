@@ -1313,15 +1313,54 @@ impl<'a> BytecodeGen<'a> {
     /// Emit a shared, frozen, deduplicated string literal for a
     /// `# frozen_string_literal: true` file. Literals with identical
     /// `(bytes, encoding)` resolve to the same object program-wide.
-    fn emit_frozen_interned(&mut self, dst: BcReg, bytes: &[u8], enc: crate::value::Encoding) {
+    fn emit_frozen_interned(
+        &mut self,
+        dst: BcReg,
+        bytes: &[u8],
+        enc: crate::value::Encoding,
+        loc: Loc,
+    ) {
         let v = self.store.intern_frozen_str(bytes, enc);
+        self.record_literal_origin(v, loc);
         self.emit(BytecodeInst::FrozenLiteral(dst, v), Loc::default());
     }
 
-    fn emit_string(&mut self, dst: BcReg, s: String) {
+    /// Under `--debug-frozen-string-literal`, remember where a
+    /// frozen/chilled string literal appears in the source so mutation
+    /// errors/warnings can point at it ("created at file:line").
+    fn record_literal_origin(&self, v: Value, loc: Loc) {
+        if crate::value::debug_frozen_string_log() {
+            let origin = format!(
+                "{}:{}",
+                self.sourceinfo.file_name(),
+                self.sourceinfo.get_line(&loc)
+            );
+            crate::value::record_string_origin(v.id(), origin);
+        }
+    }
+
+    /// Mark a pragma-less file's string-literal template as "chilled":
+    /// every runtime copy warns on first mutation (CRuby 3.4's
+    /// migration path towards frozen-by-default literals). monoruby's
+    /// own runtime Ruby (builtins / stdlib stubs under the install
+    /// root) is exempt — CRuby's counterparts all carry explicit
+    /// pragmas, and a user enabling `Warning[:deprecated]` must not
+    /// see warnings pointing into interpreter internals.
+    fn chill_literal_template(&self, mut v: Value, loc: Loc) -> Value {
+        if self.sourceinfo.frozen_string_literal.is_none()
+            && !std::path::Path::new(self.sourceinfo.file_name().as_ref())
+                .starts_with(crate::globals::install_root())
+        {
+            v.set_chilled_literal();
+            self.record_literal_origin(v, loc);
+        }
+        v
+    }
+
+    fn emit_string(&mut self, dst: BcReg, s: String, loc: Loc) {
         let enc = self.source_encoding();
         if self.frozen_string_literal() {
-            self.emit_frozen_interned(dst, s.as_bytes(), enc);
+            self.emit_frozen_interned(dst, s.as_bytes(), enc, loc);
             return;
         }
         // String literals become long-lived templates: `Literal`
@@ -1329,7 +1368,8 @@ impl<'a> BytecodeGen<'a> {
         // every execution, and the clone preserves the template's
         // `cr`. Pre-classify here so each clone gets `cr` for free
         // instead of re-running classify on first use.
-        self.emit_literal(dst, Value::string_from_source_str(&s, enc));
+        let v = self.chill_literal_template(Value::string_from_source_str(&s, enc), loc);
+        self.emit_literal(dst, v);
     }
 
     /// Emit a shared, frozen string literal (e.g. the result of
@@ -1343,7 +1383,7 @@ impl<'a> BytecodeGen<'a> {
         self.emit(BytecodeInst::FrozenLiteral(dst, v), Loc::default());
     }
 
-    fn emit_bytes(&mut self, dst: BcReg, b: Vec<u8>) {
+    fn emit_bytes(&mut self, dst: BcReg, b: Vec<u8>, loc: Loc) {
         // `NodeKind::Bytes` comes from source literals containing `\xNN`
         // escapes. Tag with the file's `# encoding:` magic-comment value
         // (defaulting to UTF-8 — Ruby's default source encoding since
@@ -1352,10 +1392,11 @@ impl<'a> BytecodeGen<'a> {
         // false but byte-level operations still work, matching CRuby.
         let enc = self.source_encoding();
         if self.frozen_string_literal() {
-            self.emit_frozen_interned(dst, &b, enc);
+            self.emit_frozen_interned(dst, &b, enc, loc);
             return;
         }
-        self.emit_literal(dst, Value::string_from_source_bytes(&b, enc));
+        let v = self.chill_literal_template(Value::string_from_source_bytes(&b, enc), loc);
+        self.emit_literal(dst, v);
     }
 
     /// Emit a string literal whose encoding was *forced* by prism —
@@ -1364,14 +1405,15 @@ impl<'a> BytecodeGen<'a> {
     /// override the lowerer extracted from prism's flags
     /// (`"UTF-8"` / `"ASCII-8BIT"`); falls back to UTF-8 if monoruby
     /// doesn't recognise the alias (shouldn't happen for these two).
-    fn emit_encoded_string(&mut self, dst: BcReg, b: Vec<u8>, enc_name: &'static str) {
+    fn emit_encoded_string(&mut self, dst: BcReg, b: Vec<u8>, enc_name: &'static str, loc: Loc) {
         let enc = crate::value::Encoding::try_from_str(enc_name)
             .unwrap_or(crate::value::Encoding::Utf8);
         if self.frozen_string_literal() {
-            self.emit_frozen_interned(dst, &b, enc);
+            self.emit_frozen_interned(dst, &b, enc, loc);
             return;
         }
-        self.emit_literal(dst, Value::string_from_source_bytes(&b, enc));
+        let v = self.chill_literal_template(Value::string_from_source_bytes(&b, enc), loc);
+        self.emit_literal(dst, v);
     }
 
     fn emit_array(&mut self, dst: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {

@@ -1016,13 +1016,27 @@ class Exception
   end
 
   def full_message(highlight: nil, order: :top)
-    msg = "#{self.class}: #{message}"
+    # CRuby's first line is `bt[0]: <detailed_message>` (i.e.
+    # "message (ClassName)"), followed by `\tfrom <frame>` lines.
+    # `--backtrace-limit=N` truncates the from-lines to N entries plus
+    # a `\t ... K levels...` marker, exactly like the top-level
+    # uncaught-error report.
+    msg = detailed_message(highlight: highlight ? true : false)
     bt = backtrace
     if bt && !bt.empty?
+      rest = bt[1..]
+      limit = Kernel.__backtrace_limit
+      trailer = nil
+      if limit && rest.size > limit
+        trailer = "\t ... #{rest.size - limit} levels...\n"
+        rest = rest[0, limit]
+      end
+      lines = rest.map { |l| "\tfrom #{l}\n" }
+      lines << trailer if trailer
       if order == :top
-        "#{bt[0]}: #{msg}\n" + bt[1..].map{|l| "\tfrom #{l}\n"}.join
+        "#{bt[0]}: #{msg}\n" + lines.join
       else
-        bt.reverse.map{|l| "\tfrom #{l}\n"}.join + "#{bt[0]}: #{msg}\n"
+        lines.reverse.join + "#{bt[0]}: #{msg}\n"
       end
     else
       msg + "\n"

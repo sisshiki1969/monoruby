@@ -126,9 +126,9 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
             NodeKind::Rational(n, d) => self.emit_rational(dst, &n, &d),
             NodeKind::RImaginary(n, d) => self.emit_rimaginary(dst, &n, &d),
-            NodeKind::String(s) => self.emit_string(dst, s),
-            NodeKind::Bytes(b) => self.emit_bytes(dst, b),
-            NodeKind::EncodedString(b, enc) => self.emit_encoded_string(dst, b, enc),
+            NodeKind::String(s) => self.emit_string(dst, s, loc),
+            NodeKind::Bytes(b) => self.emit_bytes(dst, b, loc),
+            NodeKind::EncodedString(b, enc) => self.emit_encoded_string(dst, b, enc, loc),
             NodeKind::Array(nodes, false) => self.gen_array(dst, nodes, loc)?,
             NodeKind::Hash(nodes, splat) => self.gen_hash(dst, nodes, splat, loc)?,
             NodeKind::RegExp(nodes, op, false) => self.gen_regexp(dst, nodes, op, loc)?,
@@ -954,7 +954,11 @@ impl<'a> BytecodeGen<'a> {
                 let arg = self.sp();
                 if seed {
                     let r = self.push().into();
-                    self.emit_string(r, String::new());
+                    // Plain (never chilled/frozen) seed: the concat
+                    // result is a fresh mutable string in CRuby, even
+                    // under a frozen_string_literal pragma.
+                    let enc = self.source_encoding();
+                    self.emit_literal(r, Value::string_from_source_str("", enc));
                 }
                 for expr in nodes {
                     self.push_expr(expr)?;

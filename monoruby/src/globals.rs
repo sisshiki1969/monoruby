@@ -24,6 +24,18 @@ pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
 
+/// `--backtrace-limit=N` (-1 = unlimited). Read by the uncaught-error
+/// reporter and `Exception#full_message`.
+static BACKTRACE_LIMIT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+
+/// The `--backtrace-limit` value, if one was given on the command line.
+pub(crate) fn backtrace_limit() -> Option<usize> {
+    match BACKTRACE_LIMIT.load(std::sync::atomic::Ordering::Relaxed) {
+        n if n >= 0 => Some(n as usize),
+        _ => None,
+    }
+}
+
 /// The `<arch>-<os>` platform string monoruby reports as `RUBY_PLATFORM`.
 ///
 /// This is also the name of the arch-specific subdirectory inside the
@@ -676,11 +688,36 @@ impl Globals {
         code: impl Into<Vec<u8>>,
         path: &std::path::Path,
     ) -> Result<Value> {
+        self.run_with_prelude(requires, "", code, path)
+    }
+
+    ///
+    /// Like [`Globals::run_with_requires`], but first evaluates
+    /// *prelude* (Ruby source synthesized from command-line switches:
+    /// `Warning[:...]` category overrides, `-E`/`-U`/`-K` encoding
+    /// defaults, `-0`/`-l`/`-F` separator globals, …) inside the same
+    /// `Executor`, before the `-r` requires and the script itself.
+    /// An empty *prelude* is skipped entirely.
+    ///
+    pub fn run_with_prelude(
+        &mut self,
+        requires: &[String],
+        prelude: &str,
+        code: impl Into<Vec<u8>>,
+        path: &std::path::Path,
+    ) -> Result<Value> {
         let code: Vec<u8> = code.into();
         let program_name = path.to_string_lossy().to_string();
         let mut executor = Executor::init(self, &program_name)?;
         executor.init_stack_limit(self);
         let res = (|| {
+            if !prelude.is_empty() {
+                executor.exec_script(
+                    self,
+                    prelude.as_bytes().to_vec(),
+                    std::path::Path::new("<internal:cli>"),
+                )?;
+            }
             for lib in requires {
                 executor.require(self, std::path::Path::new(lib), false)?;
             }
@@ -988,8 +1025,45 @@ impl Globals {
         self.load_path
     }
 
+    /// Cap the number of backtrace frames printed for uncaught errors
+    /// and `Exception#full_message` (`--backtrace-limit=N`).
+    pub fn set_backtrace_limit(limit: i64) {
+        BACKTRACE_LIMIT.store(limit, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The `RUBY_DESCRIPTION` string (e.g. `monoruby 0.3.0 [x86_64-linux]`),
+    /// printed by the `-v` / `--version` command-line switches.
+    pub fn ruby_description(&self) -> String {
+        self.top_string_constant("RUBY_DESCRIPTION")
+            .unwrap_or_else(|| format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")))
+    }
+
+    /// The `RUBY_COPYRIGHT` string, printed by `--copyright`.
+    pub fn ruby_copyright(&self) -> String {
+        self.top_string_constant("RUBY_COPYRIGHT")
+            .unwrap_or_else(|| format!("{} - Copyright (C) monochrome", env!("CARGO_PKG_NAME")))
+    }
+
+    fn top_string_constant(&self, name: &str) -> Option<String> {
+        self.store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id(name))
+            .and_then(|v| {
+                v.is_rstring_inner()
+                    .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+            })
+    }
+
     pub fn extend_load_path(&mut self, iter: impl Iterator<Item = String>) {
         self.load_path.as_array().extend(iter.map(Value::string));
+    }
+
+    /// Insert directories at the *front* of `$LOAD_PATH` (before the
+    /// vendored-stdlib defaults), preserving the iterator's order.
+    /// Used for `-I`, `RUBYOPT -I`, and `RUBYLIB`, which CRuby all
+    /// places ahead of the built-in paths.
+    pub fn prepend_load_path(&mut self, iter: impl Iterator<Item = String>) {
+        let dirs: Vec<Value> = iter.map(Value::string).collect();
+        self.load_path.as_array().insert_many(0, dirs);
     }
 
     pub(crate) fn get_loaded_features(&self) -> Value {

@@ -1898,7 +1898,24 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Glob
     }
     let cfp = cfp;
     let target_lfp = if globals[cfp.lfp().func_id()].is_block_style() {
-        let target = cfp.outermost_lfp();
+        // Walk the outer chain to the nearest *method-style* frame: a
+        // real method or the toplevel ends the walk (not block-style),
+        // and so do a lambda (`->`/`Kernel#lambda` promote the block
+        // via `set_method_style`) and a `define_method` body
+        // (`is_proc_method`), both of which catch `return` themselves.
+        // CRuby: `-> { [1].each { return 5 } }.call` (and `return`
+        // eval'ed inside a lambda) returns from the lambda, not from
+        // the method that lexically encloses it.
+        let target = {
+            let mut lfp = cfp.lfp();
+            while globals[lfp.func_id()].is_block_style() && !lfp.meta().is_proc_method() {
+                match lfp.outer() {
+                    Some(outer) => lfp = outer,
+                    None => break,
+                }
+            }
+            lfp
+        };
         // A synchronous thread-body boundary (see
         // `Executor::break_barriers`) also stops non-local returns: a
         // bare `return` in a thread body raises LocalJumpError at the

@@ -55,6 +55,9 @@ mod string;
 mod struct_inner;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
+/// Header flag bit 8: marks a chilled string as literal-born (see
+/// `Header::is_chilled_literal`).
+const CHILLED_LITERAL_BIT: u16 = 0b1_0000_0000;
 pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.flag);
 pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
 pub const RVALUE_OFFSET_CLASS: usize = std::mem::offset_of!(RValue, header.meta.class);
@@ -991,6 +994,14 @@ impl RValue {
         self.header.clear_chilled()
     }
 
+    pub(crate) fn is_chilled_literal(&self) -> bool {
+        self.header.is_chilled_literal()
+    }
+
+    pub(crate) fn set_chilled_literal(&mut self) {
+        self.header.set_chilled_literal()
+    }
+
     // --- Generational GC flags ---
     //
     // Reserved accessors for the generational collector. They are wired
@@ -1272,7 +1283,7 @@ impl RValue {
     pub(super) fn dup(&self) -> Self {
         let mut header = self.header;
         // dup does not copy the frozen or chilled flag (clone does).
-        unsafe { header.meta.flag &= !0b110 };
+        unsafe { header.meta.flag &= !(0b110 | CHILLED_LITERAL_BIT) };
         RValue {
             header,
             var_table: self.var_table.clone(),
@@ -2298,9 +2309,11 @@ impl Header {
     ///
     /// A "chilled" string behaves like a mutable String but emits a
     /// deprecation warning (gated by `Warning[:deprecated]`) the first time
-    /// it is mutated. monoruby only produces chilled strings from
-    /// `Symbol#to_s`; the flag is cleared on first mutation so the warning
-    /// fires at most once per string. Currently only Strings are chilled.
+    /// it is mutated. monoruby produces chilled strings from `Symbol#to_s`
+    /// and from source string literals in files without a
+    /// `frozen_string_literal` pragma (bit 8 marks the latter kind, whose
+    /// warning wording differs). The flags are cleared on first mutation so
+    /// the warning fires at most once per string. Only Strings are chilled.
     ///
     fn is_chilled(&self) -> bool {
         unsafe { self.meta.flag & 0b100 != 0 }
@@ -2311,7 +2324,15 @@ impl Header {
     }
 
     fn clear_chilled(&mut self) {
-        unsafe { self.meta.flag &= !0b100 }
+        unsafe { self.meta.flag &= !(0b100 | CHILLED_LITERAL_BIT) }
+    }
+
+    fn is_chilled_literal(&self) -> bool {
+        unsafe { self.meta.flag & CHILLED_LITERAL_BIT != 0 }
+    }
+
+    fn set_chilled_literal(&mut self) {
+        unsafe { self.meta.flag |= 0b100 | CHILLED_LITERAL_BIT }
     }
 
     // --- Generational GC flags (flag bits 3..5) ---

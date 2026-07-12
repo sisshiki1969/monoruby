@@ -835,20 +835,42 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
 
     // --- Command-line flag mirrors -------------------------------------------
 
-    // `$-a`, `$-l`, `$-p` mirror the corresponding CLI switches, none of
-    // which monoruby implements, so they read as `false` and are
+    // `$-a`, `$-l`, `$-p` mirror the corresponding CLI switches (set by
+    // `set_cli_flag_gvars` during option processing in `main`) and are
     // read-only like in CRuby.
-    fn get_false(
+    fn get_cli_flag(
         _vm: &mut Executor,
         _globals: &mut Globals,
-        _name: IdentId,
+        name: IdentId,
     ) -> Option<Value> {
-        Some(Value::bool(false))
+        let idx = match name.get_name().as_str() {
+            "$-a" => 0,
+            "$-l" => 1,
+            _ => 2,
+        };
+        Some(Value::bool(CLI_FLAGS[idx].load(std::sync::atomic::Ordering::Relaxed)))
     }
 
     for flag in ["$-a", "$-l", "$-p"] {
-        globals.define_hooked_variable(IdentId::get_id(flag), get_false, None);
+        globals.define_hooked_variable(IdentId::get_id(flag), get_cli_flag, None);
     }
+}
+
+/// Backing store for the `$-a` / `$-l` / `$-p` command-line flag
+/// mirrors, in that order.
+static CLI_FLAGS: [std::sync::atomic::AtomicBool; 3] = [
+    std::sync::atomic::AtomicBool::new(false),
+    std::sync::atomic::AtomicBool::new(false),
+    std::sync::atomic::AtomicBool::new(false),
+];
+
+/// Record the `-a` / `-l` / `-p` command-line switches so their gvar
+/// mirrors read back `true`.
+pub fn set_cli_flag_gvars(auto_split: bool, line_ending: bool, print_loop: bool) {
+    use std::sync::atomic::Ordering;
+    CLI_FLAGS[0].store(auto_split, Ordering::Relaxed);
+    CLI_FLAGS[1].store(line_ending, Ordering::Relaxed);
+    CLI_FLAGS[2].store(print_loop, Ordering::Relaxed);
 }
 
 // ============================================================================
