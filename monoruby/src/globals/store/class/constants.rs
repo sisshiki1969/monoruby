@@ -577,6 +577,7 @@ impl Globals {
             None => Err(MonorubyErr::uninitialized_cvar(
                 name,
                 parent.id().get_name(&self.store),
+                parent.as_val(),
             )),
         }
     }

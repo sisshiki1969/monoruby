@@ -925,6 +925,29 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
 /// - fail(error_type, message = nil, [NOT SUPPORTED] backtrace = caller(0), [NOT SUPPORTED] cause: $!) -> ()
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/fail.html]
+/// A `SystemExit` (or subclass) exception object carries its exit code
+/// in the `/status` ivar, but `MonorubyErrKind::SystemExit` is baked to
+/// 0 at construction (`from_class_id`). When such an object is raised,
+/// sync the kind's status from the ivar so the process exits with the
+/// requested code (`raise SystemExit.new(7)` → exit 7).
+fn fix_system_exit_status(globals: &mut Globals, err: &mut MonorubyErr, ex: Value) {
+    // Both `SystemExit` itself (kind already `SystemExit`) and any user
+    // subclass (kind `Other`, but a SystemExit descendant) exit the
+    // process silently with the requested code.
+    let is_system_exit = matches!(err.kind, MonorubyErrKind::SystemExit(_)) || {
+        let se = globals.store[SYSTEM_EXIT_ERROR_CLASS].get_module();
+        se.is_ancestor_of(globals.store[ex.class()].get_module())
+    };
+    if is_system_exit {
+        let status = globals
+            .store
+            .get_ivar(ex, IdentId::get_id("/status"))
+            .and_then(|v| v.try_fixnum())
+            .unwrap_or(0);
+        err.kind = MonorubyErrKind::SystemExit(status as u8);
+    }
+}
+
 #[monoruby_builtin]
 fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // `cause:` kwarg is at slot 3 (positional_max=3 for the shared
@@ -940,13 +963,16 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         let ex = vm.errinfo();
         if let Some(inner) = ex.is_exception() {
-            return Err(MonorubyErr::new_from_exception(inner).with_original(ex));
+            let mut err = MonorubyErr::new_from_exception(inner);
+            fix_system_exit_status(globals, &mut err, ex);
+            return Err(err.with_original(ex));
         } else {
             return Err(MonorubyErr::runtimeerr(""));
         }
     }
     if let Some(ex) = lfp.arg(0).is_exception() {
         let mut err = MonorubyErr::new_from_exception(ex);
+        fix_system_exit_status(globals, &mut err, lfp.arg(0));
         if let Some(arg1) = lfp.try_arg(1) {
             if arg1.try_hash_ty().is_none() {
                 // A message override makes CRuby return a *new* exception
@@ -970,7 +996,9 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             }
             let ex =
                 vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &args, None, None)?;
-            let err = MonorubyErr::new_from_exception(ex.is_exception().unwrap()).with_original(ex);
+            let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
+            fix_system_exit_status(globals, &mut err, ex);
+            let err = err.with_original(ex);
             return Err(apply_cause(globals, err, Some(ex), cause_kwarg)?);
         }
     } else if let Some(message) = lfp.arg(0).is_rstring() {
@@ -4396,7 +4424,32 @@ fn is_valid_ivar_name(s: &str) -> bool {
 /// semantics: Symbol/String are used directly, anything else is
 /// coerced via `#to_str` (TypeError otherwise), and the resulting
 /// name must be a valid instance-variable name (NameError otherwise).
-fn ivar_name_id(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<IdentId> {
+/// Build a `NameError` for the `instance_variable_*` / `class_variable_*`
+/// reflection methods, carrying `name_value` verbatim as `#name` (CRuby
+/// preserves the exact argument object, which the spec checks with
+/// `equal?`) and `receiver` as `#receiver`. The exception object is
+/// pre-materialized and attached as the error's `original` so those
+/// ivars survive being caught.
+pub(crate) fn name_error_reflection(
+    globals: &mut Globals,
+    msg: String,
+    name_value: Value,
+    receiver: Value,
+) -> MonorubyErr {
+    let exc = Value::new_exception_from(msg.clone(), NAME_ERROR_CLASS);
+    let _ = globals.store.set_ivar(exc, IdentId::_NAME, name_value);
+    let _ = globals
+        .store
+        .set_ivar(exc, IdentId::get_id("/receiver"), receiver);
+    MonorubyErr::nameerr(msg).with_original(exc)
+}
+
+fn ivar_name_id(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    arg: Value,
+) -> Result<IdentId> {
     let name = if let Some(sym) = arg.try_symbol() {
         sym.get_name().to_string()
     } else if let Some(s) = arg.is_str() {
@@ -4411,9 +4464,16 @@ fn ivar_name_id(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<
         return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg));
     };
     if !is_valid_ivar_name(&name) {
-        return Err(MonorubyErr::nameerr(format!(
-            "'{name}' is not allowed as an instance variable name"
-        )));
+        // CRuby surfaces the given name and the receiver on this
+        // NameError (`#name` / `#receiver`); `#name` is the *exact*
+        // argument object (a String/Symbol), which the spec checks with
+        // `equal?`, so carry the original `arg` value.
+        return Err(name_error_reflection(
+            globals,
+            format!("'{name}' is not allowed as an instance variable name"),
+            arg,
+            receiver,
+        ));
     }
     Ok(IdentId::get_id(&name))
 }
@@ -4431,7 +4491,7 @@ fn iv_defined(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
+    let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
     let b = globals.store.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
 }
@@ -4444,7 +4504,7 @@ fn iv_defined(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_set.html]
 #[monoruby_builtin]
 fn iv_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
+    let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
     let val = lfp.arg(1);
     globals.store.set_ivar(lfp.self_val(), id, val)?;
     Ok(val)
@@ -4458,7 +4518,7 @@ fn iv_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 #[monoruby_builtin]
 fn iv_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
+    let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
     let v = globals
         .store
         .get_ivar(lfp.self_val(), id)
@@ -4490,7 +4550,7 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/remove_instance_variable.html]
 #[monoruby_builtin]
 fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = ivar_name_id(vm, globals, lfp.arg(0))?;
+    let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
     match globals.store.remove_ivar(lfp.self_val(), id) {
         Some(val) => Ok(val),
         None => Err(MonorubyErr::nameerr(format!(

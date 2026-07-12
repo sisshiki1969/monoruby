@@ -164,11 +164,12 @@ fn exc_receiver(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    let v = globals
-        .store
-        .get_ivar(self_val, IdentId::get_id("/receiver"))
-        .unwrap_or_default();
-    Ok(v)
+    // CRuby raises ArgumentError when the NameError carries no receiver
+    // (e.g. `NameError.new.receiver`), rather than returning nil.
+    match globals.store.get_ivar(self_val, IdentId::get_id("/receiver")) {
+        Some(v) => Ok(v),
+        None => Err(MonorubyErr::argumenterr("no receiver is available")),
+    }
 }
 
 /// `UncaughtThrowError#tag` — the tag object of the uncaught `throw`.

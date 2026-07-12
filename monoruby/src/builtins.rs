@@ -22,7 +22,7 @@ mod gc;
 mod hash;
 mod io;
 mod json;
-mod kernel;
+pub(crate) mod kernel;
 mod main_object;
 mod marshal;
 mod match_data;

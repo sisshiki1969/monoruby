@@ -146,7 +146,10 @@ impl Executor {
     ) -> Result<Value> {
         match self.get_constant(globals, class_id, name)? {
             Some(v) => Ok(v),
-            None => Err(MonorubyErr::uninitialized_constant(name)),
+            None => {
+                let receiver = globals.store[class_id].get_module().as_val();
+                Err(MonorubyErr::uninitialized_constant_in(name, receiver))
+            }
         }
     }
 
@@ -178,6 +181,9 @@ impl Executor {
         mut module: Module,
         name: IdentId,
     ) -> Result<(Value, ClassId)> {
+        // The starting module is the one CRuby reports as
+        // `NameError#receiver`, not whichever ancestor the walk ends on.
+        let receiver = module.as_val();
         loop {
             // Snapshot whether the class has the constant before triggering
             // autoload, since `get_constant` may transition the entry from
@@ -201,7 +207,7 @@ impl Executor {
                 },
             };
         }
-        Err(MonorubyErr::uninitialized_constant(name))
+        Err(MonorubyErr::uninitialized_constant_in(name, receiver))
     }
 
     /// Ancestor-chain lookup for the segment of a **qualified** reference
@@ -272,7 +278,15 @@ impl Executor {
         ) {
             Ok(v) => Ok(v),
             Err(e) if matches!(e.kind, MonorubyErrKind::Name(..)) => {
-                Err(MonorubyErr::nameerr_with_name(e.message, name))
+                // The default `Module#const_missing` raises a bare
+                // NameError; re-attach the name and the receiver (the
+                // module the lookup started on — `Object` for a bare
+                // top-level reference) that CRuby reports.
+                Err(MonorubyErr::nameerr_with_name_receiver(
+                    e.message,
+                    name,
+                    module.as_val(),
+                ))
             }
             Err(e) => Err(e),
         }
