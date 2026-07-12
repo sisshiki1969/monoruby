@@ -1015,14 +1015,49 @@ class Exception
     end
   end
 
-  def full_message(highlight: nil, order: :top)
+  # CRuby's Exception#inspect goes through #to_s (which user classes
+  # may override): `#<ClassName: to_s>`, or just the class name when
+  # #to_s returns an empty string.
+  def inspect
+    s = to_s
+    if s.nil? || s.empty?
+      self.class.name || self.class.to_s
+    else
+      "#<#{self.class}: #{s}>"
+    end
+  end
+
+  # Whether the uncaught-exception report would be written to a tty —
+  # the default for `full_message`'s :highlight option.
+  def self.to_tty?
+    $stderr.equal?(STDERR) && STDERR.tty?
+  rescue NoMethodError
+    false
+  end
+
+  def full_message(highlight: nil, order: :top, **opts)
     # CRuby's first line is `bt[0]: <detailed_message>` (i.e.
     # "message (ClassName)"), followed by `\tfrom <frame>` lines.
     # `--backtrace-limit=N` truncates the from-lines to N entries plus
     # a `\t ... K levels...` marker, exactly like the top-level
-    # uncaught-error report.
-    msg = detailed_message(highlight: highlight ? true : false)
+    # uncaught-error report. All keyword arguments except :order are
+    # forwarded to #detailed_message, with :highlight resolved to its
+    # default first.
+    highlight = Exception.to_tty? if highlight.nil?
+    msg = nil
+    if respond_to?(:detailed_message)
+      dm = detailed_message(highlight: highlight, **opts)
+      dm = dm.to_str if !dm.is_a?(String) && dm.respond_to?(:to_str)
+      msg = dm if dm.is_a?(String)
+    end
+    if msg.nil?
+      # No usable #detailed_message: fall back to the class name.
+      msg = highlight ? "\e[1;4m#{self.class}\e[m" : self.class.to_s
+    end
     bt = backtrace
+    # An exception that was never raised has no backtrace; CRuby shows
+    # the caller of full_message instead.
+    bt = caller if bt.nil? || bt.empty?
     if bt && !bt.empty?
       rest = bt[1..]
       limit = Kernel.__backtrace_limit
@@ -1031,16 +1066,31 @@ class Exception
         trailer = "\t ... #{rest.size - limit} levels...\n"
         rest = rest[0, limit]
       end
-      lines = rest.map { |l| "\tfrom #{l}\n" }
-      lines << trailer if trailer
-      if order == :top
-        "#{bt[0]}: #{msg}\n" + lines.join
+      out = if order == :bottom
+        header = highlight ? "\e[1mTraceback\e[m (most recent call last):\n"
+                           : "Traceback (most recent call last):\n"
+        # CRuby numbers the reversed frames by their distance from the
+        # error line: `\tN: from <frame>` counting down to 1.
+        numbered = []
+        i = rest.size
+        rest.each do |l|
+          numbered << "\t#{i}: from #{l}\n"
+          i -= 1
+        end
+        numbered << trailer if trailer
+        header + numbered.reverse.join + "#{bt[0]}: #{msg}\n"
       else
-        lines.reverse.join + "#{bt[0]}: #{msg}\n"
+        lines = rest.map { |l| "\tfrom #{l}\n" }
+        lines << trailer if trailer
+        "#{bt[0]}: #{msg}\n" + lines.join
       end
     else
-      msg + "\n"
+      out = msg + "\n"
     end
+    # Chain the cause's report so every exception in the chain appears.
+    c = cause
+    out += c.full_message(highlight: highlight, order: :top) if c
+    out
   end
 
   # CRuby `Exception#detailed_message(highlight: false, **)`:
@@ -1053,16 +1103,20 @@ class Exception
       base = instance_of?(::RuntimeError) ? "unhandled exception" : (cls.name || cls.to_s)
       return highlight ? "\e[1;4m#{base}\e[m" : base
     end
-    nl = msg.index("\n")
-    first = nl ? msg[0...nl] : msg
-    rest = nl ? msg[nl..] : ""
+    first, *rest = msg.split("\n", -1)
+    # With :highlight every line of a multi-line message is bolded
+    # individually (`\e[1m…\e[m` per line).
     if cls.name.nil?
-      highlight ? "\e[1m#{first}\e[m#{rest}" : "#{first}#{rest}"
+      head = highlight ? "\e[1m#{first}\e[m" : first
     elsif highlight
-      "\e[1m#{first} (\e[1;4m#{cls}\e[m\e[1m)\e[m#{rest}"
+      head = "\e[1m#{first} (\e[1;4m#{cls}\e[m\e[1m)\e[m"
     else
-      "#{first} (#{cls})#{rest}"
+      head = "#{first} (#{cls})"
     end
+    if highlight
+      rest = rest.map { |l| l.empty? ? l : "\e[1m#{l}\e[m" }
+    end
+    ([head] + rest).join("\n")
   end
 end
 
