@@ -3029,6 +3029,29 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Ok(arg0);
     }
     let name = arg0.coerce_to_string(vm, globals)?;
+    // Special names resolved at query time: the filesystem/locale
+    // encodings follow `default_external`, and "internal" may be nil.
+    match name.as_str() {
+        "external" | "filesystem" | "locale" => {
+            let ext = globals
+                .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+                .filter(|v| !v.is_nil())
+                .unwrap_or_else(|| {
+                    globals
+                        .store
+                        .get_constant_noautoload(enc_class, IdentId::UTF_8)
+                        .unwrap_or(Value::nil())
+                });
+            return Ok(ext);
+        }
+        "internal" => {
+            let int = globals
+                .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
+                .unwrap_or(Value::nil());
+            return Ok(int);
+        }
+        _ => {}
+    }
     // First, try an exact (separator/case-insensitive) match against
     // the canonical name of every registered encoding. This lets
     // `Encoding.find(e.name)` round-trip for *every* encoding in

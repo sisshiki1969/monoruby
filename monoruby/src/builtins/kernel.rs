@@ -504,7 +504,7 @@ fn kernel_block_given(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
 #[monoruby_builtin]
-fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     fn decompose(collector: &mut Vec<Value>, val: Value) {
         match val.try_array_ty() {
             Some(ary) => {
@@ -518,8 +518,22 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         decompose(&mut collector, v);
     }
 
+    let to_s_id = IdentId::get_id("to_s");
     for v in collector {
-        globals.print_value(v)?;
+        // Non-String values stringify through their (possibly
+        // user- or Ruby-defined) `to_s` method, matching CRuby's
+        // `rb_obj_as_string`; the Rust-side fallback only handles
+        // objects whose `to_s` returns a non-String.
+        if v.is_rstring().is_some() {
+            globals.print_value(v)?;
+        } else {
+            let s = vm.invoke_method_inner(globals, to_s_id, v, &[], None, None)?;
+            if s.is_rstring().is_some() {
+                globals.print_value(s)?;
+            } else {
+                globals.print_value(v)?;
+            }
+        }
         globals.write_stdout(b"\n")?;
     }
     globals.flush_stdout()?;
@@ -532,20 +546,150 @@ fn puts(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// - gets([NOT SUPPORTED]rs = $/) -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/gets.html]
+/// Where `Kernel#gets` currently reads from. CRuby's `gets` is
+/// `ARGF.gets`: when `ARGV` holds file names they are consumed (shifted
+/// off `ARGV`) and read in order; only an initially-empty `ARGV` reads
+/// stdin. `Kernel#gets` is only ever called from the single Ruby
+/// thread, so a process-global is fine.
+enum ArgfSource {
+    /// Not yet decided — first `gets` call picks stdin or the ARGV files.
+    Uninit,
+    Stdin,
+    File(std::io::BufReader<std::fs::File>),
+    /// All ARGV files exhausted.
+    Done,
+}
+
+static ARGF_SOURCE: std::sync::Mutex<ArgfSource> = std::sync::Mutex::new(ArgfSource::Uninit);
+
+/// Shift the next file name off `ARGV`, if any.
+fn shift_argv(globals: &mut Globals) -> Option<String> {
+    let argv = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("ARGV"))?;
+    let mut ary = argv.try_array_ty()?;
+    if ary.is_empty() {
+        return None;
+    }
+    let first = ary[0];
+    let name = first
+        .is_rstring_inner()
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())?;
+    ary.remove(0);
+    Some(name)
+}
+
+/// Read one record (up to and including the separator) from `reader`
+/// into `buffer`. `sep` is the raw `$/` value: `None` slurps the whole
+/// input, `Some(b"")` is paragraph mode.
+fn read_record(
+    reader: &mut dyn std::io::BufRead,
+    sep: &Option<Vec<u8>>,
+    buffer: &mut Vec<u8>,
+) -> std::io::Result<usize> {
+    use std::io::Read;
+    match sep {
+        None => reader.read_to_end(buffer),
+        Some(sep) if sep.is_empty() => {
+            // Paragraph mode: skip leading blank lines, then read
+            // up to (and including) an empty line.
+            let mut line: Vec<u8> = Vec::new();
+            loop {
+                line.clear();
+                if reader.read_until(b'\n', &mut line)? == 0 {
+                    return Ok(buffer.len());
+                }
+                if line != b"\n" {
+                    buffer.extend_from_slice(&line);
+                    break;
+                }
+            }
+            loop {
+                line.clear();
+                if reader.read_until(b'\n', &mut line)? == 0 {
+                    return Ok(buffer.len());
+                }
+                buffer.extend_from_slice(&line);
+                if line == b"\n" {
+                    return Ok(buffer.len());
+                }
+            }
+        }
+        Some(sep) => {
+            let last = *sep.last().unwrap();
+            loop {
+                if reader.read_until(last, buffer)? == 0 {
+                    return Ok(buffer.len());
+                }
+                if buffer.ends_with(sep) {
+                    return Ok(buffer.len());
+                }
+            }
+        }
+    }
+}
+
 #[monoruby_builtin]
 fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut buffer = String::new();
-    let n = match std::io::stdin().read_line(&mut buffer) {
-        Ok(n) => n,
-        Err(_) => {
-            vm.set_last_read_line(Value::nil());
-            return Ok(Value::nil());
+    // Honour the input record separator `$/` (set by the `-0`
+    // command-line switch or by assignment): nil slurps the whole
+    // input, "" is paragraph mode, any other string reads up to and
+    // including that byte sequence.
+    let sep: Option<Vec<u8>> = match globals.get_gvar(IdentId::get_id("$/")) {
+        Some(v) if v.is_nil() => None,
+        Some(v) => match v.is_rstring_inner() {
+            Some(s) => Some(s.as_bytes().to_vec()),
+            None => Some(b"\n".to_vec()),
+        },
+        None => Some(b"\n".to_vec()),
+    };
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut source = ARGF_SOURCE.lock().unwrap();
+    let n = loop {
+        match &mut *source {
+            ArgfSource::Uninit => match shift_argv(globals) {
+                Some(name) if name != "-" => match std::fs::File::open(&name) {
+                    Ok(f) => *source = ArgfSource::File(std::io::BufReader::new(f)),
+                    Err(_) => {
+                        return Err(MonorubyErr::runtimeerr(format!(
+                            "No such file or directory @ rb_sysopen - {name}"
+                        )));
+                    }
+                },
+                Some(_) | None => *source = ArgfSource::Stdin,
+            },
+            ArgfSource::Stdin => {
+                let stdin = std::io::stdin();
+                let mut lock = stdin.lock();
+                break read_record(&mut lock, &sep, &mut buffer).unwrap_or(0);
+            }
+            ArgfSource::File(reader) => {
+                let n = read_record(reader, &sep, &mut buffer).unwrap_or(0);
+                if n > 0 {
+                    break n;
+                }
+                // Current file exhausted: move on to the next ARGV
+                // entry, or report end-of-input when none remain.
+                match shift_argv(globals) {
+                    Some(name) if name != "-" => match std::fs::File::open(&name) {
+                        Ok(f) => *source = ArgfSource::File(std::io::BufReader::new(f)),
+                        Err(_) => {
+                            return Err(MonorubyErr::runtimeerr(format!(
+                                "No such file or directory @ rb_sysopen - {name}"
+                            )));
+                        }
+                    },
+                    Some(_) => *source = ArgfSource::Stdin,
+                    None => *source = ArgfSource::Done,
+                }
+            }
+            ArgfSource::Done => break 0,
         }
     };
-    // `read_line` returns `Ok(0)` only at end-of-input. CRuby's
-    // `gets` then returns nil (and `while gets` terminates); returning
-    // the empty buffer string here would loop forever since "" is
-    // truthy.
+    drop(source);
+    // Zero bytes read means end-of-input. CRuby's `gets` then returns
+    // nil (and `while gets` terminates); returning the empty buffer
+    // string here would loop forever since "" is truthy.
     if n == 0 {
         vm.set_last_read_line(Value::nil());
         return Ok(Value::nil());
@@ -558,7 +702,7 @@ fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
         .unwrap_or(0)
         + 1;
     globals.set_gvar(IdentId::get_id("$."), Value::integer(lineno));
-    let s = Value::string(buffer);
+    let s = Value::string_from_vec(buffer);
     vm.set_last_read_line(s);
     Ok(s)
 }

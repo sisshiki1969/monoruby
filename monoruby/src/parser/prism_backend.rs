@@ -31,8 +31,8 @@ use ruby_prism::{
 };
 
 use crate::ast::{
-    BinOp, BlockInfo, CmpKind, DestructEntry, Loc, LvarCollector, NReal, Node, NodeKind, ParamKind,
-    ParseResult, SourceInfoRef, UnOp,
+    ArgList, BinOp, BlockInfo, CmpKind, DestructEntry, Loc, LvarCollector, NReal, Node, NodeKind,
+    ParamKind, ParseResult, SourceInfoRef, UnOp,
 };
 use crate::globals::{ExternalContext, MonorubyErr};
 use crate::id_table::IdentId;
@@ -253,7 +253,10 @@ fn detect_frozen_string_literal(code: &[u8]) -> Option<bool> {
 /// Scan a comment body for `frozen_string_literal` immediately followed
 /// (after optional blanks) by `:` or `=` and a `true`/`false` value.
 fn parse_frozen_directive(comment: &str) -> Option<bool> {
-    let lower = comment.to_ascii_lowercase();
+    // CRuby treats `-` and `_` in magic-comment names as equivalent
+    // (`# frozen-string-literal: false` appears in the stock
+    // `rbconfig.rb`), so normalize before matching.
+    let lower = comment.to_ascii_lowercase().replace('-', "_");
     let lb = lower.as_bytes();
     let key = "frozen_string_literal";
     let mut from = 0;
@@ -291,6 +294,11 @@ fn try_prism_inner(
     default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
     let path_display = path.display().to_string();
+    // `-n` / `-p`: the main script (and only the main script) gets its
+    // top-level statements wrapped in an implicit `while gets ... end`.
+    let cli_loop_wrap = super::take_cli_loop_wrap(&path);
+    // `-K`: default source encoding for the main script.
+    let cli_source_encoding = super::take_cli_source_encoding(&path);
 
     let result = match options.as_ref() {
         Some(opts) => prism::parse_with_options(code, opts),
@@ -307,9 +315,13 @@ fn try_prism_inner(
     // A magic comment wins; otherwise fall back to the caller-supplied
     // default (the eval'd string's own encoding — CRuby uses it as the
     // eval source encoding when no `# encoding:` comment is present).
-    let source_encoding: Option<String> =
-        detect_source_encoding(code).or(default_encoding);
-    let frozen_string_literal: Option<bool> = detect_frozen_string_literal(code);
+    let source_encoding: Option<String> = detect_source_encoding(code)
+        .or(cli_source_encoding)
+        .or(default_encoding);
+    // Per-file magic comment wins; otherwise fall back to the
+    // `--enable/--disable-frozen-string-literal` process default.
+    let frozen_string_literal: Option<bool> = detect_frozen_string_literal(code)
+        .or_else(super::frozen_string_literal_default);
 
     // SourceInfo's copy of the source is display-only (error carets,
     // `get_line`), so a binary source with invalid UTF-8 bytes is
@@ -373,6 +385,7 @@ fn try_prism_inner(
     let mut lowerer = Lowerer::new(code, path_display, source_info.clone());
     lowerer.line_offset = line_offset;
     lowerer.eval_parse = options.is_some();
+    lowerer.cli_loop_wrap = cli_loop_wrap;
     if let Some(seed) = seed_lvars {
         // For `binding.eval`, monoruby preloads a `LvarCollector`
         // with the binding's existing locals so any *new* names the
@@ -444,6 +457,9 @@ struct Lowerer<'pr> {
     /// matching desugar (`%pm<n>` — `%` is not spellable, so they never
     /// surface in `local_variables`).
     pm_temp: usize,
+    /// `-n` / `-p` command-line switches: wrap the program body in an
+    /// implicit `while gets ... end` (see `lower_program`).
+    cli_loop_wrap: Option<super::CliLoopWrap>,
 }
 
 /// See [`Lowerer::scope_wraps`].
@@ -467,6 +483,7 @@ impl<'pr> Lowerer<'pr> {
             warnings: Vec::new(),
             eval_parse: false,
             pm_temp: 0,
+            cli_loop_wrap: None,
         }
     }
 
@@ -580,15 +597,76 @@ impl<'pr> Lowerer<'pr> {
                 stmts.push(self.lower_node(&n)?);
             }
         }
+        let mut main_stmts = Vec::new();
         for n in body.body().iter() {
             if n.as_pre_execution_node().is_none() {
-                stmts.push(self.lower_node(&n)?);
+                main_stmts.push(self.lower_node(&n)?);
             }
+        }
+        if let Some(wrap) = self.cli_loop_wrap {
+            // `-n` / `-p`: run the (non-BEGIN) program body inside an
+            // implicit `while gets ... end` — CRuby wraps at the AST
+            // level too, which is why BEGIN blocks still parse and run
+            // once, before the loop.
+            stmts.push(Self::build_cli_loop(wrap, main_stmts, loc));
+        } else {
+            stmts.append(&mut main_stmts);
         }
         Ok(Node {
             kind: NodeKind::CompStmt(stmts),
             loc,
         })
+    }
+
+    /// Build the `-n` / `-p` implicit loop:
+    ///
+    /// ```text
+    /// while gets
+    ///   $_ = $_.chomp($/)   # -l
+    ///   $F = $_.split       # -a
+    ///   <program body>
+    ///   print $_            # -p
+    /// end
+    /// ```
+    fn build_cli_loop(wrap: super::CliLoopWrap, body_stmts: Vec<Node>, loc: Loc) -> Node {
+        let gvar = |name: &str| Node {
+            kind: NodeKind::GlobalVar(name.to_string()),
+            loc,
+        };
+        let assign = |target: Node, value: Node| Node {
+            kind: NodeKind::MulAssign(vec![target], vec![value]),
+            loc,
+        };
+        let mut stmts = Vec::new();
+        if wrap.chomp {
+            let chomp = Node::new_mcall(
+                gvar("$_"),
+                "chomp".to_string(),
+                ArgList::from_args(vec![gvar("$/")]),
+                false,
+                loc,
+            );
+            stmts.push(assign(gvar("$_"), chomp));
+        }
+        if wrap.auto_split {
+            let split = Node::new_mcall_noarg(gvar("$_"), "split".to_string(), false, loc);
+            stmts.push(assign(gvar("$F"), split));
+        }
+        stmts.extend(body_stmts);
+        if wrap.print_last {
+            stmts.push(Node::new_fcall(
+                "print".to_string(),
+                ArgList::from_args(vec![gvar("$_")]),
+                false,
+                loc,
+            ));
+        }
+        let cond = Node::new_fcall_noarg("gets".to_string(), false, loc);
+        let body = Node {
+            kind: NodeKind::CompStmt(stmts),
+            loc,
+        };
+        Node::new_while(cond, body, true, loc)
     }
 
     fn collect_locals(&mut self, locals: &ConstantList<'pr>) -> Result<(), MonorubyErr> {

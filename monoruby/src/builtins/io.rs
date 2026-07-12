@@ -614,7 +614,15 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             } else if let Some(rs) = v.is_rstring() {
                 String::from_utf8_lossy(rs.as_bytes()).into_owned()
             } else {
-                v.to_s(globals)
+                // Stringify through the value's (possibly Ruby-defined)
+                // `to_s`, matching CRuby's `rb_obj_as_string`; fall back
+                // to the Rust-side formatter when `to_s` misbehaves.
+                let sv =
+                    vm.invoke_method_inner(globals, IdentId::get_id("to_s"), v, &[], None, None)?;
+                match sv.is_rstring() {
+                    Some(rs) => String::from_utf8_lossy(rs.as_bytes()).into_owned(),
+                    None => v.to_s(globals),
+                }
             };
             let needs_newline = !s.ends_with('\n');
             let write_str = if needs_newline {
