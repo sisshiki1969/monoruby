@@ -1129,10 +1129,11 @@ impl Codegen {
         return_addr: CodePtr,
         evict: AsmEvict,
         evict_label: &DestLabel,
+        call_site_pc: u64,
     ) {
         self.asm_return_addr_table.insert(evict, return_addr);
         self.return_addr_table
-            .insert(return_addr, (None, evict_label.clone()));
+            .insert(return_addr, (None, evict_label.clone(), call_site_pc));
     }
 
     ///
@@ -2000,7 +2001,8 @@ impl Codegen {
         evict_label: &DestLabel,
     ) -> bool {
         let return_addr = self.gen_yield(callid, error);
-        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
+        // Yield sites do not record a call-site pc (lazy readers fall back).
+        self.set_deopt_with_return_addr(return_addr, evict, evict_label, 0);
         true
     }
 

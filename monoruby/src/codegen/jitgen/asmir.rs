@@ -1531,6 +1531,10 @@ pub(super) enum AsmInst {
         entry: JitLabel,
         patch_point: Option<JitLabel>,
         evict: AsmEvict,
+        /// The call-site bytecode pc, recorded in the deopt table so
+        /// the cont-frame slot (not written eagerly by specialized
+        /// calls) can be materialized lazily at deopt/read time.
+        call_site_pc: u64,
     },
     Yield {
         callid: CallSiteId,
@@ -1540,6 +1544,7 @@ pub(super) enum AsmInst {
     SpecializedYield {
         entry: JitLabel,
         evict: AsmEvict,
+        call_site_pc: u64,
     },
     Inline(InlineProcedure),
     /// §20 (B): array integer-index **read** (`ary[idx]`), a typed data record

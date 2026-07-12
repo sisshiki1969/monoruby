@@ -1390,3 +1390,27 @@ fn caller_reports_suspended_lines() {
         "##,
     );
 }
+
+#[test]
+fn caller_lines_through_specialized_jit_calls() {
+    // A specialized JIT call skips the eager cont-frame pc store; the
+    // pc recorded in the deopt table is materialized lazily when a
+    // reader (Kernel#caller here) observes the frame. run_test warms
+    // the JIT, so the hot caller is specialized when observed.
+    run_test(
+        r##"
+        def cljc_leaf
+          ls = caller(0, 3).map { |s| s[/:(\d+):/, 1].to_i }
+          ls.map { |l| l - ls[0] }
+        end
+        def cljc_mid
+          cljc_leaf
+        end
+        $r = []
+        20.times do
+          $r << cljc_mid
+        end
+        $r.uniq
+        "##,
+    );
+}

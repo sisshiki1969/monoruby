@@ -2818,10 +2818,11 @@ impl Codegen {
         return_addr: CodePtr,
         evict: AsmEvict,
         evict_label: &DestLabel,
+        call_site_pc: u64,
     ) {
         self.asm_return_addr_table.insert(evict, return_addr);
         self.return_addr_table
-            .insert(return_addr, (None, evict_label.clone()));
+            .insert(return_addr, (None, evict_label.clone(), call_site_pc));
     }
 
     /// Inline-cache class-version guard: deopt if the global class version moved
