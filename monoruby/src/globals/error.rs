@@ -448,6 +448,10 @@ impl MonorubyErr {
         } else if let Some(m) = obj.is_class_or_module() {
             let kind = if m.is_module() { "module" } else { "class" };
             format!("{kind} {}", obj.to_s(store))
+        } else if store[obj.class()].get_module().is_singleton().is_some() {
+            // A receiver with a singleton class keeps the address form
+            // (`for #<Object:0x…>`) in CRuby, not `an instance of …`.
+            obj.to_s(store)
         } else {
             format!("an instance of {}", obj.get_real_class_name(store))
         }
