@@ -7,11 +7,13 @@ use std::process::Command;
 
 fn run_both(script: &str) {
     let mono = Command::new(env!("CARGO_BIN_EXE_monoruby"))
+        .env_remove("RUBYOPT")
         .args(["-e", script])
         .output()
         .unwrap();
     let ruby = Command::new("ruby")
-        .args(["-e", script])
+        // Match the main harness: skip rubygems boot and ambient RUBYOPT.
+        .args(["--disable=gems,rubyopt", "-e", script])
         .output()
         .unwrap();
     assert_eq!(
