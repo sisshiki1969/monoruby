@@ -152,19 +152,30 @@ impl Codegen {
         }
     }
 
+    /// Save the caller's pc in the cont-frame slot (CFP+24 of the
+    /// callee frame). The stored value is the *call-site* pc: at
+    /// dispatch r13 points one unit past the send's first bytecode
+    /// unit (sends are 2-unit / 32-byte instructions), so normalize
+    /// by 16. Readers (`Cfp::caller_pc_slot` consumers) and the
+    /// aarch64 backend share this call-site convention.
     fn push_cont_frame(&mut self) {
         monoasm! { &mut self.jit,
             subq  rsp, 8;
             pushq r13;
+            subq  [rsp], 16;
         };
     }
 
     fn pop_cont_frame(&mut self) {
+        // The slot holds the call-site pc; the send's ret-reg operand
+        // lives in its first unit, one unit below the old r13 position.
+        const RET_REG_FROM_CALLSITE: i64 = RET_REG + 16;
         monoasm! { &mut self.jit,
-            popq r13;   // pop pc
+            popq r13;   // pop pc (call-site)
             addq rsp, 8;
-            movzxw rdi, [r13 + (RET_REG)];  // rdi <- :1
-            addq r13, 16;
+            movzxw rdi, [r13 + (RET_REG_FROM_CALLSITE)];  // rdi <- :1
+            // advance past the 2-unit send
+            addq r13, 32;
         };
     }
 

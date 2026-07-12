@@ -78,6 +78,19 @@ impl Cfp {
     }
 
     ///
+    /// The caller's suspended *pc*, read from the cont-frame slot the
+    /// caller wrote just before calling into this frame (CFP+24: the
+    /// VM's `push_cont_frame` `pushq r13`, the JIT's equivalent store,
+    /// or a zero sentinel from the invoker). This is the raw slot —
+    /// consumers must range-validate the value against the caller
+    /// frame's bytecode span before trusting it, since not every
+    /// dispatch path writes it.
+    ///
+    pub(crate) fn caller_pc_slot(&self) -> u64 {
+        unsafe { *(self.as_ptr() as *const u64).add(3) }
+    }
+
+    ///
     /// Get LFP.
     ///
     pub(crate) fn lfp(&self) -> Lfp {

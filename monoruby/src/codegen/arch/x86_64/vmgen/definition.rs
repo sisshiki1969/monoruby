@@ -62,9 +62,15 @@ impl Codegen {
 
     fn class_def_sub(&mut self) {
         self.vm_handle_error();
+        // Save r15 below the pc so the cont-frame slot (CFP+24 of the
+        // classdef frame created inside call_funcdata below) holds the
+        // caller's pc. Class-def ops are 1-unit (16-byte) instructions
+        // and r13 points one unit past at dispatch, so normalize by 16
+        // to store the call-site pc (the shared slot convention).
         monoasm! { &mut self.jit,
-            pushq r13;
             pushq r15;
+            pushq r13;
+            subq  [rsp], 16;
 
             movq r15, rax; // r15 <- self
             movq rcx, rax; // rcx <- self
@@ -95,8 +101,9 @@ impl Codegen {
             movq rax, r15;
         );
         monoasm! { &mut self.jit,
-            popq r15;
             popq r13;
+            addq r13, 16;
+            popq r15;
         };
         self.vm_handle_error();
         self.vm_store_r15(GP::Rax);

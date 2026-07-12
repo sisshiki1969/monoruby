@@ -967,6 +967,9 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             }
         }
     };
+    // The frame iterated in the previous step (this frame's callee),
+    // whose cont-frame slot holds this frame's suspended pc.
+    let mut inner_cfp: Option<crate::executor::Cfp> = None;
     for i in 0..16 {
         let prev_cfp = cfp.prev();
         if i >= level {
@@ -978,7 +981,37 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             }
             let func_id = cfp.lfp().func_id();
             if let Some(iseq) = globals.store[func_id].is_iseq() {
-                let loc = globals.store[iseq].get_location();
+                let info = &globals.store[iseq];
+                // The frame's *current* line: the pc it saved into its
+                // callee's cont-frame slot when it suspended (one past
+                // the call instruction). Falls back to the method's
+                // start location when the slot is absent (invoker
+                // boundary, unaudited dispatch path) or out of range.
+                let loc = inner_cfp
+                    .and_then(|inner| {
+                        let slot = inner.caller_pc_slot();
+                        if slot == 0 || slot % 8 != 0 {
+                            return None;
+                        }
+                        // SAFETY: validated against the bytecode span below.
+                        let pc = unsafe {
+                            crate::bytecode::BytecodePtr::from_raw(slot as *mut _)?
+                        };
+                        // Both backends store the *call-site* pc.
+                        if !info.contains_pc(pc) {
+                            return None;
+                        }
+                        let idx = info.get_pc_index(Some(pc)).to_usize();
+                        let loc = info.sourcemap[idx];
+                        // CRuby prints the path as the file was loaded
+                        // (absolute for absolute requires) — match it.
+                        Some(format!(
+                            "{}:{}",
+                            info.sourceinfo.file_name(),
+                            info.sourceinfo.get_line(&loc)
+                        ))
+                    })
+                    .unwrap_or_else(|| info.get_location());
                 let desc = globals.store.func_description(func_id);
                 // CRuby 3.4+ delimits the label with single quotes
                 // ("…:in '<main>'") instead of the legacy backticks;
@@ -991,6 +1024,7 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             }
         }
         if let Some(prev_cfp) = prev_cfp {
+            inner_cfp = Some(cfp);
             cfp = prev_cfp;
         } else {
             break;
