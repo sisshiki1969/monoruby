@@ -29,8 +29,13 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
     globals.define_builtin_funcs(ENUMERATOR_CLASS, "size", &["length"], enumerator_size, 0);
 
-    let array_class = globals[ARRAY_CLASS].get_module();
-    let yielder = globals.define_class("Yielder", array_class, ENUMERATOR_CLASS);
+    // `Enumerator::Yielder` inherits from `Object` (as in CRuby), NOT `Array`.
+    // The yielder object is a plain OBJECT-typed RValue; inheriting `Array`
+    // meant inherited methods like `Array#inspect` ran `Value::as_array` on a
+    // non-array and aborted the process (e.g. `p` on a value that had leaked a
+    // Yielder). Its `<<` / `yield` are defined directly below.
+    let object_class = globals[OBJECT_CLASS].get_module();
+    let yielder = globals.define_class("Yielder", object_class, ENUMERATOR_CLASS);
     unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
     globals.define_builtin_func(yielder.id(), "<<", yielder_push, 1);
     globals.define_builtin_func_rest(yielder.id(), "yield", yielder_yield);
@@ -457,6 +462,34 @@ mod tests {
                 end
             end
             [a.next, a.peek, a.peek, a.next, a.peek, a.next]
+            "##,
+        );
+    }
+
+    #[test]
+    fn yielder_yield_returns_nil() {
+        // Issue #905: `Yielder#yield` must return nil (the value fed back on
+        // resume), not the Yielder itself. Previously the generator driver
+        // resumed the fiber with the yielder, so `y.yield(x)` returned the
+        // Yielder; capturing it (`r << y.yield(1)`) leaked a Yielder into user
+        // data, and inspecting it aborted the process (Array#inspect ->
+        // Value::as_array on a non-array Yielder).
+        run_test(
+            r##"
+            r = []
+            Enumerator.new { |y| r << y.yield(1) }.to_a
+            r
+            "##,
+        );
+        run_test("Enumerator.new { |y| y.yield(1) }.first; :ok");
+        // Yielder is an Object subclass (as in CRuby), and inspecting one no
+        // longer crashes.
+        run_test("Enumerator::Yielder.superclass.to_s");
+        run_test(
+            r##"
+            y = nil
+            Enumerator.new { |yy| y = yy; yy.yield 1 }.first
+            [y.class.to_s, y.is_a?(Enumerator::Yielder)]
             "##,
         );
     }

@@ -129,8 +129,15 @@ impl Fiber {
         yielder: Value,
     ) -> Result<Value> {
         match self.state() {
+            // First activation: the yielder is the block parameter (`|y|`).
             FiberState::Created => self.invoke_fiber(vm, globals, &[yielder]),
-            FiberState::Suspended => self.resume_fiber(vm, yielder),
+            // Subsequent resumes: this value becomes the return value of the
+            // `y.yield(...)` that suspended the generator. For `each`/`to_a`
+            // nothing is fed back, so it must be `nil` (CRuby's `Yielder#yield`
+            // returns nil) — NOT the yielder itself, which previously leaked a
+            // `Yielder` into user code (e.g. `r << y.yield(1)`) and then
+            // aborted the process when that value was inspected.
+            FiberState::Suspended => self.resume_fiber(vm, Value::nil()),
             FiberState::Terminated => Err(MonorubyErr::stopiterationerr(
                 "iteration reached an end".to_string(),
             )),
