@@ -1352,18 +1352,27 @@ mod tests {
 
     #[test]
     fn thread_value_runs_block_lazily() {
-        // PR #361: Thread.new(&block) stores the block; .value/.join run it
+        // PR #361: Thread.new(&block) stores the block; `.value` runs it
         // synchronously on the main thread (monoruby is single-threaded).
-        // The behavior matches CRuby for the standard "build threads,
-        // signal via a flag, then collect with .value" pattern.
+        // The behavior matches CRuby for the standard "build a thread, then
+        // collect its result with `.value`" pattern.
         run_test(r#"Thread.new { 42 }.value"#);
-        // join returns self and ensures the block ran by then.
         run_test(
             r#"
             counter = [0]
             t = Thread.new { counter[0] += 1 }
-            t.join
+            t.value
             counter[0]
+            "#,
+        );
+        // `#join` returns the thread itself (matching CRuby). It deliberately
+        // does NOT run the deferred body — a worker whose body loops until
+        // another thread stops it would otherwise spin forever and hang the
+        // single-threaded VM (see builtins/startup.rb Thread#join).
+        run_test(
+            r#"
+            t = Thread.new { 42 }
+            t.join.equal?(t)
             "#,
         );
     }

@@ -809,8 +809,23 @@ class Thread
     @value
   end
 
+  # monoruby is single-threaded, so there is no separate thread to wait for.
+  # Crucially, `#join` does NOT run the deferred body: worker-thread specs
+  # routinely spawn a thread whose body loops until another thread kills or
+  # signals it (`Thread.new { loop { Thread.pass } }`), capture its status,
+  # then `#join`. Running such a body synchronously here would spin forever
+  # and hang the whole VM (and any ruby/spec run driving it). A thread whose
+  # value is actually needed is still executed lazily by `#value`; `#join`
+  # only reports completion. If the body already ran (via `#value` or a
+  # `Thread.pass` drain) its ensure/exception effects are preserved; if not,
+  # `#join` simply marks it done rather than blocking. Returns self (CRuby
+  # returns the thread; the `limit` timeout form is a no-op here).
   def join(limit = nil)
-    __run
+    unless @ran
+      @ran = true
+      @@pending.delete(self)
+      @alive = false
+    end
     self
   end
 
