@@ -245,11 +245,6 @@ mod tests {
         run_test("Fiber.current.is_a?(Fiber)");
     }
 
-    #[test]
-    fn thread_pass() {
-        run_test("Thread.pass.nil?");
-    }
-
     /// Fiber-local storage class-method sugar (`Fiber[:k]` /
     /// `Fiber[:k] = v`) and the Symbol-keyed contract.
     #[test]

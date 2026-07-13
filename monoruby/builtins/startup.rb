@@ -741,128 +741,46 @@ class Fiber
 end
 
 class Thread
-  # monoruby is single-threaded. Thread.new does NOT execute blocks
-  # concurrently. Only Thread.current (the main thread) is meaningful.
-  # Methods that require actual concurrency raise NoMethodError.
-
-  # Deferred thread bodies that have not run yet, oldest first. monoruby
-  # runs `Thread.new` blocks lazily (on `#value`/`#join`), so a main-thread
-  # busy-wait like `Thread.pass until flag` — where `flag` is set by a
-  # thread body — would otherwise spin forever. `Thread.pass` drains this
-  # queue one entry at a time to emulate cooperative scheduling.
-  @@pending = []
-
-  def self.current
-    @@current
-  end
-
-  # `Thread.pass` runs the oldest not-yet-run deferred thread (so
-  # `Thread.pass until cond` makes progress), then delegates the CPU-yield
-  # hint to the native helper. With no pending thread it is just the
-  # sched_yield(2) wrapper (see builtins/thread.rs).
-  def self.pass
-    t = @@pending.shift
-    t.__send__(:__run) if t
-    __native_yield
-    nil
-  end
+  # monoruby runs on a single OS thread and does NOT provide concurrency.
+  # `Thread` exists only so that RubyGems / Bundler — and the little stdlib
+  # that references it — load and run. `Thread.new` / `Thread.start` store
+  # the block but NEVER execute it.
+  #
+  # APIs that only make sense with a real scheduler — `#join`, `#value`,
+  # `#kill`, `#run`, `#wakeup`, `#raise`, `#status`, `#alive?`, `#stop?`,
+  # `Thread.pass`, `Thread.stop`, `#report_on_exception`, ... — are
+  # deliberately NOT defined. On one OS thread they could only hang (a body
+  # never runs on its own, so a `Thread.pass until flag` / `#join` waiting
+  # on it spins forever) or report fictional state, so they fail fast with
+  # NoMethodError instead of hanging a ruby/spec run. The kept surface is
+  # exactly what RubyGems / Bundler touch: identity (`current`), a name,
+  # thread-/fiber-local storage, an interrupt-mask no-op, and the Mutex /
+  # Queue / ConditionVariable shells (all trivial — there is nothing to
+  # contend for).
 
   def initialize(*args, &block)
     @block = block
     @args = args
-    @value = nil
-    @exception = nil
-    @ran = block.nil?
-    @alive = !@ran
-    @keys = {}
-    @thread_local = {}
-    # Register runnable (block-bearing) threads so `Thread.pass` can drive
-    # them; `Thread.new` with no block (e.g. the main thread) is already ran.
-    @@pending << self unless @ran
+    @fiber_locals = {}
+    @thread_variables = {}
+    @name = nil
   end
 
-  @@current = Thread.new
-  @@current.instance_variable_set(:@alive, true)
-
-  def __run
-    return if @ran
-    @@pending.delete(self)
-    @ran = true
-    begin
-      # Route through the native helper so a bare top-level `return` in the
-      # thread body raises LocalJumpError (as in CRuby) instead of performing
-      # a non-local return that escapes the synchronously-run block.
-      @value = __invoke_body(@block, @args)
-    rescue => e
-      @exception = e
-    ensure
-      @alive = false
-    end
-    self
+  def self.current
+    @@current
   end
-  private :__run
-  private :__invoke_body
+  @@current = new
 
-  def value
-    __run
-    raise @exception if @exception
-    @value
+  # `Thread.start` is an alias of `Thread.new` in CRuby.
+  def self.start(*args, &block)
+    new(*args, &block)
   end
 
-  # monoruby is single-threaded, so there is no separate thread to wait for.
-  # Crucially, `#join` does NOT run the deferred body: worker-thread specs
-  # routinely spawn a thread whose body loops until another thread kills or
-  # signals it (`Thread.new { loop { Thread.pass } }`), capture its status,
-  # then `#join`. Running such a body synchronously here would spin forever
-  # and hang the whole VM (and any ruby/spec run driving it). A thread whose
-  # value is actually needed is still executed lazily by `#value`; `#join`
-  # only reports completion. If the body already ran (via `#value` or a
-  # `Thread.pass` drain) its ensure/exception effects are preserved; if not,
-  # `#join` simply marks it done rather than blocking. Returns self (CRuby
-  # returns the thread; the `limit` timeout form is a no-op here).
-  def join(limit = nil)
-    unless @ran
-      @ran = true
-      @@pending.delete(self)
-      @alive = false
-    end
-    self
-  end
-
-  def kill
-    self
-  end
-
-  def alive?
-    @alive
-  end
-
-  def stop?
-    !@alive
-  end
-
-  def status
-    if @alive
-      "run"
-    else
-      false
-    end
-  end
-
-  def [](key)
-    @keys[key]
-  end
-
-  def []=(key, value)
-    @keys[key] = value
-  end
-
-  def thread_variable_set(key, value)
-    @thread_local[key] = value
-  end
-
-  def thread_variable_get(key)
-    @thread_local[key]
+  # With a single thread there is nothing to mask against asynchronous
+  # interruption, so just run the block (used by Bundler's connection_pool
+  # and by timeout).
+  def self.handle_interrupt(mask)
+    yield
   end
 
   def self.each_caller_location
@@ -871,31 +789,58 @@ class Thread
     end
   end
 
-  # The thread object returned by `Process.detach`. A general single-threaded
-  # `Thread#join` must not run its (possibly looping) body — doing so hangs
-  # the VM — so `#join` there is a no-op. Reaping one specific child via
-  # `Process.wait2` is a *terminating* operation, so this waiter overrides
-  # `#join`/`#value` to actually run the reaper: the `Process.detach(pid).join`
-  # reap-and-wait idiom (and `Open3`'s `wait_thr.value`) keep working. A
-  # missing child (`Errno::ECHILD`) is tolerated, matching CRuby.
+  attr_accessor :name
+
+  def [](key)
+    @fiber_locals[key]
+  end
+
+  def []=(key, value)
+    @fiber_locals[key] = value
+  end
+
+  def thread_variable_get(key)
+    @thread_variables[key]
+  end
+
+  def thread_variable_set(key, value)
+    @thread_variables[key] = value
+  end
+
+  # The object returned by `Process.detach`. Reaping one specific child via
+  # `Process.wait2` is a *terminating* operation (unlike an arbitrary thread
+  # body), so — unlike a general Thread, which defines no #join / #value —
+  # the waiter safely runs the reaper on #join / #value. A missing child
+  # (`Errno::ECHILD`) yields nil, matching CRuby. This is what keeps Open3's
+  # `wait_thr.value` / `wait_thr.join` working.
   class Waiter < Thread
     def initialize(pid)
+      super()
       @pid = pid
-      super() do
-        begin
-          Process.wait2(pid)[1]
-        rescue SystemCallError
-          nil
-        end
-      end
       self[:pid] = pid
     end
 
     attr_reader :pid
 
+    def value
+      __reap
+    end
+
     def join(limit = nil)
-      value
+      __reap
       self
+    end
+
+    private
+
+    def __reap
+      return @status if @reaped
+      @reaped = true
+      @status = begin
+        Process.wait2(@pid)[1]
+      rescue SystemCallError
+        nil
+      end
     end
   end
 

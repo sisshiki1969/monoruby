@@ -3334,14 +3334,6 @@ fn return_in_thread_and_class_block() {
     run_test_once(
         r#"
         res = []
-        t = Thread.new do
-          begin
-            return :x
-          rescue LocalJumpError => e
-            e
-          end
-        end
-        res << t.value.class.to_s
         # a return whose home chain crosses a class body is invalid
         begin
           eval("class RetClsA; 1.times { return }; end")
