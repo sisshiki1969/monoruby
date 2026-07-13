@@ -54,13 +54,7 @@ module Gosu
 end
 
 class Gosu::Window
-  # Call Thread.pass every tick, which may or may not be necessary for friendly co-existence with
-  # Ruby's Thread class.
-
-  alias_method :_tick, :tick
-
-  def tick
-    Thread.pass
-    _tick
-  end
+  # `Thread.pass` used to be called every tick for friendly co-existence with
+  # Ruby's Thread class. monoruby is single-threaded and no longer defines
+  # `Thread.pass` (there is nothing to yield to), so `tick` is left as-is.
 end

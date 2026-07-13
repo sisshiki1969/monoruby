@@ -1327,53 +1327,26 @@ mod tests {
     }
 
     #[test]
-    fn class_subclasses_concurrent() {
-        // PR #361: Thread.new now defers block execution and runs it
-        // lazily on .value/.join, so the canonical "build threads, signal,
-        // collect" pattern works under monoruby's single-threaded runtime.
+    fn class_subclasses_count() {
+        // `Class#subclasses` tracks every direct subclass. (This used to be
+        // written with a thread pool; monoruby is single-threaded and no
+        // longer runs Thread bodies, so it is expressed directly.)
         run_test(
             r#"
-            t = 4
-            n = 50
-            go = false
             superclass = Class.new
-            threads = t.times.map do
-              Thread.new do
-                Thread.pass until go
-                n.times.map { Class.new(superclass) }
-              end
-            end
-            go = true
-            threads.map(&:value)
+            200.times.map { Class.new(superclass) }
             superclass.subclasses.size
             "#,
         );
     }
 
     #[test]
-    fn thread_value_runs_block_lazily() {
-        // PR #361: Thread.new(&block) stores the block; `.value` runs it
-        // synchronously on the main thread (monoruby is single-threaded).
-        // The behavior matches CRuby for the standard "build a thread, then
-        // collect its result with `.value`" pattern.
-        run_test(r#"Thread.new { 42 }.value"#);
-        run_test(
-            r#"
-            counter = [0]
-            t = Thread.new { counter[0] += 1 }
-            t.value
-            counter[0]
-            "#,
-        );
-        // `#join` returns the thread itself (matching CRuby). It deliberately
-        // does NOT run the deferred body — a worker whose body loops until
-        // another thread stops it would otherwise spin forever and hang the
-        // single-threaded VM (see builtins/startup.rb Thread#join).
-        run_test(
-            r#"
-            t = Thread.new { 42 }
-            t.join.equal?(t)
-            "#,
-        );
+    fn thread_new_returns_a_thread() {
+        // monoruby is single-threaded: Thread.new stores the block but never
+        // runs it, and blocking / observation APIs (#join, #value, #status,
+        // ...) are intentionally undefined (they would only hang or lie).
+        // Only the identity is meaningful.
+        run_test(r#"Thread.new { 42 }.is_a?(Thread)"#);
+        run_test(r#"Thread.current.equal?(Thread.current)"#);
     }
 }

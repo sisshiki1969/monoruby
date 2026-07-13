@@ -748,7 +748,6 @@ class Enumerator
   alias each_with_object with_object
 end
 class Thread
-  alias exit kill
   # inherited Kernel#inspect dumps Thread's ivars; use the short Kernel#to_s
   # form for both (matches CRuby's `inspect`==`to_s`).
   def to_s = super

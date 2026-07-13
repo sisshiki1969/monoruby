@@ -89,23 +89,6 @@ fn break_ensure_interaction() {
 }
 
 #[test]
-fn break_in_thread_body_raises() {
-    run_test_once(
-        r#"
-        t = Thread.new do
-          begin
-            break :break
-          rescue LocalJumpError => e
-            e
-          end
-        end
-        v = t.value
-        [v.class.to_s, v.instance_of?(LocalJumpError)]
-        "#,
-    );
-}
-
-#[test]
 fn break_jit_tier() {
     // Hot loop: break through iteration keeps working under the JIT.
     run_test(
