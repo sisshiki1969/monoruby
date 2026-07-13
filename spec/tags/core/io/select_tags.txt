@@ -1,0 +1,2 @@
+fails:IO.select returns supplied objects when they are ready for I/O
+fails:IO.select returns the pipe read end in read set if the pipe write end is closed concurrently
