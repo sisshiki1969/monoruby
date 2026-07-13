@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    collections::HashSet,
     io::{BufRead, IsTerminal, Read, Seek, SeekFrom, Write},
     mem::ManuallyDrop,
     os::fd::{AsRawFd, FromRawFd, IntoRawFd},
@@ -8,6 +9,40 @@ use std::{
 };
 
 use super::*;
+
+thread_local! {
+    /// File descriptors currently *owned* (autoclose = true) by a live
+    /// `FileDescriptor` — i.e. fds that will be `close(2)`d when their
+    /// `FileDescriptor` drops.
+    ///
+    /// monoruby stores every fd inside a Rust `std::fs::File` (an `OwnedFd`),
+    /// and Rust's std **aborts the process** ("IO Safety violation: owned
+    /// file descriptor already closed") if the same fd is closed twice. So
+    /// `IO.new(existing_io.fileno)` — which by default (`autoclose: true`)
+    /// would wrap the *already-owned* fd in a second closing `OwnedFd` —
+    /// must not create a second owner. `io_new` consults this set and, when
+    /// the fd is already owned, opens the new IO as a *borrow*
+    /// (`autoclose: false`, released via `into_raw_fd` without closing) so
+    /// only the original owner ever closes the fd.
+    static OWNED_FDS: RefCell<HashSet<i32>> = RefCell::new(HashSet::new());
+}
+
+/// Whether `fd` is already owned by a live autoclosing `FileDescriptor`.
+pub fn fd_is_owned(fd: i32) -> bool {
+    OWNED_FDS.with(|s| s.borrow().contains(&fd))
+}
+
+fn register_owned_fd(fd: i32) {
+    OWNED_FDS.with(|s| {
+        s.borrow_mut().insert(fd);
+    });
+}
+
+fn unregister_owned_fd(fd: i32) {
+    OWNED_FDS.with(|s| {
+        s.borrow_mut().remove(&fd);
+    });
+}
 
 /// Recover the raw POSIX `wait(2)` status word from an `ExitStatus` so that
 /// Ruby-side `Process::Status` can decode exit code vs termination signal
@@ -66,13 +101,16 @@ pub struct FileDescriptor {
 
 impl Drop for FileDescriptor {
     fn drop(&mut self) {
+        let fd = self.reader.get_ref().as_raw_fd();
         // SAFETY: `reader` is wrapped in `ManuallyDrop` and is only taken
         // here, exactly once, in `Drop`. After this, `self.reader` must not
         // be accessed.
         let reader = unsafe { ManuallyDrop::take(&mut self.reader) };
         if self.autoclose.get() {
             // Normal case: dropping the `BufReader<File>` closes the fd via
-            // `OwnedFd::drop`.
+            // `OwnedFd::drop`. This descriptor was the owner; release the
+            // fd from the owned-fd set (before the number can be reused).
+            unregister_owned_fd(fd);
             drop(reader);
         } else {
             // Borrowed-fd case: release ownership without closing. Some
@@ -246,6 +284,7 @@ impl IoInner {
     }
 
     pub(super) fn file(file: std::fs::File, name: String, readable: bool, writable: bool) -> Self {
+        register_owned_fd(file.as_raw_fd());
         Self::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(std::io::BufReader::new(file)),
             name,
@@ -282,15 +321,35 @@ impl IoInner {
         readable: bool,
         writable: bool,
     ) -> Self {
-        // SAFETY: fd is a valid file descriptor obtained from pipe().
+        Self::from_raw_fd_autoclose(fd, name, has_path, readable, writable, true)
+    }
+
+    /// Like `from_raw_fd`, but with an explicit initial `autoclose`. When
+    /// `autoclose` is true this `FileDescriptor` becomes the fd's owner and
+    /// is recorded in `OWNED_FDS`; when false it merely borrows the fd (the
+    /// caller guarantees another owner closes it), so it is not recorded and
+    /// releases the fd via `into_raw_fd` on drop without closing.
+    pub(crate) fn from_raw_fd_autoclose(
+        fd: i32,
+        name: String,
+        has_path: bool,
+        readable: bool,
+        writable: bool,
+        autoclose: bool,
+    ) -> Self {
+        // SAFETY: fd is a valid file descriptor obtained from pipe() or an
+        // already-open descriptor supplied to `IO.new`.
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        if autoclose {
+            register_owned_fd(fd);
+        }
         Self::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(std::io::BufReader::new(file)),
             name,
             has_path,
             readable,
             writable,
-            autoclose: Cell::new(true),
+            autoclose: Cell::new(autoclose),
             pushback: RefCell::new(Vec::new()),
         }))
     }
@@ -887,10 +946,21 @@ impl IoInner {
     }
 
     /// Set the autoclose flag for a File IO. No-op for stdio/pipe/popen/closed
-    /// because their fd lifetime is not owned by this `IoInner`.
+    /// because their fd lifetime is not owned by this `IoInner`. Keeps the
+    /// `OWNED_FDS` set in sync: enabling autoclose makes this descriptor the
+    /// fd's owner, disabling it relinquishes ownership.
     pub fn set_autoclose(&self, value: bool) {
         if let Self::File(file) = self {
-            file.autoclose.set(value);
+            let prev = file.autoclose.get();
+            if prev != value {
+                file.autoclose.set(value);
+                let fd = file.reader.get_ref().as_raw_fd();
+                if value {
+                    register_owned_fd(fd);
+                } else {
+                    unregister_owned_fd(fd);
+                }
+            }
         }
     }
 
