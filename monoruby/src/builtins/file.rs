@@ -992,9 +992,21 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         // explicitly disclaims ownership of the borrowed fd.
         let (name, has_path, autoclose) = super::io::io_open_opts(vm, globals, lfp, 1..4, fd)?;
         let (readable, writable) = super::io::fd_rw_mode(fd_i32);
+        // If another monoruby IO already owns this fd, borrow it (autoclose
+        // = false) instead of creating a second closing `OwnedFd`, which
+        // would double-close and trip Rust's IO-safety abort. See the
+        // matching guard in `io_new` and `OWNED_FDS` in value/rvalue/io.rs.
+        let effective_autoclose =
+            autoclose && !crate::value::rvalue::fd_is_owned(fd_i32);
         // SAFETY: fd has been validated as a valid file descriptor above.
-        let io_inner = IoInner::from_raw_fd(fd_i32, name, has_path, readable, writable);
-        io_inner.set_autoclose(autoclose);
+        let io_inner = IoInner::from_raw_fd_autoclose(
+            fd_i32,
+            name,
+            has_path,
+            readable,
+            writable,
+            effective_autoclose,
+        );
         let mut res = Value::new_io_with_class(io_inner, FILE_CLASS);
         let mode_for_enc = lfp
             .try_arg(1)

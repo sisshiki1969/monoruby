@@ -134,8 +134,21 @@ fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         // `io_open_opts` for the rationale.
         let (name, has_path, autoclose) = io_open_opts(vm, globals, lfp, 1..3, fd)?;
         let (readable, writable) = fd_rw_mode(fd_i32);
-        let io_inner = IoInner::from_raw_fd(fd_i32, name, has_path, readable, writable);
-        io_inner.set_autoclose(autoclose);
+        // If the fd is already owned by another monoruby IO (e.g.
+        // `IO.new(other_io.fileno)`), do NOT create a second closing owner —
+        // that would double-close and trip Rust's IO-safety abort. Borrow it
+        // instead (autoclose = false), so only the original owner closes the
+        // fd. An explicit `autoclose: true` cannot override this, because the
+        // process would abort. (See `OWNED_FDS` in value/rvalue/io.rs.)
+        let effective_autoclose = autoclose && !fd_is_owned(fd_i32);
+        let io_inner = IoInner::from_raw_fd_autoclose(
+            fd_i32,
+            name,
+            has_path,
+            readable,
+            writable,
+            effective_autoclose,
+        );
         let res = Value::new_io(io_inner);
         let mode_for_enc = lfp
             .try_arg(1)
@@ -4176,6 +4189,41 @@ mod tests {
               f.close
               IO.open(IO.sysopen(path, "a"), File::WRONLY) { |g| g.write("b") }
               File.read(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_new_on_existing_fd_no_double_close() {
+        // `IO.new(other.fileno)` / `IO.open(other.fileno)` must not create a
+        // second *closing* owner of the fd: monoruby stores fds in Rust
+        // `OwnedFd`s, which abort the process on a double close. The new IO
+        // borrows the fd (same fileno) and only the original owner closes it.
+        // Regression: previously this aborted with "IO Safety violation".
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            io2 = IO.new(w.fileno)
+            same = (io2.fileno == w.fileno)
+            w.close
+            r.close
+            GC.start
+            same
+            "#,
+        );
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_io_dc_#{Process.pid}_#{rand(100000)}"
+            begin
+              f = File.open(path, "w")
+              g = File.open(f.fileno, "w")
+              same = (g.fileno == f.fileno)
+              f.close
+              GC.start
+              same
             ensure
               File.unlink(path) rescue nil
             end
