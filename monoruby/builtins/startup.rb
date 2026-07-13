@@ -744,23 +744,30 @@ class Thread
   # monoruby runs on a single OS thread and does NOT provide concurrency.
   # `Thread` exists only so that RubyGems / Bundler — and the little stdlib
   # that references it — load and run. `Thread.new` / `Thread.start` store
-  # the block but NEVER execute it.
+  # the block and run it lazily, on the *single* main thread, the first time
+  # its result is demanded via `#value` (used by rubygems' request_set and
+  # by `Class#subclasses`-style specs).
   #
-  # APIs that only make sense with a real scheduler — `#join`, `#value`,
+  # APIs that presuppose a real scheduler observing a *running* body — `#join`,
   # `#kill`, `#run`, `#wakeup`, `#raise`, `#status`, `#alive?`, `#stop?`,
-  # `Thread.pass`, `Thread.stop`, `#report_on_exception`, ... — are
-  # deliberately NOT defined. On one OS thread they could only hang (a body
-  # never runs on its own, so a `Thread.pass until flag` / `#join` waiting
-  # on it spins forever) or report fictional state, so they fail fast with
-  # NoMethodError instead of hanging a ruby/spec run. The kept surface is
-  # exactly what RubyGems / Bundler touch: identity (`current`), a name,
-  # thread-/fiber-local storage, an interrupt-mask no-op, and the Mutex /
-  # Queue / ConditionVariable shells (all trivial — there is nothing to
-  # contend for).
+  # `Thread.pass`, `Thread.stop`, `#report_on_exception`, ... — are deliberately
+  # NOT defined. On one OS thread they could only hang (a body never runs on
+  # its own, so a `Thread.pass until flag` / `#join` waiting on it spins
+  # forever) or report fictional state, so they fail fast with NoMethodError
+  # instead of hanging a ruby/spec run. `#value` is the one body-runner kept
+  # (it terminates or fails fast — a body that blocks forever on another
+  # thread instead runs to a no-op here); the hang-prone waiting/observation
+  # APIs above are gone. The rest of the kept surface is exactly what RubyGems
+  # / Bundler touch: identity (`current`), a name, thread-/fiber-local storage,
+  # an interrupt-mask no-op, and the Mutex / Queue / ConditionVariable shells
+  # (all trivial — there is nothing to contend for).
 
   def initialize(*args, &block)
     @block = block
     @args = args
+    @ran = false
+    @value = nil
+    @exception = nil
     @fiber_locals = {}
     @thread_variables = {}
     @name = nil
@@ -770,6 +777,33 @@ class Thread
     @@current
   end
   @@current = new
+
+  # Run the stored block (once) on the main thread and return its value.
+  # monoruby is single-threaded, so this is where a `Thread.new` body
+  # actually executes. Re-raises a body that raised (matching CRuby's
+  # `#value`). `#join` and the status/observation APIs are intentionally
+  # absent — see the class comment.
+  def value
+    __run
+    raise @exception if @exception
+    @value
+  end
+
+  def __run
+    return if @ran
+    @ran = true
+    begin
+      # Route through the native helper so a bare `return` / `break` in the
+      # body raises LocalJumpError (as in CRuby) rather than escaping the
+      # synchronously-run block.
+      @value = @block ? __invoke_body(@block, @args) : nil
+    rescue => e
+      @exception = e
+    end
+    self
+  end
+  private :__run
+  private :__invoke_body
 
   # `Thread.start` is an alias of `Thread.new` in CRuby.
   def self.start(*args, &block)
