@@ -524,7 +524,7 @@ module Process
   # runs at #value/#join time), which matches Open3's "drain the pipes first,
   # then read the exit status" ordering.
   def self.detach(pid)
-    Thread.new { Process.wait2(pid)[1] }
+    Thread::Waiter.new(pid)
   end
 
   class Tms
@@ -809,8 +809,23 @@ class Thread
     @value
   end
 
+  # monoruby is single-threaded, so there is no separate thread to wait for.
+  # Crucially, `#join` does NOT run the deferred body: worker-thread specs
+  # routinely spawn a thread whose body loops until another thread kills or
+  # signals it (`Thread.new { loop { Thread.pass } }`), capture its status,
+  # then `#join`. Running such a body synchronously here would spin forever
+  # and hang the whole VM (and any ruby/spec run driving it). A thread whose
+  # value is actually needed is still executed lazily by `#value`; `#join`
+  # only reports completion. If the body already ran (via `#value` or a
+  # `Thread.pass` drain) its ensure/exception effects are preserved; if not,
+  # `#join` simply marks it done rather than blocking. Returns self (CRuby
+  # returns the thread; the `limit` timeout form is a no-op here).
   def join(limit = nil)
-    __run
+    unless @ran
+      @ran = true
+      @@pending.delete(self)
+      @alive = false
+    end
     self
   end
 
@@ -853,6 +868,34 @@ class Thread
   def self.each_caller_location
     caller_locations(1).each do |loc|
       yield loc
+    end
+  end
+
+  # The thread object returned by `Process.detach`. A general single-threaded
+  # `Thread#join` must not run its (possibly looping) body — doing so hangs
+  # the VM — so `#join` there is a no-op. Reaping one specific child via
+  # `Process.wait2` is a *terminating* operation, so this waiter overrides
+  # `#join`/`#value` to actually run the reaper: the `Process.detach(pid).join`
+  # reap-and-wait idiom (and `Open3`'s `wait_thr.value`) keep working. A
+  # missing child (`Errno::ECHILD`) is tolerated, matching CRuby.
+  class Waiter < Thread
+    def initialize(pid)
+      @pid = pid
+      super() do
+        begin
+          Process.wait2(pid)[1]
+        rescue SystemCallError
+          nil
+        end
+      end
+      self[:pid] = pid
+    end
+
+    attr_reader :pid
+
+    def join(limit = nil)
+      value
+      self
     end
   end
 

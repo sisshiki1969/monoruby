@@ -684,7 +684,15 @@ fn do_waitpid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<(i32
     // SAFETY: waitpid is a POSIX system call.
     let ret = unsafe { libc::waitpid(pid, &mut status, flags) };
     if ret == -1 {
-        return Err(MonorubyErr::runtimeerr("No child processes"));
+        // Map the OS errno to the proper `Errno::E*` (a SystemCallError),
+        // matching CRuby — e.g. `Errno::ECHILD` ("No child processes") when
+        // there is no child to reap, rather than a bare RuntimeError.
+        let err = std::io::Error::last_os_error();
+        let msg = match err.raw_os_error() {
+            Some(errno) => crate::builtins::errno::strerror(errno),
+            None => err.to_string(),
+        };
+        return Err(MonorubyErr::from_io_err(&globals.store, &err, msg));
     }
     let status_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
     let status_obj = vm.invoke_method_inner(
@@ -1074,6 +1082,30 @@ mod tests {
         run_test_once("Process.detach(spawn(\"true\")).value.success?");
         run_test_once("Process.detach(spawn(\"false\")).value.exitstatus");
         run_test_once("st = Process.detach(spawn(\"sh\", \"-c\", \"exit 3\")).value; st.exitstatus");
+        // The detach waiter is a Thread whose #pid / :pid report the child.
+        run_test_once(
+            r#"
+            pid = spawn("true")
+            t = Process.detach(pid)
+            [t.is_a?(Thread), t.pid == pid, t[:pid] == pid]
+            "#,
+        );
+        // Unlike a general single-threaded Thread#join (which does not run the
+        // body), the detach waiter reaps the specific child on #join too, so a
+        // subsequent Process.waitpid raises Errno::ECHILD (mapped from the OS
+        // errno, matching CRuby — not a bare RuntimeError).
+        run_test_once(
+            r#"
+            pid = spawn("true")
+            Process.detach(pid).join
+            begin
+              Process.waitpid(pid)
+              :not_reaped
+            rescue Errno::ECHILD
+              :echild
+            end
+            "#,
+        );
     }
 
     #[test]
