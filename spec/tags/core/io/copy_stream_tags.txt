@@ -1,0 +1,1 @@
+fails:IO.copy_stream with a destination that does partial reads calls #write repeatedly on the destination Object
