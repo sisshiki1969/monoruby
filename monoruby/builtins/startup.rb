@@ -524,7 +524,7 @@ module Process
   # runs at #value/#join time), which matches Open3's "drain the pipes first,
   # then read the exit status" ordering.
   def self.detach(pid)
-    Thread.new { Process.wait2(pid)[1] }
+    Thread::Waiter.new(pid)
   end
 
   class Tms
@@ -868,6 +868,34 @@ class Thread
   def self.each_caller_location
     caller_locations(1).each do |loc|
       yield loc
+    end
+  end
+
+  # The thread object returned by `Process.detach`. A general single-threaded
+  # `Thread#join` must not run its (possibly looping) body — doing so hangs
+  # the VM — so `#join` there is a no-op. Reaping one specific child via
+  # `Process.wait2` is a *terminating* operation, so this waiter overrides
+  # `#join`/`#value` to actually run the reaper: the `Process.detach(pid).join`
+  # reap-and-wait idiom (and `Open3`'s `wait_thr.value`) keep working. A
+  # missing child (`Errno::ECHILD`) is tolerated, matching CRuby.
+  class Waiter < Thread
+    def initialize(pid)
+      @pid = pid
+      super() do
+        begin
+          Process.wait2(pid)[1]
+        rescue SystemCallError
+          nil
+        end
+      end
+      self[:pid] = pid
+    end
+
+    attr_reader :pid
+
+    def join(limit = nil)
+      value
+      self
     end
   end
 
