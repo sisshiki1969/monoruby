@@ -1,0 +1,1 @@
+fails:ARGF.read reads the contents of a special device file
