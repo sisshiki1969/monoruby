@@ -1,5 +1,0 @@
-spec/ruby/core/enumerator/new_spec.rb
-spec/ruby/core/exception/signal_exception_spec.rb
-spec/ruby/core/exception/signm_spec.rb
-spec/ruby/core/exception/signo_spec.rb
-spec/ruby/library/expect/expect_spec.rb
