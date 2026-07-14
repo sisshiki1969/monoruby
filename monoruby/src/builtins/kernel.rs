@@ -2833,6 +2833,20 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         // signal-terminated).
         let deadline = now + std::time::Duration::from_secs_f64(sec);
         loop {
+            // Drain signals that arrived *before* (re-)entering nanosleep —
+            // e.g. delivered between fork return and this call. Such a
+            // signal's bit is already set, so it will never EINTR the
+            // upcoming nanosleep; without this check the sleeper dozes the
+            // full interval and the surrounding block can end without ever
+            // reaching a poll (a fork child would then exit 0 instead of
+            // dying signal-terminated).
+            if crate::codegen::signal_table::PENDING_SIGNALS
+                .load(std::sync::atomic::Ordering::Relaxed)
+                != 0
+                && crate::executor::execute_gc(vm, globals).is_none()
+            {
+                return Err(vm.take_error());
+            }
             let remaining = match deadline.checked_duration_since(std::time::Instant::now()) {
                 Some(d) if !d.is_zero() => d,
                 _ => break,
