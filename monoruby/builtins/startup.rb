@@ -1966,6 +1966,11 @@ class ARGFClass
     @current_file = nil
     @current_name = nil
     @lineno = 0
+    # Set once every input stream has been consumed. ARGF must NOT fall
+    # back to $stdin after named ARGV files are exhausted (CRuby reads
+    # stdin only when ARGV was empty to begin with) — doing so made
+    # `ARGF.read; ARGF.readlines` block forever on stdin.
+    @exhausted = false
   end
 
   def argv
@@ -1978,21 +1983,44 @@ class ARGFClass
   alias_method :path, :filename
 
   def file
-    advance
-    @current_file || $stdin
+    __stream || @current_file || $stdin
   end
 
-  def advance
-    return true if @current_file && !@current_file.closed?
+  # The current open stream, opening the next ARGV file (or binding
+  # $stdin when ARGV was empty from the start) as needed. Returns nil
+  # once every input has been consumed — never falling back to $stdin
+  # after named files are done.
+  def __stream
+    return @current_file if @current_file && !@current_file.closed?
+    return nil if @exhausted
     if @argv.empty?
-      @current_file ||= $stdin
-      @current_name ||= '-'
-      false
+      if @current_name
+        # Named files were consumed earlier; there is no more input.
+        @exhausted = true
+        return nil
+      end
+      @current_name = '-'
+      @current_file = $stdin
     else
       @current_name = @argv.shift
       @current_file = @current_name == '-' ? $stdin : File.open(@current_name)
-      true
     end
+    @current_file
+  end
+  private :__stream
+
+  # Close out the current stream (it hit EOF) and mark ARGF exhausted
+  # when no further ARGV entries remain.
+  def __finish_stream
+    f = @current_file
+    f.close if f && !f.closed? && !f.equal?($stdin)
+    @current_file = nil
+    @exhausted = true if @argv.empty?
+  end
+  private :__finish_stream
+
+  def advance
+    !!__stream
   end
 
   def lineno;     @lineno; end
@@ -2024,13 +2052,12 @@ class ARGFClass
   end
   def each
     return to_enum(:each) unless block_given?
-    while advance && @current_file
-      @current_file.each_line do |line|
+    while (f = __stream)
+      f.each_line do |line|
         @lineno += 1
         yield line
       end
-      @current_file.close if @current_file && !@current_file.closed? && @current_file != $stdin
-      @current_file = nil
+      __finish_stream
     end
     self
   end
@@ -2041,14 +2068,53 @@ class ARGFClass
     each { |line| result << line }
     result
   end
-  def read(*)
-    buf = String.new
-    while advance && @current_file
-      buf << @current_file.read.to_s
-      @current_file.close if @current_file != $stdin
-      @current_file = nil
+  # CRuby-compatible ARGF.read (verified against CRuby 4.0.2):
+  # - read           -> the concatenation of every remaining stream; ""
+  #                     for empty input; nil once ARGF is exhausted.
+  # - read(len)      -> up to len bytes, continuing across file
+  #                     boundaries; stops at exactly len (this bound is
+  #                     what keeps `ARGF.read(100)` on /dev/zero from
+  #                     reading forever); nil at EOF; "" for len == 0.
+  # - read(len, buf) -> fills and returns buf (same object).
+  def read(length = nil, outbuf = nil)
+    if length && length < 0
+      raise ArgumentError, "negative length #{length} given"
     end
-    buf
+    buf = String.new
+    had_stream = false
+    read_any = false
+    unless length == 0
+      loop do
+        break if length && buf.bytesize >= length
+        f = __stream
+        break unless f
+        had_stream = true
+        need = length && length - buf.bytesize
+        chunk = need ? f.read(need) : f.read
+        if chunk && !chunk.empty?
+          read_any = true
+          buf << chunk
+        end
+        # A short (or nil) chunk means this stream hit EOF; a full read
+        # without length always consumes the stream.
+        if need.nil? || chunk.nil? || chunk.bytesize < need
+          __finish_stream
+        end
+      end
+    end
+    result =
+      if length.nil?
+        had_stream ? buf : nil
+      elsif length == 0
+        ""
+      else
+        read_any ? buf : nil
+      end
+    if outbuf
+      outbuf.replace(result || "")
+      result = outbuf if result
+    end
+    result
   end
   def readline(*args)
     line = nil

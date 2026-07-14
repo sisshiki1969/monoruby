@@ -6848,6 +6848,49 @@ mod tests {
     // Rust test harness.
 
     #[test]
+    fn argf_read_honors_length_and_eof() {
+        // The tagged ruby/spec hangs: ARGF#read used to ignore its length
+        // argument and read to EOF (unbounded on /dev/zero), and after the
+        // ARGV files were consumed, iteration fell back to $stdin (so
+        // `read` + `readlines` blocked forever). `ARGF.class.new(*argv)`
+        // gives us a fresh, ARGV-independent instance; results verified
+        // against CRuby (which supports the same construction).
+        run_test_once(
+            r#"
+            a = ARGF.class.new('/dev/zero')
+            [a.read(100) == "\0" * 100, a.read(3).bytesize]
+            "#,
+        );
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            f1 = File.join(Dir.tmpdir, "argf_r1_#{Process.pid}.txt")
+            f2 = File.join(Dir.tmpdir, "argf_r2_#{Process.pid}.txt")
+            File.write(f1, "AAAA"); File.write(f2, "BBBB")
+            begin
+              r = []
+              a = ARGF.class.new(f1, f2)
+              r << a.read(6)           # spans the file boundary
+              r << a.read(5)           # bounded by remaining input
+              r << a.read(1)           # exhausted -> nil
+              r << a.read              # exhausted, no length -> nil
+              b = ARGF.class.new(f1, f2)
+              r << b.read              # whole concatenation
+              r << b.readlines         # exhausted -> [] (used to hang on stdin)
+              c = ARGF.class.new(f1)
+              buf = +"zz"
+              r << [c.read(3, buf), buf]
+              r << (ARGF.class.new(f1).read(0))
+              r << (begin; ARGF.class.new(f1).read(-1); rescue ArgumentError => e; e.message; end)
+              r
+            ensure
+              File.unlink(f1, f2) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
     fn argf_basic_shape() {
         run_test_no_result_check(
             r#"
