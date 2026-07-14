@@ -2470,9 +2470,15 @@ pub(super) fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
         args.push(input.to_string());
         if cfg!(windows) { "cmd" } else { "sh" }
     } else {
-        let input: Vec<&str> = input.split(' ').collect();
-        input[1..].iter().for_each(|s| args.push(s.to_string()));
-        input[0]
+        // Split on whitespace *runs* (and trim the ends), like a shell's
+        // word splitting: `split(' ')` would turn consecutive/leading
+        // spaces (e.g. mspec's `"#{opts} --disable=x"` with empty opts)
+        // into empty argv entries, which the spawned program then treats
+        // as a real argument (monoruby: LoadError on the "" script).
+        let mut words = input.split_whitespace();
+        let program = words.next().unwrap_or("");
+        words.for_each(|s| args.push(s.to_string()));
+        program
     }
     .to_string();
     (program, args)
