@@ -274,6 +274,41 @@ where
     result
 }
 
+/// Like [`exec_recursive_outer`], but does **not** register an id in the
+/// recursion guard: the callee is expected to register the ids it visits
+/// itself (e.g. `calculate_hash` → `ruby_hash`, whose Array/Hash arms
+/// insert into the same `HASH_RECURSION_GUARD`). Only the outer-collapse
+/// bookkeeping (depth counter + hit flag) is provided, so a cycle detected
+/// anywhere inside `f` still collapses the outermost call to
+/// `on_recursive`. Registering the id here as well would immediately
+/// self-collide with the callee's own registration.
+pub(crate) fn exec_recursive_outer_unregistered<T, F>(f: F, on_recursive: T) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    let is_outer = OUTER_RECURSION_DEPTH.with(|d| {
+        let was = *d.borrow() == 0;
+        *d.borrow_mut() += 1;
+        was
+    });
+    if is_outer {
+        OUTER_RECURSION_HIT.with(|h| *h.borrow_mut() = false);
+    }
+    let result = f();
+    OUTER_RECURSION_DEPTH.with(|d| *d.borrow_mut() -= 1);
+    if is_outer {
+        let hit = OUTER_RECURSION_HIT.with(|h| {
+            let v = *h.borrow();
+            *h.borrow_mut() = false;
+            v
+        });
+        if hit {
+            return Ok(on_recursive);
+        }
+    }
+    result
+}
+
 /// Execute `f` with recursion protection for paired operations (==, <=>, eql?).
 ///
 /// Uses a `(lhs_id, rhs_id)` pair to detect when the same pair of containers
@@ -331,6 +366,11 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
                         let is_recursive =
                             HASH_RECURSION_GUARD.with(|guard| !guard.borrow_mut().insert(id));
                         if is_recursive {
+                            // Surface the cycle to any enclosing
+                            // `exec_recursive_outer` frame (CRuby's
+                            // rb_exec_recursive_outer semantics: the
+                            // outermost `#hash` collapses to the sentinel).
+                            OUTER_RECURSION_HIT.with(|h| *h.borrow_mut() = true);
                             0u64.hash(state);
                             return Ok(());
                         }
@@ -451,11 +491,37 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
     }
 }
 
+/// Per-process random hash state (CVE-2011-4815 hardening).
+///
+/// Every Ruby-visible `#hash` digest is produced by a SipHash keyed with
+/// this state, so hash values are consistent within a process but differ
+/// between processes, preventing precomputed hash-flooding attacks.
+/// Internal hash *tables* (rubymap / HashMap) key their own hashers and are
+/// unaffected.
+static HASH_STATE: std::sync::LazyLock<std::collections::hash_map::RandomState> =
+    std::sync::LazyLock::new(std::collections::hash_map::RandomState::new);
+
+/// A hasher keyed with the per-process random [`HASH_STATE`]. Use this for
+/// any digest returned to Ruby via `#hash`.
+pub(crate) fn seeded_hasher() -> std::collections::hash_map::DefaultHasher {
+    use std::hash::BuildHasher;
+    HASH_STATE.build_hasher()
+}
+
 impl Value {
     pub fn calculate_hash(self, e: &mut Executor, g: &mut Globals) -> Result<u64> {
-        let mut s = std::hash::DefaultHasher::new();
+        let mut s = seeded_hasher();
         RubyHash::ruby_hash(&self, &mut s, e, g)?;
         Ok(s.finish())
+    }
+
+    /// Convert a 64-bit `#hash` digest into a Ruby Integer, folding it
+    /// into Fixnum (i63) range. Ruby-visible hash digests must stay
+    /// Fixnums: CRuby hash values are always Fixnums (a C `long`), and
+    /// `Hash#hash`'s pair mixing reads element digests back with
+    /// `try_fixnum` — a Bignum digest would silently degrade to 0 there.
+    pub(crate) fn from_hash_digest(h: u64) -> Self {
+        Value::integer((h as i64) >> 1)
     }
 }
 

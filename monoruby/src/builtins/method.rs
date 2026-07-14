@@ -750,8 +750,7 @@ fn method_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let h = fid
         .wrapping_mul(0x100000001b3i64)
         .wrapping_add(recv.rotate_left(13));
-    // Mask sign bit so we always return a non-negative Fixnum-friendly value.
-    Ok(Value::integer(h & 0x7fff_ffff_ffff_ffff))
+    Ok(Value::from_hash_digest(h as u64))
 }
 
 ///
@@ -767,7 +766,7 @@ fn umethod_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let h = fid
         .wrapping_mul(0x100000001b3i64)
         .wrapping_add(owner_id.rotate_left(13));
-    Ok(Value::integer(h & 0x7fff_ffff_ffff_ffff))
+    Ok(Value::from_hash_digest(h as u64))
 }
 
 ///

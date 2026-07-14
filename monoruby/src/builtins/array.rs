@@ -661,8 +661,18 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/hash.html]
 #[monoruby_builtin]
 fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let h = lfp.self_val().calculate_hash(vm, globals)?;
-    Ok(Value::integer_from_u64(h))
+    // Outer-recursion collapse (CRuby rb_exec_recursive_outer): every
+    // structure that is cyclic — at any depth — hashes to the same
+    // sentinel, so `rec.hash == [{x: rec}].hash` when rec.eql?([{x: rec}]).
+    // The *unregistered* variant is used because `ruby_hash`'s Array arm
+    // registers self in the recursion guard itself.
+    crate::value::exec_recursive_outer_unregistered(
+        || {
+            let h = lfp.self_val().calculate_hash(vm, globals)?;
+            Ok(Value::from_hash_digest(h))
+        },
+        Value::integer(0),
+    )
 }
 
 ///

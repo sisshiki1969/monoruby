@@ -11,6 +11,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
     globals.store[INTEGER_CLASS].clear_alloc_func();
     globals.define_builtin_func_with(INTEGER_CLASS, "chr", chr, 0, 1, false);
+    globals.define_builtin_func(INTEGER_CLASS, "hash", hash, 0);
     // `next` is a true alias of `succ`.
     globals.define_builtin_inline_funcs(
         INTEGER_CLASS,
@@ -289,6 +290,28 @@ fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// - chr -> String
 /// - chr(encoding) -> String
 ///
+///
+/// ### Integer#hash
+///
+/// - hash -> Integer
+///
+/// Digests the numeric value through the per-process seeded hasher
+/// (CVE-2011-4815). Without an Integer-specific `#hash`, small integers
+/// fell back to `Kernel#hash` on the tagged immediate — identical in every
+/// process — and equal Bignums hashed by heap address, so two equal
+/// Bignums disagreed.
+#[monoruby_builtin]
+fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::hash::{Hash, Hasher};
+    let mut s = crate::value::seeded_hasher();
+    match lfp.self_val().unpack() {
+        RV::Fixnum(i) => i.hash(&mut s),
+        RV::BigInt(b) => b.hash(&mut s),
+        _ => unreachable!(),
+    }
+    Ok(Value::from_hash_digest(s.finish()))
+}
+
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]
 #[monoruby_builtin]
 fn chr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {

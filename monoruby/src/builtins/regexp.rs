@@ -800,10 +800,10 @@ fn regexp_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     use std::hash::{Hash, Hasher};
     let self_ = lfp.self_val();
     let re = self_.as_regexp_inner();
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = crate::value::seeded_hasher();
     re.source_bytes().hash(&mut h);
     (re.raw_option() & REGEXP_EQ_OPTION_MASK).hash(&mut h);
-    Ok(Value::integer(h.finish() as i64))
+    Ok(Value::from_hash_digest(h.finish()))
 }
 
 /// ### Regexp#===

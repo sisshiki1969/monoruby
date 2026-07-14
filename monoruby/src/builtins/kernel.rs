@@ -4237,7 +4237,14 @@ fn class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/hash.html]
 #[monoruby_builtin]
 fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::integer(lfp.self_val().id() as _))
+    // Digest the identity (tagged bits for immediates, address for heap
+    // objects) through the per-process seeded hasher (CVE-2011-4815): a
+    // Fixnum/Symbol's raw id is identical in every process, so returning it
+    // directly would make `14.hash` predictable across processes.
+    use std::hash::{Hash, Hasher};
+    let mut s = crate::value::seeded_hasher();
+    lfp.self_val().id().hash(&mut s);
+    Ok(Value::from_hash_digest(s.finish()))
 }
 
 ///
