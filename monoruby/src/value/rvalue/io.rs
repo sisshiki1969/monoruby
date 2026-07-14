@@ -136,7 +136,10 @@ pub enum IoInner {
     Stderr,
     File(Rc<FileDescriptor>),
     Popen(Rc<PopenDescriptor>),
-    Closed,
+    /// Closed stream. Retains the filesystem path of a path-backed File
+    /// (CRuby keeps `File#path` readable after close; tempfile.rb relies
+    /// on `File.unlink(file.path)` from its cleanup/finalizer paths).
+    Closed(Option<String>),
 }
 
 /// Outcome of a non-blocking `IO#read_nonblock`.
@@ -160,7 +163,7 @@ impl std::clone::Clone for IoInner {
             Self::Stderr => Self::Stderr,
             Self::File(file) => Self::File(file.clone()),
             Self::Popen(popen) => Self::Popen(popen.clone()),
-            Self::Closed => Self::Closed,
+            Self::Closed(p) => Self::Closed(p.clone()),
         }
     }
 }
@@ -173,7 +176,7 @@ impl std::fmt::Display for IoInner {
             Self::Stderr => write!(f, "#<IO:<STDERR>>"),
             Self::File(file) => write!(f, "#<File:{}>", file.name),
             Self::Popen(_) => write!(f, "#<IO:popen>"),
-            Self::Closed => write!(f, "#<IO:(closed)>"),
+            Self::Closed(..) => write!(f, "#<IO:(closed)>"),
         }
     }
 }
@@ -194,20 +197,20 @@ impl IoInner {
                 }
                 return Ok(());
             }
-            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+            Self::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
         };
         res.map_err(|err| MonorubyErr::runtimeerr(err.to_string()))
     }
 
     pub fn is_closed(&self) -> bool {
-        matches!(self, Self::Closed)
+        matches!(self, Self::Closed(..))
     }
 
     /// Whether the stream may be read from.
     pub fn is_readable(&self) -> bool {
         match self {
             Self::Stdin => true,
-            Self::Stdout | Self::Stderr | Self::Closed => false,
+            Self::Stdout | Self::Stderr | Self::Closed(..) => false,
             Self::File(f) => f.readable,
             Self::Popen(p) => p.reader.is_some(),
         }
@@ -217,7 +220,7 @@ impl IoInner {
     pub fn is_writable(&self) -> bool {
         match self {
             Self::Stdout | Self::Stderr => true,
-            Self::Stdin | Self::Closed => false,
+            Self::Stdin | Self::Closed(..) => false,
             Self::File(f) => f.writable,
             Self::Popen(p) => p.writer.is_some(),
         }
@@ -267,7 +270,14 @@ impl IoInner {
         } else {
             None
         };
-        *self = Self::Closed;
+        // Retain a path-backed File's path across close: CRuby keeps
+        // `File#path` readable after close (tempfile.rb's cleanup calls
+        // `File.unlink(file.path)` on a closed file).
+        let retained = match &*self {
+            Self::File(file) if file.has_path => Some(file.name.clone()),
+            _ => None,
+        };
+        *self = Self::Closed(retained);
         Ok(popen_result)
     }
 
@@ -384,7 +394,7 @@ impl IoInner {
                 Ok(())
             }
             // `ensure_writable` already rejected non-writable streams.
-            Self::Stdin | Self::Closed => unreachable!(),
+            Self::Stdin | Self::Closed(..) => unreachable!(),
         }
     }
 
@@ -411,7 +421,7 @@ impl IoInner {
     /// ungets behave LIFO while a single multi-byte unget preserves order.
     pub fn unget(&mut self, bytes: &[u8]) -> Result<()> {
         match self {
-            Self::Closed => Err(MonorubyErr::ioerr("closed stream")),
+            Self::Closed(..) => Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin | Self::Stdout | Self::Stderr => {
                 Err(MonorubyErr::ioerr("not opened for reading"))
             }
@@ -467,7 +477,7 @@ impl IoInner {
 
     fn read_underlying(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
         match self {
-            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+            Self::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => {
                 if let Some(length) = length {
                     let buf = match std::io::stdin().bytes().take(length).collect() {
@@ -551,7 +561,7 @@ impl IoInner {
         }
         let need = maxlen - out.len();
         let chunk = match self {
-            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+            Self::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdout | Self::Stderr => {
                 return Err(MonorubyErr::ioerr("not opened for reading"));
             }
@@ -701,7 +711,7 @@ impl IoInner {
         }
         let need = maxlen - out.len();
         match self {
-            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+            Self::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdout | Self::Stderr => {
                 return Err(MonorubyErr::ioerr("not opened for reading"));
             }
@@ -761,7 +771,7 @@ impl IoInner {
 
     fn read_line_underlying(&mut self) -> Result<Option<String>> {
         match self {
-            Self::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+            Self::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => {
                 let mut buf = String::new();
                 std::io::stdin()
@@ -818,7 +828,7 @@ impl IoInner {
                     Err(MonorubyErr::ioerr("closed stream"))
                 }
             }
-            Self::Closed => Err(MonorubyErr::ioerr("closed stream")),
+            Self::Closed(..) => Err(MonorubyErr::ioerr("closed stream")),
         }
     }
 
@@ -843,7 +853,7 @@ impl IoInner {
         };
         match self {
             Self::File(file) => Rc::get_mut(file).unwrap().reader.seek(seek_from),
-            Self::Closed => Err(std::io::Error::from_raw_os_error(9)), // EBADF
+            Self::Closed(..) => Err(std::io::Error::from_raw_os_error(9)), // EBADF
             _ => Err(std::io::Error::from_raw_os_error(ESPIPE)),
         }
     }
@@ -853,7 +863,7 @@ impl IoInner {
             Self::Stdin => std::io::stdin().is_terminal(),
             Self::Stdout => std::io::stdout().is_terminal(),
             Self::Stderr => std::io::stderr().is_terminal(),
-            Self::File(_) | Self::Popen(_) | Self::Closed => false,
+            Self::File(_) | Self::Popen(_) | Self::Closed(..) => false,
         }
     }
 
@@ -875,7 +885,8 @@ impl IoInner {
             Self::Stdout => Some("<STDOUT>".to_string()),
             Self::Stderr => Some("<STDERR>".to_string()),
             Self::File(file) if file.has_path => Some(file.name.clone()),
-            Self::File(_) | Self::Popen(_) | Self::Closed => None,
+            Self::Closed(p) => p.clone(),
+            Self::File(_) | Self::Popen(_) => None,
         }
     }
 

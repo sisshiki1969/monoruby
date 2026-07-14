@@ -9882,6 +9882,38 @@ mod tests {
     }
 
     #[test]
+    fn pack_template_huge_count_raises_rangeerror() {
+        // security/cve_2018_8778: an overflow-scale count in a pack/unpack
+        // template raises RangeError "pack length too big" (CRuby caps the
+        // count at a C long). Previously the unchecked digit accumulation
+        // overflowed usize and aborted the process via a non-unwinding
+        // panic. In-range templates keep working.
+        run_test(
+            r#"
+            r = []
+            [["@99999999999999999999999999", :unpack],
+             ["a99999999999999999999999999", :unpack],
+             ["@18446744073709551615",       :unpack]].each do |tmpl, _|
+              begin
+                "a".unpack(tmpl)
+                r << :no_raise
+              rescue RangeError => e
+                r << e.message
+              end
+            end
+            begin
+              [1].pack("C99999999999999999999999999")
+              r << :no_raise
+            rescue RangeError => e
+              r << e.message
+            end
+            r << "ab".unpack("@1a1")
+            r
+            "#,
+        );
+    }
+
+    #[test]
     fn pack_template_comments() {
         // # starts a comment until end of line
         run_test(r#"[65, 66].pack("C # first byte\nC")"#);

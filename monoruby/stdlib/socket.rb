@@ -36,7 +36,28 @@ end
 class TCPSocket < IPSocket; end
 class TCPServer < TCPSocket; end
 class UDPSocket < IPSocket; end
-class UNIXSocket < BasicSocket; end
+class UNIXSocket < BasicSocket
+  # Real UNIX-domain sockets are unsupported, but the path argument is
+  # validated like CRuby's (CVE-2018-8779): a NUL byte must raise
+  # ArgumentError *before* any bind/connect would happen. Valid paths
+  # fail with an explicit unsupported-feature error instead of the
+  # previous misleading NoMethodError.
+  def self.open(path, *rest, &blk)
+    new(path, *rest, &blk)
+  end
+
+  def initialize(path, *)
+    path = path.to_path if path.respond_to?(:to_path)
+    path = path.to_str  if path.respond_to?(:to_str)
+    unless path.is_a?(String)
+      raise TypeError, "no implicit conversion of #{path.class} into String"
+    end
+    if path.include?("\0")
+      raise ArgumentError, "path name contains null byte"
+    end
+    raise SocketError, "UNIX domain sockets are not supported in monoruby"
+  end
+end
 class UNIXServer < UNIXSocket; end
 
 class SocketError < StandardError; end

@@ -561,7 +561,7 @@ pub(super) fn init_io_encodings(
 
 /// Allocator for `IO` and its subclasses.
 pub(crate) extern "C" fn io_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
-    Value::new_io_with_class(IoInner::Closed, class_id)
+    Value::new_io_with_class(IoInner::Closed(None), class_id)
 }
 
 ///
@@ -808,11 +808,11 @@ fn close_write(
             popen.writer = None;
             popen.reader.is_none()
         }
-        IoInner::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+        IoInner::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
         _ => return Err(MonorubyErr::ioerr("closing non-duplex IO for writing")),
     };
     if fully_closed {
-        *io = IoInner::Closed;
+        *io = IoInner::Closed(None);
     }
     Ok(Value::nil())
 }
@@ -833,11 +833,11 @@ fn close_read(
             popen.reader = None;
             popen.writer.is_none()
         }
-        IoInner::Closed => return Err(MonorubyErr::ioerr("closed stream")),
+        IoInner::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
         _ => return Err(MonorubyErr::ioerr("closing non-duplex IO for reading")),
     };
     if fully_closed {
-        *io = IoInner::Closed;
+        *io = IoInner::Closed(None);
     }
     Ok(Value::nil())
 }
@@ -4234,6 +4234,46 @@ mod tests {
             ensure
               File.unlink(path) rescue nil
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn file_path_survives_close_and_nul_paths_rejected() {
+        // security/cve_2018_6914 + cve_2018_8779: tempfile.rb's cleanup
+        // runs `File.unlink(file.path)` on a *closed* file, so `File#path`
+        // must stay readable after close (CRuby keeps it; we previously
+        // returned nil, giving "no implicit conversion of NilClass").
+        run_test(
+            r#"
+            f = File.open("Cargo.toml")
+            f.close
+            [f.path, f.closed?]
+            "#,
+        );
+        // Tempfile#close! end-to-end (unlink of the closed file).
+        run_test_once(
+            r#"
+            require "tempfile"
+            t = Tempfile.new("mrb_sec")
+            path = t.path
+            t.close!
+            [path.nil?, File.exist?(path)]
+            "#,
+        );
+        // security/cve_2018_8780: a NUL byte anywhere in a path raises
+        // ArgumentError up front (previously an opaque RuntimeError from
+        // the failed CString conversion).
+        run_test(
+            r#"
+            %w[entries foreach children].map { |m|
+              begin
+                Dir.send(m, "/tmp\0x")
+                :no_raise
+              rescue ArgumentError => e
+                e.message
+              end
+            } + [begin; File.open("/tmp\0x"); :no_raise; rescue ArgumentError => e; e.message; end]
             "#,
         );
     }

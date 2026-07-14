@@ -524,7 +524,7 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 seen.pop();
             }
             None => {
-                let s = val.coerce_to_path_rstring(vm, globals)?;
+                let s = val.coerce_to_path_rstring_allow_nul(vm, globals)?;
                 let s = s.to_str()?.to_string();
                 if s.as_bytes().contains(&0) {
                     return Err(MonorubyErr::argumenterr("string contains null byte"));
