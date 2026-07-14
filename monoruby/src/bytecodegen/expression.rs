@@ -1945,11 +1945,45 @@ impl<'a> BytecodeGen<'a> {
     fn gen_regexp(&mut self, ret: BcReg, nodes: Vec<Node>, option: String, loc: Loc) -> Result<()> {
         let mut len = nodes.len();
         let arg = self.sp();
-        if !option.is_empty() {
-            let r = self.push().into();
-            self.emit_literal(r, Value::string(format!("(?{option})")));
-            len += 1;
+        // The interpolated-regexp source is assembled at run time by
+        // `runtime::concatenate_regexp`. Decode the literal-syntax modifier
+        // letters into the same option word `const_regexp` builds, and pass
+        // it as a leading Fixnum operand rather than as an inline `(?imx)`
+        // source prefix. Two reasons:
+        //   - `n`/`u`/`e`/`s` are encoding selectors, *not* valid Onigmo
+        //     group options — `(?n)` makes Onigmo raise "undefined group
+        //     option". They must set the regexp's `KCODE_*` / `NOENCODING`
+        //     bits instead.
+        //   - Even the valid `i`/`m`/`x` must not sit in the source: CRuby's
+        //     `Regexp#source` for `/a#{x}/im` is `"a…"`, not `"(?im-x:a…)"`.
+        //     Passing them as real Onigmo option bits keeps `#source` clean.
+        // `concatenate_regexp` (the sole consumer of `ConcatRegexp`) peels
+        // this operand off and hands the bits to the regexp builder.
+        let mut opt: i64 = 0;
+        if option.contains('i') {
+            opt |= onigmo_regex::ONIG_OPTION_IGNORECASE as i64;
         }
+        if option.contains('x') {
+            opt |= onigmo_regex::ONIG_OPTION_EXTEND as i64;
+        }
+        if option.contains('m') {
+            opt |= onigmo_regex::ONIG_OPTION_MULTILINE as i64;
+        }
+        if option.contains('n') {
+            opt |= RegexpInner::NOENCODING as i64;
+        } else if option.contains('u') {
+            opt |= RegexpInner::KCODE_UTF8 as i64;
+        } else if option.contains('e') {
+            opt |= RegexpInner::KCODE_EUCJP as i64;
+        } else if option.contains('s') {
+            opt |= RegexpInner::KCODE_SJIS as i64;
+        }
+        // Always the first operand (even when 0) so the run-time layout is
+        // uniform: operand 0 is the option word, the rest are source
+        // fragments.
+        let r = self.push().into();
+        self.emit_literal(r, Value::integer(opt));
+        len += 1;
         for expr in nodes {
             self.push_expr(expr)?;
         }

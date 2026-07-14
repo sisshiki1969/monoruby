@@ -748,6 +748,17 @@ pub(super) extern "C" fn concatenate_regexp(
     len: usize,
 ) -> Option<Value> {
     use crate::value::rvalue::Encoding;
+    // Operand 0 is the literal-syntax option word (Onigmo `i`/`m`/`x` bits
+    // plus the `NOENCODING` / `KCODE_*` encoding-selector bits for
+    // `n`/`u`/`e`/`s`), emitted by `gen_regexp` as a Fixnum (0 = none).
+    // `gen_regexp` is the sole producer of `ConcatRegexp`, so this leading
+    // operand is always present. Operands are read *downward* from `arg`
+    // (`concatenate_string_inner` walks `arg.sub(i)`), so operand 0 is at
+    // `*arg` and the source fragments start one slot below.
+    // SAFETY: `arg` points at operand 0 of `len` (>= 1) operand `Value`s.
+    let option = unsafe { (*arg).try_fixnum().unwrap_or(0) } as u32;
+    let arg = unsafe { arg.sub(1) };
+    let len = len - 1;
     // Build the interpolated source as a String first, so each operand's
     // bytes and encoding combine under the same rules as `"#{}"` — a
     // non-ASCII embedded String (e.g. EUC-JP) then upgrades the regexp's
@@ -766,16 +777,34 @@ pub(super) extern "C" fn concatenate_regexp(
     // best-effort UTF-8 view while the raw bytes + encoding drive
     // `Regexp#source` / `#encoding`.
     let reg_str = String::from_utf8_lossy(&bytes).into_owned();
-    let onig_enc = if enc == Encoding::Ascii8 {
+    // Split the encoding-selector bits out of the option word into the
+    // KCODE the resolver reads (mirroring `const_regexp`); the Onigmo
+    // `i`/`m`/`x` bits stay in `option` and `with_option_kcode_source`
+    // strips the Ruby-only bits before handing the mask to Onigmo. With an
+    // encoding modifier the declared encoding is fixed by it regardless of
+    // the interpolated content's encoding; without one it is derived from
+    // that content as before.
+    let kcode = if option & RegexpInner::KCODE_MASK != 0 {
+        Some(option & RegexpInner::KCODE_MASK)
+    } else {
+        None
+    };
+    let onig_enc = if option & RegexpInner::NOENCODING != 0 {
+        // `/n`: ASCII / BINARY matching.
+        onigmo_regex::OnigmoEncoding::ASCII
+    } else if kcode.is_some() {
+        // `/u` `/e` `/s`: match against the best-effort UTF-8 view.
+        onigmo_regex::OnigmoEncoding::UTF8
+    } else if enc == Encoding::Ascii8 {
         onigmo_regex::OnigmoEncoding::ASCII
     } else {
         onigmo_regex::OnigmoEncoding::UTF8
     };
     let inner = match RegexpInner::with_option_kcode_source(
         reg_str,
-        0,
+        option,
         onig_enc,
-        None,
+        kcode,
         Some(enc),
         Some(bytes),
     ) {
