@@ -1,1 +1,0 @@
-fails:rescuing SignalException raises a SignalException when sent a signal

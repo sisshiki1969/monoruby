@@ -35,6 +35,26 @@ pub fn install_panic_hook() {
     }));
 }
 
+/// Terminate the process *as if killed by* `signo`, so the parent
+/// observes a signal death (`$?.signaled?` / `termsig`), matching what
+/// CRuby does when a `SignalException` goes uncaught: restore the OS
+/// default disposition, unblock the signal, and deliver it to self.
+/// The trailing `exit(1)` is unreachable for genuinely fatal signals
+/// and only runs if the kernel declined to terminate us (defensive).
+pub fn terminate_with_signal(signo: i32) -> ! {
+    unsafe {
+        // SAFETY: plain POSIX calls on this process; `signo` came from the
+        // signal table / a validated SignalException, so it is a real signal.
+        libc::signal(signo, libc::SIG_DFL);
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, signo);
+        libc::sigprocmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+        libc::kill(libc::getpid(), signo);
+    }
+    std::process::exit(1);
+}
+
 pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
 pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
 
@@ -3680,7 +3700,7 @@ pub(crate) extern "C" fn execute_gc(
     // coalesced signal). The CODEGEN borrow is released before
     // dispatching so a trap handler (which JIT-compiles, GCs, …) can
     // re-enter freely. See doc/signal_handling.md A6/A7.
-    let pending = CODEGEN.with(|codegen| codegen.borrow().take_pending_signals());
+    let pending = crate::codegen::signal_table::take_pending_signals();
     if let Some(signo) = crate::codegen::signal_table::lowest_pending_signo(pending) {
         use crate::codegen::signal_table::{self, SignalDisposition};
         match globals.signal_disposition(signo) {

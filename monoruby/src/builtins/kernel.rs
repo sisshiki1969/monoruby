@@ -2449,12 +2449,22 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     }
 }
 
-fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
+/// Shell commands that must be run *by* the shell even though the command
+/// string contains no metacharacters (they are builtins/reserved words, not
+/// executables). Mirrors CRuby's `posix_sh_cmds` in proc.c — e.g.
+/// `IO.popen("exit 99")` must yield exit status 99, not ENOENT.
+const POSIX_SH_CMDS: &[&str] = &[
+    "!", ".", ":", "break", "case", "continue", "do", "done", "elif", "else", "esac", "eval",
+    "exec", "exit", "export", "fi", "for", "if", "in", "read", "readonly", "return", "set",
+    "shift", "then", "times", "trap", "umask", "unset", "until", "wait", "while",
+];
+
+pub(super) fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
     let mut args = vec![];
     let include_meta = input.contains([
         '*', '?', '{', '}', '[', ']', '<', '>', '(', ')', '~', '&', '|', '\\', '$', ';', '\'',
         '\"', '`', '\n',
-    ]);
+    ]) || POSIX_SH_CMDS.contains(&input.split_whitespace().next().unwrap_or(""));
     let program = if include_meta {
         args.push(if cfg!(windows) { "/C" } else { "-c" }.to_string());
         args.push(input.to_string());
@@ -2607,6 +2617,20 @@ fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     if let MonorubyErrKind::SystemExit(status) = &err.kind {
                         std::process::exit(*status as i32)
                     }
+                    // An uncaught SignalException must kill the child *as
+                    // that signal* so the parent's `$?.signaled?`/`termsig`
+                    // see a signal death (CRuby semantics; see the same
+                    // logic in main.rs handle_error). Interrupt reports,
+                    // plain SignalException dies silently.
+                    if let Some((signo, is_interrupt)) =
+                        err.signal_exception_signo(&globals.store)
+                    {
+                        if is_interrupt {
+                            err.show_error_message_and_all_loc(&globals.store);
+                        }
+                        crate::executor::terminate_with_signal(signo);
+                    }
+                    err.show_error_message_and_all_loc(&globals.store);
                     std::process::exit(1)
                 }
             }
@@ -2743,11 +2767,37 @@ pub(super) fn spawn(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
 #[monoruby_builtin]
 fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::os::unix::process::ExitStatusExt;
     let arg0 = lfp.arg(0);
     let (program, args) = prepare_command_arg(&arg0.coerce_to_string(vm, globals)?);
-    match std::process::Command::new(program).args(&args).output() {
+    let child = std::process::Command::new(program)
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| MonorubyErr::runtimeerr(format!("{}", err)))?;
+    let pid = child.id();
+    match child.wait_with_output() {
         Ok(output) => {
             std::io::stderr().write_all(&output.stderr).unwrap();
+            // Set `$?` / Process.last_status from the raw wait(2) status so
+            // a signal-terminated child reports `signaled?` / `termsig`
+            // (CRuby sets $? after backticks; we previously left it nil).
+            let raw = output.status.into_raw();
+            if let Ok(status_class) =
+                vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
+            {
+                if let Ok(status_obj) = vm.invoke_method_inner(
+                    globals,
+                    IdentId::NEW,
+                    status_class,
+                    &[Value::integer(raw as i64), Value::integer(pid as i64)],
+                    None,
+                    None,
+                ) {
+                    globals.set_gvar(IdentId::get_id("$?"), status_obj);
+                }
+            }
             Ok(Value::string_from_vec(output.stdout))
         }
         Err(err) => Err(MonorubyErr::runtimeerr(format!("{}", err))),
@@ -2771,7 +2821,42 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 "time interval must not be negative or NaN",
             ));
         }
-        std::thread::sleep(std::time::Duration::from_secs_f64(sec));
+        // Sleep interruptibly, like CRuby: a delivered signal (whose async
+        // handler set a pending bit) breaks nanosleep with EINTR; drain it
+        // at this safepoint so a SIGTERM etc. raises its SignalException
+        // (or runs its trap handler) *immediately*, not after the full
+        // duration. `std::thread::sleep` must not be used here — it
+        // transparently retries on EINTR, so a signaled sleeper would
+        // otherwise doze the whole interval and only convert the signal at
+        // some later poll point (racy: the surrounding block may end
+        // first, and e.g. a fork child would then exit 0 instead of dying
+        // signal-terminated).
+        let deadline = now + std::time::Duration::from_secs_f64(sec);
+        loop {
+            let remaining = match deadline.checked_duration_since(std::time::Instant::now()) {
+                Some(d) if !d.is_zero() => d,
+                _ => break,
+            };
+            let ts = libc::timespec {
+                tv_sec: remaining.as_secs() as libc::time_t,
+                tv_nsec: remaining.subsec_nanos() as libc::c_long,
+            };
+            // SAFETY: plain POSIX nanosleep on a valid timespec.
+            let r = unsafe { libc::nanosleep(&ts, std::ptr::null_mut()) };
+            if r == 0 {
+                break;
+            }
+            if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                break;
+            }
+            // A signal interrupted the sleep: run the poll point. An error
+            // (converted SignalException) aborts the sleep; a trap handler
+            // runs and the sleep resumes for the remainder (CRuby+`trap`
+            // semantics on Linux SA_RESTART-less nanosleep).
+            if crate::executor::execute_gc(vm, globals).is_none() {
+                return Err(vm.take_error());
+            }
+        }
     } else {
         // monoruby is single-threaded; sleep without argument would block
         // forever with no way to be interrupted. Return immediately.

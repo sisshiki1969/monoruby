@@ -780,7 +780,7 @@ const SIGNAL_TABLE: &[(&str, i32)] = &[
 ];
 
 /// Map a signal name (with optional "SIG" prefix) to its host signo.
-fn signal_name_to_number(name: &str) -> Option<i32> {
+pub(crate) fn signal_name_to_number(name: &str) -> Option<i32> {
     let n = name.strip_prefix("SIG").unwrap_or(name);
     SIGNAL_TABLE
         .iter()
@@ -825,6 +825,8 @@ fn process_kill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
         }
     };
     let mut count = 0i64;
+    let mut signaled_self = false;
+    let self_pid = std::process::id() as i32;
     for pid_val in args.iter().skip(1) {
         let pid = pid_val.coerce_to_int_i64(vm, globals)? as i32;
         // SAFETY: libc::kill is an OS syscall with no Rust aliasing concerns.
@@ -833,7 +835,21 @@ fn process_kill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
             let err = std::io::Error::last_os_error();
             return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "kill"));
         }
+        // pid 0 signals our whole process group, negative pids a group that
+        // may include us; treat those as self-directed too.
+        signaled_self |= pid == self_pid || pid <= 0;
         count += 1;
+    }
+    if signaled_self {
+        // A signal sent to ourselves is delivered before kill(2) returns
+        // (single-threaded process, handler installed), so its pending bit
+        // is already set. Drain it *now* so `Process.kill(:TERM, Process.pid)`
+        // raises the converted SignalException (or runs the trap handler)
+        // inside the `kill` call, as CRuby does — not at some later poll
+        // point after the caller's block has already returned.
+        if crate::executor::execute_gc(vm, globals).is_none() {
+            return Err(vm.take_error());
+        }
     }
     Ok(Value::integer(count))
 }
@@ -1229,6 +1245,27 @@ mod tests {
             [ret == pid, status.class.to_s, status.exitstatus]
             "#,
         );
+    }
+
+    // NOTE: self-signal conversion / uncaught-SignalException re-raise tests
+    // live in tests/signal_handling.rs as *subprocess* tests: sending signals
+    // to Process.pid here would signal the shared cargo-test process (signals
+    // and the pending bitmap are process-wide) and race with other tests.
+
+    #[test]
+    fn popen_and_backtick_preserve_signal_death() {
+        // IO.popen(string) must not interpose a shell for plain commands:
+        // a wrapping sh reports a signal-killed child as a normal exit
+        // 128+signo, destroying signaled?/termsig. Shell builtins still
+        // route through sh (posix_sh_cmds).
+        run_test_once(
+            r#"
+            IO.popen("exit 99") { |io| io.read }
+            Process.last_status.exitstatus
+            "#,
+        );
+        // Backticks set $? (previously left nil).
+        run_test_once(r#"`echo hi`; [$?.class.to_s, $?.exitstatus, $?.success?]"#);
     }
 
     #[test]

@@ -62,6 +62,7 @@ pub(crate) use codegen::jitgen::JitContext;
 pub use executor::Executor;
 pub use executor::frame_leak_stats;
 pub use executor::install_panic_hook;
+pub use executor::terminate_with_signal;
 pub use globals::OBJECT_CLASS;
 pub use globals::set_cli_flag_gvars;
 pub use globals::{load_file, read_source_file};
