@@ -840,6 +840,7 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         return Ok(Value::bool(false));
     };
     check_subject_match_encoding(&globals.store, &regex, subject)?;
+    warn_binary_regexp_match(vm, globals, &regex, subject);
     // Stash a UTF-8-valid String subject so the MatchData snapshot is
     // zero-copy and carries the subject's encoding into $&/$1..$N;
     // non-UTF-8 subjects fall back to the owned lossy copy as before.
@@ -926,6 +927,34 @@ fn check_subject_match_encoding(
     Ok(())
 }
 
+/// CRuby's `historical binary regexp match` warning (`rb_reg_prepare_enc`):
+/// a `/n` (NOENCODING) regexp matched against a String that carries
+/// non-ASCII content in an encoding other than ASCII-8BIT relies on
+/// byte-wise matching that predates encoding-aware regexps. Warn at the
+/// default level, once per match, like CRuby. No-op for a Symbol subject
+/// or an ASCII-only / already-BINARY String.
+fn warn_binary_regexp_match(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    regex: &RegexpInner,
+    subject: Value,
+) {
+    if regex.option() & RegexpInner::NOENCODING == 0 || subject.is_rstring().is_none() {
+        return;
+    }
+    let inner = subject.as_rstring_inner();
+    let enc = inner.encoding();
+    if enc != crate::value::Encoding::Ascii8 && !inner.is_ascii_only() {
+        let _ = vm.ruby_warn(
+            globals,
+            &format!(
+                "warning: historical binary regexp match /.../n against {} string",
+                enc.name()
+            ),
+        );
+    }
+}
+
 ///
 /// ### Regexp#=~
 /// - self =~ string -> Integer | nil
@@ -953,6 +982,7 @@ fn regexp_match(
     // Symbols and non-UTF-8 subjects fall back to the owned conversion.
     let arg0 = lfp.arg(0);
     check_subject_match_encoding(&globals.store, &regex, arg0)?;
+    warn_binary_regexp_match(vm, globals, &regex, arg0);
     let given_owned;
     let given: &str = match arg0.is_rstring() {
         Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
@@ -1048,6 +1078,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         return Ok(Value::bool(false));
     }
     check_subject_match_encoding(&globals.store, &regex, arg0)?;
+    warn_binary_regexp_match(vm, globals, &regex, arg0);
     let given = arg0.expect_symbol_or_string(globals)?.to_string();
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
         match conv_index(pos.coerce_to_int_i64(vm, globals)?, given.chars().count()) {
@@ -1098,6 +1129,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
     }
     check_subject_match_encoding(&globals.store, &regex, arg0)?;
+    warn_binary_regexp_match(vm, globals, &regex, arg0);
     // Borrow the subject's bytes directly (and stash the Value for
     // the zero-copy MatchData snapshot) when it is a UTF-8 String;
     // Symbols and non-UTF-8 subjects fall back to the owned
@@ -2270,6 +2302,37 @@ mod tests {
         );
         // A valid (binary) subject still matches.
         run_test(r#"/a/.match("xay".b).nil?"#);
+    }
+
+    #[test]
+    fn regexp_binary_match_warning() {
+        // A `/n` (NOENCODING) regexp matched against a non-ASCII String in
+        // an encoding other than ASCII-8BIT warns "historical binary regexp
+        // match" across match / =~; ASCII-only, BINARY, or non-/n cases are
+        // silent. Capture $stderr and assert on what was written.
+        run_test_once(
+            r#"
+            def cap
+              saved = $stderr
+              buf = +""
+              io = Object.new
+              io.define_singleton_method(:write) { |*a| a.each { |x| buf << x.to_s } }
+              $stderr = io
+              yield
+              buf
+            ensure
+              $stderr = saved
+            end
+            u = "\303\251".dup.force_encoding("utf-8")
+            res = []
+            res << cap { /./n.match(u) }.scan(/historical binary regexp match/)
+            res << cap { /./n =~ u }.scan(/historical binary regexp match/)
+            res << cap { /./n.match("abc") }.empty?
+            res << cap { /./n.match("\303\251".b) }.empty?
+            res << cap { /./.match(u) }.empty?
+            res
+            "#,
+        );
     }
 
     #[test]
