@@ -1227,16 +1227,26 @@ impl RegexpInner {
         given: &str,
     ) -> Result<Vec<Value>> {
         let mut ary = vec![];
-        let mut last_captures = None;
+        let mut last_captures: Option<Captures> = None;
         vm.clear_capture_special_variables();
-        for cap in self.regex.captures_iter(given) {
-            let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
+        // Walk the haystack manually rather than via `captures_iter`, which
+        // drops zero-width matches the CRuby scan is expected to yield — the
+        // empty position between two non-empty matches, and the empty match
+        // at end-of-string after a non-empty one (e.g.
+        // `"foo".scan(/(?~foo)/) == ["fo", "o", ""]`). Same loop as
+        // `replace_repeat`: advance past a non-empty match, and by one
+        // Unicode scalar past an empty one (past EOS to terminate).
+        let mut pos = 0usize;
+        while pos <= given.len() {
+            let cap = match self.captures_from_pos(given, pos, vm)? {
+                Some(c) => c,
+                None => break,
+            };
+            let m = cap.get(0).unwrap();
+            let (start, end) = (m.start(), m.end());
             match cap.len() {
                 0 => unreachable!(),
-                1 => {
-                    let m = cap.get(0).unwrap();
-                    ary.push(string_substring(subject, m.start(), m.end()));
-                }
+                1 => ary.push(string_substring(subject, start, end)),
                 len => {
                     let mut vec = vec![];
                     for i in 1..len {
@@ -1249,6 +1259,17 @@ impl RegexpInner {
                 }
             }
             last_captures = Some(cap);
+            pos = if end > start {
+                end
+            } else if start >= given.len() {
+                given.len() + 1
+            } else {
+                let mut next = start + 1;
+                while next < given.len() && !given.is_char_boundary(next) {
+                    next += 1;
+                }
+                next
+            };
         }
 
         if let Some(c) = last_captures {
