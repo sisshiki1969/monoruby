@@ -2961,14 +2961,28 @@ fn scan_block_loop(
     // change after each block call to raise "string modified" like CRuby.
     let given = subject.as_rstring_inner().check_utf8()?;
     let recv_len = recv.as_rstring_inner().len();
-    for cap in re.captures_iter(given) {
-        let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
-        vm.save_capture_special_variables(&cap, given);
+    // Manual walk (as in the no-block `RegexpInner::scan` and
+    // `replace_repeat`) so zero-width matches the CRuby scan yields —
+    // between two non-empty matches, and at end-of-string after a
+    // non-empty one — are not dropped by `captures_iter`.
+    // `captures_from_pos` already stores each match into `$~` (and clears
+    // it on the terminal no-match), so the block sees the current match's
+    // `$~`. Keep the last match to restore `$~` after the loop: the block
+    // body may clobber it, and the terminal no-match clears it, but CRuby
+    // leaves `$~` set to the scan's final match (nil if there was none).
+    let mut last_captures: Option<onigmo_regex::Captures> = None;
+    let mut pos = 0usize;
+    while pos <= given.len() {
+        let cap = match re.captures_from_pos(given, pos, vm)? {
+            Some(c) => c,
+            None => break,
+        };
+        let m = cap.get(0).unwrap();
+        let (start, end) = (m.start(), m.end());
         match cap.len() {
             0 => unreachable!(),
             1 => {
-                let m = cap.get(0).unwrap();
-                let val = string_substring(subject, m.start(), m.end());
+                let val = string_substring(subject, start, end);
                 vm.invoke_block(globals, data, &[val])?;
             }
             len => {
@@ -2984,6 +2998,21 @@ fn scan_block_loop(
             }
         }
         check_string_not_modified(recv, recv_len)?;
+        last_captures = Some(cap);
+        pos = if end > start {
+            end
+        } else if start >= given.len() {
+            given.len() + 1
+        } else {
+            let mut next = start + 1;
+            while next < given.len() && !given.is_char_boundary(next) {
+                next += 1;
+            }
+            next
+        };
+    }
+    if let Some(c) = last_captures {
+        vm.save_capture_special_variables(&c, given);
     }
     Ok(())
 }
@@ -8594,6 +8623,23 @@ mod tests {
             r##"
         "test".scan(/(z)?e/)
         "##,
+            // Zero-width matches CRuby yields but `captures_iter` dropped:
+            // the empty match at end-of-string after a non-empty one
+            // (`(?~foo)`), and the empties between/around non-empty runs.
+            r##"[Regexp.new("(?~foo)"), /[^,]*/, /x?/, /\w*/].map { |re| "foo".scan(re) }"##,
+            r##""a,b,,c".scan(/[^,]*/)"##,
+            r##"r = []; "foo".scan(Regexp.new("(?~foo)")) { |m| r << m }; [r, $&]"##,
+            // $~ after a block scan is the last scan match (nil if none),
+            // even when the block clobbers it.
+            r##""hello".scan(/./) { "ok".match(/./) }; [$~[0], $~.string]"##,
+            r##""hello.".scan("l") { }; [$~.begin(0), $~[0]]"##,
+            // Empty matches on a multibyte string advance by one scalar, not
+            // one byte (the char-boundary loop in both scan forms).
+            r##""あいう".scan(//)"##,
+            r##"r = []; "あいう".scan(//) { |m| r << m }; r"##,
+            // Block form with multiple capture groups (the `len =>` arm).
+            r##"r = []; "aXbXc".scan(/(.)(X)/) { |a, b| r << [a, b] }; r"##,
+            r##"r = []; "あXいXう".scan(/(.)(X)/) { |a, b| r << [a, b] }; r"##,
             r##"
         "abcdefgdddefjklefl".match(/d*ef/) {
             |matched| matched.to_s
