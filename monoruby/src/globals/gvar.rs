@@ -77,6 +77,27 @@ pub struct GvarTable {
 /// giving up.
 const ALIAS_MAX_DEPTH: usize = 16;
 
+/// Resolve a numbered back-reference name (`$1`, `$10`, `$4294967296`, …)
+/// against the current match. `$1`..`$9` are pre-registered as hooks, so
+/// this is reached for `$10` and above (and as the shared logic behind the
+/// low ones). Returns `None` when `name` isn't a `$<digits>` form or the
+/// index is out of range / too large to be a real capture (CRuby then
+/// reads it as `nil`).
+fn numbered_backref(vm: &mut Executor, name: IdentId) -> Option<Value> {
+    let s = name.get_name();
+    let rest = s.strip_prefix('$')?;
+    // Must be a non-empty run of ASCII digits — punctuation specials
+    // (`$&`, `$~`, …) and named globals are handled elsewhere.
+    if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // An index too large for a capture slot is always `nil` (CRuby warns
+    // at parse time and yields nil). `parse` overflowing `i64` counts as
+    // such a too-big index.
+    let n = rest.parse::<i64>().ok()?;
+    vm.get_special_matches(n)
+}
+
 impl GvarTable {
     pub fn new() -> Self {
         Self::default()
@@ -146,7 +167,14 @@ impl GvarTable {
     /// (which may itself be `nil`, e.g. `$~` after no match); `None` means
     /// the variable does not exist.
     fn lookup(vm: &mut Executor, globals: &mut Globals, name: IdentId) -> Option<Value> {
-        let id = globals.gvars.index.get(&name).copied()?;
+        let id = match globals.gvars.index.get(&name).copied() {
+            Some(id) => id,
+            // `$10`, `$11`, … — numbered capture references beyond the
+            // pre-registered `$1`..`$9`. They can be arbitrarily large, so
+            // they aren't pre-registered; resolve them against the current
+            // match here (mirroring the `$1`..`$9` hook's getter).
+            None => return numbered_backref(vm, name),
+        };
         let id = globals.gvars.resolve(id);
         match &globals.gvars.entries[id.index()] {
             GvarEntry::Simple(v) => Some(*v),

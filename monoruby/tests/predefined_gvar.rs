@@ -132,6 +132,26 @@ fn match_data_assignment() {
 }
 
 #[test]
+fn numbered_capture_variables() {
+    // `$10`..`$N` beyond the pre-registered `$1`..`$9` resolve against
+    // the current match; an out-of-range or too-big index reads as nil
+    // (and does not masquerade as `$0`, the program name).
+    run_test_once(
+        r#"
+        res = []
+        "1234567890" =~ /(1)(2)(3)(4)(5)(6)(7)(8)(9)(0)/
+        res << [$1, $9, $10, $11]
+        res << [defined?($10), defined?($11)]
+        "abc" =~ /(a)(b)(c)/
+        res << $100
+        # A too-big numbered reference is always nil (never the program name).
+        res << eval("$4294967296")
+        res
+        "#,
+    );
+}
+
+#[test]
 fn errinfo_backtrace_gvar() {
     run_test_once(
         r#"
