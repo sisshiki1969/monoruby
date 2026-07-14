@@ -2723,10 +2723,10 @@ fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
         TimeInner::Local(t) => (t.with_timezone(&Utc).timestamp(), t.nanosecond()),
         TimeInner::Utc(t) => (t.timestamp(), t.nanosecond()),
     };
-    let mut hasher = std::hash::DefaultHasher::new();
+    let mut hasher = crate::value::seeded_hasher();
     secs.hash(&mut hasher);
     nsec.hash(&mut hasher);
-    Ok(Value::integer_from_u64(hasher.finish()))
+    Ok(Value::from_hash_digest(hasher.finish()))
 }
 
 impl std::ops::Sub<Self> for TimeInner {

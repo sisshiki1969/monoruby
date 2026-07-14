@@ -645,7 +645,10 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let recursive_marker = Value::integer(0);
-    crate::value::exec_recursive(
+    // Outer-recursion collapse (CRuby rb_exec_recursive_outer): a cycle
+    // detected at any depth collapses the *outermost* #hash to the
+    // sentinel, so `h.hash == {x: h}.hash` when h[:x] = h (h.eql?(x: h)).
+    crate::value::exec_recursive_outer(
         self_val.id(),
         || {
             let h = self_val.as_hash();
@@ -672,7 +675,9 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 let vpart = vh.wrapping_mul(VAL_MIX).rotate_left(13);
                 acc = acc.wrapping_add(kpart ^ vpart);
             }
-            Ok(Value::integer(acc))
+            // Fold into Fixnum range: a Bignum digest would degrade to 0
+            // when this hash is itself an element of an outer Hash.
+            Ok(Value::from_hash_digest(acc as u64))
         },
         recursive_marker,
     )

@@ -1375,25 +1375,25 @@ fn reset(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn set_hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use crate::RubyHash;
-    use std::collections::hash_map::DefaultHasher;
     use std::hash::Hasher;
     // Hash every element through `Value::ruby_hash`, which is content-based
     // (e.g. strings hash by bytes, not by object identity). Combine with
     // XOR so the result is order-independent — two Sets with the same
     // members always hash equal regardless of insertion order.
     //
-    // `DefaultHasher::new()` uses fixed keys, so the result is stable
-    // across processes with the same element hashes.
+    // The per-process seeded hasher keeps element digests consistent
+    // within a process while randomizing them across processes
+    // (CVE-2011-4815).
     let keys = set_keys(lfp.self_val());
-    // Seed mixed in to distinguish an empty Set from other empty
+    // Constant mixed in to distinguish an empty Set from other empty
     // aggregates that XOR-combine to 0.
     let mut combined: u64 = 0x5e7_5e7_5e7_5e7;
     for k in keys {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = crate::value::seeded_hasher();
         k.ruby_hash(&mut hasher, vm, globals)?;
         combined ^= hasher.finish();
     }
-    Ok(Value::integer(combined as i64))
+    Ok(Value::from_hash_digest(combined))
 }
 
 #[cfg(test)]

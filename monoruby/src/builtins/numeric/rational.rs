@@ -571,10 +571,10 @@ fn negative_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::hash::{Hash, Hasher};
     let r = self_rat(lfp);
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = crate::value::seeded_hasher();
     r.num().hash(&mut hasher);
     r.den().hash(&mut hasher);
-    Ok(Value::integer(hasher.finish() as i64))
+    Ok(Value::from_hash_digest(hasher.finish()))
 }
 
 #[monoruby_builtin]

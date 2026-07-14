@@ -157,7 +157,7 @@ fn proc_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     let h = (proc.func_id().get() as u64)
         .wrapping_mul(31)
         .wrapping_add(proc.self_val().id());
-    Ok(Value::integer(h as i64))
+    Ok(Value::from_hash_digest(h))
 }
 
 ///

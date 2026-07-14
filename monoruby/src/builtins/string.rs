@@ -397,7 +397,7 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let h = lfp.self_val().calculate_hash(vm, globals)?;
-    Ok(Value::integer_from_u64(h))
+    Ok(Value::from_hash_digest(h))
 }
 
 

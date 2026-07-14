@@ -515,10 +515,10 @@ fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     use std::hash::{Hash, Hasher};
     let self_val = lfp.self_val();
     let c = self_val.as_complex();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = crate::value::seeded_hasher();
     c.re().hash(&mut hasher);
     c.im().hash(&mut hasher);
-    Ok(Value::integer(hasher.finish() as i64))
+    Ok(Value::from_hash_digest(hasher.finish()))
 }
 
 ///

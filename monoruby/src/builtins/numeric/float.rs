@@ -43,6 +43,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "/", div, div_ff_f, 1);
     globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "%", rem, rem_ff_f, 1);
     globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "**", pow, pow_ff_f, 1);
+    globals.define_builtin_func(FLOAT_CLASS, "hash", hash, 0);
     globals.define_builtin_func(FLOAT_CLASS, "div", div_floor, 1);
     globals.define_builtin_func(FLOAT_CLASS, "modulo", rem, 1);
     globals.define_builtin_func(FLOAT_CLASS, "divmod", divmod, 1);
@@ -223,6 +224,32 @@ fn float_toi(
 /// - to_i -> Integer
 /// - [NOT SUPPORTED]truncate(ndigits = 0) -> Integer | Float
 ///
+///
+/// ### Float#hash
+///
+/// - hash -> Integer
+///
+/// Digests the numeric value through the per-process seeded hasher
+/// (CVE-2011-4815). Hashes the canonical bit pattern (±0.0 normalized to
+/// +0.0, matching `0.0.eql?(-0.0)`) so a flonum and an equal heap-allocated
+/// Float agree. Without this, `Float#hash` fell back to `Kernel#hash`:
+/// flonum tags are identical in every process, and equal heap Floats
+/// hashed by address.
+#[monoruby_builtin]
+fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::hash::{Hash, Hasher};
+    let mut f = match lfp.self_val().unpack() {
+        RV::Float(f) => f,
+        _ => unreachable!(),
+    };
+    if f == 0.0 {
+        f = 0.0;
+    }
+    let mut s = crate::value::seeded_hasher();
+    f.to_bits().hash(&mut s);
+    Ok(Value::from_hash_digest(s.finish()))
+}
+
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_i.html]
 #[monoruby_builtin]
 fn toi(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {

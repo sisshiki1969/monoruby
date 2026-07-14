@@ -660,7 +660,7 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     crate::value::exec_recursive_outer(
         id,
         || {
-            let mut hasher = std::hash::DefaultHasher::new();
+            let mut hasher = crate::value::seeded_hasher();
             hasher.write_u64(class_hash);
             if let Some(s) = self_val.try_struct() {
                 for i in 0..s.len() {
@@ -669,9 +669,7 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     hasher.write_u64(h);
                 }
             }
-            Ok(Value::integer(
-                (hasher.finish() & 0x7fff_ffff_ffff_ffff) as i64,
-            ))
+            Ok(Value::from_hash_digest(hasher.finish()))
         },
         // On any recursion at any depth, the outer call returns this
         // sentinel, so two structs that cycle at different depths still
