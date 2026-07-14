@@ -839,6 +839,7 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else {
         return Ok(Value::bool(false));
     };
+    check_subject_match_encoding(&globals.store, &regex, subject)?;
     // Stash a UTF-8-valid String subject so the MatchData snapshot is
     // zero-copy and carries the subject's encoding into $&/$1..$N;
     // non-UTF-8 subjects fall back to the owned lossy copy as before.
@@ -858,6 +859,71 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     vm.set_match_regex(self_);
     let res = Value::bool(regex.find_one(vm, given)?.is_some());
     Ok(res)
+}
+
+/// CRuby's `rb_reg_prepare_enc`: verify that `regex` can be matched
+/// against a subject of encoding `str_enc` (with `str_ascii_only`
+/// telling whether its content is entirely 7-bit), raising
+/// `Encoding::CompatibilityError` when it cannot. No-op for
+/// Symbol subjects and for compatible String/Regexp encoding pairs.
+///
+/// The rule:
+///   - An **ASCII-incompatible** subject (UTF-16/32) is matchable only
+///     by a regexp of the *same* encoding.
+///   - A **fixed-encoding** regexp on an ASCII-compatible subject must
+///     share the subject's encoding, unless the regexp's own encoding is
+///     ASCII-compatible *and* the subject is entirely 7-bit.
+///   - Otherwise (a non-fixed, ASCII-compatible regexp on an
+///     ASCII-compatible subject) any content is fine.
+fn check_match_encoding(
+    store: &Store,
+    regex: &RegexpInner,
+    str_enc: crate::value::Encoding,
+    str_ascii_only: bool,
+) -> Result<()> {
+    let reg_enc = regex.declared_encoding();
+    if !str_enc.is_ascii_compatible() {
+        if reg_enc != str_enc {
+            return Err(regexp_encoding_mismatch(store, reg_enc, str_enc));
+        }
+    } else if regex.fixed_encoding()
+        && reg_enc != str_enc
+        && (!reg_enc.is_ascii_compatible() || !str_ascii_only)
+    {
+        return Err(regexp_encoding_mismatch(store, reg_enc, str_enc));
+    }
+    Ok(())
+}
+
+/// `Encoding::CompatibilityError` for a regexp/subject encoding clash,
+/// worded as CRuby's `reg_enc_error`.
+fn regexp_encoding_mismatch(
+    store: &Store,
+    reg_enc: crate::value::Encoding,
+    str_enc: crate::value::Encoding,
+) -> MonorubyErr {
+    MonorubyErr::encoding_compatibility_error_with_store(
+        store,
+        format!(
+            "incompatible encoding regexp match ({} regexp with {} string)",
+            reg_enc.name(),
+            str_enc.name()
+        ),
+    )
+}
+
+/// Run [`check_match_encoding`] for a subject `Value` — only Strings
+/// carry an encoding that can clash; Symbols are always compatible.
+fn check_subject_match_encoding(
+    store: &Store,
+    regex: &RegexpInner,
+    subject: Value,
+) -> Result<()> {
+    if subject.is_rstring().is_some() {
+        let inner = subject.as_rstring_inner();
+        check_match_encoding(store, regex, inner.encoding(), inner.is_ascii_only())?;
+    }
+    Ok(())
 }
 
 ///
@@ -886,6 +952,7 @@ fn regexp_match(
     // encoding to $&/$`/$'/$1..$N) when it is a UTF-8-valid String;
     // Symbols and non-UTF-8 subjects fall back to the owned conversion.
     let arg0 = lfp.arg(0);
+    check_subject_match_encoding(&globals.store, &regex, arg0)?;
     let given_owned;
     let given: &str = match arg0.is_rstring() {
         Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
@@ -980,6 +1047,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if arg0.is_nil() {
         return Ok(Value::bool(false));
     }
+    check_subject_match_encoding(&globals.store, &regex, arg0)?;
     let given = arg0.expect_symbol_or_string(globals)?.to_string();
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
         match conv_index(pos.coerce_to_int_i64(vm, globals)?, given.chars().count()) {
@@ -1029,6 +1097,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             )));
         }
     }
+    check_subject_match_encoding(&globals.store, &regex, arg0)?;
     // Borrow the subject's bytes directly (and stash the Value for
     // the zero-copy MatchData snapshot) when it is a UTF-8 String;
     // Symbols and non-UTF-8 subjects fall back to the owned
@@ -2184,6 +2253,39 @@ mod tests {
         );
         // A valid (binary) subject still matches.
         run_test(r#"/a/.match("xay".b).nil?"#);
+    }
+
+    #[test]
+    fn regexp_match_encoding_compatibility() {
+        // CRuby `rb_reg_prepare_enc`: a regexp/subject encoding clash
+        // raises Encoding::CompatibilityError across `match` / `match?` /
+        // `=~` / `===`.
+        // (1) ASCII-incompatible subject (UTF-16LE) vs an ASCII regexp.
+        run_test(
+            r#"(/\A[[:space:]]*\z/.match(" ".encode("UTF-16LE")); nil) rescue $!.class.name"#,
+        );
+        run_test(
+            r#"(/\A[[:space:]]*\z/.match?(" ".encode("UTF-16LE")); nil) rescue $!.class.name"#,
+        );
+        run_test(r#"(/\A[[:space:]]*\z/ =~ " ".encode("UTF-16LE"); nil) rescue $!.class.name"#);
+        run_test(r#"(/x/ === "y".encode("UTF-16LE"); nil) rescue $!.class.name"#);
+        // (2) A fixed-encoding regexp whose encoding differs from the
+        // (ASCII-compatible) subject's.
+        run_test(
+            r#"(Regexp.new("".dup.force_encoding("UTF-16LE"), Regexp::FIXEDENCODING) =~ " ".encode("UTF-8"); nil) rescue $!.class.name"#,
+        );
+        // (3) A fixed US-ASCII regexp vs a UTF-8 subject with non-ASCII
+        // content.
+        run_test(
+            r#"(Regexp.new("".dup.force_encoding("US-ASCII"), Regexp::FIXEDENCODING) =~ "\303\251".dup.force_encoding("UTF-8"); nil) rescue $!.class.name"#,
+        );
+        // Compatible pairs (ASCII subject, or same encoding) still match.
+        run_test(r#"[ /abc/ =~ "xabc", /\d+/.match("a12b")[0], ("héllo" =~ /é/) ]"#);
+        // A subject broken in its own encoding is still ArgumentError,
+        // not CompatibilityError.
+        run_test(
+            r#"("\x80".dup.force_encoding("UTF-8") =~ /./; nil) rescue [$!.class.name, $!.message]"#,
+        );
     }
 
     #[test]
