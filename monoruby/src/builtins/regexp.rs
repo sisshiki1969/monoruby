@@ -2231,4 +2231,26 @@ mod tests {
               .map { |r| r.source.encoding.to_s }"#,
         );
     }
+
+    #[test]
+    fn regexp_interpolation_encoding_modifiers() {
+        // An interpolated regexp with an `n`/`u`/`e`/`s` encoding modifier
+        // must not feed the letter into an Onigmo group option (`(?n)` —
+        // which used to raise "undefined group option"); the modifier fixes
+        // the declared encoding while the interpolated bytes form the source.
+        run_test(
+            r#"x = "a"
+               [ /#{x}/n, /#{x}/u, /#{x}/e, /#{x}/s, /#{x}/ ]
+                 .map { |r| r.encoding.to_s }"#,
+        );
+        // `i`/`m`/`x` still lower to an inline `(?imx)` group and the
+        // interpolated fragments still form the source verbatim.
+        run_test(
+            r#"x = "b"
+               r = /a#{x}c/imx
+               [r.source, (r =~ "xABCx"), r.match("aBc")[0]]"#,
+        );
+        // A modifier combined with `i`, and with a leading empty fragment.
+        run_test(r#"x = "Z"; (/#{x}/i =~ "qzq")"#);
+    }
 }
