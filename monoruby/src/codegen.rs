@@ -990,6 +990,14 @@ impl Codegen {
         // armed now. The rest stay at their OS default until a user
         // `Signal.trap` wires the pre-generated stub in. See A3.
         for &signo in signal_table::POSIX_SIGNALS {
+            // The hang watchdog (MONORUBY_HANG_WATCHDOG_SEC) drives its
+            // abort via a setitimer(2)-generated SIGALRM; when it is armed
+            // it owns that signal — don't displace its handler with the
+            // conversion stub. (If the watchdog arms after this point, its
+            // own sigaction overwrites the stub, so it wins either way.)
+            if signo == libc::SIGALRM && crate::watchdog::armed() {
+                continue;
+            }
             if !codegen.install_signal_stub(signo) {
                 panic!("Failed to set signal handler for signo {signo}");
             }

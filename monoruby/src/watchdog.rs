@@ -77,6 +77,15 @@ fn arm_from_env() {
     eprintln!("monoruby: hang watchdog armed (MONORUBY_HANG_WATCHDOG_SEC={secs})");
 }
 
+/// Whether the watchdog is armed (env var set to a positive budget).
+/// When armed, the watchdog owns `SIGALRM`: the runtime's default
+/// signal-conversion install skips ALRM so the watchdog's handler is
+/// not displaced (see `Codegen::new`); if the watchdog arms *after*
+/// codegen init, its own `sigaction` overwrites the stub anyway.
+pub(crate) fn armed() -> bool {
+    BUDGET.load(Ordering::Relaxed) > 0
+}
+
 /// Record interpreter progress. Called from the VM poll point; resets
 /// the countdown so the watchdog only fires after a full [`BUDGET`]
 /// seconds with no poll point reached. Cheap (one relaxed load) and a
