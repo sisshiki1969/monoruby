@@ -1727,6 +1727,17 @@ mod tests {
     }
 
     #[test]
+    fn regexp_unterminated_unicode_property_raises() {
+        // `\p{name}` / `\P{name}` must be closed; an unterminated one is a
+        // RegexpError (Onigmo would otherwise accept it silently).
+        run_test_error(r#"Regexp.new('\p{')"#);
+        run_test_error(r#"Regexp.new('\p{Wor')"#);
+        run_test_error(r#"Regexp.new('\P{')"#);
+        // A closed property still compiles and matches.
+        run_test(r#"[/\p{Word}/.match("a").to_a, /\p{Alpha}+/.match("abc").to_a, /\p{^L}/.match("1").to_a]"#);
+    }
+
+    #[test]
     fn regexp_new_unexpected_option_warns_and_treats_as_truthy() {
         // A non-Integer / non-String / non-bool / non-nil second
         // argument writes a `warning: expected true or false as

@@ -261,6 +261,17 @@ fn pre_validate_regex(src: &str) -> Result<()> {
                 )));
             }
         }
+        if (next == b'p' || next == b'P') && bytes.get(i + 2) == Some(&b'{') {
+            // `\p{name}` / `\P{name}` (Unicode property) must be closed
+            // with `}`. Onigmo accepts an unterminated `\p{` silently;
+            // CRuby raises RegexpError. Flag the no-closing-brace case
+            // (a valid property always has one).
+            if !bytes[i + 3..].contains(&b'}') {
+                return Err(MonorubyErr::regexerr(format!(
+                    "invalid character property name: /{src}/"
+                )));
+            }
+        }
         // Skip the `\` plus the escaped char.
         i += 2;
     }
