@@ -16,7 +16,6 @@ impl JitModule {
         let bop_redefined_flags = jit.data_i32(0);
         let const_version = jit.data_i64(1);
         let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
-        let pending_signals = jit.data_i32(0);
         let entry_raise = jit.label();
         let entry_panic = jit.label();
         let exec_gc = jit.label();
@@ -40,7 +39,6 @@ impl JitModule {
             class_version,
             const_version,
             alloc_flag,
-            pending_signals,
             entry_raise,
             exec_gc,
             f64_to_val,
@@ -272,25 +270,31 @@ impl JitModule {
     }
 
     /// Emit a per-signal asm stub. Each stub OR-sets its own bit into
-    /// `pending_signals` and nudges `alloc_flag` so the next GC poll
-    /// in `execute_gc` notices the signal and converts it to a Ruby
-    /// exception. `signo` is the POSIX signal number (1..32).
+    /// the process-global `signal_table::PENDING_SIGNALS` bitmap and
+    /// nudges `alloc_flag` so the next GC poll in `execute_gc` notices
+    /// the signal and converts it to a Ruby exception. `signo` is the
+    /// POSIX signal number (1..32).
     ///
     /// The handler runs in async-signal context; the only operations
-    /// performed are a memory OR and an ADD, both of which are
-    /// async-signal-safe on x86-64. No call into Rust.
+    /// performed are a memory OR and an ADD, both async-signal-safe on
+    /// x86-64, and rax is caller-saved under the C ABI a signal handler
+    /// is invoked with. No call into Rust. The bitmap is a process
+    /// global (its absolute address is baked in) so the recording side
+    /// and the polling side agree even when several `Codegen`s exist
+    /// (each re-`sigaction`s process-wide; see signal_table.rs).
     pub(crate) fn signal_handler_for(
         &mut self,
         alloc_flag: DestLabel,
-        pending_signals: DestLabel,
         signo: i32,
     ) -> CodePtr {
         debug_assert!((1..=32).contains(&signo));
         let bit: i32 = 1 << (signo - 1);
+        let ps_addr = crate::codegen::signal_table::pending_signals_addr();
         let codeptr = self.jit.get_current_address();
         monoasm! { &mut self.jit,
             addl [rip + alloc_flag], 10;
-            orl  [rip + pending_signals], (bit);
+            movq rax, (ps_addr);
+            orl  [rax], (bit);
             ret;
         }
         codeptr

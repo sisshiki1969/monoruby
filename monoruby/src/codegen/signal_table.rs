@@ -12,19 +12,56 @@
 //! default core-dump path is the right response, not a Ruby `rescue`.
 
 use crate::{MonorubyErr, Value};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Process-global bitmap of pending Unix signals — bit `n` corresponds
+/// to signal `n + 1` (SIGINT = 2 ⇒ bit 1). Written from the per-signal
+/// asm stubs (`signal_handler_for`), drained at poll time.
+///
+/// This is deliberately a *process* global, not per-`Codegen` JIT data:
+/// POSIX signals are process-wide, and `sigaction` is process-wide. With
+/// per-Codegen storage, a second `Codegen` (e.g. another test thread)
+/// re-pointing the process's handlers at *its* bitmap meant a signal
+/// could be recorded in one Codegen's bitmap while the executing (or
+/// forked-child) thread polled a different one — the signal was silently
+/// lost. One global bitmap makes recording and draining agree no matter
+/// which Codegen installed the handler.
+pub(crate) static PENDING_SIGNALS: AtomicU32 = AtomicU32::new(0);
+
+/// Absolute address of `PENDING_SIGNALS`, baked into the asm stubs.
+pub(crate) fn pending_signals_addr() -> u64 {
+    &PENDING_SIGNALS as *const AtomicU32 as u64
+}
+
+/// Atomically drain the pending-signal bitmap.
+pub(crate) fn take_pending_signals() -> u32 {
+    PENDING_SIGNALS.swap(0, Ordering::Relaxed)
+}
 
 /// List of POSIX signals monoruby installs an async-signal handler
-/// for *by default*. Only SIGINT is here: every other signal's CRuby
-/// default action is *terminate the process* (or be signal-delivered
-/// up to `Process.wait`), not raise — installing an unconditional
-/// catch-and-convert would break `Process.kill("TERM", child); $?.signaled?`
-/// patterns that fork tests rely on. The remaining entries in
-/// `signo_to_error` are intentionally pre-wired so that A7
-/// (`Signal.trap`) only needs to register the handler at trap-time,
-/// not also teach the runtime a new mapping.
+/// for *by default*. This is CRuby's default-convert set (verified
+/// against CRuby 4.0.2): a terminating signal delivered to the process
+/// is converted at the next poll point into a rescuable
+/// `SignalException` (`Interrupt` for SIGINT). Signals whose CRuby
+/// default is ignore/stop (CHLD, CONT, WINCH, TSTP, and PIPE — CRuby
+/// ignores SIGPIPE and surfaces `Errno::EPIPE` from write instead) are
+/// NOT in this set.
+///
+/// The `Process.kill("TERM", child); $?.signaled?` pattern keeps
+/// working because an *uncaught* SignalException re-raises itself with
+/// `SIG_DFL` at process exit (see `handle_error` in main.rs), so the
+/// child still dies signal-terminated exactly like CRuby.
 ///
 /// Order is delivery priority — lowest signo bit is consumed first.
-pub(crate) const POSIX_SIGNALS: &[i32] = &[libc::SIGINT];
+pub(crate) const POSIX_SIGNALS: &[i32] = &[
+    libc::SIGHUP,
+    libc::SIGINT,
+    libc::SIGQUIT,
+    libc::SIGALRM,
+    libc::SIGTERM,
+    libc::SIGUSR1,
+    libc::SIGUSR2,
+];
 
 /// Signals `Signal.trap` is allowed to install a handler for. An
 /// async-signal-safe asm stub is pre-generated for each of these at
@@ -155,6 +192,7 @@ pub(crate) fn signo_to_error(signo: i32) -> Option<MonorubyErr> {
         libc::SIGUSR1 => MonorubyErr::signalexception("SIGUSR1"),
         libc::SIGUSR2 => MonorubyErr::signalexception("SIGUSR2"),
         libc::SIGQUIT => MonorubyErr::signalexception("SIGQUIT"),
+        libc::SIGALRM => MonorubyErr::signalexception("SIGALRM"),
         libc::SIGPIPE => MonorubyErr::signalexception("SIGPIPE"),
         _ => return None,
     };

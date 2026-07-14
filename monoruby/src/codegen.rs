@@ -424,11 +424,6 @@ pub struct JitModule {
     class_version: DestLabel,
     const_version: DestLabel,
     alloc_flag: DestLabel,
-    /// 32-bit bitmap of pending Unix signals — bit `n` corresponds to
-    /// signal `n + 1` (so SIGINT = 2 ⇒ bit 1). Written async-safely from
-    /// the per-signal asm stubs in `signal_handler_for`; drained at
-    /// poll-time by `take_pending_signals`. See doc/signal_handling.md.
-    pending_signals: DestLabel,
     ///
     /// Raise error.
     ///
@@ -995,6 +990,14 @@ impl Codegen {
         // armed now. The rest stay at their OS default until a user
         // `Signal.trap` wires the pre-generated stub in. See A3.
         for &signo in signal_table::POSIX_SIGNALS {
+            // The hang watchdog (MONORUBY_HANG_WATCHDOG_SEC) drives its
+            // abort via a setitimer(2)-generated SIGALRM; when it is armed
+            // it owns that signal — don't displace its handler with the
+            // conversion stub. (If the watchdog arms after this point, its
+            // own sigaction overwrites the stub, so it wins either way.)
+            if signo == libc::SIGALRM && crate::watchdog::armed() {
+                continue;
+            }
             if !codegen.install_signal_stub(signo) {
                 panic!("Failed to set signal handler for signo {signo}");
             }
@@ -1051,29 +1054,9 @@ impl Codegen {
         CompilationUnitId(id)
     }
 
-    /// Atomically read and clear the pending-signal bitmap. Returns the
-    /// signals that were pending at call time; the bitmap is left zero.
-    ///
-    /// Uses `xchg` semantics via a volatile read-then-zero. The asm
-    /// signal stub uses `or` to set bits, so a concurrent set racing
-    /// with this clear may be lost if the read happens between OR and
-    /// the bit's observation — acceptable: it gets picked up on the
-    /// next poll. Use of `*mut u32` is fine here because the signal
-    /// handler runs on the same thread as the poll.
-    pub(crate) fn take_pending_signals(&self) -> u32 {
-        let ptr = self.jit.get_label_address(&self.pending_signals).as_ptr() as *mut u32;
-        unsafe {
-            let v = std::ptr::read_volatile(ptr);
-            if v != 0 {
-                std::ptr::write_volatile(ptr, 0);
-            }
-            v
-        }
-    }
-
     pub(crate) fn signal_handler_for(&mut self, signo: i32) -> CodePtr {
         self.jit
-            .signal_handler_for(self.alloc_flag.clone(), self.pending_signals.clone(), signo)
+            .signal_handler_for(self.alloc_flag.clone(), signo)
     }
 
     /// `sigaction(2)` `signo` to `handler` with `flags`. Returns true on

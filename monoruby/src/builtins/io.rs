@@ -1376,9 +1376,16 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         }
         (cmd, name)
     } else {
+        // String command: like CRuby, only go through the shell when the
+        // string actually needs one (metacharacters); otherwise split and
+        // exec directly. The interposed `sh` matters for more than speed:
+        // when the child dies by a signal, a wrapping shell exits *normally*
+        // with 128+signo, destroying `$?.signaled?` / `termsig` for the
+        // caller (mspec's ruby_exe checks exactly that).
         let cmd_str = cmd_val.coerce_to_str(vm, globals)?;
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(cmd_str.to_string());
+        let (program, args) = super::kernel::prepare_command_arg(&cmd_str);
+        let mut cmd = Command::new(program);
+        cmd.args(&args);
         (cmd, cmd_str)
     };
 

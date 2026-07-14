@@ -174,18 +174,29 @@ class SignalException < Exception
       @__signo = sig
       super(message || "SIG#{name}")
     elsif !sig.nil?
+      # CRuby: a message is only accepted together with a *numeric* signal;
+      # a signal name plus a message is an ArgumentError.
+      unless message.nil?
+        raise ArgumentError, "wrong number of arguments (given 2, expected 1)"
+      end
       name = sig.to_s.sub(/\ASIG/, "")
       signo = Signal.list[name]
       raise ArgumentError, "unsupported signal `SIG#{name}'" unless signo
       @__signo = signo
-      super(message || "SIG#{name}")
+      super("SIG#{name}")
     else
       super("SignalException")
     end
   end
 
   def signo
-    defined?(@__signo) ? @__signo : nil
+    return @__signo if defined?(@__signo) && @__signo
+    # A SignalException materialized by the runtime's signal conversion
+    # (delivered SIGTERM etc.) is built without #initialize, so derive the
+    # signo from the message ("SIGTERM" -> 15). Interrupt's message is
+    # "Interrupt", not a signal name; it is always SIGINT.
+    return Signal.list["INT"] if is_a?(Interrupt)
+    Signal.list[message.to_s.sub(/\ASIG/, "")]
   end
 
   # The signal description is the exception message.

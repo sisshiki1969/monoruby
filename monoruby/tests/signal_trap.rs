@@ -144,16 +144,18 @@ fn trap_method_handler_runs() {
 
 /// A non-callable handler raises `NoMethodError` at the point of
 /// delivery (when the runtime tries `handler.call(signo)`), matching
-/// CRuby — not at trap-registration time.
+/// CRuby — not at trap-registration time. A signal sent to self is
+/// drained synchronously, so the error surfaces *inside* the
+/// `Process.kill` call itself (verified against CRuby 4.0.2:
+/// `-e:2:in 'Process.kill': undefined method 'call' ...`).
 #[test]
 fn trap_non_callable_raises_at_delivery() {
     let output = monoruby()
         .args([
             "-e",
             r#"Signal.trap("USR1", Object.new)
-               Process.kill("USR1", Process.pid)
                begin
-                 10000.times { Object.new }
+                 Process.kill("USR1", Process.pid)
                  puts "no error"
                rescue NoMethodError
                  puts "nomethod"

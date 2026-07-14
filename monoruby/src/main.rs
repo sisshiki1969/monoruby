@@ -15,6 +15,18 @@ fn handle_error(err: MonorubyErr, globals: &Globals) -> ! {
         err.show_error_message_and_all_loc(&globals.store);
         std::process::exit(1);
     }
+    // An uncaught SignalException (or Interrupt) must terminate the process
+    // *as that signal*, not as exit(1): CRuby restores SIG_DFL and
+    // re-delivers the signal to itself so the parent sees a signal death
+    // (`$?.signaled?` / `termsig`). Reporting matches CRuby: an uncaught
+    // `Interrupt` prints the error report first, a plain `SignalException`
+    // (including `raise SignalException, 'SIGKILL'`) dies silently.
+    if let Some((signo, is_interrupt)) = err.signal_exception_signo(&globals.store) {
+        if is_interrupt {
+            err.show_error_message_and_all_loc(&globals.store);
+        }
+        monoruby::terminate_with_signal(signo);
+    }
     err.show_error_message_and_all_loc(&globals.store);
     std::process::exit(1);
 }

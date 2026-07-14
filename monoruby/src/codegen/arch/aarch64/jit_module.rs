@@ -117,7 +117,6 @@ impl JitModule {
         let bop_redefined_flags = jit.data_i32(0);
         let const_version = jit.data_i64(1);
         let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
-        let pending_signals = jit.data_i32(0);
         let entry_raise = jit.label();
         let entry_panic = jit.label();
         let exec_gc = jit.label();
@@ -139,7 +138,6 @@ impl JitModule {
             class_version,
             const_version,
             alloc_flag,
-            pending_signals,
             entry_raise,
             exec_gc,
             f64_to_val,
@@ -195,13 +193,14 @@ impl JitModule {
     pub(crate) fn signal_handler_for(
         &mut self,
         alloc_flag: DestLabel,
-        pending_signals: DestLabel,
         signo: i32,
     ) -> CodePtr {
         debug_assert!((1..=32).contains(&signo));
         let bit: u64 = 1u64 << (signo - 1);
         let af_addr = self.jit.get_label_address(&alloc_flag).as_ptr() as u64;
-        let ps_addr = self.jit.get_label_address(&pending_signals).as_ptr() as u64;
+        // Process-global bitmap (see signal_table.rs): recording and
+        // polling agree even when several Codegens exist.
+        let ps_addr = crate::codegen::signal_table::pending_signals_addr();
         let p = self.jit.get_current_address();
         monoasm_arm64!(&mut self.jit,
             // alloc_flag += 10  (32-bit RMW)

@@ -310,6 +310,47 @@ impl MonorubyErr {
             }
         }
     }
+
+    /// If this error is a `SignalException` (or subclass, e.g.
+    /// `Interrupt`), return `(signo, is_interrupt)`; `None` otherwise.
+    /// Used by the uncaught-exception exit paths to re-raise the signal
+    /// with `SIG_DFL` so the process dies signal-terminated
+    /// (`$?.signaled?`), matching CRuby. `is_interrupt` drives CRuby's
+    /// reporting rule: an uncaught `Interrupt` prints the error report,
+    /// a plain `SignalException` dies silently.
+    ///
+    /// The signo comes from the exception object's `@__signo` (set by
+    /// `SignalException#initialize` in builtins/error.rb) when the object
+    /// exists, else from the runtime-conversion message (`"Interrupt"` /
+    /// `"SIG<NAME>"` as produced by `signal_table::signo_to_error`).
+    pub fn signal_exception_signo(&self, store: &Store) -> Option<(i32, bool)> {
+        // Only real exception classes can be SignalExceptions; the
+        // control-flow pseudo-kinds never reach here (guard before
+        // class_id(), whose control-flow arms are unreachable!()).
+        let class = match &self.kind {
+            MonorubyErrKind::Other(c) => *c,
+            _ => return None,
+        };
+        let ancestors = store.ancestors(class);
+        if !ancestors.iter().any(|m| m.id() == SIGNAL_EXCEPTION_CLASS) {
+            return None;
+        }
+        let is_interrupt = ancestors.iter().any(|m| m.id() == INTERRUPT_CLASS);
+        // Prefer the materialized object's @__signo (covers user-raised
+        // `SignalException.new(9)` with an explicit signal).
+        if let Some(obj) = self.original {
+            if let Some(v) = store.get_ivar(obj, IdentId::get_id("@__signo")) {
+                if let Some(n) = v.try_fixnum() {
+                    return Some((n as i32, is_interrupt));
+                }
+            }
+        }
+        // Runtime-converted signals carry the name in the message.
+        if is_interrupt {
+            return Some((libc::SIGINT, true));
+        }
+        crate::builtins::signal_name_to_number(&self.message).map(|n| (n, false))
+    }
 }
 
 // Parser level errors.
