@@ -428,6 +428,26 @@ impl Value {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<RString> {
+        let rs = self.coerce_to_path_rstring_allow_nul(vm, globals)?;
+        // CRuby rejects NUL in paths up front (CVE-2018-8780 hardening):
+        // `ArgumentError: path name contains null byte`. Without this the
+        // failed CString conversion surfaced as an opaque
+        // RuntimeError("Unknown error - …").
+        if rs.as_bytes().contains(&0) {
+            return Err(MonorubyErr::argumenterr("path name contains null byte"));
+        }
+        Ok(rs)
+    }
+
+    /// `coerce_to_path_rstring` without the NUL-byte rejection, for the
+    /// callers that carry their own CRuby-specific NUL message:
+    /// `Dir.glob` ("nul-separated glob pattern is deprecated") and
+    /// `File.join` ("string contains null byte").
+    pub(crate) fn coerce_to_path_rstring_allow_nul(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<RString> {
         // CRuby's path coercion (`rb_get_path`) prefers `#to_path`, only
         // falling back to `#to_str` when `#to_path` is absent
         // (core/dir/chdir_spec.rb "prefers #to_path over #to_str").

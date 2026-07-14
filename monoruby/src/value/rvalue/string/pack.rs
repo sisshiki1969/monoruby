@@ -1268,10 +1268,20 @@ fn parse_template(template: &str, is_unpack: bool) -> Result<Vec<TemplateNode>> 
                 explicit_count: true,
             });
         } else if let Some(d1) = iter.next_if(|c| c.is_ascii_digit()) {
-            let mut count = (d1 as u32 - '0' as u32) as usize;
+            // Accumulate the count with checked arithmetic capped at
+            // i64::MAX (CRuby uses a C `long`): an overflowing count like
+            // "@99999999999999999999999999" raises RangeError "pack length
+            // too big" in CRuby. The unchecked version overflowed usize and
+            // panicked (non-unwinding -> process abort) in debug builds.
+            let too_big = || MonorubyErr::rangeerr("pack length too big");
+            let mut count = (d1 as u32 - '0' as u32) as i64;
             while let Some(d) = iter.next_if(|c| c.is_ascii_digit()) {
-                count = count * 10 + (d as u32 - '0' as u32) as usize;
+                count = count
+                    .checked_mul(10)
+                    .and_then(|c| c.checked_add((d as u32 - '0' as u32) as i64))
+                    .ok_or_else(too_big)?;
             }
+            let count = count as usize;
             temp.push(TemplateNode {
                 template,
                 endian,

@@ -235,14 +235,17 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             .as_array_inner()
             .iter()
             .map(|v| {
-                let s = v.coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
+                let s = v
+                    .coerce_to_path_rstring_allow_nul(vm, globals)?
+                    .to_str()?
+                    .to_string();
                 reject_array_pattern_nul(&s)?;
                 Ok(s)
             })
             .collect::<Result<_>>()?
     } else {
         let s = pat_val
-            .coerce_to_path_rstring(vm, globals)?
+            .coerce_to_path_rstring_allow_nul(vm, globals)?
             .to_str()?
             .to_string();
         reject_single_pattern_nul(&s)?;
@@ -296,7 +299,10 @@ fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let patterns: Vec<String> = pat_val
         .iter()
         .map(|v| {
-            let s = v.coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
+            let s = v
+                .coerce_to_path_rstring_allow_nul(vm, globals)?
+                .to_str()?
+                .to_string();
             if single {
                 reject_single_pattern_nul(&s)?;
             } else {
