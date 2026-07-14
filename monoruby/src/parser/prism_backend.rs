@@ -1757,8 +1757,35 @@ impl<'pr> Lowerer<'pr> {
                 // global variables ($1 lookups eventually go through
                 // the regex match data); match that.
                 let n = node.as_numbered_reference_read_node().unwrap();
+                // `number()` is a `u32`, so a too-big reference like
+                // `$4294967296` wraps to 0 — which would masquerade as
+                // `$0` (the program name). A real `$0` is never a
+                // *numbered* reference, so `number() == 0` can only be
+                // that overflow; recover the true digits from the source
+                // so the name resolves to `nil` (an out-of-range capture)
+                // instead of the program name. prism has already emitted
+                // the "too big for a number variable" warning.
+                let name = if n.number() == 0 {
+                    let raw = node.location().as_slice();
+                    let name = String::from_utf8_lossy(raw).into_owned();
+                    // CRuby's parser warns (default level) that the
+                    // reference is unusable and always nil.
+                    let line = source_line_for_offset(self.source, node.location().start_offset())
+                        as i64
+                        + self.line_offset;
+                    self.warnings.push((
+                        format!(
+                            "{}:{}: warning: '{}' is too big for a number variable, always nil",
+                            self.path, line, name
+                        ),
+                        false,
+                    ));
+                    name
+                } else {
+                    format!("${}", n.number())
+                };
                 Node {
-                    kind: NodeKind::GlobalVar(format!("${}", n.number())),
+                    kind: NodeKind::GlobalVar(name),
                     loc,
                 }
             }
