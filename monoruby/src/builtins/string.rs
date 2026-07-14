@@ -8633,6 +8633,13 @@ mod tests {
             // even when the block clobbers it.
             r##""hello".scan(/./) { "ok".match(/./) }; [$~[0], $~.string]"##,
             r##""hello.".scan("l") { }; [$~.begin(0), $~[0]]"##,
+            // Empty matches on a multibyte string advance by one scalar, not
+            // one byte (the char-boundary loop in both scan forms).
+            r##""あいう".scan(//)"##,
+            r##"r = []; "あいう".scan(//) { |m| r << m }; r"##,
+            // Block form with multiple capture groups (the `len =>` arm).
+            r##"r = []; "aXbXc".scan(/(.)(X)/) { |a, b| r << [a, b] }; r"##,
+            r##"r = []; "あXいXう".scan(/(.)(X)/) { |a, b| r << [a, b] }; r"##,
             r##"
         "abcdefgdddefjklefl".match(/d*ef/) {
             |matched| matched.to_s
