@@ -1438,7 +1438,13 @@ fn named_captures(
 /// distinguish.
 fn regexp_encoding_value(globals: &Globals, regex: &RegexpInner) -> Value {
     let enc_class = encoding::encoding_class(globals);
-    let encoding = regex.declared_encoding();
+    // An allocated-but-uninitialized Regexp (`Regexp.allocate`) has no
+    // source yet; CRuby reports its encoding as BINARY (ASCII-8BIT).
+    let encoding = if regex.initialized() {
+        regex.declared_encoding()
+    } else {
+        crate::value::Encoding::Ascii8
+    };
     let const_name = encoding::encoding_constant_name(encoding);
     globals
         .store
@@ -2298,6 +2304,27 @@ mod tests {
         );
         // union keeps BINARY when a part is BINARY-with-non-ASCII.
         run_test(r#"Regexp.union(/abc/, /[\x00-\x7f]/n, /[\x80-\xBF]/n).encoding.to_s"#);
+    }
+
+    #[test]
+    fn regexp_encoding_specifier_last_wins() {
+        // Several encoding specifiers on one literal: the last in source
+        // order wins (`/foo/ensuens` selects `s`), for the declared
+        // encoding and for `==`.
+        run_test(
+            r#"[ /foo/ensuensuens.encoding.to_s,
+                /foo/ensuensuens == /foo/s,
+                /foo/sn.encoding.to_s,
+                /foo/ns.encoding.to_s ]"#,
+        );
+        // ...and through interpolation (the same "last wins" decode).
+        run_test(r#"x = "o"; [ /fo#{x}/ensuens.encoding.to_s, /fo#{x}/su.encoding.to_s ]"#);
+    }
+
+    #[test]
+    fn regexp_uninitialized_encoding_is_binary() {
+        // `Regexp.allocate` has no source yet; its encoding is BINARY.
+        run_test(r#"Regexp.allocate.encoding.to_s"#);
     }
 
     #[test]

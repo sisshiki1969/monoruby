@@ -1,5 +1,26 @@
 use super::*;
 
+/// Decode the encoding-selector modifier letters (`n`/`u`/`e`/`s`) of a
+/// regexp literal into the corresponding `NOENCODING` / `KCODE_*` bit.
+///
+/// When several appear, CRuby's "last specifier wins" rule applies
+/// (`/foo/ensuens` selects `s`), so the scan runs right-to-left and stops
+/// at the first (i.e. source-order last) selector. Returns 0 when none is
+/// present.
+fn regexp_encoding_bits(option: &str) -> u32 {
+    option
+        .chars()
+        .rev()
+        .find_map(|c| match c {
+            'n' => Some(RegexpInner::NOENCODING),
+            'u' => Some(RegexpInner::KCODE_UTF8),
+            'e' => Some(RegexpInner::KCODE_EUCJP),
+            's' => Some(RegexpInner::KCODE_SJIS),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
 ///
 /// Maximum number of elements (Array) / entries (Hash) of a collection
 /// literal that are evaluated into consecutive temporary registers at once.
@@ -1969,15 +1990,8 @@ impl<'a> BytecodeGen<'a> {
         if option.contains('m') {
             opt |= onigmo_regex::ONIG_OPTION_MULTILINE as i64;
         }
-        if option.contains('n') {
-            opt |= RegexpInner::NOENCODING as i64;
-        } else if option.contains('u') {
-            opt |= RegexpInner::KCODE_UTF8 as i64;
-        } else if option.contains('e') {
-            opt |= RegexpInner::KCODE_EUCJP as i64;
-        } else if option.contains('s') {
-            opt |= RegexpInner::KCODE_SJIS as i64;
-        }
+        // Encoding selector honours "last wins" (`regexp_encoding_bits`).
+        opt |= regexp_encoding_bits(&option) as i64;
         // Always the first operand (even when 0) so the run-time layout is
         // uniform: operand 0 is the option word, the rest are source
         // fragments.
@@ -2032,7 +2046,8 @@ impl<'a> BytecodeGen<'a> {
 
     fn const_regexp(&self, nodes: Vec<Node>, option: String, loc: Loc) -> Result<Value> {
         let mut string = String::new();
-        let encoding = if option.contains('n') {
+        let enc_bits = regexp_encoding_bits(&option);
+        let encoding = if enc_bits & RegexpInner::NOENCODING != 0 {
             onigmo_regex::OnigmoEncoding::ASCII
         } else {
             onigmo_regex::OnigmoEncoding::UTF8
@@ -2042,7 +2057,9 @@ impl<'a> BytecodeGen<'a> {
         // `KCODE_*` / `NOENCODING` bits used by
         // `with_option_kcode` to derive the declared (CRuby-
         // visible) encoding for `Regexp#encoding` /
-        // `Regexp#fixed_encoding?`.
+        // `Regexp#fixed_encoding?`. The encoding selector honours
+        // "last wins" (`regexp_encoding_bits`); `i`/`m`/`x` are order-
+        // independent flags.
         let mut opt = onigmo_regex::ONIG_OPTION_NONE;
         if option.contains('i') {
             opt |= onigmo_regex::ONIG_OPTION_IGNORECASE;
@@ -2053,18 +2070,9 @@ impl<'a> BytecodeGen<'a> {
         if option.contains('m') {
             opt |= onigmo_regex::ONIG_OPTION_MULTILINE;
         }
-        if option.contains('n') {
-            opt |= RegexpInner::NOENCODING;
-        }
-        let kcode = if option.contains('u') {
-            opt |= RegexpInner::KCODE_UTF8;
-            Some(RegexpInner::KCODE_UTF8)
-        } else if option.contains('e') {
-            opt |= RegexpInner::KCODE_EUCJP;
-            Some(RegexpInner::KCODE_EUCJP)
-        } else if option.contains('s') {
-            opt |= RegexpInner::KCODE_SJIS;
-            Some(RegexpInner::KCODE_SJIS)
+        opt |= enc_bits;
+        let kcode = if enc_bits & RegexpInner::KCODE_MASK != 0 {
+            Some(enc_bits & RegexpInner::KCODE_MASK)
         } else {
             None
         };
