@@ -317,3 +317,23 @@ fn find_ruby() -> String {
     }
     "ruby".to_string() // last resort — will fail with a clear error message
 }
+
+#[cfg(test)]
+mod harness_tests {
+    use super::*;
+
+    #[test]
+    fn nonfinite_floats_reconstruct() {
+        // issue #930: CRuby's `p` prints non-finite Floats as the bare
+        // words Infinity / -Infinity / NaN; reconstructing the expected
+        // value from that output used to panic on the unresolved
+        // "constant" instead of comparing.
+        run_test_once(r#"[1.0, 1.0 / 0.0]"#);
+        run_test_once(r#"[1.0, -1.0 / 0.0]"#);
+        run_test_once(r#"[1.0, 0.0 / 0.0]"#);
+        run_test_once(r#"[Float::INFINITY, -Float::INFINITY]"#);
+        run_test_once(r#"{ a: 1.0 / 0.0, b: -1.0 / 0.0 }"#);
+        run_test_once(r#"(1.0 / 0.0)..(1.0 / 0.0)"#);
+        run_test_once(r#"[[Float::INFINITY], { x: -Float::INFINITY }]"#);
+    }
+}
