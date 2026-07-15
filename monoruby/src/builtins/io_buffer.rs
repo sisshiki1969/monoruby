@@ -1290,9 +1290,11 @@ mod tests {
             t2 = Tempfile.new("mrb_empty"); f3 = File.open(t2.path, "w+")
             r << er.call { IO::Buffer.map(f3) }
             f3.close; t2.close!
-            File.write(t.path, "z" * 5000)
+            # Page size is platform-dependent (16 KiB on Apple Silicon),
+            # so align the offset to the real page size.
+            File.write(t.path, "z" * (IO::Buffer::PAGE_SIZE + 904))
             f4 = File.open(t.path, "r+")
-            b6 = IO::Buffer.map(f4, nil, 4096); r << [b6.size, b6.get_string(0, 3)]; b6.free
+            b6 = IO::Buffer.map(f4, nil, IO::Buffer::PAGE_SIZE); r << [b6.size, b6.get_string(0, 3)]; b6.free
             r << (begin; IO::Buffer.map(f4, nil, 100); :no_raise; rescue => e; e.class.ancestors.include?(SystemCallError); end)
             f4.close; t.close!
             r << er.call { IO::Buffer.map("str") }
