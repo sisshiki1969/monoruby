@@ -3931,90 +3931,315 @@ fn io_wait_priority(
 /// - IO.copy_stream(src, dst, copy_length) -> Integer
 /// - IO.copy_stream(src, dst, copy_length, src_offset) -> Integer
 ///
+/// Streams from `src` to `dst` in chunks: `src`/`dst` are IOs, file names
+/// (String / `#to_path`), or arbitrary objects speaking the read
+/// (`#readpartial(len, buf)` / `#read(len, buf)`) or write (`#write`)
+/// protocol. Returns the number of bytes copied.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/copy_stream.html]
 #[monoruby_builtin]
-fn io_copy_stream(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
-    return Err(MonorubyErr::runtimeerr(
-        "IO.copy_stream is not yet supported",
-    ));
-    //let copy_length: Option<i64> = lfp
-    //    .try_arg(2)
-    //    .and_then(|v| if v.is_nil() { None } else { Some(v) })
-    //    .map(|v| v.coerce_to_int_i64(vm, globals))
-    //    .transpose()?;
-    //let src_offset: Option<i64> = lfp
-    //    .try_arg(3)
-    //    .and_then(|v| if v.is_nil() { None } else { Some(v) })
-    //    .map(|v| v.coerce_to_int_i64(vm, globals))
-    //    .transpose()?;
+fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    const CHUNK: usize = 16 * 1024;
 
-    // Helper: duplicate an fd from an IO Value for use as a std::fs::File.
-    //fn dup_fd_from_io(io_val: Value, globals: &Globals) -> Result<File> {
-    //    let mut v = io_val;
-    //    if v.try_rvalue().map_or(true, |rv| rv.ty() != ObjTy::IO) {
-    //        return Err(MonorubyErr::typeerr(format!(
-    //            "no implicit conversion of {} into IO",
-    //            v.get_real_class_name(&globals.store)
-    //        )));
-    //    }
-    //    let fd = v.as_io_inner_mut().fileno()?;
-    //    // SAFETY: dup the fd so that the original IO still owns its fd.
-    //    let new_fd = unsafe { libc::dup(fd) };
-    //    if new_fd == -1 {
-    //        return Err(MonorubyErr::runtimeerr("dup failed"));
-    //    }
-    //    // SAFETY: new_fd is a valid, newly duplicated file descriptor.
-    //    Ok(unsafe { File::from_raw_fd(new_fd) })
-    //}
+    let copy_length: Option<u64> = match lfp.try_arg(2) {
+        Some(v) if !v.is_nil() => {
+            let l = v.coerce_to_int_i64(vm, globals)?;
+            if l < 0 {
+                return Err(MonorubyErr::argumenterr(format!("negative length {l} given")));
+            }
+            Some(l as u64)
+        }
+        _ => None,
+    };
+    let src_offset: Option<u64> = match lfp.try_arg(3) {
+        Some(v) if !v.is_nil() => {
+            let o = v.coerce_to_int_i64(vm, globals)?;
+            if o < 0 {
+                return Err(MonorubyErr::argumenterr("negative offset"));
+            }
+            Some(o as u64)
+        }
+        _ => None,
+    };
 
-    // Open source
-    //let src_val = lfp.arg(0);
-    //let mut src_owned: File;
-    //let src_is_path = src_val.try_bytes().is_some();
-    //if src_is_path {
-    //    let path = src_val.coerce_to_string(vm, globals)?;
-    //    src_owned = File::open(&path)
-    //        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
-    //    if let Some(offset) = src_offset {
-    //        use std::io::Seek;
-    //        src_owned
-    //            .seek(std::io::SeekFrom::Start(offset as u64))
-    //            .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
-    //    }
-    //} else {
-    //    src_owned = dup_fd_from_io(src_val, globals)?;
-    //    if let Some(offset) = src_offset {
-    //        use std::io::Seek;
-    //        src_owned
-    //            .seek(std::io::SeekFrom::Start(offset as u64))
-    //            .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
-    //    }
-    //}
+    // Length 0: copy nothing — the source is not read and the
+    // destination is not written (per spec, not even dispatched to).
+    if copy_length == Some(0) {
+        return Ok(Value::integer(0));
+    }
 
-    // Open destination
-    //let dst_val = lfp.arg(1);
-    //let dst_is_path = dst_val.try_bytes().is_some();
-    //let mut dst_owned: File;
-    //if dst_is_path {
-    //    let path = dst_val.coerce_to_string(vm, globals)?;
-    //    dst_owned = File::create(&path)
-    //        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
-    //} else {
-    //    dst_owned = dup_fd_from_io(dst_val, globals)?;
-    //}
+    // What a copy endpoint is: a real IO, a file path, or an object
+    // speaking the read/write protocol.
+    enum Src {
+        Io(Value),
+        Path(String),
+        Obj(Value, IdentId), // reader method: readpartial or read
+    }
+    enum Dst {
+        Io(Value),
+        Path(String),
+        Obj(Value),
+    }
 
-    // Copy
-    //use std::io::Read;
-    //let copied = if let Some(length) = copy_length {
-    //    let mut limited = (&mut src_owned).take(length as u64);
-    //    std::io::copy(&mut limited, &mut dst_owned)
-    //        .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
-    //} else {
-    //    std::io::copy(&mut src_owned, &mut dst_owned)
-    //        .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
-    //};
+    let is_io = |v: Value| v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::IO);
+    // CRuby's endpoint resolution order: an IO (or anything `#to_io`
+    // converts, e.g. Tempfile) is used as an IO *before* the `#to_path` /
+    // String file-name form is considered.
+    let mut to_io = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<Value> {
+        if !is_io(v) && globals.check_method(v, IdentId::get_id("to_io")).is_some() {
+            let converted =
+                vm.invoke_method_inner(globals, IdentId::get_id("to_io"), v, &[], None, None)?;
+            if is_io(converted) {
+                return Ok(converted);
+            }
+        }
+        Ok(v)
+    };
+    let src_v = to_io(vm, globals, lfp.arg(0))?;
+    let src = if is_io(src_v) {
+        src_v.as_io_inner().ensure_readable()?;
+        Src::Io(src_v)
+    } else if src_v.is_rstring().is_some()
+        || globals.check_method(src_v, IdentId::TO_PATH).is_some()
+    {
+        Src::Path(
+            src_v
+                .coerce_to_path_rstring(vm, globals)?
+                .to_str()?
+                .to_string(),
+        )
+    } else {
+        // Object protocol: #readpartial is preferred over #read.
+        let rp = IdentId::get_id("readpartial");
+        let rd = IdentId::get_id("read");
+        let m = if globals.check_method(src_v, rp).is_some() {
+            rp
+        } else if globals.check_method(src_v, rd).is_some() {
+            rd
+        } else {
+            return Err(MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into IO",
+                src_v.get_real_class_name(globals)
+            )));
+        };
+        Src::Obj(src_v, m)
+    };
 
-    //Ok(Value::integer(copied as i64))
+    let dst_v = to_io(vm, globals, lfp.arg(1))?;
+    let dst = if is_io(dst_v) {
+        dst_v.as_io_inner().ensure_writable()?;
+        Dst::Io(dst_v)
+    } else if dst_v.is_rstring().is_some()
+        || globals.check_method(dst_v, IdentId::TO_PATH).is_some()
+    {
+        Dst::Path(
+            dst_v
+                .coerce_to_path_rstring(vm, globals)?
+                .to_str()?
+                .to_string(),
+        )
+    } else if globals.check_method(dst_v, IdentId::get_id("write")).is_some() {
+        Dst::Obj(dst_v)
+    } else {
+        return Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into IO",
+            dst_v.get_real_class_name(globals)
+        )));
+    };
+
+    // A path source is opened (and closed on scope exit) as a plain
+    // read-only IO; the transient Value is GC-rooted below.
+    let mut src_io_owned: Option<Value> = None;
+    let mut src_val = match &src {
+        Src::Io(v) => Some(*v),
+        Src::Path(p) => {
+            let file = std::fs::File::open(p)
+                .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", p))?;
+            let v = Value::new_file(file, p.clone(), true, false);
+            src_io_owned = Some(v);
+            Some(v)
+        }
+        Src::Obj(..) => None,
+    };
+    let mut dst_io_owned: Option<Value> = None;
+    let mut dst_val = match &dst {
+        Dst::Io(v) => Some(*v),
+        Dst::Path(p) => {
+            let file = std::fs::File::options()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(p)
+                .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", p))?;
+            let v = Value::new_file(file, p.clone(), false, true);
+            dst_io_owned = Some(v);
+            Some(v)
+        }
+        Dst::Obj(_) => None,
+    };
+
+    let result = vm.with_temp_scope(|vm| {
+        if let Some(v) = src_io_owned {
+            vm.temp_push(v);
+        }
+        if let Some(v) = dst_io_owned {
+            vm.temp_push(v);
+        }
+
+        // Write one chunk to the destination, looping over partial
+        // writes. Object destinations dispatch #write and read back the
+        // written byte count.
+        let mut write_chunk = |vm: &mut Executor,
+                               globals: &mut Globals,
+                               chunk: &[u8]|
+         -> Result<()> {
+            match (&dst, &mut dst_val) {
+                (Dst::Obj(obj), _) => {
+                    let mut rest = chunk;
+                    while !rest.is_empty() {
+                        let s = Value::bytes(rest.to_vec());
+                        let n = vm
+                            .invoke_method_inner(
+                                globals,
+                                IdentId::get_id("write"),
+                                *obj,
+                                &[s],
+                                None,
+                                None,
+                            )?
+                            .coerce_to_int_i64(vm, globals)?;
+                        let n = (n.max(0) as usize).min(rest.len());
+                        if n == 0 {
+                            return Err(MonorubyErr::ioerr("write failed"));
+                        }
+                        rest = &rest[n..];
+                    }
+                    Ok(())
+                }
+                (_, Some(v)) => {
+                    // Flush per chunk: copy_stream must not buffer (a
+                    // pipe reader on the other side expects the data
+                    // immediately — Rust's stdout is block-buffered).
+                    v.as_io_inner_mut().write(chunk)?;
+                    v.as_io_inner_mut().flush()
+                }
+                _ => unreachable!(),
+            }
+        };
+
+        let mut copied: u64 = 0;
+        match (&src, &mut src_val) {
+            // IO source with an explicit offset: pread(2)-style reads on
+            // the raw fd, leaving the source's own position untouched.
+            (_, Some(v)) if src_offset.is_some() => {
+                let fd = v.as_io_inner().fileno()?;
+                let mut offset = src_offset.unwrap() as libc::off_t;
+                loop {
+                    let want = match copy_length {
+                        Some(l) => ((l - copied) as usize).min(CHUNK),
+                        None => CHUNK,
+                    };
+                    if want == 0 {
+                        break;
+                    }
+                    let mut buf = vec![0u8; want];
+                    // SAFETY: fd is a live descriptor; buf is a valid
+                    // writable buffer of `want` bytes.
+                    let n = unsafe {
+                        libc::pread(fd, buf.as_mut_ptr() as *mut libc::c_void, want, offset)
+                    };
+                    if n < 0 {
+                        let err = std::io::Error::last_os_error();
+                        // A pipe/socket source cannot seek: ESPIPE.
+                        return Err(MonorubyErr::errno_plain(&globals.store, &err));
+                    }
+                    if n == 0 {
+                        break;
+                    }
+                    buf.truncate(n as usize);
+                    write_chunk(vm, globals, &buf)?;
+                    copied += n as u64;
+                    offset += n as libc::off_t;
+                }
+            }
+            // IO source at its current position: readpartial-style
+            // streaming so pipe data flows through without waiting for
+            // EOF (and the source position advances).
+            (_, Some(v)) => {
+                loop {
+                    let want = match copy_length {
+                        Some(l) => ((l - copied) as usize).min(CHUNK),
+                        None => CHUNK,
+                    };
+                    if want == 0 {
+                        break;
+                    }
+                    let chunk = v.as_io_inner_mut().readpartial(want)?;
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    write_chunk(vm, globals, &chunk)?;
+                    copied += chunk.len() as u64;
+                }
+            }
+            // Object source: dispatch #readpartial/#read(len, buf) until
+            // nil (read) or EOFError (readpartial).
+            (Src::Obj(obj, meth), _) => {
+                let meth = *meth;
+                let is_readpartial = meth == IdentId::get_id("readpartial");
+                loop {
+                    let want = match copy_length {
+                        Some(l) => ((l - copied) as usize).min(CHUNK),
+                        None => CHUNK,
+                    };
+                    if want == 0 {
+                        break;
+                    }
+                    let buf = Value::string_from_str("");
+                    let r = vm.invoke_method_inner(
+                        globals,
+                        meth,
+                        *obj,
+                        &[Value::integer(want as i64), buf],
+                        None,
+                        None,
+                    );
+                    let chunk = match r {
+                        Ok(v) if v.is_nil() => break,
+                        Ok(v) => v,
+                        Err(err) => {
+                            // #readpartial signals EOF by raising EOFError.
+                            if is_readpartial && err.message().contains("end of file") {
+                                break;
+                            }
+                            return Err(err);
+                        }
+                    };
+                    let Some(bytes) = chunk.is_rstring() else {
+                        return Err(MonorubyErr::typeerr("read should return a String"));
+                    };
+                    let bytes = bytes.as_bytes().to_vec();
+                    if bytes.is_empty() {
+                        break;
+                    }
+                    write_chunk(vm, globals, &bytes)?;
+                    copied += bytes.len() as u64;
+                }
+            }
+            _ => unreachable!(),
+        }
+        Ok(copied)
+    });
+
+    // Close only the endpoints this call opened (path forms); IO
+    // arguments are left open, per CRuby.
+    if let Some(mut v) = src_io_owned {
+        let _ = v.as_io_inner_mut().close();
+    }
+    if let Some(mut v) = dst_io_owned {
+        let _ = v.as_io_inner_mut().close();
+    }
+    Ok(Value::integer(result? as i64))
 }
 
 #[cfg(test)]
@@ -4535,6 +4760,63 @@ mod tests {
             File.delete(path)
             res
             "#,
+        );
+    }
+
+    #[test]
+    fn copy_stream_semantics() {
+        // IO.copy_stream: endpoint forms (IO / path / #to_path / object
+        // protocol), length/offset handling (offset leaves the source
+        // position untouched), open/close responsibilities, and the
+        // zero-length no-dispatch rule.
+        run_test_once(
+            r##"
+            require "tempfile"
+            src = Tempfile.new("mrb_cs_src"); to = Tempfile.new("mrb_cs_dst")
+            content = "Line one\nLine two\nLine three\nAnd so on...\n"
+            File.write(src.path, content)
+            r = []
+            er = ->(&b) { begin; b.call; :no_raise; rescue => e; [e.class]; end }
+            r << IO.copy_stream(src.path, to.path) << File.read(to.path)
+            r << IO.copy_stream(src.path, to.path, 8) << File.read(to.path)
+            r << IO.copy_stream(src.path, to.path, 8, 4) << File.read(to.path)
+            m = Object.new; sp = src.path; m.define_singleton_method(:to_path) { sp }
+            r << IO.copy_stream(m, to.path)
+            bad = Object.new; bad.define_singleton_method(:to_path) { 42 }
+            r << er.call { IO.copy_stream(bad, to.path) }
+            f = File.open(src.path, "rb"); f.pos = 10
+            r << IO.copy_stream(f, to.path, 8, 4) << f.pos
+            r << IO.copy_stream(f, to.path) << f.pos << f.closed?; f.close
+            f = File.open(to.path, "a")
+            r << er.call { IO.copy_stream(f, src.path) }; f.close
+            File.write(to.path, "0123456789")
+            f = File.open(src.path, "rb"); g = File.open(to.path, "rb+"); g.pos = 3
+            r << IO.copy_stream(f, g, 4) << g.pos
+            g.seek(0, IO::SEEK_SET); r << g.read << g.closed?
+            f.close; g.close
+            rd, wr = IO.pipe
+            wr.write "pipe data"; wr.close
+            r << IO.copy_stream(rd, to.path) << File.read(to.path) << rd.closed?
+            rd.close
+            rd, wr = IO.pipe
+            wr.write "x"; wr.close
+            r << er.call { IO.copy_stream(rd, to.path, 1, 0) }; rd.close
+            reader = Object.new
+            fsrc = File.open(src.path, "rb")
+            reader.define_singleton_method(:read) { |size, buf| fsrc.read(size, buf) }
+            r << IO.copy_stream(reader, to.path) << File.read(to.path)
+            fsrc.close
+            writer = Object.new; sink = +""
+            writer.define_singleton_method(:write) { |s| sink << s; s.bytesize }
+            r << IO.copy_stream(src.path, writer) << sink
+            zr = Object.new; zr.define_singleton_method(:read) { |*| raise "read called" }
+            zw = Object.new; zw.define_singleton_method(:write) { |*| raise "write called" }
+            r << IO.copy_stream(zr, zw, 0)
+            File.write(src.path, "A" * 17_000)
+            r << IO.copy_stream(src.path, to.path) << File.read(to.path).bytesize
+            src.close!; to.close!
+            r
+            "##,
         );
     }
 
