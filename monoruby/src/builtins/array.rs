@@ -5491,6 +5491,55 @@ mod tests {
     }
 
     #[test]
+    fn pack_hex_alpha_and_x_star() {
+        run_tests(&[
+            // H/h: an ASCII letter contributes `(c + 9) & 0x0F`, so a
+            // non-hex letter like 'H' (⇒ 1) wraps like a-f/A-F do.
+            r#"["H"].pack("H")"#,
+            r#"["H"].pack("h")"#,
+            r#"["z"].pack("H")"#,
+            r#"["G"].pack("h")"#,
+            // Non-letters keep using their low nibble.
+            r#"[":"].pack("H")"#,
+            r#"["^"].pack("H")"#,
+            // `X*` is a no-op; `X`/`Xn` remove bytes.
+            r#"[1, 2, 3].pack("C2X*C")"#,
+            r#"[1, 2, 3].pack("C3X")"#,
+            r#"[1, 2, 3].pack("C3X2")"#,
+        ]);
+    }
+
+    #[test]
+    fn pack_w_bignum_and_u_line_length() {
+        run_tests(&[
+            // `w` (BER) handles Bignums, not just longs.
+            r#"[2 ** 65].pack("w").bytes"#,
+            r#"[0].pack("w").bytes"#,
+            r#"[9999].pack("w").bytes"#,
+            r#"[2 ** 128 + 12345].pack("w").bytes"#,
+            // `u` per-line byte count floors to a multiple of 3.
+            r#"["abcdefghijklm"].pack("u7")"#,
+            r#"["abcdefghijklmnop"].pack("u5")"#,
+            r#"["abcdefghijklmnop"].pack("u9")"#,
+        ]);
+    }
+
+    #[test]
+    fn pack_buffer_offset_and_type() {
+        run_tests(&[
+            // The buffer seeds the output; `@` rewinds within it.
+            r#"[65, 66, 67].pack("@3ccc", buffer: "123456".dup)"#,
+            r#"[65, 66, 67].pack("@6ccc", buffer: "123".dup)"#,
+            r#"[65, 66, 67].pack("@3ccc", buffer: "1234567890".dup)"#,
+            r#"[65, 66, 67].pack("ccc", buffer: "123".dup)"#,
+            // Returns the same buffer object.
+            r#"b = +"x"; [65].pack("C", buffer: b).equal?(b)"#,
+            // A non-String buffer is a TypeError with CRuby's message.
+            r#"begin; [1].pack("C", buffer: []); rescue TypeError => e; e.message; end"#,
+        ]);
+    }
+
+    #[test]
     fn pack_base64_uuencode_nil_raises() {
         // `m` and `u` reject nil with TypeError (used to silently
         // treat nil as "").
