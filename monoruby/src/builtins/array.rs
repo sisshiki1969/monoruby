@@ -122,6 +122,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "all?", all_, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "any?", any_, 0, 1, false);
     globals.define_builtin_funcs_with(ARRAY_CLASS, "detect", &["find"], detect, 0, 1, false);
+    globals.define_builtin_func_with(ARRAY_CLASS, "rfind", rfind, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "grep", grep, 1);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
@@ -2986,24 +2987,89 @@ fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 }
 
 ///
-/// #### Enumerable#detect
+/// ### Array#find
+/// ### Array#detect
 ///
 /// - find(ifnone = nil) {|item| ... } -> object
 /// - detect(ifnone = nil) {|item| ... } -> object
+/// - find(ifnone = nil) -> Enumerator
+/// - detect(ifnone = nil) -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
 #[monoruby_builtin]
-fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    array_find(vm, globals, lfp, pc, false)
+}
+
+///
+/// ### Array#rfind
+///
+/// - rfind(ifnone = nil) {|item| ... } -> object
+/// - rfind(ifnone = nil) -> Enumerator
+///
+/// Like `find`/`detect`, but scans the array from the end and returns the
+/// **last** matching element. (Ruby 4.0)
+///
+/// [https://docs.ruby-lang.org/en/master/Array.html#method-i-rfind]
+#[monoruby_builtin]
+fn rfind(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    array_find(vm, globals, lfp, pc, true)
+}
+
+///
+/// Shared body of `Array#find`/`#detect` (forward) and `Array#rfind`
+/// (reverse, Ruby 4.0). With no block, returns a size-less `Enumerator`
+/// that replays the same method, carrying the `ifnone` argument. The
+/// array length is re-read every step so a block that mutates the
+/// receiver observes the current size (CRuby "rechecks the array size
+/// during iteration"): the forward scan stops at the shrinking end, and
+/// the reverse scan skips tail indices that no longer exist.
+///
+fn array_find(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    reverse: bool,
+) -> Result<Value> {
     let self_val = lfp.self_val();
-    let bh = lfp.expect_block()?;
+    let bh = match lfp.block() {
+        Some(bh) => bh,
+        None => {
+            // `find`/`rfind` short-circuit, so the yield count isn't
+            // predictable from `self.size`; CRuby leaves the enumerator's
+            // `size` at nil. Forward the `ifnone` arg if it was given.
+            let method = IdentId::get_id(if reverse { "rfind" } else { "find" });
+            let args = match lfp.try_arg(0) {
+                Some(ifnone) => vec![ifnone],
+                None => vec![],
+            };
+            return vm.generate_enumerator(method, self_val, args, pc);
+        }
+    };
     let data = vm.get_block_data(globals, bh)?;
-    let mut i = 0;
-    while i < self_val.as_array().len() {
-        let elem = self_val.as_array()[i];
-        if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
-            return Ok(elem);
-        };
-        i += 1;
+    if reverse {
+        // Descend from the length captured at entry; guard each index
+        // against the current length so a block that shrinks the array
+        // does not revisit now-missing tail elements.
+        for i in (0..self_val.as_array().len()).rev() {
+            if i >= self_val.as_array().len() {
+                continue;
+            }
+            let elem = self_val.as_array()[i];
+            if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                return Ok(elem);
+            }
+        }
+    } else {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                return Ok(elem);
+            }
+            i += 1;
+        }
     }
     // No element matched. CRuby: if an `ifnone` callable was given (and
     // is non-nil), call it with no arguments and return its value;
@@ -5013,6 +5079,41 @@ mod tests {
             // nil ifnone behaves like the no-arg form (returns nil).
             r#"[1, 2, 3].find(nil) { |e| e > 5 }.inspect"#,
             r#"[].find { |e| true }.inspect"#,
+        ]);
+    }
+
+    #[test]
+    fn rfind() {
+        run_tests(&[
+            // Scans from the end, returns the last match.
+            r#"[1, 2, 3, 4, 5].rfind { |x| x % 2 == 0 }"#,
+            r#"[1, 2, 3].rfind { |x| false }.inspect"#,
+            // Reverse iteration order and short-circuit from the end.
+            r#"v = []; [1, 2, 3].rfind { |x| v << x; false }; v"#,
+            r#"v = []; [1, 2, 3, 4, 5].rfind { |x| v << x; x == 3 }; v"#,
+            // ifnone proc: called (once) only when nothing matches.
+            r#"[1, 2, 3].rfind(-> { "z" }) { |x| false }"#,
+            r#"[1, 2, 3].rfind(-> { raise }) { |x| x == 3 }"#,
+            r#"[1, 2, 3].rfind(nil) { |x| false }.inspect"#,
+            // Does not destructure array elements.
+            r#"[[1, 2], [3, 4]].rfind { |e| e == [1, 2] }"#,
+            // Rechecks the array size: clearing mid-iteration stops it.
+            r#"a = [4, 2, 1, 5, 1, 3]; seen = []; a.rfind { |x| seen << x; a.clear; false }; seen"#,
+        ]);
+    }
+
+    #[test]
+    fn find_rfind_no_block_enumerator() {
+        run_tests(&[
+            // No block → Enumerator (size nil), replaying find/rfind.
+            r#"[1, 2, 3].find.class.name"#,
+            r#"[1, 2, 3].rfind.class.name"#,
+            r#"[1, 2, 3].find.size.inspect"#,
+            r#"[1, 2, 3].find { |x| x == 2 }"#,
+            r#"[1, 2, 3].rfind.each { |x| x == 2 }"#,
+            // The ifnone proc is carried by the enumerator.
+            r#"[1, 2, 3].rfind(-> { "z" }).each { |x| false }"#,
+            r#"[1, 2, 3].find(-> { "z" }).each { |x| false }"#,
         ]);
     }
 
