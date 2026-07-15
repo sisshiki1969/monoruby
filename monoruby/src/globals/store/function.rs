@@ -298,6 +298,56 @@ mod tests {
         assert_eq!(8, std::mem::size_of::<BytecodePtr>());
         assert_eq!(8, std::mem::size_of::<Meta>());
     }
+
+    // #920: a native func registered with many keyword names must reserve
+    // stack (`ofs`) for the whole callee frame — `reg_num` slots — not just
+    // the positional args. `ofs` derived from `max` (positional only)
+    // under-reserved the frame, so the argument-setup call overran it and
+    // clobbered the return address (jump to null before the builtin body).
+    #[test]
+    fn native_kw_frame_offset_covers_reg_num() {
+        // Never invoked — only used as a fn pointer to construct the
+        // `FuncInfo`. Kept on one line so the uncovered body is a single
+        // region.
+        #[rustfmt::skip]
+        extern "C" fn dummy(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Option<Value> { None }
+        // min=1, max=3, 9 keyword names, kw_rest → reg_num = 1 + 3 + 9 + 1 = 14.
+        let info = FuncInfo::new_native(
+            FuncId::new(1),
+            "readlines".to_string(),
+            dummy,
+            1,
+            3,
+            false,
+            &[
+                "chomp",
+                "mode",
+                "encoding",
+                "external_encoding",
+                "internal_encoding",
+                "binmode",
+                "textmode",
+                "autoclose",
+                "open_args",
+            ],
+            true,
+        );
+        let reg_num = info.data.meta.reg_num();
+        assert_eq!(14, reg_num);
+        // `ofs` must be the value derived from `reg_num` (not from `max`,
+        // which would be 3 and under-reserve the frame).
+        let mut expected = FuncData::default();
+        expected.set_offset(reg_num);
+        assert_eq!(expected.ofs, info.data.ofs);
+        // The reserved stack (see `push_stack_offset`: `ofs * 16 + 8`) must
+        // span the whole frame down to the last register slot.
+        let reserved = info.data.ofs as usize * 16 + 8;
+        let needed = reg_num as usize * 8 + (RSP_LOCAL_FRAME + LFP_SELF) as usize;
+        assert!(
+            reserved >= needed,
+            "reserved {reserved} < needed {needed} (reg_num {reg_num})"
+        );
+    }
 }
 
 pub(crate) struct Funcs {
@@ -791,7 +841,19 @@ impl FuncInfo {
             max,
             _padding: 0,
         };
-        data.set_offset(max);
+        // The stack reservation (`ofs`) must cover the *whole* callee
+        // frame — `reg_num` slots — not just the positional args. For a
+        // native func `meta.reg_num` is already final here (it counts
+        // self + positional + keyword names + kw_rest), and unlike an
+        // ISeq it is never re-set later via `set_reg_num`. Deriving `ofs`
+        // from `max` (positional only) under-reserved the frame for a
+        // native registered with many keyword names, so the argument
+        // setup call (`vm_handle_arguments`) overlapped and clobbered the
+        // keyword slots / return address, jumping to a null address
+        // before the builtin body ran (#920). For an ISeq `reg_num` is 0
+        // here and `set_reg_num` recomputes `ofs` after compilation, so
+        // `max` remains the placeholder in that case.
+        data.set_offset(max.max(meta.reg_num()));
         Self {
             data,
             kind,
