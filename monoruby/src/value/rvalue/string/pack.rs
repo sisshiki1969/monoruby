@@ -554,18 +554,23 @@ pub(crate) fn pack(
     buffer: Option<Value>,
 ) -> Result<Value> {
     let template = parse_template(template, false)?;
-    // Validate buffer: keyword if provided.
+    // Validate the `buffer:` keyword and seed the output with its current
+    // bytes: pack writes *into* the buffer (appending at the end, or
+    // overwriting from an `@` offset), then the buffer's whole content
+    // becomes the result.
+    let mut packed = Vec::new();
     if let Some(buf_val) = buffer {
         buf_val.ensure_not_frozen(&globals.store)?;
-        if buf_val.is_rstring_inner().is_none() {
-            return Err(MonorubyErr::no_implicit_conversion(
-                globals,
-                buf_val,
-                STRING_CLASS,
-            ));
+        match buf_val.is_rstring_inner() {
+            Some(inner) => packed.extend_from_slice(inner.as_bytes()),
+            None => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "buffer must be String, not {}",
+                    buf_val.get_real_class_name(&globals.store)
+                )));
+            }
         }
     }
-    let mut packed = Vec::new();
     let template_is_empty = template.is_empty();
     let mut iter = ary.iter();
 
@@ -728,10 +733,14 @@ pub(crate) fn pack(
                 }
             }
             Template::Back => {
-                let count = repeat.unwrap_or(1);
-                for _ in 0..count {
-                    if packed.pop().is_none() {
-                        return Err(MonorubyErr::argumenterr("X outside of string"));
+                // `X*` (`repeat == None`) is a no-op in CRuby, unlike other
+                // directives where `*` means "all"; only `X`/`Xn` (a count)
+                // removes bytes.
+                if let Some(count) = repeat {
+                    for _ in 0..count {
+                        if packed.pop().is_none() {
+                            return Err(MonorubyErr::argumenterr("X outside of string"));
+                        }
                     }
                 }
             }
@@ -760,16 +769,17 @@ pub(crate) fn pack(
                     let mut nibble_i = 0;
                     for i in 0..count {
                         let nibble = if i < s.len() {
-                            match s[i] {
-                                b'0'..=b'9' => s[i] - b'0',
-                                b'a'..=b'f' => s[i] - b'a' + 10,
-                                b'A'..=b'F' => s[i] - b'A' + 10,
-                                // CRuby: non-hex chars contribute
-                                // their low nibble (`s[i] & 0x0F`),
-                                // not zero. e.g. `["^"].pack("H")`
-                                // ⇒ `"\xE0"` (`^` is 0x5E, low
-                                // nibble 0xE).
-                                b => b & 0x0F,
+                            // CRuby (pack.c): an ASCII letter contributes
+                            // `(c + 9) & 0x0F` — so the hex digits a-f/A-F
+                            // map to 10-15, and any other letter (g-z, G-Z,
+                            // e.g. `H` ⇒ 1) wraps the same way. Every
+                            // non-letter (digits and punctuation) uses its
+                            // low nibble `c & 0x0F` directly.
+                            let c = s[i];
+                            if c.is_ascii_alphabetic() {
+                                c.wrapping_add(9) & 0x0F
+                            } else {
+                                c & 0x0F
                             }
                         } else {
                             0
@@ -990,30 +1000,18 @@ pub(crate) fn pack(
                 text_encoding = promote_text(text_encoding, Encoding::Utf8);
             }
             Template::BerCompressedInt => {
-                // 'w' — BER compressed integer
+                // 'w' — BER compressed integer (handles Bignums too).
                 if let Some(count) = repeat {
                     for _ in 0..count {
                         if let Some(value) = iter.next() {
-                            let i = value.coerce_to_int_i64(vm, globals)?;
-                            if i < 0 {
-                                return Err(MonorubyErr::argumenterr(
-                                    "can't compress negative numbers",
-                                ));
-                            }
-                            ber_encode(&mut packed, i as u64);
+                            ber_encode_value(&mut packed, vm, globals, *value)?;
                         } else {
                             return Err(MonorubyErr::argumenterr("too few arguments"));
                         }
                     }
                 } else {
                     while let Some(value) = iter.next() {
-                        let i = value.coerce_to_int_i64(vm, globals)?;
-                        if i < 0 {
-                            return Err(MonorubyErr::argumenterr(
-                                "can't compress negative numbers",
-                            ));
-                        }
-                        ber_encode(&mut packed, i as u64);
+                        ber_encode_value(&mut packed, vm, globals, *value)?;
                     }
                 }
             }
@@ -1101,10 +1099,16 @@ pub(crate) fn pack(
         };
     }
     if let Some(mut buf_val) = buffer {
-        // Append the packed data to the provided buffer string.
+        // `packed` was seeded with the buffer's original bytes and then
+        // written into (possibly rewound by `@`), so it is the full
+        // desired content. Write it back in place, preserving the buffer's
+        // identity and encoding.
+        let enc = buf_val.as_rstring_inner().encoding();
+        let orig_len = buf_val.as_rstring_inner().len();
+        let repl = RStringInner::from_encoding_scanned(&packed, enc);
         buf_val
             .as_rstring_inner_mut()
-            .extend_from_slice_checked(&packed)?;
+            .bytesplice_with(0, orig_len, &repl, &globals.store)?;
         Ok(buf_val)
     } else if template_is_empty && packed.is_empty() {
         // Empty format string produces US-ASCII encoded empty string.
@@ -1591,7 +1595,14 @@ fn hex_val(c: u8) -> Option<u8> {
 
 fn uu_encode(data: &[u8], line_len: usize) -> String {
     let mut result = String::new();
-    let bytes_per_line = if line_len == 0 { 45 } else { line_len.min(45) };
+    // uuencode emits 4 output chars per 3 input bytes, so the per-line
+    // input count is floored to a multiple of 3 (CRuby: `u7` ⇒ 6 bytes
+    // per line, `u5` ⇒ 3). A count of 0 means the default 45.
+    let bytes_per_line = if line_len == 0 {
+        45
+    } else {
+        (line_len.min(45) / 3) * 3
+    };
 
     for chunk in data.chunks(bytes_per_line) {
         // length byte
@@ -1787,6 +1798,47 @@ fn unpack_sleb128(b: &mut ByteIter) -> SlebOutcome {
 }
 
 // --- BER compressed integer encoding/decoding ---
+
+/// BER-compress one `w` argument. Uses the arbitrary-precision path for a
+/// Bignum (which doesn't fit a `u64`); otherwise coerces via `#to_int`.
+fn ber_encode_value(
+    buf: &mut Vec<u8>,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    value: Value,
+) -> Result<()> {
+    if let RV::BigInt(big) = value.unpack() {
+        use num::Signed;
+        if big.is_negative() {
+            return Err(MonorubyErr::argumenterr("can't compress negative numbers"));
+        }
+        ber_encode_bigint(buf, big);
+    } else {
+        let i = value.coerce_to_int_i64(vm, globals)?;
+        if i < 0 {
+            return Err(MonorubyErr::argumenterr("can't compress negative numbers"));
+        }
+        ber_encode(buf, i as u64);
+    }
+    Ok(())
+}
+
+/// BER-compress a non-negative arbitrary-precision integer: base-128,
+/// big-endian, with the high bit set on every group but the last.
+fn ber_encode_bigint(buf: &mut Vec<u8>, val: &num::BigInt) {
+    use num::{ToPrimitive, Zero};
+    let mask = num::BigInt::from(0x7Fu8);
+    let mut v = val.clone();
+    let mut tmp = Vec::new();
+    tmp.push((&v & &mask).to_u8().unwrap());
+    v >>= 7u32;
+    while !v.is_zero() {
+        tmp.push((&v & &mask).to_u8().unwrap() | 0x80);
+        v >>= 7u32;
+    }
+    tmp.reverse();
+    buf.extend_from_slice(&tmp);
+}
 
 fn ber_encode(buf: &mut Vec<u8>, mut val: u64) {
     if val == 0 {
