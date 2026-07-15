@@ -176,7 +176,7 @@ const MAX_MINORS_PER_MAJOR: usize = 64;
 /// A stable old generation (e.g. a long-lived data structure) then majors
 /// rarely — preserving the generational win — while a workload that keeps
 /// promoting short-lived "floating" garbage majors often, reclaiming it
-/// and keeping RSS down. See `doc/generational_gc_plan.md`.
+/// and keeping RSS down. See `doc/gc.md`.
 const OLD_GROWTH_FACTOR: usize = 2;
 
 /// Floor for the adaptive trigger: never force a major purely on old-gen
@@ -190,7 +190,7 @@ const OLD_OBJECT_FLOOR: usize = 16384;
 /// avoids promoting short-lived objects that merely happened to be live
 /// at a collection, which would otherwise accumulate as floating garbage
 /// in the old generation until the next major GC. See
-/// `doc/generational_gc_plan.md`.
+/// `doc/gc.md`.
 pub(crate) const RGENGC_OLD_AGE: u8 = 3;
 
 pub trait GC<T: GCBox> {
@@ -218,7 +218,7 @@ pub trait GCBox: PartialEq {
     /// *without* marking `self` itself. Used to scan remembered-set
     /// entries during a minor GC, where `self` is an old object that is
     /// already (seed-)marked but whose young children must still be
-    /// reached. See `doc/generational_gc_plan.md`.
+    /// reached. See `doc/gc.md`.
     ///
     fn mark_children(&self, alloc: &mut Allocator<Self>)
     where
@@ -229,14 +229,14 @@ pub trait GCBox: PartialEq {
     /// survives a collection. Only objects that are provably safe to
     /// skip in a minor GC should return `true` — currently those with no
     /// outgoing references at promotion time. See
-    /// `doc/generational_gc_plan.md`.
+    /// `doc/gc.md`.
     ///
     fn is_promotable(&self) -> bool;
 
     ///
     /// Set this object's old-generation header flag. Called only after
     /// the mark phase (never while a `&self` from marking is live), so
-    /// the `&mut` is sound. See `doc/generational_gc_plan.md`.
+    /// the `&mut` is sound. See `doc/gc.md`.
     ///
     fn promote_to_old(&mut self);
 
@@ -266,7 +266,7 @@ pub trait GCBox: PartialEq {
     /// object. Used at promotion time (`remember-on-promote`): a freshly
     /// promoted object that still points into the young generation must be
     /// added to the remembered set, because those old→young edges predate
-    /// the write barrier. See `doc/generational_gc_plan.md`.
+    /// the write barrier. See `doc/gc.md`.
     ///
     fn young_child_exists(&self, alloc: &Allocator<Self>) -> bool
     where
@@ -287,7 +287,7 @@ pub trait GCBox: PartialEq {
 /// Promotion is not enabled yet (no object carries the `OLD` flag), so
 /// `old_bits` is always empty and a `Minor` cycle currently produces
 /// exactly the same result as a `Major` one. See
-/// `doc/generational_gc_plan.md`.
+/// `doc/gc.md`.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GcKind {
@@ -317,7 +317,7 @@ pub struct Allocator<T> {
     /// Counter of GC execution.
     total_gc_counter: usize,
     /// Counter of minor (young-generation) GC executions. Always 0 until
-    /// minor GC lands; see `doc/generational_gc_plan.md`.
+    /// minor GC lands; see `doc/gc.md`.
     #[allow(dead_code)]
     minor_gc_count: usize,
     /// Counter of major (full-heap) GC executions.
@@ -352,7 +352,7 @@ pub struct Allocator<T> {
     /// extra roots; a major GC rebuilds generation state and clears it.
     /// Empty until promotion is enabled in a later phase (no object is
     /// `OLD` yet), so the barrier is currently inert. See
-    /// `doc/generational_gc_plan.md`.
+    /// `doc/gc.md`.
     remembered: Vec<std::ptr::NonNull<T>>,
     /// Flag for GC timing.
     alloc_flag: Option<*mut u32>,
@@ -784,7 +784,7 @@ impl<T: GCBox> Allocator<T> {
         // - Minor: seed `mark_bits` from `old_bits`, so old objects start
         //   "already marked" and are skipped by mark and sweep.
         // (Currently `old_bits` is always empty — nothing is promoted —
-        // so the two paths are equivalent. See generational_gc_plan.md.)
+        // so the two paths are equivalent. See gc.md.)
         match kind {
             GcKind::Major => {
                 self.clear_mark();
@@ -877,7 +877,7 @@ impl<T: GCBox> Allocator<T> {
     /// Generational GC: record `ptr` (an old-generation object that now
     /// references the young generation) in the remembered set. The
     /// caller — `RValue::write_barrier` — owns the `is_old` / dedup
-    /// checks, so this just appends. See `doc/generational_gc_plan.md`.
+    /// checks, so this just appends. See `doc/gc.md`.
     ///
     pub(crate) fn remember(&mut self, ptr: std::ptr::NonNull<T>) {
         self.remembered.push(ptr);
@@ -983,7 +983,7 @@ impl<T: GCBox> Allocator<T> {
 
     ///
     /// Clear all old-generation bitmaps (major GC demotes every object
-    /// to a collection candidate). See `doc/generational_gc_plan.md`.
+    /// to a collection candidate). See `doc/gc.md`.
     ///
     fn clear_old(&mut self) {
         unsafe {
@@ -1000,7 +1000,7 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Seed `mark_bits` from `old_bits` on every page (minor GC): old
     /// objects start out marked, so they are neither re-traversed nor
-    /// swept. See `doc/generational_gc_plan.md`.
+    /// swept. See `doc/gc.md`.
     ///
     fn seed_marks(&mut self) {
         unsafe {
@@ -1033,7 +1033,7 @@ impl<T: GCBox> Allocator<T> {
             // promoted, it no longer needs scanning — dropping it keeps
             // the remembered set (and thus minor GC cost) proportional to
             // the live old→young edges, not to every object ever promoted
-            // with a then-young child. See `doc/generational_gc_plan.md`.
+            // with a then-young child. See `doc/gc.md`.
             if unsafe { ptr.as_ref().young_child_exists(self) } {
                 kept.push(ptr);
             } else {
@@ -1236,7 +1236,7 @@ struct Page<T> {
     /// Generational GC: bitmap of old-generation cells, parallel to
     /// `mark_bits`. Reserved here so the page layout is fixed up front;
     /// it is populated and consulted once minor GC lands (see
-    /// `doc/generational_gc_plan.md`). Adding it must keep
+    /// `doc/gc.md`). Adding it must keep
     /// `size_of::<Page<T>>() <= ALLOC_SIZE` (asserted in `Allocator::new`).
     old_bits: [u64; SIZE - 1],
 }
@@ -1289,7 +1289,7 @@ impl<T: GCBox> Page<T> {
     ///
     /// Clear old-generation bitmap. Used by a major GC, which demotes
     /// every object back to a collection candidate. Reserved for the
-    /// generational GC phases; see `doc/generational_gc_plan.md`.
+    /// generational GC phases; see `doc/gc.md`.
     ///
     fn clear_old_bits(&mut self) {
         self.old_bits.iter_mut().for_each(|e| *e = 0)
@@ -1297,7 +1297,7 @@ impl<T: GCBox> Page<T> {
 
     ///
     /// Seed the mark bitmap from the old-generation bitmap (minor GC):
-    /// every old cell starts out marked. See `doc/generational_gc_plan.md`.
+    /// every old cell starts out marked. See `doc/gc.md`.
     ///
     fn seed_mark_from_old(&mut self) {
         self.mark_bits.copy_from_slice(&self.old_bits);

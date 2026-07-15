@@ -2145,7 +2145,7 @@ impl Value {
     /// (e.g. an `Array`/`Hashmap`/`Struct` wrapper's backing value).
     /// Call *after* storing `child` into one of `self`'s fields. A no-op
     /// when `self` is an immediate. Inert until promotion is enabled in
-    /// a later phase. See `doc/generational_gc_plan.md`.
+    /// a later phase. See `doc/gc.md`.
     ///
     /// Used by the container barriers wired in a later phase (Array /
     /// Hash / Struct call sites); `allow(dead_code)` until then.
@@ -2349,7 +2349,7 @@ impl Value {
     /// run the write barrier. So a mutating builtin is just
     /// `lfp.self_val().as_array_mut(&globals.store)?.push(v)`, and neither
     /// concern can be forgotten or drift apart. See
-    /// `doc/generational_gc_plan.md`.
+    /// `doc/gc.md`.
     ///
     pub(crate) fn as_array_mut(self, store: &Store) -> Result<Array> {
         self.ensure_not_frozen(store)?;

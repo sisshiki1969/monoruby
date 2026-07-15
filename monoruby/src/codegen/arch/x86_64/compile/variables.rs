@@ -175,7 +175,7 @@ impl Codegen {
 ///
 /// The inline fast path has already verified that `parent` is old, not yet
 /// remembered, and that the stored child is a heap object; this records
-/// `parent` in the remembered set. See `doc/generational_gc_plan.md`.
+/// `parent` in the remembered set. See `doc/gc.md`.
 ///
 extern "C" fn jit_write_barrier(parent: *mut RValue) {
     // SAFETY: `parent` is the live `&RValue` the store wrote into. The
@@ -195,7 +195,7 @@ impl Codegen {
     /// no scratch register and no allocator access. The rare slow path
     /// saves *all* caller-saved registers (so it is fully transparent to
     /// the surrounding code, needing no liveness information) and calls
-    /// `jit_write_barrier`. See `doc/generational_gc_plan.md`.
+    /// `jit_write_barrier`. See `doc/gc.md`.
     ///
     pub(super) fn emit_write_barrier_rdi(&mut self, child: GP) {
         let skip = self.jit.label();

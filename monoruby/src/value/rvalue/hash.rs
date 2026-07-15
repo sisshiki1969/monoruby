@@ -30,7 +30,7 @@ impl Hashmap {
 
     // Write-barrier-protected stores (shadow the `HashmapInner` methods
     // reached via `Deref`, so existing call sites go through the
-    // generational write barrier). See `doc/generational_gc_plan.md`.
+    // generational write barrier). See `doc/gc.md`.
 
     pub fn insert(
         &mut self,
@@ -147,7 +147,7 @@ impl HashmapInner {
     /// Generational GC: does this hash reference any young (non-old) heap
     /// object — among its keys, values, or default value/proc? Used for
     /// the remember-on-promote decision (the `default` field is private to
-    /// this module, hence this helper). See `doc/generational_gc_plan.md`.
+    /// this module, hence this helper). See `doc/gc.md`.
     ///
     pub(crate) fn young_child_exists(&self, alloc: &alloc::Allocator<RValue>) -> bool {
         fn is_young(v: Value, alloc: &alloc::Allocator<RValue>) -> bool {

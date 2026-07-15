@@ -80,7 +80,7 @@ impl Array {
 // (`ary.push(v)`, `ary.set_index(..)`, …) automatically go through the
 // generational write barrier. Only operations that *store* a `Value` need
 // a barrier; removers (`pop`, `remove`, `truncate`, `clear`, `drain`) do
-// not. See `doc/generational_gc_plan.md`.
+// not. See `doc/gc.md`.
 impl Array {
     pub fn push(&mut self, value: Value) {
         self.0.as_array_inner_mut().push(value);

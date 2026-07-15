@@ -1,15 +1,14 @@
 # monoruby の GC — 機構と実装
 
 monoruby のガベージコレクタの**現行実装**を、コードに即して解説するドキュメント。
-設計検討の経緯・代替案・移行計画は `doc/generational_gc_plan.md`(計画メモ)を
-参照。本書は「いま実際に動いているもの」を対象とする。
+本書は「いま実際に動いているもの」を対象とする。
 
 > 補足: `CLAUDE.md` は GC を「mark-and-sweep」と一言で書いているが、現行実装は
 > より正確には **非移動(non-moving)・単一スレッド・stop-the-world の
 > 世代別 mark & sweep**(CRuby の RGenGC に相当)である。世代別化は既に有効で、
 > オブジェクトは実際に old 世代へ昇格し、マイナー/メジャー GC が使い分けられる。
 > `alloc.rs` に残る一部コメント(「old_bits is always empty」「not enabled yet」等)は
-> 計画段階の記述で、実装より古い。実挙動は本書と該当コードを正とする。
+> 実装より古い名残りである。実挙動は本書と該当コードを正とする。
 
 主な実装ファイル:
 
@@ -479,5 +478,3 @@ Root::mark → YIELDER.mark   (ブロック/ファイバの yielder)
   マイナーは old をシードマークして young + old→young 辺だけを辿る。
 - 外部 malloc 圧・シグナル・`GC.start` も同じ `alloc_flag` 経由で同一のセーフ
   ポイント収集に集約される。
-
-設計上のトレードオフ・却下案・今後の拡張余地は `doc/generational_gc_plan.md` を参照。
