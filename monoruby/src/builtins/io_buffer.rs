@@ -95,6 +95,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_BUFFER_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(IO_BUFFER_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(IO_BUFFER_CLASS, "hexdump", hexdump, 0);
+    globals.define_builtin_class_func_with(IO_BUFFER_CLASS, "map", buffer_map, 1, 4, false);
+    globals.define_builtin_func(IO_BUFFER_CLASS, "&", bit_and, 1);
+    globals.define_builtin_func(IO_BUFFER_CLASS, "|", bit_or, 1);
+    globals.define_builtin_func(IO_BUFFER_CLASS, "^", bit_xor, 1);
+    globals.define_builtin_func(IO_BUFFER_CLASS, "~", bit_not, 0);
+    globals.define_builtin_func(IO_BUFFER_CLASS, "and!", bit_and_inplace, 1);
+    globals.define_builtin_func(IO_BUFFER_CLASS, "or!", bit_or_inplace, 1);
+    globals.define_builtin_func(IO_BUFFER_CLASS, "xor!", bit_xor_inplace, 1);
+    globals.define_builtin_func(IO_BUFFER_CLASS, "not!", bit_not_inplace, 0);
     globals.define_builtin_func(IO_BUFFER_CLASS, "get_value", get_value, 2);
     globals.define_builtin_func(IO_BUFFER_CLASS, "set_value", set_value, 3);
     globals.define_builtin_func_with(IO_BUFFER_CLASS, "each", each, 1, 3, false);
@@ -810,6 +819,11 @@ fn resize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         BufStorage::Str { .. } | BufStorage::Slice { .. } => {
             return Err(access_err(globals, "Cannot resize external buffer!"));
         }
+        // A shared file mapping cannot be resized; a PRIVATE one can
+        // (its pages are copy-on-write and never written back anyway).
+        BufStorage::FileMap { .. } if buf.flags & BUF_PRIVATE == 0 => {
+            return Err(access_err(globals, "Cannot resize external buffer!"));
+        }
         _ => {}
     }
     let mut bytes = buf.read_bytes()?;
@@ -903,6 +917,9 @@ fn describe(buf: &IoBufferInner, addr: u64) -> String {
         if buf.flags & BUF_MAPPED != 0 {
             s.push_str(" MAPPED");
         }
+        if matches!(buf.storage, BufStorage::FileMap { .. }) {
+            s.push_str(" FILE");
+        }
         if buf.flags & BUF_SHARED != 0 {
             s.push_str(" SHARED");
         }
@@ -932,6 +949,7 @@ fn buffer_addr(v: Value) -> u64 {
     match &buf.storage {
         BufStorage::Null => 0,
         BufStorage::Owned(vec) => vec.as_ptr() as u64,
+        BufStorage::FileMap { ptr, .. } => *ptr as u64,
         BufStorage::Str { s, offset } => {
             s.as_rstring_inner().as_bytes().as_ptr() as u64 + *offset as u64
         }
@@ -1011,9 +1029,295 @@ fn cmp(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     }))
 }
 
+///
+/// ### IO::Buffer.map
+///
+/// - map(file, size = nil, offset = 0, flags = 0) -> IO::Buffer
+///
+/// Maps `file` via mmap(2): MAP_SHARED (writes reach the file and other
+/// processes) unless PRIVATE is requested, PROT_READ-only when READONLY
+/// is requested. The mapping is released when the buffer is freed,
+/// transferred away, or collected.
+#[monoruby_builtin]
+fn buffer_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let io_v = lfp.arg(0);
+    let fd = if io_v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::IO) {
+        io_v.as_io_inner().fileno()?
+    } else if globals.check_method(io_v, IdentId::get_id("fileno")).is_some() {
+        vm.invoke_method_inner(globals, IdentId::get_id("fileno"), io_v, &[], None, None)?
+            .coerce_to_int_i64(vm, globals)? as i32
+    } else {
+        return Err(MonorubyErr::typeerr(format!(
+            "expected IO or #fileno, {} given",
+            io_v.get_real_class_name(globals)
+        )));
+    };
+
+    let offset = match lfp.try_arg(2) {
+        Some(v) => {
+            // An explicit nil (or any non-Integer) offset is a TypeError;
+            // only an absent argument defaults to 0.
+            let o = v.coerce_to_int_i64(vm, globals)?;
+            if o < 0 {
+                return Err(MonorubyErr::argumenterr("Offset can't be negative!"));
+            }
+            o
+        }
+        None => 0,
+    };
+
+    // SAFETY: fstat on a live fd with a valid out-pointer.
+    let file_size = unsafe {
+        let mut st: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut st) != 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_msg(
+                &globals.store,
+                &err,
+                "io_buffer_map_file:fstat",
+            ));
+        }
+        st.st_size
+    };
+    let size = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => {
+            // Strict Integer (no #to_int / Float coercion), like CRuby.
+            if !matches!(v.unpack(), RV::Fixnum(_) | RV::BigInt(_)) {
+                return Err(MonorubyErr::typeerr("not an Integer"));
+            }
+            let s = v.coerce_to_int_i64(vm, globals)?;
+            if s < 0 {
+                return Err(MonorubyErr::argumenterr("Size can't be negative!"));
+            }
+            if s == 0 {
+                return Err(MonorubyErr::argumenterr("Size can't be zero!"));
+            }
+            // A mapping reaching past EOF would SIGBUS on access beyond
+            // the last file-backed page; CRuby rejects it up front, with
+            // the size blamed when the size alone is too big and the
+            // offset blamed otherwise.
+            if s > file_size {
+                return Err(MonorubyErr::argumenterr(
+                    "Size can't be larger than file size!",
+                ));
+            }
+            if s + offset > file_size {
+                return Err(MonorubyErr::argumenterr("Offset too large!"));
+            }
+            s as usize
+        }
+        _ => {
+            if file_size <= offset {
+                return Err(MonorubyErr::argumenterr(
+                    "Invalid negative or zero file size!",
+                ));
+            }
+            (file_size - offset) as usize
+        }
+    };
+
+    let req_flags = match lfp.try_arg(3) {
+        Some(v) if !v.is_nil() => v.coerce_to_int_i64(vm, globals)? as u32,
+        _ => 0,
+    };
+    let readonly = req_flags & BUF_READONLY != 0;
+    let private = req_flags & BUF_PRIVATE != 0;
+
+    let prot = if readonly {
+        libc::PROT_READ
+    } else {
+        libc::PROT_READ | libc::PROT_WRITE
+    };
+    let map_flags = if private {
+        libc::MAP_PRIVATE
+    } else {
+        libc::MAP_SHARED
+    };
+    // SAFETY: a fresh anonymous address is requested; fd/offset/size come
+    // from the checks above. MAP_FAILED is handled.
+    let ptr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            prot,
+            map_flags,
+            fd,
+            offset as libc::off_t,
+        )
+    };
+    if ptr == libc::MAP_FAILED {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(
+            &globals.store,
+            &err,
+            "io_buffer_map_file:mmap",
+        ));
+    }
+
+    let mut flags = if private {
+        BUF_MAPPED | BUF_PRIVATE
+    } else {
+        BUF_EXTERNAL | BUF_MAPPED | BUF_SHARED
+    };
+    if readonly {
+        flags |= BUF_READONLY;
+    }
+    Ok(Value::new_io_buffer(IoBufferInner::file_map(
+        ptr as *mut u8,
+        size,
+        flags,
+    )))
+}
+
+/// Coerce the bitwise-op argument to a non-empty mask byte vector with
+/// CRuby's messages ("nil", not "NilClass", in the TypeError).
+fn mask_arg(globals: &mut Globals, v: Value) -> Result<Vec<u8>> {
+    if v.try_rvalue().is_none_or(|rv| rv.ty() != ObjTy::IO_BUFFER) {
+        let name = if v.is_nil() {
+            "nil".to_string()
+        } else {
+            v.get_real_class_name(globals)
+        };
+        return Err(MonorubyErr::typeerr(format!(
+            "wrong argument type {} (expected IO::Buffer)",
+            name
+        )));
+    }
+    let mask = v.as_io_buffer_inner().read_bytes()?;
+    if mask.is_empty() {
+        return Err(buffer_err(globals, "MaskError", "Zero-length mask given!"));
+    }
+    Ok(mask)
+}
+
+fn bitwise_bytes(bytes: &[u8], mask: &[u8], op: impl Fn(u8, u8) -> u8) -> Vec<u8> {
+    // The mask is applied cyclically: extra mask bytes are ignored, a
+    // short mask repeats.
+    bytes
+        .iter()
+        .enumerate()
+        .map(|(i, b)| op(*b, mask[i % mask.len()]))
+        .collect()
+}
+
+macro_rules! bitwise_new {
+    ($name:ident, $op:expr) => {
+        #[monoruby_builtin]
+        fn $name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+            let mask = mask_arg(globals, lfp.arg(0))?;
+            let bytes = lfp.self_val().as_io_buffer_inner().read_bytes()?;
+            let out = bitwise_bytes(&bytes, &mask, $op);
+            Ok(Value::new_io_buffer(IoBufferInner::owned(out, BUF_INTERNAL)))
+        }
+    };
+}
+bitwise_new!(bit_and, |a, b| a & b);
+bitwise_new!(bit_or, |a, b| a | b);
+bitwise_new!(bit_xor, |a, b| a ^ b);
+
+macro_rules! bitwise_inplace {
+    ($name:ident, $op:expr) => {
+        #[monoruby_builtin]
+        fn $name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+            let mut self_ = lfp.self_val();
+            // CRuby validates the mask (type, then emptiness) before the
+            // writability of the receiver.
+            let mask = mask_arg(globals, lfp.arg(0))?;
+            check_writable(globals, self_.as_io_buffer_inner())?;
+            let bytes = self_.as_io_buffer_inner().read_bytes()?;
+            let out = bitwise_bytes(&bytes, &mask, $op);
+            self_.as_io_buffer_inner_mut().write_at(0, &out)?;
+            Ok(self_)
+        }
+    };
+}
+bitwise_inplace!(bit_and_inplace, |a, b| a & b);
+bitwise_inplace!(bit_or_inplace, |a, b| a | b);
+bitwise_inplace!(bit_xor_inplace, |a, b| a ^ b);
+
+#[monoruby_builtin]
+fn bit_not(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let bytes = lfp.self_val().as_io_buffer_inner().read_bytes()?;
+    let out: Vec<u8> = bytes.iter().map(|b| !b).collect();
+    Ok(Value::new_io_buffer(IoBufferInner::owned(out, BUF_INTERNAL)))
+}
+
+#[monoruby_builtin]
+fn bit_not_inplace(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    check_writable(globals, self_.as_io_buffer_inner())?;
+    let bytes = self_.as_io_buffer_inner().read_bytes()?;
+    let out: Vec<u8> = bytes.iter().map(|b| !b).collect();
+    self_.as_io_buffer_inner_mut().write_at(0, &out)?;
+    Ok(self_)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn io_buffer_map_and_bitwise() {
+        // .map: mmap-backed buffers (FILE flag word, write-through to the
+        // file, size/offset/flags forms, READONLY/PRIVATE, EACCES for a
+        // read-only fd without READONLY, EINVAL for a non-page-aligned
+        // offset, ArgumentError for an empty file) and the bitwise family
+        // (cyclic mask, TypeError/MaskError/AccessError ordering).
+        run_test_once(
+            r##"
+            require "tempfile"
+            r = []
+            er = ->(&blk) { begin; blk.call; :no_raise; rescue => e; [e.class, e.message]; end }
+            t = Tempfile.new("mrb_map"); File.write(t.path, "abcdefghij")
+            f = File.open(t.path, "r+")
+            b = IO::Buffer.map(f)
+            r << [b.size, b.get_string, b.mapped?, b.external?, b.shared?, b.private?, b.readonly?]
+            r << b.to_s.sub(/0x\h+/, "0xA")
+            b.set_string("XY")
+            r << File.read(t.path)
+            b.free
+            b2 = IO::Buffer.map(f, 4); r << [b2.size, b2.get_string]; b2.free
+            b3 = IO::Buffer.map(f, 4, 0, IO::Buffer::READONLY)
+            r << [b3.readonly?, er.call { b3.set_string("z") }]; b3.free
+            b4 = IO::Buffer.map(f, nil, 0, IO::Buffer::PRIVATE)
+            r << [b4.private?, b4.shared?]
+            b4.set_string("QQ"); r << File.read(t.path); b4.free
+            f.close
+            f2 = File.open(t.path, "r")
+            r << (begin; IO::Buffer.map(f2); :no_raise; rescue => e; e.class.ancestors.include?(SystemCallError); end)
+            b5 = IO::Buffer.map(f2, nil, 0, IO::Buffer::READONLY); r << b5.get_string(0, 2); b5.free
+            f2.close
+            t2 = Tempfile.new("mrb_empty"); f3 = File.open(t2.path, "w+")
+            r << er.call { IO::Buffer.map(f3) }
+            f3.close; t2.close!
+            # Page size is platform-dependent (16 KiB on Apple Silicon),
+            # so align the offset to the real page size.
+            File.write(t.path, "z" * (IO::Buffer::PAGE_SIZE + 904))
+            f4 = File.open(t.path, "r+")
+            b6 = IO::Buffer.map(f4, nil, IO::Buffer::PAGE_SIZE); r << [b6.size, b6.get_string(0, 3)]; b6.free
+            r << (begin; IO::Buffer.map(f4, nil, 100); :no_raise; rescue => e; e.class.ancestors.include?(SystemCallError); end)
+            f4.close; t.close!
+            r << er.call { IO::Buffer.map("str") }
+            # bitwise family
+            b = IO::Buffer.for("12345".b)
+            m = IO::Buffer.for("\xF8\x8F".b)
+            r1 = b & m; r << [r1.get_string, r1.internal?, r1.size]
+            r << (b | m).get_string << (b ^ m).get_string
+            r4 = ~b; r << [r4.get_string, r4.internal?] << b.get_string
+            IO::Buffer.for(+"12345") { |bb| res = bb.and!(m); r << [res.equal?(bb), bb.get_string, bb.external?] }
+            IO::Buffer.for(+"12345") { |bb| bb.or!(m); r << bb.get_string }
+            IO::Buffer.for(+"12345") { |bb| bb.xor!(m); r << bb.get_string }
+            IO::Buffer.for(+"12345") { |bb| bb.not!; r << bb.get_string }
+            r << er.call { b & "x" } << er.call { b.and!(nil) }
+            e = IO::Buffer.new(0)
+            r << er.call { b & e } << er.call { b.and!(e) }
+            r << er.call { IO::Buffer.for("abc").and!(m) }
+            lk = IO::Buffer.new(2); lk.set_string("ab")
+            lk.locked { lk.and!(m); r << lk.get_string }
+            r
+            "##,
+        );
+    }
 
     #[test]
     fn io_buffer_construction_and_flags() {

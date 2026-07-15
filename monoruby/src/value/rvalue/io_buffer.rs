@@ -10,7 +10,7 @@ pub const BUF_PRIVATE: u32 = 64;
 pub const BUF_READONLY: u32 = 128;
 
 /// Where an `IO::Buffer`'s bytes live.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum BufStorage {
     /// Zero-sized or freed buffer.
     Null,
@@ -25,11 +25,46 @@ pub enum BufStorage {
     /// Reads and writes go directly through the String's bytes, so
     /// mutations are visible to (block form) — and from — the original.
     Str { s: Value, offset: usize },
+    /// A file-backed mmap region (`.map`). Unmapped on drop/free.
+    FileMap { ptr: *mut u8, len: usize },
     /// A view into a span of another IO::Buffer (`#slice`). Access is
     /// re-resolved through the parent on every operation, so a parent
     /// resize cannot leave a dangling pointer (out-of-range access
     /// simply fails the bounds check).
     Slice { parent: Value, offset: usize },
+}
+
+impl Clone for BufStorage {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Null => Self::Null,
+            Self::Owned(v) => Self::Owned(v.clone()),
+            // Cloning a mapping (object #dup) materializes a private copy —
+            // sharing the region would double-munmap on drop.
+            Self::FileMap { ptr, len } => {
+                // SAFETY: ptr/len describe a live mapping owned by self.
+                Self::Owned(unsafe { std::slice::from_raw_parts(*ptr, *len) }.to_vec())
+            }
+            Self::Str { s, offset } => Self::Str {
+                s: *s,
+                offset: *offset,
+            },
+            Self::Slice { parent, offset } => Self::Slice {
+                parent: *parent,
+                offset: *offset,
+            },
+        }
+    }
+}
+
+impl Drop for BufStorage {
+    fn drop(&mut self) {
+        if let Self::FileMap { ptr, len } = self {
+            // SAFETY: ptr/len came from a successful mmap owned solely by
+            // this storage (Clone never duplicates the mapping).
+            unsafe { libc::munmap(*ptr as *mut libc::c_void, *len) };
+        }
+    }
 }
 
 ///
@@ -76,6 +111,15 @@ impl IoBufferInner {
         }
     }
 
+    pub fn file_map(ptr: *mut u8, len: usize, flags: u32) -> Self {
+        Self {
+            storage: BufStorage::FileMap { ptr, len },
+            size: len,
+            flags,
+            locked: false,
+        }
+    }
+
     pub fn slice_of(parent: Value, offset: usize, size: usize, flags: u32) -> Self {
         Self {
             storage: BufStorage::Slice { parent, offset },
@@ -104,6 +148,11 @@ impl IoBufferInner {
         match &self.storage {
             BufStorage::Null => Ok(Vec::new()),
             BufStorage::Owned(v) => Ok(v.clone()),
+            BufStorage::FileMap { ptr, len } => {
+                let n = self.size.min(*len);
+                // SAFETY: ptr/len describe this buffer's live mapping.
+                Ok(unsafe { std::slice::from_raw_parts(*ptr, n) }.to_vec())
+            }
             BufStorage::Str { s, offset } => {
                 let bytes = s.as_rstring_inner().as_bytes();
                 if *offset + self.size > bytes.len() {
@@ -134,6 +183,18 @@ impl IoBufferInner {
             BufStorage::Null => Ok(()),
             BufStorage::Owned(v) => {
                 v[offset..offset + data.len()].copy_from_slice(data);
+                Ok(())
+            }
+            BufStorage::FileMap { ptr, len } => {
+                if offset + data.len() > *len {
+                    return Err(MonorubyErr::argumenterr(
+                        "Specified offset+length is bigger than the buffer size!",
+                    ));
+                }
+                // SAFETY: bounds checked against the mapping length above.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.add(offset), data.len())
+                };
                 Ok(())
             }
             BufStorage::Str { s, offset: base } => {
