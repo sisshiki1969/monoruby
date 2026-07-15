@@ -5289,6 +5289,10 @@ mod tests {
         );
         // A non-coercible argument is still a TypeError.
         run_test(r#"begin; [1].product(5); rescue TypeError; :te; end"#);
+        // An argument whose `#to_ary` returns a non-Array raises a TypeError.
+        run_test(
+            r#"ar = Object.new; def ar.to_ary; 5; end; begin; [1].product(ar); rescue TypeError; :te2; end"#,
+        );
     }
 
     #[test]
