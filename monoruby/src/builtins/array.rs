@@ -2113,22 +2113,62 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         }
         // Fall through to the generic loop with the original `sum`.
     }
-    let iter = self_.iter().cloned();
-    match lfp.block() {
-        None => {
-            for v in iter {
-                sum =
-                    executor::op::add_values(vm, globals, sum, v).ok_or_else(|| vm.take_error())?;
+    // Kahan–Neumaier compensated summation while both the running sum and
+    // the element are Floats, matching CRuby's precise float `sum`.
+    // `comp` accumulates the lost low-order bits and is folded back in
+    // whenever we leave the all-Float fast path (and at the end); it is
+    // *not* updated when the running total goes non-finite, so a
+    // `±Infinity`/`NaN` element propagates instead of turning the
+    // `Inf - Inf` compensation into a spurious NaN. The Integer→Float
+    // transition happens naturally through `add_values`.
+    //
+    // The array is re-read by index every step (rather than held as an
+    // iterator) so a block that grows the receiver mid-sum is tolerated
+    // and the appended elements are summed too — matching CRuby.
+    let self_val = lfp.self_val();
+    let mut comp = 0.0f64;
+    let block_data = match lfp.block() {
+        Some(bh) => Some(vm.get_block_data(globals, bh)?),
+        None => None,
+    };
+    let mut i = 0;
+    loop {
+        let v = {
+            let ary = self_val.as_array();
+            if i >= ary.len() {
+                break;
             }
-        }
-        Some(bh) => {
-            let data = vm.get_block_data(globals, bh)?;
-            for v in iter {
-                let rhs = vm.invoke_block(globals, &data, &[v])?;
-                sum = executor::op::add_values(vm, globals, sum, rhs)
-                    .ok_or_else(|| vm.take_error())?;
+            ary[i]
+        };
+        i += 1;
+        let v = match &block_data {
+            Some(data) => vm.invoke_block(globals, data, &[v])?,
+            None => v,
+        };
+        if let (Some(f), Some(x)) = (sum.try_float(), v.try_float()) {
+            let t = f + x;
+            if t.is_finite() {
+                comp += if f.abs() >= x.abs() {
+                    (f - t) + x
+                } else {
+                    (x - t) + f
+                };
             }
+            sum = Value::float(t);
+        } else {
+            if comp != 0.0
+                && let Some(f) = sum.try_float()
+            {
+                sum = Value::float(f + comp);
+            }
+            comp = 0.0;
+            sum = executor::op::add_values(vm, globals, sum, v).ok_or_else(|| vm.take_error())?;
         }
+    }
+    if comp != 0.0
+        && let Some(f) = sum.try_float()
+    {
+        sum = Value::float(f + comp);
     }
     Ok(sum)
 }
@@ -6195,6 +6235,38 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn sum_kahan_and_growth() {
+        // Kahan–Neumaier compensated summation: precise float sum.
+        run_test_once(
+            r#"[2.7800000000000002, 5.0, 2.5, 4.44, 3.89, 3.89, 4.44, 7.78, 5.0, 2.7800000000000002, 5.0, 2.5].sum"#,
+        );
+        run_test_once(r#"[1.0, 1e100, 1.0, -1e100].sum"#);
+        // Ordinary / mixed / block / non-numeric paths unaffected.
+        run_tests(&[
+            r#"[1, 2, 3].sum"#,
+            r#"[1, 2, 3].sum(10)"#,
+            r#"[1.0, 2, 3].sum"#,
+            r#"[1, 2, 3].sum { |x| x * 2 }"#,
+            r#"[[1], [2]].sum([])"#,
+        ]);
+        // A block that grows the receiver mid-sum sees the appended
+        // elements too (CRuby tolerates the size increase).
+        run_test_once(
+            r#"
+            a = [1, 2, 3]
+            seen = []
+            i = 0
+            a.sum(0) do |e|
+              seen << e
+              a << (10 + i) if i < 5
+              i += 1
+              0
+            end
+            seen
+            "#,
+        );
+    }
     #[test]
     fn subclass_return_types() {
         run_test_with_prelude("C[1,2,3].sort.class", "class C < Array; end");
