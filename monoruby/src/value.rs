@@ -343,7 +343,39 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
         g: &mut Globals,
     ) -> Result<()> {
         match self.try_rvalue() {
-            None => self.0.hash(state),
+            None => {
+                use std::hash::{Hash, Hasher};
+                match self.unpack() {
+                    // `Integer#hash`/`Float#hash` digest the numeric *value*
+                    // (not the tagged bits), so a numeric element must mix the
+                    // same digest whether reached here or through a Ruby-level
+                    // `#hash` result that Array#hash/Hash#hash coerce via
+                    // `#to_int` (see the "calls to_int on result of calling
+                    // hash on each element" core/array spec). Reproduce the
+                    // reduction inline rather than dispatching `#hash`: this
+                    // path also backs internal Hash bucketing and must not
+                    // re-enter the interpreter. Numeric keys only ever use the
+                    // Value-keyed `Map` variant, so both insert and lookup
+                    // reach this arm — bucketing stays self-consistent.
+                    RV::Fixnum(i) => {
+                        let mut s = crate::value::seeded_hasher();
+                        i.hash(&mut s);
+                        ((s.finish() as i64) >> 1).hash(state);
+                    }
+                    RV::Float(f) => {
+                        let mut s = crate::value::seeded_hasher();
+                        // Float#hash normalises -0.0 to +0.0 before hashing.
+                        let f = if f == 0.0 { 0.0 } else { f };
+                        f.to_bits().hash(&mut s);
+                        ((s.finish() as i64) >> 1).hash(state);
+                    }
+                    // nil / true / false / Symbol hash by identity. This keeps
+                    // parity with `IdentKey` (used for symbol-keyed Hash
+                    // bucketing), which digests `id()`; changing it here would
+                    // desynchronise the two hash functions for Symbol keys.
+                    _ => self.0.hash(state),
+                }
+            }
             // SAFETY: The RValue pointer is valid and the type checking via ty()
             // ensures we're accessing the correct variant of the union.
             Some(lhs) => unsafe {
