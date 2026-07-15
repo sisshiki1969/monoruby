@@ -1334,6 +1334,11 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 
     if let Some(bh) = lfp.block() {
         // Block form: fill {}, fill(start) {}, fill(start, length) {}, fill(range) {}
+        // The value comes from the block, so at most two positional args
+        // (start, length) are allowed — a third is an ArgumentError.
+        if lfp.try_arg(2).is_some() {
+            return Err(MonorubyErr::wrong_number_of_arg_range(3, 0..=2));
+        }
         let data = vm.get_block_data(globals, bh)?;
         let (start, end_idx) = if let Some(arg0) = lfp.try_arg(0) {
             if let Some(range) = arg0.is_range() {
@@ -1385,7 +1390,10 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             return Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3));
         };
         if let Some(arg1) = lfp.try_arg(1) {
-            if let Some(range) = arg1.is_range() {
+            // The range form is `fill(val, range)` only — with a third
+            // (length) argument, `arg1` is a start index, so a Range there
+            // is a TypeError (Range has no `#to_int`), matching CRuby.
+            if let Some(range) = arg1.is_range().filter(|_| lfp.try_arg(2).is_none()) {
                 // fill(val, range) -> self
                 let (start, end_idx) = fill_range_indices(vm, globals, &ary, range)?;
                 if end_idx > ary.len() {
@@ -1395,43 +1403,42 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     ary[i] = val;
                 }
             } else {
-                // fill(val, start, length = nil) -> self
-                let start = arg1.coerce_to_int_i64(vm, globals)?;
+                // fill(val, start, length = nil) -> self.
+                // A `nil` start means 0 (CRuby coerces nil to 0 here,
+                // rather than raising as `Integer(nil)` would).
+                let start = if arg1.is_nil() {
+                    0i64
+                } else {
+                    arg1.coerce_to_int_i64(vm, globals)?
+                };
                 let start = if start < 0 {
                     let s = ary.len() as i64 + start;
                     if s < 0 { 0i64 } else { s }
                 } else {
                     start
                 } as usize;
-                if let Some(len_val) = lfp.try_arg(2) {
-                    if len_val.is_nil() {
-                        // nil length means fill to end
-                        if start > ary.len() {
-                            fill_resize(&mut ary, start)?;
-                        }
-                        let len = ary.len();
-                        for i in start..len {
-                            ary[i] = val;
-                        }
-                    } else {
-                        let len = len_val.coerce_to_int_i64(vm, globals)?;
-                        if len <= 0 {
-                            return Ok(ary.into());
-                        }
-                        let end_idx = start
-                            .checked_add(len as usize)
-                            .ok_or_else(|| MonorubyErr::argumenterr("argument too big"))?;
-                        if end_idx > ary.len() {
-                            fill_resize(&mut ary, end_idx)?;
-                        }
-                        for i in start..end_idx {
-                            ary[i] = val;
-                        }
+                // Only an *explicit* length extends the array; the
+                // start-only and `nil`-length forms fill existing elements
+                // from `start` to the end and never grow it (so a `start`
+                // past the end is a no-op). `start..len` is an empty range
+                // when `start >= len`, so no bounds check is needed.
+                if let Some(len_val) = lfp.try_arg(2)
+                    && !len_val.is_nil()
+                {
+                    let len = len_val.coerce_to_int_i64(vm, globals)?;
+                    if len <= 0 {
+                        return Ok(ary.into());
+                    }
+                    let end_idx = start
+                        .checked_add(len as usize)
+                        .ok_or_else(|| MonorubyErr::argumenterr("argument too big"))?;
+                    if end_idx > ary.len() {
+                        fill_resize(&mut ary, end_idx)?;
+                    }
+                    for i in start..end_idx {
+                        ary[i] = val;
                     }
                 } else {
-                    if start > ary.len() {
-                        fill_resize(&mut ary, start)?;
-                    }
                     let len = ary.len();
                     for i in start..len {
                         ary[i] = val;
@@ -6097,6 +6104,46 @@ mod tests {
             "[].cycle(2).size",
         ]);
         run_test_no_result_check("[1, 2].cycle.size");
+        // A `to_int` that returns a non-Integer is a TypeError, not a
+        // downstream NoMethodError.
+        run_test(
+            r#"
+            o = Object.new
+            def o.to_int; "2"; end
+            begin; [1, 2].cycle(o) { |x| }; rescue TypeError; :type_error; end
+            "#,
+        );
+    }
+
+    #[test]
+    fn fill_start_length_edge_cases() {
+        run_tests(&[
+            // No length / nil length never grows the array; a start past
+            // the end is a no-op (only an explicit length extends).
+            r#"[].fill("a", 1)"#,
+            r#"[1, 2, 3].fill("x", 5)"#,
+            r#"[1, 2, 3].fill("x", 5, nil)"#,
+            r#"[].fill("a", 1, nil)"#,
+            r#"[].fill("a", 1, 2)"#,
+            // nil start means 0.
+            r#"[1, 2, 3].fill("y", nil)"#,
+            // A block with three positional args is an ArgumentError.
+            r#"begin; [1, 2].fill(1, 2, 3) { |i| i }; rescue ArgumentError; :ae; end"#,
+            // A Range start plus a length argument is a TypeError.
+            r#"begin; [1, 2, 3].fill("x", 1..2, 5); rescue TypeError; :te; end"#,
+        ]);
+    }
+
+    #[test]
+    fn slice_before_enumerator_size_is_nil() {
+        // The chunk count isn't derivable from the source size, so the
+        // returned Enumerator reports a nil size (CRuby parity); the
+        // chunks themselves are still produced.
+        run_tests(&[
+            "[1, 2, 3].slice_before(2).size.inspect",
+            "[1, 2, 3, 4].slice_before { |x| x.even? }.to_a",
+            "[1, 2, 3].slice_before(2).to_a",
+        ]);
     }
 
     #[test]
