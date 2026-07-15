@@ -3502,7 +3502,7 @@ fn set_encoding_by_bom(
 
 /// An Encoding object -> the internal `Encoding` enum (folding the
 /// names the enum doesn't represent distinctly down to ASCII-8BIT).
-fn enc_obj_to_enum(globals: &Globals, v: Value) -> Option<crate::value::Encoding> {
+pub(super) fn enc_obj_to_enum(globals: &Globals, v: Value) -> Option<crate::value::Encoding> {
     super::encoding::encoding_object_name(globals, v)
         .and_then(|n| crate::value::Encoding::try_from_str(&n).ok())
 }

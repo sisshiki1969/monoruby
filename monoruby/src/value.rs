@@ -1259,6 +1259,10 @@ impl Value {
         v
     }
 
+    pub fn new_io_buffer(inner: IoBufferInner) -> Self {
+        RValue::new_io_buffer(inner).pack()
+    }
+
     pub fn arithmetic_sequence(begin: Value, end: Value, step: Value, exclude_end: bool) -> Self {
         RValue::new_arithmetic_sequence(begin, end, step, exclude_end).pack()
     }
@@ -2871,6 +2875,14 @@ impl Value {
         assert_eq!(ObjTy::ENUMERATOR, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains an enumerator.
         unsafe { self.rvalue_mut().as_enumerator_mut() }
+    }
+
+    pub fn as_io_buffer_inner(&self) -> &IoBufferInner {
+        self.rvalue().as_io_buffer()
+    }
+
+    pub fn as_io_buffer_inner_mut(&mut self) -> &mut IoBufferInner {
+        self.rvalue_mut().as_io_buffer_mut()
     }
 
     pub fn as_arithmetic_sequence_inner(&self) -> &ArithmeticSequenceInner {
