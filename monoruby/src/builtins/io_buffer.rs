@@ -1089,6 +1089,51 @@ mod tests {
     }
 
     #[test]
+    fn io_buffer_typed_values_and_iteration() {
+        // get_value/set_value across the full 18-symbol type table
+        // (lowercase = little-endian, uppercase = big-endian), the
+        // set_value return-offset quirk, bounds/unknown-type errors, and
+        // the each/values/each_byte iteration family (blockless forms
+        // return Enumerators).
+        run_test_once(
+            r##"
+            r = []
+            b = IO::Buffer.for("\x01\x02\x03\x04\x05\x06\x07\x88".b)
+            %i[U8 S8 u16 U16 s16 S16 u32 U32 s32 S32 u64 U64 s64 S64 f32 F32 f64 F64].each do |t|
+              begin
+                r << [t, b.get_value(t, 0)]
+              rescue => e
+                r << [t, e.class, e.message]
+              end
+            end
+            er = ->(&blk) { begin; blk.call; :no_raise; rescue => e; [e.class, e.message]; end }
+            r << er.call { b.get_value(:U8, 100) }
+            r << er.call { b.get_value(:bogus, 0) }
+            w = IO::Buffer.new(8)
+            r << w.set_value(:U16, 0, 0x0102) << w.get_string(0, 2).bytes
+            r << w.set_value(:u16, 2, 0x0102) << w.get_string(2, 2).bytes
+            r << w.set_value(:S8, 4, -1) << w.get_string(4, 1).bytes
+            r << w.set_value(:f32, 4, 1.5) << w.get_value(:f32, 4)
+            r << w.set_value(:F64, 0, -2.25) << w.get_value(:F64, 0)
+            r << er.call { w.set_value(:U8, 100, 1) }
+            r << b.each(:U8).first(3)
+            r << b.each(:u16, 2).first(2)
+            r << b.each(:U8, 2, 2).to_a
+            c = 0
+            b.each(:U8) { |o, v| c += 1 }
+            r << c
+            r << b.values(:U8).first(4)
+            r << b.values(:u32, 4)
+            r << b.each_byte.first(3)
+            cb = []
+            b.each_byte { |x| cb << x }
+            r << cb.size
+            r
+            "##,
+        );
+    }
+
+    #[test]
     fn io_buffer_lock_transfer_resize_compare() {
         run_test_once(
             r##"
