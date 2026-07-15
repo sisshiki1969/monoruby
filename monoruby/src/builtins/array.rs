@@ -5277,6 +5277,21 @@ mod tests {
     }
 
     #[test]
+    fn product_coerces_arg_via_method_missing() {
+        // An argument that answers `#to_ary` only through `method_missing`
+        // (no defined `to_ary`) is still coerced, matching CRuby.
+        run_test(
+            r#"
+            ar = Object.new
+            def ar.method_missing(name, *a); name == :to_ary ? [2, 3] : super; end
+            [1].product(ar)
+            "#,
+        );
+        // A non-coercible argument is still a TypeError.
+        run_test(r#"begin; [1].product(5); rescue TypeError; :te; end"#);
+    }
+
+    #[test]
     fn intersect() {
         run_tests(&[
             r#"
