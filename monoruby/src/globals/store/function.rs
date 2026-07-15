@@ -306,14 +306,11 @@ mod tests {
     // clobbered the return address (jump to null before the builtin body).
     #[test]
     fn native_kw_frame_offset_covers_reg_num() {
-        extern "C" fn dummy(
-            _: &mut Executor,
-            _: &mut Globals,
-            _: Lfp,
-            _: BytecodePtr,
-        ) -> Option<Value> {
-            None
-        }
+        // Never invoked — only used as a fn pointer to construct the
+        // `FuncInfo`. Kept on one line so the uncovered body is a single
+        // region.
+        #[rustfmt::skip]
+        extern "C" fn dummy(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Option<Value> { None }
         // min=1, max=3, 9 keyword names, kw_rest → reg_num = 1 + 3 + 9 + 1 = 14.
         let info = FuncInfo::new_native(
             FuncId::new(1),
