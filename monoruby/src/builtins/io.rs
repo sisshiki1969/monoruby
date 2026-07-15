@@ -17,7 +17,17 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "printf", printf, 1, 1, true);
     globals.define_builtin_func(IO_CLASS, "flush", flush, 0);
-    globals.define_builtin_func_with(IO_CLASS, "gets", gets, 0, 2, false);
+    globals.define_builtin_func_with_kw(IO_CLASS, "gets", gets, 0, 2, false, &["chomp"], true);
+    globals.define_builtin_func_with_kw(
+        IO_CLASS,
+        "readline",
+        readline,
+        0,
+        2,
+        false,
+        &["chomp"],
+        true,
+    );
     globals.define_builtin_funcs(IO_CLASS, "isatty", &["tty?"], isatty, 0);
     globals.define_builtin_func(IO_CLASS, "close", close, 0);
     globals.define_builtin_func(IO_CLASS, "close_write", close_write, 0);
@@ -27,7 +37,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "seek", seek, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 2, false);
     globals.define_builtin_class_func_with(IO_CLASS, "read", io_class_read, 1, 4, false);
-    globals.define_builtin_class_func_with(IO_CLASS, "readlines", io_class_readlines, 1, 3, false);
+    globals.define_builtin_class_func_with_kw(
+        IO_CLASS,
+        "readlines",
+        io_class_readlines,
+        1,
+        3,
+        false,
+        &[],
+        true,
+    );
     globals.define_builtin_class_func_with(IO_CLASS, "sysopen", io_sysopen, 1, 3, false);
     globals.define_builtin_class_func_with(IO_CLASS, "pipe", io_pipe, 0, 3, false);
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
@@ -47,7 +66,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with_kw(
         IO_CLASS, "write_nonblock", io_write_nonblock, 1, 1, false, &["exception"], false,
     );
-    globals.define_builtin_func_with(IO_CLASS, "readlines", io_readlines, 0, 2, false);
+    globals.define_builtin_func_with_kw(
+        IO_CLASS,
+        "readlines",
+        io_readlines,
+        0,
+        2,
+        false,
+        &["chomp"],
+        true,
+    );
     globals.define_builtin_func(IO_CLASS, "binmode", io_binmode, 0);
     globals.define_builtin_func(IO_CLASS, "binmode?", io_binmode_, 0);
     globals.define_builtin_func(IO_CLASS, "autoclose=", io_autoclose_set, 1);
@@ -70,7 +98,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "close_on_exec?", io_close_on_exec_, 0);
     globals.define_builtin_func(IO_CLASS, "close_on_exec=", io_close_on_exec_set, 1);
     globals.define_builtin_class_func_with(IO_CLASS, "select", io_select, 1, 4, false);
-    globals.define_builtin_class_func_with(IO_CLASS, "foreach", io_foreach, 1, 3, false);
+    globals.define_builtin_class_func_with_kw(
+        IO_CLASS,
+        "foreach",
+        io_foreach,
+        1,
+        3,
+        false,
+        &[],
+        true,
+    );
     globals.define_builtin_class_func_with(IO_CLASS, "copy_stream", io_copy_stream, 2, 4, false);
     globals.define_builtin_func_with(IO_CLASS, "set_encoding", set_encoding, 1, 3, false);
     globals.define_builtin_func(IO_CLASS, "set_encoding_by_bom", set_encoding_by_bom, 0);
@@ -707,29 +744,131 @@ fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
     Ok(lfp.self_val())
 }
 
+/// Parse the `(sep = $/, limit = nil)` positional arguments shared by
+/// `IO#gets` and the other line readers, plus the `chomp:` keyword sitting
+/// in arg slot `kw_chomp_idx`.
 ///
-/// ### IO#gets
+/// Returns `(separator, limit, chomp)`: `separator == None` slurps to EOF
+/// (explicit `nil`, or `$/ == nil`); `limit == None` is unlimited (absent
+/// or negative). A single non-String argument is taken as the limit
+/// (coerced with `#to_int`); with two arguments the first must be a
+/// String (`#to_str`). A limit outside `i64` raises `RangeError`.
+fn getline_args(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    kw_chomp_idx: usize,
+) -> Result<(Option<Vec<u8>>, Option<usize>, bool)> {
+    // Default separator: `$/` — "\n" unless reassigned; nil slurps.
+    let mut sep: Option<Vec<u8>> = match globals.get_gvar(IdentId::get_id("$/")) {
+        None => Some(b"\n".to_vec()),
+        Some(v) if v.is_nil() => None,
+        Some(v) => match v.is_rstring() {
+            Some(rs) => Some(rs.as_bytes().to_vec()),
+            None => Some(b"\n".to_vec()),
+        },
+    };
+    let mut limit_arg: Option<Value> = None;
+    match (lfp.try_arg(0), lfp.try_arg(1)) {
+        (None, _) => {}
+        (Some(v0), None) => {
+            if v0.is_nil() {
+                sep = None;
+            } else if let Some(rs) = v0.is_rstring() {
+                sep = Some(rs.as_bytes().to_vec());
+            } else if globals.check_method(v0, IdentId::TO_STR).is_some() {
+                sep = Some(v0.coerce_to_rstring(vm, globals)?.as_bytes().to_vec());
+            } else {
+                limit_arg = Some(v0);
+            }
+        }
+        (Some(v0), Some(v1)) => {
+            if v0.is_nil() {
+                sep = None;
+            } else {
+                sep = Some(v0.coerce_to_rstring(vm, globals)?.as_bytes().to_vec());
+            }
+            limit_arg = Some(v1);
+        }
+    }
+    let limit = match limit_arg {
+        None => None,
+        Some(v) => {
+            let l = v.coerce_to_int_i64(vm, globals)?;
+            if l < 0 { None } else { Some(l as usize) }
+        }
+    };
+    let chomp = lfp.try_arg(kw_chomp_idx).is_some_and(|v| v.as_bool());
+    Ok((sep, limit, chomp))
+}
+
+/// Apply `chomp: true` to a line read with `sep`.
 ///
-/// - gets([NOT SUPPORTED]rs = $/) -> String | nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/gets.html]
-#[monoruby_builtin]
-fn gets(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+/// - default/custom separator: remove one trailing `sep` (for `"\n"`,
+///   `"\r\n"` is removed as a unit, like `String#chomp`);
+/// - paragraph mode (`""`): remove the one `"\n\n"` that terminated the
+///   paragraph (a final paragraph cut short by EOF keeps its bytes);
+/// - `nil` separator: no-op — CRuby only chomps at a separator boundary,
+///   and a slurped read has none.
+fn chomp_line(buf: &mut Vec<u8>, sep: Option<&[u8]>, _limit: Option<usize>) {
+    match sep {
+        None => {}
+        Some([]) => {
+            if buf.ends_with(b"\n\n") {
+                buf.truncate(buf.len() - 2);
+            }
+        }
+        Some(s) => {
+            if buf.ends_with(s) {
+                buf.truncate(buf.len() - s.len());
+                if s == b"\n" && buf.ends_with(b"\r") {
+                    buf.pop();
+                }
+            }
+        }
+    }
+}
+
+/// Whether reads on this IO should complete UTF-8 characters cut by a
+/// byte limit (true unless the external encoding is a single-byte one).
+fn io_completes_utf8(globals: &mut Globals, io: Value) -> bool {
+    use crate::value::Encoding as E;
+    let ext_v = read_io_encoding(globals, io, false);
+    matches!(enc_obj_to_enum(globals, ext_v).unwrap_or(E::Utf8), E::Utf8)
+}
+
+/// Bump the IO's line counter and `$.` after a successful line read.
+fn bump_lineno(globals: &mut Globals, io: Value) -> Result<()> {
+    let cur = globals
+        .store
+        .get_ivar(io, IdentId::get_id("/lineno"))
+        .and_then(|v| v.try_fixnum())
+        .unwrap_or(0);
+    let n = cur + 1;
+    globals
+        .store
+        .set_ivar(io, IdentId::get_id("/lineno"), Value::integer(n))?;
+    globals.set_gvar(IdentId::get_id("$."), Value::integer(n));
+    Ok(())
+}
+
+/// Shared body of `IO#gets` / `IO#readline`: read one line per the parsed
+/// arguments, update lineno / `$.` / `$_`, and return the tagged String
+/// (nil at EOF).
+fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
     let mut self_ = lfp.self_val();
-    let line = self_.as_io_inner_mut().read_line()?;
+    let complete_utf8 = io_completes_utf8(globals, self_);
+    let line = self_
+        .as_io_inner_mut()
+        .getline(sep.as_deref(), limit, complete_utf8)?;
     match line {
-        Some(buf) => {
-            let cur = globals
-                .store
-                .get_ivar(self_, IdentId::get_id("/lineno"))
-                .and_then(|v| v.try_fixnum())
-                .unwrap_or(0);
-            let n = cur + 1;
-            globals
-                .store
-                .set_ivar(self_, IdentId::get_id("/lineno"), Value::integer(n))?;
-            globals.set_gvar(IdentId::get_id("$."), Value::integer(n));
-            let s = tagged_read_string(globals, self_, buf.into_bytes(), false);
+        Some(mut buf) => {
+            if chomp {
+                chomp_line(&mut buf, sep.as_deref(), limit);
+            }
+            bump_lineno(globals, self_)?;
+            let s = tagged_read_string(globals, self_, buf, false);
             // `$_` is frame-local: set it on the calling Ruby scope's
             // LEP (the builtin's own native frame is skipped).
             vm.set_last_read_line(s);
@@ -740,6 +879,36 @@ fn gets(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             Ok(Value::nil())
         }
     }
+}
+
+///
+/// ### IO#gets
+///
+/// - gets(rs = $/, limit = nil, chomp: false) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/gets.html]
+#[monoruby_builtin]
+fn gets(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    gets_inner(vm, globals, lfp)
+}
+
+///
+/// ### IO#readline
+///
+/// - readline(rs = $/, limit = nil, chomp: false) -> String
+///
+/// Like `#gets`, but raises `EOFError` at end of file. Implemented
+/// natively (not as a Ruby wrapper over `#gets`) so `$_` is assigned in
+/// the *caller's* frame, like CRuby's C implementation.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readline.html]
+#[monoruby_builtin]
+fn readline(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let line = gets_inner(vm, globals, lfp)?;
+    if line.is_nil() {
+        return Err(MonorubyErr::eoferr(&globals.store, "end of file reached"));
+    }
+    Ok(line)
 }
 
 ///
@@ -908,7 +1077,7 @@ fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// ### IO#read
 ///
-/// - read(length = nil, [NOT SUPPRTED] outbuf = "") -> String | nil
+/// - read(length = nil, outbuf = "") -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/read.html
 #[monoruby_builtin]
@@ -927,16 +1096,47 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         None => None,
     };
+    // Output buffer: its content is replaced with the read bytes, and it
+    // becomes the return value. Frozen buffers raise even when there is
+    // nothing to read (CRuby checks before reading).
+    let outbuf = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => {
+            // A #to_str-convertible object: the converted String becomes
+            // the buffer (and the return value).
+            let mut b = v.coerce_to_rstring(vm, globals)?.as_val();
+            b.ensure_string_mutable(vm, globals)?;
+            Some(b)
+        }
+        _ => None,
+    };
     let buf = lfp.self_val().as_io_inner_mut().read(length)?;
-    if buf.is_empty() && length.is_some() && length != Some(0) {
-        return Ok(Value::nil());
+    let eof_nil = buf.is_empty() && length.is_some() && length != Some(0);
+    match outbuf {
+        Some(mut out) => {
+            if length.is_some() {
+                // Sized read: raw bytes; the buffer keeps its own encoding.
+                let enc = out.as_rstring_inner().encoding();
+                *out.as_rstring_inner_mut() = RStringInner::from_encoding(&buf, enc);
+            } else {
+                // Unsized read: the buffer takes the transcoded content
+                // and its encoding (like the no-buffer return value).
+                let tagged = tagged_read_string(globals, lfp.self_val(), buf, false);
+                *out.as_rstring_inner_mut() = (*tagged.as_rstring_inner()).clone();
+            }
+            if eof_nil { Ok(Value::nil()) } else { Ok(out) }
+        }
+        None => {
+            if eof_nil {
+                return Ok(Value::nil());
+            }
+            Ok(tagged_read_string(
+                globals,
+                lfp.self_val(),
+                buf,
+                length.is_some(),
+            ))
+        }
     }
-    Ok(tagged_read_string(
-        globals,
-        lfp.self_val(),
-        buf,
-        length.is_some(),
-    ))
 }
 
 ///
@@ -993,10 +1193,7 @@ fn io_class_read(
 
     let (mode, ext_obj, int_obj) = class_read_opts(vm, globals, opts)?;
     // A write/append-only mode can't be used for reading.
-    let base = mode.split(':').next().unwrap_or("").replace('b', "");
-    if base == "w" || base == "a" {
-        return Err(MonorubyErr::ioerr("not opened for reading"));
-    }
+    reject_unreadable_mode(&filename, &mode)?;
 
     let mut file = File::open(&filename).map_err(|err| {
         MonorubyErr::errno_with_path(&globals.store, &err, "rb_sysopen", &filename)
@@ -1077,77 +1274,142 @@ fn io_class_readlines(
         .coerce_to_path_rstring(vm, globals)?
         .to_str()?
         .to_string();
-    // arg1 may be a separator (String/nil), a limit (Integer) or an
-    // options Hash; arg2 may be the limit or the options Hash.
-    let mut opts = None;
-    let mut sep = "\n".to_string();
-    let mut whole = false;
-    for i in 1..3 {
-        let Some(arg) = lfp.try_arg(i) else { continue };
-        if arg.is_nil() {
-            if i == 1 {
-                whole = true; // explicit nil separator -> read all
-            }
-        } else if let Some(h) = arg.try_hash_ty() {
-            opts = Some(h);
-        } else if arg.try_fixnum().is_some() {
-            // limit: accepted, not enforced
-        } else if let Some(s) = arg.is_str() {
-            if i == 1 {
-                sep = s.to_string();
-            }
-        } else if i == 1 {
-            sep = arg.coerce_to_str(vm, globals)?;
-        } else {
-            // limit position: coerce via #to_int (raises TypeError on a
-            // non-convertible object), matching CRuby. Not enforced.
-            let _ = arg.coerce_to_int_i64(vm, globals)?;
-        }
+    let (sep, limit, chomp, (mode, ext_obj, int_obj)) = class_getline_args(vm, globals, lfp)?;
+    if limit == Some(0) {
+        return Err(MonorubyErr::argumenterr("invalid limit: 0 for readlines"));
     }
-    let (mode, ext_obj, int_obj) = class_read_opts(vm, globals, opts)?;
+    reject_unreadable_mode(&path, &mode)?;
+    let file = std::fs::File::open(&path)
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
+    let complete_utf8 = ext_completes_utf8(globals, ext_obj);
+    let mut io_val = Value::new_file(file, path, true, false);
+    vm.with_temp_scope(|vm| {
+        // Root the transient File IO (and the result lines) across the
+        // per-line allocations below.
+        vm.temp_push(io_val);
+        vm.temp_array_new(None);
+        let result = (|| {
+            while let Some(mut buf) =
+                io_val
+                    .as_io_inner_mut()
+                    .getline(sep.as_deref(), limit, complete_utf8)?
+            {
+                if chomp {
+                    chomp_line(&mut buf, sep.as_deref(), limit);
+                }
+                let line = tag_with_encs(globals, buf, ext_obj, int_obj);
+                vm.temp_array_push(line);
+            }
+            Ok(vm.temp_pop())
+        })();
+        // Close the fd now — leaving it to GC lets descriptors pile up.
+        let _ = io_val.as_io_inner_mut().close();
+        result
+    })
+}
+
+/// A write/append-only open mode can't be read from. CRuby still *opens*
+/// the file with that mode first — truncating it for "w", creating it if
+/// absent — before raising, so replicate the side effect and then fail.
+fn reject_unreadable_mode(path: &str, mode: &str) -> Result<()> {
     let base = mode.split(':').next().unwrap_or("").replace('b', "");
     if base == "w" || base == "a" {
+        let mut o = std::fs::OpenOptions::new();
+        o.write(true).create(true);
+        if base == "w" {
+            o.truncate(true);
+        } else {
+            o.append(true);
+        }
+        let _ = o.open(path); // open errors are moot; the read error wins
         return Err(MonorubyErr::ioerr("not opened for reading"));
     }
-    let content = std::fs::read(&path)
-        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
+    Ok(())
+}
 
-    let mut chunks: Vec<Vec<u8>> = Vec::new();
-    if whole {
-        if !content.is_empty() {
-            chunks.push(content);
-        }
-    } else if sep.is_empty() {
-        // Paragraph mode: split on blank lines.
-        let text = String::from_utf8_lossy(&content);
-        for part in text.split("\n\n") {
-            let t = part.trim_start_matches('\n');
-            if !t.is_empty() {
-                chunks.push(format!("{t}\n").into_bytes());
-            }
-        }
-    } else {
-        let sb = sep.as_bytes();
-        let mut start = 0;
-        while start < content.len() {
-            if let Some(pos) = content[start..]
-                .windows(sb.len())
-                .position(|w| w == sb)
-            {
-                let end = start + pos + sb.len();
-                chunks.push(content[start..end].to_vec());
-                start = end;
+/// Parse `(sep, limit, chomp, open-options)` for `IO.foreach` /
+/// `IO.readlines`.
+///
+/// Positional `sep` / `limit` sit in arg slots 1..3 with the same rules
+/// as `IO#gets` — so a *positional* options Hash lands in the sep/limit
+/// coercions and raises TypeError, like CRuby. Keywords arrive as the
+/// `**kwrest` Hash in slot 3 (registration `&[], kw_rest = true`), which
+/// keeps them distinguishable from a positional Hash, tolerates unknown
+/// keys, and feeds `class_read_opts` directly (`chomp:` plus the open
+/// options `mode:` / `encoding:` / …).
+fn class_getline_args(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<(
+    Option<Vec<u8>>,
+    Option<usize>,
+    bool,
+    (String, Option<Value>, Option<Value>),
+)> {
+    let opts = lfp.try_arg(3).and_then(|v| v.try_hash_ty());
+    let mut chomp = false;
+    if let Some(h) = &opts
+        && let Some(c) = h.get(Value::symbol(IdentId::get_id("chomp")), vm, globals)?
+    {
+        chomp = c.as_bool();
+    }
+    // Default separator: `$/` — "\n" unless reassigned; nil slurps.
+    let mut sep: Option<Vec<u8>> = match globals.get_gvar(IdentId::get_id("$/")) {
+        None => Some(b"\n".to_vec()),
+        Some(v) if v.is_nil() => None,
+        Some(v) => match v.is_rstring() {
+            Some(rs) => Some(rs.as_bytes().to_vec()),
+            None => Some(b"\n".to_vec()),
+        },
+    };
+    let mut limit_arg: Option<Value> = None;
+    match (lfp.try_arg(1), lfp.try_arg(2)) {
+        (None, _) => {}
+        (Some(v0), None) => {
+            if v0.is_nil() {
+                sep = None;
+            } else if let Some(rs) = v0.is_rstring() {
+                sep = Some(rs.as_bytes().to_vec());
+            } else if globals.check_method(v0, IdentId::TO_STR).is_some() {
+                sep = Some(v0.coerce_to_rstring(vm, globals)?.as_bytes().to_vec());
             } else {
-                chunks.push(content[start..].to_vec());
-                break;
+                limit_arg = Some(v0);
             }
+        }
+        (Some(v0), Some(v1)) => {
+            if v0.is_nil() {
+                sep = None;
+            } else {
+                sep = Some(v0.coerce_to_rstring(vm, globals)?.as_bytes().to_vec());
+            }
+            limit_arg = Some(v1);
         }
     }
-    let lines = chunks
-        .into_iter()
-        .map(|c| tag_with_encs(globals, c, ext_obj, int_obj))
-        .collect();
-    Ok(Value::array_from_vec(lines))
+    let limit = match limit_arg {
+        None => None,
+        Some(v) => {
+            let l = v.coerce_to_int_i64(vm, globals)?;
+            if l < 0 { None } else { Some(l as usize) }
+        }
+    };
+    let open = class_read_opts(vm, globals, opts)?;
+    Ok((sep, limit, chomp, open))
+}
+
+/// Whether limit-cut reads should complete UTF-8 characters, given the
+/// resolved external encoding of a class-level read (`None` = the
+/// default external encoding).
+fn ext_completes_utf8(globals: &mut Globals, ext_obj: Option<Value>) -> bool {
+    use crate::value::Encoding as E;
+    let ext = match ext_obj {
+        Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::Utf8),
+        None => {
+            let de = enc_default_external_obj(globals);
+            enc_obj_to_enum(globals, de).unwrap_or(E::Utf8)
+        }
+    };
+    matches!(ext, E::Utf8)
 }
 
 ///
@@ -1161,84 +1423,74 @@ fn io_class_readlines(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/foreach.html]
 #[monoruby_builtin]
-fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
+fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    // Without a block, return an Enumerator replaying this method
+    // (size nil, like CRuby). Only the *passed* positional slots are
+    // captured, and the `**kwrest` Hash is re-sent as keywords — passing
+    // it positionally would hit the sep/limit TypeError coercions.
     let bh = match lfp.block() {
         Some(bh) => bh,
         None => {
-            return Err(MonorubyErr::runtimeerr(
-                "IO.foreach without block is not yet supported",
-            ));
+            let mut args = vec![lfp.arg(0)];
+            for i in 1..3 {
+                if let Some(v) = lfp.try_arg(i) {
+                    args.push(v);
+                }
+            }
+            let kw = lfp.try_arg(3).and_then(|v| v.try_hash_ty());
+            return vm.generate_enumerator_with_kw(
+                IdentId::get_id("foreach"),
+                lfp.self_val(),
+                args,
+                kw,
+                pc,
+            );
         }
     };
+    let path = lfp
+        .arg(0)
+        .coerce_to_path_rstring(vm, globals)?
+        .to_str()?
+        .to_string();
     let p = vm.get_block_data(globals, bh)?;
-    // arg1: separator (String/nil), limit (Integer) or options Hash;
-    // arg2: limit or options Hash.
-    let mut opts = None;
-    let mut sep = Some("\n".to_string());
-    for i in 1..3 {
-        let Some(arg) = lfp.try_arg(i) else { continue };
-        if arg.is_nil() {
-            if i == 1 {
-                sep = None;
-            }
-        } else if let Some(h) = arg.try_hash_ty() {
-            opts = Some(h);
-        } else if arg.try_fixnum().is_some() {
-            // limit: accepted, not enforced
-        } else if i == 1 {
-            sep = Some(arg.coerce_to_str(vm, globals)?);
-        } else {
-            // limit position: coerce via #to_int (raises TypeError if
-            // the object converts to neither Integer nor responds to
-            // #to_int), matching CRuby. Value itself is not enforced.
-            let _ = arg.coerce_to_int_i64(vm, globals)?;
-        }
+    let (sep, limit, chomp, (mode, ext_obj, int_obj)) = class_getline_args(vm, globals, lfp)?;
+    if limit == Some(0) {
+        return Err(MonorubyErr::argumenterr("invalid limit: 0 for foreach"));
     }
-    let (mode, ext_obj, int_obj) = class_read_opts(vm, globals, opts)?;
-    let base = mode.split(':').next().unwrap_or("").replace('b', "");
-    if base == "w" || base == "a" {
-        return Err(MonorubyErr::ioerr("not opened for reading"));
-    }
-    let content = std::fs::read(&path)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", path, e)))?;
-
-    let mut chunks: Vec<Vec<u8>> = Vec::new();
-    match &sep {
-        None => {
-            if !content.is_empty() {
-                chunks.push(content);
-            }
-        }
-        Some(s) if s.is_empty() => {
-            let text = String::from_utf8_lossy(&content);
-            for part in text.split("\n\n") {
-                let t = part.trim_start_matches('\n');
-                if !t.is_empty() {
-                    chunks.push(format!("{t}\n").into_bytes());
+    reject_unreadable_mode(&path, &mode)?;
+    let file = std::fs::File::open(&path)
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
+    let complete_utf8 = ext_completes_utf8(globals, ext_obj);
+    let mut io_val = Value::new_file(file, path, true, false);
+    vm.with_temp_scope(|vm| {
+        // Root the transient File IO across the block calls below.
+        vm.temp_push(io_val);
+        let mut lineno = 0i64;
+        let result = (|| {
+            while let Some(mut buf) =
+                io_val
+                    .as_io_inner_mut()
+                    .getline(sep.as_deref(), limit, complete_utf8)?
+            {
+                if chomp {
+                    chomp_line(&mut buf, sep.as_deref(), limit);
                 }
+                let line = tag_with_encs(globals, buf, ext_obj, int_obj);
+                // CRuby's foreach reads through the getline machinery,
+                // which updates `$.` and `$_` per line (and leaves `$_`
+                // nil at EOF).
+                lineno += 1;
+                globals.set_gvar(IdentId::get_id("$."), Value::integer(lineno));
+                vm.set_last_read_line(line);
+                vm.invoke_block(globals, &p, &[line])?;
             }
-        }
-        Some(s) => {
-            let sb = s.as_bytes();
-            let mut start = 0;
-            while start < content.len() {
-                if let Some(pos) = content[start..].windows(sb.len()).position(|w| w == sb) {
-                    let end = start + pos + sb.len();
-                    chunks.push(content[start..end].to_vec());
-                    start = end;
-                } else {
-                    chunks.push(content[start..].to_vec());
-                    break;
-                }
-            }
-        }
-    }
-    for c in chunks {
-        let line = tag_with_encs(globals, c, ext_obj, int_obj);
-        vm.invoke_block(globals, &p, &[line])?;
-    }
-    Ok(Value::nil())
+            vm.set_last_read_line(Value::nil());
+            Ok(Value::nil())
+        })();
+        // Close the fd now — leaving it to GC lets descriptors pile up.
+        let _ = io_val.as_io_inner_mut().close();
+        result
+    })
 }
 
 ///
@@ -1555,21 +1807,30 @@ fn io_to_io(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/readlines.html]
 #[monoruby_builtin]
 fn io_readlines(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let mut lines = Vec::new();
-    while let Some(s) = self_.as_io_inner_mut().read_line()? {
-        lines.push(s);
+    let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
+    if limit == Some(0) {
+        return Err(MonorubyErr::argumenterr("invalid limit: 0 for readlines"));
     }
-    let result = lines
-        .into_iter()
-        .map(|s| tagged_read_string(globals, self_, s.into_bytes(), false))
-        .collect();
-    Ok(Value::array_from_vec(result))
+    let mut self_ = lfp.self_val();
+    let complete_utf8 = io_completes_utf8(globals, self_);
+    let mut lines = Vec::new();
+    while let Some(mut buf) =
+        self_
+            .as_io_inner_mut()
+            .getline(sep.as_deref(), limit, complete_utf8)?
+    {
+        if chomp {
+            chomp_line(&mut buf, sep.as_deref(), limit);
+        }
+        bump_lineno(globals, self_)?;
+        lines.push(tagged_read_string(globals, self_, buf, false));
+    }
+    Ok(Value::array_from_vec(lines))
 }
 
 ///
@@ -3793,6 +4054,118 @@ mod tests {
             File.unlink("/tmp/mr_gc4.txt")
             r
             "#,
+        );
+    }
+
+    #[test]
+    fn gets_separator_limit_chomp() {
+        // Full IO#gets / #readline argument semantics: separator
+        // (default/$-slash/custom/paragraph/nil), byte limit (with UTF-8
+        // character completion), chomp:, argument coercion, and the
+        // lineno / `$.` / `$_` bookkeeping.
+        run_test_once(
+            r##"
+            require "tempfile"
+            t = Tempfile.new("mrb_gets")
+            path = t.path
+            File.write(path, "one x\ntwo x\n\n\n\nthree\nfour\n")
+            r = []
+            f = File.open(path); r << f.gets << f.gets << f.lineno << $.; f.close
+            f = File.open(path); r << f.gets(nil); f.close
+            f = File.open(path); r << f.gets("") << f.gets("") << f.gets(""); f.close
+            f = File.open(path); r << f.gets("x") << f.gets("x", 2); f.close
+            f = File.open(path); r << f.gets(4) << f.gets(0) << f.gets; f.close
+            f = File.open(path); r << f.gets(chomp: true) << f.gets("", chomp: true); f.close
+            f = File.open(path); r << f.gets("x", chomp: true) << f.gets(nil, chomp: true); f.close
+            f = File.open(path); f.gets(""); r << f.gets; f.close # positioned at next paragraph
+            f = File.open(path); r << f.readline(chomp: true); f.close
+            f = File.open(path); f.readline; r << $_; f.close
+            f = File.open(path); 9.times { f.readline } rescue r << :eof; f.close
+            sep = Object.new; def sep.to_str = "x"
+            lim = Object.new; def lim.to_int = 3
+            f = File.open(path); r << f.gets(sep, lim) << f.gets(lim); f.close
+            f = File.open(path); begin; f.gets(2**64); rescue RangeError; r << :range; end; f.close
+            f = File.open(path); begin; f.gets({chomp: true}); rescue TypeError; r << :tyerr; end; f.close
+            f = File.open(path); r << f.gets(foo: 1); f.close # unknown kwargs tolerated
+            $/ = "o"
+            f = File.open(path); r << f.gets; f.close
+            $/ = nil
+            f = File.open(path); r << f.gets&.bytesize; f.close
+            $/ = "\n"
+            # UTF-8 character completion when the limit cuts mid-character
+            File.binwrite(path, "朝日")
+            f = File.open(path); r << [f.gets(1)&.bytes, f.gets(1)&.bytes]; f.close
+            t.close!
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn lines_family_separator_limit_chomp() {
+        // IO#each_line / IO#readlines / IO.foreach / IO.readlines share
+        // the gets argument semantics; foreach also maintains `$.`/`$_`
+        // and returns an Enumerator without a block.
+        run_test_once(
+            r##"
+            require "tempfile"
+            t = Tempfile.new("mrb_lines")
+            path = t.path
+            File.write(path, "one x\ntwo x\n\n\n\nthree\nfour\n")
+            r = []
+            f = File.open(path); r << f.each_line.to_a; f.close
+            f = File.open(path); a = []; f.each_line("") { |l| a << l }; r << a; f.close
+            f = File.open(path); a = []; f.each_line(4) { |l| a << l }; r << a; f.close
+            f = File.open(path); a = []; f.each_line("x", chomp: true) { |l| a << l }; r << a; f.close
+            f = File.open(path); begin; f.each_line(0) {}; rescue ArgumentError => e; r << e.message; end; f.close
+            f = File.open(path); r << f.readlines(chomp: true) << f.readlines; f.close
+            f = File.open(path); r << f.readlines("", 8).first(2); f.close
+            f = File.open(path); r << f.readlines(foo: 70).size; f.close
+            r << IO.readlines(path, chomp: true).first(3)
+            r << IO.readlines(path, "x", 3)
+            r << IO.readlines(path, nil).size
+            begin; IO.readlines(path, {chomp: true}); rescue TypeError; r << :t1; end
+            begin; IO.readlines(path, "", {chomp: true}); rescue TypeError; r << :t2; end
+            a = []; IO.foreach(path) { |l| a << [l, $.] }; r << a << $_.inspect
+            r << IO.foreach(path).to_a
+            r << IO.foreach(path, "", chomp: true).to_a
+            r << IO.foreach(path).size.inspect
+            mock = Object.new
+            mock.define_singleton_method(:to_path) { path }
+            r << IO.foreach(mock).to_a.size << IO.readlines(mock).size
+            begin; IO.readlines(path, mode: "w"); rescue IOError; r << :notread; end
+            r << File.read(path) # mode "w" rejection truncates first, like CRuby
+            t.close!
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn read_with_output_buffer() {
+        // IO#read(length, outbuf): the buffer is replaced with the read
+        // bytes and returned; frozen buffers raise up front; a sized read
+        // keeps the buffer's encoding, an unsized read retags it.
+        run_test_once(
+            r##"
+            require "tempfile"
+            t = Tempfile.new("mrb_readbuf")
+            path = t.path
+            File.write(path, "1234567890")
+            r = []
+            f = File.open(path); b = +"seed"; ret = f.read(6, b); r << [ret.equal?(b), b]; f.close
+            f = File.open(path); b = +"a much longer buffer"; f.read(3, b); r << b; f.close
+            f = File.open(path); b = +"z"; ret = f.read(nil, b); r << [ret.equal?(b), b, b.encoding.name]; f.close
+            f = File.open(path); f.read; b = +"left"; r << [f.read(nil, b), b]; f.close
+            f = File.open(path); f.read; b = +"left"; r << [f.read(5, b), b]; f.close
+            f = File.open(path); begin; f.read(5, "s".freeze); rescue FrozenError; r << :frozen; end; f.close
+            f = File.open(path)
+            m = Object.new; inner = +"m"; m.define_singleton_method(:to_str) { inner }
+            ret = f.read(4, m); r << [ret.equal?(inner), inner]; f.close
+            f = File.open(path); b = (+"x").force_encoding("ISO-8859-1"); f.read(3, b); r << b.encoding.name; f.close
+            t.close!
+            r
+            "##,
         );
     }
 
