@@ -35,18 +35,30 @@ impl Value {
     ) -> Result<Array> {
         if let Some(ary) = self.try_array_ty() {
             return Ok(ary);
-        } else if let Some(fid) = globals.check_method(*self, IdentId::TO_ARY) {
-            let result = vm.invoke_func_inner(globals, fid, *self, &[], None, None)?;
-            if let Some(ary) = result.try_array_ty() {
-                return Ok(ary);
-            }
-            return Err(MonorubyErr::cant_convert_error_ary(globals, *self, result));
         }
-        Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            *self,
-            ARRAY_CLASS,
-        ))
+        // Direct method lookup fast path, then fall back to
+        // `invoke_method_inner` which handles `method_missing` (a receiver
+        // that answers `to_ary` only through `method_missing` still
+        // coerces — matching CRuby; mirrors `coerce_to_int`).
+        let result = if let Some(fid) = globals.check_method(*self, IdentId::TO_ARY) {
+            vm.invoke_func_inner(globals, fid, *self, &[], None, None)?
+        } else {
+            match vm.invoke_method_inner(globals, IdentId::TO_ARY, *self, &[], None, None) {
+                Ok(result) => result,
+                Err(_) => {
+                    return Err(MonorubyErr::no_implicit_conversion(
+                        globals,
+                        *self,
+                        ARRAY_CLASS,
+                    ));
+                }
+            }
+        };
+        if let Some(ary) = result.try_array_ty() {
+            Ok(ary)
+        } else {
+            Err(MonorubyErr::cant_convert_error_ary(globals, *self, result))
+        }
     }
 
     ///

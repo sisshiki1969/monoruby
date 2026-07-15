@@ -1218,23 +1218,39 @@ fn index_assign(
         if let Some(idx) = i.try_fixnum() {
             ary.set_index(idx, val)
         } else if let Some(range) = i.is_range() {
-            let start = ary.get_array_index_nil_or(vm, globals, range.start(), 0)?;
+            // Resolve the start. A negative start that is still out of bounds
+            // after wrapping raises RangeError (unlike a bare negative Integer
+            // index, which raises IndexError).
+            let start = if range.start().is_nil() {
+                0
+            } else {
+                let s = range.start().coerce_to_int_i64(vm, globals)?;
+                let s = if s < 0 { s + ary.len() as i64 } else { s };
+                if s < 0 {
+                    return Err(MonorubyErr::rangeerr(format!(
+                        "{} out of range",
+                        i.to_s(&globals.store)
+                    )));
+                }
+                s as usize
+            };
+            // Resolve the length. Unlike the start, a negative end that is out
+            // of bounds is not an error: it simply yields a zero-length
+            // (insertion) replacement at `start`.
             let len = if range.end().is_nil() {
                 // endless range: length is from start to end of array
                 ary.len().checked_sub(start)
             } else {
-                let end = ary.get_array_index_nil_or(vm, globals, range.end(), ary.len())?;
-                if range.exclude_end() {
-                    end.checked_sub(start)
-                } else {
-                    (end + 1).checked_sub(start)
-                }
+                let e = range.end().coerce_to_int_i64(vm, globals)?;
+                let e = if e < 0 { e + ary.len() as i64 } else { e };
+                let e = if range.exclude_end() { e } else { e + 1 };
+                usize::try_from(e - start as i64).ok()
             };
             if let Some(len) = len {
-                ary.set_index2(start as usize, len as usize, val)
+                ary.set_index2(start, len, val)
             } else {
                 // end < start: treat as zero-length replacement at start
-                ary.set_index2(start as usize, 0, val)
+                ary.set_index2(start, 0, val)
             }
         } else {
             let idx = i.coerce_to_int_i64(vm, globals)?;
@@ -5277,6 +5293,52 @@ mod tests {
     }
 
     #[test]
+    fn hash_mixes_element_hash_value() {
+        // Array#hash sends `#hash` to each element and mixes the resulting
+        // integer, so an element whose `#hash` returns another object is
+        // coerced via `#to_int` and hashes identically to the underlying
+        // value. A numeric element must therefore mix its `Integer#hash` /
+        // `Float#hash` digest (of the value), not its raw tagged bits.
+        run_test(
+            r#"
+            x = 1.hash
+            o = Object.new
+            o.define_singleton_method(:hash) { x }
+            [1].hash == [o].hash
+            "#,
+        );
+        run_test(
+            r#"
+            x = 2.5.hash
+            o = Object.new
+            o.define_singleton_method(:hash) { x }
+            [2.5].hash == [o].hash
+            "#,
+        );
+        // Structural equality still implies hash equality for numeric content.
+        run_test(r#"[[1, 2.0, 3].hash == [1, 2.0, 3].hash, [1].hash != [2].hash]"#);
+    }
+
+    #[test]
+    fn product_coerces_arg_via_method_missing() {
+        // An argument that answers `#to_ary` only through `method_missing`
+        // (no defined `to_ary`) is still coerced, matching CRuby.
+        run_test(
+            r#"
+            ar = Object.new
+            def ar.method_missing(name, *a); name == :to_ary ? [2, 3] : super; end
+            [1].product(ar)
+            "#,
+        );
+        // A non-coercible argument is still a TypeError.
+        run_test(r#"begin; [1].product(5); rescue TypeError; :te; end"#);
+        // An argument whose `#to_ary` returns a non-Array raises a TypeError.
+        run_test(
+            r#"ar = Object.new; def ar.to_ary; 5; end; begin; [1].product(ar); rescue TypeError; :te2; end"#,
+        );
+    }
+
+    #[test]
     fn intersect() {
         run_tests(&[
             r#"
@@ -5774,6 +5836,22 @@ mod tests {
             r##"a = [1,2,3]; a[-3, 0] = [:a]; a"##,
         ]);
         run_test_error(r##"a = [1,2,3]; a[-4, 1] = []"##);
+    }
+
+    #[test]
+    fn index_assign_range_out_of_bounds() {
+        // A negative range start that is still out of bounds after wrapping
+        // raises RangeError (not IndexError).
+        run_test(r##"a = [1,2,3,4]; begin; a[-5..-5] = ""; rescue RangeError; :re; end"##);
+        run_test(r##"a = [1,2,3,4]; begin; a[-5...-4] = ""; rescue RangeError; :re; end"##);
+        run_test(r##"a = [1,2,3,4]; begin; a[-5..10] = ""; rescue RangeError; :re; end"##);
+        // A beginless range whose negative end is out of bounds inserts at the
+        // beginning rather than raising.
+        run_tests(&[
+            r##"a = [1,2,3]; a[(..-7)] = [4]; a"##,
+            r##"a = [1,2,3]; a[(...-10)] = [6]; a"##,
+            r##"a = [1,2,3,4]; a[0..-9] = [1]; a"##,
+        ]);
     }
 
     #[test]
