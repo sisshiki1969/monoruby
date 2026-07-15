@@ -21,6 +21,7 @@ mod file;
 mod gc;
 mod hash;
 mod io;
+mod io_buffer;
 mod json;
 pub(crate) mod kernel;
 mod main_object;
@@ -125,6 +126,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     arithmetic_sequence::init(globals);
     time::init(globals);
     io::init(globals);
+    io_buffer::init(globals);
     struct_class::init(globals);
     file::init(globals);
     fiddle::init(globals);
