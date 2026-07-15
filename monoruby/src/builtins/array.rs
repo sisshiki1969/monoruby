@@ -1097,12 +1097,15 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         || {
             for (i, lhs) in lhs.iter().enumerate() {
                 if let Some(rhs) = rhs.get(i) {
-                    match vm.compare_values_inner(globals, *lhs, *rhs)? {
-                        Some(res) if res != Ordering::Equal => {
-                            return Ok(Value::integer(res as i64));
-                        }
-                        Some(_) => {} // Equal, continue
-                        None => return Ok(Value::nil()),
+                    // Compare each pair with the element's own `<=>` and
+                    // return the *raw* result of the first pair that isn't
+                    // exactly the Fixnum `0` — CRuby returns whatever the
+                    // element comparison produced (`nil`, `±1`, or even a
+                    // non-Integer like a String), not a normalized value.
+                    let res =
+                        vm.invoke_method_inner(globals, IdentId::_CMP, *lhs, &[*rhs], None, None)?;
+                    if res.try_fixnum() != Some(0) {
+                        return Ok(res);
                     }
                 } else {
                     return Ok(Value::integer(Ordering::Greater as i64));
@@ -6267,6 +6270,25 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn cmp_returns_raw_element_result() {
+        run_tests(&[
+            r#"[1, 2, 3] <=> [1, 2, 3]"#,
+            r#"[1, 2, 3] <=> [1, 2, 4]"#,
+            r#"[1, 2, 3] <=> [1, 2]"#,
+            r#"[1, 2] <=> [1, 2, 3]"#,
+            // The first non-zero element `<=>` result is returned raw —
+            // including `nil` and non-Integer values — and later elements
+            // are not compared.
+            r#"a = Object.new; def a.<=>(o); "foobar"; end; [1, a, 1] <=> [1, a, 1]"#,
+            r#"a = Object.new; def a.<=>(o); nil; end; ([1, a] <=> [1, a]).inspect"#,
+            r#"a = Object.new; def a.<=>(o); 1; end; [a] <=> [a]"#,
+            // A non-Array, non-coercible rhs is nil.
+            r#"([1, 2] <=> 5).inspect"#,
+        ]);
+    }
+
     #[test]
     fn subclass_return_types() {
         run_test_with_prelude("C[1,2,3].sort.class", "class C < Array; end");
