@@ -10,7 +10,17 @@ use std::rc::Rc;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS, ObjTy::IO);
-    globals.define_builtin_class_func_with(IO_CLASS, "new", io_new, 1, 3, false);
+    globals.define_builtin_class_func_with_kw(IO_CLASS, "new", io_new, 1, 2, false, &[], true);
+    globals.define_private_builtin_func_with_kw(
+        IO_CLASS,
+        "initialize",
+        io_initialize,
+        1,
+        2,
+        false,
+        &[],
+        true,
+    );
     globals.store[IO_CLASS].set_alloc_func(io_alloc_func);
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
     globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
@@ -155,55 +165,306 @@ pub(super) fn init(globals: &mut Globals) {
 
 #[monoruby_builtin]
 fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // IO.new(fd [, mode [, opt]]) -> creates an IO object from an integer file descriptor.
-    if let Some(fd) = lfp.arg(0).try_fixnum() {
-        let fd_i32 = fd as i32;
-        if fd_i32 < 0 || unsafe { libc::fcntl(fd_i32, libc::F_GETFD) } == -1 {
-            let err = std::io::Error::from_raw_os_error(9); // EBADF
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &err,
-                "rb_sysopen",
-                &format!("fd {}", fd),
+    let class = lfp.self_val().as_class_id();
+    let obj = Value::new_io_with_class(IoInner::Closed(None), class);
+    io_init_from_fd(vm, globals, lfp, obj)?;
+    if lfp.block().is_some() {
+        // CRuby warns through rb_warn; route via Kernel#warn so the
+        // Ruby-level $stderr (which specs capture) receives it.
+        let msg = Value::string_from_str(
+            "warning: IO::new() does not take block; use IO::open() instead",
+        );
+        let main = globals.main_object;
+        let _ = vm.invoke_method_inner(globals, IdentId::get_id("warn"), main, &[msg], None, None);
+    }
+    Ok(obj)
+}
+
+///
+/// ### IO#initialize
+///
+/// - initialize(fd, mode = nil, **opts) -> self
+///
+/// (Re)associates the receiver with the file descriptor `fd`.
+#[monoruby_builtin]
+fn io_initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    io_init_from_fd(vm, globals, lfp, lfp.self_val())?;
+    Ok(lfp.self_val())
+}
+
+/// Fetch a keyword from the (optional) kwrest Hash of `IO.new`-family
+/// callsites, mapping an explicit `nil` to `None`.
+fn kw_opt(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    kw: &Option<crate::value::Hashmap>,
+    name: &str,
+) -> Result<Option<Value>> {
+    let Some(h) = kw else { return Ok(None) };
+    Ok(h.get(Value::symbol(IdentId::get_id(name)), vm, globals)?
+        .filter(|v| !v.is_nil()))
+}
+
+/// Parse a CRuby fmode string `[rwa]['+'|'b'|'t'|'x']*[:ext[:int]]`.
+/// Returns `(base ("r"/"w"/"a" [+ "+"]), binmode, textmode, enc_part)`.
+fn parse_fmode(s: &str) -> Result<(String, bool, bool, Option<String>)> {
+    let invalid = || MonorubyErr::argumenterr(format!("invalid access mode {s}"));
+    let (m, enc) = match s.split_once(':') {
+        Some((a, b)) => (a, Some(b.to_string())),
+        None => (s, None),
+    };
+    let mut chars = m.chars();
+    let first = chars.next().ok_or_else(invalid)?;
+    if !matches!(first, 'r' | 'w' | 'a') {
+        return Err(invalid());
+    }
+    let (mut plus, mut bin, mut text) = (false, false, false);
+    for c in chars {
+        match c {
+            '+' if !plus => plus = true,
+            'b' if !bin && !text => bin = true,
+            't' if !text && !bin => text = true,
+            'x' if first == 'w' => {}
+            _ => return Err(invalid()),
+        }
+    }
+    let mut base = first.to_string();
+    if plus {
+        base.push('+');
+    }
+    Ok((base, bin, text, enc))
+}
+
+/// The shared body of `IO.new` / `IO.for_fd` / `IO#initialize` / `IO.open`
+/// (CRuby's `rb_io_initialize` + `rb_io_extract_modeenc`): validates the
+/// fd, resolves mode/binmode/encodings from the positional mode argument
+/// and keyword options (with all the "specified twice" conflict checks),
+/// and (re)associates `obj` with the descriptor.
+pub(super) fn io_init_from_fd(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    mut obj: Value,
+) -> Result<()> {
+    // fd: implicit #to_int conversion (TypeError for nil/String/IO).
+    let fd = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let fd_i32 = fd as i32;
+    if fd_i32 < 0 || unsafe { libc::fcntl(fd_i32, libc::F_GETFD) } == -1 {
+        let err = std::io::Error::from_raw_os_error(libc::EBADF);
+        // CRuby's message is the bare strerror ("Bad file descriptor").
+        return Err(MonorubyErr::errno_plain(&globals.store, &err));
+    }
+
+    let kw: Option<crate::value::Hashmap> = lfp.try_arg(2).and_then(|v| v.try_hash_ty());
+
+    // Mode: positional arg vs `mode:` option — both given is an error.
+    let pos_mode = lfp.try_arg(1).filter(|v| !v.is_nil());
+    let kw_mode = kw_opt(vm, globals, &kw, "mode")?;
+    if pos_mode.is_some() && kw_mode.is_some() {
+        return Err(MonorubyErr::argumenterr("mode specified twice"));
+    }
+    // A mode value is a String (#to_str) or an Integer of File::Constants
+    // flags (#to_int); try string conversion first, like CRuby.
+    let mode_str: Option<String> = match pos_mode.or(kw_mode) {
+        None => None,
+        Some(v) => {
+            if let Some(s) = v.is_str() {
+                Some(s.to_string())
+            } else if globals.check_method(v, IdentId::TO_STR).is_some() {
+                Some(v.coerce_to_string(vm, globals)?)
+            } else {
+                let flags = v.coerce_to_int_i64(vm, globals)?;
+                Some(super::file::mode_string_from_flags(flags))
+            }
+        }
+    };
+
+    let (fd_r, fd_w) = fd_rw_mode(fd_i32);
+    let (base, bin_str, text_str, menc) = match &mode_str {
+        Some(s) => parse_fmode(s)?,
+        None => {
+            // Default mode from the descriptor's own access mode.
+            let base = match (fd_r, fd_w) {
+                (true, true) => "r+",
+                (false, true) => "w",
+                _ => "r",
+            };
+            (base.to_string(), false, false, None)
+        }
+    };
+
+    // binmode/textmode keywords, replicating CRuby's `extract_binmode`
+    // exactly: a keyword matching a mode-string flag is "specified
+    // twice", a keyword against the *other* flag is "both textmode and
+    // binmode specified", and a `false` keyword sets nothing.
+    let kw_bin = kw_opt(vm, globals, &kw, "binmode")?;
+    let kw_text = kw_opt(vm, globals, &kw, "textmode")?;
+    let mut fmode_bin = bin_str;
+    let mut fmode_text = text_str;
+    if let Some(v) = kw_text {
+        if fmode_text {
+            return Err(MonorubyErr::argumenterr("textmode specified twice"));
+        }
+        if fmode_bin {
+            return Err(MonorubyErr::argumenterr(
+                "both textmode and binmode specified",
             ));
         }
-        // Pick up `:autoclose` and `:path` from the options Hash. See
-        // `io_open_opts` for the rationale.
-        let (name, has_path, autoclose) = io_open_opts(vm, globals, lfp, 1..3, fd)?;
-        let (readable, writable) = fd_rw_mode(fd_i32);
-        // If the fd is already owned by another monoruby IO (e.g.
-        // `IO.new(other_io.fileno)`), do NOT create a second closing owner —
-        // that would double-close and trip Rust's IO-safety abort. Borrow it
-        // instead (autoclose = false), so only the original owner closes the
-        // fd. An explicit `autoclose: true` cannot override this, because the
-        // process would abort. (See `OWNED_FDS` in value/rvalue/io.rs.)
-        let effective_autoclose = autoclose && !fd_is_owned(fd_i32);
-        let io_inner = IoInner::from_raw_fd_autoclose(
-            fd_i32,
-            name,
-            has_path,
-            readable,
-            writable,
-            effective_autoclose,
-        );
-        let res = Value::new_io(io_inner);
-        let mode_for_enc = lfp
-            .try_arg(1)
-            .and_then(|a| a.is_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| {
-                match (readable, writable) {
-                    (true, true) => "r+",
-                    (false, true) => "w",
-                    _ => "r",
-                }
-                .to_string()
-            });
-        init_io_encodings(vm, globals, lfp, res, &mode_for_enc, readable, 1..3)?;
-        return Ok(res);
+        if v.as_bool() {
+            fmode_text = true;
+        }
     }
-    Err(MonorubyErr::argumenterr(
-        "IO.new requires an integer file descriptor",
-    ))
+    if let Some(v) = kw_bin {
+        if fmode_bin {
+            return Err(MonorubyErr::argumenterr("binmode specified twice"));
+        }
+        if fmode_text {
+            return Err(MonorubyErr::argumenterr(
+                "both textmode and binmode specified",
+            ));
+        }
+        if v.as_bool() {
+            fmode_bin = true;
+        }
+    }
+    if fmode_bin && fmode_text {
+        return Err(MonorubyErr::argumenterr(
+            "both textmode and binmode specified",
+        ));
+    }
+    let binmode = fmode_bin;
+
+    // Encodings: the mode-string suffix conflicts with any encoding
+    // keyword; `encoding:` is ignored (with a warning) when an explicit
+    // external/internal_encoding is also given.
+    let kw_enc = kw_opt(vm, globals, &kw, "encoding")?;
+    let kw_ext = kw_opt(vm, globals, &kw, "external_encoding")?;
+    let kw_int = kw_opt(vm, globals, &kw, "internal_encoding")?;
+    if menc.is_some() && (kw_enc.is_some() || kw_ext.is_some() || kw_int.is_some()) {
+        return Err(MonorubyErr::argumenterr("encoding specified twice"));
+    }
+    let kw_enc = match kw_enc {
+        Some(e) if kw_ext.is_some() || kw_int.is_some() => {
+            let enc_desc = if let Some(s) = e.is_str() {
+                s.to_string()
+            } else {
+                e.to_s(globals)
+            };
+            let used = if kw_ext.is_some() {
+                "external_encoding"
+            } else {
+                "internal_encoding"
+            };
+            let msg = Value::string(format!(
+                "warning: Ignoring encoding parameter '{enc_desc}': {used} is used"
+            ));
+            let main = globals.main_object;
+            let _ =
+                vm.invoke_method_inner(globals, IdentId::get_id("warn"), main, &[msg], None, None);
+            None
+        }
+        other => other,
+    };
+
+    // Resolve explicit encoding objects. String-ish values go through
+    // #to_str (implicit conversion); `internal_encoding: "-"` means "no
+    // conversion" (nil internal).
+    fn enc_value_to_obj(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        v: Value,
+    ) -> Result<Option<Value>> {
+        if v.class() == super::encoding::encoding_class(globals) {
+            return Ok(Some(v));
+        }
+        let name = v.coerce_to_string(vm, globals)?;
+        Ok(enc_by_name(globals, &name))
+    }
+    let mut ext_obj: Option<Value> = None;
+    let mut int_obj: Option<Value> = None;
+    if let Some(enc_part) = &menc {
+        let mut parts = enc_part.splitn(2, ':');
+        ext_obj = parts
+            .next()
+            .filter(|x| !x.is_empty())
+            .and_then(|x| enc_by_name(globals, x));
+        int_obj = parts
+            .next()
+            .filter(|x| !x.is_empty() && *x != "-")
+            .and_then(|x| enc_by_name(globals, x));
+    }
+    if let Some(e) = kw_enc {
+        if e.class() == super::encoding::encoding_class(globals) {
+            ext_obj = Some(e);
+        } else {
+            let s = e.coerce_to_string(vm, globals)?;
+            let mut parts = s.splitn(2, ':');
+            ext_obj = parts
+                .next()
+                .filter(|x| !x.is_empty())
+                .and_then(|x| enc_by_name(globals, x));
+            int_obj = parts
+                .next()
+                .filter(|x| !x.is_empty() && *x != "-")
+                .and_then(|x| enc_by_name(globals, x));
+        }
+    }
+    if let Some(e) = kw_ext {
+        ext_obj = enc_value_to_obj(vm, globals, e)?;
+    }
+    if let Some(i) = kw_int {
+        int_obj = if i.is_str().is_some_and(|s| s == "-") {
+            None
+        } else {
+            enc_value_to_obj(vm, globals, i)?
+        };
+    }
+
+    // The requested access mode must be satisfiable by the fd itself.
+    let (readable, writable) = match base.as_str() {
+        "r" => (true, false),
+        "w" | "a" => (false, true),
+        _ => (true, true), // "r+", "w+", "a+"
+    };
+    if (readable && !fd_r) || (writable && !fd_w) {
+        let err = std::io::Error::from_raw_os_error(libc::EINVAL);
+        return Err(MonorubyErr::errno_plain(&globals.store, &err));
+    }
+
+    // `:autoclose` / `:path` options; never double-own an fd another
+    // monoruby IO already closes (see OWNED_FDS in value/rvalue/io.rs).
+    let autoclose = kw_opt(vm, globals, &kw, "autoclose")?
+        .map(|v| v.as_bool())
+        .unwrap_or(true);
+    let (name, has_path) = match kw_opt(vm, globals, &kw, "path")? {
+        Some(p) => (p.coerce_to_string(vm, globals)?, true),
+        None => (format!("fd {}", fd), false),
+    };
+    let effective_autoclose = autoclose && !fd_is_owned(fd_i32);
+    let io_inner = IoInner::from_raw_fd_autoclose(
+        fd_i32,
+        name,
+        has_path,
+        readable,
+        writable,
+        effective_autoclose,
+    );
+    *obj.as_io_inner_mut() = io_inner;
+
+    let de = enc_default_external_obj(globals);
+    let di = enc_default_internal_obj(globals);
+    let (slot, i) =
+        resolve_io_encodings(globals, ext_obj, int_obj, binmode, readable, de, di, true);
+    store_io_encodings(globals, obj, slot, i);
+    let _ = globals
+        .store
+        .set_ivar(obj, IdentId::get_id(BINMODE_IVAR), Value::bool(binmode));
+    Ok(())
 }
 
 /// Parse the trailing options Hash for `IO.new(fd, ...)` / `File.new(fd, ...)`,
@@ -365,8 +626,10 @@ fn resolve_io_encodings(
     di: Option<Value>,
     at_creation: bool,
 ) -> (ExtSlot, Option<Value>) {
-    // `b`/binmode forces a BINARY external only when none was given.
-    let ext = if explicit_ext.is_none() && binmode {
+    // `b`/binmode forces a BINARY external only when no encoding at all
+    // was given (CRuby's `has_enc` check: an explicit *internal* encoding
+    // also disables the binary default).
+    let ext = if explicit_ext.is_none() && explicit_int.is_none() && binmode {
         enc_by_name(globals, "ASCII-8BIT")
     } else {
         explicit_ext
@@ -1547,7 +1810,58 @@ fn io_sysopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/pipe.html]
 #[monoruby_builtin]
-fn io_pipe(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class = lfp.self_val().as_class_id();
+
+    // Optional read-end encodings: (ext), (ext, int), ("ext:int"), each a
+    // String (#to_str) or an Encoding; a trailing options Hash (transcode
+    // options like `invalid: :replace`) is accepted and ignored.
+    let mut ext_obj: Option<Value> = None;
+    let mut int_obj: Option<Value> = None;
+    let mut enc_args: Vec<Value> = Vec::new();
+    for i in 0..3 {
+        if let Some(v) = lfp.try_arg(i)
+            && !v.is_nil()
+            && v.try_hash_ty().is_none()
+        {
+            enc_args.push(v);
+        }
+    }
+    if let Some(&v) = enc_args.first() {
+        if v.class() == super::encoding::encoding_class(globals) {
+            ext_obj = Some(v);
+        } else {
+            let s = v.coerce_to_string(vm, globals)?;
+            // A "BOM|" prefix requests BOM detection on read; the base
+            // encoding is what IO#external_encoding reports.
+            let s = s
+                .strip_prefix("BOM|")
+                .or_else(|| s.strip_prefix("bom|"))
+                .unwrap_or(&s);
+            let mut parts = s.splitn(2, ':');
+            ext_obj = parts
+                .next()
+                .filter(|x| !x.is_empty())
+                .and_then(|x| enc_by_name(globals, x));
+            int_obj = parts
+                .next()
+                .filter(|x| !x.is_empty() && *x != "-")
+                .and_then(|x| enc_by_name(globals, x));
+        }
+    }
+    if let Some(&v) = enc_args.get(1) {
+        int_obj = if v.class() == super::encoding::encoding_class(globals) {
+            Some(v)
+        } else {
+            let s = v.coerce_to_string(vm, globals)?;
+            if s == "-" {
+                None
+            } else {
+                enc_by_name(globals, &s)
+            }
+        };
+    }
+
     let mut fds: [libc::c_int; 2] = [0; 2];
     // SAFETY: fds is a valid pointer to a 2-element array of c_int.
     let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
@@ -1555,21 +1869,48 @@ fn io_pipe(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr)
         let err = std::io::Error::last_os_error();
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pipe(2)"));
     }
-    let read_io = Value::new_io(IoInner::from_raw_fd(
-        fds[0],
-        "pipe".to_string(),
-        false,
-        true,
-        false,
-    ));
-    let write_io = Value::new_io(IoInner::from_raw_fd(
-        fds[1],
-        "pipe".to_string(),
-        false,
-        false,
-        true,
-    ));
-    Ok(Value::array2(read_io, write_io))
+
+    // Allocate + dispatch #initialize (NOT `new`: a redefined `new` must
+    // not be called, but a redefined #initialize must — see
+    // core/io/pipe_spec "does not use IO.new method").
+    let init_id = IdentId::get_id("initialize");
+    let make_end = |vm: &mut Executor, globals: &mut Globals, fd: i32, mode: &str| -> Result<Value> {
+        let obj = Value::new_io_with_class(IoInner::Closed(None), class);
+        vm.invoke_method_inner(
+            globals,
+            init_id,
+            obj,
+            &[Value::integer(fd as i64), Value::string_from_str(mode)],
+            None,
+            None,
+        )?;
+        Ok(obj)
+    };
+    let mut read_io = make_end(vm, globals, fds[0], "r")?;
+    let mut write_io = make_end(vm, globals, fds[1], "w")?;
+
+    // The read end carries the requested (or default) encodings; the
+    // write end carries none — `#initialize` with mode "w" already left
+    // it encoding-less.
+    if ext_obj.is_some() || int_obj.is_some() {
+        let de = enc_default_external_obj(globals);
+        let di = enc_default_internal_obj(globals);
+        let (slot, i) =
+            resolve_io_encodings(globals, ext_obj, int_obj, false, true, de, di, true);
+        store_io_encodings(globals, read_io, slot, i);
+    }
+
+    match lfp.block() {
+        Some(bh) => {
+            let r = vm.invoke_block_once(globals, bh, &[read_io, write_io]);
+            // Both ends close at block exit (idempotent for ends the
+            // block already closed), success or raise.
+            let _ = read_io.as_io_inner_mut().close();
+            let _ = write_io.as_io_inner_mut().close();
+            r
+        }
+        None => Ok(Value::array2(read_io, write_io)),
+    }
 }
 
 /// ### IO.popen
@@ -4194,6 +4535,134 @@ mod tests {
             File.delete(path)
             res
             "#,
+        );
+    }
+
+    #[test]
+    fn io_new_mode_and_option_semantics() {
+        // IO.new / IO.for_fd / IO#initialize argument semantics
+        // (CRuby's rb_io_extract_modeenc): mode conflicts, binmode /
+        // textmode keyword interactions, encoding resolution and
+        // conflicts, EINVAL for an incompatible fd mode, and coercions.
+        run_test_once(
+            r##"
+            require "tempfile"
+            t = Tempfile.new("mrb_ionew")
+            path = t.path
+            File.write(path, "x")
+            r = []
+            er = ->(&b) { begin; b.call; :no_raise; rescue => e; [e.class, e.message]; end }
+            wfd = -> { IO.sysopen(path, "w") }
+            drain = ->(fd) { IO.new(fd, "w").close }
+            io = IO.new(wfd.call, "w"); r << io.class; io.close
+            m = Object.new; fdv = wfd.call; m.define_singleton_method(:to_int) { fdv }
+            io = IO.new(m, "w"); r << (io.fileno == fdv); io.close
+            fd = wfd.call; r << er.call { IO.new(fd, "w", {flags: 1}) }; drain.(fd)
+            fd = wfd.call; r << er.call { IO.new(fd, "w", nil) }; drain.(fd)
+            fd = wfd.call; r << er.call { IO.new(fd, "w", mode: "w") }; drain.(fd)
+            fd = wfd.call; r << er.call { IO.new(fd, "") }; drain.(fd)
+            fd = wfd.call; r << er.call { IO.new(fd, "r") }; drain.(fd)   # EINVAL
+            r << er.call { IO.new("4", "w") } << er.call { IO.new(STDOUT, "w") }
+            r << er.call { IO.new(-1, "w") }.first
+            io = IO.new(wfd.call, nil, mode: "w"); r << :mode_kw; io.close
+            io = IO.new(wfd.call, File::WRONLY); r << :int_mode; io.close
+            mi = Object.new; mi.define_singleton_method(:to_int) { File::Constants::WRONLY }
+            io = IO.new(wfd.call, mode: mi); r << :toint_kw; io.close
+            io = IO.new(wfd.call, 'w:utf-8:ISO-8859-1')
+            r << [io.external_encoding.to_s, io.internal_encoding.to_s]; io.close
+            io = IO.new(wfd.call, 'w', encoding: 'utf-8:ISO-8859-1')
+            r << [io.external_encoding.to_s, io.internal_encoding.to_s]; io.close
+            io = IO.new(wfd.call, 'w', external_encoding: 'utf-8', internal_encoding: 'utf-8')
+            r << [io.external_encoding.to_s, io.internal_encoding.inspect]; io.close
+            io = IO.new(wfd.call, 'w', external_encoding: 'utf-8', internal_encoding: '-')
+            r << io.internal_encoding.inspect; io.close
+            fd = wfd.call; r << er.call { IO.new(fd, 'w:ISO-8859-1', encoding: 'ISO-8859-1') }; drain.(fd)
+            io = IO.new(wfd.call, 'wb'); r << [io.binmode?, io.external_encoding.to_s]; io.close
+            io = IO.new(wfd.call, 'w', binmode: true); r << [io.binmode?, io.external_encoding.to_s]; io.close
+            io = IO.new(wfd.call, 'wb:iso-8859-1'); r << io.external_encoding.to_s; io.close
+            io = IO.new(wfd.call, 'w:iso-8859-1', binmode: true); r << io.external_encoding.to_s; io.close
+            fd = wfd.call; r << er.call { IO.new(fd, "wb", binmode: true) }; drain.(fd)
+            fd = wfd.call; r << er.call { IO.new(fd, "wb", textmode: false) }; drain.(fd)
+            fd = wfd.call; r << er.call { IO.new(fd, "wt", binmode: true) }; drain.(fd)
+            fd = wfd.call; r << er.call { IO.new(fd, "w", textmode: true, binmode: true) }; drain.(fd)
+            io = IO.new(wfd.call, 'w', binmode: false); r << io.binmode?; io.close
+            io = IO.new(wfd.call, "w", flags: File::CREAT); r << io.write("foo"); io.close
+            io = IO.new(wfd.call, 'w', autoclose: false); r << io.autoclose?; io.autoclose = true; io.close
+            io = IO.new(wfd.call, "w"); fd2 = wfd.call
+            io.send(:initialize, fd2, "w"); r << (io.fileno == fd2); io.close
+            io = IO.for_fd(wfd.call, "w"); r << io.class; io.close
+            r << IO.open(wfd.call, "w") { :blockval }
+            io2 = nil; IO.open(wfd.call, "w") { |i| io2 = i }; r << io2.closed?
+            r << er.call { IO.open(wfd.call, "w") { raise ArgumentError, "boom" } }
+            t.close!
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_pipe_encodings_subclass_block() {
+        // IO.pipe: read-end encodings from Encoding/String/"ext:int"/
+        // "BOM|" arguments (write end has none), block form closing both
+        // ends, subclass allocation via #initialize (never `new`).
+        run_test_once(
+            r##"
+            r = []
+            IO.pipe { |a, b| r << [a.external_encoding&.to_s, a.internal_encoding&.to_s,
+                                   b.external_encoding&.to_s, b.internal_encoding&.to_s] }
+            IO.pipe(Encoding::ISO_8859_1) { |a, b| r << [a.external_encoding.to_s, a.internal_encoding.inspect] }
+            IO.pipe("ISO-8859-1", "UTF-8") { |a, b| r << [a.external_encoding.to_s, a.internal_encoding.to_s] }
+            IO.pipe("ISO-8859-1:UTF-8") { |a, b| r << [a.external_encoding.to_s, a.internal_encoding.to_s] }
+            IO.pipe("BOM|UTF-8:ISO-8859-1") { |a, b| r << [a.external_encoding.to_s, a.internal_encoding.to_s] }
+            IO.pipe("UTF-8", "UTF-8") { |a, b| r << a.internal_encoding.inspect }
+            IO.pipe("ISO-8859-1", "UTF-8", invalid: :replace) { |a, b| r << a.external_encoding.to_s }
+            mo = Object.new; mo.define_singleton_method(:to_str) { "ISO-8859-1:UTF-8" }
+            IO.pipe(mo) { |a, b| r << a.external_encoding.to_s }
+            opts = Object.new; opts.define_singleton_method(:to_hash) { { invalid: :replace } }
+            IO.pipe("UTF-8", "ISO-8859-1", **opts) { |a, b| r << :tohash_ok }
+            r << IO.pipe { :blockresult }
+            a2 = b2 = nil; IO.pipe { |x, y| a2 = x; b2 = y }; r << [a2.closed?, b2.closed?]
+            begin
+              IO.pipe { |x, y| a2 = x; b2 = y; raise "boom" }
+            rescue RuntimeError
+              r << [a2.closed?, b2.closed?]
+            end
+            IO.pipe { |x, y| x.close; y.close; r << :inner_close_ok }
+            class MrbPipeSub < IO; end
+            a3, b3 = MrbPipeSub.pipe
+            r << [a3.class, b3.class]; a3.close; b3.close
+            $rec = []
+            class MrbPipeSub2 < IO
+              def self.new(...); $rec << :new; super; end
+              def initialize(...); $rec << :init; super; end
+            end
+            a4, b4 = MrbPipeSub2.pipe
+            r << $rec << [a4.class, b4.class]; a4.close; b4.close
+            rd, wr = IO.pipe
+            wr.puts "through"; wr.close
+            r << rd.gets; rd.close
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn hash_splat_calls_to_hash() {
+        // `f(**obj)` implicitly converts obj with #to_hash (and TypeErrors
+        // when absent or when the result is not a Hash).
+        run_test(
+            r##"
+            def f(**o) = o
+            def g(a, **o) = [a, o]
+            m = Object.new
+            def m.to_hash; { a: 1 }; end
+            r = [f(**m), g(1, **m), f(**{})]
+            begin; f(**Object.new); rescue TypeError => e; r << e.message; end
+            bad = Object.new
+            def bad.to_hash; 42; end
+            begin; f(**bad); rescue TypeError => e; r << e.message; end
+            r
+            "##,
         );
     }
 

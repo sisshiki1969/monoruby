@@ -2341,14 +2341,21 @@ impl Executor {
                 )
                 .unwrap();
             }
-            // Merge hash splat arguments into the keyword hash.
+            // Merge hash splat arguments into the keyword hash. `**obj`
+            // accepts any #to_hash-convertible object (implicit
+            // conversion), not just a Hash.
             for pos in cs_hash_splat_pos.iter() {
                 if let Some(v) = lfp.register(*pos) {
                     if !v.is_nil() {
-                        if let Some(hash) = v.try_hash_ty() {
-                            for (k, v) in hash.iter() {
-                                map.insert(k, v, self, globals).unwrap();
+                        let hash = match v.coerce_to_hash(self, globals) {
+                            Ok(h) => h,
+                            Err(err) => {
+                                self.set_error(err);
+                                return None;
                             }
+                        };
+                        for (k, v) in hash.iter() {
+                            map.insert(k, v, self, globals).unwrap();
                         }
                     }
                 }

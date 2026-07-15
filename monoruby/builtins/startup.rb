@@ -612,6 +612,23 @@ module File::Constants
   FNM_PATHNAME = 2
   FNM_CASEFOLD = 8
   FNM_EXTGLOB = 16
+  # Open(2) flags and flock(2) operations (Linux values), mirrored on
+  # File itself below via `include File::Constants` in CRuby; monoruby
+  # historically defined them directly on File, so keep both in sync.
+  RDONLY   = 0
+  WRONLY   = 1
+  RDWR     = 2
+  APPEND   = 1024
+  CREAT    = 64
+  EXCL     = 128
+  TRUNC    = 512
+  NONBLOCK = 2048
+  BINARY   = 0
+  LOCK_SH  = 1
+  LOCK_EX  = 2
+  LOCK_UN  = 8
+  LOCK_NB  = 4
+  NULL = "/dev/null"
 end
 
 class File
@@ -1687,6 +1704,24 @@ class IO
 
   def self.for_fd(fd, mode = nil, **opts)
     new(fd, mode, **opts)
+  end
+
+  # CRuby's rb_io_s_open: `new(*args)` plus block handling — the IO is
+  # closed when the block exits (via #close dispatch, so overrides run);
+  # an IOError meaning "already closed" is swallowed, everything else
+  # (StandardError or not) propagates.
+  def self.open(*args, **opts)
+    io = new(*args, **opts)
+    return io unless block_given?
+    begin
+      yield io
+    ensure
+      begin
+        io.close
+      rescue IOError => e
+        raise unless e.message.include?("closed stream")
+      end
+    end
   end
 end
 
