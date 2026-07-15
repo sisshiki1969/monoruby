@@ -563,6 +563,15 @@ impl Value {
         if lhs == rhs {
             return;
         }
+        // NaNs of any sign/payload count as equal for assertion purposes:
+        // e.g. x86's 0.0/0.0 yields a negative quiet NaN while a
+        // reconstructed f64::NAN is positive, so bit comparison misses.
+        if let (RV::Float(a), RV::Float(b)) = (lhs.unpack(), rhs.unpack())
+            && a.is_nan()
+            && b.is_nan()
+        {
+            return;
+        }
         match (lhs.try_rvalue(), rhs.try_rvalue()) {
             (Some(lhs), Some(rhs)) => {
                 if RValue::eq(store, lhs, rhs) {
@@ -3010,10 +3019,25 @@ impl Value {
                 assert_eq!(false, *toplevel);
                 assert_eq!(None, *parent);
                 if prefix.len() == 0 {
+                    // CRuby's `p` prints non-finite Floats as the bare
+                    // words `Infinity` / `NaN` (and `-Infinity`, which
+                    // arrives as UnOp(Neg, Const("Infinity"))). They are
+                    // not constants — map them to the float values when
+                    // reconstructing the expected result (issue #930).
+                    match name.as_str() {
+                        "Infinity" => return Value::float(f64::INFINITY),
+                        "NaN" => return Value::float(f64::NAN),
+                        _ => {}
+                    }
                     let constant = IdentId::get_id(name);
                     globals
                         .get_constant_noautoload(OBJECT_CLASS, constant)
-                        .unwrap()
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "test harness: cannot reconstruct CRuby output: \
+                                 unresolved constant `{name}`"
+                            )
+                        })
                 } else {
                     let mut module = globals
                         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id(&prefix[0]))
@@ -3061,6 +3085,18 @@ impl Value {
                 }
                 Value::hash(map)
             }
+            NodeKind::UnOp(crate::ast::UnOp::Neg, box inner) => {
+                let v = Self::from_ast_inner(inner, vm, globals, src_enc);
+                match v.unpack() {
+                    RV::Float(f) => Value::float(-f),
+                    RV::Fixnum(i) => Value::integer(-i),
+                    RV::BigInt(b) => Value::bigint(-b.clone()),
+                    _ => panic!(
+                        "test harness: cannot reconstruct negated CRuby output: {:?}",
+                        node.kind
+                    ),
+                }
+            }
             NodeKind::BinOp(crate::ast::BinOp::Div, box lhs, box rhs) => {
                 // CRuby's `p` outputs rationals as `(num/den)`, which parses as BinOp(Div).
                 match (&lhs.kind, &rhs.kind) {
@@ -3072,7 +3108,19 @@ impl Value {
                             unreachable!("{:?}", node.kind)
                         }
                     }
-                    _ => unreachable!("{:?}", node.kind),
+                    _ => {
+                        let l = Self::from_ast_inner(lhs, vm, globals, src_enc);
+                        let r = Self::from_ast_inner(rhs, vm, globals, src_enc);
+                        match (l.unpack(), r.unpack()) {
+                            (RV::Float(a), RV::Float(b)) => Value::float(a / b),
+                            (RV::Fixnum(a), RV::Fixnum(b)) if b != 0 => Value::rational(a, b),
+                            _ => panic!(
+                                "test harness: cannot reconstruct division in \
+                                 CRuby output: {:?}",
+                                node.kind
+                            ),
+                        }
+                    }
                 }
             }
             NodeKind::BinOp(crate::ast::BinOp::Add, box lhs, box rhs) => {

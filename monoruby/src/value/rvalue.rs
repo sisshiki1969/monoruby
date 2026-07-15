@@ -2049,7 +2049,16 @@ impl RValue {
                     });
                     true
                 }
-                (ObjTy::RANGE, ObjTy::RANGE) => lhs.as_range() == rhs.as_range(),
+                (ObjTy::RANGE, ObjTy::RANGE) => {
+                    // Compare the endpoints structurally: a heap Float
+                    // endpoint (e.g. Infinity, which no flonum encodes)
+                    // must match by value, not by object identity.
+                    let l = lhs.as_range();
+                    let r = rhs.as_range();
+                    Value::assert_eq(store, l.start(), r.start());
+                    Value::assert_eq(store, l.end(), r.end());
+                    l.exclude_end() == r.exclude_end()
+                }
                 (ObjTy::HASH, ObjTy::HASH) => {
                     let lhs = lhs.as_hashmap();
                     let rhs = rhs.as_hashmap();
