@@ -870,7 +870,7 @@ impl alloc::GCBox for RValue {
     /// variable, and the *first* ivar store always goes through the
     /// write barrier (`set_ivar_by_ivarid` / the JIT slow path that calls
     /// `set_ivar`), which then remembers it permanently. See
-    /// `doc/generational_gc_plan.md`.
+    /// `doc/gc.md`.
     ///
     fn is_promotable(&self) -> bool {
         // Pre-existing old→young edges (references the object held before
@@ -1006,7 +1006,7 @@ impl RValue {
     //
     // Reserved accessors for the generational collector. They are wired
     // into the GC mark/sweep, promotion, and write-barrier paths in a
-    // later phase; see `doc/generational_gc_plan.md`. Kept `dead_code`
+    // later phase; see `doc/gc.md`. Kept `dead_code`
     // until then so the header layout and API are stable up front.
 
     /// Object has been promoted to the old generation.
@@ -1066,7 +1066,7 @@ impl RValue {
     /// immediately without touching the allocator. We do not check the
     /// child's generation (remembering an old→old edge is a harmless
     /// over-approximation); immediates are skipped via `is_packed_value`.
-    /// See `doc/generational_gc_plan.md`.
+    /// See `doc/gc.md`.
     ///
     #[inline]
     pub(crate) fn write_barrier(&mut self, child: Value) {
@@ -2267,7 +2267,7 @@ struct Metadata {
     /// MUST stay zero: the JIT compares the type with a 2-byte `cmpw
     /// [ty]` that also reads this adjacent byte (e.g. the Array check in
     /// `object_send_splat_arg0`). The generational GC age therefore lives
-    /// in the high byte of `flag`, not here. See generational_gc_plan.md.
+    /// in the high byte of `flag`, not here. See gc.md.
     _padding: u8,
     class: Option<ClassId>,
 }
@@ -2343,7 +2343,7 @@ impl Header {
     //
     // A freshly allocated object has `flag == 1`, so all three bits
     // start clear (young, barrier-untracked, not remembered). See
-    // `doc/generational_gc_plan.md`.
+    // `doc/gc.md`.
 
     #[allow(dead_code)]
     fn is_old(&self) -> bool {
@@ -2392,7 +2392,7 @@ impl Header {
     /// what makes the JIT/Rust barrier fast path one instruction — young
     /// objects and already-remembered old objects both have it clear.
     /// `arm_barrier` / `enter_remembered` keep it mutually exclusive with
-    /// `REMEMBERED`. See `doc/generational_gc_plan.md`.
+    /// `REMEMBERED`. See `doc/gc.md`.
     ///
     fn is_wb_pending(&self) -> bool {
         unsafe { self.meta.flag & 0b100_0000 != 0 }

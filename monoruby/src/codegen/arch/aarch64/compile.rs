@@ -32,7 +32,7 @@ use monoasm_macro::monoasm_arm64;
 ///
 /// The inline fast path has already verified that `parent` is old, not yet
 /// remembered, and that the stored child is a heap object; this records
-/// `parent` in the remembered set. See `doc/generational_gc_plan.md`.
+/// `parent` in the remembered set. See `doc/gc.md`.
 ///
 extern "C" fn jit_write_barrier(parent: *mut RValue) {
     // SAFETY: `parent` is the live `&RValue` the store wrote into. The
@@ -3103,7 +3103,7 @@ impl Codegen {
     /// `x0..x8` and the caller-saved FP regs `d0..d7`), so it is fully
     /// transparent to the surrounding code and needs no liveness information,
     /// then calls `jit_write_barrier`. aarch64 twin of x86
-    /// `emit_write_barrier_rdi`. See `doc/generational_gc_plan.md`.
+    /// `emit_write_barrier_rdi`. See `doc/gc.md`.
     ///
     pub(in crate::codegen::jitgen) fn emit_write_barrier(&mut self, parent: GP, child: GP) {
         let skip = self.jit.label();
