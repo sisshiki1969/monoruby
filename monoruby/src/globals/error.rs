@@ -1096,6 +1096,14 @@ impl MonorubyErr {
         Self::from_io_err(store, err, msg)
     }
 
+    /// Errno exception whose message is the bare strerror description
+    /// (e.g. `Errno::EBADF: Bad file descriptor`), like CRuby raises when
+    /// there is no path/context to append.
+    pub(crate) fn errno_plain(store: &Store, err: &std::io::Error) -> MonorubyErr {
+        let desc = errno_description(err);
+        Self::from_io_err(store, err, desc)
+    }
+
     pub(crate) fn rangeerr(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Range, msg)
     }

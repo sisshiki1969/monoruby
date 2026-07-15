@@ -30,6 +30,7 @@ pub(crate) fn set_frame_arguments_simple(
     positional_simple(vm, globals, callee_fid, src, pos_num, callee_lfp)?;
     let callee = &globals.store[callee_fid];
     if !callee.no_keyword() {
+        coerce_hash_splat_args(vm, globals, callid, caller_lfp)?;
         handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp, None)?;
     }
 
@@ -267,6 +268,54 @@ fn check_single_arg_expand(
 ///
 /// Set arguments for the callee frame.
 ///
+/// Coerce every `**splat` argument register at the call site to a real
+/// Hash via `#to_hash` (implicit conversion): `f(**obj)` accepts any
+/// #to_hash-convertible object. The caller's register is rewritten in
+/// place so every downstream consumer sees a Hash.
+fn coerce_hash_splat_args(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    mut caller_lfp: Lfp,
+) -> Result<()> {
+    for pos in globals[callid].hash_splat_pos.clone() {
+        if let Some(v) = caller_lfp.register(pos)
+            && !v.is_nil()
+            && v.try_hash_ty().is_none()
+        {
+            let converted = vm.invoke_method_if_exists(
+                globals,
+                IdentId::get_id("to_hash"),
+                v,
+                &[],
+                None,
+                None,
+            )?;
+            let h = match converted {
+                Some(h) if h.try_hash_ty().is_some() => h,
+                Some(bad) => {
+                    return Err(MonorubyErr::typeerr(format!(
+                        "can't convert {} to Hash ({}#to_hash gives {})",
+                        v.get_real_class_name(globals),
+                        v.get_real_class_name(globals),
+                        bad.get_real_class_name(globals),
+                    )));
+                }
+                None => {
+                    return Err(MonorubyErr::no_implicit_conversion(
+                        globals,
+                        v,
+                        HASH_CLASS,
+                    ));
+                }
+            };
+            // SAFETY: `pos` is a live argument slot of the caller frame.
+            unsafe { caller_lfp.set_register(pos, Some(h)) };
+        }
+    }
+    Ok(())
+}
+
 fn set_callee_frame_arguments(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -275,6 +324,7 @@ fn set_callee_frame_arguments(
     callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
+    coerce_hash_splat_args(vm, globals, callid, caller_lfp)?;
     let src = caller_lfp.register_ptr(globals[callid].args) as *mut Value;
     let dst = callee_lfp.register_ptr(SlotId(1));
     let pos_args = globals[callid].pos_num;
@@ -306,7 +356,9 @@ fn set_callee_frame_arguments(
             if v.is_nil() {
                 continue;
             }
-            for (k, v) in v.expect_hash_ty(globals)?.iter() {
+            // `**obj` accepts any #to_hash-convertible object (implicit
+            // conversion), not just a Hash.
+            for (k, v) in v.coerce_to_hash(vm, globals)?.iter() {
                 h.insert(k, v, vm, globals)?;
             }
         }

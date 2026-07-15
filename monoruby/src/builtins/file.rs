@@ -935,7 +935,7 @@ fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// access mode in the low 2 bits (RDONLY=0/WRONLY=1/RDWR=2), `O_CREAT`=0o100,
 /// `O_TRUNC`=0o1000, `O_APPEND`=0o2000. Other flags (EXCL, NONBLOCK, …) pass
 /// through silently — `open` handles their effect via mode-string semantics.
-fn mode_string_from_flags(flags: i64) -> String {
+pub(super) fn mode_string_from_flags(flags: i64) -> String {
     const O_CREAT: i64 = 0o100;
     const O_TRUNC: i64 = 0o1000;
     const O_APPEND: i64 = 0o2000;
@@ -964,6 +964,31 @@ fn mode_string_from_flags(flags: i64) -> String {
                 "w+".to_string()
             } else {
                 "r+".to_string()
+            }
+        }
+    }
+}
+
+/// Close `io` at `File.open` block exit through `#close` *dispatch* (a
+/// subclass/singleton override must run), swallowing the IOError that
+/// means "already closed" and propagating everything else. A block
+/// error, when present, wins over a close error (close still runs).
+pub(super) fn block_close(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    io: Value,
+    block_result: Result<Value>,
+) -> Result<Value> {
+    let close_result =
+        vm.invoke_method_inner(globals, IdentId::get_id("close"), io, &[], None, None);
+    match (block_result, close_result) {
+        (Err(e), _) => Err(e),
+        (Ok(v), Ok(_)) => Ok(v),
+        (Ok(v), Err(ce)) => {
+            if ce.message().contains("closed stream") {
+                Ok(v)
+            } else {
+                Err(ce)
             }
         }
     }
@@ -1025,8 +1050,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             // Match CRuby File.open(...) {|io| ... }: close at block exit.
             // Holding the underlying fd open across blocks defeats `flock`
             // (rubygems' open_with_flock relies on this) and leaks fds.
-            let _ = res.as_io_inner_mut().close();
-            return r;
+            return block_close(vm, globals, res, r);
         }
         return Ok(res);
     }
@@ -1110,8 +1134,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     if let Some(bh) = lfp.block() {
         let r = vm.invoke_block_once(globals, bh, &[res]);
         // CRuby File.open(...) {|io| ... } closes the file at block exit.
-        let _ = res.as_io_inner_mut().close();
-        return r;
+        return block_close(vm, globals, res, r);
     }
     Ok(res)
 }
