@@ -87,16 +87,25 @@ class Hash
   def transform_keys!(hash = nil, &block)
     return to_enum(:transform_keys!) { size } unless block || hash
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    if hash
-      keys.each do |k|
-        if hash.key?(k)
-          self[hash[k]] = delete(k)
-        elsif block
-          self[block.call(k)] = delete(k)
-        end
+    # Snapshot the original pairs up front so a new key that collides with
+    # a not-yet-processed original key can't corrupt its value, and track
+    # the keys we produce so we never delete one we just created (e.g.
+    # `{a:1,b:2}.transform_keys!(&:succ)` must not let `a`→`b` clobber the
+    # original `b`). A `break` in the block exits mid-loop, leaving the
+    # partial in-place result — matching CRuby.
+    new_keys = {}
+    new_keys.compare_by_identity if compare_by_identity?
+    to_a.each do |k, v|
+      nk = if hash&.key?(k)
+        hash[k]
+      elsif block
+        block.call(k)
+      else
+        k
       end
-    else
-      keys.each { |k| self[block.call(k)] = delete(k) }
+      delete(k) unless new_keys.key?(k)
+      self[nk] = v
+      new_keys[nk] = true
     end
     self
   end

@@ -594,6 +594,12 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if lhs.len() != rhs.len() {
         return Ok(Value::bool(false));
     }
+    // Two *non-empty* hashes that differ only in `compare_by_identity` are
+    // not equal (their key-equality semantics differ). Two empty hashes
+    // are equal regardless of the flag, matching CRuby.
+    if lhs.len() != 0 && lhs.is_compare_by_identity() != rhs.is_compare_by_identity() {
+        return Ok(Value::bool(false));
+    }
     crate::value::exec_recursive_paired(self_val.id(), rhs_v.id(), || {
         for (k, lhs_value) in lhs.iter() {
             if let Some(rhs_value) = rhs.get(k, vm, globals)?
@@ -627,6 +633,12 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         return Ok(Value::bool(false));
     };
     if lhs.len() != rhs.len() {
+        return Ok(Value::bool(false));
+    }
+    // Two *non-empty* hashes that differ only in `compare_by_identity` are
+    // not equal (their key-equality semantics differ). Two empty hashes
+    // are equal regardless of the flag, matching CRuby.
+    if lhs.len() != 0 && lhs.is_compare_by_identity() != rhs.is_compare_by_identity() {
         return Ok(Value::bool(false));
     }
     let eql_id = IdentId::EQL_;
@@ -3986,6 +3998,35 @@ mod tests {
             r#"{1.0 => "x"}.eql?({1.0 => "x"})"#,
             // Equal values via `eql?` semantics.
             r#"{1 => "a"}.eql?({1 => "a"})"#,
+        ]);
+    }
+
+    #[test]
+    fn hash_eq_compare_by_identity_flag() {
+        run_tests(&[
+            // Non-empty hashes differing only in compare_by_identity are
+            // not equal; two empty hashes are equal regardless.
+            r#"{1 => 2} == {1 => 2}.compare_by_identity"#,
+            r#"{1 => 2}.compare_by_identity == {1 => 2}"#,
+            r#"{1 => 2}.eql?({1 => 2}.compare_by_identity)"#,
+            r#"{}.compare_by_identity == {}"#,
+            r#"({} == {}.compare_by_identity)"#,
+            r#"{1 => 2}.compare_by_identity == {1 => 2}.compare_by_identity"#,
+        ]);
+    }
+
+    #[test]
+    fn hash_transform_keys_bang_conflicts_and_break() {
+        run_tests(&[
+            // New keys that collide with not-yet-processed original keys
+            // must not corrupt them, and the produced keys aren't deleted.
+            r#"{a: 1, b: 2, c: 3, d: 4}.transform_keys!(&:succ)"#,
+            r#"{a: 1, b: 2}.transform_keys!({a: :x})"#,
+            r#"{a: 1, b: 2}.transform_keys!({a: :b})"#,
+            // A break leaves the partial in-place result.
+            r#"h = {a: 1, b: 2, c: 3, d: 4}; h.transform_keys! { |k| break if k == :c; k.succ }; h"#,
+            // Enumerator when neither a block nor a hash is given.
+            r#"{a: 1}.transform_keys!.class.name"#,
         ]);
     }
 
