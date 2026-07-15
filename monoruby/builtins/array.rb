@@ -207,6 +207,7 @@ class Array
       unless no_n || n.nil? || n.is_a?(Integer)
         raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.respond_to?(:to_int)
         n = n.to_int
+        raise TypeError, "can't convert to Integer" unless n.is_a?(Integer)
       end
       # Size hint:
       #   * empty array            -> 0
@@ -236,6 +237,7 @@ class Array
       unless n.is_a?(Integer)
         raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.respond_to?(:to_int)
         n = n.to_int
+        raise TypeError, "can't convert to Integer" unless n.is_a?(Integer)
       end
       n.times do
         each { |x| yield x }

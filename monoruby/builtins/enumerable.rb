@@ -1059,7 +1059,11 @@ module Enumerable
       end
     end
     res << current if current
-    res.each
+    # `slice_before` always returns an Enumerator whose `size` is nil
+    # (the chunk count is not derivable from the source size). `res.each`
+    # would report `res.size`, so wrap the chunks in an `Enumerator.new`,
+    # which reports a nil size.
+    ::Enumerator.new { |y| res.each { |chunk| y << chunk } }
   end
 
   # Mirror of `slice_before`: the boundary fires *after* an element

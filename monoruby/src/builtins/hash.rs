@@ -8,8 +8,24 @@ use jitgen::{AbstractState, JitContext};
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
-    let hash_meta = globals.store.get_metaclass(HASH_CLASS).id();
-    globals.define_builtin_funcs_with_effect(hash_meta, "new", &[], new, 0, 0, true, Effect::CAPTURE);
+    // `Hash.new(ifnone = nil, capacity: nil)` / `Hash.new { … }`. The
+    // Ruby 3.4+ `capacity:` keyword is accepted (and ignored — monoruby's
+    // Hash has no pre-sizing); `kw_rest = false` makes any *other* keyword
+    // an ArgumentError. Positional args stay a `rest` so they are
+    // forwarded verbatim to `#initialize` — a `Hash` subclass may override
+    // `initialize` to take any arity, and the plain-`Hash` arity check
+    // (0..1) lives there. (The previous `Effect::CAPTURE` flag was never
+    // consumed anywhere, so dropping it changes no behavior.)
+    globals.define_builtin_class_func_with_kw(
+        HASH_CLASS,
+        "new",
+        new,
+        0,
+        0,
+        true,
+        &["capacity"],
+        false,
+    );
     globals.store[HASH_CLASS].set_alloc_func(hash_alloc_func);
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
     globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
@@ -150,6 +166,10 @@ pub(super) fn init(globals: &mut Globals) {
 fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::hash_with_class_and_default(class, Value::nil());
+    // Forward the positional args verbatim to `#initialize` (arity is
+    // validated there, so a subclass can override it). The `capacity:`
+    // keyword is bound by the registration and ignored; unknown keywords
+    // are already rejected before we get here.
     vm.invoke_method_inner(
         globals,
         IdentId::INITIALIZE,
@@ -3636,6 +3656,23 @@ mod tests {
         run_test_error("Hash.new(5) { 0 }");
         // More than one positional: ArgumentError
         run_test_error("Hash.new(5, 6)");
+    }
+
+    #[test]
+    fn hash_new_capacity_keyword() {
+        run_tests(&[
+            // `capacity:` (Ruby 3.4+) is accepted and ignored.
+            "Hash.new(capacity: 42).default.inspect",
+            "Hash.new(5, capacity: 42).default",
+            "(Hash.new(capacity: 42) { 1 }).default_proc.is_a?(Proc)",
+            "Hash.new(capacity: -42).default.inspect",
+            // A braced Hash stays a positional default, not keywords.
+            "Hash.new({ foo: 1 }).default",
+        ]);
+        // Any other keyword is an ArgumentError.
+        run_test_error("Hash.new(unknown: true)");
+        run_test_error("Hash.new(1, unknown: true)");
+        run_test_error("Hash.new(unknown: true) { 0 }");
     }
 
     #[test]
