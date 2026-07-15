@@ -72,6 +72,31 @@ fn read_partial_chunk<T: Read>(
     Ok(chunk)
 }
 
+/// How many more bytes are needed to complete a UTF-8 character that
+/// `buf` may end in the middle of. 0 when the tail is a complete
+/// character (or invalid, in which case there is nothing to complete).
+fn utf8_missing_bytes(buf: &[u8]) -> usize {
+    let len = buf.len();
+    // A UTF-8 lead byte is at most 3 bytes from the end of a truncated
+    // sequence (4-byte character missing its last byte).
+    let start = len.saturating_sub(3);
+    for i in (start..len).rev() {
+        let b = buf[i];
+        if b & 0b1100_0000 == 0b1000_0000 {
+            continue; // continuation byte — keep looking for the lead
+        }
+        let need: usize = match b {
+            0x00..=0x7f => 1,
+            0xc0..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf7 => 4,
+            _ => 1, // invalid lead — treat as complete
+        };
+        return need.saturating_sub(len - i);
+    }
+    0
+}
+
 #[derive(Debug)]
 pub struct FileDescriptor {
     reader: ManuallyDrop<std::io::BufReader<std::fs::File>>,
@@ -747,53 +772,51 @@ impl IoInner {
     }
 
     pub fn read_line(&mut self) -> Result<Option<String>> {
+        Ok(self
+            .read_line_bytes()?
+            .map(|v| String::from_utf8_lossy(&v).into_owned()))
+    }
+
+    /// Read one `\n`-terminated line as raw bytes (pushback-aware).
+    pub fn read_line_bytes(&mut self) -> Result<Option<Vec<u8>>> {
         if self.pushback_len() > 0 {
             let cell = self.pushback_cell().unwrap();
             let nl = cell.borrow().iter().position(|&b| b == b'\n');
             match nl {
                 Some(idx) => {
-                    let line = self.take_pushback(Some(idx + 1));
-                    return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+                    return Ok(Some(self.take_pushback(Some(idx + 1))));
                 }
                 None => {
                     let mut line = self.take_pushback(None);
-                    match self.read_line_underlying()? {
-                        Some(rest) => line.extend_from_slice(rest.as_bytes()),
-                        None if line.is_empty() => return Ok(None),
-                        None => {}
+                    if let Some(rest) = self.read_line_bytes_underlying()? {
+                        line.extend_from_slice(&rest);
                     }
-                    return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+                    // `line` is non-empty: the pushback supplied at least
+                    // one byte.
+                    return Ok(Some(line));
                 }
             }
         }
-        self.read_line_underlying()
+        self.read_line_bytes_underlying()
     }
 
-    fn read_line_underlying(&mut self) -> Result<Option<String>> {
-        match self {
+    fn read_line_bytes_underlying(&mut self) -> Result<Option<Vec<u8>>> {
+        let mut buf = Vec::new();
+        let size = match self {
             Self::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
-            Self::Stdin => {
-                let mut buf = String::new();
-                std::io::stdin()
-                    .read_line(&mut buf)
-                    .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
-                Ok(Some(buf))
-            }
-            Self::Stdout => Err(MonorubyErr::argumenterr("can't read from $stdin")),
-            Self::Stderr => Err(MonorubyErr::argumenterr("can't read from $stderr")),
+            Self::Stdin => std::io::stdin()
+                .lock()
+                .read_until(b'\n', &mut buf)
+                .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?,
+            Self::Stdout => return Err(MonorubyErr::argumenterr("can't read from $stdin")),
+            Self::Stderr => return Err(MonorubyErr::argumenterr("can't read from $stderr")),
             Self::File(file) => {
                 if !file.readable {
                     return Err(MonorubyErr::ioerr("not opened for reading"));
                 }
                 let file = &mut *Rc::get_mut(file).unwrap().reader;
-                let mut buf = String::new();
-                let size = file
-                    .read_line(&mut buf)
-                    .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
-                if size == 0 {
-                    return Ok(None);
-                }
-                Ok(Some(buf))
+                file.read_until(b'\n', &mut buf)
+                    .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
             }
             Self::Popen(popen) => {
                 let popen = Rc::get_mut(popen).unwrap();
@@ -801,16 +824,159 @@ impl IoInner {
                     .reader
                     .as_mut()
                     .ok_or_else(|| MonorubyErr::ioerr("not opened for reading"))?;
-                let mut buf = String::new();
-                let size = reader
-                    .read_line(&mut buf)
-                    .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
-                if size == 0 {
+                reader
+                    .read_until(b'\n', &mut buf)
+                    .map_err(|e| MonorubyErr::ioerr(e.to_string()))?
+            }
+        };
+        if size == 0 {
+            return Ok(None);
+        }
+        Ok(Some(buf))
+    }
+
+    /// Read one byte (pushback-aware). `None` at EOF.
+    fn read1(&mut self) -> Result<Option<u8>> {
+        Ok(self.read(Some(1))?.first().copied())
+    }
+
+    /// General line reader implementing CRuby's `IO#gets` semantics:
+    ///
+    /// - `sep == None` — slurp the rest of the stream (up to `limit`).
+    /// - `sep == Some(b"")` — paragraph mode: skip blank lines, then read
+    ///   up to and including the `"\n\n"` that ends the paragraph.
+    /// - otherwise — read up to and including `sep` (multi-byte separators
+    ///   are matched even across buffer refills).
+    ///
+    /// `limit` caps the number of bytes read; when the cap cuts a UTF-8
+    /// character in half and `complete_utf8` is set, up to 16 extra bytes
+    /// are read to finish that character (CRuby reads on to the character
+    /// boundary of the external encoding).
+    ///
+    /// Returns `None` at EOF (except `limit == Some(0)`, which returns an
+    /// empty line without consuming anything, like CRuby).
+    pub fn getline(
+        &mut self,
+        sep: Option<&[u8]>,
+        limit: Option<usize>,
+        complete_utf8: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        if limit == Some(0) {
+            return Ok(Some(Vec::new()));
+        }
+        match sep {
+            None => {
+                let mut buf = self.read(limit)?;
+                if buf.is_empty() {
                     return Ok(None);
+                }
+                if complete_utf8 && limit == Some(buf.len()) {
+                    self.complete_partial_char(&mut buf)?;
                 }
                 Ok(Some(buf))
             }
+            Some([]) => {
+                // Paragraph mode: skip the blank lines between paragraphs.
+                let mut buf = Vec::new();
+                loop {
+                    match self.read1()? {
+                        None => return Ok(None),
+                        Some(b'\n') => continue,
+                        Some(b) => {
+                            buf.push(b);
+                            break;
+                        }
+                    }
+                }
+                let mut at_sep = false;
+                loop {
+                    if let Some(l) = limit
+                        && buf.len() >= l
+                    {
+                        if complete_utf8 {
+                            self.complete_partial_char(&mut buf)?;
+                        }
+                        break;
+                    }
+                    match self.read1()? {
+                        None => break,
+                        Some(b) => {
+                            buf.push(b);
+                            if buf.ends_with(b"\n\n") {
+                                at_sep = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if at_sep {
+                    // Swallow any further blank lines so the stream is
+                    // positioned at the start of the next paragraph
+                    // (CRuby's swallow(io, '\n')).
+                    loop {
+                        match self.read1()? {
+                            Some(b'\n') => continue,
+                            Some(b) => {
+                                let _ = self.unget(&[b]);
+                                break;
+                            }
+                            None => break,
+                        }
+                    }
+                }
+                Ok(Some(buf))
+            }
+            Some(s) => {
+                // Fast path for the default record separator.
+                if s == b"\n" && limit.is_none() {
+                    return self.read_line_bytes();
+                }
+                let mut buf = Vec::new();
+                loop {
+                    if let Some(l) = limit
+                        && buf.len() >= l
+                    {
+                        if complete_utf8 {
+                            self.complete_partial_char(&mut buf)?;
+                        }
+                        break;
+                    }
+                    match self.read1()? {
+                        None => break,
+                        Some(b) => {
+                            buf.push(b);
+                            if buf.ends_with(s) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if buf.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(buf))
+                }
+            }
         }
+    }
+
+    /// After a limit cut, read up to 16 extra bytes to complete a UTF-8
+    /// character the cut may have split. Like CRuby, the scan keeps
+    /// consuming while the tail still looks like an unfinished character
+    /// — re-anchoring on each new lead byte — so a run of invalid
+    /// "lead, continuation, lead, …" bytes is consumed up to the 16-byte
+    /// cap rather than stopping at the first invalid boundary.
+    fn complete_partial_char(&mut self, buf: &mut Vec<u8>) -> Result<()> {
+        for _ in 0..16 {
+            if utf8_missing_bytes(buf) == 0 {
+                return Ok(());
+            }
+            match self.read1()? {
+                None => return Ok(()),
+                Some(b) => buf.push(b),
+            }
+        }
+        Ok(())
     }
 
     pub fn fileno(&self) -> Result<i32> {
