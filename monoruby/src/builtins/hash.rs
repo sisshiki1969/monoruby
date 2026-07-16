@@ -1017,7 +1017,15 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     let hash = lfp.self_val().as_hash();
     let data = vm.get_block_data(globals, bh)?;
     let _iter_guard = hash.iter_guard();
-    for (k, v) in hash.iter() {
+    // Snapshot the stored (key, value) pairs before yielding so the traversal
+    // tolerates deletion during iteration (CRuby allows `h.each { h.delete(k) }`
+    // / `h.shift`). Yielding the snapshotted pairs directly — rather than
+    // re-looking-up each key — is essential: a key's `#hash` may legitimately
+    // differ from its stored slot (e.g. `Hash#rehash`, mutable keys), and a
+    // re-lookup would then miss it. Adding a *new* key still raises via the
+    // iteration guard on `insert`.
+    let pairs: Vec<(Value, Value)> = hash.iter().collect();
+    for (k, v) in pairs {
         vm.invoke_block(globals, &data, &[Value::array2(k, v)])?;
     }
     Ok(lfp.self_val())
@@ -3487,6 +3495,38 @@ mod tests {
         "##,
             r##"
         [Hash.new("default").shift, Hash.new.shift]
+        "##,
+        ]);
+    }
+
+    #[test]
+    fn mutate_during_iteration() {
+        run_tests(&[
+            // Deleting the current key while iterating visits every original
+            // entry and empties the hash (CRuby allows this).
+            r##"
+        h = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10,
+              k: 11, l: 12, m: 13, n: 14, o: 15, p: 16, q: 17, r: 18, s: 19, t: 20 }
+        visited = []
+        h.each_pair { |k, v| visited << k; h.delete(k) }
+        [visited, h]
+        "##,
+            // Shifting entries while iterating is likewise allowed.
+            r##"
+        h = { a: 1, b: 2, c: 3 }
+        visited = []
+        shifted = []
+        h.each_pair { |k, v| visited << k; shifted << h.shift }
+        [visited, shifted, h]
+        "##,
+            // Adding a new key mid-iteration still raises.
+            r##"
+        h = { a: 1 }
+        begin
+          h.each { |k, v| h[:b] = 2 }
+        rescue RuntimeError
+          :raised
+        end
         "##,
         ]);
     }
