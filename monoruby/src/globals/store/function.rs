@@ -1296,6 +1296,13 @@ impl FuncInfo {
         }
     }
 
+    /// Override this function's `Effect`. Used to attach an effect (e.g.
+    /// `Effect::CAPTURE`) to a builtin registered through the keyword-aware
+    /// path, which does not take an effect argument.
+    pub(crate) fn set_effect(&mut self, effect: Effect) {
+        self.ext.effect = effect;
+    }
+
     fn positional_within_range(&self, pos_num: usize) -> bool {
         let min = self.min_positional_args();
         let max = self.max_positional_args();

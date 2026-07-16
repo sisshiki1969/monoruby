@@ -1324,6 +1324,10 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 
     if let Some(bh) = lfp.block() {
         // Block form: fill {}, fill(start) {}, fill(start, length) {}, fill(range) {}
+        // A third positional argument is invalid with a block.
+        if lfp.try_arg(2).is_some() {
+            return Err(MonorubyErr::wrong_number_of_arg_range(3, 0..=2));
+        }
         let data = vm.get_block_data(globals, bh)?;
         let (start, end_idx) = if let Some(arg0) = lfp.try_arg(0) {
             if let Some(range) = arg0.is_range() {
@@ -1375,7 +1379,13 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             return Err(MonorubyErr::wrong_number_of_arg_range(0, 1..=3));
         };
         if let Some(arg1) = lfp.try_arg(1) {
-            if let Some(range) = arg1.is_range() {
+            // A Range is only a range selector in the 2-argument form; with a
+            // third (length) argument CRuby treats arg1 as a start index and
+            // a Range there fails to convert (`no implicit conversion of
+            // Range into Integer`).
+            if let Some(range) = arg1.is_range()
+                && lfp.try_arg(2).is_none()
+            {
                 // fill(val, range) -> self
                 let (start, end_idx) = fill_range_indices(vm, globals, &ary, range)?;
                 if end_idx > ary.len() {
@@ -1385,8 +1395,12 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     ary[i] = val;
                 }
             } else {
-                // fill(val, start, length = nil) -> self
-                let start = arg1.coerce_to_int_i64(vm, globals)?;
+                // fill(val, start, length = nil) -> self. A nil start means 0.
+                let start = if arg1.is_nil() {
+                    0i64
+                } else {
+                    arg1.coerce_to_int_i64(vm, globals)?
+                };
                 let start = if start < 0 {
                     let s = ary.len() as i64 + start;
                     if s < 0 { 0i64 } else { s }
@@ -1395,10 +1409,8 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 } as usize;
                 if let Some(len_val) = lfp.try_arg(2) {
                     if len_val.is_nil() {
-                        // nil length means fill to end
-                        if start > ary.len() {
-                            fill_resize(&mut ary, start)?;
-                        }
+                        // nil length means fill to the current end; never
+                        // extends the array (a start past the end fills nothing).
                         let len = ary.len();
                         for i in start..len {
                             ary[i] = val;
@@ -1419,9 +1431,8 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                         }
                     }
                 } else {
-                    if start > ary.len() {
-                        fill_resize(&mut ary, start)?;
-                    }
+                    // fill(val, start) with no length fills to the current
+                    // end and never extends the array.
                     let len = ary.len();
                     for i in start..len {
                         ary[i] = val;

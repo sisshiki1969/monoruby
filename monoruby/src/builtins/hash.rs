@@ -9,7 +9,22 @@ use jitgen::{AbstractState, JitContext};
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
     let hash_meta = globals.store.get_metaclass(HASH_CLASS).id();
-    globals.define_builtin_funcs_with_effect(hash_meta, "new", &[], new, 0, 0, true, Effect::CAPTURE);
+    // `capacity:` is accepted (Ruby 4.0) as a sizing hint and ignored; kw_rest
+    // is false so any other keyword raises ArgumentError. The keyword-aware
+    // registration doesn't take an Effect, so attach CAPTURE (the block may be
+    // retained as the hash's default_proc) afterward.
+    let new_fid = globals.define_builtin_funcs_with_kw(
+        hash_meta,
+        "new",
+        &[],
+        new,
+        0,
+        0,
+        true,
+        &["capacity"],
+        false,
+    );
+    globals.store[new_fid].set_effect(Effect::CAPTURE);
     globals.store[HASH_CLASS].set_alloc_func(hash_alloc_func);
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
     globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
