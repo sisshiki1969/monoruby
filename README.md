@@ -77,8 +77,8 @@ steps:
 
 The action first tries to download a prebuilt binary attached to a GitHub
 release (built by the `release binaries` workflow), which installs in seconds:
-release tags use their own release's assets, while `@master` / `@latest` use
-the rolling `latest` nightly prerelease, rebuilt on every master push (so it
+release tags use their own release's assets, while `@master` / `@nightly` use
+the rolling `nightly` prerelease, rebuilt on every master push (so it
 can lag a just-pushed HEAD by one build, ~15 min). Automatic builds cover
 x86-64 Linux only; assets for Linux arm64 and macOS arm64 are published on
 demand by dispatching the `release binaries` workflow with the wanted tag and
