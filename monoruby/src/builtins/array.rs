@@ -122,6 +122,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "all?", all_, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "any?", any_, 0, 1, false);
     globals.define_builtin_funcs_with(ARRAY_CLASS, "detect", &["find"], detect, 0, 1, false);
+    globals.define_builtin_func_with(ARRAY_CLASS, "rfind", rfind, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "grep", grep, 1);
     globals.define_builtin_func(ARRAY_CLASS, "include?", include_, 1);
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
@@ -2983,17 +2984,78 @@ fn any_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/detect.html]
 #[monoruby_builtin]
-fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn detect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    find_inner(vm, globals, lfp, pc, false)
+}
+
+///
+/// #### Array#rfind
+///
+/// - rfind(ifnone = nil) {|item| ... } -> object
+///
+/// Like `#find`/`#detect`, but scans elements from the end of the array
+/// toward the front, returning the last element for which the block is
+/// truthy. Introduced in Ruby 4.0.
+#[monoruby_builtin]
+fn rfind(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    find_inner(vm, globals, lfp, pc, true)
+}
+
+/// Shared body for `Array#find`/`#detect` (`reverse == false`) and
+/// `Array#rfind` (`reverse == true`).
+///
+/// When no block is given, returns an `Enumerator` (with unknown size, so
+/// `enum.size` is `nil`) that captures the optional `ifnone` argument, so
+/// re-invoking it via `enum.each { ... }` still honours `ifnone`.
+fn find_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    reverse: bool,
+) -> Result<Value> {
     let self_val = lfp.self_val();
-    let bh = lfp.expect_block()?;
+    let bh = match lfp.block() {
+        Some(bh) => bh,
+        None => {
+            // No block: return an Enumerator that replays the ifnone arg.
+            let method = if reverse {
+                IdentId::get_id("rfind")
+            } else {
+                IdentId::get_id("find")
+            };
+            let args = match lfp.try_arg(0) {
+                Some(a) => vec![a],
+                None => vec![],
+            };
+            return vm.generate_enumerator(method, self_val, args, pc);
+        }
+    };
     let data = vm.get_block_data(globals, bh)?;
-    let mut i = 0;
-    while i < self_val.as_array().len() {
-        let elem = self_val.as_array()[i];
-        if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
-            return Ok(elem);
-        };
-        i += 1;
+    if reverse {
+        // Scan from the end. Re-read the length every step so the array
+        // shrinking mid-iteration (e.g. the block calls `clear`) is
+        // tolerated: an index that no longer exists is simply skipped.
+        let mut i = self_val.as_array().len();
+        while i > 0 {
+            i -= 1;
+            if i >= self_val.as_array().len() {
+                continue;
+            }
+            let elem = self_val.as_array()[i];
+            if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                return Ok(elem);
+            };
+        }
+    } else {
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                return Ok(elem);
+            };
+            i += 1;
+        }
     }
     // No element matched. CRuby: if an `ifnone` callable was given (and
     // is non-nil), call it with no arguments and return its value;
