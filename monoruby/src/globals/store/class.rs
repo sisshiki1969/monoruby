@@ -691,7 +691,7 @@ impl ClassInfo {
 }
 
 impl ClassInfoTable {
-    fn get_module(&self, class_id: ClassId) -> Module {
+    pub(crate) fn get_module(&self, class_id: ClassId) -> Module {
         self[class_id].object.unwrap()
     }
 

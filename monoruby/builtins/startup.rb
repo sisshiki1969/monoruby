@@ -771,13 +771,6 @@ class Thread
   # asynchronous interruption — #raise / #kill — is not implemented yet,
   # so there is nothing to mask).
 
-  # Interrupt masking: monoruby delivers no asynchronous interrupts yet,
-  # so just run the block (used by Bundler's connection_pool and by
-  # timeout).
-  def self.handle_interrupt(mask)
-    yield
-  end
-
   def self.each_caller_location
     caller_locations(1).each do |loc|
       yield loc

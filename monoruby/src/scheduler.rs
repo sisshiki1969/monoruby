@@ -43,7 +43,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::alloc::GC;
-use crate::value::rvalue::{PendingInterrupt, ThreadInner, ThreadState};
+use crate::value::rvalue::{InterruptTiming, PendingInterrupt, ThreadInner, ThreadState};
 use crate::*;
 
 thread_local! {
@@ -251,6 +251,11 @@ pub(crate) fn sleep(
     dur: Option<Duration>,
 ) -> Result<Duration> {
     ensure_main(vm);
+    // A pending interrupt allowed at blocking points fires *instead of*
+    // parking (also the case where it was queued while running).
+    let cur0 = SCHEDULER.with(|s| s.borrow().current.unwrap());
+    deliver_pending_now(globals, cur0, true)?;
+    set_park_blocking(cur0, true);
     let start = Instant::now();
     // An enormous duration (e.g. sleep(2**62)) must not overflow Instant
     // arithmetic — treat it as "sleep until woken".
@@ -263,7 +268,7 @@ pub(crate) fn sleep(
             s.sleepers.push((deadline, main));
         });
         scheduler_run(vm, globals)?;
-        take_main_pending()?;
+        take_main_pending(globals, true)?;
     } else {
         let cur = SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -280,6 +285,11 @@ pub(crate) fn sleep(
 /// `Thread.pass`: give every currently runnable thread a chance to run.
 pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
     ensure_main(vm);
+    // `Thread.pass` is a delivery point for `:immediate` interrupts but
+    // NOT for `:on_blocking` ones (it is not a blocking call).
+    let cur0 = SCHEDULER.with(|s| s.borrow().current.unwrap());
+    deliver_pending_now(globals, cur0, false)?;
+    set_park_blocking(cur0, false);
     if is_current_main() {
         // Dispatch the threads that are ready *now* (not the ones they
         // enqueue), then come back to main. Like `scheduler_run`, the
@@ -312,7 +322,7 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
             s.current = Some(main);
         });
         result?;
-        take_main_pending()
+        take_main_pending(globals, false)
     } else {
         let cur = SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -343,6 +353,8 @@ pub(crate) fn join(
     }
     let deadline = timeout.map(|d| Instant::now() + d);
     loop {
+        deliver_pending_now(globals, cur, true)?;
+        set_park_blocking(cur, true);
         if target.as_thread_inner().is_dead() {
             return Ok(true);
         }
@@ -363,7 +375,7 @@ pub(crate) fn join(
                 }
             });
             scheduler_run(vm, globals)?;
-            take_main_pending()?;
+            take_main_pending(globals, true)?;
         } else {
             SCHEDULER.with(|s| {
                 let mut s = s.borrow_mut();
@@ -380,6 +392,117 @@ pub(crate) fn join(
     }
 }
 
+/// The effective `handle_interrupt` timing for `thread`'s queued pending
+/// interrupt. Kill is unmaskable. For a raise, the innermost mask entry
+/// whose class covers the exception's class wins; default `Immediate`.
+fn pending_timing(store: &Store, thread: Value) -> Option<InterruptTiming> {
+    let inner = thread.as_thread_inner();
+    let pending = inner.pending.as_ref()?;
+    let exc_class = match pending {
+        PendingInterrupt::Kill => return Some(InterruptTiming::Immediate),
+        PendingInterrupt::Raise(err) => err.class_id(),
+    };
+    for frame in inner.masks.iter().rev() {
+        for (mask_class, timing) in frame {
+            let Some(mask_module) = mask_class.is_class_or_module() else {
+                continue;
+            };
+            // Class-hierarchy match: the exception class or any of its
+            // superclasses equals the mask class.
+            let mut m = Some(store.get_module(exc_class));
+            while let Some(cur) = m {
+                if cur.id() == mask_module.id() {
+                    return Some(*timing);
+                }
+                m = cur.superclass();
+            }
+        }
+    }
+    Some(InterruptTiming::Immediate)
+}
+
+/// Take `thread`'s pending interrupt and turn it into the error to raise.
+fn take_pending_as_error(mut thread: Value) -> Option<MonorubyErr> {
+    let inner = thread.as_thread_inner_mut();
+    match inner.pending.take()? {
+        PendingInterrupt::Kill => {
+            inner.killed = true;
+            Some(kill_unwind_error())
+        }
+        PendingInterrupt::Raise(err) => Some(err),
+    }
+}
+
+/// Deliver the current thread's pending interrupt *now* if its mask
+/// timing allows delivery in this context (`at_blocking`: a real
+/// blocking operation vs `Thread.pass` / handle_interrupt boundaries).
+/// Called at every park entry and at handle_interrupt entry/exit.
+pub(crate) fn deliver_pending_now(
+    globals: &mut Globals,
+    thread: Value,
+    at_blocking: bool,
+) -> Result<()> {
+    let allowed = match pending_timing(&globals.store, thread) {
+        None => false,
+        Some(InterruptTiming::Immediate) => true,
+        Some(InterruptTiming::OnBlocking) => at_blocking,
+        Some(InterruptTiming::Never) => false,
+    };
+    if allowed
+        && let Some(err) = take_pending_as_error(thread)
+    {
+        // Killing the main thread terminates the process.
+        let is_main = SCHEDULER.with(|s| s.borrow().main) == Some(thread);
+        if is_main && thread.as_thread_inner().killed {
+            let mut t = thread;
+            t.as_thread_inner_mut().killed = false;
+            return Err(MonorubyErr::new(MonorubyErrKind::SystemExit(0), "exit"));
+        }
+        return Err(err);
+    }
+    Ok(())
+}
+
+/// Whether `thread` has a queued pending interrupt (optionally filtered
+/// by exception class) — `Thread.pending_interrupt?`.
+pub(crate) fn pending_interrupt_p(store: &Store, thread: Value, filter: Option<Module>) -> bool {
+    let inner = thread.as_thread_inner();
+    let Some(pending) = inner.pending.as_ref() else {
+        return false;
+    };
+    let Some(filter) = filter else { return true };
+    let exc_class = match pending {
+        PendingInterrupt::Kill => return true,
+        PendingInterrupt::Raise(err) => err.class_id(),
+    };
+    let mut m = Some(store.get_module(exc_class));
+    while let Some(cur) = m {
+        if cur.id() == filter.id() {
+            return true;
+        }
+        m = cur.superclass();
+    }
+    false
+}
+
+/// Record whether the thread's imminent park is a blocking operation
+/// (vs `Thread.pass`) — consulted when a queued `:on_blocking` interrupt
+/// is delivered at resume.
+fn set_park_blocking(mut thread: Value, blocking: bool) {
+    thread.as_thread_inner_mut().park_blocking = blocking;
+}
+
+/// Push / pop a `handle_interrupt` mask frame on the current thread.
+pub(crate) fn push_interrupt_mask(vm: &mut Executor, mask: Vec<(Value, InterruptTiming)>) {
+    let mut cur = current_thread(vm);
+    cur.as_thread_inner_mut().masks.push(mask);
+}
+
+pub(crate) fn pop_interrupt_mask(vm: &mut Executor) {
+    let mut cur = current_thread(vm);
+    cur.as_thread_inner_mut().masks.pop();
+}
+
 /// Queue an asynchronous interrupt (`Thread#kill` / `#raise`) for
 /// `target` and wake it if parked. An interrupt aimed at the *current*
 /// thread is returned as `Err` for the caller to raise in place.
@@ -394,39 +517,40 @@ pub(crate) fn interrupt(
     // (allocation can trigger GC, which re-enters it for marking).
     let cur = SCHEDULER.with(|s| s.borrow().current.unwrap());
     if target == cur {
-        return Err(match int {
-            PendingInterrupt::Kill => {
-                if SCHEDULER.with(|s| s.borrow().main) == Some(target) {
-                    // Killing the main thread terminates the process.
-                    MonorubyErr::new(MonorubyErrKind::SystemExit(0), "exit")
-                } else {
-                    target.as_thread_inner_mut().killed = true;
-                    kill_unwind_error()
-                }
-            }
-            PendingInterrupt::Raise(err) => err,
-        });
+        // Self-targeted interrupts honor the current handle_interrupt
+        // mask: only `:immediate` delivers in place, everything else is
+        // queued for a later delivery point.
+        target.as_thread_inner_mut().pending = Some(int);
+        if pending_timing(&globals.store, target) == Some(InterruptTiming::Immediate) {
+            return deliver_pending_now(globals, target, false);
+        }
+        return Ok(());
     }
     if target.as_thread_inner().is_dead() {
         // CRuby: killing a dead thread is a no-op; raising into one is
         // also accepted (the exception is simply lost).
         return Ok(());
     }
-    SCHEDULER.with(|s| {
-        let mut s = s.borrow_mut();
-        let inner = target.as_thread_inner_mut();
-        inner.pending = Some(int);
-        // Wake a parked target so delivery happens promptly.
-        if matches!(
-            inner.state(),
-            ThreadState::Sleeping | ThreadState::Joining | ThreadState::IoWaiting
-        ) {
-            inner.state = ThreadState::Runnable;
-            if Some(target) != s.main {
-                s.ready.push_back(target);
+    target.as_thread_inner_mut().pending = Some(int);
+    // Wake a parked target so delivery happens promptly — unless the
+    // target's handle_interrupt mask defers it (`:never`); a parked
+    // thread counts as blocking, so `:on_blocking` wakes too.
+    let wake = pending_timing(&globals.store, target) != Some(InterruptTiming::Never);
+    if wake {
+        SCHEDULER.with(|s| {
+            let mut s = s.borrow_mut();
+            let inner = target.as_thread_inner_mut();
+            if matches!(
+                inner.state(),
+                ThreadState::Sleeping | ThreadState::Joining | ThreadState::IoWaiting
+            ) {
+                inner.state = ThreadState::Runnable;
+                if Some(target) != s.main {
+                    s.ready.push_back(target);
+                }
             }
-        }
-    });
+        });
+    }
     Ok(())
 }
 
@@ -440,20 +564,10 @@ fn kill_unwind_error() -> MonorubyErr {
 
 /// Deliver a pending interrupt queued for the *main* thread. Called
 /// after the scheduler returns control to a main-thread park.
-fn take_main_pending() -> Result<()> {
-    let pending = SCHEDULER.with(|s| {
-        let s = s.borrow();
-        let mut main = s.main.unwrap();
-        main.as_thread_inner_mut().pending.take()
-    });
-    match pending {
-        None => Ok(()),
-        // Killing the main thread terminates the process (CRuby).
-        Some(PendingInterrupt::Kill) => {
-            Err(MonorubyErr::new(MonorubyErrKind::SystemExit(0), "exit"))
-        }
-        Some(PendingInterrupt::Raise(err)) => Err(err),
-    }
+fn take_main_pending(globals: &mut Globals, at_blocking: bool) -> Result<()> {
+    let main = SCHEDULER.with(|s| s.borrow().main.unwrap());
+    // The handle_interrupt mask still applies at this delivery point.
+    deliver_pending_now(globals, main, at_blocking)
 }
 
 /// Park the current thread until `fd` reports one of `events` (or the
@@ -477,6 +591,9 @@ pub(crate) fn wait_fds(
     deadline: Option<Instant>,
 ) -> Result<()> {
     ensure_main(vm);
+    let cur0 = SCHEDULER.with(|s| s.borrow().current.unwrap());
+    deliver_pending_now(globals, cur0, true)?;
+    set_park_blocking(cur0, true);
     if is_current_main() {
         SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -492,7 +609,7 @@ pub(crate) fn wait_fds(
         let result = scheduler_run(vm, globals);
         unregister_io_waiter(SCHEDULER.with(|s| s.borrow().main.unwrap()));
         result?;
-        take_main_pending()
+        take_main_pending(globals, true)
     } else {
         let cur = SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -739,12 +856,21 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
     }
     // The kill tag allocates; do it outside the scheduler borrow.
     let kill_err = kill_unwind_error();
+    // Whether the queued interrupt (if any) may be delivered at this
+    // resume, per the target's handle_interrupt mask. The park kind
+    // (blocking vs Thread.pass) was recorded at park time.
+    let deliverable = match pending_timing(&globals.store, thread) {
+        None => false,
+        Some(InterruptTiming::Immediate) => true,
+        Some(InterruptTiming::OnBlocking) => thread.as_thread_inner().park_blocking,
+        Some(InterruptTiming::Never) => false,
+    };
     let entry = SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
         s.current = Some(thread);
         let inner = thread.as_thread_inner_mut();
-        let pending = inner.pending.take();
         if inner.state() == ThreadState::Created {
+            let pending = inner.pending.take();
             match pending {
                 Some(PendingInterrupt::Kill) => return Entry::Skip(None),
                 Some(PendingInterrupt::Raise(err)) => return Entry::Skip(Some(err)),
@@ -759,7 +885,13 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
         } else {
             inner.state = ThreadState::Runnable;
             let exec = inner.resume_exec.take().unwrap().as_ptr();
-            match pending {
+            if !deliverable {
+                // A masked pending interrupt stays queued; resume the
+                // thread normally (it re-parks or delivers later at an
+                // allowed point).
+                return Entry::Resume(exec);
+            }
+            match inner.pending.take() {
                 None => Entry::Resume(exec),
                 Some(int) => {
                     let err = match int {
