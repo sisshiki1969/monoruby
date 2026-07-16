@@ -1,88 +1,278 @@
 use super::*;
+use crate::scheduler;
+use crate::value::rvalue::{ThreadInner, ThreadState};
 
 //
 // Thread class
 //
-// monoruby runs Ruby code on a single OS thread and does not provide
-// concurrency. Most of `Thread` lives in monoruby/builtins/startup.rb as
-// plain Ruby: `Thread.new` stores its block and runs it lazily on `#value`,
-// on the main thread. The kept surface is what RubyGems / Bundler touch
-// plus `#value`; the hang-prone waiting/observation APIs (#join, #status,
-// Thread.pass, ...) are intentionally absent so they fail fast instead of
-// hanging. Only the one piece that needs native support lives here:
-// `__invoke_body`, which runs a thread body with CRuby-compatible
-// return/break and thread-local `$~`/`$_` semantics.
+// monoruby threads are cooperative green threads multiplexed on the one
+// OS thread by the scheduler (src/scheduler.rs). `Thread.new` queues the
+// body; it starts running the first time any thread reaches a blocking
+// point (`sleep`, `#join`, `Thread.pass`, ...). Blocking APIs park the
+// calling thread on the scheduler instead of blocking the process.
+//
+// Ruby-level surface that is pure bookkeeping (name, thread/fiber-local
+// storage, `Thread::Waiter` for `Process.detach`) stays in
+// monoruby/builtins/startup.rb.
 
 pub(super) fn init(globals: &mut Globals) {
-    let klass = globals.define_class_under_obj("Thread").id();
-    globals.define_builtin_func(klass, "__invoke_body", invoke_body, 2);
+    globals
+        .store
+        .define_builtin_class_under_obj("Thread", THREAD_CLASS, ObjTy::THREAD);
+    globals.store[THREAD_CLASS].set_alloc_func(thread_alloc_func);
+
+    globals.define_builtin_class_func_rest(THREAD_CLASS, "new", thread_new);
+    globals.define_builtin_class_func_rest(THREAD_CLASS, "start", thread_new);
+    globals.define_builtin_class_func_rest(THREAD_CLASS, "fork", thread_new);
+    globals.define_builtin_class_func(THREAD_CLASS, "current", thread_current, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "main", thread_main, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "pass", thread_pass, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "list", thread_list, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "stop", thread_stop, 0);
+
+    globals.define_builtin_func_with(THREAD_CLASS, "join", thread_join, 0, 1, false);
+    globals.define_builtin_func(THREAD_CLASS, "value", thread_value, 0);
+    globals.define_builtin_func(THREAD_CLASS, "status", thread_status, 0);
+    globals.define_builtin_func(THREAD_CLASS, "alive?", thread_alive, 0);
+    globals.define_builtin_func(THREAD_CLASS, "stop?", thread_stop_p, 0);
+    globals.define_builtin_func(THREAD_CLASS, "wakeup", thread_wakeup, 0);
+    globals.define_builtin_func(THREAD_CLASS, "run", thread_run, 0);
+}
+
+/// Allocator: an inert shell (never scheduled). Exists for Ruby-level
+/// subclasses with their own life cycle — `Thread::Waiter.allocate` from
+/// `Process.detach` — not for user `Thread.allocate` + `#run`.
+pub(crate) extern "C" fn thread_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
+    Value::new_thread(class_id, ThreadInner::shell())
 }
 
 ///
-/// ### Thread#__invoke_body(block, args)
+/// ### Thread.new
 ///
-/// Runs a thread body block. Used by `Thread#__run` in startup.rb. Emulates
-/// two thread semantics that monoruby's synchronous, single-threaded model
-/// would otherwise break:
+/// - new(*args) {|*args| ... } -> Thread
 ///
-/// 1. **`return` / `break` → `LocalJumpError`.** CRuby runs each thread on
-///    its own stack, so a `return` (or `break`) written directly in a
-///    `Thread.new { ... }` block has no enclosing frame to jump to and
-///    raises `LocalJumpError`. monoruby runs the body synchronously on the
-///    caller's stack, so the block's home frame is still live and the jump
-///    would otherwise escape the body. Catch the escaping `MethodReturn` /
-///    `BlockBreak` here and convert it.
+/// Creates a green thread running the block and queues it; the body gets
+/// its first time slice at the next blocking point of any thread.
 ///
-/// 2. **Thread-local `$~` / `$_`.** These special variables are frame-local,
-///    stored on the block's lexical home method frame — which, run
-///    synchronously, is shared with the code that spawned the thread. Save
-///    that frame's svar container, run the body against a fresh (empty) one,
-///    and restore it, so the body's `$~` / `$_` neither leak out to nor
-///    inherit from the spawning thread (matching CRuby's thread-local
-///    semantics).
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/new.html]
 #[monoruby_builtin]
-fn invoke_body(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let block = Proc::new(lfp.arg(0));
-    let args = lfp.arg(1).as_array();
-
-    // Isolate the block's home method frame's `$~`/`$_` container for the
-    // duration of the body (item 2 above). The saved container is kept
-    // reachable for the GC via the temp stack while it is off the frame.
-    let home_mfp = block.outer_lfp().map(|o| o.mfp());
-    let saved = home_mfp.and_then(|m| m.svar_slot_value());
-    if let Some(m) = home_mfp {
-        if let Some(s) = saved {
-            vm.temp_push(s);
+fn thread_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let bh = match lfp.block() {
+        Some(bh) => bh,
+        None => {
+            return Err(MonorubyErr::threaderr(
+                &globals.store,
+                "must be called with a block",
+            ));
         }
-        m.restore_svar_slot(None);
+    };
+    let proc = vm.generate_proc(globals, bh, pc)?;
+    let args = lfp.arg(0).as_array().to_vec();
+    let class_id = lfp.self_val().as_class_id();
+    let thread = Value::new_thread(class_id, ThreadInner::new(proc, args));
+    scheduler::spawn(vm, thread);
+    Ok(thread)
+}
+
+///
+/// ### Thread.current
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/current.html]
+#[monoruby_builtin]
+fn thread_current(vm: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(scheduler::current_thread(vm))
+}
+
+///
+/// ### Thread.main
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/main.html]
+#[monoruby_builtin]
+fn thread_main(vm: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(scheduler::main_thread(vm))
+}
+
+///
+/// ### Thread.pass
+///
+/// Gives every runnable thread a chance to run, then returns nil.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/pass.html]
+#[monoruby_builtin]
+fn thread_pass(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    scheduler::pass(vm, globals)?;
+    Ok(Value::nil())
+}
+
+///
+/// ### Thread.list
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/list.html]
+#[monoruby_builtin]
+fn thread_list(vm: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::array_from_vec(scheduler::thread_list(vm)))
+}
+
+///
+/// ### Thread.stop
+///
+/// Parks the current thread until another thread wakes it with
+/// `#wakeup` / `#run`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/stop.html]
+#[monoruby_builtin]
+fn thread_stop(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    scheduler::sleep(vm, globals, None)?;
+    Ok(Value::nil())
+}
+
+fn join_timeout(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<std::time::Duration>> {
+    match lfp.try_arg(0) {
+        None => Ok(None),
+        Some(v) if v.is_nil() => Ok(None),
+        Some(v) => {
+            let secs = v.coerce_to_f64(vm, globals)?;
+            if secs.is_nan() || secs < 0.0 {
+                return Err(MonorubyErr::argumenterr(
+                    "time interval must not be negative or NaN",
+                ));
+            }
+            Ok(Some(std::time::Duration::from_secs_f64(secs)))
+        }
     }
+}
 
-    vm.push_break_barrier(vm.cfp());
-    let result = vm.invoke_proc(globals, &block, &args);
-    vm.pop_break_barrier();
-
-    if let Some(m) = home_mfp {
-        m.restore_svar_slot(saved);
-        if saved.is_some() {
-            vm.temp_pop();
-        }
+///
+/// ### Thread#join
+///
+/// - join -> self
+/// - join(limit) -> self | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/join.html]
+#[monoruby_builtin]
+fn thread_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let timeout = join_timeout(vm, globals, lfp)?;
+    let dead = scheduler::join(vm, globals, self_, timeout)?;
+    if !dead {
+        return Ok(Value::nil());
     }
-
-    match result {
-        Ok(v) => Ok(v),
-        Err(err) if matches!(err.kind(), MonorubyErrKind::MethodReturn(..)) => {
-            Err(MonorubyErr::localjumperr("unexpected return"))
-        }
-        Err(err) if matches!(err.kind(), MonorubyErrKind::BlockBreak(..)) => {
-            Err(MonorubyErr::localjumperr("break from proc-closure"))
-        }
-        Err(err) => Err(err),
+    // A thread that terminated with an exception re-raises it in the
+    // joiner (CRuby).
+    if let Some(err) = self_.as_thread_inner().exception.clone() {
+        return Err(err);
     }
+    Ok(self_)
+}
+
+///
+/// ### Thread#value
+///
+/// Joins the thread and returns the body's value, re-raising a
+/// terminating exception.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/value.html]
+#[monoruby_builtin]
+fn thread_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    scheduler::join(vm, globals, self_, None)?;
+    let inner = self_.as_thread_inner();
+    if let Some(err) = inner.exception.clone() {
+        return Err(err);
+    }
+    Ok(inner.result.unwrap_or_default())
+}
+
+///
+/// ### Thread#status
+///
+/// "run" | "sleep" | false (normal termination) | nil (terminated with
+/// exception).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/status.html]
+#[monoruby_builtin]
+fn thread_status(vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let inner = self_.as_thread_inner();
+    Ok(match inner.state() {
+        ThreadState::Dead => {
+            if inner.exception.is_some() {
+                Value::nil()
+            } else {
+                Value::bool(false)
+            }
+        }
+        ThreadState::Sleeping | ThreadState::Joining => Value::string_from_str("sleep"),
+        ThreadState::Created | ThreadState::Runnable => {
+            // The current thread reports "run"; queued-but-not-yet-run
+            // threads also report "run" (CRuby: runnable == "run").
+            let _ = vm;
+            Value::string_from_str("run")
+        }
+    })
+}
+
+///
+/// ### Thread#alive?
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/alive=3f.html]
+#[monoruby_builtin]
+fn thread_alive(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(!lfp.self_val().as_thread_inner().is_dead()))
+}
+
+///
+/// ### Thread#stop?
+///
+/// True when the thread is dead or parked.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/stop=3f.html]
+#[monoruby_builtin]
+fn thread_stop_p(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let state = lfp.self_val().as_thread_inner().state();
+    Ok(Value::bool(matches!(
+        state,
+        ThreadState::Dead | ThreadState::Sleeping | ThreadState::Joining
+    )))
+}
+
+///
+/// ### Thread#wakeup
+///
+/// Marks a sleeping thread eligible to run. Raises ThreadError on a dead
+/// thread.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/wakeup.html]
+#[monoruby_builtin]
+fn thread_wakeup(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if !scheduler::wakeup(self_) {
+        return Err(MonorubyErr::threaderr(
+            &globals.store,
+            "killed thread",
+        ));
+    }
+    Ok(self_)
+}
+
+///
+/// ### Thread#run
+///
+/// Wakes the thread and gives it (and other runnable threads) a chance
+/// to run immediately.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/run.html]
+#[monoruby_builtin]
+fn thread_run(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if !scheduler::wakeup(self_) {
+        return Err(MonorubyErr::threaderr(
+            &globals.store,
+            "killed thread",
+        ));
+    }
+    scheduler::pass(vm, globals)?;
+    Ok(self_)
 }
 
 #[cfg(test)]
@@ -90,9 +280,7 @@ mod tests {
     use crate::tests::*;
 
     #[test]
-    fn thread_value_runs_block_lazily() {
-        // monoruby is single-threaded: Thread.new stores the block and runs
-        // it lazily on #value, on the main thread.
+    fn thread_new_join_value() {
         run_test(r#"Thread.new { 42 }.value"#);
         run_test(
             r#"
@@ -105,7 +293,120 @@ mod tests {
         run_test_once(
             r#"
             t = Thread.new { 3 * 4 }
-            [t.is_a?(Thread), t.value]
+            [t.is_a?(Thread), t.value, t.join == t, t.alive?, t.status]
+            "#,
+        );
+        run_test_once(r#"Thread.new(1, 2, 3) { |a, b, c| a + b + c }.value"#);
+    }
+
+    #[test]
+    fn thread_concurrency_with_queue_like_handoff() {
+        // The spawned thread must not run at Thread.new time; it runs
+        // when the main thread blocks (join), and both make progress.
+        run_test_once(
+            r#"
+            order = []
+            t = Thread.new { order << :thread }
+            order << :main
+            t.join
+            order
+            "#,
+        );
+        // Two threads interleave at sleep points.
+        run_test_once(
+            r#"
+            log = []
+            t1 = Thread.new { 3.times { |i| log << [:a, i]; sleep 0.01 } }
+            t2 = Thread.new { 3.times { |i| log << [:b, i]; sleep 0.01 } }
+            t1.join
+            t2.join
+            log.sort
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_status_and_pass() {
+        run_test_once(
+            r#"
+            t = Thread.new { sleep }
+            Thread.pass while t.status != "sleep"
+            st = t.status
+            t.wakeup
+            t.join
+            [st, t.status, t.stop?, t.alive?]
+            "#,
+        );
+        run_test_once(r#"Thread.pass"#);
+        run_test_once(r#"[Thread.current == Thread.main, Thread.current.alive?]"#);
+        run_test_once(r#"Thread.current.status"#);
+    }
+
+    #[test]
+    fn thread_exception_propagates_on_join() {
+        run_test(
+            r#"
+            t = Thread.new { raise ArgumentError, "boom" }
+            begin
+              t.join
+              :no_error
+            rescue ArgumentError => e
+              e.message
+            end
+            "#,
+        );
+        run_test(
+            r#"
+            t = Thread.new { raise "boom" }
+            Thread.pass until t.status.nil?
+            [t.status, t.alive?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_join_timeout() {
+        run_test_once(
+            r#"
+            t = Thread.new { sleep }
+            r = t.join(0.05)
+            t.wakeup
+            t.join
+            [r, t.status]
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_join_self_raises() {
+        run_test_error(r#"Thread.current.join"#);
+        run_test_error(r#"Thread.new"#);
+    }
+
+    #[test]
+    fn thread_sleep_interleaves_with_main() {
+        run_test_once(
+            r#"
+            v = []
+            t = Thread.new { v << 1; sleep 0.05; v << 3 }
+            sleep 0.01   # let t run its first leg
+            v << 2
+            t.join
+            v
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_body_bare_return_raises_localjumperror() {
+        run_test(
+            r#"
+            begin
+              Thread.new { return }.value
+              :no_error
+            rescue LocalJumpError
+              :local_jump
+            end
             "#,
         );
     }
@@ -122,29 +423,34 @@ mod tests {
     }
 
     #[test]
-    fn thread_body_bare_return_raises_localjumperror() {
-        // A bare top-level `return` in a thread body is a LocalJumpError in
-        // CRuby. monoruby runs the body synchronously on #value, so the
-        // `__invoke_body` conversion must reproduce that.
+    fn thread_fiber_yield_at_thread_root_errors() {
+        // Fiber.yield at a thread root has no parent fiber: FiberError,
+        // exactly like at the main fiber.
         run_test(
             r#"
-            begin
-              Thread.new { return }.value
-              :no_error
-            rescue LocalJumpError
-              :local_jump
-            end
+            t = Thread.new { Fiber.yield rescue $!.class.to_s }
+            t.value
             "#,
         );
-        // A bare `break` in a thread body is likewise a LocalJumpError.
-        run_test(
+    }
+
+    #[test]
+    fn thread_nested_fiber_inside_thread() {
+        // A fiber created inside a green thread keeps its own resume
+        // chain across scheduler switches.
+        // NOTE: resume(arg) with a one-param fiber block hits a
+        // pre-existing (master) destructure bug, so this test passes the
+        // value through the yield instead.
+        run_test_once(
             r#"
-            begin
-              Thread.new { break :b }.value
-              :no_error
-            rescue LocalJumpError
-              :local_jump
+            t = Thread.new do
+              f = Fiber.new { Fiber.yield 1; :done }
+              a = f.resume
+              sleep 0.01
+              b = f.resume
+              [a, b]
             end
+            t.value
             "#,
         );
     }

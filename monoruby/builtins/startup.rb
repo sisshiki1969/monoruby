@@ -758,78 +758,22 @@ class Fiber
 end
 
 class Thread
-  # monoruby runs on a single OS thread and does NOT provide concurrency.
-  # `Thread` exists only so that RubyGems / Bundler — and the little stdlib
-  # that references it — load and run. `Thread.new` / `Thread.start` store
-  # the block and run it lazily, on the *single* main thread, the first time
-  # its result is demanded via `#value` (used by rubygems' request_set and
-  # by `Class#subclasses`-style specs).
+  # monoruby threads are cooperative green threads multiplexed on the one
+  # OS thread by the native scheduler (src/scheduler.rs). The native side
+  # provides: Thread.new / .start / .fork (queue a body), .current /
+  # .main / .list / .pass / .stop, and #join / #value / #status /
+  # #alive? / #stop? / #wakeup / #run. Blocking APIs park the calling
+  # thread on the scheduler; a body starts running the first time any
+  # thread reaches a blocking point.
   #
-  # APIs that presuppose a real scheduler observing a *running* body — `#join`,
-  # `#kill`, `#run`, `#wakeup`, `#raise`, `#status`, `#alive?`, `#stop?`,
-  # `Thread.pass`, `Thread.stop`, `#report_on_exception`, ... — are deliberately
-  # NOT defined. On one OS thread they could only hang (a body never runs on
-  # its own, so a `Thread.pass until flag` / `#join` waiting on it spins
-  # forever) or report fictional state, so they fail fast with NoMethodError
-  # instead of hanging a ruby/spec run. `#value` is the one body-runner kept
-  # (it terminates or fails fast — a body that blocks forever on another
-  # thread instead runs to a no-op here); the hang-prone waiting/observation
-  # APIs above are gone. The rest of the kept surface is exactly what RubyGems
-  # / Bundler touch: identity (`current`), a name, thread-/fiber-local storage,
-  # an interrupt-mask no-op, and the Mutex / Queue / ConditionVariable shells
-  # (all trivial — there is nothing to contend for).
+  # This Ruby side keeps only the pure-bookkeeping surface: a name,
+  # thread-/fiber-local storage, and an interrupt-mask no-op (real
+  # asynchronous interruption — #raise / #kill — is not implemented yet,
+  # so there is nothing to mask).
 
-  def initialize(*args, &block)
-    @block = block
-    @args = args
-    @ran = false
-    @value = nil
-    @exception = nil
-    @fiber_locals = {}
-    @thread_variables = {}
-    @name = nil
-  end
-
-  def self.current
-    @@current
-  end
-  @@current = new
-
-  # Run the stored block (once) on the main thread and return its value.
-  # monoruby is single-threaded, so this is where a `Thread.new` body
-  # actually executes. Re-raises a body that raised (matching CRuby's
-  # `#value`). `#join` and the status/observation APIs are intentionally
-  # absent — see the class comment.
-  def value
-    __run
-    raise @exception if @exception
-    @value
-  end
-
-  def __run
-    return if @ran
-    @ran = true
-    begin
-      # Route through the native helper so a bare `return` / `break` in the
-      # body raises LocalJumpError (as in CRuby) rather than escaping the
-      # synchronously-run block.
-      @value = @block ? __invoke_body(@block, @args) : nil
-    rescue => e
-      @exception = e
-    end
-    self
-  end
-  private :__run
-  private :__invoke_body
-
-  # `Thread.start` is an alias of `Thread.new` in CRuby.
-  def self.start(*args, &block)
-    new(*args, &block)
-  end
-
-  # With a single thread there is nothing to mask against asynchronous
-  # interruption, so just run the block (used by Bundler's connection_pool
-  # and by timeout).
+  # Interrupt masking: monoruby delivers no asynchronous interrupts yet,
+  # so just run the block (used by Bundler's connection_pool and by
+  # timeout).
   def self.handle_interrupt(mask)
     yield
   end
@@ -842,20 +786,22 @@ class Thread
 
   attr_accessor :name
 
+  # Thread objects are native (ObjTy::THREAD) and no longer run a Ruby
+  # initialize, so the local-storage tables are created lazily.
   def [](key)
-    @fiber_locals[key]
+    @fiber_locals && @fiber_locals[key]
   end
 
   def []=(key, value)
-    @fiber_locals[key] = value
+    (@fiber_locals ||= {})[key] = value
   end
 
   def thread_variable_get(key)
-    @thread_variables[key]
+    @thread_variables && @thread_variables[key]
   end
 
   def thread_variable_set(key, value)
-    @thread_variables[key] = value
+    (@thread_variables ||= {})[key] = value
   end
 
   # The object returned by `Process.detach`. Reaping one specific child via
@@ -865,11 +811,20 @@ class Thread
   # (`Errno::ECHILD`) yields nil, matching CRuby. This is what keeps Open3's
   # `wait_thr.value` / `wait_thr.join` working.
   class Waiter < Thread
-    def initialize(pid)
-      super()
+    # The native Thread.new requires a block (it queues a green thread);
+    # a Waiter is an inert shell around one specific child pid, so build
+    # it via allocate.
+    def self.new(pid)
+      w = allocate
+      w.__send__(:__init_waiter, pid)
+      w
+    end
+
+    def __init_waiter(pid)
       @pid = pid
       self[:pid] = pid
     end
+    private :__init_waiter
 
     attr_reader :pid
 

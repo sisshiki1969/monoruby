@@ -50,6 +50,7 @@ mod globals;
 mod id_table;
 pub mod parser;
 mod ruby_probe;
+mod scheduler;
 pub mod tests;
 mod value;
 mod watchdog;

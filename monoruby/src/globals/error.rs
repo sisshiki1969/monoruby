@@ -1056,6 +1056,19 @@ impl MonorubyErr {
 
     /// `EOFError` (a subclass of `IOError` defined in Ruby). Falls
     /// back to a plain `IOError` if the class can't be resolved.
+    /// `ThreadError` (defined in Ruby in startup.rb). Falls back to a
+    /// plain `RuntimeError` if the class can't be resolved.
+    pub(crate) fn threaderr(store: &Store, msg: impl ToString) -> MonorubyErr {
+        let cid = store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("ThreadError"))
+            .and_then(|v| v.is_class_or_module())
+            .map(|m| m.id());
+        match cid {
+            Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg.to_string()),
+            None => MonorubyErr::new(MonorubyErrKind::Runtime, msg.to_string()),
+        }
+    }
+
     pub(crate) fn eoferr(store: &Store, msg: impl ToString) -> MonorubyErr {
         let cid = store
             .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("EOFError"))

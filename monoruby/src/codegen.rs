@@ -59,6 +59,18 @@ pub(crate) type BlockInvoker = extern "C" fn(
 
 pub(crate) type BindingInvoker = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
 
+/// First activation of a green thread: the executor passed first IS the
+/// thread's own executor (its `rsp_save` holds the fresh stack top); the
+/// calling scheduler context is saved into the `SCHED_RSP` slot.
+pub(crate) type ThreadInvoker = extern "C" fn(
+    &mut Executor,
+    &mut Globals,
+    &ProcData,
+    Value,
+    *const Value,
+    usize,
+) -> Option<Value>;
+
 pub(crate) type FiberInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
@@ -655,6 +667,9 @@ pub struct Codegen {
     pub(crate) fiber_invoker_with_self: FiberInvoker,
     pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
+    pub(crate) thread_invoker: ThreadInvoker,
+    pub(crate) switch_to_scheduler: extern "C" fn(*mut Executor, Value) -> Option<Value>,
+    pub(crate) scheduler_resume: extern "C" fn(*mut Executor, Value) -> Option<Value>,
     pub(crate) startup_flag: bool,
     /// (§9a-ii) When `Some`, `encode_linst*` and the per-arch fallthrough buffer
     /// the lowered `LInst`s here instead of emitting, so the region driver
@@ -937,6 +952,9 @@ impl Codegen {
         let fiber_invoker_with_self = jit.fiber_invoker_with_self();
         let resume_fiber = jit.resume_fiber();
         let yield_fiber = jit.yield_fiber();
+        let thread_invoker = jit.thread_invoker();
+        let switch_to_scheduler = jit.switch_to_scheduler();
+        let scheduler_resume = jit.scheduler_resume();
 
         let mut codegen = Self {
             jit,
@@ -967,6 +985,9 @@ impl Codegen {
             fiber_invoker_with_self,
             resume_fiber,
             yield_fiber,
+            thread_invoker,
+            switch_to_scheduler,
+            scheduler_resume,
             startup_flag: false,
             lir_buf: None,
             #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
