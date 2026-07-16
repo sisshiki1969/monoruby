@@ -2820,6 +2820,25 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let now = std::time::Instant::now();
+    // With other live green threads, sleeping must yield to the
+    // scheduler so they run during the wait (and a no-duration sleep
+    // parks until Thread#wakeup instead of returning immediately).
+    if crate::scheduler::has_other_live_threads() {
+        let dur = match lfp.try_arg(0) {
+            Some(sec) => {
+                let sec = sec.coerce_to_f64(vm, globals)?;
+                if sec.is_nan() || sec < 0.0 {
+                    return Err(MonorubyErr::argumenterr(
+                        "time interval must not be negative or NaN",
+                    ));
+                }
+                Some(std::time::Duration::from_secs_f64(sec))
+            }
+            None => None,
+        };
+        let elapsed = crate::scheduler::sleep(vm, globals, dur)?;
+        return Ok(Value::integer(elapsed.as_secs() as i64));
+    }
     if let Some(sec) = lfp.try_arg(0) {
         let sec = sec.coerce_to_f64(vm, globals)?;
         if sec.is_nan() || sec < 0.0 {

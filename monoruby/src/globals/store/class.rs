@@ -76,6 +76,7 @@ pub const ARITHMETIC_SEQUENCE_CLASS: ClassId = ClassId::new(55);
 pub const SIGNAL_EXCEPTION_CLASS: ClassId = ClassId::new(56);
 pub const INTERRUPT_CLASS: ClassId = ClassId::new(57);
 pub const IO_BUFFER_CLASS: ClassId = ClassId::new(58);
+pub const THREAD_CLASS: ClassId = ClassId::new(59);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
