@@ -1083,15 +1083,16 @@ impl Codegen {
         let Some(codeptr) = self.signal_stubs.get(&signo) else {
             return false;
         };
+        // No SA_RESTART, deliberately (like CRuby): a signal must EINTR a
+        // blocking syscall so the interpreter can reach a poll point and
+        // convert the pending signal. With SA_RESTART, a read(2) that has
+        // transferred 0 bytes is transparently restarted by the kernel and
+        // a process blocked on an idle pipe can never be terminated by
+        // SIGTERM. The blocking primitives (value/rvalue/io.rs, sleep,
+        // waitpid, select) all retry bare EINTRs themselves.
         // SAFETY: codeptr is a stable pointer into the finalized JIT
-        // buffer; SA_RESTART matches the startup install.
-        unsafe {
-            Self::sigaction_to(
-                signo,
-                codeptr.as_ptr() as libc::sighandler_t,
-                libc::SA_RESTART,
-            )
-        }
+        // buffer.
+        unsafe { Self::sigaction_to(signo, codeptr.as_ptr() as libc::sighandler_t, 0) }
     }
 
     /// Set `signo` to `SIG_IGN` (silently discard).

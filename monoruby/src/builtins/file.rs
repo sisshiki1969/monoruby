@@ -1147,18 +1147,19 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn write(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let data = lfp.arg(0).as_array();
-    let mut self_ = lfp.self_val();
     let mut count = 0i64;
     for s in data.iter() {
-        if let Some(bytes) = s.is_rstring_inner() {
-            count += bytes.len() as i64;
-            self_.as_io_inner_mut().write(bytes)?;
+        let bytes = if let Some(bytes) = s.is_rstring_inner() {
+            bytes.to_vec()
         } else {
             let s_str = vm.invoke_tos(globals, *s)?;
-            let bytes = s_str.expect_bytes(&globals.store)?;
-            count += bytes.len() as i64;
-            self_.as_io_inner_mut().write(bytes)?;
-        }
+            s_str.expect_bytes(&globals.store)?.to_vec()
+        };
+        count += bytes.len() as i64;
+        let mut done = 0;
+        super::io::blocking_region(vm, globals, || {
+            lfp.self_val().as_io_inner_mut().write(&bytes, &mut done)
+        })?;
     }
     Ok(Value::integer(count))
 }
