@@ -22,6 +22,7 @@ pub use fiber::*;
 pub use thread::*;
 pub use hash::*;
 pub use io::{fd_is_owned, IoInner, NonblockRead, NonblockWrite};
+pub(crate) use io::NonblockGuard;
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
 pub use method::*;

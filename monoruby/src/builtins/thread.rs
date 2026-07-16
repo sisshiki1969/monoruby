@@ -729,6 +729,94 @@ mod tests {
     }
 
     #[test]
+    fn thread_blocking_io_midway_yields_to_scheduler() {
+        // read(n) needing more bytes than the pipe holds: the reader
+        // consumes the first chunk, parks *mid-operation*, and finishes
+        // when the rest arrives (entry-only parking would block the
+        // process here).
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { r.read(6) }
+            w.write "abc"
+            Thread.pass while t.status != "sleep"
+            w.write "def"
+            t.value
+            "#,
+        );
+        // gets parking mid-line: the separator arrives after a partial
+        // line was already consumed.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { r.gets }
+            w.write "hel"
+            Thread.pass while t.status != "sleep"
+            w.write "lo\n"
+            t.value
+            "#,
+        );
+        // Slurping read (no length) across several chunks, then EOF.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { r.read }
+            w.write "a" * 100
+            Thread.pass while t.status != "sleep"
+            w.write "b" * 100
+            Thread.pass while t.status != "sleep"
+            w.close
+            t.value
+            "#,
+        );
+        // A write larger than the pipe capacity: the writer parks
+        // mid-write while main drains; nothing is lost or duplicated.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            data = "xyz" * 70_000
+            t = Thread.new { n = w.write(data); w.close; n }
+            got = r.read
+            [t.value, got.size, got == data]
+            "#,
+        );
+        // readpartial parking mid-operation (needs at least one byte).
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { r.readpartial(10) }
+            Thread.pass while t.status != "sleep"
+            w.write "pq"
+            t.value
+            "#,
+        );
+        // An fd left non-blocking by read_nonblock: buffered reads on it
+        // must still act blocking (CRuby waits instead of raising EAGAIN),
+        // including with no other live threads.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            a = r.read_nonblock(1, exception: false)
+            w.write "hello"
+            w.close
+            [a, r.read]
+            "#,
+        );
+        // Same, with the wait actually exercised: the reader parks on the
+        // non-blocking fd until the writer thread supplies data.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            a = r.read_nonblock(1, exception: false)
+            t = Thread.new { sleep 0.02; w.write "k"; w.close }
+            v = r.read
+            t.join
+            [a, v]
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_handle_interrupt_masking() {
         // Shared driver mirroring ruby/spec's handle_interrupt fixture:
         // raise into a thread inside a handle_interrupt block, observe
