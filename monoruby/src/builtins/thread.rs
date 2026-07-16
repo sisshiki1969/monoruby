@@ -423,6 +423,138 @@ mod tests {
     }
 
     #[test]
+    fn mutex_lock_unlock_contention() {
+        run_test_once(
+            r#"
+            m = Mutex.new
+            counter = 0
+            ts = 4.times.map do
+              Thread.new { 50.times { m.synchronize { c = counter; sleep 0.0001; counter = c + 1 } } }
+            end
+            ts.each(&:join)
+            counter
+            "#,
+        );
+        run_test_once(
+            r#"
+            m = Mutex.new
+            r = [m.locked?, m.try_lock, m.locked?, m.owned?, m.try_lock]
+            m.unlock
+            r << m.locked?
+            begin; m.unlock; rescue ThreadError; r << :not_locked; end
+            m.lock
+            begin; m.lock; rescue ThreadError; r << :recursive; end
+            m.unlock
+            r
+            "#,
+        );
+        run_test_once(
+            r#"
+            m = Mutex.new
+            slept = false
+            t = Thread.new { m.synchronize { m.sleep(0.01); slept = m.owned? } }
+            t.join
+            [slept, m.locked?]
+            "#,
+        );
+    }
+
+    #[test]
+    fn queue_producer_consumer() {
+        run_test_once(
+            r#"
+            q = Queue.new
+            prod = Thread.new { 5.times { |i| q.push i }; q.close }
+            out = []
+            while v = q.pop
+              out << v
+            end
+            prod.join
+            [out, q.closed?, q.pop]
+            "#,
+        );
+        run_test_once(
+            r#"
+            q = Queue.new
+            r = [q.pop(timeout: 0.02)]
+            begin; q.pop(true); rescue ThreadError; r << :empty; end
+            q.push 1
+            q.close
+            begin; q.push 2; rescue ClosedQueueError; r << :closed; end
+            r << q.pop << q.pop
+            r
+            "#,
+        );
+        run_test_once(
+            r#"
+            q = Queue.new
+            t = Thread.new { q.pop }
+            Thread.pass until q.num_waiting == 1
+            q.push :v
+            [t.value, q.num_waiting]
+            "#,
+        );
+    }
+
+    #[test]
+    fn sized_queue_backpressure() {
+        run_test_once(
+            r#"
+            q = SizedQueue.new(2)
+            pushed = 0
+            t = Thread.new { 5.times { |i| q.push(i); pushed += 1 } }
+            Thread.pass until q.num_waiting == 1
+            first = pushed
+            3.times { q.pop }
+            t.join
+            [q.max, first, pushed, q.size]
+            "#,
+        );
+        run_test_once(
+            r#"
+            begin; SizedQueue.new(0); rescue ArgumentError; :nonpositive; end
+            "#,
+        );
+    }
+
+    #[test]
+    fn condition_variable_wait_signal() {
+        run_test_once(
+            r#"
+            m = Mutex.new
+            cv = ConditionVariable.new
+            log = []
+            t = Thread.new do
+              m.synchronize { log << :waiting; cv.wait(m); log << :woken; m.owned? }
+            end
+            Thread.pass until m.synchronize { log.include?(:waiting) }
+            m.synchronize { cv.signal }
+            [t.value, log]
+            "#,
+        );
+        run_test_once(
+            r#"
+            m = Mutex.new
+            cv = ConditionVariable.new
+            woken = 0
+            ts = 3.times.map { Thread.new { m.synchronize { cv.wait(m); woken += 1 } } }
+            Thread.pass until ts.all? { |t| t.status == "sleep" }
+            m.synchronize { cv.broadcast }
+            ts.each(&:join)
+            woken
+            "#,
+        );
+        run_test_once(
+            r#"
+            m = Mutex.new
+            cv = ConditionVariable.new
+            m.synchronize { cv.wait(m, 0.02) }
+            :timeout_ok
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_fiber_yield_at_thread_root_errors() {
         // Fiber.yield at a thread root has no parent fiber: FiberError,
         // exactly like at the main fiber.
