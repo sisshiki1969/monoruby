@@ -58,83 +58,15 @@ fn signal_pending() -> bool {
     crate::codegen::signal_table::PENDING_SIGNALS.load(std::sync::atomic::Ordering::Relaxed) != 0
 }
 
-/// Whether an io error out of the primitives below is one of the two
-/// restartable interrupts: `Interrupted` (EINTR with a signal pending) or
-/// `WouldBlock` (EAGAIN on an fd the green-thread scheduler put in
-/// non-blocking mode). Both are surfaced as internal marker errors that
-/// the IO builtins intercept and restart; see [`interrupt_marker`].
-fn is_interrupt_kind(kind: std::io::ErrorKind) -> bool {
-    matches!(
-        kind,
-        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
-    )
-}
-
-/// The internal marker error corresponding to a restartable interrupt
-/// kind: the signal-interrupt marker for `Interrupted`, the would-block
-/// marker for `WouldBlock` (see `MonorubyErr::{signal,would_block}_interrupt`).
-fn interrupt_marker(kind: std::io::ErrorKind) -> MonorubyErr {
-    if kind == std::io::ErrorKind::WouldBlock {
-        MonorubyErr::would_block_interrupt()
-    } else {
-        MonorubyErr::signal_interrupt()
-    }
-}
-
-/// Map an io error out of the interruptible primitives below: the
-/// restartable interrupts (see [`is_interrupt_kind`]) become their internal
-/// marker so the IO builtins can park/poll and restart; anything else goes
-/// through `f` (the call site's existing mapping).
+/// Map an io error out of the interruptible primitives below:
+/// `Interrupted` (EINTR with a signal pending) becomes the internal
+/// signal-interrupt marker so the IO builtins can run the VM poll point;
+/// anything else goes through `f` (the call site's existing mapping).
 fn map_read_err(e: std::io::Error, f: impl FnOnce(String) -> MonorubyErr) -> MonorubyErr {
-    if is_interrupt_kind(e.kind()) {
-        interrupt_marker(e.kind())
+    if e.kind() == std::io::ErrorKind::Interrupted {
+        MonorubyErr::signal_interrupt()
     } else {
         f(e.to_string())
-    }
-}
-
-/// RAII guard for the green-thread scheduler's blocking-IO emulation: put
-/// `fd` into non-blocking mode so that a read/write that would block the
-/// whole OS process returns `EAGAIN` instead (surfaced upward as the
-/// would-block marker), and restore the original file-status flags on
-/// drop. The restore keeps the non-blocking mode from leaking to child
-/// processes spawned later and to other processes sharing the open file
-/// description (e.g. a terminal).
-///
-/// `set` returns `None` — and the operation simply keeps its plain
-/// blocking behavior — when the flag was already set (a `read_nonblock`
-/// user fd: nothing to restore, `EAGAIN` already surfaces) or `fcntl`
-/// failed.
-pub(crate) struct NonblockGuard {
-    fd: i32,
-    flags: i32,
-}
-
-impl NonblockGuard {
-    pub(crate) fn set(fd: i32) -> Option<Self> {
-        // SAFETY: fcntl is called on a caller-supplied fd that is open for
-        // the duration of the guarded operation; F_GETFL/F_SETFL do not
-        // touch memory.
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFL);
-            if flags < 0 || flags & libc::O_NONBLOCK != 0 {
-                return None;
-            }
-            if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
-                return None;
-            }
-            Some(Self { fd, flags })
-        }
-    }
-}
-
-impl Drop for NonblockGuard {
-    fn drop(&mut self) {
-        // SAFETY: best-effort restore of the flags captured in `set` on the
-        // same fd.
-        unsafe {
-            libc::fcntl(self.fd, libc::F_SETFL, self.flags);
-        }
     }
 }
 
@@ -256,9 +188,6 @@ fn read_partial_chunk<T: Read>(
                     if signal_pending() {
                         return Err(MonorubyErr::signal_interrupt());
                     }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    return Err(MonorubyErr::would_block_interrupt());
                 }
                 Err(e) => return Err(MonorubyErr::ioerr(e.to_string())),
             }
@@ -622,13 +551,6 @@ impl IoInner {
                             return Err(MonorubyErr::signal_interrupt());
                         }
                     }
-                    // EAGAIN on an fd the green-thread scheduler put in
-                    // non-blocking mode: `*progress` records what was
-                    // flushed, so the restart after the fd-readiness park
-                    // resumes mid-buffer without duplicating output.
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        return Err(MonorubyErr::would_block_interrupt());
-                    }
                     Err(e) => return Err(map(e.to_string())),
                 }
             }
@@ -661,24 +583,6 @@ impl IoInner {
             }
             // `ensure_writable` already rejected non-writable streams.
             Self::Stdin | Self::Closed(..) => unreachable!(),
-        }
-    }
-
-    /// Whether a read can be satisfied without touching the fd: ungetc
-    /// pushback or bytes already sitting in the internal BufReader. Used
-    /// by the green-thread IO scheduler to skip the fd-readiness park.
-    pub fn has_buffered_data(&self) -> bool {
-        if self.pushback_len() > 0 {
-            return true;
-        }
-        match self {
-            Self::File(f) => !f.reader.buffer().is_empty(),
-            Self::Popen(p) => p
-                .reader
-                .as_ref()
-                .map(|r| !r.buffer().is_empty())
-                .unwrap_or(false),
-            _ => false,
         }
     }
 
@@ -744,63 +648,37 @@ impl IoInner {
                     return Ok(self.take_pushback(Some(n)));
                 }
                 Some(n) => {
-                    let out = self.take_pushback(None);
+                    let mut out = self.take_pushback(None);
                     let need = n - out.len();
-                    return self.read_more_preserving(out, Some(need));
+                    out.extend_from_slice(&self.read_underlying(Some(need))?);
+                    return Ok(out);
                 }
                 None => {
-                    let out = self.take_pushback(None);
-                    return self.read_more_preserving(out, None);
+                    let mut out = self.take_pushback(None);
+                    out.extend_from_slice(&self.read_underlying(None)?);
+                    return Ok(out);
                 }
             }
         }
         self.read_underlying(length)
     }
 
-    /// Extend already-drained pushback bytes (`out`) with an underlying
-    /// read. On a restartable interrupt out of the read, `out` must go
-    /// back into the pushback buffer before the marker propagates — the
-    /// caller retries the whole operation and would otherwise lose those
-    /// bytes. (`read_underlying` has already pushed back its own partial
-    /// data at that point; ungetting `out` afterwards splices it in front,
-    /// preserving stream order.)
-    fn read_more_preserving(&mut self, mut out: Vec<u8>, length: Option<usize>) -> Result<Vec<u8>> {
-        match self.read_underlying(length) {
-            Ok(chunk) => {
-                out.extend_from_slice(&chunk);
-                Ok(out)
-            }
-            Err(err) => {
-                if (err.is_signal_interrupt() || err.is_would_block_interrupt())
-                    && !out.is_empty()
-                {
-                    let _ = self.unget(&out);
-                }
-                Err(err)
-            }
-        }
-    }
-
     fn read_underlying(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
-        // On a restartable interrupt (`Interrupted`/`WouldBlock` out of the
-        // read helpers), bytes already consumed from the fd are pushed back
-        // so that the retried read (after a `Signal.trap` handler ran, or
-        // after the green thread was parked until the fd became ready)
-        // returns them first and no data is lost. `pushback` is `None` for
-        // Stdin, which has no pushback cell — an interrupted stdin read may
-        // drop the partial data, like the pre-existing ungetc limitation
-        // there.
-        let interrupted = |kind: std::io::ErrorKind,
-                           partial: Vec<u8>,
-                           pushback: Option<&RefCell<Vec<u8>>>|
-         -> MonorubyErr {
-            if !partial.is_empty()
-                && let Some(cell) = pushback
-            {
-                cell.borrow_mut().splice(0..0, partial);
-            }
-            interrupt_marker(kind)
-        };
+        // On a signal interrupt (`Interrupted` out of the read helpers),
+        // bytes already consumed from the fd are pushed back so that the
+        // retried read (after a `Signal.trap` handler ran) returns them
+        // first and no data is lost. `pushback` is `None` for Stdin, which
+        // has no pushback cell — an interrupted stdin read may drop the
+        // partial data, like the pre-existing ungetc limitation there.
+        let interrupted =
+            |partial: Vec<u8>, pushback: Option<&RefCell<Vec<u8>>>| -> MonorubyErr {
+                if !partial.is_empty()
+                    && let Some(cell) = pushback
+                {
+                    cell.borrow_mut().splice(0..0, partial);
+                }
+                MonorubyErr::signal_interrupt()
+            };
         match self {
             Self::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => {
@@ -831,8 +709,8 @@ impl IoInner {
                 };
                 match res {
                     Ok(()) => Ok(buf),
-                    Err(e) if is_interrupt_kind(e.kind()) => {
-                        Err(interrupted(e.kind(), buf, Some(&file.pushback)))
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        Err(interrupted(buf, Some(&file.pushback)))
                     }
                     Err(e) => Err(MonorubyErr::runtimeerr(e.to_string())),
                 }
@@ -851,8 +729,8 @@ impl IoInner {
                 };
                 match res {
                     Ok(()) => Ok(buf),
-                    Err(e) if is_interrupt_kind(e.kind()) => {
-                        Err(interrupted(e.kind(), buf, Some(&popen.pushback)))
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        Err(interrupted(buf, Some(&popen.pushback)))
                     }
                     Err(e) => Err(MonorubyErr::ioerr(e.to_string())),
                 }
@@ -908,14 +786,13 @@ impl IoInner {
                 let mut buf = vec![0u8; need];
                 let n = match read_step(reader.get_mut(), &mut buf) {
                     Ok(n) => n,
-                    Err(e) if is_interrupt_kind(e.kind()) => {
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
                         // Preserve pushback bytes already drained into
-                        // `out` for the retry after the trap handler /
-                        // fd-readiness park.
+                        // `out` for the retry after the trap handler.
                         if !out.is_empty() {
                             fdesc.pushback.borrow_mut().splice(0..0, out);
                         }
-                        return Err(interrupt_marker(e.kind()));
+                        return Err(MonorubyErr::signal_interrupt());
                     }
                     Err(e) => return Err(MonorubyErr::runtimeerr(e.to_string())),
                 };
@@ -931,11 +808,11 @@ impl IoInner {
                 let mut buf = vec![0u8; need];
                 let n = match read_step(reader.get_mut(), &mut buf) {
                     Ok(n) => n,
-                    Err(e) if is_interrupt_kind(e.kind()) => {
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
                         if !out.is_empty() {
                             popen.pushback.borrow_mut().splice(0..0, out);
                         }
-                        return Err(interrupt_marker(e.kind()));
+                        return Err(MonorubyErr::signal_interrupt());
                     }
                     Err(e) => return Err(MonorubyErr::ioerr(e.to_string())),
                 };
@@ -1113,19 +990,17 @@ impl IoInner {
 
     fn read_line_bytes_underlying(&mut self) -> Result<Option<Vec<u8>>> {
         let mut buf = Vec::new();
-        // See `read_underlying`: on a restartable interrupt, push already-
-        // read bytes back so the retried getline sees them first.
-        let interrupted = |kind: std::io::ErrorKind,
-                           partial: Vec<u8>,
-                           pushback: Option<&RefCell<Vec<u8>>>|
-         -> MonorubyErr {
-            if !partial.is_empty()
-                && let Some(cell) = pushback
-            {
-                cell.borrow_mut().splice(0..0, partial);
-            }
-            interrupt_marker(kind)
-        };
+        // See `read_underlying`: on a signal interrupt, push already-read
+        // bytes back so the retried getline sees them first.
+        let interrupted =
+            |partial: Vec<u8>, pushback: Option<&RefCell<Vec<u8>>>| -> MonorubyErr {
+                if !partial.is_empty()
+                    && let Some(cell) = pushback
+                {
+                    cell.borrow_mut().splice(0..0, partial);
+                }
+                MonorubyErr::signal_interrupt()
+            };
         let size = match self {
             Self::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => read_until_step(&mut std::io::stdin().lock(), b'\n', &mut buf)
@@ -1139,8 +1014,8 @@ impl IoInner {
                 let file = Rc::get_mut(file).unwrap();
                 match read_until_step(&mut *file.reader, b'\n', &mut buf) {
                     Ok(n) => n,
-                    Err(e) if is_interrupt_kind(e.kind()) => {
-                        return Err(interrupted(e.kind(), buf, Some(&file.pushback)));
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        return Err(interrupted(buf, Some(&file.pushback)));
                     }
                     Err(e) => return Err(MonorubyErr::runtimeerr(e.to_string())),
                 }
@@ -1153,8 +1028,8 @@ impl IoInner {
                     .ok_or_else(|| MonorubyErr::ioerr("not opened for reading"))?;
                 match read_until_step(reader, b'\n', &mut buf) {
                     Ok(n) => n,
-                    Err(e) if is_interrupt_kind(e.kind()) => {
-                        return Err(interrupted(e.kind(), buf, Some(&popen.pushback)));
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        return Err(interrupted(buf, Some(&popen.pushback)));
                     }
                     Err(e) => return Err(MonorubyErr::ioerr(e.to_string())),
                 }
@@ -1171,17 +1046,14 @@ impl IoInner {
         Ok(self.read(Some(1))?.first().copied())
     }
 
-    /// `read1` for the getline accumulation loops: on a restartable
-    /// interrupt (signal or would-block), push the bytes accumulated so far
-    /// (`acc`) back into the pushback buffer so the getline retried after a
-    /// `Signal.trap` handler / fd-readiness park re-reads them and no data
-    /// is lost.
+    /// `read1` for the getline accumulation loops: on a signal interrupt,
+    /// push the bytes accumulated so far (`acc`) back into the pushback
+    /// buffer so the getline retried after a `Signal.trap` handler
+    /// re-reads them and no data is lost.
     fn read1_preserving(&mut self, acc: &[u8]) -> Result<Option<u8>> {
         match self.read1() {
             Err(err) => {
-                if (err.is_signal_interrupt() || err.is_would_block_interrupt())
-                    && !acc.is_empty()
-                {
+                if err.is_signal_interrupt() && !acc.is_empty() {
                     let _ = self.unget(acc);
                 }
                 Err(err)
@@ -1346,24 +1218,6 @@ impl IoInner {
             }
             Self::Closed(..) => Err(MonorubyErr::ioerr("closed stream")),
         }
-    }
-
-    /// The fd a poll for `events` actually applies to: like [`Self::fileno`],
-    /// except that a `POLLOUT` wait on a `Popen` resolves to the child's
-    /// stdin (the pipe end this process writes) rather than the read side
-    /// `fileno` reports.
-    pub fn wait_fd_for(&self, events: i16) -> Result<i32> {
-        if events & libc::POLLOUT != 0
-            && let Self::Popen(popen) = self
-        {
-            if let Some(ref stdin) = popen.child.stdin {
-                return Ok(stdin.as_raw_fd());
-            }
-            if let Some(ref writer) = popen.writer {
-                return Ok(writer.as_raw_fd());
-            }
-        }
-        self.fileno()
     }
 
     /// Seek the underlying file. `whence` follows POSIX: 0 = SEEK_SET,

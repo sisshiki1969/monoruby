@@ -878,7 +878,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         vm.to_s(globals, lfp.arg(0))?.into_bytes()
     };
     let mut done = 0;
-    blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, || {
+    blocking_region(vm, globals, || {
         lfp.self_val().as_io_inner_mut().write(&bytes, &mut done)
     })?;
     lfp.self_val().as_io_inner_mut().flush()?;
@@ -988,10 +988,8 @@ fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 
     let buf = vm.format_by_args(globals, &format_str, &args)?;
     let mut done = 0;
-    blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, || {
-        lfp.self_val()
-            .as_io_inner_mut()
-            .write(buf.as_bytes(), &mut done)
+    blocking_region(vm, globals, || {
+        lfp.self_val().as_io_inner_mut().write(buf.as_bytes(), &mut done)
     })?;
 
     Ok(Value::nil())
@@ -1135,119 +1133,27 @@ fn bump_lineno(globals: &mut Globals, io: Value) -> Result<()> {
 /// delivered before the syscall (re-)entered the kernel, so it can never
 /// EINTR it, and the operation could otherwise block forever with the
 /// signal sitting in the bitmap (same reasoning as `Kernel#sleep`).
-/// Additionally, for fd-backed operations: when other green
-/// threads are live and the operation would block (fd not ready, nothing
-/// buffered), park the current thread on the scheduler's fd poller so
-/// the other threads run in the meantime, instead of blocking the whole
-/// process. Readiness is re-checked after every wake (spurious wakeups
-/// and error/hangup revents fall through to `f`, which surfaces the real
-/// outcome).
-///
-/// The entry check alone would leave an operation that consumes the
-/// available data and then needs more (e.g. `read(n)` beyond what a pipe
-/// holds) blocking the process mid-way. To cover the middle of the
-/// operation too, `f` runs with the fd in temporary non-blocking mode
-/// (`NonblockGuard`) while other green threads are live: a kernel entry
-/// that would block returns `EAGAIN`, the primitives push back what was
-/// already consumed and surface the internal would-block marker, and the
-/// thread parks on the fd poller before restarting `f`. With no other
-/// live threads the marker can still surface — from an fd left
-/// permanently non-blocking by `read_nonblock`/`write_nonblock` — and is
-/// waited out with a plain (signal-interruptible) `poll(2)`, matching
-/// CRuby, where buffered IO on a non-blocking fd still blocks the caller.
-pub(crate) fn blocking_io_region<T>(
+pub(crate) fn blocking_region<T>(
     vm: &mut Executor,
     globals: &mut Globals,
-    io: Value,
-    events: i16,
     mut f: impl FnMut() -> Result<T>,
 ) -> Result<T> {
     loop {
-        if crate::scheduler::has_other_live_threads()
-            && !(events & libc::POLLIN != 0 && io.as_io_inner().has_buffered_data())
-            && !io.as_io_inner().is_closed()
-            && let Ok(fd) = io.as_io_inner().wait_fd_for(events)
-            && fd >= 0
-            && poll_single_fd(io, events, 0)? == 0
-        {
-            crate::scheduler::wait_fd(vm, globals, fd, events, None)?;
-            continue;
-        }
         if crate::codegen::signal_table::PENDING_SIGNALS.load(std::sync::atomic::Ordering::Relaxed)
             != 0
             && crate::executor::execute_gc(vm, globals).is_none()
         {
             return Err(vm.take_error());
         }
-        // Mid-operation would-block emulation. Skipped for the std streams
-        // (fds 0-2): their open file description is shared with the parent
-        // shell and other processes, and a non-blocking flag leaked by an
-        // abnormal exit mid-operation would corrupt *their* IO — the classic
-        // "nonblocking stdout" bug. Std streams keep entry-only parking.
-        let guard = if crate::scheduler::has_other_live_threads()
-            && !io.as_io_inner().is_closed()
-            && let Ok(fd) = io.as_io_inner().wait_fd_for(events)
-            && fd > 2
-        {
-            crate::value::rvalue::NonblockGuard::set(fd)
-        } else {
-            None
-        };
-        let res = f();
-        // Restore the fd's blocking mode *before* parking: while this
-        // thread is parked, other green threads (or a spawned child) may
-        // use the same fd and must see it in its original mode.
-        drop(guard);
-        match res {
+        match f() {
             Err(err) if err.is_signal_interrupt() => {
                 if crate::executor::execute_gc(vm, globals).is_none() {
                     return Err(vm.take_error());
                 }
-            }
-            Err(err) if err.is_would_block_interrupt() => {
-                let fd = io.as_io_inner().wait_fd_for(events)?;
-                if crate::scheduler::has_other_live_threads() {
-                    crate::scheduler::wait_fd(vm, globals, fd, events, None)?;
-                } else {
-                    wait_fd_single(vm, globals, fd, events)?;
-                }
+                // A trap handler handled the signal; restart the operation.
             }
             res => return res,
         }
-    }
-}
-
-/// Wait until `fd` reports one of `events`, blocking the whole process —
-/// used when a would-block interrupt surfaces with no other green threads
-/// to run (an fd left permanently non-blocking by `read_nonblock` /
-/// `write_nonblock`). Signal-interruptible: `EINTR` (and a signal already
-/// pending on entry) runs the VM poll point, then re-polls.
-fn wait_fd_single(vm: &mut Executor, globals: &mut Globals, fd: i32, events: i16) -> Result<()> {
-    loop {
-        if crate::codegen::signal_table::PENDING_SIGNALS.load(std::sync::atomic::Ordering::Relaxed)
-            != 0
-            && crate::executor::execute_gc(vm, globals).is_none()
-        {
-            return Err(vm.take_error());
-        }
-        let mut pfd = libc::pollfd {
-            fd,
-            events,
-            revents: 0,
-        };
-        // SAFETY: `poll` accepts a pointer to an array of pollfd; we pass
-        // exactly one element with length 1.
-        let ret = unsafe { libc::poll(&mut pfd, 1, -1) };
-        if ret < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::EINTR) {
-                continue;
-            }
-            return Err(MonorubyErr::ioerr(format!("poll failed: {err}")));
-        }
-        // Ready (or an error/hangup revent — the retried operation
-        // surfaces the real outcome).
-        return Ok(());
     }
 }
 
@@ -1258,7 +1164,7 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
     let mut self_ = lfp.self_val();
     let complete_utf8 = io_completes_utf8(globals, self_);
-    let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let line = blocking_region(vm, globals, || {
         lfp.self_val()
             .as_io_inner_mut()
             .getline(sep.as_deref(), limit, complete_utf8)
@@ -1510,7 +1416,7 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         _ => None,
     };
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_region(vm, globals, || {
         lfp.self_val().as_io_inner_mut().read(length)
     })?;
     let eof_nil = buf.is_empty() && length.is_some() && length != Some(0);
@@ -1692,7 +1598,7 @@ fn io_class_readlines(
         vm.temp_push(io_val);
         vm.temp_array_new(None);
         let result = (|| {
-            while let Some(mut buf) = blocking_io_region(vm, globals, io_val, libc::POLLIN, || {
+            while let Some(mut buf) = blocking_region(vm, globals, || {
                 io_val
                     .as_io_inner_mut()
                     .getline(sep.as_deref(), limit, complete_utf8)
@@ -1870,7 +1776,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         vm.temp_push(io_val);
         let mut lineno = 0i64;
         let result = (|| {
-            while let Some(mut buf) = blocking_io_region(vm, globals, io_val, libc::POLLIN, || {
+            while let Some(mut buf) = blocking_region(vm, globals, || {
                 io_val
                     .as_io_inner_mut()
                     .getline(sep.as_deref(), limit, complete_utf8)
@@ -2300,7 +2206,7 @@ fn io_readlines(
     let mut self_ = lfp.self_val();
     let complete_utf8 = io_completes_utf8(globals, self_);
     let mut lines = Vec::new();
-    while let Some(mut buf) = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    while let Some(mut buf) = blocking_region(vm, globals, || {
         lfp.self_val()
             .as_io_inner_mut()
             .getline(sep.as_deref(), limit, complete_utf8)
@@ -2548,7 +2454,7 @@ fn io_eof_(
         return Ok(Value::bool(false));
     }
     // Read 1 byte; if empty, we're at EOF. Then push it back via seek(-1).
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_region(vm, globals, || {
         lfp.self_val().as_io_inner_mut().read(Some(1))
     })?;
     let io = self_.as_io_inner_mut();
@@ -2576,7 +2482,7 @@ fn io_getbyte(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_region(vm, globals, || {
         lfp.self_val().as_io_inner_mut().read(Some(1))
     })?;
     if buf.is_empty() {
@@ -2698,7 +2604,7 @@ fn io_getc(
     let self_ = lfp.self_val();
     let ext_obj = read_io_encoding(globals, self_, false);
     let ext = enc_obj_to_enum(globals, ext_obj).unwrap_or(crate::value::Encoding::Utf8);
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_region(vm, globals, || {
         read_one_char_enc(lfp.self_val().as_io_inner_mut(), ext)
     })?;
     if buf.is_empty() {
@@ -2946,7 +2852,7 @@ fn io_write_method(
         };
         total += bytes.len() as i64;
         let mut done = 0;
-        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, || {
+        blocking_region(vm, globals, || {
             lfp.self_val().as_io_inner_mut().write(&bytes, &mut done)
         })?;
     }
@@ -3142,7 +3048,7 @@ fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             None => Value::string_from_vec(vec![]),
         });
     }
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_region(vm, globals, || {
         lfp.self_val().as_io_inner_mut().sysread(maxlen as usize)
     })?;
     if buf.is_empty() {
@@ -3201,7 +3107,7 @@ fn io_readpartial(
             None => Value::string_from_vec(vec![]),
         });
     }
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_region(vm, globals, || {
         lfp.self_val().as_io_inner_mut().readpartial(maxlen as usize)
     })?;
     if buf.is_empty() {
@@ -3363,20 +3269,10 @@ fn io_write_nonblock(
 }
 
 /// Helper: extract raw fd from a Value that is an IO (or responds to to_io).
-fn value_to_fd(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i32> {
+fn value_to_fd(globals: &Globals, v: Value) -> Result<i32> {
     if let Some(rv) = v.try_rvalue() {
         if rv.ty() == ObjTy::IO {
             return v.as_io_inner().fileno();
-        }
-    }
-    // Duck typing: CRuby converts non-IO entries through #to_io.
-    let to_io = IdentId::get_id("to_io");
-    if globals.check_method(v, to_io).is_some() {
-        let io = vm.invoke_method_inner(globals, to_io, v, &[], None, None)?;
-        if let Some(rv) = io.try_rvalue()
-            && rv.ty() == ObjTy::IO
-        {
-            return io.as_io_inner().fileno();
         }
     }
     Err(MonorubyErr::typeerr(format!(
@@ -3446,112 +3342,25 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         ary.to_vec()
     };
 
-    // Get fds (non-IO entries convert through #to_io).
-    let mut read_fds: Vec<i32> = Vec::with_capacity(read_ios.len());
-    for v in &read_ios {
-        read_fds.push(value_to_fd(vm, globals, *v)?);
-    }
-    let mut write_fds: Vec<i32> = Vec::with_capacity(write_ios.len());
-    for v in &write_ios {
-        write_fds.push(value_to_fd(vm, globals, *v)?);
-    }
-    let mut error_fds: Vec<i32> = Vec::with_capacity(error_ios.len());
-    for v in &error_ios {
-        error_fds.push(value_to_fd(vm, globals, *v)?);
-    }
+    // Get fds
+    let read_fds: Vec<i32> = read_ios
+        .iter()
+        .map(|v| value_to_fd(globals, *v))
+        .collect::<Result<Vec<_>>>()?;
+    let write_fds: Vec<i32> = write_ios
+        .iter()
+        .map(|v| value_to_fd(globals, *v))
+        .collect::<Result<Vec<_>>>()?;
+    let error_fds: Vec<i32> = error_ios
+        .iter()
+        .map(|v| value_to_fd(globals, *v))
+        .collect::<Result<Vec<_>>>()?;
 
-    // All sets empty, no timeout: with other live threads this parks
-    // forever (until killed/woken) with status "sleep", like CRuby; on a
-    // lone thread nothing could ever wake us, so return nil immediately.
-    if read_ios.is_empty() && write_ios.is_empty() && error_ios.is_empty() {
-        if crate::scheduler::has_other_live_threads() {
-            let dur = timeout.map(|tv| {
-                std::time::Duration::new(
-                    tv.tv_sec.max(0) as u64,
-                    (tv.tv_usec.clamp(0, 999_999) as u32) * 1000,
-                )
-            });
-            crate::scheduler::sleep(vm, globals, dur)?;
-            return Ok(Value::nil());
-        }
-        if timeout.is_none() {
-            return Ok(Value::nil());
-        }
-    }
-
-    // Green threads: wait on the scheduler's fd poller instead of
-    // blocking the whole process in select(2), so other threads keep
-    // running while this one waits.
-    if crate::scheduler::has_other_live_threads() {
-        // An enormous timeout (e.g. select(..., 2**62)) must not
-        // overflow Instant arithmetic — treat it as "no deadline".
-        let deadline = timeout.and_then(|tv| {
-            std::time::Instant::now().checked_add(std::time::Duration::new(
-                tv.tv_sec.max(0) as u64,
-                (tv.tv_usec.clamp(0, 999_999) as u32) * 1000,
-            ))
-        });
-        // Probe raw fds (the io lists may hold non-IO objects converted
-        // through #to_io — the fd lists are the source of truth).
-        let probe = |fd: i32, events: i16| -> Result<bool> {
-            let mut pfd = libc::pollfd {
-                fd,
-                events,
-                revents: 0,
-            };
-            // SAFETY: one valid pollfd, length 1, zero timeout.
-            let ret = unsafe { libc::poll(&mut pfd, 1, 0) };
-            if ret < 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::EINTR) {
-                    return Ok(false);
-                }
-                return Err(MonorubyErr::ioerr(format!("poll failed: {err}")));
-            }
-            Ok(pfd.revents != 0)
-        };
-        loop {
-            let mut ready_read = vec![];
-            for (i, &fd) in read_fds.iter().enumerate() {
-                if probe(fd, libc::POLLIN | libc::POLLPRI)? {
-                    ready_read.push(read_ios[i]);
-                }
-            }
-            let mut ready_write = vec![];
-            for (i, &fd) in write_fds.iter().enumerate() {
-                if probe(fd, libc::POLLOUT)? {
-                    ready_write.push(write_ios[i]);
-                }
-            }
-            let mut ready_error = vec![];
-            for (i, &fd) in error_fds.iter().enumerate() {
-                if probe(fd, libc::POLLPRI)? {
-                    ready_error.push(error_ios[i]);
-                }
-            }
-            if !ready_read.is_empty() || !ready_write.is_empty() || !ready_error.is_empty() {
-                let r = Value::array_from_vec(ready_read);
-                let w = Value::array_from_vec(ready_write);
-                let e = Value::array_from_vec(ready_error);
-                return Ok(Value::array_from_vec(vec![r, w, e]));
-            }
-            if let Some(dl) = deadline
-                && std::time::Instant::now() >= dl
-            {
-                return Ok(Value::nil());
-            }
-            let mut fds: Vec<(i32, i16)> = vec![];
-            for &fd in &read_fds {
-                fds.push((fd, libc::POLLIN | libc::POLLPRI));
-            }
-            for &fd in &write_fds {
-                fds.push((fd, libc::POLLOUT));
-            }
-            for &fd in &error_fds {
-                fds.push((fd, libc::POLLPRI));
-            }
-            crate::scheduler::wait_fds(vm, globals, &fds, deadline)?;
-        }
+    // If all arrays are empty with no timeout, return nil immediately.
+    // In CRuby this would block forever, but monoruby is single-threaded
+    // so nothing could ever wake us up.
+    if read_ios.is_empty() && write_ios.is_empty() && error_ios.is_empty() && timeout.is_none() {
+        return Ok(Value::nil());
     }
 
     // Find max fd
@@ -3773,7 +3582,7 @@ fn set_encoding_by_bom(
     }
     // Read up to 4 bytes — enough to disambiguate every BOM (and to
     // tell UTF-16LE from UTF-32LE, which share the FF FE prefix).
-    let head = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let head = blocking_region(vm, globals, || {
         lfp.self_val().as_io_inner_mut().read(Some(4))
     })?;
     let (consume, enc_name): (usize, &str) = match head.first() {
@@ -4013,7 +3822,7 @@ fn poll_single_fd(self_val: Value, events: i16, timeout_ms: i32) -> Result<i16> 
     if self_val.as_io_inner().is_closed() {
         return Err(MonorubyErr::ioerr("closed stream"));
     }
-    let fd = self_val.as_io_inner().wait_fd_for(events)?;
+    let fd = self_val.as_io_inner().fileno()?;
     let mut pfd = libc::pollfd {
         fd,
         events,
@@ -4425,7 +4234,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                     // immediately — Rust's stdout is block-buffered).
                     let mut vv = *v;
                     let mut done = 0;
-                    blocking_io_region(vm, globals, vv, libc::POLLOUT, || {
+                    blocking_region(vm, globals, || {
                         vv.as_io_inner_mut().write(chunk, &mut done)
                     })?;
                     vv.as_io_inner_mut().flush()
@@ -4482,9 +4291,8 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                         break;
                     }
                     let mut vv = *v;
-                    let chunk = blocking_io_region(vm, globals, vv, libc::POLLIN, || {
-                        vv.as_io_inner_mut().readpartial(want)
-                    })?;
+                    let chunk =
+                        blocking_region(vm, globals, || vv.as_io_inner_mut().readpartial(want))?;
                     if chunk.is_empty() {
                         break;
                     }

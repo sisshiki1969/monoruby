@@ -72,16 +72,6 @@ fn fiber_yield(
     vm.yield_fiber(val)
 }
 
-/// Out-of-line error path for the inlined `Fiber.yield`: yielding with
-/// no parent fiber (the main fiber, or a green thread's root) raises
-/// FiberError instead of switching through a null parent pointer.
-pub(crate) extern "C" fn fiber_yield_no_parent(vm: &mut Executor) -> Option<Value> {
-    vm.set_error(MonorubyErr::fibererr(
-        "attempt to yield on a not resumed fiber".to_string(),
-    ));
-    None
-}
-
 fn fiber_yield_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -116,6 +106,7 @@ fn fiber_yield_inline(
     let using_fpr = state.get_using_fpr(ir);
     let error = ir.new_error(state);
     ir.fpr_save(using_fpr);
+    // TODO: we must check if the parent fiber exits.
     if pos_num == 0 {
         ir.inline(move |r#gen, _, _, _| r#gen.emit_fiber_yield_value_nil());
     } else if pos_num == 1 {
@@ -127,8 +118,7 @@ fn fiber_yield_inline(
     }
     ir.inline(move |r#gen, _, _, _| {
         let yield_fiber = r#gen.yield_fiber as *const () as u64;
-        let no_parent = fiber_yield_no_parent as *const () as u64;
-        r#gen.emit_fiber_yield_call(yield_fiber, no_parent)
+        r#gen.emit_fiber_yield_call(yield_fiber)
     });
     ir.fpr_restore(using_fpr);
     ir.handle_error(error);
