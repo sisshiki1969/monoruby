@@ -506,7 +506,7 @@ impl JitModule {
     /// (Mirrors x86 scheduler_resume.)
     pub(in crate::codegen) fn scheduler_resume(
         &mut self,
-    ) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
+    ) -> extern "C" fn(*mut Executor, u64) -> Option<Value> {
         let codeptr = self.jit.get_current_address();
         let sched_rsp = crate::scheduler::sched_rsp_addr();
         self.a64_push_callee_save();

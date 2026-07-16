@@ -1,6 +1,6 @@
 use super::*;
 use crate::scheduler;
-use crate::value::rvalue::{ThreadInner, ThreadState};
+use crate::value::rvalue::{PendingInterrupt, ThreadInner, ThreadState};
 
 //
 // Thread class
@@ -37,6 +37,106 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(THREAD_CLASS, "stop?", thread_stop_p, 0);
     globals.define_builtin_func(THREAD_CLASS, "wakeup", thread_wakeup, 0);
     globals.define_builtin_func(THREAD_CLASS, "run", thread_run, 0);
+    globals.define_builtin_func_rest(THREAD_CLASS, "raise", thread_raise);
+    globals.define_builtin_func(THREAD_CLASS, "kill", thread_kill, 0);
+    globals.define_builtin_func(THREAD_CLASS, "exit", thread_kill, 0);
+    globals.define_builtin_func(THREAD_CLASS, "terminate", thread_kill, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "kill", thread_class_kill, 1);
+    globals.define_builtin_class_func(THREAD_CLASS, "exit", thread_class_exit, 0);
+}
+
+/// Build the exception for an asynchronous `Thread#raise` from its
+/// arguments (a simplified `Kernel#raise`): no args -> RuntimeError;
+/// exception object (+ optional message override); exception class
+/// (+ optional message); a String message.
+fn build_async_error(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    args: &[Value],
+) -> Result<MonorubyErr> {
+    let Some(a0) = args.first().copied() else {
+        return Ok(MonorubyErr::runtimeerr("unhandled exception"));
+    };
+    if let Some(ex) = a0.is_exception() {
+        let mut err = MonorubyErr::new_from_exception(ex);
+        if let Some(msg) = args.get(1) {
+            err.set_msg(msg.coerce_to_str(vm, globals)?);
+            return Ok(err);
+        }
+        return Ok(err.with_original(a0));
+    }
+    if let Some(klass) = a0.is_class() {
+        if klass.is_exception() {
+            let cargs: Vec<Value> = args.get(1).copied().into_iter().collect();
+            let ex = vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &cargs, None, None)?;
+            let err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
+            return Ok(err.with_original(ex));
+        }
+        return Err(MonorubyErr::typeerr("exception class/object expected"));
+    }
+    if let Some(msg) = a0.is_rstring() {
+        return Ok(MonorubyErr::runtimeerr(msg.to_str()?));
+    }
+    Err(MonorubyErr::typeerr("exception class/object expected"))
+}
+
+///
+/// ### Thread#raise
+///
+/// - raise -> nil
+/// - raise(error_type, message = nil) -> nil
+///
+/// Delivers an exception into the receiver thread: immediately when it
+/// targets the current thread, otherwise at the target's park point.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/raise.html]
+#[monoruby_builtin]
+fn thread_raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let args = lfp.arg(0).as_array().to_vec();
+    let err = build_async_error(vm, globals, &args)?;
+    scheduler::interrupt(vm, globals, lfp.self_val(), PendingInterrupt::Raise(err))?;
+    Ok(Value::nil())
+}
+
+///
+/// ### Thread#kill / #exit / #terminate
+///
+/// Unwinds the receiver thread (running its ensure clauses, uncatchable
+/// by rescue) and terminates it as a clean death. Killing the main
+/// thread terminates the process.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/kill.html]
+#[monoruby_builtin]
+fn thread_kill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    scheduler::interrupt(vm, globals, lfp.self_val(), PendingInterrupt::Kill)?;
+    Ok(lfp.self_val())
+}
+
+///
+/// ### Thread.kill(thread)
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/kill.html]
+#[monoruby_builtin]
+fn thread_class_kill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let target = lfp.arg(0);
+    if !target.is_thread() {
+        return Err(MonorubyErr::typeerr("wrong argument type (expected VM/thread)"));
+    }
+    scheduler::interrupt(vm, globals, target, PendingInterrupt::Kill)?;
+    Ok(target)
+}
+
+///
+/// ### Thread.exit
+///
+/// Kills the current thread.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/exit.html]
+#[monoruby_builtin]
+fn thread_class_exit(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    let cur = scheduler::current_thread(vm);
+    scheduler::interrupt(vm, globals, cur, PendingInterrupt::Kill)?;
+    Ok(cur)
 }
 
 /// Allocator: an inert shell (never scheduled). Exists for Ruby-level
@@ -418,6 +518,97 @@ mod tests {
             Thread.current[:k] = 42
             Thread.current.thread_variable_set(:tv, 7)
             [Thread.current[:k], Thread.current.thread_variable_get(:tv)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_kill_semantics() {
+        // kill runs ensure clauses, is not rescuable, dies cleanly.
+        run_test_once(
+            r#"
+            r = []
+            t = Thread.new { begin; sleep; rescue Exception => e; r << e.class; ensure; r << :ensure; end }
+            Thread.pass while t.status != "sleep"
+            t.kill
+            t.join
+            [r, t.status, t.alive?]
+            "#,
+        );
+        // killing an unstarted thread never runs the body.
+        run_test_once(
+            r#"
+            ran = false
+            t = Thread.new { ran = true }
+            t.kill
+            t.join
+            [ran, t.status]
+            "#,
+        );
+        // Thread.exit kills the current thread mid-body.
+        run_test_once(
+            r#"
+            r = []
+            t = Thread.new { r << 1; Thread.exit; r << 2 }
+            t.join
+            [r, t.status]
+            "#,
+        );
+        // killing a dead thread is a no-op returning the thread.
+        run_test_once(
+            r#"
+            t = Thread.new { :x }
+            t.join
+            [t.kill == t, Thread.kill(t) == t]
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_raise_semantics() {
+        run_test_once(
+            r#"
+            t = Thread.new { begin; sleep; rescue ArgumentError => e; e.message; end }
+            Thread.pass while t.status != "sleep"
+            t.raise(ArgumentError, "boom")
+            t.value
+            "#,
+        );
+        // raise with a plain string -> RuntimeError; uncaught -> join re-raises.
+        run_test(
+            r#"
+            t = Thread.new { sleep }
+            t.report_on_exception = false
+            Thread.pass while t.status != "sleep"
+            t.raise("bang")
+            begin
+              t.join
+              :no_error
+            rescue RuntimeError => e
+              e.message
+            end
+            "#,
+        );
+        // kill during ConditionVariable#wait re-locks then unlocks via ensure.
+        run_test_once(
+            r#"
+            m = Mutex.new
+            cv = ConditionVariable.new
+            t = Thread.new { m.synchronize { cv.wait(m) } }
+            Thread.pass while t.status != "sleep"
+            t.kill
+            t.join
+            [t.status, m.locked?]
+            "#,
+        );
+        // raise on the current thread raises in place.
+        run_test(
+            r#"
+            begin
+              Thread.current.raise(ArgumentError, "self")
+            rescue ArgumentError => e
+              e.message
+            end
             "#,
         );
     }
