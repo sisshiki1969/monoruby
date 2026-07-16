@@ -1648,25 +1648,45 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/inject.html]
 #[monoruby_builtin]
 fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val().as_array();
-    let mut iter = self_.iter().cloned();
     // A block is used only for the 0/1-argument forms. With two
     // arguments (init, sym) the block is ignored (CRuby warns).
     if let Some(bh) = lfp.block()
         && lfp.try_arg(1).is_none()
     {
-        let res = if lfp.try_arg(0).is_none() {
-            iter.next().unwrap_or_default()
+        // Fold with the block, re-reading the receiver by index each step so
+        // that growing the array inside the block is tolerated: CRuby visits
+        // the appended elements too (and a shrink simply stops early). A
+        // snapshot iterator would miss them.
+        let self_val = lfp.self_val();
+        let data = vm.get_block_data(globals, bh)?;
+        let (mut res, mut i) = if lfp.try_arg(0).is_none() {
+            let ary = self_val.as_array();
+            if ary.len() == 0 {
+                return Ok(Value::nil());
+            }
+            (ary[0], 1usize)
         } else {
-            lfp.arg(0)
+            (lfp.arg(0), 0usize)
         };
-        return vm.invoke_block_fold1(globals, bh, iter, res);
+        loop {
+            let elem = {
+                let ary = self_val.as_array();
+                if i >= ary.len() {
+                    break;
+                }
+                ary[i]
+            };
+            i += 1;
+            res = vm.invoke_block(globals, &data, &[res, elem])?;
+        }
+        return Ok(res);
     }
     if lfp.block().is_some() && lfp.try_arg(1).is_some() {
         // CRuby emits this with an implicit `uplevel: 1`, so the message is
         // prefixed with the location of the `inject` call site.
         vm.ruby_warn_caller(globals, "warning: given block not used")?;
     }
+    let self_ = lfp.self_val().as_array();
     // The `inject(sym)` form may consume the first element as the
     // initial accumulator; track where the remaining elements start.
     // A non-Symbol/String method name is coerced via `#to_str`.
@@ -6575,6 +6595,23 @@ mod tests {
             // value, not the block's).
             r#"[1, 2, 3].inject(10, :-) { raise "never" }"#,
             r#"[1, 2, 3, 4].inject(0, :+) { 99 }"#,
+            // inject with a block re-reads the receiver each step, so
+            // appending inside the block is tolerated and the new elements
+            // are folded in (CRuby).
+            r#"
+            a = [:a, :b, :c]
+            i = 0
+            visited = []
+            a.inject(nil) { |_, e| visited << e; a << i if i < 5; i += 1 }
+            visited
+            "#,
+            // The no-initial-value block form uses the first element as the
+            // seed and still tolerates growth.
+            r#"
+            a = [1, 2, 3]
+            n = 0
+            a.inject { |s, e| a << 10 if n < 2; n += 1; s + e }
+            "#,
         ]);
     }
 }
