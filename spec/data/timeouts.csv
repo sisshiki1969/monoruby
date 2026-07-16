@@ -1,3 +1,6 @@
 category,file
-io,core/io/copy_stream_spec.rb
-io,core/io/select_spec.rb
+file,core/file/flock_spec.rb
+file,core/file/open_spec.rb
+mutex,core/mutex/lock_spec.rb
+thread,core/thread/list_spec.rb
+thread,core/thread/report_on_exception_spec.rb

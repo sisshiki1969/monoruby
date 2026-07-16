@@ -13,3 +13,8 @@ timestamp,commit,category,file
 2026-07-16T08:17:18Z,e66220e,io,core/io/select_spec.rb
 2026-07-16T23:13:55Z,8ecda5e,io,core/io/copy_stream_spec.rb
 2026-07-16T23:13:55Z,8ecda5e,io,core/io/select_spec.rb
+2026-07-16T23:15:58Z,44f4023,file,core/file/flock_spec.rb
+2026-07-16T23:15:58Z,44f4023,file,core/file/open_spec.rb
+2026-07-16T23:15:58Z,44f4023,mutex,core/mutex/lock_spec.rb
+2026-07-16T23:15:58Z,44f4023,thread,core/thread/list_spec.rb
+2026-07-16T23:15:58Z,44f4023,thread,core/thread/report_on_exception_spec.rb
