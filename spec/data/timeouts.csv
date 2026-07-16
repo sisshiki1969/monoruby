@@ -1,0 +1,3 @@
+category,file
+io,core/io/copy_stream_spec.rb
+io,core/io/select_spec.rb
