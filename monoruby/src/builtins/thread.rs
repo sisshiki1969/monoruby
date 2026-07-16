@@ -590,6 +590,73 @@ mod tests {
     }
 
     #[test]
+    fn thread_io_select_edges() {
+        // Timeout expiry with live threads returns nil.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { sleep 0.2 }
+            v = IO.select([r], nil, nil, 0.02)
+            t.kill; t.join
+            v.inspect
+            "#,
+        );
+        // Write-ready set through the green path.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { sleep 0.2 }
+            ready = IO.select(nil, [w], nil, 5)
+            t.kill; t.join
+            ready[1][0] == w
+            "#,
+        );
+        // #to_io conversion of non-IO entries.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            w.write "x"
+            box = Object.new
+            box.define_singleton_method(:to_io) { r }
+            t = Thread.new { sleep 0.2 }
+            ready = IO.select([box], nil, nil, 5)
+            t.kill; t.join
+            ready[0][0] == box
+            "#,
+        );
+        // All-empty select parks with status "sleep" until killed.
+        run_test_once(
+            r#"
+            t = Thread.new { IO.select(nil, nil, nil, nil) }
+            Thread.pass while t.status && t.status != "sleep"
+            st = t.status
+            t.kill
+            t.join
+            [st, t.status]
+            "#,
+        );
+        // Enormous timeouts must not overflow (treated as forever).
+        run_test_once(
+            r#"
+            t = Thread.new { IO.select(nil, nil, nil, 2**62) }
+            Thread.pass while t.status && t.status != "sleep"
+            t.kill
+            t.join
+            t.status
+            "#,
+        );
+        run_test_once(
+            r#"
+            t = Thread.new { sleep(2**62) }
+            Thread.pass while t.status && t.status != "sleep"
+            t.kill
+            t.join
+            t.status
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_kill_semantics() {
         // kill runs ensure clauses, is not rescuable, dies cleanly.
         run_test_once(
