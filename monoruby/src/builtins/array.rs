@@ -6612,6 +6612,8 @@ mod tests {
             n = 0
             a.inject { |s, e| a << 10 if n < 2; n += 1; s + e }
             "#,
+            // No initial value and an empty receiver yields nil.
+            r#"[].inject { |s, e| s + e }"#,
         ]);
     }
 }
