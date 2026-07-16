@@ -478,7 +478,8 @@ module Enumerable
       end
     end
     result << current unless first
-    result.each
+    # Returns an Enumerator of unknown size, so `enum.size` is nil (CRuby).
+    Enumerator.new { |__yielder| result.each { |__chunk| __yielder << __chunk } }
   end
 
   def slice_when(&block)
@@ -502,7 +503,8 @@ module Enumerable
       end
     end
     result << current unless first
-    result.each
+    # Returns an Enumerator of unknown size, so `enum.size` is nil (CRuby).
+    Enumerator.new { |__yielder| result.each { |__chunk| __yielder << __chunk } }
   end
 
   def zip(*others)
@@ -1059,7 +1061,8 @@ module Enumerable
       end
     end
     res << current if current
-    res.each
+    # Returns an Enumerator of unknown size, so `enum.size` is nil (CRuby).
+    Enumerator.new { |__yielder| res.each { |__chunk| __yielder << __chunk } }
   end
 
   # Mirror of `slice_before`: the boundary fires *after* an element
@@ -1084,7 +1087,8 @@ module Enumerable
       end
     end
     res << current unless current.empty?
-    res.each
+    # Returns an Enumerator of unknown size, so `enum.size` is nil (CRuby).
+    Enumerator.new { |__yielder| res.each { |__chunk| __yielder << __chunk } }
   end
 
   # Concatenates `self` with each enumerable in `enums`. Returns an
