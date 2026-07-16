@@ -786,6 +786,16 @@ class Thread
 
   attr_accessor :name
 
+  # Reported when a thread dies with an unhandled exception (read by the
+  # native finalizer). Instance-level only; default true, as in CRuby.
+  def report_on_exception
+    @report_on_exception.nil? ? true : @report_on_exception
+  end
+
+  def report_on_exception=(flag)
+    @report_on_exception = flag
+  end
+
   # Thread objects are native (ObjTy::THREAD) and no longer run a Ruby
   # initialize, so the local-storage tables are created lazily.
   def [](key)

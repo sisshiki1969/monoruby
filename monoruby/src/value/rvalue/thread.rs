@@ -1,5 +1,18 @@
 use super::*;
 
+/// An asynchronous interrupt queued for a thread (`Thread#kill` /
+/// `Thread#raise`), delivered by the scheduler when the thread is next
+/// resumed (or immediately, if it targets the current thread).
+#[derive(Debug)]
+pub(crate) enum PendingInterrupt {
+    /// `Thread#kill`: unwind the thread's stack running ensure clauses,
+    /// uncatchable by `rescue` — delivered as a `Throw` with a fresh
+    /// object tag no `catch` can match — then die silently.
+    Kill,
+    /// `Thread#raise`: deliver the exception at the interrupted point.
+    Raise(MonorubyErr),
+}
+
 /// Green-thread control block.
 ///
 /// monoruby threads are cooperative green threads multiplexed on the one
@@ -33,6 +46,12 @@ pub struct ThreadInner {
     pub(crate) exception: Option<MonorubyErr>,
     /// Threads parked in `#join` on this thread.
     pub(crate) joiners: Vec<Value>,
+    /// A queued asynchronous interrupt (`#kill` / `#raise`), delivered
+    /// at the next resume.
+    pub(crate) pending: Option<PendingInterrupt>,
+    /// Set when a kill was delivered: the terminating `Throw` unwind is
+    /// then a clean death, not an exception (see scheduler finalize).
+    pub(crate) killed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +105,9 @@ impl alloc::GC<RValue> for ThreadInner {
         for v in &self.joiners {
             v.mark(alloc);
         }
+        if let Some(PendingInterrupt::Raise(err)) = &self.pending {
+            err.mark(alloc);
+        }
     }
 }
 
@@ -102,6 +124,8 @@ impl ThreadInner {
             result: None,
             exception: None,
             joiners: vec![],
+            pending: None,
+            killed: false,
         }
     }
 
@@ -118,6 +142,8 @@ impl ThreadInner {
             result: None,
             exception: None,
             joiners: vec![],
+            pending: None,
+            killed: false,
         }
     }
 
@@ -135,6 +161,8 @@ impl ThreadInner {
             result: None,
             exception: None,
             joiners: vec![],
+            pending: None,
+            killed: false,
         }
     }
 

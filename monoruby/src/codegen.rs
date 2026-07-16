@@ -669,7 +669,7 @@ pub struct Codegen {
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
     pub(crate) thread_invoker: ThreadInvoker,
     pub(crate) switch_to_scheduler: extern "C" fn(*mut Executor, Value) -> Option<Value>,
-    pub(crate) scheduler_resume: extern "C" fn(*mut Executor, Value) -> Option<Value>,
+    pub(crate) scheduler_resume: extern "C" fn(*mut Executor, u64) -> Option<Value>,
     pub(crate) startup_flag: bool,
     /// (§9a-ii) When `Some`, `encode_linst*` and the per-arch fallthrough buffer
     /// the lowered `LInst`s here instead of emitting, so the region driver

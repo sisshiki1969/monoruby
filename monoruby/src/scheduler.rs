@@ -43,7 +43,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::alloc::GC;
-use crate::value::rvalue::{ThreadInner, ThreadState};
+use crate::value::rvalue::{PendingInterrupt, ThreadInner, ThreadState};
 use crate::*;
 
 thread_local! {
@@ -246,6 +246,7 @@ pub(crate) fn sleep(
             s.sleepers.push((deadline, main));
         });
         scheduler_run(vm, globals)?;
+        take_main_pending()?;
     } else {
         let cur = SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -293,7 +294,8 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
             let main = s.main.unwrap();
             s.current = Some(main);
         });
-        result
+        result?;
+        take_main_pending()
     } else {
         let cur = SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -344,6 +346,7 @@ pub(crate) fn join(
                 }
             });
             scheduler_run(vm, globals)?;
+            take_main_pending()?;
         } else {
             SCHEDULER.with(|s| {
                 let mut s = s.borrow_mut();
@@ -357,6 +360,82 @@ pub(crate) fn join(
             });
             park_switch(vm, cur)?;
         }
+    }
+}
+
+/// Queue an asynchronous interrupt (`Thread#kill` / `#raise`) for
+/// `target` and wake it if parked. An interrupt aimed at the *current*
+/// thread is returned as `Err` for the caller to raise in place.
+pub(crate) fn interrupt(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut target: Value,
+    int: PendingInterrupt,
+) -> Result<()> {
+    ensure_main(vm);
+    // The kill unwind tag is allocated *before* borrowing the scheduler
+    // (allocation can trigger GC, which re-enters it for marking).
+    let cur = SCHEDULER.with(|s| s.borrow().current.unwrap());
+    if target == cur {
+        return Err(match int {
+            PendingInterrupt::Kill => {
+                if SCHEDULER.with(|s| s.borrow().main) == Some(target) {
+                    // Killing the main thread terminates the process.
+                    MonorubyErr::new(MonorubyErrKind::SystemExit(0), "exit")
+                } else {
+                    target.as_thread_inner_mut().killed = true;
+                    kill_unwind_error()
+                }
+            }
+            PendingInterrupt::Raise(err) => err,
+        });
+    }
+    if target.as_thread_inner().is_dead() {
+        // CRuby: killing a dead thread is a no-op; raising into one is
+        // also accepted (the exception is simply lost).
+        return Ok(());
+    }
+    SCHEDULER.with(|s| {
+        let mut s = s.borrow_mut();
+        let inner = target.as_thread_inner_mut();
+        inner.pending = Some(int);
+        // Wake a parked target so delivery happens promptly.
+        if matches!(
+            inner.state(),
+            ThreadState::Sleeping | ThreadState::Joining
+        ) {
+            inner.state = ThreadState::Runnable;
+            if Some(target) != s.main {
+                s.ready.push_back(target);
+            }
+        }
+    });
+    Ok(())
+}
+
+/// The unrescuable unwind used to deliver `Thread#kill`: a `Throw` whose
+/// tag is a fresh object no `catch` can ever match, so it runs every
+/// ensure clause on the way out but passes through every rescue — and is
+/// recognized in `finalize` as a clean death.
+fn kill_unwind_error() -> MonorubyErr {
+    MonorubyErr::throw(Value::object(OBJECT_CLASS), Value::nil())
+}
+
+/// Deliver a pending interrupt queued for the *main* thread. Called
+/// after the scheduler returns control to a main-thread park.
+fn take_main_pending() -> Result<()> {
+    let pending = SCHEDULER.with(|s| {
+        let s = s.borrow();
+        let mut main = s.main.unwrap();
+        main.as_thread_inner_mut().pending.take()
+    });
+    match pending {
+        None => Ok(()),
+        // Killing the main thread terminates the process (CRuby).
+        Some(PendingInterrupt::Kill) => {
+            Err(MonorubyErr::new(MonorubyErrKind::SystemExit(0), "exit"))
+        }
+        Some(PendingInterrupt::Raise(err)) => Err(err),
     }
 }
 
@@ -505,12 +584,26 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
     enum Entry {
         Invoke(ProcData, *const Value, usize, *mut Executor),
         Resume(*mut Executor),
+        /// Resume delivering a pending interrupt: the error is already
+        /// set on the executor; resuming with 0 makes the parked
+        /// `park_switch` return `Err(vm.take_error())`.
+        ResumeInterrupt(*mut Executor),
+        /// A never-started thread was killed / raised into: no body run.
+        Skip(Option<MonorubyErr>),
     }
+    // The kill tag allocates; do it outside the scheduler borrow.
+    let kill_err = kill_unwind_error();
     let entry = SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
         s.current = Some(thread);
         let inner = thread.as_thread_inner_mut();
+        let pending = inner.pending.take();
         if inner.state() == ThreadState::Created {
+            match pending {
+                Some(PendingInterrupt::Kill) => return Entry::Skip(None),
+                Some(PendingInterrupt::Raise(err)) => return Entry::Skip(Some(err)),
+                None => {}
+            }
             inner.state = ThreadState::Runnable;
             inner.initialize_stack();
             let proc_data = ProcData::from_proc(inner.proc().unwrap());
@@ -519,7 +612,24 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
             Entry::Invoke(proc_data, ptr, len, inner.handle() as *mut Executor)
         } else {
             inner.state = ThreadState::Runnable;
-            Entry::Resume(inner.resume_exec.take().unwrap().as_ptr())
+            let exec = inner.resume_exec.take().unwrap().as_ptr();
+            match pending {
+                None => Entry::Resume(exec),
+                Some(int) => {
+                    let err = match int {
+                        PendingInterrupt::Kill => {
+                            inner.killed = true;
+                            kill_err
+                        }
+                        PendingInterrupt::Raise(err) => err,
+                    };
+                    // SAFETY: `exec` is the parked context inside this
+                    // thread's rooted RValue; setting its pending error
+                    // is what the 0-resume below hands to park_switch.
+                    unsafe { (*exec).set_error(err) };
+                    Entry::ResumeInterrupt(exec)
+                }
+            }
         }
     });
     // The switch itself happens with no scheduler borrow held.
@@ -540,7 +650,19 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
         }
         Entry::Resume(exec) => {
             let resume = CODEGEN.with(|c| c.borrow().scheduler_resume);
-            resume(exec, Value::nil())
+            resume(exec, Value::nil().id())
+        }
+        Entry::ResumeInterrupt(exec) => {
+            let resume = CODEGEN.with(|c| c.borrow().scheduler_resume);
+            resume(exec, 0)
+        }
+        Entry::Skip(err) => {
+            finalize_unstarted(globals, thread, err);
+            SCHEDULER.with(|s| {
+                let mut s = s.borrow_mut();
+                s.current = s.main;
+            });
+            return Ok(());
         }
     };
     // Control is back in the scheduler context.
@@ -554,52 +676,85 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
     Ok(())
 }
 
+/// A thread killed or raised-into before its body ever ran: mark it
+/// dead without running the body (CRuby semantics for an unstarted
+/// target), record the raise as its terminating exception, wake joiners.
+fn finalize_unstarted(globals: &mut Globals, mut thread: Value, err: Option<MonorubyErr>) {
+    {
+        let inner = thread.as_thread_inner_mut();
+        inner.killed = err.is_none();
+        inner.exception = err;
+        inner.result = None;
+    }
+    finalize_common(globals, thread);
+}
+
 /// A green thread's body finished: record the outcome, wake joiners,
 /// prune the registry.
 fn finalize(globals: &mut Globals, mut thread: Value, ret: Option<Value>) {
-    let woken = SCHEDULER.with(|s| {
-        let mut s = s.borrow_mut();
+    {
         let inner = thread.as_thread_inner_mut();
-        inner.state = ThreadState::Dead;
         match ret {
             Some(v) => inner.result = Some(v),
             None => {
                 let err = inner.take_error();
-                // A bare `return` / `break` escaping a thread body has no
-                // enclosing frame on the thread's own stack: LocalJumpError
-                // (CRuby).
-                let err = match err.kind() {
-                    MonorubyErrKind::MethodReturn(..) => {
-                        MonorubyErr::localjumperr("unexpected return")
-                    }
-                    MonorubyErrKind::BlockBreak(..) => {
-                        MonorubyErr::localjumperr("break from proc-closure")
-                    }
-                    _ => err,
-                };
-                inner.exception = Some(err);
+                if inner.killed && matches!(err.kind(), MonorubyErrKind::Throw(..)) {
+                    // The kill unwind arrived at the thread root: a clean
+                    // death (status false, join returns, nothing re-raised).
+                    inner.result = None;
+                } else {
+                    // A bare `return` / `break` escaping a thread body has
+                    // no enclosing frame on the thread's own stack:
+                    // LocalJumpError (CRuby).
+                    let err = match err.kind() {
+                        MonorubyErrKind::MethodReturn(..) => {
+                            MonorubyErr::localjumperr("unexpected return")
+                        }
+                        MonorubyErrKind::BlockBreak(..) => {
+                            MonorubyErr::localjumperr("break from proc-closure")
+                        }
+                        _ => err,
+                    };
+                    inner.exception = Some(err);
+                }
             }
         }
+    }
+    finalize_common(globals, thread);
+}
+
+/// Shared tail of thread termination: mark dead, wake joiners, prune the
+/// registry, and report an unhandled exception per report_on_exception.
+fn finalize_common(globals: &mut Globals, mut thread: Value) {
+    SCHEDULER.with(|s| {
+        let mut s = s.borrow_mut();
+        let inner = thread.as_thread_inner_mut();
+        inner.state = ThreadState::Dead;
         let joiners = std::mem::take(&mut inner.joiners);
         let main = s.main;
-        let mut main_woken = false;
         for mut j in joiners {
             let ji = j.as_thread_inner_mut();
             if ji.state() == ThreadState::Joining {
                 ji.state = ThreadState::Runnable;
-                if Some(j) == main {
-                    main_woken = true;
-                } else {
+                if Some(j) != main {
                     s.ready.push_back(j);
                 }
             }
         }
         s.threads.retain(|t| *t != thread);
-        main_woken
     });
-    let _ = woken;
-    // `Thread#report_on_exception` default: surface a terminating
-    // exception on stderr (CRuby prints it when the thread dies).
+    // `Thread#report_on_exception` (default true): surface a terminating
+    // exception on stderr (CRuby prints it when the thread dies). An
+    // explicit `t.report_on_exception = false` (ivar set by the Ruby-side
+    // accessor) suppresses it; a kill never reports.
+    let report = globals
+        .store
+        .get_ivar(thread, IdentId::get_id("@report_on_exception"))
+        .map(|v| v.as_bool())
+        .unwrap_or(true);
+    if !report {
+        return;
+    }
     let msg = {
         let inner = thread.as_thread_inner();
         inner
