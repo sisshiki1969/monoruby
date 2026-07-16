@@ -586,6 +586,24 @@ impl IoInner {
         }
     }
 
+    /// Whether a read can be satisfied without touching the fd: ungetc
+    /// pushback or bytes already sitting in the internal BufReader. Used
+    /// by the green-thread IO scheduler to skip the fd-readiness park.
+    pub fn has_buffered_data(&self) -> bool {
+        if self.pushback_len() > 0 {
+            return true;
+        }
+        match self {
+            Self::File(f) => !f.reader.buffer().is_empty(),
+            Self::Popen(p) => p
+                .reader
+                .as_ref()
+                .map(|r| !r.buffer().is_empty())
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
     /// Bytes currently sitting in the `ungetc`/`ungetbyte` pushback buffer.
     pub fn pushback_len(&self) -> usize {
         match self {

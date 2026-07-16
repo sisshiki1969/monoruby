@@ -302,7 +302,9 @@ fn thread_status(vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 Value::bool(false)
             }
         }
-        ThreadState::Sleeping | ThreadState::Joining => Value::string_from_str("sleep"),
+        ThreadState::Sleeping | ThreadState::Joining | ThreadState::IoWaiting => {
+            Value::string_from_str("sleep")
+        }
         ThreadState::Created | ThreadState::Runnable => {
             // The current thread reports "run"; queued-but-not-yet-run
             // threads also report "run" (CRuby: runnable == "run").
@@ -332,7 +334,10 @@ fn thread_stop_p(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let state = lfp.self_val().as_thread_inner().state();
     Ok(Value::bool(matches!(
         state,
-        ThreadState::Dead | ThreadState::Sleeping | ThreadState::Joining
+        ThreadState::Dead
+            | ThreadState::Sleeping
+            | ThreadState::Joining
+            | ThreadState::IoWaiting
     )))
 }
 
@@ -518,6 +523,68 @@ mod tests {
             Thread.current[:k] = 42
             Thread.current.thread_variable_set(:tv, 7)
             [Thread.current[:k], Thread.current.thread_variable_get(:tv)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_blocking_io_yields_to_scheduler() {
+        // The copy_stream partial-read pattern: a thread copies into a
+        // pipe while the main thread drains it one byte at a time.
+        run_test_once(
+            r#"
+            from_out, from_in = IO.pipe
+            to_out, to_in = IO.pipe
+            from_in.write "1234"
+            from_in.close
+            th = Thread.new { IO.copy_stream(from_out, to_in) }
+            copied = ""
+            4.times { copied += to_out.read(1) }
+            th.join
+            copied
+            "#,
+        );
+        // A thread parked in gets is fed by main.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { r.gets }
+            Thread.pass while t.status != "sleep"
+            w.puts "hello"
+            t.value
+            "#,
+        );
+        // Main parked in read is fed by a thread.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { sleep 0.02; w.write "x"; w.close }
+            v = r.read
+            t.join
+            v
+            "#,
+        );
+        // IO.select waits without blocking the writer thread.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { sleep 0.02; w.write "z" }
+            ready = IO.select([r], nil, nil, 5)
+            v = [ready[0][0] == r, r.read(1)]
+            t.join
+            v
+            "#,
+        );
+        // Two threads ping-pong over a pair of pipes.
+        run_test_once(
+            r#"
+            a_r, a_w = IO.pipe
+            b_r, b_w = IO.pipe
+            t = Thread.new { 3.times { v = a_r.gets.chomp; b_w.puts (v.to_i + 1).to_s } }
+            res = []
+            3.times { |i| a_w.puts (i*10).to_s; res << b_r.gets.chomp.to_i }
+            t.join
+            res
             "#,
         );
     }
