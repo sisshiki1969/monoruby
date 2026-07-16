@@ -814,6 +814,55 @@ mod tests {
             [a, v]
             "#,
         );
+        // ... and with NO other live threads (the single-thread poll(2)
+        // wait): the data is produced by a child process instead.
+        run_test_once(
+            r#"
+            io = IO.popen("sleep 0.05; echo hi")
+            a = io.read_nonblock(1, exception: false)
+            v = io.gets
+            io.close
+            [a, v]
+            "#,
+        );
+        // Writing to a popen'd child stdin past the pipe capacity: the
+        // POLLOUT park resolves to the write-side fd (not the fd
+        // `fileno` reports), while another thread stays live.
+        run_test_once(
+            r#"
+            io = IO.popen("sleep 0.05; cat > /dev/null", "w")
+            t = Thread.new { sleep 0.3 }
+            n = io.write("x" * 200_000)
+            io.close
+            t.join
+            n
+            "#,
+        );
+        // gets with a multi-byte custom separator split across chunks
+        // (the byte-at-a-time getline loop parks and re-reads pushback).
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { r.gets("!!") }
+            w.write "ab!"
+            Thread.pass while t.status != "sleep"
+            w.write "!cd"
+            v = t.value
+            w.close
+            [v, r.read]
+            "#,
+        );
+        // Paragraph-mode gets parking mid-paragraph.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { r.gets("") }
+            w.write "para\n"
+            Thread.pass while t.status != "sleep"
+            w.write "\nnext"
+            t.value
+            "#,
+        );
     }
 
     #[test]
