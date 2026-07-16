@@ -4400,4 +4400,47 @@ mod tests {
             r#"[[1, 2]].map { |k| k }"#,
         ]);
     }
+
+    #[test]
+    fn hash_map_arity_and_subclass() {
+        run_tests(&[
+            // Plain Hash#map: a two-param block sees k, v; a one-param block
+            // sees the [k, v] pair.
+            r#"{a: 1, b: 2}.map { |k, v| [k, v] }"#,
+            r#"{a: 1, b: 2}.map { |x| x }"#,
+            // A strict arity-2 Method (no auto-splat) still receives k and v.
+            r#"
+            c = Class.new { def register(a, b); [a, b]; end }
+            m = c.new.method(:register)
+            {1 => "a", 2 => "b"}.map(&m)
+            "#,
+        ]);
+        // A subclass overriding #each to `yield k, v` (two values) maps
+        // correctly for both block arities.
+        run_test(
+            r#"
+            cls = Class.new(Hash) do
+              def each
+                super { |k, v| yield k, v }
+              end
+            end
+            o = cls.new
+            o["x"] = "y"
+            [o.map { |k, v| [k, v] }, o.map { |z| z }]
+            "#,
+        );
+        // A subclass overriding #each to `yield [k, v]` (one array) too.
+        run_test(
+            r#"
+            cls = Class.new(Hash) do
+              def each
+                super { |k, v| yield [k, v] }
+              end
+            end
+            o = cls.new
+            o["x"] = "y"
+            o.map { |k, v| [k, v] }
+            "#,
+        );
+    }
 }
