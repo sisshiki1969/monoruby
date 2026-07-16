@@ -1205,24 +1205,12 @@ fn index_assign(
         if let Some(idx) = i.try_fixnum() {
             ary.set_index(idx, val)
         } else if let Some(range) = i.is_range() {
-            let start = ary.get_array_index_nil_or(vm, globals, range.start(), 0)?;
-            let len = if range.end().is_nil() {
-                // endless range: length is from start to end of array
-                ary.len().checked_sub(start)
-            } else {
-                let end = ary.get_array_index_nil_or(vm, globals, range.end(), ary.len())?;
-                if range.exclude_end() {
-                    end.checked_sub(start)
-                } else {
-                    (end + 1).checked_sub(start)
-                }
-            };
-            if let Some(len) = len {
-                ary.set_index2(start as usize, len as usize, val)
-            } else {
-                // end < start: treat as zero-length replacement at start
-                ary.set_index2(start as usize, 0, val)
-            }
+            // Range assignment: an out-of-bounds range *start* raises
+            // RangeError (not IndexError), and an end before the start is a
+            // zero-length insertion. `fill_range_indices` already encodes
+            // exactly these CRuby semantics.
+            let (start, end_idx) = fill_range_indices(vm, globals, &ary, range)?;
+            ary.set_index2(start, end_idx - start, val)
         } else {
             let idx = i.coerce_to_int_i64(vm, globals)?;
             ary.set_index(idx, val)
@@ -2379,11 +2367,19 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
             if block_res.is_nil() {
                 return Err(MonorubyErr::argumenterr("comparison of elements failed"));
             }
-            // Try to use <=> with 0 for non-Integer results
-            let res = match block_res.try_fixnum() {
-                Some(i) => i,
-                None => {
-                    // Try coercing via <=> with 0
+            // An Integer result (Fixnum or Bignum) is compared by its sign
+            // alone — never via `<=>` — matching CRuby's `rb_cmpint`. This
+            // keeps huge block results like `(a - b) * 2**200` working even
+            // when `Integer#<=>` is redefined. Other objects fall back to
+            // `<=> 0`.
+            let res = match block_res.unpack() {
+                RV::Fixnum(i) => i,
+                RV::BigInt(b) => match b.sign() {
+                    num::bigint::Sign::Minus => -1,
+                    num::bigint::Sign::Plus => 1,
+                    num::bigint::Sign::NoSign => 0,
+                },
+                _ => {
                     let cmp = vm.invoke_method_inner(
                         globals,
                         IdentId::_CMP,
