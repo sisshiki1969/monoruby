@@ -1613,18 +1613,31 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val().as_array();
-    let mut iter = self_.iter().cloned();
     // A block is used only for the 0/1-argument forms. With two
     // arguments (init, sym) the block is ignored (CRuby warns).
     if let Some(bh) = lfp.block()
         && lfp.try_arg(1).is_none()
     {
-        let res = if lfp.try_arg(0).is_none() {
-            iter.next().unwrap_or_default()
+        let data = vm.get_block_data(globals, bh)?;
+        let self_val = lfp.self_val();
+        // `res` seeds from arg0, or from the first element when no init
+        // is given. `i` marks the next element to fold in. Re-read the
+        // length each step so elements the block appends are folded in
+        // too (CRuby tolerates the collection growing mid-iteration).
+        let (mut res, mut i) = if lfp.try_arg(0).is_none() {
+            if self_val.as_array().len() == 0 {
+                return Ok(Value::nil());
+            }
+            (self_val.as_array()[0], 1usize)
         } else {
-            lfp.arg(0)
+            (lfp.arg(0), 0usize)
         };
-        return vm.invoke_block_fold1(globals, bh, iter, res);
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            res = vm.invoke_block(globals, &data, &[res, elem])?;
+            i += 1;
+        }
+        return Ok(res);
     }
     if lfp.block().is_some() && lfp.try_arg(1).is_some() {
         vm.ruby_warn(globals, "warning: given block not used")?;
@@ -2060,6 +2073,36 @@ fn take(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 
 ///
 /// ### Array#sum
+/// One step of Kahan-Babuška compensated summation with the same
+/// non-finite handling as CRuby's `Array#sum`: NaN is sticky, an infinite
+/// addend replaces the running value (or yields NaN when it meets an
+/// opposite-signed infinity), and a finite addend to an infinite running
+/// value is a no-op. Returns the updated `(sum, compensation)`.
+fn kahan_step(f: f64, c: f64, x: f64) -> (f64, f64) {
+    if f.is_nan() {
+        return (f, c);
+    }
+    if x.is_nan() {
+        return (x, c);
+    }
+    if x.is_infinite() {
+        if f.is_infinite() && (x.is_sign_negative() != f.is_sign_negative()) {
+            return (f64::NAN, c);
+        }
+        return (x, c);
+    }
+    if f.is_infinite() {
+        return (f, c);
+    }
+    let t = f + x;
+    let c = if f.abs() >= x.abs() {
+        c + ((f - t) + x)
+    } else {
+        c + ((x - t) + f)
+    };
+    (t, c)
+}
+
 ///
 /// - sum(init=0) -> object
 /// - sum(init=0) {|e| expr } -> object
@@ -2096,22 +2139,50 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         }
         // Fall through to the generic loop with the original `sum`.
     }
-    let iter = self_.iter().cloned();
-    match lfp.block() {
-        None => {
-            for v in iter {
-                sum =
-                    executor::op::add_values(vm, globals, sum, v).ok_or_else(|| vm.take_error())?;
-            }
-        }
-        Some(bh) => {
-            let data = vm.get_block_data(globals, bh)?;
-            for v in iter {
-                let rhs = vm.invoke_block(globals, &data, &[v])?;
-                sum = executor::op::add_values(vm, globals, sum, rhs)
+    // Generic path. Once a Float appears, switch to Kahan-Babuška
+    // compensated summation (matching CRuby's Array#sum) so a long run of
+    // floats doesn't accumulate rounding error. `float_acc` holds the
+    // running float sum `f` and its compensation `c` while in float mode.
+    let data = match lfp.block() {
+        Some(bh) => Some(vm.get_block_data(globals, bh)?),
+        None => None,
+    };
+    let self_val = lfp.self_val();
+    let mut float_acc: Option<(f64, f64)> = None;
+    // Re-read the length every step so elements appended by a block during
+    // iteration are visited too (CRuby tolerates the array growing mid-sum).
+    let mut i = 0;
+    while i < self_val.as_array().len() {
+        let elem = self_val.as_array()[i];
+        i += 1;
+        let v = match &data {
+            Some(d) => vm.invoke_block(globals, d, &[elem])?,
+            None => elem,
+        };
+        if let Some((f, c)) = float_acc.as_mut() {
+            if let Some(x) = v.try_float() {
+                (*f, *c) = kahan_step(*f, *c, x);
+            } else {
+                // A non-float element ends the float run: fold the
+                // compensated total back into `sum` and resume generic `+`.
+                sum = Value::float(*f + *c);
+                float_acc = None;
+                sum = executor::op::add_values(vm, globals, sum, v)
                     .ok_or_else(|| vm.take_error())?;
             }
+        } else if let Some(x) = v.try_float()
+            && let Some(s) = sum.try_float().or_else(|| sum.try_fixnum().map(|n| n as f64))
+        {
+            // First float while `sum` is still an exact int/float: seed
+            // Kahan accumulation from the current sum and this element.
+            float_acc = Some(kahan_step(s, 0.0, x));
+        } else {
+            sum = executor::op::add_values(vm, globals, sum, v)
+                .ok_or_else(|| vm.take_error())?;
         }
+    }
+    if let Some((f, c)) = float_acc {
+        sum = Value::float(f + c);
     }
     Ok(sum)
 }

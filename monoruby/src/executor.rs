@@ -2269,20 +2269,6 @@ impl Executor {
         Ok(v)
     }
 
-    pub(crate) fn invoke_block_fold1(
-        &mut self,
-        globals: &mut Globals,
-        bh: BlockHandler,
-        iter: impl Iterator<Item = Value>,
-        mut res: Value,
-    ) -> Result<Value> {
-        let data = self.get_block_data(globals, bh)?;
-        for elem in iter {
-            res = self.invoke_block(globals, &data, &[res, elem])?;
-        }
-        Ok(res)
-    }
-
     ///
     /// Invoke proc.
     ///
