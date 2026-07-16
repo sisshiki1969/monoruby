@@ -1157,7 +1157,7 @@ fn write(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         };
         count += bytes.len() as i64;
         let mut done = 0;
-        super::io::blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, || {
+        super::io::blocking_region(vm, globals, || {
             lfp.self_val().as_io_inner_mut().write(&bytes, &mut done)
         })?;
     }

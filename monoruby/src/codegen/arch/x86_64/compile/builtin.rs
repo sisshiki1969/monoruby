@@ -182,24 +182,11 @@ impl Codegen {
     }
 
     /// `Fiber.yield`: call `yield_fiber(vm, value)` (value already in rsi).
-    /// A yield with no parent fiber (main fiber / a green thread's root)
-    /// must not reach the switch stub — it would load rsp through a null
-    /// `parent_fiber` — so route it to the error helper instead (returns
-    /// None with a FiberError set; the inline's handle_error picks it up).
-    pub(crate) fn emit_fiber_yield_call(&mut self, yield_fiber: u64, no_parent: u64) {
-        let none = self.jit.label();
-        let exit = self.jit.label();
+    pub(crate) fn emit_fiber_yield_call(&mut self, yield_fiber: u64) {
         monoasm! { &mut self.jit,
             movq rdi, rbx;
-            cmpq [rdi + (EXECUTOR_PARENT_FIBER)], 0;
-            jeq  none;
             movq rax, (yield_fiber);
             call rax;
-            jmp  exit;
-        none:
-            movq rax, (no_parent);
-            call rax;
-        exit:
         }
     }
 

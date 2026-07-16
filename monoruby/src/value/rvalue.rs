@@ -19,10 +19,8 @@ pub use complex::ComplexInner;
 pub use enumerator::*;
 pub use exception::ExceptionInner;
 pub use fiber::*;
-pub use thread::*;
 pub use hash::*;
 pub use io::{fd_is_owned, IoInner, NonblockRead, NonblockWrite};
-pub(crate) use io::NonblockGuard;
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
 pub use method::*;
@@ -45,7 +43,6 @@ mod complex;
 mod enumerator;
 mod exception;
 mod fiber;
-mod thread;
 mod hash;
 mod io;
 mod ivar_table;
@@ -109,7 +106,6 @@ impl std::fmt::Debug for ObjTy {
                 24 => "STRUCT",
                 25 => "ARITHMETIC_SEQUENCE",
                 26 => "IO_BUFFER",
-                27 => "THREAD",
                 _ => return write!(f, "INVALID({ty})"),
             }
         )
@@ -149,7 +145,6 @@ impl ObjTy {
     pub const STRUCT: Self = Self(std::num::NonZeroU8::new(24).unwrap());
     pub const ARITHMETIC_SEQUENCE: Self = Self(std::num::NonZeroU8::new(25).unwrap());
     pub const IO_BUFFER: Self = Self(std::num::NonZeroU8::new(26).unwrap());
-    pub const THREAD: Self = Self(std::num::NonZeroU8::new(27).unwrap());
 }
 
 #[repr(C)]
@@ -172,9 +167,6 @@ pub union ObjKind {
     method: ManuallyDrop<MethodInner>,
     umethod: ManuallyDrop<UMethodInner>,
     fiber: ManuallyDrop<FiberInner>,
-    /// Boxed: ThreadInner (scheduler bookkeeping, saved error, joiner
-    /// list) is far larger than the RValue cell.
-    thread: ManuallyDrop<Box<ThreadInner>>,
     enumerator: ManuallyDrop<Box<EnumeratorInner>>,
     generator: ManuallyDrop<GeneratorInner>,
     binding: ManuallyDrop<BindingInner>,
@@ -417,12 +409,6 @@ impl ObjKind {
         }
     }
 
-    fn thread(inner: ThreadInner) -> Self {
-        Self {
-            thread: ManuallyDrop::new(Box::new(inner)),
-        }
-    }
-
     fn fiber(proc: Proc) -> Self {
         Self {
             fiber: ManuallyDrop::new(FiberInner::new(proc)),
@@ -539,7 +525,6 @@ impl std::fmt::Debug for RValue {
                             ObjTy::IO => format!("{:?}", self.kind.io),
                             ObjTy::METHOD => format!("{:?}", self.kind.method),
                             ObjTy::FIBER => format!("{:?}", self.kind.fiber),
-                            ObjTy::THREAD => format!("{:?}", self.kind.thread),
                             ObjTy::ENUMERATOR => format!("{:?}", self.kind.enumerator),
                             ObjTy::GENERATOR => format!("{:?}", self.kind.generator),
                             ObjTy::COMPLEX => format!("{:?}", self.kind.complex),
@@ -788,7 +773,6 @@ impl alloc::GCBox for RValue {
                 ObjTy::HASH => ManuallyDrop::drop(&mut self.kind.hash),
                 ObjTy::REGEXP => ManuallyDrop::drop(&mut self.kind.regexp),
                 ObjTy::FIBER => ManuallyDrop::drop(&mut self.kind.fiber),
-                ObjTy::THREAD => ManuallyDrop::drop(&mut self.kind.thread),
                 ObjTy::ENUMERATOR => ManuallyDrop::drop(&mut self.kind.enumerator),
                 ObjTy::GENERATOR => ManuallyDrop::drop(&mut self.kind.generator),
                 ObjTy::BINDING => ManuallyDrop::drop(&mut self.kind.binding),
@@ -875,7 +859,6 @@ impl alloc::GCBox for RValue {
                 ObjTy::EXCEPTION => self.as_exception().mark(alloc),
                 ObjTy::METHOD => self.as_method().mark(alloc),
                 ObjTy::FIBER => self.as_fiber().mark(alloc),
-                ObjTy::THREAD => self.as_thread().mark(alloc),
                 ObjTy::ENUMERATOR => self.as_enumerator().mark(alloc),
                 ObjTy::GENERATOR => self.as_generator().mark(alloc),
                 ObjTy::BINDING => self.as_binding().mark(alloc),
@@ -1952,14 +1935,6 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_thread(class_id: ClassId, inner: ThreadInner) -> Self {
-        RValue {
-            header: Header::new(class_id, ObjTy::THREAD),
-            kind: ObjKind::thread(inner),
-            var_table: None,
-        }
-    }
-
     pub(super) fn new_fiber(proc: Proc) -> Self {
         RValue {
             header: Header::new(FIBER_CLASS, ObjTy::FIBER),
@@ -2259,16 +2234,6 @@ impl RValue {
     pub(crate) fn as_umethod(&self) -> &UMethodInner {
         assert_eq!(self.ty(), ObjTy::UMETHOD);
         unsafe { &self.kind.umethod }
-    }
-
-    pub(super) unsafe fn as_thread(&self) -> &ThreadInner {
-        assert_eq!(self.ty(), ObjTy::THREAD);
-        unsafe { &self.kind.thread }
-    }
-
-    pub(super) unsafe fn as_thread_mut(&mut self) -> &mut ThreadInner {
-        assert_eq!(self.ty(), ObjTy::THREAD);
-        unsafe { &mut self.kind.thread }
     }
 
     pub(super) unsafe fn as_fiber(&self) -> &FiberInner {

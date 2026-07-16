@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [master, thread]
+    branches: [master]
   pull_request:
-    branches: [master, thread]
+    branches: [master]
 
 jobs:
   amd64:

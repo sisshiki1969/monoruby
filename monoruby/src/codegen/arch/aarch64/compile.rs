@@ -3916,29 +3916,14 @@ impl Codegen {
     /// method's own LR is saved: the invoker's a64_push_callee_save stashes the
     /// *post-blr* x30, not ours, so we restore the real return address after the
     /// fiber resumes back here.
-    /// A yield with no parent fiber (main fiber / a green thread's root)
-    /// must not reach the switch stub — it would load SP through a null
-    /// `parent_fiber` — so route it to the error helper instead (returns
-    /// None with a FiberError set; the inline's handle_error picks it up).
-    pub(crate) fn emit_fiber_yield_call(&mut self, yield_fiber: u64, no_parent: u64) {
-        let none = self.jit.label();
-        let exit = self.jit.label();
+    pub(crate) fn emit_fiber_yield_call(&mut self, yield_fiber: u64) {
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;          // vm (EXEC)
             mov x1, x3;           // value (Rsi)
-            ldr x9, [x0, #(EXECUTOR_PARENT_FIBER as u32)];
-            cbz x9, none;
             mov x9, (yield_fiber);
             str x30, [sp, #-16]!;
             blr x9;
             ldr x30, [sp], #16;
-            b exit;
-        none:
-            mov x9, (no_parent);
-            str x30, [sp, #-16]!;
-            blr x9;
-            ldr x30, [sp], #16;
-        exit:
         );
     }
 

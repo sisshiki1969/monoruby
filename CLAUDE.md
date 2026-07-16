@@ -168,10 +168,7 @@ cd ../monoruby
 bin/spec
 ```
 
-> **Note**: With green threads (the `thread` branch series), the formerly
-> hang-prone specs (`core/io/copy_stream_spec.rb`, `core/io/select_spec.rb`)
-> now run to completion — blocking IO parks the calling thread on the
-> scheduler's fd poller instead of blocking the process.
+> **Note**: `core/io/copy_stream_spec.rb`, `core/io/select_spec.rb`, and `core/kernel/readlines_spec.rb` hang under monoruby's single-threaded runtime and are excluded by `bin/spec`.
 
 ---
 
