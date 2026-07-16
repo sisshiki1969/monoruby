@@ -1401,6 +1401,14 @@ impl Value {
         RValue::new_fiber(proc).pack()
     }
 
+    pub(crate) fn new_thread(class_id: ClassId, inner: crate::value::rvalue::ThreadInner) -> Self {
+        RValue::new_thread(class_id, inner).pack()
+    }
+
+    pub(crate) fn is_thread(&self) -> bool {
+        self.ty() == Some(ObjTy::THREAD)
+    }
+
     pub(crate) fn new_enumerator(
         obj: Value,
         method: IdentId,
@@ -2892,6 +2900,18 @@ impl Value {
     pub fn as_umethod(&self) -> &UMethodInner {
         assert_eq!(ObjTy::UMETHOD, self.rvalue().ty());
         self.rvalue().as_umethod()
+    }
+
+    pub(crate) fn as_thread_inner(&self) -> &crate::value::rvalue::ThreadInner {
+        assert_eq!(self.ty(), Some(ObjTy::THREAD));
+        // SAFETY: type checked immediately above.
+        unsafe { self.rvalue().as_thread() }
+    }
+
+    pub(crate) fn as_thread_inner_mut(&mut self) -> &mut crate::value::rvalue::ThreadInner {
+        assert_eq!(self.ty(), Some(ObjTy::THREAD));
+        // SAFETY: type checked immediately above.
+        unsafe { self.rvalue_mut().as_thread_mut() }
     }
 
     pub fn as_fiber_inner(&self) -> &FiberInner {

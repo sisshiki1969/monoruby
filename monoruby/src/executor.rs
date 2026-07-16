@@ -301,6 +301,9 @@ impl Executor {
         // `$-d` is its alias.
         globals.set_gvar(IdentId::get_id("$DEBUG"), Value::bool(false));
         globals.alias_global_variable(IdentId::get_id("$-d"), IdentId::get_id("$DEBUG"));
+        // A fresh interpreter must not see green-thread state left over
+        // from a previous interpreter on this OS thread (test harness).
+        crate::scheduler::reset();
         let mut executor = Self::default();
         // Bring-up/testing aid (used by the in-progress aarch64 VM port): skip
         // loading startup.rb + gems so a trivial program can exercise the VM
@@ -3665,6 +3668,10 @@ impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
         unsafe { crate::builtins::YIELDER.unwrap().mark(alloc) };
         self.globals.mark(alloc);
         self.executor.mark(alloc);
+        // Green threads: every live thread's stack frames (and the main
+        // thread's, while a green thread is the one triggering GC) are
+        // reachable only through the scheduler registry.
+        crate::scheduler::mark(alloc);
     }
 }
 

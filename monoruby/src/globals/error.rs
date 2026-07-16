@@ -5,6 +5,11 @@ use crate::ast::{Loc, ParseErr, ParseErrKind, SourceInfoRef};
 /// Ruby as a RuntimeError.
 pub(crate) const SIGNAL_INTERRUPT_MSG: &str = "__monoruby_signal_interrupt__";
 
+/// Reserved message of the internal [`MonorubyErr::would_block_interrupt`]
+/// marker error (see there). Chosen to be unmistakable if a bug ever lets
+/// it leak to Ruby as a RuntimeError.
+pub(crate) const WOULD_BLOCK_INTERRUPT_MSG: &str = "__monoruby_would_block_interrupt__";
+
 use super::*;
 
 ///
@@ -1004,7 +1009,7 @@ impl MonorubyErr {
     /// Internal marker: a blocking IO primitive observed `EINTR` while an
     /// async signal handler had recorded a pending signal. This never
     /// surfaces to Ruby — callers holding an `Executor` (the IO builtins,
-    /// via `blocking_region` in builtins/io.rs) intercept it with
+    /// via `blocking_io_region` in builtins/io.rs) intercept it with
     /// [`MonorubyErr::is_signal_interrupt`], run the VM poll point (which
     /// raises the converted `SignalException` or runs the `Signal.trap`
     /// handler), and restart the operation when the handler returned
@@ -1017,6 +1022,25 @@ impl MonorubyErr {
     /// marker.
     pub(crate) fn is_signal_interrupt(&self) -> bool {
         self.kind == MonorubyErrKind::Runtime && self.message() == SIGNAL_INTERRUPT_MSG
+    }
+
+    /// Internal marker: a blocking IO primitive hit `EAGAIN` on an fd put
+    /// into non-blocking mode by the green-thread scheduler's blocking-IO
+    /// emulation (or left non-blocking by `read_nonblock` /
+    /// `write_nonblock`). This never surfaces to Ruby — `blocking_io_region`
+    /// in builtins/io.rs intercepts it, parks the current green thread on
+    /// the scheduler's fd poller (or, with no other live threads, blocks in
+    /// `poll(2)` directly), and restarts the operation once the fd is ready.
+    /// Bytes consumed before the interrupt were pushed back by the
+    /// primitives, so the restart loses no data.
+    pub(crate) fn would_block_interrupt() -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Runtime, WOULD_BLOCK_INTERRUPT_MSG)
+    }
+
+    /// Whether this error is the internal
+    /// [`MonorubyErr::would_block_interrupt`] marker.
+    pub(crate) fn is_would_block_interrupt(&self) -> bool {
+        self.kind == MonorubyErrKind::Runtime && self.message() == WOULD_BLOCK_INTERRUPT_MSG
     }
 
     /// Construct a FatalError. Used when a Rust `panic!` is caught at an
@@ -1056,6 +1080,19 @@ impl MonorubyErr {
 
     /// `EOFError` (a subclass of `IOError` defined in Ruby). Falls
     /// back to a plain `IOError` if the class can't be resolved.
+    /// `ThreadError` (defined in Ruby in startup.rb). Falls back to a
+    /// plain `RuntimeError` if the class can't be resolved.
+    pub(crate) fn threaderr(store: &Store, msg: impl ToString) -> MonorubyErr {
+        let cid = store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("ThreadError"))
+            .and_then(|v| v.is_class_or_module())
+            .map(|m| m.id());
+        match cid {
+            Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg.to_string()),
+            None => MonorubyErr::new(MonorubyErrKind::Runtime, msg.to_string()),
+        }
+    }
+
     pub(crate) fn eoferr(store: &Store, msg: impl ToString) -> MonorubyErr {
         let cid = store
             .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("EOFError"))
