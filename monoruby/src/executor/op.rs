@@ -637,6 +637,60 @@ impl Executor {
         Ok(())
     }
 
+    ///
+    /// The `"file:line"` of the nearest Ruby (iseq) caller of the current
+    /// native builtin frame.
+    ///
+    /// Used for CRuby-style warnings that prefix the caller's location
+    /// (e.g. `Array#inject`'s "given block not used", emitted with an
+    /// implicit `uplevel: 1`). Returns `None` when no iseq caller is found.
+    ///
+    pub(crate) fn nearest_caller_location(&self, store: &Store) -> Option<String> {
+        // Walk callers via each inner frame's saved call-site pc, exactly
+        // like `Kernel#caller` / `complete_backtrace_for_rescue`, skipping
+        // native frames until the first Ruby (iseq) caller.
+        let mut inner_cfp = self.cfp();
+        let mut cfp = inner_cfp.prev()?;
+        loop {
+            let func_id = cfp.lfp().func_id();
+            if let Some(iseq_id) = store[func_id].is_iseq() {
+                let info = &store[iseq_id];
+                let loc = {
+                    let slot = inner_cfp.caller_pc_slot();
+                    if slot != 0
+                        && slot % 8 == 0
+                        && let Some(pc) =
+                            unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _) }
+                        && info.contains_pc(pc)
+                    {
+                        info.sourcemap[info.get_pc_index(Some(pc)).to_usize()]
+                    } else {
+                        info.loc
+                    }
+                };
+                return Some(format!(
+                    "{}:{}",
+                    info.sourceinfo.file_name(),
+                    info.sourceinfo.get_line(&loc)
+                ));
+            }
+            inner_cfp = cfp;
+            cfp = cfp.prev()?;
+        }
+    }
+
+    ///
+    /// Like [`Self::ruby_warn`], but prefixes the message with the nearest
+    /// Ruby caller's `"file:line: "` (CRuby's `rb_warn` / `warn(uplevel: 1)`
+    /// behaviour). Falls back to the bare message when no caller is found.
+    ///
+    pub(crate) fn ruby_warn_caller(&mut self, globals: &mut Globals, msg: &str) -> Result<()> {
+        match self.nearest_caller_location(&globals.store) {
+            Some(loc) => self.ruby_warn(globals, &format!("{loc}: {msg}")),
+            None => self.ruby_warn(globals, msg),
+        }
+    }
+
     pub(crate) fn compare_values(
         &mut self,
         globals: &mut Globals,

@@ -456,7 +456,7 @@ extern "C" fn array_dup_extern(val: Value, globals: &Globals) -> Value {
 fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some(arg0) = lfp.try_arg(0) {
         if lfp.block().is_some() {
-            vm.ruby_warn(globals, "warning: given block not used")?;
+            vm.ruby_warn_caller(globals, "warning: given block not used")?;
         }
         let mut count = 0;
         let ary = lfp.self_val();
@@ -1663,7 +1663,9 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         return vm.invoke_block_fold1(globals, bh, iter, res);
     }
     if lfp.block().is_some() && lfp.try_arg(1).is_some() {
-        vm.ruby_warn(globals, "warning: given block not used")?;
+        // CRuby emits this with an implicit `uplevel: 1`, so the message is
+        // prefixed with the location of the `inject` call site.
+        vm.ruby_warn_caller(globals, "warning: given block not used")?;
     }
     // The `inject(sym)` form may consume the first element as the
     // initial accumulator; track where the remaining elements start.
@@ -2993,7 +2995,7 @@ fn all_any_inner(
     if let Some(pattern) = lfp.try_arg(0) {
         // Pattern form: all?(pattern) / any?(pattern) — block is ignored
         if lfp.block().is_some() {
-            vm.ruby_warn(globals, "warning: given block not used")?;
+            vm.ruby_warn_caller(globals, "warning: given block not used")?;
         }
         let mut i = 0;
         while i < self_val.as_array().len() {
@@ -3980,7 +3982,7 @@ fn find_index(
     let self_val = lfp.self_val();
     if let Some(arg0) = lfp.try_arg(0) {
         if lfp.block().is_some() {
-            vm.ruby_warn(globals, "warning: given block not used")?;
+            vm.ruby_warn_caller(globals, "warning: given block not used")?;
         }
         let func_id = vm.find_method(globals, arg0, IdentId::_EQ, false)?;
         let mut i = 0;
@@ -6568,6 +6570,11 @@ mod tests {
             r#"[1, 2, 3].none?(String) { |x| true }"#,
             r#"[1, 2, 3].one?(Integer) { |x| false }"#,
             r#"[1, 2, 3].count(2) { |x| true }"#,
+            // inject(init, sym) ignores the block (a warning goes to stderr,
+            // checked by ruby/spec; here we confirm the result is the folded
+            // value, not the block's).
+            r#"[1, 2, 3].inject(10, :-) { raise "never" }"#,
+            r#"[1, 2, 3, 4].inject(0, :+) { 99 }"#,
         ]);
     }
 }
