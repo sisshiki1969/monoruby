@@ -13,6 +13,19 @@ pub(crate) enum PendingInterrupt {
     Raise(MonorubyErr),
 }
 
+/// `Thread.handle_interrupt` timing for one mask entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InterruptTiming {
+    /// Deliver as soon as a delivery point is reached (the default).
+    Immediate,
+    /// Deliver only at blocking operations (parks) — `Thread.pass` and
+    /// `handle_interrupt` boundaries do not count.
+    OnBlocking,
+    /// Defer while the mask is in effect; the `handle_interrupt` block
+    /// exit is the delivery point.
+    Never,
+}
+
 /// Green-thread control block.
 ///
 /// monoruby threads are cooperative green threads multiplexed on the one
@@ -52,6 +65,14 @@ pub struct ThreadInner {
     /// Set when a kill was delivered: the terminating `Throw` unwind is
     /// then a clean death, not an exception (see scheduler finalize).
     pub(crate) killed: bool,
+    /// `Thread.handle_interrupt` mask stack (innermost last). Each frame
+    /// is the `{Class => timing}` pairs of one handle_interrupt block.
+    pub(crate) masks: Vec<Vec<(Value, InterruptTiming)>>,
+    /// Whether the thread's current/last park was a *blocking* operation
+    /// (sleep / join / fd wait / queue pop) as opposed to `Thread.pass`.
+    /// Consulted when delivering a pending interrupt masked
+    /// `:on_blocking`.
+    pub(crate) park_blocking: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +131,11 @@ impl alloc::GC<RValue> for ThreadInner {
         if let Some(PendingInterrupt::Raise(err)) = &self.pending {
             err.mark(alloc);
         }
+        for frame in &self.masks {
+            for (class, _) in frame {
+                class.mark(alloc);
+            }
+        }
     }
 }
 
@@ -128,6 +154,8 @@ impl ThreadInner {
             joiners: vec![],
             pending: None,
             killed: false,
+            masks: vec![],
+            park_blocking: false,
         }
     }
 
@@ -146,6 +174,8 @@ impl ThreadInner {
             joiners: vec![],
             pending: None,
             killed: false,
+            masks: vec![],
+            park_blocking: false,
         }
     }
 
@@ -165,6 +195,8 @@ impl ThreadInner {
             joiners: vec![],
             pending: None,
             killed: false,
+            masks: vec![],
+            park_blocking: false,
         }
     }
 

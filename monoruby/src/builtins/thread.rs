@@ -1,6 +1,6 @@
 use super::*;
 use crate::scheduler;
-use crate::value::rvalue::{PendingInterrupt, ThreadInner, ThreadState};
+use crate::value::rvalue::{InterruptTiming, PendingInterrupt, ThreadInner, ThreadState};
 
 //
 // Thread class
@@ -43,6 +43,145 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(THREAD_CLASS, "terminate", thread_kill, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "kill", thread_class_kill, 1);
     globals.define_builtin_class_func(THREAD_CLASS, "exit", thread_class_exit, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "handle_interrupt", handle_interrupt, 1);
+    globals.define_builtin_class_func_with(
+        THREAD_CLASS,
+        "pending_interrupt?",
+        class_pending_interrupt_p,
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_func_with(
+        THREAD_CLASS,
+        "pending_interrupt?",
+        pending_interrupt_p,
+        0,
+        1,
+        false,
+    );
+}
+
+/// Parse a `{Class => :immediate | :on_blocking | :never}` mask hash.
+fn parse_interrupt_mask(
+    globals: &mut Globals,
+    hash: Value,
+) -> Result<Vec<(Value, InterruptTiming)>> {
+    let Some(h) = hash.try_hash_ty() else {
+        return Err(MonorubyErr::argumenterr("unknown mask signature"));
+    };
+    let mut mask = vec![];
+    let _guard = h.iter_guard();
+    for (k, v) in h.iter() {
+        if k.is_class_or_module().is_none() {
+            return Err(MonorubyErr::typeerr(
+                "class or module required for rescue clause",
+            ));
+        }
+        let timing = match v.try_symbol().map(|id| id.get_name()) {
+            Some(name) if name == "immediate" => InterruptTiming::Immediate,
+            Some(name) if name == "on_blocking" => InterruptTiming::OnBlocking,
+            Some(name) if name == "never" => InterruptTiming::Never,
+            _ => return Err(MonorubyErr::argumenterr("unknown mask signature")),
+        };
+        mask.push((k, timing));
+    }
+    let _ = globals;
+    Ok(mask)
+}
+
+///
+/// ### Thread.handle_interrupt
+///
+/// - handle_interrupt(hash) { ... } -> object
+///
+/// Runs the block under an interrupt mask (`Class => :immediate /
+/// :on_blocking / :never`). Pending interrupts allowed by the new mask
+/// fire on entry; interrupts deferred by the mask fire at block exit
+/// (under the outer mask).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/handle_interrupt.html]
+#[monoruby_builtin]
+fn handle_interrupt(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let bh = lfp.expect_block()?;
+    let mask = parse_interrupt_mask(globals, lfp.arg(0))?;
+    let cur = scheduler::current_thread(vm);
+    scheduler::push_interrupt_mask(vm, mask);
+    // Entry delivery point (non-blocking): a pending interrupt the new
+    // mask allows fires before the block runs.
+    let res = match scheduler::deliver_pending_now(globals, cur, false) {
+        Err(err) => Err(err),
+        Ok(()) => vm.invoke_block_once(globals, bh, &[]),
+    };
+    scheduler::pop_interrupt_mask(vm);
+    // Exit delivery point, under the outer mask: interrupts the block's
+    // mask deferred fire here — even when the block itself raised, and
+    // the delivered interrupt takes precedence over the block's own
+    // exception (CRuby).
+    scheduler::deliver_pending_now(globals, cur, false)?;
+    res
+}
+
+fn pending_filter(globals: &Globals, lfp: Lfp) -> Result<Option<Module>> {
+    match lfp.try_arg(0) {
+        None => Ok(None),
+        Some(v) => match v.is_class_or_module() {
+            Some(m) => Ok(Some(m)),
+            None => {
+                let _ = globals;
+                Err(MonorubyErr::typeerr(
+                    "class or module required for rescue clause",
+                ))
+            }
+        },
+    }
+}
+
+///
+/// ### Thread.pending_interrupt?
+///
+/// Whether the current thread has queued asynchronous interrupts
+/// (optionally filtered by exception class).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/pending_interrupt=3f.html]
+#[monoruby_builtin]
+fn class_pending_interrupt_p(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let filter = pending_filter(globals, lfp)?;
+    let cur = scheduler::current_thread(vm);
+    Ok(Value::bool(scheduler::pending_interrupt_p(
+        &globals.store,
+        cur,
+        filter,
+    )))
+}
+
+///
+/// ### Thread#pending_interrupt?
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/pending_interrupt=3f.html]
+#[monoruby_builtin]
+fn pending_interrupt_p(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let filter = pending_filter(globals, lfp)?;
+    Ok(Value::bool(scheduler::pending_interrupt_p(
+        &globals.store,
+        lfp.self_val(),
+        filter,
+    )))
 }
 
 /// Build the exception for an asynchronous `Thread#raise` from its
@@ -587,6 +726,94 @@ mod tests {
             res
             "#,
         );
+    }
+
+    #[test]
+    fn thread_handle_interrupt_masking() {
+        // Shared driver mirroring ruby/spec's handle_interrupt fixture:
+        // raise into a thread inside a handle_interrupt block, observe
+        // whether it fires inside (:interrupted) or at exit (:deferred).
+        const DRIVER: &str = r#"
+            def run_masked(timing, blocking = true)
+              klass = Class.new(RuntimeError)
+              pad = []
+              in_hi = Queue.new
+              cont = Queue.new
+              th = Thread.new do
+                begin
+                  Thread.handle_interrupt(klass => timing) do
+                    begin
+                      in_hi << true
+                      if blocking
+                        Thread.pass
+                        cont.pop
+                      else
+                        begin
+                          cont.pop(true)
+                        rescue ThreadError
+                          Thread.pass
+                          retry
+                        end
+                      end
+                    rescue klass
+                      pad << :interrupted
+                    end
+                  end
+                rescue klass
+                  pad << :deferred
+                end
+              end
+              in_hi.pop
+              Thread.pass while blocking && !th.stop?
+              th.raise klass, "interrupt"
+              cont << true
+              th.join
+              pad
+            end
+        "#;
+        run_test_once(&format!("{DRIVER}\nrun_masked(:never)"));
+        run_test_once(&format!("{DRIVER}\nrun_masked(:on_blocking)"));
+        // Thread.pass is NOT a blocking call: :on_blocking defers when
+        // the block never really blocks.
+        run_test_once(&format!("{DRIVER}\nrun_masked(:on_blocking, false)"));
+        run_test_once(&format!("{DRIVER}\nrun_masked(:immediate)"));
+        // Entry delivery: unmasking with pending interrupts fires them
+        // before the block runs; pending_interrupt? reflects the queue.
+        run_test_once(
+            r#"
+            Thread.handle_interrupt(RuntimeError => :never) do
+              current = Thread.current
+              Thread.new { current.raise "interrupt immediate" }.join
+              a = Thread.pending_interrupt?
+              b = begin
+                Thread.handle_interrupt(RuntimeError => :immediate) { :not_reached }
+              rescue RuntimeError => e
+                e.message
+              end
+              [a, b, Thread.pending_interrupt?]
+            end
+            "#,
+        );
+        // Class-filtered pending_interrupt? and hierarchy matching.
+        run_test_once(
+            r#"
+            Thread.handle_interrupt(StandardError => :never) do
+              current = Thread.current
+              Thread.new { current.raise ArgumentError, "x" }.join
+              r = [Thread.pending_interrupt?, Thread.pending_interrupt?(ArgumentError),
+                   Thread.pending_interrupt?(TypeError)]
+              begin
+                Thread.handle_interrupt(Exception => :immediate) {}
+              rescue ArgumentError
+                r << :fired
+              end
+              r
+            end rescue nil
+            "#,
+        );
+        // Invalid mask arguments.
+        run_test_error(r#"Thread.handle_interrupt(RuntimeError => :sometimes) {}"#);
+        run_test_error(r#"Thread.handle_interrupt(1 => :never) {}"#);
     }
 
     #[test]
