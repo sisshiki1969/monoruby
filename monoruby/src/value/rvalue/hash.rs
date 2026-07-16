@@ -346,7 +346,10 @@ impl HashmapInner {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<Option<(Value, Value)>> {
-        self.check_iter()?;
+        // Shifting an entry during iteration is allowed, like `delete` — CRuby
+        // permits `h.each { h.shift }` (see ruby/spec core/hash/shift_spec.rb
+        // "allows shifting entries while iterating"). Only *adding* a key is
+        // rejected mid-iteration.
         self.content.shift(vm, globals)
     }
 
