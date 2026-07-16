@@ -65,6 +65,8 @@ pub(crate) enum ThreadState {
     Sleeping,
     /// Parked in `#join` / `#value` waiting on another thread.
     Joining,
+    /// Parked waiting for fd readiness (scheduler `io_waiters`).
+    IoWaiting,
     /// Terminated (body returned, raised, or was killed).
     Dead,
 }

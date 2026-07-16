@@ -302,7 +302,9 @@ fn thread_status(vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 Value::bool(false)
             }
         }
-        ThreadState::Sleeping | ThreadState::Joining => Value::string_from_str("sleep"),
+        ThreadState::Sleeping | ThreadState::Joining | ThreadState::IoWaiting => {
+            Value::string_from_str("sleep")
+        }
         ThreadState::Created | ThreadState::Runnable => {
             // The current thread reports "run"; queued-but-not-yet-run
             // threads also report "run" (CRuby: runnable == "run").
@@ -332,7 +334,10 @@ fn thread_stop_p(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let state = lfp.self_val().as_thread_inner().state();
     Ok(Value::bool(matches!(
         state,
-        ThreadState::Dead | ThreadState::Sleeping | ThreadState::Joining
+        ThreadState::Dead
+            | ThreadState::Sleeping
+            | ThreadState::Joining
+            | ThreadState::IoWaiting
     )))
 }
 
@@ -518,6 +523,135 @@ mod tests {
             Thread.current[:k] = 42
             Thread.current.thread_variable_set(:tv, 7)
             [Thread.current[:k], Thread.current.thread_variable_get(:tv)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_blocking_io_yields_to_scheduler() {
+        // The copy_stream partial-read pattern: a thread copies into a
+        // pipe while the main thread drains it one byte at a time.
+        run_test_once(
+            r#"
+            from_out, from_in = IO.pipe
+            to_out, to_in = IO.pipe
+            from_in.write "1234"
+            from_in.close
+            th = Thread.new { IO.copy_stream(from_out, to_in) }
+            copied = ""
+            4.times { copied += to_out.read(1) }
+            th.join
+            copied
+            "#,
+        );
+        // A thread parked in gets is fed by main.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { r.gets }
+            Thread.pass while t.status != "sleep"
+            w.puts "hello"
+            t.value
+            "#,
+        );
+        // Main parked in read is fed by a thread.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { sleep 0.02; w.write "x"; w.close }
+            v = r.read
+            t.join
+            v
+            "#,
+        );
+        // IO.select waits without blocking the writer thread.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { sleep 0.02; w.write "z" }
+            ready = IO.select([r], nil, nil, 5)
+            v = [ready[0][0] == r, r.read(1)]
+            t.join
+            v
+            "#,
+        );
+        // Two threads ping-pong over a pair of pipes.
+        run_test_once(
+            r#"
+            a_r, a_w = IO.pipe
+            b_r, b_w = IO.pipe
+            t = Thread.new { 3.times { v = a_r.gets.chomp; b_w.puts (v.to_i + 1).to_s } }
+            res = []
+            3.times { |i| a_w.puts (i*10).to_s; res << b_r.gets.chomp.to_i }
+            t.join
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_io_select_edges() {
+        // Timeout expiry with live threads returns nil.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { sleep 0.2 }
+            v = IO.select([r], nil, nil, 0.02)
+            t.kill; t.join
+            v.inspect
+            "#,
+        );
+        // Write-ready set through the green path.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { sleep 0.2 }
+            ready = IO.select(nil, [w], nil, 5)
+            t.kill; t.join
+            ready[1][0] == w
+            "#,
+        );
+        // #to_io conversion of non-IO entries.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            w.write "x"
+            box = Object.new
+            box.define_singleton_method(:to_io) { r }
+            t = Thread.new { sleep 0.2 }
+            ready = IO.select([box], nil, nil, 5)
+            t.kill; t.join
+            ready[0][0] == box
+            "#,
+        );
+        // All-empty select parks with status "sleep" until killed.
+        run_test_once(
+            r#"
+            t = Thread.new { IO.select(nil, nil, nil, nil) }
+            Thread.pass while t.status && t.status != "sleep"
+            st = t.status
+            t.kill
+            t.join
+            [st, t.status]
+            "#,
+        );
+        // Enormous timeouts must not overflow (treated as forever).
+        run_test_once(
+            r#"
+            t = Thread.new { IO.select(nil, nil, nil, 2**62) }
+            Thread.pass while t.status && t.status != "sleep"
+            t.kill
+            t.join
+            t.status
+            "#,
+        );
+        run_test_once(
+            r#"
+            t = Thread.new { sleep(2**62) }
+            Thread.pass while t.status && t.status != "sleep"
+            t.kill
+            t.join
+            t.status
             "#,
         );
     }
