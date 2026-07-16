@@ -85,6 +85,39 @@ jobs:
               | awk '{s+=$1} END {print s+0}'
           }
 
+          TIMEOUTS="$OUT/timeouts.csv"
+          echo "category,file" > "$TIMEOUTS"
+
+          # Run a batch of spec files under a hard deadline. `-k 5` matters:
+          # monoruby installs its own SIGTERM handler (deferred to a VM poll
+          # point), so a process stuck in a blocking read never dies to the
+          # plain TERM that `timeout` sends -- without the KILL escalation a
+          # single hung spec stalls the whole job until timeout-minutes.
+          # Exit 124 = killed by TERM, 137 = needed the KILL.
+          run_specs () {
+            timeout -k 5 60 ../mspec/bin/mspec "$@" -t monoruby -f s >> "$LOG" 2>&1
+            local rc=$?
+            [ $rc -eq 124 ] || [ $rc -eq 137 ]
+          }
+
+          # A killed batch prints no summary line, so none of its 10 files
+          # get tallied. Rerun them one by one: completing files are counted
+          # after all, and the hanging file(s) are pinned down and recorded.
+          run_batch () {
+            [ ${#BATCH[@]} -eq 0 ] && return
+            if run_specs "${BATCH[@]}"; then
+              echo "### batch timed out; rerunning ${#BATCH[@]} files individually" >> "$LOG"
+              local f
+              for f in "${BATCH[@]}"; do
+                if run_specs "$f"; then
+                  echo "$cat,$f" >> "$TIMEOUTS"
+                  echo "### TIMEOUT: $f" >> "$LOG"
+                fi
+              done
+            fi
+            BATCH=()
+          }
+
           T_FILES=0; T_EX=0; T_FAIL=0; T_ERR=0
 
           for cat in $(ls core/ | sort); do
@@ -94,9 +127,12 @@ jobs:
             LOG="$OUT/logs/core_${cat}.log"
             : > "$LOG"
 
-            echo "$SPECS" | xargs -n 10 bash -c '
-              timeout 60 ../mspec/bin/mspec "$@" -t monoruby -f s
-            ' _ >> "$LOG" 2>&1 || true
+            BATCH=()
+            while IFS= read -r f; do
+              BATCH+=("$f")
+              [ ${#BATCH[@]} -ge 10 ] && run_batch
+            done <<< "$SPECS"
+            run_batch
 
             EX=$(sum_field "$LOG" 'examples?')
             FAIL=$(sum_field "$LOG" 'failures?')
@@ -126,6 +162,18 @@ jobs:
             T_RATE="0.00"
           fi
           echo "| **TOTAL** | **$T_FILES** | **$T_EX** | **$T_PASS** | **$T_FAIL** | **$T_ERR** | **${T_RATE}%** |" >> "$REPORT"
+
+          N_TIMEOUT=$(($(wc -l < "$TIMEOUTS") - 1))
+          if [ "$N_TIMEOUT" -gt 0 ]; then
+            {
+              echo ""
+              echo "### Timed-out spec files ($N_TIMEOUT)"
+              echo ""
+              echo "Killed after 60s; their examples are not included in the tallies above."
+              echo ""
+              tail -n +2 "$TIMEOUTS" | awk -F, '{print "- `" $2 "`"}'
+            } >> "$REPORT"
+          fi
 
           cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
 
@@ -199,6 +247,20 @@ jobs:
 
           echo "$TIMESTAMP,$SHORT_SHA,$TOTAL_EX,$TOTAL_PASS,$TOTAL_FAIL,$TOTAL_ERR,$TOTAL_RATE" \
             >> spec/data/history_total.csv
+
+          # Latest run's timed-out spec files (shown on the site), plus a
+          # timestamped history of them.
+          if [ -f "$GITHUB_WORKSPACE/spec-results/timeouts.csv" ]; then
+            cp "$GITHUB_WORKSPACE/spec-results/timeouts.csv" spec/data/timeouts.csv
+          else
+            echo "category,file" > spec/data/timeouts.csv
+          fi
+          if [ ! -f spec/data/history_timeouts.csv ]; then
+            echo "timestamp,commit,category,file" > spec/data/history_timeouts.csv
+          fi
+          tail -n +2 spec/data/timeouts.csv \
+            | awk -v ts="$TIMESTAMP" -v sha="$SHORT_SHA" -F, 'BEGIN{OFS=","} {print ts,sha,$0}' \
+            >> spec/data/history_timeouts.csv
 
           cp "$GITHUB_WORKSPACE/.github/spec-pages/index.html" spec/index.html
           cp "$GITHUB_WORKSPACE/.github/portal/index.html" index.html

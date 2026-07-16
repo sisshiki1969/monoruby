@@ -94,6 +94,18 @@
   </table>
 </section>
 
+<section>
+  <h2>Timed-out spec files (latest run)</h2>
+  <p class="meta">
+    Spec files whose individual run exceeded the 60-second timeout and was
+    killed — typically hangs waiting on real thread concurrency. Their
+    examples are not included in the tallies above.
+    Source: <a href="data/timeouts.csv">timeouts.csv</a>,
+    <a href="data/history_timeouts.csv">history_timeouts.csv</a>.
+  </p>
+  <ul id="timeoutList"></ul>
+</section>
+
 <script>
 const SPEC_BASE = "https://github.com/ruby/spec/tree/master/core/";
 const specUrl = cat => SPEC_BASE + encodeURIComponent(cat);
@@ -116,6 +128,29 @@ async function loadCsv(path) {
 (async () => {
   const total = await loadCsv('data/history_total.csv');
   const hist = await loadCsv('data/history.csv');
+  const timeouts = await loadCsv('data/timeouts.csv');
+
+  // ------- Timed-out spec files (latest run) -------
+  {
+    const ul = document.getElementById('timeoutList');
+    if (!timeouts.length) {
+      const li = document.createElement('li');
+      li.textContent = 'none recorded';
+      li.style.color = '#666';
+      ul.appendChild(li);
+    } else {
+      for (const t of timeouts) {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = 'https://github.com/ruby/spec/blob/master/' + t.file;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = t.file;
+        li.appendChild(a);
+        ul.appendChild(li);
+      }
+    }
+  }
 
   // ------- shared date range over the run timestamps -------
   const allStamps = [...new Set(total.map(r => r.timestamp))].sort();
