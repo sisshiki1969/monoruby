@@ -872,15 +872,16 @@ pub(crate) extern "C" fn io_alloc_func(class_id: ClassId, _: &mut Globals) -> Va
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/=3c=3c.html]
 #[monoruby_builtin]
 fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    if let Some(b) = lfp.arg(0).try_bytes() {
-        io.write(b.as_bytes())?;
+    let bytes = if let Some(b) = lfp.arg(0).try_bytes() {
+        b.as_bytes().to_vec()
     } else {
-        let s = vm.to_s(globals, lfp.arg(0))?;
-        io.write(s.as_bytes())?;
+        vm.to_s(globals, lfp.arg(0))?.into_bytes()
     };
-    io.flush()?;
+    let mut done = 0;
+    blocking_region(vm, globals, || {
+        lfp.self_val().as_io_inner_mut().write(&bytes, &mut done)
+    })?;
+    lfp.self_val().as_io_inner_mut().flush()?;
     Ok(lfp.self_val())
 }
 
@@ -983,12 +984,13 @@ fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let format_str = lfp.arg(0).coerce_to_string(vm, globals)?;
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
     let args = lfp.arg(1).as_array();
 
     let buf = vm.format_by_args(globals, &format_str, &args)?;
-    io.write(buf.as_bytes())?;
+    let mut done = 0;
+    blocking_region(vm, globals, || {
+        lfp.self_val().as_io_inner_mut().write(buf.as_bytes(), &mut done)
+    })?;
 
     Ok(Value::nil())
 }
@@ -1115,6 +1117,46 @@ fn bump_lineno(globals: &mut Globals, io: Value) -> Result<()> {
     Ok(())
 }
 
+/// Run a blocking IO operation with CRuby-like interrupt semantics.
+///
+/// The interruptible read primitives (see value/rvalue/io.rs) surface
+/// "EINTR with a pending signal" as the internal
+/// `MonorubyErr::signal_interrupt` marker instead of silently retrying the
+/// syscall (which is what makes a blocked read un-killable by SIGTERM).
+/// This wrapper catches the marker and runs the VM poll point: the default
+/// disposition raises the converted `SignalException` out of the read,
+/// while a `Signal.trap` handler runs and — when it returns normally —
+/// the operation is restarted (bytes consumed before the interrupt were
+/// pushed back by the primitives, so no data is lost).
+///
+/// A signal that was already pending on entry is drained up front: it was
+/// delivered before the syscall (re-)entered the kernel, so it can never
+/// EINTR it, and the operation could otherwise block forever with the
+/// signal sitting in the bitmap (same reasoning as `Kernel#sleep`).
+pub(crate) fn blocking_region<T>(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut f: impl FnMut() -> Result<T>,
+) -> Result<T> {
+    loop {
+        if crate::codegen::signal_table::PENDING_SIGNALS.load(std::sync::atomic::Ordering::Relaxed)
+            != 0
+            && crate::executor::execute_gc(vm, globals).is_none()
+        {
+            return Err(vm.take_error());
+        }
+        match f() {
+            Err(err) if err.is_signal_interrupt() => {
+                if crate::executor::execute_gc(vm, globals).is_none() {
+                    return Err(vm.take_error());
+                }
+                // A trap handler handled the signal; restart the operation.
+            }
+            res => return res,
+        }
+    }
+}
+
 /// Shared body of `IO#gets` / `IO#readline`: read one line per the parsed
 /// arguments, update lineno / `$.` / `$_`, and return the tagged String
 /// (nil at EOF).
@@ -1122,9 +1164,11 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
     let mut self_ = lfp.self_val();
     let complete_utf8 = io_completes_utf8(globals, self_);
-    let line = self_
-        .as_io_inner_mut()
-        .getline(sep.as_deref(), limit, complete_utf8)?;
+    let line = blocking_region(vm, globals, || {
+        lfp.self_val()
+            .as_io_inner_mut()
+            .getline(sep.as_deref(), limit, complete_utf8)
+    })?;
     match line {
         Some(mut buf) => {
             if chomp {
@@ -1372,7 +1416,9 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         _ => None,
     };
-    let buf = lfp.self_val().as_io_inner_mut().read(length)?;
+    let buf = blocking_region(vm, globals, || {
+        lfp.self_val().as_io_inner_mut().read(length)
+    })?;
     let eof_nil = buf.is_empty() && length.is_some() && length != Some(0);
     match outbuf {
         Some(mut out) => {
@@ -1552,11 +1598,11 @@ fn io_class_readlines(
         vm.temp_push(io_val);
         vm.temp_array_new(None);
         let result = (|| {
-            while let Some(mut buf) =
+            while let Some(mut buf) = blocking_region(vm, globals, || {
                 io_val
                     .as_io_inner_mut()
-                    .getline(sep.as_deref(), limit, complete_utf8)?
-            {
+                    .getline(sep.as_deref(), limit, complete_utf8)
+            })? {
                 if chomp {
                     chomp_line(&mut buf, sep.as_deref(), limit);
                 }
@@ -1730,11 +1776,11 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         vm.temp_push(io_val);
         let mut lineno = 0i64;
         let result = (|| {
-            while let Some(mut buf) =
+            while let Some(mut buf) = blocking_region(vm, globals, || {
                 io_val
                     .as_io_inner_mut()
-                    .getline(sep.as_deref(), limit, complete_utf8)?
-            {
+                    .getline(sep.as_deref(), limit, complete_utf8)
+            })? {
                 if chomp {
                     chomp_line(&mut buf, sep.as_deref(), limit);
                 }
@@ -2160,11 +2206,11 @@ fn io_readlines(
     let mut self_ = lfp.self_val();
     let complete_utf8 = io_completes_utf8(globals, self_);
     let mut lines = Vec::new();
-    while let Some(mut buf) =
-        self_
+    while let Some(mut buf) = blocking_region(vm, globals, || {
+        lfp.self_val()
             .as_io_inner_mut()
-            .getline(sep.as_deref(), limit, complete_utf8)?
-    {
+            .getline(sep.as_deref(), limit, complete_utf8)
+    })? {
         if chomp {
             chomp_line(&mut buf, sep.as_deref(), limit);
         }
@@ -2397,8 +2443,8 @@ fn io_rewind(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/eof.html]
 #[monoruby_builtin]
 fn io_eof_(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
@@ -2408,7 +2454,10 @@ fn io_eof_(
         return Ok(Value::bool(false));
     }
     // Read 1 byte; if empty, we're at EOF. Then push it back via seek(-1).
-    let buf = io.read(Some(1))?;
+    let buf = blocking_region(vm, globals, || {
+        lfp.self_val().as_io_inner_mut().read(Some(1))
+    })?;
+    let io = self_.as_io_inner_mut();
     if buf.is_empty() {
         return Ok(Value::bool(true));
     }
@@ -2428,14 +2477,14 @@ fn io_eof_(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/getbyte.html]
 #[monoruby_builtin]
 fn io_getbyte(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
+    vm: &mut Executor,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    let buf = io.read(Some(1))?;
+    let buf = blocking_region(vm, globals, || {
+        lfp.self_val().as_io_inner_mut().read(Some(1))
+    })?;
     if buf.is_empty() {
         Ok(Value::nil())
     } else {
@@ -2466,13 +2515,28 @@ fn read_one_char(io: &mut IoInner) -> Result<Vec<u8>> {
     };
     let mut buf = first;
     while buf.len() < total {
-        let next = io.read(Some(total - buf.len()))?;
+        let next = read_more_char_bytes(io, &buf, total)?;
         if next.is_empty() {
             break;
         }
         buf.extend_from_slice(&next);
     }
     Ok(buf)
+}
+
+/// Continuation read for `read_one_char{,_enc}`: on a signal interrupt,
+/// push the partial character bytes back so the retried getc re-reads a
+/// whole character.
+fn read_more_char_bytes(io: &mut IoInner, acc: &[u8], total: usize) -> Result<Vec<u8>> {
+    match io.read(Some(total - acc.len())) {
+        Err(err) => {
+            if err.is_signal_interrupt() && !acc.is_empty() {
+                let _ = io.unget(acc);
+            }
+            Err(err)
+        }
+        ok => ok,
+    }
 }
 
 /// Per-encoding character width from the lead byte (mirrors
@@ -2512,7 +2576,7 @@ fn read_one_char_enc(io: &mut IoInner, enc: crate::value::Encoding) -> Result<Ve
     let total = char_width_from_lead(enc, first[0]);
     let mut buf = first;
     while buf.len() < total {
-        let next = io.read(Some(total - buf.len()))?;
+        let next = read_more_char_bytes(io, &buf, total)?;
         if next.is_empty() {
             break;
         }
@@ -2532,15 +2596,17 @@ fn read_one_char_enc(io: &mut IoInner, enc: crate::value::Encoding) -> Result<Ve
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/getc.html]
 #[monoruby_builtin]
 fn io_getc(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_ = lfp.self_val();
+    let self_ = lfp.self_val();
     let ext_obj = read_io_encoding(globals, self_, false);
     let ext = enc_obj_to_enum(globals, ext_obj).unwrap_or(crate::value::Encoding::Utf8);
-    let buf = read_one_char_enc(self_.as_io_inner_mut(), ext)?;
+    let buf = blocking_region(vm, globals, || {
+        read_one_char_enc(lfp.self_val().as_io_inner_mut(), ext)
+    })?;
     if buf.is_empty() {
         Ok(Value::nil())
     } else {
@@ -2775,8 +2841,6 @@ fn io_write_method(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
     let args = lfp.arg(0).as_array();
     let mut total = 0i64;
     for v in args.iter().cloned() {
@@ -2787,7 +2851,10 @@ fn io_write_method(
             s.into_bytes()
         };
         total += bytes.len() as i64;
-        io.write(&bytes)?;
+        let mut done = 0;
+        blocking_region(vm, globals, || {
+            lfp.self_val().as_io_inner_mut().write(&bytes, &mut done)
+        })?;
     }
     Ok(Value::integer(total))
 }
@@ -2813,16 +2880,36 @@ fn io_syswrite(
         s.into_bytes()
     };
     let fd = io.fileno()?;
-    // SAFETY: fd is a valid file descriptor, bytes is a valid buffer.
-    let written = unsafe { libc::write(fd, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
-    if written < 0 {
+    let written = loop {
+        // Signal handlers are installed without SA_RESTART; run the VM
+        // poll point on EINTR (raise the SignalException or run the trap
+        // handler and retry), like the buffered write path.
+        if crate::codegen::signal_table::PENDING_SIGNALS
+            .load(std::sync::atomic::Ordering::Relaxed)
+            != 0
+            && crate::executor::execute_gc(vm, globals).is_none()
+        {
+            return Err(vm.take_error());
+        }
+        // SAFETY: fd is a valid file descriptor, bytes is a valid buffer.
+        let written =
+            unsafe { libc::write(fd, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
+        if written >= 0 {
+            break written;
+        }
         let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EINTR) {
+            if crate::executor::execute_gc(vm, globals).is_none() {
+                return Err(vm.take_error());
+            }
+            continue;
+        }
         return Err(MonorubyErr::errno_with_msg(
             &globals.store,
             &err,
             "syswrite",
         ));
-    }
+    };
     Ok(Value::integer(written as i64))
 }
 
@@ -2961,7 +3048,9 @@ fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             None => Value::string_from_vec(vec![]),
         });
     }
-    let buf = lfp.self_val().as_io_inner_mut().sysread(maxlen as usize)?;
+    let buf = blocking_region(vm, globals, || {
+        lfp.self_val().as_io_inner_mut().sysread(maxlen as usize)
+    })?;
     if buf.is_empty() {
         if let Some(mut v) = buffer {
             let enc = v.as_rstring_inner().encoding();
@@ -3018,7 +3107,9 @@ fn io_readpartial(
             None => Value::string_from_vec(vec![]),
         });
     }
-    let buf = lfp.self_val().as_io_inner_mut().readpartial(maxlen as usize)?;
+    let buf = blocking_region(vm, globals, || {
+        lfp.self_val().as_io_inner_mut().readpartial(maxlen as usize)
+    })?;
     if buf.is_empty() {
         if let Some(mut v) = buffer {
             let enc = v.as_rstring_inner().encoding();
@@ -3288,58 +3379,77 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let mut writefds: libc::fd_set = std::mem::zeroed();
         let mut errorfds: libc::fd_set = std::mem::zeroed();
 
-        libc::FD_ZERO(&mut readfds);
-        libc::FD_ZERO(&mut writefds);
-        libc::FD_ZERO(&mut errorfds);
-
-        for &fd in &read_fds {
-            libc::FD_SET(fd, &mut readfds);
-        }
-        for &fd in &write_fds {
-            libc::FD_SET(fd, &mut writefds);
-        }
-        for &fd in &error_fds {
-            libc::FD_SET(fd, &mut errorfds);
-        }
-
+        // On Linux, select(2) updates the timeval to the time not slept,
+        // so re-entering after an EINTR (below) continues with the
+        // remaining timeout rather than starting over.
         let mut tv_storage = timeout.unwrap_or(libc::timeval {
             tv_sec: 0,
             tv_usec: 0,
         });
-        let timeout_ptr = if timeout.is_some() {
-            &mut tv_storage as *mut libc::timeval
-        } else {
-            std::ptr::null_mut()
+
+        let ret = loop {
+            // select(2) mutates the fd sets, so rebuild them each attempt.
+            libc::FD_ZERO(&mut readfds);
+            libc::FD_ZERO(&mut writefds);
+            libc::FD_ZERO(&mut errorfds);
+
+            for &fd in &read_fds {
+                libc::FD_SET(fd, &mut readfds);
+            }
+            for &fd in &write_fds {
+                libc::FD_SET(fd, &mut writefds);
+            }
+            for &fd in &error_fds {
+                libc::FD_SET(fd, &mut errorfds);
+            }
+
+            let timeout_ptr = if timeout.is_some() {
+                &mut tv_storage as *mut libc::timeval
+            } else {
+                std::ptr::null_mut()
+            };
+
+            let ret = libc::select(
+                nfds,
+                if read_fds.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    &mut readfds
+                },
+                if write_fds.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    &mut writefds
+                },
+                if error_fds.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    &mut errorfds
+                },
+                timeout_ptr,
+            );
+
+            if ret < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    // A signal interrupted the wait: run the VM poll
+                    // point (raise the converted SignalException, or run
+                    // the trap handler and retry the select), matching
+                    // CRuby, which restarts select after processing
+                    // interrupts instead of surfacing Errno::EINTR.
+                    if crate::executor::execute_gc(vm, globals).is_none() {
+                        return Err(vm.take_error());
+                    }
+                    continue;
+                }
+                return Err(MonorubyErr::errno_with_msg(
+                    &globals.store,
+                    &err,
+                    "select(2)",
+                ));
+            }
+            break ret;
         };
-
-        let ret = libc::select(
-            nfds,
-            if read_fds.is_empty() {
-                std::ptr::null_mut()
-            } else {
-                &mut readfds
-            },
-            if write_fds.is_empty() {
-                std::ptr::null_mut()
-            } else {
-                &mut writefds
-            },
-            if error_fds.is_empty() {
-                std::ptr::null_mut()
-            } else {
-                &mut errorfds
-            },
-            timeout_ptr,
-        );
-
-        if ret < 0 {
-            let err = std::io::Error::last_os_error();
-            return Err(MonorubyErr::errno_with_msg(
-                &globals.store,
-                &err,
-                "select(2)",
-            ));
-        }
 
         if ret == 0 {
             return Ok(Value::nil());
@@ -3432,7 +3542,7 @@ fn set_encoding(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/set_encoding_by_bom.html]
 #[monoruby_builtin]
 fn set_encoding_by_bom(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -3472,7 +3582,9 @@ fn set_encoding_by_bom(
     }
     // Read up to 4 bytes — enough to disambiguate every BOM (and to
     // tell UTF-16LE from UTF-32LE, which share the FF FE prefix).
-    let head = self_.as_io_inner_mut().read(Some(4))?;
+    let head = blocking_region(vm, globals, || {
+        lfp.self_val().as_io_inner_mut().read(Some(4))
+    })?;
     let (consume, enc_name): (usize, &str) = match head.first() {
         Some(0xEF) if head.len() >= 3 && head[1] == 0xBB && head[2] == 0xBF => (3, "UTF-8"),
         Some(0x00) if head.len() >= 4 && head[1] == 0x00 && head[2] == 0xFE && head[3] == 0xFF => {
@@ -4120,8 +4232,12 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                     // Flush per chunk: copy_stream must not buffer (a
                     // pipe reader on the other side expects the data
                     // immediately — Rust's stdout is block-buffered).
-                    v.as_io_inner_mut().write(chunk)?;
-                    v.as_io_inner_mut().flush()
+                    let mut vv = *v;
+                    let mut done = 0;
+                    blocking_region(vm, globals, || {
+                        vv.as_io_inner_mut().write(chunk, &mut done)
+                    })?;
+                    vv.as_io_inner_mut().flush()
                 }
                 _ => unreachable!(),
             }
@@ -4174,7 +4290,9 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                     if want == 0 {
                         break;
                     }
-                    let chunk = v.as_io_inner_mut().readpartial(want)?;
+                    let mut vv = *v;
+                    let chunk =
+                        blocking_region(vm, globals, || vv.as_io_inner_mut().readpartial(want))?;
                     if chunk.is_empty() {
                         break;
                     }

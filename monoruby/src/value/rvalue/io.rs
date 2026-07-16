@@ -52,6 +52,123 @@ fn encode_wait_status(status: &std::process::ExitStatus) -> i32 {
     status.into_raw()
 }
 
+/// Whether an async signal handler has recorded a pending signal that the
+/// VM has not yet drained at a poll point.
+fn signal_pending() -> bool {
+    crate::codegen::signal_table::PENDING_SIGNALS.load(std::sync::atomic::Ordering::Relaxed) != 0
+}
+
+/// Map an io error out of the interruptible primitives below:
+/// `Interrupted` (EINTR with a signal pending) becomes the internal
+/// signal-interrupt marker so the IO builtins can run the VM poll point;
+/// anything else goes through `f` (the call site's existing mapping).
+fn map_read_err(e: std::io::Error, f: impl FnOnce(String) -> MonorubyErr) -> MonorubyErr {
+    if e.kind() == std::io::ErrorKind::Interrupted {
+        MonorubyErr::signal_interrupt()
+    } else {
+        f(e.to_string())
+    }
+}
+
+/// One read through `reader`, like `Read::read` but signal-aware: a bare
+/// `EINTR` (no pending signal — e.g. SIGCHLD with SA_RESTART unset on
+/// another handler) is retried, while `EINTR` with a pending signal is
+/// surfaced as `Interrupted` so the caller can reach a VM poll point.
+/// Rust std's own helpers (`read_to_end`, `Bytes`, `read_until`) retry
+/// `Interrupted` unconditionally, which is exactly what makes a blocked
+/// read un-killable by SIGTERM — never use them on fds that can block.
+fn read_step(reader: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
+    loop {
+        match reader.read(buf) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted && !signal_pending() => continue,
+            r => return r,
+        }
+    }
+}
+
+/// Signal-interruptible replacement for `bytes().take(len).collect()`:
+/// append up to `len` bytes to `out`, stopping early at EOF. On
+/// `Interrupted`, bytes read so far remain in `out` so the caller can
+/// preserve them (pushback) before surfacing the interrupt.
+fn read_upto(reader: &mut impl Read, len: usize, out: &mut Vec<u8>) -> std::io::Result<()> {
+    let mut buf = [0u8; 8192];
+    while out.len() < len {
+        // A signal delivered while we were in userspace (e.g. right after
+        // the previous chunk) sets the pending bit without EINTR-ing
+        // anything; entering a blocking read with the bit already set
+        // would block unkillably. Check before every kernel entry.
+        if signal_pending() {
+            return Err(std::io::ErrorKind::Interrupted.into());
+        }
+        let want = (len - out.len()).min(buf.len());
+        match read_step(reader, &mut buf[..want])? {
+            0 => break,
+            n => out.extend_from_slice(&buf[..n]),
+        }
+    }
+    Ok(())
+}
+
+/// Signal-interruptible replacement for `read_to_end`. On `Interrupted`,
+/// bytes read so far remain in `out`.
+fn read_all(reader: &mut impl Read, out: &mut Vec<u8>) -> std::io::Result<()> {
+    let mut buf = [0u8; 8192];
+    loop {
+        // See `read_upto` on why this is checked before every kernel entry.
+        if signal_pending() {
+            return Err(std::io::ErrorKind::Interrupted.into());
+        }
+        match read_step(reader, &mut buf)? {
+            0 => return Ok(()),
+            n => out.extend_from_slice(&buf[..n]),
+        }
+    }
+}
+
+/// Signal-interruptible replacement for `BufRead::read_until`. Returns the
+/// number of bytes appended to `out`; on `Interrupted`, bytes read so far
+/// remain in `out`.
+fn read_until_step(
+    reader: &mut impl BufRead,
+    delim: u8,
+    out: &mut Vec<u8>,
+) -> std::io::Result<usize> {
+    let mut total = 0;
+    loop {
+        // See `read_upto` on why this is checked before every kernel entry.
+        if signal_pending() {
+            return Err(std::io::ErrorKind::Interrupted.into());
+        }
+        let (found, used) = {
+            let avail = match reader.fill_buf() {
+                Ok(a) => a,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                    if signal_pending() {
+                        return Err(e);
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            match avail.iter().position(|&b| b == delim) {
+                Some(i) => {
+                    out.extend_from_slice(&avail[..=i]);
+                    (true, i + 1)
+                }
+                None => {
+                    out.extend_from_slice(avail);
+                    (false, avail.len())
+                }
+            }
+        };
+        reader.consume(used);
+        total += used;
+        if found || used == 0 {
+            return Ok(total);
+        }
+    }
+}
+
 /// Pull up to `need` bytes from a buffered reader for `readpartial`.
 /// When `no_block` is set (ungetc pushback already produced data),
 /// only the bytes already sitting in the internal buffer are taken;
@@ -64,7 +181,18 @@ fn read_partial_chunk<T: Read>(
     let avail: &[u8] = if no_block {
         reader.buffer()
     } else {
-        reader.fill_buf().map_err(|e| MonorubyErr::ioerr(e.to_string()))?
+        loop {
+            match reader.fill_buf() {
+                Ok(_) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                    if signal_pending() {
+                        return Err(MonorubyErr::signal_interrupt());
+                    }
+                }
+                Err(e) => return Err(MonorubyErr::ioerr(e.to_string())),
+            }
+        }
+        reader.buffer()
     };
     let n = avail.len().min(need);
     let chunk = avail[..n].to_vec();
@@ -389,34 +517,69 @@ impl IoInner {
         }))
     }
 
-    pub fn write(&mut self, data: &[u8]) -> Result<()> {
+    /// Write all of `data[*progress..]`, advancing `*progress` past every
+    /// byte accepted by the kernel (fixing silent short writes on pipes).
+    ///
+    /// Signal-interruptible: a bare `EINTR` is retried, while `EINTR`
+    /// with a pending signal surfaces the internal signal-interrupt
+    /// marker. Because `*progress` records exactly what was flushed, the
+    /// builtin's `blocking_region` retry after a `Signal.trap` handler
+    /// resumes mid-buffer without duplicating output.
+    pub fn write(&mut self, data: &[u8], progress: &mut usize) -> Result<()> {
         self.ensure_writable()?;
-        match self {
-            Self::Stdout => match std::io::stdout().write(data) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(MonorubyErr::rangeerr(e.to_string())),
-            },
-            Self::Stderr => match std::io::stderr().write(data) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(MonorubyErr::rangeerr(e.to_string())),
-            },
-            Self::File(file) => {
-                let _ = Rc::get_mut(file)
-                    .unwrap()
-                    .reader
-                    .get_mut()
-                    .write(data)
-                    .map_err(|e| MonorubyErr::rangeerr(e.to_string()))?;
-                Ok(())
+        fn write_all(
+            writer: &mut impl Write,
+            data: &[u8],
+            progress: &mut usize,
+            map: impl Fn(String) -> MonorubyErr,
+        ) -> Result<()> {
+            while *progress < data.len() {
+                // A blocking pipe write that already transferred bytes
+                // returns the partial count on a signal instead of EINTR,
+                // and a signal can also land while we are in userspace
+                // between chunks; either way the pending bit is set and
+                // re-entering write(2) would block unkillably. Check
+                // before every kernel entry.
+                if signal_pending() {
+                    return Err(MonorubyErr::signal_interrupt());
+                }
+                match writer.write(&data[*progress..]) {
+                    Ok(0) => return Err(map("write returned 0".to_string())),
+                    Ok(n) => *progress += n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        if signal_pending() {
+                            return Err(MonorubyErr::signal_interrupt());
+                        }
+                    }
+                    Err(e) => return Err(map(e.to_string())),
+                }
             }
+            Ok(())
+        }
+        match self {
+            Self::Stdout => write_all(
+                &mut std::io::stdout(),
+                data,
+                progress,
+                MonorubyErr::rangeerr,
+            ),
+            Self::Stderr => write_all(
+                &mut std::io::stderr(),
+                data,
+                progress,
+                MonorubyErr::rangeerr,
+            ),
+            Self::File(file) => write_all(
+                Rc::get_mut(file).unwrap().reader.get_mut(),
+                data,
+                progress,
+                MonorubyErr::rangeerr,
+            ),
             Self::Popen(popen) => {
                 let popen = Rc::get_mut(popen).unwrap();
                 // `ensure_writable` guaranteed the writer is present.
                 let writer = popen.writer.as_mut().unwrap();
-                writer
-                    .write(data)
-                    .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
-                Ok(())
+                write_all(writer, data, progress, MonorubyErr::ioerr)
             }
             // `ensure_writable` already rejected non-writable streams.
             Self::Stdin | Self::Closed(..) => unreachable!(),
@@ -501,22 +664,33 @@ impl IoInner {
     }
 
     fn read_underlying(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
+        // On a signal interrupt (`Interrupted` out of the read helpers),
+        // bytes already consumed from the fd are pushed back so that the
+        // retried read (after a `Signal.trap` handler ran) returns them
+        // first and no data is lost. `pushback` is `None` for Stdin, which
+        // has no pushback cell — an interrupted stdin read may drop the
+        // partial data, like the pre-existing ungetc limitation there.
+        let interrupted =
+            |partial: Vec<u8>, pushback: Option<&RefCell<Vec<u8>>>| -> MonorubyErr {
+                if !partial.is_empty()
+                    && let Some(cell) = pushback
+                {
+                    cell.borrow_mut().splice(0..0, partial);
+                }
+                MonorubyErr::signal_interrupt()
+            };
         match self {
             Self::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
             Self::Stdin => {
-                if let Some(length) = length {
-                    let buf = match std::io::stdin().bytes().take(length).collect() {
-                        Ok(buf) => buf,
-                        Err(e) => return Err(MonorubyErr::runtimeerr(e.to_string())),
-                    };
-                    Ok(buf)
+                let mut buf = vec![];
+                let res = if let Some(length) = length {
+                    read_upto(&mut std::io::stdin(), length, &mut buf)
                 } else {
-                    let mut buf = vec![];
-                    match std::io::stdin().read_to_end(&mut buf) {
-                        Ok(_) => {}
-                        Err(e) => return Err(MonorubyErr::runtimeerr(e.to_string())),
-                    }
-                    Ok(buf)
+                    read_all(&mut std::io::stdin(), &mut buf)
+                };
+                match res {
+                    Ok(()) => Ok(buf),
+                    Err(e) => Err(map_read_err(e, MonorubyErr::runtimeerr)),
                 }
             }
             Self::Stdout => Err(MonorubyErr::argumenterr("can't read from $stdin")),
@@ -525,22 +699,20 @@ impl IoInner {
                 if !file.readable {
                     return Err(MonorubyErr::ioerr("not opened for reading"));
                 }
-                // `&mut *...reader` peels the ManuallyDrop wrapper to yield
-                // `&mut BufReader<File>`, which is needed because `Read::bytes`
-                // takes `self` by value and would otherwise try to move out of
-                // the ManuallyDrop.
-                let file = &mut *Rc::get_mut(file).unwrap().reader;
-                if let Some(length) = length {
-                    let buf = match file.bytes().take(length).collect() {
-                        Ok(buf) => buf,
-                        Err(e) => return Err(MonorubyErr::runtimeerr(e.to_string())),
-                    };
-                    Ok(buf)
+                let file = Rc::get_mut(file).unwrap();
+                let reader = &mut *file.reader;
+                let mut buf = vec![];
+                let res = if let Some(length) = length {
+                    read_upto(reader, length, &mut buf)
                 } else {
-                    let mut buf = vec![];
-                    file.read_to_end(&mut buf)
-                        .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
-                    Ok(buf)
+                    read_all(reader, &mut buf)
+                };
+                match res {
+                    Ok(()) => Ok(buf),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        Err(interrupted(buf, Some(&file.pushback)))
+                    }
+                    Err(e) => Err(MonorubyErr::runtimeerr(e.to_string())),
                 }
             }
             Self::Popen(popen) => {
@@ -549,16 +721,18 @@ impl IoInner {
                     .reader
                     .as_mut()
                     .ok_or_else(|| MonorubyErr::ioerr("not opened for reading"))?;
-                if let Some(length) = length {
-                    let buf: std::result::Result<Vec<u8>, _> =
-                        reader.bytes().take(length).collect();
-                    buf.map_err(|e| MonorubyErr::ioerr(e.to_string()))
+                let mut buf = vec![];
+                let res = if let Some(length) = length {
+                    read_upto(reader, length, &mut buf)
                 } else {
-                    let mut buf = vec![];
-                    reader
-                        .read_to_end(&mut buf)
-                        .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
-                    Ok(buf)
+                    read_all(reader, &mut buf)
+                };
+                match res {
+                    Ok(()) => Ok(buf),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        Err(interrupted(buf, Some(&popen.pushback)))
+                    }
+                    Err(e) => Err(MonorubyErr::ioerr(e.to_string())),
                 }
             }
         }
@@ -575,7 +749,7 @@ impl IoInner {
     /// Returns an empty `Vec` only at end of file (the caller raises
     /// `EOFError`).
     pub fn sysread(&mut self, maxlen: usize) -> Result<Vec<u8>> {
-        use std::io::{Read, Seek, SeekFrom};
+        use std::io::{Seek, SeekFrom};
         let mut out = if self.pushback_len() > 0 {
             self.take_pushback(Some(maxlen))
         } else {
@@ -592,9 +766,8 @@ impl IoInner {
             }
             Self::Stdin => {
                 let mut buf = vec![0u8; need];
-                let n = std::io::stdin()
-                    .read(&mut buf)
-                    .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+                let n = read_step(&mut std::io::stdin(), &mut buf)
+                    .map_err(|e| map_read_err(e, MonorubyErr::runtimeerr))?;
                 buf.truncate(n);
                 buf
             }
@@ -602,7 +775,8 @@ impl IoInner {
                 if !file.readable {
                     return Err(MonorubyErr::ioerr("not opened for reading"));
                 }
-                let reader = &mut *Rc::get_mut(file).unwrap().reader;
+                let fdesc = Rc::get_mut(file).unwrap();
+                let reader = &mut *fdesc.reader;
                 // Sync the underlying fd to the logical position and
                 // discard the BufReader buffer. Best-effort: pipe /
                 // socket fds (also stored as `File`) are not seekable
@@ -610,24 +784,38 @@ impl IoInner {
                 // below simply returns whatever is available.
                 let _ = reader.seek(SeekFrom::Current(0));
                 let mut buf = vec![0u8; need];
-                let n = reader
-                    .get_mut()
-                    .read(&mut buf)
-                    .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?;
+                let n = match read_step(reader.get_mut(), &mut buf) {
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        // Preserve pushback bytes already drained into
+                        // `out` for the retry after the trap handler.
+                        if !out.is_empty() {
+                            fdesc.pushback.borrow_mut().splice(0..0, out);
+                        }
+                        return Err(MonorubyErr::signal_interrupt());
+                    }
+                    Err(e) => return Err(MonorubyErr::runtimeerr(e.to_string())),
+                };
                 buf.truncate(n);
                 buf
             }
             Self::Popen(popen) => {
                 let popen = Rc::get_mut(popen).unwrap();
-                let reader = popen
-                    .reader
-                    .as_mut()
-                    .ok_or_else(|| MonorubyErr::ioerr("not opened for reading"))?;
+                let reader = match popen.reader.as_mut() {
+                    Some(r) => r,
+                    None => return Err(MonorubyErr::ioerr("not opened for reading")),
+                };
                 let mut buf = vec![0u8; need];
-                let n = reader
-                    .get_mut()
-                    .read(&mut buf)
-                    .map_err(|e| MonorubyErr::ioerr(e.to_string()))?;
+                let n = match read_step(reader.get_mut(), &mut buf) {
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        if !out.is_empty() {
+                            popen.pushback.borrow_mut().splice(0..0, out);
+                        }
+                        return Err(MonorubyErr::signal_interrupt());
+                    }
+                    Err(e) => return Err(MonorubyErr::ioerr(e.to_string())),
+                };
                 buf.truncate(n);
                 buf
             }
@@ -802,21 +990,35 @@ impl IoInner {
 
     fn read_line_bytes_underlying(&mut self) -> Result<Option<Vec<u8>>> {
         let mut buf = Vec::new();
+        // See `read_underlying`: on a signal interrupt, push already-read
+        // bytes back so the retried getline sees them first.
+        let interrupted =
+            |partial: Vec<u8>, pushback: Option<&RefCell<Vec<u8>>>| -> MonorubyErr {
+                if !partial.is_empty()
+                    && let Some(cell) = pushback
+                {
+                    cell.borrow_mut().splice(0..0, partial);
+                }
+                MonorubyErr::signal_interrupt()
+            };
         let size = match self {
             Self::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
-            Self::Stdin => std::io::stdin()
-                .lock()
-                .read_until(b'\n', &mut buf)
-                .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?,
+            Self::Stdin => read_until_step(&mut std::io::stdin().lock(), b'\n', &mut buf)
+                .map_err(|e| map_read_err(e, MonorubyErr::runtimeerr))?,
             Self::Stdout => return Err(MonorubyErr::argumenterr("can't read from $stdin")),
             Self::Stderr => return Err(MonorubyErr::argumenterr("can't read from $stderr")),
             Self::File(file) => {
                 if !file.readable {
                     return Err(MonorubyErr::ioerr("not opened for reading"));
                 }
-                let file = &mut *Rc::get_mut(file).unwrap().reader;
-                file.read_until(b'\n', &mut buf)
-                    .map_err(|e| MonorubyErr::runtimeerr(e.to_string()))?
+                let file = Rc::get_mut(file).unwrap();
+                match read_until_step(&mut *file.reader, b'\n', &mut buf) {
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        return Err(interrupted(buf, Some(&file.pushback)));
+                    }
+                    Err(e) => return Err(MonorubyErr::runtimeerr(e.to_string())),
+                }
             }
             Self::Popen(popen) => {
                 let popen = Rc::get_mut(popen).unwrap();
@@ -824,9 +1026,13 @@ impl IoInner {
                     .reader
                     .as_mut()
                     .ok_or_else(|| MonorubyErr::ioerr("not opened for reading"))?;
-                reader
-                    .read_until(b'\n', &mut buf)
-                    .map_err(|e| MonorubyErr::ioerr(e.to_string()))?
+                match read_until_step(reader, b'\n', &mut buf) {
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        return Err(interrupted(buf, Some(&popen.pushback)));
+                    }
+                    Err(e) => return Err(MonorubyErr::ioerr(e.to_string())),
+                }
             }
         };
         if size == 0 {
@@ -838,6 +1044,22 @@ impl IoInner {
     /// Read one byte (pushback-aware). `None` at EOF.
     fn read1(&mut self) -> Result<Option<u8>> {
         Ok(self.read(Some(1))?.first().copied())
+    }
+
+    /// `read1` for the getline accumulation loops: on a signal interrupt,
+    /// push the bytes accumulated so far (`acc`) back into the pushback
+    /// buffer so the getline retried after a `Signal.trap` handler
+    /// re-reads them and no data is lost.
+    fn read1_preserving(&mut self, acc: &[u8]) -> Result<Option<u8>> {
+        match self.read1() {
+            Err(err) => {
+                if err.is_signal_interrupt() && !acc.is_empty() {
+                    let _ = self.unget(acc);
+                }
+                Err(err)
+            }
+            ok => ok,
+        }
     }
 
     /// General line reader implementing CRuby's `IO#gets` semantics:
@@ -879,7 +1101,7 @@ impl IoInner {
                 // Paragraph mode: skip the blank lines between paragraphs.
                 let mut buf = Vec::new();
                 loop {
-                    match self.read1()? {
+                    match self.read1_preserving(&buf)? {
                         None => return Ok(None),
                         Some(b'\n') => continue,
                         Some(b) => {
@@ -898,7 +1120,7 @@ impl IoInner {
                         }
                         break;
                     }
-                    match self.read1()? {
+                    match self.read1_preserving(&buf)? {
                         None => break,
                         Some(b) => {
                             buf.push(b);
@@ -914,7 +1136,7 @@ impl IoInner {
                     // positioned at the start of the next paragraph
                     // (CRuby's swallow(io, '\n')).
                     loop {
-                        match self.read1()? {
+                        match self.read1_preserving(&buf)? {
                             Some(b'\n') => continue,
                             Some(b) => {
                                 let _ = self.unget(&[b]);
@@ -941,7 +1163,7 @@ impl IoInner {
                         }
                         break;
                     }
-                    match self.read1()? {
+                    match self.read1_preserving(&buf)? {
                         None => break,
                         Some(b) => {
                             buf.push(b);
@@ -971,7 +1193,7 @@ impl IoInner {
             if utf8_missing_bytes(buf) == 0 {
                 return Ok(());
             }
-            match self.read1()? {
+            match self.read1_preserving(buf)? {
                 None => return Ok(()),
                 Some(b) => buf.push(b),
             }

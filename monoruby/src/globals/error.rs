@@ -1,5 +1,10 @@
 use crate::ast::{Loc, ParseErr, ParseErrKind, SourceInfoRef};
 
+/// Reserved message of the internal [`MonorubyErr::signal_interrupt`]
+/// marker error. Chosen to be unmistakable if a bug ever lets it leak to
+/// Ruby as a RuntimeError.
+pub(crate) const SIGNAL_INTERRUPT_MSG: &str = "__monoruby_signal_interrupt__";
+
 use super::*;
 
 ///
@@ -994,6 +999,24 @@ impl MonorubyErr {
 
     pub(crate) fn interrupt(msg: impl ToString) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Other(INTERRUPT_CLASS), msg)
+    }
+
+    /// Internal marker: a blocking IO primitive observed `EINTR` while an
+    /// async signal handler had recorded a pending signal. This never
+    /// surfaces to Ruby — callers holding an `Executor` (the IO builtins,
+    /// via `blocking_region` in builtins/io.rs) intercept it with
+    /// [`MonorubyErr::is_signal_interrupt`], run the VM poll point (which
+    /// raises the converted `SignalException` or runs the `Signal.trap`
+    /// handler), and restart the operation when the handler returned
+    /// normally.
+    pub(crate) fn signal_interrupt() -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::Runtime, SIGNAL_INTERRUPT_MSG)
+    }
+
+    /// Whether this error is the internal [`MonorubyErr::signal_interrupt`]
+    /// marker.
+    pub(crate) fn is_signal_interrupt(&self) -> bool {
+        self.kind == MonorubyErrKind::Runtime && self.message() == SIGNAL_INTERRUPT_MSG
     }
 
     /// Construct a FatalError. Used when a Rust `panic!` is caught at an

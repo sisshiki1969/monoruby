@@ -681,19 +681,32 @@ fn do_waitpid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<(i32
         0
     };
     let mut status: i32 = 0;
-    // SAFETY: waitpid is a POSIX system call.
-    let ret = unsafe { libc::waitpid(pid, &mut status, flags) };
-    if ret == -1 {
+    let ret = loop {
+        // SAFETY: waitpid is a POSIX system call.
+        let ret = unsafe { libc::waitpid(pid, &mut status, flags) };
+        if ret != -1 {
+            break ret;
+        }
+        let err = std::io::Error::last_os_error();
+        // Signal handlers are installed without SA_RESTART, so a signal
+        // delivered while blocked in waitpid EINTRs it. Run the VM poll
+        // point (raise the converted SignalException, or run the trap
+        // handler) and retry the wait, matching CRuby.
+        if err.raw_os_error() == Some(libc::EINTR) {
+            if crate::executor::execute_gc(vm, globals).is_none() {
+                return Err(vm.take_error());
+            }
+            continue;
+        }
         // Map the OS errno to the proper `Errno::E*` (a SystemCallError),
         // matching CRuby — e.g. `Errno::ECHILD` ("No child processes") when
         // there is no child to reap, rather than a bare RuntimeError.
-        let err = std::io::Error::last_os_error();
         let msg = match err.raw_os_error() {
             Some(errno) => crate::builtins::errno::strerror(errno),
             None => err.to_string(),
         };
         return Err(MonorubyErr::from_io_err(&globals.store, &err, msg));
-    }
+    };
     let status_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
     let status_obj = vm.invoke_method_inner(
         globals,
