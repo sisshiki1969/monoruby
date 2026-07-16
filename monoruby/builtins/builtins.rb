@@ -201,10 +201,20 @@ class Hash
   def map(&blk)
     return to_enum(:map) { size } unless blk
     result = []
-    if blk.arity == 1
-      each { |pair| result << blk.call(pair) }
-    else
-      each { |pair| result << blk.call(*pair) }
+    # Capture every value `each` yields. A plain Hash yields a single
+    # [k, v] pair, but a subclass may override `each` to `yield k, v` as
+    # two separate values (or `yield [k, v]` as one) — normalise both.
+    # An arity-1 block/proc sees the element as-is (the pair for a plain
+    # Hash, the first value for a two-value yield); anything else has the
+    # pair splatted, so a strict arity-2 block/Method receives k and v
+    # (matches CRuby rb_yield_values2 / the enumerable map specs).
+    each do |*vs|
+      if blk.arity == 1
+        result << blk.call(vs[0])
+      else
+        pair = vs.size == 1 ? vs[0] : vs
+        result << blk.call(*pair)
+      end
     end
     result
   end
