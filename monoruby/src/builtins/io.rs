@@ -1135,39 +1135,26 @@ fn bump_lineno(globals: &mut Globals, io: Value) -> Result<()> {
 /// delivered before the syscall (re-)entered the kernel, so it can never
 /// EINTR it, and the operation could otherwise block forever with the
 /// signal sitting in the bitmap (same reasoning as `Kernel#sleep`).
-pub(crate) fn blocking_region<T>(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    mut f: impl FnMut() -> Result<T>,
-) -> Result<T> {
-    loop {
-        if crate::codegen::signal_table::PENDING_SIGNALS.load(std::sync::atomic::Ordering::Relaxed)
-            != 0
-            && crate::executor::execute_gc(vm, globals).is_none()
-        {
-            return Err(vm.take_error());
-        }
-        match f() {
-            Err(err) if err.is_signal_interrupt() => {
-                if crate::executor::execute_gc(vm, globals).is_none() {
-                    return Err(vm.take_error());
-                }
-                // A trap handler handled the signal; restart the operation.
-            }
-            res => return res,
-        }
-    }
-}
-
-/// Like [`blocking_region`], for fd-backed operations: when other green
+/// Additionally, for fd-backed operations: when other green
 /// threads are live and the operation would block (fd not ready, nothing
 /// buffered), park the current thread on the scheduler's fd poller so
 /// the other threads run in the meantime, instead of blocking the whole
 /// process. Readiness is re-checked after every wake (spurious wakeups
 /// and error/hangup revents fall through to `f`, which surfaces the real
-/// outcome). Note: only the *entry* to the operation is guarded — an
-/// operation that consumes the available data and then needs more (e.g.
-/// `read(n)` beyond what a pipe holds) still blocks mid-way.
+/// outcome).
+///
+/// The entry check alone would leave an operation that consumes the
+/// available data and then needs more (e.g. `read(n)` beyond what a pipe
+/// holds) blocking the process mid-way. To cover the middle of the
+/// operation too, `f` runs with the fd in temporary non-blocking mode
+/// (`NonblockGuard`) while other green threads are live: a kernel entry
+/// that would block returns `EAGAIN`, the primitives push back what was
+/// already consumed and surface the internal would-block marker, and the
+/// thread parks on the fd poller before restarting `f`. With no other
+/// live threads the marker can still surface — from an fd left
+/// permanently non-blocking by `read_nonblock`/`write_nonblock` — and is
+/// waited out with a plain (signal-interruptible) `poll(2)`, matching
+/// CRuby, where buffered IO on a non-blocking fd still blocks the caller.
 pub(crate) fn blocking_io_region<T>(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1179,7 +1166,7 @@ pub(crate) fn blocking_io_region<T>(
         if crate::scheduler::has_other_live_threads()
             && !(events & libc::POLLIN != 0 && io.as_io_inner().has_buffered_data())
             && !io.as_io_inner().is_closed()
-            && let Ok(fd) = io.as_io_inner().fileno()
+            && let Ok(fd) = io.as_io_inner().wait_fd_for(events)
             && fd >= 0
             && poll_single_fd(io, events, 0)? == 0
         {
@@ -1192,14 +1179,75 @@ pub(crate) fn blocking_io_region<T>(
         {
             return Err(vm.take_error());
         }
-        match f() {
+        // Mid-operation would-block emulation. Skipped for the std streams
+        // (fds 0-2): their open file description is shared with the parent
+        // shell and other processes, and a non-blocking flag leaked by an
+        // abnormal exit mid-operation would corrupt *their* IO — the classic
+        // "nonblocking stdout" bug. Std streams keep entry-only parking.
+        let guard = if crate::scheduler::has_other_live_threads()
+            && !io.as_io_inner().is_closed()
+            && let Ok(fd) = io.as_io_inner().wait_fd_for(events)
+            && fd > 2
+        {
+            crate::value::rvalue::NonblockGuard::set(fd)
+        } else {
+            None
+        };
+        let res = f();
+        // Restore the fd's blocking mode *before* parking: while this
+        // thread is parked, other green threads (or a spawned child) may
+        // use the same fd and must see it in its original mode.
+        drop(guard);
+        match res {
             Err(err) if err.is_signal_interrupt() => {
                 if crate::executor::execute_gc(vm, globals).is_none() {
                     return Err(vm.take_error());
                 }
             }
+            Err(err) if err.is_would_block_interrupt() => {
+                let fd = io.as_io_inner().wait_fd_for(events)?;
+                if crate::scheduler::has_other_live_threads() {
+                    crate::scheduler::wait_fd(vm, globals, fd, events, None)?;
+                } else {
+                    wait_fd_single(vm, globals, fd, events)?;
+                }
+            }
             res => return res,
         }
+    }
+}
+
+/// Wait until `fd` reports one of `events`, blocking the whole process —
+/// used when a would-block interrupt surfaces with no other green threads
+/// to run (an fd left permanently non-blocking by `read_nonblock` /
+/// `write_nonblock`). Signal-interruptible: `EINTR` (and a signal already
+/// pending on entry) runs the VM poll point, then re-polls.
+fn wait_fd_single(vm: &mut Executor, globals: &mut Globals, fd: i32, events: i16) -> Result<()> {
+    loop {
+        if crate::codegen::signal_table::PENDING_SIGNALS.load(std::sync::atomic::Ordering::Relaxed)
+            != 0
+            && crate::executor::execute_gc(vm, globals).is_none()
+        {
+            return Err(vm.take_error());
+        }
+        let mut pfd = libc::pollfd {
+            fd,
+            events,
+            revents: 0,
+        };
+        // SAFETY: `poll` accepts a pointer to an array of pollfd; we pass
+        // exactly one element with length 1.
+        let ret = unsafe { libc::poll(&mut pfd, 1, -1) };
+        if ret < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(MonorubyErr::ioerr(format!("poll failed: {err}")));
+        }
+        // Ready (or an error/hangup revent — the retried operation
+        // surfaces the real outcome).
+        return Ok(());
     }
 }
 
@@ -1644,7 +1692,7 @@ fn io_class_readlines(
         vm.temp_push(io_val);
         vm.temp_array_new(None);
         let result = (|| {
-            while let Some(mut buf) = blocking_region(vm, globals, || {
+            while let Some(mut buf) = blocking_io_region(vm, globals, io_val, libc::POLLIN, || {
                 io_val
                     .as_io_inner_mut()
                     .getline(sep.as_deref(), limit, complete_utf8)
@@ -1822,7 +1870,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         vm.temp_push(io_val);
         let mut lineno = 0i64;
         let result = (|| {
-            while let Some(mut buf) = blocking_region(vm, globals, || {
+            while let Some(mut buf) = blocking_io_region(vm, globals, io_val, libc::POLLIN, || {
                 io_val
                     .as_io_inner_mut()
                     .getline(sep.as_deref(), limit, complete_utf8)
@@ -3725,7 +3773,7 @@ fn set_encoding_by_bom(
     }
     // Read up to 4 bytes — enough to disambiguate every BOM (and to
     // tell UTF-16LE from UTF-32LE, which share the FF FE prefix).
-    let head = blocking_region(vm, globals, || {
+    let head = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
         lfp.self_val().as_io_inner_mut().read(Some(4))
     })?;
     let (consume, enc_name): (usize, &str) = match head.first() {
@@ -3965,7 +4013,7 @@ fn poll_single_fd(self_val: Value, events: i16, timeout_ms: i32) -> Result<i16> 
     if self_val.as_io_inner().is_closed() {
         return Err(MonorubyErr::ioerr("closed stream"));
     }
-    let fd = self_val.as_io_inner().fileno()?;
+    let fd = self_val.as_io_inner().wait_fd_for(events)?;
     let mut pfd = libc::pollfd {
         fd,
         events,
