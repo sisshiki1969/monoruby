@@ -1464,9 +1464,13 @@ mod tests {
             r << [n.size, n.internal?]
             x = IO::Buffer.new(2); x.set_string("ab")
             y = IO::Buffer.new(2); y.set_string("ab")
-            r << [x == y, x <=> y]
+            # CRuby's IO::Buffer#<=> leaks the raw memcmp(3) result, whose
+            # magnitude varies with the libc/CPU (e.g. -1 vs -32769 for the
+            # same operands on different glibc builds) — compare the sign
+            # only, or the differential test is flaky across environments.
+            r << [x == y, (x <=> y) <=> 0]
             y.set_string("ac")
-            r << [x == y, x <=> y]
+            r << [x == y, (x <=> y) <=> 0]
             r << er.call { x <=> "ab" }
             r
             "##,

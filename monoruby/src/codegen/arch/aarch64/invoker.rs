@@ -433,6 +433,99 @@ impl JitModule {
         self.a64_fiber_invoker(true)
     }
 
+    /// First activation of a green thread. In: x0 thread_vm, x1 globals,
+    /// x2 &ProcData, x3 (unused), x4 args, x5 len. Saves the scheduler
+    /// context into the process-global `SCHED_RSP` slot, switches onto the
+    /// thread's fresh stack, runs the body, and switches back on
+    /// termination. `parent_fiber` is deliberately left `None` so
+    /// `Fiber.yield` at the thread root takes the existing error paths.
+    /// (Mirrors x86 thread_invoker.)
+    pub(in crate::codegen) fn thread_invoker(&mut self) -> ThreadInvoker {
+        let codeptr = self.jit.get_current_address();
+        let sched_rsp = crate::scheduler::sched_rsp_addr();
+        self.a64_push_callee_save();
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (sched_rsp);
+            mov x11, sp;
+            str x11, [x10];  // SCHED_RSP = scheduler context
+            ldr x10, [x0, #(EXECUTOR_RSP_SAVE as u32)];
+            mov sp, x10;  // SP = thread's fresh stack top
+            mov x(EXEC.0), x0;
+            mov x(GLOBALS.0), x1;
+        );
+        self.a64_block_frame_setup(false);
+        monoasm_arm64!(&mut self.jit,
+            mov x7, (0);  // thread bodies carry no keyword args
+        );
+        self.a64_invoker_args_and_call(true);
+        // body completed: mark terminated, switch back to the scheduler.
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (u64::MAX);  // -1 = terminated
+            str x10, [x(EXEC.0), #(EXECUTOR_RSP_SAVE as u32)];
+            mov x10, (sched_rsp);
+            ldr x10, [x10];
+            mov sp, x10;
+        );
+        self.a64_pop_callee_save();
+        monoasm_arm64!(&mut self.jit,
+            ret;
+        // SAFETY: codeptr is an extern "C" fn with the ThreadInvoker ABI.
+        );
+        unsafe { std::mem::transmute_copy::<*mut u8, ThreadInvoker>(&codeptr.as_ptr()) }
+    }
+
+    /// Switch from the running green thread to the scheduler context in
+    /// `SCHED_RSP`. In: x0 current executor, x1 value (returned to the
+    /// scheduler's pending resume call). `parent_fiber` is untouched.
+    /// (Mirrors x86 switch_to_scheduler.)
+    pub(in crate::codegen) fn switch_to_scheduler(
+        &mut self,
+    ) -> extern "C" fn(*mut Executor, Value) -> Option<Value> {
+        let codeptr = self.jit.get_current_address();
+        let sched_rsp = crate::scheduler::sched_rsp_addr();
+        self.a64_push_callee_save();
+        monoasm_arm64!(&mut self.jit,
+            mov x10, sp;
+            str x10, [x0, #(EXECUTOR_RSP_SAVE as u32)];  // save current context
+            mov x10, (sched_rsp);
+            ldr x10, [x10];
+            mov sp, x10;  // SP = scheduler context
+        );
+        self.a64_pop_callee_save();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x1;
+            ret;
+        // SAFETY: codeptr matches the switch_to_scheduler ABI.
+        );
+        unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
+    }
+
+    /// Resume a parked green thread. In: x0 thread executor, x1 value
+    /// (returned to the thread's pending switch_to_scheduler call). The
+    /// scheduler context is saved into `SCHED_RSP`.
+    /// (Mirrors x86 scheduler_resume.)
+    pub(in crate::codegen) fn scheduler_resume(
+        &mut self,
+    ) -> extern "C" fn(*mut Executor, u64) -> Option<Value> {
+        let codeptr = self.jit.get_current_address();
+        let sched_rsp = crate::scheduler::sched_rsp_addr();
+        self.a64_push_callee_save();
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (sched_rsp);
+            mov x11, sp;
+            str x11, [x10];  // SCHED_RSP = scheduler context
+            ldr x10, [x0, #(EXECUTOR_RSP_SAVE as u32)];
+            mov sp, x10;  // SP = thread context
+        );
+        self.a64_pop_callee_save();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x1;
+            ret;
+        // SAFETY: codeptr matches the scheduler_resume ABI.
+        );
+        unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
+    }
+
     /// Resume a suspended fiber. In: x0 parent_vm, x1 child_vm, x2 value.
     /// Save the parent context, switch onto the child's saved stack, and
     /// return (the child resumes where it last yielded). x86 resume_fiber.

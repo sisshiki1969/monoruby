@@ -758,81 +758,18 @@ class Fiber
 end
 
 class Thread
-  # monoruby runs on a single OS thread and does NOT provide concurrency.
-  # `Thread` exists only so that RubyGems / Bundler — and the little stdlib
-  # that references it — load and run. `Thread.new` / `Thread.start` store
-  # the block and run it lazily, on the *single* main thread, the first time
-  # its result is demanded via `#value` (used by rubygems' request_set and
-  # by `Class#subclasses`-style specs).
+  # monoruby threads are cooperative green threads multiplexed on the one
+  # OS thread by the native scheduler (src/scheduler.rs). The native side
+  # provides: Thread.new / .start / .fork (queue a body), .current /
+  # .main / .list / .pass / .stop, and #join / #value / #status /
+  # #alive? / #stop? / #wakeup / #run. Blocking APIs park the calling
+  # thread on the scheduler; a body starts running the first time any
+  # thread reaches a blocking point.
   #
-  # APIs that presuppose a real scheduler observing a *running* body — `#join`,
-  # `#kill`, `#run`, `#wakeup`, `#raise`, `#status`, `#alive?`, `#stop?`,
-  # `Thread.pass`, `Thread.stop`, `#report_on_exception`, ... — are deliberately
-  # NOT defined. On one OS thread they could only hang (a body never runs on
-  # its own, so a `Thread.pass until flag` / `#join` waiting on it spins
-  # forever) or report fictional state, so they fail fast with NoMethodError
-  # instead of hanging a ruby/spec run. `#value` is the one body-runner kept
-  # (it terminates or fails fast — a body that blocks forever on another
-  # thread instead runs to a no-op here); the hang-prone waiting/observation
-  # APIs above are gone. The rest of the kept surface is exactly what RubyGems
-  # / Bundler touch: identity (`current`), a name, thread-/fiber-local storage,
-  # an interrupt-mask no-op, and the Mutex / Queue / ConditionVariable shells
-  # (all trivial — there is nothing to contend for).
-
-  def initialize(*args, &block)
-    @block = block
-    @args = args
-    @ran = false
-    @value = nil
-    @exception = nil
-    @fiber_locals = {}
-    @thread_variables = {}
-    @name = nil
-  end
-
-  def self.current
-    @@current
-  end
-  @@current = new
-
-  # Run the stored block (once) on the main thread and return its value.
-  # monoruby is single-threaded, so this is where a `Thread.new` body
-  # actually executes. Re-raises a body that raised (matching CRuby's
-  # `#value`). `#join` and the status/observation APIs are intentionally
-  # absent — see the class comment.
-  def value
-    __run
-    raise @exception if @exception
-    @value
-  end
-
-  def __run
-    return if @ran
-    @ran = true
-    begin
-      # Route through the native helper so a bare `return` / `break` in the
-      # body raises LocalJumpError (as in CRuby) rather than escaping the
-      # synchronously-run block.
-      @value = @block ? __invoke_body(@block, @args) : nil
-    rescue => e
-      @exception = e
-    end
-    self
-  end
-  private :__run
-  private :__invoke_body
-
-  # `Thread.start` is an alias of `Thread.new` in CRuby.
-  def self.start(*args, &block)
-    new(*args, &block)
-  end
-
-  # With a single thread there is nothing to mask against asynchronous
-  # interruption, so just run the block (used by Bundler's connection_pool
-  # and by timeout).
-  def self.handle_interrupt(mask)
-    yield
-  end
+  # This Ruby side keeps only the pure-bookkeeping surface: a name,
+  # thread-/fiber-local storage, and an interrupt-mask no-op (real
+  # asynchronous interruption — #raise / #kill — is not implemented yet,
+  # so there is nothing to mask).
 
   def self.each_caller_location
     caller_locations(1).each do |loc|
@@ -842,20 +779,32 @@ class Thread
 
   attr_accessor :name
 
+  # Reported when a thread dies with an unhandled exception (read by the
+  # native finalizer). Instance-level only; default true, as in CRuby.
+  def report_on_exception
+    @report_on_exception.nil? ? true : @report_on_exception
+  end
+
+  def report_on_exception=(flag)
+    @report_on_exception = flag
+  end
+
+  # Thread objects are native (ObjTy::THREAD) and no longer run a Ruby
+  # initialize, so the local-storage tables are created lazily.
   def [](key)
-    @fiber_locals[key]
+    @fiber_locals && @fiber_locals[key]
   end
 
   def []=(key, value)
-    @fiber_locals[key] = value
+    (@fiber_locals ||= {})[key] = value
   end
 
   def thread_variable_get(key)
-    @thread_variables[key]
+    @thread_variables && @thread_variables[key]
   end
 
   def thread_variable_set(key, value)
-    @thread_variables[key] = value
+    (@thread_variables ||= {})[key] = value
   end
 
   # The object returned by `Process.detach`. Reaping one specific child via
@@ -865,11 +814,20 @@ class Thread
   # (`Errno::ECHILD`) yields nil, matching CRuby. This is what keeps Open3's
   # `wait_thr.value` / `wait_thr.join` working.
   class Waiter < Thread
-    def initialize(pid)
-      super()
+    # The native Thread.new requires a block (it queues a green thread);
+    # a Waiter is an inert shell around one specific child pid, so build
+    # it via allocate.
+    def self.new(pid)
+      w = allocate
+      w.__send__(:__init_waiter, pid)
+      w
+    end
+
+    def __init_waiter(pid)
       @pid = pid
       self[:pid] = pid
     end
+    private :__init_waiter
 
     attr_reader :pid
 
@@ -895,35 +853,131 @@ class Thread
     end
   end
 
+  # Green threads switch only at blocking points (sleep / Thread.stop /
+  # join / pass), so plain Ruby code is atomic with respect to the
+  # scheduler — no preemption can occur between two non-blocking
+  # statements. That makes these synchronization primitives correct as
+  # pure Ruby built on Thread.stop / Kernel#sleep (park) and
+  # Thread#wakeup (unpark): every "test then enqueue then park" sequence
+  # below is uninterruptible up to the park itself.
+
   class Mutex
-    def synchronize
-      yield
+    def locked?
+      !!@owner
     end
-    
+
     def owned?
-      false
+      @owner == Thread.current
+    end
+
+    def try_lock
+      if @owner
+        false
+      else
+        @owner = Thread.current
+        true
+      end
+    end
+
+    def lock
+      raise ThreadError, "deadlock; recursive locking" if owned?
+      until try_lock
+        (@waiters ||= []) << Thread.current
+        begin
+          Thread.stop
+        ensure
+          @waiters.delete(Thread.current)
+        end
+      end
+      self
+    end
+
+    def unlock
+      unless @owner
+        raise ThreadError, "Attempt to unlock a mutex which is not locked"
+      end
+      unless owned?
+        raise ThreadError, "Attempt to unlock a mutex which is locked by another thread"
+      end
+      @owner = nil
+      # Hand the next waiter a chance; it re-contends in its lock loop.
+      if @waiters
+        while (w = @waiters.shift)
+          if w.alive?
+            w.wakeup
+            break
+          end
+        end
+      end
+      self
+    end
+
+    def synchronize
+      raise ThreadError, "must be called with a block" unless block_given?
+      lock
+      begin
+        yield
+      ensure
+        unlock
+      end
+    end
+
+    # Atomically release the mutex, sleep, and re-acquire it on wake
+    # (including on an exception raised into the sleeper).
+    def sleep(timeout = nil)
+      raise ThreadError, "Attempt to unlock a mutex which is not locked" unless owned?
+      unlock
+      begin
+        timeout ? Kernel.sleep(timeout) : Thread.stop
+      ensure
+        lock
+      end
     end
   end
 
   class Queue
     def initialize
       @items = []
+      @waiters = []
+      @closed = false
     end
 
     def push(item)
+      raise ClosedQueueError, "queue closed" if @closed
       @items.push(item)
+      __wake_one(@waiters)
       self
     end
     alias << push
     alias enq push
 
     def pop(non_block = false, timeout: nil)
-      if @items.empty?
-        raise ThreadError, "queue empty" if non_block
-        # With timeout, return nil (no threading in monoruby)
-        return nil
+      if non_block
+        raise ThreadError, "queue empty" if @items.empty? && !@closed
+        return @items.shift
       end
-      @items.shift
+      deadline = timeout && Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+      loop do
+        return @items.shift unless @items.empty?
+        return nil if @closed
+        if deadline
+          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          return nil if remaining <= 0
+          @waiters << Thread.current
+          begin
+            Kernel.sleep(remaining)
+          ensure
+            @waiters.delete(Thread.current)
+          end
+        else
+          @waiters << Thread.current
+          begin
+            Thread.stop
+          ensure
+            @waiters.delete(Thread.current)
+          end
+        end
+      end
     end
     alias shift pop
     alias deq pop
@@ -942,33 +996,101 @@ class Thread
       self
     end
 
+    # Closing wakes every parked consumer/producer: consumers drain the
+    # remaining items then get nil; producers raise ClosedQueueError.
     def close
+      return self if @closed
       @closed = true
+      __wake_all(@waiters)
+      __wake_all(@push_waiters) if defined?(@push_waiters) && @push_waiters
       self
     end
 
     def closed?
-      @closed || false
+      @closed
     end
 
     def num_waiting
-      0
+      @waiters.size + (defined?(@push_waiters) && @push_waiters ? @push_waiters.size : 0)
+    end
+
+    private
+
+    def __wake_one(waiters)
+      while (w = waiters.shift)
+        if w.alive?
+          w.wakeup
+          return
+        end
+      end
+    end
+
+    def __wake_all(waiters)
+      until waiters.empty?
+        __wake_one(waiters)
+      end
     end
   end
 
   class SizedQueue < Queue
-    def initialize(max = nil)
+    def initialize(max)
+      max = max.to_int if !max.is_a?(Integer) && max.respond_to?(:to_int)
+      raise ArgumentError, "queue size must be positive" unless max.is_a?(Integer) && max > 0
       super()
       @max = max
+      @push_waiters = []
     end
 
-    def max
-      @max
-    end
+    attr_reader :max
 
     def max=(new_max)
+      raise ArgumentError, "queue size must be positive" unless new_max.is_a?(Integer) && new_max > 0
+      grew = new_max > @max
       @max = new_max
+      __wake_all(@push_waiters) if grew
+      new_max
     end
+
+    def push(item, non_block = false, timeout: nil)
+      deadline = timeout && Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+      loop do
+        raise ClosedQueueError, "queue closed" if @closed
+        if @items.size < @max
+          @items.push(item)
+          __wake_one(@waiters)
+          return self
+        end
+        raise ThreadError, "queue full" if non_block
+        if deadline
+          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          return nil if remaining <= 0
+          @push_waiters << Thread.current
+          begin
+            Kernel.sleep(remaining)
+          ensure
+            @push_waiters.delete(Thread.current)
+          end
+        else
+          @push_waiters << Thread.current
+          begin
+            Thread.stop
+          ensure
+            @push_waiters.delete(Thread.current)
+          end
+        end
+      end
+    end
+    alias << push
+    alias enq push
+
+    def pop(non_block = false, timeout: nil)
+      v = super
+      # Popping frees a slot: let one parked producer through.
+      __wake_one(@push_waiters)
+      v
+    end
+    alias shift pop
+    alias deq pop
   end
 
   class ConditionVariable
@@ -976,15 +1098,38 @@ class Thread
       @waiters = []
     end
 
+    # Atomically release `mutex` and park until signaled (or the timeout
+    # elapses), then re-acquire `mutex` before returning — also on an
+    # exception raised into the waiter.
     def wait(mutex, timeout = nil)
+      @waiters << Thread.current
+      begin
+        mutex.unlock
+        begin
+          timeout ? Kernel.sleep(timeout) : Thread.stop
+        ensure
+          mutex.lock
+        end
+      ensure
+        @waiters.delete(Thread.current)
+      end
       self
     end
 
     def signal
+      while (w = @waiters.shift)
+        if w.alive?
+          w.wakeup
+          break
+        end
+      end
       self
     end
 
     def broadcast
+      until @waiters.empty?
+        signal
+      end
       self
     end
   end
@@ -1029,6 +1174,9 @@ end
 
 # Top-level aliases (CRuby compatibility)
 class ThreadError < StandardError; end unless defined?(::ThreadError)
+# Raised by push/pop on a closed queue (CRuby: subclass of StopIteration,
+# so `loop { q.pop }` exits cleanly when the queue is closed).
+class ClosedQueueError < StopIteration; end unless defined?(::ClosedQueueError)
 Queue = Thread::Queue
 SizedQueue = Thread::SizedQueue
 ConditionVariable = Thread::ConditionVariable
