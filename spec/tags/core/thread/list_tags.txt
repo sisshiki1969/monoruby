@@ -1,0 +1,1 @@
+fails:Thread.list returns instances of Thread and not null or nil values
