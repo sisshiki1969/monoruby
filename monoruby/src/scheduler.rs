@@ -154,6 +154,43 @@ pub(crate) fn mark(alloc: &mut crate::alloc::Allocator<RValue>) {
     SCHEDULER.with(|s| s.borrow().mark(alloc));
 }
 
+/// Forensics (`MONORUBY_GC_BREAK`): one-line dump of the scheduler state
+/// as seen by the GC root scan.
+pub(crate) fn dump_state_for_gc() -> String {
+    SCHEDULER.with(|s| {
+        let s = s.borrow();
+        format!(
+            "in_scheduler={} main_exec={:?} main_exec_parent_fiber={:?} current={:016x} main={:016x} threads={} ready={} sleepers={} io_waiters={}",
+            s.in_scheduler,
+            s.main_exec,
+            // SAFETY: forensics-only read; main_exec is live while set.
+            s.main_exec
+                .map(|e| unsafe { e.as_ref().parent_fiber() }),
+            s.current.map(|v| v.id()).unwrap_or(0),
+            s.main.map(|v| v.id()).unwrap_or(0),
+            s.threads.len(),
+            s.ready.len(),
+            s.sleepers.len(),
+            s.io_waiters.len(),
+        ) + &s
+            .main
+            .map(|m| {
+                let inner = m.as_thread_inner();
+                format!(
+                    " main_state={:?} main_resume_exec={:?} main_resume_parent_fiber={:?}",
+                    inner.state,
+                    inner.resume_exec,
+                    // SAFETY: forensics-only read; resume_exec is live
+                    // while the thread is parked.
+                    inner
+                        .resume_exec
+                        .map(|e| unsafe { e.as_ref().parent_fiber() }),
+                )
+            })
+            .unwrap_or_default()
+    })
+}
+
 /// The `Thread` object for the currently running thread, creating the
 /// main thread object lazily on first use.
 pub(crate) fn current_thread(vm: &mut Executor) -> Value {
@@ -298,7 +335,7 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         // executor for the duration.
         SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
-            s.main_exec = Some(std::ptr::NonNull::from(&mut *vm));
+            s.main_exec = Some(root_exec(vm));
             s.in_scheduler = true;
         });
         // Same fd-waiter promotion as `scheduler_loop`: a main thread
@@ -657,12 +694,34 @@ fn park_switch(vm: &mut Executor, mut cur: Value) -> Result<()> {
     }
 }
 
+/// The thread-root executor of `vm`'s fiber-parent chain.
+///
+/// GC root marking must always start from the thread-root executor: a
+/// fiber's frame chain is reached *from* the frame that holds the Fiber
+/// object (the resumer), never the other way round — `Executor::mark`
+/// walks only its own cfp chain and does not cross fiber boundaries.
+/// `execute_gc` performs this same walk for the triggering executor;
+/// capturing `main_exec` from a park that happened *inside* a fiber
+/// (e.g. `sleep` in an Enumerator body) without the walk would publish
+/// the fiber's executor instead, leaving every frame of the main
+/// thread's root chain invisible to a green-thread-triggered GC — a
+/// use-after-free of anything referenced only by those frames.
+fn root_exec(vm: &mut Executor) -> std::ptr::NonNull<Executor> {
+    let mut cur = std::ptr::NonNull::from(&mut *vm);
+    // SAFETY: `parent_fiber` links point at live executors while the
+    // child fiber is running (the resumer is suspended on its stack).
+    while let Some(parent) = unsafe { cur.as_ref().parent_fiber() } {
+        cur = parent;
+    }
+    cur
+}
+
 /// The scheduler loop. Only ever called in the main thread's context,
 /// while the main thread is parked; returns when main is runnable again.
 fn scheduler_run(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
-        s.main_exec = Some(std::ptr::NonNull::from(&mut *vm));
+        s.main_exec = Some(root_exec(vm));
         s.in_scheduler = true;
     });
     let result = scheduler_loop(vm, globals);

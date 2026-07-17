@@ -366,6 +366,101 @@ pub struct Allocator<T> {
     /// freed (a one-cycle grace covering the promote→root-store
     /// window).
     heap_frames: std::collections::HashMap<usize, FrameRec, AddrHashBuilder>,
+    /// Use-after-free forensics (enabled by `MONORUBY_GC_FREE_LOG=1`):
+    /// ring buffer of `(address, total_gc_counter, kind, was_old)` for
+    /// every slot the sweep frees. When a stale-object assertion fires
+    /// (e.g. `Value::as_array` on an `INVALID` header), the crash site
+    /// looks the address up to learn *which* GC freed the object — a
+    /// Minor implicates the write barrier / remembered set, a Major the
+    /// root set.
+    free_log: Vec<(usize, u32, u8, bool)>,
+    /// Write cursor into `free_log` once it reached capacity.
+    free_log_pos: usize,
+    /// `GcKind` of the collection currently sweeping (forensics tag).
+    current_kind: u8,
+}
+
+/// Whether `MONORUBY_GC_FREE_LOG=1` forensics are enabled (cached).
+pub(crate) fn free_log_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MONORUBY_GC_FREE_LOG").is_some())
+}
+
+/// Forensics: `MONORUBY_GC_ALL_MAJOR=1` forces every collection to be a
+/// Major (full-heap) GC. A generational bug (missed write barrier /
+/// remembered-set entry) disappears under this switch; a plain root-scan
+/// bug does not. Diagnostic only — never enable in production.
+fn all_major_forced() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MONORUBY_GC_ALL_MAJOR").is_some())
+}
+
+/// Stale-object crash forensics: report when (and by which GC kind) the
+/// heap slot behind `v` was last freed, per the `MONORUBY_GC_FREE_LOG`
+/// ring buffer. Called from assertion sites right before panicking on a
+/// dead/reused RValue; no-op unless the log is enabled.
+pub(crate) fn report_stale_object(site: &str, v: crate::Value) {
+    if !free_log_enabled() {
+        return;
+    }
+    if v.is_packed_value() {
+        eprintln!(
+            "[{site}] stale-object report: value {:016x} is not a heap pointer",
+            v.id()
+        );
+        return;
+    }
+    let addr = v.id() as usize;
+    let _ = ALLOC.try_with(|a| {
+        let Ok(a) = a.try_borrow() else {
+            eprintln!("[{site}] stale-object report: allocator busy");
+            return;
+        };
+        match a.lookup_free_log(addr) {
+            Some((gc, kind)) => eprintln!(
+                "[{site}] stale object {addr:016x}: freed by GC #{gc} ({}) — current GC #{}",
+                if kind == 0 { "Minor" } else { "Major" },
+                a.gc_counter(),
+            ),
+            None => eprintln!(
+                "[{site}] stale object {addr:016x}: no free record (never swept while logging, or evicted) — current GC #{}",
+                a.gc_counter(),
+            ),
+        }
+        // Who still holds a reference to the freed slot? An `old=true,
+        // remembered=false` holder is the signature of a missed write
+        // barrier; no holder at all means the reference lived outside the
+        // heap (frame slot, Rust local, JIT register).
+        let holders = a.find_holders(addr);
+        if holders.is_empty() {
+            eprintln!(
+                "[{site}]   no heap holder contains this address — held outside the heap"
+            );
+        }
+        for (h, marked, old, remembered) in holders {
+            // SAFETY: forensics-only read of a heap cell header.
+            let ty = unsafe { &*(h as *const crate::value::rvalue::RValue) }.ty();
+            eprintln!(
+                "[{site}]   holder {h:016x} ty={ty:?} marked={marked} old={old} remembered={remembered}"
+            );
+        }
+    });
+}
+
+const FREE_LOG_CAP: usize = 1 << 21;
+
+/// Forensics: a single heap address to trace (`MONORUBY_GC_TRACK=0x…`).
+/// Every allocation returning it, every mark reaching it (with the mark
+/// chain via backtrace), and every sweep freeing it are reported. Used
+/// with ASLR disabled (`setarch -R`) so the address reproduces across
+/// runs: run once to learn the victim address from the stale-object
+/// report, re-run tracking it.
+pub(crate) fn tracked_addr() -> Option<usize> {
+    static ADDR: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    *ADDR.get_or_init(|| {
+        let v = std::env::var("MONORUBY_GC_TRACK").ok()?;
+        usize::from_str_radix(v.trim_start_matches("0x"), 16).ok()
+    })
 }
 
 /// Fast hasher for the heap-frame registry. Keys are LFP addresses
@@ -456,6 +551,9 @@ impl<T: GCBox> Allocator<T> {
             alloc_flag: None,
             gc_enabled: true,
             heap_frames: std::collections::HashMap::default(),
+            free_log: Vec::new(),
+            free_log_pos: 0,
+            current_kind: 0,
         }
     }
 
@@ -682,6 +780,15 @@ impl<T: GCBox> Allocator<T> {
                 std::ptr::write(gcbox, data)
             }
             self.free_list_count -= 1;
+            if let Some(addr) = tracked_addr()
+                && gcbox as usize == addr
+            {
+                eprintln!(
+                    "[GC-TRACK] allocated (free list) after GC #{}:\n{}",
+                    self.total_gc_counter,
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
             return gcbox;
         }
 
@@ -752,12 +859,16 @@ impl<T: GCBox> Allocator<T> {
             return;
         }
         // A pending `GC.start` request forces a Major collection.
-        let kind = if GC_FORCE_MAJOR.swap(false, Ordering::Relaxed) {
+        let kind = if GC_FORCE_MAJOR.swap(false, Ordering::Relaxed) || all_major_forced() {
             GcKind::Major
         } else {
             self.decide_gc_kind()
         };
         self.total_gc_counter += 1;
+        self.current_kind = match kind {
+            GcKind::Minor => 0,
+            GcKind::Major => 1,
+        };
         match kind {
             GcKind::Minor => {
                 self.minor_gc_count += 1;
@@ -888,6 +999,16 @@ impl<T: GCBox> Allocator<T> {
     /// If not yet, mark it and return false.
     pub(crate) fn gc_check_and_mark(&mut self, ptr: &T) -> bool {
         let p = ptr as *const T;
+        if let Some(addr) = tracked_addr()
+            && p as usize == addr
+        {
+            eprintln!(
+                "[GC-TRACK] mark hit at GC #{} ({}):\n{}",
+                self.total_gc_counter,
+                if self.current_kind == 0 { "Minor" } else { "Major" },
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         let page_ptr = self.get_page(p);
 
         let index = unsafe { (*page_ptr).get_index(p) };
@@ -964,6 +1085,49 @@ impl<T: GCBox> Allocator<T> {
         let index = unsafe { (*page_ptr).get_index(ptr) };
         let bit_mask = 1 << (index % 64);
         unsafe { (*page_ptr).old_bits[index / 64] & bit_mask != 0 }
+    }
+
+    ///
+    /// Forensics (stale-object reports): scan every heap cell's raw words
+    /// for `addr` and return each holder cell's address together with its
+    /// `(marked, old, remembered)` status. A holder that is `old` but not
+    /// `remembered` is the signature of a missed write barrier. Linear in
+    /// heap size; only called right before a stale-object panic.
+    ///
+    pub(crate) fn find_holders(&self, addr: usize) -> Vec<(usize, bool, bool, bool)> {
+        let words = std::mem::size_of::<T>() / std::mem::size_of::<usize>();
+        let mut out = Vec::new();
+        let mut scan_page = |page: &Page<T>, len: usize| {
+            for index in 0..len {
+                let cell = page.get_cell(index) as usize;
+                if cell == addr {
+                    continue;
+                }
+                // SAFETY: forensics-only raw read of an initialized heap
+                // cell (free-list cells are initialized too — their header
+                // holds the next-pointer).
+                let hit = (0..words)
+                    .any(|w| unsafe { (cell as *const usize).add(w).read() } == addr);
+                if hit {
+                    let bit = 1u64 << (index % 64);
+                    let marked = page.mark_bits[index / 64] & bit != 0;
+                    let old = page.old_bits[index / 64] & bit != 0;
+                    let remembered = self
+                        .remembered
+                        .iter()
+                        .any(|r| r.as_ptr() as usize == cell);
+                    out.push((cell, marked, old, remembered));
+                }
+            }
+        };
+        for page in &self.pages {
+            scan_page(unsafe { page.as_ref() }, DATA_LEN);
+        }
+        scan_page(
+            unsafe { self.current_page.as_ref() },
+            self.used_in_current,
+        );
+        out
     }
 }
 
@@ -1101,6 +1265,7 @@ impl<T: GCBox> Allocator<T> {
             mut map: u64,
             ptr: &mut *mut T,
             head: &mut *mut T,
+            log: &mut Option<Vec<usize>>,
         ) -> usize {
             let mut c = 0;
             let min = map.trailing_ones() as usize;
@@ -1115,6 +1280,9 @@ impl<T: GCBox> Allocator<T> {
                         (**ptr).set_next_none();
                         c += 1;
                     }
+                    if let Some(log) = log {
+                        log.push(*ptr as usize);
+                    }
                 }
                 *ptr = unsafe { (*ptr).add(1) };
                 map >>= 1;
@@ -1125,12 +1293,17 @@ impl<T: GCBox> Allocator<T> {
         let mut c = 0;
         let mut anchor = T::new_invalid();
         let head = &mut ((&mut anchor) as *mut T);
+        let mut log = if free_log_enabled() {
+            Some(Vec::new())
+        } else {
+            None
+        };
 
         for pinfo in self.pages.iter_mut() {
             unsafe {
                 let mut ptr = pinfo.as_ref().get_first_cell();
                 for map in pinfo.as_mut().mark_bits.iter() {
-                    c += sweep_bits(64, *map, &mut ptr, head);
+                    c += sweep_bits(64, *map, &mut ptr, head, &mut log);
                 }
             }
         }
@@ -1142,15 +1315,51 @@ impl<T: GCBox> Allocator<T> {
         let bitmap = unsafe { self.current_page.as_mut().mark_bits };
 
         for map in bitmap.iter().take(i) {
-            c += sweep_bits(64, *map, &mut ptr, head);
+            c += sweep_bits(64, *map, &mut ptr, head, &mut log);
         }
 
         if i < SIZE - 1 {
-            c += sweep_bits(bit, bitmap[i], &mut ptr, head);
+            c += sweep_bits(bit, bitmap[i], &mut ptr, head, &mut log);
         }
 
         self.free = anchor.next();
         self.free_list_count = c;
+        if let Some(log) = log {
+            let gc = self.total_gc_counter as u32;
+            let kind = self.current_kind;
+            for addr in log {
+                self.push_free_log(addr, gc, kind);
+            }
+        }
+    }
+
+    /// Append one freed-slot record to the forensics ring buffer.
+    fn push_free_log(&mut self, addr: usize, gc: u32, kind: u8) {
+        if tracked_addr() == Some(addr) {
+            eprintln!("[GC-TRACK] freed by sweep of GC #{gc} (kind {kind})");
+        }
+        if self.free_log.len() < FREE_LOG_CAP {
+            self.free_log.push((addr, gc, kind, false));
+        } else {
+            self.free_log[self.free_log_pos] = (addr, gc, kind, false);
+            self.free_log_pos = (self.free_log_pos + 1) % FREE_LOG_CAP;
+        }
+    }
+
+    /// Most recent forensics record for `addr` (see `free_log`), plus the
+    /// current GC counter for "how long ago" context.
+    pub(crate) fn lookup_free_log(&self, addr: usize) -> Option<(u32, u8)> {
+        let newest = self
+            .free_log
+            .iter()
+            .filter(|(a, ..)| *a == addr)
+            .max_by_key(|(_, gc, ..)| *gc)?;
+        Some((newest.1, newest.2))
+    }
+
+    /// Current value of the GC cycle counter (forensics context).
+    pub(crate) fn gc_counter(&self) -> usize {
+        self.total_gc_counter
     }
 
     ///

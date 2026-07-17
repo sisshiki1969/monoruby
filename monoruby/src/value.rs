@@ -2388,7 +2388,10 @@ impl Value {
     }
 
     pub(crate) fn as_array(self) -> Array {
-        assert_eq!(self.ty(), Some(ObjTy::ARRAY));
+        if self.ty() != Some(ObjTy::ARRAY) {
+            crate::alloc::report_stale_object("Value::as_array", self);
+            panic!("as_array: not an ARRAY: ty={:?}", self.ty());
+        }
         Array::new_unchecked(self)
     }
 
