@@ -301,18 +301,27 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
             s.main_exec = Some(std::ptr::NonNull::from(&mut *vm));
             s.in_scheduler = true;
         });
-        let n = SCHEDULER.with(|s| s.borrow().ready.len());
-        let mut result = Ok(());
-        for _ in 0..n {
-            let t = SCHEDULER.with(|s| s.borrow_mut().ready.pop_front());
-            match t {
-                Some(t) => {
-                    if let Err(err) = dispatch(globals, t) {
-                        result = Err(err);
-                        break;
+        // Same fd-waiter promotion as `scheduler_loop`: a main thread
+        // spinning in `Thread.pass while …` never reaches the scheduler's
+        // idle branch, so fd-parked green threads would otherwise starve.
+        let mut result = if prune_io_waiters() {
+            poll_io_waiters(vm, globals, Some(Instant::now()))
+        } else {
+            Ok(())
+        };
+        if result.is_ok() {
+            let n = SCHEDULER.with(|s| s.borrow().ready.len());
+            for _ in 0..n {
+                let t = SCHEDULER.with(|s| s.borrow_mut().ready.pop_front());
+                match t {
+                    Some(t) => {
+                        if let Err(err) = dispatch(globals, t) {
+                            result = Err(err);
+                            break;
+                        }
                     }
+                    None => break,
                 }
-                None => break,
             }
         }
         SCHEDULER.with(|s| {
@@ -669,6 +678,16 @@ fn scheduler_run(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
 fn scheduler_loop(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
     loop {
         wake_due_sleepers();
+        // Promote fd-parked threads whose fd is already ready *before*
+        // picking the next runnable thread. Without this zero-timeout
+        // check, fd waiters are only polled in the idle branch below —
+        // and a busy thread that never blocks (e.g. `loop { Thread.pass }`)
+        // keeps the ready queue non-empty forever, starving every fd
+        // waiter (a live-lock: the busy thread spins, the fd waiter —
+        // possibly main — never wakes even though its fd is long ready).
+        if prune_io_waiters() {
+            poll_io_waiters(vm, globals, Some(Instant::now()))?;
+        }
         let (main_ready, next) = SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
             let main_ready =
@@ -686,13 +705,7 @@ fn scheduler_loop(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         // Nothing runnable: wait for fd readiness and/or the nearest
         // deadline. Only when no thread can ever become runnable again
         // (no sleeper, no fd waiter) is it a deadlock.
-        let has_io = SCHEDULER.with(|s| {
-            let mut s = s.borrow_mut();
-            // Prune stale entries (threads woken through another path).
-            s.io_waiters
-                .retain(|(_, _, t)| t.as_thread_inner().state() == ThreadState::IoWaiting);
-            !s.io_waiters.is_empty()
-        });
+        let has_io = prune_io_waiters();
         match (has_io, nearest_deadline()) {
             (true, deadline) => poll_io_waiters(vm, globals, deadline)?,
             (false, Some(deadline)) => interruptible_sleep_until(vm, globals, deadline)?,
@@ -703,6 +716,17 @@ fn scheduler_loop(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
             }
         }
     }
+}
+
+/// Drop io_waiter entries whose thread was woken (or died) through
+/// another path; returns whether any fd waiter remains.
+fn prune_io_waiters() -> bool {
+    SCHEDULER.with(|s| {
+        let mut s = s.borrow_mut();
+        s.io_waiters
+            .retain(|(_, _, t)| t.as_thread_inner().state() == ThreadState::IoWaiting);
+        !s.io_waiters.is_empty()
+    })
 }
 
 fn wake_due_sleepers() {

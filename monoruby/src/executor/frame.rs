@@ -194,7 +194,7 @@ impl Executor {
     /// Try to get the previous CFP, returning `None` if there is no previous
     /// frame and no parent fiber (i.e. the Proc's enclosing method has already
     /// returned — "detached context").
-    fn try_prev_cfp(vm: &Executor, cfp: Cfp) -> Option<(&Executor, Cfp)> {
+    pub(crate) fn try_prev_cfp(vm: &Executor, cfp: Cfp) -> Option<(&Executor, Cfp)> {
         match cfp.prev() {
             Some(prev) => Some((vm, prev)),
             None => {

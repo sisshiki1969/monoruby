@@ -755,7 +755,19 @@ impl RValue {
 
 impl alloc::GC<RValue> for RValue {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        assert!(self.header.is_live());
+        // A dead object reached from a root means a stale edge somewhere
+        // in the root set — abort like the old `assert!`, but dump the
+        // object header and the mark chain first so a rare failure in CI
+        // (see issue #950) identifies the offending root path.
+        if !self.header.is_live() {
+            eprintln!(
+                "DEAD RVALUE reached in mark: {:p} meta={:?}",
+                self as *const _,
+                unsafe { self.header.meta }
+            );
+            eprintln!("{}", std::backtrace::Backtrace::force_capture());
+            std::process::abort();
+        }
         if alloc.gc_check_and_mark(self) {
             return;
         }

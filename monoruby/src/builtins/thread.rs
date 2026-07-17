@@ -866,6 +866,92 @@ mod tests {
     }
 
     #[test]
+    fn thread_fd_waiters_not_starved_by_busy_threads() {
+        // A busy thread that never blocks (only `Thread.pass`es) keeps the
+        // ready queue non-empty forever; fd-parked threads must still be
+        // woken when their fd becomes ready (issue #950: the scheduler
+        // only polled fds in its idle branch, live-locking this pattern).
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            stop = false
+            busy = Thread.new { Thread.pass until stop }
+            t = Thread.new { r.read(2) }
+            w.write "hi"
+            v = t.value
+            stop = true
+            busy.join
+            v
+            "#,
+        );
+        // Main spinning in `Thread.pass while …` never reaches the
+        // scheduler's idle branch either; fd waiters must be promoted
+        // from the pass path too.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            t = Thread.new { r.read(2) }
+            feeder = Thread.new { w.write "ok" }
+            Thread.pass while t.alive?
+            feeder.join
+            t.value
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_block_param_of_cross_thread_frame() {
+        // Reading a `&block` parameter (lazily materialized by monoruby)
+        // from inside a green thread: the parameter's lexical home is a
+        // heap-promoted frame owned by the *main* thread's frame chain.
+        // Used to abort the whole process on `parent_fiber.unwrap()` while
+        // searching the green thread's own chain for it (issue #950).
+        run_test_once(
+            r#"
+            def go(&block)
+              t = Thread.new { block.call { :x } }
+              t.value
+            end
+            go { |&pause| pause.call }
+            "#,
+        );
+        // The ruby/spec kernel_raise pattern that surfaced it: Thread#raise
+        // into a thread parked via a block-provided pause, then join.
+        run_test_once(
+            r#"
+            class BlockRaiser
+              def self.raise_in_thread(*args, &block)
+                t = Thread.new do
+                  Thread.current.report_on_exception = false
+                  if block_given?
+                    block.call do
+                      sleep
+                    end
+                  else
+                    sleep
+                  end
+                end
+                Thread.pass until t.stop?
+                t.raise(*args)
+                begin
+                  t.join
+                ensure
+                  t.kill if t.alive?
+                  Thread.pass while t.alive?
+                end
+              end
+            end
+            begin; raise "raised"; rescue => e; end
+            begin
+              BlockRaiser.raise_in_thread(e) { |&pause| pause.call }
+            rescue => reraised
+            end
+            [reraised.class, reraised == e]
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_handle_interrupt_masking() {
         // Shared driver mirroring ruby/spec's handle_interrupt fixture:
         // raise into a thread inside a handle_interrupt block, observe
