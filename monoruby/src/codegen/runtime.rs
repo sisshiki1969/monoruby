@@ -441,10 +441,37 @@ pub(super) extern "C" fn block_arg(
     if bh.get().is_nil() {
         return Some(Value::nil());
     }
-    let mut cfp = vm.cfp();
-    while cfp.lfp() != lfp {
-        cfp = Executor::prev_cfp(vm, cfp).1;
+    // Already-materialized Proc: return it directly, *without* locating
+    // the owner frame's Cfp. This is not just a shortcut: when the owner
+    // frame belongs to a different execution context — e.g. a `&block`
+    // parameter read from inside a green thread whose lexical home is a
+    // heap-promoted frame on the *main* thread's chain — the dynamic-chain
+    // search below can never find it (and walking past a thread root used
+    // to panic on `parent_fiber.unwrap()`, aborting the whole process; see
+    // issue #950). Cross-context handlers are always materialized when
+    // their frame escapes to the heap (`materialize_escaped_block_handlers`),
+    // so this early return covers exactly those cases.
+    if let Some(proc) = bh.try_proc() {
+        return Some(proc.into());
     }
+    // Proxy handler: its (fid, depth) is relative to the frame that owns
+    // it, so locate that frame's Cfp on the current chain (crossing into
+    // parent fibers). A proxy owner is always on the current chain — an
+    // escaped frame would have had its handler materialized above — but
+    // walk defensively rather than aborting the process on a violation.
+    let mut owner = (&*vm, vm.cfp());
+    while owner.1.lfp() != lfp {
+        match Executor::try_prev_cfp(owner.0, owner.1) {
+            Some(prev) => owner = prev,
+            None => {
+                vm.set_error(MonorubyErr::fatal(
+                    "[BUG] block handler owner frame is not on the current frame chain",
+                ));
+                return None;
+            }
+        }
+    }
+    let cfp = owner.1;
     match vm.generate_proc_inner(globals, cfp, bh, pc) {
         Ok(val) => Some(val.into()),
         Err(err) => {
