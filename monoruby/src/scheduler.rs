@@ -154,6 +154,25 @@ pub(crate) fn mark(alloc: &mut crate::alloc::Allocator<RValue>) {
     SCHEDULER.with(|s| s.borrow().mark(alloc));
 }
 
+/// Forensics (`MONORUBY_GC_BREAK`): one-line dump of the scheduler state
+/// as seen by the GC root scan.
+pub(crate) fn dump_state_for_gc() -> String {
+    SCHEDULER.with(|s| {
+        let s = s.borrow();
+        format!(
+            "in_scheduler={} main_exec={:?} current={:016x} main={:016x} threads={} ready={} sleepers={} io_waiters={}",
+            s.in_scheduler,
+            s.main_exec,
+            s.current.map(|v| v.id()).unwrap_or(0),
+            s.main.map(|v| v.id()).unwrap_or(0),
+            s.threads.len(),
+            s.ready.len(),
+            s.sleepers.len(),
+            s.io_waiters.len(),
+        )
+    })
+}
+
 /// The `Thread` object for the currently running thread, creating the
 /// main thread object lazily on first use.
 pub(crate) fn current_thread(vm: &mut Executor) -> Value {

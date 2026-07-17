@@ -3730,12 +3730,35 @@ pub(crate) extern "C" fn execute_gc(
             }
         }
     }
+    // Forensics (`MONORUBY_GC_BREAK=N`): dump the trigger context of GC
+    // #N — who called into the collector, from which executor, and what
+    // the scheduler state was — right before that collection runs.
+    let triggering_executor = executor as *const Executor;
     // Get root Executor.
+    let mut fiber_depth = 0usize;
     while let Some(mut parent) = executor.parent_fiber {
         // SAFETY: parent_fiber is guaranteed to be a valid pointer to an Executor
         // that outlives this borrow. The parent fiber structure is maintained correctly.
         executor = unsafe { parent.as_mut() };
+        fiber_depth += 1;
+    }
+    if let Some(break_at) = gc_break_at()
+        && alloc::ALLOC.with(|a| a.borrow().gc_counter()) + 1 == break_at
+    {
+        eprintln!(
+            "[GC-BREAK] GC #{break_at}: trigger_exec={:016x} root_exec={:016x} fiber_depth={fiber_depth}",
+            triggering_executor as usize, executor as *const Executor as usize,
+        );
+        eprintln!("[GC-BREAK] scheduler: {}", crate::scheduler::dump_state_for_gc());
+        eprintln!("[GC-BREAK] backtrace:\n{}", std::backtrace::Backtrace::force_capture());
     }
     alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc(&Root { globals, executor }));
     Some(Value::nil())
+}
+
+/// Forensics: the GC ordinal to dump trigger context for
+/// (`MONORUBY_GC_BREAK=N`), cached.
+fn gc_break_at() -> Option<usize> {
+    static AT: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    *AT.get_or_init(|| std::env::var("MONORUBY_GC_BREAK").ok()?.parse().ok())
 }
