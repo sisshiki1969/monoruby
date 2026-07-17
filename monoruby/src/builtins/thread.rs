@@ -962,6 +962,39 @@ mod tests {
     }
 
     #[test]
+    fn thread_gc_while_main_parked_inside_fiber() {
+        // Main parks *inside a fiber* (`sleep` in an Enumerator body); a
+        // green thread then runs and triggers GC. The scheduler used to
+        // publish the parking (fiber) executor as `main_exec`, so the GC
+        // marked only the fiber's frame chain — every object referenced
+        // solely from the main thread's root frames (here `arr`, and the
+        // Enumerator itself) was freed and later used: a use-after-free
+        // that killed full ruby/spec core runs.
+        // `arr` must live in a frame that is NOT on the fiber block's
+        // lexical outer chain (the outer chain is marked through the
+        // fiber's own frames); only the cfp chain of the main root
+        // executor reaches it.
+        run_test_once(
+            r#"
+            def make_enum
+              Enumerator.new { |y| sleep 0.05; y << :done }
+            end
+
+            def hold_and_wait(e)
+              arr = Array.new(64) { |i| [i, i.to_s] }
+              v = e.next
+              [v, arr.all? { |a| a[0] == a[1].to_i }, arr.size]
+            end
+
+            t = Thread.new { 20.times { GC.start; Thread.pass } }
+            r = hold_and_wait(make_enum)
+            t.join
+            r
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_block_param_of_cross_thread_frame() {
         // Reading a `&block` parameter (lazily materialized by monoruby)
         // from inside a green thread: the parameter's lexical home is a
