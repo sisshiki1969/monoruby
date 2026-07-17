@@ -1,0 +1,3 @@
+fails:Process.kill signals the process group if the signal number is negative
+fails:Process.kill signals the process group if the short signal name starts with a minus sign
+fails:Process.kill signals the process group if the full signal name starts with a minus sign
