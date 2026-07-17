@@ -11,7 +11,7 @@
 # 1. Prebuilt release asset — when the action ref is a release tag (v*), try
 #    downloading monoruby-<tag>-<target>.tar.gz from that GitHub release
 #    (uploaded by .github/workflows/release-binaries.yml). `@master` and
-#    `@latest` map to the rolling `latest` nightly prerelease, whose assets
+#    `@nightly` map to the rolling `nightly` prerelease, whose assets
 #    are replaced on every master push — so a `@master` consumer gets the
 #    most recent nightly binary, which can lag the just-pushed HEAD by one
 #    build (~15 min). Extraction takes seconds and needs no toolchain; set
@@ -103,15 +103,15 @@ runs:
         esac
 
         # Map the action ref to a release tag carrying assets: release tags
-        # map to themselves, master/latest to the rolling `latest` nightly
+        # map to themselves, master/nightly to the rolling `nightly`
         # prerelease (replaced on every master push). Other branch/SHA refs
         # go straight to the source build, as does a missing asset (older
         # release, unbuilt platform), which 404s and falls through.
         tag=
         if [[ "${ACTION_REF:-}" =~ ^v[0-9] ]]; then
           tag="$ACTION_REF"
-        elif [[ "${ACTION_REF:-}" == "master" || "${ACTION_REF:-}" == "latest" ]]; then
-          tag="latest"
+        elif [[ "${ACTION_REF:-}" == "master" || "${ACTION_REF:-}" == "nightly" ]]; then
+          tag="nightly"
         fi
 
         if [[ "$PREFER_PREBUILT" == "true" && -n "$target" && -n "$tag" ]]; then

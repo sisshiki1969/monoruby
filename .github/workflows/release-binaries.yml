@@ -2,16 +2,16 @@
 # so the setup-monoruby action (root action.yml) can download them instead of
 # compiling from source. Three triggers:
 #
-#   * push to master   — rolling nightly: the `latest` tag is force-moved to
-#                        the pushed commit and the assets on the `latest`
-#                        prerelease are replaced (serves `@master`/`@latest`)
+#   * push to master   — rolling nightly: the `nightly` tag is force-moved to
+#                        the pushed commit and the assets on the `nightly`
+#                        prerelease are replaced (serves `@master`/`@nightly`)
 #   * release published — assets for that release tag (serves `@v…`)
 #   * workflow_dispatch — build assets for an existing tag on demand
 #
 # Automatic triggers (push / release) build x86-64 Linux only, to keep the
 # per-push runner cost at one job. Other architectures (Linux arm64, macOS
 # arm64) are built on demand: dispatch the workflow with the wanted tag
-# (`latest` or a release tag) and target selection. Platforms without an
+# (`nightly` or a release tag) and target selection. Platforms without an
 # asset simply fall back to the action's source-build path.
 #
 # Each asset is a tarball named monoruby-<tag>-<target>.tar.gz containing:
@@ -36,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build assets for: a release tag (e.g. v3.0.1) or `latest`"
+        description: "Tag to build assets for: a release tag (e.g. v3.0.1) or `nightly`"
         required: true
       targets:
         description: "Which architectures to build"
@@ -49,35 +49,35 @@ on:
           - aarch64-macos
 
 permissions:
-  contents: write # move the latest tag, create/edit the release, upload assets
+  contents: write # move the nightly tag, create/edit the release, upload assets
 
 # One run per target tag; a newer master push supersedes an in-flight
 # nightly build.
 concurrency:
-  group: release-binaries-${{ github.event_name == 'push' && 'latest' || github.event.release.tag_name || inputs.tag }}
+  group: release-binaries-${{ github.event_name == 'push' && 'nightly' || github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: true
 
 jobs:
-  # Rolling nightly bookkeeping (push events only): move the `latest` tag to
-  # the pushed commit and make sure the `latest` prerelease exists, so the
+  # Rolling nightly bookkeeping (push events only): move the `nightly` tag to
+  # the pushed commit and make sure the `nightly` prerelease exists, so the
   # matrix jobs have a release to upload onto.
-  prepare-latest:
+  prepare-nightly:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Move latest tag and upsert the nightly prerelease
+      - name: Move nightly tag and upsert the nightly prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git tag -f latest "$GITHUB_SHA"
-          git push -f origin latest
-          notes="Rolling nightly build of master, replaced on every push. Currently ${GITHUB_SHA}. Consumed by the setup-monoruby action (see action.yml) for \`@master\` / \`@latest\` refs."
-          if gh release view latest --json id >/dev/null 2>&1; then
-            gh release edit latest --prerelease --title "Nightly build (latest master)" --notes "$notes"
+          git tag -f nightly "$GITHUB_SHA"
+          git push -f origin nightly
+          notes="Rolling nightly build of master, replaced on every push. Currently ${GITHUB_SHA}. Consumed by the setup-monoruby action (see action.yml) for \`@master\` / \`@nightly\` refs."
+          if gh release view nightly --json id >/dev/null 2>&1; then
+            gh release edit nightly --prerelease --title "Nightly build (master)" --notes "$notes"
           else
-            gh release create latest --prerelease --title "Nightly build (latest master)" --notes "$notes"
+            gh release create nightly --prerelease --title "Nightly build (master)" --notes "$notes"
           fi
 
           # Only the x86-64 Linux asset is rebuilt per push; drop other-arch
@@ -85,22 +85,22 @@ jobs:
           # never served for the new commit — those platforms fall back to
           # the action's source build until re-dispatched. The x86-64 asset
           # stays up (one-build lag) until the build job clobbers it.
-          for a in $(gh release view latest --json assets -q '.assets[].name'); do
+          for a in $(gh release view nightly --json assets -q '.assets[].name'); do
             case "$a" in
-              monoruby-latest-x86_64-unknown-linux-gnu.tar.gz) ;;
-              *) gh release delete-asset latest "$a" -y ;;
+              monoruby-nightly-x86_64-unknown-linux-gnu.tar.gz) ;;
+              *) gh release delete-asset nightly "$a" -y ;;
             esac
           done
 
   build:
-    needs: prepare-latest
-    # Run when prepare-latest succeeded (push) or was skipped (release /
-    # dispatch), but never build the `latest` tag from a release event — the
+    needs: prepare-nightly
+    # Run when prepare-nightly succeeded (push) or was skipped (release /
+    # dispatch), but never build the `nightly` tag from a release event — the
     # nightly is owned by the push path.
     if: >-
       always() &&
-      (needs.prepare-latest.result == 'success' || needs.prepare-latest.result == 'skipped') &&
-      !(github.event_name == 'release' && github.event.release.tag_name == 'latest')
+      (needs.prepare-nightly.result == 'success' || needs.prepare-nightly.result == 'skipped') &&
+      !(github.event_name == 'release' && github.event.release.tag_name == 'nightly')
     strategy:
       fail-fast: false
       matrix:
@@ -118,7 +118,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      TAG: ${{ github.event_name == 'push' && 'latest' || github.event.release.tag_name || inputs.tag }}
+      TAG: ${{ github.event_name == 'push' && 'nightly' || github.event.release.tag_name || inputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
