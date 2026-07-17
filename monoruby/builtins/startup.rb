@@ -789,6 +789,28 @@ class Thread
     @report_on_exception = flag
   end
 
+  # When set (per-thread, or the Thread global default), an exception
+  # that terminates this thread is re-raised in the main thread (read by
+  # the native finalizer, which also suppresses the report in that case,
+  # as in CRuby). Default false.
+  def abort_on_exception
+    @abort_on_exception.nil? ? false : @abort_on_exception
+  end
+
+  def abort_on_exception=(flag)
+    @abort_on_exception = flag
+  end
+
+  class << self
+    def abort_on_exception
+      @abort_on_exception.nil? ? false : @abort_on_exception
+    end
+
+    def abort_on_exception=(flag)
+      @abort_on_exception = flag
+    end
+  end
+
   # Thread objects are native (ObjTy::THREAD) and no longer run a Ruby
   # initialize, so the local-storage tables are created lazily.
   def [](key)

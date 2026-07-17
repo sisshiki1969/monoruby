@@ -1045,10 +1045,27 @@ fn finalize_common(globals: &mut Globals, mut thread: Value) {
         }
         s.threads.retain(|t| *t != thread);
     });
+    // A `SystemExit` that escapes any thread terminates the process: CRuby
+    // re-raises it in the main thread (`Kernel#exit` from a thread exits
+    // the interpreter once main handles it). The same forwarding applies
+    // to *any* terminating exception when the thread — or the `Thread`
+    // global default — has `abort_on_exception` set. The exception stays
+    // recorded on the dead thread too (`#join` / `#value` re-raise it).
+    forward_exception_to_main(globals, thread);
     // `Thread#report_on_exception` (default true): surface a terminating
     // exception on stderr (CRuby prints it when the thread dies). An
     // explicit `t.report_on_exception = false` (ivar set by the Ruby-side
-    // accessor) suppresses it; a kill never reports.
+    // accessor) suppresses it; a kill never reports, and neither does a
+    // `SystemExit` (CRuby reports an abort_on_exception forwarding, but
+    // never a SystemExit — that is the process exiting, not a crash).
+    if thread
+        .as_thread_inner()
+        .exception
+        .as_ref()
+        .is_some_and(|err| matches!(err.kind(), MonorubyErrKind::SystemExit(_)))
+    {
+        return;
+    }
     let report = globals
         .store
         .get_ivar(thread, IdentId::get_id("@report_on_exception"))
@@ -1068,4 +1085,51 @@ fn finalize_common(globals: &mut Globals, mut thread: Value) {
         eprintln!("warning: thread terminated with exception (report_on_exception is true):");
         eprintln!("{msg}");
     }
+}
+
+/// Queue a dead thread's terminating exception as a pending interrupt on
+/// the main thread (waking it if parked) when CRuby semantics call for
+/// it: always for `SystemExit`, and for any exception when the thread or
+/// the `Thread` global default has `abort_on_exception` set.
+fn forward_exception_to_main(globals: &mut Globals, thread: Value) -> bool {
+    let Some(err) = ({
+        let inner = thread.as_thread_inner();
+        inner.exception.clone()
+    }) else {
+        return false;
+    };
+    let forward = matches!(err.kind(), MonorubyErrKind::SystemExit(_)) || {
+        let ivar = IdentId::get_id("@abort_on_exception");
+        let per_thread = globals
+            .store
+            .get_ivar(thread, ivar)
+            .map(|v| v.as_bool())
+            .unwrap_or(false);
+        let global_default = globals
+            .store
+            .get_ivar(globals.store.get_module(THREAD_CLASS).as_val(), ivar)
+            .map(|v| v.as_bool())
+            .unwrap_or(false);
+        per_thread || global_default
+    };
+    if !forward {
+        return false;
+    }
+    let Some(mut main) = SCHEDULER.with(|s| s.borrow().main) else {
+        return false;
+    };
+    if main == thread {
+        return false;
+    }
+    main.as_thread_inner_mut().pending = Some(PendingInterrupt::Raise(err));
+    // Wake a parked main so delivery happens promptly (mirrors
+    // `interrupt`); delivery itself still honors handle_interrupt masks.
+    let inner = main.as_thread_inner_mut();
+    if matches!(
+        inner.state(),
+        ThreadState::Sleeping | ThreadState::Joining | ThreadState::IoWaiting
+    ) {
+        inner.state = ThreadState::Runnable;
+    }
+    true
 }

@@ -866,6 +866,68 @@ mod tests {
     }
 
     #[test]
+    fn thread_exception_forwarding_to_main() {
+        // SystemExit escaping a thread is re-raised in the main thread
+        // (CRuby: `exit` from a thread terminates the process through
+        // main). Previously main slept forever and the scheduler's
+        // deadlock detector aborted with an uncatchable FatalError —
+        // which killed entire mspec runs at core/kernel/exit_spec.rb.
+        run_test_once(
+            r#"
+            r = []
+            ready = false
+            t = Thread.new {
+              Thread.pass until ready
+              begin
+                exit 42
+              rescue SystemExit => e
+                r << :in_thread
+                raise e
+              end
+            }
+            begin
+              ready = true
+              sleep
+            rescue SystemExit
+              r << :in_main
+            end
+            r << (begin; t.value; rescue SystemExit; :value_raises; end)
+            r
+            "#,
+        );
+        // Thread#abort_on_exception: the terminating exception is
+        // forwarded to main (net-http's spec fixture server threads set
+        // this; the method was missing entirely).
+        run_test_once(
+            r#"
+            t = Thread.new { Thread.current.abort_on_exception = true; sleep 0.02; raise "boom" }
+            v = begin
+              sleep
+            rescue => e
+              e.message
+            end
+            t.join rescue nil
+            [v, t.abort_on_exception]
+            "#,
+        );
+        // Thread.abort_on_exception (the global default) does the same.
+        run_test_once(
+            r#"
+            Thread.abort_on_exception = true
+            t = Thread.new { sleep 0.02; raise ArgumentError, "global" }
+            v = begin
+              sleep
+            rescue ArgumentError => e
+              e.message
+            end
+            Thread.abort_on_exception = false
+            t.join rescue nil
+            [v, Thread.abort_on_exception]
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_fd_waiters_not_starved_by_busy_threads() {
         // A busy thread that never blocks (only `Thread.pass`es) keeps the
         // ready queue non-empty forever; fd-parked threads must still be
