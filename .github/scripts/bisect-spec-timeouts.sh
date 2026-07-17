@@ -4,11 +4,14 @@
 #
 # For each `category,file` row of the input timeouts.csv, every example
 # of the file is run individually under a hard deadline. An example is a
-# culprit when it either times out (a genuine hang: exit 124/137) or
-# takes longer than SLOW_SECS by itself (a near-budget burner like a
-# ~55s blocking wait — no single hang, but the file cannot fit the
-# budget with it). Culprits are appended (deduplicated) to the repo's
-# tag files, which both rubyspec-stats and the monitor exclude.
+# culprit when it either times out (a genuine hang: exit 124/137),
+# crashes the interpreter fast (Ruby-level FatalError such as the
+# deadlock detector, native SIGSEGV/SIGABRT, or a Rust panic — spotted
+# by scanning the example's own stderr), or takes longer than SLOW_SECS
+# by itself (a near-budget burner like a ~55s blocking wait — no single
+# hang, but the file cannot fit the budget with it). Culprits are
+# appended (deduplicated) to the repo's tag files, which both
+# rubyspec-stats and the monitor exclude.
 #
 # A file with no individual culprit (purely cumulative slowness) is
 # reported as such and left untagged — that calls for a budget change,
@@ -99,13 +102,17 @@ while IFS=, read -r cat file; do
       break
     fi
     ex_start=$SECONDS
-    (cd "$SPEC_DIR" && timeout -k 5 "$EX_BUDGET" \
-      "$MSPEC" run "$file" -e "$desc" -t "$RUBY_CMD" > /dev/null 2>&1)
+    out=$(cd "$SPEC_DIR" && timeout -k 5 "$EX_BUDGET" \
+      "$MSPEC" run "$file" -e "$desc" -t "$RUBY_CMD" 2>&1)
     rc=$?
     dur=$((SECONDS - ex_start))
     verdict=""
     if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then
       verdict="hang"
+    elif printf '%s' "$out" | grep -qE 'FatalError|Segmentation fault|Aborted|panicked at'; then
+      # Ruby-level fatal (Deadlock detector), native crash, or Rust panic —
+      # the process died fast, before mspec could record a normal failure.
+      verdict="crash"
     elif [ "$dur" -ge "$SLOW_SECS" ]; then
       verdict="slow"
     fi
