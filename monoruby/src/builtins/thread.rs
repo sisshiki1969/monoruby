@@ -962,6 +962,35 @@ mod tests {
     }
 
     #[test]
+    fn queue_pop_timeout_validation() {
+        // `timeout:` must be nil or Numeric. `false` in particular must
+        // not be treated as "no timeout" — it used to fall through to the
+        // unbounded park branch and block forever (deadlock FatalError in
+        // ruby/spec shared/queue/deque.rb).
+        run_test_once(
+            r#"
+            q = Thread::Queue.new
+            r = []
+            begin; q.pop(timeout: "1"); rescue TypeError => e; r << e.message; end
+            begin; q.pop(timeout: false); rescue TypeError => e; r << e.message; end
+            begin; q.pop(timeout: true); rescue TypeError => e; r << e.message; end
+            begin; q.pop(true, timeout: 1); rescue ArgumentError => e; r << e.message; end
+            begin; q.pop(timeout: :sym); rescue TypeError => e; r << e.message; end
+            sq = Thread::SizedQueue.new(1)
+            begin; sq.push(1, timeout: "1"); rescue TypeError => e; r << e.message; end
+            class TimeoutConv; def to_f; 0.001; end; end
+            class TimeoutBad; def to_f; "x"; end; end
+            begin; q.pop(timeout: TimeoutBad.new); rescue TypeError => e; r << e.message; end
+            q << 1
+            r << q.pop(timeout: TimeoutConv.new)
+            q << 2
+            r << q.pop(timeout: 5)
+            r
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_gc_while_main_parked_inside_fiber() {
         // Main parks *inside a fiber* (`sleep` in an Enumerator body); a
         // green thread then runs and triggers GC. The scheduler used to

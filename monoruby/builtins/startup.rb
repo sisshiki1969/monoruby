@@ -974,7 +974,33 @@ class Thread
     alias << push
     alias enq push
 
+    # CRuby-compatible `timeout:` validation, shared by Queue#pop,
+    # SizedQueue#pop and SizedQueue#push. `false` must NOT be treated as
+    # "no timeout": without the type check it fell through to the
+    # unbounded `Thread.stop` branch and blocked forever.
+    def __check_timeout(timeout, non_block)
+      return nil if timeout.nil?
+      raise ArgumentError, "can't set a timeout if non_block is enabled" if non_block
+      return timeout if Numeric === timeout
+      case timeout
+      when true, false, String
+        desc = String === timeout ? "string" : timeout.inspect
+        raise TypeError, "no implicit conversion to float from #{desc}"
+      end
+      unless timeout.respond_to?(:to_f)
+        raise TypeError, "can't convert #{timeout.class} into Float"
+      end
+      f = timeout.to_f
+      unless Float === f
+        raise TypeError,
+              "can't convert #{timeout.class} to Float (#{timeout.class}#to_f gives #{f.class})"
+      end
+      f
+    end
+    private :__check_timeout
+
     def pop(non_block = false, timeout: nil)
+      timeout = __check_timeout(timeout, non_block)
       if non_block
         raise ThreadError, "queue empty" if @items.empty? && !@closed
         return @items.shift
@@ -1075,6 +1101,7 @@ class Thread
     end
 
     def push(item, non_block = false, timeout: nil)
+      timeout = __check_timeout(timeout, non_block)
       deadline = timeout && Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
       loop do
         raise ClosedQueueError, "queue closed" if @closed
