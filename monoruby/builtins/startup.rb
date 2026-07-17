@@ -733,6 +733,7 @@ class Fiber
     @@scheduler = scheduler
   end
 
+
   def self.current_scheduler
     # CRuby: nil when the current fiber is blocking. monoruby fibers
     # are always blocking, so this is always nil.

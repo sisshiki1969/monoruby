@@ -39,6 +39,23 @@ fn fiber_new(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let bh = lfp.expect_block()?;
+    // CRuby's `Fiber.new` keywords (`blocking:`, `storage:`) arrive as a
+    // trailing hash. monoruby has no fiber scheduler, so an explicitly
+    // requested non-blocking fiber would silently act as a blocking one —
+    // `sleep` inside it then parks the whole thread forever, and under
+    // mspec that ends in the scheduler's uncatchable deadlock FatalError,
+    // killing the entire run (core/kernel/sleep_spec.rb). Fail loudly so
+    // fiber-scheduler specs count as ordinary errors instead.
+    if let Some(arg) = lfp.try_arg(0)
+        && let Some(h) = arg.try_hash_ty()
+        && let Some(v) = h.get(Value::symbol(IdentId::get_id("blocking")), vm, globals)?
+        && !v.as_bool()
+    {
+        return Err(MonorubyErr::not_implemented_err(
+            &globals.store,
+            "monoruby does not support non-blocking fibers (fiber scheduler)",
+        ));
+    }
     let proc = vm.generate_proc(globals, bh, pc)?;
     Ok(Value::new_fiber(proc))
 }
@@ -294,6 +311,29 @@ mod tests {
     /// `set_scheduler` validates the scheduler interface
     /// (`#block`, `#kernel_sleep`, …), which monoruby's stub does
     /// not enforce. Interface validation is intentional follow-up.
+    /// Explicitly requesting a non-blocking fiber (the fiber-scheduler
+    /// protocol) raises NotImplementedError instead of silently creating
+    /// a blocking fiber whose `sleep` would park the thread forever.
+    /// Intentional CRuby divergence (CRuby accepts it), so no
+    /// differential comparison here.
+    #[test]
+    fn fiber_new_nonblocking_not_implemented() {
+        let v = run_test_no_result_check(
+            r##"
+            r = begin
+              Fiber.new(blocking: false) { }
+              :accepted
+            rescue NotImplementedError
+              :not_implemented
+            end
+            # blocking: true and plain Fiber.new keep working.
+            f = Fiber.new(blocking: true) { :ok }
+            [r, f.resume]
+            "##,
+        );
+        assert!(format!("{v:?}").contains("[:not_implemented, :ok]"));
+    }
+
     #[test]
     fn fiber_scheduler_blocking() {
         run_test_once(
