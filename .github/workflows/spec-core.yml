@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   core-specs:
@@ -46,6 +47,17 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/ruby/spec.git ../spec
           git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
+
+      - name: Install spec tags
+        # mspec derives each spec's tag file as <spec-root>/tags/<path>,
+        # so the repo's tags (hanging / over-budget examples, see
+        # doc/ruby_spec_skip_tags.md) are copied into the checkout and
+        # excluded from the runs below via --excl-tag fails. Without
+        # this, every already-known hanging example re-times-out on
+        # every monitor run.
+        run: |
+          mkdir -p ../spec/tags
+          [ -d spec/tags ] && cp -R spec/tags/. ../spec/tags/ || true
 
       - name: Run core specs per subcategory
         id: run
@@ -95,7 +107,7 @@ jobs:
           # single hung spec stalls the whole job until timeout-minutes.
           # Exit 124 = killed by TERM, 137 = needed the KILL.
           run_specs () {
-            timeout -k 5 60 ../mspec/bin/mspec "$@" -t monoruby -f s >> "$LOG" 2>&1
+            timeout -k 5 60 ../mspec/bin/mspec "$@" --excl-tag fails -t monoruby -f s >> "$LOG" 2>&1
             local rc=$?
             [ $rc -eq 124 ] || [ $rc -eq 137 ]
           }
@@ -184,6 +196,74 @@ jobs:
             echo "total_err=$T_ERR"
             echo "total_rate=$T_RATE"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Identify timed-out examples and update tags
+        id: bisect
+        shell: bash
+        run: |
+          set -uo pipefail
+          TIMEOUTS="$GITHUB_WORKSPACE/spec-results/timeouts.csv"
+          OUTCSV="$GITHUB_WORKSPACE/spec-results/timeout_culprits.csv"
+          N=$(($(wc -l < "$TIMEOUTS") - 1))
+          if [ "$N" -le 0 ]; then
+            echo "no timed-out files — nothing to bisect"
+            echo "n_tagged=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          .github/scripts/bisect-spec-timeouts.sh \
+            "$TIMEOUTS" \
+            "$(cd "$GITHUB_WORKSPACE/../spec" && pwd)" \
+            "$(cd "$GITHUB_WORKSPACE/../mspec" && pwd)/bin/mspec" \
+            monoruby \
+            "$GITHUB_WORKSPACE/spec/tags" \
+            "$OUTCSV"
+          {
+            echo ""
+            echo "### Timeout bisection"
+            echo ""
+            cat "${OUTCSV%.csv}.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open a PR for the new tags
+        if: steps.bisect.outputs.n_tagged != '' && steps.bisect.outputs.n_tagged != '0' && (github.event_name == 'schedule' || github.ref == 'refs/heads/master')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          BRANCH=auto/spec-timeout-tags
+          # A fixed branch keeps this idempotent: reruns before the PR
+          # merges regenerate the same tag set and force-push it, updating
+          # the existing PR instead of stacking new ones.
+          git checkout -B "$BRANCH"
+          git add spec/tags
+          git commit -m "spec: auto-tag hanging / over-budget examples
+
+          Added by the core monitor's timeout bisection
+          (.github/scripts/bisect-spec-timeouts.sh) for run
+          ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+          for i in 1 2 3 4; do
+            git push -f -u origin "$BRANCH" && break
+            sleep $((2 ** i))
+          done
+
+          BODY_FILE="$RUNNER_TEMP/pr-body.md"
+          {
+            echo "The core monitor detected spec files exceeding the 60s per-file budget and bisected them example-by-example ([run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}))."
+            echo ""
+            cat "$GITHUB_WORKSPACE/spec-results/timeout_culprits.md"
+            echo ""
+            echo "- \`hang\`: the example alone hit the ${EX_BUDGET:-60}s deadline (exit 124/137)."
+            echo "- \`slow\`: the example alone took ≥ ${SLOW_SECS:-30}s — it cannot share a 60s file budget."
+            echo "- \`cumulative-only\` rows (if any) were **not** tagged: no single culprit; the file needs a budget review instead."
+            echo ""
+            echo "Please review whether each culprit reflects a known limitation (see doc/ruby_spec_skip_tags.md) or a regression to fix instead of tagging."
+          } > "$BODY_FILE"
+          gh pr create --base master --head "$BRANCH" \
+            --title "spec: auto-tag hanging / over-budget examples (monitor bisection)" \
+            --body-file "$BODY_FILE" \
+            || gh pr edit "$BRANCH" --body-file "$BODY_FILE"
 
       - name: Upload results
         if: always()
