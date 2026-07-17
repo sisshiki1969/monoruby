@@ -277,3 +277,32 @@ example 単位で切り分け、各ファイルとも**犯人1例**を `fails` t
   約 55 秒（内部期待のタイムアウトまで）ブロックし、単独でファイル予算を
   ほぼ使い切る。`flock(2)` の LOCK_NB + リトライによるスケジューラ統合で
   解除できる。
+
+## タイムアウトの自動検知・自動タグ付け（spec-core モニタ）
+
+上記のような「グリーンスレッド化で新たにハングする example」を手作業で
+切り分ける運用を自動化した。仕組み（`.github/workflows/spec-core.yml` +
+`.github/scripts/bisect-spec-timeouts.sh`）:
+
+1. **モニタ自身が tags を適用**: リポジトリの `spec/tags/` を ruby/spec
+   チェックアウトへコピーし、全ラン `--excl-tag fails` で実行する。
+   タグ済みのハング example が毎回 60 秒予算を食い潰すのを防ぐ
+   （統計上は tagged として除外カウントされる）。
+2. **検知**: 従来どおり、ファイル単位 `timeout -k 5 60` で完走しなかった
+   ファイルが `timeouts.csv` に記録される。
+3. **同定**: `bisect-spec-timeouts.sh` が各タイムアウトファイルの example
+   一覧を `mspec --dry-run -f s` で取得し（describe の連結 = tag 名）、
+   1 example ずつ `timeout -k 5 60` 付きで個別実行。
+   - exit 124/137 → `hang`（真のハング）
+   - 単独で 30 秒以上 → `slow`（単独で予算を圧迫する近予算バーナー）
+   - どちらも該当なし → `cumulative-only`（合算超過。タグ付けせず
+     予算見直し対象として報告のみ）
+   - 病的ケース対策: dry-run にも 60 秒、1 ファイルの bisect に
+     900 秒の上限。
+4. **タグ更新と PR**: 見つかった culprit を `spec/tags/<cat>/<file>_tags.txt`
+   へ重複排除で追記し、差分があれば固定ブランチ `auto/spec-timeout-tags`
+   に commit して PR を自動作成する（既存 PR があれば force-push +
+   body 更新で同じ PR が更新される＝冪等）。**マージは人間が判断する**:
+   tag が妥当（既知の制限）か、退行として修正すべきかのレビューを挟む。
+   結果テーブルはラン summary・PR body・artifact
+   （`timeout_culprits.{csv,md}`）に出力される。
