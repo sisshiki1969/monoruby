@@ -2421,8 +2421,7 @@ impl Executor {
         data: &ProcData,
         args: &[Value],
     ) -> Result<Value> {
-        self.poll_safepoint(globals)?;
-        (globals.invokers.block)(
+        let ret = (globals.invokers.block)(
             self,
             globals,
             data,
@@ -2431,19 +2430,33 @@ impl Executor {
             args.len(),
             None,
         )
-        .ok_or_else(|| self.take_error())
+        .ok_or_else(|| self.take_error())?;
+        self.poll_safepoint(globals, ret)?;
+        Ok(ret)
     }
 
     /// Rust-side safepoint. Builtins that iterate natively (`Kernel#loop`,
     /// `Integer#times`, …) invoke the block from a Rust loop: a
     /// JIT-compiled block body with no loops or calls of its own contains
     /// no poll site at all, so signals and timeslice preemption would
-    /// never fire on such loops. Polling per block invocation closes that
-    /// gap; the fast path is a single relaxed load.
+    /// never fire on such loops. Polling once per block invocation closes
+    /// that gap; the fast path is a single relaxed load.
+    ///
+    /// Polled *after* the invocation, never before: beforehand the args
+    /// exist only in the caller's Rust locals, which are not GC roots.
+    /// Afterwards the sole new live value is the block's result — rooted
+    /// on the temp stack for the poll — so this is equivalent to the
+    /// block body allocating once more at its end, which every caller
+    /// already tolerates.
     #[inline]
-    pub(crate) fn poll_safepoint(&mut self, globals: &mut Globals) -> Result<()> {
-        if crate::preempt::flag_pending() && execute_gc(self, globals).is_none() {
-            return Err(self.take_error());
+    pub(crate) fn poll_safepoint(&mut self, globals: &mut Globals, root: Value) -> Result<()> {
+        if crate::preempt::flag_pending() {
+            self.temp_push(root);
+            let ok = execute_gc(self, globals).is_some();
+            self.temp_pop();
+            if !ok {
+                return Err(self.take_error());
+            }
         }
         Ok(())
     }
@@ -2455,8 +2468,7 @@ impl Executor {
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
-        self.poll_safepoint(globals)?;
-        (globals.invokers.block_with_self)(
+        let ret = (globals.invokers.block_with_self)(
             self,
             globals,
             data as _,
@@ -2465,7 +2477,9 @@ impl Executor {
             args.len(),
             None,
         )
-        .ok_or_else(|| self.take_error())
+        .ok_or_else(|| self.take_error())?;
+        self.poll_safepoint(globals, ret)?;
+        Ok(ret)
     }
 
     pub(crate) fn module_eval(
