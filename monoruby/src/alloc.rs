@@ -89,14 +89,23 @@ pub(crate) fn request_gc(force_major: bool) {
     if addr == 0 {
         return;
     }
-    let flag = addr as *mut u32;
-    // SAFETY: `flag` is the registered JIT alloc-flag location, valid for
-    // the VM thread's lifetime; monoruby's VM is single-threaded.
-    unsafe {
-        if std::ptr::read_volatile(flag) < 8 {
-            std::ptr::write_volatile(flag, 8);
+    nudge_flag(addr);
+}
+
+/// Lift the poll flag into its `>= 8` trigger band without disturbing the
+/// preempt bit or a value already in the band. Atomic because the preempt
+/// timer ORs its bit into the same word from another OS thread.
+fn nudge_flag(addr: usize) {
+    // SAFETY: `addr` is the registered JIT alloc-flag location, valid for
+    // the VM thread's lifetime.
+    let flag = unsafe { &*(addr as *const std::sync::atomic::AtomicU32) };
+    let _ = flag.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+        if v & !crate::preempt::PREEMPT_BIT >= 8 {
+            None
+        } else {
+            Some(v | 8)
         }
-    }
+    });
 }
 
 /// Request a GC at the next VM safepoint when live malloc has crossed the
@@ -128,21 +137,13 @@ fn request_gc_if_malloc_over(total: usize) {
     // it), and the signal handler adds 10. To actually request a GC we must
     // therefore lift it to the `>= 8` trigger band — writing a small value
     // like `1` only joins the page-fill accumulation and is effectively a
-    // no-op. Write `8` (the low edge of the trigger band) only when the flag
-    // is below it, so we request exactly one collection, never stomp a value
-    // already in the trigger/signal range, and never climb unboundedly while
-    // we sit over threshold. Racing the async signal handler is harmless: a
-    // signal's delivery rides the separate `pending_signals` bitmap, so even
-    // if our store overwrites its `+= 10`, the poll still fires (`== 8`) and
-    // `execute_gc` still drains the pending signal.
-    let flag = addr as *mut u32;
-    // SAFETY: `flag` is the JIT alloc-flag location, valid for the VM
-    // thread's lifetime once registered; monoruby's VM is single-threaded.
-    unsafe {
-        if std::ptr::read_volatile(flag) < 8 {
-            std::ptr::write_volatile(flag, 8);
-        }
-    }
+    // no-op. `nudge_flag` ORs `8` in only when the flag (preempt bit aside)
+    // is below the band, so we request exactly one collection, never stomp a
+    // value already in the trigger/signal range, and never climb unboundedly
+    // while we sit over threshold. Racing the async signal handler is
+    // harmless: a signal's delivery rides the separate `pending_signals`
+    // bitmap, so the poll still fires and `execute_gc` still drains it.
+    nudge_flag(addr);
 }
 
 /// Register the VM allocation-flag address with the malloc-trigger path.
@@ -679,16 +680,22 @@ impl<T: GCBox> Allocator<T> {
     ///
     fn set_alloc_flag(&self) {
         if let Some(flag) = self.alloc_flag {
-            unsafe { *flag += 1 }
+            // SAFETY: registered poll-flag location; atomic because the
+            // preempt timer ORs a bit into the same word from another
+            // OS thread.
+            unsafe { &*(flag as *const std::sync::atomic::AtomicU32) }
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
 
     ///
-    /// Unset allocation flag.
+    /// Unset allocation flag (keeping a concurrently-set preempt bit).
     ///
     fn unset_alloc_flag(&self) {
         if let Some(flag) = self.alloc_flag {
-            unsafe { *flag = 0 }
+            // SAFETY: as in `set_alloc_flag`.
+            unsafe { &*(flag as *const std::sync::atomic::AtomicU32) }
+                .fetch_and(crate::preempt::PREEMPT_BIT, Ordering::Relaxed);
         }
     }
 

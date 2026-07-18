@@ -1,0 +1,103 @@
+# Timeslice preemption (Phase 1)
+
+monoruby's green threads are M:1 and historically switched only at
+explicit blocking points inside builtins (`sleep`, `join`, IO, `pass`).
+Phase 1 adds **timer-driven preemption at safepoints**, keeping the
+single-OS-thread model: fairness problems (busy loops starving other
+threads, undeliverable `Thread#kill`, mspec's `--timeout` watchdog
+thread never running) are solved without touching the GC, the JIT
+backends, or the thread-local singletons.
+
+Kernel-blocking syscalls (flock(2), FIFO `open(2)`) are *not* addressed
+by preemption; that is Phase 2 (native worker offload), tracked
+separately.
+
+## How it works
+
+Preemption is exactly **"as if every thread called `Thread.pass` at its
+next safepoint"** — it reuses the existing cooperative switching
+machinery unchanged.
+
+1. A dedicated timer OS thread (10 ms tick, `preempt.rs`) runs while
+   two or more green threads are alive. Each tick ORs `PREEMPT_BIT`
+   (bit 30) into the interpreter's GC poll flag.
+2. The VM and JIT already poll that flag (`>= 8` → `execute_gc`) at
+   every method call and loop back-edge, so the running thread soon
+   reaches `execute_gc` — with its live registers written back, exactly
+   as for a GC.
+3. `execute_gc` strips the bit (`preempt::consume_poll_flag`) and calls
+   `scheduler::pass`: the main thread dispatches the ready queue and
+   continues; a green thread re-enqueues itself and switches back to
+   the scheduler. Pending interrupts (`Thread#kill` / `#raise`) are
+   delivered through the same path, so they now reach busy-looping
+   threads.
+4. A collection runs only when the flag's *base* value (bit stripped)
+   is in the `>= 8` trigger band — a pure preempt tick never causes a
+   spurious full GC, and page-fill accumulation below the band is
+   preserved.
+
+Rust-side iteration builtins (`Kernel#loop`, `Integer#times`, …) invoke
+blocks from native loops; a JIT-compiled block body with no loops or
+calls of its own contains no poll site at all. `Executor::poll_safepoint`
+(one relaxed load, called per block invocation in `invoke_block` /
+`invoke_block_with_self`) closes that gap — it also makes signals
+deliverable in such loops, which they previously were not.
+
+`scheduler.rs` gained a `machinery` marker: preemption is suppressed
+while the scheduler's own machinery (dispatch loop, fd polling) runs in
+the main context, and enabled exactly while a dispatched thread's Ruby
+code runs. `pass` also promotes due sleepers now, so a green thread's
+expired `sleep` is noticed even if main never parks.
+
+## Why safepoint-granularity switching is safe (and CRuby-compatible)
+
+- Switches happen only where a GC could already happen, with the same
+  register write-back; every suspended frame is GC-complete.
+- Builtins are atomic with respect to other threads (no switch inside a
+  builtin except at its own blocking/poll points) — the same guarantee
+  CRuby gives C functions under the GVL.
+- JIT register caching of locals cannot leak stale values across
+  threads: another thread can only reach a frame's locals through a
+  captured (heap-promoted) frame, and the JIT already forces captured
+  locals into stack slots — block-passing call sites write back and
+  unlink all locals (`locals_to_S`), loop-tier compilation guards on
+  the frame being uncaptured, and outer-variable specialization is
+  guarded by `no_capture_guard`. Uncaptured frames are unreachable from
+  other threads, so their register caches are unobservable.
+
+## Flag protocol
+
+The poll flag is one `u32` in JIT memory with several writers:
+
+| writer                    | operation            |
+|---------------------------|----------------------|
+| RValue arena (page fill)  | `+= 1`               |
+| signal stubs              | `+= 10`              |
+| malloc trigger, `GC.start`| lift into `>= 8` band|
+| preempt timer             | `|= 1 << 30`         |
+
+Bit 30, not 31: the x86-64 poll is `cmpl ...; jge` — a *signed*
+compare, so bit 31 would read as negative and never fire. All flag
+accesses are atomic now (the timer writes from another OS thread).
+
+The timer's write is guarded by a mutex around the flag address;
+`Codegen::drop` clears the address under the same mutex, so the timer
+can never write into freed JIT memory (relevant for the multi-interpreter
+test harness).
+
+## Switches
+
+- `MONORUBY_NO_PREEMPT=1` — never start the timer (cooperative-only).
+- `MONORUBY_PREEMPT_STRESS=1` — every poll-site visit attempts a
+  switch (deterministic torture mode, the scheduling analog of
+  `gc-stress`); used to shake out latent "unexpected switch here"
+  state bugs.
+
+## Phase 2 (planned): blocking-syscall offload
+
+A small native worker pool for kernel-blocking operations (flock,
+FIFO open, `fcntl(F_SETLKW)`, …): the builtin packages the op (fds and
+raw bytes only — no heap references), parks the green thread, and the
+worker signals completion through an eventfd registered with the
+scheduler's fd poller. This removes the remaining class of
+whole-process hangs and the associated spec tags.

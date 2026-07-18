@@ -991,6 +991,74 @@ mod tests {
     }
 
     #[test]
+    fn preempt_busy_main_lets_thread_run() {
+        // Timeslice preemption: a busy-looping main thread must not
+        // starve a runnable green thread forever. This also probes the
+        // JIT captured-local protocol: `done` is captured by the thread
+        // block, so the loop condition must re-read the (heap) frame
+        // slot every iteration — a stale register cache would spin
+        // forever. Hangs without preemption.
+        run_test(
+            r#"
+            done = false
+            i = 0
+            t = Thread.new { done = true }
+            until done
+              i += 1
+            end
+            t.join
+            [done, i >= 0]
+            "#,
+        );
+        // Float (xmm-cached) loop variant of the same pattern.
+        run_test(
+            r#"
+            stop = false
+            t = Thread.new { stop = true }
+            sum = 0.0
+            sum += 1.0 until stop
+            t.join
+            [stop, sum > 0.0]
+            "#,
+        );
+    }
+
+    #[test]
+    fn preempt_kill_busy_thread() {
+        // `Thread#kill` must reach a thread spinning in a loop that
+        // never parks: the kill is delivered at the target's next
+        // timeslice boundary. Hangs without preemption (the target
+        // never yields, and pre-preemption main's `sleep` was never
+        // woken because the busy thread kept the scheduler loop
+        // dispatching it).
+        run_test_once(
+            r#"
+            t = Thread.new { loop {} }
+            sleep 0.05
+            t.kill
+            t.join
+            [t.alive?, t.status]
+            "#,
+        );
+    }
+
+    #[test]
+    fn preempt_sleeper_wakes_under_busy_main() {
+        // A green thread's expired `sleep` must be noticed even though
+        // main never parks (the pass path promotes due sleepers).
+        run_test_once(
+            r#"
+            r = []
+            t = Thread.new { sleep 0.05; r << :woke }
+            x = 0
+            x += 1 while r.empty?
+            t.join
+            [r, x >= 0]
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_gc_while_main_parked_inside_fiber() {
         // Main parks *inside a fiber* (`sleep` in an Enumerator body); a
         // green thread then runs and triggers GC. The scheduler used to

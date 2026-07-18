@@ -2421,6 +2421,7 @@ impl Executor {
         data: &ProcData,
         args: &[Value],
     ) -> Result<Value> {
+        self.poll_safepoint(globals)?;
         (globals.invokers.block)(
             self,
             globals,
@@ -2433,6 +2434,20 @@ impl Executor {
         .ok_or_else(|| self.take_error())
     }
 
+    /// Rust-side safepoint. Builtins that iterate natively (`Kernel#loop`,
+    /// `Integer#times`, …) invoke the block from a Rust loop: a
+    /// JIT-compiled block body with no loops or calls of its own contains
+    /// no poll site at all, so signals and timeslice preemption would
+    /// never fire on such loops. Polling per block invocation closes that
+    /// gap; the fast path is a single relaxed load.
+    #[inline]
+    pub(crate) fn poll_safepoint(&mut self, globals: &mut Globals) -> Result<()> {
+        if crate::preempt::flag_pending() && execute_gc(self, globals).is_none() {
+            return Err(self.take_error());
+        }
+        Ok(())
+    }
+
     pub(crate) fn invoke_block_with_self(
         &mut self,
         globals: &mut Globals,
@@ -2440,6 +2455,7 @@ impl Executor {
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
+        self.poll_safepoint(globals)?;
         (globals.invokers.block_with_self)(
             self,
             globals,
@@ -3693,6 +3709,12 @@ pub(crate) extern "C" fn execute_gc(
     // hang watchdog's countdown (no-op unless armed). See
     // doc/signal_handling.md B+.
     crate::watchdog::poll();
+    // Strip the preempt bit off the poll flag first: `(base, preempt)`
+    // decides below whether this poll wants a collection (`base >= 8`), a
+    // timeslice switch, or both. A pure preempt tick must not run a
+    // spurious full GC. See preempt.rs for the flag protocol.
+    let (flag_base, preempt) = crate::preempt::consume_poll_flag();
+    let current_exec = executor as *mut Executor;
     // Drain the pending-signal bitmap. The lowest-numbered pending signal
     // is consumed; any others observed in the same drain are dropped on
     // the floor (signo collisions in a single poll window are extremely
@@ -3730,29 +3752,50 @@ pub(crate) extern "C" fn execute_gc(
             }
         }
     }
-    // Forensics (`MONORUBY_GC_BREAK=N`): dump the trigger context of GC
-    // #N — who called into the collector, from which executor, and what
-    // the scheduler state was — right before that collection runs.
-    let triggering_executor = executor as *const Executor;
-    // Get root Executor.
-    let mut fiber_depth = 0usize;
-    while let Some(mut parent) = executor.parent_fiber {
-        // SAFETY: parent_fiber is guaranteed to be a valid pointer to an Executor
-        // that outlives this borrow. The parent fiber structure is maintained correctly.
-        executor = unsafe { parent.as_mut() };
-        fiber_depth += 1;
+    if flag_base >= 8 {
+        // Forensics (`MONORUBY_GC_BREAK=N`): dump the trigger context of GC
+        // #N — who called into the collector, from which executor, and what
+        // the scheduler state was — right before that collection runs.
+        let triggering_executor = executor as *const Executor;
+        // Get root Executor.
+        let mut fiber_depth = 0usize;
+        while let Some(mut parent) = executor.parent_fiber {
+            // SAFETY: parent_fiber is guaranteed to be a valid pointer to an Executor
+            // that outlives this borrow. The parent fiber structure is maintained correctly.
+            executor = unsafe { parent.as_mut() };
+            fiber_depth += 1;
+        }
+        if let Some(break_at) = gc_break_at()
+            && alloc::ALLOC.with(|a| a.borrow().gc_counter()) + 1 == break_at
+        {
+            eprintln!(
+                "[GC-BREAK] GC #{break_at}: trigger_exec={:016x} root_exec={:016x} fiber_depth={fiber_depth}",
+                triggering_executor as usize, executor as *const Executor as usize,
+            );
+            eprintln!("[GC-BREAK] scheduler: {}", crate::scheduler::dump_state_for_gc());
+            eprintln!("[GC-BREAK] backtrace:\n{}", std::backtrace::Backtrace::force_capture());
+        }
+        alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc(&Root { globals, executor }));
     }
-    if let Some(break_at) = gc_break_at()
-        && alloc::ALLOC.with(|a| a.borrow().gc_counter()) + 1 == break_at
-    {
-        eprintln!(
-            "[GC-BREAK] GC #{break_at}: trigger_exec={:016x} root_exec={:016x} fiber_depth={fiber_depth}",
-            triggering_executor as usize, executor as *const Executor as usize,
-        );
-        eprintln!("[GC-BREAK] scheduler: {}", crate::scheduler::dump_state_for_gc());
-        eprintln!("[GC-BREAK] backtrace:\n{}", std::backtrace::Backtrace::force_capture());
+    // Stress mode: re-arm the flag *before* a possible switch — `pass`
+    // below transfers control to another thread, which must find the
+    // flag armed or it would spin forever without ever polling (this
+    // context's tail would only run once control returns here).
+    crate::preempt::stress_renudge();
+    // Timeslice preemption: behave as if the running thread called
+    // `Thread.pass` at this safepoint. Skipped while the scheduler's own
+    // machinery is on the stack (`preempt_ok`). An `Err` is a pending
+    // interrupt delivered to this thread (kill / raise) — surface it
+    // exactly like the signal path above.
+    if preempt && crate::scheduler::preempt_ok() {
+        // SAFETY: `current_exec` is the triggering executor passed into
+        // this call; the root-walk above only reborrowed its parents.
+        let vm = unsafe { &mut *current_exec };
+        if let Err(err) = crate::scheduler::pass(vm, globals) {
+            vm.set_error(err);
+            return None;
+        }
     }
-    alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc(&Root { globals, executor }));
     Some(Value::nil())
 }
 

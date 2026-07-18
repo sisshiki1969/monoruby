@@ -49,6 +49,7 @@ mod executor;
 mod globals;
 mod id_table;
 pub mod parser;
+mod preempt;
 mod ruby_probe;
 mod scheduler;
 pub mod tests;

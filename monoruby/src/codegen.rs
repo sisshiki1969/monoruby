@@ -806,6 +806,15 @@ pub(crate) struct VmHandlers {
     pub concat: CodePtr,              // 181
 }
 
+impl Drop for Codegen {
+    fn drop(&mut self) {
+        // The poll flag lives in this Codegen's JIT memory and the
+        // preempt timer writes to it from another OS thread: detach it
+        // before the memory is freed. See preempt.rs.
+        crate::preempt::codegen_dropped();
+    }
+}
+
 impl Codegen {
     ///
     /// Build the bytecode interpreter (the `dispatch` table).
@@ -1031,6 +1040,9 @@ impl Codegen {
         codegen.vm_code_position = (Some(info.0), info.1, Some(info.2), info.3);
 
         let address = codegen.jit.get_label_address(&codegen.alloc_flag).as_ptr() as *mut u32;
+        // The preempt timer nudges the same flag from its own OS thread;
+        // register it (detached again in `Codegen::drop`).
+        crate::preempt::register_flag(address);
         alloc::ALLOC.with(|alloc| {
             let mut alloc = alloc.borrow_mut();
             alloc.set_alloc_flag_address(address);

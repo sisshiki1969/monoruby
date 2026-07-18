@@ -95,6 +95,14 @@ pub(crate) struct Scheduler {
     /// frames would otherwise be unreachable.
     main_exec: Option<std::ptr::NonNull<Executor>>,
     in_scheduler: bool,
+    /// True while the scheduler's own machinery (dispatch loop, fd
+    /// polling) — as opposed to a thread's Ruby code — is running in the
+    /// main context. Timeslice preemption must not inject a `pass` there:
+    /// `dispatch` clears this exactly for the span where control is
+    /// inside a resumed thread. Note `in_scheduler` cannot serve here —
+    /// it stays true while a *dispatched thread* runs, which is exactly
+    /// when preemption must be allowed.
+    machinery: bool,
 }
 
 impl Scheduler {
@@ -108,6 +116,7 @@ impl Scheduler {
             main: None,
             main_exec: None,
             in_scheduler: false,
+            machinery: false,
         }
     }
 
@@ -152,6 +161,35 @@ pub(crate) fn reset() {
 /// GC root hook (called from `Root::mark`).
 pub(crate) fn mark(alloc: &mut crate::alloc::Allocator<RValue>) {
     SCHEDULER.with(|s| s.borrow().mark(alloc));
+}
+
+/// Whether a timeslice switch may be injected at the current poll point:
+/// only while a thread's Ruby code (not the scheduler's own machinery) is
+/// running, and only when another live thread could actually use the
+/// slice. See `Scheduler::machinery`.
+pub(crate) fn preempt_ok() -> bool {
+    SCHEDULER.with(|s| {
+        let s = s.borrow();
+        !s.machinery && s.main.is_some()
+    }) && has_other_live_threads()
+}
+
+/// Toggle the machinery marker around the context switch in `dispatch`.
+fn set_machinery(v: bool) {
+    SCHEDULER.with(|s| s.borrow_mut().machinery = v);
+}
+
+/// Tell the preempt timer how many live threads exist. Computed under
+/// the borrow, reported outside it.
+fn notify_thread_count() {
+    let live = SCHEDULER.with(|s| {
+        s.borrow()
+            .threads
+            .iter()
+            .filter(|t| !t.as_thread_inner().is_dead())
+            .count()
+    });
+    crate::preempt::on_thread_count(live);
 }
 
 /// Forensics (`MONORUBY_GC_BREAK`): one-line dump of the scheduler state
@@ -255,6 +293,7 @@ pub(crate) fn spawn(vm: &mut Executor, thread: Value) {
         s.threads.push(thread);
         s.ready.push_back(thread);
     });
+    notify_thread_count();
 }
 
 /// Wake a thread parked in `sleep` (`Thread#wakeup` / `#run`). Returns
@@ -337,7 +376,13 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
             let mut s = s.borrow_mut();
             s.main_exec = Some(root_exec(vm));
             s.in_scheduler = true;
+            s.machinery = true;
         });
+        // A main thread that never parks (busy loop, preempted here)
+        // never reaches `scheduler_loop` either: promote due sleepers to
+        // the ready queue from the pass path too, or a green thread's
+        // expired `sleep` would only ever be noticed when main parks.
+        wake_due_sleepers();
         // Same fd-waiter promotion as `scheduler_loop`: a main thread
         // spinning in `Thread.pass while …` never reaches the scheduler's
         // idle branch, so fd-parked green threads would otherwise starve.
@@ -364,6 +409,7 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
             s.in_scheduler = false;
+            s.machinery = false;
             let main = s.main.unwrap();
             s.current = Some(main);
         });
@@ -723,11 +769,13 @@ fn scheduler_run(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         let mut s = s.borrow_mut();
         s.main_exec = Some(root_exec(vm));
         s.in_scheduler = true;
+        s.machinery = true;
     });
     let result = scheduler_loop(vm, globals);
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
         s.in_scheduler = false;
+        s.machinery = false;
         let main = s.main.unwrap();
         s.current = Some(main);
     });
@@ -993,29 +1041,41 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
             }
         }
     });
-    // The switch itself happens with no scheduler borrow held.
+    // The switch itself happens with no scheduler borrow held. While
+    // control is inside the resumed thread, `machinery` is cleared so
+    // timeslice preemption can fire in its Ruby code; it is restored the
+    // moment control returns to this (scheduler) context.
     let ret = match entry {
         Entry::Invoke(proc_data, args, len, handle) => {
             let invoker = CODEGEN.with(|c| c.borrow().thread_invoker);
+            set_machinery(false);
             // SAFETY: `handle`/`args` point into the THREAD RValue,
             // which is rooted by the scheduler registry for the whole
             // run; the RValue arena does not move objects.
-            invoker(
+            let ret = invoker(
                 unsafe { &mut *handle },
                 globals,
                 &proc_data,
                 Value::nil(),
                 args,
                 len,
-            )
+            );
+            set_machinery(true);
+            ret
         }
         Entry::Resume(exec) => {
             let resume = CODEGEN.with(|c| c.borrow().scheduler_resume);
-            resume(exec, Value::nil().id())
+            set_machinery(false);
+            let ret = resume(exec, Value::nil().id());
+            set_machinery(true);
+            ret
         }
         Entry::ResumeInterrupt(exec) => {
             let resume = CODEGEN.with(|c| c.borrow().scheduler_resume);
-            resume(exec, 0)
+            set_machinery(false);
+            let ret = resume(exec, 0);
+            set_machinery(true);
+            ret
         }
         Entry::Skip(err) => {
             finalize_unstarted(globals, thread, err);
@@ -1104,6 +1164,7 @@ fn finalize_common(globals: &mut Globals, mut thread: Value) {
         }
         s.threads.retain(|t| *t != thread);
     });
+    notify_thread_count();
     // A `SystemExit` that escapes any thread terminates the process: CRuby
     // re-raises it in the main thread (`Kernel#exit` from a thread exits
     // the interpreter once main handles it). The same forwarding applies
