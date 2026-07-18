@@ -59,9 +59,12 @@ pub struct ThreadInner {
     pub(crate) exception: Option<MonorubyErr>,
     /// Threads parked in `#join` on this thread.
     pub(crate) joiners: Vec<Value>,
-    /// A queued asynchronous interrupt (`#kill` / `#raise`), delivered
-    /// at the next resume.
-    pub(crate) pending: Option<PendingInterrupt>,
+    /// Queued asynchronous interrupts (`#kill` / `#raise`), delivered
+    /// FIFO at delivery points (CRuby's `pending_interrupt_queue`). A
+    /// queue, not a slot: `t.raise e; t.kill` must deliver the raise
+    /// first — with a single slot the kill overwrites it and the
+    /// exception (and its report_on_exception output) is lost.
+    pub(crate) pending: std::collections::VecDeque<PendingInterrupt>,
     /// Set when a kill was delivered: the terminating `Throw` unwind is
     /// then a clean death, not an exception (see scheduler finalize).
     pub(crate) killed: bool,
@@ -136,8 +139,10 @@ impl alloc::GC<RValue> for ThreadInner {
         for v in &self.joiners {
             v.mark(alloc);
         }
-        if let Some(PendingInterrupt::Raise(err)) = &self.pending {
-            err.mark(alloc);
+        for int in &self.pending {
+            if let PendingInterrupt::Raise(err) = int {
+                err.mark(alloc);
+            }
         }
         for frame in &self.masks {
             for (class, _) in frame {
@@ -160,7 +165,7 @@ impl ThreadInner {
             result: None,
             exception: None,
             joiners: vec![],
-            pending: None,
+            pending: Default::default(),
             killed: false,
             masks: vec![],
             park_blocking: false,
@@ -181,7 +186,7 @@ impl ThreadInner {
             result: None,
             exception: None,
             joiners: vec![],
-            pending: None,
+            pending: Default::default(),
             killed: false,
             masks: vec![],
             park_blocking: false,
@@ -203,7 +208,7 @@ impl ThreadInner {
             result: None,
             exception: None,
             joiners: vec![],
-            pending: None,
+            pending: Default::default(),
             killed: false,
             masks: vec![],
             park_blocking: false,

@@ -429,7 +429,7 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
                 let t = SCHEDULER.with(|s| s.borrow_mut().ready.pop_front());
                 match t {
                     Some(t) => {
-                        if let Err(err) = dispatch(globals, t) {
+                        if let Err(err) = dispatch(vm, globals, t) {
                             result = Err(err);
                             break;
                         }
@@ -516,14 +516,12 @@ pub(crate) fn join(
     }
 }
 
-/// The effective `handle_interrupt` timing for `thread`'s queued pending
-/// interrupt. Kill is unmaskable. For a raise, the innermost mask entry
+/// The effective `handle_interrupt` timing for one queued interrupt on
+/// a thread. Kill is unmaskable. For a raise, the innermost mask entry
 /// whose class covers the exception's class wins; default `Immediate`.
-fn pending_timing(store: &Store, thread: Value) -> Option<InterruptTiming> {
-    let inner = thread.as_thread_inner();
-    let pending = inner.pending.as_ref()?;
-    let exc_class = match pending {
-        PendingInterrupt::Kill => return Some(InterruptTiming::Immediate),
+fn interrupt_timing(store: &Store, inner: &ThreadInner, int: &PendingInterrupt) -> InterruptTiming {
+    let exc_class = match int {
+        PendingInterrupt::Kill => return InterruptTiming::Immediate,
         PendingInterrupt::Raise(err) => err.class_id(),
     };
     for frame in inner.masks.iter().rev() {
@@ -536,19 +534,46 @@ fn pending_timing(store: &Store, thread: Value) -> Option<InterruptTiming> {
             let mut m = Some(store.get_module(exc_class));
             while let Some(cur) = m {
                 if cur.id() == mask_module.id() {
-                    return Some(*timing);
+                    return *timing;
                 }
                 m = cur.superclass();
             }
         }
     }
-    Some(InterruptTiming::Immediate)
+    InterruptTiming::Immediate
 }
 
-/// Take `thread`'s pending interrupt and turn it into the error to raise.
-fn take_pending_as_error(mut thread: Value) -> Option<MonorubyErr> {
+/// Index of the first queued interrupt deliverable in this context.
+/// FIFO with per-element masking, like CRuby's `pending_interrupt_queue`:
+/// masked elements are skipped (they stay queued), the first allowed one
+/// is delivered.
+fn deliverable_index(store: &Store, thread: Value, at_blocking: bool) -> Option<usize> {
+    let inner = thread.as_thread_inner();
+    inner
+        .pending
+        .iter()
+        .position(|int| match interrupt_timing(store, inner, int) {
+            InterruptTiming::Immediate => true,
+            InterruptTiming::OnBlocking => at_blocking,
+            InterruptTiming::Never => false,
+        })
+}
+
+/// Whether any queued interrupt warrants waking a parked target (i.e. is
+/// not masked `:never`; a parked thread counts as blocking, so
+/// `:on_blocking` qualifies).
+fn wake_worthy(store: &Store, thread: Value) -> bool {
+    let inner = thread.as_thread_inner();
+    inner
+        .pending
+        .iter()
+        .any(|int| interrupt_timing(store, inner, int) != InterruptTiming::Never)
+}
+
+/// Remove queue element `idx` and turn it into the error to raise.
+fn take_pending_as_error(mut thread: Value, idx: usize) -> Option<MonorubyErr> {
     let inner = thread.as_thread_inner_mut();
-    match inner.pending.take()? {
+    match inner.pending.remove(idx)? {
         PendingInterrupt::Kill => {
             inner.killed = true;
             Some(kill_unwind_error())
@@ -557,23 +582,18 @@ fn take_pending_as_error(mut thread: Value) -> Option<MonorubyErr> {
     }
 }
 
-/// Deliver the current thread's pending interrupt *now* if its mask
-/// timing allows delivery in this context (`at_blocking`: a real
-/// blocking operation vs `Thread.pass` / handle_interrupt boundaries).
-/// Called at every park entry and at handle_interrupt entry/exit.
+/// Deliver the current thread's first deliverable pending interrupt
+/// *now*, per each element's mask timing in this context (`at_blocking`:
+/// a real blocking operation vs `Thread.pass` / handle_interrupt
+/// boundaries). Called at every park entry and at handle_interrupt
+/// entry/exit.
 pub(crate) fn deliver_pending_now(
     globals: &mut Globals,
     thread: Value,
     at_blocking: bool,
 ) -> Result<()> {
-    let allowed = match pending_timing(&globals.store, thread) {
-        None => false,
-        Some(InterruptTiming::Immediate) => true,
-        Some(InterruptTiming::OnBlocking) => at_blocking,
-        Some(InterruptTiming::Never) => false,
-    };
-    if allowed
-        && let Some(err) = take_pending_as_error(thread)
+    if let Some(idx) = deliverable_index(&globals.store, thread, at_blocking)
+        && let Some(err) = take_pending_as_error(thread, idx)
     {
         // Killing the main thread terminates the process.
         let is_main = SCHEDULER.with(|s| s.borrow().main) == Some(thread);
@@ -591,22 +611,23 @@ pub(crate) fn deliver_pending_now(
 /// by exception class) — `Thread.pending_interrupt?`.
 pub(crate) fn pending_interrupt_p(store: &Store, thread: Value, filter: Option<Module>) -> bool {
     let inner = thread.as_thread_inner();
-    let Some(pending) = inner.pending.as_ref() else {
-        return false;
+    let Some(filter) = filter else {
+        return !inner.pending.is_empty();
     };
-    let Some(filter) = filter else { return true };
-    let exc_class = match pending {
-        PendingInterrupt::Kill => return true,
-        PendingInterrupt::Raise(err) => err.class_id(),
-    };
-    let mut m = Some(store.get_module(exc_class));
-    while let Some(cur) = m {
-        if cur.id() == filter.id() {
-            return true;
+    inner.pending.iter().any(|int| {
+        let exc_class = match int {
+            PendingInterrupt::Kill => return true,
+            PendingInterrupt::Raise(err) => err.class_id(),
+        };
+        let mut m = Some(store.get_module(exc_class));
+        while let Some(cur) = m {
+            if cur.id() == filter.id() {
+                return true;
+            }
+            m = cur.superclass();
         }
-        m = cur.superclass();
-    }
-    false
+        false
+    })
 }
 
 /// Record whether the thread's imminent park is a blocking operation
@@ -642,24 +663,25 @@ pub(crate) fn interrupt(
     let cur = SCHEDULER.with(|s| s.borrow().current.unwrap());
     if target == cur {
         // Self-targeted interrupts honor the current handle_interrupt
-        // mask: only `:immediate` delivers in place, everything else is
-        // queued for a later delivery point.
-        target.as_thread_inner_mut().pending = Some(int);
-        if pending_timing(&globals.store, target) == Some(InterruptTiming::Immediate) {
-            return deliver_pending_now(globals, target, false);
-        }
-        return Ok(());
+        // mask: only `:immediate` delivers in place (at_blocking =
+        // false), everything else stays queued for a later delivery
+        // point.
+        target.as_thread_inner_mut().pending.push_back(int);
+        return deliver_pending_now(globals, target, false);
     }
     if target.as_thread_inner().is_dead() {
         // CRuby: killing a dead thread is a no-op; raising into one is
         // also accepted (the exception is simply lost).
         return Ok(());
     }
-    target.as_thread_inner_mut().pending = Some(int);
-    // Wake a parked target so delivery happens promptly — unless the
-    // target's handle_interrupt mask defers it (`:never`); a parked
-    // thread counts as blocking, so `:on_blocking` wakes too.
-    let wake = pending_timing(&globals.store, target) != Some(InterruptTiming::Never);
+    // Append, never overwrite: `t.raise e; t.kill` queues both, and the
+    // raise is delivered first (FIFO) — the thread dies *with* the
+    // exception, so report_on_exception / #join see it (CRuby).
+    target.as_thread_inner_mut().pending.push_back(int);
+    // Wake a parked target so delivery happens promptly — unless every
+    // queued interrupt is masked `:never`; a parked thread counts as
+    // blocking, so `:on_blocking` wakes too.
+    let wake = wake_worthy(&globals.store, target);
     if wake {
         SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -838,7 +860,7 @@ fn scheduler_loop(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
             return Ok(());
         }
         if let Some(t) = next {
-            dispatch(globals, t)?;
+            dispatch(vm, globals, t)?;
             continue;
         }
         // Nothing runnable: wait for fd readiness and/or the nearest
@@ -1006,7 +1028,7 @@ fn interruptible_sleep_until(
 }
 
 /// Run one green thread until it parks or terminates.
-fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
+fn dispatch(vm: &mut Executor, globals: &mut Globals, mut thread: Value) -> Result<()> {
     enum Entry {
         Invoke(ProcData, *const Value, usize, *mut Executor),
         Resume(*mut Executor),
@@ -1019,22 +1041,22 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
     }
     // The kill tag allocates; do it outside the scheduler borrow.
     let kill_err = kill_unwind_error();
-    // Whether the queued interrupt (if any) may be delivered at this
-    // resume, per the target's handle_interrupt mask. The park kind
-    // (blocking vs Thread.pass) was recorded at park time.
-    let deliverable = match pending_timing(&globals.store, thread) {
-        None => false,
-        Some(InterruptTiming::Immediate) => true,
-        Some(InterruptTiming::OnBlocking) => thread.as_thread_inner().park_blocking,
-        Some(InterruptTiming::Never) => false,
-    };
+    // The first queued interrupt (if any) deliverable at this resume,
+    // per each element's handle_interrupt mask. The park kind (blocking
+    // vs Thread.pass) was recorded at park time.
+    let deliverable_idx = deliverable_index(
+        &globals.store,
+        thread,
+        thread.as_thread_inner().park_blocking,
+    );
     let entry = SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
         s.current = Some(thread);
         let inner = thread.as_thread_inner_mut();
         if inner.state() == ThreadState::Created {
-            let pending = inner.pending.take();
-            match pending {
+            // FIFO: the first queued interrupt decides how the unstarted
+            // thread dies (raise-then-kill records the raise).
+            match inner.pending.pop_front() {
                 Some(PendingInterrupt::Kill) => return Entry::Skip(None),
                 Some(PendingInterrupt::Raise(err)) => return Entry::Skip(Some(err)),
                 None => {}
@@ -1048,13 +1070,13 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
         } else {
             inner.state = ThreadState::Runnable;
             let exec = inner.resume_exec.take().unwrap().as_ptr();
-            if !deliverable {
-                // A masked pending interrupt stays queued; resume the
+            let Some(idx) = deliverable_idx else {
+                // Masked pending interrupts stay queued; resume the
                 // thread normally (it re-parks or delivers later at an
                 // allowed point).
                 return Entry::Resume(exec);
-            }
-            match inner.pending.take() {
+            };
+            match inner.pending.remove(idx) {
                 None => Entry::Resume(exec),
                 Some(int) => {
                     let err = match int {
@@ -1110,7 +1132,7 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
             ret
         }
         Entry::Skip(err) => {
-            finalize_unstarted(globals, thread, err);
+            finalize_unstarted(vm, globals, thread, err);
             SCHEDULER.with(|s| {
                 let mut s = s.borrow_mut();
                 s.current = s.main;
@@ -1120,7 +1142,7 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
     };
     // Control is back in the scheduler context.
     if thread.as_thread_inner().body_terminated() {
-        finalize(globals, thread, ret);
+        finalize(vm, globals, thread, ret);
     }
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
@@ -1132,19 +1154,24 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
 /// A thread killed or raised-into before its body ever ran: mark it
 /// dead without running the body (CRuby semantics for an unstarted
 /// target), record the raise as its terminating exception, wake joiners.
-fn finalize_unstarted(globals: &mut Globals, mut thread: Value, err: Option<MonorubyErr>) {
+fn finalize_unstarted(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut thread: Value,
+    err: Option<MonorubyErr>,
+) {
     {
         let inner = thread.as_thread_inner_mut();
         inner.killed = err.is_none();
         inner.exception = err;
         inner.result = None;
     }
-    finalize_common(globals, thread);
+    finalize_common(vm, globals, thread);
 }
 
 /// A green thread's body finished: record the outcome, wake joiners,
 /// prune the registry.
-fn finalize(globals: &mut Globals, mut thread: Value, ret: Option<Value>) {
+fn finalize(vm: &mut Executor, globals: &mut Globals, mut thread: Value, ret: Option<Value>) {
     {
         let inner = thread.as_thread_inner_mut();
         match ret {
@@ -1173,12 +1200,22 @@ fn finalize(globals: &mut Globals, mut thread: Value, ret: Option<Value>) {
             }
         }
     }
-    finalize_common(globals, thread);
+    finalize_common(vm, globals, thread);
 }
 
-/// Shared tail of thread termination: mark dead, wake joiners, prune the
-/// registry, and report an unhandled exception per report_on_exception.
-fn finalize_common(globals: &mut Globals, mut thread: Value) {
+/// Shared tail of thread termination: mark dead, wake joiners, report an
+/// unhandled exception per report_on_exception, prune the registry.
+fn finalize_common(vm: &mut Executor, globals: &mut Globals, mut thread: Value) {
+    // Undelivered interrupts die with the thread (CRuby drops the
+    // remaining pending_interrupt_queue too) — e.g. the kill queued
+    // behind the raise the thread just died from.
+    thread.as_thread_inner_mut().pending.clear();
+    // Report before marking the thread dead: CRuby reports while the
+    // dying thread still has status "run" (ruby/spec matches the status
+    // word in the inspect header), and the registry entry still roots
+    // the thread (and its recorded exception) across the report's
+    // allocation / Ruby invocation.
+    report_exception(vm, globals, thread);
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
         let inner = thread.as_thread_inner_mut();
@@ -1204,39 +1241,73 @@ fn finalize_common(globals: &mut Globals, mut thread: Value) {
     // global default — has `abort_on_exception` set. The exception stays
     // recorded on the dead thread too (`#join` / `#value` re-raise it).
     forward_exception_to_main(globals, thread);
-    // `Thread#report_on_exception` (default true): surface a terminating
-    // exception on stderr (CRuby prints it when the thread dies). An
-    // explicit `t.report_on_exception = false` (ivar set by the Ruby-side
-    // accessor) suppresses it; a kill never reports, and neither does a
-    // `SystemExit` (CRuby reports an abort_on_exception forwarding, but
-    // never a SystemExit — that is the process exiting, not a crash).
-    if thread
-        .as_thread_inner()
-        .exception
-        .as_ref()
-        .is_some_and(|err| matches!(err.kind(), MonorubyErrKind::SystemExit(_)))
-    {
-        return;
-    }
+}
+
+/// `Thread#report_on_exception` (instance flag, falling back to the
+/// `Thread` class-level default; both default true): surface a
+/// terminating exception when the thread dies. A kill never reports, and
+/// neither does a `SystemExit` (CRuby reports an abort_on_exception
+/// forwarding, but never a SystemExit — that is the process exiting, not
+/// a crash). The report goes through the Ruby-level `$stderr` — CRuby
+/// writes it with `rb_write_error_str`, which honours a replaced
+/// `$stderr`; mspec's `output` matcher relies on exactly that. Errors
+/// during the report (broken `$stderr`, raising `inspect`) are swallowed:
+/// a report must never alter the program's outcome.
+fn report_exception(vm: &mut Executor, globals: &mut Globals, thread: Value) {
+    let exc = {
+        let inner = thread.as_thread_inner();
+        match &inner.exception {
+            None => return,
+            Some(err) if matches!(err.kind(), MonorubyErrKind::SystemExit(_)) => return,
+            Some(err) => format!("{} ({})", err.message(), err.class_name(&globals.store)),
+        }
+    };
+    let ivar = IdentId::get_id("@report_on_exception");
+    // An ivar explicitly set to nil counts as unset (the Ruby-side
+    // accessors treat nil as "fall back to the default").
     let report = globals
         .store
-        .get_ivar(thread, IdentId::get_id("@report_on_exception"))
+        .get_ivar(thread, ivar)
+        .filter(|v| !v.is_nil())
         .map(|v| v.as_bool())
+        .or_else(|| {
+            globals
+                .store
+                .get_ivar(globals.store.get_module(THREAD_CLASS).as_val(), ivar)
+                .filter(|v| !v.is_nil())
+                .map(|v| v.as_bool())
+        })
         .unwrap_or(true);
     if !report {
         return;
     }
-    let msg = {
-        let inner = thread.as_thread_inner();
-        inner
-            .exception
-            .as_ref()
-            .map(|err| format!("{} ({})", err.message(), err.class_name(&globals.store)))
-    };
-    if let Some(msg) = msg {
-        eprintln!("warning: thread terminated with exception (report_on_exception is true):");
-        eprintln!("{msg}");
-    }
+    // `#<Thread:0x... dead> terminated with exception (...)`: the header
+    // uses Thread#inspect (the spec matchers key on the `Thread` word and
+    // interpolate `t.inspect`).
+    let insp = vm
+        .invoke_method_inner(
+            globals,
+            IdentId::get_id("inspect"),
+            thread,
+            &[],
+            None,
+            None,
+        )
+        .ok()
+        .and_then(|v| v.is_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| format!("#<Thread:0x{:016x} dead>", thread.id()));
+    let text = format!("{insp} terminated with exception (report_on_exception is true):\n{exc}\n");
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or_default();
+    let _ = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[Value::string(text)],
+        None,
+        None,
+    );
 }
 
 /// Queue a dead thread's terminating exception as a pending interrupt on
@@ -1273,7 +1344,9 @@ fn forward_exception_to_main(globals: &mut Globals, thread: Value) -> bool {
     if main == thread {
         return false;
     }
-    main.as_thread_inner_mut().pending = Some(PendingInterrupt::Raise(err));
+    main.as_thread_inner_mut()
+        .pending
+        .push_back(PendingInterrupt::Raise(err));
     // Wake a parked main so delivery happens promptly (mirrors
     // `interrupt`); delivery itself still honors handle_interrupt masks.
     let inner = main.as_thread_inner_mut();

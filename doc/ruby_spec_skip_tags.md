@@ -266,10 +266,16 @@ example 単位で切り分け、各ファイルとも**犯人1例**を `fails` t
   では spawner スレッドに永遠に CPU が渡らない。タイムスライス・
   プリエンプション（SIGALRM watchdog → poll 点で強制 yield、doc/threads.md §8-1）
   の実装で解除できる。
-- `core/thread/report_on_exception_tags.txt` — `… prints the backtrace even if
-  the thread was killed just after Thread#raise`: `Thread#raise` 直後に `#kill`
-  する競合パターンで対象スレッドが永久に進まなくなる（単体実行で 70 秒
-  タイムアウト確認）。raise/kill の pending 上書き順序の見直しが必要。
+- ~~`core/thread/report_on_exception_tags.txt`~~ — **解除済み**。真因は 2 つ:
+  (1) `ThreadInner::pending` が 1 スロットで `#kill` が直前の `#raise` を
+  上書きしていた → CRuby の `pending_interrupt_queue` と同じ FIFO
+  `VecDeque` に変更(raise が先に配達され、スレッドは例外で死ぬ)。
+  (2) 「ハング」の正体はクラスメソッド `Thread.report_on_exception=` の欠落 —
+  upstream `spec_helper.rb` が「true で raise する shim」を注入しスレッド本体が
+  即死、`Thread.pass until ready …` が無限ループしていた → クラスレベル
+  アクセサを追加。あわせてレポート出力を Ruby レベル `$stderr` 経由の
+  CRuby 形式(`#<Thread:0xADDR run> terminated with exception …`)に変更
+  (mspec の output matcher は `$stderr` 差し替えで捕捉するため必須)。
 - `core/mutex/lock_tags.txt` — `Mutex#lock does not raise deadlock if a fiber's
   attempt to lock was interrupted`: fiber 内の `Mutex#lock` 待ちへの割り込み
   （`Thread#raise`）で待機が解けず永久ブロック。fiber が thread の代理で park

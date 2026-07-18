@@ -1,1 +1,0 @@
-fails:Thread#report_on_exception= when set to true prints the backtrace even if the thread was killed just after Thread#raise

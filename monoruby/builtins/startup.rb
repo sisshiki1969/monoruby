@@ -781,14 +781,30 @@ class Thread
   attr_accessor :name
 
   # Reported when a thread dies with an unhandled exception (read by the
-  # native finalizer). Instance-level only; default true, as in CRuby.
+  # native finalizer). Falls back to the class-level default
+  # (`Thread.report_on_exception`), which defaults to true, as in CRuby.
   def report_on_exception
-    @report_on_exception.nil? ? true : @report_on_exception
+    @report_on_exception.nil? ? Thread.report_on_exception : @report_on_exception
   end
 
   def report_on_exception=(flag)
     @report_on_exception = flag
   end
+
+  # CRuby's Thread#to_s: `#<Thread:0xADDR[@name] status>` (the spawn
+  # file:line is not tracked). ruby/spec interpolates this into the
+  # report_on_exception output matchers, so the `#<Thread:` prefix and
+  # the status word matter.
+  def to_s
+    st = status
+    st = "dead" unless st
+    if (n = @name)
+      "#<Thread:#{format('0x%016x', object_id << 1)}@#{n} #{st}>"
+    else
+      "#<Thread:#{format('0x%016x', object_id << 1)} #{st}>"
+    end
+  end
+  alias inspect to_s
 
   # When set (per-thread, or the Thread global default), an exception
   # that terminates this thread is re-raised in the main thread (read by
@@ -809,6 +825,18 @@ class Thread
 
     def abort_on_exception=(flag)
       @abort_on_exception = flag
+    end
+
+    # Global default for Thread#report_on_exception (true, as in CRuby).
+    # Threads whose instance flag is unset fall back to this; ruby/spec's
+    # spec_helper requires the class-level accessor to exist (otherwise
+    # it installs a shim instance method that raises).
+    def report_on_exception
+      @report_on_exception.nil? ? true : @report_on_exception
+    end
+
+    def report_on_exception=(flag)
+      @report_on_exception = flag
     end
   end
 

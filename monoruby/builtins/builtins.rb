@@ -766,12 +766,8 @@ class Enumerator
   # identical to with_object; re-root on Enumerator (overrides Enumerable's).
   alias each_with_object with_object
 end
-class Thread
-  # inherited Kernel#inspect dumps Thread's ivars; use the short Kernel#to_s
-  # form for both (matches CRuby's `inspect`==`to_s`).
-  def to_s = super
-  alias inspect to_s
-end
+# (Thread#to_s / #inspect are defined in startup.rb in CRuby's
+# `#<Thread:0xADDR status>` format — no override needed here.)
 
 # ENV is a singleton object (not a class), so its methods live on its
 # singleton class. ruby/spec checks several of them for strict alias identity
