@@ -1010,15 +1010,20 @@ mod tests {
             [done, i >= 0]
             "#,
         );
-        // Float (xmm-cached) loop variant of the same pattern.
+        // Float (xmm-cached) loop variant of the same pattern. The
+        // do-while form guarantees at least one iteration, so the
+        // assertion does not depend on whether the thread got scheduled
+        // before the loop started.
         run_test(
             r#"
             stop = false
             t = Thread.new { stop = true }
             sum = 0.0
-            sum += 1.0 until stop
+            begin
+              sum += 1.0
+            end until stop
             t.join
-            [stop, sum > 0.0]
+            [stop, sum >= 1.0]
             "#,
         );
     }
@@ -1311,14 +1316,15 @@ mod tests {
             [r, t.status, t.alive?]
             "#,
         );
-        // killing an unstarted thread never runs the body.
+        // Killing a just-created thread: whether the body ran before the
+        // kill is scheduling-dependent (in CRuby too, and under
+        // preemption here), so assert only the convergent facts.
         run_test_once(
             r#"
-            ran = false
-            t = Thread.new { ran = true }
+            t = Thread.new { :body }
             t.kill
             t.join
-            [ran, t.status]
+            [t.status, t.alive?]
             "#,
         );
         // Thread.exit kills the current thread mid-body.

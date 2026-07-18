@@ -73,6 +73,14 @@ pub struct ThreadInner {
     /// Consulted when delivering a pending interrupt masked
     /// `:on_blocking`.
     pub(crate) park_blocking: bool,
+    /// Park permit: set by `Thread#wakeup` / `#run` when the target is
+    /// *running* (not parked); consumed by the next park, which then
+    /// returns immediately. Closes the classic lost-wakeup window under
+    /// preemption — "enqueue as waiter → (preempted; the waker runs and
+    /// wakes a still-running thread) → park forever". The Ruby-level
+    /// Mutex / ConditionVariable / Queue in builtins/startup.rb all park
+    /// through patterns that need this.
+    pub(crate) park_permit: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +164,7 @@ impl ThreadInner {
             killed: false,
             masks: vec![],
             park_blocking: false,
+            park_permit: false,
         }
     }
 
@@ -176,6 +185,7 @@ impl ThreadInner {
             killed: false,
             masks: vec![],
             park_blocking: false,
+            park_permit: false,
         }
     }
 
@@ -197,6 +207,7 @@ impl ThreadInner {
             killed: false,
             masks: vec![],
             park_blocking: false,
+            park_permit: false,
         }
     }
 

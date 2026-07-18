@@ -312,8 +312,18 @@ pub(crate) fn wakeup(thread: Value) -> bool {
                 }
                 true
             }
-            // Runnable / Created / Joining: nothing to do (CRuby's
-            // wakeup only interrupts sleep).
+            // A wakeup delivered to a *running* thread arms its park
+            // permit: the target's next park returns immediately. Under
+            // preemption, a waiter can be preempted between registering
+            // itself and parking; the waker's `#wakeup` lands in that
+            // window and would otherwise be lost, leaving the waiter
+            // parked forever (see `ThreadInner::park_permit`).
+            ThreadState::Runnable => {
+                inner.park_permit = true;
+                true
+            }
+            // Created / Joining: nothing to do (CRuby's wakeup only
+            // interrupts sleep).
             _ => true,
         }
     })
@@ -332,6 +342,17 @@ pub(crate) fn sleep(
     let cur0 = SCHEDULER.with(|s| s.borrow().current.unwrap());
     deliver_pending_now(globals, cur0, true)?;
     set_park_blocking(cur0, true);
+    // Consume a park permit armed by a wakeup that raced this park (see
+    // `ThreadInner::park_permit`): return immediately instead of
+    // sleeping — the wakeup has already happened.
+    {
+        let mut cur = cur0;
+        let inner = cur.as_thread_inner_mut();
+        if inner.park_permit {
+            inner.park_permit = false;
+            return Ok(Duration::ZERO);
+        }
+    }
     let start = Instant::now();
     // An enormous duration (e.g. sleep(2**62)) must not overflow Instant
     // arithmetic — treat it as "sleep until woken".

@@ -876,13 +876,20 @@ class Thread
     end
   end
 
-  # Green threads switch only at blocking points (sleep / Thread.stop /
-  # join / pass), so plain Ruby code is atomic with respect to the
-  # scheduler — no preemption can occur between two non-blocking
-  # statements. That makes these synchronization primitives correct as
-  # pure Ruby built on Thread.stop / Kernel#sleep (park) and
-  # Thread#wakeup (unpark): every "test then enqueue then park" sequence
-  # below is uninterruptible up to the park itself.
+  # With timeslice preemption, a switch can occur at any safepoint —
+  # every method call and loop back-edge. These pure-Ruby primitives
+  # stay correct under that model through two rules:
+  #
+  # 1. Test-and-set sequences contain no safepoint between the test and
+  #    the set: straight-line ivar reads/writes only, with any needed
+  #    method calls (e.g. `Thread.current`) hoisted before the test.
+  #    See `Mutex#try_lock`.
+  # 2. Every "register as waiter → park" sequence tolerates a wakeup
+  #    landing in the window before the park: `Thread#wakeup` on a
+  #    *running* thread arms its park permit, making the next park
+  #    return immediately (scheduler.rs, `ThreadInner::park_permit`).
+  #    The park sites all sit in retry loops, so a spurious early
+  #    return is re-checked.
 
   class Mutex
     def locked?
@@ -894,10 +901,17 @@ class Thread
     end
 
     def try_lock
+      # Atomic under preemption: `Thread.current` is a method call (a
+      # safepoint where a timeslice switch can occur), so it must be
+      # evaluated BEFORE the test. The test-and-set below is straight-line
+      # code — ivar read, branch, ivar write — with no calls and no loop
+      # back-edges, hence no safepoint can interleave another thread
+      # between the test and the set.
+      cur = Thread.current
       if @owner
         false
       else
-        @owner = Thread.current
+        @owner = cur
         true
       end
     end

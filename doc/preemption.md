@@ -93,6 +93,27 @@ test harness).
   `gc-stress`); used to shake out latent "unexpected switch here"
   state bugs.
 
+## Synchronization primitives under preemption
+
+The pure-Ruby Mutex / ConditionVariable / Queue in `builtins/startup.rb`
+were written against the cooperative model ("no switch between two
+non-blocking statements"). Preemption invalidates that; they are kept
+correct by two mechanisms (see the comment block in startup.rb):
+
+1. Test-and-set sequences are safepoint-free straight-line code (calls
+   like `Thread.current` hoisted before the test — `Mutex#try_lock`).
+2. A `Thread#wakeup` that lands on a *running* thread arms its **park
+   permit** (`ThreadInner::park_permit`): the target's next park returns
+   immediately, closing every "register as waiter → (preempted; waker
+   runs) → park forever" lost-wakeup window. All park sites sit in
+   retry loops, so the early return is re-checked.
+
+Known follow-up: `Queue#pop`'s `@items.empty?` / `@items.shift` pair has
+a safepoint between the two calls, so two poppers racing can make one
+return nil as if an element were nil. Restructuring Queue on top of the
+(now preemption-safe) Mutex + ConditionVariable, as CRuby layers it,
+would close this; not yet observed in ruby/spec stress runs.
+
 ## Phase 2 (planned): blocking-syscall offload
 
 A small native worker pool for kernel-blocking operations (flock,
