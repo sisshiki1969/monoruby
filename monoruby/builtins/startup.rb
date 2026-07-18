@@ -990,15 +990,22 @@ class Thread
     end
 
     # Atomically release the mutex, sleep, and re-acquire it on wake
-    # (including on an exception raised into the sleeper).
+    # (including on an exception raised into the sleeper). Returns the
+    # rounded number of seconds actually slept, as in CRuby. A negative
+    # duration is an ArgumentError (validated before the ownership check).
     def sleep(timeout = nil)
+      if timeout && timeout < 0
+        raise ArgumentError, "time interval must not be negative"
+      end
       raise ThreadError, "Attempt to unlock a mutex which is not locked" unless owned?
+      start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       unlock
       begin
         timeout ? Kernel.sleep(timeout) : Thread.stop
       ensure
         lock
       end
+      (Process.clock_gettime(Process::CLOCK_MONOTONIC) - start).round
     end
   end
 
@@ -1202,16 +1209,20 @@ class Thread
     def wait(mutex, timeout = nil)
       @waiters << Thread.current
       begin
-        mutex.unlock
-        begin
-          timeout ? Kernel.sleep(timeout) : Thread.stop
-        ensure
-          mutex.lock
-        end
+        # Delegate to Mutex#sleep so the mutex is atomically released,
+        # the caller parks, and the mutex is re-acquired on wake — exactly
+        # as CRuby does (which is why `#wait` calls `#sleep` on its arg).
+        mutex.sleep(timeout)
       ensure
         @waiters.delete(Thread.current)
       end
       self
+    end
+
+    # ConditionVariable holds runtime synchronization state that cannot be
+    # serialized; CRuby raises TypeError from Marshal.
+    def marshal_dump
+      raise TypeError, "can't dump #{self.class}"
     end
 
     def signal
