@@ -21,10 +21,11 @@ machinery unchanged.
 1. A dedicated timer OS thread (10 ms tick, `preempt.rs`) runs while
    two or more green threads are alive. Each tick ORs `PREEMPT_BIT`
    (bit 30) into the interpreter's GC poll flag.
-2. The VM and JIT already poll that flag (`>= 8` → `execute_gc`) at
-   every method call and loop back-edge, so the running thread soon
-   reaches `execute_gc` — with its live registers written back, exactly
-   as for a GC.
+2. The VM and JIT poll that flag (`>= 8` → `execute_gc`) at every
+   **callee entry** (`vm_init` / JIT `InitMethod`, i.e. inside the new
+   frame right after the prologue) and at every loop back-edge, so the
+   running thread soon reaches `execute_gc` — with its live registers
+   written back, exactly as for a GC.
 3. `execute_gc` strips the bit (`preempt::consume_poll_flag`) and calls
    `scheduler::pass`: the main thread dispatches the ready queue and
    continues; a green thread re-enqueues itself and switches back to
@@ -36,19 +37,24 @@ machinery unchanged.
    spurious full GC, and page-fill accumulation below the band is
    preserved.
 
-Rust-side iteration builtins invoke blocks from native loops; a
-JIT-compiled block body with no loops or calls of its own contains no
-poll site at all. `Executor::poll_safepoint` (one relaxed load) closes
-that gap — it also makes signals deliverable in such loops, which they
-previously were not. It is a GC point, so it is called only from
-**audited** sites whose Rust locals hold no unrooted heap values across
-it — currently `Kernel#loop`. (Putting it in the generic `invoke_block`
-path corrupted callers like `File.open {}`, whose receiver lives only in
-a Rust local after the block returns.) Ruby-level iterators
-(`Integer#times`, `Array#each`, `while`) poll at their VM loop
-back-edges already; other Rust iteration helpers (`invoke_block_iter1`
-etc.) remain unpreemptible when the block body is poll-free — audit and
-annotate them one by one as needed.
+Poll placement is **callee-entry + loop back-edge** (the classic
+JVM/CRuby scheme), not call-site. The entry poll sits inside the callee
+frame right after the prologue — frame linked, `rsp` below it, args
+homed into rooted slots, remaining registers nil-filled — so the GC
+root scan sees a fully consistent frame, and it fires on *every*
+dispatch path uniformly, including the Rust invokers
+(`invoke_method` / `invoke_block`), which must never poll on the caller
+side: Rust callers hold unrooted heap `Value`s in locals across those
+calls (a caller-side poll in generic `invoke_block` corrupted
+`File.open {}`, whose receiver lives only in a Rust local after the
+block returns). That entry poll is what makes Rust-side iteration
+builtins (`Kernel#loop`, `Array#each`, `invoke_block_iter1`-style
+helpers) preemptible and signal-responsive per iteration even when the
+block body itself is poll-free — no per-builtin audits needed. Call
+sites keep only the stack-overflow check (`CheckStack` /
+`vm_check_stack`); native (non-Ruby) callees have no entry poll, but
+any unbounded execution passes a loop back-edge or a Ruby-frame entry,
+so the poll-to-poll distance stays bounded.
 
 `scheduler.rs` gained a `machinery` marker: preemption is suppressed
 while the scheduler's own machinery (dispatch loop, fd polling) runs in

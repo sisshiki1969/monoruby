@@ -47,8 +47,11 @@ impl Codegen {
         let method_missing = self.jit.label();
         let class_version = self.class_version_label();
         let get_class = self.get_class.clone();
+        // No call-site GC/preempt poll here: the callee entry (`vm_init` /
+        // JIT `InitMethod`) polls on every invocation, which covers all
+        // Ruby-level callees; native callees are bounded between the
+        // caller's loop-edge/entry polls. Only the stack check stays.
         self.vm_check_stack();
-        self.vm_execute_gc();
         self.push_cont_frame();
         monoasm! { &mut self.jit,
             // set self (= receiver)
@@ -118,8 +121,9 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_yield(&mut self, is_simple: bool) -> CodePtr {
         let label = self.jit.get_current_address();
+        // Stack check only — the block body's entry poll (`vm_init` / JIT
+        // `InitMethod`) fires on every yield, so no call-site poll is needed.
         self.vm_check_stack();
-        self.vm_execute_gc();
         self.get_proc_data();
         // rax: outer, rdx: FuncId
         self.vm_handle_error();

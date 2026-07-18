@@ -2433,32 +2433,16 @@ impl Executor {
         .ok_or_else(|| self.take_error())
     }
 
-    /// Rust-side safepoint for audited native iteration loops.
-    ///
-    /// `Kernel#loop`-style builtins invoke a block from a Rust loop: a
-    /// JIT-compiled block body with no loops or calls of its own contains
-    /// no poll site at all, so signals and timeslice preemption would
-    /// never fire on such loops. Calling this once per iteration closes
-    /// that gap; the fast path is a single relaxed load.
-    ///
-    /// This is a GC point. It must ONLY be called from sites audited to
-    /// hold no unrooted heap `Value`s in Rust locals across the call —
-    /// putting it in the generic `invoke_block` path instead corrupted
-    /// callers like `File.open {}`'s `block_close`, whose receiver lives
-    /// only in a Rust local after the block returns. `root` (typically
-    /// the just-returned block result) is kept alive across the poll.
-    #[inline]
-    pub(crate) fn poll_safepoint(&mut self, globals: &mut Globals, root: Value) -> Result<()> {
-        if crate::preempt::flag_pending() {
-            self.temp_push(root);
-            let ok = execute_gc(self, globals).is_some();
-            self.temp_pop();
-            if !ok {
-                return Err(self.take_error());
-            }
-        }
-        Ok(())
-    }
+    // NOTE: there is deliberately no generic Rust-side safepoint helper
+    // here. Callee-entry polls (`vm_init` / JIT `InitMethod`) fire on
+    // every `invoke_method` / `invoke_block` dispatch, so native
+    // iteration loops get a per-iteration safepoint for free. Adding a
+    // GC point directly in the generic invoke paths is forbidden: Rust
+    // callers hold unrooted heap `Value`s in locals across these calls
+    // (e.g. `File.open {}`'s `block_close` receiver), and such a poll
+    // corrupted them. The entry poll runs *inside* the callee frame,
+    // after all arguments are homed into rooted slots, which is why it
+    // is safe where a caller-side poll is not.
 
     pub(crate) fn invoke_block_with_self(
         &mut self,

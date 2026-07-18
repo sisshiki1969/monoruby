@@ -435,6 +435,15 @@ impl AsmIr {
         self.push(AsmInst::ExecGc { write_back, error });
     }
 
+    ///
+    /// Check native stack depth and raise SystemStackError on overflow,
+    /// without a GC/preempt poll (call sites rely on the callee's entry
+    /// poll for that).
+    ///
+    pub(super) fn check_stack(&mut self, write_back: WriteBack, error: AsmError) {
+        self.push(AsmInst::CheckStack { write_back, error });
+    }
+
     pub(super) fn reg_move(&mut self, src: GP, dst: GP) {
         if src != dst {
             self.push(AsmInst::RegMove(src, dst));

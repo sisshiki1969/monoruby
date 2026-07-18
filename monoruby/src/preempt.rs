@@ -76,12 +76,6 @@ thread_local! {
         }),
         timer: None,
     });
-
-    /// Owning-thread copy of the flag address for the hot Rust-side poll
-    /// (`flag_pending`): a plain `Cell` read, no `RefCell` or mutex on
-    /// the per-block-invocation fast path. Kept in sync with
-    /// `Shared::flag_addr` by `register_flag` / `codegen_dropped`.
-    static FLAG_HOT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn no_preempt() -> bool {
@@ -99,7 +93,6 @@ pub(crate) fn register_flag(addr: *mut u32) {
     STATE.with(|st| {
         *st.borrow().shared.flag_addr.lock().unwrap() = addr as usize;
     });
-    FLAG_HOT.with(|c| c.set(addr as usize));
     if stress() {
         // Arm the very first poll; `stress_renudge` re-arms after each one.
         // SAFETY: `addr` is the live poll flag just registered.
@@ -117,20 +110,6 @@ pub(crate) fn codegen_dropped() {
         *st.shared.flag_addr.lock().unwrap() = 0;
         st.shared.stop.store(true, Ordering::Relaxed);
     });
-    let _ = FLAG_HOT.try_with(|c| c.set(0));
-}
-
-/// Whether the poll flag is in its trigger band — the Rust-side
-/// safepoint check (`Executor::poll_safepoint`). One `Cell` read plus
-/// one relaxed atomic load on the fast path.
-#[inline]
-pub(crate) fn flag_pending() -> bool {
-    FLAG_HOT.with(|c| {
-        let addr = c.get();
-        // SAFETY: owning-thread read; the address is cleared before the
-        // flag's JIT memory is freed (`codegen_dropped`).
-        addr != 0 && unsafe { &*(addr as *const AtomicU32) }.load(Ordering::Relaxed) >= 8
-    })
 }
 
 /// The live (non-dead) thread count changed. The timer runs exactly

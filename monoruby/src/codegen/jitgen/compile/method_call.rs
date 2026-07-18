@@ -442,7 +442,9 @@ impl<'a> JitContext<'a> {
             Some(outer),
             callid,
         )?;
-        state.exec_gc(ir, true);
+        // Stack check only: the specialized block body compiles its own
+        // `InitMethod` entry poll, so no call-site GC poll is needed.
+        state.check_stack(ir);
         let using_fpr = state.get_using_fpr(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
@@ -863,7 +865,10 @@ impl AbstractState {
     ) {
         let evict = ir.new_evict();
         let dst = store[callid].dst;
-        self.exec_gc(ir, true);
+        // Stack check only — no call-site GC/preempt poll. Ruby callees
+        // poll at their entry (`InitMethod` / `vm_init`); native callees
+        // are bounded between the caller's loop-edge/entry polls.
+        self.check_stack(ir);
         // Flush the GP pool up front (folded into `get_using_fpr`), before
         // `set_arguments`. An earlier optimization deferred this for simple,
         // block-less calls — reading args straight from the pool registers and
@@ -936,7 +941,9 @@ impl AbstractState {
         // one forwarding consume was source-routed AND no forwarding
         // consume needs the real rest `Array`.
         let defer_rest = deferred_rest && !needs_rest_array;
-        self.exec_gc(ir, true);
+        // Stack check only: the specialized callee body compiles its own
+        // `InitMethod` entry poll.
+        self.check_stack(ir);
         let using_fpr = self.get_using_fpr(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
@@ -971,7 +978,9 @@ impl AbstractState {
         let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
         let evict = ir.new_evict();
-        self.exec_gc(ir, true);
+        // Stack check only: the block body polls at its entry
+        // (`InitMethod` / `vm_init`) on every yield.
+        self.check_stack(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
