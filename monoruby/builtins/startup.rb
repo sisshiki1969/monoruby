@@ -969,8 +969,10 @@ class Thread
       if @waiters
         while (w = @waiters.shift)
           if w.alive?
-            # Permit-arming wake (see Queue#__wake_one): a wake racing
-            # the waiter's park in Mutex#lock must not be lost.
+            # Permit-arming wake: unlike the public Thread#wakeup, a wake
+            # racing the waiter's park in Mutex#lock (preempted between
+            # registering and parking) is not lost — the next park returns
+            # immediately and the lock loop re-contends.
             w.__wakeup_permit
             break
           end
@@ -1010,16 +1012,31 @@ class Thread
   end
 
   class Queue
+    # Layered on Mutex + ConditionVariable, exactly like CRuby's
+    # thread_sync.c. Mutual exclusion (not statement ordering) is what
+    # makes check-and-take atomic here: with callee-entry GC/preempt
+    # polls, EVERY method call is a safepoint, so an unlocked
+    # `@items.empty?` / `@items.shift` pair lets a competing consumer
+    # take the last item in between and the shift returns a phantom nil.
+    #
+    # NOTE: the wait loops are `while true`, never `loop do` —
+    # `Kernel#loop` swallows StopIteration and ClosedQueueError is a
+    # StopIteration subclass (so `loop { q.pop }` ends cleanly on close);
+    # a `raise ClosedQueueError` inside a `loop` block would be silently
+    # eaten and turned into a nil return.
     def initialize
       @items = []
-      @waiters = []
       @closed = false
+      @mutex = Mutex.new
+      @cv_pop = ConditionVariable.new
     end
 
     def push(item)
-      raise ClosedQueueError, "queue closed" if @closed
-      @items.push(item)
-      __wake_one(@waiters)
+      @mutex.synchronize do
+        raise ClosedQueueError, "queue closed" if @closed
+        @items.push(item)
+        @cv_pop.signal
+      end
       self
     end
     alias << push
@@ -1052,29 +1069,20 @@ class Thread
 
     def pop(non_block = false, timeout: nil)
       timeout = __check_timeout(timeout, non_block)
-      if non_block
-        raise ThreadError, "queue empty" if @items.empty? && !@closed
-        return @items.shift
-      end
       deadline = timeout && Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-      loop do
-        return @items.shift unless @items.empty?
-        return nil if @closed
-        if deadline
-          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          return nil if remaining <= 0
-          @waiters << Thread.current
-          begin
-            Kernel.sleep(remaining)
-          ensure
-            @waiters.delete(Thread.current)
-          end
-        else
-          @waiters << Thread.current
-          begin
-            Thread.stop
-          ensure
-            @waiters.delete(Thread.current)
+      @mutex.synchronize do
+        while true
+          return __pop_locked unless @items.empty?
+          # CRuby raises even on a closed queue: only a *blocking* pop
+          # returns nil for closed-and-drained.
+          raise ThreadError, "queue empty" if non_block
+          return nil if @closed
+          if deadline
+            remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            return nil if remaining <= 0
+            @cv_pop.wait(@mutex, remaining)
+          else
+            @cv_pop.wait(@mutex)
           end
         end
       end
@@ -1092,17 +1100,18 @@ class Thread
     alias length size
 
     def clear
-      @items.clear
+      @mutex.synchronize { @items.clear }
       self
     end
 
     # Closing wakes every parked consumer/producer: consumers drain the
     # remaining items then get nil; producers raise ClosedQueueError.
     def close
-      return self if @closed
-      @closed = true
-      __wake_all(@waiters)
-      __wake_all(@push_waiters) if defined?(@push_waiters) && @push_waiters
+      @mutex.synchronize do
+        return self if @closed
+        @closed = true
+        @cv_pop.broadcast
+      end
       self
     end
 
@@ -1111,28 +1120,15 @@ class Thread
     end
 
     def num_waiting
-      @waiters.size + (defined?(@push_waiters) && @push_waiters ? @push_waiters.size : 0)
+      @cv_pop.__num_waiting
     end
 
     private
 
-    def __wake_one(waiters)
-      while (w = waiters.shift)
-        if w.alive?
-          # Permit-arming wake: unlike the public Thread#wakeup, a wake
-          # that races the waiter's own park (preempted between
-          # registering and parking) is not lost — the waiter's next
-          # park returns immediately and its retry loop re-checks.
-          w.__wakeup_permit
-          return
-        end
-      end
-    end
-
-    def __wake_all(waiters)
-      until waiters.empty?
-        __wake_one(waiters)
-      end
+    # Take the head item; the caller holds @mutex and has checked
+    # non-emptiness. SizedQueue overrides this to also free a producer.
+    def __pop_locked
+      @items.shift
     end
   end
 
@@ -1142,45 +1138,40 @@ class Thread
       raise ArgumentError, "queue size must be positive" unless max.is_a?(Integer) && max > 0
       super()
       @max = max
-      @push_waiters = []
+      @cv_push = ConditionVariable.new
     end
 
     attr_reader :max
 
     def max=(new_max)
       raise ArgumentError, "queue size must be positive" unless new_max.is_a?(Integer) && new_max > 0
-      grew = new_max > @max
-      @max = new_max
-      __wake_all(@push_waiters) if grew
+      @mutex.synchronize do
+        grew = new_max > @max
+        @max = new_max
+        # Growing frees capacity: every parked producer re-checks.
+        @cv_push.broadcast if grew
+      end
       new_max
     end
 
     def push(item, non_block = false, timeout: nil)
       timeout = __check_timeout(timeout, non_block)
       deadline = timeout && Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-      loop do
-        raise ClosedQueueError, "queue closed" if @closed
-        if @items.size < @max
-          @items.push(item)
-          __wake_one(@waiters)
-          return self
-        end
-        raise ThreadError, "queue full" if non_block
-        if deadline
-          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          return nil if remaining <= 0
-          @push_waiters << Thread.current
-          begin
-            Kernel.sleep(remaining)
-          ensure
-            @push_waiters.delete(Thread.current)
+      @mutex.synchronize do
+        while true
+          raise ClosedQueueError, "queue closed" if @closed
+          if @items.size < @max
+            @items.push(item)
+            @cv_pop.signal
+            return self
           end
-        else
-          @push_waiters << Thread.current
-          begin
-            Thread.stop
-          ensure
-            @push_waiters.delete(Thread.current)
+          raise ThreadError, "queue full" if non_block
+          if deadline
+            remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            return nil if remaining <= 0
+            @cv_push.wait(@mutex, remaining)
+          else
+            @cv_push.wait(@mutex)
           end
         end
       end
@@ -1188,14 +1179,37 @@ class Thread
     alias << push
     alias enq push
 
-    def pop(non_block = false, timeout: nil)
-      v = super
+    def clear
+      @mutex.synchronize do
+        @items.clear
+        # Clearing frees capacity (CRuby wakes blocked producers here).
+        @cv_push.broadcast
+      end
+      self
+    end
+
+    def close
+      @mutex.synchronize do
+        return self if @closed
+        @closed = true
+        @cv_pop.broadcast
+        @cv_push.broadcast
+      end
+      self
+    end
+
+    def num_waiting
+      @cv_pop.__num_waiting + @cv_push.__num_waiting
+    end
+
+    private
+
+    def __pop_locked
+      v = @items.shift
       # Popping frees a slot: let one parked producer through.
-      __wake_one(@push_waiters)
+      @cv_push.signal
       v
     end
-    alias shift pop
-    alias deq pop
   end
 
   class ConditionVariable
@@ -1228,8 +1242,8 @@ class Thread
     def signal
       while (w = @waiters.shift)
         if w.alive?
-          # Permit-arming wake (see Queue#__wake_one): a signal racing
-          # the waiter's park in CV#wait must not be lost.
+          # Permit-arming wake (see Mutex#unlock): a signal racing the
+          # waiter's park in CV#wait must not be lost.
           w.__wakeup_permit
           break
         end
@@ -1242,6 +1256,13 @@ class Thread
         signal
       end
       self
+    end
+
+    # Waiter-count peek for Queue#num_waiting (a waiter registers before
+    # releasing the mutex and stays registered until it re-acquires it,
+    # so this tracks "parked in #wait" closely and race-free).
+    def __num_waiting
+      @waiters.size
     end
   end
 

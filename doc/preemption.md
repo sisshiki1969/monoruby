@@ -121,11 +121,17 @@ correct by two mechanisms (see the comment block in startup.rb):
    runs) → park forever" lost-wakeup window. All park sites sit in
    retry loops, so the early return is re-checked.
 
-Known follow-up: `Queue#pop`'s `@items.empty?` / `@items.shift` pair has
-a safepoint between the two calls, so two poppers racing can make one
-return nil as if an element were nil. Restructuring Queue on top of the
-(now preemption-safe) Mutex + ConditionVariable, as CRuby layers it,
-would close this; not yet observed in ruby/spec stress runs.
+Queue / SizedQueue are layered on that Mutex + ConditionVariable
+(CRuby's thread_sync.c structure): every check-and-take runs under the
+queue's mutex, so the former `@items.empty?` / `@items.shift` safepoint
+window (two racing poppers, one gets a phantom nil) is closed by mutual
+exclusion. Note that with callee-entry polls, hoisting method calls
+cannot make a multi-call sequence atomic — every call is a safepoint —
+so a lock is the only correct tool for compound state transitions. The
+queue wait loops use `while true`, never `loop do`: `Kernel#loop`
+swallows StopIteration, and `ClosedQueueError < StopIteration`, so a
+`raise ClosedQueueError` inside a `loop` block is silently eaten (this
+was a real bug — `SizedQueue#push` on a closed queue returned nil).
 
 ## Phase 2 (planned): blocking-syscall offload
 
