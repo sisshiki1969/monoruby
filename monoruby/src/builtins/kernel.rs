@@ -902,14 +902,25 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
     };
     let data = vm.get_block_data(globals, bh)?;
     loop {
-        if let Err(err) = vm.invoke_block(globals, &data, &[]) {
-            // `loop` swallows StopIteration and any user subclass of it, and
-            // re-raises everything else (including control-flow signals).
-            return if err.is_stop_iteration(&globals.store) {
-                Ok(Value::nil())
-            } else {
-                Err(err)
-            };
+        match vm.invoke_block(globals, &data, &[]) {
+            Ok(ret) => {
+                // Rust-side safepoint: a JIT-compiled block body with no
+                // loops or calls of its own has no poll site, so `loop {}`
+                // would otherwise never see signals or timeslice
+                // preemption. Audited GC point: the only live heap values
+                // here are `ret` (rooted by the poll) and `data`, whose
+                // Proc is reachable through the caller's frame.
+                vm.poll_safepoint(globals, ret)?;
+            }
+            Err(err) => {
+                // `loop` swallows StopIteration and any user subclass of it, and
+                // re-raises everything else (including control-flow signals).
+                return if err.is_stop_iteration(&globals.store) {
+                    Ok(Value::nil())
+                } else {
+                    Err(err)
+                };
+            }
         }
     }
 }

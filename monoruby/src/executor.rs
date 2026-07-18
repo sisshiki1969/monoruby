@@ -2421,7 +2421,7 @@ impl Executor {
         data: &ProcData,
         args: &[Value],
     ) -> Result<Value> {
-        let ret = (globals.invokers.block)(
+        (globals.invokers.block)(
             self,
             globals,
             data,
@@ -2430,24 +2430,23 @@ impl Executor {
             args.len(),
             None,
         )
-        .ok_or_else(|| self.take_error())?;
-        self.poll_safepoint(globals, ret)?;
-        Ok(ret)
+        .ok_or_else(|| self.take_error())
     }
 
-    /// Rust-side safepoint. Builtins that iterate natively (`Kernel#loop`,
-    /// `Integer#times`, …) invoke the block from a Rust loop: a
+    /// Rust-side safepoint for audited native iteration loops.
+    ///
+    /// `Kernel#loop`-style builtins invoke a block from a Rust loop: a
     /// JIT-compiled block body with no loops or calls of its own contains
     /// no poll site at all, so signals and timeslice preemption would
-    /// never fire on such loops. Polling once per block invocation closes
+    /// never fire on such loops. Calling this once per iteration closes
     /// that gap; the fast path is a single relaxed load.
     ///
-    /// Polled *after* the invocation, never before: beforehand the args
-    /// exist only in the caller's Rust locals, which are not GC roots.
-    /// Afterwards the sole new live value is the block's result — rooted
-    /// on the temp stack for the poll — so this is equivalent to the
-    /// block body allocating once more at its end, which every caller
-    /// already tolerates.
+    /// This is a GC point. It must ONLY be called from sites audited to
+    /// hold no unrooted heap `Value`s in Rust locals across the call —
+    /// putting it in the generic `invoke_block` path instead corrupted
+    /// callers like `File.open {}`'s `block_close`, whose receiver lives
+    /// only in a Rust local after the block returns. `root` (typically
+    /// the just-returned block result) is kept alive across the poll.
     #[inline]
     pub(crate) fn poll_safepoint(&mut self, globals: &mut Globals, root: Value) -> Result<()> {
         if crate::preempt::flag_pending() {
@@ -2468,7 +2467,7 @@ impl Executor {
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
-        let ret = (globals.invokers.block_with_self)(
+        (globals.invokers.block_with_self)(
             self,
             globals,
             data as _,
@@ -2477,9 +2476,7 @@ impl Executor {
             args.len(),
             None,
         )
-        .ok_or_else(|| self.take_error())?;
-        self.poll_safepoint(globals, ret)?;
-        Ok(ret)
+        .ok_or_else(|| self.take_error())
     }
 
     pub(crate) fn module_eval(

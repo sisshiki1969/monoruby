@@ -36,12 +36,19 @@ machinery unchanged.
    spurious full GC, and page-fill accumulation below the band is
    preserved.
 
-Rust-side iteration builtins (`Kernel#loop`, `Integer#times`, …) invoke
-blocks from native loops; a JIT-compiled block body with no loops or
-calls of its own contains no poll site at all. `Executor::poll_safepoint`
-(one relaxed load, called per block invocation in `invoke_block` /
-`invoke_block_with_self`) closes that gap — it also makes signals
-deliverable in such loops, which they previously were not.
+Rust-side iteration builtins invoke blocks from native loops; a
+JIT-compiled block body with no loops or calls of its own contains no
+poll site at all. `Executor::poll_safepoint` (one relaxed load) closes
+that gap — it also makes signals deliverable in such loops, which they
+previously were not. It is a GC point, so it is called only from
+**audited** sites whose Rust locals hold no unrooted heap values across
+it — currently `Kernel#loop`. (Putting it in the generic `invoke_block`
+path corrupted callers like `File.open {}`, whose receiver lives only in
+a Rust local after the block returns.) Ruby-level iterators
+(`Integer#times`, `Array#each`, `while`) poll at their VM loop
+back-edges already; other Rust iteration helpers (`invoke_block_iter1`
+etc.) remain unpreemptible when the block body is poll-free — audit and
+annotate them one by one as needed.
 
 `scheduler.rs` gained a `machinery` marker: preemption is suppressed
 while the scheduler's own machinery (dispatch loop, fd polling) runs in

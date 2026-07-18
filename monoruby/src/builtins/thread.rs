@@ -991,6 +991,47 @@ mod tests {
     }
 
     #[test]
+    fn native_offload_flock_and_fifo() {
+        // Kernel-blocking syscalls must park only the calling green
+        // thread, not the process (native worker offload,
+        // doc/preemption.md Phase 2). Both of these hang the whole
+        // interpreter without it.
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            path = File.join(Dir.tmpdir, "mrb_flock_test_#{Process.pid}")
+            f1 = File.open(path, "w")
+            f2 = File.open(path, "w")
+            f1.flock(File::LOCK_EX)
+            r = []
+            t = Thread.new { f2.flock(File::LOCK_EX); r << :locked; f2.flock(File::LOCK_UN); :done }
+            sleep 0.05
+            r << t.alive?
+            r << (r.include?(:locked) ? :early : :blocked_ok)
+            f1.flock(File::LOCK_UN)
+            r << t.value
+            f1.close; f2.close; File.delete(path)
+            r
+            "#,
+        );
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            path = File.join(Dir.tmpdir, "mrb_fifo_test_#{Process.pid}")
+            File.mkfifo(path)
+            r = []
+            t = Thread.new { File.open(path, "r") { |io| r << io.read } }
+            sleep 0.05
+            r << t.alive?
+            File.open(path, "w") { |io| io.write "hi" }
+            t.join
+            File.delete(path)
+            r
+            "#,
+        );
+    }
+
+    #[test]
     fn preempt_busy_main_lets_thread_run() {
         // Timeslice preemption: a busy-looping main thread must not
         // starve a runnable green thread forever. This also probes the
