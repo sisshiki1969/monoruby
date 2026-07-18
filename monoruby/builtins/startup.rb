@@ -941,7 +941,9 @@ class Thread
       if @waiters
         while (w = @waiters.shift)
           if w.alive?
-            w.wakeup
+            # Permit-arming wake (see Queue#__wake_one): a wake racing
+            # the waiter's park in Mutex#lock must not be lost.
+            w.__wakeup_permit
             break
           end
         end
@@ -1082,7 +1084,11 @@ class Thread
     def __wake_one(waiters)
       while (w = waiters.shift)
         if w.alive?
-          w.wakeup
+          # Permit-arming wake: unlike the public Thread#wakeup, a wake
+          # that races the waiter's own park (preempted between
+          # registering and parking) is not lost — the waiter's next
+          # park returns immediately and its retry loop re-checks.
+          w.__wakeup_permit
           return
         end
       end
@@ -1183,7 +1189,9 @@ class Thread
     def signal
       while (w = @waiters.shift)
         if w.alive?
-          w.wakeup
+          # Permit-arming wake (see Queue#__wake_one): a signal racing
+          # the waiter's park in CV#wait must not be lost.
+          w.__wakeup_permit
           break
         end
       end

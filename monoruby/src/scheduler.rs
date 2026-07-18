@@ -299,6 +299,23 @@ pub(crate) fn spawn(vm: &mut Executor, thread: Value) {
 /// Wake a thread parked in `sleep` (`Thread#wakeup` / `#run`). Returns
 /// false if the thread is dead.
 pub(crate) fn wakeup(thread: Value) -> bool {
+    wakeup_inner(thread, false)
+}
+
+/// Internal wake used by the Ruby-level synchronization primitives
+/// (Mutex#unlock, ConditionVariable#signal, the Queue wake helpers) via
+/// `Thread#__wakeup_permit`. Unlike the public `Thread#wakeup` — for
+/// which CRuby specifies that waking a *running* thread has no effect
+/// on its future sleeps — this arms the target's park permit when it is
+/// not parked yet: under preemption a waiter can be preempted between
+/// registering itself and parking, and the primitive's wake landing in
+/// that window would otherwise be lost, leaving the waiter parked
+/// forever (see `ThreadInner::park_permit`).
+pub(crate) fn wakeup_permit(thread: Value) -> bool {
+    wakeup_inner(thread, true)
+}
+
+fn wakeup_inner(thread: Value, permit: bool) -> bool {
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
         let mut t = thread;
@@ -312,18 +329,12 @@ pub(crate) fn wakeup(thread: Value) -> bool {
                 }
                 true
             }
-            // A wakeup delivered to a *running* thread arms its park
-            // permit: the target's next park returns immediately. Under
-            // preemption, a waiter can be preempted between registering
-            // itself and parking; the waker's `#wakeup` lands in that
-            // window and would otherwise be lost, leaving the waiter
-            // parked forever (see `ThreadInner::park_permit`).
-            ThreadState::Runnable => {
+            ThreadState::Runnable if permit => {
                 inner.park_permit = true;
                 true
             }
-            // Created / Joining: nothing to do (CRuby's wakeup only
-            // interrupts sleep).
+            // Public wakeup on a running thread, or Created / Joining:
+            // nothing to do (CRuby's wakeup only interrupts sleep).
             _ => true,
         }
     })

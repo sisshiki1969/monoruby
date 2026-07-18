@@ -36,6 +36,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(THREAD_CLASS, "alive?", thread_alive, 0);
     globals.define_builtin_func(THREAD_CLASS, "stop?", thread_stop_p, 0);
     globals.define_builtin_func(THREAD_CLASS, "wakeup", thread_wakeup, 0);
+    globals.define_builtin_func(THREAD_CLASS, "__wakeup_permit", thread_wakeup_permit, 0);
     globals.define_builtin_func(THREAD_CLASS, "run", thread_run, 0);
     globals.define_builtin_func_rest(THREAD_CLASS, "raise", thread_raise);
     globals.define_builtin_func(THREAD_CLASS, "kill", thread_kill, 0);
@@ -491,6 +492,27 @@ fn thread_stop_p(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn thread_wakeup(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     if !scheduler::wakeup(self_) {
+        return Err(MonorubyErr::threaderr(
+            &globals.store,
+            "killed thread",
+        ));
+    }
+    Ok(self_)
+}
+
+/// Internal: wake used by the Ruby-level sync primitives in startup.rb.
+/// Unlike `#wakeup`, arms the target's park permit when it is running,
+/// so a wake racing the target's own park is never lost (see
+/// `scheduler::wakeup_permit`).
+#[monoruby_builtin]
+fn thread_wakeup_permit(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if !scheduler::wakeup_permit(self_) {
         return Err(MonorubyErr::threaderr(
             &globals.store,
             "killed thread",
