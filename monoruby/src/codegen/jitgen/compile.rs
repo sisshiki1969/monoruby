@@ -210,6 +210,14 @@ impl<'a> JitContext<'a> {
                     prologue_offset: PrologueOffset::Hint(self.current_frame_id()),
                 });
                 ir.push(AsmInst::Preparation);
+                // Callee-entry GC/preempt poll, mirroring the VM's
+                // `vm_init` (see init_method.rs): the prologue has just
+                // completed — frame linked, rsp adjusted, non-arg
+                // registers nil-filled, nothing register-resident yet —
+                // so this is a fully frame-consistent poll point that
+                // fires on every entry regardless of the caller
+                // (including the poll-free Rust invokers).
+                state.exec_gc(ir, false);
             }
             TraceIr::LoopStart { .. } => {
                 state.flush_gp(ir);

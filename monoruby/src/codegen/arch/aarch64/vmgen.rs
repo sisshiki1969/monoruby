@@ -2250,6 +2250,11 @@ impl Codegen {
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
+        // Callee-entry GC/preempt poll, mirroring x86 `vm_init`: frame
+        // linked, sp adjusted, locals nil-filled — a fully
+        // frame-consistent poll point on every entry path (including
+        // the poll-free Rust invokers).
+        self.a64_vm_execute_gc();
         self.a64_fetch_and_dispatch();
         p
     }
