@@ -1145,9 +1145,11 @@ mod tests {
             rescue SocketError
               res << "SocketError"
             end
-            # TCPServer.new(port) form; listen; numeric addr
+            # TCPServer.new(port) form; listen; numeric addr. (Do not
+            # assert s.addr[0]: with the host omitted, CRuby binds the
+            # IPv6 wildcard on macOS — AF_INET6 — but AF_INET on Linux.)
             s = TCPServer.new(0)
-            res << s.addr[0]
+            res << s.addr[1].is_a?(Integer)
             s2 = TCPServer.new("127.0.0.1", 0)
             res << s2.listen(5)
             res << s2.addr(:numeric).values_at(0, 2, 3)
