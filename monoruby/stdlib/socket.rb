@@ -1,59 +1,87 @@
-# Minimal Socket / BasicSocket / IPSocket stub for monoruby.
+# Ruby-level remainder of the socket library for monoruby.
 #
-# The real socket C extension is unsupported. ActiveSupport loads socket.rb
-# via `core_ext/object/json.rb` (for IPAddr → JSON serialization) and
-# ipaddr.rb autoloads it too, but none of that actually requires a working
-# socket during class loading. Provide empty classes so the constant
-# references resolve.
+# The real TCP surface — BasicSocket < IO, IPSocket, TCPSocket, TCPServer,
+# Socket, Socket::Constants, SocketError — is implemented natively
+# (src/builtins/socket.rs): sockets are IO objects over the socket fd, so
+# the whole IO method set (read/gets/write/close/closed?/…, including the
+# green-thread blocking-IO emulation) applies to them by inheritance, and
+# accept/connect park the calling green thread on the scheduler's fd
+# poller. This file adds only pure-Ruby bookkeeping and the stubs for the
+# protocols that remain unsupported (UNIX domain, UDP).
 
 class BasicSocket
-  def self.do_not_reverse_lookup; true; end
-  def self.do_not_reverse_lookup=(v); v; end
+  # monoruby always returns numeric addresses (as if
+  # do_not_reverse_lookup were true); the accessors exist for
+  # compatibility.
+  @do_not_reverse_lookup = true
+  def self.do_not_reverse_lookup
+    @do_not_reverse_lookup.nil? ? true : @do_not_reverse_lookup
+  end
+
+  def self.do_not_reverse_lookup=(v)
+    @do_not_reverse_lookup = v
+  end
+
+  def do_not_reverse_lookup
+    @do_not_reverse_lookup.nil? ? BasicSocket.do_not_reverse_lookup : @do_not_reverse_lookup
+  end
+
+  def do_not_reverse_lookup=(v)
+    @do_not_reverse_lookup = v
+  end
 end
 
-class Socket < BasicSocket
-  AF_INET = 2
-  AF_INET6 = 10
-  AF_UNIX = 1
-  SOCK_STREAM = 1
-  SOCK_DGRAM = 2
-  INADDR_ANY = "0.0.0.0"
-
-  class Constants; end
+class Socket
+  # The high-level connect helper the net/* libraries use. Delegates to
+  # the native TCPSocket; extra keywords accepted for compatibility
+  # (resolv_timeout / fast_fallback are meaningless for a blocking
+  # single-resolver connect).
+  def self.tcp(host, port, local_host = nil, local_port = nil,
+               connect_timeout: nil, resolv_timeout: nil,
+               open_timeout: nil, fast_fallback: nil)
+    timeout = connect_timeout || open_timeout
+    sock = TCPSocket.new(host, port, local_host, local_port,
+                         connect_timeout: timeout)
+    if block_given?
+      begin
+        yield sock
+      ensure
+        sock.close unless sock.closed?
+      end
+    else
+      sock
+    end
+  end
 
   def self.gethostname
-    "localhost"
+    require "etc" rescue nil
+    (Etc.uname[:nodename] rescue nil) || "localhost"
   end
 
-  def self.getaddrinfo(*_); []; end
-  def self.ip_address_list; []; end
+  def self.getaddrinfo(*_)
+    []
+  end
+
+  def self.ip_address_list
+    []
+  end
 end
 
-class IPSocket < BasicSocket
-  def self.getaddress(host); host; end
-end
-
-# Real TCP sockets are unsupported. Fail loudly at instantiation, like
-# UNIXSocket below: a silent do-nothing socket object lets code run on
-# until it dies far from the cause. The ruby/spec net-http fixture is
-# the concrete case — it builds a TCPServer, then spawns a server
-# thread with `abort_on_exception = true`; with a do-nothing server
-# object the thread died on a missing method and the exception was
-# forwarded to (and killed) the main thread, aborting the whole mspec
-# run. Raising here surfaces in the spec's own setup instead.
-class TCPSocket < IPSocket
+class UDPSocket < IPSocket
+  # UDP is not implemented. Fail loudly at instantiation (see UNIXSocket
+  # below): a silent do-nothing socket lets code run on until it dies far
+  # from the cause.
   def initialize(*)
-    raise SocketError, "TCP sockets are not supported in monoruby"
+    raise SocketError, "UDP sockets are not supported in monoruby"
   end
 end
-class TCPServer < TCPSocket; end
-class UDPSocket < IPSocket; end
+
 class UNIXSocket < BasicSocket
   # Real UNIX-domain sockets are unsupported, but the path argument is
   # validated like CRuby's (CVE-2018-8779): a NUL byte must raise
   # ArgumentError *before* any bind/connect would happen. Valid paths
-  # fail with an explicit unsupported-feature error instead of the
-  # previous misleading NoMethodError.
+  # fail with an explicit unsupported-feature error instead of a
+  # misleading NoMethodError.
   def self.open(path, *rest, &blk)
     new(path, *rest, &blk)
   end
@@ -71,8 +99,6 @@ class UNIXSocket < BasicSocket
   end
 end
 class UNIXServer < UNIXSocket; end
-
-class SocketError < StandardError; end
 
 class Addrinfo
   def self.tcp(host, port); new; end

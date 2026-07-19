@@ -1293,6 +1293,10 @@ impl Value {
         RValue::new_file(file, name, readable, writable).pack()
     }
 
+    pub(crate) fn new_socket(file: std::fs::File, name: String, class_id: ClassId) -> Self {
+        RValue::new_socket(file, name, class_id).pack()
+    }
+
     pub fn range(start: Value, end: Value, exclude_end: bool) -> Self {
         // Range objects are frozen since Ruby 3.0.
         let mut v = RValue::new_range(start, end, exclude_end).pack();

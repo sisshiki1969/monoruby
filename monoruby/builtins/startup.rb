@@ -791,6 +791,13 @@ class Thread
     @report_on_exception = flag
   end
 
+  # The group this thread was added to (ThreadGroup#add), defaulting to
+  # ThreadGroup::Default. The timeout gem consults
+  # `watcher.group.enclosed?` when it spawns its watchdog thread.
+  def group
+    @__thread_group || ThreadGroup::Default
+  end
+
   # CRuby's Thread#to_s: `#<Thread:0xADDR[@name] status>` (the spawn
   # file:line is not tracked). ruby/spec interpolates this into the
   # report_on_exception output matchers, so the `#<Thread:` prefix and
@@ -1311,6 +1318,42 @@ class ThreadError < StandardError; end unless defined?(::ThreadError)
 class ClosedQueueError < StopIteration; end unless defined?(::ClosedQueueError)
 Queue = Thread::Queue
 SizedQueue = Thread::SizedQueue
+
+# Thread groups. Threads carry their group in an ivar (nil = Default);
+# scheduling is untouched — groups are pure bookkeeping, which matches
+# their CRuby role. The timeout gem needs `Thread#group`,
+# `ThreadGroup#enclosed?` and `ThreadGroup::Default.add`.
+class ThreadGroup
+  def initialize
+    @enclosed = false
+  end
+
+  def enclose
+    @enclosed = true
+    self
+  end
+
+  def enclosed?
+    @enclosed
+  end
+
+  def add(thread)
+    if @enclosed
+      raise ThreadError, "can't move to the enclosed thread group"
+    end
+    if thread.group.enclosed?
+      raise ThreadError, "can't move from the enclosed thread group"
+    end
+    thread.instance_variable_set(:@__thread_group, self)
+    self
+  end
+
+  def list
+    Thread.list.select { |t| t.group == self }
+  end
+
+  Default = new
+end
 ConditionVariable = Thread::ConditionVariable
 
 class Exception

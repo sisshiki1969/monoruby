@@ -103,6 +103,15 @@ pub(crate) struct Scheduler {
     /// it stays true while a *dispatched thread* runs, which is exactly
     /// when preemption must be allowed.
     machinery: bool,
+    /// Pre-rendered report_on_exception texts queued by thread
+    /// finalization (machinery context, where invoking Ruby is
+    /// forbidden), delivered through the Ruby-level `$stderr` at the next
+    /// safepoint in a normal context (`flush_pending_reports`).
+    pending_reports: Vec<String>,
+    /// Re-entrancy latch for `flush_pending_reports`: the `$stderr.write`
+    /// invoke can itself park (full pipe), and the park entry is a flush
+    /// point.
+    flushing_reports: bool,
 }
 
 impl Scheduler {
@@ -117,6 +126,8 @@ impl Scheduler {
             main_exec: None,
             in_scheduler: false,
             machinery: false,
+            pending_reports: vec![],
+            flushing_reports: false,
         }
     }
 
@@ -348,6 +359,7 @@ pub(crate) fn sleep(
     dur: Option<Duration>,
 ) -> Result<Duration> {
     ensure_main(vm);
+    flush_pending_reports(vm, globals);
     // A pending interrupt allowed at blocking points fires *instead of*
     // parking (also the case where it was queued while running).
     let cur0 = SCHEDULER.with(|s| s.borrow().current.unwrap());
@@ -376,6 +388,7 @@ pub(crate) fn sleep(
             s.sleepers.push((deadline, main));
         });
         scheduler_run(vm, globals)?;
+        flush_pending_reports(vm, globals);
         take_main_pending(globals, true)?;
     } else {
         let cur = SCHEDULER.with(|s| {
@@ -393,6 +406,7 @@ pub(crate) fn sleep(
 /// `Thread.pass`: give every currently runnable thread a chance to run.
 pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
     ensure_main(vm);
+    flush_pending_reports(vm, globals);
     // `Thread.pass` is a delivery point for `:immediate` interrupts but
     // NOT for `:on_blocking` ones (it is not a blocking call).
     let cur0 = SCHEDULER.with(|s| s.borrow().current.unwrap());
@@ -429,7 +443,7 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
                 let t = SCHEDULER.with(|s| s.borrow_mut().ready.pop_front());
                 match t {
                     Some(t) => {
-                        if let Err(err) = dispatch(vm, globals, t) {
+                        if let Err(err) = dispatch(globals, t) {
                             result = Err(err);
                             break;
                         }
@@ -446,6 +460,7 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
             s.current = Some(main);
         });
         result?;
+        flush_pending_reports(vm, globals);
         take_main_pending(globals, false)
     } else {
         let cur = SCHEDULER.with(|s| {
@@ -477,6 +492,7 @@ pub(crate) fn join(
     }
     let deadline = timeout.map(|d| Instant::now() + d);
     loop {
+        flush_pending_reports(vm, globals);
         deliver_pending_now(globals, cur, true)?;
         set_park_blocking(cur, true);
         if target.as_thread_inner().is_dead() {
@@ -755,6 +771,7 @@ pub(crate) fn wait_fds(
         let result = scheduler_run(vm, globals);
         unregister_io_waiter(SCHEDULER.with(|s| s.borrow().main.unwrap()));
         result?;
+        flush_pending_reports(vm, globals);
         take_main_pending(globals, true)
     } else {
         let cur = SCHEDULER.with(|s| {
@@ -860,7 +877,7 @@ fn scheduler_loop(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
             return Ok(());
         }
         if let Some(t) = next {
-            dispatch(vm, globals, t)?;
+            dispatch(globals, t)?;
             continue;
         }
         // Nothing runnable: wait for fd readiness and/or the nearest
@@ -1028,7 +1045,7 @@ fn interruptible_sleep_until(
 }
 
 /// Run one green thread until it parks or terminates.
-fn dispatch(vm: &mut Executor, globals: &mut Globals, mut thread: Value) -> Result<()> {
+fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
     enum Entry {
         Invoke(ProcData, *const Value, usize, *mut Executor),
         Resume(*mut Executor),
@@ -1132,7 +1149,7 @@ fn dispatch(vm: &mut Executor, globals: &mut Globals, mut thread: Value) -> Resu
             ret
         }
         Entry::Skip(err) => {
-            finalize_unstarted(vm, globals, thread, err);
+            finalize_unstarted(globals, thread, err);
             SCHEDULER.with(|s| {
                 let mut s = s.borrow_mut();
                 s.current = s.main;
@@ -1142,7 +1159,7 @@ fn dispatch(vm: &mut Executor, globals: &mut Globals, mut thread: Value) -> Resu
     };
     // Control is back in the scheduler context.
     if thread.as_thread_inner().body_terminated() {
-        finalize(vm, globals, thread, ret);
+        finalize(globals, thread, ret);
     }
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
@@ -1154,24 +1171,19 @@ fn dispatch(vm: &mut Executor, globals: &mut Globals, mut thread: Value) -> Resu
 /// A thread killed or raised-into before its body ever ran: mark it
 /// dead without running the body (CRuby semantics for an unstarted
 /// target), record the raise as its terminating exception, wake joiners.
-fn finalize_unstarted(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    mut thread: Value,
-    err: Option<MonorubyErr>,
-) {
+fn finalize_unstarted(globals: &mut Globals, mut thread: Value, err: Option<MonorubyErr>) {
     {
         let inner = thread.as_thread_inner_mut();
         inner.killed = err.is_none();
         inner.exception = err;
         inner.result = None;
     }
-    finalize_common(vm, globals, thread);
+    finalize_common(globals, thread);
 }
 
 /// A green thread's body finished: record the outcome, wake joiners,
 /// prune the registry.
-fn finalize(vm: &mut Executor, globals: &mut Globals, mut thread: Value, ret: Option<Value>) {
+fn finalize(globals: &mut Globals, mut thread: Value, ret: Option<Value>) {
     {
         let inner = thread.as_thread_inner_mut();
         match ret {
@@ -1200,22 +1212,24 @@ fn finalize(vm: &mut Executor, globals: &mut Globals, mut thread: Value, ret: Op
             }
         }
     }
-    finalize_common(vm, globals, thread);
+    finalize_common(globals, thread);
 }
 
 /// Shared tail of thread termination: mark dead, wake joiners, report an
 /// unhandled exception per report_on_exception, prune the registry.
-fn finalize_common(vm: &mut Executor, globals: &mut Globals, mut thread: Value) {
+fn finalize_common(globals: &mut Globals, mut thread: Value) {
     // Undelivered interrupts die with the thread (CRuby drops the
     // remaining pending_interrupt_queue too) — e.g. the kill queued
     // behind the raise the thread just died from.
     thread.as_thread_inner_mut().pending.clear();
-    // Report before marking the thread dead: CRuby reports while the
-    // dying thread still has status "run" (ruby/spec matches the status
-    // word in the inspect header), and the registry entry still roots
-    // the thread (and its recorded exception) across the report's
-    // allocation / Ruby invocation.
-    report_exception(vm, globals, thread);
+    // Render the report_on_exception text now (pure Rust — this is the
+    // scheduler machinery context, where invoking Ruby is forbidden: the
+    // `$stderr.write` could park and re-enter the scheduler, corrupting
+    // the saved context; observed as a SIGSEGV in `dispatch`'s epilogue).
+    // The text is queued and written at the next normal-context
+    // safepoint by `flush_pending_reports`. Rendered before the thread
+    // is marked dead so the header shows status "run", like CRuby.
+    queue_exception_report(globals, thread);
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
         let inner = thread.as_thread_inner_mut();
@@ -1244,16 +1258,13 @@ fn finalize_common(vm: &mut Executor, globals: &mut Globals, mut thread: Value) 
 }
 
 /// `Thread#report_on_exception` (instance flag, falling back to the
-/// `Thread` class-level default; both default true): surface a
-/// terminating exception when the thread dies. A kill never reports, and
-/// neither does a `SystemExit` (CRuby reports an abort_on_exception
-/// forwarding, but never a SystemExit — that is the process exiting, not
-/// a crash). The report goes through the Ruby-level `$stderr` — CRuby
-/// writes it with `rb_write_error_str`, which honours a replaced
-/// `$stderr`; mspec's `output` matcher relies on exactly that. Errors
-/// during the report (broken `$stderr`, raising `inspect`) are swallowed:
-/// a report must never alter the program's outcome.
-fn report_exception(vm: &mut Executor, globals: &mut Globals, thread: Value) {
+/// `Thread` class-level default; both default true): render the report
+/// for a thread that died with an unhandled exception and queue it for
+/// delivery. A kill never reports, and neither does a `SystemExit`
+/// (CRuby reports an abort_on_exception forwarding, but never a
+/// SystemExit — that is the process exiting, not a crash). Pure Rust —
+/// no Ruby is invoked here (see the caller comment).
+fn queue_exception_report(globals: &mut Globals, thread: Value) {
     let exc = {
         let inner = thread.as_thread_inner();
         match &inner.exception {
@@ -1281,33 +1292,55 @@ fn report_exception(vm: &mut Executor, globals: &mut Globals, thread: Value) {
     if !report {
         return;
     }
-    // `#<Thread:0x... dead> terminated with exception (...)`: the header
-    // uses Thread#inspect (the spec matchers key on the `Thread` word and
-    // interpolate `t.inspect`).
-    let insp = vm
-        .invoke_method_inner(
-            globals,
-            IdentId::get_id("inspect"),
-            thread,
-            &[],
-            None,
-            None,
-        )
-        .ok()
-        .and_then(|v| v.is_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| format!("#<Thread:0x{:016x} dead>", thread.id()));
-    let text = format!("{insp} terminated with exception (report_on_exception is true):\n{exc}\n");
-    let stderr = globals
-        .get_gvar(IdentId::get_id("$stderr"))
+    // The header mirrors Thread#inspect (`#<Thread:0xADDR[@name] run>`)
+    // without calling it — the spec matchers key on the `Thread` word and
+    // interpolate `t.inspect` taken while the thread was running.
+    let name = globals
+        .store
+        .get_ivar(thread, IdentId::get_id("@name"))
+        .and_then(|v| v.is_str().map(|s| format!("@{s}")))
         .unwrap_or_default();
-    let _ = vm.invoke_method_inner(
-        globals,
-        IdentId::get_id("write"),
-        stderr,
-        &[Value::string(text)],
-        None,
-        None,
+    let text = format!(
+        "#<Thread:0x{:016x}{} run> terminated with exception (report_on_exception is true):\n{}\n",
+        thread.id(),
+        name,
+        exc
     );
+    SCHEDULER.with(|s| s.borrow_mut().pending_reports.push(text));
+}
+
+/// Write queued report_on_exception texts through the Ruby-level
+/// `$stderr` — CRuby uses `rb_write_error_str`, which honours a replaced
+/// `$stderr`; mspec's `output` matcher relies on exactly that. Called
+/// from normal (non-machinery) contexts only: the write invokes Ruby and
+/// may legitimately park. Errors are swallowed — a report must never
+/// alter the program's outcome.
+pub(crate) fn flush_pending_reports(vm: &mut Executor, globals: &mut Globals) {
+    loop {
+        let Some(text) = SCHEDULER.with(|s| {
+            let mut s = s.borrow_mut();
+            if s.flushing_reports || s.pending_reports.is_empty() {
+                None
+            } else {
+                s.flushing_reports = true;
+                Some(s.pending_reports.remove(0))
+            }
+        }) else {
+            return;
+        };
+        let stderr = globals
+            .get_gvar(IdentId::get_id("$stderr"))
+            .unwrap_or_default();
+        let _ = vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("write"),
+            stderr,
+            &[Value::string(text)],
+            None,
+            None,
+        );
+        SCHEDULER.with(|s| s.borrow_mut().flushing_reports = false);
+    }
 }
 
 /// Queue a dead thread's terminating exception as a pending interrupt on

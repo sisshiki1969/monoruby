@@ -1222,7 +1222,12 @@ pub(crate) fn blocking_io_region<T>(
 /// to run (an fd left permanently non-blocking by `read_nonblock` /
 /// `write_nonblock`). Signal-interruptible: `EINTR` (and a signal already
 /// pending on entry) runs the VM poll point, then re-polls.
-fn wait_fd_single(vm: &mut Executor, globals: &mut Globals, fd: i32, events: i16) -> Result<()> {
+pub(crate) fn wait_fd_single(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    fd: i32,
+    events: i16,
+) -> Result<()> {
     loop {
         if crate::codegen::signal_table::PENDING_SIGNALS.load(std::sync::atomic::Ordering::Relaxed)
             != 0
@@ -1510,9 +1515,18 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         _ => None,
     };
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
-        lfp.self_val().as_io_inner_mut().read(length)
-    })?;
+    let buf = if length == Some(0) {
+        // `read(0)` never blocks and returns "" (CRuby) — entering the
+        // blocking region would park on POLLIN waiting for data that a
+        // zero-length read must not consume (the net-http fixture calls
+        // `client.read(0)` for `Content-Length: 0` requests).
+        lfp.self_val().as_io_inner().ensure_readable()?;
+        Vec::new()
+    } else {
+        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+            lfp.self_val().as_io_inner_mut().read(length)
+        })?
+    };
     let eof_nil = buf.is_empty() && length.is_some() && length != Some(0);
     match outbuf {
         Some(mut out) => {
@@ -4009,6 +4023,45 @@ fn ensure_io_open(self_val: Value) -> Result<()> {
 /// `POLLIN`/`POLLPRI`/`POLLOUT`) and a timeout in milliseconds. Returns the
 /// revents from the kernel, or 0 on timeout. Closed / invalid fds raise
 /// `IOError: closed stream`.
+/// Green-thread-aware fd wait for the `IO#wait*` family: when other green
+/// threads are live, park on the scheduler's fd poller (deadline-bounded)
+/// instead of issuing a process-blocking poll(2) — a plain poll freezes
+/// every other green thread for the whole timeout, and the peer this wait
+/// is waiting *for* is typically one of them (e.g. net/protocol's
+/// `rbuf_fill` waiting on a spec's in-process server thread). Returns the
+/// ready revents, 0 on timeout.
+fn wait_single_fd_events(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    events: i16,
+    timeout_ms: i32,
+) -> Result<i16> {
+    if !crate::scheduler::has_other_live_threads() {
+        return poll_single_fd(self_val, events, timeout_ms);
+    }
+    let deadline = if timeout_ms >= 0 {
+        Some(std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64))
+    } else {
+        None
+    };
+    loop {
+        // Zero-timeout probe; also raises IOError once the stream is
+        // closed (including by another thread while we were parked).
+        let revents = poll_single_fd(self_val, events, 0)?;
+        if revents != 0 {
+            return Ok(revents);
+        }
+        if let Some(dl) = deadline
+            && std::time::Instant::now() >= dl
+        {
+            return Ok(0);
+        }
+        let fd = self_val.as_io_inner().wait_fd_for(events)?;
+        crate::scheduler::wait_fd(vm, globals, fd, events, deadline)?;
+    }
+}
+
 fn poll_single_fd(self_val: Value, events: i16, timeout_ms: i32) -> Result<i16> {
     if self_val.as_io_inner().is_closed() {
         return Err(MonorubyErr::ioerr("closed stream"));
@@ -4068,7 +4121,7 @@ fn io_wait(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let args = lfp.arg(0).as_array();
 
     if args.is_empty() {
-        let revents = poll_single_fd(self_val, libc::POLLIN as i16, -1)?;
+        let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLIN as i16, -1)?;
         return if revents == 0 {
             Ok(Value::nil())
         } else {
@@ -4135,7 +4188,7 @@ fn io_wait(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         poll_events |= libc::POLLOUT as i16;
     }
 
-    let revents = poll_single_fd(self_val, poll_events, timeout_ms)?;
+    let revents = wait_single_fd_events(vm, globals, self_val, poll_events, timeout_ms)?;
 
     if has_symbol {
         let ready = (revents & libc::POLLIN as i16) != 0
@@ -4178,7 +4231,7 @@ fn io_wait_readable(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
-    let revents = poll_single_fd(self_val, libc::POLLIN as i16, timeout_ms)?;
+    let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLIN as i16, timeout_ms)?;
     if revents == 0 {
         return Ok(Value::nil());
     }
@@ -4199,7 +4252,7 @@ fn io_wait_writable(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
-    let revents = poll_single_fd(self_val, libc::POLLOUT as i16, timeout_ms)?;
+    let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLOUT as i16, timeout_ms)?;
     if revents == 0 {
         return Ok(Value::nil());
     }
@@ -4220,7 +4273,7 @@ fn io_wait_priority(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
-    let revents = poll_single_fd(self_val, libc::POLLPRI as i16, timeout_ms)?;
+    let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLPRI as i16, timeout_ms)?;
     if revents == 0 {
         return Ok(Value::nil());
     }
@@ -7157,6 +7210,27 @@ mod tests {
             [io.external_encoding == io.string.encoding, io.internal_encoding]
             "##,
             r##"require "stringio""##,
+        );
+    }
+
+    #[test]
+    fn io_wait_readable_writable() {
+        run_test_once(
+            r#"
+            require "io/wait"
+            r, w = IO.pipe
+            res = []
+            res << r.wait_readable(0)          # no data yet -> nil
+            w.write "x"
+            res << (r.wait_readable(1) == r)
+            res << (w.wait_writable(1) == w)
+            res << (r.wait(1, :read) == r)
+            res << (r.read(0))                 # length 0 never blocks
+            res << (r.read(1))
+            r.close
+            w.close
+            res
+            "#,
         );
     }
 }

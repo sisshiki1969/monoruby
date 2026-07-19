@@ -39,6 +39,7 @@ mod random;
 mod range;
 mod regexp;
 mod set;
+mod socket;
 mod string;
 pub(crate) mod struct_class;
 mod symbol;
@@ -129,6 +130,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     io_buffer::init(globals);
     struct_class::init(globals);
     file::init(globals);
+    socket::init(globals);
     fiddle::init(globals);
     ffi::init(globals);
     marshal::init(globals);

@@ -1851,6 +1851,18 @@ impl RValue {
         }
     }
 
+    /// A socket IO (TCPSocket / TCPServer / …): an ordinary `ObjTy::IO`
+    /// RValue over the socket fd, classed as the given socket class so the
+    /// whole IO method surface applies to it via inheritance.
+    pub(super) fn new_socket(file: std::fs::File, name: String, class_id: ClassId) -> Self {
+        let inner = IoInner::socket(file, name);
+        RValue {
+            header: Header::new(class_id, ObjTy::IO),
+            kind: ObjKind::io(inner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_time(time: TimeInner) -> Self {
         RValue {
             header: Header::new(TIME_CLASS, ObjTy::TIME),

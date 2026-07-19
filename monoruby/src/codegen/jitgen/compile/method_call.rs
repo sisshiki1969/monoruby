@@ -673,6 +673,17 @@ impl<'a> JitContext<'a> {
             None,
             callid,
         )?;
+        // The call site passes a block literal: if the callee heapifies
+        // its *own* frame during the call (`Proc.new` / `lambda` /
+        // `binding`), `materialize_escaped_block_handlers` turns the
+        // passed block handler into a Proc — whose home is THIS frame —
+        // and promotes this frame to the heap as well. Mirror the
+        // generic-send rule (see `compile_method_call`): drop the
+        // no-capture invariant so the result store below goes via the
+        // LFP and `immediate_evict` emits a capture guard.
+        if self.store[callid].block_fid.is_some() {
+            state.unset_no_capture_guard(self);
+        }
         let evict = ir.new_evict();
         state.send_specialized(
             ir,
@@ -1270,6 +1281,41 @@ impl AbstractState {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// Regression test: a specialized (inlined-compiled) callee that
+    /// captures its own frame (`Proc.new` with a literal block) while the
+    /// call site passes a block literal. Materializing the escaped block
+    /// handler promotes the *caller's* frame to the heap mid-call
+    /// (`materialize_escaped_block_handlers`), so the caller's result
+    /// store must go via the LFP — an rbp-relative store lands on the
+    /// abandoned stack frame and the result reads back as nil after the
+    /// capture deopt. This is the `Timeout.timeout` shape: its `perform`
+    /// proc's non-local `return yield(sec)` silently became nil once the
+    /// caller was JIT-compiled, so `Net::HTTP#connect` saw a nil socket.
+    #[test]
+    fn specialized_call_result_survives_transitive_capture() {
+        run_test(
+            r#"
+            def tmo(klass)
+              perform = Proc.new do
+                begin
+                  return :tok
+                ensure
+                  @x = 1
+                end
+              end
+              if klass
+                perform.call
+              else
+                dummy(&perform)
+              end
+            end
+            res = []
+            50.times { |n| res << (tmo(RuntimeError) { :blk }) }
+            res
+            "#,
+        );
+    }
 
     /// Regression test for issue #405. After JIT compilation of a block
     /// passed to `Array#map`, calls inside the block that raise and are

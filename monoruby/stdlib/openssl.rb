@@ -129,6 +129,11 @@ module OpenSSL
   end
 
   module SSL
+    # net/http's rescue clauses name these even for plain-HTTP requests;
+    # a missing constant turns any transport error into a NameError.
+    class SSLError < OpenSSLError; end
+    class SSLErrorWaitReadable < SSLError; end
+    class SSLErrorWaitWritable < SSLError; end
     class SSLContext
       def initialize(*); end
       def set_params(*); end
