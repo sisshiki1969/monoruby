@@ -530,6 +530,22 @@ impl IoInner {
         }))
     }
 
+    /// Wrap a socket fd (connected stream or listener). Like [`Self::file`]
+    /// but with no filesystem path (`IO#path` is nil for sockets) and
+    /// always opened read/write; `name` only feeds `Display`/inspect.
+    pub(super) fn socket(file: std::fs::File, name: String) -> Self {
+        register_owned_fd(file.as_raw_fd());
+        Self::File(Rc::new(FileDescriptor {
+            reader: ManuallyDrop::new(std::io::BufReader::new(file)),
+            name,
+            has_path: false,
+            readable: true,
+            writable: true,
+            autoclose: Cell::new(true),
+            pushback: RefCell::new(Vec::new()),
+        }))
+    }
+
     pub(crate) fn popen(mut child: std::process::Child) -> Self {
         let reader = child.stdout.take().map(std::io::BufReader::new);
         let writer = child.stdin.take();
