@@ -33,7 +33,19 @@ class IPSocket < BasicSocket
   def self.getaddress(host); host; end
 end
 
-class TCPSocket < IPSocket; end
+# Real TCP sockets are unsupported. Fail loudly at instantiation, like
+# UNIXSocket below: a silent do-nothing socket object lets code run on
+# until it dies far from the cause. The ruby/spec net-http fixture is
+# the concrete case — it builds a TCPServer, then spawns a server
+# thread with `abort_on_exception = true`; with a do-nothing server
+# object the thread died on a missing method and the exception was
+# forwarded to (and killed) the main thread, aborting the whole mspec
+# run. Raising here surfaces in the spec's own setup instead.
+class TCPSocket < IPSocket
+  def initialize(*)
+    raise SocketError, "TCP sockets are not supported in monoruby"
+  end
+end
 class TCPServer < TCPSocket; end
 class UDPSocket < IPSocket; end
 class UNIXSocket < BasicSocket
