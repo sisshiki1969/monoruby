@@ -103,9 +103,19 @@ impl JitModule {
         };
 
         let label = self.exec_gc.clone();
+        // The GC poll fires from VM dispatch and JIT code at points where
+        // frame data can still live in the red zone just below the
+        // caller's rsp (e.g. a callee frame staged at `rsp - 40 - …`
+        // before `call_funcdata` lowers rsp past it). `save_registers`'
+        // 192-byte scratch would overwrite those slots, so drop rsp by a
+        // generous cushion first — the same trick as `slow_path2`'s
+        // `subq rsp, 1016` around `find_method`. (Exposed by
+        // MONORUBY_PREEMPT_STRESS, which makes every poll site fire:
+        // language/super_spec's zsuper kw-forwarding read a slot this
+        // scratch had zeroed.)
         monoasm! { &mut self.jit,
         label:
-            subq rsp, 8;
+            subq rsp, 1032;
         }
         self.save_registers();
         monoasm! { &mut self.jit,
@@ -116,7 +126,7 @@ impl JitModule {
         }
         self.restore_registers();
         monoasm! { &mut self.jit,
-            addq rsp, 8;
+            addq rsp, 1032;
             ret;
         }
     }

@@ -420,6 +420,17 @@ impl AbstractFrame {
         let error = ir.new_error(self);
         ir.exec_gc(wb, error, check_stack);
     }
+
+    ///
+    /// Stack-overflow check only (no GC/preempt poll) — used at call
+    /// sites, where the callee's entry poll (`InitMethod`) provides the
+    /// safepoint.
+    ///
+    pub fn check_stack(&self, ir: &mut AsmIr) {
+        let wb = self.get_gc_write_back();
+        let error = ir.new_error(self);
+        ir.check_stack(wb, error);
+    }
 }
 
 impl AbstractFrame {

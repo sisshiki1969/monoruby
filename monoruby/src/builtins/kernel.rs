@@ -902,14 +902,21 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
     };
     let data = vm.get_block_data(globals, bh)?;
     loop {
-        if let Err(err) = vm.invoke_block(globals, &data, &[]) {
-            // `loop` swallows StopIteration and any user subclass of it, and
-            // re-raises everything else (including control-flow signals).
-            return if err.is_stop_iteration(&globals.store) {
-                Ok(Value::nil())
-            } else {
-                Err(err)
-            };
+        match vm.invoke_block(globals, &data, &[]) {
+            // No explicit safepoint needed: the block body's entry poll
+            // (`vm_init` / JIT `InitMethod`) fires on every iteration, so
+            // signals, GC, and timeslice preemption are all serviced even
+            // for an empty `loop {}` body.
+            Ok(_) => {}
+            Err(err) => {
+                // `loop` swallows StopIteration and any user subclass of it, and
+                // re-raises everything else (including control-flow signals).
+                return if err.is_stop_iteration(&globals.store) {
+                    Ok(Value::nil())
+                } else {
+                    Err(err)
+                };
+            }
         }
     }
 }

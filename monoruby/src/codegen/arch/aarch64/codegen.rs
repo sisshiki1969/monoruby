@@ -72,6 +72,11 @@ impl Codegen {
             gc:
             stp x29, x30, [sp, #(-16)]!;
             mov x29, sp;
+            // Red-zone cushion: the poll can fire while frame data still
+            // lives just below sp (a staged callee frame); drop sp past it
+            // so the Rust callee's stack frames cannot overwrite it.
+            // Mirrors the x86-64 exec_gc stub's `subq rsp, 1032`.
+            sub sp, sp, #(1024);
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             mov x9, (crate::executor::execute_gc as *const () as u64);

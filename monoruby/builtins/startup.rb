@@ -781,14 +781,30 @@ class Thread
   attr_accessor :name
 
   # Reported when a thread dies with an unhandled exception (read by the
-  # native finalizer). Instance-level only; default true, as in CRuby.
+  # native finalizer). Falls back to the class-level default
+  # (`Thread.report_on_exception`), which defaults to true, as in CRuby.
   def report_on_exception
-    @report_on_exception.nil? ? true : @report_on_exception
+    @report_on_exception.nil? ? Thread.report_on_exception : @report_on_exception
   end
 
   def report_on_exception=(flag)
     @report_on_exception = flag
   end
+
+  # CRuby's Thread#to_s: `#<Thread:0xADDR[@name] status>` (the spawn
+  # file:line is not tracked). ruby/spec interpolates this into the
+  # report_on_exception output matchers, so the `#<Thread:` prefix and
+  # the status word matter.
+  def to_s
+    st = status
+    st = "dead" unless st
+    if (n = @name)
+      "#<Thread:#{format('0x%016x', object_id << 1)}@#{n} #{st}>"
+    else
+      "#<Thread:#{format('0x%016x', object_id << 1)} #{st}>"
+    end
+  end
+  alias inspect to_s
 
   # When set (per-thread, or the Thread global default), an exception
   # that terminates this thread is re-raised in the main thread (read by
@@ -809,6 +825,18 @@ class Thread
 
     def abort_on_exception=(flag)
       @abort_on_exception = flag
+    end
+
+    # Global default for Thread#report_on_exception (true, as in CRuby).
+    # Threads whose instance flag is unset fall back to this; ruby/spec's
+    # spec_helper requires the class-level accessor to exist (otherwise
+    # it installs a shim instance method that raises).
+    def report_on_exception
+      @report_on_exception.nil? ? true : @report_on_exception
+    end
+
+    def report_on_exception=(flag)
+      @report_on_exception = flag
     end
   end
 
@@ -876,13 +904,20 @@ class Thread
     end
   end
 
-  # Green threads switch only at blocking points (sleep / Thread.stop /
-  # join / pass), so plain Ruby code is atomic with respect to the
-  # scheduler — no preemption can occur between two non-blocking
-  # statements. That makes these synchronization primitives correct as
-  # pure Ruby built on Thread.stop / Kernel#sleep (park) and
-  # Thread#wakeup (unpark): every "test then enqueue then park" sequence
-  # below is uninterruptible up to the park itself.
+  # With timeslice preemption, a switch can occur at any safepoint —
+  # every method call and loop back-edge. These pure-Ruby primitives
+  # stay correct under that model through two rules:
+  #
+  # 1. Test-and-set sequences contain no safepoint between the test and
+  #    the set: straight-line ivar reads/writes only, with any needed
+  #    method calls (e.g. `Thread.current`) hoisted before the test.
+  #    See `Mutex#try_lock`.
+  # 2. Every "register as waiter → park" sequence tolerates a wakeup
+  #    landing in the window before the park: `Thread#wakeup` on a
+  #    *running* thread arms its park permit, making the next park
+  #    return immediately (scheduler.rs, `ThreadInner::park_permit`).
+  #    The park sites all sit in retry loops, so a spurious early
+  #    return is re-checked.
 
   class Mutex
     def locked?
@@ -894,10 +929,17 @@ class Thread
     end
 
     def try_lock
+      # Atomic under preemption: `Thread.current` is a method call (a
+      # safepoint where a timeslice switch can occur), so it must be
+      # evaluated BEFORE the test. The test-and-set below is straight-line
+      # code — ivar read, branch, ivar write — with no calls and no loop
+      # back-edges, hence no safepoint can interleave another thread
+      # between the test and the set.
+      cur = Thread.current
       if @owner
         false
       else
-        @owner = Thread.current
+        @owner = cur
         true
       end
     end
@@ -927,7 +969,11 @@ class Thread
       if @waiters
         while (w = @waiters.shift)
           if w.alive?
-            w.wakeup
+            # Permit-arming wake: unlike the public Thread#wakeup, a wake
+            # racing the waiter's park in Mutex#lock (preempted between
+            # registering and parking) is not lost — the next park returns
+            # immediately and the lock loop re-contends.
+            w.__wakeup_permit
             break
           end
         end
@@ -946,29 +992,51 @@ class Thread
     end
 
     # Atomically release the mutex, sleep, and re-acquire it on wake
-    # (including on an exception raised into the sleeper).
+    # (including on an exception raised into the sleeper). Returns the
+    # rounded number of seconds actually slept, as in CRuby. A negative
+    # duration is an ArgumentError (validated before the ownership check).
     def sleep(timeout = nil)
+      if timeout && timeout < 0
+        raise ArgumentError, "time interval must not be negative"
+      end
       raise ThreadError, "Attempt to unlock a mutex which is not locked" unless owned?
+      start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       unlock
       begin
         timeout ? Kernel.sleep(timeout) : Thread.stop
       ensure
         lock
       end
+      (Process.clock_gettime(Process::CLOCK_MONOTONIC) - start).round
     end
   end
 
   class Queue
+    # Layered on Mutex + ConditionVariable, exactly like CRuby's
+    # thread_sync.c. Mutual exclusion (not statement ordering) is what
+    # makes check-and-take atomic here: with callee-entry GC/preempt
+    # polls, EVERY method call is a safepoint, so an unlocked
+    # `@items.empty?` / `@items.shift` pair lets a competing consumer
+    # take the last item in between and the shift returns a phantom nil.
+    #
+    # NOTE: the wait loops are `while true`, never `loop do` —
+    # `Kernel#loop` swallows StopIteration and ClosedQueueError is a
+    # StopIteration subclass (so `loop { q.pop }` ends cleanly on close);
+    # a `raise ClosedQueueError` inside a `loop` block would be silently
+    # eaten and turned into a nil return.
     def initialize
       @items = []
-      @waiters = []
       @closed = false
+      @mutex = Mutex.new
+      @cv_pop = ConditionVariable.new
     end
 
     def push(item)
-      raise ClosedQueueError, "queue closed" if @closed
-      @items.push(item)
-      __wake_one(@waiters)
+      @mutex.synchronize do
+        raise ClosedQueueError, "queue closed" if @closed
+        @items.push(item)
+        @cv_pop.signal
+      end
       self
     end
     alias << push
@@ -1001,29 +1069,20 @@ class Thread
 
     def pop(non_block = false, timeout: nil)
       timeout = __check_timeout(timeout, non_block)
-      if non_block
-        raise ThreadError, "queue empty" if @items.empty? && !@closed
-        return @items.shift
-      end
       deadline = timeout && Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-      loop do
-        return @items.shift unless @items.empty?
-        return nil if @closed
-        if deadline
-          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          return nil if remaining <= 0
-          @waiters << Thread.current
-          begin
-            Kernel.sleep(remaining)
-          ensure
-            @waiters.delete(Thread.current)
-          end
-        else
-          @waiters << Thread.current
-          begin
-            Thread.stop
-          ensure
-            @waiters.delete(Thread.current)
+      @mutex.synchronize do
+        while true
+          return __pop_locked unless @items.empty?
+          # CRuby raises even on a closed queue: only a *blocking* pop
+          # returns nil for closed-and-drained.
+          raise ThreadError, "queue empty" if non_block
+          return nil if @closed
+          if deadline
+            remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            return nil if remaining <= 0
+            @cv_pop.wait(@mutex, remaining)
+          else
+            @cv_pop.wait(@mutex)
           end
         end
       end
@@ -1041,17 +1100,18 @@ class Thread
     alias length size
 
     def clear
-      @items.clear
+      @mutex.synchronize { @items.clear }
       self
     end
 
     # Closing wakes every parked consumer/producer: consumers drain the
     # remaining items then get nil; producers raise ClosedQueueError.
     def close
-      return self if @closed
-      @closed = true
-      __wake_all(@waiters)
-      __wake_all(@push_waiters) if defined?(@push_waiters) && @push_waiters
+      @mutex.synchronize do
+        return self if @closed
+        @closed = true
+        @cv_pop.broadcast
+      end
       self
     end
 
@@ -1060,24 +1120,15 @@ class Thread
     end
 
     def num_waiting
-      @waiters.size + (defined?(@push_waiters) && @push_waiters ? @push_waiters.size : 0)
+      @cv_pop.__num_waiting
     end
 
     private
 
-    def __wake_one(waiters)
-      while (w = waiters.shift)
-        if w.alive?
-          w.wakeup
-          return
-        end
-      end
-    end
-
-    def __wake_all(waiters)
-      until waiters.empty?
-        __wake_one(waiters)
-      end
+    # Take the head item; the caller holds @mutex and has checked
+    # non-emptiness. SizedQueue overrides this to also free a producer.
+    def __pop_locked
+      @items.shift
     end
   end
 
@@ -1087,45 +1138,40 @@ class Thread
       raise ArgumentError, "queue size must be positive" unless max.is_a?(Integer) && max > 0
       super()
       @max = max
-      @push_waiters = []
+      @cv_push = ConditionVariable.new
     end
 
     attr_reader :max
 
     def max=(new_max)
       raise ArgumentError, "queue size must be positive" unless new_max.is_a?(Integer) && new_max > 0
-      grew = new_max > @max
-      @max = new_max
-      __wake_all(@push_waiters) if grew
+      @mutex.synchronize do
+        grew = new_max > @max
+        @max = new_max
+        # Growing frees capacity: every parked producer re-checks.
+        @cv_push.broadcast if grew
+      end
       new_max
     end
 
     def push(item, non_block = false, timeout: nil)
       timeout = __check_timeout(timeout, non_block)
       deadline = timeout && Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-      loop do
-        raise ClosedQueueError, "queue closed" if @closed
-        if @items.size < @max
-          @items.push(item)
-          __wake_one(@waiters)
-          return self
-        end
-        raise ThreadError, "queue full" if non_block
-        if deadline
-          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          return nil if remaining <= 0
-          @push_waiters << Thread.current
-          begin
-            Kernel.sleep(remaining)
-          ensure
-            @push_waiters.delete(Thread.current)
+      @mutex.synchronize do
+        while true
+          raise ClosedQueueError, "queue closed" if @closed
+          if @items.size < @max
+            @items.push(item)
+            @cv_pop.signal
+            return self
           end
-        else
-          @push_waiters << Thread.current
-          begin
-            Thread.stop
-          ensure
-            @push_waiters.delete(Thread.current)
+          raise ThreadError, "queue full" if non_block
+          if deadline
+            remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            return nil if remaining <= 0
+            @cv_push.wait(@mutex, remaining)
+          else
+            @cv_push.wait(@mutex)
           end
         end
       end
@@ -1133,14 +1179,37 @@ class Thread
     alias << push
     alias enq push
 
-    def pop(non_block = false, timeout: nil)
-      v = super
+    def clear
+      @mutex.synchronize do
+        @items.clear
+        # Clearing frees capacity (CRuby wakes blocked producers here).
+        @cv_push.broadcast
+      end
+      self
+    end
+
+    def close
+      @mutex.synchronize do
+        return self if @closed
+        @closed = true
+        @cv_pop.broadcast
+        @cv_push.broadcast
+      end
+      self
+    end
+
+    def num_waiting
+      @cv_pop.__num_waiting + @cv_push.__num_waiting
+    end
+
+    private
+
+    def __pop_locked
+      v = @items.shift
       # Popping frees a slot: let one parked producer through.
-      __wake_one(@push_waiters)
+      @cv_push.signal
       v
     end
-    alias shift pop
-    alias deq pop
   end
 
   class ConditionVariable
@@ -1154,22 +1223,28 @@ class Thread
     def wait(mutex, timeout = nil)
       @waiters << Thread.current
       begin
-        mutex.unlock
-        begin
-          timeout ? Kernel.sleep(timeout) : Thread.stop
-        ensure
-          mutex.lock
-        end
+        # Delegate to Mutex#sleep so the mutex is atomically released,
+        # the caller parks, and the mutex is re-acquired on wake — exactly
+        # as CRuby does (which is why `#wait` calls `#sleep` on its arg).
+        mutex.sleep(timeout)
       ensure
         @waiters.delete(Thread.current)
       end
       self
     end
 
+    # ConditionVariable holds runtime synchronization state that cannot be
+    # serialized; CRuby raises TypeError from Marshal.
+    def marshal_dump
+      raise TypeError, "can't dump #{self.class}"
+    end
+
     def signal
       while (w = @waiters.shift)
         if w.alive?
-          w.wakeup
+          # Permit-arming wake (see Mutex#unlock): a signal racing the
+          # waiter's park in CV#wait must not be lost.
+          w.__wakeup_permit
           break
         end
       end
@@ -1181,6 +1256,13 @@ class Thread
         signal
       end
       self
+    end
+
+    # Waiter-count peek for Queue#num_waiting (a waiter registers before
+    # releasing the mutex and stays registered until it re-acquires it,
+    # so this tracks "parked in #wait" closely and race-free).
+    def __num_waiting
+      @waiters.size
     end
   end
 

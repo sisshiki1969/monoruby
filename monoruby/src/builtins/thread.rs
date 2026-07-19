@@ -36,6 +36,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(THREAD_CLASS, "alive?", thread_alive, 0);
     globals.define_builtin_func(THREAD_CLASS, "stop?", thread_stop_p, 0);
     globals.define_builtin_func(THREAD_CLASS, "wakeup", thread_wakeup, 0);
+    globals.define_builtin_func(THREAD_CLASS, "__wakeup_permit", thread_wakeup_permit, 0);
     globals.define_builtin_func(THREAD_CLASS, "run", thread_run, 0);
     globals.define_builtin_func_rest(THREAD_CLASS, "raise", thread_raise);
     globals.define_builtin_func(THREAD_CLASS, "kill", thread_kill, 0);
@@ -491,6 +492,27 @@ fn thread_stop_p(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn thread_wakeup(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     if !scheduler::wakeup(self_) {
+        return Err(MonorubyErr::threaderr(
+            &globals.store,
+            "killed thread",
+        ));
+    }
+    Ok(self_)
+}
+
+/// Internal: wake used by the Ruby-level sync primitives in startup.rb.
+/// Unlike `#wakeup`, arms the target's park permit when it is running,
+/// so a wake racing the target's own park is never lost (see
+/// `scheduler::wakeup_permit`).
+#[monoruby_builtin]
+fn thread_wakeup_permit(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if !scheduler::wakeup_permit(self_) {
         return Err(MonorubyErr::threaderr(
             &globals.store,
             "killed thread",
@@ -991,6 +1013,120 @@ mod tests {
     }
 
     #[test]
+    fn native_offload_flock_and_fifo() {
+        // Kernel-blocking syscalls must park only the calling green
+        // thread, not the process (native worker offload,
+        // doc/preemption.md Phase 2). Both of these hang the whole
+        // interpreter without it.
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            path = File.join(Dir.tmpdir, "mrb_flock_test_#{Process.pid}")
+            f1 = File.open(path, "w")
+            f2 = File.open(path, "w")
+            f1.flock(File::LOCK_EX)
+            r = []
+            t = Thread.new { f2.flock(File::LOCK_EX); r << :locked; f2.flock(File::LOCK_UN); :done }
+            sleep 0.05
+            r << t.alive?
+            r << (r.include?(:locked) ? :early : :blocked_ok)
+            f1.flock(File::LOCK_UN)
+            r << t.value
+            f1.close; f2.close; File.delete(path)
+            r
+            "#,
+        );
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            path = File.join(Dir.tmpdir, "mrb_fifo_test_#{Process.pid}")
+            File.mkfifo(path)
+            r = []
+            t = Thread.new { File.open(path, "r") { |io| r << io.read } }
+            sleep 0.05
+            r << t.alive?
+            File.open(path, "w") { |io| io.write "hi" }
+            t.join
+            File.delete(path)
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn preempt_busy_main_lets_thread_run() {
+        // Timeslice preemption: a busy-looping main thread must not
+        // starve a runnable green thread forever. This also probes the
+        // JIT captured-local protocol: `done` is captured by the thread
+        // block, so the loop condition must re-read the (heap) frame
+        // slot every iteration — a stale register cache would spin
+        // forever. Hangs without preemption.
+        run_test(
+            r#"
+            done = false
+            i = 0
+            t = Thread.new { done = true }
+            until done
+              i += 1
+            end
+            t.join
+            [done, i >= 0]
+            "#,
+        );
+        // Float (xmm-cached) loop variant of the same pattern. The
+        // do-while form guarantees at least one iteration, so the
+        // assertion does not depend on whether the thread got scheduled
+        // before the loop started.
+        run_test(
+            r#"
+            stop = false
+            t = Thread.new { stop = true }
+            sum = 0.0
+            begin
+              sum += 1.0
+            end until stop
+            t.join
+            [stop, sum >= 1.0]
+            "#,
+        );
+    }
+
+    #[test]
+    fn preempt_kill_busy_thread() {
+        // `Thread#kill` must reach a thread spinning in a loop that
+        // never parks: the kill is delivered at the target's next
+        // timeslice boundary. Hangs without preemption (the target
+        // never yields, and pre-preemption main's `sleep` was never
+        // woken because the busy thread kept the scheduler loop
+        // dispatching it).
+        run_test_once(
+            r#"
+            t = Thread.new { loop {} }
+            sleep 0.05
+            t.kill
+            t.join
+            [t.alive?, t.status]
+            "#,
+        );
+    }
+
+    #[test]
+    fn preempt_sleeper_wakes_under_busy_main() {
+        // A green thread's expired `sleep` must be noticed even though
+        // main never parks (the pass path promotes due sleepers).
+        run_test_once(
+            r#"
+            r = []
+            t = Thread.new { sleep 0.05; r << :woke }
+            x = 0
+            x += 1 while r.empty?
+            t.join
+            [r, x >= 0]
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_gc_while_main_parked_inside_fiber() {
         // Main parks *inside a fiber* (`sleep` in an Enumerator body); a
         // green thread then runs and triggers GC. The scheduler used to
@@ -1243,14 +1379,15 @@ mod tests {
             [r, t.status, t.alive?]
             "#,
         );
-        // killing an unstarted thread never runs the body.
+        // Killing a just-created thread: whether the body ran before the
+        // kill is scheduling-dependent (in CRuby too, and under
+        // preemption here), so assert only the convergent facts.
         run_test_once(
             r#"
-            ran = false
-            t = Thread.new { ran = true }
+            t = Thread.new { :body }
             t.kill
             t.join
-            [ran, t.status]
+            [t.status, t.alive?]
             "#,
         );
         // Thread.exit kills the current thread mid-body.

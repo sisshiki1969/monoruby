@@ -850,15 +850,34 @@ fn writable_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/i/flock.html]
 #[monoruby_builtin]
-fn flock_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let op = lfp.arg(0).coerce_to_i64(&_globals.store)? as i32;
+fn flock_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let op = lfp.arg(0).coerce_to_i64(&globals.store)? as i32;
     let self_ = lfp.self_val();
     let fd = self_.as_io_inner().fileno()?;
-    let r = unsafe { libc::flock(fd, op) };
+    let (r, errno) = if (op & libc::LOCK_NB) != 0 || (op & libc::LOCK_UN) != 0 {
+        // Non-blocking request / unlock: never blocks, run inline.
+        // SAFETY: plain flock(2) on the IO's fd.
+        let r = unsafe { libc::flock(fd, op) };
+        let errno = if r == 0 {
+            0
+        } else {
+            std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+        };
+        (r as i64, errno)
+    } else {
+        // A blocking flock waits *in the kernel* with nothing to poll:
+        // inline it would freeze every green thread (and the process).
+        // Run it on a native worker and park this thread instead.
+        let comp = crate::native_pool::run_blocking(
+            vm,
+            globals,
+            crate::native_pool::NativeOp::Flock { fd, op },
+        )?;
+        (comp.ret, comp.errno)
+    };
     if r == 0 {
         return Ok(Value::integer(0));
     }
-    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
     // Non-blocking lock that would have blocked: return false (Ruby spec).
     if (op & libc::LOCK_NB) != 0 && (errno == libc::EWOULDBLOCK || errno == libc::EAGAIN) {
         return Ok(Value::bool(false));
@@ -1118,15 +1137,57 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     };
     let path = to_path_str(vm, globals, lfp.arg(0))?;
-    let file = match opt.open(&path) {
-        Ok(file) => file,
-        Err(err) => {
+    // A FIFO's open(2) blocks in the kernel until the peer end appears;
+    // opening it inline through std would freeze every green thread (and
+    // the process). Detect the FIFO up front and run the blocking open on
+    // a native worker instead, parking only this thread
+    // (doc/preemption.md, Phase 2). A TOCTOU miss here just falls back to
+    // the previous inline behavior.
+    let is_fifo = std::fs::metadata(&path)
+        .map(|m| std::os::unix::fs::FileTypeExt::is_fifo(&m.file_type()))
+        .unwrap_or(false);
+    let file = if is_fifo && let Ok(cpath) = std::ffi::CString::new(path.as_str()) {
+        let flags = match mode_base.as_str() {
+            "r" => libc::O_RDONLY,
+            "w" => libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+            "a" => libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND,
+            "r+" | "+r" => libc::O_RDWR,
+            "w+" | "+w" => libc::O_RDWR | libc::O_CREAT | libc::O_TRUNC,
+            "a+" | "+a" => libc::O_RDWR | libc::O_CREAT | libc::O_APPEND,
+            _ => unreachable!(),
+        } | libc::O_CLOEXEC;
+        let comp = crate::native_pool::run_blocking(
+            vm,
+            globals,
+            crate::native_pool::NativeOp::Open {
+                path: cpath,
+                flags,
+                mode: 0o666,
+            },
+        )?;
+        if comp.ret < 0 {
+            let err = std::io::Error::from_raw_os_error(comp.errno);
             return Err(MonorubyErr::errno_with_path(
                 &globals.store,
                 &err,
                 "rb_sysopen",
                 &path,
             ));
+        }
+        // SAFETY: `ret` is a fresh fd from the worker's open(2); ownership
+        // transfers to the File here.
+        unsafe { <File as std::os::fd::FromRawFd>::from_raw_fd(comp.ret as i32) }
+    } else {
+        match opt.open(&path) {
+            Ok(file) => file,
+            Err(err) => {
+                return Err(MonorubyErr::errno_with_path(
+                    &globals.store,
+                    &err,
+                    "rb_sysopen",
+                    &path,
+                ));
+            }
         }
     };
     let mut res = Value::new_file(file, path, readable, writable);

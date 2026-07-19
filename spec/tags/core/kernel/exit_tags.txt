@@ -1,1 +1,0 @@
-fails:Kernel#exit raises the SystemExit in the main thread if it reaches the top-level handler of another thread

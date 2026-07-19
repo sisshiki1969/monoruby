@@ -1419,10 +1419,11 @@ impl Codegen {
             .as_ptr() as u64;
         // Raise SystemStackError before pushing the new frame (so the caller's
         // LFP is still intact when entry_raise inspects it for a rescue).
+        // No call-site GC/preempt poll here: the callee entry
+        // (`a64_op_init_method` / JIT `InitMethod`) polls on every
+        // invocation, which covers all Ruby-level callees; native callees
+        // are bounded between the caller's loop-edge/entry polls.
         self.a64_check_stack();
-        // GC + signal poll. The signal handler nudges alloc_flag by 10 so a
-        // pending Signal.trap callback runs at this safepoint.
-        self.a64_vm_execute_gc();
         // push_cont_frame: save caller PC (sp -= 16; [sp] = PC)
         monoasm_arm64!(&mut self.jit,
             sub sp, sp, #(16);
@@ -1712,15 +1713,11 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         let skip = self.jit.label();
-        // Stack check + GC/signal poll before building the block frame, mirroring
-        // x86 `vm_yield` (and `a64_op_send`). The signal handler nudges alloc_flag
-        // by 10, so a pending Signal.trap callback / Interrupt is observed at this
-        // safepoint. Without it, a Ruby `while … yield … end` driver like
-        // `Integer#times` had no per-iteration safepoint once the block body
-        // inlined its only call (e.g. `Object.new` -> inlined `Class#new`), so a
-        // pending SIGINT could be missed until the whole loop finished.
+        // Stack check only, mirroring x86 `vm_yield` (and `a64_op_send`).
+        // The block body's entry poll (`a64_op_init_method` / JIT
+        // `InitMethod`) fires on every yield, so signals / GC / preemption
+        // get a per-iteration safepoint without a call-site poll here.
         self.a64_check_stack();
-        self.a64_vm_execute_gc();
         // push_cont_frame: save caller PC
         monoasm_arm64!(&mut self.jit,
             sub sp, sp, #(16);
@@ -2250,6 +2247,11 @@ impl Codegen {
             skip:
             add x(PC.0), x(PC.0), #(16);
         );
+        // Callee-entry GC/preempt poll, mirroring x86 `vm_init`: frame
+        // linked, sp adjusted, locals nil-filled — a fully
+        // frame-consistent poll point on every entry path (including
+        // the poll-free Rust invokers).
+        self.a64_vm_execute_gc();
         self.a64_fetch_and_dispatch();
         p
     }

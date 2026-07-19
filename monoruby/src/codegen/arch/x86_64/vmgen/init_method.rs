@@ -24,6 +24,16 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.vm_init_func();
         self.fill_nil();
+        // Callee-entry GC/preempt poll. This is the one point every call
+        // path funnels through — including the Rust invokers
+        // (`invoke_method` / `invoke_block`), which have no call-site
+        // poll — and the safest possible poll position: the frame is
+        // fully linked, rsp is below it (no staging red zone), args are
+        // in their slots and the remaining registers were just
+        // nil-filled, so the GC root scan sees a completely consistent
+        // frame. Closes the "JIT-compiled block body with no polls,
+        // called from a native loop" preemption gap uniformly.
+        self.vm_execute_gc();
         self.fetch_and_dispatch();
         label
     }
