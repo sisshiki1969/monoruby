@@ -726,6 +726,7 @@ class Set
   alias eql? ==
 end
 class Time
+  include Comparable
   alias asctime ctime
 end
 class Encoding
