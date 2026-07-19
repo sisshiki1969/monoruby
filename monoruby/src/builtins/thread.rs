@@ -578,17 +578,34 @@ mod tests {
 
     #[test]
     fn thread_concurrency_with_queue_like_handoff() {
-        // The spawned thread must not run at Thread.new time; it runs
-        // when the main thread blocks (join), and both make progress.
+        // Both threads make progress and join works. The relative order
+        // of `:thread` vs. a main-side append *before* the join is
+        // deliberately not asserted against CRuby: monoruby's
+        // `Thread.new` eagerly runs the new thread's first slice (so
+        // fixture-style server threads reach their accept/park before
+        // `new` returns), whereas CRuby's GVL usually lets the creator
+        // continue first. Sequencing after `join` is identical on both.
         run_test_once(
             r#"
             order = []
             t = Thread.new { order << :thread }
-            order << :main
             t.join
+            order << :main
             order
             "#,
         );
+        // monoruby-specific eager-start guarantee: the body has run to
+        // its first blocking point (here: completion) before Thread.new
+        // returns.
+        let v = run_test_no_result_check(
+            r#"
+            order = []
+            Thread.new { order << :thread }
+            order << :main
+            order.inspect
+            "#,
+        );
+        assert_eq!("[:thread, :main]", v.as_str());
         // Two threads interleave at sleep points.
         run_test_once(
             r#"
