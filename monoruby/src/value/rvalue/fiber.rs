@@ -169,9 +169,13 @@ impl Fiber {
         arg: &[Value],
     ) -> Result<Value> {
         assert_eq!(FiberState::Created, self.state());
+        // The fiber's body runs on its own executor; record the Fiber object
+        // there so `Fiber.current` resolves to it (per-Fiber identity).
+        let fiber_val = self.0;
         self.initialize();
         let proc = ProcData::from_proc(&self.proc);
         let handle = &mut self.handle;
+        handle.set_current_fiber(fiber_val);
         match (globals.invokers.fiber)(
             vm,
             globals,

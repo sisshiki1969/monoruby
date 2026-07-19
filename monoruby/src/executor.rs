@@ -205,6 +205,11 @@ pub struct Executor {
     /// frame (a fresh deferral for a frame that already has one means the
     /// previous inner-ensure unwind was bypassed and is abandoned).
     deferred_unwind: Vec<(Lfp, MonorubyErr)>,
+    /// The `Fiber` object whose body is currently executing on this
+    /// `Executor`, or `None` for a thread's root context (which falls back
+    /// to the shared main-fiber object). Exposed as `Fiber.current` so that
+    /// mutex ownership can be tracked per-Fiber, as in CRuby.
+    current_fiber: Option<Value>,
 }
 
 impl std::default::Default for Executor {
@@ -227,6 +232,7 @@ impl std::default::Default for Executor {
             exception: None,
             errinfo: Value::nil(),
             deferred_unwind: vec![],
+            current_fiber: None,
         }
     }
 }
@@ -261,6 +267,10 @@ impl alloc::GC<RValue> for Executor {
         // `$!` — the exception being handled survives as long as this
         // execution context (fiber) does.
         self.errinfo.mark(alloc);
+        // The `Fiber` object this executor is running as (`Fiber.current`).
+        if let Some(f) = self.current_fiber {
+            f.mark(alloc);
+        }
         // Transient per-match stashes: live across the MatchData
         // allocation in `save_capture_special_variables`, which can
         // trigger GC.
@@ -488,6 +498,18 @@ impl Executor {
 
     pub fn parent_fiber(&self) -> Option<std::ptr::NonNull<Executor>> {
         self.parent_fiber
+    }
+
+    /// The `Fiber` object this executor runs as (`Fiber.current`), or `None`
+    /// for a thread's root context.
+    pub fn current_fiber(&self) -> Option<Value> {
+        self.current_fiber
+    }
+
+    /// Record the `Fiber` object whose body runs on this executor. Set once,
+    /// when the fiber is first invoked.
+    pub(crate) fn set_current_fiber(&mut self, fiber: Value) {
+        self.current_fiber = Some(fiber);
     }
 
     /// `$&` — the last successful match (derived from the current

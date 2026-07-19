@@ -23,6 +23,18 @@ pub(super) fn init(globals: &mut Globals) {
         inline_gen2!(fiber_yield_inline),
     );
     globals.define_builtin_func_rest(FIBER_CLASS, "resume", resume);
+    // Backs `Fiber.current`: the fiber running on this executor, or nil at a
+    // thread's root context (the Ruby wrapper substitutes the main fiber).
+    globals.define_builtin_class_func(FIBER_CLASS, "__current_fiber", current_fiber, 0);
+}
+
+///
+/// The `Fiber` currently executing on this executor, or `nil` at a thread's
+/// root context. Not a public API — `Fiber.current` (startup.rb) wraps it.
+///
+#[monoruby_builtin]
+fn current_fiber(vm: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(vm.current_fiber().unwrap_or_default())
 }
 
 ///

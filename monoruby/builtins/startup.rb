@@ -664,9 +664,12 @@ end
 class Fiber
   @@main_fiber = nil
   def self.current
-    # Return the main fiber (monoruby is single-threaded and doesn't track
-    # the current fiber across resume/yield).
-    @@main_fiber ||= Fiber.new {}
+    # Inside a fiber body the executor knows which Fiber it is running as;
+    # at a thread's root context there is none, so fall back to a shared
+    # main-fiber object (distinct from any explicit Fiber, which is all that
+    # per-Fiber mutex ownership needs — cross-thread checks key on the
+    # Thread).
+    __current_fiber || (@@main_fiber ||= Fiber.new {})
   end
 
   # --- Fiber-local storage (CRuby 3.2+) --------------------------------
@@ -935,7 +938,10 @@ class Thread
     end
 
     def owned?
-      @owner == Thread.current
+      # Ownership is per-Fiber (CRuby): the same Thread's other Fibers do not
+      # own a mutex this Fiber locked. The Thread test also makes a cross-
+      # thread check false regardless of Fiber identity.
+      @owner == Thread.current && @owner_fiber == Fiber.current
     end
 
     def try_lock
@@ -946,16 +952,23 @@ class Thread
       # back-edges, hence no safepoint can interleave another thread
       # between the test and the set.
       cur = Thread.current
+      cur_fiber = Fiber.current
       if @owner
         false
       else
         @owner = cur
+        @owner_fiber = cur_fiber
         true
       end
     end
 
     def lock
-      raise ThreadError, "deadlock; recursive locking" if owned?
+      # Deadlock detection is per-Thread, not per-Fiber: a mutex already held
+      # by THIS thread (in any fiber) can only be released by this thread, so
+      # trying to acquire it again — recursively or from a sibling fiber —
+      # would park the one thread that could release it. Raise rather than
+      # hang. (Ownership *reported* by #owned? is still per-Fiber.)
+      raise ThreadError, "deadlock; recursive locking" if @owner == Thread.current
       until try_lock
         # Reclaim a lock abandoned by a terminated owner (a dead thread
         # never unlocks or wakes waiters, so a contender must take it over
@@ -981,7 +994,10 @@ class Thread
       unless @owner
         raise ThreadError, "Attempt to unlock a mutex which is not locked"
       end
-      unless owned?
+      # Thread-level check (not the per-Fiber #owned?): keeps the hot unlock
+      # path free of the extra Fiber.current safepoint, and every unlock spec
+      # exercises the cross-thread case anyway.
+      unless @owner == Thread.current
         raise ThreadError, "Attempt to unlock a mutex which is locked by another thread"
       end
       @owner = nil
