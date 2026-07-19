@@ -781,6 +781,17 @@ class Thread
     end
   end
 
+  # Whether a detected deadlock is ignored rather than aborting. monoruby
+  # does not run the deadlock detector, but the flag round-trips.
+  @@ignore_deadlock = false
+  def self.ignore_deadlock
+    @@ignore_deadlock
+  end
+
+  def self.ignore_deadlock=(flag)
+    @@ignore_deadlock = flag
+  end
+
   attr_accessor :name
 
   # Reported when a thread dies with an unhandled exception (read by the
@@ -852,20 +863,104 @@ class Thread
 
   # Thread objects are native (ObjTy::THREAD) and no longer run a Ruby
   # initialize, so the local-storage tables are created lazily.
+
+  # Normalize a fiber-local / thread-variable key to a Symbol, as CRuby
+  # does: Symbols pass through, Strings convert, an object with #to_str
+  # converts through that, anything else is a TypeError.
+  def __thread_key(key)
+    case key
+    when Symbol
+      key
+    when String
+      key.to_sym
+    else
+      if key.respond_to?(:to_str)
+        key.to_str.to_sym
+      else
+        raise TypeError, "#{key.inspect} is not a symbol nor a string"
+      end
+    end
+  end
+  private :__thread_key
+
   def [](key)
-    @fiber_locals && @fiber_locals[key]
+    k = __thread_key(key)
+    @fiber_locals && @fiber_locals[k]
   end
 
   def []=(key, value)
-    (@fiber_locals ||= {})[key] = value
+    raise FrozenError, "can't modify frozen thread locals" if frozen?
+    (@fiber_locals ||= {})[__thread_key(key)] = value
+  end
+
+  def key?(key)
+    k = __thread_key(key)
+    !!(@fiber_locals && @fiber_locals.key?(k))
+  end
+
+  def keys
+    @fiber_locals ? @fiber_locals.keys : []
+  end
+
+  def fetch(key, *default)
+    if default.size > 1
+      raise ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)"
+    end
+    k = __thread_key(key)
+    if @fiber_locals && @fiber_locals.key?(k)
+      @fiber_locals[k]
+    elsif block_given?
+      warn "warning: block supersedes default value argument" unless default.empty?
+      yield(key)
+    elsif !default.empty?
+      default[0]
+    else
+      raise KeyError.new("key not found: #{key.inspect}", receiver: self, key: key)
+    end
   end
 
   def thread_variable_get(key)
-    @thread_variables && @thread_variables[key]
+    k = __thread_key(key)
+    @thread_variables && @thread_variables[k]
   end
 
   def thread_variable_set(key, value)
-    (@thread_variables ||= {})[key] = value
+    raise FrozenError, "can't modify frozen thread locals" if frozen?
+    (@thread_variables ||= {})[__thread_key(key)] = value
+  end
+
+  def thread_variable?(key)
+    k = __thread_key(key)
+    !!(@thread_variables && @thread_variables.key?(k))
+  end
+
+  def thread_variables
+    @thread_variables ? @thread_variables.keys : []
+  end
+
+  # monoruby has no real thread-scheduler priority; store the value so it
+  # round-trips (a new thread defaults to 0, matching an unset priority).
+  def priority
+    @priority || 0
+  end
+
+  def priority=(value)
+    unless value.is_a?(Integer)
+      unless value.respond_to?(:to_int) && (value = value.to_int).is_a?(Integer)
+        raise TypeError, "no implicit conversion of #{value.class} into Integer"
+      end
+    end
+    # CRuby clamps the stored priority to -3..3.
+    value = 3 if value > 3
+    value = -3 if value < -3
+    @priority = value
+  end
+
+  # A per-Thread identifier while the thread is alive (nil once it has
+  # finished). monoruby multiplexes green threads onto one OS thread, so
+  # this is a distinct-per-object token rather than a real kernel tid.
+  def native_thread_id
+    alive? ? object_id : nil
   end
 
   # The object returned by `Process.detach`. Reaping one specific child via
