@@ -928,7 +928,10 @@ class Thread
 
   class Mutex
     def locked?
-      !!@owner
+      # A thread releases its locks when it terminates (CRuby semantics), so
+      # an owner that is no longer alive means the lock has been abandoned
+      # and the mutex is effectively unlocked.
+      (o = @owner) ? o.alive? : false
     end
 
     def owned?
@@ -954,6 +957,16 @@ class Thread
     def lock
       raise ThreadError, "deadlock; recursive locking" if owned?
       until try_lock
+        # Reclaim a lock abandoned by a terminated owner (a dead thread
+        # never unlocks or wakes waiters, so a contender must take it over
+        # rather than park forever). Clearing @owner is idempotent under a
+        # race — concurrent reclaimers write the same nil — and the actual
+        # acquisition still goes through try_lock's atomic test-and-set, so
+        # no two threads can both win.
+        if (o = @owner) && !o.alive?
+          @owner = nil
+          next
+        end
         (@waiters ||= []) << Thread.current
         begin
           Thread.stop
