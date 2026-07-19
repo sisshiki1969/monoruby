@@ -291,8 +291,15 @@ pub(crate) extern "C" fn thread_alloc_func(class_id: ClassId, _: &mut Globals) -
 ///
 /// - new(*args) {|*args| ... } -> Thread
 ///
-/// Creates a green thread running the block and queues it; the body gets
-/// its first time slice at the next blocking point of any thread.
+/// Creates a green thread running the block, queues it, and immediately
+/// yields one time slice so the body starts before `new` returns (up to
+/// its first park). CRuby starts a new thread concurrently right away;
+/// deferring the first slice to "whenever anything next blocks" leaves a
+/// spawned-but-never-started thread behind whenever the spawner never
+/// blocks again — the thread then fires much later against torn-down
+/// state (ruby/spec's socket files: a stale accept thread from a
+/// finished example stole the next example's connection through a reused
+/// fd, deadlocking the file).
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/new.html]
 #[monoruby_builtin]
@@ -311,6 +318,10 @@ fn thread_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
     let class_id = lfp.self_val().as_class_id();
     let thread = Value::new_thread(class_id, ThreadInner::new(proc, args));
     scheduler::spawn(vm, thread);
+    // The eager first slice must keep `thread` (and this frame's Values)
+    // rooted: `pass` is a scheduler entry (GC-safe park point), and
+    // `thread` is reachable via the scheduler registry.
+    scheduler::pass(vm, globals)?;
     Ok(thread)
 }
 
