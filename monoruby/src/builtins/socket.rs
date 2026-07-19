@@ -265,16 +265,74 @@ fn sockaddr_in(addr_be: u32, port: u16) -> libc::sockaddr_in {
     sin
 }
 
+/// `socket(2)` with close-on-exec (and optionally non-blocking) set.
+/// Linux sets both atomically via `SOCK_CLOEXEC` / `SOCK_NONBLOCK`;
+/// macOS/BSD have neither flag, so fall back to `fcntl(2)` after
+/// creation (a benign race in a green-thread runtime — nothing forks
+/// between the two calls).
+fn cloexec_socket(domain: i32, ty: i32, proto: i32, nonblock: bool) -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        let mut ty = ty | libc::SOCK_CLOEXEC;
+        if nonblock {
+            ty |= libc::SOCK_NONBLOCK;
+        }
+        // SAFETY: plain socket(2).
+        unsafe { libc::socket(domain, ty, proto) }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // SAFETY: plain socket(2), then fcntl on the fd we just created.
+        unsafe {
+            let fd = libc::socket(domain, ty, proto);
+            if fd >= 0 {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                if nonblock {
+                    let flags = libc::fcntl(fd, libc::F_GETFL);
+                    if flags >= 0 {
+                        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                    }
+                }
+            }
+            fd
+        }
+    }
+}
+
+/// `accept(2)` returning a close-on-exec, *blocking* connection fd.
+/// Linux uses `accept4(2)`; macOS/BSD fall back to `accept(2)` +
+/// `fcntl(2)`, also clearing `O_NONBLOCK` — BSD-family accepted fds
+/// inherit the listener's non-blocking flag (Linux ones do not), and
+/// the IO layer expects blocking-mode sockets.
+fn cloexec_accept(fd: i32) -> i32 {
+    #[cfg(target_os = "linux")]
+    // SAFETY: accept4 on the caller's listener fd; out params unused (NULL).
+    unsafe {
+        libc::accept4(
+            fd,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            libc::SOCK_CLOEXEC,
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    // SAFETY: accept on the caller's listener fd; fcntl on the fresh fd.
+    unsafe {
+        let conn = libc::accept(fd, std::ptr::null_mut(), std::ptr::null_mut());
+        if conn >= 0 {
+            libc::fcntl(conn, libc::F_SETFD, libc::FD_CLOEXEC);
+            let flags = libc::fcntl(conn, libc::F_GETFL);
+            if flags >= 0 {
+                libc::fcntl(conn, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+            }
+        }
+        conn
+    }
+}
+
 /// A new non-blocking, close-on-exec TCP socket fd.
 fn new_tcp_fd(store: &Store) -> Result<i32> {
-    // SAFETY: plain socket(2).
-    let fd = unsafe {
-        libc::socket(
-            libc::AF_INET,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-            0,
-        )
-    };
+    let fd = cloexec_socket(libc::AF_INET, libc::SOCK_STREAM, 0, true);
     if fd < 0 {
         return Err(last_errno_err(store, "socket(2)"));
     }
@@ -431,17 +489,9 @@ fn tcp_server_accept(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byte
             }));
         }
         let fd = self_.as_io_inner().fileno()?;
-        // SAFETY: accept4 on our listener fd; out params unused (NULL).
-        let conn = unsafe {
-            libc::accept4(
-                fd,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                libc::SOCK_CLOEXEC,
-            )
-        };
+        let conn = cloexec_accept(fd);
         if conn >= 0 {
-            // SAFETY: conn is a fresh, owned fd from accept4.
+            // SAFETY: conn is a fresh, owned fd from accept.
             let file = unsafe { std::fs::File::from_raw_fd(conn) };
             return Ok(Value::new_socket(
                 file,
@@ -637,8 +687,7 @@ fn socket_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
         Some(v) if !v.is_nil() => v.coerce_to_i64(&globals.store)? as i32,
         _ => 0,
     };
-    // SAFETY: plain socket(2).
-    let fd = unsafe { libc::socket(domain, stype | libc::SOCK_CLOEXEC, proto) };
+    let fd = cloexec_socket(domain, stype, proto, false);
     if fd < 0 {
         return Err(last_errno_err(&globals.store, "socket(2)"));
     }
