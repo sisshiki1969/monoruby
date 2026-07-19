@@ -30,6 +30,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(RANGE_CLASS, "entries", &["to_a"], toa, 0);
     globals.define_builtin_func(RANGE_CLASS, "min", min, 0);
     globals.define_builtin_func(RANGE_CLASS, "max", max, 0);
+    // Fast paths kept reachable from the Ruby-level min/max overrides
+    // (builtins/range.rb), which add the `min(n)` / `max(n)` forms.
+    globals.define_builtin_func(RANGE_CLASS, "__builtin_min", min, 0);
+    globals.define_builtin_func(RANGE_CLASS, "__builtin_max", max, 0);
     globals.define_builtin_func(RANGE_CLASS, "count", count, 0);
     globals.define_builtin_func(RANGE_CLASS, "minmax", minmax, 0);
 }
@@ -1092,6 +1096,63 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn min_max_with_integer_argument() {
+        run_tests2(&[
+            "(1..10).min(2)",
+            "(1..10).max(2)",
+            "(1...10).max(2)",
+            "(0...2**64).max(2)",
+            "('f'..'l').min(2)",
+            "('a'...'f').max(2)",
+            "(..1).max(2)",
+            "(...1).max(2)",
+            "(100..10).min(2)",
+            "(5...5).min(2)",
+            "(5..5).max(2)",
+            "(1..).min(2)",
+            "(1..3).max(10)",
+            "(1..5).min(2) {|a,b| b<=>a}",
+            "(1..5).max(2) {|a,b| b<=>a}",
+            "(1..10).min(0)",
+        ]);
+        run_test_error("(1..).max(2)");
+        run_test_error("(..1).min(2)");
+        run_test_error("(1.0..2.0).min(2)");
+        run_test_error("(..1.0).max(2)");
+        run_test_error("(0..2).min(-1)");
+        run_test_error("(0..2).max('x')");
+    }
+
+    #[test]
+    fn string_range_succ_order_iteration() {
+        // succ order sorts by length first: "a".."ab" runs a..z, aa, ab.
+        run_tests2(&[
+            r#"("a".."ab").to_a"#,
+            r#"("z".."aa").to_a"#,
+            r#"("a".."ab").include?("b")"#,
+            r#"("a".."ab").include?("ac")"#,
+            r#"o = Object.new; def o.to_str; "b"; end; ("a".."aa").include?(o)"#,
+            r#"t = Time.at(0); [(t..).include?(t + 1), (nil..nil).include?(t)]"#,
+        ]);
+    }
+
+    #[test]
+    fn cover_range_argument_edge_cases() {
+        run_tests2(&[
+            "(1...1).cover?(1...1)",
+            "(1..3).cover?(2...2)",
+            "(1..3).cover?(3..1)",
+            "(nil...nil).cover?(4..6)",
+            "(nil...nil).cover?(1..)",
+            "(1...).cover?(1..)",
+            "(1..10).cover?(4...11)",
+            "(..10).cover?(4...11)",
+            "(0..10.0).cover?(5...11.0)",
+            "(..10.0).cover?(...11.0)",
+        ]);
+    }
 
     #[test]
     fn range_basics_to_s_inspect_each_map_flat_map() {
