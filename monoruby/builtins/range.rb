@@ -52,7 +52,15 @@ class Range
           return self
         end
       end
-      end_len = (e.is_a?(Symbol) ? e.to_s.length : e.length) if seq_mode
+      if seq_mode
+        end_len = e.is_a?(Symbol) ? e.to_s.length : e.length
+        # CRuby's rb_str_upto_each gates on a plain lexicographic
+        # compare before iterating: ("z".."aa") is empty even though
+        # succ order would reach "aa" — only ranges with beg <= end
+        # as strings iterate at all.
+        c0 = (i <=> e)
+        return self if c0.nil? || c0 > 0 || (excl && c0 == 0)
+      end
       loop do
         if seq_mode
           cur_len = i.is_a?(Symbol) ? i.to_s.length : i.length
