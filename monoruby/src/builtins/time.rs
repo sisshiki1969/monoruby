@@ -2353,7 +2353,11 @@ fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         TimeInner::Utc(t) => t.format("%Y-%m-%d %H:%M:%S UTC"),
     }
     .to_string();
-    Ok(Value::string(s))
+    let mut v = Value::string(s);
+    // CRuby returns `Time#to_s` as a US-ASCII string (like `#inspect`).
+    v.as_rstring_inner_mut()
+        .set_encoding(crate::value::Encoding::UsAscii);
+    Ok(v)
 }
 
 ///
