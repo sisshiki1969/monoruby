@@ -1131,4 +1131,59 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn constructor_variants_and_errors() {
+        run_test_once(
+            r#"
+            require "socket"
+            res = []
+            # unknown host -> SocketError
+            begin
+              TCPSocket.new("no-such-host.invalid", 80)
+              res << "connected"
+            rescue SocketError
+              res << "SocketError"
+            end
+            # TCPServer.new(port) form; listen; numeric addr
+            s = TCPServer.new(0)
+            res << s.addr[0]
+            s2 = TCPServer.new("127.0.0.1", 0)
+            res << s2.listen(5)
+            res << s2.addr(:numeric).values_at(0, 2, 3)
+            # Socket.new with String family/type and explicit protocol
+            sock = Socket.new("INET", "STREAM", 0)
+            res << sock.is_a?(Socket)
+            sock.close
+            # 4-arg TCPSocket.new with local bind
+            port = s2.addr[1]
+            t = Thread.new { c = s2.accept; c.close }
+            k = TCPSocket.new("127.0.0.1", port, "127.0.0.1", 0)
+            res << k.addr[2]
+            k.close
+            t.join
+            s.close
+            s2.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn shutdown_symbol_and_eof_read() {
+        run_test_once(
+            r#"
+            require "socket"
+            s = TCPServer.new("127.0.0.1", 0)
+            got = nil
+            t = Thread.new { c = s.accept; got = c.read; c.close }
+            k = TCPSocket.new("127.0.0.1", s.addr[1])
+            k.shutdown(:WR)
+            t.join
+            k.close
+            s.close
+            got
+            "#,
+        );
+    }
 }
