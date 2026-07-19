@@ -386,21 +386,51 @@ impl AbstractFrame {
                 // returns are tainted to `Value` upstream by
                 // `taint_for_unmodeled_rescue`, so what arrives here is
                 // a true compile-time constant — safe to fold into the
-                // caller's abstract state.
+                // caller's abstract state. (No machine store happens, so
+                // a capture during the call is harmless here: deopt
+                // write-backs address slots via the LFP.)
                 ReturnValue::Const(v) => {
                     self.def_C(dst, v);
                 }
                 ReturnValue::Class(class) => {
-                    self.def_reg2acc_class(ir, GP::Rax, dst, class);
+                    self.def_return_store_guarded(ir, GP::Rax, dst, slot::Guarded::from_class(class));
                 }
                 ReturnValue::Value => {
-                    self.def_rax2acc(ir, dst);
+                    self.def_return_store_guarded(ir, GP::Rax, dst, slot::Guarded::Value);
                 }
             }
             CompileResult::Continue
         } else {
             ir.push(AsmInst::Unreachable);
             CompileResult::Cease
+        }
+    }
+
+    /// Store a specialized-call / specialized-yield result from `src`.
+    /// On the fast path (`no_capture_guard` holds) this is the ordinary
+    /// rbp-relative slot store. When the invariant is broken — the callee
+    /// may have moved this frame to the heap during the call, e.g. by
+    /// capturing its own frame with `Proc.new`, which makes
+    /// `materialize_escaped_block_handlers` promote this frame too when
+    /// the call site passed a block literal — the store must go via the
+    /// LFP (r14, reloaded from `cfp.lfp` after the call) so it lands on
+    /// whichever frame is live, exactly like `def_rax2acc_capturing`.
+    /// The `GuardCapture` deopt that `immediate_evict` emits afterwards
+    /// only re-homes register residents, never an rbp-stored `S` slot.
+    fn def_return_store_guarded(
+        &mut self,
+        ir: &mut AsmIr,
+        src: GP,
+        dst: impl Into<Option<SlotId>>,
+        guarded: slot::Guarded,
+    ) {
+        if let Some(dst) = dst.into() {
+            if self.no_capture_guard() {
+                ir.reg2stack(src, dst);
+            } else {
+                ir.reg2lfp_stack(src, dst);
+            }
+            self.def_S_guarded(dst, guarded);
         }
     }
 
