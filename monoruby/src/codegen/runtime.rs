@@ -1299,8 +1299,17 @@ pub(super) extern "C" fn get_index(
     globals: &mut Globals,
     base: Value,
     index: Value,
-    class_slot: &mut ClassIdSlot,
+    // Bit 0 carries `is_func_call`: the VM sets it when the base operand is
+    // slot 0 (a literal `self[i]`), which reaches a private `#[]`; it is clear
+    // for any other receiver, which enforces visibility. The slot lives
+    // 8-aligned in the bytecode stream, so bit 0 is free. Only consulted on
+    // the user-class fallback below — Array/Hash slice with no visibility gate.
+    class_slot: *mut ClassIdSlot,
 ) -> Option<Value> {
+    let is_func_call = (class_slot as usize) & 1 != 0;
+    // SAFETY: the VM passes `&ClassIdSlot | is_func_call`; clearing bit 0
+    // restores the original 8-aligned slot pointer.
+    let class_slot = unsafe { &mut *(((class_slot as usize) & !1) as *mut ClassIdSlot) };
     let base_classid = base.class();
     class_slot.base = base_classid;
     class_slot.idx = index.class();
@@ -1404,7 +1413,7 @@ pub(super) extern "C" fn get_index(
         }
         _ => {}
     }
-    vm.invoke_method_simple(globals, IdentId::_INDEX, base, &[index])
+    vm.invoke_method(globals, IdentId::_INDEX, is_func_call, base, &[index], None, None)
 }
 
 pub(super) extern "C" fn set_index(
@@ -1413,8 +1422,14 @@ pub(super) extern "C" fn set_index(
     base: Value,
     index: Value,
     src: Value,
-    class_slot: &mut ClassIdSlot,
+    // Bit 0 carries `is_func_call` — see `get_index`. `self[i] = v` reaches a
+    // private `#[]=`; any other receiver enforces visibility.
+    class_slot: *mut ClassIdSlot,
 ) -> Option<Value> {
+    let is_func_call = (class_slot as usize) & 1 != 0;
+    // SAFETY: the VM passes `&ClassIdSlot | is_func_call`; clearing bit 0
+    // restores the original 8-aligned slot pointer.
+    let class_slot = unsafe { &mut *(((class_slot as usize) & !1) as *mut ClassIdSlot) };
     let base_classid = base.class();
     class_slot.base = base_classid;
     class_slot.idx = index.class();
@@ -1434,7 +1449,15 @@ pub(super) extern "C" fn set_index(
             }
         };
     }
-    vm.invoke_method_simple(globals, IdentId::_INDEX_ASSIGN, base, &[index, src])
+    vm.invoke_method(
+        globals,
+        IdentId::_INDEX_ASSIGN,
+        is_func_call,
+        base,
+        &[index, src],
+        None,
+        None,
+    )
 }
 
 /*///

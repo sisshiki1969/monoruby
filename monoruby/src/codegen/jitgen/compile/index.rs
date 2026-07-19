@@ -13,11 +13,11 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<CompileResult> {
         let (base_class, idx_class) = state.binary_class(base, idx, ic);
         if let Some(lhs_class) = base_class {
-            // The `Index` fast-path calls `#[]` directly, bypassing the
-            // `is_func_call = false` visibility gate the VM's `get_index`
-            // applies. Bail to the interpreter for a non-public `#[]` so its
-            // `NoMethodError` still fires (a literal `self[i]` reaches a
-            // private `#[]` through the ordinary call site, not here).
+            // The JIT `Index` fast-path calls `#[]` directly without a
+            // visibility check. Bail to the interpreter for a non-public
+            // `#[]`: the VM's `get_index` receives the `is_func_call` bit
+            // (base-slot == self) and so raises `NoMethodError` for a plain
+            // `obj[i]` while letting an explicit-`self` `self[i]` through.
             if !self.jit_index_method_is_public(lhs_class, IdentId::_INDEX) {
                 return Ok(CompileResult::Deopt);
             }
@@ -48,11 +48,12 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<CompileResult> {
         let (base_class, idx_class) = state.binary_class(base, idx, ic);
         if let Some(recv_class) = base_class {
-            // The `IndexAssign` fast-path calls `#[]=` directly, bypassing the
-            // `is_func_call = false` visibility gate the VM's `set_index`
-            // applies. Bail to the interpreter for a non-public `#[]=` so its
-            // `NoMethodError` still fires (a literal `self[i] = v` reaches a
-            // private `#[]=` through the ordinary call site, not here).
+            // The JIT `IndexAssign` fast-path calls `#[]=` directly without a
+            // visibility check. Bail to the interpreter for a non-public
+            // `#[]=`: the VM's `set_index` receives the `is_func_call` bit
+            // (base-slot == self) and so raises `NoMethodError` for a plain
+            // `obj[i] = v` while letting an explicit-`self` `self[i] = v`
+            // through.
             if !self.jit_index_method_is_public(recv_class, IdentId::_INDEX_ASSIGN) {
                 return Ok(CompileResult::Deopt);
             }

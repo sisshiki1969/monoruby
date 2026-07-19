@@ -172,11 +172,12 @@ impl<'a> BytecodeGen<'a> {
                 box base,
                 mut index,
             } => {
-                // A `self[..]` read must go through the general `#[]` call
-                // site (not the `Index` fast-path opcode, which always
-                // enforces visibility) so a private `#[]` is reachable via
-                // the explicit-`self` receiver, matching CRuby.
-                if index.len() == 1 && !index[0].is_splat() && base.kind != NodeKind::SelfValue {
+                // `self[i]` uses the fast `Index` opcode like any other
+                // single-index read; `gen_index` keeps a literal `self` base as
+                // slot 0, so the VM passes `is_func_call` to `get_index` and a
+                // private `#[]` stays reachable (matching CRuby) with no slow
+                // call-site detour for the common public case.
+                if index.len() == 1 && !index[0].is_splat() {
                     self.gen_index(Some(dst), base, index.remove(0), loc)?;
                 } else {
                     let arglist = ArgList::from_args(index);
@@ -484,11 +485,10 @@ impl<'a> BytecodeGen<'a> {
                 box base,
                 mut index,
             } => {
-                // A `self[..]` read must go through the general `#[]` call
-                // site (not the `Index` fast-path opcode, which always
-                // enforces visibility) so a private `#[]` is reachable via
-                // the explicit-`self` receiver, matching CRuby.
-                if index.len() == 1 && !index[0].is_splat() && base.kind != NodeKind::SelfValue {
+                // `self[i]` uses the fast `Index` opcode; a literal `self` base
+                // stays slot 0 so the VM passes `is_func_call` to `get_index`
+                // and a private `#[]` stays reachable. See the read arm above.
+                if index.len() == 1 && !index[0].is_splat() {
                     self.gen_index(None, base, index.remove(0), loc)?;
                 } else {
                     let arglist = ArgList::from_args(index);
@@ -1669,7 +1669,16 @@ impl<'a> BytecodeGen<'a> {
 
     fn gen_index(&mut self, ret: Option<BcReg>, base: Node, index: Node, loc: Loc) -> Result<()> {
         let old = self.temp;
-        let base = self.gen_expr_reg(base)?;
+        // Keep a literal `self` base as `BcReg::Self_` (slot 0, no temp) so the
+        // emitted `Index` opcode records the receiver as self: the VM reads
+        // base-slot == 0 and passes `is_func_call = true` to `get_index`, which
+        // lets `self[i]` reach a private `#[]` (matching CRuby) while a plain
+        // `obj[i]` — or `x = self; x[i]` — still enforces visibility.
+        let base = if base.kind == NodeKind::SelfValue {
+            BcReg::Self_
+        } else {
+            self.gen_expr_reg(base)?
+        };
         let index = self.gen_expr_reg(index)?;
         self.temp = old;
         let ret = match ret {

@@ -1019,6 +1019,15 @@ impl Codegen {
     fn vm_index(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch3();
+        // is_func_call = (base slot == self, slot 0): a literal `self[i]`
+        // reaches a private `#[]`; any other receiver enforces visibility.
+        // rdi still holds the base *slot* here, before it becomes a value.
+        // The bit rides in `class_slot`'s low bit (8-aligned → free).
+        monoasm! { &mut self.jit,
+            xorq rax, rax;
+            testq rdi, rdi;
+            seteq rax;     // rax <- (base slot == 0)
+        };
         self.vm_get_slot_value(GP::Rdi);
         self.vm_get_slot_value(GP::Rsi);
         monoasm! { &mut self.jit,
@@ -1026,7 +1035,8 @@ impl Codegen {
             movq rcx, rsi; // idx: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            lea  r8, [r13 - 8]; // &mut ClassId
+            lea  r8, [r13 - 8]; // &mut ClassIdSlot
+            orq  r8, rax;  // fold is_func_call into bit 0
             movq rax, (runtime::get_index);
             call rax;
         };
@@ -1039,6 +1049,14 @@ impl Codegen {
     fn vm_index_assign(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch3();
+        // is_func_call = (base slot == self, slot 0): `self[i] = v` reaches a
+        // private `#[]=`. rdi still holds the base *slot* here. The bit rides
+        // in `class_slot`'s low bit (8-aligned → free).
+        monoasm! { &mut self.jit,
+            xorq rax, rax;
+            testq rdi, rdi;
+            seteq rax;     // rax <- (base slot == 0)
+        };
         self.vm_get_slot_value(GP::R15);
         self.vm_get_slot_value(GP::Rdi);
         self.vm_get_slot_value(GP::Rsi);
@@ -1048,7 +1066,8 @@ impl Codegen {
             movq r8, r15;  // src: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            lea  r9, [r13 - 8];
+            lea  r9, [r13 - 8]; // &mut ClassIdSlot
+            orq  r9, rax;  // fold is_func_call into bit 0
             movq rax, (runtime::set_index);
             call rax;
         };

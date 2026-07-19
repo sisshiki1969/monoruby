@@ -1703,23 +1703,16 @@ impl<'a> BytecodeGen<'a> {
                         splat_pos,
                     }
                 } else if index.len() == 1 {
+                    // `self[i] = v` uses the fast `StoreIndex` opcode like any
+                    // other single-index assign; a literal `self` base stays
+                    // `BcReg::Self_` (slot 0) so the VM records the receiver as
+                    // self and lets `set_index` reach a private `#[]=` (see
+                    // `runtime::set_index`). `x = self; x[i] = v` keeps a temp
+                    // base, so it still enforces visibility.
                     let base = self.eval_index_base(base)?;
                     let index = self.push_expr(index[0].clone())?;
                     self.push(); // register for src.
-                    if base == BcReg::Self_ {
-                        // `self[i] = v` must reach a private `#[]=` via the
-                        // explicit-`self` receiver. Route it through the
-                        // general `#[]=` call site (`Index2`) rather than the
-                        // `StoreIndex` fast-path opcode, which always enforces
-                        // visibility.
-                        LvalueKind::Index2 {
-                            base,
-                            index1: index,
-                            num: 1,
-                        }
-                    } else {
-                        LvalueKind::Index { base, index }
-                    }
+                    LvalueKind::Index { base, index }
                 } else {
                     let base = self.eval_index_base(base)?;
                     let index1 = self.push_expr(index[0].clone())?;
