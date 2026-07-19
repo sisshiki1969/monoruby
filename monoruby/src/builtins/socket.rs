@@ -940,3 +940,195 @@ fn shutdown_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
     Ok(Value::integer(0))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn tcp_echo_roundtrip() {
+        run_test_once(
+            r#"
+            require "socket"
+            s = TCPServer.new("127.0.0.1", 0)
+            port = s.addr[1]
+            t = Thread.new { c = s.accept; c.write(c.gets); c.close }
+            k = TCPSocket.new("127.0.0.1", port)
+            k.puts "hello"
+            res = k.gets
+            k.close
+            t.join
+            s.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn tcp_open_block_and_connect_timeout() {
+        run_test_once(
+            r#"
+            require "socket"
+            s = TCPServer.new("127.0.0.1", 0)
+            port = s.addr[1]
+            t = Thread.new { c = s.accept; c.write("pong\n"); c.close }
+            res = TCPSocket.open("127.0.0.1", port, connect_timeout: 5) { |k| k.gets }
+            t.join
+            s.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn tcp_addr_and_peeraddr() {
+        run_test_once(
+            r#"
+            require "socket"
+            s = TCPServer.new("127.0.0.1", 0)
+            port = s.addr[1]
+            t = Thread.new { c = s.accept; sleep 0.2; c.close }
+            k = TCPSocket.new("127.0.0.1", port)
+            res = [
+              s.addr.values_at(0, 2, 3),
+              s.addr[1].is_a?(Integer),
+              k.peeraddr.values_at(0, 2, 3),
+              k.peeraddr[1] == port,
+              k.addr[0],
+              IPSocket.getaddress("127.0.0.1"),
+            ]
+            k.close
+            t.join
+            s.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn tcp_connect_refused() {
+        run_test_once(
+            r#"
+            require "socket"
+            # Grab a port that is momentarily free, then connect after closing.
+            s = TCPServer.new("127.0.0.1", 0)
+            port = s.addr[1]
+            s.close
+            begin
+              TCPSocket.new("127.0.0.1", port)
+              "connected"
+            rescue Errno::ECONNREFUSED
+              "refused"
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn accept_closed_in_another_thread() {
+        run_test_once(
+            r#"
+            require "socket"
+            s = TCPServer.new("127.0.0.1", 0)
+            t = Thread.new do
+              begin
+                s.accept
+                "accepted"
+              rescue IOError => e
+                e.message
+              end
+            end
+            sleep 0.2
+            s.close
+            t.value
+            "#,
+        );
+    }
+
+    #[test]
+    fn shutdown_write_gives_server_eof() {
+        run_test_once(
+            r#"
+            require "socket"
+            s = TCPServer.new("127.0.0.1", 0)
+            port = s.addr[1]
+            t = Thread.new { c = s.accept; got = c.read; c.write(got.upcase); c.close; got }
+            k = TCPSocket.new("127.0.0.1", port)
+            k.write "chunked body"
+            k.shutdown(Socket::SHUT_WR)
+            res = [k.read, t.value]
+            k.close
+            s.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn socket_new_and_constants() {
+        run_test_once(
+            r#"
+            require "socket"
+            sock = Socket.new(:INET, :STREAM)
+            res = [
+              sock.is_a?(Socket),
+              sock.is_a?(BasicSocket),
+              sock.close,
+              Socket::AF_INET == Socket::Constants::AF_INET,
+              Socket::SOCK_STREAM.is_a?(Integer),
+              Socket::SOL_SOCKET.is_a?(Integer),
+              Socket::SOMAXCONN >= 1,
+              TCPSocket.superclass,
+              TCPServer.superclass,
+              BasicSocket.superclass,
+              SocketError.superclass,
+            ]
+            res
+            "#,
+        );
+    }
+
+    // getsockopt returns a plain Integer in monoruby (CRuby wraps it in
+    // Socket::Option), so assert monoruby's behavior directly instead of
+    // comparing with CRuby.
+    #[test]
+    fn set_and_getsockopt() {
+        let v = run_test_no_result_check(
+            r#"
+            require "socket"
+            s = TCPServer.new("127.0.0.1", 0)
+            s.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
+            on = s.getsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE)
+            s.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, false)
+            off = s.getsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE)
+            s.close
+            [on != 0, off].inspect
+            "#,
+        );
+        assert_eq!("[true, 0]", v.as_str());
+    }
+
+    #[test]
+    fn gets_read_partial_across_packets() {
+        run_test_once(
+            r#"
+            require "socket"
+            s = TCPServer.new("127.0.0.1", 0)
+            port = s.addr[1]
+            t = Thread.new do
+              c = s.accept
+              c.write "line one\n"
+              sleep 0.1
+              c.write "line two\nrest"
+              c.close
+            end
+            k = TCPSocket.new("127.0.0.1", port)
+            res = [k.gets, k.gets, k.read]
+            k.close
+            t.join
+            s.close
+            res
+            "#,
+        );
+    }
+}

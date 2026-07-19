@@ -7212,4 +7212,25 @@ mod tests {
             r##"require "stringio""##,
         );
     }
+
+    #[test]
+    fn io_wait_readable_writable() {
+        run_test_once(
+            r#"
+            require "io/wait"
+            r, w = IO.pipe
+            res = []
+            res << r.wait_readable(0)          # no data yet -> nil
+            w.write "x"
+            res << (r.wait_readable(1) == r)
+            res << (w.wait_writable(1) == w)
+            res << (r.wait(1, :read) == r)
+            res << (r.read(0))                 # length 0 never blocks
+            res << (r.read(1))
+            r.close
+            w.close
+            res
+            "#,
+        );
+    }
 }
