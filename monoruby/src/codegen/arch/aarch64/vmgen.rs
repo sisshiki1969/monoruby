@@ -707,15 +707,20 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
-            ldrh x2, [x(PC.0), #(2)];
+            ldrh x2, [x(PC.0), #(2)];  // base slot
+            // is_func_call = (base slot == self, slot 0): a literal `self[i]`
+            // reaches a private `#[]`; any other receiver enforces visibility.
+            cmp x2, #(0);
         );
+        self.jit.cset(X5, Cond::Eq); // x5 <- (base slot == 0)
         self.a64_slot_value(X2); // base
         monoasm_arm64!(&mut self.jit,
             ldrh x3, [x(PC.0)];
         );
         self.a64_slot_value(X3); // idx
         monoasm_arm64!(&mut self.jit,
-            add x4, x(PC.0), #(8);  // &cache
+            add x4, x(PC.0), #(8);  // &cache (8-aligned)
+            orr x4, x4, x5;         // fold is_func_call into bit 0
             mov x9, (runtime::get_index as *const () as u64);
             blr x9;
         );
@@ -731,8 +736,12 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
-            ldrh x2, [x(PC.0), #(2)];
+            ldrh x2, [x(PC.0), #(2)];  // base slot
+            // is_func_call = (base slot == self, slot 0): `self[i] = v` reaches
+            // a private `#[]=`; any other receiver enforces visibility.
+            cmp x2, #(0);
         );
+        self.jit.cset(X6, Cond::Eq); // x6 <- (base slot == 0)
         self.a64_slot_value(X2); // base
         monoasm_arm64!(&mut self.jit,
             ldrh x3, [x(PC.0)];
@@ -743,7 +752,8 @@ impl Codegen {
         );
         self.a64_slot_value(X4); // src
         monoasm_arm64!(&mut self.jit,
-            add x5, x(PC.0), #(8);  // &cache
+            add x5, x(PC.0), #(8);  // &cache (8-aligned)
+            orr x5, x5, x6;         // fold is_func_call into bit 0
             mov x9, (runtime::set_index as *const () as u64);
             blr x9;
             cbz x0, raise;
