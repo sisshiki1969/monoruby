@@ -57,6 +57,15 @@ class Range
         if seq_mode
           cur_len = i.is_a?(Symbol) ? i.to_s.length : i.length
           break if cur_len > end_len
+          # succ order sorts first by length, then lexicographically —
+          # `"b" < "ab"` in succ order even though `"b" > "ab"` as
+          # strings ("a".."ab" runs a..z then aa, ab). While shorter
+          # than the end, keep stepping without the lex comparison.
+          if cur_len < end_len
+            yield i
+            i = i.succ
+            next
+          end
         end
         c = (i <=> e)
         break if c.nil?
@@ -212,31 +221,134 @@ class Range
   def include?(val)
     b = self.begin
     e = self.end
-    # Fully-open range: accept Numeric val, reject anything else as
-    # "inclusion undecidable".
+    # Fully-open range: accept "linear" values (CRuby's linear_object_p:
+    # Numeric and Time), reject anything else as "inclusion
+    # undecidable".
     if b.nil? && e.nil?
-      return true if val.is_a?(Numeric)
+      return true if val.is_a?(Numeric) || val.is_a?(Time)
       raise TypeError, "cannot determine inclusion in beginless/endless ranges"
     end
-    # Numeric-backed range uses cover? (continuous semantics).
-    if b.is_a?(Numeric) || e.is_a?(Numeric)
+    # A range with a linear endpoint uses cover? (continuous semantics).
+    if b.is_a?(Numeric) || e.is_a?(Numeric) || b.is_a?(Time) || e.is_a?(Time)
       return cover?(val)
     end
-    # Non-numeric ranges with a nil endpoint cannot decide inclusion.
+    # Non-linear ranges with a nil endpoint cannot decide inclusion.
     if b.nil? || e.nil?
       raise TypeError, "cannot determine inclusion in beginless/endless ranges"
     end
-    # Both endpoints present and non-numeric: use succ iteration if possible.
+    # String ranges convert the argument with #to_str first (CRuby's
+    # rb_check_string_type in rb_str_include_range_p).
+    if b.is_a?(String) && e.is_a?(String) && !val.is_a?(String)
+      return false unless val.respond_to?(:to_str)
+      conv = val.to_str
+      unless conv.is_a?(String)
+        raise TypeError,
+              "can't convert #{val.class} to String (#{val.class}#to_str gives #{conv.class})"
+      end
+      val = conv
+    end
+    # Both endpoints present and non-linear: use succ iteration if possible.
     if b.respond_to?(:succ)
       self.each do |x|
         return true if x == val
       end
       return false
     end
-    # Non-succ types (e.g., Time): fall back to cover? semantics.
+    # Non-succ types: fall back to cover? semantics.
     cover?(val)
   end
   alias member? include?
+
+  # The n argument of min(n)/max(n): #to_int conversion + validation.
+  def __minmax_n(n)
+    unless n.is_a?(Integer)
+      unless n.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{n.class} into Integer"
+      end
+      conv = n.to_int
+      unless conv.is_a?(Integer)
+        raise TypeError,
+              "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{conv.class})"
+      end
+      n = conv
+    end
+    raise ArgumentError, "negative array size (or size too big)" if n < 0
+    n
+  end
+
+  def min(n = nil, &block)
+    raise RangeError, "cannot get the minimum of beginless range" if self.begin.nil?
+    if block
+      if self.end.nil?
+        raise RangeError, "cannot get the minimum of endless range with custom comparison method"
+      end
+      return __builtin_min(&block) if n.nil?
+      return to_a.sort(&block).first(__minmax_n(n))
+    end
+    return __builtin_min if n.nil?
+    n = __minmax_n(n)
+    # min(n) == the first n elements in iteration order: works lazily for
+    # endless Integer ranges, yields [] for empty/backward ones, and
+    # raises TypeError via #each when the begin has no #succ (Float,
+    # Time, Array, ...).
+    res = []
+    each do |x|
+      break if res.size == n
+      res << x
+    end
+    res
+  end
+
+  def max(n = nil, &block)
+    e = self.end
+    raise RangeError, "cannot get the maximum of endless range" if e.nil?
+    if block
+      if self.begin.nil?
+        raise RangeError, "cannot get the maximum of beginless range with custom comparison method"
+      end
+      return __builtin_max(&block) if n.nil?
+      return to_a.sort(&block).last(__minmax_n(n)).reverse
+    end
+    if n.nil?
+      if exclude_end? && !e.is_a?(Numeric)
+        # CRuby's Enumerable fallback: an exclusive range with a
+        # non-numeric, succ-iterable end is iterated to its rightmost
+        # element (the numeric fast path below instead raises
+        # "cannot exclude non Integer end value" for e.g. Float ends —
+        # which cover?'s range-argument rescue relies on).
+        if self.begin.nil?
+          raise RangeError, "cannot get the maximum of beginless range with custom comparison method"
+        end
+        m = nil
+        each { |x| m = x }
+        return m
+      end
+      return __builtin_max
+    end
+    n = __minmax_n(n)
+    if e.is_a?(Integer)
+      # Arithmetic from the top: handles beginless ends and huge spans
+      # ((0...2**64).max(2)) without iterating from the start.
+      hi = exclude_end? ? e - 1 : e
+      b = self.begin
+      lo = hi - n + 1
+      unless b.nil?
+        c = (b <=> hi)
+        return [] if c.nil? || c > 0
+        lo = b if b.is_a?(Integer) && lo < b
+      end
+      res = []
+      v = hi
+      while v >= lo
+        res << v
+        v -= 1
+      end
+      return res
+    end
+    # Non-Integer end: materialize the range (raises TypeError via #each
+    # for begins that cannot be iterated — Float, Time, Array, nil).
+    to_a.last(n).reverse
+  end
 
   def lazy
     Enumerator::Lazy.new(self)
@@ -521,37 +633,57 @@ class Range
     true
   end
 
+  # Port of CRuby's r_cover_range_p (range.c).
   def __cover_range_q(val)
-    s_b = self.begin
     s_e = self.end
     v_b = val.begin
     v_e = val.end
 
-    return false if v_b.nil? && !s_b.nil?
+    return false if v_b.nil? && !self.begin.nil?
     return false if v_e.nil? && !s_e.nil?
 
-    if !s_b.nil? && !v_b.nil?
-      c = (s_b <=> v_b)
+    # An empty or backward other is never covered.
+    if !v_b.nil? && !v_e.nil?
+      c = (v_b <=> v_e)
       return false if c.nil?
-      return false if c > 0
+      return false if c > (val.exclude_end? ? -1 : 0)
     end
 
-    # Normalise exclusive Integer endpoints to inclusive (so `...11`
-    # matches `..10`), then compare and handle equality for strict Floats.
-    if !s_e.nil? && !v_e.nil?
-      s_eff = (self.exclude_end? && s_e.is_a?(Integer)) ? s_e - 1 : s_e
-      v_eff = (val.exclude_end?  && v_e.is_a?(Integer)) ? v_e - 1 : v_e
-      c = (v_eff <=> s_eff)
-      return false if c.nil?
-      return false if c > 0
-      if c == 0
-        s_strict = self.exclude_end? && !s_e.is_a?(Integer)
-        v_strict = val.exclude_end?  && !v_e.is_a?(Integer)
-        return false if s_strict && !v_strict
-      end
+    return false if !v_b.nil? && !__cover_val_q(v_b)
+
+    if !v_e.nil? && !s_e.nil?
+      cmp_end = (s_e <=> v_e)
+      return false if cmp_end.nil?
+    elsif s_e.nil? && !v_e.nil?
+      # self is endless, other is bounded: self's end (+∞) is greater,
+      # so even an exclusive self covers other's end.
+      cmp_end = 1
+    else
+      # Both ends nil (a bounded self with an endless other already
+      # returned false above): equal.
+      cmp_end = 0
     end
 
-    true
+    if exclude_end? == val.exclude_end?
+      return cmp_end >= 0
+    elsif exclude_end?
+      return cmp_end > 0
+    elsif cmp_end >= 0
+      return true
+    end
+
+    # self is inclusive, other is exclusive, and other's raw endpoint
+    # lies past self.end: other may still be covered if its actual
+    # maximum element is — e.g. (1..2).cover?(1...3), or a generic
+    # succ-iterable other whose rightmost value <= self.end.
+    v_max = begin
+      val.max
+    rescue TypeError
+      nil
+    end
+    return false if v_max.nil?
+    c = (s_e <=> v_max)
+    !c.nil? && c >= 0
   end
 
   def __range_empty_q(r)
