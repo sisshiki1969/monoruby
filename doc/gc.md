@@ -234,7 +234,8 @@ struct Metadata {          // rvalue.rs:2373
 | 4 | `0b0001_0000` | WB_UNPROTECTED(shady 用に予約。現状**未使用** — §7.3) |
 | 5 | `0b0010_0000` | **REMEMBERED**(remembered set に登録済み) |
 | 6 | `0b0100_0000` | **WB_PENDING / armed**(old かつ未 remembered = 書き込みバリアの slow path 対象) |
-| 8..15 | 上位バイト | **age**(生存回数;`RGENGC_OLD_AGE` で昇格) |
+| 7 | `0b1000_0000` | CHILLED_LITERAL(リテラル由来の chilled 文字列;警告文言の出し分け用) |
+| 8..15 | 上位バイト | **age**(生存回数;`RGENGC_OLD_AGE` で昇格。上位バイトは age 専用 — 下位バイトのフラグはここに置かないこと) |
 
 新規オブジェクトは `flag == 1` なので、OLD / REMEMBERED / WB_PENDING はすべて 0
 (= young・バリア対象外)、age は 0 から始まる。
