@@ -713,16 +713,16 @@ mod tests {
 
     #[test]
     fn proc_to_s() {
-        // The address differs per run, so check the stable invariants
-        // (CRuby: `#<Proc:0xADDR FILE:LINE [(lambda)]>`, BINARY encoding;
-        // `inspect` == `to_s`; `:sym.to_proc` shows `(&:sym)`).
-        run_test(r#"proc { }.to_s.encoding.to_s"#);
-        run_test(
+        run_tests(&[
+            // The address differs per run, so check the stable invariants
+            // (CRuby: `#<Proc:0xADDR FILE:LINE [(lambda)]>`, BINARY encoding;
+            // `inspect` == `to_s`; `:sym.to_proc` shows `(&:sym)`).
+            r#"proc { }.to_s.encoding.to_s"#,
             r##"[proc { }.to_s.start_with?("#<Proc:0x"),
                (-> () {}).to_s.include?(" (lambda)"),
                :foo.to_proc.to_s.include?("(&:foo)"),
                proc { }.inspect.start_with?("#<Proc:0x")]"##,
-        );
+        ]);
     }
 
     #[test]

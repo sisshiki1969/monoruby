@@ -624,10 +624,12 @@ mod tests {
 
     #[test]
     fn basicobject_equal_is_alias_of_eq() {
-        // ruby/spec core/basicobject/equal_spec.rb: `equal?` must be the same
-        // method entry as `==` on BasicObject.
-        run_test("BasicObject.instance_method(:equal?) == BasicObject.instance_method(:==)");
-        run_test("BasicObject.public_instance_methods(false).include?(:equal?)");
+        run_tests(&[
+            // ruby/spec core/basicobject/equal_spec.rb: `equal?` must be the same
+            // method entry as `==` on BasicObject.
+            "BasicObject.instance_method(:equal?) == BasicObject.instance_method(:==)",
+            "BasicObject.public_instance_methods(false).include?(:equal?)",
+        ]);
     }
 
     #[test]
