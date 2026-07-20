@@ -1248,7 +1248,7 @@ impl RValue {
 
     pub(super) fn deep_copy(&self) -> Self {
         RValue {
-            header: self.header,
+            header: self.header.newborn(),
             var_table: self.var_table.clone(),
             kind: unsafe {
                 match self.ty() {
@@ -1328,7 +1328,7 @@ impl RValue {
     }
 
     pub(super) fn dup(&self) -> Self {
-        let mut header = self.header;
+        let mut header = self.header.newborn();
         // dup does not copy the frozen or chilled flag (clone does).
         unsafe { header.meta.flag &= !(0b110 | CHILLED_LITERAL_BIT) };
         RValue {
@@ -1413,7 +1413,8 @@ impl RValue {
     }
 
     pub(super) fn clone_value(&self) -> Self {
-        let header = self.header;
+        // clone keeps frozen / chilled, but not the source's GC state.
+        let header = self.header.newborn();
         RValue {
             header,
             var_table: self.var_table.clone(),
@@ -2406,6 +2407,20 @@ impl Header {
         unsafe { self.meta.flag & 0b1 == 1 && self.meta.ty.is_some() }
     }
 
+    /// A copy of this header for a newborn object (`#dup` / `#clone` /
+    /// literal instantiation): the generational-GC state — age (bits
+    /// 8..15), OLD, REMEMBERED, WB_PENDING — is reset so the copy starts
+    /// young and unbarriered, instead of inheriting the source's GC
+    /// state without being registered in the page-side `old_bits` /
+    /// remembered-set bookkeeping (issue #977). LIVE, WB_UNPROTECTED,
+    /// and the frozen/chilled family survive; `dup` clears the latter
+    /// itself.
+    fn newborn(&self) -> Header {
+        let mut header = *self;
+        unsafe { header.meta.flag &= 0b0001_0111 | CHILLED_LITERAL_BIT };
+        header
+    }
+
     fn is_frozen(&self) -> bool {
         unsafe { self.meta.flag & 0b10 != 0 }
     }
@@ -2598,5 +2613,32 @@ mod header_flag_tests {
             assert!(h.is_chilled());
             assert!(!h.is_chilled_literal(), "odd age misread as literal-born");
         }
+    }
+
+    // Issue #977: a header copied for a newborn (`dup` / `clone` /
+    // literal instantiation) must not inherit the source's GC state.
+    #[test]
+    fn newborn_resets_gc_state_and_keeps_the_rest() {
+        let mut h = string_header();
+        h.set_frozen();
+        h.set_chilled_literal();
+        h.set_old();
+        h.enter_remembered();
+        h.set_age(3);
+        let n = h.newborn();
+        assert_eq!(n.age(), 0, "newborn inherited the age counter");
+        assert!(!n.is_old(), "newborn inherited the OLD bit");
+        assert!(!n.is_remembered(), "newborn inherited REMEMBERED");
+        assert!(!n.is_wb_pending(), "newborn inherited WB_PENDING");
+        assert!(n.is_live());
+        assert!(n.is_frozen(), "newborn dropped the frozen bit");
+        assert!(n.is_chilled(), "newborn dropped the chilled bit");
+        assert!(n.is_chilled_literal(), "newborn dropped the literal bit");
+
+        let mut h = string_header();
+        h.set_old();
+        h.arm_barrier();
+        let n = h.newborn();
+        assert!(!n.is_wb_pending(), "newborn born with the barrier armed");
     }
 }
