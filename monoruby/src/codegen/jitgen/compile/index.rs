@@ -13,14 +13,11 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<CompileResult> {
         let (base_class, idx_class) = state.binary_class(base, idx, ic);
         if let Some(lhs_class) = base_class {
-            // The JIT `Index` fast-path calls `#[]` directly without a
-            // visibility check. Bail to the interpreter for a non-public
-            // `#[]`: the VM's `get_index` receives the `is_func_call` bit
-            // (base-slot == self) and so raises `NoMethodError` for a plain
-            // `obj[i]` while letting an explicit-`self` `self[i]` through.
-            if !self.jit_index_method_is_public(lhs_class, IdentId::_INDEX) {
-                return Ok(CompileResult::Deopt);
-            }
+            // Visibility (`#[]` may be private) is enforced in the shared
+            // `compile_method_call` choke point (`jit_visibility_blocks`),
+            // using the call site's func-call flag: a plain `obj[i]` deopts to
+            // the VM (which raises `NoMethodError`) while an explicit-`self`
+            // `self[i]` compiles inline.
             return self.call_binary_method(
                 state,
                 ir,
@@ -48,15 +45,11 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<CompileResult> {
         let (base_class, idx_class) = state.binary_class(base, idx, ic);
         if let Some(recv_class) = base_class {
-            // The JIT `IndexAssign` fast-path calls `#[]=` directly without a
-            // visibility check. Bail to the interpreter for a non-public
-            // `#[]=`: the VM's `set_index` receives the `is_func_call` bit
-            // (base-slot == self) and so raises `NoMethodError` for a plain
-            // `obj[i] = v` while letting an explicit-`self` `self[i] = v`
-            // through.
-            if !self.jit_index_method_is_public(recv_class, IdentId::_INDEX_ASSIGN) {
-                return Ok(CompileResult::Deopt);
-            }
+            // Visibility (`#[]=` may be private) is enforced in the shared
+            // `compile_method_call` choke point (`jit_visibility_blocks`),
+            // using the call site's func-call flag: a plain `obj[i] = v` deopts
+            // to the VM (which raises `NoMethodError`) while an explicit-`self`
+            // `self[i] = v` compiles inline.
             return self.call_ternary_method(
                 state,
                 ir,

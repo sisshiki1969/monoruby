@@ -1094,28 +1094,42 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Whether *name* resolves to a **public** method on *class_id* at compile
-    /// time (or is not defined at all, i.e. no visibility constraint applies
-    /// here — that case is handled elsewhere).
+    /// Whether CRuby method visibility forbids compiling this call site inline,
+    /// so it must instead deopt to the VM. Applied at the single dispatch choke
+    /// point (`compile_method_call`), it covers both operator dispatch (`#[]`,
+    /// `#[]=`, arithmetic / comparison / unary operators) and ordinary method
+    /// calls whose receiver class is resolved at compile time.
     ///
-    /// The `Index` / `IndexAssign` fast paths call the resolved `#[]` / `#[]=`
-    /// directly, without the `is_func_call = false` visibility gate that the
-    /// VM's `get_index` / `set_index` apply. A non-public `#[]` / `#[]=` must
-    /// therefore not be compiled inline (it would be reachable from JIT while
-    /// the interpreter correctly raises `NoMethodError`); such sites bail to
-    /// the interpreter instead.
+    /// A `Private` method reached without a func-call receiver (`recv` is not
+    /// the literal `self` slot and the site is not a visibility-bypassing send)
+    /// is never a valid call, so such a site is handed to the VM, which raises
+    /// `NoMethodError`. `Public` methods, func-call sites, and `super`
+    /// (`name == None`, which bypasses visibility) are always inlinable.
     ///
-    fn jit_index_method_is_public(&self, class_id: ClassId, name: IdentId) -> bool {
-        let class_version = self.class_version();
-        match self
-            .store
-            .check_method_for_class_with_version(class_id, name, class_version)
-        {
-            Some(entry) => entry.visibility() == Visibility::Public,
-            // Not defined here: let the ordinary `MethodNotFound` path handle
-            // it rather than forcing a deopt.
-            None => true,
+    /// `Protected` is intentionally *not* blocked here: the protected receiver
+    /// `kind_of?` test depends on the runtime `self`, which the compiler cannot
+    /// pin (the same method body may run with different `self`s), and a hot
+    /// site was already validated by the VM. Deopting every protected call
+    /// would regress valid protected dispatch for no correctness gain the JIT
+    /// can guarantee statically; protected enforcement stays with the VM.
+    ///
+    fn jit_visibility_blocks(&self, recv_class: ClassId, callid: CallSiteId) -> bool {
+        let callsite = &self.store[callid];
+        // `super` (no method name) bypasses visibility.
+        let Some(name) = callsite.name else {
+            return false;
+        };
+        // A func-call receiver (literal `self` / visibility-bypassing send)
+        // may call private and protected methods.
+        if callsite.is_func_call() {
+            return false;
         }
+        let class_version = self.class_version();
+        matches!(
+            self.store
+                .check_method_for_class_with_version(recv_class, name, class_version),
+            Some(entry) if entry.visibility() == Visibility::Private
+        )
     }
 
     ///

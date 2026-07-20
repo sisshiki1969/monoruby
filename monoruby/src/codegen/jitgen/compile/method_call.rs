@@ -119,6 +119,16 @@ impl<'a> JitContext<'a> {
         // compiled BinCmp sites, which have such a path (Part B).
         recompile_on_recv_miss: bool,
     ) -> JitResult<CompileResult> {
+        // CRuby method visibility. This is the single dispatch choke point for
+        // operators (`#[]`, `#[]=`, arithmetic / comparison / unary) and for
+        // ordinary calls whose receiver class is known at compile time, so the
+        // visibility gate lives here rather than in each caller. A private
+        // method reached without a func-call receiver deopts to the VM, which
+        // raises `NoMethodError` (a plain `obj[i]` / `obj + x` while an
+        // explicit-`self` `self[i]` / `self + x` compiles inline).
+        if self.jit_visibility_blocks(recv_class, callid) {
+            return Ok(CompileResult::Deopt);
+        }
         let callsite = &self.store[callid];
         self.inline_method_cache
             .push((recv_class, callsite.name, func_id));
