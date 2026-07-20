@@ -1062,9 +1062,10 @@ impl Value {
     }
 
     pub fn yielder_object() -> Self {
-        // SAFETY: YIELDER is a static variable that is properly initialized before use.
-        // Access is synchronized through single-threaded Ruby VM execution.
-        Value::object(unsafe { crate::builtins::YIELDER.unwrap().id() })
+        // `Enumerator::Yielder` has a fixed builtin class id, so a yielder
+        // instance can be built without a `Globals` handle. The class is kept
+        // alive by the class table (see `Store::mark`).
+        Value::object(crate::globals::YIELDER_CLASS)
     }
 
     /// Build a String value without scanning the bytes. The

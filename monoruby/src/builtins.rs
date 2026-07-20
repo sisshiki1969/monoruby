@@ -50,7 +50,6 @@ mod true_class;
 #[cfg(target_arch = "x86_64")]
 use crate::codegen::jitgen::AbstractState;
 use codegen::jitgen::asmir::*;
-pub use enumerator::YIELDER;
 pub use monoasm::*;
 // The asm macros are only used by the x86-only inline generators
 // (`fiddle`, the x86 `gen_class_new_inline`/`object_send`, and the integer

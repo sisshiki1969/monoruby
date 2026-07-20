@@ -3274,13 +3274,13 @@ impl Executor {
         self.sp_match_regex = Some(regex);
     }
 
-    pub(crate) fn push_break_barrier(&mut self, cfp: Cfp) {
-        self.break_barriers.push(cfp);
-    }
+    //pub(crate) fn push_break_barrier(&mut self, cfp: Cfp) {
+    //    self.break_barriers.push(cfp);
+    //}
 
-    pub(crate) fn pop_break_barrier(&mut self) {
-        self.break_barriers.pop();
-    }
+    //pub(crate) fn pop_break_barrier(&mut self) {
+    //    self.break_barriers.pop();
+    //}
 
     pub(crate) fn break_barrier(&self) -> Option<Cfp> {
         self.break_barriers.last().copied()
@@ -3717,10 +3717,6 @@ struct Root<'a, 'b> {
 
 impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        // SAFETY: YIELDER is a static mutable variable that is properly initialized
-        // before GC runs. Access is synchronized through the single-threaded nature
-        // of the Ruby VM.
-        unsafe { crate::builtins::YIELDER.unwrap().mark(alloc) };
         self.globals.mark(alloc);
         self.executor.mark(alloc);
         // Green threads: every live thread's stack frames (and the main

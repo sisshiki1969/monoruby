@@ -226,9 +226,9 @@ impl ThreadInner {
         }
     }
 
-    pub(crate) fn is_main(&self) -> bool {
-        self.handle.is_none() && self.proc.is_none() && self.state != ThreadState::Dead
-    }
+    //pub(crate) fn is_main(&self) -> bool {
+    //    self.handle.is_none() && self.proc.is_none() && self.state != ThreadState::Dead
+    //}
 
     pub(crate) fn state(&self) -> ThreadState {
         self.state
