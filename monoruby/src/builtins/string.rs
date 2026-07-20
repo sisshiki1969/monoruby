@@ -9585,11 +9585,23 @@ mod tests {
     }
 
     #[test]
-    fn string_casecmp_invalid_utf8() {
-        run_test(r#""\xc3".casecmp("\xe3")"#);
-        run_test(r#""\xc3".casecmp("\xc3")"#);
-        run_test(r#""a".casecmp("A")"#);
-        run_test(r#""abc".casecmp("ABC")"#);
+    fn string_casecmp() {
+        run_tests(&[
+            // string_casecmp_invalid_utf8
+            r#""\xc3".casecmp("\xe3")"#,
+            r#""\xc3".casecmp("\xc3")"#,
+            r#""a".casecmp("A")"#,
+            r#""abc".casecmp("ABC")"#,
+            // string_casecmp_p_encoding
+            // Binary vs binary: ASCII-only case-insensitive comparison
+            r#""\x41".b.casecmp?("\x61".b)"#,
+            // Binary vs binary: non-ASCII bytes are compared as-is
+            r#""\xC3".b.casecmp?("\xE3".b)"#,
+            // Binary vs UTF-8: incompatible encodings return nil
+            r#""\xC3".b.casecmp?("abc")"#,
+            // UTF-8 vs UTF-8: Unicode case folding
+            r#""ä".casecmp?("Ä")"#,
+        ]);
     }
 
     #[test]
@@ -9604,100 +9616,90 @@ mod tests {
     }
 
     #[test]
-    fn string_casecmp_p_encoding() {
-        // Binary vs binary: ASCII-only case-insensitive comparison
-        run_test(r#""\x41".b.casecmp?("\x61".b)"#);
-        // Binary vs binary: non-ASCII bytes are compared as-is
-        run_test(r#""\xC3".b.casecmp?("\xE3".b)"#);
-        // Binary vs UTF-8: incompatible encodings return nil
-        run_test(r#""\xC3".b.casecmp?("abc")"#);
-        // UTF-8 vs UTF-8: Unicode case folding
-        run_test(r#""ä".casecmp?("Ä")"#);
-    }
-
-    #[test]
     fn string_xnn_literal_is_utf8() {
-        // Source-file `\xNN` escapes inherit the source (UTF-8) encoding
-        // regardless of whether the resulting bytes form valid UTF-8,
-        // matching CRuby.
-        run_test(r#""\xC3\xA9".encoding.name"#);
-        run_test(r#""\xC3\xA9".valid_encoding?"#);
-        run_test(r#""\xA9".encoding.name"#);
-        run_test(r#""\xA9".valid_encoding?"#);
-        run_test(r#""\xe3\x81\x82".encoding.name"#);
-        run_test(r#""\xe3\x81\x82".valid_encoding?"#);
+        run_tests(&[
+            // Source-file `\xNN` escapes inherit the source (UTF-8) encoding
+            // regardless of whether the resulting bytes form valid UTF-8,
+            // matching CRuby.
+            r#""\xC3\xA9".encoding.name"#,
+            r#""\xC3\xA9".valid_encoding?"#,
+            r#""\xA9".encoding.name"#,
+            r#""\xA9".valid_encoding?"#,
+            r#""\xe3\x81\x82".encoding.name"#,
+            r#""\xe3\x81\x82".valid_encoding?"#,
+        ]);
     }
 
     #[test]
     fn string_multibyte_char_boundary_check() {
-        // é (UTF-8 0xC3 0xA9) is a single character; start_with?/end_with?
-        // on a mid-character byte must return false even though the byte
-        // literally matches.
-        run_test(r#""\xC3\xA9".start_with?("\xC3")"#);
-        run_test(r#""\xC3\xA9".end_with?("\xA9")"#);
-        // 3-byte sequence for あ (UTF-8 0xE3 0x81 0x82)
-        run_test(r#""\xe3\x81\x82".end_with?("\x82")"#);
-        run_test(r#""\xe3\x81\x82".start_with?("\xe3")"#);
-        // Full-character match still succeeds.
-        run_test(r#""\xC3\xA9".start_with?("\xC3\xA9")"#);
-        run_test(r#""\xC3\xA9".end_with?("\xC3\xA9")"#);
+        run_tests(&[
+            // é (UTF-8 0xC3 0xA9) is a single character; start_with?/end_with?
+            // on a mid-character byte must return false even though the byte
+            // literally matches.
+            r#""\xC3\xA9".start_with?("\xC3")"#,
+            r#""\xC3\xA9".end_with?("\xA9")"#,
+            // 3-byte sequence for あ (UTF-8 0xE3 0x81 0x82)
+            r#""\xe3\x81\x82".end_with?("\x82")"#,
+            r#""\xe3\x81\x82".start_with?("\xe3")"#,
+            // Full-character match still succeeds.
+            r#""\xC3\xA9".start_with?("\xC3\xA9")"#,
+            r#""\xC3\xA9".end_with?("\xC3\xA9")"#,
+        ]);
     }
 
     #[test]
     fn string_index_at_end() {
-        run_test(r#""blablabla".index("", 9)"#);
-        run_test(r#""blablabla".index("", 10)"#);
-        run_test(r#""abc".index("", 3)"#);
-        run_test(r#""abc".index("", 0)"#);
+        run_tests(&[
+            r#""blablabla".index("", 9)"#,
+            r#""blablabla".index("", 10)"#,
+            r#""abc".index("", 3)"#,
+            r#""abc".index("", 0)"#,
+        ]);
     }
 
     #[test]
     fn string_rindex_zero_width() {
-        run_test(r#""blablabla".rindex(/.{0}/)"#);
-        run_test(r#""blablabla".rindex(/.*/)"#);
-        run_test(r#""hello".rindex(/.{0}/)"#);
+        run_tests(&[
+            r#""blablabla".rindex(/.{0}/)"#,
+            r#""blablabla".rindex(/.*/)"#,
+            r#""hello".rindex(/.{0}/)"#,
+        ]);
     }
 
     #[test]
-    fn string_rindex_string_basic() {
-        run_test(r#""hello".rindex("l")"#);
-        run_test(r#""hello".rindex("ll")"#);
-        run_test(r#""hello".rindex("z")"#);
-        run_test(r#""ababab".rindex("ab")"#);
-        run_test(r#""hello".rindex("hello")"#);
-        // Long haystack with many occurrences: the previous
-        // implementation paid a regex match per char boundary.
-        run_test(r#"("foo bar baz " * 50).rindex("bar")"#);
-    }
-
-    #[test]
-    fn string_rindex_string_with_pos() {
-        // pos clamps the maximum match-start position.
-        run_test(r#""hello".rindex("l", 2)"#);
-        run_test(r#""hello".rindex("l", 1)"#);
-        run_test(r#""hello".rindex("l", 100)"#); // positive clamp
-        run_test(r#""hello".rindex("hello", -1)"#); // negative-but-in-range
-        run_test(r#""hello".rindex("a", -100)"#); // negative overflow → nil
-        run_test(r#""ababab".rindex("ab", 3)"#);
-    }
-
-    #[test]
-    fn string_rindex_string_empty_needle() {
-        // Empty needle returns `pos` (capped at char_len).
-        run_test(r#""hello".rindex("")"#);
-        run_test(r#""hello".rindex("", 3)"#);
-        run_test(r#""hello".rindex("", 100)"#);
-        run_test(r#""".rindex("")"#);
-    }
-
-    #[test]
-    fn string_rindex_string_utf8() {
-        // Char-level positions on multibyte strings.
-        run_test(r#""あいうあいう".rindex("いう")"#);
-        run_test(r#""あいうあいう".rindex("いう", 2)"#);
-        run_test(r#""あいうあいう".rindex("い")"#);
-        // Match at the start.
-        run_test(r#""あいう".rindex("あ")"#);
+    fn string_rindex_string() {
+        run_tests(&[
+            // string_rindex_string_basic
+            r#""hello".rindex("l")"#,
+            r#""hello".rindex("ll")"#,
+            r#""hello".rindex("z")"#,
+            r#""ababab".rindex("ab")"#,
+            r#""hello".rindex("hello")"#,
+            // Long haystack with many occurrences: the previous
+            // implementation paid a regex match per char boundary.
+            r#"("foo bar baz " * 50).rindex("bar")"#,
+            // string_rindex_string_with_pos
+            // pos clamps the maximum match-start position.
+            r#""hello".rindex("l", 2)"#,
+            r#""hello".rindex("l", 1)"#,
+            r#""hello".rindex("l", 100)"#, // positive clamp
+            r#""hello".rindex("hello", -1)"#, // negative-but-in-range
+            r#""hello".rindex("a", -100)"#, // negative overflow → nil
+            r#""ababab".rindex("ab", 3)"#,
+            // string_rindex_string_empty_needle
+            // Empty needle returns `pos` (capped at char_len).
+            r#""hello".rindex("")"#,
+            r#""hello".rindex("", 3)"#,
+            r#""hello".rindex("", 100)"#,
+            r#""".rindex("")"#,
+            // string_rindex_string_utf8
+            // Char-level positions on multibyte strings.
+            r#""あいうあいう".rindex("いう")"#,
+            r#""あいうあいう".rindex("いう", 2)"#,
+            r#""あいうあいう".rindex("い")"#,
+            // Match at the start.
+            r#""あいう".rindex("あ")"#,
+        ]);
     }
 
     #[test]
@@ -10127,9 +10129,11 @@ mod tests {
 
     #[test]
     fn string_index_with_string() {
-        // String#[] with a String argument should return substring or nil
-        run_test(r#""abcde"["bc"]"#);
-        run_test(r#""abcde"["xy"]"#);
+        run_tests(&[
+            // String#[] with a String argument should return substring or nil
+            r#""abcde"["bc"]"#,
+            r#""abcde"["xy"]"#,
+        ]);
     }
 
     #[test]
@@ -10179,50 +10183,44 @@ mod tests {
     }
 
     #[test]
-    fn string_byterindex_basics() {
-        // String pattern, default offset (= bytesize): last occurrence.
-        run_test(r#""blablabla".byterindex("a")"#);
-        run_test(r#""blablabla".byterindex("la")"#);
-        run_test(r#""blablabla".byterindex("bla")"#);
-        run_test(r#""blablabla".byterindex("abla")"#);
-        run_test(r#""blablabla".byterindex("blablabla")"#);
-        // No match.
-        run_test(r#""blablabla".byterindex("z")"#);
-        run_test(r#""blablabla".byterindex("blablablabla")"#);
-        // Empty pattern returns the offset (or bytesize if not given).
-        run_test(r#""blablabla".byterindex("")"#);
-        run_test(r#""blablabla".byterindex("", 0)"#);
-        run_test(r#""blablabla".byterindex("", 5)"#);
-        run_test(r#""blablabla".byterindex("", 10)"#); // clamped
-    }
-
-    #[test]
-    fn string_byterindex_with_offset() {
-        run_test(r#""blablabla".byterindex("blab", 0)"#);
-        run_test(r#""blablabla".byterindex("blab", 3)"#);
-        run_test(r#""blablabla".byterindex("blab", 6)"#);
-        // Negative offset: counts from end.
-        run_test(r#""blablabla".byterindex("bla", -1)"#);
-        run_test(r#""blablabla".byterindex("bla", -100)"#); // out of range -> nil
-    }
-
-    #[test]
-    fn string_byterindex_regex() {
-        run_test(r#""blablabla".byterindex(/bla/)"#);
-        run_test(r#""blablabla".byterindex(/.{1}/)"#);
-        run_test(r#""blablabla".byterindex(/.l./)"#);
-        run_test(r#""blablabla".byterindex(/bla|a/)"#);
-        // Anchors.
-        run_test(r#""blablabla".byterindex(/\A/)"#);
-        run_test(r#""blablabla".byterindex(/\z/)"#);
-        run_test(r#""blablabla\n".byterindex(/\Z/)"#);
-    }
-
-    #[test]
-    fn string_byterindex_multibyte() {
-        run_test(r#""ありがりがとう".byterindex("が")"#); // 12
-        run_test(r#""ありがりがとう".byterindex(/が/)"#); // 12
-        run_test(r#""ありがりがとう".byterindex("が", 9)"#); // 6
+    fn string_byterindex() {
+        run_tests(&[
+            // string_byterindex_basics
+            // String pattern, default offset (= bytesize): last occurrence.
+            r#""blablabla".byterindex("a")"#,
+            r#""blablabla".byterindex("la")"#,
+            r#""blablabla".byterindex("bla")"#,
+            r#""blablabla".byterindex("abla")"#,
+            r#""blablabla".byterindex("blablabla")"#,
+            // No match.
+            r#""blablabla".byterindex("z")"#,
+            r#""blablabla".byterindex("blablablabla")"#,
+            // Empty pattern returns the offset (or bytesize if not given).
+            r#""blablabla".byterindex("")"#,
+            r#""blablabla".byterindex("", 0)"#,
+            r#""blablabla".byterindex("", 5)"#,
+            r#""blablabla".byterindex("", 10)"#, // clamped
+            // string_byterindex_with_offset
+            r#""blablabla".byterindex("blab", 0)"#,
+            r#""blablabla".byterindex("blab", 3)"#,
+            r#""blablabla".byterindex("blab", 6)"#,
+            // Negative offset: counts from end.
+            r#""blablabla".byterindex("bla", -1)"#,
+            r#""blablabla".byterindex("bla", -100)"#, // out of range -> nil
+            // string_byterindex_regex
+            r#""blablabla".byterindex(/bla/)"#,
+            r#""blablabla".byterindex(/.{1}/)"#,
+            r#""blablabla".byterindex(/.l./)"#,
+            r#""blablabla".byterindex(/bla|a/)"#,
+            // Anchors.
+            r#""blablabla".byterindex(/\A/)"#,
+            r#""blablabla".byterindex(/\z/)"#,
+            r#""blablabla\n".byterindex(/\Z/)"#,
+            // string_byterindex_multibyte
+            r#""ありがりがとう".byterindex("が")"#, // 12
+            r#""ありがりがとう".byterindex(/が/)"#, // 12
+            r#""ありがりがとう".byterindex("が", 9)"#, // 6
+        ]);
     }
 
     #[test]
@@ -10244,27 +10242,29 @@ mod tests {
     }
 
     #[test]
-    fn string_to_c() {
-        run_test(r#""1+2i".to_c.inspect"#);
-        run_test(r#""3".to_c.inspect"#);
-        run_test(r#""i".to_c.inspect"#);
-        run_test(r#""".to_c.inspect"#);
-        run_test(r#""-3+4i".to_c.inspect"#);
-    }
-
-    #[test]
-    fn string_to_r() {
-        run_test(r#""1/3".to_r.inspect"#);
-        run_test(r#""0.5".to_r.inspect"#);
-        run_test(r#""1".to_r.inspect"#);
-        run_test(r#""".to_r.inspect"#);
+    fn string_to_c_r() {
+        run_tests(&[
+            // string_to_c
+            r#""1+2i".to_c.inspect"#,
+            r#""3".to_c.inspect"#,
+            r#""i".to_c.inspect"#,
+            r#""".to_c.inspect"#,
+            r#""-3+4i".to_c.inspect"#,
+            // string_to_r
+            r#""1/3".to_r.inspect"#,
+            r#""0.5".to_r.inspect"#,
+            r#""1".to_r.inspect"#,
+            r#""".to_r.inspect"#,
+        ]);
     }
 
     #[test]
     fn slice_bang_with_string() {
-        run_test(r#"s = "hello world"; s.slice!("world"); s"#);
-        run_test(r#"s = "hello"; s.slice!("xyz")"#);
-        run_test(r#"s = "abcabc"; s.slice!("bc"); s"#);
+        run_tests(&[
+            r#"s = "hello world"; s.slice!("world"); s"#,
+            r#"s = "hello"; s.slice!("xyz")"#,
+            r#"s = "abcabc"; s.slice!("bc"); s"#,
+        ]);
     }
 
     #[test]
