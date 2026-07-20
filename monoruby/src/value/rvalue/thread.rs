@@ -84,6 +84,10 @@ pub struct ThreadInner {
     /// Mutex / ConditionVariable / Queue in builtins/startup.rb all park
     /// through patterns that need this.
     pub(crate) park_permit: bool,
+    /// `$?` / `Process.last_status` for this thread. CRuby keeps the
+    /// last child status per thread, so a fresh thread sees `nil` until
+    /// it reaps a child of its own.
+    pub(crate) last_status: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +153,9 @@ impl alloc::GC<RValue> for ThreadInner {
                 class.mark(alloc);
             }
         }
+        if let Some(v) = self.last_status {
+            v.mark(alloc);
+        }
     }
 }
 
@@ -170,6 +177,7 @@ impl ThreadInner {
             masks: vec![],
             park_blocking: false,
             park_permit: false,
+            last_status: None,
         }
     }
 
@@ -191,6 +199,7 @@ impl ThreadInner {
             masks: vec![],
             park_blocking: false,
             park_permit: false,
+            last_status: None,
         }
     }
 
@@ -213,6 +222,7 @@ impl ThreadInner {
             masks: vec![],
             park_blocking: false,
             park_permit: false,
+            last_status: None,
         }
     }
 

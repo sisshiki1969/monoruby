@@ -253,6 +253,20 @@ pub(crate) fn main_thread(vm: &mut Executor) -> Value {
     SCHEDULER.with(|s| s.borrow().main.unwrap())
 }
 
+/// `$?` / `Process.last_status` of the current thread (CRuby keeps the
+/// last child status per thread).
+pub(crate) fn last_status(vm: &mut Executor) -> Option<Value> {
+    let thread = current_thread(vm);
+    thread.as_thread_inner().last_status
+}
+
+/// Record a reaped child's `Process::Status` as the current thread's
+/// `$?` / `Process.last_status`.
+pub(crate) fn set_last_status(vm: &mut Executor, status: Value) {
+    let mut thread = current_thread(vm);
+    thread.as_thread_inner_mut().last_status = Some(status);
+}
+
 /// All alive threads (`Thread.list`).
 pub(crate) fn thread_list(vm: &mut Executor) -> Vec<Value> {
     ensure_main(vm);

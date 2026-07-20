@@ -1359,7 +1359,7 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             None,
             None,
         )?;
-        globals.set_gvar(IdentId::get_id("$?"), status_obj);
+        crate::scheduler::set_last_status(vm, status_obj);
     }
     Ok(Value::nil())
 }
@@ -2235,7 +2235,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                     None,
                     None,
                 ) {
-                    globals.set_gvar(IdentId::get_id("$?"), status_obj);
+                    crate::scheduler::set_last_status(vm, status_obj);
                 }
             }
         }

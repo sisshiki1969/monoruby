@@ -2509,10 +2509,36 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             args.push(v.coerce_to_string(vm, globals)?);
         }
     }
-    Ok(match Command::new(program).args(&args).status() {
-        Ok(status) => Value::bool(status.success()),
-        Err(_) => Value::nil(),
-    })
+    let mut child = match Command::new(program).args(&args).spawn() {
+        Ok(child) => child,
+        Err(_) => return Ok(Value::nil()),
+    };
+    let pid = child.id();
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(_) => return Ok(Value::nil()),
+    };
+    // Set `$?` / Process.last_status from the raw wait(2) status, like
+    // CRuby does after #system.
+    {
+        use std::os::unix::process::ExitStatusExt;
+        let raw = status.into_raw();
+        if let Ok(status_class) =
+            vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
+        {
+            if let Ok(status_obj) = vm.invoke_method_inner(
+                globals,
+                IdentId::NEW,
+                status_class,
+                &[Value::integer(raw as i64), Value::integer(pid as i64)],
+                None,
+                None,
+            ) {
+                crate::scheduler::set_last_status(vm, status_obj);
+            }
+        }
+    }
+    Ok(Value::bool(status.success()))
 }
 
 ///
@@ -2808,7 +2834,7 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                     None,
                     None,
                 ) {
-                    globals.set_gvar(IdentId::get_id("$?"), status_obj);
+                    crate::scheduler::set_last_status(vm, status_obj);
                 }
             }
             Ok(Value::string_from_vec(output.stdout))

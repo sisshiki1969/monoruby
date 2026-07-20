@@ -645,7 +645,7 @@ fn process_wait(
     _: BytecodePtr,
 ) -> Result<Value> {
     let (pid, status) = do_waitpid(vm, globals, lfp)?;
-    globals.set_gvar(IdentId::get_id("$?"), status);
+    crate::scheduler::set_last_status(vm, status);
     Ok(Value::integer(pid as i64))
 }
 
@@ -662,7 +662,7 @@ fn process_wait2(
     _: BytecodePtr,
 ) -> Result<Value> {
     let (pid, status) = do_waitpid(vm, globals, lfp)?;
-    globals.set_gvar(IdentId::get_id("$?"), status);
+    crate::scheduler::set_last_status(vm, status);
     Ok(Value::array_from_vec(vec![
         Value::integer(pid as i64),
         status,
@@ -727,13 +727,12 @@ fn do_waitpid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<(i32
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/last_status.html]
 #[monoruby_builtin]
 fn last_status(
-    _vm: &mut Executor,
-    globals: &mut Globals,
+    vm: &mut Executor,
+    _globals: &mut Globals,
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let val = globals.get_gvar(IdentId::get_id("$?"));
-    Ok(val.unwrap_or_default())
+    Ok(crate::scheduler::last_status(vm).unwrap_or_default())
 }
 
 /// Canonical signal name ↔ host signo table, built from the running
