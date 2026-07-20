@@ -2203,7 +2203,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 sum = Value::float(f + comp);
             }
             comp = 0.0;
-            sum = executor::op::add_values(vm, globals, sum, v).ok_or_else(|| vm.take_error())?;
+            sum = executor::op::add_values(vm, globals, sum, v, false).ok_or_else(|| vm.take_error())?;
         }
     }
     if comp != 0.0
@@ -5316,29 +5316,27 @@ mod tests {
 
     #[test]
     fn hash_mixes_element_hash_value() {
-        // Array#hash sends `#hash` to each element and mixes the resulting
-        // integer, so an element whose `#hash` returns another object is
-        // coerced via `#to_int` and hashes identically to the underlying
-        // value. A numeric element must therefore mix its `Integer#hash` /
-        // `Float#hash` digest (of the value), not its raw tagged bits.
-        run_test(
+        run_tests(&[
+            // Array#hash sends `#hash` to each element and mixes the resulting
+            // integer, so an element whose `#hash` returns another object is
+            // coerced via `#to_int` and hashes identically to the underlying
+            // value. A numeric element must therefore mix its `Integer#hash` /
+            // `Float#hash` digest (of the value), not its raw tagged bits.
             r#"
             x = 1.hash
             o = Object.new
             o.define_singleton_method(:hash) { x }
             [1].hash == [o].hash
             "#,
-        );
-        run_test(
             r#"
             x = 2.5.hash
             o = Object.new
             o.define_singleton_method(:hash) { x }
             [2.5].hash == [o].hash
             "#,
-        );
-        // Structural equality still implies hash equality for numeric content.
-        run_test(r#"[[1, 2.0, 3].hash == [1, 2.0, 3].hash, [1].hash != [2].hash]"#);
+            // Structural equality still implies hash equality for numeric content.
+            r#"[[1, 2.0, 3].hash == [1, 2.0, 3].hash, [1].hash != [2].hash]"#,
+        ]);
     }
 
     #[test]

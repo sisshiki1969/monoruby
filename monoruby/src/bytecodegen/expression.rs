@@ -2275,9 +2275,9 @@ mod tests {
 
     #[test]
     fn next_and_break_run_loop_ensures() {
-        // `next` / `break` inside `begin/ensure` nested in a `while`/`until`
-        // loop must run the enclosing `ensure` blocks (innermost first).
-        run_test(
+        run_tests(&[
+            // `next` / `break` inside `begin/ensure` nested in a `while`/`until`
+            // loop must run the enclosing `ensure` blocks (innermost first).
             r#"
             log = []; x = true
             while x
@@ -2294,8 +2294,6 @@ mod tests {
             end
             log
             "#,
-        );
-        run_test(
             r#"
             log = []; x = 1
             until false
@@ -2309,7 +2307,7 @@ mod tests {
             end
             log
             "#,
-        );
+        ]);
     }
 
     #[test]

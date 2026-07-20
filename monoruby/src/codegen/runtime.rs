@@ -543,17 +543,20 @@ fn array_teq_impl(
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
-    teq: extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>,
+    teq: crate::executor::BinaryOpFn,
 ) -> Option<Value> {
+    // case/when and rescue `===` dispatch with funcall semantics; the
+    // `cmp_teq_case_values` / `cmp_teq_rescue_values` helpers force it
+    // regardless, so the flag passed here is nominal.
     if let Some(lhs_ary) = lhs.try_array_ty() {
         for lhs in lhs_ary.iter().cloned() {
-            if teq(vm, globals, lhs, rhs)?.as_bool() {
+            if teq(vm, globals, lhs, rhs, true)?.as_bool() {
                 return Some(Value::bool(true));
             }
         }
         Some(Value::bool(false))
     } else {
-        teq(vm, globals, lhs, rhs)
+        teq(vm, globals, lhs, rhs, true)
     }
 }
 

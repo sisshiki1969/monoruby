@@ -2763,15 +2763,15 @@ mod tests {
 
     #[test]
     fn marshal_dump_regexp() {
-        // Regexp now round-trips through the '/' dump tag.
-        run_test(r#"Marshal.dump(/foo/im).bytes"#);
-        run_test(
+        run_tests(&[
+            // Regexp now round-trips through the '/' dump tag.
+            r#"Marshal.dump(/foo/im).bytes"#,
             r#"
             r = Marshal.load(Marshal.dump(/foo/im))
             [r.source, r.options]
             "#,
-        );
-        run_test(r#"Marshal.load(Marshal.dump(/foo/n)).source"#);
+            r#"Marshal.load(Marshal.dump(/foo/n)).source"#,
+        ]);
     }
 
     #[test]
@@ -2866,29 +2866,31 @@ mod tests {
 
     #[test]
     fn marshal_load_freeze() {
-        // `freeze: true` deep-freezes reconstructed objects but leaves
-        // classes/modules mutable.
-        run_test(r#"Marshal.load(Marshal.dump("foo"), freeze: true).frozen?"#);
-        run_test(r#"Marshal.load(Marshal.dump([1, 2, 3]), freeze: true).frozen?"#);
-        run_test(r#"Marshal.load(Marshal.dump({foo: 42}), freeze: true).frozen?"#);
-        run_test(
+        run_tests(&[
+            // `freeze: true` deep-freezes reconstructed objects but leaves
+            // classes/modules mutable.
+            r#"Marshal.load(Marshal.dump("foo"), freeze: true).frozen?"#,
+            r#"Marshal.load(Marshal.dump([1, 2, 3]), freeze: true).frozen?"#,
+            r#"Marshal.load(Marshal.dump({foo: 42}), freeze: true).frozen?"#,
             r#"
             o = Object.new
             a = Marshal.load(Marshal.dump([o]), freeze: true)
             [a.frozen?, a[0].frozen?]
             "#,
-        );
-        run_test(r#"Marshal.load(Marshal.dump(String), freeze: true).frozen?"#);
-        run_test(r#"Marshal.load(Marshal.dump("bar")).frozen?"#);
+            r#"Marshal.load(Marshal.dump(String), freeze: true).frozen?"#,
+            r#"Marshal.load(Marshal.dump("bar")).frozen?"#,
+        ]);
     }
 
     #[test]
     fn marshal_load_float_mantissa_extension() {
-        // CRuby appends a legacy '\0' + mantissa blob after the decimal
-        // text; the load path must parse the textual prefix and ignore
-        // the trailing raw bytes.
-        run_test(r#"Marshal.load("\x04\bf\v1.3\x00\xcc\xcd")"#);
-        run_test(r#"Marshal.load(Marshal.dump(1.3)) == 1.3"#);
+        run_tests(&[
+            // CRuby appends a legacy '\0' + mantissa blob after the decimal
+            // text; the load path must parse the textual prefix and ignore
+            // the trailing raw bytes.
+            r#"Marshal.load("\x04\bf\v1.3\x00\xcc\xcd")"#,
+            r#"Marshal.load(Marshal.dump(1.3)) == 1.3"#,
+        ]);
     }
 
     #[test]
@@ -2934,39 +2936,33 @@ mod tests {
 
     #[test]
     fn marshal_builtin_ivars() {
-        // Array / Hash / String carrying user instance variables dump
-        // with an 'I' wrapper and round-trip.
-        run_test(
+        run_tests(&[
+            // Array / Hash / String carrying user instance variables dump
+            // with an 'I' wrapper and round-trip.
             r#"
             a = [1, 2]
             a.instance_variable_set(:@foo, 5)
             Marshal.dump(a).bytes
             "#,
-        );
-        run_test(
             r#"
             a = [1, 2]
             a.instance_variable_set(:@foo, 5)
             r = Marshal.load(Marshal.dump(a))
             [r, r.instance_variable_get(:@foo)]
             "#,
-        );
-        run_test(
             r#"
             h = {a: 1}
             h.instance_variable_set(:@foo, 5)
             r = Marshal.load(Marshal.dump(h))
             [r, r.instance_variable_get(:@foo)]
             "#,
-        );
-        run_test(
             r#"
             s = "str"
             s.instance_variable_set(:@foo, 5)
             r = Marshal.load(Marshal.dump(s))
             [r, r.instance_variable_get(:@foo)]
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -3067,52 +3063,44 @@ mod tests {
 
     #[test]
     fn marshal_load_proc_containers() {
-        // The proc visits hash keys/values and struct members, and works
-        // together with freeze: true.
-        run_test(
+        run_tests(&[
+            // The proc visits hash keys/values and struct members, and works
+            // together with freeze: true.
             r#"
             ret = []
             Marshal.load(Marshal.dump({a: 1, b: 2}), proc { |o| ret << o.inspect; o })
             ret
             "#,
-        );
-        run_test(
             r#"
             S = Struct.new(:a, :b)
             ret = []
             Marshal.load(Marshal.dump(S.new(1, 2)), proc { |o| ret << o.inspect; o })
             ret.size
             "#,
-        );
-        run_test(
             r#"
             ret = []
             r = Marshal.load(Marshal.dump([1, "x"]), proc { |o| ret << o.frozen?; o }, freeze: true)
             [r.frozen?, ret.last]
             "#,
-        );
+        ]);
     }
 
     #[test]
     fn marshal_load_proc() {
-        // The load proc is called on every reconstructed value, children
-        // before their parent.
-        run_test(
+        run_tests(&[
+            // The load proc is called on every reconstructed value, children
+            // before their parent.
             r#"
             ret = []
             Marshal.load(Marshal.dump([1, 2]), proc { |o| ret << o.inspect; o })
             ret
             "#,
-        );
-        run_test(
             r#"
             ret = []
             Marshal.load(Marshal.dump([[1], 2]), proc { |o| ret << o.inspect; o })
             ret
             "#,
-        );
-        // A self-reference into an object still being built is not visited.
-        run_test(
+            // A self-reference into an object still being built is not visited.
             r#"
             a = [1]
             a << a
@@ -3120,51 +3108,49 @@ mod tests {
             Marshal.load(Marshal.dump(a), proc { |o| ret << o.inspect; o })
             ret.size
             "#,
-        );
-        // Object links are visited; symbol links are not.
-        run_test(
+            // Object links are visited; symbol links are not.
             r#"
             s = "x"
             ret = []
             Marshal.load(Marshal.dump([s, s]), proc { |o| ret << o.inspect; o })
             ret
             "#,
-        );
+        ]);
     }
 
     #[test]
     fn marshal_restore_alias() {
-        // Marshal.restore is the very same method object as Marshal.load.
-        run_test(r#"Marshal.method(:restore) == Marshal.method(:load)"#);
-        run_test(r#"Marshal.restore(Marshal.dump([1, 2, 3]))"#);
+        run_tests(&[
+            // Marshal.restore is the very same method object as Marshal.load.
+            r#"Marshal.method(:restore) == Marshal.method(:load)"#,
+            r#"Marshal.restore(Marshal.dump([1, 2, 3]))"#,
+        ]);
     }
 
     #[test]
     fn marshal_range_bytes() {
-        // Range dumps as an 'o' object with :excl, :begin, :end (in that
-        // order) and round-trips.
-        run_test(r#"Marshal.dump(1..10).bytes"#);
-        run_test(r#"Marshal.dump(1...5).bytes"#);
-        run_test(
+        run_tests(&[
+            // Range dumps as an 'o' object with :excl, :begin, :end (in that
+            // order) and round-trips.
+            r#"Marshal.dump(1..10).bytes"#,
+            r#"Marshal.dump(1...5).bytes"#,
             r#"
             r = Marshal.load(Marshal.dump(1...5))
             [r.begin, r.end, r.exclude_end?]
             "#,
-        );
+        ]);
     }
 
     #[test]
     fn marshal_struct_ivars() {
-        // A Struct that carries user ivars dumps with an 'I' wrapper.
-        run_test(
+        run_tests(&[
+            // A Struct that carries user ivars dumps with an 'I' wrapper.
             r#"
             S = Struct.new(:a, :b)
             s = S.new(1, 2)
             s.instance_variable_set(:@x, 9)
             Marshal.dump(s).bytes
             "#,
-        );
-        run_test(
             r#"
             S2 = Struct.new(:a, :b)
             s = S2.new(1, 2)
@@ -3172,28 +3158,26 @@ mod tests {
             r = Marshal.load(Marshal.dump(s))
             [r.a, r.b, r.instance_variable_get(:@x)]
             "#,
-        );
+        ]);
     }
 
     #[test]
     fn marshal_symbol_load_encoding() {
-        // A plain non-ASCII symbol loads as binary; an 'I'-wrapped one
-        // loads under its recorded encoding (and a UTF-8 one is identity-
-        // equal to the same literal symbol).
-        run_test(r#"Marshal.load("\x04\b:\b\xE2\x86\x92".b).encoding.to_s"#);
-        run_test(
+        run_tests(&[
+            // A plain non-ASCII symbol loads as binary; an 'I'-wrapped one
+            // loads under its recorded encoding (and a UTF-8 one is identity-
+            // equal to the same literal symbol).
+            r#"Marshal.load("\x04\b:\b\xE2\x86\x92".b).encoding.to_s"#,
             r#"
             s = Marshal.load("\x04\bI:\b\xE2\x86\x92\x06:\x06ET".b)
             [s.to_s, s.encoding.to_s, s == "→".to_sym]
             "#,
-        );
-        // Two UTF-8 symbols sharing the encoding link.
-        run_test(
+            // Two UTF-8 symbols sharing the encoding link.
             r#"
             dump = "\x04\b[\aI:\t\xE2\x82\xACa\x06:\x06ETI:\t\xE2\x82\xACb\x06;\x06T".b
             Marshal.load(dump).map { |s| [s.to_s, s.encoding.to_s] }
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -3209,63 +3193,55 @@ mod tests {
 
     #[test]
     fn marshal_numeric_edges() {
-        // Float special values and a large Bignum round-trip.
-        run_test(r#"Marshal.load(Marshal.dump(Float::INFINITY)) == Float::INFINITY"#);
-        run_test(r#"Marshal.load(Marshal.dump(-Float::INFINITY)) == -Float::INFINITY"#);
-        run_test(r#"Marshal.load(Marshal.dump(Float::NAN)).nan?"#);
-        run_test(r#"Marshal.load(Marshal.dump(0.0)) == 0.0"#);
-        run_test(r#"Marshal.load(Marshal.dump(-0.0)).to_s"#);
-        run_test(r#"Marshal.load(Marshal.dump(10 ** 100)) == 10 ** 100"#);
-        run_test(r#"Marshal.load(Marshal.dump(-(2 ** 80))) == -(2 ** 80)"#);
+        run_tests(&[
+            // Float special values and a large Bignum round-trip.
+            r#"Marshal.load(Marshal.dump(Float::INFINITY)) == Float::INFINITY"#,
+            r#"Marshal.load(Marshal.dump(-Float::INFINITY)) == -Float::INFINITY"#,
+            r#"Marshal.load(Marshal.dump(Float::NAN)).nan?"#,
+            r#"Marshal.load(Marshal.dump(0.0)) == 0.0"#,
+            r#"Marshal.load(Marshal.dump(-0.0)).to_s"#,
+            r#"Marshal.load(Marshal.dump(10 ** 100)) == 10 ** 100"#,
+            r#"Marshal.load(Marshal.dump(-(2 ** 80))) == -(2 ** 80)"#,
+        ]);
     }
 
     #[test]
     fn marshal_time_zone_offset() {
-        // A UTC time dumps `:zone "UTC"` and reloads as UTC.
-        run_test(
+        run_tests(&[
+            // A UTC time dumps `:zone "UTC"` and reloads as UTC.
             r#"
             t = Time.utc(2012, 1, 1)
             r = Marshal.load(Marshal.dump(t))
             [r.utc?, r.year, r.month, r.day]
             "#,
-        );
-        // A fixed-offset time records `:offset` and keeps it on reload.
-        run_test(
+            // A fixed-offset time records `:offset` and keeps it on reload.
             r#"
             t = Time.new(2007, 11, 1, 15, 25, 0, "+09:00")
             Marshal.load(Marshal.dump(t)).utc_offset
             "#,
-        );
-        // Sub-microsecond nanoseconds survive via the :nano_num ivar.
-        run_test(
+            // Sub-microsecond nanoseconds survive via the :nano_num ivar.
             r#"
             t = Time.now
             Marshal.load(Marshal.dump(t)).nsec == t.nsec
             "#,
-        );
-        // Time carrying a user ivar round-trips it, without leaking the
-        // internal :offset/:zone ivars.
-        run_test(
+            // Time carrying a user ivar round-trips it, without leaking the
+            // internal :offset/:zone ivars.
             r#"
             t = Time.now
             t.instance_variable_set(:@foo, "bar")
             r = Marshal.load(Marshal.dump(t))
             [r.instance_variable_get(:@foo), r.instance_variables.include?(:@zone)]
             "#,
-        );
-        run_test(
             r#"
             Marshal.load(Marshal.dump(Time.now)).instance_variables.empty?
             "#,
-        );
-        // A UTC time also keeps its nanoseconds (Utc branch of the loader).
-        run_test(
+            // A UTC time also keeps its nanoseconds (Utc branch of the loader).
             r#"
             t = Time.now.utc
             r = Marshal.load(Marshal.dump(t))
             [r.utc?, r.nsec == t.nsec]
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -3325,17 +3301,15 @@ mod tests {
 
     #[test]
     fn marshal_object_non_ascii_ivar() {
-        // An instance-variable name with non-ASCII bytes is written as an
-        // encoding-wrapped symbol key and read back through `read_symbol`.
-        run_test(
+        run_tests(&[
+            // An instance-variable name with non-ASCII bytes is written as an
+            // encoding-wrapped symbol key and read back through `read_symbol`.
             r#"
             o = Object.new
             ivar = "@é".dup.force_encoding("UTF-8").to_sym
             o.instance_variable_set(ivar, 1)
             Marshal.dump(o).bytes
             "#,
-        );
-        run_test(
             r#"
             o = Object.new
             ivar = "@é".dup.force_encoding("UTF-8").to_sym
@@ -3343,7 +3317,7 @@ mod tests {
             r = Marshal.load(Marshal.dump(o))
             [r.instance_variables.map(&:to_s), r.instance_variable_get(ivar)]
             "#,
-        );
+        ]);
     }
 
     #[test]
@@ -3365,11 +3339,13 @@ mod tests {
 
     #[test]
     fn marshal_symbol_encoding() {
-        // A UTF-8 symbol carries an encoding ivar; a binary one does not.
-        run_test(r#"Marshal.dump("→".to_sym).bytes"#);
-        run_test(r#"Marshal.dump("→".dup.force_encoding("binary").to_sym).bytes"#);
-        run_test(r#"Marshal.dump([:"→", :"→"]).bytes"#);
-        run_test(r#"Marshal.load(Marshal.dump("→".to_sym)).to_s"#);
+        run_tests(&[
+            // A UTF-8 symbol carries an encoding ivar; a binary one does not.
+            r#"Marshal.dump("→".to_sym).bytes"#,
+            r#"Marshal.dump("→".dup.force_encoding("binary").to_sym).bytes"#,
+            r#"Marshal.dump([:"→", :"→"]).bytes"#,
+            r#"Marshal.load(Marshal.dump("→".to_sym)).to_s"#,
+        ]);
     }
 
     #[test]
@@ -3509,58 +3485,54 @@ mod tests {
 
     #[test]
     fn marshal_rational_complex() {
-        // Rational / Complex serialize via the 'U' (marshal_dump) tag and
-        // round-trip through their Kernel constructors.
-        run_test(r#"Marshal.dump(Rational(2, 3)).bytes"#);
-        run_test(r#"Marshal.dump(Complex(2, 5)).bytes"#);
-        run_test(r#"Marshal.load(Marshal.dump(Rational(2, 3)))"#);
-        run_test(r#"Marshal.load(Marshal.dump(Complex(2, 5)))"#);
-        run_test(
+        run_tests(&[
+            // Rational / Complex serialize via the 'U' (marshal_dump) tag and
+            // round-trip through their Kernel constructors.
+            r#"Marshal.dump(Rational(2, 3)).bytes"#,
+            r#"Marshal.dump(Complex(2, 5)).bytes"#,
+            r#"Marshal.load(Marshal.dump(Rational(2, 3)))"#,
+            r#"Marshal.load(Marshal.dump(Complex(2, 5)))"#,
             r#"
             r = Rational(2, 3)
             Marshal.load(Marshal.dump([r, r]))
             "#,
-        );
+        ]);
     }
 
     #[test]
     fn marshal_dump_string_encoding() {
-        // US-ASCII strings carry a `:E false` ivar; UTF-8 carries
-        // `:E true`; binary strings carry no ivar.
-        run_test(r#"Marshal.dump("abc".force_encoding("US-ASCII")).bytes"#);
-        run_test(r#"Marshal.dump("abc".force_encoding("BINARY")).bytes"#);
-        run_test(r#"Marshal.dump("abc").bytes"#);
-        run_test(
+        run_tests(&[
+            // US-ASCII strings carry a `:E false` ivar; UTF-8 carries
+            // `:E true`; binary strings carry no ivar.
+            r#"Marshal.dump("abc".force_encoding("US-ASCII")).bytes"#,
+            r#"Marshal.dump("abc".force_encoding("BINARY")).bytes"#,
+            r#"Marshal.dump("abc").bytes"#,
             r#"
             s = Marshal.load(Marshal.dump("abc".force_encoding("US-ASCII")))
             s.encoding.to_s
             "#,
-        );
+        ]);
     }
 
     #[test]
     fn marshal_dump_object_links() {
-        // Repeated non-immediate objects share one link slot.
-        run_test(
+        run_tests(&[
+            // Repeated non-immediate objects share one link slot.
             r#"
             s = "string"
             Marshal.dump([s, s]).bytes
             "#,
-        );
-        run_test(
             r#"
             s = "abc"
             a = Marshal.load(Marshal.dump([s, s]))
             a[0].equal?(a[1])
             "#,
-        );
-        run_test(
             r#"
             a = [1]
             arr = Marshal.load(Marshal.dump([a, a, a]))
             [arr[0].equal?(arr[1]), arr[1].equal?(arr[2])]
             "#,
-        );
+        ]);
     }
 
     #[test]

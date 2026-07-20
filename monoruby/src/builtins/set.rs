@@ -1675,19 +1675,17 @@ mod tests {
 
     #[test]
     fn divide_enumerator_arity() {
-        // Arity-2 via the no-block Enumerator: graph/SCC grouping.
-        run_test(
+        run_tests(&[
+            // Arity-2 via the no-block Enumerator: graph/SCC grouping.
             r#"Set[1,2,3,4].divide.each { |a, b| (a + b).even? } == Set[Set[1, 3], Set[2, 4]]"#,
-        );
-        // Arity-1 via the no-block Enumerator: classify grouping.
-        run_test(r#"Set[1,2,3,4].divide.each { |x| x % 2 }.map { |s| s.to_a.sort }.sort"#);
-        // No block -> Enumerator.
-        run_test(r#"Set[1,2,3,4].divide.is_a?(Enumerator)"#);
-        // Direct (non-enumerator) arity-2 / arity-1 still correct.
-        run_test(
+            // Arity-1 via the no-block Enumerator: classify grouping.
+            r#"Set[1,2,3,4].divide.each { |x| x % 2 }.map { |s| s.to_a.sort }.sort"#,
+            // No block -> Enumerator.
+            r#"Set[1,2,3,4].divide.is_a?(Enumerator)"#,
+            // Direct (non-enumerator) arity-2 / arity-1 still correct.
             r#"Set[1,3,4,6,9,10,11].divide { |x, y| (x - y).abs == 1 }.map { |s| s.to_a.sort }.sort"#,
-        );
-        run_test(r#"Set[1,2,3,4].divide { |x| x % 2 }.map { |s| s.to_a.sort }.sort"#);
+            r#"Set[1,2,3,4].divide { |x| x % 2 }.map { |s| s.to_a.sort }.sort"#,
+        ]);
     }
 
     #[test]

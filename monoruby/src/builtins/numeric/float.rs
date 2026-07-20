@@ -393,7 +393,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3d.html]
 #[monoruby_builtin]
 fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    crate::executor::op::cmp_ge_values(vm, globals, lfp.self_val(), lfp.arg(0))
+    crate::executor::op::cmp_ge_values(vm, globals, lfp.self_val(), lfp.arg(0), false)
         .ok_or_else(|| vm.take_error())
 }
 
@@ -405,7 +405,7 @@ fn ge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e.html]
 #[monoruby_builtin]
 fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    crate::executor::op::cmp_gt_values(vm, globals, lfp.self_val(), lfp.arg(0))
+    crate::executor::op::cmp_gt_values(vm, globals, lfp.self_val(), lfp.arg(0), false)
         .ok_or_else(|| vm.take_error())
 }
 
@@ -417,7 +417,7 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3d.html]
 #[monoruby_builtin]
 fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    crate::executor::op::cmp_le_values(vm, globals, lfp.self_val(), lfp.arg(0))
+    crate::executor::op::cmp_le_values(vm, globals, lfp.self_val(), lfp.arg(0), false)
         .ok_or_else(|| vm.take_error())
 }
 
@@ -429,7 +429,7 @@ fn le(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c.html]
 #[monoruby_builtin]
 fn lt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    crate::executor::op::cmp_lt_values(vm, globals, lfp.self_val(), lfp.arg(0))
+    crate::executor::op::cmp_lt_values(vm, globals, lfp.self_val(), lfp.arg(0), false)
         .ok_or_else(|| vm.take_error())
 }
 

@@ -626,6 +626,15 @@ impl Codegen {
     fn vm_generic_unop(&mut self, generic: &DestLabel, func: UnaryOpFn) {
         self.jit.bind_label(generic.clone());
         self.vm_save_lhs_class();
+        // is_func_call = (operand slot == self slot 0); the operand slot is the
+        // `:2` bytecode operand at [r13 - 14]. Passed to the helper in rcx (the
+        // 4th C-arg) for its method-visibility fallback.
+        monoasm! { &mut self.jit,
+            movzxw rax, [r13 - 14];
+            xorq  rcx, rcx;
+            testq rax, rax;
+            seteq cl;
+        };
         self.call_unop(func);
         self.vm_handle_error();
         self.vm_store_r15(GP::Rax);
@@ -635,6 +644,15 @@ impl Codegen {
     fn vm_generic_binop(&mut self, generic: &DestLabel, func: BinaryOpFn) {
         self.jit.bind_label(generic.clone());
         self.vm_save_binary_class();
+        // is_func_call = (lhs slot == self slot 0); the lhs slot is the `:2`
+        // bytecode operand at [r13 - 14]. Passed to the helper in r8 (the 5th
+        // C-arg) for its method-visibility fallback.
+        monoasm! { &mut self.jit,
+            movzxw rax, [r13 - 14];
+            xorq  r8, r8;
+            testq rax, rax;
+            seteq r8;
+        };
         self.call_binop(func);
         self.vm_handle_error();
         self.vm_store_r15(GP::Rax);

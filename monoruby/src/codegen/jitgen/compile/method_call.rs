@@ -38,10 +38,10 @@ impl<'a> JitContext<'a> {
                 return Ok(CompileResult::Deopt);
             }
         }
-        let (recv_class, func_id) = if let Some(recv_class) = recv_class {
+        let (recv_class, func_id, visibility) = if let Some(recv_class) = recv_class {
             // the receiver class is known.
-            if let Some(func_id) = self.jit_check_call(recv_class, callsite.name) {
-                (recv_class, func_id)
+            if let Some((func_id, visibility)) = self.jit_check_call(recv_class, callsite.name) {
+                (recv_class, func_id, visibility)
             } else {
                 return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
             }
@@ -52,18 +52,21 @@ impl<'a> JitContext<'a> {
                     if cache.version != self.class_version() {
                         // the inline method cache is invalid.
                         let recv_class = cache.recv_class;
-                        let func_id =
-                            if let Some(fid) = self.jit_check_call(recv_class, callsite.name) {
-                                fid
+                        let (func_id, visibility) =
+                            if let Some(x) = self.jit_check_call(recv_class, callsite.name) {
+                                x
                             } else {
                                 return Ok(CompileResult::Recompile(
                                     RecompileReason::MethodNotFound,
                                 ));
                             };
-                        (recv_class, func_id)
+                        (recv_class, func_id, visibility)
                     } else {
-                        // the inline method cache is valid.
-                        (cache.recv_class, cache.func_id)
+                        // The inline method cache is valid: the VM already
+                        // enforced visibility when it warmed the cache (a
+                        // private non-func-call call never caches successfully),
+                        // so no compile-time visibility gate is needed here.
+                        (cache.recv_class, cache.func_id, Visibility::Public)
                     }
                 }
                 // The VM resolved this call to `method_missing` and the cached
@@ -98,11 +101,17 @@ impl<'a> JitContext<'a> {
                 None
             }
         };
-        self.compile_method_call(state, ir, recv_class, arg_class, func_id, callid, false)
+        self.compile_method_call(
+            state, ir, recv_class, arg_class, func_id, visibility, callid, false,
+        )
     }
 
     ///
     /// Compile TraceIr::MethodCall with inline method cache info.
+    ///
+    /// *visibility* is the resolved method's visibility, obtained together with
+    /// *func_id* in the same method-table probe (see `jit_check_call`), so the
+    /// visibility gate below costs no extra lookup.
     ///
     #[cfg_attr(target_arch = "aarch64", allow(unused_variables))]
     pub(super) fn compile_method_call(
@@ -112,6 +121,7 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         arg_class: Option<ClassId>,
         func_id: FuncId,
+        visibility: Visibility,
         callid: CallSiteId,
         // When the receiver-class guard misses, recompile (so the
         // site flips to the non-deopting polymorphic path) instead
@@ -119,6 +129,16 @@ impl<'a> JitContext<'a> {
         // compiled BinCmp sites, which have such a path (Part B).
         recompile_on_recv_miss: bool,
     ) -> JitResult<CompileResult> {
+        // CRuby method visibility. This is the single dispatch choke point for
+        // operators (`#[]`, `#[]=`, arithmetic / comparison / unary) and for
+        // ordinary calls whose receiver class is known at compile time, so the
+        // visibility gate lives here rather than in each caller. A private
+        // method reached without a func-call receiver deopts to the VM, which
+        // raises `NoMethodError` (a plain `obj[i]` / `obj + x` while an
+        // explicit-`self` `self[i]` / `self + x` compiles inline).
+        if self.jit_visibility_blocks(callid, visibility) {
+            return Ok(CompileResult::Deopt);
+        }
         let callsite = &self.store[callid];
         self.inline_method_cache
             .push((recv_class, callsite.name, func_id));

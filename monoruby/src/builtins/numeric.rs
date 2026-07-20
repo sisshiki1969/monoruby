@@ -42,7 +42,7 @@ macro_rules! binop {
         paste! {
             #[monoruby_builtin]
             fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-                match super::op::[<$op _values>](vm, globals, lfp.self_val(), lfp.arg(0)) {
+                match super::op::[<$op _values>](vm, globals, lfp.self_val(), lfp.arg(0), false) {
                     Some(val) => Ok(val),
                     None => {
                         let err = vm.take_error();
@@ -124,7 +124,7 @@ macro_rules! unop {
         paste! {
             #[monoruby_builtin]
             fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-                match super::op::[<$op _value>](vm, globals, lfp.self_val()) {
+                match super::op::[<$op _value>](vm, globals, lfp.self_val(), false) {
                     Some(val) => Ok(val),
                     None => {
                         let err = vm.take_error();
@@ -153,7 +153,7 @@ unop!(neg, bitnot);
 #[monoruby_builtin]
 fn angle(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let is_negative = match super::op::cmp_lt_values(vm, globals, self_val, Value::integer(0)) {
+    let is_negative = match super::op::cmp_lt_values(vm, globals, self_val, Value::integer(0), false) {
         Some(v) => v == Value::bool(true),
         None => return Err(vm.take_error()),
     };

@@ -187,7 +187,8 @@ macro_rules! binop_values {
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
-                rhs: Value
+                rhs: Value,
+                is_func_call: bool,
             ) -> Option<Value> {
                 match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
                     (Some(lhs), Some(rhs)) => return Some((lhs.$op(rhs)).into()),
@@ -232,7 +233,10 @@ macro_rules! binop_values {
                         return complex_real_op(vm, globals, $op_str, lhs, rhs);
                     }
                     _ => {
-                        return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);
+                        // Original receiver `lhs`: honor the call site's
+                        // func-call flag (a private operator is callable only
+                        // from `self OP x`).
+                        return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
                     }
                 };
                 Some(v)
@@ -252,9 +256,10 @@ macro_rules! binop_values_no_opt {
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
-                rhs: Value
+                rhs: Value,
+                is_func_call: bool,
             ) -> Option<Value> {
-                vm.invoke_method_simple(globals, $op_str, lhs, &[rhs])
+                vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None)
             }
         }
     };
@@ -275,6 +280,7 @@ pub(crate) extern "C" fn div_values(
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
     match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
@@ -297,7 +303,7 @@ pub(crate) extern "C" fn div_values(
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
             try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Integer")
         }
-        _ => vm.invoke_method_simple(globals, IdentId::_DIV, lhs, &[rhs]),
+        _ => vm.invoke_method(globals, IdentId::_DIV, is_func_call, lhs, &[rhs], None, None),
     }
 }
 
@@ -306,6 +312,7 @@ pub(crate) extern "C" fn rem_values(
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
     match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
@@ -352,7 +359,7 @@ pub(crate) extern "C" fn rem_values(
             return try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Complex");
         }
         _ => {
-            return vm.invoke_method_simple(globals, IdentId::_REM, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_REM, is_func_call, lhs, &[rhs], None, None);
         }
     };
     Some(v)
@@ -449,6 +456,7 @@ pub(crate) extern "C" fn pow_values(
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => pow_ii(lhs, rhs, vm)?,
@@ -535,7 +543,7 @@ pub(crate) extern "C" fn pow_values(
             return try_coerce_and_apply(vm, globals, IdentId::_POW, lhs, rhs, "Float");
         }
         _ => {
-            return vm.invoke_method_simple(globals, IdentId::_POW, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_POW, is_func_call, lhs, &[rhs], None, None);
         }
     };
     Some(v)
@@ -548,7 +556,8 @@ macro_rules! int_binop_values {
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
-                rhs: Value
+                rhs: Value,
+                is_func_call: bool,
             ) -> Option<Value> {
                 let v = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Value::integer(lhs.$op(&rhs)),
@@ -561,7 +570,7 @@ macro_rules! int_binop_values {
                         return try_coerce_and_apply_bit(vm, globals, $op_str, lhs, rhs);
                     }
                     _ => {
-                        return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);
+                        return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
                     }
                 };
                 Some(v)
@@ -585,6 +594,7 @@ pub(crate) extern "C" fn shr_values(
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
@@ -626,7 +636,7 @@ pub(crate) extern "C" fn shr_values(
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
             // >> requires to_int conversion (not coerce), supports BigInt shift amounts
             match rhs.coerce_to_int(vm, globals) {
-                Ok(rhs_int) => return shr_values(vm, globals, lhs, rhs_int).into(),
+                Ok(rhs_int) => return shr_values(vm, globals, lhs, rhs_int, is_func_call).into(),
                 Err(_) => {
                     vm.set_error(MonorubyErr::typeerr(format!(
                         "{} can't be coerced into Integer",
@@ -637,7 +647,7 @@ pub(crate) extern "C" fn shr_values(
             }
         }
         _ => {
-            return vm.invoke_method_simple(globals, IdentId::_SHR, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_SHR, is_func_call, lhs, &[rhs], None, None);
         }
     };
     Some(v)
@@ -648,6 +658,7 @@ pub(crate) extern "C" fn shl_values(
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
@@ -693,7 +704,7 @@ pub(crate) extern "C" fn shl_values(
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
             // << requires to_int conversion (not coerce), supports BigInt shift amounts
             match rhs.coerce_to_int(vm, globals) {
-                Ok(rhs_int) => return shl_values(vm, globals, lhs, rhs_int).into(),
+                Ok(rhs_int) => return shl_values(vm, globals, lhs, rhs_int, is_func_call).into(),
                 Err(_) => {
                     vm.set_error(MonorubyErr::typeerr(format!(
                         "{} can't be coerced into Integer",
@@ -704,7 +715,7 @@ pub(crate) extern "C" fn shl_values(
             }
         }
         _ => {
-            return vm.invoke_method_simple(globals, IdentId::_SHL, lhs, &[rhs]);
+            return vm.invoke_method(globals, IdentId::_SHL, is_func_call, lhs, &[rhs], None, None);
         }
     };
     Some(v)

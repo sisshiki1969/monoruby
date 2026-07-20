@@ -421,6 +421,8 @@ pub(crate) extern "C" fn not_match_values(
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
+    // `!~` keeps its existing (funcall) dispatch; the flag is nominal here.
+    _is_func_call: bool,
 ) -> Option<Value> {
     match not_match_inner(vm, globals, lhs, rhs) {
         Ok(v) => Some(v),
@@ -459,9 +461,10 @@ fn kernel_not_match(
     let CallSiteInfo {
         recv, args, dst, ..
     } = *callsite;
+    let is_func_call = callsite.is_func_call();
     state.write_back_recv_and_callargs(ir, callsite);
     let error = ir.new_error(state);
-    ir.generic_binop(state, recv, args, not_match_values);
+    ir.generic_binop(state, recv, args, not_match_values, is_func_call);
     ir.handle_error(error);
     // The dispatched `=~` can run arbitrary Ruby; invalidate cached
     // guards so subsequent instructions re-establish them.

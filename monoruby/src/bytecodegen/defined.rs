@@ -451,19 +451,21 @@ mod tests {
 
     #[test]
     fn defined_logical_and_match_ops() {
-        // `&&` / `||` / `and` / `or` are expressions (operands not
-        // checked); `=~` / `!~` are method calls. Previously these
-        // panicked (`unimplemented!`) and aborted the process.
-        run_test(r#"a = 1; b = 2; defined?(a && b)"#);
-        run_test(r#"defined?(1 || 2)"#);
-        run_test(r#"a = 1; defined?(a and 2)"#);
-        run_test(r#"defined?(1 or 2)"#);
-        run_test(r#"defined?(undef_x && 1)"#);
-        run_test(r#"defined?(undef_x || undef_y)"#);
-        run_test(r#"defined?("x" =~ /x/)"#);
-        run_test(r#"defined?(1 =~ 2).inspect"#);
-        run_test(r#"defined?(1 !~ 2)"#);
-        run_test(r#"defined?(undef_x =~ /a/).inspect"#);
+        run_tests(&[
+            // `&&` / `||` / `and` / `or` are expressions (operands not
+            // checked); `=~` / `!~` are method calls. Previously these
+            // panicked (`unimplemented!`) and aborted the process.
+            r#"a = 1; b = 2; defined?(a && b)"#,
+            r#"defined?(1 || 2)"#,
+            r#"a = 1; defined?(a and 2)"#,
+            r#"defined?(1 or 2)"#,
+            r#"defined?(undef_x && 1)"#,
+            r#"defined?(undef_x || undef_y)"#,
+            r#"defined?("x" =~ /x/)"#,
+            r#"defined?(1 =~ 2).inspect"#,
+            r#"defined?(1 !~ 2)"#,
+            r#"defined?(undef_x =~ /a/).inspect"#,
+        ]);
     }
 
     #[test]
