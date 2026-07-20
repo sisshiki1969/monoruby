@@ -1261,7 +1261,7 @@ pub(crate) fn wait_fd_single(
 /// (nil at EOF).
 fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
-    let mut self_ = lfp.self_val();
+    let self_ = lfp.self_val();
     let complete_utf8 = io_completes_utf8(globals, self_);
     let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
         lfp.self_val()
@@ -2311,7 +2311,7 @@ fn io_readlines(
     if limit == Some(0) {
         return Err(MonorubyErr::argumenterr("invalid limit: 0 for readlines"));
     }
-    let mut self_ = lfp.self_val();
+    let self_ = lfp.self_val();
     let complete_utf8 = io_completes_utf8(globals, self_);
     let mut lines = Vec::new();
     while let Some(mut buf) = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
@@ -4341,7 +4341,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     // CRuby's endpoint resolution order: an IO (or anything `#to_io`
     // converts, e.g. Tempfile) is used as an IO *before* the `#to_path` /
     // String file-name form is considered.
-    let mut to_io = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<Value> {
+    let to_io = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<Value> {
         if !is_io(v) && globals.check_method(v, IdentId::get_id("to_io")).is_some() {
             let converted =
                 vm.invoke_method_inner(globals, IdentId::get_id("to_io"), v, &[], None, None)?;

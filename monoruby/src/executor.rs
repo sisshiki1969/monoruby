@@ -3274,13 +3274,13 @@ impl Executor {
         self.sp_match_regex = Some(regex);
     }
 
-    pub(crate) fn push_break_barrier(&mut self, cfp: Cfp) {
-        self.break_barriers.push(cfp);
-    }
+    //pub(crate) fn push_break_barrier(&mut self, cfp: Cfp) {
+    //    self.break_barriers.push(cfp);
+    //}
 
-    pub(crate) fn pop_break_barrier(&mut self) {
-        self.break_barriers.pop();
-    }
+    //pub(crate) fn pop_break_barrier(&mut self) {
+    //    self.break_barriers.pop();
+    //}
 
     pub(crate) fn break_barrier(&self) -> Option<Cfp> {
         self.break_barriers.last().copied()

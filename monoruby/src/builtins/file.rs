@@ -1051,7 +1051,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             writable,
             effective_autoclose,
         );
-        let mut res = Value::new_io_with_class(io_inner, FILE_CLASS);
+        let res = Value::new_io_with_class(io_inner, FILE_CLASS);
         let mode_for_enc = lfp
             .try_arg(1)
             .and_then(|a| a.is_str().map(|s| s.to_string()))
@@ -1190,7 +1190,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             }
         }
     };
-    let mut res = Value::new_file(file, path, readable, writable);
+    let res = Value::new_file(file, path, readable, writable);
     super::io::init_io_encodings(vm, globals, lfp, res, &mode, readable, 1..4)?;
     if let Some(bh) = lfp.block() {
         let r = vm.invoke_block_once(globals, bh, &[res]);
