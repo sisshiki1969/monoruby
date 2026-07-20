@@ -651,7 +651,7 @@ impl Codegen {
             movzxw rax, [r13 - 14];
             xorq  r8, r8;
             testq rax, rax;
-            seteq r8b;
+            seteq r8;
         };
         self.call_binop(func);
         self.vm_handle_error();
