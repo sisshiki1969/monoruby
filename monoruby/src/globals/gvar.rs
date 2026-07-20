@@ -577,6 +577,19 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
     }
     globals.define_hooked_variable(IdentId::get_id("$$"), get_pid, None);
 
+    // `$?` — the last child status, kept per thread (CRuby: a fresh
+    // thread sees nil until it reaps a child of its own). Always
+    // defined, wrapping nil, like `$~`. Read-only from Ruby; Rust
+    // writers go through `scheduler::set_last_status`.
+    fn get_last_status(
+        vm: &mut Executor,
+        _globals: &mut Globals,
+        _name: IdentId,
+    ) -> Option<Value> {
+        Some(crate::scheduler::last_status(vm).unwrap_or_default())
+    }
+    globals.define_hooked_variable(IdentId::get_id("$?"), get_last_status, None);
+
     globals.define_hooked_variable(IdentId::get_id("$!"), get_errinfo, None);
     globals.define_hooked_variable(
         IdentId::get_id(crate::globals::ERRINFO_INTERNAL_GVAR),
