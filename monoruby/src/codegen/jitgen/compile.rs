@@ -958,11 +958,11 @@ impl<'a> JitContext<'a> {
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        if let Some(func_id) = self.jit_check_method(recv_class, name.into()) {
+        if let Some((func_id, visibility)) = self.jit_check_method(recv_class, name.into()) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].pos_num, 0);
-            self.compile_method_call(state, ir, recv_class, None, func_id, callid, false)
+            self.compile_method_call(state, ir, recv_class, None, func_id, visibility, callid, false)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -980,7 +980,7 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
         recompile_on_recv_miss: bool,
     ) -> JitResult<CompileResult> {
-        if let Some(fid) = self.jit_check_method(lhs_class, name.into()) {
+        if let Some((fid, visibility)) = self.jit_check_method(lhs_class, name.into()) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, lhs);
             assert_eq!(self.store[callid].args, rhs);
@@ -991,6 +991,7 @@ impl<'a> JitContext<'a> {
                 lhs_class,
                 rhs_class,
                 fid,
+                visibility,
                 callid,
                 recompile_on_recv_miss,
             )
@@ -1011,13 +1012,13 @@ impl<'a> JitContext<'a> {
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        if let Some(fid) = self.jit_check_method(recv_class, name.into()) {
+        if let Some((fid, visibility)) = self.jit_check_method(recv_class, name.into()) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].args, idx);
             assert_eq!(self.store[callid].args + 1usize, src);
             assert_eq!(self.store[callid].pos_num, 2);
-            self.compile_method_call(state, ir, recv_class, idx_class, fid, callid, false)
+            self.compile_method_call(state, ir, recv_class, idx_class, fid, visibility, callid, false)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -1073,24 +1074,32 @@ impl<'a> JitContext<'a> {
     ///
     /// Check whether a method or `super` of class *class_id* exists in compile time.
     ///
-    fn jit_check_call(&mut self, recv_class: ClassId, name: Option<IdentId>) -> Option<FuncId> {
+    fn jit_check_call(
+        &mut self,
+        recv_class: ClassId,
+        name: Option<IdentId>,
+    ) -> Option<(FuncId, Visibility)> {
         if let Some(name) = name {
             // for method call
             self.jit_check_method(recv_class, name)
         } else {
-            // for super
-            self.jit_check_super(recv_class)
+            // for super: `super` bypasses visibility, so report it as Public.
+            Some((self.jit_check_super(recv_class)?, Visibility::Public))
         }
     }
 
     ///
-    /// Check whether a method *name* of class *class_id* exists in compile time.
+    /// Resolve method *name* of class *class_id* at compile time to its target
+    /// `FuncId` **and** visibility in a single method-table probe, so callers
+    /// need not look the entry up twice (once for the target, once for the
+    /// visibility gate in `compile_method_call`).
     ///
-    fn jit_check_method(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
+    fn jit_check_method(&self, class_id: ClassId, name: IdentId) -> Option<(FuncId, Visibility)> {
         let class_version = self.class_version();
-        self.store
-            .check_method_for_class_with_version(class_id, name, class_version)?
-            .func_id()
+        let entry = self
+            .store
+            .check_method_for_class_with_version(class_id, name, class_version)?;
+        Some((entry.func_id()?, entry.visibility()))
     }
 
     ///
@@ -1103,8 +1112,8 @@ impl<'a> JitContext<'a> {
     /// A `Private` method reached without a func-call receiver (`recv` is not
     /// the literal `self` slot and the site is not a visibility-bypassing send)
     /// is never a valid call, so such a site is handed to the VM, which raises
-    /// `NoMethodError`. `Public` methods, func-call sites, and `super`
-    /// (`name == None`, which bypasses visibility) are always inlinable.
+    /// `NoMethodError`. `Public` methods, func-call sites, and `super` (which
+    /// `jit_check_call` resolves as `Public`) are always inlinable.
     ///
     /// `Protected` is intentionally *not* blocked here: the protected receiver
     /// `kind_of?` test depends on the runtime `self`, which the compiler cannot
@@ -1113,23 +1122,13 @@ impl<'a> JitContext<'a> {
     /// would regress valid protected dispatch for no correctness gain the JIT
     /// can guarantee statically; protected enforcement stays with the VM.
     ///
-    fn jit_visibility_blocks(&self, recv_class: ClassId, callid: CallSiteId) -> bool {
-        let callsite = &self.store[callid];
-        // `super` (no method name) bypasses visibility.
-        let Some(name) = callsite.name else {
-            return false;
-        };
+    /// *visibility* is the target method's visibility resolved alongside its
+    /// `FuncId` (see `jit_check_method`), so this gate performs no lookup.
+    ///
+    fn jit_visibility_blocks(&self, callid: CallSiteId, visibility: Visibility) -> bool {
         // A func-call receiver (literal `self` / visibility-bypassing send)
         // may call private and protected methods.
-        if callsite.is_func_call() {
-            return false;
-        }
-        let class_version = self.class_version();
-        matches!(
-            self.store
-                .check_method_for_class_with_version(recv_class, name, class_version),
-            Some(entry) if entry.visibility() == Visibility::Private
-        )
+        visibility == Visibility::Private && !self.store[callid].is_func_call()
     }
 
     ///
