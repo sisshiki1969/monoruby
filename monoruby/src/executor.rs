@@ -3717,10 +3717,6 @@ struct Root<'a, 'b> {
 
 impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        // SAFETY: YIELDER is a static mutable variable that is properly initialized
-        // before GC runs. Access is synchronized through the single-threaded nature
-        // of the Ruby VM.
-        unsafe { crate::builtins::YIELDER.unwrap().mark(alloc) };
         self.globals.mark(alloc);
         self.executor.mark(alloc);
         // Green threads: every live thread's stack frames (and the main

@@ -1,10 +1,5 @@
 use super::*;
 
-use std::sync::Once;
-
-pub static mut YIELDER: Option<Module> = None;
-static YIELDER_INIT: Once = Once::new();
-
 //
 // Enumerator class
 //
@@ -35,10 +30,15 @@ pub(super) fn init(globals: &mut Globals) {
     // non-array and aborted the process (e.g. `p` on a value that had leaked a
     // Yielder). Its `<<` / `yield` are defined directly below.
     let object_class = globals[OBJECT_CLASS].get_module();
-    let yielder = globals.define_class("Yielder", object_class, ENUMERATOR_CLASS);
-    unsafe { YIELDER_INIT.call_once(|| YIELDER = Some(yielder)) }
-    globals.define_builtin_func(yielder.id(), "<<", yielder_push, 1);
-    globals.define_builtin_func_rest(yielder.id(), "yield", yielder_yield);
+    globals.define_builtin_class(
+        "Yielder",
+        YIELDER_CLASS,
+        object_class,
+        ENUMERATOR_CLASS,
+        None::<ObjTy>,
+    );
+    globals.define_builtin_func(YIELDER_CLASS, "<<", yielder_push, 1);
+    globals.define_builtin_func_rest(YIELDER_CLASS, "yield", yielder_yield);
 
     let object_class = globals.object_class();
     globals.define_builtin_class(

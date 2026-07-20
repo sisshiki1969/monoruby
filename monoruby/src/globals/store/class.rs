@@ -77,6 +77,11 @@ pub const SIGNAL_EXCEPTION_CLASS: ClassId = ClassId::new(56);
 pub const INTERRUPT_CLASS: ClassId = ClassId::new(57);
 pub const IO_BUFFER_CLASS: ClassId = ClassId::new(58);
 pub const THREAD_CLASS: ClassId = ClassId::new(59);
+/// `Enumerator::Yielder`. A plain OBJECT-typed class (nested under
+/// `Enumerator`, inheriting `Object`) with a fixed id so `Value::yielder_object`
+/// can materialize a yielder instance without a `Globals` handle. Rooted like
+/// every other builtin class via the class table (`Store::mark`).
+pub const YIELDER_CLASS: ClassId = ClassId::new(60);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
