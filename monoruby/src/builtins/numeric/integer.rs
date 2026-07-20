@@ -799,7 +799,7 @@ macro_rules! cmpop {
             fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
                 let lhs = lfp.self_val();
                 let rhs = lfp.arg(0);
-                match crate::executor::op::[<cmp_ $op _values>](vm, globals, lhs, rhs) {
+                match crate::executor::op::[<cmp_ $op _values>](vm, globals, lhs, rhs, false) {
                     Some(res) => Ok(res),
                     None => {
                         let err = vm.take_error();
@@ -825,7 +825,7 @@ cmpop!(ge, gt, le, lt);
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3e.html]
 #[monoruby_builtin]
 fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
+    super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0), false).ok_or_else(|| vm.take_error())
 }
 
 /// Constant-fold `lhs >> rhs` for two i63 fixnums.
@@ -968,7 +968,7 @@ fn shl_overflow_zero(r#gen: &mut Codegen, deopt: &DestLabel) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3c.html]
 #[monoruby_builtin]
 fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
+    super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0), false).ok_or_else(|| vm.take_error())
 }
 
 fn integer_shl(
@@ -1045,7 +1045,7 @@ fn integer_shl(
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=25.html]
 #[monoruby_builtin]
 fn int_rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
+    super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0), false).ok_or_else(|| vm.take_error())
 }
 
 fn integer_rem(
@@ -1156,7 +1156,7 @@ fn integer_rem_float_rhs(
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2a=2a.html]
 #[monoruby_builtin]
 fn int_pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    super::op::pow_values(vm, globals, lfp.self_val(), lfp.arg(0)).ok_or_else(|| vm.take_error())
+    super::op::pow_values(vm, globals, lfp.self_val(), lfp.arg(0), false).ok_or_else(|| vm.take_error())
 }
 
 fn integer_pow(

@@ -1217,6 +1217,7 @@ impl Codegen {
         lhs: SlotId,
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
+        is_func_call: bool,
         using_fpr: UsingFpr,
     ) {
         self.fpr_save(using_fpr);
@@ -1225,6 +1226,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
+            movq r8, (is_func_call as u64);
             movq rax, (func);
             call rax;
         );
@@ -1251,6 +1253,7 @@ impl Codegen {
         rhs: SlotId,
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
+        is_func_call: bool,
         using_fpr: UsingFpr,
     ) {
         self.load_rdx(lhs);
@@ -1291,6 +1294,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
+            movq r8, (is_func_call as u64);
             movq rax, (func);
             call rax;
         );
@@ -1824,9 +1828,10 @@ impl Codegen {
         lhs: SlotId,
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
+        is_func_call: bool,
         using_fpr: UsingFpr,
     ) -> bool {
-        self.generic_binop(lhs, rhs, func, using_fpr);
+        self.generic_binop(lhs, rhs, func, is_func_call, using_fpr);
         true
     }
 
@@ -1855,9 +1860,10 @@ impl Codegen {
         rhs: SlotId,
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
+        is_func_call: bool,
         using_fpr: UsingFpr,
     ) -> bool {
-        self.opt_eq_cmp(lhs, rhs, kind, func, using_fpr);
+        self.opt_eq_cmp(lhs, rhs, kind, func, is_func_call, using_fpr);
         true
     }
 

@@ -61,7 +61,8 @@ macro_rules! cmp_values {
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
-                rhs: Value
+                rhs: Value,
+                is_func_call: bool,
             ) -> Option<Value> {
                 let b = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.$op(&rhs),
@@ -137,7 +138,10 @@ macro_rules! cmp_values {
                         return None;
                     }
                     _ => {
-                        return vm.invoke_method_simple(globals, $op_str, lhs, &[rhs]);
+                        // Original receiver `lhs`: honor the call site's
+                        // func-call flag so a private relational operator is
+                        // callable only from `self OP x` (matches CRuby).
+                        return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
                     }
                 };
                 Some(Value::bool(b))
@@ -149,9 +153,10 @@ macro_rules! cmp_values {
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
-                rhs: Value
+                rhs: Value,
+                is_func_call: bool,
             ) -> Option<Value> {
-                vm.invoke_method_simple(globals, $op_str, lhs, &[rhs])
+                vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None)
             }
         }
     };
@@ -182,6 +187,22 @@ impl Executor {
         globals: &mut Globals,
         lhs: Value,
         rhs: Value,
+    ) -> Result<Value> {
+        // Internal callers (`Array#==`, `Hash#==`, …) compare with funcall
+        // semantics, matching CRuby's `rb_equal`.
+        self.eq_values_vis(globals, lhs, rhs, true)
+    }
+
+    /// `==` dispatch honoring the call site's func-call flag for a
+    /// user-defined `==` (a private `==` is callable only from a func-call
+    /// site). The numeric/String *reverse* dispatches keep funcall semantics
+    /// (`rb_equal`), so only the direct receiver dispatch consults the flag.
+    pub(crate) fn eq_values_vis(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+        is_func_call: bool,
     ) -> Result<Value> {
         let b = match (lhs.unpack(), rhs.unpack()) {
             (RV::Nil, RV::Nil) => true,
@@ -240,7 +261,7 @@ impl Executor {
                     return Ok(Value::bool(self.invoke_eq(globals, rhs, lhs)?));
                 }
             }
-            _ => return self.invoke_eq_raw(globals, lhs, rhs),
+            _ => return self.invoke_eq_raw_vis(globals, lhs, rhs, is_func_call),
         };
         Ok(Value::bool(b))
     }
@@ -259,8 +280,9 @@ impl Executor {
         globals: &mut Globals,
         lhs: Value,
         rhs: Value,
+        is_func_call: bool,
     ) -> Result<Value> {
-        self.invoke_eq_raw(globals, lhs, rhs)
+        self.invoke_eq_raw_vis(globals, lhs, rhs, is_func_call)
     }
 
     ///
@@ -275,18 +297,34 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<Value> {
+        // Internal callers use funcall semantics, matching `rb_equal`-style `!=`.
+        self.ne_values_vis(globals, lhs, rhs, true)
+    }
+
+    /// `!=` dispatch honoring the call site's func-call flag for a redefined
+    /// `!=` (or the private-`==` it negates).
+    pub(crate) fn ne_values_vis(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+        is_func_call: bool,
+    ) -> Result<Value> {
         // Check if the receiver has a custom != method (not a basic op /
-        // the default BasicObject#!=). If so, dispatch to it directly
-        // instead of negating ==. `custom_neq` is memoized per
+        // the default BasicObject#!=). If so, dispatch to it (honoring its
+        // visibility) instead of negating ==. `custom_neq` is memoized per
         // class_version, so the common unredefined case costs a load
         // instead of a method-table probe per comparison.
         let class_id = lhs.class();
-        if let Some(entry) = globals.store.custom_neq(class_id, Globals::class_version()) {
-            if let Some(func_id) = entry.func_id() {
-                return self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None);
-            }
+        if globals
+            .store
+            .custom_neq(class_id, Globals::class_version())
+            .is_some()
+        {
+            let func_id = self.find_method(globals, lhs, IdentId::_NEQ, is_func_call)?;
+            return self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None);
         }
-        Ok(Value::bool(!self.eq_values_bool(globals, lhs, rhs)?))
+        Ok(Value::bool(!self.eq_values_vis(globals, lhs, rhs, is_func_call)?.as_bool()))
     }
 
     pub(crate) fn ne_values_bool(
@@ -303,8 +341,9 @@ impl Executor {
         globals: &mut Globals,
         lhs: Value,
         rhs: Value,
+        is_func_call: bool,
     ) -> Result<Value> {
-        let func_id = self.find_method(globals, lhs, IdentId::_NEQ, true)?;
+        let func_id = self.find_method(globals, lhs, IdentId::_NEQ, is_func_call)?;
         self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)
     }
 }
@@ -318,9 +357,10 @@ macro_rules! eq_values {
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
-                rhs: Value
+                rhs: Value,
+                is_func_call: bool,
             ) -> Option<Value> {
-                match vm.[<$op _values>](globals, lhs, rhs) {
+                match vm.[<$op _values_vis>](globals, lhs, rhs, is_func_call) {
                     Ok(v) => Some(v),
                     Err(err) => {
                         vm.set_error(err);
@@ -335,9 +375,10 @@ macro_rules! eq_values {
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
-                rhs: Value
+                rhs: Value,
+                is_func_call: bool,
             ) -> Option<Value> {
-                match vm.[<$op _values_no_opt>](globals, lhs, rhs) {
+                match vm.[<$op _values_no_opt>](globals, lhs, rhs, is_func_call) {
                     Ok(v) => Some(v),
                     Err(err) => {
                         vm.set_error(err);
@@ -398,25 +439,29 @@ fn cmp_values() {
     }
 }
 
+/// Plain `a === b` (the non-optimizable TEq opcode): a public-only call,
+/// except when the receiver is the literal `self` — the call site's
+/// func-call flag carries that, so `self === b` may reach a private `===`.
 pub(crate) extern "C" fn cmp_teq_values(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
-    cmp_teq_values_impl(vm, globals, lhs, rhs, false)
+    cmp_teq_values_impl(vm, globals, lhs, rhs, is_func_call)
 }
 
 /// `===` dispatch for the *optimizable* TEq opcode, which bytecodegen
 /// only emits for case/when and rescue matching: CRuby dispatches
 /// those `===` calls with funcall semantics, so a private `===` is
-/// allowed (an explicit `a === b` compiles to the non-optimizable
-/// opcode and stays a public-only call).
+/// allowed regardless of the receiver (`is_func_call` is unused).
 pub(crate) extern "C" fn cmp_teq_case_values(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
+    _is_func_call: bool,
 ) -> Option<Value> {
     cmp_teq_values_impl(vm, globals, lhs, rhs, true)
 }
@@ -424,12 +469,13 @@ pub(crate) extern "C" fn cmp_teq_case_values(
 /// `===` dispatch for rescue-clause matching (the RescueTEq opcode):
 /// the clause must be a Class or Module — CRuby raises TypeError
 /// before any `===` dispatch — and the call itself has funcall
-/// semantics like case/when.
+/// semantics like case/when (`is_func_call` is unused).
 pub(crate) extern "C" fn cmp_teq_rescue_values(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
+    _is_func_call: bool,
 ) -> Option<Value> {
     if lhs.is_class_or_module().is_none() {
         vm.set_error(MonorubyErr::typeerr(
@@ -491,8 +537,9 @@ pub(crate) extern "C" fn cmp_teq_values_no_opt(
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
-    vm.invoke_method_simple(globals, IdentId::_TEQ, lhs, &[rhs])
+    vm.invoke_method(globals, IdentId::_TEQ, is_func_call, lhs, &[rhs], None, None)
 }
 
 pub(crate) fn cmp_teq_values_bool(
@@ -760,8 +807,9 @@ macro_rules! unop_value_no_opt {
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
+                is_func_call: bool,
             ) -> Option<Value> {
-                vm.invoke_method_simple(globals, $op_str, lhs, &[])
+                vm.invoke_method(globals, $op_str, is_func_call, lhs, &[], None, None)
             }
         }
     };
@@ -782,6 +830,7 @@ pub(crate) extern "C" fn neg_value(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
     let v = match lhs.unpack() {
         RV::Fixnum(lhs) => match lhs.checked_neg() {
@@ -799,11 +848,11 @@ pub(crate) extern "C" fn neg_value(
             } else {
                 // Custom Numeric components: dispatch `-@` to each part via
                 // `Complex#-@` (`neg_op`, not `neg_value`), so no recursion.
-                return vm.invoke_method_simple(globals, IdentId::_UMINUS, lhs, &[]);
+                return vm.invoke_method(globals, IdentId::_UMINUS, is_func_call, lhs, &[], None, None);
             }
         }
         _ => {
-            return vm.invoke_method_simple(globals, IdentId::_UMINUS, lhs, &[]);
+            return vm.invoke_method(globals, IdentId::_UMINUS, is_func_call, lhs, &[], None, None);
         }
     };
     Some(v)
@@ -813,13 +862,14 @@ pub(crate) extern "C" fn pos_value(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
     let v = match lhs.unpack() {
         RV::Fixnum(lhs) => Value::integer(lhs),
         RV::BigInt(lhs) => Value::bigint(lhs.clone()),
         RV::Float(lhs) => Value::float(lhs),
         _ => {
-            return vm.invoke_method_simple(globals, IdentId::_UPLUS, lhs, &[]);
+            return vm.invoke_method(globals, IdentId::_UPLUS, is_func_call, lhs, &[], None, None);
         }
     };
     Some(v)
@@ -829,6 +879,7 @@ pub(crate) extern "C" fn not_value(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
     let v = match lhs.unpack() {
         RV::Fixnum(_)
@@ -840,7 +891,7 @@ pub(crate) extern "C" fn not_value(
         | RV::Bool(true) => Value::bool(false),
         RV::Bool(false) | RV::Nil => Value::bool(true),
         _ => {
-            return vm.invoke_method_simple(globals, IdentId::_NOT, lhs, &[]);
+            return vm.invoke_method(globals, IdentId::_NOT, is_func_call, lhs, &[], None, None);
         }
     };
     Some(v)
@@ -850,12 +901,13 @@ pub(crate) extern "C" fn bitnot_value(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
+    is_func_call: bool,
 ) -> Option<Value> {
     let v = match lhs.unpack() {
         RV::Fixnum(lhs) => Value::integer(!lhs),
         RV::BigInt(lhs) => Value::bigint(!lhs),
         _ => {
-            return vm.invoke_method_simple(globals, IdentId::_BNOT, lhs, &[]);
+            return vm.invoke_method(globals, IdentId::_BNOT, is_func_call, lhs, &[], None, None);
         }
     };
     Some(v)

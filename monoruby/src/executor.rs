@@ -55,8 +55,15 @@ pub fn terminate_with_signal(signo: i32) -> ! {
     std::process::exit(1);
 }
 
-pub type BinaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, Value) -> Option<Value>;
-pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value) -> Option<Value>;
+/// Runtime helper for a binary operator's generic (non-fast-path) dispatch.
+/// The trailing `is_func_call` carries the call site's func-call flag
+/// (`recv` is the literal `self` slot / a visibility-bypassing send) so the
+/// method-visibility fallback matches CRuby: a private operator is callable
+/// only from a func-call site. The VM generic path computes it from the lhs
+/// slot (== 0) and the JIT passes the call site's compile-time constant.
+pub type BinaryOpFn =
+    extern "C" fn(&mut Executor, &mut Globals, Value, Value, bool) -> Option<Value>;
+pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, bool) -> Option<Value>;
 
 pub(crate) const RSP_LOCAL_FRAME: i32 = 40;
 pub(crate) const RSP_CFP: i32 = 24;
@@ -2289,14 +2296,29 @@ impl Executor {
         Ok(self.invoke_eq_raw(globals, lhs, rhs)?.as_bool())
     }
 
-    /// Dispatch `lhs == rhs` and return the method's value untouched.
+    /// Dispatch `lhs == rhs` and return the method's value untouched. Uses
+    /// funcall semantics (private `==` allowed) — for the visibility-aware
+    /// top-level `a == b` dispatch use [`Self::invoke_eq_raw_vis`].
     pub(crate) fn invoke_eq_raw(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
         rhs: Value,
     ) -> Result<Value> {
-        let func_id = self.find_method(globals, lhs, IdentId::_EQ, true)?;
+        self.invoke_eq_raw_vis(globals, lhs, rhs, true)
+    }
+
+    /// Dispatch `lhs == rhs`, enforcing the receiver's `==` visibility per the
+    /// call site's func-call flag (a private `==` is callable only from a
+    /// func-call site).
+    pub(crate) fn invoke_eq_raw_vis(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+        is_func_call: bool,
+    ) -> Result<Value> {
+        let func_id = self.find_method(globals, lhs, IdentId::_EQ, is_func_call)?;
         self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)
     }
 

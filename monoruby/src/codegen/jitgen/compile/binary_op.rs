@@ -160,7 +160,11 @@ impl<'a> JitContext<'a> {
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
                 state.flush_gp(ir);
                 if polymorphic {
-                    self.emit_generic_cmp(state, ir, kind, lhs, rhs, false);
+                    let is_func_call = self
+                        .store
+                        .get_callsite_id(self.iseq_id(), bc_pos)
+                        .is_some_and(|c| self.store[c].is_func_call());
+                    self.emit_generic_cmp(state, ir, kind, lhs, rhs, false, is_func_call);
                     state.def_rax2acc(ir, dst);
                     Ok(CompileResult::Continue)
                 } else {
@@ -198,6 +202,9 @@ impl<'a> JitContext<'a> {
         // matching) dispatches `===` with funcall semantics; a plain
         // `BinCmp` (`a === b`) is a public-only call.
         case_semantics: bool,
+        // The call site's func-call flag: for `==`/`!=`/`<=>`/plain `===`
+        // a private operator is callable only from `self OP x`.
+        is_func_call: bool,
     ) {
         state.write_back_slots(ir, &[lhs, rhs]);
         // §9 9d-B: the generic comparison emits a C-ABI call; flush any
@@ -209,12 +216,13 @@ impl<'a> JitContext<'a> {
         // generic C-call (Part 3-B).
         match kind {
             CmpKind::Eq | CmpKind::Ne => {
-                ir.opt_eq_cmp(state, lhs, rhs, kind, cmp_generic_fn(kind))
+                ir.opt_eq_cmp(state, lhs, rhs, kind, cmp_generic_fn(kind), is_func_call)
             }
             CmpKind::TEq if case_semantics => {
-                ir.generic_binop(state, lhs, rhs, crate::executor::op::cmp_teq_case_values)
+                // case/when `===` is funcall regardless (the helper forces it).
+                ir.generic_binop(state, lhs, rhs, crate::executor::op::cmp_teq_case_values, true)
             }
-            _ => ir.generic_binop(state, lhs, rhs, cmp_generic_fn(kind)),
+            _ => ir.generic_binop(state, lhs, rhs, cmp_generic_fn(kind), is_func_call),
         }
         ir.handle_error(error);
         // The C helper can run arbitrary Ruby (user-defined `==`,
@@ -273,7 +281,11 @@ impl<'a> JitContext<'a> {
             BinaryOpType::Other(Some(lhs_class), rhs_class) => {
                 state.flush_gp(ir);
                 if polymorphic {
-                    self.emit_generic_cmp(state, ir, kind, lhs, rhs, true);
+                    let is_func_call = self
+                        .store
+                        .get_callsite_id(self.iseq_id(), bc_pos)
+                        .is_some_and(|c| self.store[c].is_func_call());
+                    self.emit_generic_cmp(state, ir, kind, lhs, rhs, true, is_func_call);
                     let src_idx = bc_pos + 1;
                     self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
                     return Ok(CompileResult::Continue);

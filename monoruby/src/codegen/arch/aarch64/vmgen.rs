@@ -279,6 +279,11 @@ impl Codegen {
         );
         self.a64_slot_value(X2); // reload src (get_class clobbered x2)
         monoasm_arm64!(&mut self.jit,
+            // is_func_call = (operand slot == self slot 0). The operand slot is
+            // the `[PC+2]` bytecode operand; passed in x3 (4th C-arg).
+            ldrh x3, [x(PC.0), #(2)];
+            cmp x3, #(0);
+            cset x3, eq;
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             mov x9, (abs);
@@ -1983,9 +1988,14 @@ impl Codegen {
         // survive get_class), clobbers x0/x1/x2 and x10/x11/x12.
         self.a64_save_binary_class();
         monoasm_arm64!(&mut self.jit,
-        // cmp_*_values(vm, globals, lhs=X13, rhs=X14) -> Option<Value>
+        // cmp_*_values(vm, globals, lhs=X13, rhs=X14, is_func_call) -> Option<Value>
             mov x2, x13;  // lhs
             mov x3, x14;  // rhs
+            // is_func_call = (lhs slot == self slot 0); the lhs slot is the
+            // `[PC+2]` bytecode operand. Passed in x4 (5th C-arg).
+            ldrh x4, [x(PC.0), #(2)];
+            cmp x4, #(0);
+            cset x4, eq;
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             mov x9, (cmp_fn);
@@ -2133,6 +2143,11 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x2, x13;  // lhs
             mov x3, x14;  // rhs
+            // is_func_call = (lhs slot == self slot 0). The lhs slot is the
+            // `[PC+2]` bytecode operand; passed in x4 (5th C-arg).
+            ldrh x4, [x(PC.0), #(2)];
+            cmp x4, #(0);
+            cset x4, eq;
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             mov x9, (func as u64);
@@ -2362,6 +2377,11 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x2, x13;
             mov x3, x14;
+            // is_func_call = (lhs slot == self slot 0); the lhs slot is the
+            // `[PC+2]` bytecode operand. Passed in x4 (5th C-arg).
+            ldrh x4, [x(PC.0), #(2)];
+            cmp x4, #(0);
+            cset x4, eq;
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             mov x9, (cmp_fn);

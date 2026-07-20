@@ -704,12 +704,14 @@ impl AsmIr {
         lhs: SlotId,
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
+        is_func_call: bool,
     ) {
         let using_fpr = state.using_fpr_offset();
         self.push(AsmInst::GenericBinOp {
             lhs,
             rhs,
             func,
+            is_func_call,
             using_fpr,
         });
     }
@@ -729,6 +731,7 @@ impl AsmIr {
         rhs: SlotId,
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
+        is_func_call: bool,
     ) {
         let using_fpr = state.using_fpr_offset();
         self.push(AsmInst::OptEqCmp {
@@ -736,6 +739,7 @@ impl AsmIr {
             rhs,
             kind,
             func,
+            is_func_call,
             using_fpr,
         });
     }
@@ -1755,6 +1759,10 @@ pub(super) enum AsmInst {
         lhs: SlotId,
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
+        /// Call site's func-call flag, passed to the helper for its
+        /// method-visibility fallback (a private operator is callable
+        /// only from a func-call site).
+        is_func_call: bool,
         using_fpr: UsingFpr,
     },
 
@@ -1769,6 +1777,7 @@ pub(super) enum AsmInst {
         rhs: SlotId,
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
+        is_func_call: bool,
         using_fpr: UsingFpr,
     },
 

@@ -2203,7 +2203,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 sum = Value::float(f + comp);
             }
             comp = 0.0;
-            sum = executor::op::add_values(vm, globals, sum, v).ok_or_else(|| vm.take_error())?;
+            sum = executor::op::add_values(vm, globals, sum, v, false).ok_or_else(|| vm.take_error())?;
         }
     }
     if comp != 0.0

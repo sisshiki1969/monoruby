@@ -800,11 +800,11 @@ impl Codegen {
                 self.encode_linst(LInst::DefinedIvar { dst, name, using_fpr })
             }
             // Generic binary-op / Array=== runtime calls.
-            AsmInst::GenericBinOp { lhs, rhs, func, using_fpr } => {
-                self.encode_linst(LInst::GenericBinOp { lhs, rhs, func, using_fpr })
+            AsmInst::GenericBinOp { lhs, rhs, func, is_func_call, using_fpr } => {
+                self.encode_linst(LInst::GenericBinOp { lhs, rhs, func, is_func_call, using_fpr })
             }
-            AsmInst::OptEqCmp { lhs, rhs, kind, func, using_fpr } => {
-                self.encode_linst(LInst::OptEqCmp { lhs, rhs, kind, func, using_fpr })
+            AsmInst::OptEqCmp { lhs, rhs, kind, func, is_func_call, using_fpr } => {
+                self.encode_linst(LInst::OptEqCmp { lhs, rhs, kind, func, is_func_call, using_fpr })
             }
             AsmInst::ArrayTEq { lhs, rhs, using_fpr } => {
                 self.encode_linst(LInst::ArrayTEq { lhs, rhs, using_fpr })
@@ -1289,11 +1289,11 @@ impl Codegen {
             LInst::DefinedIvar { dst, name, using_fpr } => {
                 self.emit_defined_ivar(dst, name, using_fpr);
             }
-            LInst::GenericBinOp { lhs, rhs, func, using_fpr } => {
-                self.emit_generic_binop(lhs, rhs, func, using_fpr);
+            LInst::GenericBinOp { lhs, rhs, func, is_func_call, using_fpr } => {
+                self.emit_generic_binop(lhs, rhs, func, is_func_call, using_fpr);
             }
-            LInst::OptEqCmp { lhs, rhs, kind, func, using_fpr } => {
-                self.emit_opt_eq_cmp(lhs, rhs, kind, func, using_fpr);
+            LInst::OptEqCmp { lhs, rhs, kind, func, is_func_call, using_fpr } => {
+                self.emit_opt_eq_cmp(lhs, rhs, kind, func, is_func_call, using_fpr);
             }
             LInst::ArrayTEq { lhs, rhs, using_fpr } => {
                 self.emit_array_teq(lhs, rhs, using_fpr);
