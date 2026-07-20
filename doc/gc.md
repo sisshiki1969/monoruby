@@ -41,6 +41,10 @@ monoruby のガベージコレクタの**現行実装**を、コードに即し�
 コンパイルパイプライン全体における GC の位置づけは `CLAUDE.md` の
 "Custom GC (`alloc.rs`)" と本書を対応させて読むとよい。
 
+オブジェクトの状態遷移(マークの在り処・ヘッダフラグの具体値・minor/major の
+手順)を 1 枚にまとめた図が [gc_state_transitions.svg](gc_state_transitions.svg)
+にある(§5・§6・§7 の図解版)。
+
 ---
 
 ## 2. ヒープのレイアウト
@@ -338,6 +342,8 @@ pub(crate) fn write_barrier(&mut self, child: Value) {
 (`emit_write_barrier_rdi`)の両方でカバーされる。
 
 ### 7.2 状態遷移
+
+![世代別 GC オブジェクト状態遷移図](gc_state_transitions.svg)
 
 ```
 young(flag=1) ──[age>=3 で昇格]──▶ old

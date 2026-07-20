@@ -1,0 +1,277 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1810" viewBox="0 0 1240 1810" font-family="Helvetica, Arial, 'Hiragino Sans', 'Noto Sans CJK JP', sans-serif">
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arwB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="arwA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b45309"/>
+    </marker>
+    <marker id="arwR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#be123c"/>
+    </marker>
+    <marker id="arwG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#15803d"/>
+    </marker>
+  </defs>
+
+  <!-- background -->
+  <rect x="0" y="0" width="1240" height="1810" fill="#ffffff"/>
+  <rect x="4" y="4" width="1232" height="1802" fill="none" stroke="#e2e8f0" stroke-width="2" rx="10"/>
+
+  <!-- title -->
+  <text x="620" y="44" text-anchor="middle" font-size="25" font-weight="bold" fill="#0f172a">monoruby 世代別 GC — オブジェクトの状態遷移</text>
+  <text x="620" y="70" text-anchor="middle" font-size="13" fill="#64748b">非移動・stop-the-world の世代別 mark &amp; sweep(実装: alloc.rs / rvalue.rs — 詳細は doc/gc.md)</text>
+
+  <!-- ==================== Section 1 ==================== -->
+  <text x="40" y="112" font-size="18" font-weight="bold" fill="#0f172a">① マークの在り処 — ページ末尾の外部ビットマップとヘッダフラグ</text>
+
+  <!-- Panel 1a: page layout -->
+  <rect x="40" y="130" width="565" height="320" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="60" y="158" font-size="15" font-weight="bold" fill="#1e293b">ヒープページと外部ビットマップ(mark-external)</text>
+  <text x="60" y="178" font-size="11.5" fill="#64748b">Page = 256KB(256KB 境界に整列)/ セルは RValue 64B 固定 ※幅は模式</text>
+
+  <!-- page bar -->
+  <rect x="70" y="200" width="310" height="52" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="225" y="222" text-anchor="middle" font-size="12" fill="#075985">data: [RValue; 4032]</text>
+  <text x="225" y="238" text-anchor="middle" font-size="11" fill="#075985">(64B × 4032 セル)</text>
+  <rect x="380" y="200" width="100" height="52" fill="#fde68a" stroke="#b45309"/>
+  <text x="430" y="222" text-anchor="middle" font-size="12" fill="#78350f">mark_bits</text>
+  <text x="430" y="238" text-anchor="middle" font-size="11" fill="#78350f">[u64; 63]</text>
+  <rect x="480" y="200" width="100" height="52" fill="#fbcfe8" stroke="#be185d"/>
+  <text x="530" y="222" text-anchor="middle" font-size="12" fill="#831843">old_bits</text>
+  <text x="530" y="238" text-anchor="middle" font-size="11" fill="#831843">[u64; 63]</text>
+
+  <!-- cell k highlight -->
+  <rect x="310" y="200" width="10" height="52" fill="#0284c7"/>
+  <text x="315" y="194" text-anchor="middle" font-size="11" font-weight="bold" fill="#0369a1">セル k</text>
+
+  <!-- arrows cell -> bitmaps -->
+  <path d="M 315 254 C 315 288, 420 288, 428 256" fill="none" stroke="#b45309" stroke-width="1.6" marker-end="url(#arwA)"/>
+  <path d="M 315 254 C 315 304, 520 304, 528 256" fill="none" stroke="#be185d" stroke-width="1.6" marker-end="url(#arwR)"/>
+  <text x="380" y="318" text-anchor="middle" font-size="10.5" fill="#b45309">1 セル = 1 ビット</text>
+
+  <!-- formulas -->
+  <text x="70" y="332" font-size="12.5" fill="#0f172a" font-family="Consolas, 'Courier New', monospace">page = ptr &amp; !0x3FFFF          <tspan fill="#64748b">// 256KB マスクで O(1) 逆引き</tspan></text>
+  <text x="70" y="354" font-size="12.5" fill="#0f172a" font-family="Consolas, 'Courier New', monospace">k    = (ptr - &amp;page.data[0]) / 64   <tspan fill="#64748b">// セル番号</tspan></text>
+  <text x="70" y="376" font-size="12.5" fill="#78350f" font-family="Consolas, 'Courier New', monospace">マーク: page.mark_bits[k/64] &amp; (1 &lt;&lt; (k%64))</text>
+  <text x="70" y="398" font-size="12.5" fill="#831843" font-family="Consolas, 'Courier New', monospace">old  : page.old_bits [k/64] &amp; (1 &lt;&lt; (k%64))</text>
+  <text x="70" y="428" font-size="11.5" fill="#64748b">マークは本体の外に置く(生存オブジェクトを汚さず、sweep は 64 セルずつ一括走査できる)</text>
+
+  <!-- Panel 1b: header flag -->
+  <rect x="635" y="130" width="565" height="320" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="655" y="158" font-size="15" font-weight="bold" fill="#1e293b">RValue ヘッダの flag: u16(オフセット 0)</text>
+  <text x="655" y="178" font-size="11.5" fill="#64748b">header.meta.flag — フリーリスト上では同じ 8B が next ポインタになる(union)</text>
+
+  <!-- bit numbers -->
+  <text x="741" y="198" text-anchor="middle" font-size="9.5" fill="#64748b">bit 15 .. 8</text>
+  <text x="839" y="198" text-anchor="middle" font-size="9.5" fill="#64748b">7</text>
+  <text x="883" y="198" text-anchor="middle" font-size="9.5" fill="#64748b">6</text>
+  <text x="927" y="198" text-anchor="middle" font-size="9.5" fill="#64748b">5</text>
+  <text x="971" y="198" text-anchor="middle" font-size="9.5" fill="#64748b">4</text>
+  <text x="1015" y="198" text-anchor="middle" font-size="9.5" fill="#64748b">3</text>
+  <text x="1059" y="198" text-anchor="middle" font-size="9.5" fill="#64748b">2</text>
+  <text x="1103" y="198" text-anchor="middle" font-size="9.5" fill="#64748b">1</text>
+  <text x="1147" y="198" text-anchor="middle" font-size="9.5" fill="#64748b">0</text>
+
+  <!-- bit boxes -->
+  <rect x="665" y="204" width="152" height="46" fill="#ddd6fe" stroke="#6d28d9"/>
+  <text x="741" y="232" text-anchor="middle" font-size="13" font-weight="bold" fill="#4c1d95">age(生存回数)</text>
+  <rect x="817" y="204" width="44" height="46" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="839" y="232" text-anchor="middle" font-size="12" fill="#94a3b8">—</text>
+  <rect x="861" y="204" width="44" height="46" fill="#fed7aa" stroke="#b45309"/>
+  <text x="883" y="232" text-anchor="middle" font-size="12" font-weight="bold" fill="#7c2d12">WP</text>
+  <rect x="905" y="204" width="44" height="46" fill="#bbf7d0" stroke="#15803d"/>
+  <text x="927" y="232" text-anchor="middle" font-size="12" font-weight="bold" fill="#14532d">RM</text>
+  <rect x="949" y="204" width="44" height="46" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="971" y="232" text-anchor="middle" font-size="12" fill="#64748b">WU</text>
+  <rect x="993" y="204" width="44" height="46" fill="#fecdd3" stroke="#be123c"/>
+  <text x="1015" y="232" text-anchor="middle" font-size="12" font-weight="bold" fill="#881337">OLD</text>
+  <rect x="1037" y="204" width="44" height="46" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="1059" y="232" text-anchor="middle" font-size="12" fill="#64748b">CH</text>
+  <rect x="1081" y="204" width="44" height="46" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="1103" y="232" text-anchor="middle" font-size="12" fill="#64748b">FR</text>
+  <rect x="1125" y="204" width="44" height="46" fill="#e0f2fe" stroke="#0284c7"/>
+  <text x="1147" y="232" text-anchor="middle" font-size="12" font-weight="bold" fill="#075985">LV</text>
+
+  <!-- hex under boxes -->
+  <text x="883" y="266" text-anchor="middle" font-size="10" fill="#7c2d12" font-family="Consolas, monospace">0x40</text>
+  <text x="927" y="266" text-anchor="middle" font-size="10" fill="#14532d" font-family="Consolas, monospace">0x20</text>
+  <text x="971" y="266" text-anchor="middle" font-size="10" fill="#64748b" font-family="Consolas, monospace">0x10</text>
+  <text x="1015" y="266" text-anchor="middle" font-size="10" fill="#881337" font-family="Consolas, monospace">0x08</text>
+  <text x="1059" y="266" text-anchor="middle" font-size="10" fill="#64748b" font-family="Consolas, monospace">0x04</text>
+  <text x="1103" y="266" text-anchor="middle" font-size="10" fill="#64748b" font-family="Consolas, monospace">0x02</text>
+  <text x="1147" y="266" text-anchor="middle" font-size="10" fill="#075985" font-family="Consolas, monospace">0x01</text>
+
+  <!-- legend -->
+  <text x="665" y="292" font-size="12.5" fill="#4c1d95"><tspan font-weight="bold">age</tspan>(bits 8..15): 生存回数。RGENGC_OLD_AGE = 3 に達すると old へ昇格</text>
+  <text x="665" y="314" font-size="12.5" fill="#7c2d12"><tspan font-weight="bold">WP 0x0040 WB_PENDING</tspan>: old かつ未 remembered =「armed」。</text>
+  <text x="690" y="332" font-size="12" fill="#7c2d12">write_barrier の高速パスはこの 1 ビットだけをテストする</text>
+  <text x="665" y="354" font-size="12.5" fill="#14532d"><tspan font-weight="bold">RM 0x0020 REMEMBERED</tspan>: remembered set 登録済み(WP と常に排他)</text>
+  <text x="665" y="376" font-size="12.5" fill="#881337"><tspan font-weight="bold">OLD 0x0008</tspan>: old 昇格済み(世代の正本はページ側 old_bits。ヘッダは補助)</text>
+  <text x="665" y="398" font-size="12.5" fill="#475569"><tspan font-weight="bold">LV 0x0001 LIVE</tspan> / FR: FROZEN / CH: CHILLED / WU: shady 用予約(未使用)</text>
+  <text x="665" y="426" font-size="11.5" fill="#64748b">新規オブジェクトは flag = 0x0001(LIVE のみ)= young・age 0・バリア対象外</text>
+
+  <!-- ==================== Section 2 ==================== -->
+  <text x="40" y="500" font-size="18" font-weight="bold" fill="#0f172a">② 状態遷移図(ボックス内は具体値。FROZEN 等の無関係ビットは 0 と仮定)</text>
+
+  <!-- major demote curve (OLD top -> YOUNG top) -->
+  <path d="M 990 590 C 990 514, 250 514, 252 588" fill="none" stroke="#be123c" stroke-width="2" stroke-dasharray="7 4" marker-end="url(#arwR)"/>
+  <text x="620" y="556" text-anchor="middle" font-size="12.5" fill="#be123c" font-weight="bold">major GC: clear_old — 全ページ old_bits = 0 / remembered.clear() / old_count = 0</text>
+  <text x="620" y="574" text-anchor="middle" font-size="11.5" fill="#be123c">全オブジェクトが young へ降格(ヘッダの OLD/age は残るが、生存すれば同サイクルの apply_aging で再昇格)</text>
+
+  <!-- YOUNG container -->
+  <rect x="60" y="590" width="380" height="470" rx="12" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+  <text x="250" y="616" text-anchor="middle" font-size="14" font-weight="bold" fill="#1d4ed8">YOUNG 世代(old_bit = 0)</text>
+  <text x="250" y="633" text-anchor="middle" font-size="11" fill="#3b82f6">毎回の GC で走査・sweep の対象</text>
+
+  <!-- S0 -->
+  <rect x="90" y="644" width="320" height="76" rx="8" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="250" y="668" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#1e3a8a">新規オブジェクト(age = 0)</text>
+  <text x="250" y="688" text-anchor="middle" font-size="12" fill="#0f172a" font-family="Consolas, monospace">flag = 0x0001 (LIVE)</text>
+  <text x="250" y="706" text-anchor="middle" font-size="11.5" fill="#475569" font-family="Consolas, monospace">mark_bit = 0 / old_bit = 0</text>
+
+  <!-- arrow S0->S1 -->
+  <line x1="250" y1="720" x2="250" y2="762" stroke="#475569" stroke-width="1.8" marker-end="url(#arw)"/>
+  <text x="262" y="746" font-size="11.5" fill="#475569">GC 生存(マーク)→ apply_aging: age+1</text>
+
+  <!-- S1 -->
+  <rect x="90" y="764" width="320" height="64" rx="8" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="250" y="788" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">1 回生存(age = 1)</text>
+  <text x="250" y="810" text-anchor="middle" font-size="12" fill="#0f172a" font-family="Consolas, monospace">flag = 0x0101</text>
+
+  <!-- arrow S1->S2 -->
+  <line x1="250" y1="828" x2="250" y2="878" stroke="#475569" stroke-width="1.8" marker-end="url(#arw)"/>
+  <text x="262" y="858" font-size="11.5" fill="#475569">GC 生存 → age+1</text>
+
+  <!-- S2 -->
+  <rect x="90" y="880" width="320" height="76" rx="8" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="250" y="904" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e3a8a">2 回生存(age = 2)</text>
+  <text x="250" y="926" text-anchor="middle" font-size="12" fill="#0f172a" font-family="Consolas, monospace">flag = 0x0201</text>
+  <text x="250" y="944" text-anchor="middle" font-size="11" fill="#64748b">昇格可能型のみ aging リストで追跡</text>
+
+  <!-- note -->
+  <text x="250" y="1040" text-anchor="middle" font-size="11" fill="#64748b">※ minor / major を問わず「マークされた」ことが生存。</text>
+
+  <!-- alloc arrow into S0 -->
+  <line x1="24" y1="658" x2="88" y2="658" stroke="#15803d" stroke-width="2" marker-end="url(#arwG)"/>
+  <text x="16" y="628" font-size="12.5" font-weight="bold" fill="#15803d">alloc()</text>
+  <text x="16" y="644" font-size="10.5" fill="#15803d" font-family="Consolas, monospace">flag=0x0001</text>
+
+  <!-- reuse arrow DEAD -> S0 -->
+  <path d="M 88 1172 C 14 1172, 14 690, 86 690" fill="none" stroke="#15803d" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#arwG)"/>
+  <text x="30" y="950" font-size="11.5" fill="#15803d" transform="rotate(-90 30 950)">alloc() でフリーリストから再利用</text>
+
+  <!-- Promotion panel -->
+  <rect x="470" y="700" width="250" height="260" rx="10" fill="#fdf4ff" stroke="#a21caf" stroke-width="1.8"/>
+  <text x="595" y="726" text-anchor="middle" font-size="14" font-weight="bold" fill="#86198f">昇格(apply_aging)</text>
+  <text x="595" y="744" text-anchor="middle" font-size="10.5" fill="#a21caf">マーク完了後の後処理パスで実行</text>
+  <text x="595" y="772" text-anchor="middle" font-size="12.5" fill="#0f172a">3 回目の生存で age = 3 に到達</text>
+  <text x="485" y="800" font-size="11.5" fill="#0f172a" font-family="Consolas, monospace">page.old_bits[k/64]</text>
+  <text x="485" y="817" font-size="11.5" fill="#0f172a" font-family="Consolas, monospace">    |= 1 &lt;&lt; (k%64)</text>
+  <text x="485" y="841" font-size="11.5" fill="#0f172a" font-family="Consolas, monospace">flag |= 0x0008 (OLD)</text>
+  <text x="485" y="865" font-size="11.5" fill="#0f172a" font-family="Consolas, monospace">old_count += 1</text>
+  <text x="595" y="900" text-anchor="middle" font-size="12" fill="#86198f">直後に判定:</text>
+  <text x="595" y="920" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#86198f">young の子を参照している?</text>
+  <text x="595" y="940" text-anchor="middle" font-size="10.5" fill="#a21caf" font-family="Consolas, monospace">young_child_exists()</text>
+
+  <!-- arrow S2 -> promotion -->
+  <line x1="410" y1="918" x2="468" y2="918" stroke="#a21caf" stroke-width="2" marker-end="url(#arwB)"/>
+
+  <!-- branch labels + arrows -->
+  <text x="560" y="652" font-size="12" font-weight="bold" fill="#b45309">子なし → arm_barrier</text>
+  <text x="560" y="670" font-size="10.5" fill="#b45309" font-family="Consolas, monospace">flag = (flag|0x40) &amp; !0x20</text>
+  <path d="M 720 740 L 808 702" fill="none" stroke="#b45309" stroke-width="2" marker-end="url(#arwA)"/>
+
+  <text x="475" y="996" font-size="12" font-weight="bold" fill="#15803d">子あり → remember-on-promote</text>
+  <text x="475" y="1014" font-size="10.5" fill="#15803d" font-family="Consolas, monospace">enter_remembered: flag=(flag|0x20)&amp;!0x40</text>
+  <text x="475" y="1030" font-size="10.5" fill="#15803d" font-family="Consolas, monospace">remembered.push(self)</text>
+  <path d="M 720 930 L 808 1008" fill="none" stroke="#15803d" stroke-width="2" marker-end="url(#arwG)"/>
+
+  <!-- OLD container -->
+  <rect x="780" y="590" width="420" height="560" rx="12" fill="#fffbeb" stroke="#d97706" stroke-width="2"/>
+  <text x="990" y="616" text-anchor="middle" font-size="14" font-weight="bold" fill="#b45309">OLD 世代(old_bit = 1)</text>
+  <text x="990" y="633" text-anchor="middle" font-size="11" fill="#b45309">minor GC では走査も sweep もされない(seed でマーク済み扱い)</text>
+
+  <!-- O-armed -->
+  <rect x="810" y="644" width="360" height="118" rx="8" fill="#ffffff" stroke="#b45309" stroke-width="1.5"/>
+  <text x="990" y="668" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#7c2d12">old / armed(バリア監視中)</text>
+  <text x="990" y="690" text-anchor="middle" font-size="12" fill="#0f172a" font-family="Consolas, monospace">flag = 0x0349 (age3|WP|OLD|LV)</text>
+  <text x="990" y="710" text-anchor="middle" font-size="11.5" fill="#475569" font-family="Consolas, monospace">old_bit=1 / WB_PENDING=1, REMEMBERED=0</text>
+  <text x="990" y="730" text-anchor="middle" font-size="11.5" fill="#475569">remembered set: 未登録</text>
+  <text x="990" y="750" text-anchor="middle" font-size="11" fill="#64748b">young への参照を持たない old の定常状態</text>
+
+  <!-- arrows armed <-> remembered -->
+  <line x1="880" y1="762" x2="880" y2="968" stroke="#7c2d12" stroke-width="2" marker-end="url(#arw)"/>
+  <text x="898" y="792" font-size="11.5" font-weight="bold" fill="#7c2d12">↓ フィールドへ young を格納</text>
+  <text x="898" y="810" font-size="11" fill="#7c2d12" font-family="Consolas, monospace">write_barrier(child):</text>
+  <text x="898" y="827" font-size="11" fill="#7c2d12" font-family="Consolas, monospace">flag &amp; 0x0040 ≠ 0 なら</text>
+  <text x="898" y="844" font-size="11" fill="#7c2d12" font-family="Consolas, monospace">flag=(flag|0x20)&amp;!0x40</text>
+  <text x="898" y="861" font-size="11" fill="#7c2d12" font-family="Consolas, monospace">+ remembered.push(self)</text>
+
+  <line x1="1130" y1="968" x2="1130" y2="762" stroke="#15803d" stroke-width="2" marker-end="url(#arwG)"/>
+  <text x="898" y="898" font-size="11.5" font-weight="bold" fill="#15803d">↑ minor GC の自己クリーニング</text>
+  <text x="898" y="916" font-size="11" fill="#15803d">young の子が全て昇格/死亡したら</text>
+  <text x="898" y="933" font-size="11" fill="#15803d" font-family="Consolas, monospace">set から除外 + arm_barrier</text>
+  <text x="898" y="950" font-size="11" fill="#15803d" font-family="Consolas, monospace">flag=(flag|0x40)&amp;!0x20</text>
+
+  <!-- O-remembered -->
+  <rect x="810" y="970" width="360" height="130" rx="8" fill="#ffffff" stroke="#15803d" stroke-width="1.5"/>
+  <text x="990" y="994" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#14532d">old / remembered(old→young 辺あり)</text>
+  <text x="990" y="1016" text-anchor="middle" font-size="12" fill="#0f172a" font-family="Consolas, monospace">flag = 0x0329 (age3|RM|OLD|LV)</text>
+  <text x="990" y="1036" text-anchor="middle" font-size="11.5" fill="#475569" font-family="Consolas, monospace">old_bit=1 / REMEMBERED=1, WB_PENDING=0</text>
+  <text x="990" y="1056" text-anchor="middle" font-size="11.5" fill="#475569">remembered set: 登録済み(Allocator.remembered)</text>
+  <text x="990" y="1076" text-anchor="middle" font-size="11" fill="#64748b">minor GC が子だけを mark_children で走査(自身は走査不要)</text>
+
+  <!-- DEAD box -->
+  <rect x="90" y="1120" width="320" height="106" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+  <text x="250" y="1146" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#334155">解放済みセル(フリーリスト)</text>
+  <text x="250" y="1168" text-anchor="middle" font-size="12" fill="#0f172a" font-family="Consolas, monospace">header.next = 次の空きセル</text>
+  <text x="250" y="1188" text-anchor="middle" font-size="11.5" fill="#475569">sweep が free() してリストへ連結</text>
+  <text x="250" y="1206" text-anchor="middle" font-size="11" fill="#64748b">(ヘッダ union が meta → next に化ける)</text>
+
+  <!-- young -> dead -->
+  <line x1="250" y1="1060" x2="250" y2="1118" stroke="#be123c" stroke-width="2" marker-end="url(#arwR)"/>
+  <text x="262" y="1092" font-size="11.5" fill="#be123c">GC で未マーク(mark_bit = 0)→ sweep</text>
+
+  <!-- old -> dead -->
+  <path d="M 900 1150 C 900 1230, 520 1180, 414 1180" fill="none" stroke="#be123c" stroke-width="2" stroke-dasharray="7 4" marker-end="url(#arwR)"/>
+  <text x="560" y="1224" font-size="11.5" fill="#be123c">major GC で未マークなら回収(minor では sweep 対象外)</text>
+
+  <!-- ==================== Section 3 ==================== -->
+  <text x="40" y="1300" font-size="18" font-weight="bold" fill="#0f172a">③ minor / major GC の手順と発火条件</text>
+
+  <!-- Minor panel -->
+  <rect x="40" y="1320" width="565" height="300" rx="10" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.8"/>
+  <text x="60" y="1350" font-size="15" font-weight="bold" fill="#1d4ed8">Minor GC — young だけを集める</text>
+  <text x="60" y="1382" font-size="12.5" fill="#0f172a"><tspan font-weight="bold">1. seed:</tspan> 各ページで mark_bits ← old_bits をコピー</text>
+  <text x="80" y="1400" font-size="11.5" fill="#475569">→ old は「最初からマーク済み」となり、走査も sweep も回避</text>
+  <text x="60" y="1428" font-size="12.5" fill="#0f172a"><tspan font-weight="bold">2. マーク:</tspan> ルートから到達(実際に辿るのは young のみ)</text>
+  <text x="80" y="1446" font-size="11.5" fill="#475569">+ remembered set の各 old の<tspan font-weight="bold">子だけ</tspan> mark_children</text>
+  <text x="80" y="1464" font-size="11.5" fill="#475569">(young の子が消えた entry は set から外して arm_barrier)</text>
+  <text x="60" y="1492" font-size="12.5" fill="#0f172a"><tspan font-weight="bold">3. apply_aging:</tspan> 生存 young の age+1、age=3 は昇格</text>
+  <text x="60" y="1520" font-size="12.5" fill="#0f172a"><tspan font-weight="bold">4. sweep:</tspan> mark_bit=0 のセルのみ free()(old セルは不変)</text>
+  <text x="60" y="1556" font-size="11.5" fill="#1d4ed8">マークコスト ∝ 生きている young + old→young 辺(remembered set)</text>
+  <text x="60" y="1576" font-size="11.5" fill="#1d4ed8">old の中のゴミ(浮遊ゴミ)はこのサイクルでは回収されない</text>
+
+  <!-- Major panel -->
+  <rect x="635" y="1320" width="565" height="300" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="1.8"/>
+  <text x="655" y="1350" font-size="15" font-weight="bold" fill="#b45309">Major GC — 全ヒープ</text>
+  <text x="655" y="1382" font-size="12.5" fill="#0f172a"><tspan font-weight="bold">1. リセット:</tspan> mark_bits=0 / old_bits=0 / old_count=0 /</text>
+  <text x="675" y="1400" font-size="11.5" fill="#475569">remembered.clear() — 全オブジェクト降格(ヘッダ OLD/age は残置)</text>
+  <text x="655" y="1428" font-size="12.5" fill="#0f172a"><tspan font-weight="bold">2. マーク:</tspan> ルートから全ライブグラフを走査</text>
+  <text x="655" y="1456" font-size="12.5" fill="#0f172a"><tspan font-weight="bold">3. apply_aging:</tspan> 生存者を加齢・age≥3 は(再)昇格。</text>
+  <text x="675" y="1474" font-size="11.5" fill="#475569">remember-on-promote で remembered set をゼロから再構築</text>
+  <text x="655" y="1502" font-size="12.5" fill="#0f172a"><tspan font-weight="bold">4. sweep:</tspan> 全域。全セル死亡ページは free_pages へ回収</text>
+  <text x="655" y="1538" font-size="12.5" fill="#0f172a"><tspan font-weight="bold">終了時:</tspan> <tspan font-family="Consolas, monospace" font-size="11.5">old_major_threshold = max(old_count × 2, 16384)</tspan></text>
+  <text x="655" y="1564" font-size="11.5" fill="#b45309">old に溜まった浮遊ゴミもここで回収され、世代情報が作り直される</text>
+
+  <!-- trigger strip -->
+  <rect x="40" y="1644" width="1160" height="130" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="60" y="1672" font-size="13" font-weight="bold" fill="#0f172a">GC 種別の決定(decide_gc_kind)</text>
+  <text x="60" y="1698" font-size="12.5" fill="#0f172a"><tspan font-family="Consolas, monospace" font-size="12">old_count ≥ old_major_threshold</tspan> または <tspan font-family="Consolas, monospace" font-size="12">minors_since_major ≥ 64</tspan>(MAX_MINORS_PER_MAJOR)または <tspan font-family="Consolas, monospace" font-size="12">GC.start</tspan> → <tspan font-weight="bold" fill="#b45309">Major</tspan> / それ以外 → <tspan font-weight="bold" fill="#1d4ed8">Minor</tspan></text>
+  <text x="60" y="1728" font-size="12.5" fill="#0f172a"><tspan font-weight="bold">昇格できる型(is_promotable)</tspan>: OBJECT / STRING / BIGNUM / FLOAT / ARRAY / STRUCT / HASH</text>
+  <text x="60" y="1750" font-size="11.5" fill="#64748b">= 参照フィールドへの全ストア経路(ivar / 要素 / スロット)が write barrier で保護済みの型のみ。それ以外は昇格せず、常に young として毎回走査される。</text>
+</svg>
