@@ -1,5 +1,5 @@
 //! Integration coverage for `Signal.trap` / `Kernel#trap`
-//! (doc/signal_handling.md A7).
+//! (doc/signal.md A7).
 //!
 //! These exercise actual signal *delivery*: a script traps a signal,
 //! `Process.kill`s its own pid, and the handler runs at the next poll

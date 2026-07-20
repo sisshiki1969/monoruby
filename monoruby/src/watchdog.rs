@@ -1,4 +1,4 @@
-//! Optional hang watchdog (doc/signal_handling.md B+).
+//! Optional hang watchdog (doc/signal.md B+).
 //!
 //! monoruby runs Ruby on a single OS thread with no preemptive
 //! scheduler, so some inherently-concurrent programs — and a handful of

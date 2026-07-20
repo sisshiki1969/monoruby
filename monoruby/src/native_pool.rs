@@ -1,5 +1,5 @@
-//! Native worker offload for kernel-blocking syscalls (preemption
-//! Phase 2, see doc/preemption.md).
+//! Native worker offload for kernel-blocking syscalls
+//! (see doc/threads.md §9).
 //!
 //! Some syscalls block *in the kernel* with no fd to poll — `flock(2)`
 //! waiting for a lock, `open(2)` on a FIFO waiting for its peer. In an

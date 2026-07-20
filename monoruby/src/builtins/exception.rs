@@ -1386,7 +1386,7 @@ mod tests {
         run_test(r#"Exception.new.backtrace_locations"#);
     }
 
-    /// `Interrupt < SignalException` (A4 in doc/signal_handling.md): the
+    /// `Interrupt < SignalException` (A4 in doc/signal.md): the
     /// SIGINT path raises a real `Interrupt`, caught by
     /// `rescue SignalException` and `rescue Exception`, with the
     /// conventional default message. Only assertions that agree with

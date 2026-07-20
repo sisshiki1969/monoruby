@@ -604,7 +604,7 @@ pub struct Codegen {
     /// Pre-generated async-signal-safe asm stub for every signal in
     /// `signal_table::TRAPPABLE_SIGNALS`, keyed by signo. Generated once
     /// at `Codegen::new`; `Signal.trap` looks up the stub here and
-    /// `sigaction(2)`s it at trap time. See doc/signal_handling.md A7.
+    /// `sigaction(2)`s it at trap time. See doc/signal.md A7.
     signal_stubs: HashMap<i32, CodePtr>,
     class_version_addr: *mut u32,
     const_version_addr: *mut u64,
@@ -1009,7 +1009,7 @@ impl Codegen {
         // time — no JIT codegen on a live buffer. SIGSEGV/SIGBUS/SIGFPE/
         // SIGILL/SIGABRT are deliberately absent: those are genuine
         // programming errors and are left to the kernel's core-dump path.
-        // See doc/signal_handling.md A2/A7.
+        // See doc/signal.md A2/A7.
         for &signo in signal_table::TRAPPABLE_SIGNALS {
             let codeptr = codegen.signal_handler_for(signo);
             codegen.signal_stubs.insert(signo, codeptr);

@@ -225,7 +225,7 @@ pub struct Globals {
     /// unused). Written by `Signal.trap` / `Kernel#trap` and consulted
     /// at the poll point (`execute_gc`) to decide whether a pending
     /// signal runs a Ruby `Proc`, is ignored, or lowers to the default
-    /// exception. See doc/signal_handling.md A7.
+    /// exception. See doc/signal.md A7.
     pub(crate) signal_handlers: Vec<crate::codegen::signal_table::SignalDisposition>,
     /// `Kernel#at_exit` handler Procs, run in LIFO order at program
     /// termination. Held here as GC roots: they are reachable only from
@@ -336,7 +336,7 @@ impl Globals {
         WARNING.store(warning, std::sync::atomic::Ordering::Relaxed);
 
         // Arm the optional hang watchdog (no-op unless
-        // MONORUBY_HANG_WATCHDOG_SEC is set). See doc/signal_handling.md B+.
+        // MONORUBY_HANG_WATCHDOG_SEC is set). See doc/signal.md B+.
         crate::watchdog::init();
 
         // Propagate the host CRuby's gem-root directories to the vendored

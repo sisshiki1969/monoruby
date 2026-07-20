@@ -1044,7 +1044,7 @@ mod tests {
     fn native_offload_flock_and_fifo() {
         // Kernel-blocking syscalls must park only the calling green
         // thread, not the process (native worker offload,
-        // doc/preemption.md Phase 2). Both of these hang the whole
+        // doc/threads.md §9). Both of these hang the whole
         // interpreter without it.
         run_test_once(
             r#"

@@ -1141,7 +1141,7 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // opening it inline through std would freeze every green thread (and
     // the process). Detect the FIFO up front and run the blocking open on
     // a native worker instead, parking only this thread
-    // (doc/preemption.md, Phase 2). A TOCTOU miss here just falls back to
+    // (doc/threads.md §9). A TOCTOU miss here just falls back to
     // the previous inline behavior.
     let is_fifo = std::fs::metadata(&path)
         .map(|m| std::os::unix::fs::FileTypeExt::is_fifo(&m.file_type()))

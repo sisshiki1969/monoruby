@@ -1,6 +1,6 @@
 //! POSIX signal → Ruby exception mapping.
 //!
-//! See doc/signal_handling.md for the full plan. This module is the
+//! See doc/signal.md for the full plan. This module is the
 //! single source of truth for:
 //!
 //! 1. Which signals monoruby installs an async-signal-safe handler for.
@@ -219,7 +219,7 @@ mod tests {
     use crate::globals::{INTERRUPT_CLASS, SIGNAL_EXCEPTION_CLASS};
 
     /// SIGINT maps to the dedicated `Interrupt` class with the
-    /// conventional "Interrupt" message (A4 in doc/signal_handling.md).
+    /// conventional "Interrupt" message (A4 in doc/signal.md).
     #[test]
     fn sigint_maps_to_interrupt() {
         let err = signo_to_error(libc::SIGINT).expect("SIGINT must map");
@@ -228,7 +228,7 @@ mod tests {
     }
 
     /// Every pre-wired terminate-class signal maps to `SignalException`
-    /// with a "SIG…" message (A3 / A6 in doc/signal_handling.md). These
+    /// with a "SIG…" message (A3 / A6 in doc/signal.md). These
     /// arms are unreachable through the default install set (SIGINT
     /// only), so this is their only coverage until A7 (`Signal.trap`)
     /// flips the install bit.

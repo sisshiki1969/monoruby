@@ -1007,7 +1007,7 @@ fn disposition_to_value(disp: signal_table::SignalDisposition) -> Value {
 ///
 /// The handler does not run in async-signal context: the asm stub only
 /// records the pending signal, and `#call` is invoked at the next
-/// interpreter poll point. See doc/signal_handling.md A7.
+/// interpreter poll point. See doc/signal.md A7.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Signal/m/trap.html]
 #[monoruby_builtin]

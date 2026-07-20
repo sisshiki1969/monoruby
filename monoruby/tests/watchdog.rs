@@ -1,5 +1,5 @@
 //! Integration coverage for the optional hang watchdog
-//! (doc/signal_handling.md B+).
+//! (doc/signal.md B+).
 //!
 //! The watchdog aborts the *process* via `_exit` from a signal handler,
 //! so it can only be exercised by spawning the real binary — not through

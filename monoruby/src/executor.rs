@@ -3746,7 +3746,7 @@ pub(crate) extern "C" fn execute_gc(
 ) -> Option<Value> {
     // Reaching the poll point counts as interpreter progress: reset the
     // hang watchdog's countdown (no-op unless armed). See
-    // doc/signal_handling.md B+.
+    // doc/signal.md B+.
     crate::watchdog::poll();
     // Strip the preempt bit off the poll flag first: `(base, preempt)`
     // decides below whether this poll wants a collection (`base >= 8`), a
@@ -3760,7 +3760,7 @@ pub(crate) extern "C" fn execute_gc(
     // unlikely, and CRuby itself does not guarantee delivery of every
     // coalesced signal). The CODEGEN borrow is released before
     // dispatching so a trap handler (which JIT-compiles, GCs, …) can
-    // re-enter freely. See doc/signal_handling.md A6/A7.
+    // re-enter freely. See doc/signal.md A6/A7.
     let pending = crate::codegen::signal_table::take_pending_signals();
     if let Some(signo) = crate::codegen::signal_table::lowest_pending_signo(pending) {
         use crate::codegen::signal_table::{self, SignalDisposition};
