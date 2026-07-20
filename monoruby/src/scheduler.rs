@@ -927,7 +927,7 @@ fn wake_due_sleepers() {
         let mut s = s.borrow_mut();
         let mut due = vec![];
         s.sleepers.retain(|(deadline, t)| {
-            let mut t = *t;
+            let t = *t;
             let state = t.as_thread_inner().state();
             // Entries whose thread was already woken (or died) through
             // another path are stale — drop them.

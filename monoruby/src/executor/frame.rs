@@ -430,13 +430,13 @@ impl Lfp {
         self.set_svar_slot(val);
     }
 
-    /// Read **this** frame's raw `LFP_SVAR` slot (no outer-chain walk),
-    /// returning `None` for the zero "no container yet" sentinel. Unlike
-    /// [`Lfp::svar`] this does not walk to the LEP — pass a frame that is
-    /// already the method frame (e.g. from [`Lfp::mfp`]).
-    pub(crate) fn svar_slot_value(self) -> Option<Value> {
-        self.svar_slot()
-    }
+    // Read **this** frame's raw `LFP_SVAR` slot (no outer-chain walk),
+    // returning `None` for the zero "no container yet" sentinel. Unlike
+    // [`Lfp::svar`] this does not walk to the LEP — pass a frame that is
+    // already the method frame (e.g. from [`Lfp::mfp`]).
+    //pub(crate) fn svar_slot_value(self) -> Option<Value> {
+    //    self.svar_slot()
+    //}
 
     /// Restore **this** frame's `LFP_SVAR` slot to a previously saved
     /// value (or the zero "no container" sentinel when `val` is `None`).
