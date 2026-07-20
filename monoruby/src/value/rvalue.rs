@@ -60,9 +60,12 @@ mod string;
 mod struct_inner;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
-/// Header flag bit 8: marks a chilled string as literal-born (see
-/// `Header::is_chilled_literal`).
-const CHILLED_LITERAL_BIT: u16 = 0b1_0000_0000;
+/// Header flag bit 7: marks a chilled string as literal-born (see
+/// `Header::is_chilled_literal`). Must stay inside the low byte — the
+/// high byte (bits 8..15) is the generational-GC age field, which
+/// `set_age` overwrites wholesale (issue #975: this bit previously sat
+/// on bit 8 and corrupted / was corrupted by the age counter).
+const CHILLED_LITERAL_BIT: u16 = 0b1000_0000;
 pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.flag);
 pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
 pub const RVALUE_OFFSET_CLASS: usize = std::mem::offset_of!(RValue, header.meta.class);
@@ -2542,5 +2545,58 @@ impl Header {
 
     fn change_class(&mut self, class: ClassId) {
         self.meta.class = Some(class);
+    }
+}
+
+#[cfg(test)]
+mod header_flag_tests {
+    use super::*;
+
+    fn string_header() -> Header {
+        Header::new(STRING_CLASS, ObjTy::STRING)
+    }
+
+    // Issue #975: CHILLED_LITERAL_BIT must not overlap the generational-GC
+    // age field (flag bits 8..15).
+    #[test]
+    fn chilled_literal_bit_is_outside_the_age_byte() {
+        assert_eq!(CHILLED_LITERAL_BIT & 0xff00, 0);
+    }
+
+    #[test]
+    fn chilled_literal_survives_aging() {
+        let mut h = string_header();
+        h.set_chilled_literal();
+        assert_eq!(h.age(), 0, "a fresh chilled literal must be age 0");
+        for age in 1..=3 {
+            h.set_age(age);
+            assert!(h.is_chilled(), "aging cleared the chilled bit");
+            assert!(h.is_chilled_literal(), "aging cleared the literal bit");
+            assert_eq!(h.age(), age);
+        }
+    }
+
+    #[test]
+    fn clear_chilled_keeps_the_age() {
+        let mut h = string_header();
+        h.set_chilled_literal();
+        h.set_age(3);
+        h.clear_chilled();
+        assert!(!h.is_chilled());
+        assert!(!h.is_chilled_literal());
+        assert_eq!(h.age(), 3, "clear_chilled corrupted the age counter");
+    }
+
+    // A `Symbol#to_s` chilled string (chilled, not literal-born) must not
+    // turn into a "literal" one merely by surviving collections.
+    #[test]
+    fn aged_symbol_to_s_string_is_not_literal() {
+        let mut h = string_header();
+        h.set_chilled();
+        for age in [1, 3] {
+            h.set_age(age);
+            assert!(h.is_chilled());
+            assert!(!h.is_chilled_literal(), "odd age misread as literal-born");
+        }
     }
 }
