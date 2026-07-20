@@ -868,7 +868,7 @@ mod tests {
     // change the MatchData or `$~`.
     #[test]
     fn match_data_haystack_snapshot() {
-        run_test(
+        run_tests(&[
             r##"
         s = "hello world foo bar baz " * 10
         m = s.match(/world (\w+)/)
@@ -878,8 +878,6 @@ mod tests {
         after = [m[0], m[1], m.pre_match.bytesize, m.string]
         [before == after, m.string.include?("world"), s.getbyte(6)]
         "##,
-        );
-        run_test(
             r##"
         big = "x" * 100 + "needle" + "y" * 100
         rest = big.byteslice(50..)
@@ -887,16 +885,14 @@ mod tests {
         big.setbyte(150, 33)
         [mt[0], mt.pre_match.bytesize, mt.post_match.bytesize]
         "##,
-        );
-        // Subjects that die before the MatchData does (the snapshot
-        // must keep the haystack alive through GC).
-        run_test(
+            // Subjects that die before the MatchData does (the snapshot
+            // must keep the haystack alive through GC).
             r##"
         mds = 20.times.map { |i| ("p#{i} " + "x" * 64 + " needle#{i}").match(/needle\d+/) }
         GC.start
         mds.each_with_index.map { |m, i| m[0] == "needle#{i}" && m.string.start_with?("p#{i}") }.all?
         "##,
-        );
+        ]);
     }
 
     #[test]
@@ -1137,24 +1133,18 @@ mod tests {
 
     #[test]
     fn match_data_result_encoding() {
-        // Capture / pre_match / post_match strings inherit the subject's
-        // encoding (not a fixed UTF-8/ASCII-8BIT auto-detection).
-        run_test(
+        run_tests(&[
+            // Capture / pre_match / post_match strings inherit the subject's
+            // encoding (not a fixed UTF-8/ASCII-8BIT auto-detection).
             r#"s = "abc".dup.force_encoding(Encoding::EUC_JP); \
                m = s.match(/b/); [m.pre_match.encoding.to_s, m.post_match.encoding.to_s]"#,
-        );
-        run_test(
             r#"s = "abc".dup.force_encoding(Encoding::ISO_8859_1); \
                s.match(/a/).pre_match.encoding.to_s"#,
-        );
-        run_test(
             r#"md = "haystack".dup.force_encoding("euc-jp").match(/(?<t>t(?<a>ack))/u); \
                [md[:t].encoding.to_s, md[1].encoding.to_s]"#,
-        );
-        run_test(
             r#"s = "abc".dup.force_encoding(Encoding::EUC_JP); \
                s.match(/(b)(c)/).captures.map { |x| x.encoding.to_s }"#,
-        );
+        ]);
     }
 
     #[test]
