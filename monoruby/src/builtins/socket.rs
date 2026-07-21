@@ -2447,12 +2447,13 @@ mod tests {
             # 3-arg packed-sockaddr form
             res << c.send("aa", 0, Socket.pack_sockaddr_in(port, "127.0.0.1"))
             res << srv.recvfrom(2).first
+            # Addrinfo destination (while still disconnected — an explicit
+            # destination on a connected UDP socket is EISCONN on BSD/macOS)
+            res << c.send("cc", 0, srv.connect_address)
+            res << srv.recvfrom(2).first
             # connected 2-arg form
             c.connect("127.0.0.1", port)
             res << c.send("bb", 0)
-            res << srv.recvfrom(2).first
-            # send with Addrinfo destination via BasicSocket#send wrapper
-            res << c.send("cc", 0, srv.connect_address)
             res << srv.recvfrom(2).first
             c.close; srv.close
             res
