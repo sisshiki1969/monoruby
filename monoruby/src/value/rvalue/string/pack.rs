@@ -554,15 +554,33 @@ pub(crate) fn pack(
     buffer: Option<Value>,
 ) -> Result<Value> {
     let template = parse_template(template, false)?;
-    // Validate the `buffer:` keyword and seed the output with its current
-    // bytes: pack writes *into* the buffer (appending at the end, or
-    // overwriting from an `@` offset), then the buffer's whole content
-    // becomes the result.
+    // Validate the `buffer:` keyword. pack writes *into* the buffer
+    // (appending at the end, or overwriting from an `@` offset), then the
+    // buffer's whole content becomes the result. `@`/`X` (with a count)
+    // are the only directives that can reach back into bytes that were
+    // already in the buffer, so only they force working on a full copy of
+    // it (`seed_buffer`). For every other template, `packed` holds just
+    // the freshly packed bytes, appended to the buffer at the end —
+    // protobuf-style encoders call `pack("E", buffer: buff)` on an
+    // ever-growing buffer, and copying + re-scanning the whole buffer per
+    // call made encoding quadratic in the message size.
+    let seed_buffer = buffer.is_some()
+        && template.iter().any(|t| match t.template {
+            // `X*` is a no-op (CRuby: `*` is count 0 for `X`); `@` always
+            // repositions — `@*` means `@0`.
+            Template::Back => t.repeat.is_some(),
+            Template::AtPos => true,
+            _ => false,
+        });
     let mut packed = Vec::new();
     if let Some(buf_val) = buffer {
         buf_val.ensure_not_frozen(&globals.store)?;
         match buf_val.is_rstring_inner() {
-            Some(inner) => packed.extend_from_slice(inner.as_bytes()),
+            Some(inner) => {
+                if seed_buffer {
+                    packed.extend_from_slice(inner.as_bytes());
+                }
+            }
             None => {
                 return Err(MonorubyErr::typeerr(format!(
                     "buffer must be String, not {}",
@@ -745,15 +763,15 @@ pub(crate) fn pack(
                 }
             }
             Template::AtPos => {
-                // '@' — move to absolute position, padding with nulls if needed
-                if let Some(pos) = repeat {
-                    if pos > packed.len() {
-                        packed.resize(pos, 0);
-                    } else {
-                        packed.truncate(pos);
-                    }
+                // '@' — move to absolute position, padding with nulls if
+                // needed. CRuby (pack.c) treats `*` as count 0 for
+                // `@`/`X`/`x`, so `@*` rewinds to position 0.
+                let pos = repeat.unwrap_or(0);
+                if pos > packed.len() {
+                    packed.resize(pos, 0);
+                } else {
+                    packed.truncate(pos);
                 }
-                // @* does nothing meaningful for pack
             }
             Template::Hex => {
                 // 'h' (low nibble first) / 'H' (high nibble first) — hex string
@@ -1099,16 +1117,24 @@ pub(crate) fn pack(
         };
     }
     if let Some(mut buf_val) = buffer {
-        // `packed` was seeded with the buffer's original bytes and then
-        // written into (possibly rewound by `@`), so it is the full
-        // desired content. Write it back in place, preserving the buffer's
-        // identity and encoding.
-        let enc = buf_val.as_rstring_inner().encoding();
-        let orig_len = buf_val.as_rstring_inner().len();
-        let repl = RStringInner::from_encoding_scanned(&packed, enc);
-        buf_val
-            .as_rstring_inner_mut()
-            .bytesplice_with(0, orig_len, &repl, &globals.store)?;
+        if seed_buffer {
+            // `packed` was seeded with the buffer's original bytes and then
+            // written into (possibly rewound by `@`), so it is the full
+            // desired content. Write it back in place, preserving the
+            // buffer's identity and encoding.
+            let enc = buf_val.as_rstring_inner().encoding();
+            let orig_len = buf_val.as_rstring_inner().len();
+            let repl = RStringInner::from_encoding_scanned(&packed, enc);
+            buf_val
+                .as_rstring_inner_mut()
+                .bytesplice_with(0, orig_len, &repl, &globals.store)?;
+        } else {
+            // No `@`/`X` in the template: everything in `packed` is new
+            // output that belongs after the buffer's existing bytes.
+            buf_val
+                .as_rstring_inner_mut()
+                .extend_from_slice_merge_cr(&packed);
+        }
         Ok(buf_val)
     } else if template_is_empty && packed.is_empty() {
         // Empty format string produces US-ASCII encoded empty string.
