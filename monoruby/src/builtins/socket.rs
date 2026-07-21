@@ -334,6 +334,13 @@ fn resolve_ipv4(store: &Store, host: Option<&str>, for_bind: bool) -> Result<u32
 fn sockaddr_in(addr_be: u32, port: u16) -> libc::sockaddr_in {
     // SAFETY: sockaddr_in is plain-old-data; zeroing is a valid initial state.
     let mut sin: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    // BSD-family sockaddrs carry a length prefix; CRuby fills it in the
+    // packed form (e.g. Socket.pack_sockaddr_in's first byte is 16 on
+    // macOS), so match that for byte-identical sockaddr strings.
+    #[cfg(not(target_os = "linux"))]
+    {
+        sin.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
+    }
     sin.sin_family = libc::AF_INET as libc::sa_family_t;
     sin.sin_port = port.to_be();
     sin.sin_addr = libc::in_addr { s_addr: addr_be };
@@ -1788,6 +1795,11 @@ fn unix_path_bytes(globals: &Globals, v: Value, allow_nul: bool) -> Result<Vec<u
 fn sockaddr_un_from_path(path: &[u8]) -> libc::sockaddr_un {
     // SAFETY: sockaddr_un is plain-old-data; zeroing is a valid initial state.
     let mut sun: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    // See sockaddr_in: CRuby sets the BSD length prefix (106 on macOS).
+    #[cfg(not(target_os = "linux"))]
+    {
+        sun.sun_len = std::mem::size_of::<libc::sockaddr_un>() as u8;
+    }
     sun.sun_family = libc::AF_UNIX as libc::sa_family_t;
     for (i, b) in path.iter().enumerate() {
         sun.sun_path[i] = *b as libc::c_char;
