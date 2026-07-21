@@ -5650,6 +5650,31 @@ mod tests {
     }
 
     #[test]
+    fn pack_buffer_append_fast_path() {
+        run_tests(&[
+            // Append-only templates (no `@`/`X`) take the fast path that
+            // extends the buffer in place instead of rebuilding it.
+            r#"[65, 66].pack("cc", buffer: "abc".dup)"#,
+            r#"[3.14].pack("E", buffer: "".b).bytes"#,
+            r#"b = "".b; 100.times { [3.14].pack("E", buffer: b) }; b.bytesize"#,
+            // The buffer's encoding is preserved; appending a byte that is
+            // invalid in it degrades valid_encoding?, appending ASCII keeps it.
+            r#"b = "あ".dup; [255].pack("C", buffer: b); [b.encoding.to_s, b.valid_encoding?]"#,
+            r#"b = "あ".dup; [65].pack("C", buffer: b); [b, b.valid_encoding?]"#,
+            // `X` with a count reaches back into the buffer's own bytes
+            // (the seeded slow path).
+            r#"[65].pack("X2C", buffer: "12345".dup)"#,
+            // `X*` is a no-op (count 0) and keeps the fast path.
+            r#"[65].pack("X*C", buffer: "123".dup)"#,
+            // `@*` means `@0` in CRuby: rewind to position 0, discarding
+            // the seeded buffer content.
+            r#"[65].pack("@*C", buffer: "123".dup)"#,
+            r#"["ab", 65].pack("a2@*C")"#,
+            r#"["abc"].pack("a3@*")"#,
+        ]);
+    }
+
+    #[test]
     fn pack_buffer_offset_and_type() {
         run_tests(&[
             // The buffer seeds the output; `@` rewinds within it.

@@ -2055,6 +2055,40 @@ impl RStringInner {
         self.cr.set(CodeRange::Unknown);
     }
 
+    /// Append raw bytes without validation, merging the cached code range
+    /// in O(`slice`): the slice is classified standalone under the
+    /// receiver's encoding and combined with the cached cr, so hot append
+    /// loops (e.g. `Array#pack` with `buffer:`) stay linear and a later
+    /// `code_range()` query doesn't rescan the whole string. Unlike
+    /// `extend_from_slice_checked`, bytes invalid in the receiver's
+    /// encoding are permitted — the cr just degrades to Unknown (a later
+    /// query classifies to Broken), matching pack's semantics of writing
+    /// arbitrary binary into a text-tagged buffer.
+    pub fn extend_from_slice_merge_cr(&mut self, slice: &[u8]) {
+        if slice.is_empty() {
+            return;
+        }
+        let slice_cr = if self.ty.is_ascii_compatible() && slice.iter().all(|&b| b < 0x80) {
+            CodeRange::SevenBit
+        } else {
+            self.ty.classify(slice)
+        };
+        // Both sides classifying SevenBit/Valid standalone makes the
+        // concatenation Valid: a SevenBit/Valid receiver ends on a
+        // complete character, and the appended part is a well-formed
+        // sequence from its first byte. Anything else (either side
+        // Broken/Unknown) is left Unknown for lazy reclassification.
+        let new_cr = match (self.cr.get(), slice_cr) {
+            (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
+            (CodeRange::SevenBit | CodeRange::Valid, CodeRange::SevenBit | CodeRange::Valid) => {
+                CodeRange::Valid
+            }
+            _ => CodeRange::Unknown,
+        };
+        self.owned_mut().extend_from_slice(slice);
+        self.cr.set(new_cr);
+    }
+
     pub fn repeat(&self, len: usize) -> RStringInner {
         // Repetition of a classified buffer trivially preserves cr:
         // SevenBit/Valid stay so under concatenation of identical
@@ -3086,6 +3120,35 @@ mod encoding_tests {
         let s = RStringInner::with_encoding_capacity(Encoding::Utf16Le, 0);
         assert_eq!(s.cr.get(), CodeRange::SevenBit);
         assert_eq!(s.encoding(), Encoding::Utf16Le);
+    }
+
+    #[test]
+    fn extend_from_slice_merge_cr_merges_in_o1_queries() {
+        // SevenBit + SevenBit stays SevenBit.
+        let mut s = RStringInner::from_str_scanned("abc");
+        s.extend_from_slice_merge_cr(b"def");
+        assert_eq!(s.cr.get(), CodeRange::SevenBit);
+
+        // SevenBit + valid multi-byte UTF-8 → Valid.
+        s.extend_from_slice_merge_cr("あ".as_bytes());
+        assert_eq!(s.cr.get(), CodeRange::Valid);
+
+        // Appending bytes invalid in the receiver's encoding degrades to
+        // Unknown, and a later query classifies the truth (Broken).
+        s.extend_from_slice_merge_cr(b"\xff");
+        assert_eq!(s.cr.get(), CodeRange::Unknown);
+        assert_eq!(s.code_range(), CodeRange::Broken);
+
+        // Ascii8 receiver: high bytes are Valid, so the merge keeps an
+        // O(1)-queryable cr.
+        let mut b = RStringInner::from_encoding_scanned(b"ab", Encoding::Ascii8);
+        b.extend_from_slice_merge_cr(b"\xff\xfe");
+        assert_eq!(b.cr.get(), CodeRange::Valid);
+
+        // Empty append is a no-op.
+        let mut e = RStringInner::from_str_scanned("x");
+        e.extend_from_slice_merge_cr(b"");
+        assert_eq!(e.cr.get(), CodeRange::SevenBit);
     }
 
     #[test]
