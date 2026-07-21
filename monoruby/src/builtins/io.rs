@@ -3237,7 +3237,8 @@ fn io_readpartial(
 
 /// Resolve a nested `IO::<name>` exception class id (for the
 /// `*WaitReadable` / `*WaitWritable` classes defined in startup.rb).
-fn io_wait_class(globals: &Globals, name: &str) -> Option<ClassId> {
+/// Shared with the socket builtins' `*_nonblock` methods.
+pub(super) fn io_wait_class(globals: &Globals, name: &str) -> Option<ClassId> {
     let io = globals
         .store
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("IO"))?

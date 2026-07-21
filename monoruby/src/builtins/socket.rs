@@ -44,6 +44,12 @@ pub(super) fn init(globals: &mut Globals) {
     let tsrv_id = tcpserver.id();
     let socket_class = globals.define_class("Socket", basic, OBJECT_CLASS);
     let sock_id = socket_class.id();
+    let udpsocket = globals.define_class("UDPSocket", ipsocket, OBJECT_CLASS);
+    let udp_id = udpsocket.id();
+    let unixsocket = globals.define_class("UNIXSocket", basic, OBJECT_CLASS);
+    let unix_id = unixsocket.id();
+    let unixserver = globals.define_class("UNIXServer", unixsocket, OBJECT_CLASS);
+    let usrv_id = unixserver.id();
     globals.define_class("SocketError", standard_error, OBJECT_CLASS);
 
     // Socket::Constants, and the same constants directly on Socket
@@ -100,6 +106,71 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(basic_id, "setsockopt", setsockopt, 3);
     globals.define_builtin_func(basic_id, "getsockopt", getsockopt, 2);
     globals.define_builtin_func_with(basic_id, "shutdown", shutdown_, 0, 1, false);
+
+    // Datagram/message primitives (park-and-retry blocking discipline).
+    globals.define_builtin_func_with(basic_id, "recv", basic_recv, 1, 3, false);
+    globals.define_builtin_func_with_kw(
+        basic_id,
+        "recv_nonblock",
+        basic_recv_nonblock,
+        1,
+        3,
+        false,
+        &["exception"],
+        false,
+    );
+    globals.define_builtin_func_with(basic_id, "send", basic_send, 2, 3, false);
+    // Same native under an internal name so stdlib/socket.rb can wrap
+    // `send` (Addrinfo destination coercion) without recursing.
+    globals.define_builtin_func_with(basic_id, "__send_raw", basic_send, 2, 3, false);
+    // Wrap an existing fd in the receiver socket class (Socket.for_fd,
+    // UNIXSocket.for_fd, ... — overrides the generic IO.for_fd).
+    globals.define_builtin_class_func(basic_id, "for_fd", socket_for_fd, 1);
+    globals.define_builtin_func_with(basic_id, "__recvfrom_raw", recvfrom_raw, 3, 3, false);
+    globals.define_builtin_func_with(basic_id, "__recvmsg_raw", recvmsg_raw, 3, 3, false);
+    globals.define_builtin_func_with(basic_id, "__sendmsg_raw", sendmsg_raw, 4, 4, false);
+    globals.define_builtin_func(basic_id, "__sockname_raw", sockname_raw, 0);
+    globals.define_builtin_func(basic_id, "__peername_raw", peername_raw, 0);
+    globals.define_builtin_func_with(basic_id, "__accept_raw", accept_raw, 1, 1, false);
+
+    // Generic sockaddr-level Socket surface.
+    globals.define_builtin_func(sock_id, "bind", socket_bind, 1);
+    globals.define_builtin_func_with_kw(
+        sock_id,
+        "connect",
+        socket_connect,
+        1,
+        1,
+        false,
+        &["timeout"],
+        false,
+    );
+    globals.define_builtin_func(sock_id, "listen", socket_listen, 1);
+    globals.define_builtin_class_func_with(sock_id, "pack_sockaddr_in", pack_sockaddr_in, 2, 2, false);
+    globals.define_builtin_class_func_with(sock_id, "sockaddr_in", pack_sockaddr_in, 2, 2, false);
+    globals.define_builtin_class_func(sock_id, "unpack_sockaddr_in", unpack_sockaddr_in, 1);
+    globals.define_builtin_class_func(sock_id, "pack_sockaddr_un", pack_sockaddr_un, 1);
+    globals.define_builtin_class_func(sock_id, "sockaddr_un", pack_sockaddr_un, 1);
+    globals.define_builtin_class_func(sock_id, "unpack_sockaddr_un", unpack_sockaddr_un, 1);
+    globals.define_builtin_class_func_with(sock_id, "pair", socket_pair, 2, 3, false);
+    globals.define_builtin_class_func_with(sock_id, "socketpair", socket_pair, 2, 3, false);
+
+    globals.define_builtin_func(tsrv_id, "sysaccept", tcp_server_sysaccept, 0);
+
+    // UDP: real datagram sockets (previously a raising stub).
+    globals.define_builtin_class_func_with(udp_id, "new", udp_socket_new, 0, 1, false);
+    globals.define_builtin_class_func_with(udp_id, "open", udp_socket_new, 0, 1, false);
+    globals.define_builtin_func(udp_id, "bind", udp_bind, 2);
+    globals.define_builtin_func(udp_id, "connect", udp_connect, 2);
+    globals.define_builtin_func_with(udp_id, "send", udp_send, 2, 4, false);
+
+    // UNIX domain sockets (previously a raising stub).
+    globals.define_builtin_class_func(unix_id, "new", unix_socket_new, 1);
+    globals.define_builtin_class_func_with(unix_id, "pair", unix_pair, 0, 2, false);
+    globals.define_builtin_class_func_with(unix_id, "socketpair", unix_pair, 0, 2, false);
+    globals.define_builtin_func(unix_id, "path", unix_path, 0);
+    globals.define_builtin_class_func(usrv_id, "new", unix_server_new, 1);
+    globals.define_builtin_func(usrv_id, "listen", socket_listen, 1);
 }
 
 /// The socket constants exposed as `Socket::X` / `Socket::Constants::X`.
@@ -941,6 +1012,1128 @@ fn shutdown_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::integer(0))
 }
 
+//
+// Generic message-level socket surface: recv/send (+_nonblock), the raw
+// primitives behind recvfrom/recvmsg/sendmsg/accept/local_address (the
+// Ruby layer in stdlib/socket.rb wraps them into Addrinfo-shaped
+// results), UDP and UNIX-domain sockets, and sockaddr pack/unpack.
+//
+// Blocking discipline is uniform with `accept`/`connect` above: every
+// potentially blocking attempt is issued non-blocking (`MSG_DONTWAIT`,
+// or an O_NONBLOCK listener fd), and a would-block result parks the
+// calling green thread on the scheduler's fd poller via `park_on_fd` —
+// so `Thread#status` reports `"sleep"` while blocked (ruby/spec's
+// `block_caller` matcher spins on exactly that).
+//
+
+/// Retry a would-block-signalling syscall attempt around the scheduler.
+/// `attempt(fd)` returns `Ok(v)` on success or `Err(errno)`; `EAGAIN`
+/// parks on `events` (after a poll point — signals / preemption /
+/// `Thread#kill` land there), `EINTR` just re-runs the poll point, and
+/// anything else surfaces as the matching `Errno::E*`. Closed-ness is
+/// re-checked every round so a cross-thread `close` wakes the parked
+/// thread into an IOError, mirroring `TCPServer#accept`.
+fn park_retry<T>(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    io: Value,
+    events: i16,
+    ctx: &str,
+    mut attempt: impl FnMut(i32) -> std::result::Result<T, i32>,
+) -> Result<T> {
+    let mut parked = false;
+    loop {
+        if io.as_io_inner().is_closed() {
+            return Err(MonorubyErr::ioerr(if parked {
+                "stream closed in another thread"
+            } else {
+                "closed stream"
+            }));
+        }
+        let fd = io.as_io_inner().fileno()?;
+        match attempt(fd) {
+            Ok(v) => return Ok(v),
+            Err(errno) => match errno {
+                libc::EAGAIN | libc::EINTR => {
+                    if crate::executor::execute_gc(vm, globals).is_none() {
+                        return Err(vm.take_error());
+                    }
+                    if errno == libc::EAGAIN {
+                        parked = true;
+                        park_on_fd(vm, globals, fd, events, None)?;
+                    }
+                }
+                _ => return Err(errno_err(&globals.store, errno, ctx)),
+            },
+        }
+    }
+}
+
+fn last_errno() -> i32 {
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(libc::EIO)
+}
+
+/// One `recvfrom(2)` attempt (non-blocking via `MSG_DONTWAIT`).
+/// Returns `(data, sender_sockaddr_bytes)`; the sockaddr is empty for
+/// connected stream sockets.
+fn recvfrom_attempt(fd: i32, maxlen: usize, flags: i32) -> std::result::Result<(Vec<u8>, Vec<u8>), i32> {
+    let mut buf = vec![0u8; maxlen.max(1)];
+    let mut sa = [0u8; 128];
+    let mut sa_len = sa.len() as libc::socklen_t;
+    // SAFETY: buf/sa are live locals sized to the lengths passed.
+    let n = unsafe {
+        libc::recvfrom(
+            fd,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            maxlen,
+            flags | libc::MSG_DONTWAIT,
+            sa.as_mut_ptr() as *mut libc::sockaddr,
+            &mut sa_len,
+        )
+    };
+    if n < 0 {
+        return Err(last_errno());
+    }
+    buf.truncate(n as usize);
+    Ok((buf, sa[..sa_len as usize].to_vec()))
+}
+
+/// Whether `fd` is a stream-type socket (`SO_TYPE == SOCK_STREAM`).
+/// A zero-byte `recvfrom(2)` on a stream socket means EOF (peer
+/// shutdown) and surfaces as `nil` in Ruby, while on a datagram socket
+/// it is a legitimate empty datagram (`""`).
+fn is_stream_socket(fd: i32) -> bool {
+    let mut ty: i32 = 0;
+    let mut len = std::mem::size_of::<i32>() as libc::socklen_t;
+    // SAFETY: getsockopt out-params sized to an i32.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_TYPE,
+            &mut ty as *mut i32 as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    rc == 0 && ty == libc::SOCK_STREAM
+}
+
+/// Write `data` into the supplied output buffer (preserving its identity
+/// and encoding) or build a fresh binary string.
+fn data_to_result(data: Vec<u8>, outbuf: Option<Value>) -> Value {
+    match outbuf {
+        Some(mut v) => {
+            let enc = v.as_rstring_inner().encoding();
+            *v.as_rstring_inner_mut() = RStringInner::from_encoding(&data, enc);
+            v
+        }
+        None => Value::bytes(data),
+    }
+}
+
+/// The `(maxlen, flags = 0, outbuf = nil)` argument triple shared by
+/// `recv` / `recv_nonblock`.
+fn recv_args(vm: &mut Executor, globals: &mut Globals, lfp: &Lfp) -> Result<(usize, i32, Option<Value>)> {
+    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    if maxlen < 0 {
+        return Err(MonorubyErr::argumenterr(format!("negative length {} given", maxlen)));
+    }
+    let flags = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => v.coerce_to_i64(&globals.store)? as i32,
+        _ => 0,
+    };
+    let outbuf = match lfp.try_arg(2) {
+        Some(v) if !v.is_nil() => Some(v.coerce_to_rstring(vm, globals)?.as_val()),
+        _ => None,
+    };
+    Ok((maxlen as usize, flags, outbuf))
+}
+
+///
+/// ### BasicSocket#recv
+///
+/// - recv(maxlen, flags = 0, outbuf = nil) -> String
+///
+/// Parks the calling green thread until data (or EOF) arrives.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/BasicSocket/i/recv.html]
+#[monoruby_builtin]
+fn basic_recv(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let (maxlen, flags, outbuf) = recv_args(vm, globals, &lfp)?;
+    let (data, _) = park_retry(vm, globals, lfp.self_val(), libc::POLLIN, "recvfrom(2)", |fd| {
+        recvfrom_attempt(fd, maxlen, flags)
+    })?;
+    if data.is_empty() && maxlen > 0 && is_stream_socket(lfp.self_val().as_io_inner().fileno()?) {
+        return Ok(Value::nil());
+    }
+    Ok(data_to_result(data, outbuf))
+}
+
+///
+/// ### BasicSocket#recv_nonblock
+///
+/// - recv_nonblock(maxlen, flags = 0, outbuf = nil, exception: true) -> String | :wait_readable
+///
+#[monoruby_builtin]
+fn basic_recv_nonblock(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let (maxlen, flags, outbuf) = recv_args(vm, globals, &lfp)?;
+    let exception = lfp.try_arg(3).map_or(true, |v| v.as_bool());
+    if lfp.self_val().as_io_inner().is_closed() {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    match recvfrom_attempt(fd, maxlen, flags) {
+        Ok((data, _)) => Ok(data_to_result(data, outbuf)),
+        Err(errno) if errno == libc::EAGAIN => {
+            if exception {
+                let cid = super::io::io_wait_class(globals, "EAGAINWaitReadable")
+                    .ok_or_else(|| MonorubyErr::ioerr("IO::EAGAINWaitReadable not defined"))?;
+                Err(MonorubyErr::new(
+                    MonorubyErrKind::Other(cid),
+                    "Resource temporarily unavailable - recvfrom(2) would block".to_string(),
+                ))
+            } else {
+                Ok(Value::symbol(IdentId::get_id("wait_readable")))
+            }
+        }
+        Err(errno) => Err(errno_err(&globals.store, errno, "recvfrom(2)")),
+    }
+}
+
+///
+/// ### BasicSocket#send
+///
+/// - send(mesg, flags, dest_sockaddr = nil) -> Integer
+///
+/// Parks on POLLOUT when the kernel send buffer is full. An unconnected
+/// datagram socket without `dest_sockaddr` surfaces
+/// `Errno::EDESTADDRREQ`, as CRuby does.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/BasicSocket/i/send.html]
+#[monoruby_builtin]
+fn basic_send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mesg = lfp.arg(0).coerce_to_rstring(vm, globals)?.as_val();
+    let bytes = mesg.as_rstring_inner().as_bytes().to_vec();
+    let flags = lfp.arg(1).coerce_to_i64(&globals.store)? as i32;
+    let dest: Option<Vec<u8>> = match lfp.try_arg(2) {
+        Some(v) if !v.is_nil() => match v.is_rstring_inner() {
+            Some(s) => Some(s.as_bytes().to_vec()),
+            None => {
+                return Err(MonorubyErr::typeerr(
+                    "dest_sockaddr should be a packed sockaddr String".to_string(),
+                ));
+            }
+        },
+        _ => None,
+    };
+    let n = park_retry(vm, globals, lfp.self_val(), libc::POLLOUT, "sendto(2)", |fd| {
+        // SAFETY: bytes/dest are live locals sized to the lengths passed.
+        let n = unsafe {
+            match &dest {
+                Some(sa) => libc::sendto(
+                    fd,
+                    bytes.as_ptr() as *const libc::c_void,
+                    bytes.len(),
+                    flags | libc::MSG_DONTWAIT,
+                    sa.as_ptr() as *const libc::sockaddr,
+                    sa.len() as libc::socklen_t,
+                ),
+                None => libc::send(
+                    fd,
+                    bytes.as_ptr() as *const libc::c_void,
+                    bytes.len(),
+                    flags | libc::MSG_DONTWAIT,
+                ),
+            }
+        };
+        if n < 0 { Err(last_errno()) } else { Ok(n) }
+    })?;
+    Ok(Value::integer(n as i64))
+}
+
+///
+/// ### BasicSocket#__recvfrom_raw (stdlib/socket.rb internal)
+///
+/// - __recvfrom_raw(maxlen, flags, blocking) -> [String, sockaddr_bytes]
+///
+/// The primitive behind `Socket#recvfrom` / `IPSocket#recvfrom` /
+/// `UNIXSocket#recvfrom` and their `_nonblock` variants; the Ruby layer
+/// shapes the sender address.
+#[monoruby_builtin]
+fn recvfrom_raw(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?.max(0) as usize;
+    let flags = lfp.arg(1).coerce_to_i64(&globals.store)? as i32;
+    let blocking = lfp.arg(2).as_bool();
+    let (data, sa) = if blocking {
+        park_retry(vm, globals, lfp.self_val(), libc::POLLIN, "recvfrom(2)", |fd| {
+            recvfrom_attempt(fd, maxlen, flags)
+        })?
+    } else {
+        let fd = lfp.self_val().as_io_inner().fileno()?;
+        match recvfrom_attempt(fd, maxlen, flags) {
+            Ok(v) => v,
+            Err(errno) if errno == libc::EAGAIN => {
+                let cid = super::io::io_wait_class(globals, "EAGAINWaitReadable")
+                    .ok_or_else(|| MonorubyErr::ioerr("IO::EAGAINWaitReadable not defined"))?;
+                return Err(MonorubyErr::new(
+                    MonorubyErrKind::Other(cid),
+                    "Resource temporarily unavailable - recvfrom(2) would block".to_string(),
+                ));
+            }
+            Err(errno) => return Err(errno_err(&globals.store, errno, "recvfrom(2)")),
+        }
+    };
+    if data.is_empty() && maxlen > 0 && is_stream_socket(lfp.self_val().as_io_inner().fileno()?) {
+        return Ok(Value::nil());
+    }
+    Ok(Value::array_from_vec(vec![Value::bytes(data), Value::bytes(sa)]))
+}
+
+/// One `recvmsg(2)` attempt (non-blocking via `MSG_DONTWAIT`).
+fn recvmsg_attempt(fd: i32, maxlen: usize, flags: i32) -> std::result::Result<(Vec<u8>, Vec<u8>, i32), i32> {
+    let mut buf = vec![0u8; maxlen.max(1)];
+    let mut sa = [0u8; 128];
+    let mut iov = libc::iovec {
+        iov_base: buf.as_mut_ptr() as *mut libc::c_void,
+        iov_len: maxlen,
+    };
+    // SAFETY: msghdr is plain-old-data; zeroing is a valid initial state.
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_name = sa.as_mut_ptr() as *mut libc::c_void;
+    msg.msg_namelen = sa.len() as libc::socklen_t;
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    // SAFETY: msg points at live locals set up above.
+    let n = unsafe { libc::recvmsg(fd, &mut msg, flags | libc::MSG_DONTWAIT) };
+    if n < 0 {
+        return Err(last_errno());
+    }
+    buf.truncate(n as usize);
+    Ok((buf, sa[..msg.msg_namelen as usize].to_vec(), msg.msg_flags))
+}
+
+///
+/// ### BasicSocket#__recvmsg_raw (stdlib/socket.rb internal)
+///
+/// - __recvmsg_raw(maxlen, flags, blocking) -> [String, sockaddr_bytes, rflags]
+///
+#[monoruby_builtin]
+fn recvmsg_raw(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?.max(0) as usize;
+    let flags = lfp.arg(1).coerce_to_i64(&globals.store)? as i32;
+    let blocking = lfp.arg(2).as_bool();
+    let (data, sa, rflags) = if blocking {
+        park_retry(vm, globals, lfp.self_val(), libc::POLLIN, "recvmsg(2)", |fd| {
+            recvmsg_attempt(fd, maxlen, flags)
+        })?
+    } else {
+        let fd = lfp.self_val().as_io_inner().fileno()?;
+        match recvmsg_attempt(fd, maxlen, flags) {
+            Ok(v) => v,
+            Err(errno) if errno == libc::EAGAIN => {
+                let cid = super::io::io_wait_class(globals, "EAGAINWaitReadable")
+                    .ok_or_else(|| MonorubyErr::ioerr("IO::EAGAINWaitReadable not defined"))?;
+                return Err(MonorubyErr::new(
+                    MonorubyErrKind::Other(cid),
+                    "Resource temporarily unavailable - recvmsg(2) would block".to_string(),
+                ));
+            }
+            Err(errno) => return Err(errno_err(&globals.store, errno, "recvmsg(2)")),
+        }
+    };
+    if data.is_empty() && maxlen > 0 && is_stream_socket(lfp.self_val().as_io_inner().fileno()?) {
+        return Ok(Value::nil());
+    }
+    Ok(Value::array_from_vec(vec![
+        Value::bytes(data),
+        Value::bytes(sa),
+        Value::integer(rflags as i64),
+    ]))
+}
+
+///
+/// ### BasicSocket#__sendmsg_raw (stdlib/socket.rb internal)
+///
+/// - __sendmsg_raw(mesg, flags, dest_sockaddr_or_nil, blocking) -> Integer
+///
+#[monoruby_builtin]
+fn sendmsg_raw(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mesg = lfp.arg(0).coerce_to_rstring(vm, globals)?.as_val();
+    let bytes = mesg.as_rstring_inner().as_bytes().to_vec();
+    let flags = lfp.arg(1).coerce_to_i64(&globals.store)? as i32;
+    let dest: Option<Vec<u8>> = match lfp.try_arg(2) {
+        Some(v) if !v.is_nil() => match v.is_rstring_inner() {
+            Some(s) => Some(s.as_bytes().to_vec()),
+            None => {
+                return Err(MonorubyErr::typeerr(
+                    "dest_sockaddr should be a packed sockaddr String".to_string(),
+                ));
+            }
+        },
+        _ => None,
+    };
+    let blocking = lfp.arg(3).as_bool();
+    let attempt = |fd: i32| -> std::result::Result<isize, i32> {
+        let mut iov = libc::iovec {
+            iov_base: bytes.as_ptr() as *mut libc::c_void,
+            iov_len: bytes.len(),
+        };
+        // SAFETY: msghdr is plain-old-data; zeroing is a valid initial state.
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        if let Some(sa) = &dest {
+            msg.msg_name = sa.as_ptr() as *mut libc::c_void;
+            msg.msg_namelen = sa.len() as libc::socklen_t;
+        }
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        // SAFETY: msg points at live locals set up above.
+        let n = unsafe { libc::sendmsg(fd, &msg, flags | libc::MSG_DONTWAIT) };
+        if n < 0 { Err(last_errno()) } else { Ok(n) }
+    };
+    let n = if blocking {
+        park_retry(vm, globals, lfp.self_val(), libc::POLLOUT, "sendmsg(2)", attempt)?
+    } else {
+        let fd = lfp.self_val().as_io_inner().fileno()?;
+        match attempt(fd) {
+            Ok(n) => n,
+            Err(errno) if errno == libc::EAGAIN => {
+                let cid = super::io::io_wait_class(globals, "EAGAINWaitWritable")
+                    .ok_or_else(|| MonorubyErr::ioerr("IO::EAGAINWaitWritable not defined"))?;
+                return Err(MonorubyErr::new(
+                    MonorubyErrKind::Other(cid),
+                    "Resource temporarily unavailable - sendmsg(2) would block".to_string(),
+                ));
+            }
+            Err(errno) => return Err(errno_err(&globals.store, errno, "sendmsg(2)")),
+        }
+    };
+    Ok(Value::integer(n as i64))
+}
+
+/// Generic getsockname/getpeername returning the raw sockaddr bytes.
+fn name_raw(store: &Store, io: Value, peer: bool) -> Result<Value> {
+    let fd = io.as_io_inner().fileno()?;
+    let mut sa = [0u8; 128];
+    let mut len = sa.len() as libc::socklen_t;
+    // SAFETY: out-params sized to the local buffer.
+    let rc = unsafe {
+        let p = sa.as_mut_ptr() as *mut libc::sockaddr;
+        if peer {
+            libc::getpeername(fd, p, &mut len)
+        } else {
+            libc::getsockname(fd, p, &mut len)
+        }
+    };
+    if rc < 0 {
+        return Err(last_errno_err(store, if peer { "getpeername(2)" } else { "getsockname(2)" }));
+    }
+    Ok(Value::bytes(sa[..len as usize].to_vec()))
+}
+
+/// ### BasicSocket#__sockname_raw (stdlib/socket.rb internal)
+#[monoruby_builtin]
+fn sockname_raw(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    name_raw(&globals.store, lfp.self_val(), false)
+}
+
+/// ### BasicSocket#__peername_raw (stdlib/socket.rb internal)
+#[monoruby_builtin]
+fn peername_raw(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    name_raw(&globals.store, lfp.self_val(), true)
+}
+
+/// Put `fd` in non-blocking mode (sticky — every blocking path here
+/// parks around EAGAIN, so the mode is transparent to Ruby code).
+fn set_nonblocking(fd: i32) {
+    // SAFETY: fcntl on an fd we own; best-effort.
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+}
+
+/// `accept(2)` capturing the peer sockaddr; the new fd is made
+/// close-on-exec and blocking (see `cloexec_accept`).
+fn accept_addr_attempt(fd: i32) -> std::result::Result<(i32, Vec<u8>), i32> {
+    let mut sa = [0u8; 128];
+    let mut len = sa.len() as libc::socklen_t;
+    // SAFETY: accept on the caller's listener fd with length-matched
+    // out-params; fcntl on the fresh fd.
+    let conn = unsafe {
+        let conn = libc::accept(fd, sa.as_mut_ptr() as *mut libc::sockaddr, &mut len);
+        if conn >= 0 {
+            libc::fcntl(conn, libc::F_SETFD, libc::FD_CLOEXEC);
+            let flags = libc::fcntl(conn, libc::F_GETFL);
+            if flags >= 0 {
+                libc::fcntl(conn, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+            }
+        }
+        conn
+    };
+    if conn < 0 {
+        return Err(last_errno());
+    }
+    Ok((conn, sa[..len as usize].to_vec()))
+}
+
+///
+/// ### BasicSocket#__accept_raw (stdlib/socket.rb internal)
+///
+/// - __accept_raw(klass_or_nil) -> [Socket-like, sockaddr_bytes] | [Integer, sockaddr_bytes]
+///
+/// The blocking primitive behind `Socket#accept` / `UNIXServer#accept`
+/// and their `sysaccept` variants: parks until a connection arrives,
+/// then wraps the fd in an instance of `klass` (or returns the raw fd
+/// when `klass` is nil). The listener fd is switched to non-blocking on
+/// first use, like `TCPServer`'s permanently non-blocking listener.
+#[monoruby_builtin]
+fn accept_raw(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let klass = lfp.arg(0);
+    set_nonblocking(self_.as_io_inner().fileno()?);
+    let (conn, sa) = park_retry(vm, globals, self_, libc::POLLIN, "accept(2)", |fd| {
+        match accept_addr_attempt(fd) {
+            // ECONNABORTED: the peer went away between the poll wake and
+            // the accept — just wait for the next connection.
+            Err(errno) if errno == libc::ECONNABORTED => Err(libc::EINTR),
+            other => other,
+        }
+    })?;
+    let first = if klass.is_nil() {
+        Value::integer(conn as i64)
+    } else {
+        let class_id = klass.as_class().id();
+        let name = globals.store.get_class_name(class_id);
+        // SAFETY: conn is a fresh, owned fd from accept.
+        let file = unsafe { std::fs::File::from_raw_fd(conn) };
+        Value::new_socket(file, name, class_id)
+    };
+    Ok(Value::array_from_vec(vec![first, Value::bytes(sa)]))
+}
+
+///
+/// ### BasicSocket.for_fd
+///
+/// - for_fd(fd) -> instance of the receiver class
+///
+/// Takes ownership of an existing socket fd (e.g. one returned by
+/// `sysaccept`) and wraps it in the receiver class.
+#[monoruby_builtin]
+fn socket_for_fd(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let fd = lfp.arg(0).coerce_to_i64(&globals.store)? as i32;
+    if fd < 0 {
+        return Err(MonorubyErr::argumenterr(format!("invalid fd: {fd}")));
+    }
+    let class_id = lfp.self_val().as_class().id();
+    let name = globals.store.get_class_name(class_id);
+    // SAFETY: per for_fd's contract the caller transfers ownership of fd.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    Ok(Value::new_socket(file, name, class_id))
+}
+
+///
+/// ### TCPServer#sysaccept
+///
+/// - sysaccept -> Integer
+///
+#[monoruby_builtin]
+fn tcp_server_sysaccept(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let (conn, _) = park_retry(vm, globals, self_, libc::POLLIN, "accept(2)", |fd| {
+        match accept_addr_attempt(fd) {
+            Err(errno) if errno == libc::ECONNABORTED => Err(libc::EINTR),
+            other => other,
+        }
+    })?;
+    Ok(Value::integer(conn as i64))
+}
+
+///
+/// ### Socket#bind
+///
+/// - bind(sockaddr) -> 0
+///
+#[monoruby_builtin]
+fn socket_bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let sa = match lfp.arg(0).is_rstring_inner() {
+        Some(s) => s.as_bytes().to_vec(),
+        None => {
+            return Err(MonorubyErr::typeerr(
+                "bind argument should be a packed sockaddr String".to_string(),
+            ));
+        }
+    };
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    // SAFETY: bind(2) with a length-matched byte buffer.
+    if unsafe { libc::bind(fd, sa.as_ptr() as *const libc::sockaddr, sa.len() as libc::socklen_t) } < 0 {
+        return Err(last_errno_err(&globals.store, "bind(2)"));
+    }
+    Ok(Value::integer(0))
+}
+
+/// Park until a non-blocking `connect(2)` on `fd` settles, then check
+/// `SO_ERROR` (the same discipline as `TCPSocket.new`).
+fn wait_connect_settled(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    fd: i32,
+    deadline: Option<std::time::Instant>,
+    ctx: &str,
+) -> Result<()> {
+    loop {
+        park_on_fd(vm, globals, fd, libc::POLLOUT, deadline)?;
+        let mut soerr: i32 = 0;
+        let mut len = std::mem::size_of::<i32>() as libc::socklen_t;
+        // SAFETY: getsockopt out-params sized to an i32.
+        unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_ERROR,
+                &mut soerr as *mut i32 as *mut libc::c_void,
+                &mut len,
+            );
+        }
+        if soerr != 0 {
+            return Err(errno_err(&globals.store, soerr, ctx));
+        }
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        // SAFETY: one pollfd, length 1, timeout 0.
+        let ready = unsafe { libc::poll(&mut pfd, 1, 0) };
+        if ready > 0 {
+            return Ok(());
+        }
+        if let Some(dl) = deadline
+            && std::time::Instant::now() >= dl
+        {
+            return Err(errno_err(&globals.store, libc::ETIMEDOUT, ctx));
+        }
+    }
+}
+
+///
+/// ### Socket#connect
+///
+/// - connect(sockaddr, timeout: nil) -> 0
+///
+/// Non-blocking connect parking on POLLOUT, like `TCPSocket.new`.
+#[monoruby_builtin]
+fn socket_connect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let sa = match lfp.arg(0).is_rstring_inner() {
+        Some(s) => s.as_bytes().to_vec(),
+        None => {
+            return Err(MonorubyErr::typeerr(
+                "connect argument should be a packed sockaddr String".to_string(),
+            ));
+        }
+    };
+    let deadline = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => {
+            let secs = v.coerce_to_f64(vm, globals)?;
+            Some(std::time::Instant::now() + std::time::Duration::from_secs_f64(secs.max(0.0)))
+        }
+        _ => None,
+    };
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    set_nonblocking(fd);
+    // SAFETY: connect(2) with a length-matched byte buffer.
+    let rc = unsafe { libc::connect(fd, sa.as_ptr() as *const libc::sockaddr, sa.len() as libc::socklen_t) };
+    if rc < 0 {
+        let errno = last_errno();
+        match errno {
+            libc::EINPROGRESS | libc::EINTR | libc::EAGAIN => {
+                wait_connect_settled(vm, globals, fd, deadline, "connect(2)")?;
+            }
+            _ => {
+                set_blocking(fd);
+                return Err(errno_err(&globals.store, errno, "connect(2)"));
+            }
+        }
+    }
+    set_blocking(fd);
+    Ok(Value::integer(0))
+}
+
+///
+/// ### Socket.pack_sockaddr_in / Socket.sockaddr_in
+///
+/// - pack_sockaddr_in(port, host) -> String
+///
+#[monoruby_builtin]
+fn pack_sockaddr_in(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let port = match lfp.arg(0).try_fixnum() {
+        Some(i) if (0..=65535).contains(&i) => i as u16,
+        _ => value_to_port(globals, lfp.arg(0))?,
+    };
+    let host = value_to_host(globals, lfp.arg(1))?;
+    let addr = resolve_ipv4(&globals.store, host.as_deref(), true)?;
+    let sin = sockaddr_in(addr, port);
+    // SAFETY: viewing a POD struct as bytes.
+    let bytes = unsafe {
+        std::slice::from_raw_parts(
+            &sin as *const libc::sockaddr_in as *const u8,
+            std::mem::size_of::<libc::sockaddr_in>(),
+        )
+    };
+    Ok(Value::bytes(bytes.to_vec()))
+}
+
+/// Read a `sockaddr_in` out of packed bytes, validating family.
+fn sockaddr_in_from_bytes(bytes: &[u8]) -> Result<libc::sockaddr_in> {
+    if bytes.len() < std::mem::size_of::<libc::sockaddr_in>() {
+        return Err(MonorubyErr::argumenterr("not an AF_INET sockaddr".to_string()));
+    }
+    // SAFETY: length checked; sockaddr_in is plain-old-data.
+    let sin: libc::sockaddr_in =
+        unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const libc::sockaddr_in) };
+    if sin.sin_family != libc::AF_INET as libc::sa_family_t {
+        return Err(MonorubyErr::argumenterr("not an AF_INET sockaddr".to_string()));
+    }
+    Ok(sin)
+}
+
+///
+/// ### Socket.unpack_sockaddr_in
+///
+/// - unpack_sockaddr_in(sockaddr) -> [port, ip_address]
+///
+#[monoruby_builtin]
+fn unpack_sockaddr_in(_: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let v = lfp.arg(0);
+    let bytes = v
+        .is_rstring_inner()
+        .ok_or_else(|| MonorubyErr::typeerr("sockaddr should be a String".to_string()))?
+        .as_bytes()
+        .to_vec();
+    let sin = sockaddr_in_from_bytes(&bytes)?;
+    let ip = std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr)).to_string();
+    Ok(Value::array_from_vec(vec![
+        Value::integer(u16::from_be(sin.sin_port) as i64),
+        Value::string(ip),
+    ]))
+}
+
+/// Longest path that fits `sun_path` with a trailing NUL.
+const UNIX_PATH_MAX: usize = 107;
+
+fn unix_path_bytes(globals: &Globals, v: Value) -> Result<Vec<u8>> {
+    let path = match v.is_str() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(MonorubyErr::typeerr(format!(
+                "no implicit conversion of {} into String",
+                globals.store.get_class_name(v.class())
+            )));
+        }
+    };
+    if path.as_bytes().contains(&0) {
+        return Err(MonorubyErr::argumenterr("path name contains null byte".to_string()));
+    }
+    if path.len() > UNIX_PATH_MAX {
+        return Err(MonorubyErr::argumenterr(format!(
+            "too long unix socket path ({} bytes given but {} bytes max)",
+            path.len(),
+            UNIX_PATH_MAX
+        )));
+    }
+    Ok(path.into_bytes())
+}
+
+fn sockaddr_un_from_path(path: &[u8]) -> libc::sockaddr_un {
+    // SAFETY: sockaddr_un is plain-old-data; zeroing is a valid initial state.
+    let mut sun: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    sun.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (i, b) in path.iter().enumerate() {
+        sun.sun_path[i] = *b as libc::c_char;
+    }
+    sun
+}
+
+///
+/// ### Socket.pack_sockaddr_un / Socket.sockaddr_un
+///
+/// - pack_sockaddr_un(path) -> String
+///
+#[monoruby_builtin]
+fn pack_sockaddr_un(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = unix_path_bytes(globals, lfp.arg(0))?;
+    let sun = sockaddr_un_from_path(&path);
+    // SAFETY: viewing a POD struct as bytes.
+    let bytes = unsafe {
+        std::slice::from_raw_parts(
+            &sun as *const libc::sockaddr_un as *const u8,
+            std::mem::size_of::<libc::sockaddr_un>(),
+        )
+    };
+    Ok(Value::bytes(bytes.to_vec()))
+}
+
+///
+/// ### Socket.unpack_sockaddr_un
+///
+/// - unpack_sockaddr_un(sockaddr) -> String
+///
+#[monoruby_builtin]
+fn unpack_sockaddr_un(_: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let v = lfp.arg(0);
+    let bytes = v
+        .is_rstring_inner()
+        .ok_or_else(|| MonorubyErr::typeerr("sockaddr should be a String".to_string()))?
+        .as_bytes()
+        .to_vec();
+    let path = sun_path_from_bytes(&bytes)
+        .ok_or_else(|| MonorubyErr::argumenterr("not an AF_UNIX sockaddr".to_string()))?;
+    Ok(Value::string_from_vec(path))
+}
+
+/// Extract the NUL-terminated `sun_path` out of packed AF_UNIX sockaddr
+/// bytes; `None` when the family doesn't match.
+fn sun_path_from_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let path_off = std::mem::offset_of!(libc::sockaddr_un, sun_path);
+    if bytes.len() < path_off {
+        return None;
+    }
+    // SAFETY: header length checked; sockaddr_un is plain-old-data and a
+    // short input only leaves the zeroed tail in place.
+    let sun: libc::sockaddr_un = unsafe {
+        let mut tmp: libc::sockaddr_un = std::mem::zeroed();
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            &mut tmp as *mut libc::sockaddr_un as *mut u8,
+            bytes.len().min(std::mem::size_of::<libc::sockaddr_un>()),
+        );
+        tmp
+    };
+    if sun.sun_family != libc::AF_UNIX as libc::sa_family_t {
+        return None;
+    }
+    let path: Vec<u8> = sun
+        .sun_path
+        .iter()
+        .take(bytes.len().saturating_sub(path_off))
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
+    Some(path)
+}
+
+/// Make both socketpair fds close-on-exec.
+fn cloexec_pair(fds: [i32; 2]) {
+    for fd in fds {
+        // SAFETY: fcntl on fds we own; best-effort.
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+    }
+}
+
+///
+/// ### Socket.pair / Socket.socketpair
+///
+/// - pair(family, type, protocol = 0) -> [Socket, Socket]
+///
+#[monoruby_builtin]
+fn socket_pair(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let family = family_const(&globals.store, lfp.arg(0))?;
+    let stype = type_const(&globals.store, lfp.arg(1))?;
+    let proto = match lfp.try_arg(2) {
+        Some(v) if !v.is_nil() => v.coerce_to_i64(&globals.store)? as i32,
+        _ => 0,
+    };
+    make_pair(globals, family, stype, proto, lfp.self_val().as_class().id())
+}
+
+///
+/// ### UNIXSocket.pair / UNIXSocket.socketpair
+///
+/// - pair(type = :STREAM, protocol = 0) -> [UNIXSocket, UNIXSocket]
+///
+#[monoruby_builtin]
+fn unix_pair(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let stype = match lfp.try_arg(0) {
+        Some(v) if !v.is_nil() => type_const(&globals.store, v)?,
+        _ => libc::SOCK_STREAM,
+    };
+    let proto = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => v.coerce_to_i64(&globals.store)? as i32,
+        _ => 0,
+    };
+    make_pair(globals, libc::AF_UNIX, stype, proto, lfp.self_val().as_class().id())
+}
+
+fn make_pair(globals: &Globals, family: i32, stype: i32, proto: i32, class_id: ClassId) -> Result<Value> {
+    let mut fds = [0i32; 2];
+    // SAFETY: socketpair(2) with a two-slot out array.
+    if unsafe { libc::socketpair(family, stype, proto, fds.as_mut_ptr()) } < 0 {
+        return Err(last_errno_err(&globals.store, "socketpair(2)"));
+    }
+    cloexec_pair(fds);
+    let name = globals.store.get_class_name(class_id);
+    // SAFETY: both fds are fresh, owned socketpair fds.
+    let (a, b) = unsafe {
+        (
+            Value::new_socket(std::fs::File::from_raw_fd(fds[0]), name.clone(), class_id),
+            Value::new_socket(std::fs::File::from_raw_fd(fds[1]), name, class_id),
+        )
+    };
+    Ok(Value::array_from_vec(vec![a, b]))
+}
+
+///
+/// ### UDPSocket.new
+///
+/// - new(address_family = Socket::AF_INET) -> UDPSocket
+///
+#[monoruby_builtin]
+fn udp_socket_new(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let family = match lfp.try_arg(0) {
+        Some(v) if !v.is_nil() => family_const(&globals.store, v)?,
+        _ => libc::AF_INET,
+    };
+    let fd = cloexec_socket(family, libc::SOCK_DGRAM, 0, false);
+    if fd < 0 {
+        return Err(last_errno_err(&globals.store, "socket(2)"));
+    }
+    let class_id = lfp.self_val().as_class().id();
+    // SAFETY: fd is a fresh, owned socket fd.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    Ok(Value::new_socket(file, "UDPSocket".into(), class_id))
+}
+
+///
+/// ### UDPSocket#bind
+///
+/// - bind(host, port) -> 0
+///
+#[monoruby_builtin]
+fn udp_bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let host = value_to_host(globals, lfp.arg(0))?;
+    let port = value_to_port(globals, lfp.arg(1))?;
+    let addr = resolve_ipv4(&globals.store, host.as_deref(), true)?;
+    let sin = sockaddr_in(addr, port);
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    // SAFETY: bind(2) with a valid sockaddr_in.
+    if unsafe {
+        libc::bind(
+            fd,
+            &sin as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        )
+    } < 0
+    {
+        return Err(last_errno_err(&globals.store, "bind(2)"));
+    }
+    Ok(Value::integer(0))
+}
+
+///
+/// ### UDPSocket#connect
+///
+/// - connect(host, port) -> 0
+///
+/// Datagram connect just records the default peer — no handshake, so no
+/// parking is needed.
+#[monoruby_builtin]
+fn udp_connect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let host = value_to_host(globals, lfp.arg(0))?;
+    let port = value_to_port(globals, lfp.arg(1))?;
+    let addr = resolve_ipv4(&globals.store, host.as_deref(), false)?;
+    let sin = sockaddr_in(addr, port);
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    // SAFETY: connect(2) with a valid sockaddr_in.
+    if unsafe {
+        libc::connect(
+            fd,
+            &sin as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        )
+    } < 0
+    {
+        return Err(last_errno_err(&globals.store, "connect(2)"));
+    }
+    Ok(Value::integer(0))
+}
+
+///
+/// ### UDPSocket#send
+///
+/// - send(mesg, flags) -> Integer                     (connected)
+/// - send(mesg, flags, sockaddr_to) -> Integer
+/// - send(mesg, flags, host, port) -> Integer
+///
+#[monoruby_builtin]
+fn udp_send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mesg = lfp.arg(0).coerce_to_rstring(vm, globals)?.as_val();
+    let bytes = mesg.as_rstring_inner().as_bytes().to_vec();
+    let flags = lfp.arg(1).coerce_to_i64(&globals.store)? as i32;
+    let dest: Option<Vec<u8>> = match (lfp.try_arg(2), lfp.try_arg(3)) {
+        (Some(host), Some(port)) if !port.is_nil() => {
+            let host = value_to_host(globals, host)?;
+            let port = value_to_port(globals, port)?;
+            let addr = resolve_ipv4(&globals.store, host.as_deref(), false)?;
+            let sin = sockaddr_in(addr, port);
+            // SAFETY: viewing a POD struct as bytes.
+            let sa = unsafe {
+                std::slice::from_raw_parts(
+                    &sin as *const libc::sockaddr_in as *const u8,
+                    std::mem::size_of::<libc::sockaddr_in>(),
+                )
+            };
+            Some(sa.to_vec())
+        }
+        (Some(sa), _) if !sa.is_nil() => match sa.is_rstring_inner() {
+            Some(s) => Some(s.as_bytes().to_vec()),
+            None => {
+                return Err(MonorubyErr::typeerr(
+                    "sockaddr_to should be a packed sockaddr String".to_string(),
+                ));
+            }
+        },
+        _ => None,
+    };
+    let n = park_retry(vm, globals, lfp.self_val(), libc::POLLOUT, "sendto(2)", |fd| {
+        // SAFETY: bytes/dest are live locals sized to the lengths passed.
+        let n = unsafe {
+            match &dest {
+                Some(sa) => libc::sendto(
+                    fd,
+                    bytes.as_ptr() as *const libc::c_void,
+                    bytes.len(),
+                    flags | libc::MSG_DONTWAIT,
+                    sa.as_ptr() as *const libc::sockaddr,
+                    sa.len() as libc::socklen_t,
+                ),
+                None => libc::send(
+                    fd,
+                    bytes.as_ptr() as *const libc::c_void,
+                    bytes.len(),
+                    flags | libc::MSG_DONTWAIT,
+                ),
+            }
+        };
+        if n < 0 { Err(last_errno()) } else { Ok(n) }
+    })?;
+    Ok(Value::integer(n as i64))
+}
+
+///
+/// ### UNIXSocket.new
+///
+/// - new(path) -> UNIXSocket
+///
+/// Connects to a UNIX-domain stream server. A full backlog (EAGAIN from
+/// a non-blocking AF_UNIX connect) parks briefly on POLLOUT and retries.
+#[monoruby_builtin]
+fn unix_socket_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = unix_path_bytes(globals, lfp.arg(0))?;
+    let sun = sockaddr_un_from_path(&path);
+    let fd = cloexec_socket(libc::AF_UNIX, libc::SOCK_STREAM, 0, true);
+    if fd < 0 {
+        return Err(last_errno_err(&globals.store, "socket(2)"));
+    }
+    let sa_len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+    loop {
+        // SAFETY: connect(2) with a valid sockaddr_un.
+        let rc = unsafe { libc::connect(fd, &sun as *const libc::sockaddr_un as *const libc::sockaddr, sa_len) };
+        if rc == 0 {
+            break;
+        }
+        let errno = last_errno();
+        match errno {
+            libc::EINPROGRESS => {
+                if let Err(e) = wait_connect_settled(vm, globals, fd, None, "connect(2)") {
+                    // SAFETY: closing the fd we own.
+                    unsafe { libc::close(fd) };
+                    return Err(e);
+                }
+                break;
+            }
+            // Backlog full on AF_UNIX: retry after a bounded park.
+            libc::EAGAIN | libc::EINTR => {
+                if crate::executor::execute_gc(vm, globals).is_none() {
+                    // SAFETY: closing the fd we own.
+                    unsafe { libc::close(fd) };
+                    return Err(vm.take_error());
+                }
+                if errno == libc::EAGAIN {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+                    if let Err(e) = park_on_fd(vm, globals, fd, libc::POLLOUT, Some(deadline)) {
+                        // SAFETY: closing the fd we own.
+                        unsafe { libc::close(fd) };
+                        return Err(e);
+                    }
+                }
+            }
+            _ => {
+                // SAFETY: closing the fd we own.
+                unsafe { libc::close(fd) };
+                return Err(errno_err(&globals.store, errno, "connect(2)"));
+            }
+        }
+    }
+    set_blocking(fd);
+    let class_id = lfp.self_val().as_class().id();
+    // SAFETY: fd is a fresh, owned socket fd.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    Ok(Value::new_socket(file, "UNIXSocket".into(), class_id))
+}
+
+///
+/// ### UNIXServer.new
+///
+/// - new(path) -> UNIXServer
+///
+/// Binds and listens on a UNIX-domain stream socket. The listener fd is
+/// left non-blocking for `accept`'s park-and-retry loop.
+#[monoruby_builtin]
+fn unix_server_new(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = unix_path_bytes(globals, lfp.arg(0))?;
+    let sun = sockaddr_un_from_path(&path);
+    let fd = cloexec_socket(libc::AF_UNIX, libc::SOCK_STREAM, 0, true);
+    if fd < 0 {
+        return Err(last_errno_err(&globals.store, "socket(2)"));
+    }
+    let sa_len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+    // SAFETY: bind/listen on the fresh fd we own.
+    unsafe {
+        if libc::bind(fd, &sun as *const libc::sockaddr_un as *const libc::sockaddr, sa_len) < 0 {
+            let err = last_errno_err(&globals.store, "bind(2)");
+            libc::close(fd);
+            return Err(err);
+        }
+        if libc::listen(fd, libc::SOMAXCONN) < 0 {
+            let err = last_errno_err(&globals.store, "listen(2)");
+            libc::close(fd);
+            return Err(err);
+        }
+    }
+    let class_id = lfp.self_val().as_class().id();
+    // SAFETY: fd is a fresh, owned socket fd.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    Ok(Value::new_socket(file, "UNIXServer".into(), class_id))
+}
+
+///
+/// ### UNIXSocket#path
+///
+/// - path -> String
+///
+/// The bound path for a server-side socket, `""` for a client.
+#[monoruby_builtin]
+fn unix_path(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let sa = name_raw(&globals.store, lfp.self_val(), false)?;
+    let path = sun_path_from_bytes(sa.as_rstring_inner().as_bytes()).unwrap_or_default();
+    Ok(Value::string_from_vec(path))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1000,6 +2193,151 @@ mod tests {
             k.close
             t.join
             s.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn udp_roundtrip_and_recvfrom() {
+        run_test_once(
+            r#"
+            require "socket"
+            s = UDPSocket.new
+            s.bind("127.0.0.1", 0)
+            port = s.addr[1]
+            c = UDPSocket.new
+            c.send("ping", 0, "127.0.0.1", port)
+            msg, addr = s.recvfrom(10)
+            res = [msg, addr[0], addr[3], addr[1].is_a?(Integer)]
+            c.close
+            s.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn socket_generic_accept_connect() {
+        run_test_once(
+            r#"
+            require "socket"
+            srv = Socket.new(:INET, :STREAM)
+            srv.setsockopt(:SOCKET, :REUSEADDR, true)
+            srv.bind(Socket.pack_sockaddr_in(0, "127.0.0.1"))
+            srv.listen(5)
+            port = srv.local_address.ip_port
+            cli = Socket.new(:INET, :STREAM)
+            t = Thread.new { cli.connect(Socket.pack_sockaddr_in(port, "127.0.0.1")) }
+            conn, ai = srv.accept
+            t.join
+            res = [conn.class.to_s, ai.class.to_s, ai.ip_address, ai.ip_port.is_a?(Integer)]
+            conn.close; cli.close; srv.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn unix_pair_recv_send_and_recvmsg() {
+        run_test_once(
+            r#"
+            require "socket"
+            a, b = UNIXSocket.pair
+            a.send("hello", 0)
+            got = b.recv(5)
+            b.sendmsg("world")
+            data, ai, _fl = a.recvmsg(5)
+            res = [got, data, ai.class.to_s, a.class.to_s]
+            a.close; b.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn unix_server_client_roundtrip() {
+        run_test_once(
+            r#"
+            require "socket"
+            require "tmpdir"
+            path = File.join(Dir.mktmpdir, "s.sock")
+            srv = UNIXServer.new(path)
+            t = Thread.new { c = srv.accept; c.write(c.gets); c.close }
+            k = UNIXSocket.new(path)
+            k.puts "unix!"
+            res = [k.gets, srv.path]
+            k.close
+            t.join
+            srv.close
+            res.map { |s| s.sub(File.dirname(path), "") }
+            "#,
+        );
+    }
+
+    #[test]
+    fn recv_returns_nil_at_stream_eof() {
+        run_test_once(
+            r#"
+            require "socket"
+            a, b = UNIXSocket.pair
+            a.close
+            res = b.recv(10)
+            b.close
+            res.inspect
+            "#,
+        );
+    }
+
+    #[test]
+    fn pack_unpack_sockaddr() {
+        run_test_once(
+            r#"
+            require "socket"
+            sa = Socket.pack_sockaddr_in(8080, "127.0.0.1")
+            un = Socket.pack_sockaddr_un("/tmp/x.sock")
+            [
+              Socket.unpack_sockaddr_in(sa),
+              Socket.unpack_sockaddr_un(un),
+              sa.encoding.to_s,
+              begin; Socket.unpack_sockaddr_in(un); rescue ArgumentError => e; :bad_family; end,
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn blocked_socket_ops_report_sleep_status() {
+        // The exact discipline ruby/spec's `block_caller` matcher spins
+        // on: a thread blocked in a socket op must report status
+        // "sleep", and Thread#kill must be able to reap it.
+        run_test_once(
+            r#"
+            require "socket"
+            require "tmpdir"
+            res = []
+            probe = lambda do |&blk|
+              t = Thread.new(&blk)
+              st = nil
+              5000.times do
+                st = t.status
+                break if st == "sleep" || st == false || st.nil?
+                Thread.pass
+              end
+              t.kill
+              t.join
+              st
+            end
+            s = TCPServer.new("127.0.0.1", 0)
+            res << probe.call { s.accept }
+            u = UDPSocket.new
+            u.bind("127.0.0.1", 0)
+            res << probe.call { u.recvfrom(10) }
+            a, b = UNIXSocket.pair
+            res << probe.call { a.recv(4) }
+            res << probe.call { a.recvmsg }
+            res << probe.call { Socket.tcp_server_loop("127.0.0.1", 0) { } }
+            [s, u, a, b].each(&:close)
             res
             "#,
         );
