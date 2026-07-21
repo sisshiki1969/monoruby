@@ -454,6 +454,29 @@ pub(crate) struct OptionalInfo {
     initializer: Node,
 }
 
+/// Whether a parameter-default expression is a scalar literal, i.e. its
+/// evaluation can have no observable effect beyond writing the parameter's
+/// local slot. Anything else is treated as effectful for the
+/// trivial-method hint: constant lookups can raise `NameError`,
+/// interpolation and composite literals can run arbitrary user code.
+fn default_expr_is_pure(node: &Node) -> bool {
+    matches!(
+        node.kind,
+        NodeKind::Nil
+            | NodeKind::Bool(_)
+            | NodeKind::Integer(_)
+            | NodeKind::Bignum(_)
+            | NodeKind::Float(_)
+            | NodeKind::Imaginary(_)
+            | NodeKind::Rational(..)
+            | NodeKind::RImaginary(..)
+            | NodeKind::String(_)
+            | NodeKind::Bytes(_)
+            | NodeKind::EncodedString(..)
+            | NodeKind::Symbol(_)
+    )
+}
+
 impl OptionalInfo {
     pub fn new(local: BcLocal, initializer: Node) -> Self {
         Self { local, initializer }
@@ -688,9 +711,22 @@ impl<'a> BytecodeGen<'a> {
         // observable side effects. Optional- and keyword-parameter default
         // expressions can run arbitrary user code (e.g.
         // `def f(a = ($x = 1)); 1; end` — calling `f` must still assign
-        // `$x`), so their presence disqualifies the method from the hint.
-        let prologue_has_side_effects = !info.optional_info.is_empty()
-            || info.keyword_initializers.iter().any(|i| i.is_some());
+        // `$x`), so a default that isn't a scalar literal disqualifies the
+        // method from the hint. Literal defaults (the overwhelmingly common
+        // `arg = false` / `arg = nil` shape — e.g. the default
+        // `respond_to_missing?(name, include_all = false)`, whose
+        // `ConstReturn` hint the JIT folds `respond_to?` misses through)
+        // only write a local slot no trivial body can observe, so they keep
+        // the hint.
+        let prologue_has_side_effects = info
+            .optional_info
+            .iter()
+            .any(|o| !default_expr_is_pure(&o.initializer))
+            || info
+                .keyword_initializers
+                .iter()
+                .flatten()
+                .any(|i| !default_expr_is_pure(i));
         for OptionalInfo { local, initializer } in info.optional_info {
             let local = local.into();
             let next = self.new_label();
