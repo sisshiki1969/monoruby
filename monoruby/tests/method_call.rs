@@ -100,6 +100,64 @@ fn optional_default_side_effect_trivial_body() {
 }
 
 #[test]
+fn optional_literal_default_trivial_body() {
+    // Scalar-literal defaults have no observable effect, so a trivial body
+    // keeps the constant-return hint (the default `respond_to_missing?
+    // (name, include_all = false)` relies on this — dropping its hint made
+    // `respond_to?` on missing methods quadratically slower to fold in the
+    // JIT). These tests pin the *semantics*: literal defaults, trivial
+    // bodies, with and without supplied arguments.
+    run_test(
+        r#"
+        def f(a = false); 1; end
+        [f, f(:x)]
+        "#,
+    );
+    run_test(
+        r#"
+        def f(a = nil, b = :sym, c = "s"); nil; end
+        [f, f(1), f(1, 2, 3)]
+        "#,
+    );
+    run_test(
+        r#"
+        class C
+          def f(a = 42); self; end
+        end
+        c = C.new
+        c.f.equal?(c)
+        "#,
+    );
+    run_test(
+        r#"
+        def f(k: false, j: 1.5); true; end
+        [f, f(k: :x, j: nil)]
+        "#,
+    );
+    // A literal default mixed with an effectful one: the hint must still
+    // be dropped and the effectful default must run.
+    run_test(
+        r#"
+        def f(a = false, b = ($x = 7)); 1; end
+        f
+        $x
+        "#,
+    );
+    // respond_to? consults the default respond_to_missing? (whose
+    // include_all default is a literal): both outcomes stay correct.
+    run_test(
+        r#"
+        class D
+          def m; end
+          private def p_m; end
+        end
+        d = D.new
+        [d.respond_to?(:m), d.respond_to?(:absent), d.respond_to?(:p_m), d.respond_to?(:p_m, true)]
+        "#,
+    );
+}
+
+#[test]
 fn method_rest() {
     run_test_with_prelude(
         r#"
