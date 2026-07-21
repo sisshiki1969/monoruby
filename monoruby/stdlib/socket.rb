@@ -485,8 +485,10 @@ class Addrinfo
   alias to_s to_sockaddr
 
   def afamily
-    # sa_family is a native-endian u16 at offset 0 on Linux.
-    @sockaddr.bytesize < 2 ? Socket::AF_UNSPEC : @sockaddr.unpack1("S")
+    # sa_family's offset/width is platform-dependent (Linux: u16 at 0;
+    # macOS/BSD: u8 after sa_len) — the native helper reads it through
+    # the real struct sockaddr layout.
+    Socket.__sockaddr_family(@sockaddr)
   end
   alias pfamily afamily
 

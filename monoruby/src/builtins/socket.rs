@@ -152,6 +152,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(sock_id, "pack_sockaddr_un", pack_sockaddr_un, 1);
     globals.define_builtin_class_func(sock_id, "sockaddr_un", pack_sockaddr_un, 1);
     globals.define_builtin_class_func(sock_id, "unpack_sockaddr_un", unpack_sockaddr_un, 1);
+    globals.define_builtin_class_func(sock_id, "__sockaddr_family", sockaddr_family, 1);
     globals.define_builtin_class_func_with(sock_id, "pair", socket_pair, 2, 3, false);
     globals.define_builtin_class_func_with(sock_id, "socketpair", socket_pair, 2, 3, false);
 
@@ -1722,6 +1723,36 @@ fn unpack_sockaddr_in(_: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: Byt
         Value::integer(u16::from_be(sin.sin_port) as i64),
         Value::string(ip),
     ]))
+}
+
+///
+/// ### Socket.__sockaddr_family (stdlib/socket.rb internal)
+///
+/// - __sockaddr_family(sockaddr) -> Integer
+///
+/// The address family of packed sockaddr bytes, read through the
+/// platform's `struct sockaddr` layout — `sa_family` is a u16 at offset
+/// 0 on Linux but a u8 after `sa_len` on macOS/BSD, so Ruby-side
+/// `unpack` can't do this portably. Empty/short input yields AF_UNSPEC.
+#[monoruby_builtin]
+fn sockaddr_family(_: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let v = lfp.arg(0);
+    let bytes = v
+        .is_rstring_inner()
+        .ok_or_else(|| MonorubyErr::typeerr("sockaddr should be a String".to_string()))?
+        .as_bytes();
+    // SAFETY: sockaddr is plain-old-data; a short input only leaves the
+    // zeroed tail in place (family reads as AF_UNSPEC).
+    let sa: libc::sockaddr = unsafe {
+        let mut tmp: libc::sockaddr = std::mem::zeroed();
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            &mut tmp as *mut libc::sockaddr as *mut u8,
+            bytes.len().min(std::mem::size_of::<libc::sockaddr>()),
+        );
+        tmp
+    };
+    Ok(Value::integer(sa.sa_family as i64))
 }
 
 /// Longest path that fits `sun_path` with a trailing NUL.
