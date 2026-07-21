@@ -347,6 +347,15 @@ class Socket
 end
 
 class UDPSocket < IPSocket
+  # send(mesg, flags [, host, port] / [, sockaddr_to]) -> Integer
+  # Wraps the native primitive to accept an Addrinfo destination.
+  def send(mesg, flags, *rest)
+    if rest.length == 1 && rest[0].respond_to?(:to_sockaddr)
+      rest = [rest[0].to_sockaddr]
+    end
+    __udp_send_raw(mesg, flags, *rest)
+  end
+
   # UDPSocket#recvfrom_nonblock(maxlen, flags = 0, outbuf = nil, exception: true)
   #   -> [data, ["AF_INET", sender_port, sender_host, sender_host]]
   def recvfrom_nonblock(maxlen, flags = 0, _outbuf = nil, exception: true)

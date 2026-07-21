@@ -163,6 +163,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(udp_id, "bind", udp_bind, 2);
     globals.define_builtin_func(udp_id, "connect", udp_connect, 2);
     globals.define_builtin_func_with(udp_id, "send", udp_send, 2, 4, false);
+    // Same native under an internal name so stdlib/socket.rb can wrap
+    // `send` (Addrinfo destination coercion) without recursing.
+    globals.define_builtin_func_with(udp_id, "__udp_send_raw", udp_send, 2, 4, false);
 
     // UNIX domain sockets (previously a raising stub).
     globals.define_builtin_class_func(unix_id, "new", unix_socket_new, 1);
@@ -1724,7 +1727,11 @@ fn unpack_sockaddr_in(_: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: Byt
 /// Longest path that fits `sun_path` with a trailing NUL.
 const UNIX_PATH_MAX: usize = 107;
 
-fn unix_path_bytes(globals: &Globals, v: Value) -> Result<Vec<u8>> {
+/// Validate a UNIX socket path argument. `allow_nul` distinguishes
+/// `Socket.pack_sockaddr_un` (CRuby packs NUL-containing paths — used
+/// for Linux abstract addresses) from `UNIXSocket.new`/`UNIXServer.new`
+/// (a NUL must raise before any bind/connect — CVE-2018-8779).
+fn unix_path_bytes(globals: &Globals, v: Value, allow_nul: bool) -> Result<Vec<u8>> {
     let path = match v.is_str() {
         Some(s) => s.to_string(),
         None => {
@@ -1734,7 +1741,7 @@ fn unix_path_bytes(globals: &Globals, v: Value) -> Result<Vec<u8>> {
             )));
         }
     };
-    if path.as_bytes().contains(&0) {
+    if !allow_nul && path.as_bytes().contains(&0) {
         return Err(MonorubyErr::argumenterr("path name contains null byte".to_string()));
     }
     if path.len() > UNIX_PATH_MAX {
@@ -1764,7 +1771,7 @@ fn sockaddr_un_from_path(path: &[u8]) -> libc::sockaddr_un {
 ///
 #[monoruby_builtin]
 fn pack_sockaddr_un(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = unix_path_bytes(globals, lfp.arg(0))?;
+    let path = unix_path_bytes(globals, lfp.arg(0), true)?;
     let sun = sockaddr_un_from_path(&path);
     // SAFETY: viewing a POD struct as bytes.
     let bytes = unsafe {
@@ -2033,7 +2040,7 @@ fn udp_send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// a non-blocking AF_UNIX connect) parks briefly on POLLOUT and retries.
 #[monoruby_builtin]
 fn unix_socket_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = unix_path_bytes(globals, lfp.arg(0))?;
+    let path = unix_path_bytes(globals, lfp.arg(0), false)?;
     let sun = sockaddr_un_from_path(&path);
     let fd = cloexec_socket(libc::AF_UNIX, libc::SOCK_STREAM, 0, true);
     if fd < 0 {
@@ -2095,7 +2102,7 @@ fn unix_socket_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
 /// left non-blocking for `accept`'s park-and-retry loop.
 #[monoruby_builtin]
 fn unix_server_new(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = unix_path_bytes(globals, lfp.arg(0))?;
+    let path = unix_path_bytes(globals, lfp.arg(0), false)?;
     let sun = sockaddr_un_from_path(&path);
     let fd = cloexec_socket(libc::AF_UNIX, libc::SOCK_STREAM, 0, true);
     if fd < 0 {
@@ -2338,6 +2345,214 @@ mod tests {
             res << probe.call { a.recvmsg }
             res << probe.call { Socket.tcp_server_loop("127.0.0.1", 0) { } }
             [s, u, a, b].each(&:close)
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn recv_nonblock_and_msg_nonblock_paths() {
+        run_test_once(
+            r#"
+            require "socket"
+            res = []
+            a, b = UNIXSocket.pair
+            # would-block: exception and exception: false forms
+            res << (begin; b.recv_nonblock(4); rescue IO::WaitReadable; :raised; end)
+            res << b.recv_nonblock(4, exception: false)
+            res << (begin; b.recvmsg_nonblock(4); rescue IO::WaitReadable; :raised; end)
+            res << b.recvmsg_nonblock(4, exception: false)
+            # data present: outbuf form and plain form
+            a.send("hi", 0)
+            buf = +"xxxx"
+            res << b.recv_nonblock(2, 0, buf)
+            res << buf
+            a.sendmsg_nonblock("yo")
+            data, ai, _fl = b.recvmsg_nonblock(2)
+            res << [data, ai.class.to_s]
+            a.close; b.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn sendmsg_nonblock_error_paths() {
+        run_test_once(
+            r#"
+            require "socket"
+            s = Socket.new(:INET, :DGRAM)
+            res = []
+            res << (begin; s.sendmsg_nonblock("x"); rescue Errno::EDESTADDRREQ; :dest_req; end)
+            res << (begin; s.send("x", 0); rescue Errno::EDESTADDRREQ; :dest_req; end)
+            s.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn udp_send_forms_and_connect() {
+        run_test_once(
+            r#"
+            require "socket"
+            srv = UDPSocket.new
+            srv.bind("127.0.0.1", 0)
+            port = srv.addr[1]
+            c = UDPSocket.new
+            res = []
+            # 3-arg packed-sockaddr form
+            res << c.send("aa", 0, Socket.pack_sockaddr_in(port, "127.0.0.1"))
+            res << srv.recvfrom(2).first
+            # connected 2-arg form
+            c.connect("127.0.0.1", port)
+            res << c.send("bb", 0)
+            res << srv.recvfrom(2).first
+            # send with Addrinfo destination via BasicSocket#send wrapper
+            res << c.send("cc", 0, srv.connect_address)
+            res << srv.recvfrom(2).first
+            c.close; srv.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn socket_pair_and_for_fd_and_sysaccept() {
+        run_test_once(
+            r#"
+            require "socket"
+            res = []
+            x, y = Socket.pair(:UNIX, :STREAM)
+            x.send("pp", 0)
+            res << y.recv(2)
+            res << [x.class.to_s, y.class.to_s]
+            x.close; y.close
+            u, v = UNIXSocket.pair(:DGRAM)
+            u.send("qq", 0)
+            res << v.recv(2)
+            u.close; v.close
+            # sysaccept returns a raw fd; wrap it back with for_fd
+            srv = TCPServer.new("127.0.0.1", 0)
+            port = srv.addr[1]
+            t = Thread.new { TCPSocket.new("127.0.0.1", port) }
+            fd = srv.sysaccept
+            res << fd.is_a?(Integer)
+            conn = Socket.for_fd(fd)
+            res << conn.class.to_s
+            k = t.join.value
+            k.write("zz")
+            res << conn.recv(2)
+            conn.close; k.close; srv.close
+            res
+            "#,
+        );
+        run_test_once(
+            r#"
+            require "socket"
+            require "tmpdir"
+            path = File.join(Dir.mktmpdir, "sa.sock")
+            srv = UNIXServer.new(path)
+            t = Thread.new { UNIXSocket.new(path) }
+            fd = srv.sysaccept
+            k = t.join.value
+            res = [fd.is_a?(Integer)]
+            sock = Socket.new(:INET, :STREAM)
+            sock.setsockopt(:SOCKET, :REUSEADDR, true)
+            sock.bind(Socket.pack_sockaddr_in(0, "127.0.0.1"))
+            sock.listen(1)
+            port = sock.local_address.ip_port
+            t2 = Thread.new { TCPSocket.new("127.0.0.1", port) }
+            fd2, ai = sock.sysaccept
+            k2 = t2.join.value
+            res << [fd2.is_a?(Integer), ai.class.to_s, ai.ip_address]
+            IO.for_fd(fd).close rescue nil
+            IO.for_fd(fd2).close rescue nil
+            k.close; k2.close; srv.close; sock.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn sockaddr_error_paths_and_unix_helpers() {
+        run_test_once(
+            r#"
+            require "socket"
+            require "tmpdir"
+            res = []
+            # pack allows NUL (abstract addresses); UNIXSocket.new rejects it.
+            res << Socket.pack_sockaddr_un("a\0b").bytes.first(6)
+            res << (begin; UNIXSocket.new("a\0b"); rescue ArgumentError; :nul; end)
+            res << (begin; Socket.pack_sockaddr_un("x" * 200); rescue ArgumentError; :too_long; end)
+            res << (begin; Socket.unpack_sockaddr_un(Socket.pack_sockaddr_in(1, "127.0.0.1")); rescue ArgumentError; :bad_family; end)
+            res << (begin; UNIXSocket.new(123); rescue TypeError; :not_str; end)
+            path = File.join(Dir.mktmpdir, "h.sock")
+            srv = UNIXServer.new(path)
+            t = Thread.new { srv.accept.close }
+            k = UNIXSocket.open(path) { |s| s.addr[0] }
+            t.join
+            res << k
+            res << srv.addr[0]
+            res << (srv.path == path)
+            srv.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn generic_connect_refused_and_recvfrom_eof() {
+        run_test_once(
+            r#"
+            require "socket"
+            # Grab a free port, close the listener, then generic-connect to it.
+            s = TCPServer.new("127.0.0.1", 0)
+            port = s.addr[1]
+            s.close
+            res = []
+            c = Socket.new(:INET, :STREAM)
+            res << (begin
+              c.connect(Socket.pack_sockaddr_in(port, "127.0.0.1"))
+              :connected
+            rescue Errno::ECONNREFUSED
+              :refused
+            end)
+            c.close
+            # recvfrom/recvmsg on a peer-closed stream return nil (EOF).
+            a, b = UNIXSocket.pair
+            a.close
+            res << b.recvfrom(4).inspect
+            b.close
+            x, y = UNIXSocket.pair
+            x.close
+            res << y.recvmsg(4).inspect
+            y.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn address_helpers_and_argument_errors() {
+        run_test_once(
+            r#"
+            require "socket"
+            res = []
+            s = TCPServer.new("127.0.0.1", 0)
+            res << s.local_address.ip_address
+            res << (s.local_address.ip_port == s.addr[1])
+            res << s.getsockname.is_a?(String)
+            res << (begin; s.recv(-1); rescue ArgumentError; :neg; end)
+            t = Thread.new { c = s.accept; c.recv(4); c.close }
+            k = TCPSocket.new("127.0.0.1", s.addr[1])
+            res << (k.remote_address.ip_port == s.addr[1])
+            res << k.getpeername.is_a?(String)
+            ai = k.local_address
+            res << (begin; ai.unix_path; rescue SocketError; :not_unix; end)
+            k.send("done", 0)
+            t.join
+            k.close; s.close
             res
             "#,
         );
