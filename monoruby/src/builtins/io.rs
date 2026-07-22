@@ -1155,6 +1155,30 @@ fn bump_lineno(globals: &mut Globals, io: Value) -> Result<()> {
 /// permanently non-blocking by `read_nonblock`/`write_nonblock` — and is
 /// waited out with a plain (signal-interruptible) `poll(2)`, matching
 /// CRuby, where buffered IO on a non-blocking fd still blocks the caller.
+/// Bridge for error classes: the read/write primitives below `IoInner`
+/// have no `Store`, so raw OS errors surface as
+/// `RuntimeError("… (os error N)")` instead of the `Errno::*` class
+/// CRuby raises (e.g. `read` on a listening socket must be
+/// `Errno::ENOTCONN`). Rebuild such errors here, where `globals` is in
+/// reach, by parsing the errno std::io::Error stably formats into the
+/// message. A structural fix (errors carrying their errno) can replace
+/// this; until then every blocking-region operation gets the right
+/// class on every platform.
+fn errnoify(globals: &Globals, err: MonorubyErr) -> MonorubyErr {
+    if !matches!(err.kind(), MonorubyErrKind::Runtime) {
+        return err;
+    }
+    let msg = err.message();
+    if let Some(pos) = msg.rfind("(os error ")
+        && let Some(end) = msg[pos..].find(')')
+        && let Ok(errno) = msg[pos + 10..pos + end].parse::<i32>()
+    {
+        let io_err = std::io::Error::from_raw_os_error(errno);
+        return MonorubyErr::from_io_err(&globals.store, &io_err, msg.to_string());
+    }
+    err
+}
+
 /// Whether `fd` is a listening socket (`SO_ACCEPTCONN`). `false` for
 /// non-sockets (`ENOTSOCK`) and on any getsockopt failure.
 fn is_listening_socket(fd: i32) -> bool {
@@ -1272,6 +1296,7 @@ pub(crate) fn blocking_io_region<T>(
                     wait_fd_single(vm, globals, fd, events)?;
                 }
             }
+            Err(err) => return Err(errnoify(globals, err)),
             res => return res,
         }
     }
