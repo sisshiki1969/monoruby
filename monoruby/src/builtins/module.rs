@@ -3453,15 +3453,19 @@ mod tests {
     fn attr_result_survives_gc_in_method_added_hook() {
         // The Symbol-array result of attr_reader/attr_writer/attr_accessor
         // is a bare heap object owned by the native frame while the
-        // method_added hook runs Ruby per attribute. A hook that allocates
-        // (every allocation collects under gc-stress) used to sweep that
-        // unrooted array mid-loop — the darwin CI SIGABRT of issue #985's
-        // shape. The result must come back intact for every name.
+        // method_added hook runs Ruby per attribute; without temp-rooting,
+        // a collection reached inside the hook sweeps it mid-loop and the
+        // next push aborts on the freed cell (issue #985's darwin
+        // SIGABRT). `GC.start` requests a collection and the loop's
+        // safepoint runs it *inside the hook* — this deterministically
+        // aborted (ARRAY != INVALID in Array::push, non-unwinding panic)
+        // before the fix, on x86-64 too.
         run_test(
             r#"
             class C
               def self.method_added(name)
-                ("x" * 64) + name.to_s  # allocate: a GC opportunity per hook
+                GC.start
+                10.times { |i| i }  # pass a safepoint so the GC runs here
               end
               $r = attr_accessor :a, :b, :c
               $w = attr_writer :d, :e
