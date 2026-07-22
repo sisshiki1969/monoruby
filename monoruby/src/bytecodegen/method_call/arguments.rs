@@ -51,7 +51,7 @@ impl<'a> BytecodeGen<'a> {
         let (block_fid, block_arg) = if arglist.delegate_block {
             let (_, _, outer) = self.mother.clone();
             let block = self.push().into();
-            self.emit(BytecodeInst::BlockArgProxy(block, outer), loc);
+            self.emit_block_forward(block, outer, loc);
             (None, Some(block))
         } else {
             let block_arg = self.sp().into();
@@ -130,7 +130,7 @@ impl<'a> BytecodeGen<'a> {
         };
 
         let block = self.push().into();
-        self.emit(BytecodeInst::BlockArgProxy(block, outer), loc);
+        self.emit_block_forward(block, outer, loc);
 
         Ok(CallSite::new(
             name,
@@ -203,7 +203,7 @@ impl<'a> BytecodeGen<'a> {
         };
 
         let block = self.push().into();
-        self.emit(BytecodeInst::BlockArgProxy(block, outer), loc);
+        self.emit_block_forward(block, outer, loc);
 
         CallSite::new(
             None,
@@ -217,6 +217,34 @@ impl<'a> BytecodeGen<'a> {
             dst,
             true,
         )
+    }
+
+    ///
+    /// Emit the block handler of the method `outer` lexical levels up into
+    /// `dst`, to be passed on as the block argument of a call.
+    ///
+    /// A *proxy* handler encodes its home frame as a **dynamic** prev-cfp
+    /// hop count, but `BlockArgProxy` can only bump that count by a
+    /// statically known amount — it assumes every lexical level costs
+    /// exactly two frames (the block frame plus the method that `yield`ed
+    /// it). That holds only when each enclosing block is invoked by a
+    /// direct `yield` from the method it was passed to; as soon as the
+    /// block travels one more hop (a block re-yielded from inside another
+    /// literal block, issue #982) the forwarded handler resolves to an
+    /// unrelated frame, so `break` out of it reports a bogus
+    /// `LocalJumpError: break from proc-closure`.
+    ///
+    /// For `outer == 0` the home frame *is* the current frame, so the
+    /// static +1 is exact and the cheap proxy is kept. For `outer > 0`,
+    /// materialize the handler into a Proc with `BlockArg`, which locates
+    /// the home frame on the live cfp chain at run time.
+    ///
+    fn emit_block_forward(&mut self, dst: BcReg, outer: usize, loc: Loc) {
+        if outer == 0 {
+            self.emit(BytecodeInst::BlockArgProxy(dst, 0), loc);
+        } else {
+            self.emit(BytecodeInst::BlockArg(dst, outer), loc);
+        }
     }
 
     fn load_dynvar(&mut self, slot_id: SlotId, outer: usize, loc: Loc) -> BcReg {
@@ -331,7 +359,7 @@ impl<'a> BytecodeGen<'a> {
                     self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
                 } else {
                     assert_eq!(Some(proc_local), self.outer_block_param_name(outer));
-                    self.emit(BytecodeInst::BlockArgProxy(dst, outer), loc);
+                    self.emit_block_forward(dst, outer, loc);
                 }
             }
             _ => {
