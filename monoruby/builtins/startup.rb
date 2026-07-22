@@ -2070,6 +2070,11 @@ class IO
   end
   EWOULDBLOCKWaitReadable = EAGAINWaitReadable
   EWOULDBLOCKWaitWritable = EAGAINWaitWritable
+  # Raised by Socket#connect_nonblock while the connect is in flight
+  # (`rescue IO::WaitWritable`, then IO.select writable and retry).
+  class EINPROGRESSWaitWritable < Errno::EINPROGRESS
+    include IO::WaitWritable
+  end
 
   def sync
     raise IOError, "closed stream" if closed?
