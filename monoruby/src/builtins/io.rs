@@ -1179,40 +1179,6 @@ fn errnoify(globals: &Globals, err: MonorubyErr) -> MonorubyErr {
     err
 }
 
-/// Whether `fd` is a listening socket (`SO_ACCEPTCONN`). `false` for
-/// non-sockets (`ENOTSOCK`) and on any getsockopt failure.
-fn is_listening_socket(fd: i32) -> bool {
-    let mut val: i32 = 0;
-    let mut len = std::mem::size_of::<i32>() as libc::socklen_t;
-    // SAFETY: getsockopt out-params sized to an i32.
-    let rc = unsafe {
-        libc::getsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_ACCEPTCONN,
-            &mut val as *mut i32 as *mut libc::c_void,
-            &mut len,
-        )
-    };
-    rc == 0 && val != 0
-}
-
-/// Whether `io` is a socket-classed IO (class inherits `BasicSocket`).
-/// Pure in-memory ancestry walk — no syscalls — so the listening-socket
-/// gate below costs nothing for files and pipes.
-fn is_socket_io(globals: &Globals, io: Value) -> bool {
-    match globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("BasicSocket"))
-    {
-        Some(basic) => match basic.is_class_or_module() {
-            Some(m) => io.is_kind_of(&globals.store, m.id()),
-            None => false,
-        },
-        None => false,
-    }
-}
-
 pub(crate) fn blocking_io_region<T>(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1220,38 +1186,24 @@ pub(crate) fn blocking_io_region<T>(
     events: i16,
     mut f: impl FnMut() -> Result<T>,
 ) -> Result<T> {
-    // Reading a listening socket can never produce data — `read(2)` on it
-    // fails immediately (`ENOTCONN` for AF_INET, `EINVAL` for AF_UNIX on
-    // Linux) — but the entry parking below would wait for a POLLIN that
-    // only an incoming *connection* can raise, hanging forever
-    // (ruby/spec: `TCPServer#gets raises Errno::ENOTCONN`). Probe with a
-    // 1-byte read and surface the kernel's actual errno, as CRuby does.
-    if events & libc::POLLIN != 0
-        && is_socket_io(globals, io)
-        && !io.as_io_inner().has_buffered_data()
-        && let Ok(fd) = io.as_io_inner().wait_fd_for(events)
-        && is_listening_socket(fd)
-    {
-        let mut b = [0u8; 1];
-        // SAFETY: 1-byte read into a live local; a listener never has
-        // data, so nothing can be consumed.
-        let n = unsafe { libc::read(fd, b.as_mut_ptr() as *mut libc::c_void, 1) };
-        if n < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() != Some(libc::EAGAIN) {
-                let msg = format!("{err} - read on a listening socket (fd {fd})");
-                return Err(MonorubyErr::from_io_err(&globals.store, &err, msg));
-            }
-        }
-        // n >= 0 or EAGAIN (should be impossible for a listener): fall
-        // through to the ordinary blocking path.
-    }
     loop {
+        // Entry parking (wait for readiness *before* attempting the
+        // operation) is kept only for the std streams: their open file
+        // description is shared with the parent shell, so the
+        // would-block emulation's non-blocking flag must never touch
+        // them, and parking first is the only way not to block the
+        // process. Every other fd attempts the operation first — a
+        // would-block parks below, and an fd that can never signal
+        // readiness (e.g. `read` on a *listening* socket, which poll
+        // only wakes for an incoming connection) surfaces its real
+        // error — `Errno::ENOTCONN` / `EINVAL` per platform — instead
+        // of hanging (ruby/spec: `TCPServer#gets raises
+        // Errno::ENOTCONN`).
         if crate::scheduler::has_other_live_threads()
             && !(events & libc::POLLIN != 0 && io.as_io_inner().has_buffered_data())
             && !io.as_io_inner().is_closed()
             && let Ok(fd) = io.as_io_inner().wait_fd_for(events)
-            && fd >= 0
+            && (0..=2).contains(&fd)
             && poll_single_fd(io, events, 0)? == 0
         {
             crate::scheduler::wait_fd(vm, globals, fd, events, None)?;

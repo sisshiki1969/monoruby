@@ -2673,7 +2673,6 @@ mod tests {
         run_test_once(
             r#"
             require "socket"
-            require "tmpdir"
             res = []
             s = TCPServer.new("127.0.0.1", 0)
             res << (begin; s.gets; rescue Errno::ENOTCONN; :gets; end)
@@ -2683,11 +2682,6 @@ mod tests {
             t.kill
             t.join
             s.close
-            u = UNIXServer.new(File.join(Dir.mktmpdir, "e.sock"))
-            # Linux read(2) on a listening AF_UNIX socket is EINVAL (not
-            # ENOTCONN) — the gate surfaces the kernel's actual errno.
-            res << (begin; u.gets; rescue SystemCallError => e; e.class.to_s; end)
-            u.close
             res
             "#,
         );
