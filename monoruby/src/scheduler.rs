@@ -253,6 +253,14 @@ pub(crate) fn main_thread(vm: &mut Executor) -> Value {
     SCHEDULER.with(|s| s.borrow().main.unwrap())
 }
 
+/// The main thread's executor pointer, once main has entered the
+/// scheduler at least once. Used by `Thread#backtrace` from a green
+/// thread to read the parked main's frame chain (single OS thread — a
+/// parked main is quiescent until the scheduler switches back to it).
+pub(crate) fn main_exec_ptr() -> Option<std::ptr::NonNull<Executor>> {
+    SCHEDULER.with(|s| s.borrow().main_exec)
+}
+
 /// `$?` / `Process.last_status` of the current thread (CRuby keeps the
 /// last child status per thread).
 pub(crate) fn last_status(vm: &mut Executor) -> Option<Value> {

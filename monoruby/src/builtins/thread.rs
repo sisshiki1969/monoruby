@@ -33,6 +33,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(THREAD_CLASS, "join", thread_join, 0, 1, false);
     globals.define_builtin_func(THREAD_CLASS, "value", thread_value, 0);
     globals.define_builtin_func(THREAD_CLASS, "status", thread_status, 0);
+    globals.define_builtin_func(THREAD_CLASS, "backtrace", thread_backtrace, 0);
     globals.define_builtin_func(THREAD_CLASS, "alive?", thread_alive, 0);
     globals.define_builtin_func(THREAD_CLASS, "stop?", thread_stop_p, 0);
     globals.define_builtin_func(THREAD_CLASS, "wakeup", thread_wakeup, 0);
@@ -466,6 +467,52 @@ fn thread_status(vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 }
 
 ///
+/// ### Thread#backtrace
+///
+/// - backtrace -> [String] | nil
+///
+/// The target thread's current Ruby backtrace: `nil` for a dead
+/// thread, `[]` for one not yet started. For the current thread the
+/// live frame chain is walked (like `Kernel#caller`); for a parked
+/// thread the frames come from its suspended executor, and for the
+/// parked main thread from the scheduler's published main executor.
+/// Native frames (e.g. the parked `TCPServer#accept`) render as
+/// `<internal>:in 'label'` — mspec's TimeoutAction and specs that
+/// match `/in 'accept'/` rely on the label being present.
+#[monoruby_builtin]
+fn thread_backtrace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    match self_.as_thread_inner().state() {
+        ThreadState::Dead => return Ok(Value::nil()),
+        ThreadState::Created => return Ok(Value::array_from_vec(vec![])),
+        _ => {}
+    }
+    let frames = if scheduler::current_thread(vm) == self_ {
+        // Skip this builtin's own frame.
+        super::kernel::collect_backtrace(globals, vm.cfp(), 1, None, 64, true)
+    } else if let Some(exec) = self_.as_thread_inner().resume_exec {
+        // SAFETY: one OS thread — a parked thread's executor is
+        // quiescent until the scheduler resumes it, so its frame chain
+        // cannot change under us.
+        let cfp = unsafe { exec.as_ref() }.cfp();
+        super::kernel::collect_backtrace(globals, cfp, 0, None, 64, true)
+    } else if self_ == scheduler::main_thread(vm)
+        && let Some(exec) = scheduler::main_exec_ptr()
+    {
+        // The parked main thread: its executor is published to the
+        // scheduler while green threads run on its behalf.
+        // SAFETY: as above — main is parked while a green thread runs.
+        let cfp = unsafe { exec.as_ref() }.cfp();
+        super::kernel::collect_backtrace(globals, cfp, 0, None, 64, true)
+    } else {
+        // Runnable-but-not-current (ready queue): the context is mid
+        // switch — report no frames rather than guess.
+        vec![]
+    };
+    Ok(Value::array_from_vec(frames))
+}
+
+///
 /// ### Thread#alive?
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/alive=3f.html]
@@ -634,6 +681,42 @@ mod tests {
         run_test_once(r#"Thread.pass"#);
         run_test_once(r#"[Thread.current == Thread.main, Thread.current.alive?]"#);
         run_test_once(r#"Thread.current.status"#);
+    }
+
+    #[test]
+    fn thread_backtrace_states() {
+        // Live parked thread: an Array whose Ruby frames match CRuby's
+        // (block in <main>); dead thread: nil; current thread: contains
+        // the calling frame. Native frames render as <internal>:… in
+        // monoruby, so compare only CRuby-portable properties.
+        run_test_once(
+            r#"
+            res = []
+            t = Thread.new { sleep }
+            Thread.pass while t.status != "sleep"
+            bt = t.backtrace
+            res << bt.class.to_s
+            res << bt.any? { |l| l.include?("block in <main>") }
+            res << bt.any? { |l| l.include?("sleep") }
+            t.kill
+            t.join
+            res << t.backtrace.inspect
+            res << Thread.current.backtrace.any? { |l| l.include?("<main>") }
+            res
+            "#,
+        );
+        // The mspec TimeoutAction shape: a watchdog green thread dumps
+        // every thread's backtrace, including the parked main thread's.
+        run_test_once(
+            r#"
+            res = nil
+            watcher = Thread.new do
+              res = Thread.list.map { |th| th.backtrace.class.to_s }
+            end
+            sleep 0.1
+            res
+            "#,
+        );
     }
 
     #[test]

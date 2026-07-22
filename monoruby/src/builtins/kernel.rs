@@ -1184,8 +1184,7 @@ fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/caller.html]
 #[monoruby_builtin]
 fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut cfp = vm.cfp();
-    let mut v = Vec::new();
+    let cfp = vm.cfp();
     // Resolve the arguments into the first frame to report (`level` — the
     // number of cfp frames to skip, which includes this builtin's own
     // frame, hence the `+ 1`) and an optional cap on how many frames to
@@ -1217,10 +1216,32 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             }
         }
     };
+    let v = collect_backtrace(globals, cfp, level, length, 16, false);
+    Ok(Value::array_from_vec(v))
+}
+
+/// Walk a frame chain from `cfp` outward, rendering CRuby-style
+/// backtrace strings (`file:line:in 'label'`). `level` frames are
+/// skipped first, at most `length` (when given) are collected, and the
+/// walk is capped at `max_frames`. Native (non-iseq) frames have no
+/// source location; `include_native` renders them as
+/// `<internal>:in 'label'` (Thread#backtrace wants the parked builtin —
+/// e.g. `TCPServer#accept` — visible), while `Kernel#caller` skips
+/// them, keeping its established output.
+pub(super) fn collect_backtrace(
+    globals: &Globals,
+    start_cfp: crate::executor::Cfp,
+    level: usize,
+    length: Option<usize>,
+    max_frames: usize,
+    include_native: bool,
+) -> Vec<Value> {
+    let mut cfp = start_cfp;
+    let mut v = Vec::new();
     // The frame iterated in the previous step (this frame's callee),
     // whose cont-frame slot holds this frame's suspended pc.
     let mut inner_cfp: Option<crate::executor::Cfp> = None;
-    for i in 0..16 {
+    for i in 0..max_frames {
         let prev_cfp = cfp.prev();
         if i >= level {
             // Stop once `length` frames have been collected.
@@ -1278,6 +1299,11 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 v.push(Value::string_from_vec(
                     format!("{loc}:in '{desc}'").into_bytes(),
                 ));
+            } else if include_native {
+                let desc = globals.store.func_description(func_id);
+                v.push(Value::string_from_vec(
+                    format!("<internal>:in '{desc}'").into_bytes(),
+                ));
             }
         }
         if let Some(prev_cfp) = prev_cfp {
@@ -1287,7 +1313,7 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             break;
         }
     }
-    Ok(Value::array_from_vec(v))
+    v
 }
 
 #[monoruby_builtin]
