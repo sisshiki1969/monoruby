@@ -591,17 +591,23 @@ fn attr_accessor(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
-    for v in lfp.arg(0).as_array().iter() {
-        let arg_name = v.coerce_to_symbol_or_string(vm, globals)?;
-        let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
-        ary.push(Value::symbol(method_name));
-        let method_name = vm.define_attr_writer(globals, class_id, arg_name, visi)?;
-        ary.push(Value::symbol(method_name));
-    }
-    Ok(ary.into())
+    // The result array is a bare heap object held only by this native
+    // frame, but define_attr_* runs the Ruby `method_added` hook, whose
+    // poll points can GC — root the array on the temp stack for the
+    // duration or a collection there frees it out from under us.
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(None);
+        for v in lfp.arg(0).as_array().iter() {
+            let arg_name = v.coerce_to_symbol_or_string(vm, globals)?;
+            let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
+            vm.temp_array_push(Value::symbol(method_name));
+            let method_name = vm.define_attr_writer(globals, class_id, arg_name, visi)?;
+            vm.temp_array_push(Value::symbol(method_name));
+        }
+        Ok(vm.temp_at(vm.temp_len() - 1))
+    })
 }
 
 ///
@@ -617,15 +623,19 @@ fn attr_reader(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
-    for v in lfp.arg(0).as_array().iter() {
-        let arg_name = v.coerce_to_symbol_or_string(vm, globals)?;
-        let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
-        ary.push(Value::symbol(method_name));
-    }
-    Ok(ary.into())
+    // See attr_accessor: the result array must be temp-rooted across the
+    // method_added hook.
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(None);
+        for v in lfp.arg(0).as_array().iter() {
+            let arg_name = v.coerce_to_symbol_or_string(vm, globals)?;
+            let method_name = vm.define_attr_reader(globals, class_id, arg_name, visi)?;
+            vm.temp_array_push(Value::symbol(method_name));
+        }
+        Ok(vm.temp_at(vm.temp_len() - 1))
+    })
 }
 
 ///
@@ -641,15 +651,19 @@ fn attr_writer(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut ary = Array::new_empty();
     let class_id = lfp.self_val().as_class_id();
     let visi = vm.context_visibility();
-    for v in lfp.arg(0).as_array().iter() {
-        let arg_name = v.coerce_to_symbol_or_string(vm, globals)?;
-        let method_name = vm.define_attr_writer(globals, class_id, arg_name, visi)?;
-        ary.push(Value::symbol(method_name));
-    }
-    Ok(ary.into())
+    // See attr_accessor: the result array must be temp-rooted across the
+    // method_added hook.
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(None);
+        for v in lfp.arg(0).as_array().iter() {
+            let arg_name = v.coerce_to_symbol_or_string(vm, globals)?;
+            let method_name = vm.define_attr_writer(globals, class_id, arg_name, visi)?;
+            vm.temp_array_push(Value::symbol(method_name));
+        }
+        Ok(vm.temp_at(vm.temp_len() - 1))
+    })
 }
 
 ///
@@ -3432,6 +3446,29 @@ mod tests {
         a.w = 11
         [a.v, a.w, c]
         "#,
+        );
+    }
+
+    #[test]
+    fn attr_result_survives_gc_in_method_added_hook() {
+        // The Symbol-array result of attr_reader/attr_writer/attr_accessor
+        // is a bare heap object owned by the native frame while the
+        // method_added hook runs Ruby per attribute. A hook that allocates
+        // (every allocation collects under gc-stress) used to sweep that
+        // unrooted array mid-loop — the darwin CI SIGABRT of issue #985's
+        // shape. The result must come back intact for every name.
+        run_test(
+            r#"
+            class C
+              def self.method_added(name)
+                ("x" * 64) + name.to_s  # allocate: a GC opportunity per hook
+              end
+              $r = attr_accessor :a, :b, :c
+              $w = attr_writer :d, :e
+              $rd = attr_reader :f, :g
+            end
+            [$r, $w, $rd]
+            "#,
         );
     }
 
