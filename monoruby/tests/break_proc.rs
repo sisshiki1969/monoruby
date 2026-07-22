@@ -102,3 +102,68 @@ fn break_jit_tier() {
         "#,
     );
 }
+
+#[test]
+fn break_through_nested_yield_forwarding() {
+    // issue #982: `&b` forwarded from inside a block that is itself run
+    // through *another* literal block's `yield`. The forwarded block
+    // handler used to be re-based on a statically guessed cfp distance,
+    // which mis-identified the block's defining frame and turned the
+    // `break` into a bogus `LocalJumpError`.
+    run_test_once(
+        r#"
+        def base; yield :s; end
+        def relay; base { |s| yield(s) }; end
+        def inner; yield; end
+        res = []
+        def outer(&b); relay { |_s| inner(&b) }; end
+        res << (outer { break 3 })
+        res << (outer { 7 })
+        # class-hierarchy variant (ruby/spec's ServerLoopPortFinder shape)
+        class BaseH
+          def self.helper
+            yield [:sock]
+          ensure
+            :cleanup
+          end
+        end
+        class SubH < BaseH
+          def self.helper
+            super() { |s| yield(s) }
+          end
+        end
+        def accept_loop(_s); loop { yield :conn }; end
+        def server_loop(&b); SubH.helper { |s| accept_loop(s, &b) }; end
+        res << (server_loop { break :a })
+        # zsuper forwarding the block from inside a nested block
+        class P1
+          def m; yield :zs; end
+        end
+        class P2 < P1
+          def m; relay { |_s| super }; end
+        end
+        res << (P2.new.m { |x| break [:zsuper, x] })
+        # `...` forwarding from inside a nested block
+        def fwd_target(a, &b); inner(&b); end
+        def fwd(...); relay { |_s| fwd_target(...) }; end
+        res << (fwd(1) { break :fwd })
+        res
+        "#,
+    );
+}
+
+#[test]
+fn break_through_nested_yield_forwarding_jit() {
+    // Same shape, hot enough to be JIT-compiled.
+    run_test(
+        r#"
+        def base2; yield :s; end
+        def relay2; base2 { |s| yield(s) }; end
+        def inner2; yield; end
+        def outer_jit(&b); relay2 { |_s| inner2(&b) }; end
+        res = nil
+        50.times { res = outer_jit { break :jit } }
+        res
+        "#,
+    );
+}
