@@ -1,0 +1,375 @@
+name: ruby/spec library monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'
+  push:
+    branches: [master, preempt]
+    paths:
+      - 'monoruby/**'
+      - 'ruruby-parse/**'
+      - 'monoruby_attr/**'
+      - 'rubymap/**'
+      - 'Cargo.toml'
+      - '.github/workflows/spec-library.yml'
+      - '.github/spec-library-pages/**'
+      - '.github/portal/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  library-specs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.2"
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install monoruby (release)
+        run: RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby --locked
+
+      - name: Clone ruby/spec and mspec
+        run: |
+          git clone --depth 1 https://github.com/ruby/spec.git ../spec
+          git clone --depth 1 https://github.com/ruby/mspec.git ../mspec
+
+      - name: Install spec tags
+        # mspec derives each spec's tag file as <spec-root>/tags/<path>,
+        # so the repo's tags (hanging / over-budget examples, see
+        # doc/ruby_spec_skip_tags.md) are copied into the checkout and
+        # excluded from the runs below via --excl-tag fails. Without
+        # this, every already-known hanging example re-times-out on
+        # every monitor run.
+        run: |
+          mkdir -p ../spec/tags
+          [ -d spec/tags ] && cp -R spec/tags/. ../spec/tags/ || true
+
+      - name: Run library specs per subcategory
+        id: run
+        working-directory: ../spec
+        shell: bash
+        run: |
+          # GitHub Actions' default `shell: bash` is `bash --noprofile --norc
+          # -eo pipefail`. We rely on grep-no-match returning non-zero (a
+          # category with zero summary lines is normal -- e.g. when every
+          # batch hits the 60s timeout), and on `[ test ] && cmd` patterns
+          # below; both would terminate the step under -e. Disable it.
+          set +e
+          set -uo pipefail
+          OUT="$GITHUB_WORKSPACE/spec-results"
+          mkdir -p "$OUT/logs"
+          REPORT="$OUT/report.md"
+          CSV="$OUT/report.csv"
+
+          {
+            echo "## ruby/spec library summary"
+            echo ""
+            echo "monoruby commit: \`$GITHUB_SHA\`"
+            echo ""
+            echo "| Category | Files | Examples | Pass | Failures | Errors | Pass rate |"
+            echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"
+          } > "$REPORT"
+          echo "category,files,examples,pass,failures,errors,pass_rate" > "$CSV"
+
+          parse_log () {
+            local log="$1"
+            grep -aE '[0-9]+ examples?, ' "$log" || true
+          }
+          sum_field () {
+            parse_log "$1" \
+              | grep -oE "[0-9]+ $2" \
+              | grep -oE '[0-9]+' \
+              | awk '{s+=$1} END {print s+0}'
+          }
+
+          TIMEOUTS="$OUT/timeouts.csv"
+          echo "category,file" > "$TIMEOUTS"
+
+          # Run a batch of spec files under a hard deadline. `-k 5` matters:
+          # monoruby installs its own SIGTERM handler (deferred to a VM poll
+          # point), so a process stuck in a blocking read never dies to the
+          # plain TERM that `timeout` sends -- without the KILL escalation a
+          # single hung spec stalls the whole job until timeout-minutes.
+          # Exit 124 = killed by TERM, 137 = needed the KILL.
+          run_specs () {
+            timeout -k 5 60 ../mspec/bin/mspec "$@" --excl-tag fails -t monoruby -f s >> "$LOG" 2>&1
+            local rc=$?
+            [ $rc -eq 124 ] || [ $rc -eq 137 ]
+          }
+
+          # A killed batch prints no summary line, so none of its 10 files
+          # get tallied. Rerun them one by one: completing files are counted
+          # after all, and the hanging file(s) are pinned down and recorded.
+          run_batch () {
+            [ ${#BATCH[@]} -eq 0 ] && return
+            if run_specs "${BATCH[@]}"; then
+              echo "### batch timed out; rerunning ${#BATCH[@]} files individually" >> "$LOG"
+              local f
+              for f in "${BATCH[@]}"; do
+                if run_specs "$f"; then
+                  echo "$cat,$f" >> "$TIMEOUTS"
+                  echo "### TIMEOUT: $f" >> "$LOG"
+                fi
+              done
+            fi
+            BATCH=()
+          }
+
+          T_FILES=0; T_EX=0; T_FAIL=0; T_ERR=0
+
+          for cat in $(ls library/ | sort); do
+            SPECS=$(find "library/$cat" -name '*_spec.rb' 2>/dev/null | sort)
+            [ -z "$SPECS" ] && continue
+            FILE_COUNT=$(echo "$SPECS" | wc -l)
+            LOG="$OUT/logs/library_${cat}.log"
+            : > "$LOG"
+
+            BATCH=()
+            while IFS= read -r f; do
+              BATCH+=("$f")
+              [ ${#BATCH[@]} -ge 10 ] && run_batch
+            done <<< "$SPECS"
+            run_batch
+
+            EX=$(sum_field "$LOG" 'examples?')
+            FAIL=$(sum_field "$LOG" 'failures?')
+            ERR=$(sum_field "$LOG" 'errors?')
+            PASS=$((EX - FAIL - ERR))
+            [ "$PASS" -lt 0 ] && PASS=0
+            if [ "$EX" -gt 0 ] && [ "$PASS" -gt 0 ]; then
+              RATE=$(awk "BEGIN{printf \"%.1f\",($PASS/$EX)*100}")
+            else
+              RATE="0.0"
+            fi
+
+            echo "| $cat | $FILE_COUNT | $EX | $PASS | $FAIL | $ERR | ${RATE}% |" >> "$REPORT"
+            echo "$cat,$FILE_COUNT,$EX,$PASS,$FAIL,$ERR,$RATE" >> "$CSV"
+
+            T_FILES=$((T_FILES + FILE_COUNT))
+            T_EX=$((T_EX + EX))
+            T_FAIL=$((T_FAIL + FAIL))
+            T_ERR=$((T_ERR + ERR))
+          done
+
+          T_PASS=$((T_EX - T_FAIL - T_ERR))
+          [ "$T_PASS" -lt 0 ] && T_PASS=0
+          if [ "$T_EX" -gt 0 ] && [ "$T_PASS" -gt 0 ]; then
+            T_RATE=$(awk "BEGIN{printf \"%.2f\",($T_PASS/$T_EX)*100}")
+          else
+            T_RATE="0.00"
+          fi
+          echo "| **TOTAL** | **$T_FILES** | **$T_EX** | **$T_PASS** | **$T_FAIL** | **$T_ERR** | **${T_RATE}%** |" >> "$REPORT"
+
+          N_TIMEOUT=$(($(wc -l < "$TIMEOUTS") - 1))
+          if [ "$N_TIMEOUT" -gt 0 ]; then
+            {
+              echo ""
+              echo "### Timed-out spec files ($N_TIMEOUT)"
+              echo ""
+              echo "Killed after 60s; their examples are not included in the tallies above."
+              echo ""
+              tail -n +2 "$TIMEOUTS" | awk -F, '{print "- `" $2 "`"}'
+            } >> "$REPORT"
+          fi
+
+          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "total_examples=$T_EX"
+            echo "total_pass=$T_PASS"
+            echo "total_fail=$T_FAIL"
+            echo "total_err=$T_ERR"
+            echo "total_rate=$T_RATE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Identify timed-out examples and update tags
+        id: bisect
+        shell: bash
+        run: |
+          set -uo pipefail
+          TIMEOUTS="$GITHUB_WORKSPACE/spec-results/timeouts.csv"
+          OUTCSV="$GITHUB_WORKSPACE/spec-results/timeout_culprits.csv"
+          N=$(($(wc -l < "$TIMEOUTS") - 1))
+          if [ "$N" -le 0 ]; then
+            echo "no timed-out files — nothing to bisect"
+            echo "n_tagged=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          .github/scripts/bisect-spec-timeouts.sh \
+            "$TIMEOUTS" \
+            "$(cd "$GITHUB_WORKSPACE/../spec" && pwd)" \
+            "$(cd "$GITHUB_WORKSPACE/../mspec" && pwd)/bin/mspec" \
+            monoruby \
+            "$GITHUB_WORKSPACE/spec/tags" \
+            "$OUTCSV"
+          {
+            echo ""
+            echo "### Timeout bisection"
+            echo ""
+            cat "${OUTCSV%.csv}.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open a PR for the new tags
+        if: steps.bisect.outputs.n_tagged != '' && steps.bisect.outputs.n_tagged != '0' && (github.event_name == 'schedule' || github.ref == 'refs/heads/master')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          BRANCH=auto/library-spec-timeout-tags
+          # A fixed branch keeps this idempotent: reruns before the PR
+          # merges regenerate the same tag set and force-push it, updating
+          # the existing PR instead of stacking new ones.
+          git checkout -B "$BRANCH"
+          git add spec/tags
+          git commit -m "spec: auto-tag hanging / over-budget examples
+
+          Added by the library monitor's timeout bisection
+          (.github/scripts/bisect-spec-timeouts.sh) for run
+          ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+          for i in 1 2 3 4; do
+            git push -f -u origin "$BRANCH" && break
+            sleep $((2 ** i))
+          done
+
+          BODY_FILE="$RUNNER_TEMP/pr-body.md"
+          {
+            echo "The library monitor detected spec files exceeding the 60s per-file budget and bisected them example-by-example ([run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}))."
+            echo ""
+            cat "$GITHUB_WORKSPACE/spec-results/timeout_culprits.md"
+            echo ""
+            echo "- \`hang\`: the example alone hit the ${EX_BUDGET:-60}s deadline (exit 124/137)."
+            echo "- \`slow\`: the example alone took ≥ ${SLOW_SECS:-30}s — it cannot share a 60s file budget."
+            echo "- \`cumulative-only\` rows (if any) were **not** tagged: no single culprit; the file needs a budget review instead."
+            echo ""
+            echo "Please review whether each culprit reflects a known limitation (see doc/ruby_spec_skip_tags.md) or a regression to fix instead of tagging."
+          } > "$BODY_FILE"
+          gh pr create --base master --head "$BRANCH" \
+            --title "spec: auto-tag hanging / over-budget examples (monitor bisection)" \
+            --body-file "$BODY_FILE" \
+            || gh pr edit "$BRANCH" --body-file "$BODY_FILE"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-library-results
+          path: spec-results/
+          retention-days: 30
+
+      - name: Publish history to gh-pages
+        if: github.event_name == 'schedule' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/preempt'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOTAL_EX: ${{ steps.run.outputs.total_examples }}
+          TOTAL_PASS: ${{ steps.run.outputs.total_pass }}
+          TOTAL_FAIL: ${{ steps.run.outputs.total_fail }}
+          TOTAL_ERR: ${{ steps.run.outputs.total_err }}
+          TOTAL_RATE: ${{ steps.run.outputs.total_rate }}
+        run: |
+          set -euo pipefail
+
+          GH_PAGES_DIR="$RUNNER_TEMP/gh-pages"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+          if git ls-remote --exit-code --heads "$REPO_URL" gh-pages > /dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "$REPO_URL" "$GH_PAGES_DIR"
+          else
+            mkdir -p "$GH_PAGES_DIR"
+            git -C "$GH_PAGES_DIR" init -b gh-pages
+            git -C "$GH_PAGES_DIR" remote add origin "$REPO_URL"
+          fi
+
+          cd "$GH_PAGES_DIR"
+
+          # master (and the weekly schedule, which runs on master) keeps the
+          # canonical library/ page; any other branch (e.g. preempt) gets its
+          # own page + history under library/<branch>/, so branch results never
+          # mix into master's trend data.
+          BRANCH="${GITHUB_REF_NAME}"
+          if [ "$BRANCH" = "master" ]; then
+            DEST=library
+          else
+            DEST="library/$BRANCH"
+          fi
+
+          mkdir -p "$DEST/data"
+
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+
+          if [ ! -f "$DEST/data/history.csv" ]; then
+            echo "timestamp,commit,category,files,examples,pass,failures,errors,pass_rate" > "$DEST/data/history.csv"
+          fi
+          if [ ! -f "$DEST/data/history_total.csv" ]; then
+            echo "timestamp,commit,examples,pass,failures,errors,pass_rate" > "$DEST/data/history_total.csv"
+          fi
+
+          tail -n +2 "$GITHUB_WORKSPACE/spec-results/report.csv" \
+            | awk -v ts="$TIMESTAMP" -v sha="$SHORT_SHA" -F, 'BEGIN{OFS=","} {print ts,sha,$0}' \
+            >> "$DEST/data/history.csv"
+
+          echo "$TIMESTAMP,$SHORT_SHA,$TOTAL_EX,$TOTAL_PASS,$TOTAL_FAIL,$TOTAL_ERR,$TOTAL_RATE" \
+            >> "$DEST/data/history_total.csv"
+
+          # Latest run's timed-out spec files (shown on the site), plus a
+          # timestamped history of them.
+          if [ -f "$GITHUB_WORKSPACE/spec-results/timeouts.csv" ]; then
+            cp "$GITHUB_WORKSPACE/spec-results/timeouts.csv" "$DEST/data/timeouts.csv"
+          else
+            echo "category,file" > "$DEST/data/timeouts.csv"
+          fi
+          if [ ! -f "$DEST/data/history_timeouts.csv" ]; then
+            echo "timestamp,commit,category,file" > "$DEST/data/history_timeouts.csv"
+          fi
+          tail -n +2 "$DEST/data/timeouts.csv" \
+            | awk -v ts="$TIMESTAMP" -v sha="$SHORT_SHA" -F, 'BEGIN{OFS=","} {print ts,sha,$0}' \
+            >> "$DEST/data/history_timeouts.csv"
+
+          # The page fetches its CSVs by relative path (data/…), so the same
+          # index.html works from any directory depth. Branch pages get the
+          # branch name injected into the heading so they are not mistaken
+          # for master's dashboard.
+          cp "$GITHUB_WORKSPACE/.github/spec-library-pages/index.html" "$DEST/index.html"
+          if [ "$BRANCH" != "master" ]; then
+            sed -i "s|</h1>|</h1><p><strong>branch: ${BRANCH}</strong> — <a href=\"../\">master dashboard</a></p>|" "$DEST/index.html"
+          fi
+                    cat > "$DEST/latest.json" <<JSON
+          {"schemaVersion":1,"label":"ruby/spec library","message":"${TOTAL_RATE}%","color":"blue","timestamp":"${TIMESTAMP}","commit":"${SHORT_SHA}","branch":"${BRANCH}","examples":${TOTAL_EX},"pass":${TOTAL_PASS},"failures":${TOTAL_FAIL},"errors":${TOTAL_ERR}}
+          JSON
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "no changes to publish"
+          else
+            git commit -m "library-spec: ${TIMESTAMP} (${SHORT_SHA}, ${BRANCH}) ${TOTAL_RATE}%"
+            # With two publishing branches (master + preempt) concurrent
+            # runs can race on gh-pages; a plain re-push would fail every
+            # retry on non-fast-forward, so rebase onto the remote first.
+            for i in 1 2 3 4; do
+              if git push -u origin gh-pages; then
+                break
+              fi
+              sleep $((2 ** i))
+              git pull --rebase origin gh-pages || true
+            done
+          fi

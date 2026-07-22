@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>monoruby ruby/spec library history</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2em; max-width: 1100px; color: #1a1a1a; }
+  h1 { margin-bottom: 0.2em; }
+  .meta { color: #666; font-size: 0.9em; margin-bottom: 2em; }
+  section { margin-bottom: 3em; }
+  canvas { max-width: 100%; }
+  select { font-size: 1em; padding: 0.2em 0.5em; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { border-bottom: 2px solid #888; }
+  a { color: #1565c0; }
+  td a { text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+  .range-control { margin-top: 1em; padding: 0.8em 0; border-top: 1px solid #eee; }
+  .range-control .dates { font-size: 0.85em; color: #555; margin-bottom: 0.8em; }
+  /* Single slider with two thumbs: two overlaid range inputs whose
+     tracks are transparent, sharing one visible track + fill. */
+  .dual-slider { position: relative; height: 24px; }
+  .dual-slider .track {
+    position: absolute; left: 0; right: 0; top: 10px; height: 4px;
+    background: #ddd; border-radius: 2px;
+  }
+  .dual-slider .fill {
+    position: absolute; top: 10px; height: 4px;
+    background: #1565c0; border-radius: 2px;
+  }
+  .dual-slider input[type=range] {
+    position: absolute; left: 0; top: 0; width: 100%; height: 24px;
+    margin: 0; background: none; pointer-events: none;
+    -webkit-appearance: none; appearance: none;
+  }
+  .dual-slider input[type=range]::-webkit-slider-runnable-track { background: none; border: none; }
+  .dual-slider input[type=range]::-moz-range-track { background: none; border: none; }
+  .dual-slider input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; pointer-events: auto;
+    width: 16px; height: 16px; margin-top: -6px; border-radius: 50%;
+    background: #1565c0; border: 2px solid #fff; cursor: pointer;
+    box-shadow: 0 0 2px rgba(0,0,0,0.4);
+  }
+  .dual-slider input[type=range]::-moz-range-thumb {
+    pointer-events: auto; width: 16px; height: 16px; border-radius: 50%;
+    background: #1565c0; border: 2px solid #fff; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<h1>monoruby × ruby/spec library</h1>
+<div class="meta">
+  Pass rate history of <code>library/*</code> subcategories.
+  Source: <a href="data/history.csv">history.csv</a>,
+  <a href="data/history_total.csv">history_total.csv</a>,
+  <a href="latest.json">latest.json</a>.
+</div>
+
+<section>
+  <h2>Total pass rate over time</h2>
+  <canvas id="totalChart" height="120"></canvas>
+
+  <h2 style="margin-top:1.5em">Per-category pass rate over time</h2>
+  <label>Category: <select id="catSelect"></select></label>
+  <canvas id="catChart" height="120"></canvas>
+
+  <div class="range-control" id="rangeControl" hidden>
+    <div class="dates">
+      Showing <strong id="rangeFromLabel"></strong> &ndash; <strong id="rangeToLabel"></strong>
+    </div>
+    <div class="dual-slider">
+      <div class="track"></div>
+      <div class="fill" id="rangeFill"></div>
+      <input type="range" id="rangeFrom" min="0" max="0" value="0">
+      <input type="range" id="rangeTo"   min="0" max="0" value="0">
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Latest snapshot</h2>
+  <div id="latestMeta" class="meta"></div>
+  <p class="meta">Click a benchmark name to open its <a href="https://github.com/ruby/spec/tree/master/library">ruby/spec</a> source directory.</p>
+  <div id="latestBarWrap" style="position: relative;"><canvas id="latestBar"></canvas></div>
+  <table id="latestTable">
+    <thead>
+      <tr><th>Category</th><th>Files</th><th>Examples</th><th>Pass</th><th>Failures</th><th>Errors</th><th>Pass rate</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Timed-out spec files (latest run)</h2>
+  <p class="meta">
+    Spec files whose individual run exceeded the 60-second timeout and was
+    killed — typically hangs waiting on real thread concurrency. Their
+    examples are not included in the tallies above.
+    Source: <a href="data/timeouts.csv">timeouts.csv</a>,
+    <a href="data/history_timeouts.csv">history_timeouts.csv</a>.
+  </p>
+  <ul id="timeoutList"></ul>
+</section>
+
+<script>
+const SPEC_BASE = "https://github.com/ruby/spec/tree/master/library/";
+const specUrl = cat => SPEC_BASE + encodeURIComponent(cat);
+
+async function loadCsv(path) {
+  const res = await fetch(path + '?t=' + Date.now());
+  if (!res.ok) return [];
+  const text = (await res.text()).trim();
+  if (!text) return [];
+  const [header, ...rows] = text.split('\n');
+  const cols = header.split(',');
+  return rows.map(r => {
+    const vals = r.split(',');
+    const obj = {};
+    cols.forEach((c, i) => obj[c] = vals[i]);
+    return obj;
+  });
+}
+
+(async () => {
+  const total = await loadCsv('data/history_total.csv');
+  const hist = await loadCsv('data/history.csv');
+  const timeouts = await loadCsv('data/timeouts.csv');
+
+  // ------- Timed-out spec files (latest run) -------
+  {
+    const ul = document.getElementById('timeoutList');
+    if (!timeouts.length) {
+      const li = document.createElement('li');
+      li.textContent = 'none recorded';
+      li.style.color = '#666';
+      ul.appendChild(li);
+    } else {
+      for (const t of timeouts) {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = 'https://github.com/ruby/spec/blob/master/' + t.file;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = t.file;
+        li.appendChild(a);
+        ul.appendChild(li);
+      }
+    }
+  }
+
+  // ------- shared date range over the run timestamps -------
+  const allStamps = [...new Set(total.map(r => r.timestamp))].sort();
+  let fromIdx = 0;
+  let toIdx = Math.max(0, allStamps.length - 1);
+  const inRange = ts => {
+    if (!allStamps.length) return true;
+    return ts >= allStamps[fromIdx] && ts <= allStamps[toIdx];
+  };
+
+  // Tooltip title that appends the commit hash for a row set.
+  const titleWithCommit = rowsRef => items => {
+    const r = rowsRef[items[0].dataIndex];
+    return r ? (r.timestamp + (r.commit ? '  @  ' + r.commit : '')) : '';
+  };
+
+  // ------- Total pass rate over time -------
+  let totalChart, totalRows = [];
+  function drawTotal() {
+    totalRows = total.filter(r => inRange(r.timestamp));
+    const cfg = {
+      type: 'line',
+      data: {
+        labels: totalRows.map(r => r.timestamp),
+        datasets: [{
+          label: 'Total pass rate (%)',
+          data: totalRows.map(r => parseFloat(r.pass_rate)),
+          borderColor: '#2e7d32',
+          backgroundColor: 'rgba(46,125,50,0.15)',
+          tension: 0.15,
+          fill: true,
+          pointRadius: 2
+        }]
+      },
+      options: {
+        scales: { y: { suggestedMin: 0, suggestedMax: 100 } },
+        plugins: { tooltip: { callbacks: { title: titleWithCommit(totalRows) } } }
+      }
+    };
+    if (totalChart) totalChart.destroy();
+    totalChart = new Chart(document.getElementById('totalChart'), cfg);
+  }
+
+  // ------- Per-category pass rate over time -------
+  const categories = [...new Set(hist.map(r => r.category))].sort();
+  const sel = document.getElementById('catSelect');
+  for (const c of categories) {
+    const opt = document.createElement('option');
+    opt.value = c; opt.textContent = c;
+    sel.appendChild(opt);
+  }
+
+  let catChart, catRows = [];
+  function drawCat(cat) {
+    catRows = hist.filter(r => r.category === cat && inRange(r.timestamp));
+    const cfg = {
+      type: 'line',
+      data: {
+        labels: catRows.map(r => r.timestamp),
+        datasets: [{
+          label: cat + ' pass rate (%)',
+          data: catRows.map(r => Math.max(0, parseFloat(r.pass_rate))),
+          borderColor: '#1565c0',
+          backgroundColor: 'rgba(21,101,192,0.15)',
+          tension: 0.15,
+          fill: true,
+          pointRadius: 2
+        }]
+      },
+      options: {
+        scales: { y: { suggestedMin: 0, suggestedMax: 100 } },
+        plugins: { tooltip: { callbacks: { title: titleWithCommit(catRows) } } }
+      }
+    };
+    if (catChart) catChart.destroy();
+    catChart = new Chart(document.getElementById('catChart'), cfg);
+  }
+
+  if (categories.length) {
+    sel.value = categories[0];
+    sel.addEventListener('change', e => drawCat(e.target.value));
+  }
+
+  // ------- date range slider (one slider, two thumbs) -------
+  if (allStamps.length > 1) {
+    const ctrl = document.getElementById('rangeControl');
+    const fromEl = document.getElementById('rangeFrom');
+    const toEl = document.getElementById('rangeTo');
+    const fromLbl = document.getElementById('rangeFromLabel');
+    const toLbl = document.getElementById('rangeToLabel');
+    const fillEl = document.getElementById('rangeFill');
+    ctrl.hidden = false;
+    const lastIdx = allStamps.length - 1;
+    fromEl.max = String(lastIdx);
+    toEl.max = String(lastIdx);
+    toEl.value = String(lastIdx);
+
+    const syncUi = () => {
+      fromLbl.textContent = allStamps[fromIdx];
+      toLbl.textContent = allStamps[toIdx];
+      // position the visible fill between the two thumbs
+      const lo = (fromIdx / lastIdx) * 100;
+      const hi = (toIdx / lastIdx) * 100;
+      fillEl.style.left = lo + '%';
+      fillEl.style.width = (hi - lo) + '%';
+      // keep both thumbs grabbable when they meet: raise the one that
+      // can still move inward.
+      fromEl.style.zIndex = fromIdx >= lastIdx ? 5 : 3;
+      toEl.style.zIndex = 4;
+    };
+    const onInput = (e) => {
+      let lo = parseInt(fromEl.value, 10);
+      let hi = parseInt(toEl.value, 10);
+      if (lo > hi) {                       // don't let thumbs cross
+        if (e.target === fromEl) { hi = lo; toEl.value = String(hi); }
+        else { lo = hi; fromEl.value = String(lo); }
+      }
+      fromIdx = lo;
+      toIdx = hi;
+      syncUi();
+      drawTotal();
+      drawCat(sel.value);
+    };
+    fromEl.addEventListener('input', onInput);
+    toEl.addEventListener('input', onInput);
+    syncUi();
+  }
+
+  if (total.length) drawTotal();
+  if (categories.length) drawCat(sel.value);
+
+  // ------- Latest snapshot -------
+  if (hist.length) {
+    const latestTs = hist[hist.length - 1].timestamp;
+    const latestSha = hist[hist.length - 1].commit;
+    const latest = hist.filter(r => r.timestamp === latestTs)
+                       .sort((a, b) => parseFloat(b.pass_rate) - parseFloat(a.pass_rate));
+    document.getElementById('latestMeta').textContent =
+      'snapshot: ' + latestTs + ' @ ' + latestSha;
+
+    const barColor = v => {
+      if (v >= 100) return '#2e7d32';
+      if (v >= 90)  return '#9ccc65';
+      if (v >= 70)  return '#fdd835';
+      return '#c62828';
+    };
+    document.getElementById('latestBarWrap').style.height =
+      Math.max(320, latest.length * 24) + 'px';
+
+    const latestBar = new Chart(document.getElementById('latestBar'), {
+      type: 'bar',
+      data: {
+        labels: latest.map(r => r.category),
+        datasets: [{
+          label: 'Pass rate (%)',
+          data: latest.map(r => parseFloat(r.pass_rate)),
+          backgroundColor: latest.map(r => barColor(parseFloat(r.pass_rate)))
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        maintainAspectRatio: false,
+        scales: {
+          x: { suggestedMin: 0, suggestedMax: 100 },
+          y: { ticks: { autoSkip: false, font: { size: 13 }, color: '#1565c0' } }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { afterLabel: () => 'click to open ruby/spec source' } }
+        },
+        onClick: (evt) => {
+          const idx = latestBar.scales.y.getValueForPixel(evt.y);
+          if (idx != null && idx >= 0 && idx < latest.length) {
+            window.open(specUrl(latest[idx].category), '_blank', 'noopener');
+          }
+        },
+        onHover: (evt) => {
+          evt.native.target.style.cursor = 'pointer';
+        }
+      }
+    });
+
+    const tbody = document.querySelector('#latestTable tbody');
+    for (const r of latest) {
+      const tr = document.createElement('tr');
+      for (const k of ['category','files','examples','pass','failures','errors','pass_rate']) {
+        const td = document.createElement('td');
+        if (k === 'category') {
+          const a = document.createElement('a');
+          a.href = specUrl(r.category);
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.textContent = r.category;
+          td.appendChild(a);
+        } else {
+          td.textContent = k === 'pass_rate' ? r[k] + '%' : r[k];
+        }
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+  }
+})();
+</script>
+</body>
+</html>
