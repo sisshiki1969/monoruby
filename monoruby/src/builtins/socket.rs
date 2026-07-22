@@ -146,6 +146,16 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func(sock_id, "listen", socket_listen, 1);
+    globals.define_builtin_func_with_kw(
+        sock_id,
+        "connect_nonblock",
+        socket_connect_nonblock,
+        1,
+        1,
+        false,
+        &["exception"],
+        false,
+    );
     globals.define_builtin_class_func_with(sock_id, "pack_sockaddr_in", pack_sockaddr_in, 2, 2, false);
     globals.define_builtin_class_func_with(sock_id, "sockaddr_in", pack_sockaddr_in, 2, 2, false);
     globals.define_builtin_class_func(sock_id, "unpack_sockaddr_in", unpack_sockaddr_in, 1);
@@ -1563,21 +1573,31 @@ fn tcp_server_sysaccept(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: B
     Ok(Value::integer(conn as i64))
 }
 
+/// A packed-sockaddr argument: a String's bytes, or anything with a
+/// `#to_sockaddr` (Addrinfo).
+fn sockaddr_arg(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Vec<u8>> {
+    if let Some(s) = v.is_rstring_inner() {
+        return Ok(s.as_bytes().to_vec());
+    }
+    if let Ok(r) = vm.invoke_method_inner(globals, IdentId::get_id("to_sockaddr"), v, &[], None, None)
+        && let Some(s) = r.is_rstring_inner()
+    {
+        return Ok(s.as_bytes().to_vec());
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "no implicit conversion of {} into String",
+        globals.store.get_class_name(v.class())
+    )))
+}
+
 ///
 /// ### Socket#bind
 ///
 /// - bind(sockaddr) -> 0
 ///
 #[monoruby_builtin]
-fn socket_bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let sa = match lfp.arg(0).is_rstring_inner() {
-        Some(s) => s.as_bytes().to_vec(),
-        None => {
-            return Err(MonorubyErr::typeerr(
-                "bind argument should be a packed sockaddr String".to_string(),
-            ));
-        }
-    };
+fn socket_bind(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let sa = sockaddr_arg(vm, globals, lfp.arg(0))?;
     let fd = lfp.self_val().as_io_inner().fileno()?;
     // SAFETY: bind(2) with a length-matched byte buffer.
     if unsafe { libc::bind(fd, sa.as_ptr() as *const libc::sockaddr, sa.len() as libc::socklen_t) } < 0 {
@@ -1638,14 +1658,7 @@ fn wait_connect_settled(
 /// Non-blocking connect parking on POLLOUT, like `TCPSocket.new`.
 #[monoruby_builtin]
 fn socket_connect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let sa = match lfp.arg(0).is_rstring_inner() {
-        Some(s) => s.as_bytes().to_vec(),
-        None => {
-            return Err(MonorubyErr::typeerr(
-                "connect argument should be a packed sockaddr String".to_string(),
-            ));
-        }
-    };
+    let sa = sockaddr_arg(vm, globals, lfp.arg(0))?;
     let deadline = match lfp.try_arg(1) {
         Some(v) if !v.is_nil() => {
             let secs = v.coerce_to_f64(vm, globals)?;
@@ -1671,6 +1684,54 @@ fn socket_connect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     }
     set_blocking(fd);
     Ok(Value::integer(0))
+}
+
+///
+/// ### Socket#connect_nonblock
+///
+/// - connect_nonblock(sockaddr, exception: true) -> 0 | :wait_writable
+///
+/// A single non-blocking connect attempt: an in-flight connect raises
+/// `IO::EINPROGRESSWaitWritable` (an `Errno::EINPROGRESS` with
+/// `IO::WaitWritable` mixed in), or returns `:wait_writable` with
+/// `exception: false`; a second call on an already-connected socket
+/// raises `Errno::EISCONN` (or returns 0). The fd is left non-blocking,
+/// as CRuby does — the ordinary read/write paths handle that via the
+/// would-block emulation.
+#[monoruby_builtin]
+fn socket_connect_nonblock(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let sa = sockaddr_arg(vm, globals, lfp.arg(0))?;
+    let exception = lfp.try_arg(1).map_or(true, |v| v.as_bool());
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    set_nonblocking(fd);
+    // SAFETY: connect(2) with a length-matched byte buffer.
+    let rc = unsafe { libc::connect(fd, sa.as_ptr() as *const libc::sockaddr, sa.len() as libc::socklen_t) };
+    if rc == 0 {
+        return Ok(Value::integer(0));
+    }
+    let errno = last_errno();
+    match errno {
+        libc::EINPROGRESS | libc::EALREADY => {
+            if exception {
+                let err = std::io::Error::from_raw_os_error(errno);
+                let msg = format!("{err} - connect(2) would block");
+                if let Some(cid) = super::io::io_wait_class(globals, "EINPROGRESSWaitWritable") {
+                    Err(MonorubyErr::new(MonorubyErrKind::Other(cid), msg))
+                } else {
+                    Err(MonorubyErr::from_io_err(&globals.store, &err, msg))
+                }
+            } else {
+                Ok(Value::symbol(IdentId::get_id("wait_writable")))
+            }
+        }
+        libc::EISCONN if !exception => Ok(Value::integer(0)),
+        _ => Err(errno_err(&globals.store, errno, "connect(2)")),
+    }
 }
 
 ///
@@ -2597,6 +2658,65 @@ mod tests {
             k.send("done", 0)
             t.join
             k.close; s.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn read_on_listening_socket_raises_enotconn() {
+        // ruby/spec: `TCPServer#gets raises Errno::ENOTCONN`. The threaded
+        // variant matters most: with another live green thread the read
+        // path used to park on a POLLIN that a listener never raises,
+        // hanging mspec runs for the full --timeout (rubyspec-stats'
+        // library step died on exactly this).
+        run_test_once(
+            r#"
+            require "socket"
+            res = []
+            s = TCPServer.new("127.0.0.1", 0)
+            res << (begin; s.gets; rescue Errno::ENOTCONN; :gets; end)
+            res << (begin; s.read(4); rescue Errno::ENOTCONN; :read; end)
+            t = Thread.new { sleep }
+            res << (begin; s.gets; rescue Errno::ENOTCONN; :gets_threaded; end)
+            t.kill
+            t.join
+            s.close
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn connect_nonblock_full_cycle() {
+        run_test_once(
+            r#"
+            require "socket"
+            res = []
+            srv = TCPServer.new("127.0.0.1", 0)
+            addr = Socket.sockaddr_in(srv.addr[1], "127.0.0.1")
+            sock = Socket.new(:INET, :STREAM)
+            res << (begin
+              sock.connect_nonblock(addr)
+              :connected
+            rescue IO::WaitWritable
+              :in_progress
+            end)
+            IO.select(nil, [sock])
+            res << (begin
+              sock.connect_nonblock(addr)
+              :zero
+            rescue Errno::EISCONN
+              :isconn
+            end)
+            # exceptionless mode on an established connection returns 0
+            res << sock.connect_nonblock(addr, exception: false)
+            # in-flight connect with exception: false is :wait_writable
+            s2 = Socket.new(:INET, :STREAM)
+            r2 = s2.connect_nonblock(addr, exception: false)
+            res << (r2 == :wait_writable || r2 == 0)
+            c = srv.accept
+            c.close; sock.close; s2.close; srv.close
             res
             "#,
         );

@@ -1155,6 +1155,30 @@ fn bump_lineno(globals: &mut Globals, io: Value) -> Result<()> {
 /// permanently non-blocking by `read_nonblock`/`write_nonblock` — and is
 /// waited out with a plain (signal-interruptible) `poll(2)`, matching
 /// CRuby, where buffered IO on a non-blocking fd still blocks the caller.
+/// Bridge for error classes: the read/write primitives below `IoInner`
+/// have no `Store`, so raw OS errors surface as
+/// `RuntimeError("… (os error N)")` instead of the `Errno::*` class
+/// CRuby raises (e.g. `read` on a listening socket must be
+/// `Errno::ENOTCONN`). Rebuild such errors here, where `globals` is in
+/// reach, by parsing the errno std::io::Error stably formats into the
+/// message. A structural fix (errors carrying their errno) can replace
+/// this; until then every blocking-region operation gets the right
+/// class on every platform.
+fn errnoify(globals: &Globals, err: MonorubyErr) -> MonorubyErr {
+    if !matches!(err.kind(), MonorubyErrKind::Runtime) {
+        return err;
+    }
+    let msg = err.message();
+    if let Some(pos) = msg.rfind("(os error ")
+        && let Some(end) = msg[pos..].find(')')
+        && let Ok(errno) = msg[pos + 10..pos + end].parse::<i32>()
+    {
+        let io_err = std::io::Error::from_raw_os_error(errno);
+        return MonorubyErr::from_io_err(&globals.store, &io_err, msg.to_string());
+    }
+    err
+}
+
 pub(crate) fn blocking_io_region<T>(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1163,11 +1187,23 @@ pub(crate) fn blocking_io_region<T>(
     mut f: impl FnMut() -> Result<T>,
 ) -> Result<T> {
     loop {
+        // Entry parking (wait for readiness *before* attempting the
+        // operation) is kept only for the std streams: their open file
+        // description is shared with the parent shell, so the
+        // would-block emulation's non-blocking flag must never touch
+        // them, and parking first is the only way not to block the
+        // process. Every other fd attempts the operation first — a
+        // would-block parks below, and an fd that can never signal
+        // readiness (e.g. `read` on a *listening* socket, which poll
+        // only wakes for an incoming connection) surfaces its real
+        // error — `Errno::ENOTCONN` / `EINVAL` per platform — instead
+        // of hanging (ruby/spec: `TCPServer#gets raises
+        // Errno::ENOTCONN`).
         if crate::scheduler::has_other_live_threads()
             && !(events & libc::POLLIN != 0 && io.as_io_inner().has_buffered_data())
             && !io.as_io_inner().is_closed()
             && let Ok(fd) = io.as_io_inner().wait_fd_for(events)
-            && fd >= 0
+            && (0..=2).contains(&fd)
             && poll_single_fd(io, events, 0)? == 0
         {
             crate::scheduler::wait_fd(vm, globals, fd, events, None)?;
@@ -1212,6 +1248,7 @@ pub(crate) fn blocking_io_region<T>(
                     wait_fd_single(vm, globals, fd, events)?;
                 }
             }
+            Err(err) => return Err(errnoify(globals, err)),
             res => return res,
         }
     }
@@ -2558,10 +2595,10 @@ fn io_eof_(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    if io.pushback_len() > 0 {
+    if io.has_buffered_data() {
         return Ok(Value::bool(false));
     }
-    // Read 1 byte; if empty, we're at EOF. Then push it back via seek(-1).
+    // Read 1 byte; if empty, we're at EOF.
     let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
         lfp.self_val().as_io_inner_mut().read(Some(1))
     })?;
@@ -2569,10 +2606,15 @@ fn io_eof_(
     if buf.is_empty() {
         return Ok(Value::bool(true));
     }
-    // Try to seek back. If seek isn't supported (pipe/stdin), accept that the
-    // byte is consumed — matches CRuby's pipe semantics where eof? blocks
-    // for a read and discards the byte if it appears.
-    let _ = io.seek(-1, 1);
+    // Make the probe non-destructive: seek back where possible, and on an
+    // unseekable stream (pipe/socket/stdin) unread the byte into the
+    // pushback buffer. CRuby's eof? may block reading a pipe but keeps
+    // what it read in the IO buffer for the next read — discarding it
+    // here made `expect`'s select/eof?/getc loop lose the first byte of
+    // every pattern and drain the stream without ever matching.
+    if io.seek(-1, 1).is_err() {
+        io.unget(&buf)?;
+    }
     Ok(Value::bool(false))
 }
 
@@ -3400,6 +3442,16 @@ fn value_to_fd(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i32
     )))
 }
 
+/// Whether `v` is an IO whose userspace read buffer already holds data.
+/// CRuby's `IO.select` reports such IOs as ready immediately
+/// (`rb_io_read_pending`): the kernel fd may be drained while unread
+/// bytes sit in the buffer — waiting on the fd would sleep through data
+/// the caller could read right now (the `expect` library's
+/// select-then-getc loop hangs exactly there).
+fn io_read_pending(v: Value) -> bool {
+    v.ty() == Some(crate::value::rvalue::ObjTy::IO) && v.as_io_inner().has_buffered_data()
+}
+
 /// ### IO.select
 ///
 /// - IO.select(read_array [, write_array [, error_array [, timeout]]]) -> array or nil
@@ -3528,7 +3580,7 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         loop {
             let mut ready_read = vec![];
             for (i, &fd) in read_fds.iter().enumerate() {
-                if probe(fd, libc::POLLIN | libc::POLLPRI)? {
+                if io_read_pending(read_ios[i]) || probe(fd, libc::POLLIN | libc::POLLPRI)? {
                     ready_read.push(read_ios[i]);
                 }
             }
@@ -3567,6 +3619,45 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             }
             crate::scheduler::wait_fds(vm, globals, &fds, deadline)?;
         }
+    }
+
+    // Buffered read data makes an IO immediately ready (see
+    // `io_read_pending`): report those without entering select(2),
+    // adding any other fds that are kernel-ready right now.
+    if read_ios.iter().any(|v| io_read_pending(*v)) {
+        let poll0 = |fd: i32, events: i16| -> bool {
+            let mut pfd = libc::pollfd {
+                fd,
+                events,
+                revents: 0,
+            };
+            // SAFETY: one valid pollfd, length 1, zero timeout.
+            let ret = unsafe { libc::poll(&mut pfd, 1, 0) };
+            ret > 0 && pfd.revents != 0
+        };
+        let mut ready_read = vec![];
+        for (i, &fd) in read_fds.iter().enumerate() {
+            if io_read_pending(read_ios[i]) || poll0(fd, libc::POLLIN | libc::POLLPRI) {
+                ready_read.push(read_ios[i]);
+            }
+        }
+        let mut ready_write = vec![];
+        for (i, &fd) in write_fds.iter().enumerate() {
+            if poll0(fd, libc::POLLOUT) {
+                ready_write.push(write_ios[i]);
+            }
+        }
+        let mut ready_error = vec![];
+        for (i, &fd) in error_fds.iter().enumerate() {
+            if poll0(fd, libc::POLLPRI) {
+                ready_error.push(error_ios[i]);
+            }
+        }
+        return Ok(Value::array_from_vec(vec![
+            Value::array_from_vec(ready_read),
+            Value::array_from_vec(ready_write),
+            Value::array_from_vec(ready_error),
+        ]));
     }
 
     // Find max fd
@@ -6702,6 +6793,40 @@ mod tests {
             r.close
             r.close
             "ok"
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_select_reports_buffered_read_data() {
+        // CRuby: an IO whose userspace read buffer holds unread bytes is
+        // immediately ready in IO.select, even when the kernel fd is
+        // drained (rb_io_read_pending). The expect library's
+        // select-then-getc loop hangs forever without this — getc
+        // buffers the whole pipe payload on the first call, and every
+        // later select waits on an empty fd.
+        run_test_once(
+            r#"
+            require "expect"
+            res = []
+            r, w = IO.pipe
+            w << "prompt> hello"
+            r.getc                       # slurps the payload into the buffer
+            sel = IO.select([r], nil, nil, 0)
+            res << sel.class.to_s
+            res << (sel && sel[0][0].equal?(r))
+            # the actual ruby/spec expect scenario, end to end
+            r2, w2 = IO.pipe
+            w2 << "prompt> hello"
+            res << r2.expect(/[pf]rompt>/)
+            # threaded variant exercises the scheduler wait path
+            r3, w3 = IO.pipe
+            w3 << "prompt> hello"
+            t = Thread.new { sleep }
+            res << r3.expect("prompt>")
+            t.kill; t.join
+            [r, w, r2, w2, r3, w3].each(&:close)
+            res
             "#,
         );
     }
