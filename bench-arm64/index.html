@@ -117,6 +117,13 @@ async function loadJson(path) {
   const maxRatio = okBars.reduce((m, b) =>
     (b.ratio && b.ratio > m) ? b.ratio : m, 1.5);
 
+  // Symmetric log2 bounds: center 1.0, extend to the nearest power-of-2
+  // that covers the data in both directions.  e.g. maxRatio=3 → exp=2,
+  // logMax=4, logMin=0.25 → ticks: 0.25, 0.5, 1, 2, 4
+  const exp = Math.ceil(Math.log2(Math.max(maxRatio, 2)));
+  const logMax = Math.pow(2, exp);
+  const logMin = 1 / logMax;
+
   const barColor = b => {
     const r = b.ratio || 0;
     if (r >= 1.0) return "#2e7d32";
@@ -185,7 +192,7 @@ async function loadJson(path) {
       labels: benches.map(b => b.name),
       datasets: [{
         label: "YJIT / monoruby",
-        data: benches.map(b => failed(b) ? 0 : (b.ratio || 0)),
+        data: benches.map(b => failed(b) ? null : (b.ratio || null)),
         backgroundColor: benches.map(b => failed(b) ? "transparent" : barColor(b)),
       }],
     },
@@ -194,15 +201,24 @@ async function loadJson(path) {
       maintainAspectRatio: false,
       scales: {
         x: {
+          type: "logarithmic",
           position: "top",
-          beginAtZero: true,
-          suggestedMax: Math.max(2.0, maxRatio),
+          min: logMin,
+          max: logMax,
           title: {
             display: true,
-            text: "relative speed (× YJIT, higher = monoruby faster)",
+            text: "relative speed (× YJIT, higher = monoruby faster, 1× = parity)",
             align: "center",
           },
           grid: { color: "rgba(0,0,0,0.08)" },
+          afterBuildTicks(axis) {
+            const ticks = [];
+            for (let e = -exp; e <= exp; e++) {
+              ticks.push({ value: Math.pow(2, e) });
+            }
+            axis.ticks = ticks;
+          },
+          ticks: { callback: v => v + "×" },
         },
         y: { ticks: { autoSkip: false, font: { size: 13 }, color: "#1565c0" } },
       },
