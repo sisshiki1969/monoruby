@@ -1689,4 +1689,23 @@ mod tests {
             "(0..3).each { |x| }.to_s",
         ]);
     }
+
+    #[test]
+    fn range_each_noninteger_loop_backedge() {
+        // Regression: `Range#each` over a non-Integer range (the generic
+        // `while true` + `<=>` loop introduced with the Integer fast path)
+        // JIT-compiled to a loop whose back-edge carries a `Fixnum` (`<=>`'s
+        // result) in a slot that is `nil` at the loop pre-header. The
+        // back-edge fixpoint could non-monotonically drop the back-edge on a
+        // later iteration, leaving the loop-head merge target at the stale
+        // `C(nil)`, and bridging the real `S(Fixnum)` back-edge to it aborted
+        // the process (`slot.rs` `S -> C` unreachable). See
+        // `analyse_backedge_fixpoint`.
+        run_test(
+            r#"
+            t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end
+            (t..t.succ).to_a.size
+        "#,
+        );
+    }
 }
