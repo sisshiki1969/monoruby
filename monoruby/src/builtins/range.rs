@@ -1658,4 +1658,35 @@ mod tests {
         // it through the AS path.
         run_test_error("(1..10).step(0).to_a");
     }
+
+    #[test]
+    fn range_each_stop_iteration_propagates() {
+        // Regression: `Range#each` must not swallow a StopIteration raised
+        // by the yielded block. It used to iterate via `Kernel#loop`, which
+        // rescues StopIteration — so the exception was silently absorbed
+        // instead of propagating out of `each` as CRuby's C impl does.
+        run_tests(&[
+            // inclusive / exclusive / endless(bounded by break-less raise)
+            r#"
+              r = "noraise"
+              begin; (0..5).each { |x| raise StopIteration if x == 2 }; rescue StopIteration; r = "prop"; end
+              r
+            "#,
+            r#"
+              r = "noraise"
+              begin; (0...5).each { |x| raise StopIteration if x == 2 }; rescue StopIteration; r = "prop"; end
+              r
+            "#,
+            // a user subclass of StopIteration must also propagate
+            r#"
+              class MyStop < StopIteration; end
+              r = "noraise"
+              begin; (0..5).each { |x| raise MyStop if x == 2 }; rescue MyStop; r = "myprop"; end
+              r
+            "#,
+            // break still returns its value from `each`
+            "(0..10).each { |x| break 42 if x == 5 }",
+            "(0..3).each { |x| }.to_s",
+        ]);
+    }
 }
