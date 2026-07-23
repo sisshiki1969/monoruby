@@ -20,11 +20,28 @@ class Range
     end
     excl = self.exclude_end?
     if e.nil?
-      loop do
+      # Use `while true`, not `Kernel#loop`: `loop` rescues StopIteration,
+      # which would swallow a StopIteration raised by the yielded block
+      # instead of letting it propagate out of `each`. CRuby's C
+      # `Range#each` does not intercept it.
+      while true
         yield i
         i = i.succ
       end
     else
+      # Integer fast path: both endpoints are Integers — by far the most
+      # common shape. A plain `<=` / `+ 1` replaces the generic `<=>` /
+      # `succ` dispatch, and iterating without `Kernel#loop` both lets a
+      # StopIteration from the block propagate (CRuby-compatible) and keeps
+      # the `yield` eligible for JIT block specialization.
+      if i.is_a?(Integer) && e.is_a?(Integer)
+        last = excl ? e - 1 : e
+        while i <= last
+          yield i
+          i += 1
+        end
+        return self
+      end
       # For String / Symbol ranges, stop once succ extends past the end
       # element's length — `:Z.succ == :AA` would otherwise loop past
       # `:z` indefinitely. CRuby's String#upto applies the same
@@ -61,7 +78,9 @@ class Range
         c0 = (i <=> e)
         return self if c0.nil? || c0 > 0 || (excl && c0 == 0)
       end
-      loop do
+      # `while true`, not `Kernel#loop`: see the `e.nil?` branch above —
+      # `loop` would swallow a StopIteration raised by the yielded block.
+      while true
         if seq_mode
           cur_len = i.is_a?(Symbol) ? i.to_s.length : i.length
           break if cur_len > end_len

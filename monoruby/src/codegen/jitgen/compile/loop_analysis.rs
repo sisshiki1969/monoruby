@@ -31,7 +31,24 @@ impl<'a> JitContext<'a> {
                     self.add_loop_info(loop_start, liveness, Some(backedge));
                 }
             } else {
-                self.add_loop_info(loop_start, liveness, None);
+                // This iteration found no back-edge. If an earlier iteration
+                // already recorded one, keep it: the back-edge fixpoint must be
+                // *monotone* (a back-edge, once present, cannot disappear). A
+                // later iteration's refined entry state can statically prune the
+                // back-edge branch (it decides the loop always exits), but the
+                // real forward compilation still emits that back-edge, whose
+                // state then bridges to the loop-head merge target. Overwriting
+                // with `None` would drop the back-edge join from that target,
+                // leaving loop-carried slots at their stale pre-header concrete
+                // types (e.g. an uninitialized local's `C(nil)`) that the real
+                // back-edge (e.g. `S(Fixnum)`) contradicts — tripping the
+                // `bridge` `S -> C` unreachable. Refresh liveness but retain the
+                // recorded back-edge and treat the fixpoint as converged.
+                if let Some(be) = self.loop_backedge(loop_start).cloned() {
+                    self.add_loop_info(loop_start, liveness, Some(be));
+                } else {
+                    self.add_loop_info(loop_start, liveness, None);
+                }
                 break;
             }
             if x == 9 {

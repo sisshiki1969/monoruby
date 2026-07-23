@@ -1658,4 +1658,54 @@ mod tests {
         // it through the AS path.
         run_test_error("(1..10).step(0).to_a");
     }
+
+    #[test]
+    fn range_each_stop_iteration_propagates() {
+        // Regression: `Range#each` must not swallow a StopIteration raised
+        // by the yielded block. It used to iterate via `Kernel#loop`, which
+        // rescues StopIteration — so the exception was silently absorbed
+        // instead of propagating out of `each` as CRuby's C impl does.
+        run_tests(&[
+            // inclusive / exclusive / endless(bounded by break-less raise)
+            r#"
+              r = "noraise"
+              begin; (0..5).each { |x| raise StopIteration if x == 2 }; rescue StopIteration; r = "prop"; end
+              r
+            "#,
+            r#"
+              r = "noraise"
+              begin; (0...5).each { |x| raise StopIteration if x == 2 }; rescue StopIteration; r = "prop"; end
+              r
+            "#,
+            // a user subclass of StopIteration must also propagate
+            r#"
+              class MyStop < StopIteration; end
+              r = "noraise"
+              begin; (0..5).each { |x| raise MyStop if x == 2 }; rescue MyStop; r = "myprop"; end
+              r
+            "#,
+            // break still returns its value from `each`
+            "(0..10).each { |x| break 42 if x == 5 }",
+            "(0..3).each { |x| }.to_s",
+        ]);
+    }
+
+    #[test]
+    fn range_each_noninteger_loop_backedge() {
+        // Regression: `Range#each` over a non-Integer range (the generic
+        // `while true` + `<=>` loop introduced with the Integer fast path)
+        // JIT-compiled to a loop whose back-edge carries a `Fixnum` (`<=>`'s
+        // result) in a slot that is `nil` at the loop pre-header. The
+        // back-edge fixpoint could non-monotonically drop the back-edge on a
+        // later iteration, leaving the loop-head merge target at the stale
+        // `C(nil)`, and bridging the real `S(Fixnum)` back-edge to it aborted
+        // the process (`slot.rs` `S -> C` unreachable). See
+        // `analyse_backedge_fixpoint`.
+        run_test(
+            r#"
+            t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end
+            (t..t.succ).to_a.size
+        "#,
+        );
+    }
 }
