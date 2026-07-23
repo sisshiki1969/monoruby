@@ -324,6 +324,32 @@ fn set_callee_frame_arguments(
     callee_lfp: Lfp,
     caller_lfp: Lfp,
 ) -> Result<()> {
+    // Fast path for the overwhelmingly common call/yield shape: a plain
+    // positional call with no splat, no hash-splat and no keyword arguments
+    // at the call site, whose callee takes neither keyword parameters (nor
+    // `**kwrest`), auto-splats a lone block argument (`single_arg_expand`),
+    // nor needs `**nil` / `ruby2_keywords` handling. Every `yield x` to a
+    // `{ |a| }` block and most `foo(a, b)` calls land here. Binding is then
+    // just `fill_positional_args`, skipping `coerce_hash_splat_args`, the
+    // excess-keyword machinery, the `ruby2_keywords` promotion and the
+    // otherwise-unconditional `handle_keyword` call (which allocates an
+    // `unknowns` Vec and dispatches three sub-helpers even with no keywords).
+    {
+        let callsite = &globals.store[callid];
+        let callee = &globals.store[callee_fid];
+        if !callsite.has_splat()
+            && !callsite.kw_may_exists()
+            && callee.no_keyword()
+            && !callee.forbid_keyword()
+            && !callee.single_arg_expand()
+            && !callee.ruby2_keywords()
+        {
+            let src = caller_lfp.register_ptr(callsite.args) as *const Value;
+            let dst = callee_lfp.register_ptr(SlotId(1));
+            return fill_positional_args2(dst, callee, src, callsite.pos_num);
+        }
+    }
+
     coerce_hash_splat_args(vm, globals, callid, caller_lfp)?;
     let src = caller_lfp.register_ptr(globals[callid].args) as *mut Value;
     let dst = callee_lfp.register_ptr(SlotId(1));
