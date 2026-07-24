@@ -95,6 +95,13 @@ impl<'a> BytecodeGen<'a> {
         info.non_temp_num = non_temp_num;
         info.sp = sp;
         self.store.set_func_data(func_id);
+        // Precompute the lazy `(...)`-forwarding gate (consulted on every
+        // generic-path call, so it must be a plain field load at runtime).
+        let lazy = self
+            .store
+            .forwarding_trampoline_rest(func_id)
+            .filter(|_| self.iseq().forwarding_no_escape);
+        self.iseq_mut().lazy_forwarding_rest = lazy;
         Ok(())
     }
 
@@ -116,10 +123,42 @@ impl<'a> BytecodeGen<'a> {
         }
         incoming.pop();
 
+        self.iseq_mut().forwarding_no_escape = Self::forwarding_no_escape(&ir);
         self.iseq_mut().bb_info = BasicBlockInfo::new(incoming.branches, &BytecodeIr::new(ir));
         self.iseq_mut().set_bytecode(ops);
 
         Ok(())
+    }
+
+    ///
+    /// Whether nothing in this instruction stream can observe the
+    /// frame's own parameter slots beyond ordinary forwarding
+    /// consumes. Disqualifiers:
+    ///
+    /// - `super` in any form — zsuper reads *every* param slot of the
+    ///   method frame (including from `eval`'d code nested below), so a
+    ///   lazily-deferred rest slot would leak its marker.
+    /// - `yield` — dispatches through block paths the lazy-forwarding
+    ///   resolver does not cover.
+    /// - a block literal (`block_fid` on a call site) — the block body
+    ///   (or a block nested inside it) can contain a zsuper that reads
+    ///   this frame's param slots through the outer chain.
+    ///
+    /// `defined?(super)` / `defined?(yield)` only probe callability
+    /// (no argument collection), but are included for conservatism.
+    ///
+    /// One of the gates for the lazy `(...)`-forwarding convention;
+    /// see `Store::lazy_forwarding_rest`.
+    ///
+    fn forwarding_no_escape(ir: &[(BytecodeInst, Loc)]) -> bool {
+        ir.iter().all(|(inst, _)| match inst {
+            BytecodeInst::Super(_)
+            | BytecodeInst::Yield(_)
+            | BytecodeInst::DefinedSuper { .. }
+            | BytecodeInst::DefinedYield { .. } => false,
+            BytecodeInst::MethodCall(callsite) => callsite.block_fid.is_none(),
+            _ => true,
+        })
     }
 
     fn inst_to_bc(

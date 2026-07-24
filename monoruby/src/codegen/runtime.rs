@@ -1211,6 +1211,22 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send_splat(
     callid: CallSiteId,
 ) -> Option<Value> {
     assert_eq!(globals.store[callid].pos_num, 1);
+    // `send(...)` from a lazy `(...)` trampoline: the splat slot may hold
+    // a lazy-forwarding marker — materialize it (allow_direct = false;
+    // the send convention strips the leading method-name element, which
+    // the direct fast fill does not model).
+    if let Err(err) = resolve_lazy_forwarding(
+        vm,
+        globals,
+        callid,
+        callee_lfp,
+        callee_lfp.func_id(),
+        caller_lfp,
+        false,
+    ) {
+        vm.set_error(err);
+        return None;
+    }
     let src = caller_lfp.register_ptr(globals.store[callid].args) as _;
     match set_frame_arguments_send_splat(globals, callee_lfp, src) {
         Ok(_) => Some(Value::nil()),
