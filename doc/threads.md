@@ -71,6 +71,7 @@ handle:        Option<Box<Executor>>   // main スレッドのみ None(Executor 
 proc / args:   本体ブロックと Thread.new の引数
 stack:         専用 256 KiB スタック(初回起動時に遅延確保)
 state:         Created | Runnable | Sleeping | Joining | IoWaiting | Dead
+               (状態遷移図は doc/scheduler_state_diagram.md)
 resume_exec:   park した実行コンテキスト(スレッド root、またはスレッド内で park した nested Fiber)
 result / exception:  終了結果(#join / #value が参照)
 joiners:       このスレッドを #join で待っているスレッド
