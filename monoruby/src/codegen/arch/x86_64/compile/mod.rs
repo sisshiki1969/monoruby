@@ -201,8 +201,17 @@ impl Codegen {
                 deferred_src,
             } => {
                 let offset = store[callee_fid].get_offset();
-                // gate guarantees req_num() >= lead_num
-                let expected_len = store[callee_fid].req_num() - lead_num;
+                // D1 source-routed: the forwarded count is the statically
+                // known caller arg count; missing optional slots are
+                // None-filled (gate guarantees req <= lead+len <= reqopt).
+                // Eager: gate guarantees a req-only callee with
+                // req_num() >= lead_num, so the length guard is exact.
+                let (expected_len, none_fill) = if let Some((_, len)) = deferred_src {
+                    let n = len as usize;
+                    (n, store[callee_fid].reqopt_num() - lead_num - n)
+                } else {
+                    (store[callee_fid].req_num() - lead_num, 0)
+                };
                 self.jit_set_arguments_forwarded(
                     callid,
                     callee_fid,
@@ -210,6 +219,7 @@ impl Codegen {
                     args,
                     lead_num,
                     expected_len,
+                    none_fill,
                     recv,
                     kwrest_guard,
                     deferred_src,
