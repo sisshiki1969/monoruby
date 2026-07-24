@@ -226,8 +226,12 @@ module Kernel
 end
 
 class Object
-  def initialize(...)
-  end
+  # NOTE: no `def initialize` here — the default constructor is the
+  # native `BasicObject#initialize` (arity 0), matching CRuby's owner
+  # and its strict arity (`Object.new(1)` raises ArgumentError). A
+  # Ruby-level `def initialize(...)` would silently accept any
+  # arguments and also defeat the JIT's forwarding specialization for
+  # argument-less `Class#new`.
 
   def tap
     yield self

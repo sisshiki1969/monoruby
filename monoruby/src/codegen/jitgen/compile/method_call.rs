@@ -1198,7 +1198,6 @@ impl AbstractState {
         } else if callsite.forwarding
             && callsite.pos_num >= 1
             && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]
-            && callee.is_iseq().is_some()
             && callee.no_keyword()
             && !callee.is_rest()
             && callee.post_num() == 0
@@ -1206,7 +1205,11 @@ impl AbstractState {
         {
             // Forwarding `g(x.., ...)` where `g` takes only required (and
             // possibly optional) positionals and the only splat is the
-            // trailing `...` rest (`splat_pos == [pos_num-1]`). The
+            // trailing `...` rest (`splat_pos == [pos_num-1]`). Applies
+            // to iseq and native callees alike — a native's callee-frame
+            // protocol is identical (fixed slots, None for an absent
+            // optional; `Class#new`'s forward to a native `initialize`
+            // such as `BasicObject#initialize` lands here). The
             // `lead_num = pos_num-1` leading args sit at `callsite.args ..`,
             // the `...` Array at `args + lead_num`; copy both straight into
             // the callee frame instead of re-parsing via the runtime.
@@ -1272,7 +1275,6 @@ impl AbstractState {
         } else if callsite.forwarding
             && callsite.splat_pos.len() == 1
             && callsite.splat_pos[0] < callsite.pos_num
-            && callee.is_iseq().is_some()
             && callee.no_keyword()
         {
             // Forwarding with a single splat at any position — `g(x.., ...)`
@@ -1281,8 +1283,10 @@ impl AbstractState {
             // runtime helper, which skips the generic CallSiteInfo
             // re-parse on the common no-forwarded-kw path (building
             // lead ++ splat-array ++ post directly) and delegates the
-            // subtle kw case to the proven generic.
-            // Array-path forwarding consume (iseq with opt/post/rest):
+            // subtle kw case to the proven generic. Native callees share
+            // the same callee-frame protocol (rest natives get their rest
+            // Array materialized by the same `fill_positional_args`).
+            // Array-path forwarding consume (callee with opt/post/rest):
             // it reads `f`'s rest slot as a real `Array`.
             if self.deferred_rest_tuple().is_some() {
                 ir.set_needs_rest_array();

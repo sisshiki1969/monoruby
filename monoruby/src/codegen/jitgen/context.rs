@@ -1236,9 +1236,13 @@ impl<'a> JitContext<'a> {
             return None;
         }
         let cs = &self.store[cid];
-        if cs.kw_may_exists() || cs.block_arg.is_some() || cs.pos_num == 0 {
+        if cs.kw_may_exists() || cs.block_arg.is_some() {
             return None;
         }
+        // `pos_num == 0` (e.g. `NoArg.new` through the Ruby `Class#new`)
+        // defers to an *empty* source range: the consume copies nothing
+        // and the side-exit materialization (`create_array` with len 0)
+        // rebuilds `[]` without touching the source pointer.
         Some((rest_local, cs.args, cs.pos_num as u16))
     }
 

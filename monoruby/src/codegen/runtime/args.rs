@@ -37,23 +37,24 @@ pub(crate) fn set_frame_arguments(
     // known shape; route them through the same direct positional build
     // the JIT uses instead of the generic CallSiteInfo re-interpretation
     // (splat-position scan + excessive-keyword machinery). Same gate as
-    // the JIT dispatch in jitgen/compile/method_call.rs. Lazy-forwarding
-    // markers are handled inside `forwarded_set_arguments_core`.
+    // the JIT dispatch in jitgen/compile/method_call.rs; applies to iseq
+    // and native callees alike (identical callee-frame protocol, same
+    // `fill_positional_args` terminal). Lazy-forwarding markers are
+    // handled inside `forwarded_set_arguments_core`.
     {
         let cs = &globals[callid];
         if cs.forwarding {
             if cs.splat_pos.len() == 1
                 && cs.splat_pos[0] < cs.pos_num
-                && globals[callee_fid].is_iseq().is_some()
                 && globals[callee_fid].no_keyword()
             {
                 return forwarded_set_arguments_core(
                     vm, globals, callid, callee_lfp, callee_fid, caller_lfp,
                 );
             }
-            // Shapes outside the direct gate (native or keyword-taking
-            // callee, extra user splats as in `g(*a, ...)`) still need
-            // any pending lazy marker materialized before the generic
+            // Shapes outside the direct gate (keyword-taking callee,
+            // extra user splats as in `g(*a, ...)`) still need any
+            // pending lazy marker materialized before the generic
             // machinery interprets the splat slots.
             materialize_lazy_at_callsite(vm, globals, callid, caller_lfp);
         }
@@ -1626,6 +1627,27 @@ mod tests {
             res << [o.a, o.b, o.k]
             res << (begin; fwd(1); rescue ArgumentError => e; e.message; end)
             res << fwd(1, 2)
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_new_native_initialize() {
+        // With the Ruby-level `Class#new`, an argument-less class's
+        // `initialize` resolves to the native `BasicObject#initialize`
+        // (arity 0) — the forward must dispatch there (D1 source-routes
+        // natives too) and keep CRuby's strict arity: `Object.new(1)`
+        // raises ArgumentError instead of being silently accepted (the
+        // old Ruby-level `Object#initialize(...)` swallowed anything).
+        run_test(
+            r#"
+            class NoArg; end
+            res = []
+            res << NoArg.new.class.to_s
+            res << (begin; Object.new(1); rescue ArgumentError => e; e.message; end)
+            res << (begin; NoArg.new(k: 1); rescue ArgumentError => e; e.class.to_s; end)
+            res << Object.instance_method(:initialize).owner.to_s
             res
             "#,
         );
