@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 820" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',Meiryo,sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,4 L0,8 z" fill="#444"/>
+    </marker>
+  </defs>
+
+  <rect width="1160" height="820" fill="#ffffff"/>
+  <text x="580" y="34" text-anchor="middle" font-size="20" font-weight="bold" fill="#222">monoruby green thread スケジューラ — Thread 状態遷移</text>
+
+  <!-- initial state -->
+  <circle cx="140" cy="70" r="7" fill="#222"/>
+  <line x1="140" y1="77" x2="140" y2="116" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="152" y="100" font-size="12" fill="#333">Thread.new / start / fork — spawn()</text>
+
+  <!-- Created -->
+  <rect x="40" y="120" width="200" height="58" rx="10" fill="#e3edf9" stroke="#4a6fa5" stroke-width="1.5"/>
+  <text x="140" y="144" text-anchor="middle" font-size="16" font-weight="bold" fill="#222">Created</text>
+  <text x="140" y="163" text-anchor="middle" font-size="11" fill="#555">(spawn: ready キューへ)</text>
+
+  <!-- Created -> Runnable -->
+  <line x1="215" y1="178" x2="448" y2="306" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="331" y="232" text-anchor="middle" font-size="12" fill="#333" transform="rotate(29 331 232)">dispatch(): スタック確保 → 本体起動</text>
+
+  <!-- Created -> Dead -->
+  <path d="M100,178 L100,692 L384,692" fill="none" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="112" y="420" font-size="12" fill="#333">起動前に #kill / #raise</text>
+  <text x="112" y="436" font-size="12" fill="#333">(finalize_unstarted)</text>
+
+  <!-- Runnable -->
+  <rect x="390" y="300" width="200" height="64" rx="10" fill="#e3edf9" stroke="#4a6fa5" stroke-width="1.5"/>
+  <text x="490" y="326" text-anchor="middle" font-size="16" font-weight="bold" fill="#222">Runnable</text>
+  <text x="490" y="346" text-anchor="middle" font-size="11" fill="#555">(実行中 or ready キュー)</text>
+
+  <!-- Runnable self loop: Thread.pass / preemption -->
+  <path d="M390,312 C305,290 305,374 390,352" fill="none" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="316" y="318" text-anchor="end" font-size="12" fill="#333">Thread.pass /</text>
+  <text x="316" y="334" text-anchor="end" font-size="12" fill="#333">プリエンプション</text>
+  <text x="316" y="350" text-anchor="end" font-size="12" fill="#333">(ready 末尾へ)</text>
+
+  <!-- Runnable -> Dead -->
+  <line x1="490" y1="364" x2="490" y2="688" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="502" y="480" font-size="12" fill="#333">本体 return / 未捕捉例外 /</text>
+  <text x="502" y="496" font-size="12" fill="#333">kill unwind → finalize()</text>
+
+  <!-- Dead -->
+  <rect x="390" y="692" width="200" height="58" rx="10" fill="#ececec" stroke="#888" stroke-width="1.5"/>
+  <text x="490" y="716" text-anchor="middle" font-size="16" font-weight="bold" fill="#222">Dead</text>
+  <text x="490" y="735" text-anchor="middle" font-size="11" fill="#555">(registry から prune)</text>
+
+  <!-- final state -->
+  <line x1="490" y1="750" x2="490" y2="780" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <circle cx="490" cy="794" r="9" fill="none" stroke="#222" stroke-width="1.5"/>
+  <circle cx="490" cy="794" r="4.5" fill="#222"/>
+
+  <!-- Sleeping -->
+  <rect x="880" y="120" width="240" height="58" rx="10" fill="#fdf3dc" stroke="#c9972b" stroke-width="1.5"/>
+  <text x="1000" y="144" text-anchor="middle" font-size="16" font-weight="bold" fill="#222">Sleeping</text>
+  <text x="1000" y="163" text-anchor="middle" font-size="11" fill="#555">(sleepers: deadline は Option)</text>
+
+  <!-- Joining -->
+  <rect x="880" y="304" width="240" height="58" rx="10" fill="#fdf3dc" stroke="#c9972b" stroke-width="1.5"/>
+  <text x="1000" y="328" text-anchor="middle" font-size="16" font-weight="bold" fill="#222">Joining</text>
+  <text x="1000" y="347" text-anchor="middle" font-size="11" fill="#555">(対象の joiners に登録)</text>
+
+  <!-- IoWaiting -->
+  <rect x="880" y="490" width="240" height="58" rx="10" fill="#fdf3dc" stroke="#c9972b" stroke-width="1.5"/>
+  <text x="1000" y="514" text-anchor="middle" font-size="16" font-weight="bold" fill="#222">IoWaiting</text>
+  <text x="1000" y="533" text-anchor="middle" font-size="11" fill="#555">(io_waiters: fd, poll events)</text>
+
+  <!-- Runnable <-> Sleeping -->
+  <line x1="585" y1="306" x2="876" y2="146" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="730" y="216" text-anchor="middle" font-size="12" fill="#333" transform="rotate(-29 730 216)">Kernel#sleep / Thread.stop</text>
+  <line x1="876" y1="162" x2="588" y2="318" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="732" y="266" text-anchor="middle" font-size="12" fill="#333" transform="rotate(-29 732 266)">#wakeup・#run / deadline / #kill・#raise</text>
+
+  <!-- Runnable <-> Joining -->
+  <line x1="590" y1="324" x2="876" y2="324" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="733" y="314" text-anchor="middle" font-size="12" fill="#333">Thread#join / #value</text>
+  <line x1="876" y1="342" x2="590" y2="342" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="733" y="360" text-anchor="middle" font-size="12" fill="#333">対象スレッドの死亡 / timeout / 割り込み</text>
+
+  <!-- Runnable <-> IoWaiting -->
+  <line x1="585" y1="352" x2="876" y2="506" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="730" y="419" text-anchor="middle" font-size="12" fill="#333" transform="rotate(29 730 419)">wait_fd / wait_fds (IO.select)</text>
+  <line x1="876" y1="522" x2="588" y2="364" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="732" y="468" text-anchor="middle" font-size="12" fill="#333" transform="rotate(29 732 468)">fd ready / deadline / 割り込み</text>
+
+  <!-- notes / legend -->
+  <rect x="660" y="600" width="460" height="190" rx="8" fill="#fbfbf6" stroke="#bbb" stroke-width="1" stroke-dasharray="5 3"/>
+  <text x="680" y="628" font-size="13" font-weight="bold" fill="#222">#status との対応 / 注意</text>
+  <rect x="680" y="640" width="14" height="14" fill="#e3edf9" stroke="#4a6fa5"/>
+  <text x="702" y="652" font-size="12" fill="#333">Created / Runnable → #status "run"</text>
+  <rect x="680" y="662" width="14" height="14" fill="#fdf3dc" stroke="#c9972b"/>
+  <text x="702" y="674" font-size="12" fill="#333">Sleeping / Joining / IoWaiting → #status "sleep"</text>
+  <rect x="680" y="684" width="14" height="14" fill="#ececec" stroke="#888"/>
+  <text x="702" y="696" font-size="12" fill="#333">Dead → false(正常終了・kill)/ nil(例外終了)</text>
+  <text x="680" y="722" font-size="12" fill="#333">・「Running」状態はない — Runnable が実行中を兼ねる</text>
+  <text x="680" y="742" font-size="12" fill="#333">・main スレッドは ready キューに入らない(main が Runnable に</text>
+  <text x="692" y="758" font-size="12" fill="#333">戻ることが scheduler_loop の終了条件)</text>
+  <text x="680" y="778" font-size="12" fill="#333">・#kill / #raise は pending に積んで起床させるだけ — 配送は再開時</text>
+</svg>

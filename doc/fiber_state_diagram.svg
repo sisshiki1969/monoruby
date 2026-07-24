@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1050 480" font-family="'Hiragino Sans','Noto Sans CJK JP','Yu Gothic',Meiryo,sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,4 L0,8 z" fill="#444"/>
+    </marker>
+  </defs>
+
+  <rect width="1050" height="480" fill="#ffffff"/>
+  <text x="525" y="34" text-anchor="middle" font-size="18" font-weight="bold" fill="#222">monoruby — Fiber 状態遷移(FiberState は Executor::rsp_save から導出)</text>
+
+  <!-- initial state -->
+  <circle cx="40" cy="168" r="7" fill="#222"/>
+  <line x1="47" y1="168" x2="96" y2="168" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="71" y="150" text-anchor="middle" font-size="12" fill="#333">Fiber.new</text>
+
+  <!-- Created -->
+  <rect x="100" y="140" width="170" height="58" rx="10" fill="#e3edf9" stroke="#4a6fa5" stroke-width="1.5"/>
+  <text x="185" y="164" text-anchor="middle" font-size="16" font-weight="bold" fill="#222">Created</text>
+  <text x="185" y="183" text-anchor="middle" font-size="11" fill="#555">rsp_save = None</text>
+
+  <!-- Created -> Suspended -->
+  <line x1="270" y1="168" x2="426" y2="168" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="350" y="216" text-anchor="middle" font-size="12" fill="#333">初回 #resume / Enumerator#next</text>
+  <text x="350" y="232" text-anchor="middle" font-size="12" fill="#333">(invoke_fiber: スタック確保 → 本体起動)</text>
+
+  <!-- Suspended -->
+  <rect x="430" y="140" width="200" height="58" rx="10" fill="#e3edf9" stroke="#4a6fa5" stroke-width="1.5"/>
+  <text x="530" y="164" text-anchor="middle" font-size="16" font-weight="bold" fill="#222">Suspended</text>
+  <text x="530" y="183" text-anchor="middle" font-size="11" fill="#555">rsp_save = 保存された rsp</text>
+
+  <!-- Suspended self loop: yield / resume -->
+  <path d="M490,140 C460,72 600,72 570,140" fill="none" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="530" y="52" text-anchor="middle" font-size="12" fill="#333">Fiber.yield(yield_fiber: 親へ復帰)</text>
+  <text x="530" y="68" text-anchor="middle" font-size="12" fill="#333">⇄ #resume(resume_fiber: 再開)</text>
+
+  <!-- Suspended -> Terminated -->
+  <line x1="630" y1="168" x2="786" y2="168" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="710" y="216" text-anchor="middle" font-size="12" fill="#333">本体 return / 例外</text>
+  <text x="710" y="232" text-anchor="middle" font-size="12" fill="#333">(invoker エピローグが rsp_save = -1)</text>
+
+  <!-- Terminated -->
+  <rect x="790" y="140" width="180" height="58" rx="10" fill="#ececec" stroke="#888" stroke-width="1.5"/>
+  <text x="880" y="164" text-anchor="middle" font-size="16" font-weight="bold" fill="#222">Terminated</text>
+  <text x="880" y="183" text-anchor="middle" font-size="11" fill="#555">rsp_save = -1</text>
+
+  <!-- final state -->
+  <line x1="880" y1="198" x2="880" y2="248" stroke="#444" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <circle cx="880" cy="262" r="9" fill="none" stroke="#222" stroke-width="1.5"/>
+  <circle cx="880" cy="262" r="4.5" fill="#222"/>
+
+  <!-- notes -->
+  <rect x="70" y="300" width="910" height="150" rx="8" fill="#fbfbf6" stroke="#bbb" stroke-width="1" stroke-dasharray="5 3"/>
+  <text x="90" y="326" font-size="13" font-weight="bold" fill="#222">注意(エラー遷移 — 状態は変化しない)</text>
+  <text x="90" y="350" font-size="12.5" fill="#333">・「Running」は表現されない — 実行中の Fiber も rsp_save 上は Suspended と読める</text>
+  <text x="90" y="374" font-size="12.5" fill="#333">・実行中の Fiber 自身・parent_fiber チェーン上の祖先への #resume → FiberError(double resume)</text>
+  <text x="90" y="398" font-size="12.5" fill="#333">・Terminated への #resume → FiberError(Enumerator / Generator 経路は StopIteration)</text>
+  <text x="90" y="422" font-size="12.5" fill="#333">・parent_fiber = None のコンテキスト(main・スレッド root)での Fiber.yield → FiberError</text>
+</svg>

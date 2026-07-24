@@ -12,6 +12,8 @@
 Created | Runnable | Sleeping | Joining | IoWaiting | Dead
 ```
 
+![Thread 状態遷移図](thread_state_diagram.svg)
+
 ```mermaid
 stateDiagram-v2
     [*] --> Created : Thread.new / start / fork<br>spawn() が registry と ready キューに登録
@@ -94,6 +96,8 @@ rsp_save == None  → Created
 rsp_save == -1    → Terminated
 それ以外          → Suspended
 ```
+
+![Fiber 状態遷移図](fiber_state_diagram.svg)
 
 ```mermaid
 stateDiagram-v2
