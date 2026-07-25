@@ -1206,14 +1206,21 @@ impl<'a> JitContext<'a> {
     /// D1 forwarding-rest deferral decision for the *current* frame.
     ///
     /// `Some((rest_local, src, len))` iff the current frame is a
-    /// specialized pure forwarding trampoline `def f(...) = g(...)`
-    /// whose caller is the outermost (non-specialized) JIT frame —
-    /// `specialize_level == 1`, so `f` sits exactly one level below the
-    /// root and the caller's `rbp` is precisely the value `f` saved at
-    /// `[rbp]` (its `init_func` did `pushq rbp; movq rbp, rsp`). `src`
-    /// is the caller call site's positional args base (caller register
-    /// numbering, read via that saved caller `rbp`), `len` its
-    /// positional count, `rest_local` `f`'s synthetic rest local slot.
+    /// specialized pure forwarding trampoline `def f(...) = g(...)`.
+    /// The specialization depth does not matter: every frame (root or
+    /// specialized) runs the standard prologue (`pushq rbp; movq rbp,
+    /// rsp`), so `f`'s *direct physical caller* frame is always the
+    /// value `f` saved at `[rbp]` — and for a method trampoline
+    /// `method_caller_callsite` is exactly that direct caller's call
+    /// site (`current_method_frame` resolves `f` itself at offset 0).
+    /// The caller spilled that site's args to its frame slots
+    /// (`write_back_recv_and_callargs`) before the call, and a
+    /// trampoline-into-trampoline chain cannot defer through a deferred
+    /// source: the parent's own forwarding call site has a splat, which
+    /// fails the `is_simple_call` gate below. `src` is the caller call
+    /// site's positional args base (caller register numbering, read via
+    /// that saved caller `rbp`), `len` its positional count,
+    /// `rest_local` `f`'s synthetic rest local slot.
     ///
     pub(super) fn forward_rest_deferral(&self) -> Option<(SlotId, SlotId, u16)> {
         // The aarch64 AsmIR lowering does not implement the deferred-rest
@@ -1226,7 +1233,7 @@ impl<'a> JitContext<'a> {
         if cfg!(target_arch = "aarch64") {
             return None;
         }
-        if !self.is_specialized() || self.specialize_level() != 1 {
+        if !self.is_specialized() {
             return None;
         }
         let fid = self.func_id();
