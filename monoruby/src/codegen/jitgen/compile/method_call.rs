@@ -1359,6 +1359,49 @@ mod tests {
         );
     }
 
+    /// A JIT-specialized *deferred* construction that deopts mid-run. The
+    /// Ruby `Class#new` trampoline defers `Foo.new`'s `...` rest (D1), so the
+    /// forwarded ctor args are source-routed straight from the caller frame
+    /// and no rest array is built on the fast path. A class-version bump then
+    /// invalidates the compiled construction, so the interpreter resumes
+    /// inside `new` and must rebuild the forwarded `...` array via the
+    /// `forward_rest` side-exit materialize (`gen_forward_rest_materialize` /
+    /// `a64_gen_forward_rest_materialize`). Exercises both the deferred
+    /// source-routing and the deopt materialization on both backends; the
+    /// ctor takes both req-only and optional shapes.
+    #[test]
+    fn deferred_construction_deopt() {
+        run_test(
+            r#"
+            class Foo
+              def initialize(a, b, c); @a = a; @b = b; @c = c; end
+              attr_reader :a, :b, :c
+            end
+            class Bar
+              def initialize(a, b = 10, c = 100); @a = a; @b = b; @c = c; end
+              attr_reader :a, :b, :c
+            end
+            def mk_foo(i); Foo.new(i, i * 2, i * 3); end
+            def mk_bar1(i); Bar.new(i); end
+            def mk_bar2(i); Bar.new(i, i + 1); end
+            res = 0
+            i = 0
+            while i < 300
+              f = mk_foo(i)
+              res += f.a + f.b + f.c
+              b1 = mk_bar1(i)
+              b2 = mk_bar2(i)
+              res += b1.a + b1.b + b1.c + b2.b + b2.c
+              # bump the class version mid-run -> deopt the compiled ctors
+              Foo.class_eval { def extra; 1; end } if i == 150
+              Bar.class_eval { def extra; 1; end } if i == 175
+              i += 1
+            end
+            res
+            "#,
+        );
+    }
+
     /// Regression test: a specialized (inlined-compiled) callee that
     /// captures its own frame (`Proc.new` with a literal block) while the
     /// call site passes a block literal. Materializing the escaped block

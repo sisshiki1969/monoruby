@@ -1223,16 +1223,14 @@ impl<'a> JitContext<'a> {
     /// `rest_local` `f`'s synthetic rest local slot.
     ///
     pub(super) fn forward_rest_deferral(&self) -> Option<(SlotId, SlotId, u16)> {
-        // The aarch64 AsmIR lowering does not implement the deferred-rest
-        // optimization (the side-exit `forward_rest` materialize and the
-        // `SetArgumentsForwarded` inline fast path), so it never defers: the
-        // `...` rest array is built the normal way and forwarding goes through
-        // the generic helper. Correct, just unoptimized — and it keeps the
-        // aarch64 lowering bail-free (no `forward_rest` / `deferred_src` ever
-        // reach codegen). x86 keeps the optimization.
-        if cfg!(target_arch = "aarch64") {
-            return None;
-        }
+        // D1 deferred-rest is lowered on both backends now: the side-exit
+        // `forward_rest` materialize (`gen_forward_rest_materialize` /
+        // `a64_gen_forward_rest_materialize`) and the `SetArgumentsForwarded`
+        // inline source-routing (`jit_set_arguments_forwarded` /
+        // `a64_set_arguments_forwarded_deferred`). The caller-slot addressing is
+        // arch-neutral (`[fp - rbp_local(slot)]`, since
+        // `RBP_LOCAL_FRAME == (BP_CFP + CFP_LFP) + 8` on both arches), so the
+        // whole deferral is enabled uniformly here.
         if !self.is_specialized() {
             return None;
         }
