@@ -3,8 +3,9 @@
 //! The arch-neutral front-end builds `AsmIr`; this drives the lowering on
 //! aarch64. Every `AsmInst` and side exit is lowered: large frame/field/sp
 //! offsets are materialized through scratch registers rather than bailing, and
-//! the `...`-forwarding deferral — the one shape that needed unported
-//! caller-relative codegen — is disabled for aarch64 in `forward_rest_deferral`.
+//! the `...`-forwarding deferral (D1) is now lowered here too — the
+//! source-routed `SetArgumentsForwarded` copy (`a64_set_arguments_forwarded_deferred`)
+//! and the deopt-time rest-array rebuild (`a64_gen_forward_rest_materialize`).
 //! So aarch64 never bails out of JIT compilation; `compile_asmir`'s `bool` is
 //! vestigial. See `doc/aarch64-jitgen-plan.md`.
 
@@ -328,14 +329,9 @@ impl Codegen {
 
     /// Write back live values to LFP slots for a side exit, r14(x22)-relative
     /// (the local frame may be on the heap after a call returns). Mirrors x86
-    /// `gen_write_back_for_deopt`. The deferred forwarding-rest write-back never
-    /// occurs on aarch64 (the deferral is disabled in `forward_rest_deferral`),
-    /// so every write-back lowers.
+    /// `gen_write_back_for_deopt`, including the D1 deferred forwarding-rest
+    /// materialization, which runs last (see `a64_gen_forward_rest_materialize`).
     fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
-        debug_assert!(
-            wb.forward_rest.is_empty(),
-            "aarch64 disables forward-rest deferral, so a deopt write-back never carries one",
-        );
         // Spill each live FP-pool register to its slot(s) as a boxed Float
         // Value, so the interpreter sees the up-to-date float after the deopt.
         for (fpr, slots) in &wb.fpr {
@@ -354,6 +350,37 @@ impl Codegen {
             let off = slot.0 as u32 * 8 + LFP_SELF as u32;
             self.a64_frame_store(reg.a64().0, lfp, off);
         }
+        // D1: materialize deferred forwarding-rest arrays. Runs last so the
+        // literal loop above has already written the `dst` slot (mode `C(nil)`),
+        // keeping the frame GC-consistent during the `create_array` call (which
+        // may itself allocate).
+        for (dst, src, len) in wb.forward_rest.clone() {
+            self.a64_gen_forward_rest_materialize(dst, src, len);
+        }
+    }
+
+    /// Rebuild a deferred `...` rest `Array` for an interpreter resuming inside
+    /// the trampoline frame `f`. Twin of x86 `gen_forward_rest_materialize`.
+    /// The positional source lives in the *caller* (outermost, non-specialized)
+    /// frame — `f` saved the caller's frame pointer at `[x29]` — so the array is
+    /// built from `[caller_fp - rbp_local(src)]` and stored into `f`'s rest
+    /// local `dst` (`x22`/LFP-relative). `create_array(ptr = &caller[src], len)`.
+    /// x9/x10 are lowering scratch here (x10 is used internally by
+    /// `a64_addr_sub`/`a64_frame_store` for large offsets).
+    fn a64_gen_forward_rest_materialize(&mut self, dst: SlotId, src: SlotId, len: u16) {
+        let lfp = GP::R14.a64().0; // x22
+        let f = runtime::create_array as *const () as u64;
+        // x9 = caller fp (the value `f` saved at `[x29]`); x0 = &caller[src].
+        monoasm_arm64!(&mut self.jit, ldr x9, [x29];);
+        self.a64_addr_sub(0, 9, rbp_local(src) as u32);
+        monoasm_arm64!(&mut self.jit,
+            mov x1, (len as u64);
+            str x30, [sp, #-16]!;              // save LR (16-aligned)
+            mov x9, (f);
+            blr x9;                            // x0 = create_array(ptr, len)
+            ldr x30, [sp], #16;                // restore LR
+        );
+        self.a64_frame_store(0, lfp, conv(dst) as u32);
     }
 
     /// Inline fixnum binary op. Fixnums are tagged `2n+1`; signed 64-bit
@@ -806,30 +833,83 @@ impl Codegen {
         true
     }
 
-    /// Lower `SetArgumentsForwarded` (the `g(*rest, **kw, &blk)` trampoline
-    /// fast path). aarch64 does not emit the inline element-copy fast path;
-    /// it dispatches to the specialized `jit_forwarded_set_arguments`
-    /// runtime helper, whose common no-forwarded-keyword branch builds the
-    /// callee positionals directly from the statically-known callsite shape
-    /// (the forwarding `**kwrest` stays nil now that `CheckKwRest` is not
-    /// emitted for `...`), and which delegates the subtle keyword case to
-    /// the proven generic path. The deferred `...`-rest (`deferred_src`)
-    /// shape never occurs because aarch64 disables the deferral
-    /// (`forward_rest_deferral`), so the rest array is always built
-    /// normally.
-    fn a64_set_arguments_forwarded(
+    /// Lower the D1 source-routed `SetArgumentsForwarded` fast path (the
+    /// deferred `...`-rest case). The trampoline `f`'s `...` rest `Array` was
+    /// elided at frame entry, so the forwarded positionals are copied straight
+    /// from the *caller* frame into the callee's argument slots — no array is
+    /// ever built. A literal port of x86 `jit_set_arguments_forwarded`'s
+    /// `deferred_src` branch:
+    ///
+    /// * `recv` and the `lead_num` leading args are `f`'s own slots
+    ///   (`x22`/LFP-relative via `conv`).
+    /// * The `expected_len` forwarded positionals live in the caller frame:
+    ///   `f` saved the caller's frame pointer at `[x29]`, and the structural
+    ///   gate guarantees the caller is exactly one (outermost, non-specialized)
+    ///   level up, so the source slots are `[caller_fp - rbp_local(src + j)]`
+    ///   (the fp→local displacement is arch-neutral —
+    ///   `RBP_LOCAL_FRAME == (BP_CFP + CFP_LFP) + 8`, matching
+    ///   `load_dyn_var_specialized`).
+    /// * The `none_fill` trailing optional slots (statically not covered by the
+    ///   forwarded args) get `0`, exactly as `fill_positional_args` writes for
+    ///   an absent optional — the callee prologue's `CheckLocal` then runs the
+    ///   defaults.
+    ///
+    /// Statically-bound arity and a nil forwarded `**kwrest` are gate
+    /// invariants, so there is no length/kw guard and no fallback. Leaves
+    /// `x0 = NIL_VALUE` (the success sentinel the following `HandleError`
+    /// checks). Scratch: x9..x15 are reserved lowering temps (never GP-mapped);
+    /// x10 is used internally by `a64_frame_load/store` for large offsets, so
+    /// the fixed temps below avoid it.
+    fn a64_set_arguments_forwarded_deferred(
         &mut self,
-        callid: CallSiteId,
-        fid: FuncId,
-        offset: usize,
-        deferred_src: Option<(SlotId, u16)>,
+        recv: SlotId,
+        args: SlotId,
+        lead_num: usize,
+        expected_len: usize,
+        none_fill: usize,
+        src: SlotId,
     ) -> bool {
-        debug_assert!(
-            deferred_src.is_none(),
-            "aarch64 disables forward-rest deferral, so SetArgumentsForwarded never carries deferred_src",
+        // Fixed lowering temps (x9..x15 are never GP-mapped; x10 is the
+        // internal scratch of `a64_frame_load/store`, so it is left free):
+        //   x13 = callee LFP base (sp - RSP_LOCAL_FRAME), stable across the copy
+        //   x12 = value in transit
+        //   x11 = caller frame pointer
+        const CLFP: u32 = 13;
+        const VAL: u32 = 12;
+        const CALLER_FP: u32 = 11;
+        let lfp = GP::R14.a64().0; // x22: f's own LFP
+        monoasm_arm64!(&mut self.jit,
+            sub x13, sp, #(RSP_LOCAL_FRAME as u32);
         );
-        let _ = deferred_src;
-        self.jit_set_arguments_forwarded_helper(callid, fid, offset)
+        // self <- f's own recv slot
+        self.a64_frame_load(VAL, lfp, conv(recv) as u32);
+        self.a64_frame_store(VAL, CLFP, LFP_SELF as u32);
+        // leading args (f's own slots)
+        for i in 0..lead_num {
+            self.a64_frame_load(VAL, lfp, conv(args + i) as u32);
+            self.a64_frame_store(VAL, CLFP, (LFP_ARG0 + 8 * i as i32) as u32);
+        }
+        // forwarded positionals routed straight from the caller frame
+        if expected_len != 0 {
+            monoasm_arm64!(&mut self.jit, ldr x11, [x29];);
+            for j in 0..expected_len {
+                self.a64_frame_load(VAL, CALLER_FP, rbp_local(src + j) as u32);
+                self.a64_frame_store(VAL, CLFP, (LFP_ARG0 + 8 * (lead_num + j) as i32) as u32);
+            }
+        }
+        // None-fill the statically-uncovered trailing optionals (0 sentinel)
+        if none_fill != 0 {
+            monoasm_arm64!(&mut self.jit, mov x12, (0u64););
+            for j in 0..none_fill {
+                self.a64_frame_store(
+                    VAL,
+                    CLFP,
+                    (LFP_ARG0 + 8 * (lead_num + expected_len + j) as i32) as u32,
+                );
+            }
+        }
+        monoasm_arm64!(&mut self.jit, mov x0, (NIL_VALUE as u64););
+        true
     }
 
     /// Lower `SetArgumentsForwardedHelper`: same asm shape as
@@ -4983,11 +5063,29 @@ impl Codegen {
             AsmInst::SetArgumentsForwarded {
                 callid,
                 callee_fid,
+                recv,
+                args,
+                lead_num,
+                kwrest_guard: _,
                 deferred_src,
-                ..
             } => {
                 let offset = store[callee_fid].get_offset();
-                return self.a64_set_arguments_forwarded(callid, callee_fid, offset, deferred_src);
+                // D1 source-routed: the forwarded count is the statically
+                // known caller arg count; missing optional slots are
+                // None-filled (gate guarantees req <= lead+len <= reqopt).
+                // The non-deferred (eager) case keeps routing through the
+                // generic runtime helper (aarch64 does not emit the eager
+                // inline array copy that x86 does).
+                return match deferred_src {
+                    Some((src, len)) => {
+                        let n = len as usize;
+                        let none_fill = store[callee_fid].reqopt_num() - lead_num - n;
+                        self.a64_set_arguments_forwarded_deferred(
+                            recv, args, lead_num, n, none_fill, src,
+                        )
+                    }
+                    None => self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset),
+                };
             }
             // Every other AsmInst variant is handled by the shared
             // `compile_asmir` dispatcher before reaching here, so the wildcard
