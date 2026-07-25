@@ -15,7 +15,7 @@ use super::*;
 #[path = "../arch/x86_64/compile/mod.rs"]
 mod compile;
 #[cfg(target_arch = "aarch64")]
-#[path = "../arch/aarch64/compile.rs"]
+#[path = "../arch/aarch64/compile/mod.rs"]
 mod compile;
 mod compile_shared;
 
