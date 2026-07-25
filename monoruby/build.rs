@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hasher;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io};
@@ -207,14 +209,36 @@ fn main() {
         copy_dir_all(src, dst).unwrap();
     }
 
+    // Content-address the staged tree. When the installed root already
+    // holds *identical* content (the common case: rebuilding the same
+    // sources under different cargo feature sets, worktrees of the same
+    // revision, `cargo test` after `cargo build`, …), skip the swap
+    // entirely. A running monoruby resolves the install root file-by-file
+    // during startup, so an unnecessary swap is not harmless: the old
+    // tree vanishes mid-`require` sequence and the process dies with a
+    // spurious LoadError. The stamp stores this hash; it is only
+    // rewritten on a real install, so the skip path leaves the tracked
+    // stamp untouched and Cargo's fingerprint stable.
+    let mut hasher = DefaultHasher::new();
+    hash_tree(&staging, &mut hasher).unwrap();
+    let tree_stamp = format!("{}:{:016x}", env!("CARGO_PKG_VERSION"), hasher.finish());
+    if fs::read_to_string(&stamp).map(|s| s == tree_stamp).unwrap_or(false) {
+        let _ = fs::remove_dir_all(&staging);
+        return;
+    }
+
     // Swap the fully-staged tree into the versioned install root. `rename`
     // is atomic within a filesystem, so a concurrent reader sees either the
-    // prior complete tree or the new one. Remove any prior tree first
-    // (rename onto a non-empty dir fails); if that races another builder
+    // prior complete tree or the new one. The prior tree is moved aside
+    // with a rename (not deleted in place): the unavailability window for a
+    // concurrent reader shrinks to the instant between the two renames
+    // instead of a full recursive delete. If the swap races another builder
     // installing the same versioned tree, tolerate the "already present"
     // outcome rather than panicking.
+    let trash = lib_path.join(format!(".trash-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&trash);
     if install_root.exists() {
-        let _ = fs::remove_dir_all(&install_root);
+        let _ = fs::rename(&install_root, &trash);
     }
     if fs::rename(&staging, &install_root).is_err() {
         // Either a concurrent builder won the swap, or staging and the
@@ -225,11 +249,32 @@ fn main() {
         }
         let _ = fs::remove_dir_all(&staging);
     }
+    let _ = fs::remove_dir_all(&trash);
 
     // Write the stamp last so its presence means a complete install. Its
     // path is tracked above via cargo:rerun-if-changed, so deleting the
     // install root makes the next build re-run this script.
-    fs::write(&stamp, env!("CARGO_PKG_VERSION")).unwrap();
+    fs::write(&stamp, tree_stamp).unwrap();
+}
+
+/// Stable content hash of a directory tree: file names, lengths and bytes,
+/// walked in sorted order. Not cryptographic — just a fingerprint to detect
+/// "nothing changed" between installs.
+fn hash_tree(root: &Path, h: &mut DefaultHasher) -> io::Result<()> {
+    let mut entries: Vec<_> = fs::read_dir(root)?.collect::<io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let p = e.path();
+        h.write(e.file_name().to_string_lossy().as_bytes());
+        if p.is_dir() {
+            hash_tree(&p, h)?;
+        } else {
+            let data = fs::read(&p)?;
+            h.write_u64(data.len() as u64);
+            h.write(&data);
+        }
+    }
+    Ok(())
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> io::Result<()> {

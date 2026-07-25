@@ -807,12 +807,16 @@ impl Codegen {
     }
 
     /// Lower `SetArgumentsForwarded` (the `g(*rest, **kw, &blk)` trampoline
-    /// fast path). aarch64 does not emit the inline element-copy fast path, so it
-    /// always falls back to the generic `jit_generic_set_arguments` — the x86
-    /// fast path's own miss target, so correct, just unoptimized. The deferred
-    /// `...`-rest (`deferred_src`) shape never occurs because aarch64 disables
-    /// the deferral (`forward_rest_deferral`), so the rest array is always built
-    /// normally and forwarding goes through the generic helper.
+    /// fast path). aarch64 does not emit the inline element-copy fast path;
+    /// it dispatches to the specialized `jit_forwarded_set_arguments`
+    /// runtime helper, whose common no-forwarded-keyword branch builds the
+    /// callee positionals directly from the statically-known callsite shape
+    /// (the forwarding `**kwrest` stays nil now that `CheckKwRest` is not
+    /// emitted for `...`), and which delegates the subtle keyword case to
+    /// the proven generic path. The deferred `...`-rest (`deferred_src`)
+    /// shape never occurs because aarch64 disables the deferral
+    /// (`forward_rest_deferral`), so the rest array is always built
+    /// normally.
     fn a64_set_arguments_forwarded(
         &mut self,
         callid: CallSiteId,
@@ -825,7 +829,7 @@ impl Codegen {
             "aarch64 disables forward-rest deferral, so SetArgumentsForwarded never carries deferred_src",
         );
         let _ = deferred_src;
-        self.a64_set_arguments(callid, fid, offset)
+        self.jit_set_arguments_forwarded_helper(callid, fid, offset)
     }
 
     /// Lower `SetArgumentsForwardedHelper`: same asm shape as
