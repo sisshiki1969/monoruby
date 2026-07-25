@@ -94,8 +94,21 @@ pub(super) fn init(globals: &mut Globals) {
     // instance methods. The default `Class#allocate` consults the receiver
     // class's `ClassInfo.alloc_func`, raising TypeError when None.
     // Public, user-overridable `Class#allocate` (CRuby semantics:
-    // `klass.allocate` directly dispatches to a user override).
-    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
+    // `klass.allocate` directly dispatches to a user override — an
+    // override is a different FuncId, so this inline generator never
+    // applies to it). Carries the same inline-asm generator as
+    // `__builtin_allocate__`, so a monomorphic `Foo.allocate` call site
+    // compiles to a direct `alloc_func` call (receiver-identity-guarded;
+    // see `gen_class_allocate_inline`) instead of the native trampoline,
+    // and the allocated object's class is recorded for monomorphic
+    // downstream dispatch.
+    globals.define_builtin_inline_func(
+        CLASS_CLASS,
+        "allocate",
+        allocate,
+        inline_gen2!(gen_class_allocate()),
+        0,
+    );
     // Private, non-overridable internal allocator that the Ruby
     // `Class#new` (startup.rb) calls. Users override `allocate`, not
     // this name, so `new` keeps CRuby's "bypass user allocate"
@@ -336,6 +349,27 @@ pub(crate) fn call_alloc_func(globals: &mut Globals, class_id: ClassId) -> Resul
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// The public `Class#allocate` carries the same inline generator as
+    /// `__builtin_allocate__`. The inline must keep CRuby semantics: a
+    /// user override (a different FuncId) is dispatched instead, a
+    /// singleton-class receiver raises TypeError (receiver-identity
+    /// guard), and a class without an allocator raises TypeError.
+    #[test]
+    fn class_allocate_inline() {
+        run_test(
+            r#"
+        class A; end
+        class B; def self.allocate; :overridden; end; end
+        res = []
+        res << A.allocate.class.to_s
+        res << B.allocate.to_s
+        res << (begin; Object.new.singleton_class.allocate; rescue TypeError => e; e.message; end)
+        res << (begin; Integer.allocate; rescue TypeError => e; e.message; end)
+        res
+        "#,
+        );
+    }
 
     #[test]
     fn test_class() {
