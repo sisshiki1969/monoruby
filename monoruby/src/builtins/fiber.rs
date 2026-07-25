@@ -127,12 +127,6 @@ fn fiber_yield_inline(
     let CallSiteInfo {
         args, pos_num, dst, ..
     } = *callsite;
-    // aarch64 reaches the args via `sub x0, lfp, #conv(args)` (bounded
-    // immediate); bail to the slow path on an out-of-range frame.
-    #[cfg(target_arch = "aarch64")]
-    if pos_num > 1 && jitgen::conv(args) as u32 > 4095 {
-        return false;
-    }
     // `Fiber.yield` suspends this fiber: control returns to the resumer
     // and arbitrary code (including GCs) runs while this frame stays live
     // on the fiber's stack. Unlike a normal call, the inlined yield does
@@ -180,6 +174,35 @@ fn resume(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn fiber_yield_multi_arg() {
+        // `Fiber.yield(a, b, ...)` with >=2 args exercises the inlined
+        // `emit_fiber_yield_value_array` (builds the yielded array from the
+        // arg slots). Warm the fiber body so the yield JIT-compiles; the >=2
+        // arg array-build path (aarch64 addresses the arg slots through a
+        // scratch register for any frame offset) must match CRuby.
+        run_test(
+            r#"
+            def run
+              out = []
+              50.times do |k|
+                f = Fiber.new do
+                  a = Fiber.yield(k, k + 1)
+                  b = Fiber.yield(k + 2, k + 3, k + 4)
+                  [a, b]
+                end
+                out << f.resume
+                out << f.resume(100)
+                out << f.resume(200)
+              end
+              out
+            end
+            run
+            "#,
+        );
+    }
+
     #[test]
     fn fiber_error() {
         run_test_error("Fiber.yield");

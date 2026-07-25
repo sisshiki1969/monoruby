@@ -1020,18 +1020,15 @@ fn integer_shl(
         // Variable shift amount.
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);
-        // x86 has a literal-lhs fast path (`gen_shl_lhs_imm`) that folds the
-        // overflow guard to a constant `lzcnt`; aarch64's shift-back overflow
-        // check gains nothing from a constant lhs (recv is already in Rdi), so
-        // it uses `gen_shl` for both cases.
-        #[cfg(target_arch = "x86_64")]
+        // Literal-lhs fast path (`gen_shl_lhs_imm`, both backends): the
+        // left-shift overflow bound is the literal's `leading_zeros()`, a
+        // compile-time constant, so the runtime shift-back overflow check
+        // folds to a single constant compare.
         if let Some(lhs) = state.is_fixnum_literal(recv) {
             ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
         } else {
             ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
         }
-        #[cfg(target_arch = "aarch64")]
-        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true

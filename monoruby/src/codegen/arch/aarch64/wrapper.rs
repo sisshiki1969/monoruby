@@ -18,7 +18,26 @@ impl Codegen {
             entry:
         );
         match &globals.store[fid].kind {
-            FuncKind::ISeq(_) => {
+            FuncKind::ISeq(iseq) => match globals.store[*iseq].hint {
+                // Trivial methods: return the constant / self immediately with
+                // no frame creation or bytecode execution (mirrors x86
+                // `gen_wrapper`). Reached from the VM tier, invokers
+                // (send / Method#call / block yields), and non-foldable
+                // polymorphic JIT sites; foldable JIT'd call sites already
+                // const-fold the hint in the front-end.
+                ISeqHint::ConstReturn(imm) => {
+                    monoasm_arm64!(&mut self.jit,
+                        mov x0, (imm.id());
+                        ret;
+                    );
+                }
+                ISeqHint::SelfReturn => {
+                    monoasm_arm64!(&mut self.jit,
+                        ldur x0, [x(LFP.0), #(-(LFP_SELF as i32))];
+                        ret;
+                    );
+                }
+                ISeqHint::Normal => {
                 let vm_entry = self.vm_entry();
                 // JIT trigger (Phase 3a/3b). Per-method JIT-entry slot + call
                 // counter (both heap-leaked so their absolute addresses are
@@ -84,6 +103,7 @@ impl Codegen {
                     run_jit:
                         br x10;                  // tail-call the JIT code
                     );
+                }
                 }
             }
             FuncKind::Builtin { abs_address } => {

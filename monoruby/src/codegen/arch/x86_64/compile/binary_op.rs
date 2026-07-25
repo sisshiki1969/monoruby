@@ -757,7 +757,11 @@ impl Codegen {
             sarq rcx, 1;
             js shr;
             cmpq rcx, (lzcnt);
-            jgt deopt;
+            // The tagged lhs's top bit sits at `63 - lzcnt`, so shifting `2n`
+            // left sets the sign bit once `k >= lzcnt` — deopt there. (Was
+            // `jgt`, an off-by-one that let `lit << lzcnt` overflow silently;
+            // e.g. `5 << 60` yielded a wrapped negative instead of a Bignum.)
+            jge deopt;
             subq rdi, 1;
             salq rdi, rcx;
         after:
