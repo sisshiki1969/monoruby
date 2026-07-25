@@ -39,11 +39,32 @@ pub(super) fn gen_class_allocate_inline(
         self_module = origin.as_class();
     }
     let class_id = self_module.id();
+
+    // Instantiating a singleton class raises TypeError; bail to the
+    // native `allocate` (`call_alloc_func`) so it does the raising.
+    if store[class_id].get_module().is_singleton().is_some() {
+        return false;
+    }
+
     let alloc_func = match store[class_id].alloc_func() {
         Some(f) => f,
         None => return false,
     };
-    let CallSiteInfo { dst, .. } = *callsite;
+    let CallSiteInfo { recv, dst, .. } = *callsite;
+
+    // Runtime identity guard: the compile speculates that the receiver
+    // *is* the attached class object of `self_class`, but the dispatch
+    // class is not injective over receivers — an object's singleton
+    // class shares it with the attached object's class (for `o` an
+    // instance of `Foo`, both `Foo` and `o.singleton_class` dispatch as
+    // `#<Class:Foo>`), so `o.singleton_class.new` would otherwise enter
+    // the code compiled for `Foo.new` and allocate a `Foo` instead of
+    // raising TypeError. Deopt on mismatch: the interpreter's native
+    // `allocate` then does the raising.
+    state.load(ir, recv, GP::Rax);
+    let deopt = ir.new_deopt(state);
+    ir.guard_value_identity(self_module.as_val(), deopt);
+
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {

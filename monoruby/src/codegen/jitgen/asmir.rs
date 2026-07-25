@@ -336,6 +336,24 @@ impl AsmIr {
     }
 
     ///
+    /// Value-identity guard: deopt unless the accumulator holds exactly
+    /// `v`. Used by inline generators whose compile speculates on a
+    /// *specific object* rather than a class — e.g. the inlined
+    /// `__builtin_allocate__` bakes the attached class of the receiver's
+    /// dispatch class, but an object's singleton class shares that
+    /// dispatch class with the attached object's class, so only an
+    /// identity check tells `Foo` from `foo_instance.singleton_class`.
+    /// (Reuses the `GuardConstBaseClass` lowering, which is exactly an
+    /// accumulator-vs-baked-`Value` identity compare.)
+    ///
+    pub(crate) fn guard_value_identity(&mut self, v: Value, deopt: AsmDeopt) {
+        self.push(AsmInst::GuardConstBaseClass {
+            base_class: v,
+            deopt,
+        });
+    }
+
+    ///
     /// Materialize a guarded transfer record's deopt **program point** (a
     /// [`DeoptPoint`], recorded by the analysis half — doc §9) into a `side_exit`
     /// label, returning its `AsmDeopt`. The emit/codegen half calls this so that
