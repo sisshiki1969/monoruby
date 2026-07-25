@@ -3457,3 +3457,54 @@ fn trivial_method_wrapper_dispatch() {
         "#,
     );
 }
+
+#[test]
+fn recompile_on_polymorphic_comparison_flip() {
+    // A comparison compiled while monomorphic (one receiver class) that later
+    // sees another class: the receiver-class-guard miss must re-JIT the site to
+    // the guard-free polymorphic path (RecompileReason::BecamePolymorphic) and
+    // keep producing correct results — not deopt to the VM on every off-class
+    // receiver forever (the aarch64 bug where the RecompileDeopt side-exit
+    // collapsed to a plain deopt). Exercises the recompile write-back on both
+    // backends.
+    run_test(
+        r#"
+        class A; def ==(o); "A==#{o}"; end; end
+        class B; def ==(o); "B==#{o}"; end; end
+        def cmp(x); x == 5; end
+        a = A.new; b = B.new
+        res = []
+        i = 0
+        while i < 2000; cmp(a); i += 1; end   # warm monomorphic (A)
+        j = 0
+        while j < 30                           # polymorphic -> recompile to guard-free
+          res << cmp(a) << cmp(b)
+          j += 1
+        end
+        res.uniq.sort
+        "#,
+    );
+}
+
+#[test]
+fn recompile_hot_method_after_class_version_bump() {
+    // A hot JIT'd method whose body makes a cached method call carries a
+    // class-version guard. Any `def` bumps the global class version; the guard
+    // then misses and the method must RECOMPILE (RecompileReason::
+    // ClassVersionGuardFailed) rather than deopt to the interpreter for the
+    // rest of the process (the aarch64 permanent-strand bug). Verify results
+    // stay correct across the bump.
+    run_test(
+        r#"
+        class Lib; def twice(n); n + n; end; end
+        $lib = Lib.new
+        def work(n); $lib.twice(n) + 1; end
+        s = 0
+        i = 0
+        while i < 3000; s += work(i); i += 1; end   # warm -> method JIT
+        class Other; def noop; end; end              # bump class version
+        while i < 6000; s += work(i); i += 1; end    # keep calling across the bump
+        s
+        "#,
+    );
+}

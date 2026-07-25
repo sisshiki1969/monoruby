@@ -1156,8 +1156,7 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
                 self.a64_fpr_save(dst, 0, base); // result d0 -> dst
             }
-            // Cold side-exit (deopt) handler blocks. aarch64 has no recompiler,
-            // so Evict / RecompileDeopt collapse to a plain deopt.
+            // Cold side-exit handler blocks. Deopt / Evict re-enter the VM.
             LInst::SideExit {
                 kind,
                 pc,
@@ -1166,10 +1165,26 @@ impl Codegen {
                 loop_jit_spill_bytes,
                 base,
             } => match kind {
-                LSideExitKind::Deopt
-                | LSideExitKind::Evict
-                | LSideExitKind::RecompileDeopt { .. } => {
+                LSideExitKind::Deopt | LSideExitKind::Evict => {
                     self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base)
+                }
+                // A monomorphically-compiled site (e.g. a `BinCmp`) whose
+                // receiver-class guard missed because it went polymorphic.
+                // Route the miss through the same counter-gated recompiler the
+                // main-body `AsmInst::RecompileDeopt` / `GuardClassVersionSpecialized`
+                // use, so the site re-JITs to the guard-free (polymorphic) path
+                // instead of deopting to the VM on every off-class receiver
+                // forever. `emit_recompile_deopt` runs the recompile once (or
+                // falls straight through while the counter is unexhausted),
+                // branching to `deopt_body` to resume in the interpreter, or to
+                // `error_body` if the recompile itself raised a FatalError.
+                LSideExitKind::RecompileDeopt { reason, position } => {
+                    let deopt_body = self.jit.label();
+                    let error_body = self.jit.label();
+                    self.jit.bind_label(entry);
+                    self.emit_recompile_deopt(position, &deopt_body, Some(&error_body), reason);
+                    self.a64_gen_deopt(pc, &wb, deopt_body, loop_jit_spill_bytes, base);
+                    self.a64_gen_handle_error(pc, &wb, error_body, loop_jit_spill_bytes, base);
                 }
                 LSideExitKind::Error => {
                     self.a64_gen_handle_error(pc, &wb, entry, loop_jit_spill_bytes, base)
@@ -1832,11 +1847,33 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_guard_class_version(
         &mut self,
         _class_version: DestLabel,
-        _position: Option<BytecodePtr>,
+        position: Option<BytecodePtr>,
         _with_recovery: bool,
         deopt: DestLabel,
     ) {
-        self.a64_guard_class_version(&deopt);
+        // On a class-version miss, recompile (loop → `jit_recompile_loop`,
+        // method → `jit_recompile_method`) then resume via the deopt side exit,
+        // instead of deopting to the VM forever: `insert_method` bumps the
+        // global class version on any `def`, so without this a hot JIT'd method
+        // is stranded in the interpreter for the rest of the process after any
+        // unrelated method definition. Mirrors x86 `guard_class_version` and the
+        // aarch64 `GuardClassVersionSpecialized` twin; no counter — the
+        // recompile bakes in the new version, so the guard won't re-fire. The
+        // cheap x86 `with_recovery` path (an in-place inline-cache re-bake that
+        // resumes in JIT without recompiling) is not ported —
+        // `jit_recompile_method_with_recovery` is x86-only — so `_with_recovery`
+        // is ignored and this always full-recompiles. On a recompile panic the
+        // helper leaves a FatalError set and x0 == 0; we still branch to the
+        // deopt, which resumes at the guarded call where the interpreter
+        // propagates the fatal (matching the specialized twin).
+        let miss = self.jit.label();
+        let done = self.jit.label();
+        self.a64_guard_class_version(&miss); // version mismatch -> miss
+        monoasm_arm64!(&mut self.jit, b done;); // match -> continue in JIT
+        self.jit.bind_label(miss);
+        self.a64_call_recompile(position, RecompileReason::ClassVersionGuardFailed);
+        monoasm_arm64!(&mut self.jit, b deopt;); // recompiled -> resume via deopt
+        self.jit.bind_label(done);
     }
 
     /// Recompile-or-deopt point. Counter-gates a one-shot recompile, then falls
