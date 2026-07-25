@@ -354,12 +354,26 @@ impl<'a> JitContext<'a> {
                         || (pos_num != 0
                             && (args..args + pos_num).any(|i| state.is_C_immediate(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
+                // The forwarded `initialize` inside the Ruby `Class#new`
+                // (the privileged `recv.__builtin_initialize__(...)`
+                // spelling, marked `bypass_visibility`): specialize the
+                // callee for the statically-known allocated class even
+                // though the forwarding splat keeps the call site
+                // non-simple. Argument link-modes are NOT propagated
+                // (`specializable` stays false, so `specialized_iseq`
+                // uses `JitArgumentInfo::default()`); the arguments flow
+                // through the same forwarded `set_arguments` (D1
+                // source-routed when the trampoline's rest is deferred).
+                // This turns construction into
+                // allocate + direct `SpecializedCall` into an
+                // initialize compiled for exactly that class.
+                let forwarded_initialize = callsite.forwarding && callsite.bypass_visibility;
 
                 // Method specialization (inlining a callee iseq) and block-
                 // argument inlining (`iseq_block`, which drives specialized
                 // `yield`) are both lowered on x86 and aarch64 now.
-                if (specializable && self.specialize_level() < 5) || iseq_block.is_some()
-                /*name == Some(IdentId::NEW)*/
+                if ((specializable || forwarded_initialize) && self.specialize_level() < 5)
+                    || iseq_block.is_some()
                 {
                     return self.specialized_iseq(
                         state,
