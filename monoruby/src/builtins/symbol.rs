@@ -28,11 +28,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs_with(SYMBOL_CLASS, "[]", &["slice"], sym_aref, 1, 2, false);
     globals.define_builtin_func_with(SYMBOL_CLASS, "match", sym_match, 1, 2, false);
     globals.define_builtin_func_rest(SYMBOL_CLASS, "start_with?", sym_start_with);
-    // Symbol.new is undefined (raises NoMethodError).
+    // Symbol.new is undefined (raises NoMethodError). Insert the undef
+    // tombstone directly: `Class#new` is now the Ruby trampoline defined
+    // later by startup.rb, so there is no `new` to look up yet — but the
+    // tombstone must still shadow it once defined.
     let meta = globals.store.get_metaclass(SYMBOL_CLASS).id();
     globals
-        .undef_method_for_class(meta, IdentId::NEW)
-        .unwrap();
+        .store
+        .add_empty_method(meta, IdentId::NEW, Visibility::Undefined);
 }
 
 ///

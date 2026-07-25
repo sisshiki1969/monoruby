@@ -253,33 +253,6 @@ impl JitModule {
         unsafe { std::mem::transmute_copy::<*mut u8, MethodInvoker>(&codeptr.as_ptr()) }
     }
 
-    /// Like `method_invoker`, but the args come as a descending `Arg` in a
-    /// caller frame (not an ascending `*const Value`) and there is no block or
-    /// keyword argument. ABI: x0 exec, x1 globals, x2 funcid, x3 self, x4 args
-    /// (Arg), x5 len. Used by the inlined `Class#new` to run `initialize`.
-    pub(in crate::codegen) fn method_invoker2(&mut self) -> MethodInvoker2 {
-        let codeptr = self.jit.get_current_address();
-        let fdata = X9;
-        self.a64_invoker_prologue();
-        self.a64_get_func_data_x2();
-        let fb = X12;
-        monoasm_arm64!(&mut self.jit,
-            sub x(fb.0), sp, #((RSP_LOCAL_FRAME + LFP_SELF) as u32);
-            mov x13, (0);
-            mov x7, (0);                // no keyword args
-            str x3, [x(fb.0)];          // LFP_SELF  = self
-            str x13, [x(fb.0), #(8)];   // LFP_BLOCK = 0
-            str x13, [x(fb.0), #(16)];  // LFP_SVAR  = 0
-            ldr x14, [x(fdata.0), #(FUNCDATA_META as u32)];
-            str x14, [x(fb.0), #(24)];  // LFP_META  = funcdata.meta
-            str x13, [x(fb.0), #(32)];  // LFP_OUTER = 0
-        );
-        self.a64_invoker_args_and_call(false);
-        self.a64_invoker_epilogue();
-        // SAFETY: codeptr points at an extern "C" fn with the MethodInvoker2 ABI.
-        unsafe { std::mem::transmute_copy::<*mut u8, MethodInvoker2>(&codeptr.as_ptr()) }
-    }
-
     /// Block invoker. AAPCS64 in: x0 exec, x1 globals, x2 &ProcData,
     /// x3 self (dummy unless `with_self`), x4 args, x5 len, x6 kw.
     /// `self` for a plain block comes from the captured outer frame.

@@ -758,7 +758,14 @@ impl<'a> BytecodeGen<'a> {
         }
 
         // check keyword rest param. if nil, substitute with empty hash.
-        if let Some(kw_rest) = info.params.kw_rest {
+        // A `...` forwarding `**kwrest` is unnamed and only ever consumed
+        // as a forwarding hash-splat, and every hash-splat consumer treats
+        // nil as "no keyword arguments" (see `hash_splat_and_kw_rest` /
+        // the JIT `CheckKwRest` D1 note), so skip the per-call empty-Hash
+        // materialization for it.
+        if let Some(kw_rest) = info.params.kw_rest
+            && !info.params.forwarding()
+        {
             let local = BcLocal(kw_rest.0 - 1).into();
             self.emit_check_kw_rest(local);
         }

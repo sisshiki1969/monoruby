@@ -1487,4 +1487,28 @@ impl Store {
         }
         Some(SlotId(rest_idx + 1))
     }
+
+    ///
+    /// Gate for the *lazy* `(...)`-forwarding calling convention.
+    ///
+    /// Returns the rest-parameter local `SlotId` iff `fid` is a pure
+    /// forwarding trampoline (`forwarding_trampoline_rest`) whose body
+    /// additionally contains no construct that could observe its own
+    /// parameter slots outside a forwarding consume (`super` / `yield`
+    /// / block literals — see `ISeqInfo::forwarding_no_escape`).
+    ///
+    /// For such a callee, a flat call site may skip materializing the
+    /// rest `Array` (and the `**kwrest` stays nil): the callee's rest
+    /// slot instead receives a `Fixnum(callid)` *marker*, resolved at
+    /// its forwarding call by reading the original caller's argument
+    /// slots directly (they stay live and GC-rooted in the caller frame
+    /// for the whole call). String-`eval` / `binding` materialize any
+    /// pending marker first (`runtime::materialize_lazy_forwarding`),
+    /// since eval'd code compiled against a live frame could otherwise
+    /// reach the raw slot.
+    ///
+    pub(crate) fn lazy_forwarding_rest(&self, fid: FuncId) -> Option<SlotId> {
+        let iseq_id = self[fid].is_iseq()?;
+        self[iseq_id].lazy_forwarding_rest
+    }
 }

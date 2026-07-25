@@ -45,37 +45,6 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(in crate::codegen) fn method_invoker2(&mut self) -> MethodInvoker2 {
-        let codeptr = self.jit.get_current_address();
-
-        #[cfg(feature = "perf")]
-        let pair = self.get_address_pair();
-
-        // rdi: &mut Executor
-        // rsi: &mut Globals
-        // rdx: FuncId
-        // rcx: receiver: Value
-        // r8:  args: Arg
-        // r9:  len: usize
-        // r10: Option<Hashmap>
-        // r11: Option<BlockHandler>
-        let error_exit = self.jit.label();
-        monoasm! { &mut self.jit,
-            xorq r10, r10;
-            xorq r11, r11;
-        }
-        self.invoker_prologue(&error_exit);
-        self.invoker_frame_setup(false, true);
-        self.invoker_args_setup(&error_exit, false);
-        self.call_invoker();
-        self.invoker_epilogue(&error_exit);
-
-        #[cfg(feature = "perf")]
-        self.perf_info(pair, "method-invoker2");
-
-        unsafe { std::mem::transmute(codeptr.as_ptr()) }
-    }
-
     pub(in crate::codegen) fn block_invoker(&mut self) -> BlockInvoker {
         let codeptr = self.jit.get_current_address();
 

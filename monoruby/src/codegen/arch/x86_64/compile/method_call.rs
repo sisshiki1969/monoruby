@@ -602,6 +602,7 @@ impl Codegen {
         args: SlotId,
         lead_num: usize,
         expected_len: usize,
+        none_fill: usize,
         recv: SlotId,
         kwrest_guard: Option<SlotId>,
         deferred_src: Option<(SlotId, u16)>,
@@ -614,8 +615,12 @@ impl Codegen {
             // rbp is the value `f` saved at `[rbp]`; the gate guarantees
             // the caller is exactly one (outermost) level up, so the
             // source lives at `[caller_rbp - rbp_local(src + j)]`.
-            // Exact arity and a nil forwarded `**kwrest` are gate
-            // invariants, hence no length/kw guard and no fallback.
+            // Statically-bound arity and a nil forwarded `**kwrest` are
+            // gate invariants, hence no length/kw guard and no fallback.
+            // The `none_fill` trailing optional slots (statically not
+            // covered by the forwarded args) get `None` (0), exactly as
+            // `fill_positional_args` writes for an absent optional — the
+            // callee prologue's `CheckLocal` then runs the defaults.
             monoasm! { &mut self.jit,
                 movq rax, [rbp - (rbp_local(recv))];
                 movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
@@ -633,6 +638,11 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     movq rax, [rcx - (rbp_local(src + j))];
                     movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * (lead_num + j)) as i32)], rax;
+                }
+            }
+            for j in 0..none_fill {
+                monoasm! { &mut self.jit,
+                    movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * (lead_num + expected_len + j)) as i32)], 0;
                 }
             }
             monoasm! { &mut self.jit,

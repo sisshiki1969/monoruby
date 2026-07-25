@@ -180,13 +180,26 @@ fn struct_initialize(
     let class_id = new_module.id();
     let args = lfp.arg(0).as_array();
 
-    globals.define_builtin_class_inline_funcs_catch_all(
-        class_id,
-        "new",
-        &["[]"],
-        new,
-        inline_gen!(super::class::gen_class_new_object()),
-    );
+    // Bind `new` / `[]` on the generated class's metaclass to `Class#new`
+    // (the Ruby trampoline in startup.rb, optimized end-to-end for the
+    // `(...)` forward). Explicit registration is required: without it the
+    // generated class would *inherit* `Struct.new` (the struct-class
+    // factory on `#<Class:Struct>`) as its class-level `new`, so
+    // `S.new("!")` would try to define a struct named `"!"`. Owner-wise
+    // this matches CRuby, where both live on `#<Class:S>`.
+    let (new_fid, _, _) = globals
+        .store
+        .find_method_for_class(CLASS_CLASS, IdentId::get_id("new"))
+        .expect("Class#new must be defined");
+    let meta_id = globals.store.get_metaclass(class_id).id();
+    for name in ["new", "[]"] {
+        globals.add_method(
+            meta_id,
+            IdentId::get_id(name),
+            new_fid,
+            Visibility::Public,
+        );
+    }
     globals.define_builtin_class_func(class_id, "members", struct_members, 0);
     // `keyword_init?` is defined per Struct subclass (matching CRuby —
     // it is intentionally NOT inherited by direct `class X < Struct`
@@ -255,11 +268,6 @@ fn struct_members(
     // the superclass chain rather than assuming the ivar is local.
     let members = get_members(globals, lfp.self_val().as_class())?;
     Ok(members.into())
-}
-
-#[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    super::class::__new(vm, globals, lfp, pc)
 }
 
 fn get_members(globals: &mut Globals, mut class: Module) -> Result<Array> {

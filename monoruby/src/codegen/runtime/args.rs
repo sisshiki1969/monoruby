@@ -13,6 +13,52 @@ pub(crate) fn set_frame_arguments(
     callid: CallSiteId,
 ) -> Result<()> {
     let callee_fid = callee_lfp.func_id();
+    // Lazy `(...)` trampoline entry: a flat call site into a lazy
+    // forwarding trampoline (`Store::lazy_forwarding_rest`) skips
+    // materializing the rest Array — the callee's rest slot receives a
+    // Fixnum(callid) marker instead, resolved at its forwarding call by
+    // reading this frame's argument slots directly (they stay live and
+    // GC-rooted here for the whole call). The `**kwrest` gets nil, the
+    // same value the eager path stores for a keyword-less call site.
+    if let Some(rest_slot) = globals.store.lazy_forwarding_rest(callee_fid) {
+        let cs = &globals[callid];
+        if cs.splat_pos.is_empty() && cs.kw_args.is_empty() && cs.hash_splat_pos.is_empty() {
+            unsafe {
+                *callee_lfp.register_ptr(rest_slot) = Some(Value::integer(callid.get() as i64));
+                if let Some(kwr) = globals[callee_fid].kw_rest() {
+                    *callee_lfp.register_ptr(kwr) = Some(Value::nil());
+                }
+            }
+            return Ok(());
+        }
+    }
+    // Forwarding callsites (`g(x.., ...)` — most importantly the
+    // `o.initialize(...)` in a Ruby-level `Class#new`) have a statically
+    // known shape; route them through the same direct positional build
+    // the JIT uses instead of the generic CallSiteInfo re-interpretation
+    // (splat-position scan + excessive-keyword machinery). Same gate as
+    // the JIT dispatch in jitgen/compile/method_call.rs; applies to iseq
+    // and native callees alike (identical callee-frame protocol, same
+    // `fill_positional_args` terminal). Lazy-forwarding markers are
+    // handled inside `forwarded_set_arguments_core`.
+    {
+        let cs = &globals[callid];
+        if cs.forwarding {
+            if cs.splat_pos.len() == 1
+                && cs.splat_pos[0] < cs.pos_num
+                && globals[callee_fid].no_keyword()
+            {
+                return forwarded_set_arguments_core(
+                    vm, globals, callid, callee_lfp, callee_fid, caller_lfp,
+                );
+            }
+            // Shapes outside the direct gate (keyword-taking callee,
+            // extra user splats as in `g(*a, ...)`) still need any
+            // pending lazy marker materialized before the generic
+            // machinery interprets the splat slots.
+            materialize_lazy_at_callsite(vm, globals, callid, caller_lfp);
+        }
+    }
     set_callee_frame_arguments(vm, globals, callid, callee_fid, callee_lfp, caller_lfp)
 }
 
@@ -90,7 +136,15 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     let src = caller_lfp.register_ptr(globals[callid].recv);
     let dst = callee_lfp.register_ptr(SlotId::self_());
     unsafe { *dst = *src };
-    match set_callee_frame_arguments(vm, globals, callid, callee_fid, callee_lfp, caller_lfp) {
+    let res = resolve_lazy_forwarding(vm, globals, callid, callee_lfp, callee_fid, caller_lfp, true)
+        .and_then(|done| {
+            if done {
+                Ok(())
+            } else {
+                set_callee_frame_arguments(vm, globals, callid, callee_fid, callee_lfp, caller_lfp)
+            }
+        });
+    match res {
         Ok(_) => {}
         Err(mut err) => {
             err.push_internal_trace(callee_fid);
@@ -129,14 +183,288 @@ pub(crate) extern "C" fn jit_forwarded_set_arguments(
     let dst0 = callee_lfp.register_ptr(SlotId::self_());
     unsafe { *dst0 = *src0 };
 
-    let cs = &globals[callid];
-    let kw_empty = cs.kw_args.is_empty()
-        && cs
-            .hash_splat_pos
-            .iter()
-            .all(|p| caller_lfp.register(*p).map_or(true, |v| v.is_nil()));
+    match forwarded_set_arguments_core(vm, globals, callid, callee_lfp, callee_fid, caller_lfp) {
+        Ok(_) => Some(Value::nil()),
+        Err(mut err) => {
+            err.push_internal_trace(callee_fid);
+            vm.set_error(err);
+            None
+        }
+    }
+}
 
-    let res = if kw_empty && !globals[callee_fid].single_arg_expand() {
+///
+/// Resolve a lazy `(...)`-forwarding marker at a forwarding call site.
+///
+/// A lazy trampoline's rest slot holds `Fixnum(orig_callid)` instead of
+/// a materialized Array (see the entry store in `set_frame_arguments`).
+/// Its forwarding call `Mov`s that marker into the splat argument slot,
+/// so every runtime path that interprets a forwarding call site's
+/// arguments must call this first.
+///
+/// Returns `Ok(true)` when the callee frame's positional (and, trivially,
+/// keyword — the gate requires a keyword-less callee) slots were fully
+/// set by routing the original caller's argument slots straight into the
+/// callee frame. Returns `Ok(false)` when there was no marker — or when
+/// the shape needs the generic machinery, in which case the rest Array
+/// has been materialized *in place* (both the trampoline's rest slot and
+/// the splat argument slot) so downstream code sees an ordinary forward.
+///
+/// A `Fixnum` in the splat slot is a marker i.f.f. the calling frame is
+/// itself lazy-qualified: in such a frame the (unnamed) rest slot is
+/// only ever written by frame entry (marker or Array). A zsuper of a
+/// reassigned named rest (`def m(*r); r = 7; super; end`) also puts a
+/// Fixnum in a splat slot, but its frame never lazy-qualifies, so it
+/// falls through to the generic scalar-wrapping path unchanged.
+///
+pub(crate) fn resolve_lazy_forwarding(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    callee_lfp: Lfp,
+    callee_fid: FuncId,
+    caller_lfp: Lfp,
+    allow_direct: bool,
+) -> Result<bool> {
+    let cs = &globals[callid];
+    if !cs.forwarding {
+        return Ok(false);
+    }
+    if cs.splat_pos.len() != 1 || cs.splat_pos[0] >= cs.pos_num {
+        // Odd forwarding shape (e.g. extra user splats, `g(*a, ...)`):
+        // materialize any pending marker and let the generic machinery
+        // interpret the call site.
+        materialize_lazy_at_callsite(vm, globals, callid, caller_lfp);
+        return Ok(false);
+    }
+    let sp = cs.splat_pos[0];
+    let args_ptr = caller_lfp.register_ptr(cs.args) as *const Value;
+    let splat_v = unsafe { *args_ptr.sub(sp) };
+    let Some((orig_ptr, orig_num)) =
+        lazy_marker_source(vm, globals, splat_v, caller_lfp, sp + 1 == cs.pos_num)
+    else {
+        return Ok(false);
+    };
+
+    let kw_empty = cs.kw_args.is_empty()
+        && cs.hash_splat_pos.iter().all(|p| {
+            caller_lfp.register(*p).map_or(true, |v| {
+                v.is_nil() || v.try_hash_ty().is_some_and(|h| h.len() == 0)
+            })
+        });
+    if allow_direct
+        && kw_empty
+        && globals[callee_fid].no_keyword()
+        && !globals[callee_fid].single_arg_expand()
+    {
+        lazy_forward_fill(
+            globals, callid, callee_lfp, callee_fid, caller_lfp, sp, orig_ptr, orig_num,
+        )?;
+        return Ok(true);
+    }
+    // Shape outside the fast gate (keyword-taking or block-style callee,
+    // send-splat specialization, …): materialize the Array in place and
+    // let the proven generic machinery run on it.
+    materialize_lazy_at_callsite(vm, globals, callid, caller_lfp);
+    Ok(false)
+}
+
+///
+/// Fill the callee's positional slots for a lazy-forwarded call: the
+/// buffer order matches the materialized forward exactly —
+/// lead `[0..sp]` ++ original flat args ++ post `[sp+1..pos_num]`
+/// (post is empty for a `...` forward, which must be trailing; kept
+/// generic for symmetry with the materialized branch).
+///
+/// `#[inline(never)]`: this is the hot resolve in the *interpreter*
+/// tier, but must not bloat `forwarded_set_arguments_core`'s
+/// materialized-Array path, which is the JIT tier's per-call helper.
+///
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn lazy_forward_fill(
+    globals: &Globals,
+    callid: CallSiteId,
+    callee_lfp: Lfp,
+    callee_fid: FuncId,
+    caller_lfp: Lfp,
+    sp: usize,
+    orig_ptr: *const Value,
+    orig_num: usize,
+) -> Result<()> {
+    let cs = &globals[callid];
+    let pos_args = cs.pos_num;
+    let args_ptr = caller_lfp.register_ptr(cs.args) as *const Value;
+    let mut buf: smallvec::SmallVec<[Value; 8]> =
+        smallvec::SmallVec::with_capacity(pos_args - 1 + orig_num);
+    for i in 0..sp {
+        buf.push(unsafe { *args_ptr.sub(i) });
+    }
+    for i in 0..orig_num {
+        buf.push(unsafe { *orig_ptr.sub(i) });
+    }
+    for i in (sp + 1)..pos_args {
+        buf.push(unsafe { *args_ptr.sub(i) });
+    }
+    let dst = callee_lfp.register_ptr(SlotId(1));
+    fill_positional_args1(dst, &globals.store[callee_fid], &buf)
+}
+
+///
+/// If `splat_v` (the value found in a forwarding call site's splat slot)
+/// is a lazy-forwarding marker of the `caller_lfp` frame, return the
+/// original caller's argument window `(ptr, len)` — `ptr` is the first
+/// argument slot, arguments live at descending addresses (`ptr.sub(i)`).
+///
+/// The original caller is the frame that pushed the trampoline: the one
+/// directly below it on the control-frame chain. Its argument slots stay
+/// live (and GC-scanned) for the whole duration of the trampoline call.
+///
+/// Returns `None` when `splat_v` is not a marker:
+///
+/// - not a Fixnum;
+/// - a genuine user Fixnum from a zsuper of a reassigned named rest
+///   (`def m(*r); r = 7; super; end`) — that frame never lazy-qualifies;
+/// - a genuine user Fixnum in a *lazy* frame (`g(*7, ...)`): in a lazy
+///   frame the marker only ever sits in the **trailing** splat (`...`
+///   must be the last positional), so `trailing` (computed by the caller
+///   as `sp + 1 == pos_num`) must hold.
+///
+#[inline]
+fn lazy_marker_source(
+    vm: &Executor,
+    globals: &Globals,
+    splat_v: Value,
+    caller_lfp: Lfp,
+    trailing: bool,
+) -> Option<(*const Value, usize)> {
+    if !trailing {
+        return None;
+    }
+    let orig_cid = splat_v.try_fixnum()?;
+    globals.store.lazy_forwarding_rest(caller_lfp.func_id())?;
+    let mut cfp = vm.cfp();
+    while cfp.lfp() != caller_lfp {
+        cfp = cfp
+            .prev()
+            .expect("lazy forwarding: trampoline frame not on cfp chain");
+    }
+    let orig_lfp = cfp
+        .prev()
+        .expect("lazy forwarding: original caller frame missing")
+        .lfp();
+    let orig_cs = &globals[CallSiteId(orig_cid as u32)];
+    Some((
+        orig_lfp.register_ptr(orig_cs.args) as *const Value,
+        orig_cs.pos_num,
+    ))
+}
+
+///
+/// Materialize the pending lazy-forwarding marker (if any) behind the
+/// forwarding call site `callid`: build the real rest Array from the
+/// original caller's argument slots and write it into both the
+/// trampoline's rest slot and the call site's splat argument slot, so
+/// every downstream consumer sees an ordinary materialized forward.
+/// No-op when the splat slot does not hold a marker.
+///
+fn materialize_lazy_at_callsite(
+    vm: &Executor,
+    globals: &Globals,
+    callid: CallSiteId,
+    caller_lfp: Lfp,
+) {
+    let cs = &globals[callid];
+    if !cs.forwarding {
+        return;
+    }
+    let Some(rest_slot) = globals.store.lazy_forwarding_rest(caller_lfp.func_id()) else {
+        return;
+    };
+    let args_ptr = caller_lfp.register_ptr(cs.args) as *const Value;
+    // A forwarding call site can carry extra user splats besides the
+    // `...` rest (`g(*a, ...)`); only the rest slot's copy holds the
+    // marker, the others are ordinary values.
+    for &sp in cs.splat_pos.iter() {
+        if sp >= cs.pos_num {
+            continue;
+        }
+        let splat_v = unsafe { *args_ptr.sub(sp) };
+        if let Some((orig_ptr, orig_num)) =
+            lazy_marker_source(vm, globals, splat_v, caller_lfp, sp + 1 == cs.pos_num)
+        {
+            let ary =
+                Value::array_from_iter((0..orig_num).map(|i| unsafe { *orig_ptr.sub(i) }));
+            unsafe {
+                *caller_lfp.register_ptr(rest_slot) = Some(ary);
+                *(args_ptr as *mut Option<Value>).sub(sp) = Some(ary);
+            }
+        }
+    }
+}
+
+///
+/// Materialize every pending lazy-forwarding marker on the current
+/// control-frame chain.
+///
+/// Called before compiling string-`eval` code or capturing a `Binding`:
+/// code compiled against a live frame can reach that frame's raw
+/// parameter slots (e.g. a zsuper in `eval`'d source reads the mother
+/// method's rest/kwrest through the outer chain), so no marker may be
+/// left in any frame such code could observe. Walks from `start` (the
+/// frame the code is compiled against) down the control-frame chain,
+/// which covers the whole outer chain: lazy frames are always active
+/// frames (a lazy trampoline can contain no block literal, so its frame
+/// cannot escape into a Proc that outlives it).
+///
+pub(crate) fn materialize_lazy_forwarding(globals: &mut Globals, start: Cfp) {
+    let mut cfp = Some(start);
+    while let Some(c) = cfp {
+        let lfp = c.lfp();
+        if let Some(rest_slot) = globals.store.lazy_forwarding_rest(lfp.func_id())
+            && let Some(v) = lfp.register(rest_slot)
+            && let Some(orig_cid) = v.try_fixnum()
+        {
+            let orig_lfp = c
+                .prev()
+                .expect("lazy forwarding: original caller frame missing")
+                .lfp();
+            let orig_cs = &globals[CallSiteId(orig_cid as u32)];
+            let orig_ptr = orig_lfp.register_ptr(orig_cs.args) as *const Value;
+            let ary = Value::array_from_iter(
+                (0..orig_cs.pos_num).map(|i| unsafe { *orig_ptr.sub(i) }),
+            );
+            unsafe { *lfp.register_ptr(rest_slot) = Some(ary) };
+        }
+        cfp = c.prev();
+    }
+}
+
+/// Shared body of the forwarding-call argument setup (see
+/// `jit_forwarded_set_arguments`; also reached from the interpreter's
+/// `set_frame_arguments`). Positional-only forwards build the callee's
+/// positional buffer directly from the statically-known callsite shape;
+/// actually-forwarded keywords defer to the generic path.
+fn forwarded_set_arguments_core(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    callee_lfp: Lfp,
+    callee_fid: FuncId,
+    caller_lfp: Lfp,
+) -> Result<()> {
+    let cs = &globals[callid];
+    // A hash-splat slot forwards no keywords when it is nil (`...` kwrest
+    // with nothing to forward) — and an *empty* Hash forwards none either
+    // (e.g. a `**kwrest` that went through `CheckKwRest`, or `f(**{})`).
+    let kw_empty = cs.kw_args.is_empty()
+        && cs.hash_splat_pos.iter().all(|p| {
+            caller_lfp.register(*p).map_or(true, |v| {
+                v.is_nil() || v.try_hash_ty().is_some_and(|h| h.len() == 0)
+            })
+        });
+
+    if kw_empty && !globals[callee_fid].single_arg_expand() {
         let pos_args = cs.pos_num;
         // gate guarantees exactly one splat; `sp` is its position (the
         // `...`/`*rest` slot). It is trailing for `g(x.., ...)` but is
@@ -150,6 +478,20 @@ pub(crate) extern "C" fn jit_forwarded_set_arguments(
         // treats `nil` as empty.
         let splat_v = unsafe { *args_ptr.sub(sp) };
         let splat_ary = splat_v.try_array_ty();
+        // Lazy `(...)`-forwarding marker in place of the rest Array:
+        // source-route the original caller's argument slots straight
+        // into the callee frame, skipping the intermediate Array
+        // entirely (see `lazy_marker_source`). Out of line so the hot
+        // materialized-Array path below keeps its code size (this is
+        // the JIT tier's per-call helper).
+        if splat_ary.is_none()
+            && let Some((orig_ptr, orig_num)) =
+                lazy_marker_source(vm, globals, splat_v, caller_lfp, sp + 1 == pos_args)
+        {
+            return lazy_forward_fill(
+                globals, callid, callee_lfp, callee_fid, caller_lfp, sp, orig_ptr, orig_num,
+            );
+        }
         let splat_len = splat_ary.as_ref().map_or(
             if splat_v.is_nil() { 0 } else { 1 },
             |a| a.len(),
@@ -172,17 +514,10 @@ pub(crate) extern "C" fn jit_forwarded_set_arguments(
         let dst = callee_lfp.register_ptr(SlotId(1));
         fill_positional_args1(dst, &globals.store[callee_fid], &buf)
     } else {
-        // keywords actually forwarded: defer to the proven generic path.
+        // keywords actually forwarded: defer to the proven generic path
+        // (materializing any pending lazy marker first).
+        materialize_lazy_at_callsite(vm, globals, callid, caller_lfp);
         set_callee_frame_arguments(vm, globals, callid, callee_fid, callee_lfp, caller_lfp)
-    };
-
-    match res {
-        Ok(_) => Some(Value::nil()),
-        Err(mut err) => {
-            err.push_internal_trace(callee_fid);
-            vm.set_error(err);
-            None
-        }
     }
 }
 
@@ -1205,6 +1540,118 @@ fn invoker_arguments_inner(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn lazy_forwarding() {
+        // The lazy `(...)`-forwarding convention: a flat call into a pure
+        // forwarding trampoline defers the rest-Array materialization
+        // (Fixnum(callid) marker in the rest slot), resolved at the
+        // forwarding call from the original caller's argument slots.
+        run_test(
+            r#"
+            def t(a, b = :d, *r, k: 1, &blk); [a, b, r, k, blk ? blk.call : nil]; end
+            def f(...) = t(...)
+            def lead(x, ...) = t(x, ...)
+            def g2(...) = t(...)
+            def nested(...) = g2(...)
+            res = []
+            res << f(1)
+            res << f(1, 2, 3, 4)
+            res << f(1, 2, k: 9)
+            res << (f(1) { :blk })
+            res << lead(10, 20, 30)
+            res << nested(5, 6, 7, k: 2)
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn lazy_forwarding_escape() {
+        // Escapes from the lazy convention must observe a materialized
+        // rest: a zsuper of a reassigned named rest (a genuine user
+        // Fixnum in a splat slot), zsuper reached through string-eval
+        // and through a captured Binding, and `send` forwarding.
+        run_test(
+            r#"
+            class A
+              def m(*a, **k); [:A, a, k]; end
+            end
+            class B < A
+              def m(*r); r = 7; super; end
+            end
+            class C < A
+              def m(...); eval("super"); end
+            end
+            class D < A
+              def m(...); b = binding; b.eval("super"); end
+            end
+            def t(*a, **k) = [:t, a, k]
+            def fs(...) = send(:t, ...)
+            res = []
+            res << B.new.m(1, 2)
+            res << C.new.m(1, 2, x: 9)
+            res << C.new.m
+            res << D.new.m(3, 4)
+            res << fs(1, 2, z: 3)
+            res << fs
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn lazy_forwarding_class_new() {
+        // The motivating shape: a Ruby-level `Class#new` trampoline
+        // (allocate + forwarded initialize). Positional, keyword, and
+        // arity-error behavior must match an eager forward.
+        run_test(
+            r#"
+            class Foo
+              attr_reader :a, :b, :k
+              def initialize(a = nil, b = nil, **k); @a = a; @b = b; @k = k; end
+            end
+            class Class
+              def rnew(...)
+                o = allocate
+                o.send(:initialize, ...)
+                o
+              end
+            end
+            def strict(x, y) = [x, y]
+            def fwd(...) = strict(...)
+            res = []
+            o = Foo.rnew(1, 2)
+            res << [o.a, o.b, o.k]
+            o = Foo.rnew(7, x: 5)
+            res << [o.a, o.b, o.k]
+            res << (begin; fwd(1); rescue ArgumentError => e; e.message; end)
+            res << fwd(1, 2)
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn class_new_native_initialize() {
+        // With the Ruby-level `Class#new`, an argument-less class's
+        // `initialize` resolves to the native `BasicObject#initialize`
+        // (arity 0) — the forward must dispatch there (D1 source-routes
+        // natives too) and keep CRuby's strict arity: `Object.new(1)`
+        // raises ArgumentError instead of being silently accepted (the
+        // old Ruby-level `Object#initialize(...)` swallowed anything).
+        run_test(
+            r#"
+            class NoArg; end
+            res = []
+            res << NoArg.new.class.to_s
+            res << (begin; Object.new(1); rescue ArgumentError => e; e.message; end)
+            res << (begin; NoArg.new(k: 1); rescue ArgumentError => e; e.class.to_s; end)
+            res << Object.instance_method(:initialize).owner.to_s
+            res
+            "#,
+        );
+    }
 
     #[test]
     fn no_keywords_parameter() {

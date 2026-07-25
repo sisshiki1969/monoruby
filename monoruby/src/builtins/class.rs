@@ -6,15 +6,6 @@ use jitgen::{AbstractState, JitContext};
 // Class class
 //
 
-/// Returns the JIT inliner for `Class#new`. The inliner reads the receiver
-/// class's `alloc_func` from `ClassInfo` at JIT-compile time, embeds the raw
-/// function pointer into the generated code, and calls it directly (ABI:
-/// `extern "C" fn(ClassId, &mut Globals) -> Value`), matching the slow-path
-/// `call_alloc_func` helper.
-pub fn gen_class_new_object() -> Box<InlineGen> {
-    Box::new(gen_class_new_inline)
-}
-
 pub fn gen_class_allocate() -> Box<InlineGen> {
     Box::new(gen_class_allocate_inline)
 }
@@ -48,11 +39,32 @@ pub(super) fn gen_class_allocate_inline(
         self_module = origin.as_class();
     }
     let class_id = self_module.id();
+
+    // Instantiating a singleton class raises TypeError; bail to the
+    // native `allocate` (`call_alloc_func`) so it does the raising.
+    if store[class_id].get_module().is_singleton().is_some() {
+        return false;
+    }
+
     let alloc_func = match store[class_id].alloc_func() {
         Some(f) => f,
         None => return false,
     };
-    let CallSiteInfo { dst, .. } = *callsite;
+    let CallSiteInfo { recv, dst, .. } = *callsite;
+
+    // Runtime identity guard: the compile speculates that the receiver
+    // *is* the attached class object of `self_class`, but the dispatch
+    // class is not injective over receivers — an object's singleton
+    // class shares it with the attached object's class (for `o` an
+    // instance of `Foo`, both `Foo` and `o.singleton_class` dispatch as
+    // `#<Class:Foo>`), so `o.singleton_class.new` would otherwise enter
+    // the code compiled for `Foo.new` and allocate a `Foo` instead of
+    // raising TypeError. Deopt on mismatch: the interpreter's native
+    // `allocate` then does the raising.
+    state.load(ir, recv, GP::Rax);
+    let deopt = ir.new_deopt(state);
+    ir.guard_value_identity(self_module.as_val(), deopt);
+
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
@@ -82,8 +94,21 @@ pub(super) fn init(globals: &mut Globals) {
     // instance methods. The default `Class#allocate` consults the receiver
     // class's `ClassInfo.alloc_func`, raising TypeError when None.
     // Public, user-overridable `Class#allocate` (CRuby semantics:
-    // `klass.allocate` directly dispatches to a user override).
-    globals.define_builtin_func(CLASS_CLASS, "allocate", allocate, 0);
+    // `klass.allocate` directly dispatches to a user override — an
+    // override is a different FuncId, so this inline generator never
+    // applies to it). Carries the same inline-asm generator as
+    // `__builtin_allocate__`, so a monomorphic `Foo.allocate` call site
+    // compiles to a direct `alloc_func` call (receiver-identity-guarded;
+    // see `gen_class_allocate_inline`) instead of the native trampoline,
+    // and the allocated object's class is recorded for monomorphic
+    // downstream dispatch.
+    globals.define_builtin_inline_func(
+        CLASS_CLASS,
+        "allocate",
+        allocate,
+        inline_gen2!(gen_class_allocate()),
+        0,
+    );
     // Private, non-overridable internal allocator that the Ruby
     // `Class#new` (startup.rb) calls. Users override `allocate`, not
     // this name, so `new` keeps CRuby's "bypass user allocate"
@@ -103,18 +128,10 @@ pub(super) fn init(globals: &mut Globals) {
         alloc_fid,
         Visibility::Private,
     );
-    globals.define_builtin_inline_funcs_with_kw(
-        CLASS_CLASS,
-        "new",
-        &[],
-        new,
-        inline_gen2!(gen_class_new_object()),
-        0,
-        0,
-        true,
-        &[],
-        true,
-    );
+    // NOTE: no native `Class#new` — the canonical instance constructor is
+    // the Ruby trampoline in startup.rb (`__builtin_allocate__` +
+    // forwarded `__builtin_initialize__`), whose `(...)` forward the
+    // interpreter and JIT optimize end-to-end.
     globals.define_builtin_func(CLASS_CLASS, "superclass", superclass, 0);
     globals.define_builtin_func(CLASS_CLASS, "attached_object", attached_object, 0);
     // Class#initialize is private and raises TypeError for already-initialized classes.
@@ -266,43 +283,6 @@ fn class_initialize(
     Ok(lfp.self_val())
 }
 
-/// ### Class#new
-///
-/// - new(*args, **kw, &block) -> object
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Class/i/new.html]
-#[monoruby_builtin]
-pub(super) fn new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    // Class#new dispatches to the receiver's C-level allocator (`alloc_func`),
-    // bypassing any user-defined Ruby `def self.allocate`. Matches CRuby's
-    // `rb_class_alloc` semantics.
-    let self_val = lfp.self_val();
-    let class_id = self_val.as_class_id();
-    let obj = call_alloc_func(globals, class_id)?;
-
-    vm.invoke_method_inner(
-        globals,
-        IdentId::INITIALIZE,
-        obj,
-        &lfp.arg(0).as_array(),
-        lfp.block(),
-        if let Some(kw) = lfp.try_arg(1)
-            && let Some(kw) = kw.try_hash_ty()
-            && !kw.is_empty()
-        {
-            Some(kw)
-        } else {
-            None
-        },
-    )?;
-    Ok(obj)
-}
-
 /// ### Class#superclass
 /// - superclass -> Class | nil
 ///
@@ -366,257 +346,30 @@ pub(crate) fn call_alloc_func(globals: &mut Globals, class_id: ClassId) -> Resul
     }
 }
 
-/// JIT inliner for `Class#new`. Resolves the receiver class's `alloc_func`
-/// at compile time and emits a direct C call, then falls through to the
-/// usual cached-`initialize` dispatch used by the previous implementation.
-///
-/// Bails to the slow path (Rust `new`, which raises `TypeError`) when the
-/// class has no allocator, mirroring `call_alloc_func`.
-#[cfg(target_arch = "x86_64")]
-pub(super) fn gen_class_new_inline(
-    state: &mut AbstractState,
-    ir: &mut AsmIr,
-    _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
-    self_class: ClassId,
-    _: Option<ClassId>,
-) -> bool {
-    let callsite = &store[callid];
-    // Positional and plain keyword callsites are supported; bail on
-    // splat / hash-splat / block-arg shapes (a literal block never
-    // reaches an inline gen).
-    if callsite.has_splat() || callsite.has_hash_splat() || callsite.block_arg.is_some() {
-        return false;
-    }
-    // When `Class#new` is called on a class object, the receiver's class is
-    // that class's singleton (metaclass). Unwrap it to the attached class
-    // so we read the right `alloc_func`.
-    let mut self_module = store[self_class].get_module();
-    if let Some(origin) = self_module.is_singleton() {
-        self_module = origin.as_class();
-    }
-    let class_id = self_module.id();
-
-    // Instantiating a singleton class raises TypeError; bail to the slow
-    // path (Rust `new` → `call_alloc_func`) so it does the raising.
-    if store[class_id].get_module().is_singleton().is_some() {
-        return false;
-    }
-
-    let alloc_func = match store[class_id].alloc_func() {
-        Some(f) => f,
-        None => return false,
-    };
-
-    let CallSiteInfo {
-        recv,
-        args,
-        pos_num,
-        dst,
-        ..
-    } = *callsite;
-    let kw_callid = if callsite.kw_args.is_empty() {
-        None
-    } else {
-        Some(callid)
-    };
-    state.load(ir, recv, GP::Rdi);
-    state.write_back_recv_and_callargs(ir, callsite);
-    let using_fpr = state.get_using_fpr(ir);
-    let error = ir.new_error(state);
-    ir.fpr_save(using_fpr);
-    ir.inline(move |r#gen, _, _, _| {
-        let cached_version = r#gen.jit.data_i32(-1);
-        let cached_funcid = r#gen.jit.data_i32(-1);
-        let class_version = r#gen.class_version_label();
-        let slow_path = r#gen.jit.label();
-        let checked = r#gen.jit.label();
-        let initialize = r#gen.jit.label();
-        let exit = r#gen.jit.label();
-        monoasm!( &mut r#gen.jit,
-            // alloc_func(class_id, &mut Globals) -> Value
-            movl rdi, (class_id.u32());
-            movq rsi, r12;
-            movq rax, (alloc_func);
-            call rax;
-            movq r15, rax; // r15 <- new instance
-            movl rax, [rip + class_version];
-            cmpl rax, [rip + cached_version];
-            jne  slow_path;
-            movl rax, [rip + cached_funcid];
-        checked:
-            testq rax, rax;
-            jne  initialize;
-        exit:
-            movq rax, r15;
-        );
-
-        r#gen.jit.select_page(1);
-        if let Some(callid) = kw_callid {
-            monoasm!( &mut r#gen.jit,
-            initialize:
-                // class_new_initialize_kw(vm, globals, FuncId, receiver,
-                //                         CallSiteId, caller_lfp)
-                movq rdi, rbx;
-                movq rsi, r12;
-                movq rdx, rax;
-                movq rcx, r15;
-                movl r8, (callid.0);
-                movq r9, r14;
-                movq rax, (class_new_initialize_kw);
-                call rax;
-                testq rax, rax;
-                jne  exit;
-                xorq r15, r15;
-                jmp  exit;
-            );
-        } else {
-            monoasm!( &mut r#gen.jit,
-            initialize:
-                movq rdi, rbx;
-                movq rsi, r12;
-                movq rdx, rax;
-                movq rcx, r15;
-                lea r8, [r14 - (crate::executor::jitgen::conv(args))];
-                movl r9, (pos_num);
-                // TODO: Currently inline call does not support calling with block arguments.
-                movq rax, (r#gen.method_invoker2);
-                call rax;
-                testq rax, rax;
-                jne  exit;
-                xorq r15, r15;
-                jmp  exit;
-            );
-        }
-        monoasm!( &mut r#gen.jit,
-        slow_path:
-            movq rdi, r12;
-            movq rsi, r15;
-            movq rax, (check_initializer);
-            call rax;
-            movl [rip + cached_funcid], rax;
-            movl rdi, [rip + class_version];
-            movl [rip + cached_version], rdi;
-            jmp  checked;
-        );
-        r#gen.jit.select_page(0);
-    });
-    ir.fpr_restore(using_fpr);
-    ir.handle_error(error);
-    state.def_rax2acc(ir, dst);
-    true
-}
-
-/// Runtime arm of the inlined `Class#new` for callsites with keyword
-/// arguments: collect the keywords from the caller's frame into a Hash
-/// (`Class#new` forwards them to `initialize` as **kw) and invoke the
-/// cached `initialize`. Returns `None` with the error set on the
-/// executor on failure (the standard native calling convention).
-#[cfg(target_arch = "x86_64")]
-extern "C" fn class_new_initialize_kw(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    func_id: FuncId,
-    receiver: Value,
-    callid: CallSiteId,
-    caller_lfp: Lfp,
-) -> Option<Value> {
-    // The freshly allocated receiver lives only in registers / Rust
-    // locals here (the caller's dst slot is written after this call
-    // returns), so root it — and the kw hash — across the allocations
-    // below. The positional/keyword argument values stay rooted via
-    // the caller's frame slots.
-    let temp_len = vm.temp_len();
-    vm.temp_push(receiver);
-    let (pos_args, kw) = {
-        let callsite = &globals.store[callid];
-        let pos_args: Vec<Value> = (0..callsite.pos_num)
-            .map(|i| caller_lfp.register(callsite.args + i).unwrap())
-            .collect();
-        let mut h = rubymap::RubyMap::default();
-        for (k, id) in callsite.kw_args.iter() {
-            let v = caller_lfp.register(callsite.kw_pos + *id).unwrap();
-            h.insert_sym(crate::value::RubySymbol::new(*k), v);
-        }
-        (pos_args, Value::hash(h))
-    };
-    vm.temp_push(kw);
-    let res = vm.invoke_func(
-        globals,
-        func_id,
-        receiver,
-        &pos_args,
-        None,
-        kw.try_hash_ty(),
-    );
-    vm.temp_clear(temp_len);
-    res
-}
-
-/// aarch64 twin of `gen_class_new_inline`. The hot-path asm (allocate + resolve
-/// + invoke `initialize` via `method_invoker2`) lives in `Codegen::a64_class_new`;
-/// here we resolve the allocator at JIT-compile time and write back the
-/// receiver/args so the invoker can read them from the frame.
-#[cfg(target_arch = "aarch64")]
-pub(super) fn gen_class_new_inline(
-    state: &mut AbstractState,
-    ir: &mut AsmIr,
-    _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
-    self_class: ClassId,
-    _: Option<ClassId>,
-) -> bool {
-    let callsite = &store[callid];
-    if !callsite.is_simple() {
-        return false;
-    }
-    let mut self_module = store[self_class].get_module();
-    if let Some(origin) = self_module.is_singleton() {
-        self_module = origin.as_class();
-    }
-    let class_id = self_module.id();
-    let alloc_func = match store[class_id].alloc_func() {
-        Some(f) => f,
-        None => return false,
-    };
-    let CallSiteInfo {
-        recv,
-        args,
-        pos_num,
-        dst,
-        ..
-    } = *callsite;
-    // `a64_class_new` reaches the args via `sub x4, lfp, #conv(args)`, whose
-    // immediate is bounded; bail to the slow path on an out-of-range frame.
-    let args_off = crate::executor::jitgen::conv(args);
-    if args_off > 4095 {
-        return false;
-    }
-    state.load(ir, recv, GP::Rdi);
-    state.write_back_recv_and_callargs(ir, callsite);
-    let using_fpr = state.get_using_fpr(ir);
-    let error = ir.new_error(state);
-    ir.fpr_save(using_fpr);
-    let alloc_func = alloc_func as *const () as u64;
-    let ci = check_initializer as *const () as u64;
-    ir.inline(move |r#gen, _, _, _| {
-        r#gen.emit_class_new(class_id.u32(), alloc_func, args_off as u32, pos_num, ci);
-    });
-    ir.fpr_restore(using_fpr);
-    ir.handle_error(error);
-    state.def_rax2acc(ir, dst);
-    true
-}
-
-extern "C" fn check_initializer(globals: &mut Globals, receiver: Value) -> Option<FuncId> {
-    globals.check_method(receiver, IdentId::INITIALIZE)
-}
-
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// The public `Class#allocate` carries the same inline generator as
+    /// `__builtin_allocate__`. The inline must keep CRuby semantics: a
+    /// user override (a different FuncId) is dispatched instead, a
+    /// singleton-class receiver raises TypeError (receiver-identity
+    /// guard), and a class without an allocator raises TypeError.
+    #[test]
+    fn class_allocate_inline() {
+        run_test(
+            r#"
+        class A; end
+        class B; def self.allocate; :overridden; end; end
+        res = []
+        res << A.allocate.class.to_s
+        res << B.allocate.to_s
+        res << (begin; Object.new.singleton_class.allocate; rescue TypeError => e; e.message; end)
+        res << (begin; Integer.allocate; rescue TypeError => e; e.message; end)
+        res
+        "#,
+        );
+    }
 
     #[test]
     fn test_class() {

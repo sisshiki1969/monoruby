@@ -779,6 +779,12 @@ impl Globals {
         src_encoding: Option<String>,
     ) -> Result<FuncId> {
         let line_offset = lineno - 1;
+        // Eval'd code compiled against a live frame can reach raw
+        // parameter slots anywhere on the caller's outer chain (e.g. a
+        // zsuper reading the mother method's rest/kwrest), so no lazy
+        // `(...)`-forwarding marker may be left pending in any frame it
+        // could observe.
+        crate::codegen::runtime::materialize_lazy_forwarding(self, caller_cfp);
         // Walk the CFP chain to find the nearest *iseq* (Ruby) frame.
         // `Module#class_eval` / `instance_eval` / `Kernel#eval` may be
         // invoked indirectly through builtin frames (mspec, helpers

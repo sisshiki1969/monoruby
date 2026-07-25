@@ -226,8 +226,12 @@ module Kernel
 end
 
 class Object
-  def initialize(...)
-  end
+  # NOTE: no `def initialize` here — the default constructor is the
+  # native `BasicObject#initialize` (arity 0), matching CRuby's owner
+  # and its strict arity (`Object.new(1)` raises ArgumentError). A
+  # Ruby-level `def initialize(...)` would silently accept any
+  # arguments and also defeat the JIT's forwarding specialization for
+  # argument-less `Class#new`.
 
   def tap
     yield self
@@ -262,11 +266,20 @@ class Object
 end
 
 class Class
-  #def new(...)
-  #  o = __builtin_allocate__
-  #  o.__builtin_initialize__(...)
-  #  o
-  #end
+  # The canonical object constructor, written in Ruby. `__builtin_allocate__`
+  # is the private, non-overridable allocator (users override `allocate`,
+  # which `new` deliberately bypasses, as in CRuby); `__builtin_initialize__`
+  # is the privileged spelling that dispatches to `initialize` bypassing its
+  # `private` visibility. The `(...)` forward is optimized end-to-end: the
+  # interpreter defers the rest-Array via the lazy-forwarding marker, and a
+  # specialized JIT compile source-routes the caller's argument slots
+  # straight into `initialize`'s frame (D1), so construction allocates
+  # nothing but the object itself.
+  def new(...)
+    o = __builtin_allocate__
+    o.__builtin_initialize__(...)
+    o
+  end
 
   private
   def inherited(subclass)

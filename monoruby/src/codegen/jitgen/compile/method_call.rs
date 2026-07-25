@@ -354,12 +354,26 @@ impl<'a> JitContext<'a> {
                         || (pos_num != 0
                             && (args..args + pos_num).any(|i| state.is_C_immediate(i))));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
+                // The forwarded `initialize` inside the Ruby `Class#new`
+                // (the privileged `recv.__builtin_initialize__(...)`
+                // spelling, marked `bypass_visibility`): specialize the
+                // callee for the statically-known allocated class even
+                // though the forwarding splat keeps the call site
+                // non-simple. Argument link-modes are NOT propagated
+                // (`specializable` stays false, so `specialized_iseq`
+                // uses `JitArgumentInfo::default()`); the arguments flow
+                // through the same forwarded `set_arguments` (D1
+                // source-routed when the trampoline's rest is deferred).
+                // This turns construction into
+                // allocate + direct `SpecializedCall` into an
+                // initialize compiled for exactly that class.
+                let forwarded_initialize = callsite.forwarding && callsite.bypass_visibility;
 
                 // Method specialization (inlining a callee iseq) and block-
                 // argument inlining (`iseq_block`, which drives specialized
                 // `yield`) are both lowered on x86 and aarch64 now.
-                if (specializable && self.specialize_level() < 5) || iseq_block.is_some()
-                /*name == Some(IdentId::NEW)*/
+                if ((specializable || forwarded_initialize) && self.specialize_level() < 5)
+                    || iseq_block.is_some()
                 {
                     return self.specialized_iseq(
                         state,
@@ -1198,31 +1212,34 @@ impl AbstractState {
         } else if callsite.forwarding
             && callsite.pos_num >= 1
             && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]
-            && callee.is_iseq().is_some()
             && callee.no_keyword()
             && !callee.is_rest()
-            && callee.opt_num() == 0
             && callee.post_num() == 0
-            && callee.req_num() + 1 >= callsite.pos_num
+            && callee.reqopt_num() + 1 >= callsite.pos_num
         {
-            // Forwarding `g(x.., ...)` where `g` takes only required
-            // positionals and the only splat is the trailing `...` rest
-            // (`splat_pos == [pos_num-1]`). The `lead_num = pos_num-1`
-            // leading args sit at `callsite.args ..`, the `...` Array at
-            // `args + lead_num`; copy both straight into the callee frame
-            // (length-guarded) instead of re-parsing via the runtime.
-            // `req_num()+1 >= pos_num` ensures `req_num() >= lead_num`.
+            // Forwarding `g(x.., ...)` where `g` takes only required (and
+            // possibly optional) positionals and the only splat is the
+            // trailing `...` rest (`splat_pos == [pos_num-1]`). Applies
+            // to iseq and native callees alike — a native's callee-frame
+            // protocol is identical (fixed slots, None for an absent
+            // optional; `Class#new`'s forward to a native `initialize`
+            // such as `BasicObject#initialize` lands here). The
+            // `lead_num = pos_num-1` leading args sit at `callsite.args ..`,
+            // the `...` Array at `args + lead_num`; copy both straight into
+            // the callee frame instead of re-parsing via the runtime.
+            // `reqopt_num()+1 >= pos_num` ensures `reqopt_num() >= lead_num`.
             let recv = callsite.recv;
             let args = callsite.args;
             let lead_num = callsite.pos_num - 1;
             let kwrest_guard = callsite.hash_splat_pos.first().copied();
             // D1: if `f`'s `...` rest array was deferred at frame entry,
             // route the copy straight from the caller's source slots.
-            // Only when the forwarded arity exactly matches `g`'s
-            // required params (this branch already guarantees `g` is
-            // req-only: no opt/post/rest/kw, so no `ArgumentError`-
-            // shaped case the eager `create_array` + length-guard would
-            // raise) and only for the `g(*rest, **kwrest, &blk)`
+            // Only when the forwarded arity statically binds to `g`'s
+            // positional params — `req <= lead+len <= req+opt` with no
+            // post/rest, so the fill layout (copied slots + None-filled
+            // optionals, whose defaults the callee prologue then runs) is
+            // a compile-time constant and no `ArgumentError`-shaped case
+            // remains — and only for the `g(*rest, **kwrest, &blk)`
             // trampoline shape (`kwrest_guard.is_some()`; the structural
             // gate guarantees no kw reaches `f`, so the forwarded
             // `**kwrest` is nil). `ir.set_deferred_rest` makes the
@@ -1231,8 +1248,10 @@ impl AbstractState {
             // rebuild the array for an interpreter resuming inside `f`.
             let deferred_src = match self.deferred_rest_src(args + lead_num) {
                 Some((src, len))
-                    if (len as usize) == callee.req_num() - lead_num
-                        && kwrest_guard.is_some() =>
+                    if {
+                        let n = lead_num + len as usize;
+                        callee.req_num() <= n && n <= callee.reqopt_num()
+                    } && kwrest_guard.is_some() =>
                 {
                     ir.set_deferred_rest();
                     Some((src, len))
@@ -1249,20 +1268,27 @@ impl AbstractState {
             };
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
-            ir.push(AsmInst::SetArgumentsForwarded {
-                callid,
-                callee_fid,
-                recv,
-                args,
-                lead_num,
-                kwrest_guard,
-                deferred_src,
-            });
+            if deferred_src.is_none() && callee.opt_num() != 0 {
+                // Eager Array into an optional-taking callee: the bind
+                // length is only known at run time — keep the proven
+                // specialized runtime helper (same as before this branch
+                // accepted optional callees).
+                ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
+            } else {
+                ir.push(AsmInst::SetArgumentsForwarded {
+                    callid,
+                    callee_fid,
+                    recv,
+                    args,
+                    lead_num,
+                    kwrest_guard,
+                    deferred_src,
+                });
+            }
             ir.handle_error(error);
         } else if callsite.forwarding
             && callsite.splat_pos.len() == 1
             && callsite.splat_pos[0] < callsite.pos_num
-            && callee.is_iseq().is_some()
             && callee.no_keyword()
         {
             // Forwarding with a single splat at any position — `g(x.., ...)`
@@ -1271,8 +1297,10 @@ impl AbstractState {
             // runtime helper, which skips the generic CallSiteInfo
             // re-parse on the common no-forwarded-kw path (building
             // lead ++ splat-array ++ post directly) and delegates the
-            // subtle kw case to the proven generic.
-            // Array-path forwarding consume (iseq with opt/post/rest):
+            // subtle kw case to the proven generic. Native callees share
+            // the same callee-frame protocol (rest natives get their rest
+            // Array materialized by the same `fill_positional_args`).
+            // Array-path forwarding consume (callee with opt/post/rest):
             // it reads `f`'s rest slot as a real `Array`.
             if self.deferred_rest_tuple().is_some() {
                 ir.set_needs_rest_array();
@@ -1301,6 +1329,35 @@ impl AbstractState {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// D1 forwarding-rest deferral into an *optional*-parameter callee:
+    /// the forwarded count is statically known per specialization, so the
+    /// fill layout (copied slots + None-filled optionals running their
+    /// defaults) is a compile-time constant. Cover under-, exactly-, and
+    /// over-supplied optionals (the last vetoes the deferral and takes
+    /// the eager helper path, raising ArgumentError like CRuby), plus a
+    /// default expression with a side effect (must run only when the
+    /// slot is None-filled).
+    #[test]
+    fn forwarded_opt_callee() {
+        run_test(
+            r#"
+            $effects = []
+            def g(a = ($effects << :a; 1), b = ($effects << :b; 2)); [a, b]; end
+            def f(...) = g(...)
+            def strict(x, y = 9) = [x, y]
+            def fs(...) = strict(...)
+            res = []
+            res << f
+            res << f(10)
+            res << f(10, 20)
+            res << (begin; fs(1, 2, 3); rescue ArgumentError => e; e.message; end)
+            res << fs(1)
+            res << $effects.size
+            res
+            "#,
+        );
+    }
 
     /// Regression test: a specialized (inlined-compiled) callee that
     /// captures its own frame (`Proc.new` with a literal block) while the

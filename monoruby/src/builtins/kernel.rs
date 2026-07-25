@@ -867,7 +867,11 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/binding.html]
 #[monoruby_builtin]
-fn binding(vm: &mut Executor, _: &mut Globals, _: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn binding(vm: &mut Executor, globals: &mut Globals, _: Lfp, pc: BytecodePtr) -> Result<Value> {
+    // Code later eval'd against this Binding can reach raw parameter
+    // slots on the captured frame's outer chain — materialize any
+    // pending lazy `(...)`-forwarding marker first.
+    crate::codegen::runtime::materialize_lazy_forwarding(globals, vm.cfp());
     Ok(vm.generate_binding(pc).as_val())
 }
 

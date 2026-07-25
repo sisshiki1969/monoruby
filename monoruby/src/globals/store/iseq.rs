@@ -231,6 +231,26 @@ pub struct ISeqInfo {
     ///
     pub(crate) in_singleton_lexical: bool,
     ///
+    /// `true` when this iseq's instruction stream contains nothing that
+    /// can observe its own parameter slots beyond ordinary forwarding
+    /// consumes: no `super` (zsuper reads every param slot, including
+    /// from `eval`'d nested code), no `yield`, and no block literal
+    /// (whose body could contain a zsuper reading this frame's params
+    /// through the outer chain). Set during bytecode encoding; one of
+    /// the gates for the lazy `(...)`-forwarding calling convention
+    /// (see `Store::lazy_forwarding_rest`).
+    ///
+    pub(crate) forwarding_no_escape: bool,
+    ///
+    /// Precomputed result of the lazy `(...)`-forwarding gate for this
+    /// iseq (`Store::lazy_forwarding_rest`): the rest-parameter slot
+    /// when this is a pure forwarding trampoline with no param-slot
+    /// escape. Computed once when the bytecode is installed
+    /// (`set_func_data`) — the gate is consulted on every generic-path
+    /// call, so it must be a single load.
+    ///
+    pub(crate) lazy_forwarding_rest: Option<SlotId>,
+    ///
     /// `Some(receiver.class)` for an `instance_eval("...")` body.
     /// CRuby resolves unqualified constants there in a blended order:
     /// receiver singleton class → **receiver class** → caller lexical
@@ -303,6 +323,8 @@ impl ISeqInfo {
             nested_definee: None,
             singleton_classdef: false,
             in_singleton_lexical: false,
+            forwarding_no_escape: false,
+            lazy_forwarding_rest: None,
             instance_eval_class: None,
         }
     }

@@ -72,7 +72,6 @@ pub use globals::{load_file, read_source_file};
 pub use globals::{Globals, MonorubyErr, MonorubyErrKind};
 pub use value::*;
 
-use builtins::Arg;
 use executor::*;
 pub use frame::Lfp;
 use fxhash::FxHashMap as HashMap;
