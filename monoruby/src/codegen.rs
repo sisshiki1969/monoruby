@@ -44,9 +44,6 @@ pub(crate) type MethodInvoker = extern "C" fn(
     Option<Hashmap>,
 ) -> Option<Value>;
 
-pub(crate) type MethodInvoker2 =
-    extern "C" fn(&mut Executor, &mut Globals, FuncId, Value, Arg, usize) -> Option<Value>;
-
 pub(crate) type BlockInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
@@ -647,7 +644,6 @@ pub struct Codegen {
     ///
     pub(crate) init_stack_limit: extern "C" fn(&mut Executor) -> *const u8,
     pub(crate) method_invoker: MethodInvoker,
-    pub(crate) method_invoker2: MethodInvoker2,
     pub(crate) block_invoker: BlockInvoker,
     pub(crate) block_invoker_with_self: BlockInvoker,
     pub(crate) binding_invoker: BindingInvoker,
@@ -953,7 +949,6 @@ impl Codegen {
         let get_class = jit.get_class();
         let init_stack_limit = jit.init_stack_limit();
         let method_invoker = jit.method_invoker();
-        let method_invoker2 = jit.method_invoker2();
         let block_invoker = jit.block_invoker();
         let block_invoker_with_self = jit.block_invoker_with_self();
         let binding_invoker = jit.binding_invoker();
@@ -986,7 +981,6 @@ impl Codegen {
             get_class,
             init_stack_limit,
             method_invoker,
-            method_invoker2,
             block_invoker,
             block_invoker_with_self,
             binding_invoker,

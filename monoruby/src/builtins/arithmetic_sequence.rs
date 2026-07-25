@@ -33,7 +33,13 @@ pub(super) fn init(globals: &mut Globals) {
     // type assertion and aborts the process (non-unwinding builtin).
     globals.store[ARITHMETIC_SEQUENCE_CLASS].clear_alloc_func();
     let meta = globals.store.get_metaclass(ARITHMETIC_SEQUENCE_CLASS).id();
-    globals.undef_method_for_class(meta, IdentId::NEW).unwrap();
+    // Insert the undef tombstone directly: `Class#new` is now the Ruby
+    // trampoline defined later by startup.rb, so at builtin-init time
+    // there is no `new` to look up — but the tombstone must still
+    // shadow it once defined.
+    globals
+        .store
+        .add_empty_method(meta, IdentId::NEW, Visibility::Undefined);
     globals.define_builtin_class_func(
         ARITHMETIC_SEQUENCE_CLASS,
         "__build",
