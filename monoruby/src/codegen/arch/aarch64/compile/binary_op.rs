@@ -227,6 +227,53 @@ impl Codegen {
         self.jit.bind_label(cont);
     }
 
+    /// `<literal_int> << <variable>` fast path. Mirrors x86 `gen_shl_lhs_imm`:
+    /// the left-shift overflow bound is the literal's `leading_zeros()`, a
+    /// compile-time constant, so the runtime shift-back overflow test (`sub` /
+    /// `lsl` / `asr` / `cmp`) of the generic `gen_shl` collapses to a single
+    /// `cmp x1, #lzcnt; b.gt deopt` (which also subsumes the `cmp #64` bound).
+    /// The tagged lhs is already in x4 (recv); the shift amount is in x1.
+    pub(crate) fn gen_shl_lhs_imm(&mut self, lhs: i64, deopt: &DestLabel) {
+        let shr = self.jit.label();
+        let after = self.jit.label();
+        let under = self.jit.label();
+        let cont = self.jit.label();
+        let deopt = deopt.clone();
+        let lhs = Value::check_fixnum(lhs).unwrap();
+        let lzcnt = lhs.id().leading_zeros();
+        monoasm_arm64!(&mut self.jit,
+            asr x1, x1, #1;            // untag shift amount
+            cmp x1, #0;
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &shr); // negative -> right shift
+        // Overflow bound: the tagged lhs's top bit sits at position
+        // `63 - lzcnt`, so shifting `2n` left sets the sign bit once
+        // `k >= lzcnt` — deopt there (the x86 `gen_shl_lhs_imm` uses `jgt`
+        // here, which is an off-by-one that lets `lit << lzcnt` overflow
+        // silently; `b.ge` is the correct bound).
+        monoasm_arm64!(&mut self.jit, cmp x1, #(lzcnt);); // baked overflow bound
+        self.jit.bcond_label(monoasm::Cond::Ge, &deopt); // shift >= lzcnt -> overflow
+        monoasm_arm64!(&mut self.jit,
+            sub x4, x4, #1;           // strip tag -> 2n
+            lsl x4, x4, x1;           // 2n << k (statically bounded, no shift-back check)
+        );
+        self.jit.bind_label(after.clone());
+        monoasm_arm64!(&mut self.jit,
+            mov x9, #1;
+            orr x4, x4, x9;           // re-tag fixnum
+            b cont;
+        );
+        // right shift by -k (cold)
+        self.jit.bind_label(shr);
+        monoasm_arm64!(&mut self.jit, neg x1, x1; cmp x1, #64;);
+        self.jit.bcond_label(monoasm::Cond::Ge, &under);
+        monoasm_arm64!(&mut self.jit, asr x4, x4, x1; b after;);
+        // right shift by >= 64 (cold): 0 if lhs >= 0, else -1
+        self.jit.bind_label(under);
+        self.a64_shift_under(&after);
+        self.jit.bind_label(cont);
+    }
+
     /// Shared cold tail for a shift-right by >= 64 bits: the tagged lhs is in
     /// Rdi (x4); leave 0 (Value 0) for a non-negative lhs or -1 (Value -1) for a
     /// negative one, then branch to `after` (which re-tags). Mirrors x86

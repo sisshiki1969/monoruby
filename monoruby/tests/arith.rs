@@ -142,6 +142,26 @@ fn test_shift() {
 }
 
 #[test]
+fn shift_literal_lhs_overflow_boundary() {
+    // `<literal> << <variable>` uses the JIT literal-lhs fast path
+    // (`gen_shl_lhs_imm`), which bakes the left-shift overflow bound from the
+    // literal's `leading_zeros`. Regression: an off-by-one (`> lzcnt` instead
+    // of `>= lzcnt`) let `lit << lzcnt` overflow silently to a wrapped negative
+    // instead of promoting to a Bignum (e.g. `5 << 60`). Exercise the exact
+    // boundary across several literals and signs, on both backends.
+    run_test(
+        r#"
+        res = []
+        [0, 1, 2, 30, 31, 58, 59, 60, 61, 62, 63, 64, 100, -1, -30, -64].each do |k|
+          res << (1 << k) << (5 << k) << (255 << k) << (1000000 << k)
+          res << (-1 << k) << (-7 << k) << (0 << k)
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
 fn test_assign_op() {
     run_tests(&[
         "a=3; a+=7; a",

@@ -11,10 +11,13 @@ impl Codegen {
     }
 
     /// `Fiber.yield(*args)` with ≥2 args: build the args array, leaving it in
-    /// Rsi (x3). `args_off` is `conv(args)`; bounded by the caller.
+    /// Rsi (x3). `args_off` is `conv(args)`; any frame offset is addressable
+    /// (large offsets materialize through a scratch register via `a64_addr_sub`,
+    /// so the caller never has to bail).
     pub(crate) fn emit_fiber_yield_value_array(&mut self, args_off: usize, pos_num: usize) {
+        let lfp = GP::R14.a64().0; // x22
+        self.a64_addr_sub(0, lfp, args_off as u32); // x0 = &args (lfp - conv)
         monoasm_arm64!(&mut self.jit,
-            sub x0, x22, #(args_off as u32);   // &args (lfp - conv)
             mov x1, (pos_num);
             mov x9, (crate::runtime::create_array as *const () as u64);
             str x30, [sp, #-16]!;

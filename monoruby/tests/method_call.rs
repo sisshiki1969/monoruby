@@ -3417,3 +3417,43 @@ fn return_in_thread_and_class_block() {
         "#,
     );
 }
+
+#[test]
+fn trivial_method_wrapper_dispatch() {
+    // Const-return (`true`/`false`/`nil`/small-int-literal body) and
+    // self-return (`def m; self; end`) methods reached through the per-method
+    // *wrapper* — `send` / `Method#call` / a polymorphic (non-foldable) call
+    // site — must return the right value. The wrapper's trivial fast paths
+    // (x86 `gen_wrapper` ConstReturn/SelfReturn; the aarch64 twin) build no
+    // frame and run no bytecode, so a wrong register/offset would surface here.
+    run_test(
+        r#"
+        class A
+          def flag; true; end
+          def zero; 0; end
+          def big; 1_000_000; end
+          def nn; nil; end
+          def me; self; end
+        end
+        class B
+          def flag; false; end
+          def me; self; end
+        end
+        a = A.new; b = B.new
+        res = []
+        res << a.send(:flag) << a.send(:zero) << a.send(:big) << a.send(:nn).inspect
+        res << a.send(:me).equal?(a) << b.send(:flag)
+        res << a.method(:flag).call << a.method(:me).call.equal?(a)
+        objs = [a, b, a, b, a]
+        t = 0; s = 0
+        200.times do
+          objs.each do |o|
+            t += 1 if o.flag
+            s += 1 if o.me.equal?(o)
+          end
+        end
+        res << t << s
+        res
+        "#,
+    );
+}
