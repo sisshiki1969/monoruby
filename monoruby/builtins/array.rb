@@ -1,11 +1,20 @@
 class Array
   include Enumerable
 
-  def self.new(...)
-    o = allocate
-    o.__send__(:initialize, ...)
-    o
-  end
+  # NOTE: no `def self.new` here. It used to be defined as
+  # `o = allocate; o.__send__(:initialize, ...); o`, which predates the
+  # Ruby-level `Class#new`. That override is now both slower and less
+  # correct than inheriting `Class#new`:
+  #   * `__send__` is registered with rest + kwrest, so the forwarded
+  #     `initialize` call missed every JIT forwarding fast path and fell
+  #     back to the generic argument re-parse plus an eagerly
+  #     materialized rest Array per call (~8x slower than the inherited
+  #     trampoline, which reaches `Array#initialize` — 0/2 positionals,
+  #     no rest, no keywords — through the inline path); and
+  #   * it dispatched the *public* `allocate`, so a user-defined
+  #     `self.allocate` on an Array subclass was honoured. CRuby's
+  #     `Array.new` bypasses it, which is what `Class#new` does via
+  #     `__builtin_allocate__`.
 
   def sample(n = (no_n = true; nil), random: nil)
     if no_n

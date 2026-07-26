@@ -2388,6 +2388,33 @@ fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 }
 
 fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array) -> Result<Value> {
+    // The merge buffer must be scanned by the GC: while a merge is in
+    // flight it holds the only reference to one run's elements (their
+    // slots in `ary` have already been overwritten with merge output),
+    // and the comparator below runs Ruby, so a GC can happen right in
+    // that window. Back it with a `nil`-filled Array on the temp stack —
+    // every slot is then always a valid, markable Value, and the storage
+    // address is stable (the collector does not move objects).
+    let scratch_len = executor::op::merge_scratch_len(ary.len());
+    vm.with_temp_scope(|vm| {
+        let buf = if scratch_len == 0 {
+            std::ptr::null_mut()
+        } else {
+            let mut scratch = Array::new_from_vec(vec![Value::nil(); scratch_len]);
+            vm.temp_push(scratch.into());
+            scratch.as_mut_ptr()
+        };
+        sort_with_buf(vm, globals, lfp, ary, buf)
+    })
+}
+
+fn sort_with_buf(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    mut ary: Array,
+    buf: *mut Value,
+) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
@@ -2420,9 +2447,9 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
                 _ => std::cmp::Ordering::Greater,
             })
         };
-        executor::op::sort_by(&mut ary, f)?;
+        executor::op::sort_by(&mut ary, buf, f)?;
     } else {
-        vm.sort(globals, &mut ary)?;
+        vm.sort(globals, &mut ary, buf)?;
     }
     Ok(ary.into())
 }
@@ -2437,9 +2464,11 @@ fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array
 #[monoruby_builtin]
 fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
-    // The receiver is the array we sort in place; it is already rooted
-    // through `lfp`, so the merge buffer used inside `sort_inner` only
-    // ever holds bit-copies of elements that the receiver still owns.
+    // NOTE: the receiver being rooted through `lfp` is NOT enough to keep
+    // the merge buffer's contents alive — `merge` overwrites the
+    // receiver's slots before the corresponding buffer entries are
+    // consumed, so during that window the buffer is their only reference.
+    // `sort_inner` therefore roots the buffer itself.
     let ary = lfp.self_val().as_array();
     sort_inner(vm, globals, lfp, ary)
 }
@@ -4072,6 +4101,67 @@ fn insert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn array_new_via_class_new() {
+        // `Array` no longer overrides `self.new`; it inherits the Ruby
+        // `Class#new`. Cover every argument form, the error cases, and —
+        // the semantic difference from the old override, which dispatched
+        // the public `allocate` — that a subclass's `allocate` override is
+        // NOT called (CRuby bypasses it in `Array.new`).
+        run_test(
+            r#"
+            class MyA < Array
+              def self.allocate; $called = true; super; end
+            end
+            $called = false
+            res = []
+            res << Array.new
+            res << Array.new(3)
+            res << Array.new(3, :x)
+            res << Array.new(3) { |i| i * 2 }
+            res << (begin; Array.new(-1); rescue ArgumentError => e; e.message; end)
+            res << (begin; Array.new(1, 2, 3); rescue ArgumentError => e; e.message; end)
+            a = MyA.new(2, :z)
+            res << [a.class.to_s, a.to_a, $called]
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn array_new_with_block_write_barrier() {
+        // `Array#initialize`'s block form installs every element at once
+        // by swapping the payload of the (already rooted, and therefore
+        // possibly promoted-and-armed) receiver. Without a write barrier
+        // on that swap the array never enters the remembered set, a minor
+        // GC skips scanning it, and all of its elements are swept while
+        // still reachable — a later read then trips `Dead object`. The
+        // allocation churn after the build is what forces that minor GC.
+        run_test_once(
+            r#"
+            a = Array.new(300_000) { |i| [i % 1000] }
+            200_000.times { [1] }
+            a.map { |x| x[0] }.sum
+            "#,
+        );
+    }
+
+    #[test]
+    fn sort_bang_rooted_merge_buffer() {
+        // `sort!`'s merge buffer holds the only reference to one run's
+        // elements while `merge` overwrites their slots in the receiver,
+        // and the comparator can allocate (and thus GC) right in that
+        // window — so the buffer itself has to be GC-visible.
+        run_test_once(
+            r#"
+            a = []
+            200_000.times { |i| a << [(i * 7919) % 1000] }
+            a.sort! { |x, y| [x[0]] <=> [y[0]] }
+            [a.size, a.first[0], a.last[0]]
+            "#,
+        );
+    }
 
     #[test]
     fn array_literal_chunked() {

@@ -1289,7 +1289,8 @@ impl AbstractState {
         } else if callsite.forwarding
             && callsite.splat_pos.len() == 1
             && callsite.splat_pos[0] < callsite.pos_num
-            && callee.no_keyword()
+            && (callee.no_keyword()
+                || (callee.kw_names().is_empty() && callsite.kw_may_exists()))
         {
             // Forwarding with a single splat at any position — `g(x.., ...)`
             // (trailing) or implicit `super` of a `def m(a,*r,z)` method
@@ -1300,6 +1301,27 @@ impl AbstractState {
             // subtle kw case to the proven generic. Native callees share
             // the same callee-frame protocol (rest natives get their rest
             // Array materialized by the same `fill_positional_args`).
+            //
+            // A callee whose only keyword surface is a bare `**kwrest`
+            // (no declared keyword names) is admitted too, *provided the
+            // call site itself carries keyword syntax*: the helper's
+            // runtime core then checks whether keywords are actually
+            // being forwarded and stores `nil` into the kwrest slot when
+            // they are not — the same value the generic path would
+            // write. `Struct#initialize` is exactly this shape (rest +
+            // kwrest, for `keyword_init:`) and a `...` forward always
+            // carries the `**kwrest` hash-splat, so this is what keeps
+            // `S.new(...)` off the generic re-parse.
+            //
+            // The `kw_may_exists()` requirement is what keeps
+            // ruby2_keywords correct: promotion of a flagged trailing
+            // Hash into the callee's keywords only happens when the call
+            // site passes no keywords of its own (`r2k_promote` in
+            // `set_callee_frame_arguments`), and the fast path does not
+            // implement it. Forwarding call sites without keyword syntax
+            // — `ruby2_keywords def t(*args); super; end`, or a
+            // delegating block's `target(*args, **kwargs)` — must keep
+            // taking the generic path.
             // Array-path forwarding consume (callee with opt/post/rest):
             // it reads `f`'s rest slot as a real `Array`.
             if self.deferred_rest_tuple().is_some() {

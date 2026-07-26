@@ -46,16 +46,16 @@ pub(crate) fn set_frame_arguments(
         if cs.forwarding {
             if cs.splat_pos.len() == 1
                 && cs.splat_pos[0] < cs.pos_num
-                && globals[callee_fid].no_keyword()
+                && forwarded_fast_path_ok(&globals.store[callee_fid], cs)
             {
                 return forwarded_set_arguments_core(
                     vm, globals, callid, callee_lfp, callee_fid, caller_lfp,
                 );
             }
-            // Shapes outside the direct gate (keyword-taking callee,
-            // extra user splats as in `g(*a, ...)`) still need any
-            // pending lazy marker materialized before the generic
-            // machinery interprets the splat slots.
+            // Shapes outside the direct gate (callee with *named*
+            // keyword parameters, extra user splats as in `g(*a, ...)`)
+            // still need any pending lazy marker materialized before the
+            // generic machinery interprets the splat slots.
             materialize_lazy_at_callsite(vm, globals, callid, caller_lfp);
         }
     }
@@ -254,7 +254,7 @@ pub(crate) fn resolve_lazy_forwarding(
         });
     if allow_direct
         && kw_empty
-        && globals[callee_fid].no_keyword()
+        && forwarded_fast_path_ok(&globals.store[callee_fid], &globals[callid])
         && !globals[callee_fid].single_arg_expand()
     {
         lazy_forward_fill(
@@ -307,7 +307,52 @@ fn lazy_forward_fill(
         buf.push(unsafe { *args_ptr.sub(i) });
     }
     let dst = callee_lfp.register_ptr(SlotId(1));
-    fill_positional_args1(dst, &globals.store[callee_fid], &buf)
+    fill_positional_args1(dst, &globals.store[callee_fid], &buf)?;
+    store_empty_kw_rest(globals, callee_lfp, callee_fid);
+    Ok(())
+}
+
+///
+/// Whether a forwarding call site may take the direct positional build
+/// instead of the generic `set_callee_frame_arguments` re-parse.
+///
+/// A keyword-less callee always may. A callee whose only keyword surface
+/// is a bare `**kwrest` may too — `store_empty_kw_rest` initializes that
+/// slot — but only when the call site itself carries keyword syntax.
+/// That last condition is what preserves ruby2_keywords: promotion of a
+/// flagged trailing Hash into the callee's keywords is gated on the call
+/// site passing no keywords of its own (`r2k_promote`), and the direct
+/// build does not implement it. In practice the shapes this excludes are
+/// `ruby2_keywords def m(*args); super; end` and delegating blocks,
+/// while the `...` forward — which always carries the `**kwrest`
+/// hash-splat — stays on the fast path.
+///
+/// Mirrors the JIT-side gate in `jitgen/compile/method_call.rs`.
+///
+#[inline]
+fn forwarded_fast_path_ok(callee: &FuncInfo, cs: &CallSiteInfo) -> bool {
+    callee.no_keyword() || (callee.kw_names().is_empty() && cs.kw_may_exists())
+}
+
+///
+/// Initialize the callee's `**kwrest` slot for a forwarded call that
+/// carries no keywords.
+///
+/// The positional fast paths above write only positional slots, so a
+/// callee that declares a bare `**kwrest` (no named keywords — the gate
+/// rejects those) would otherwise be left with an uninitialized slot.
+/// `nil` is what the generic path's `handle_keyword_simple` stores for a
+/// keyword-less call, and it means "no keyword arguments" everywhere
+/// downstream: an iseq callee's prologue turns it into `{}` via
+/// `CheckKwRest`, and natives that declare a kwrest already have to
+/// tolerate it (e.g. `Struct#initialize` filters its kwrest argument on
+/// `try_hash_ty()` + non-empty, treating `nil` and `{}` alike).
+///
+#[inline]
+fn store_empty_kw_rest(globals: &Globals, callee_lfp: Lfp, callee_fid: FuncId) {
+    if let Some(rest) = globals[callee_fid].kw_rest() {
+        unsafe { *callee_lfp.register_ptr(rest) = Some(Value::nil()) };
+    }
 }
 
 ///
@@ -464,7 +509,10 @@ fn forwarded_set_arguments_core(
             })
         });
 
-    if kw_empty && !globals[callee_fid].single_arg_expand() {
+    if kw_empty
+        && forwarded_fast_path_ok(&globals.store[callee_fid], cs)
+        && !globals[callee_fid].single_arg_expand()
+    {
         let pos_args = cs.pos_num;
         // gate guarantees exactly one splat; `sp` is its position (the
         // `...`/`*rest` slot). It is trailing for `g(x.., ...)` but is
@@ -512,7 +560,9 @@ fn forwarded_set_arguments_core(
             buf.push(unsafe { *args_ptr.sub(i) });
         }
         let dst = callee_lfp.register_ptr(SlotId(1));
-        fill_positional_args1(dst, &globals.store[callee_fid], &buf)
+        fill_positional_args1(dst, &globals.store[callee_fid], &buf)?;
+        store_empty_kw_rest(globals, callee_lfp, callee_fid);
+        Ok(())
     } else {
         // keywords actually forwarded: defer to the proven generic path
         // (materializing any pending lazy marker first).
@@ -1648,6 +1698,61 @@ mod tests {
             res << (begin; Object.new(1); rescue ArgumentError => e; e.message; end)
             res << (begin; NoArg.new(k: 1); rescue ArgumentError => e; e.class.to_s; end)
             res << Object.instance_method(:initialize).owner.to_s
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn forwarded_bare_kwrest_callee() {
+        // A callee whose only keyword surface is a bare `**kwrest` (no
+        // declared keyword names) is admitted to the forwarding fast
+        // path; the kwrest slot must still be initialized. An iseq
+        // callee sees `{}` (its prologue's `CheckKwRest` turns the
+        // stored nil into an empty Hash), and forwarded keywords must
+        // still arrive intact.
+        run_test(
+            r#"
+            class K; def initialize(*a, **kw); @a = a; @kw = kw; end
+                     attr_reader :a, :kw; end
+            class F; def initialize(x, **kw); @x = x; @kw = kw; end
+                     attr_reader :x, :kw; end
+            def fwd(...) = K.new(...)
+            res = []
+            o = K.new;            res << [o.a, o.kw]
+            o = K.new(1, 2);      res << [o.a, o.kw]
+            o = K.new(1, x: 3);   res << [o.a, o.kw]
+            o = fwd(5, y: 6);     res << [o.a, o.kw]
+            o = fwd;              res << [o.a, o.kw]
+            o = F.new(7);         res << [o.x, o.kw]
+            o = F.new(7, z: 8);   res << [o.x, o.kw]
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn forwarded_struct_construction() {
+        // `Struct#initialize` is a native registered with rest + kwrest
+        // (for `keyword_init:`), which used to disqualify it from every
+        // forwarding fast path. It now takes the specialized helper, so
+        // exercise the shapes that path has to get right.
+        run_test(
+            r#"
+            S = Struct.new(:a, :b)
+            K = Struct.new(:x, keyword_init: true)
+            U = Struct.new(:v) do
+              def initialize(v); super(v * 2); end
+            end
+            res = []
+            res << S.new(1, 2).to_a
+            res << S.new(1).to_a
+            res << S[3, 4].to_a
+            res << K.new(x: 9).x
+            res << K[x: 8].x
+            res << U.new(21).v
+            res << (begin; S.new(1, 2, 3); rescue ArgumentError => e; e.message; end)
+            res << S.new(1, 2).frozen?
             res
             "#,
         );
