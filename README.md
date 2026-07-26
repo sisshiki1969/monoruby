@@ -178,7 +178,7 @@ Up-to-date benchmark results (yjit-bench, measured on every push to master) and 
 ### 1. Optcarrot banechmark
 
 Several Ruby implementations described below were measured by [optcarrot](https://github.com/mame/optcarrot) benchmark.
-Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/Optcarrot_benchmark) for details. 
+Please see [wiki](https://github.com/sisshiki1969/monoruby/wiki/Optcarrot-benchmark) for details. 
 
 #### Versions of used Rubies
 
