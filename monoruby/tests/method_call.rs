@@ -3542,3 +3542,29 @@ fn eager_forwarding_into_req_only_callee() {
         "##,
     );
 }
+
+#[test]
+fn jit_integer_method_with_bignum_receiver() {
+    // A user-defined `Integer` method JIT-compiled for fixnum receivers, then
+    // called with heap-Integer (BigNum) receivers. The class-guard stub routes
+    // a BigNum straight to the VM (`a64_guard_class2`) instead of the
+    // miss/profile-patch chain — results must stay correct across interleaved
+    // fixnum and BigNum receivers.
+    run_test(
+        r#"
+        class Integer
+          def dbl; self * 2; end
+          def add5(x); self + x; end
+        end
+        s = 0
+        i = 0
+        while i < 3000; s += i.dbl + i.add5(3); i += 1; end
+        big = 10 ** 40
+        res = []
+        [5, big, big + 1, 7, big * big, 9, -8, -big].each do |n|
+          res << n.dbl << n.add5(100)
+        end
+        [s, res]
+        "#,
+    );
+}
