@@ -513,6 +513,14 @@ proc/args/result/exception/joiners/pending/masks/last_status をマークする�
 | `gc-stress` | **毎回のアロケーションで GC** を走らせる(`bin/test` が使用)。世代別のバリア/remembered set 漏れを最も強く炙り出す。 |
 | `gc-verify` | マイナー GC 後に独立フル再マークで健全性検証(§6.5)。 |
 
+環境変数 `MONORUBY_MALLOC_HARD_LIMIT`(例 `3G`。K/M/G サフィックス可)を設定すると、
+malloc 総量がこれを超える確保が要求された瞬間に、要求サイズとバックトレースを
+stderr へ出力して abort する(`alloc.rs` の `malloc_hard_limit`)。OOM でマシン/
+ランナーごと死んでログが失われる環境(darwin CI)で、暴走アロケーションを
+「名前付きで診断可能なクラッシュ」に変換するための装置。ポーリング型の監視では
+捕捉できない単発の巨大確保も、アロケータ内の同期チェックなので確実に捕まる。
+未設定なら無効(コストは relaxed load 1 回)。
+
 ---
 
 ## 14. まとめ

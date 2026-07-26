@@ -8,6 +8,18 @@ pub struct RurubyAlloc;
 
 unsafe impl GlobalAlloc for RurubyAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // Optional hard cap (MONORUBY_MALLOC_HARD_LIMIT): abort with a
+        // report instead of letting a runaway allocation OOM-kill the
+        // machine. Checked against layout.size() itself too, so even a
+        // single multi-GB request (which a polling watchdog can never
+        // catch in time) trips it. Costs one relaxed load when disabled.
+        let limit = malloc_hard_limit();
+        if limit != 0 && !MALLOC_ABORTING.load(Ordering::Relaxed) {
+            let projected = MALLOC_AMOUNT.load(Ordering::Relaxed) + layout.size();
+            if projected > limit {
+                malloc_hard_limit_abort(layout.size(), projected, limit);
+            }
+        }
         // Only object-scale buffers count toward the malloc-driven GC trigger;
         // huge one-shot reservations are skipped (see `MALLOC_TRACK_LIMIT`).
         // The same size test gates `dealloc`, so accounting stays symmetric
@@ -47,6 +59,73 @@ const MALLOC_TRACK_LIMIT: usize = 64 * 1024 * 1024;
 /// only by GC-arena (`RValue`) pressure — a `String#<<` loop allocates almost
 /// no `RValue`s yet can balloon malloc memory unboundedly.
 pub static MALLOC_AMOUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Optional hard ceiling on malloc'd memory, set via the
+/// `MONORUBY_MALLOC_HARD_LIMIT` environment variable (bytes, with an
+/// optional K/M/G suffix, e.g. `3G`; unset/unparsable = disabled, returns
+/// 0). When an allocation would push the live tracked total past the
+/// limit, the process prints the requested size plus a backtrace and
+/// aborts — converting a runaway allocation into a *diagnosable, named*
+/// crash before the OS kills the whole machine. Motivated by the darwin
+/// CI runner (7 GB RAM), whose OOM death destroys every log and artifact:
+/// a polling memory watchdog can never catch a single multi-GB request in
+/// time, but this check sees each allocation synchronously. The GC
+/// arena's up-front reservation and monoasm's JIT pages call
+/// `System.alloc` directly (or exceed `MALLOC_TRACK_LIMIT`), mirroring
+/// what `MALLOC_AMOUNT` tracks, so only real buffer growth counts —
+/// though a single oversized request trips the cap regardless via
+/// `layout.size()`.
+fn malloc_hard_limit() -> usize {
+    // usize::MAX = "not initialized yet". Initialization reads the
+    // environment, which itself allocates; IN_INIT makes those nested
+    // allocations skip the cap instead of recursing unboundedly (and
+    // OnceLock::get_or_init would deadlock on such reentrancy).
+    static LIMIT: AtomicUsize = AtomicUsize::new(usize::MAX);
+    static IN_INIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let v = LIMIT.load(Ordering::Relaxed);
+    if v != usize::MAX {
+        return v;
+    }
+    if IN_INIT.swap(true, Ordering::Relaxed) {
+        // Nested allocation during init (or a racing thread): treat as
+        // unlimited for this one call; LIMIT is stored momentarily.
+        return 0;
+    }
+    let parsed = std::env::var("MONORUBY_MALLOC_HARD_LIMIT")
+        .ok()
+        .and_then(|s| parse_byte_size(s.trim()))
+        .unwrap_or(0);
+    LIMIT.store(parsed, Ordering::Relaxed);
+    parsed
+}
+
+/// `"123"`, `"512K"`, `"64M"`, `"3G"` → bytes. Anything else → None.
+fn parse_byte_size(s: &str) -> Option<usize> {
+    let (num, mult) = match s.as_bytes().last()? {
+        b'k' | b'K' => (&s[..s.len() - 1], 1usize << 10),
+        b'm' | b'M' => (&s[..s.len() - 1], 1 << 20),
+        b'g' | b'G' => (&s[..s.len() - 1], 1 << 30),
+        _ => (s, 1),
+    };
+    num.parse::<usize>().ok()?.checked_mul(mult)
+}
+
+/// Set for the duration of the hard-limit crash report, so the report's
+/// own allocations (eprintln formatting, backtrace capture) bypass the
+/// cap instead of re-tripping it and aborting mid-report.
+static MALLOC_ABORTING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cold]
+fn malloc_hard_limit_abort(size: usize, projected: usize, limit: usize) -> ! {
+    MALLOC_ABORTING.store(true, Ordering::SeqCst);
+    eprintln!(
+        "monoruby: MONORUBY_MALLOC_HARD_LIMIT exceeded: \
+         requested {size} B (live tracked total would be {projected} B, limit {limit} B) — aborting"
+    );
+    eprintln!("{}", std::backtrace::Backtrace::force_capture());
+    std::process::abort();
+}
 
 /// Address (as `usize`; `0` until the VM registers it) of the JIT/VM
 /// allocation flag — the same `u32` the GC-arena path nudges. Stored
