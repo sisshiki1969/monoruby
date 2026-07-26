@@ -110,6 +110,32 @@ fn parse_byte_size(s: &str) -> Option<usize> {
     num.parse::<usize>().ok()?.checked_mul(mult)
 }
 
+#[cfg(test)]
+mod malloc_limit_tests {
+    use super::parse_byte_size;
+
+    #[test]
+    fn parses_plain_and_suffixed_sizes() {
+        assert_eq!(parse_byte_size("123"), Some(123));
+        assert_eq!(parse_byte_size("512K"), Some(512 << 10));
+        assert_eq!(parse_byte_size("512k"), Some(512 << 10));
+        assert_eq!(parse_byte_size("64M"), Some(64 << 20));
+        assert_eq!(parse_byte_size("64m"), Some(64 << 20));
+        assert_eq!(parse_byte_size("3G"), Some(3usize << 30));
+        assert_eq!(parse_byte_size("3g"), Some(3usize << 30));
+    }
+
+    #[test]
+    fn rejects_garbage_and_overflow() {
+        assert_eq!(parse_byte_size(""), None);
+        assert_eq!(parse_byte_size("abc"), None);
+        assert_eq!(parse_byte_size("G"), None);
+        assert_eq!(parse_byte_size("12x"), None);
+        // numeric part parses, multiplication overflows
+        assert_eq!(parse_byte_size("99999999999999999G"), None);
+    }
+}
+
 /// Set for the duration of the hard-limit crash report, so the report's
 /// own allocations (eprintln formatting, backtrace capture) bypass the
 /// cap instead of re-tripping it and aborting mid-report.
@@ -117,6 +143,7 @@ static MALLOC_ABORTING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 #[cold]
+#[coverage(off)] // crash handler: aborts the process, uncoverable in-test
 fn malloc_hard_limit_abort(size: usize, projected: usize, limit: usize) -> ! {
     MALLOC_ABORTING.store(true, Ordering::SeqCst);
     eprintln!(

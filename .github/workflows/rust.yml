@@ -11,6 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
+      # Backstop + coverage: a runaway allocation aborts with a report here
+      # too (the 16 GB Linux runner survives OOM better, but a named crash
+      # still beats a thrashing one), and having the limit set exercises the
+      # cap's init + hot-path compare under the coverage run.
+      MONORUBY_MALLOC_HARD_LIMIT: 6G
     steps:
       - uses: actions/checkout@v4
       - name: Set up Ruby
