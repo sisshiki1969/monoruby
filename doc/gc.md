@@ -41,6 +41,10 @@ monoruby のガベージコレクタの**現行実装**を、コードに即し�
 コンパイルパイプライン全体における GC の位置づけは `CLAUDE.md` の
 "Custom GC (`alloc.rs`)" と本書を対応させて読むとよい。
 
+オブジェクトの状態遷移(世代間の移動と OLD / WB_PENDING / REMEMBERED / age
+各フラグの変化)を 1 枚にまとめた図が
+[gc_state_transitions.svg](gc_state_transitions.svg) にある(§6・§7 の図解版)。
+
 ---
 
 ## 2. ヒープのレイアウト
@@ -315,6 +319,12 @@ old_count >= old_major_threshold  ||  minors_since_major >= MAX_MINORS_PER_MAJOR
 world 停止型・非移動なので、必要なのは **old→young 辺を remembered set に記録する
 だけ**の単純なバリア。
 
+バリアと remembered set が「なぜ必要か」(世代別 GC なし / remembered set なしの
+minor GC / 完全な minor GC の 3 通りでのマーク走査の比較と、バリアが必要な辺の
+分類)を図解したものが [gc_write_barrier.svg](gc_write_barrier.svg) にある。
+
+![write barrier と remembered set](gc_write_barrier.svg)
+
 ### 7.1 実体(`RValue::write_barrier`, `rvalue.rs:1115`)
 
 ```rust
@@ -338,6 +348,8 @@ pub(crate) fn write_barrier(&mut self, child: Value) {
 (`emit_write_barrier_rdi`)の両方でカバーされる。
 
 ### 7.2 状態遷移
+
+![世代別 GC オブジェクト状態遷移図](gc_state_transitions.svg)
 
 ```
 young(flag=1) ──[age>=3 で昇格]──▶ old
