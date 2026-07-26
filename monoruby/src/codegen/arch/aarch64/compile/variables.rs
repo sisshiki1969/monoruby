@@ -159,9 +159,9 @@ impl Codegen {
         let p = parent.a64().0;
         let c = child.a64().0;
         monoasm_arm64!(&mut self.jit,
-            // barrier armed?  (WB_PENDING = flag bit 6 = old & not remembered)
+            // barrier armed?  (WB_ARMED = flag bit 6 = old & not remembered)
             ldrb w9, [x(p), #(RVALUE_OFFSET_FLAG as u32)];
-            tbz x9, #(6), skip;        // WB_PENDING clear -> skip
+            tbz x9, #(6), skip;        // WB_ARMED clear -> skip
             // child immediate?  (heap pointers have the low 3 bits clear)
             mov x9, (0b111);
             and x9, x(c), x9;

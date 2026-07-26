@@ -179,7 +179,7 @@ impl Codegen {
 ///
 extern "C" fn jit_write_barrier(parent: *mut RValue) {
     // SAFETY: `parent` is the live `&RValue` the store wrote into. The
-    // inline fast path has already checked it is `wb_pending` with a heap
+    // inline fast path has already checked it is `wb_armed` with a heap
     // child, so `write_barrier_bulk` records it in the remembered set.
     unsafe { (*parent).write_barrier_bulk() };
 }
@@ -200,7 +200,7 @@ impl Codegen {
     pub(super) fn emit_write_barrier_rdi(&mut self, child: GP) {
         let skip = self.jit.label();
         monoasm! { &mut self.jit,
-            // barrier armed?  (WB_PENDING = flag bit 6 = old & not remembered)
+            // barrier armed?  (WB_ARMED = flag bit 6 = old & not remembered)
             // Young objects and already-remembered old objects both have it
             // clear, so the common case skips after this single test.
             testb [rdi + (RVALUE_OFFSET_FLAG as i32)], 0x40;

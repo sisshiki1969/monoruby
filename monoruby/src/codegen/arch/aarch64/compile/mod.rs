@@ -48,7 +48,7 @@ mod variables;
 ///
 extern "C" fn jit_write_barrier(parent: *mut RValue) {
     // SAFETY: `parent` is the live `&RValue` the store wrote into. The
-    // inline fast path has already checked it is `wb_pending` with a heap
+    // inline fast path has already checked it is `wb_armed` with a heap
     // child, so `write_barrier_bulk` records it in the remembered set.
     unsafe { (*parent).write_barrier_bulk() };
 }
