@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d8eaad21.js";
+            window.path_to_searchindex_js = "../searchindex-fa231d60.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -650,6 +650,13 @@ proc/args/result/exception/joiners/pending/masks/last_status をマークする�
 </tbody>
 </table>
 </div>
+<p>環境変数 <code>MONORUBY_MALLOC_HARD_LIMIT</code>(例 <code>3G</code>。K/M/G サフィックス可)を設定すると、
+malloc 総量がこれを超える確保が要求された瞬間に、要求サイズとバックトレースを
+stderr へ出力して abort する(<code>alloc.rs</code> の <code>malloc_hard_limit</code>)。OOM でマシン/
+ランナーごと死んでログが失われる環境(darwin CI)で、暴走アロケーションを
+「名前付きで診断可能なクラッシュ」に変換するための装置。ポーリング型の監視では
+捕捉できない単発の巨大確保も、アロケータ内の同期チェックなので確実に捕まる。
+未設定なら無効(コストは relaxed load 1 回)。</p>
 <hr>
 <h2 id="14-まとめ"><a class="header" href="#14-まとめ">14. まとめ</a></h2>
 <ul>
