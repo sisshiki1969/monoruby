@@ -1425,7 +1425,20 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     } else {
         let mut keys = hash.keys();
-        vm.sort(globals, &mut keys)?;
+        // Root the merge buffer (see `Array::sort_inner`): the hash keeps
+        // the keys alive, but a user-defined `<=>` may mutate the hash
+        // mid-sort, and the buffer would then be their only reference.
+        let scratch_len = executor::op::merge_scratch_len(keys.len());
+        vm.with_temp_scope(|vm| {
+            let buf = if scratch_len == 0 {
+                std::ptr::null_mut()
+            } else {
+                let mut scratch = Array::new_from_vec(vec![Value::nil(); scratch_len]);
+                vm.temp_push(scratch.into());
+                scratch.as_mut_ptr()
+            };
+            vm.sort(globals, &mut keys, buf)
+        })?;
         pairs = keys
             .iter()
             .map(|&k| Value::array2(k, hash.get(k, vm, globals).unwrap().unwrap()))

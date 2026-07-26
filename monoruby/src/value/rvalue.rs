@@ -571,8 +571,24 @@ impl PartialEq for RValue {
 }
 
 impl RValue {
+    ///
+    /// Exchange the payloads (and hence the child references) of two
+    /// objects.
+    ///
+    /// Both objects end up owning a child set they did not have before,
+    /// so both need the write barrier: either one may be an OLD object
+    /// that was armed while childless (`apply_aging` takes the
+    /// `arm_barrier` branch when `young_child_exists()` is false), and a
+    /// minor GC seeds OLD objects as already-marked and never scans them
+    /// unless they are in the remembered set. `Array#initialize`'s block
+    /// form hits exactly that: the receiver is allocated empty, stays
+    /// rooted across the whole block loop (so it ages into OLD), and then
+    /// receives every element at once through this swap.
+    ///
     pub fn swap_kind(&mut self, other: &mut Self) {
         std::mem::swap(&mut self.kind, &mut other.kind);
+        self.write_barrier_bulk();
+        other.write_barrier_bulk();
     }
 
     pub(crate) fn debug(&self, store: &Store) -> String {

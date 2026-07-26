@@ -1,22 +1,54 @@
 use super::*;
 
+/// Slices of up to this length get sorted using insertion sort, which
+/// needs no merge buffer.
+const MAX_INSERTION: usize = 20;
+
+///
+/// Number of scratch `Value` slots `merge_sort` needs to sort `len`
+/// elements; 0 when insertion sort covers it.
+///
+/// The caller owns the scratch buffer because it must be **GC-visible**:
+/// during a merge the buffer holds the only reference to the elements of
+/// one run (their slots in the receiver have already been overwritten by
+/// merge output), and the comparator runs arbitrary Ruby — and therefore
+/// may trigger a GC — between the copy-in and the copy-out. A plain
+/// Rust `Vec<Value>` is not scanned by the collector, so those elements
+/// were swept and the sort resumed on dangling pointers. Callers back
+/// the buffer with a `nil`-filled Array kept on the temp stack (every
+/// slot then always holds a valid, markable `Value`).
+///
+pub(crate) fn merge_scratch_len(len: usize) -> usize {
+    if len <= MAX_INSERTION { 0 } else { len / 2 }
+}
+
 impl Executor {
     ///
     /// Execute merge sort for Vec of *Value*s with `<=>`.
     ///
-    pub(crate) fn sort(&mut self, globals: &mut Globals, vec: &mut [Value]) -> Result<()> {
+    /// `buf` must point to at least `merge_scratch_len(vec.len())`
+    /// initialized, GC-rooted `Value`s (may be null when that is 0).
+    ///
+    pub(crate) fn sort(
+        &mut self,
+        globals: &mut Globals,
+        vec: &mut [Value],
+        buf: *mut Value,
+    ) -> Result<()> {
         let is_less = |a: Value, b: Value| {
             let ord = Executor::compare_values(self, globals, a, b)?;
             Result::Ok(ord == std::cmp::Ordering::Less)
         };
-        merge_sort(vec, is_less)
+        merge_sort(vec, buf, is_less)
     }
 }
 
 ///
 /// Execute merge sort for Vec of *Value*s with `compare`.
 ///
-pub(crate) fn sort_by<F>(vec: &mut [Value], mut compare: F) -> Result<()>
+/// See `Executor::sort` for the `buf` contract.
+///
+pub(crate) fn sort_by<F>(vec: &mut [Value], buf: *mut Value, mut compare: F) -> Result<()>
 where
     F: FnMut(Value, Value) -> Result<std::cmp::Ordering>,
 {
@@ -24,15 +56,13 @@ where
         let ord = compare(a, b)?;
         Result::Ok(ord == std::cmp::Ordering::Less)
     };
-    merge_sort(vec, f)
+    merge_sort(vec, buf, f)
 }
 
-fn merge_sort<F>(v: &mut [Value], mut is_less: F) -> Result<()>
+fn merge_sort<F>(v: &mut [Value], buf: *mut Value, mut is_less: F) -> Result<()>
 where
     F: FnMut(Value, Value) -> Result<bool>,
 {
-    // Slices of up to this length get sorted using insertion sort.
-    const MAX_INSERTION: usize = 20;
     // Very short runs are extended using insertion sort to span at least this many elements.
     const MIN_RUN: usize = 10;
 
@@ -48,7 +78,7 @@ where
         return Ok(());
     }
 
-    let mut buf = Vec::with_capacity(len / 2);
+    debug_assert!(!buf.is_null());
     let mut runs = vec![];
     let mut end = len;
     while end > 0 {
@@ -95,7 +125,7 @@ where
             merge(
                 &mut v[left.start..right.start + right.len],
                 left.len,
-                buf.as_mut_ptr(),
+                buf,
                 &mut is_less,
             )?;
             runs[r] = Run {
