@@ -319,6 +319,12 @@ old_count >= old_major_threshold  ||  minors_since_major >= MAX_MINORS_PER_MAJOR
 world 停止型・非移動なので、必要なのは **old→young 辺を remembered set に記録する
 だけ**の単純なバリア。
 
+バリアと remembered set が「なぜ必要か」(世代別 GC なし / remembered set なしの
+minor GC / 完全な minor GC の 3 通りでのマーク走査の比較と、バリアが必要な辺の
+分類)を図解したものが [gc_write_barrier.svg](gc_write_barrier.svg) にある。
+
+![write barrier と remembered set](gc_write_barrier.svg)
+
 ### 7.1 実体(`RValue::write_barrier`, `rvalue.rs:1115`)
 
 ```rust

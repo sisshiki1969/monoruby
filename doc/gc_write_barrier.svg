@@ -1,0 +1,258 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="1660" viewBox="0 0 1160 1660" font-family="Helvetica, Arial, 'Hiragino Sans', 'Noto Sans CJK JP', sans-serif">
+  <defs>
+    <marker id="mG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="mGy" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="mD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1160" height="1660" fill="#ffffff"/>
+  <rect x="4" y="4" width="1152" height="1652" fill="none" stroke="#e2e8f0" stroke-width="2" rx="10"/>
+
+  <!-- title -->
+  <text x="580" y="42" text-anchor="middle" font-size="23" font-weight="bold" fill="#0f172a">monoruby 世代別 GC — write barrier と remembered set</text>
+  <text x="580" y="66" text-anchor="middle" font-size="12" fill="#64748b">同じオブジェクトグラフを、世代別 GC なし / minor GC(remembered set なしの仮定)/ minor GC 完全版 の 3 通りでマークする様子</text>
+
+  <!-- legend -->
+  <circle cx="60" cy="97" r="11" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="78" y="101" font-size="11.5" fill="#334155">young(毎回走査)</text>
+  <circle cx="215" cy="97" r="11" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
+  <text x="233" y="101" font-size="11.5" fill="#334155">old(minor では走査しない)</text>
+  <circle cx="430" cy="97" r="9" fill="#16a34a"/>
+  <text x="430" y="101" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <text x="445" y="101" font-size="11.5" fill="#334155">マークされた</text>
+  <circle cx="555" cy="97" r="9" fill="#d97706"/>
+  <text x="555" y="101" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <text x="570" y="101" font-size="11.5" fill="#334155">seed でマーク済み(old)</text>
+  <line x1="745" y1="97" x2="790" y2="97" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <text x="798" y="101" font-size="11.5" fill="#334155">たどる辺</text>
+  <line x1="880" y1="97" x2="925" y2="97" stroke="#94a3b8" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#mGy)"/>
+  <text x="933" y="101" font-size="11.5" fill="#334155">たどらない辺</text>
+
+  <!-- ==================== Panel A ==================== -->
+  <rect x="30" y="125" width="1100" height="390" rx="10" fill="#fcfcfd" stroke="#cbd5e1"/>
+  <text x="50" y="153" font-size="15" font-weight="bold" fill="#0f172a">A. 世代別 GC なし(= 毎回 full mark / major GC 相当)</text>
+  <text x="50" y="173" font-size="11.5" fill="#64748b">ルートセットから全ての辺をたどり、生きている全オブジェクトをマークする。世代の区別は使わない。</text>
+
+  <!-- root box -->
+  <rect x="60" y="195" width="150" height="100" rx="8" fill="#e2e8f0" stroke="#475569" stroke-width="1.5"/>
+  <text x="135" y="230" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">ルートセット</text>
+  <text x="135" y="252" text-anchor="middle" font-size="10" fill="#475569">スタック / グローバル変数</text>
+  <text x="135" y="268" text-anchor="middle" font-size="10" fill="#475569">定数 / VM レジスタ …</text>
+
+  <!-- edges -->
+  <line x1="210" y1="215" x2="320" y2="222" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <line x1="210" y1="275" x2="324" y2="352" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <line x1="376" y1="225" x2="490" y2="225" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <text x="434" y="213" text-anchor="middle" font-size="10" fill="#64748b">young→young</text>
+  <line x1="376" y1="365" x2="570" y2="365" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <text x="474" y="353" text-anchor="middle" font-size="10" fill="#64748b">old→young</text>
+  <line x1="371" y1="379" x2="495" y2="431" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <text x="398" y="416" font-size="10" fill="#64748b">old→old</text>
+  <line x1="520" y1="251" x2="520" y2="415" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <text x="532" y="340" font-size="10" fill="#64748b">young→old</text>
+
+  <!-- nodes -->
+  <circle cx="350" cy="225" r="26" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="350" y="230" text-anchor="middle" font-size="14" font-weight="bold" fill="#1e3a8a">A</text>
+  <text x="350" y="267" text-anchor="middle" font-size="10" fill="#2563eb">young</text>
+  <circle cx="520" cy="225" r="26" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="520" y="230" text-anchor="middle" font-size="14" font-weight="bold" fill="#1e3a8a">B</text>
+  <text x="520" y="267" text-anchor="middle" font-size="10" fill="#2563eb">young</text>
+  <circle cx="350" cy="365" r="26" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
+  <text x="350" y="370" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">O1</text>
+  <text x="350" y="407" text-anchor="middle" font-size="10" fill="#b45309">old</text>
+  <circle cx="600" cy="365" r="26" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="600" y="370" text-anchor="middle" font-size="14" font-weight="bold" fill="#1e3a8a">Y1</text>
+  <text x="600" y="407" text-anchor="middle" font-size="10" fill="#2563eb">young</text>
+  <circle cx="520" cy="445" r="26" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
+  <text x="520" y="450" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">O2</text>
+  <text x="520" y="487" text-anchor="middle" font-size="10" fill="#b45309">old</text>
+  <circle cx="800" cy="425" r="26" fill="#e2e8f0" stroke="#94a3b8" stroke-width="2"/>
+  <text x="800" y="430" text-anchor="middle" font-size="14" font-weight="bold" fill="#64748b">Y2</text>
+  <text x="800" y="467" text-anchor="middle" font-size="10" fill="#94a3b8">どこからも参照なし</text>
+  <text x="800" y="483" text-anchor="middle" font-size="10" fill="#94a3b8">→ sweep で解放</text>
+
+  <!-- marks -->
+  <circle cx="369" cy="206" r="9" fill="#16a34a"/><text x="369" y="210" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="539" cy="206" r="9" fill="#16a34a"/><text x="539" y="210" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="369" cy="346" r="9" fill="#16a34a"/><text x="369" y="350" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="619" cy="346" r="9" fill="#16a34a"/><text x="619" y="350" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="539" cy="426" r="9" fill="#16a34a"/><text x="539" y="430" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+
+  <!-- note -->
+  <text x="880" y="230" font-size="11.5" fill="#475569">マークコストは生きている全オブ</text>
+  <text x="880" y="248" font-size="11.5" fill="#475569">ジェクト数に比例。長命な old が</text>
+  <text x="880" y="266" font-size="11.5" fill="#475569">増えるほど、毎回の GC がその分</text>
+  <text x="880" y="284" font-size="11.5" fill="#475569">だけ重くなっていく。</text>
+
+  <!-- ==================== Panel B ==================== -->
+  <rect x="30" y="530" width="1100" height="390" rx="10" fill="#fef2f2" stroke="#fca5a5"/>
+  <text x="50" y="558" font-size="15" font-weight="bold" fill="#991b1b">B. minor GC(もし remembered set が無かったら)— old→young 辺の見落とし</text>
+  <text x="50" y="578" font-size="11.5" fill="#b91c1c">old(O1・O2)は seed でマーク済み扱いになり走査しない。すると O1 だけが知っている Y1 に誰も到達できない。</text>
+
+  <!-- root box -->
+  <rect x="60" y="600" width="150" height="100" rx="8" fill="#e2e8f0" stroke="#475569" stroke-width="1.5"/>
+  <text x="135" y="635" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">ルートセット</text>
+  <text x="135" y="657" text-anchor="middle" font-size="10" fill="#475569">スタック / グローバル変数</text>
+  <text x="135" y="673" text-anchor="middle" font-size="10" fill="#475569">定数 / VM レジスタ …</text>
+
+  <!-- edges -->
+  <line x1="210" y1="620" x2="320" y2="627" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <line x1="210" y1="680" x2="324" y2="757" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <text x="60" y="727" font-size="10" fill="#b45309">old に到達 → 走査打ち切り</text>
+  <line x1="376" y1="630" x2="490" y2="630" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <line x1="376" y1="770" x2="570" y2="770" stroke="#94a3b8" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#mGy)"/>
+  <line x1="371" y1="784" x2="495" y2="836" stroke="#94a3b8" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#mGy)"/>
+  <path d="M 512 655 C 462 720, 462 780, 500 828" fill="none" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+
+  <!-- nodes -->
+  <circle cx="350" cy="630" r="26" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="350" y="635" text-anchor="middle" font-size="14" font-weight="bold" fill="#1e3a8a">A</text>
+  <text x="350" y="672" text-anchor="middle" font-size="10" fill="#2563eb">young</text>
+  <circle cx="520" cy="630" r="26" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="520" y="635" text-anchor="middle" font-size="14" font-weight="bold" fill="#1e3a8a">B</text>
+  <text x="520" y="672" text-anchor="middle" font-size="10" fill="#2563eb">young</text>
+  <circle cx="350" cy="770" r="26" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
+  <text x="350" y="775" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">O1</text>
+  <text x="350" y="812" text-anchor="middle" font-size="10" fill="#b45309">old(走査しない)</text>
+  <circle cx="600" cy="770" r="26" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="600" y="775" text-anchor="middle" font-size="14" font-weight="bold" fill="#1e3a8a">Y1</text>
+  <circle cx="520" cy="850" r="26" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
+  <text x="520" y="855" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">O2</text>
+  <text x="520" y="892" text-anchor="middle" font-size="10" fill="#b45309">old(走査しない)</text>
+  <circle cx="800" cy="830" r="26" fill="#e2e8f0" stroke="#94a3b8" stroke-width="2"/>
+  <text x="800" y="835" text-anchor="middle" font-size="14" font-weight="bold" fill="#64748b">Y2</text>
+  <text x="800" y="872" text-anchor="middle" font-size="10" fill="#94a3b8">未マーク → 解放(正しい)</text>
+
+  <!-- marks -->
+  <circle cx="369" cy="611" r="9" fill="#16a34a"/><text x="369" y="615" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="539" cy="611" r="9" fill="#16a34a"/><text x="539" y="615" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="369" cy="751" r="9" fill="#d97706"/><text x="369" y="755" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="539" cy="831" r="9" fill="#d97706"/><text x="539" y="835" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+
+  <!-- danger ring on Y1 -->
+  <circle cx="600" cy="770" r="36" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-dasharray="6 4"/>
+  <text x="600" y="700" text-anchor="middle" font-size="11" font-weight="bold" fill="#dc2626">生きているのに sweep される</text>
+  <text x="600" y="716" text-anchor="middle" font-size="11" font-weight="bold" fill="#dc2626">→ 誤解放(use-after-free)</text>
+  <text x="659" y="775" font-size="12" font-weight="bold" fill="#dc2626">← 未マーク!</text>
+
+  <!-- note -->
+  <text x="880" y="740" font-size="11.5" fill="#7f1d1d">old を丸ごとスキップする以上、</text>
+  <text x="880" y="758" font-size="11.5" fill="#7f1d1d">old→young の辺は GC の外で</text>
+  <text x="880" y="776" font-size="11.5" fill="#7f1d1d">誰かが覚えておくしかない。</text>
+  <text x="880" y="800" font-size="11.5" font-weight="bold" fill="#7f1d1d">→ それが remembered set と</text>
+  <text x="880" y="818" font-size="11.5" font-weight="bold" fill="#7f1d1d">   write barrier の役割</text>
+
+  <!-- ==================== Panel C ==================== -->
+  <rect x="30" y="935" width="1100" height="450" rx="10" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="50" y="963" font-size="15" font-weight="bold" fill="#14532d">C. minor GC + write barrier / remembered set(monoruby の実装)</text>
+  <text x="50" y="983" font-size="11.5" fill="#15803d">old→young 参照を作った瞬間に write barrier が記録し、minor GC はルートセットと remembered set の両方からマークする。</text>
+
+  <!-- root box -->
+  <rect x="60" y="1005" width="150" height="100" rx="8" fill="#e2e8f0" stroke="#475569" stroke-width="1.5"/>
+  <text x="135" y="1040" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">ルートセット</text>
+  <text x="135" y="1062" text-anchor="middle" font-size="10" fill="#475569">スタック / グローバル変数</text>
+  <text x="135" y="1078" text-anchor="middle" font-size="10" fill="#475569">定数 / VM レジスタ …</text>
+
+  <!-- remembered set box -->
+  <rect x="60" y="1225" width="150" height="90" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="2"/>
+  <text x="135" y="1249" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#14532d">remembered set</text>
+  <rect x="103" y="1258" width="64" height="24" rx="6" fill="#ffffff" stroke="#b45309" stroke-width="1.5"/>
+  <text x="135" y="1275" text-anchor="middle" font-size="12" font-weight="bold" fill="#78350f">O1</text>
+  <text x="135" y="1302" text-anchor="middle" font-size="9.5" fill="#15803d">old→young 辺を持つ old の一覧</text>
+
+  <!-- edges -->
+  <line x1="210" y1="1025" x2="320" y2="1032" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <text x="60" y="1128" font-size="10.5" fill="#15803d">② ルートから young を走査</text>
+  <line x1="210" y1="1085" x2="324" y2="1162" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <line x1="376" y1="1035" x2="490" y2="1035" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+  <line x1="376" y1="1175" x2="570" y2="1175" stroke="#16a34a" stroke-width="2.6" marker-end="url(#mG)"/>
+  <line x1="371" y1="1189" x2="495" y2="1241" stroke="#94a3b8" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#mGy)"/>
+  <line x1="520" y1="1061" x2="520" y2="1225" stroke="#16a34a" stroke-width="2.2" marker-end="url(#mG)"/>
+
+  <!-- write barrier badge on O1->Y1 -->
+  <rect x="405" y="1132" width="140" height="22" rx="11" fill="#7f1d1d"/>
+  <text x="475" y="1147" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#ffffff">① ⚡ write barrier</text>
+
+  <!-- remembered -> O1 scan arrow -->
+  <path d="M 210 1262 C 262 1262, 300 1230, 328 1198" fill="none" stroke="#15803d" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#mG)"/>
+
+  <!-- nodes -->
+  <circle cx="350" cy="1035" r="26" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="350" y="1040" text-anchor="middle" font-size="14" font-weight="bold" fill="#1e3a8a">A</text>
+  <text x="350" y="1077" text-anchor="middle" font-size="10" fill="#2563eb">young</text>
+  <circle cx="520" cy="1035" r="26" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="520" y="1040" text-anchor="middle" font-size="14" font-weight="bold" fill="#1e3a8a">B</text>
+  <text x="520" y="1077" text-anchor="middle" font-size="10" fill="#2563eb">young</text>
+  <circle cx="350" cy="1175" r="26" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
+  <text x="350" y="1180" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">O1</text>
+  <text x="350" y="1217" text-anchor="middle" font-size="10" fill="#b45309">old(remembered)</text>
+  <circle cx="600" cy="1175" r="26" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="600" y="1180" text-anchor="middle" font-size="14" font-weight="bold" fill="#1e3a8a">Y1</text>
+  <text x="600" y="1217" text-anchor="middle" font-size="10" fill="#2563eb">young</text>
+  <circle cx="520" cy="1255" r="26" fill="#fde68a" stroke="#b45309" stroke-width="2"/>
+  <text x="520" y="1260" text-anchor="middle" font-size="14" font-weight="bold" fill="#78350f">O2</text>
+  <text x="520" y="1297" text-anchor="middle" font-size="10" fill="#b45309">old(armed)</text>
+  <circle cx="800" cy="1235" r="26" fill="#e2e8f0" stroke="#94a3b8" stroke-width="2"/>
+  <text x="800" y="1240" text-anchor="middle" font-size="14" font-weight="bold" fill="#64748b">Y2</text>
+  <text x="800" y="1277" text-anchor="middle" font-size="10" fill="#94a3b8">未マーク → 解放(正しい)</text>
+
+  <!-- marks -->
+  <circle cx="369" cy="1016" r="9" fill="#16a34a"/><text x="369" y="1020" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="539" cy="1016" r="9" fill="#16a34a"/><text x="539" y="1020" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="369" cy="1156" r="9" fill="#d97706"/><text x="369" y="1160" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="619" cy="1156" r="9" fill="#16a34a"/><text x="619" y="1160" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="539" cy="1236" r="9" fill="#d97706"/><text x="539" y="1240" text-anchor="middle" font-size="10" fill="#ffffff" font-weight="bold">✓</text>
+
+  <!-- note -->
+  <text x="880" y="1160" font-size="11.5" fill="#14532d">minor GC のマーク起点は</text>
+  <text x="880" y="1178" font-size="11.5" font-weight="bold" fill="#14532d">ルートセット + remembered set。</text>
+  <text x="880" y="1196" font-size="11.5" fill="#14532d">old 本体は走査しないまま、</text>
+  <text x="880" y="1214" font-size="11.5" fill="#14532d">old→young 辺だけ確実に拾えるので</text>
+  <text x="880" y="1232" font-size="11.5" fill="#14532d">Y1 は見落とされない。</text>
+
+  <!-- sequence captions -->
+  <text x="60" y="1342" font-size="11" fill="#7f1d1d">① 実行中の代入 <tspan font-family="Consolas, monospace">o1.f = y1</tspan> が write barrier を発火 → O1 を remembered set に登録(O1 は armed → remembered)</text>
+  <text x="60" y="1362" font-size="11" fill="#14532d">③ minor GC は remembered set 内の各 old の子だけを走査(mark_children)→ Y1 をマーク</text>
+
+  <!-- ==================== Edge table ==================== -->
+  <rect x="30" y="1400" width="1100" height="240" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="50" y="1430" font-size="15" font-weight="bold" fill="#0f172a">どの辺(代入)に write barrier が必要か</text>
+
+  <!-- cell 1: root -> any -->
+  <rect x="70" y="1478" width="34" height="24" rx="4" fill="#e2e8f0" stroke="#475569"/>
+  <text x="87" y="1494" text-anchor="middle" font-size="9" fill="#334155">root</text>
+  <line x1="108" y1="1490" x2="148" y2="1490" stroke="#475569" stroke-width="2" marker-end="url(#mD)"/>
+  <circle cx="165" cy="1490" r="13" fill="#dbeafe" stroke="#2563eb" stroke-width="1.8"/>
+  <text x="200" y="1484" font-size="12.5" font-weight="bold" fill="#0f172a">root → 任意: バリア不要</text>
+  <text x="200" y="1503" font-size="11" fill="#475569">ルートは毎 GC 必ず列挙して走査し直すため</text>
+
+  <!-- cell 2: young -> any -->
+  <circle cx="620" cy="1490" r="13" fill="#dbeafe" stroke="#2563eb" stroke-width="1.8"/>
+  <line x1="637" y1="1490" x2="677" y2="1490" stroke="#475569" stroke-width="2" marker-end="url(#mD)"/>
+  <circle cx="694" cy="1490" r="13" fill="#dbeafe" stroke="#2563eb" stroke-width="1.8"/>
+  <circle cx="726" cy="1490" r="13" fill="#fde68a" stroke="#b45309" stroke-width="1.8"/>
+  <text x="760" y="1484" font-size="12.5" font-weight="bold" fill="#0f172a">young → 任意: バリア不要</text>
+  <text x="760" y="1503" font-size="11" fill="#475569">young は minor / major を問わず毎回全走査されるため</text>
+
+  <!-- cell 3: old -> young -->
+  <circle cx="85" cy="1580" r="13" fill="#fde68a" stroke="#b45309" stroke-width="1.8"/>
+  <line x1="102" y1="1580" x2="142" y2="1580" stroke="#b91c1c" stroke-width="2.5" marker-end="url(#mD)"/>
+  <text x="122" y="1568" text-anchor="middle" font-size="11" fill="#b91c1c">⚡</text>
+  <circle cx="159" cy="1580" r="13" fill="#dbeafe" stroke="#2563eb" stroke-width="1.8"/>
+  <text x="200" y="1574" font-size="12.5" font-weight="bold" fill="#b91c1c">old → young: バリア必須!</text>
+  <text x="200" y="1593" font-size="11" fill="#475569">格納した瞬間に remembered set へ記録しないと Panel B の誤解放が起きる</text>
+
+  <!-- cell 4: old -> old -->
+  <circle cx="620" cy="1580" r="13" fill="#fde68a" stroke="#b45309" stroke-width="1.8"/>
+  <line x1="637" y1="1580" x2="677" y2="1580" stroke="#475569" stroke-width="2" marker-end="url(#mD)"/>
+  <circle cx="694" cy="1580" r="13" fill="#fde68a" stroke="#b45309" stroke-width="1.8"/>
+  <text x="760" y="1574" font-size="12.5" font-weight="bold" fill="#0f172a">old → old: 概念上は不要</text>
+  <text x="760" y="1593" font-size="11" fill="#475569">monoruby は armed old への格納なら子の世代を見ずに発火(無害な過剰近似)</text>
+</svg>
