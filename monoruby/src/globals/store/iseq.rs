@@ -677,7 +677,28 @@ impl ISeqInfo {
         self.jit_entry.clear();
         self.jit_class_profile.clear();
         #[cfg(target_arch = "aarch64")]
-        self.jit_slot.clear();
+        {
+            // aarch64 has no entry-reversion pass (x86 reverts every compiled
+            // method entry to `vm_entry` via `apply_jmp_patch_address` in
+            // `set_bop_redefine`). Its compiled methods are instead reached
+            // through a heap-leaked dispatch slot (see `arch/aarch64/wrapper.rs`
+            // + `compile_patch`). Zero each tracked slot so an already-compiled
+            // method stops branching into its now-stale JIT body — which may
+            // have folded a basic-op result or inlined integer arithmetic that a
+            // BOP redefinition has invalidated — and falls back to the VM on its
+            // next call. The slots are plain data words read with `ldr`, so a
+            // bare store suffices; no I-cache maintenance is needed (that is only
+            // required when patching instructions).
+            for &slot_addr in self.jit_slot.values() {
+                // SAFETY: each value is a heap-leaked `u64` (a wrapper or
+                // class-guard-chain dispatch word) recorded by `set_jit_slot`;
+                // it is leaked for the process lifetime, so the pointer is always
+                // valid to write, and the write races nothing (method-table
+                // mutation is not a green-thread yield point).
+                unsafe { *(slot_addr as *mut u64) = 0 };
+            }
+            self.jit_slot.clear();
+        }
     }
 
     /// Record one warm-up sample of *self_class* for this iseq and report
