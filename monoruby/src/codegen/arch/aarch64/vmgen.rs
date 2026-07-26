@@ -1534,6 +1534,17 @@ impl Codegen {
     /// instead of returning the fixnum result inline. Mirrors the x86
     /// `remove_vm_bop_optimization` in `vmgen.rs`.
     pub(in crate::codegen) fn remove_vm_bop_optimization(&mut self) {
+        // loop_start (14): swap in the no-opt handler (plain advance +
+        // dispatch, same shape as loop_end) so the VM stops entering compiled
+        // OSR loop bodies — and stops triggering new loop compiles — entirely.
+        // Without this, an off-stack method's `[pc+8]` still holds its stale
+        // loop codeptr (nothing reverts OSR entries; `invalidate_jit_code`
+        // only covers method dispatch slots), so a fresh frame's loop_start
+        // would branch straight into loop code whose folds / inline integer
+        // arithmetic assume the now-redefined basic op. Mirrors the x86
+        // `remove_vm_bop_optimization`'s `dispatch[14] = vm_loop_start_no_opt`.
+        self.dispatch[14] = self.a64_op_loop();
+
         let add = self.a64_op_binop(add_values_no_opt);
         let sub = self.a64_op_binop(sub_values_no_opt);
         let mul = self.a64_op_binop(mul_values_no_opt);

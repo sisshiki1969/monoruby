@@ -1890,6 +1890,17 @@ impl Executor {
         visibility: Visibility,
     ) -> Result<()> {
         globals.add_method(class_id, name, func_id, visibility);
+        // Evict stale on-stack JIT frames *after* the store mutation and
+        // *before* the `method_added` hook: if this definition redefined a
+        // basic op, `set_bop_redefine` has just set the flags, and every JIT
+        // frame currently on the stack (e.g. a caller whose inline integer
+        // arithmetic follows the call that led here) must deopt on return
+        // instead of resuming its compiled body — including inside the
+        // `method_added` callback, which runs arbitrary Ruby. This funnel
+        // covers every definition route (`def`, `Module#define_method`,
+        // `alias`); checking before the store mutation (as the `def` path
+        // used to) misses the very definition that sets the flags.
+        Codegen::check_bop_redefine(self.cfp());
         self.invoke_method_added(globals, class_id, name)
     }
 
@@ -1906,6 +1917,8 @@ impl Executor {
         original_name: IdentId,
     ) -> Result<()> {
         globals.add_method_with_original(class_id, name, func_id, visibility, original_name);
+        // BOP-redefinition eviction — see `add_method`.
+        Codegen::check_bop_redefine(self.cfp());
         self.invoke_method_added(globals, class_id, name)
     }
 
@@ -1918,6 +1931,8 @@ impl Executor {
         old_name: IdentId,
     ) -> Result<()> {
         globals.alias_method_for_class(class_id, new_name, old_name)?;
+        // BOP-redefinition eviction (`alias_method :+, :other`) — see `add_method`.
+        Codegen::check_bop_redefine(self.cfp());
         self.invoke_method_added(globals, class_id, new_name)
     }
 
@@ -2119,7 +2134,6 @@ impl Executor {
         if let Some(attached) = target.is_singleton() {
             attached.ensure_not_frozen(&globals.store)?;
         }
-        Codegen::check_bop_redefine(self.cfp());
         if cref.module_function {
             self.add_method(globals, class_id, name, func, Visibility::Private)?;
             self.add_singleton_method(globals, class_id, name, func, cref.visibility)?;
@@ -2144,6 +2158,8 @@ impl Executor {
             };
             self.add_method(globals, class_id, name, func, visibility)?;
         }
+        // BOP-redefinition eviction fires inside `add_method` (after the store
+        // mutation, before the `method_added` hook) — see the comment there.
         Ok(Value::nil())
     }
 }
