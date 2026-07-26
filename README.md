@@ -80,14 +80,15 @@ Monthly highlights of improvements since January 2026 (with representative PRs).
 - Fast. Currently, monoruby is comparable to ruby3.4.1+YJIT in the optcarrot benchmark.
 - Hand-written original parser.
 - Register-based bytecode.
-- Bytecode executor (virtual machine) written in x86-64 assembly (yes, we currently support only x86-64!).
-- A compact and fast just-in-time compiler. (internally using self-made dynamic assembler [monoasm](https://github.com/sisshiki1969/monoasm))
+- Bytecode executor (virtual machine) emitting machine code directly, for both x86-64 and aarch64 (Apple Silicon).
+- A compact and fast just-in-time compiler with full backends for x86-64 and aarch64. (internally using self-made dynamic assembler [monoasm](https://github.com/sisshiki1969/monoasm))
 
 ## Prerequisites
 
 ### Platform
 
-Currently, only x86-64/linux is supported.
+- x86-64 Linux
+- aarch64 — macOS on Apple Silicon is fully supported (VM + JIT); CI runs natively on GitHub's Apple Silicon (`macos-latest`) runners. Linux arm64 works as well.
 
 ## How to run
 
