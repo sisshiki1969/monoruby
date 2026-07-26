@@ -3508,3 +3508,37 @@ fn recompile_hot_method_after_class_version_bump() {
         "#,
     );
 }
+
+#[test]
+fn eager_forwarding_into_req_only_callee() {
+    // A top-level `def f(...) = g(...)` trampoline is not specialized, so the
+    // `...` rest is materialized and forwarded EAGERLY (deferred_src == None)
+    // into a required-args-only callee. aarch64 now inlines the array-copy fast
+    // path (guarding Array-shape + exact length + nil kwrest) instead of always
+    // calling the runtime helper; any guard miss (keyword forwarded, wrong
+    // length) still falls back to the helper and matches CRuby — including the
+    // ArgumentError on an arity mismatch.
+    run_test(
+        r##"
+        def a0; 42; end
+        def a1(x); x * 10; end
+        def a5(a, b, c, d, e); a + b + c + d + e; end
+        def f0(...); a0(...); end
+        def f1(...); a1(...); end
+        def f5(...); a5(...); end
+        def kw_target(a, b); "#{a}/#{b}"; end
+        def fkw(...); kw_target(...); end
+        class P; def greet(a, b); "#{a}:#{b}"; end; end
+        class C < P; def greet(...); super(...); end; end
+        res = []
+        i = 0
+        while i < 3000
+          f0; f1(i); f5(i, i, i, i, i); C.new.greet(i, i)
+          i += 1
+        end
+        res << f0 << f1(9) << f5(1, 2, 3, 4, 5) << fkw(1, 2) << C.new.greet(7, 8)
+        res << (begin; f5(1, 2); rescue ArgumentError; "argerr"; end)
+        res
+        "##,
+    );
+}

@@ -2326,16 +2326,13 @@ impl Codegen {
                 recv,
                 args,
                 lead_num,
-                kwrest_guard: _,
+                kwrest_guard,
                 deferred_src,
             } => {
                 let offset = store[callee_fid].get_offset();
                 // D1 source-routed: the forwarded count is the statically
                 // known caller arg count; missing optional slots are
                 // None-filled (gate guarantees req <= lead+len <= reqopt).
-                // The non-deferred (eager) case keeps routing through the
-                // generic runtime helper (aarch64 does not emit the eager
-                // inline array copy that x86 does).
                 return match deferred_src {
                     Some((src, len)) => {
                         let n = len as usize;
@@ -2344,7 +2341,24 @@ impl Codegen {
                             recv, args, lead_num, n, none_fill, src,
                         )
                     }
-                    None => self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset),
+                    // Eager (rest Array materialized): the callee is req-only
+                    // (the front-end routes optional-taking eager forwards to
+                    // SetArgumentsForwardedHelper), so `expected_len` is the
+                    // fixed req count minus the leading args. Inline the
+                    // array-copy fast path with a helper fallback.
+                    None => {
+                        let expected_len = store[callee_fid].req_num() - lead_num;
+                        self.a64_set_arguments_forwarded_eager(
+                            callid,
+                            callee_fid,
+                            offset,
+                            recv,
+                            args,
+                            lead_num,
+                            expected_len,
+                            kwrest_guard,
+                        )
+                    }
                 };
             }
             // Every other AsmInst variant is handled by the shared
