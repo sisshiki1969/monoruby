@@ -173,6 +173,15 @@ jobs:
         env:
           MONORUBY_MALLOC_HARD_LIMIT: 3G
           GH_TOKEN: ${{ github.token }}
+          # Experiment (2026-07-26): all three instrumented runner deaths
+          # struck inside the nextest phase at unrelated suite positions
+          # (tests #1438, #1360, #422) with memory healthy 30 s before —
+          # a fast ambient blow-up, not one culprit test. Default
+          # parallelism on the M1 runner is 3; halving it tests the
+          # parallel-interaction hypothesis and lowers peak pressure.
+          # A normal pass is ~11 min, so the ~+40% nextest time stays
+          # well under the 25-min attempt cap.
+          NEXTEST_TEST_THREADS: "2"
         with:
           timeout_minutes: 25
           max_attempts: 2
