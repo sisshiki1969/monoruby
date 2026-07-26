@@ -53,7 +53,6 @@ use codegen::jitgen::asmir::*;
 pub use monoasm::*;
 use monoruby_attr::monoruby_builtin;
 use num::ToPrimitive;
-#[cfg(target_arch = "x86_64")]
 pub(crate) use kernel::object_send;
 pub(crate) use kernel::{parse_kernel_float, parse_kernel_integer, send};
 pub(crate) use process::signal_name_to_number;

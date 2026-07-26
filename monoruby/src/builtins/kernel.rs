@@ -282,7 +282,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         "send",
         &["__send__"],
         crate::builtins::send,
-        inline_gen!(crate::builtins::object_send),
+        inline_gen2!(crate::builtins::object_send),
         0,
         0,
         true,
@@ -3582,8 +3582,6 @@ pub(crate) fn send(
         },
     )
 }
-
-#[cfg(target_arch = "x86_64")]
 
 pub fn object_send(
     state: &mut AbstractState,

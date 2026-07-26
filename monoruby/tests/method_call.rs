@@ -3568,3 +3568,40 @@ fn jit_integer_method_with_bignum_receiver() {
         "#,
     );
 }
+
+#[test]
+fn object_send_inline() {
+    // `Object#send` / `#__send__` JIT inline: symbol + string names, splat,
+    // block, keywords, class method, arity errors, NoMethodError, and a varying
+    // method name (LFU symbol-cache promotion), all hammered to trigger the
+    // inline generator. Must match CRuby.
+    run_test(
+        r##"
+        class C
+          def m0; "m0"; end
+          def m1(a); a * 10; end
+          def m6(a,b,c,d,e,f); a+b+c+d+e+f; end
+          def rest(*a); a.length; end
+          def opt(a, b=99); a + b; end
+          def blk; yield; end
+          def kw(a:, b:); a - b; end
+          def self.smeth(x); x * 3; end
+        end
+        c = C.new
+        res = []
+        50000.times do
+          c.send(:m0); c.send(:m1, 5); c.__send__(:m6, 1,2,3,4,5,6)
+          c.send(:rest, 1, 2, 3); c.send(:opt, 10)
+        end
+        res << c.send(:m0) << c.send(:m1, 42) << c.__send__(:m6, 1,2,3,4,5,6)
+        res << c.send("m0") << c.send(:rest) << c.send(:rest, 1, 2, 3, 4)
+        res << c.send(:opt, 10) << c.send(:opt, 10, 20)
+        res << c.send(:blk) { 777 } << c.send(:kw, a: 9, b: 4)
+        res << c.send(*[:m1, 88]) << C.send(:smeth, 8)
+        res << (c.send(:opt) rescue "argerr")
+        res << (c.send(:nope, 1) rescue $!.class.name)
+        [:m0, :m1, :rest].each { |m| res << (m == :m1 ? c.send(m, 7) : c.send(m)) }
+        res
+        "##,
+    );
+}

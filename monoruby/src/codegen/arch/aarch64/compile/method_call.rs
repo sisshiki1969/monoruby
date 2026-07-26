@@ -1,7 +1,436 @@
 use super::*;
 use monoasm_macro::monoasm_arm64;
 
+// ---- Object#send inline symbol cache (aarch64 twin of the x86_64 copy in
+// arch/x86_64/compile/method_call.rs; the two files are arch-selected so the
+// duplicate definitions never collide) ----------------------------------------
+const CACHE_SIZE: usize = 4;
+const CACHE_METHOD: usize = std::mem::offset_of!(CacheEntry, method);
+const CACHE_FID: usize = std::mem::offset_of!(CacheEntry, fid);
+const CACHE_COUNTER: usize = std::mem::offset_of!(CacheEntry, counter);
+
+#[repr(C)]
+struct CacheEntry {
+    method: Option<IdentId>,
+    fid: Option<FuncId>,
+    counter: usize,
+}
+
+#[repr(C)]
+struct Cache([CacheEntry; CACHE_SIZE]);
+
+extern "C" fn expect_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Option<IdentId> {
+    v.expect_symbol_or_string(globals)
+        .map_err(|err| vm.set_error(err))
+        .ok()
+}
+
+extern "C" fn no_method_name(vm: &mut Executor) -> Option<Value> {
+    let err = MonorubyErr::argumenterr("no method name given.");
+    vm.set_error(err);
+    None
+}
+
+extern "C" fn wrong_number_of_arg(vm: &mut Executor, expected: usize, given: usize) -> Option<Value> {
+    let err = MonorubyErr::wrong_number_of_arg(expected, given);
+    vm.set_error(err);
+    None
+}
+
+extern "C" fn find(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    func_name: IdentId,
+) -> Option<FuncId> {
+    vm.find_method(globals, recv, func_name, true)
+        .map_err(|err| vm.set_error(err))
+        .ok()
+}
+
 impl Codegen {
+    /// Invalidate the `Object#send` symbol cache when the global class version
+    /// moved (a method was (re)defined). aarch64 twin of x86
+    /// `check_version_with_cache`: no RIP-relative addressing (bake the data
+    /// addresses) and no `select_page` (the clear block is laid out inline).
+    /// Does not deopt — it zeroes the 4 cache entries' `method`/`fid` words so a
+    /// stale `IdentId -> FuncId` binding can't survive a redefinition.
+    fn check_version_with_cache(&mut self, cache_addr: u64) {
+        // Per-callsite version stamp. Heap-leaked (like the wrapper's jit_slot)
+        // so its absolute address bakes into the stub — aarch64 has no
+        // RIP-relative addressing, and a fresh JIT-data label is not yet
+        // resolved at emit time (only `class_version_label`, allocated at
+        // startup, is).
+        let cv_addr = Box::into_raw(Box::new(-1i32)) as u64;
+        let gv_addr = self
+            .jit
+            .get_label_address(&self.class_version_label())
+            .as_ptr() as u64;
+        let clear = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (gv_addr);
+            ldr w10, [x9];           // global class version
+            mov x9, (cv_addr);
+            ldr w11, [x9];           // cached version stamp
+            cmp w10, w11;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &clear);
+        monoasm_arm64!(&mut self.jit, b exit;); // match -> keep the cache
+        self.jit.bind_label(clear);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (cv_addr);
+            str w10, [x9];           // re-stamp the cached version
+            mov x9, (cache_addr);
+            mov x12, #0;
+            str x12, [x9];           // zero each entry's method+fid word
+            str x12, [x9, #(16)];
+            str x12, [x9, #(32)];
+            str x12, [x9, #(48)];
+        );
+        self.jit.bind_label(exit);
+    }
+
+    /// `send(*arr)`: extract the method name (arg0 == `arr[0]`, or `arr` itself
+    /// when it is not an Array) into x11. Twin of x86 `object_send_splat_arg0`;
+    /// reuses the Array-shape guard idiom of `a64_set_arguments_forwarded_eager`.
+    /// An empty-array splat raises via `no_method_name`.
+    fn object_send_splat_arg0(&mut self, args: SlotId, error: &DestLabel) {
+        let lfp = GP::R14.a64().0;
+        let exit = self.jit.label();
+        let heap = self.jit.label();
+        self.a64_frame_load(11, lfp, conv(args) as u32); // x11 = splat value
+        monoasm_arm64!(&mut self.jit,
+            mov x9, #7;
+            and x9, x11, x9;
+            cbnz x9, exit;                                // immediate -> arg0 = value
+            ldrb w9, [x11, #(RVALUE_OFFSET_TY as u32)];
+            cmp x9, #(ObjTy::ARRAY.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &exit);   // not an Array -> arg0 = value
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x11, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            cmp x9, #(ARRAY_INLINE_CAPA as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &heap);
+        monoasm_arm64!(&mut self.jit,
+            ldr x11, [x11, #(RVALUE_OFFSET_INLINE as u32)]; // inline elem0
+            cbnz x11, exit;                                 // non-null -> arg0 = elem0
+            // empty array: raise "no method name given."
+            mov x0, x19;
+            str x30, [sp, #-16]!;
+            mov x9, (no_method_name as *const () as u64);
+            blr x9;
+            ldr x30, [sp], #16;
+            b error;
+        );
+        self.jit.bind_label(heap);
+        monoasm_arm64!(&mut self.jit,
+            ldr x11, [x11, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            ldr x11, [x11];                                 // heap elem0
+        );
+        self.jit.bind_label(exit);
+    }
+
+    /// Resolve the `send` method name (arg0 in x11: a Symbol or String) to a
+    /// FuncId in x0. Twin of x86 `object_send_inner`: an LFU symbol cache
+    /// (4 entries) keyed by `IdentId`, promoting hot entries by swapping with
+    /// the least-used slot; a miss calls `find`, a non-Symbol arg0 is coerced
+    /// via `expect_string`. x0 == 0 (None) on error is caught by the caller's
+    /// `handle_error`. aarch64: no `select_page`, so the cold blocks are inline;
+    /// `csel` replaces `cmovltq`. Regs: x11 IdentId, x12 cur, x13 min, x14/x15/x9
+    /// scratch.
+    fn object_send_inner(&mut self, recv: SlotId, cache_addr: u64, error: &DestLabel) {
+        let lfp = GP::R14.a64().0;
+        let not_symbol = self.jit.label();
+        let l1 = self.jit.label();
+        let found = self.jit.label();
+        let not_found = self.jit.label();
+        let loop0 = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, #(0xff);
+            and x9, x11, x9;
+            cmp x9, #(TAG_SYMBOL as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &not_symbol);
+        monoasm_arm64!(&mut self.jit, lsr x11, x11, #(32);); // untag Symbol -> IdentId
+        self.jit.bind_label(l1.clone());
+        monoasm_arm64!(&mut self.jit,
+            mov x12, (cache_addr);   // cur = &Cache[0]
+            mov x13, x12;            // min = &Cache[0]
+            ldr w0, [x12, #(CACHE_METHOD as u32)];
+            cbz x0, not_found;
+            cmp w11, w0;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &found);
+        monoasm_arm64!(&mut self.jit, mov x15, #((CACHE_SIZE - 1) as u64););
+        self.jit.bind_label(loop0.clone());
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x12, #(CACHE_COUNTER as u32)];  // cur counter
+            ldr x14, [x13, #(CACHE_COUNTER as u32)]; // min counter
+            cmp x9, x14;
+            csel x13, x12, x13, lt;                  // min tracks the least-used
+            add x12, x12, #(16);                     // next entry
+            ldr w0, [x12, #(CACHE_METHOD as u32)];
+            cbz x0, not_found;
+            cmp w11, w0;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &found);
+        monoasm_arm64!(&mut self.jit,
+            sub x15, x15, #1;
+            cbz x15, not_found;
+            b loop0;
+        );
+        self.jit.bind_label(found.clone());
+        monoasm_arm64!(&mut self.jit,
+            ldr w0, [x12, #(CACHE_FID as u32)];      // result = fid
+            ldr x9, [x12, #(CACHE_COUNTER as u32)];
+            add x9, x9, #1;
+            str x9, [x12, #(CACHE_COUNTER as u32)];  // bump cur counter
+            ldr x14, [x13, #(CACHE_COUNTER as u32)];
+            cmp x9, x14;
+        );
+        self.jit.bcond_label(monoasm::Cond::Le, &exit); // cur <= min -> done
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x12];      ldr x14, [x13];       // swap word0 (method+fid)
+            str x14, [x12];     str x9, [x13];
+            ldr x9, [x12, #(8)]; ldr x14, [x13, #(8)]; // swap word1 (counter)
+            str x14, [x12, #(8)]; str x9, [x13, #(8)];
+            b exit;
+        );
+        self.jit.bind_label(not_found.clone());
+        monoasm_arm64!(&mut self.jit,
+            stp x11, x12, [sp, #-16]!;                // save IdentId + cur&Cache
+            mov x0, x19;                              // vm
+            mov x1, x20;                              // globals
+        );
+        self.a64_frame_load(2, lfp, conv(recv) as u32); // x2 = recv
+        monoasm_arm64!(&mut self.jit,
+            mov x3, x11;                              // func_name (IdentId)
+            str x30, [sp, #-16]!;
+            mov x9, (find as *const () as u64);
+            blr x9;                                   // x0 = Option<FuncId>
+            ldr x30, [sp], #16;
+            ldp x11, x12, [sp], #16;
+            cbz x0, exit;                             // None -> error (handle_error)
+            str w0, [x12, #(CACHE_FID as u32)];
+            str w11, [x12, #(CACHE_METHOD as u32)];
+            mov x9, #1;
+            str x9, [x12, #(CACHE_COUNTER as u32)];
+            b exit;
+        );
+        self.jit.bind_label(not_symbol.clone());
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                              // vm
+            mov x1, x20;                              // globals
+            mov x2, x11;                              // arg0 value
+            str x30, [sp, #-16]!;
+            mov x9, (expect_string as *const () as u64);
+            blr x9;                                   // x0 = Option<IdentId>
+            ldr x30, [sp], #16;
+        );
+        self.emit_handle_error(error);                // x0 == 0 -> error
+        monoasm_arm64!(&mut self.jit,
+            mov x11, x0;                              // IdentId = result
+            b l1;
+        );
+        self.jit.bind_label(exit);
+    }
+
+    /// C call into a `(vm, globals, caller_lfp, callee_lfp, callid)` argument
+    /// marshaller (`jit_handle_arguments_no_block_for_send{,_splat}`). aarch64
+    /// twin of x86 `generic_handle_arguments` + `push/pop_stack_offset`: the
+    /// callee frame is reserved below sp from the *runtime* callee's
+    /// `FUNCDATA_OFS` (held via `x26 = &FuncData`, callee-saved so it survives
+    /// the call and the reservation is recomputed to restore sp). Result in x0.
+    fn a64_generic_handle_arguments(&mut self, f: u64, callid: CallSiteId) {
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                              // vm
+            mov x1, x20;                              // globals
+            mov x2, x22;                              // caller LFP
+            sub x3, sp, #(RSP_LOCAL_FRAME as u32);    // callee LFP (before reserving)
+            mov x4, (callid.get() as u64);            // callid
+            str x30, [sp, #-16]!;                     // save LR
+            // reserve the callee frame (FUNCDATA_OFS is in 16-byte units).
+            ldrh w9, [x26, #(FUNCDATA_OFS as u32)];
+            lsl x9, x9, #(4);
+            add x9, x9, #(16);
+            mov x10, sp;
+            sub x10, x10, x9;
+            mov sp, x10;
+            mov x9, (f);
+            blr x9;                                   // x0 = Option<Value>
+            // restore sp (recompute the reservation — x26 survives the call).
+            ldrh w9, [x26, #(FUNCDATA_OFS as u32)];
+            lsl x9, x9, #(4);
+            add x9, x9, #(16);
+            mov x10, sp;
+            add x10, x10, x9;
+            mov sp, x10;
+            ldr x30, [sp], #16;                       // restore LR
+        );
+    }
+
+    /// Marshal the forwarded args for a no-splat `send`, splicing out arg0 (the
+    /// method name). Twin of x86 `object_send_handle_arguments`. Fast path: a
+    /// "simple" iseq callee with matching arity — unrolled copy of the
+    /// `pos_num - 1` positionals from `args + 1` into the callee slots. Cold
+    /// (inline, no `select_page`): arity mismatch -> `wrong_number_of_arg`;
+    /// non-simple callee -> the generic C marshaller. `x26` holds `&FuncData`.
+    fn object_send_handle_arguments(
+        &mut self,
+        args: SlotId,
+        pos_num: usize,
+        callid: CallSiteId,
+        error: &DestLabel,
+    ) {
+        let lfp = GP::R14.a64().0;
+        let not_simple = self.jit.label();
+        let arg_error = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            ldrb w9, [x26, #((FUNCDATA_META + META_KIND) as u32)];
+            tbz w9, #(4), not_simple;                 // not a simple iseq -> generic
+            ldrh w9, [x26, #(FUNCDATA_MIN as u32)];    // callee min arity
+            cmp w9, #((pos_num - 1) as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &arg_error);
+        // fast copy: splice out arg0 (source starts at args + 1).
+        monoasm_arm64!(&mut self.jit, sub x13, sp, #(RSP_LOCAL_FRAME as u32);); // callee LFP base
+        for k in 0..(pos_num - 1) {
+            self.a64_frame_load(9, lfp, conv(args + (k + 1)) as u32);
+            self.a64_frame_store(9, 13, (LFP_ARG0 + 8 * k as i32) as u32);
+        }
+        monoasm_arm64!(&mut self.jit, b exit;);
+        // arity mismatch (inline): raise. `wrong_number_of_arg(vm, expected, given)`
+        // matches x86: expected = pos_num-1, given = the callee min arity in w9.
+        self.jit.bind_label(arg_error);
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x9;                               // given (callee min arity)
+            mov x0, x19;                              // vm
+            mov x1, #((pos_num - 1) as u64);          // expected
+            str x30, [sp, #-16]!;
+            mov x9, (wrong_number_of_arg as *const () as u64);
+            blr x9;
+            ldr x30, [sp], #16;
+            b error;
+        );
+        // non-simple callee (inline): the generic C marshaller.
+        self.jit.bind_label(not_simple);
+        self.a64_generic_handle_arguments(
+            crate::runtime::jit_handle_arguments_no_block_for_send as *const () as u64,
+            callid,
+        );
+        self.emit_handle_error(error);
+        monoasm_arm64!(&mut self.jit, b exit;);
+        self.jit.bind_label(exit);
+    }
+
+    /// aarch64 `Object#send` / `#__send__` inline body. Twin of x86
+    /// `object_send_inline`: resolve arg0 (Symbol/String) -> FuncId via the LFU
+    /// symbol cache, build the callee frame from the resolved `&FuncData`
+    /// (held in x26, callee-saved), marshal the args (splicing out arg0), and
+    /// tail into the callee's codeptr. Result in x0. Reached from the shared
+    /// `object_send` generator through `ir.inline` once this is registered with
+    /// `inline_gen2!`.
+    pub(crate) fn object_send_inline(
+        &mut self,
+        callid: CallSiteId,
+        store: &Store,
+        using_fpr: UsingFpr,
+        error: &DestLabel,
+        no_splat: bool,
+    ) {
+        let CallSiteInfo {
+            recv,
+            args,
+            pos_num,
+            block_fid,
+            block_arg,
+            ..
+        } = store[callid];
+        let lfp = GP::R14.a64().0;
+        // Per-callsite symbol cache. Heap-leaked (64-byte zeroed region ==
+        // size_of::<Cache>()) so its absolute address bakes into the stub; a
+        // fresh JIT-data label is not resolved at emit time on aarch64.
+        assert_eq!(std::mem::size_of::<Cache>(), 64);
+        let cache_addr = Box::into_raw(Box::new([0u64; 8])) as u64;
+        self.check_version_with_cache(cache_addr);
+        self.emit_fpr_save(using_fpr, false);
+        // resolve arg0 -> FuncId in x0
+        if no_splat {
+            if pos_num < 1 {
+                let error = error.clone();
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, x19;
+                    str x30, [sp, #-16]!;
+                    mov x9, (no_method_name as *const () as u64);
+                    blr x9;
+                    ldr x30, [sp], #16;
+                    b error;
+                );
+            } else {
+                self.a64_frame_load(11, lfp, conv(args) as u32); // x11 = arg0
+                self.object_send_inner(recv, cache_addr, error);
+            }
+        } else {
+            self.object_send_splat_arg0(args, error);
+            self.object_send_inner(recv, cache_addr, error);
+        }
+        self.emit_handle_error(error);
+        // FuncId (x0) -> &FuncData in x26 (callee-saved, survives the arg C-calls
+        // and the callee call).
+        monoasm_arm64!(&mut self.jit, mov x2, x0;);
+        self.a64_get_func_data_x2(); // x9 = &FuncData
+        monoasm_arm64!(&mut self.jit, mov x26, x9;);
+        // callee frame fields: OUTER=0, META from funcdata, SVAR=0, block, SELF.
+        monoasm_arm64!(&mut self.jit, mov x9, #0;);
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_OUTER) as u32);
+        monoasm_arm64!(&mut self.jit, ldr x9, [x26, #(FUNCDATA_META as u32)];);
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_META) as u32);
+        monoasm_arm64!(&mut self.jit, mov x9, #0;);
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_SVAR) as u32);
+        self.a64_set_block(block_fid, block_arg);
+        self.a64_frame_load(9, lfp, conv(recv) as u32);
+        self.a64_store_x9_below_sp((RSP_LOCAL_FRAME + LFP_SELF) as u32);
+        // marshal arguments (splicing out arg0)
+        if no_splat {
+            self.object_send_handle_arguments(args, pos_num, callid, error);
+        } else {
+            self.a64_generic_handle_arguments(
+                crate::runtime::jit_handle_arguments_no_block_for_send_splat as *const () as u64,
+                callid,
+            );
+            self.emit_handle_error(error);
+        }
+        // call the resolved funcdata (x26): push_frame + set LFP + set PC +
+        // blr codeptr + pop_frame (the runtime-codeptr call shape from emit_yield).
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x11, sp, #(RSP_CFP as u32);
+            str x10, [x11];
+            str x11, [x19, #(EXECUTOR_CFP as u32)];
+            sub x22, sp, #(RSP_LOCAL_FRAME as u32);       // callee LFP
+            sub x10, sp, #((RSP_CFP + CFP_LFP) as u32);
+            str x22, [x10];
+            sub x3, x21, #(16u32);                        // call-site bc ptr (with-pc builtins)
+            ldr x21, [x26, #(FUNCDATA_PC as u32)];         // PC <- callee pc
+            ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
+            blr x10;                                       // x0 = result
+            sub x11, sp, #(RSP_CFP as u32);
+            ldr x10, [x11];
+            str x10, [x19, #(EXECUTOR_CFP as u32)];
+            sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
+            ldr x22, [x10];
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        self.emit_handle_error(error);
+    }
 
     /// Lower `SetupMethodFrame`: write the callee frame's outer/meta/svar
     /// and block fields at `[sp - (RSP_LOCAL_FRAME + LFP_*)]`. Mirrors x86
