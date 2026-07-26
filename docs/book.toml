@@ -1,0 +1,10 @@
+[book]
+title = "monoruby"
+description = "Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust"
+authors = ["sisshiki1969 and contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+site-url = "/monoruby/docs/"
+git-repository-url = "https://github.com/sisshiki1969/monoruby"
