@@ -58,7 +58,7 @@ pub(super) fn init(globals: &mut Globals) {
         "__send__",
         &[],
         crate::builtins::send,
-        inline_gen!(crate::builtins::object_send),
+        inline_gen2!(crate::builtins::object_send),
         0,
         0,
         true,

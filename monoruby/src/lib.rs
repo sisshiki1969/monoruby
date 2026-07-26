@@ -15,13 +15,19 @@
 /// generators has not been ported to aarch64, so there it registers the
 /// universal `noinline_gen` instead — it declines to inline, falling back to a
 /// normal method call, without ever naming `$f`.
+// `object_send` was the last x86-only inline generator; now that its asm is
+// ported to both arches (registered with `inline_gen2!`), `inline_gen!` has no
+// callers. Keep it (and its aarch64 `noinline_gen` fallback) for the next
+// generator whose asm lands on x86 first.
 #[cfg(target_arch = "x86_64")]
+#[allow(unused_macros)]
 macro_rules! inline_gen {
     ($f:expr) => {
         Box::new($f)
     };
 }
 #[cfg(target_arch = "aarch64")]
+#[allow(unused_macros)]
 macro_rules! inline_gen {
     ($f:expr) => {
         Box::new(crate::globals::noinline_gen)
