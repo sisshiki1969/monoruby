@@ -423,6 +423,63 @@ impl Codegen {
     /// write-back reads it (d8-d15 are callee-saved); x19-x23 are AAPCS64
     /// callee-saved so the VM globals survive. `global_idx` is the resolved
     /// `specialized_base + idx` slot in `specialized_info`.
+    /// Emit an (uncounted) call to the non-specialized recompiler:
+    /// `jit_recompile_loop(vm, globals, lfp, pc, reason)` when `position` is a
+    /// loop-header pc, else `jit_recompile_method(vm, globals, lfp, reason)`.
+    /// Twin of `a64_call_recompile_specialized`. The caller-saved d2-d7 FP pool
+    /// and x5-x8 GP pool (R8-R11) are saved around the `blr` because the deopt
+    /// write-back that follows reads both (x19-x23 / d8-d15 / x19-x28 are
+    /// callee-saved). Leaves the `Option<Value>` result in x0 — x0 == 0 means
+    /// the recompile panicked and set a FatalError.
+    pub(super) fn a64_call_recompile(
+        &mut self,
+        position: Option<BytecodePtr>,
+        reason: RecompileReason,
+    ) {
+        monoasm_arm64!(&mut self.jit,
+            sub sp, sp, #(80);
+            str d2, [sp, #(0)];
+            str d3, [sp, #(8)];
+            str d4, [sp, #(16)];
+            str d5, [sp, #(24)];
+            str d6, [sp, #(32)];
+            str d7, [sp, #(40)];
+            stp x5, x6, [sp, #(48)];      // GP pool (R8-R11), read by the deopt write-back
+            stp x7, x8, [sp, #(64)];
+            mov x0, x19;                  // vm (Executor)
+            mov x1, x20;                  // globals
+            mov x2, x22;                  // lfp
+        );
+        let f = if let Some(pc) = position {
+            let pc_ptr = pc.as_ptr() as u64;
+            monoasm_arm64!(&mut self.jit,
+                mov x3, (pc_ptr);         // loop pc
+                mov x4, (reason as u64);
+            );
+            crate::codegen::compiler::jit_recompile_loop as *const () as u64
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x3, (reason as u64);
+            );
+            crate::codegen::compiler::jit_recompile_method as *const () as u64
+        };
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                       // -> Option<Value>: None (x0 == 0) = panic
+            ldr x30, [sp], #16;
+            ldr d2, [sp, #(0)];
+            ldr d3, [sp, #(8)];
+            ldr d4, [sp, #(16)];
+            ldr d5, [sp, #(24)];
+            ldr d6, [sp, #(32)];
+            ldr d7, [sp, #(40)];
+            ldp x5, x6, [sp, #(48)];
+            ldp x7, x8, [sp, #(64)];
+            add sp, sp, #(80);
+        );
+    }
+
     pub(super) fn a64_call_recompile_specialized(&mut self, global_idx: usize, reason: RecompileReason) {
         let f = crate::codegen::compiler::jit_recompile_specialized as *const () as u64;
         monoasm_arm64!(&mut self.jit,
