@@ -16,6 +16,10 @@ monoruby のスレッド機構(`thread` ブランチ系列 #941–#962)の現状
 | `monoruby/builtins/startup.rb` | Mutex / Queue / SizedQueue / ConditionVariable(純 Ruby)、Thread の簿記系メソッド |
 | `monoruby/src/builtins/io.rs` | `blocking_io_region` / `IO.select` のグリーンパス |
 
+関連ドキュメント:
+[scheduler_state_diagram.md](scheduler_state_diagram.md) —
+Thread / Fiber の状態遷移図(mermaid + SVG)と遷移⇔実装対応表。
+
 ## 0. 全体像
 
 - **M:1 グリーンスレッド**。Ruby の `Thread` は 1 本の OS スレッド上で多重化される。
@@ -54,6 +58,8 @@ Thread は Fiber の機構(スタック切替)を土台にしている。まず 
   スタックに退避してから rsp を差し替える。
 - Fiber の状態は `rsp_save` から導出される:
   `None` = Created、`-1` = Terminated、それ以外 = Suspended。
+  状態遷移図は [scheduler_state_diagram.md §2](scheduler_state_diagram.md#2-fiber-の状態遷移)
+  ([SVG](fiber_state_diagram.svg))。
 - **`parent_fiber` チェーン**: resume した側が子の `parent_fiber` に記録され、
   `Fiber.yield` はそこへ戻る(非対称コルーチン)。
 - GC は保守的スタックスキャンを行わない。サスペンド中の Fiber のフレームは
@@ -71,7 +77,6 @@ handle:        Option<Box<Executor>>   // main スレッドのみ None(Executor 
 proc / args:   本体ブロックと Thread.new の引数
 stack:         専用 256 KiB スタック(初回起動時に遅延確保)
 state:         Created | Runnable | Sleeping | Joining | IoWaiting | Dead
-               (状態遷移図は doc/scheduler_state_diagram.md)
 resume_exec:   park した実行コンテキスト(スレッド root、またはスレッド内で park した nested Fiber)
 result / exception:  終了結果(#join / #value が参照)
 joiners:       このスレッドを #join で待っているスレッド
@@ -82,6 +87,10 @@ park_blocking: 直近の park がブロッキング操作だったか(#status �
 park_permit:   park permit。running な対象への #wakeup/#run が立て、次の park が即戻る(§5・§8)
 last_status:   $? / Process.last_status をスレッドごとに保持(#972)
 ```
+
+`state` の状態遷移図(各遷移とスケジューラ実装の対応表つき)は
+[scheduler_state_diagram.md §1](scheduler_state_diagram.md#1-thread-の状態遷移)
+([SVG](thread_state_diagram.svg))。
 
 重要な設計判断: **スレッド root の `parent_fiber` は常に `None`**。
 このため `Fiber.yield` をスレッド本体で呼ぶと、main fiber と同じ既存のエラー経路
