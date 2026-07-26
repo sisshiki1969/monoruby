@@ -148,6 +148,109 @@ impl Codegen {
         true
     }
 
+    /// Lower the *eager* (non-deferred) `SetArgumentsForwarded` fast path: the
+    /// `...` rest `Array` was materialized in `f`'s rest slot and is forwarded
+    /// into a req-only callee. Port of the x86
+    /// `jit_set_arguments_forwarded`'s non-deferred branch — copy `recv`/lead
+    /// from `f`'s own slots, then, if the rest slot really holds an `Array` of
+    /// exactly `expected_len` elements (and no keyword is forwarded), two-copy
+    /// its elements straight into the callee arg slots, skipping the runtime
+    /// helper entirely. Any guard miss (not an Array, wrong length, or a live
+    /// forwarded keyword) falls through to the proven
+    /// `jit_forwarded_set_arguments` helper. Scratch: x9 (+ x10, used internally
+    /// by `a64_frame_load/store`/`a64_field_load` for large offsets), x11 = the
+    /// rest array, x12 = value, x13 = callee LFP base, x14 = element base,
+    /// x15 = length.
+    pub(super) fn a64_set_arguments_forwarded_eager(
+        &mut self,
+        callid: CallSiteId,
+        fid: FuncId,
+        offset: usize,
+        recv: SlotId,
+        args: SlotId,
+        lead_num: usize,
+        expected_len: usize,
+        kwrest_guard: Option<SlotId>,
+    ) -> bool {
+        const CLFP: u32 = 13;
+        const VAL: u32 = 12;
+        const ARR: u32 = 11;
+        const BASE: u32 = 14;
+        const LEN: u32 = 15;
+        let lfp = GP::R14.a64().0; // x22: f's own LFP
+        let fallback = self.jit.label();
+        let done = self.jit.label();
+        let heap = self.jit.label();
+        let got = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            sub x13, sp, #(RSP_LOCAL_FRAME as u32);
+        );
+        // self + leading args from f's own slots
+        self.a64_frame_load(VAL, lfp, conv(recv) as u32);
+        self.a64_frame_store(VAL, CLFP, LFP_SELF as u32);
+        for i in 0..lead_num {
+            self.a64_frame_load(VAL, lfp, conv(args + i) as u32);
+            self.a64_frame_store(VAL, CLFP, (LFP_ARG0 + 8 * i as i32) as u32);
+        }
+        // load the forwarded `...` rest slot (= args + lead_num) and guard it is
+        // a heap Array (tag == 0, ty == ARRAY).
+        self.a64_frame_load(ARR, lfp, conv(args + lead_num) as u32);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, #7;
+            and x9, x(ARR), x9;
+            cbnz x9, fallback;                    // immediate (not a heap ptr) -> fallback
+            ldrb w9, [x(ARR), #(RVALUE_OFFSET_TY as u32)];
+            cmp x9, #(ObjTy::ARRAY.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+        // length + element base: inline (capa <= INLINE_CAPA) vs heap.
+        monoasm_arm64!(&mut self.jit,
+            ldr x(LEN), [x(ARR), #(RVALUE_OFFSET_ARY_CAPA as u32)]; // capa == len when inline
+            cmp x(LEN), #(ARRAY_INLINE_CAPA as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &heap);
+        monoasm_arm64!(&mut self.jit,
+            add x(BASE), x(ARR), #(RVALUE_OFFSET_INLINE as u32);
+            b got;
+        );
+        self.jit.bind_label(heap);
+        monoasm_arm64!(&mut self.jit,
+            ldr x(LEN), [x(ARR), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            ldr x(BASE), [x(ARR), #(RVALUE_OFFSET_HEAP_PTR as u32)];
+        );
+        self.jit.bind_label(got);
+        // speculative length guard (expected_len is a compile-time constant).
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (expected_len as u64);
+            cmp x(LEN), x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+        // only fast-path when no keyword is actually forwarded (nil kwrest).
+        if let Some(kw) = kwrest_guard {
+            self.a64_frame_load(VAL, lfp, conv(kw) as u32);
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (NIL_VALUE as u64);
+                cmp x(VAL), x9;
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+        }
+        // copy the `expected_len` elements into the callee arg slots.
+        for j in 0..expected_len {
+            self.a64_field_load(VAL, BASE, (8 * j) as u32);
+            self.a64_frame_store(VAL, CLFP, (LFP_ARG0 + 8 * (lead_num + j) as i32) as u32);
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x0, (NIL_VALUE as u64);           // success sentinel
+            b done;
+        );
+        // guard miss: the proven specialized forwarding helper (handles the
+        // subtle keyword / shape cases and re-parses the call site).
+        self.jit.bind_label(fallback);
+        self.jit_set_arguments_forwarded_helper(callid, fid, offset);
+        self.jit.bind_label(done);
+        true
+    }
+
     /// Lower `SetArgumentsForwardedHelper`: same asm shape as
     /// `a64_set_arguments`, but dispatches to the specialized
     /// `jit_forwarded_set_arguments` runtime helper (forwarding `g(x.., ...)`
