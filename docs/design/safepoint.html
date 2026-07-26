@@ -1,0 +1,445 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Safepoints (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d8eaad21.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-e1173681.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="セーフポイントsafepoint"><a class="header" href="#セーフポイントsafepoint">セーフポイント(safepoint)</a></h1>
+<p>monoruby の VM / JIT が「実行を割り込んでよい」と保証する地点を<strong>セーフポイント</strong>と呼ぶ。
+GC(<code>doc/gc.md</code>)・タイムスライスプリエンプション(<code>doc/threads.md</code> §8)・シグナル配送
+(<code>doc/signal.md</code>)という 3 つの非同期イベントは、<strong>すべてこの同一のセーフポイント
+機構に集約されている</strong>。本書はその共通機構を横断的にまとめる。</p>
+<p>対象読者はランタイム実装者。関連ソース:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>対象</th><th>ファイル</th></tr>
+</thead>
+<tbody>
+<tr><td>poll のコード生成(x86-64)</td><td><code>codegen/arch/x86_64/jit_module.rs</code>(<code>execute_gc_inner</code>) / <code>vmgen/init_method.rs</code>(<code>vm_init</code>) / <code>vmgen.rs</code>(<code>vm_loop_start</code>)</td></tr>
+<tr><td>poll のコード生成(aarch64)</td><td><code>codegen/arch/aarch64/codegen.rs</code>(<code>a64_vm_execute_gc</code>) / <code>vmgen.rs</code></td></tr>
+<tr><td>セーフポイント本体</td><td><code>executor.rs</code>(<code>execute_gc</code>)</td></tr>
+<tr><td>poll フラグ</td><td><code>alloc.rs</code>(<code>alloc_flag</code> / <code>set_alloc_flag</code> / <code>unset_alloc_flag</code>) / <code>preempt.rs</code>(<code>PREEMPT_BIT</code> / <code>consume_poll_flag</code>)</td></tr>
+<tr><td>JIT tier の poll IR</td><td><code>codegen/jitgen/asmir.rs</code>(<code>AsmInst::ExecGc</code>) / <code>codegen/jitgen/compile.rs</code></td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="1-セーフポイントとは何か"><a class="header" href="#1-セーフポイントとは何か">1. セーフポイントとは何か</a></h2>
+<p>セーフポイントとは、実行中のインタプリタが<strong>フレームを完全に整合した(GC-complete な)状態
+にしたうえで poll フラグを検査する</strong>地点である。フラグがトリガ帯に立っていれば、その場で
+<code>execute_gc</code>(<code>executor.rs</code>)を呼び、以下のいずれか(または複数)を行う:</p>
+<ul>
+<li><strong>GC</strong>: マーク&amp;スイープ(<code>doc/gc.md</code>)。</li>
+<li><strong>シグナル配送</strong>: 保留シグナルを Ruby 例外 / <code>Signal.trap</code> ハンドラ呼び出しに変換
+(<code>doc/signal.md</code>)。</li>
+<li><strong>タイムスライスプリエンプション</strong>: <code>Thread.pass</code> 相当のスケジューラ切替
+(<code>doc/threads.md</code> §8)。</li>
+</ul>
+<p>3 つとも「<strong>フラグを立てて、次のセーフポイントで実行する</strong>」という遅延実行モデルを共有する。
+イベント発生源(ページ充填 / シグナルハンドラ / 別 OS スレッドのプリエンプトタイマ)は
+フラグを立てるだけで、実処理はセーフポイントに到達した VM スレッド自身が行う。</p>
+<hr>
+<h2 id="2-なぜ即時実行してはいけないか"><a class="header" href="#2-なぜ即時実行してはいけないか">2. なぜ即時実行してはいけないか</a></h2>
+<p>イベント発生の瞬間に処理を走らせると危険なため、セーフポイントまで遅延する:</p>
+<ul>
+<li><strong>未退避のライブレジスタ</strong>: JIT コンパイル済みコードは Ruby のローカル変数やレシーバを
+マシンレジスタにキャッシュしている。任意地点で GC ルート走査に入ると、レジスタ上の
+<code>Value</code> を取りこぼす(=生存オブジェクトの誤回収)。</li>
+<li><strong>半端なフレーム</strong>: フレーム構築の途中(引数のホーミング前、<code>rsp</code> 調整前など)では、
+ルート走査が読むスロットが不定値を含みうる。</li>
+<li><strong>シグナルの非同期性</strong>: シグナルハンドラは async-signal 文脈で走るので、そこで
+Rust のアロケータや <code>RefCell</code> に触れられない。ハンドラはビットを立てるだけにする。</li>
+</ul>
+<p>セーフポイントは「<strong>そこでなら GC ルート走査が完全に整合したフレームを見られる</strong>」と
+設計上保証された地点であり、そこへ到達したときにライブレジスタを退避(write-back、§6)
+してから処理に入る。プリエンプションが安全なのも「GC が起きうるのと<strong>同じ</strong>地点でしか
+切り替わらない」ため — register write-back を含め GC と全く同じ扱いになる。</p>
+<hr>
+<h2 id="3-poll-フラグ-alloc_flagu32"><a class="header" href="#3-poll-フラグ-alloc_flagu32">3. poll フラグ <code>alloc_flag</code>(<code>u32</code>)</a></h2>
+<p>VM/JIT が参照する単一の <code>u32</code>。3 イベントすべてがこの 1 語を共有する。<strong>ベース値(下位)が
+8 以上でトリガ帯</strong>、上位ビット <code>PREEMPT_BIT</code> がプリエンプト要求。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>書き手</th><th>操作</th><th>意味</th></tr>
+</thead>
+<tbody>
+<tr><td>ページ充填</td><td><code>set_alloc_flag</code>:<code>+= 1</code></td><td>ほぼ満杯ページごと(約 8 ページで 8 に到達)→ GC</td></tr>
+<tr><td>malloc 圧 / <code>GC.start</code></td><td><code>&gt;= 8</code> 帯へ持ち上げ</td><td>外部バッファ圧・明示 GC → GC</td></tr>
+<tr><td>シグナルハンドラ</td><td><code>+= 10</code></td><td>保留シグナル配送</td></tr>
+<tr><td>プリエンプトタイマ</td><td><code>|= 1 &lt;&lt; 30</code>(<code>PREEMPT_BIT</code>)</td><td>タイムスライス切替</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>ビット 30</strong> であってビット 31 ではない: x86-64 poll は <code>cmpl …; jge</code>(符号付き比較)なので、
+ビット 31 だと負値に読めて発火しない。</li>
+<li>タイマは別 OS スレッドから書くので、フラグアクセスはすべてアトミック。GC 後の
+<code>unset_alloc_flag</code> は <code>fetch_and(PREEMPT_BIT)</code> でベース帯だけ落とし、並行して立った
+プリエンプトビットは保存する。</li>
+<li>詳細な相互作用は <code>doc/gc.md</code> §4.1、<code>doc/threads.md</code> §8.2 を参照。</li>
+</ul>
+<hr>
+<h2 id="4-poll-の配置"><a class="header" href="#4-poll-の配置">4. poll の配置</a></h2>
+<p><strong>callee-entry(呼び出し先エントリ)+ ループバックエッジのみ</strong>に poll を置く。
+call-site(呼び出し側)には置かない — これは古典的な JVM / CRuby 方式である。</p>
+<h3 id="41-callee-entryvm_init--jit-initmethod"><a class="header" href="#41-callee-entryvm_init--jit-initmethod">4.1 callee entry(<code>vm_init</code> / JIT <code>InitMethod</code>)</a></h3>
+<p><code>vmgen/init_method.rs</code> の <code>vm_init</code>:プロローグ直後、<code>fill_nil</code> の後に <code>vm_execute_gc()</code> を出力。
+この位置が「最も安全な poll 地点」である理由(同ファイルのコメント):</p>
+<ul>
+<li>フレームが完全にリンクされ、<code>rsp</code> はその下(ステージング用のレッドゾーンなし)、</li>
+<li>引数はスロットに収まり、残りのレジスタは直前に nil 詰めされている。</li>
+</ul>
+<p>よって GC ルート走査は<strong>完全に整合したフレーム</strong>を見る。しかも callee entry は
+<strong>全呼び出し経路が必ず 1 度通る唯一の合流点</strong>なので、Rust の invoker
+(<code>invoke_method</code> / <code>invoke_block</code>)から呼ばれた場合も含め、あらゆる dispatch 経路で
+一様に発火する(§8)。</p>
+<h3 id="42-ループバックエッジvm_loop_start--jit-loopstart"><a class="header" href="#42-ループバックエッジvm_loop_start--jit-loopstart">4.2 ループバックエッジ(<code>vm_loop_start</code> / JIT <code>LoopStart</code>)</a></h3>
+<p><code>vmgen.rs</code> の <code>vm_loop_start</code> は先頭で <code>vm_execute_gc()</code> を出力する。JIT tier でも
+<code>compile.rs</code> の <code>TraceIr::LoopStart</code> が <code>state.exec_gc(ir, false)</code> を出す。これにより
+メソッド呼び出しを一切含まない tight loop でも、反復ごとに poll を通る。</p>
+<h3 id="43-call-site-には置かない"><a class="header" href="#43-call-site-には置かない">4.3 call site には置かない</a></h3>
+<p><code>vmgen/method_call.rs</code> のコメントどおり、呼び出し側には<strong>スタックオーバーフロー
+チェック(<code>CheckStack</code> / <code>vm_check_stack</code>)だけ</strong>を残し、GC/preempt poll は置かない。
+callee entry が全呼び出しで poll するので二重にならず、かつ Rust invoker の caller 側で
+poll してはならない制約(§8)とも整合する。</p>
+<h3 id="44-poll-間距離の有界性"><a class="header" href="#44-poll-間距離の有界性">4.4 poll 間距離の有界性</a></h3>
+<p>native(非 Ruby)の callee には entry poll がないが、任意の非有界実行は必ずループ
+バックエッジか Ruby フレームの entry を通過するので、poll から poll までの距離は有界に保たれる。</p>
+<hr>
+<h2 id="5-poll-のコード生成"><a class="header" href="#5-poll-のコード生成">5. poll のコード生成</a></h2>
+<h3 id="51-vm-tierx86-64"><a class="header" href="#51-vm-tierx86-64">5.1 VM tier(x86-64)</a></h3>
+<p><code>execute_gc_inner</code>(<code>jit_module.rs</code>)が出力する。ホットパスは 1 比較 + fall-through:</p>
+<pre><code class="language-asm">    cmpl [rip + alloc_flag], 8
+    jge  gc          ; ベース値 &gt;= 8(またはプリエンプトビット)なら収集パスへ
+exit:
+    ; --- 別ページ ---
+gc:
+    write_back        ; 生きたレジスタを退避(§6)
+    call exec_gc      ; = executor::execute_gc()
+    testq rax, rax
+    jne  exit         ; Some(nil)(=正常)なら復帰
+    jmp  error        ; None(=例外/シグナル/割り込み)なら伝播
+</code></pre>
+<ul>
+<li><strong>fall-through が最頻ケース</strong>(フラグ未武装)で、収集本体は <code>select_page(1)</code> の別ページに
+置いてホットパスの I-cache を汚さない。</li>
+<li><code>exec_gc</code> は <code>execute_gc</code> を呼ぶスタブ。戻り値 <code>Some</code> を <code>rax != 0</code>、<code>None</code> を <code>rax == 0</code> として
+分岐する。</li>
+</ul>
+<h3 id="52-vm-tieraarch64"><a class="header" href="#52-vm-tieraarch64">5.2 VM tier(aarch64)</a></h3>
+<p><code>a64_vm_execute_gc</code>(<code>codegen.rs</code>)が対称に出力する:</p>
+<pre><code class="language-asm">    mov x10, alloc_flag_addr
+    ldr w11, [x10]
+    cmp x11, #8
+    b.lt skip
+    bl  gc
+skip:
+</code></pre>
+<h3 id="53-jit-tier"><a class="header" href="#53-jit-tier">5.3 JIT tier</a></h3>
+<p>JIT コンパイル済みコードでは、<code>state.exec_gc(...)</code> が <code>AsmInst::ExecGc { write_back, error }</code>
+(<code>asmir.rs</code>)を積み、アーキ別バックエンド(<code>arch/*/compile</code>)が <code>execute_gc_inner</code> /
+<code>jit_execute_gc</code> に落とす。<code>InitMethod</code> と <code>LoopStart</code> の両方で発行される(<code>compile.rs</code>)。
+VM tier との違いは、退避すべきライブレジスタ集合が<strong>その地点の抽象状態から算出した
+<code>WriteBack</code></strong> として渡ること(§6)。</p>
+<hr>
+<h2 id="6-write-backライブレジスタの退避"><a class="header" href="#6-write-backライブレジスタの退避">6. write-back(ライブレジスタの退避)</a></h2>
+<p>poll でフラグが立っていたら、収集本体に入る<strong>前</strong>に、レジスタにキャッシュされた
+生存 <code>Value</code> をスタックスロットへ書き戻し、フレームを GC-complete にする:</p>
+<ul>
+<li><strong>VM tier</strong>: entry poll は直前の <code>fill_nil</code> で残スロットを nil 詰め済み。JIT のように
+レジスタキャッシュを持たないので、追加退避は基本的に不要(<code>execute_gc_inner</code> の
+<code>write_back</code> クロージャは VM 経路では空)。</li>
+<li><strong>JIT tier</strong>: <code>gen_write_back</code>(<code>jitgen.rs</code>)が、その poll 地点の抽象状態が示す
+「レジスタに載っている生きたスロット」をスタックへ書き出す。これにより GC ルート走査
+(<code>Executor::mark</code> が <code>lfp()</code> のスロットを辿る、<code>doc/gc.md</code> §8)がレジスタ値を取りこぼさない。</li>
+</ul>
+<p>同じ write-back 規律は<strong>コンテキストスイッチ</strong>にも適用される。JIT インライン <code>Fiber.yield</code>
+は切替前に write-back(<code>exec_gc</code>)を発行し、サスペンドされる側のフレームを GC-complete に
+してから rsp を差し替える(<code>doc/threads.md</code> §1)。スレッドのプリエンプション切替も、
+セーフポイントで write-back 済みだからこそ安全に行える。</p>
+<hr>
+<h2 id="7-セーフポイント本体execute_gc-executorrs"><a class="header" href="#7-セーフポイント本体execute_gc-executorrs">7. セーフポイント本体(<code>execute_gc</code>, <code>executor.rs</code>)</a></h2>
+<p>セーフポイントから呼ばれる <code>extern "C"</code> 関数。3 イベントを 1 か所で捌く。順序:</p>
+<ol>
+<li><strong><code>watchdog::poll()</code></strong> — poll 到達はインタプリタの進捗なので、ハングウォッチドッグの
+カウントダウンをリセット(<code>doc/signal.md</code>)。</li>
+<li><strong><code>preempt::consume_poll_flag()</code></strong> — プリエンプトビットを剥がし <code>(ベース値, プリエンプトか)</code>
+を得る。以降の GC 判定はベース値で行う(純プリエンプト tick で偽の full GC を起こさない)。
+フラグ未登録なら防御的に <code>(8, false)</code>。</li>
+<li><strong>保留シグナルの drain</strong> — <code>PENDING_SIGNALS</code> ビットマップを取り、最小番号のシグナルを
+<code>Signal.trap</code> ハンドラ呼び出し / 既定例外(SIGINT ⇒ <code>Interrupt</code> 等)に変換。エラーを
+立てて <code>None</code> を返しうる。</li>
+<li><strong>GC(ベース値 <code>&gt;= 8</code> のときだけ)</strong> — <code>parent_fiber</code> を辿ってルート Executor へ行き、
+<code>ALLOC.borrow_mut().gc(&amp;Root { globals, executor })</code>。</li>
+<li><strong><code>preempt::stress_renudge()</code></strong> — stress モードでは切替の<strong>前に</strong>フラグを再武装し、
+切替先スレッドも poll するようにする。</li>
+<li><strong>プリエンプション</strong> — <code>preempt &amp;&amp; scheduler::preempt_ok()</code> のとき <code>scheduler::pass</code>。
+<code>Err</code>(このスレッドへ配送された kill/raise)は <code>set_error</code> + <code>None</code> で浮上させる。</li>
+</ol>
+<p>戻り値の意味は poll コード(§5.1)と対になる: <code>Some(nil)</code> = 正常復帰、<code>None</code> = 例外 /
+シグナル / 割り込みを伝播せよ。</p>
+<hr>
+<h2 id="8-rust-invoker-とcaller-側で-poll-しない原則"><a class="header" href="#8-rust-invoker-とcaller-側で-poll-しない原則">8. Rust invoker と「caller 側で poll しない」原則</a></h2>
+<p>セーフポイントを <strong>callee entry</strong> に置く設計上の要石は、Rust 側の invoker
+(<code>invoke_method</code> / <code>invoke_block</code>)を<strong>呼び出し側で poll してはならない</strong>という制約である。</p>
+<ul>
+<li>Rust の caller はルート化されていないヒープ <code>Value</code> をローカル変数に握ったまま、これらの
+invoker を呼ぶ。caller 側に poll を置くと、その <code>Value</code> が GC ルートから外れて誤回収される
+(汎用 <code>invoke_block</code> の caller-side poll が <code>File.open {}</code> を壊した実績がある — レシーバが
+ブロック復帰後に Rust ローカルにしか無かった)。</li>
+<li>callee entry poll は、これら Rust invoker から呼ばれた Ruby フレームでも一様に発火する。
+結果として <code>Kernel#loop</code> / <code>Array#each</code> などの Rust 側イテレーションビルトインも、ブロック
+本体が poll-free でも<strong>1 反復ごとに</strong>プリエンプト・シグナル応答可能になる
+(ビルトインごとの監査は不要)。</li>
+</ul>
+<p>この不変条件のおかげで、ビルトインは他スレッドに対して<strong>アトミック</strong>になる(自分の
+blocking/poll 地点以外では切り替わらない)—— GVL 下で CRuby が C 関数に与える保証と同じ。
+一方、<strong>純 Ruby コードのアトミック性はプリエンプションで失われている</strong>ので、純 Ruby の
+同期プリミティブは別途 park permit とロックで守られる(<code>doc/threads.md</code> §5)。</p>
+<hr>
+<h2 id="9-まとめ"><a class="header" href="#9-まとめ">9. まとめ</a></h2>
+<ul>
+<li>セーフポイントは monoruby の GC・プリエンプション・シグナルを束ねる<strong>単一の割り込み点</strong>。
+3 イベントとも「フラグを立て、次のセーフポイントで実行」する遅延モデルを共有する。</li>
+<li>配置は <strong>callee entry(<code>vm_init</code> / <code>InitMethod</code>)+ ループバックエッジ(<code>vm_loop_start</code> /
+<code>LoopStart</code>)</strong> のみ。call-site には置かず、スタックチェックだけ残す。</li>
+<li>各 poll はホットパス 1 比較で、フラグが立ったときだけ<strong>ライブレジスタを write-back</strong>
+してから <code>execute_gc</code> に入る。ゆえにサスペンド/収集時のフレームは常に GC-complete。</li>
+<li>callee-entry 配置は「Rust invoker を caller 側で poll しない」原則と表裏一体で、これが
+ビルトインのアトミック性と Rust 側イテレーションの応答性を同時に成立させる。</li>
+<li>詳細は <code>doc/gc.md</code>(収集本体)・<code>doc/threads.md</code> §8(プリエンプション)・
+<code>doc/signal.md</code>(シグナル)を参照。</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/scheduler_state_diagram.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/signal.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/scheduler_state_diagram.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/signal.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

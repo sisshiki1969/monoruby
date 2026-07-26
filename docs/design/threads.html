@@ -1,0 +1,723 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Thread / Fiber / non-blocking IO / preemption (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d8eaad21.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-e1173681.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="thread--fiber--non-blocking-io--プリエンプション-の実装"><a class="header" href="#thread--fiber--non-blocking-io--プリエンプション-の実装">Thread / Fiber / non-blocking IO / プリエンプション の実装</a></h1>
+<p>monoruby のスレッド機構(<code>thread</code> ブランチ系列 #941–#962)の現状をまとめる。
+対象読者はランタイムの実装に手を入れる人。関連ソース:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>ファイル</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>monoruby/src/scheduler.rs</code></td><td>グリーンスレッド・スケジューラ本体</td></tr>
+<tr><td><code>monoruby/src/preempt.rs</code></td><td>タイムスライス・プリエンプションのタイマ(§8)</td></tr>
+<tr><td><code>monoruby/src/native_pool.rs</code></td><td>カーネルブロッキング syscall のネイティブ・オフロード(§9)</td></tr>
+<tr><td><code>monoruby/src/value/rvalue/thread.rs</code></td><td><code>ThreadInner</code>(スレッド制御ブロック)と状態機械</td></tr>
+<tr><td><code>monoruby/src/value/rvalue/fiber.rs</code></td><td><code>FiberInner</code>(Fiber 制御ブロック)</td></tr>
+<tr><td><code>monoruby/src/builtins/thread.rs</code></td><td>Thread クラスのネイティブ・ビルトイン</td></tr>
+<tr><td><code>monoruby/src/builtins/fiber.rs</code></td><td>Fiber クラスのビルトイン + JIT インライン <code>Fiber.yield</code></td></tr>
+<tr><td><code>monoruby/src/codegen/arch/{x86_64,aarch64}/invoker.rs</code></td><td>コンテキストスイッチのスタブ(両アーキ)</td></tr>
+<tr><td><code>monoruby/builtins/startup.rb</code></td><td>Mutex / Queue / SizedQueue / ConditionVariable(純 Ruby)、Thread の簿記系メソッド</td></tr>
+<tr><td><code>monoruby/src/builtins/io.rs</code></td><td><code>blocking_io_region</code> / <code>IO.select</code> のグリーンパス</td></tr>
+</tbody>
+</table>
+</div>
+<p>関連ドキュメント:
+<a href="scheduler_state_diagram.html">scheduler_state_diagram.md</a> —
+Thread / Fiber の状態遷移図(mermaid + SVG)と遷移⇔実装対応表。</p>
+<h2 id="0-全体像"><a class="header" href="#0-全体像">0. 全体像</a></h2>
+<ul>
+<li><strong>M:1 グリーンスレッド</strong>。Ruby の <code>Thread</code> は 1 本の OS スレッド上で多重化される。
+真の並列性はない(GVL 型でもない — そもそも VM を回す OS スレッドが 1 本)。
+カーネルブロッキング syscall のオフロード(§9)には別の短命 OS スレッドを使うが、
+それらは Ruby ヒープにも VM にも触れない。</li>
+<li><strong>切替の 2 系統</strong>:
+<ol>
+<li><strong>ブロッキング地点</strong>。<code>sleep</code> / <code>Thread.stop</code> / <code>#join</code> / <code>Thread.pass</code> /
+ブロックする IO / 同期プリミティブの待機で、実行中のスレッドが自発的に
+スケジューラへ制御を返す(協調型)。</li>
+<li><strong>タイマ駆動プリエンプション</strong>(§8、#962)。生存スレッドが 2 本以上あるとき、
+10 ms ごとに専用タイマ OS スレッドが GC poll フラグにプリエンプトビットを立て、
+走行中のスレッドが次のセーフポイント(callee-entry / ループバックエッジ)で
+強制的に <code>Thread.pass</code> 相当を行う。busy-loop するスレッドも CPU を譲る。</li>
+</ol>
+</li>
+<li><strong>どちらの切替も VM のセーフポイントでしか起きない</strong>。この不変条件が設計全体を貫く:
+<ul>
+<li>切替は必ずビルトイン内のブロッキング地点か、GC が起きうるのと同じセーフポイントで
+起きる。よってサスペンド中のスレッドのフレームは常に GC-complete(§6・§3.4)。
+プリエンプションが安全なのはこのため — 「GC が起きうる場所でしか切り替わらない」
+ので register write-back を含めて GC と全く同じ扱いになる(§8)。</li>
+<li>ビルトインは他スレッドに対して<strong>アトミック</strong>(ビルトイン内では自分のブロッキング/
+poll 地点以外で切り替わらない — GVL 下で CRuby が C 関数に与える保証と同じ)。</li>
+<li>ただし<strong>純 Ruby コードのアトミック性はプリエンプションで失われた</strong>。2 つの
+非ブロッキング文の間に他スレッドが割り込みうる。かつて純 Ruby の Mutex / Queue /
+ConditionVariable が check-then-act 競合なしに書けていた根拠はこれだったので、
+プリエンプション導入に合わせて park permit とロックで作り直してある(§5)。</li>
+</ul>
+</li>
+</ul>
+<h2 id="1-fiber前提となる既存機構"><a class="header" href="#1-fiber前提となる既存機構">1. Fiber(前提となる既存機構)</a></h2>
+<p>Thread は Fiber の機構(スタック切替)を土台にしている。まず Fiber 側の構造:</p>
+<ul>
+<li><code>FiberInner { handle: Box&lt;Executor&gt;, proc: Proc, stack: Option&lt;NonNull&lt;u8&gt;&gt; }</code></li>
+<li>各 Fiber は <strong>256 KiB の専用マシンスタック</strong>(最下位ページは <code>mprotect(PROT_NONE)</code> の
+ガードページ)と、自分専用の <code>Executor</code>(VM コンテキスト: cfp、エラー情報、<code>$~</code>/<code>$_</code> など)を持つ。</li>
+<li>コンテキストスイッチは <code>Executor::rsp_save</code> フィールドの <strong>rsp 交換</strong>で実現する。
+スタブ(<code>fiber_invoker</code> / <code>resume_fiber</code> / <code>yield_fiber</code>)は callee-saved レジスタを
+スタックに退避してから rsp を差し替える。</li>
+<li>Fiber の状態は <code>rsp_save</code> から導出される:
+<code>None</code> = Created、<code>-1</code> = Terminated、それ以外 = Suspended。
+状態遷移図は <a href="scheduler_state_diagram.html#2-fiber-の状態遷移">scheduler_state_diagram.md §2</a>
+(<a href="fiber_state_diagram.svg">SVG</a>)。</li>
+<li><strong><code>parent_fiber</code> チェーン</strong>: resume した側が子の <code>parent_fiber</code> に記録され、
+<code>Fiber.yield</code> はそこへ戻る(非対称コルーチン)。</li>
+<li>GC は保守的スタックスキャンを行わない。サスペンド中の Fiber のフレームは
+<code>FiberInner::mark</code> → 子 <code>Executor</code> の CFP チェーン歩行で<strong>精密に</strong>マークされる。
+そのために JIT インライン <code>Fiber.yield</code> は切替前に write-back(<code>exec_gc</code>)を発行し、
+フレームを GC-complete にしてから切り替える。</li>
+</ul>
+<h2 id="2-thread-の構造"><a class="header" href="#2-thread-の構造">2. Thread の構造</a></h2>
+<p><code>ThreadInner</code>(<code>value/rvalue/thread.rs</code>、<code>ObjTy::THREAD</code> / <code>THREAD_CLASS = 59</code>)は
+FiberInner の拡張形で、RValue セルに収まらないため union 内では <code>Box</code> 化されている:</p>
+<pre><code>handle:        Option&lt;Box&lt;Executor&gt;&gt;   // main スレッドのみ None(Executor は埋め込み側所有)
+proc / args:   本体ブロックと Thread.new の引数
+stack:         専用 256 KiB スタック(初回起動時に遅延確保)
+state:         Created | Runnable | Sleeping | Joining | IoWaiting | Dead
+resume_exec:   park した実行コンテキスト(スレッド root、またはスレッド内で park した nested Fiber)
+result / exception:  終了結果(#join / #value が参照)
+joiners:       このスレッドを #join で待っているスレッド
+pending:       未配送の非同期割り込み(Kill | Raise(err))
+killed:        kill 配送済みフラグ(終了時の unwind をクリーンな死として扱う)
+masks:         Thread.handle_interrupt のマスクスタック(§6)
+park_blocking: 直近の park がブロッキング操作だったか(#status のポーリング用)
+park_permit:   park permit。running な対象への #wakeup/#run が立て、次の park が即戻る(§5・§8)
+last_status:   $? / Process.last_status をスレッドごとに保持(#972)
+</code></pre>
+<p><code>state</code> の状態遷移図(各遷移とスケジューラ実装の対応表つき)は
+<a href="scheduler_state_diagram.html#1-thread-の状態遷移">scheduler_state_diagram.md §1</a>
+(<a href="thread_state_diagram.svg">SVG</a>)。</p>
+<p>重要な設計判断: <strong>スレッド root の <code>parent_fiber</code> は常に <code>None</code></strong>。
+このため <code>Fiber.yield</code> をスレッド本体で呼ぶと、main fiber と同じ既存のエラー経路
+(Rust 側 / JIT インライン側とも)が<strong>無変更で</strong>正しく FiberError を出す。
+スレッドの切替は <code>parent_fiber</code> を使わず、専用スタブ(§3)で行う。</p>
+<p>注: <code>priority</code> / <code>native_thread_id</code> / fiber-local / thread-variable / <code>ignore_deadlock</code> は
+<code>ThreadInner</code> のフィールドではなく、すべて startup.rb の純 Ruby 側で
+インスタンス変数(<code>@priority</code> / <code>@fiber_locals</code> / <code>@thread_variables</code> 等)として実装される(§4)。</p>
+<h2 id="3-スケジューラ"><a class="header" href="#3-スケジューラ">3. スケジューラ</a></h2>
+<p><code>src/scheduler.rs</code>。OS スレッドごとの <code>thread_local!</code> シングルトン(<code>SCHEDULER: RefCell&lt;Scheduler&gt;</code>)。</p>
+<pre><code>threads:          生存スレッドの registry(main 含む)— GC ルート
+ready:            実行可能キュー(FIFO)
+sleepers:         (Option&lt;Instant&gt;, Thread)  — sleep / タイムアウト付き join・IO 待ち
+io_waiters:       (fd, poll events, Thread) — fd 待ち(§7)
+current / main
+main_exec:        scheduler_run 実行中のみ有効な main の Executor ポインタ(GC 用)
+in_scheduler:     scheduler_run のイベントループ実行中か(main_exec の有効期間)
+machinery:        スケジューラ自身の機構(dispatch ループ / fd ポーリング)が
+                  main コンテキストで走行中か — プリエンプション抑止マーカー(§8)
+pending_reports:  遅延した report_on_exception のテキスト(machinery 中に生成し後で flush)
+flushing_reports: flush_pending_reports の再入ラッチ
+</code></pre>
+<h3 id="31-トポロジ-main-のスタック上で回るイベントループ"><a class="header" href="#31-トポロジ-main-のスタック上で回るイベントループ">3.1 トポロジ: main のスタック上で回るイベントループ</a></h3>
+<p>スケジューラループ(<code>scheduler_run</code>)は <strong>main スレッドのコンテキストでしか実行されない</strong>:</p>
+<ul>
+<li><strong>main が park するとき</strong>: 自分のスタック上で <code>scheduler_run</code> を普通の関数として呼ぶ。
+ループは main が Runnable に戻るまで green thread を dispatch し、戻ったら return する。</li>
+<li><strong>green thread が park するとき</strong>: 起床条件を登録してから、プロセス(正確には OS
+スレッド)グローバルなスロット <code>SCHED_RSP</code> に保存されたスケジューラ・コンテキストへ
+switch する。つまり制御はループ中の pending な dispatch 呼び出しから「返って」くる。</li>
+<li><strong>本体が終了したとき</strong>: <code>thread_invoker</code> のエピローグが <code>rsp_save = -1</code>(Terminated)を
+マークして同じくスケジューラへ switch し、ループが finalize する。</li>
+</ul>
+<p>ループが制御を手放す直前に必ず自分のコンテキストを <code>SCHED_RSP</code> へ保存するので、
+スロットは 1 個で足りる(green thread は <code>scheduler_run</code> を呼ばないため、
+ループのインスタンスは常に高々 1 つ)。</p>
+<p><code>SCHED_RSP</code> は <strong>OS スレッドごと</strong>(<code>thread_local</code> の <code>Cell&lt;u64&gt;</code>)。各 OS スレッドの
+<code>Codegen</code> が自分のスロットのアドレスをスタブに焼き込む(alloc_flag と同じ構図)。
+テストハーネスのように複数のインタプリタが別 OS スレッドで並走しても衝突しない。</p>
+<h3 id="32-コンテキストスイッチのスタブ2-アーキ"><a class="header" href="#32-コンテキストスイッチのスタブ2-アーキ">3.2 コンテキストスイッチのスタブ(×2 アーキ)</a></h3>
+<p><code>codegen/arch/{x86_64,aarch64}/invoker.rs</code> に 3 種。いずれも <code>parent_fiber</code> に触らない:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>スタブ</th><th>役割</th></tr>
+</thead>
+<tbody>
+<tr><td><code>thread_invoker</code></td><td>初回起動。スケジューラ・コンテキストを <code>SCHED_RSP</code> に保存 → 新スタックへ切替 → フレーム構築 → 本体実行。終了時は <code>rsp_save=-1</code> をマークして <code>SCHED_RSP</code> へ復帰</td></tr>
+<tr><td><code>switch_to_scheduler(cur, val)</code></td><td>park。現コンテキストを <code>cur.rsp_save</code> へ保存し <code>SCHED_RSP</code> へ switch。<code>val</code> はスケジューラ側の resume 呼び出しの戻り値になる</td></tr>
+<tr><td><code>scheduler_resume(exec, val)</code></td><td>再開。ループのコンテキストを <code>SCHED_RSP</code> へ保存し <code>exec.rsp_save</code> へ switch。<code>val</code>(u64)は park 側の戻り値。<strong>0 を渡すとエラー再開</strong>(§6)</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>parent_fiber</code> を使わないため、スレッド内にネストした Fiber の resume チェーンは
+スケジューラ切替をまたいでも壊れない(<code>resume_exec</code> は「park した実行コンテキスト」
+そのものを指すので、nested Fiber の中で park してもそこへ直接戻る)。</p>
+<h3 id="33-ブロッキング-api-の流れ"><a class="header" href="#33-ブロッキング-api-の流れ">3.3 ブロッキング API の流れ</a></h3>
+<p><code>sleep(dur)</code> / <code>join(target, timeout)</code> / <code>pass()</code> / <code>wait_fd(s)</code> は全て同型:</p>
+<ol>
+<li>短い <code>RefCell</code> 借用で自分を適切な待機構造(sleepers / joiners / io_waiters / ready)に
+登録し、state を更新する(借用をスイッチをまたいで保持しない・借用中に Ruby
+アロケーションをしない、が規律)。</li>
+<li>green thread なら <code>park_switch</code>(<code>resume_exec</code> を記録して <code>switch_to_scheduler</code>)。
+main なら <code>scheduler_run</code> を呼び、戻ったら <code>take_main_pending()</code> で
+割り込みの配送を受ける。</li>
+<li>起床後、呼び出し元のループで条件(join 対象死亡 / タイムアウト / fd ready)を再検査する。
+スプリアス起床は常に許容される設計。</li>
+</ol>
+<p>park の直前には <code>park_permit</code> を確認し、立っていればクリアして即戻る(§5)。
+アイドル時(ready が空)のループは:</p>
+<ul>
+<li><code>io_waiters</code> があれば全 fd を <code>poll(2)</code>(タイムアウトは直近の deadline、なければ無限)</li>
+<li>fd 待ちがなく deadline だけなら <code>nanosleep</code></li>
+<li>どちらもなければ <strong>デッドロック</strong>: CRuby と同じく fatal
+<code>No live threads left. Deadlock?</code> を main に投げる
+(fd 待ちは外部入力で解決しうるのでデッドロック扱いしない)。</li>
+<li>どちらの待機も EINTR で VM ポーリング地点(<code>execute_gc</code>)を経由するので、
+シグナル(SIGTERM 等)への応答性は保たれる。</li>
+</ul>
+<h3 id="34-gc-との統合"><a class="header" href="#34-gc-との統合">3.4 GC との統合</a></h3>
+<ul>
+<li><strong>registry が GC ルート</strong>: <code>Root::mark</code>(executor.rs)から <code>scheduler::mark</code> が呼ばれ、
+全 Thread オブジェクト(→ <code>ThreadInner::mark</code> → 各スレッドの Executor の CFP チェーン)
+をマークする。詳細は <code>doc/gc.md</code> §8。</li>
+<li><strong>main のフレーム</strong>: GC のトリガが green thread 側だと、main のフレームは current の
+チェーンから辿れない。<code>scheduler_run</code> 実行中は <code>main_exec</code> ポインタを公開し、
+<code>in_scheduler</code> フラグが立っている間だけそれを deref してマークする。</li>
+<li>切替はセーフポイントのみなので、サスペンド中のどのスレッドのフレームも GC-complete。</li>
+</ul>
+<h2 id="4-thread-api-の実装状況"><a class="header" href="#4-thread-api-の実装状況">4. Thread API の実装状況</a></h2>
+<p>ネイティブ(<code>builtins/thread.rs</code>、<code>init</code>):
+<code>Thread.new/start/fork</code>(本体はキューされ、どこかのスレッドが最初にブロックした時点で
+初実行される)、<code>Thread.current/main/list/pass/stop</code>、
+<code>Thread.kill(th)</code> / <code>Thread.exit</code>、<code>Thread.handle_interrupt</code> / <code>Thread.pending_interrupt?</code>、
+<code>#join(timeout)</code> / <code>#value</code>(終了例外を再 raise)、<code>#status</code>(“run” / “sleep” / false / nil)、
+<code>#alive?</code> / <code>#stop?</code>、<code>#wakeup</code> / <code>#run</code> / <code>#__wakeup_permit</code>(§5)、
+<code>#raise</code> / <code>#kill</code> / <code>#exit</code> / <code>#terminate</code>、<code>#pending_interrupt?</code>。</p>
+<p><code>Thread.handle_interrupt</code> は<strong>ネイティブで機能する</strong>:マスク(<code>(例外クラス, タイミング)</code> の列)を
+<code>ThreadInner::masks</code> へ push/pop し、マスク境界で保留割り込みを配送する(§6)。
+※ startup.rb 冒頭に残る「#raise / #kill はまだ未実装」旨のコメントは古い名残り
+(現在はネイティブ <code>raise</code>/<code>kill</code> と <code>pending</code>/<code>masks</code> の割り込み機構が動いている)。</p>
+<p>Ruby 側(startup.rb、<code>class Thread</code>):</p>
+<ul>
+<li><code>#name</code></li>
+<li>fiber-local <code>[]</code> / <code>[]=</code> / <code>key?</code> / <code>keys</code> / <code>fetch</code>(<code>@fiber_locals</code> に格納)</li>
+<li><code>#thread_variable_get</code> / <code>_set</code> / <code>#thread_variable?</code> / <code>#thread_variables</code>(<code>@thread_variables</code> に格納)</li>
+<li><code>#priority</code> / <code>#priority=</code>(-3..3 にクランプして <code>@priority</code> に保存するのみ。実際の
+スケジューリングには影響しない)</li>
+<li><code>#native_thread_id</code>(生存中は <code>object_id</code>、死後は <code>nil</code> を返す。実カーネル tid ではなく
+オブジェクトごとに一意なトークン)</li>
+<li><code>#report_on_exception</code>(インスタンスのみ)</li>
+<li><code>Thread.ignore_deadlock</code> / <code>=</code>(クラス変数に丸めるだけ。デッドロック検出器自体は止めない)</li>
+<li><code>Thread::Waiter</code>(<code>Process.detach</code> 用。native <code>Thread.new</code> はブロック必須なので
+<code>allocate</code> ベースで生成)</li>
+</ul>
+<p><code>Kernel#sleep</code> は他に生存スレッドがいるときだけスケジューラ経由になる
+(無引数 sleep は <code>#wakeup</code> まで park)。単独スレッド時は従来の nanosleep ループ。</p>
+<h2 id="5-同期プリミティブ純-ruby-プリエンプション下での正しさ"><a class="header" href="#5-同期プリミティブ純-ruby-プリエンプション下での正しさ">5. 同期プリミティブ(純 Ruby)+ プリエンプション下での正しさ</a></h2>
+<p>Mutex / Queue / SizedQueue / ConditionVariable は <strong>startup.rb の純 Ruby 実装</strong>で
+ネイティブコードはない。かつて(協調型のみだった頃)は §0 のアトミック性
+「2 つの非ブロッキング文の間に他スレッドが割り込まない」を根拠に、
+「条件検査 → waiter 配列へ self を追加 → park」の列を素朴に書けた。</p>
+<p><strong>プリエンプション(§8)はこの前提を壊す</strong>ので、次の 2 機構で正しさを保っている
+(startup.rb のコメントブロック参照):</p>
+<ol>
+<li><strong>test-and-set はセーフポイントのない一直線コードにする</strong>。判定の前に
+<code>Thread.current</code> 等の呼び出しを巻き上げておき、判定〜フラグ設定の間にセーフポイント
+(=切替点)を挟まない(<code>Mutex#try_lock</code>)。ただし callee-entry poll がある以上、
+メソッド呼び出しを巻き上げても<strong>複数呼び出しの列</strong>をアトミックにはできない
+(どの呼び出しもセーフポイント)。複合的な状態遷移にはロックが唯一の正しい道具。</li>
+<li><strong>park permit で lost-wakeup を塞ぐ</strong>。<em>running</em>(park 中でない)スレッドに対する
+<code>Thread#wakeup</code>/<code>#run</code> は対象の <code>park_permit</code>(<code>ThreadInner</code>)を立て、対象の次の park は
+即座に戻る。これで「waiter として登録 →(プリエンプトされ、起こす側が走って
+まだ running な対象を wake)→ 永遠に park」という古典的な lost-wakeup 窓が閉じる。
+全 park 地点はリトライループの中にあるので、早期復帰しても条件は再検査される。
+純 Ruby からは <code>Thread#__wakeup_permit</code> を使う(公開 <code>#wakeup</code> は permit なし版で、
+running を起こしても no-op という CRuby 意味論に一致)。</li>
+</ol>
+<p>その他:</p>
+<ul>
+<li>park は <code>Thread.stop</code>(または timeout 付きは <code>Kernel.sleep</code>)、
+unpark は上記 <code>#wakeup</code> / <code>#__wakeup_permit</code> を使う。</li>
+<li><code>Mutex#sleep</code> / <code>ConditionVariable#wait</code> は unlock → park → <strong>ensure で re-lock</strong>。
+<code>#kill</code> / <code>#raise</code> が park 中に配送されても(§6 の unwind は ensure を実行するので)
+mutex は正しく再取得・解放される。終了スレッドが握ったまま放置したロックは
+次の取得者側で回収される(#966)。<code>Mutex#owned?</code> は <strong>Fiber 単位</strong>の所有で判定する(#967)。</li>
+<li>Queue / SizedQueue は Mutex + ConditionVariable の上に載る(CRuby thread_sync.c と同じ構造)。
+すべての check-and-take をキューの mutex 下で行うことで、かつての
+<code>@items.empty?</code> / <code>@items.shift</code> のセーフポイント窓(2 つの pop が競合し片方が幻の nil を
+得る)を相互排他で閉じる。</li>
+<li>待機ループは <code>loop do</code> ではなく <strong><code>while true</code></strong> を使う: <code>Kernel#loop</code> は StopIteration を
+握り潰し、<code>ClosedQueueError &lt; StopIteration</code> なので <code>loop</code> ブロック内の
+<code>raise ClosedQueueError</code> が黙って飲まれてしまう(実際に <code>SizedQueue#push</code> on closed が
+nil を返すバグだった)。</li>
+<li><code>Queue#close</code> は全 waiter を起こす(consumer は残要素を排出後 nil、
+producer は <code>ClosedQueueError</code>)。<code>ClosedQueueError &lt; StopIteration</code> は startup.rb で定義。</li>
+<li>デッドロックは §3.3 のスケジューラ検出に自然に乗る。</li>
+</ul>
+<h2 id="6-非同期割り込みthreadraise--kill"><a class="header" href="#6-非同期割り込みthreadraise--kill">6. 非同期割り込み(<code>Thread#raise</code> / <code>#kill</code>)</a></h2>
+<p>割り込みは対象の <code>ThreadInner.pending</code> にキューされ、スケジューラが配送する:</p>
+<ul>
+<li><strong>park 中の対象</strong>: 起こして(Runnable 化)、dispatch 時に
+「park していた Executor に <code>set_error</code> してから <code>scheduler_resume(exec, 0)</code>」。
+park 側の <code>park_switch</code> は戻り値 <code>None</code>(=0)を見て <code>Err(vm.take_error())</code> を返すので、
+例外は<strong>ブロックしていたまさにその地点</strong>から unwind する(ensure 実行)。
+この「0-resume = エラー再開」が予約済みの配送経路。</li>
+<li><strong>走行中の対象</strong>: プリエンプション(§8)が対象を次のセーフポイントで <code>pass</code> に落とし、
+そこで pending が配送される。busy-loop 中のスレッドにも <code>#kill</code> / <code>#raise</code> が届く。</li>
+<li><strong>kill の unwind</strong>: <code>Throw</code>(タグは新規生成した Object なのでどの <code>catch</code> にも
+一致しない)として配送する。monoruby の unwinder は <code>Throw</code> を rescue 節
+(<code>rescue Exception</code> 含む)を素通しにしつつ ensure 節を実行する —
+これは CRuby の kill の意味論と一致する。スレッド root まで到達したら
+<code>killed</code> フラグにより「クリーンな死」(status false、join は正常返り、
+report_on_exception 出力なし)として finalize される。
+※ <code>FatalError</code> は ensure をスキップするため使えない。ユーザーの
+「uncaught throw」は throw サイトで <code>UncaughtThrowError</code> に変換されるので、
+スレッド root に <code>Throw</code> が素で届くのは kill 配送だけ。</li>
+<li><strong>自分自身が対象</strong>: その場で raise(kill なら kill-unwind、main の kill は
+<code>SystemExit</code> = プロセス終了)。</li>
+<li><strong>未起動(Created)の対象</strong>: 本体を実行せずに死ぬ。</li>
+<li><strong>park 中の main</strong>: <code>scheduler_run</code> から戻った直後に <code>take_main_pending()</code> が配送する。</li>
+<li><strong><code>Thread.handle_interrupt</code></strong>: マスク(<code>ThreadInner::masks</code>)にマッチする割り込みは
+即配送せず保留し、マスク境界(handle_interrupt ブロックの出入り)で配送する。</li>
+</ul>
+<h2 id="7-non-blocking-iofd-ポーラ統合"><a class="header" href="#7-non-blocking-iofd-ポーラ統合">7. non-blocking IO(fd ポーラ統合)</a></h2>
+<p>前提として、シグナル対応の際に全ブロッキング IO は <code>blocking_io_region</code>
+(EINTR → VM ポーリング → 再開)という単一のチョークポイントに集約されている
+(SA_RESTART なしのシグナルハンドラ、EINTR を握り潰さない独自 read/write プリミティブ。
+fd を持たない旧 <code>blocking_region</code> は全サイトが <code>blocking_io_region</code> に統合され削除)。
+グリーンスレッド統合はこの上に載る:</p>
+<ul>
+<li><strong><code>blocking_io_region(vm, globals, io, events, f)</code></strong>(builtins/io.rs):
+fd を扱う 13 のビルトイン(read 系 / write 系 / <code>IO.copy_stream</code> の両側)を包む。
+<ol>
+<li>他に生存スレッドがいなければ従来どおり(本当にブロックする)。</li>
+<li>read 系は先にバッファ(ungetc pushback / BufReader 内残データ)を確認し、
+あれば fd を見ずに実行(バッファがあるのに fd 未 ready で park すると自己デッドロック)。</li>
+<li>ゼロタイムアウト <code>poll</code> で readiness を確認し、未 ready なら
+<code>scheduler::wait_fd(fd, events)</code> で park(§3.3)。起床後に再検査。</li>
+<li>ready なら操作本体 <code>f()</code> を実行(直前に他スレッドは走れないので、
+readiness が横取りされる競合はない)。</li>
+</ol>
+</li>
+<li><strong>スケジューラ側</strong>: <code>io_waiters</code> に登録された fd 群をアイドル時に一括 <code>poll(2)</code> し、
+revents が立ったスレッドを起こす(POLLERR/HUP/NVAL も起床 → 本体が実 errno を出す)。
+<code>#kill</code> / <code>#raise</code> は fd 待ちのスレッドも起こす。</li>
+<li><strong><code>IO.select</code></strong>: グリーンパスでは与えられた全 fd を <code>wait_fds</code> で待つ
+(timeout は deadline として sleepers に併載)。非 IO オブジェクトは <code>#to_io</code> で変換。
+全セット空 + timeout なしは CRuby 同様「status “sleep” で永眠(kill/wakeup 可能)」。
+単独スレッド時は従来の <code>select(2)</code>(EINTR → ポーリング → 再試行)。</li>
+<li><strong>ソケット</strong>: TCP の <code>connect</code> は非ブロッキング発行(<code>EINPROGRESS</code>)→ <code>POLLOUT</code> を
+<code>wait_fd</code> で待って <code>SO_ERROR</code> 確認、<code>accept</code> はリスナ fd を恒久 non-blocking にして
+<code>POLLIN</code> の park-retry ループで受ける(いずれも native worker ではなくスケジューラの
+fd ポーラで処理)。DNS(<code>getaddrinfo</code>)は CRuby 同様インラインでブロックする。</li>
+<li><strong>poll できないカーネルブロッキング</strong>(flock、FIFO の open)は native worker に
+オフロードする(§9)。</li>
+</ul>
+<h3 id="mid-operation-の-would-block-エミュレーション"><a class="header" href="#mid-operation-の-would-block-エミュレーション">mid-operation の would-block エミュレーション</a></h3>
+<p>入口の readiness チェックだけでは、「利用可能なデータを消費し、さらに要求する」操作
+(例: パイプ上の <code>read(n)</code> で n が到着済みバイト数を超える、行が複数チャンクに分かれて
+届く <code>gets</code>、パイプ容量を超える <code>write</code>)の 2 チャンク目以降がプロセス全体をブロックする。
+これを防ぐため、他に生存スレッドがいる間は <code>f()</code> の実行中だけ fd を一時的に
+<code>O_NONBLOCK</code> にする(<code>NonblockGuard</code>、drop で元のフラグへ復元):</p>
+<ul>
+<li>ブロックするはずだったカーネル突入は <code>EAGAIN</code> を返し、read/write プリミティブは
+消費済みバイトを pushback に戻して内部マーカー <code>MonorubyErr::would_block_interrupt</code>
+を浮上させる(シグナルの <code>signal_interrupt</code> マーカーと同型の配管)。</li>
+<li><code>blocking_io_region</code> がマーカーを捕捉し、fd のモードを復元してから
+<code>scheduler::wait_fd</code> で park → ready 後に操作を再開(pushback から再読するので
+データは失われない。write は <code>*progress</code> が書けた分を記録しているので重複しない)。</li>
+<li>生存スレッドがいないのにマーカーが浮上した場合(<code>read_nonblock</code> /
+<code>write_nonblock</code> が恒久的に nonblocking 化した fd)は、シグナル割り込み可能な
+素の <code>poll(2)</code> で待つ(CRuby も nonblocking fd 上のバッファド IO はブロックする)。</li>
+<li>標準ストリーム(fd 0–2)はガード対象外: open file description を親シェルと
+共有しており、異常終了でフラグが漏れると外側の IO を壊すため
+(古典的な「nonblocking stdout」問題)。入口 park のみでカバーする。</li>
+</ul>
+<h2 id="8-タイムスライスプリエンプションpreemptrs-962"><a class="header" href="#8-タイムスライスプリエンプションpreemptrs-962">8. タイムスライス・プリエンプション(<code>preempt.rs</code>, #962)</a></h2>
+<p>協調型だけでは、busy-loop するスレッドが <code>Thread.pass</code> を呼ばない限り CPU を独占し、
+他スレッドの飢餓・<code>Thread#kill</code> 未配送・mspec の <code>--timeout</code> watchdog スレッドが
+永久に走らない、といった公平性の問題が残る。プリエンプションはこれらを、GC・JIT
+バックエンド・スレッドローカルシングルトンに一切触れずに解消する。</p>
+<p>プリエンプションは正確に <strong>「全スレッドが次のセーフポイントで <code>Thread.pass</code> を
+呼んだかのように」</strong> 振る舞う — 既存の協調切替機構をそのまま再利用する。</p>
+<h3 id="81-タイマ"><a class="header" href="#81-タイマ">8.1 タイマ</a></h3>
+<ul>
+<li><strong>10 ms tick</strong>(<code>TICK</code>)の専用タイマ OS スレッド。<strong>生存スレッドが 2 本以上ある間だけ</strong>
+走る(<code>on_thread_count(live)</code> が <code>live &gt;= 2</code> で起動、<code>live &lt; 2</code> で停止)。単独スレッドの
+プログラムはタイマを 1 本も生やさずコストゼロ。</li>
+<li><code>MONORUBY_NO_PREEMPT</code> / <code>MONORUBY_PREEMPT_STRESS</code> が設定されているとタイマは起動しない。</li>
+<li>毎 tick、<code>flag_addr</code> の mutex を取ってから poll フラグに <code>fetch_or(PREEMPT_BIT)</code>。
+<code>Codegen::drop</code>(<code>codegen_dropped</code>)が同じ mutex 下で <code>flag_addr</code> を 0 に落とすので、
+タイマが解放済み JIT メモリを触ることはない(マルチインタプリタのテストハーネス対策)。</li>
+</ul>
+<h3 id="82-フラグプロトコル"><a class="header" href="#82-フラグプロトコル">8.2 フラグプロトコル</a></h3>
+<p>poll フラグは <strong>GC の <code>alloc_flag</code> と同じ 1 つの <code>u32</code></strong>。複数の書き手がいる:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>書き手</th><th>操作</th></tr>
+</thead>
+<tbody>
+<tr><td>RValue アリーナ(ページ充填)</td><td><code>+= 1</code></td></tr>
+<tr><td>シグナルスタブ</td><td><code>+= 10</code></td></tr>
+<tr><td>malloc トリガ / <code>GC.start</code></td><td><code>&gt;= 8</code> 帯へ持ち上げ</td></tr>
+<tr><td>プリエンプトタイマ</td><td><code>|= 1 &lt;&lt; 30</code>(<code>PREEMPT_BIT</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>ビット 30</strong>であってビット 31 ではない: x86-64 の poll は <code>cmpl [rip+alloc_flag], 8; jge</code>
+という<strong>符号付き</strong>比較なので、ビット 31 だと負値に読めて発火しない。</li>
+<li>タイマは別 OS スレッドから書くので、フラグアクセスはすべてアトミック
+(タイマ <code>fetch_or</code>、GC 後の <code>unset_alloc_flag</code> は <code>fetch_and(PREEMPT_BIT)</code> で
+ベース帯だけ落として並行設定されたプリエンプトビットを<strong>保存</strong>する)。</li>
+</ul>
+<h3 id="83-poll-配置"><a class="header" href="#83-poll-配置">8.3 poll 配置</a></h3>
+<p><strong>callee-entry + ループバックエッジのみ。call-site poll は無い</strong>(JVM/CRuby 方式)。</p>
+<ul>
+<li><strong>callee entry</strong>(<code>vmgen/init_method.rs</code> = VM の <code>vm_init</code> / JIT の <code>InitMethod</code>):
+プロローグ直後、フレームがリンクされ <code>rsp</code> がその下、引数が rooted スロットに収まり、
+残レジスタが nil 詰めされた「最も安全な」位置で poll する。GC ルート走査が
+完全に整合したフレームを見る。全 dispatch 経路で一様に発火する。</li>
+<li><strong>call site</strong>: スタックオーバーフローチェック(<code>CheckStack</code>)のみ残す。Rust invoker
+(<code>invoke_method</code> / <code>invoke_block</code>)は caller 側にルート化されていないヒープ Value を
+ローカルに握るので、caller 側で poll してはならない(汎用 <code>invoke_block</code> の caller-side
+poll が <code>File.open {}</code> を壊した実績あり)。この callee-entry poll のおかげで、
+Rust 側のイテレーションビルトイン(<code>Kernel#loop</code> / <code>Array#each</code> 等)もブロック本体が
+poll-free でも 1 反復ごとにプリエンプト・シグナル応答可能になる(ビルトインごとの
+監査は不要)。</li>
+<li><strong>ループバックエッジ</strong>(<code>vm_loop_start</code>):同じく poll。</li>
+<li>aarch64 も対称に実装(<code>a64_op_init_method</code> / <code>a64_op_loop_start</code> が poll、call-site なし)。</li>
+</ul>
+<h3 id="84-execute_gc-での消費"><a class="header" href="#84-execute_gc-での消費">8.4 <code>execute_gc</code> での消費</a></h3>
+<p>セーフポイントから呼ばれる <code>execute_gc</code>(executor.rs)の順序:</p>
+<ol>
+<li><code>watchdog::poll()</code>。</li>
+<li><code>let (flag_base, preempt) = preempt::consume_poll_flag();</code> — プリエンプトビットを剥がし、
+<code>(ベース値, プリエンプトか)</code> を返す(フラグ未登録なら防御的に <code>(8, false)</code>)。</li>
+<li>保留シグナルを drain(エラーを立てて <code>None</code> を返しうる)。</li>
+<li><code>flag_base &gt;= 8</code> のときだけ実際に GC(純プリエンプト tick はベースが 8 未満なので
+スキップ = 偽の full GC を起こさない)。</li>
+<li><code>stress_renudge()</code> — stress モードでは切替の<strong>前に</strong>フラグを再武装し、切替先スレッドも
+poll するようにする。</li>
+<li><code>if preempt &amp;&amp; scheduler::preempt_ok() { scheduler::pass(vm, globals)? }</code>。
+<code>pass</code> の <code>Err</code>(kill/raise がこのスレッドに配送された)は <code>set_error</code> + <code>None</code> で浮上。</li>
+</ol>
+<p><code>preempt_ok()</code> = <code>!machinery &amp;&amp; main.is_some() &amp;&amp; has_other_live_threads()</code>。
+<code>machinery</code> マーカー(§3 の Scheduler フィールド)は、スケジューラ自身の機構
+(dispatch ループ / fd ポーリング)が main コンテキストで走る間 true・dispatch された
+スレッドの Ruby コードが走る間だけ false。よってプリエンプションは resume されたスレッドの
+コード中でだけ発火する(<code>in_scheduler</code> はこの役に立たない — dispatch 中のスレッド走行中も
+true のままだから)。</p>
+<h3 id="85-安全性cruby-互換"><a class="header" href="#85-安全性cruby-互換">8.5 安全性(CRuby 互換)</a></h3>
+<ul>
+<li>切替は GC が起きうる地点でしか起きず、register write-back も GC と同一。
+よってサスペンド中のフレームは常に GC-complete。</li>
+<li>ビルトインは他スレッドに対してアトミック(自分の blocking/poll 地点以外で切り替わらない)—
+GVL 下で CRuby が C 関数に与える保証と同じ。</li>
+<li>JIT がローカルをレジスタにキャッシュしても他スレッドへ古値が漏れない: 他スレッドが
+フレームのローカルに触れるのは capture(ヒープ退避)経由のみで、JIT は capture された
+ローカルを必ずスタックスロットに書き戻す(block 渡しの call site は <code>locals_to_S</code>、
+ループ tier コンパイルは uncaptured 前提でガード、外側変数特殊化は <code>no_capture_guard</code>)。
+uncaptured フレームは他スレッドから到達不能なのでレジスタキャッシュは観測不能。</li>
+</ul>
+<h3 id="86-スイッチ"><a class="header" href="#86-スイッチ">8.6 スイッチ</a></h3>
+<ul>
+<li><code>MONORUBY_NO_PREEMPT=1</code> — タイマを起動しない(協調型のみ)。</li>
+<li><code>MONORUBY_PREEMPT_STRESS=1</code> — 全 poll 地点で切替を試みる(<code>gc-stress</code> のスケジューリング版。
+「ここで切り替わるはずがない」系の潜在状態バグを炙り出す拷問モード)。</li>
+</ul>
+<h2 id="9-ネイティブ-syscall-オフロードnative_poolrs-962"><a class="header" href="#9-ネイティブ-syscall-オフロードnative_poolrs-962">9. ネイティブ syscall オフロード(<code>native_pool.rs</code>, #962)</a></h2>
+<p>poll(2) で readiness を待てるもの(ソケット等)はスケジューラの fd ポーラで扱えるが、
+<strong>待つべき fd を持たないカーネルブロッキング syscall</strong> はグリーンスレッドの単一 OS
+スレッドをそのままブロックしてしまう。これらだけを別の短命 OS スレッドへ逃がす。</p>
+<ul>
+<li><strong>オフロード対象は 2 つだけ</strong>(<code>NativeOp</code>):
+<ul>
+<li><code>flock(2)</code> のブロッキング取得(<code>File#flock</code>)。<code>LOCK_NB</code> / <code>LOCK_UN</code> は
+カーネルでブロックしないのでインライン実行。</li>
+<li><strong>FIFO</strong> に対するブロッキング <code>open(2)</code>(相手が開くまでブロックする)。事前に
+<code>stat</code> して FIFO のときだけオフロードし、それ以外の open はインライン。</li>
+</ul>
+</li>
+<li><strong>プールではない</strong>: <code>submit</code> は操作ごとに <code>std::thread::spawn</code> で<strong>専用の短命 OS
+スレッドを 1 本</strong>生やし、syscall が返ったら終了する(ワーカー数・キュー・再利用なし)。</li>
+<li><strong>ワーカーは Ruby ヒープにも VM のスレッドローカルにも触れない</strong>。<code>NativeOp</code> は生 fd /
+フラグ / <code>CString</code> パスだけを運ぶ(ヒープ参照を持たない)。共有状態はプロセスグローバル:
+<code>results</code>(<code>Mutex&lt;HashMap&lt;ticket, Completion{ret, errno}&gt;&gt;</code>)、<code>orphans</code>、<code>NEXT_ID</code>。</li>
+<li><strong>完了通知は eventfd ではなく pipe(2)</strong>。各インタプリタ OS スレッドが <code>thread_local</code> に
+自己パイプ(read/write)を遅延生成し、ワーカーは結果を <code>results</code> に置いてから提出元の
+write 端へ 1 バイト書く。read 端はスケジューラの<strong>通常の fd ポーラ</strong>に登録される
+(スケジューラは <code>native_pool</code> を一切知らない)。</li>
+<li><strong>flow</strong>(<code>run_blocking</code>): <code>submit(op)</code> → チケット取得 → <code>try_take</code> で完了を回収、
+未完なら <code>scheduler::wait_fd(read端, POLLIN)</code> で park(他 green thread に譲り、main が
+park しているなら <code>poll(2)</code> で寝る)→ 起床で pipe を <code>drain</code> → 再試行。パイプは複数
+waiter で共有なので、未充足の waiter は再 park する。</li>
+<li><strong>キャンセル</strong>: park 中に kill/raise が来て <code>wait_fd</code> が <code>Err</code> を返したら、チケットを
+<code>discard</code>(結果が既に届いていれば除去、まだなら <code>orphans</code> に入れてワーカーの結果を
+到着時に捨てる)しエラーを伝播する。ワーカー本体はそのまま無害に完走させる
+(可搬なキャンセル syscall がないため)。</li>
+</ul>
+<h2 id="10-既知の制限と今後"><a class="header" href="#10-既知の制限と今後">10. 既知の制限と今後</a></h2>
+<ol>
+<li><strong>シグナルは「ポーリングしたスレッド」で変換される</strong>(CRuby は main に配送)。</li>
+<li><code>Thread.new</code> のサブクラスは Ruby の <code>initialize</code> オーバーライドを実行しない。</li>
+<li><code>Thread#priority</code> は保存のみ(スケジューリングに影響しない)。<code>native_thread_id</code> は
+実 tid ではなくオブジェクト単位トークン。<code>ThreadGroup</code> / <code>fork</code> との相互作用、
+<code>Thread.ignore_deadlock</code> の実効(検出器の停止)は未実装。</li>
+<li>ネイティブオフロード(§9)は flock / FIFO open のみ。<code>fcntl(F_SETLKW)</code> 等、他の
+カーネルブロッキング操作は未対応(将来 <code>NativeOp</code> を増やす余地)。</li>
+<li>真の並列化は別の話(Ractor 型の分離が現アーキテクチャ —
+OS スレッドごとの ALLOC / CODEGEN / SCHEDULER — と整合的)。</li>
+</ol>
+<p>(解決済み: <code>Thread.handle_interrupt</code> マスキング、mid-operation の IO ブロック(§7 の
+would-block エミュレーション)、タイムスライス・プリエンプション(§8)、
+カーネルブロッキング syscall のオフロード(§9)。)</p>
+<h2 id="11-テスト"><a class="header" href="#11-テスト">11. テスト</a></h2>
+<ul>
+<li><code>builtins/thread.rs</code> の <code>#[cfg(test)]</code>: CRuby 4.0.2 との差分テスト
+(インターリーブ順序、status ポーリング、kill/raise 意味論、同期プリミティブ、
+thread+IO の各パターン、IO.select エッジ、fiber-local / thread-variable、
+<code>native_offload_flock_and_fifo</code>(flock / FIFO open がグリーンスレッドだけをブロックし
+プロセス全体を止めないことの検証)ほか)。</li>
+<li>ruby/spec: <code>bin/spec</code> またはリポジトリ外の spec/mspec で
+<code>core/thread</code> / <code>core/mutex</code> / <code>core/queue</code> / <code>core/sizedqueue</code> /
+<code>core/conditionvariable</code> / <code>core/io</code> を実行。
+かつてスペックランナーをハングさせた <code>core/io/copy_stream_spec.rb</code> と
+<code>core/io/select_spec.rb</code> は完走・全パスする。</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/gc.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/scheduler_state_diagram.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/gc.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/scheduler_state_diagram.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

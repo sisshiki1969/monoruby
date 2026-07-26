@@ -1,0 +1,246 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="2260" viewBox="0 0 1400 2260" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="mG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="mGy" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="mD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1400" height="2260" fill="#ffffff"/>
+  <rect x="4" y="4" width="1392" height="2252" fill="none" stroke="#e2e8f0" stroke-width="2" rx="12"/>
+
+  <!-- title -->
+  <text x="700" y="52" text-anchor="middle" font-size="34" font-weight="bold" fill="#0f172a">monoruby Generational GC — Write Barrier &amp; Remembered Set</text>
+  <text x="700" y="86" text-anchor="middle" font-size="17" fill="#64748b">The same object graph, marked three ways</text>
+
+  <!-- legend -->
+  <circle cx="70" cy="125" r="14" fill="#dbeafe" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="92" y="131" font-size="17" fill="#334155">young (scanned every GC)</text>
+  <circle cx="330" cy="125" r="14" fill="#fde68a" stroke="#b45309" stroke-width="2.5"/>
+  <text x="352" y="131" font-size="17" fill="#334155">old (skipped in minor GC)</text>
+  <circle cx="600" cy="125" r="12" fill="#16a34a"/>
+  <text x="600" y="130" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <text x="618" y="131" font-size="17" fill="#334155">marked</text>
+  <circle cx="720" cy="125" r="12" fill="#d97706"/>
+  <text x="720" y="130" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <text x="738" y="131" font-size="17" fill="#334155">seed-marked (old)</text>
+  <line x1="920" y1="125" x2="970" y2="125" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <text x="978" y="131" font-size="17" fill="#334155">traced</text>
+  <line x1="1070" y1="125" x2="1120" y2="125" stroke="#94a3b8" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#mGy)"/>
+  <text x="1128" y="131" font-size="17" fill="#334155">not traced</text>
+
+  <!-- ==================== Panel A ==================== -->
+  <rect x="30" y="160" width="1340" height="550" rx="12" fill="#fcfcfd" stroke="#cbd5e1"/>
+  <text x="50" y="196" font-size="22" font-weight="bold" fill="#0f172a">A. No generational GC (full mark — same as a major GC)</text>
+  <text x="50" y="222" font-size="16.5" fill="#64748b">Every edge is traced from the roots; every live object is marked.</text>
+
+  <!-- root box -->
+  <rect x="60" y="255" width="200" height="130" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="2"/>
+  <text x="160" y="305" text-anchor="middle" font-size="19" font-weight="bold" fill="#1e293b">Roots</text>
+  <text x="160" y="333" text-anchor="middle" font-size="14.5" fill="#475569">stack / globals /</text>
+  <text x="160" y="355" text-anchor="middle" font-size="14.5" fill="#475569">constants …</text>
+
+  <!-- edges -->
+  <line x1="260" y1="285" x2="431" y2="292" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <line x1="260" y1="355" x2="435" y2="457" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <line x1="504" y1="295" x2="661" y2="295" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <text x="583" y="277" text-anchor="middle" font-size="14.5" fill="#64748b">young→young</text>
+  <line x1="504" y1="480" x2="771" y2="480" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <text x="638" y="462" text-anchor="middle" font-size="14.5" fill="#64748b">old→young</text>
+  <line x1="497" y1="499" x2="666" y2="566" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <text x="495" y="562" font-size="14.5" fill="#64748b">old→old</text>
+  <line x1="700" y1="329" x2="700" y2="546" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <text x="716" y="442" font-size="14.5" fill="#64748b">young→old</text>
+
+  <!-- nodes -->
+  <circle cx="470" cy="295" r="34" fill="#dbeafe" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="470" y="302" text-anchor="middle" font-size="21" font-weight="bold" fill="#1e3a8a">A</text>
+  <text x="470" y="349" text-anchor="middle" font-size="15" fill="#2563eb">young</text>
+  <circle cx="700" cy="295" r="34" fill="#dbeafe" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="700" y="302" text-anchor="middle" font-size="21" font-weight="bold" fill="#1e3a8a">B</text>
+  <text x="700" y="349" text-anchor="middle" font-size="15" fill="#2563eb">young</text>
+  <circle cx="470" cy="480" r="34" fill="#fde68a" stroke="#b45309" stroke-width="2.5"/>
+  <text x="470" y="487" text-anchor="middle" font-size="21" font-weight="bold" fill="#78350f">O1</text>
+  <text x="470" y="534" text-anchor="middle" font-size="15" fill="#b45309">old</text>
+  <circle cx="810" cy="480" r="34" fill="#dbeafe" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="810" y="487" text-anchor="middle" font-size="21" font-weight="bold" fill="#1e3a8a">Y1</text>
+  <text x="810" y="534" text-anchor="middle" font-size="15" fill="#2563eb">young</text>
+  <circle cx="700" cy="585" r="34" fill="#fde68a" stroke="#b45309" stroke-width="2.5"/>
+  <text x="700" y="592" text-anchor="middle" font-size="21" font-weight="bold" fill="#78350f">O2</text>
+  <text x="700" y="639" text-anchor="middle" font-size="15" fill="#b45309">old</text>
+  <circle cx="1070" cy="560" r="34" fill="#e2e8f0" stroke="#94a3b8" stroke-width="2.5"/>
+  <text x="1070" y="567" text-anchor="middle" font-size="21" font-weight="bold" fill="#64748b">Y2</text>
+  <text x="1070" y="614" text-anchor="middle" font-size="15" fill="#94a3b8">unreachable → swept</text>
+
+  <!-- marks -->
+  <circle cx="495" cy="270" r="12" fill="#16a34a"/><text x="495" y="275" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="725" cy="270" r="12" fill="#16a34a"/><text x="725" y="275" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="495" cy="455" r="12" fill="#16a34a"/><text x="495" y="460" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="835" cy="455" r="12" fill="#16a34a"/><text x="835" y="460" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="725" cy="560" r="12" fill="#16a34a"/><text x="725" y="565" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+
+  <!-- note -->
+  <text x="60" y="690" font-size="16.5" fill="#475569">Mark cost ∝ all live objects — a large old generation makes every GC slow.</text>
+
+  <!-- ==================== Panel B ==================== -->
+  <rect x="30" y="725" width="1340" height="560" rx="12" fill="#fef2f2" stroke="#fca5a5"/>
+  <text x="50" y="761" font-size="22" font-weight="bold" fill="#991b1b">B. Minor GC without a remembered set — the old→young edge is missed</text>
+  <text x="50" y="787" font-size="16.5" fill="#b91c1c">Old objects (O1, O2) are seed-marked and never scanned, so nothing ever reaches Y1.</text>
+
+  <!-- root box -->
+  <rect x="60" y="820" width="200" height="130" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="2"/>
+  <text x="160" y="870" text-anchor="middle" font-size="19" font-weight="bold" fill="#1e293b">Roots</text>
+  <text x="160" y="898" text-anchor="middle" font-size="14.5" fill="#475569">stack / globals /</text>
+  <text x="160" y="920" text-anchor="middle" font-size="14.5" fill="#475569">constants …</text>
+
+  <!-- edges -->
+  <line x1="260" y1="850" x2="431" y2="857" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <line x1="260" y1="920" x2="435" y2="1022" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <text x="60" y="980" font-size="14.5" fill="#b45309">reaches old → stop</text>
+  <line x1="504" y1="860" x2="661" y2="860" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <line x1="504" y1="1045" x2="771" y2="1045" stroke="#94a3b8" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#mGy)"/>
+  <line x1="497" y1="1064" x2="666" y2="1131" stroke="#94a3b8" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#mGy)"/>
+  <path d="M 690 893 C 615 970, 615 1050, 670 1122" fill="none" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+
+  <!-- nodes -->
+  <circle cx="470" cy="860" r="34" fill="#dbeafe" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="470" y="867" text-anchor="middle" font-size="21" font-weight="bold" fill="#1e3a8a">A</text>
+  <text x="470" y="914" text-anchor="middle" font-size="15" fill="#2563eb">young</text>
+  <circle cx="700" cy="860" r="34" fill="#dbeafe" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="700" y="867" text-anchor="middle" font-size="21" font-weight="bold" fill="#1e3a8a">B</text>
+  <text x="700" y="914" text-anchor="middle" font-size="15" fill="#2563eb">young</text>
+  <circle cx="470" cy="1045" r="34" fill="#fde68a" stroke="#b45309" stroke-width="2.5"/>
+  <text x="470" y="1052" text-anchor="middle" font-size="21" font-weight="bold" fill="#78350f">O1</text>
+  <text x="470" y="1099" text-anchor="middle" font-size="15" fill="#b45309">old (not scanned)</text>
+  <circle cx="810" cy="1045" r="34" fill="#dbeafe" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="810" y="1052" text-anchor="middle" font-size="21" font-weight="bold" fill="#1e3a8a">Y1</text>
+  <circle cx="700" cy="1150" r="34" fill="#fde68a" stroke="#b45309" stroke-width="2.5"/>
+  <text x="700" y="1157" text-anchor="middle" font-size="21" font-weight="bold" fill="#78350f">O2</text>
+  <text x="700" y="1204" text-anchor="middle" font-size="15" fill="#b45309">old (not scanned)</text>
+  <circle cx="1070" cy="1125" r="34" fill="#e2e8f0" stroke="#94a3b8" stroke-width="2.5"/>
+  <text x="1070" y="1132" text-anchor="middle" font-size="21" font-weight="bold" fill="#64748b">Y2</text>
+  <text x="1070" y="1179" text-anchor="middle" font-size="15" fill="#94a3b8">unmarked → swept (correct)</text>
+
+  <!-- marks -->
+  <circle cx="495" cy="835" r="12" fill="#16a34a"/><text x="495" y="840" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="725" cy="835" r="12" fill="#16a34a"/><text x="725" y="840" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="495" cy="1020" r="12" fill="#d97706"/><text x="495" y="1025" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="725" cy="1125" r="12" fill="#d97706"/><text x="725" y="1130" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+
+  <!-- danger ring on Y1 -->
+  <circle cx="810" cy="1045" r="46" fill="none" stroke="#dc2626" stroke-width="3" stroke-dasharray="8 5"/>
+  <text x="810" y="955" text-anchor="middle" font-size="15.5" font-weight="bold" fill="#dc2626">live, but never marked</text>
+  <text x="810" y="977" text-anchor="middle" font-size="15.5" font-weight="bold" fill="#dc2626">→ wrongly swept (use-after-free)</text>
+  <text x="868" y="1052" font-size="16" font-weight="bold" fill="#dc2626">← unmarked!</text>
+
+  <!-- notes -->
+  <text x="60" y="1240" font-size="16.5" fill="#7f1d1d">Old objects are skipped, so old→young edges must be recorded outside the GC —</text>
+  <text x="60" y="1268" font-size="16.5" font-weight="bold" fill="#7f1d1d">that is the job of the write barrier and the remembered set.</text>
+
+  <!-- ==================== Panel C ==================== -->
+  <rect x="30" y="1300" width="1340" height="620" rx="12" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="50" y="1336" font-size="22" font-weight="bold" fill="#14532d">C. Minor GC with write barrier + remembered set (monoruby)</text>
+  <text x="50" y="1362" font-size="16.5" fill="#15803d">The barrier records old→young stores as they happen; minor GC marks from roots + remembered set.</text>
+
+  <!-- root box -->
+  <rect x="60" y="1395" width="200" height="130" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="2"/>
+  <text x="160" y="1445" text-anchor="middle" font-size="19" font-weight="bold" fill="#1e293b">Roots</text>
+  <text x="160" y="1473" text-anchor="middle" font-size="14.5" fill="#475569">stack / globals /</text>
+  <text x="160" y="1495" text-anchor="middle" font-size="14.5" fill="#475569">constants …</text>
+
+  <text x="60" y="1556" font-size="15" fill="#15803d">② scan young from roots</text>
+
+  <!-- remembered set box -->
+  <rect x="60" y="1680" width="200" height="120" rx="10" fill="#dcfce7" stroke="#15803d" stroke-width="2.5"/>
+  <text x="160" y="1712" text-anchor="middle" font-size="17" font-weight="bold" fill="#14532d">remembered set</text>
+  <rect x="120" y="1724" width="80" height="34" rx="8" fill="#ffffff" stroke="#b45309" stroke-width="2"/>
+  <text x="160" y="1747" text-anchor="middle" font-size="17" font-weight="bold" fill="#78350f">O1</text>
+  <text x="160" y="1784" text-anchor="middle" font-size="12.5" fill="#15803d">old objects with young children</text>
+
+  <!-- edges -->
+  <line x1="260" y1="1425" x2="431" y2="1432" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <line x1="260" y1="1495" x2="435" y2="1597" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <line x1="504" y1="1435" x2="661" y2="1435" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+  <line x1="504" y1="1620" x2="771" y2="1620" stroke="#16a34a" stroke-width="3.5" marker-end="url(#mG)"/>
+  <line x1="497" y1="1639" x2="666" y2="1706" stroke="#94a3b8" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#mGy)"/>
+  <line x1="700" y1="1469" x2="700" y2="1686" stroke="#16a34a" stroke-width="3" marker-end="url(#mG)"/>
+
+  <!-- write barrier badge on O1->Y1 -->
+  <rect x="540" y="1555" width="200" height="32" rx="16" fill="#7f1d1d"/>
+  <text x="640" y="1577" text-anchor="middle" font-size="15.5" font-weight="bold" fill="#ffffff">① ⚡ write barrier</text>
+
+  <!-- remembered -> O1 scan arrow -->
+  <path d="M 260 1730 C 330 1730, 390 1690, 442 1650" fill="none" stroke="#15803d" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#mG)"/>
+
+  <!-- nodes -->
+  <circle cx="470" cy="1435" r="34" fill="#dbeafe" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="470" y="1442" text-anchor="middle" font-size="21" font-weight="bold" fill="#1e3a8a">A</text>
+  <text x="470" y="1489" text-anchor="middle" font-size="15" fill="#2563eb">young</text>
+  <circle cx="700" cy="1435" r="34" fill="#dbeafe" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="700" y="1442" text-anchor="middle" font-size="21" font-weight="bold" fill="#1e3a8a">B</text>
+  <text x="700" y="1489" text-anchor="middle" font-size="15" fill="#2563eb">young</text>
+  <circle cx="470" cy="1620" r="34" fill="#fde68a" stroke="#b45309" stroke-width="2.5"/>
+  <text x="470" y="1627" text-anchor="middle" font-size="21" font-weight="bold" fill="#78350f">O1</text>
+  <text x="470" y="1674" text-anchor="middle" font-size="15" fill="#b45309">old (remembered)</text>
+  <circle cx="810" cy="1620" r="34" fill="#dbeafe" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="810" y="1627" text-anchor="middle" font-size="21" font-weight="bold" fill="#1e3a8a">Y1</text>
+  <text x="810" y="1674" text-anchor="middle" font-size="15" fill="#2563eb">young</text>
+  <circle cx="700" cy="1725" r="34" fill="#fde68a" stroke="#b45309" stroke-width="2.5"/>
+  <text x="700" y="1732" text-anchor="middle" font-size="21" font-weight="bold" fill="#78350f">O2</text>
+  <text x="700" y="1779" text-anchor="middle" font-size="15" fill="#b45309">old (armed)</text>
+  <circle cx="1070" cy="1700" r="34" fill="#e2e8f0" stroke="#94a3b8" stroke-width="2.5"/>
+  <text x="1070" y="1707" text-anchor="middle" font-size="21" font-weight="bold" fill="#64748b">Y2</text>
+  <text x="1070" y="1754" text-anchor="middle" font-size="15" fill="#94a3b8">unmarked → swept (correct)</text>
+
+  <!-- marks -->
+  <circle cx="495" cy="1410" r="12" fill="#16a34a"/><text x="495" y="1415" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="725" cy="1410" r="12" fill="#16a34a"/><text x="725" y="1415" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="495" cy="1595" r="12" fill="#d97706"/><text x="495" y="1600" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="835" cy="1595" r="12" fill="#16a34a"/><text x="835" y="1600" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+  <circle cx="725" cy="1700" r="12" fill="#d97706"/><text x="725" y="1705" text-anchor="middle" font-size="13" fill="#ffffff" font-weight="bold">✓</text>
+
+  <!-- sequence captions -->
+  <text x="60" y="1842" font-size="16" fill="#7f1d1d">① The store <tspan font-family="Consolas, monospace">o1.f = y1</tspan> fires the barrier → O1 enters the remembered set (armed → remembered)</text>
+  <text x="60" y="1870" font-size="16" fill="#15803d">③ Minor GC scans only the children of each remembered old (mark_children) → Y1 is marked</text>
+  <text x="60" y="1902" font-size="16.5" font-weight="bold" fill="#14532d">Minor GC roots = root set + remembered set. Old objects are never scanned, yet old→young edges are covered.</text>
+
+  <!-- ==================== Edge table ==================== -->
+  <rect x="30" y="1935" width="1340" height="290" rx="12" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="50" y="1977" font-size="21" font-weight="bold" fill="#0f172a">Which stores need a write barrier?</text>
+
+  <!-- cell 1: root -> any -->
+  <rect x="70" y="2020" width="52" height="36" rx="6" fill="#e2e8f0" stroke="#475569" stroke-width="1.5"/>
+  <text x="96" y="2044" text-anchor="middle" font-size="13" fill="#334155">root</text>
+  <line x1="128" y1="2038" x2="178" y2="2038" stroke="#475569" stroke-width="2.5" marker-end="url(#mD)"/>
+  <circle cx="202" cy="2038" r="17" fill="#dbeafe" stroke="#2563eb" stroke-width="2.2"/>
+  <text x="250" y="2032" font-size="18" font-weight="bold" fill="#0f172a">root → any: no barrier</text>
+  <text x="250" y="2058" font-size="15.5" fill="#475569">roots are re-enumerated on every GC</text>
+
+  <!-- cell 2: young -> any -->
+  <circle cx="740" cy="2038" r="17" fill="#dbeafe" stroke="#2563eb" stroke-width="2.2"/>
+  <line x1="762" y1="2038" x2="812" y2="2038" stroke="#475569" stroke-width="2.5" marker-end="url(#mD)"/>
+  <circle cx="836" cy="2038" r="17" fill="#dbeafe" stroke="#2563eb" stroke-width="2.2"/>
+  <circle cx="876" cy="2038" r="17" fill="#fde68a" stroke="#b45309" stroke-width="2.2"/>
+  <text x="920" y="2032" font-size="18" font-weight="bold" fill="#0f172a">young → any: no barrier</text>
+  <text x="920" y="2058" font-size="15.5" fill="#475569">young objects are fully scanned on every GC</text>
+
+  <!-- cell 3: old -> young -->
+  <circle cx="87" cy="2148" r="17" fill="#fde68a" stroke="#b45309" stroke-width="2.2"/>
+  <line x1="109" y1="2148" x2="159" y2="2148" stroke="#b91c1c" stroke-width="3.5" marker-end="url(#mD)"/>
+  <text x="134" y="2132" text-anchor="middle" font-size="15" fill="#b91c1c">⚡</text>
+  <circle cx="183" cy="2148" r="17" fill="#dbeafe" stroke="#2563eb" stroke-width="2.2"/>
+  <text x="250" y="2142" font-size="18" font-weight="bold" fill="#b91c1c">old → young: barrier required!</text>
+  <text x="250" y="2168" font-size="15.5" fill="#475569">must be recorded in the remembered set, or panel B happens</text>
+
+  <!-- cell 4: old -> old -->
+  <circle cx="740" cy="2148" r="17" fill="#fde68a" stroke="#b45309" stroke-width="2.2"/>
+  <line x1="762" y1="2148" x2="812" y2="2148" stroke="#475569" stroke-width="2.5" marker-end="url(#mD)"/>
+  <circle cx="836" cy="2148" r="17" fill="#fde68a" stroke="#b45309" stroke-width="2.2"/>
+  <text x="920" y="2142" font-size="18" font-weight="bold" fill="#0f172a">old → old: not needed in principle</text>
+  <text x="920" y="2168" font-size="15.5" fill="#475569">fires on any armed-old store; harmless over-approximation</text>
+</svg>

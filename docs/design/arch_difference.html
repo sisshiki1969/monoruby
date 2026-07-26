@@ -1,0 +1,507 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>x86-64 / aarch64 JIT backend differences - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d8eaad21.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-e1173681.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="x86-64--aarch64-jit-backend-differences"><a class="header" href="#x86-64--aarch64-jit-backend-differences">x86-64 / aarch64 JIT backend differences</a></h1>
+<p>A survey of how the two JIT machine-code backends differ today, focused on
+<strong>AsmInst coverage</strong> and <strong>lowering logic</strong>. It is current as of the full
+aarch64 port (<code>#704</code>) and the chunked-literal frame-size fix (<code>#709</code>).</p>
+<ul>
+<li>x86-64 backend: <code>monoruby/src/codegen/arch/x86_64/</code> — <code>compile/</code> (split into
+<code>mod.rs</code>, <code>binary_op.rs</code>, <code>method_call.rs</code>, <code>variables.rs</code>, <code>index.rs</code>,
+<code>builtin.rs</code>, <code>defined.rs</code>, <code>definition.rs</code>, <code>constants.rs</code>,
+<code>init_method.rs</code>) + <code>guard.rs</code>.</li>
+<li>aarch64 backend: <code>monoruby/src/codegen/arch/aarch64/</code> — <code>compile.rs</code>
+(one ~4.8 k-line file) + <code>guard.rs</code>.</li>
+<li>Shared front-end + dispatcher: <code>monoruby/src/codegen/jitgen/</code> (TraceIR →
+AsmIR) and <code>jitgen/asmir/compile_shared.rs</code> (the arch-neutral AsmInst
+lowering dispatcher).</li>
+</ul>
+<blockquote>
+<p><strong>History.</strong> An earlier revision of this document (pre-<code>#704</code>) described
+aarch64 as a <em>streaming port that bails to the VM</em> on any instruction shape it
+could not lower, and catalogued ~two dozen bail sites. <strong>That is no longer
+true.</strong> As of <code>#704</code> aarch64 lowers every <code>AsmInst</code> and every side exit, so it
+never bails out of JIT compilation. The sections below describe the current,
+bail-free state; §4 covers the asymmetries that <em>do</em> remain (recompilation
+strategy and eviction patching — not coverage).</p>
+</blockquote>
+<hr>
+<h2 id="1-the-big-picture-one-front-end-two-backends-coverage-symmetric"><a class="header" href="#1-the-big-picture-one-front-end-two-backends-coverage-symmetric">1. The big picture: one front-end, two backends, coverage-symmetric</a></h2>
+<p>Both backends consume the <strong>same</strong> arch-neutral <code>AsmIR</code> produced by <code>jitgen</code>
+(TraceIR → register-allocated AsmIR). They diverge only at the final
+AsmIR → machine-code step, driven by a single shared dispatcher,
+<code>Codegen::compile_asmir</code>
+(<a href="../monoruby/src/codegen/jitgen/asmir/compile_shared.rs#L25">compile_shared.rs:25</a>),
+which lowers each <code>AsmInst</code> by one of two routes:</p>
+<ol>
+<li><strong>Shared arm</strong> — the <code>match</code> in <code>compile_asmir</code> handles the instruction
+structurally and calls a tiny per-arch <strong>emission primitive</strong>
+(<code>emit_reg_move</code>, <code>emit_reg_to_stack</code>, <code>emit_guard_class</code>,
+<code>emit_integer_binop</code>, …). Only the emitted bytes differ per arch.</li>
+<li><strong>Per-arch arm</strong> — the <code>other =&gt;</code> fallthrough calls <code>compile_asmir_arch</code>,
+the backend-private match
+(<a href="../monoruby/src/codegen/arch/x86_64/compile/mod.rs#L23">x86_64/compile/mod.rs:23</a>,
+<a href="../monoruby/src/codegen/arch/aarch64/compile.rs#L4730">aarch64/compile.rs:4730</a>).
+On both arches this handles only the <em>same three</em> specialized inlined-frame
+variants (<code>GuardClassVersionSpecialized</code>, <code>RecompileDeoptSpecialized</code>,
+<code>SetArgumentsForwarded</code>); everything else is handled by the shared arm.</li>
+</ol>
+<h3 id="the-bool-return-is-now-vestigial"><a class="header" href="#the-bool-return-is-now-vestigial">The <code>bool</code> return is now vestigial</a></h3>
+<p>Every emission primitive (and <code>compile_asmir</code> itself) returns a <code>bool</code>. In the
+pre-<code>#704</code> port this was the aarch64 “not-yet-ported / out-of-range → bail to
+the VM” signal. <strong>Today both backends always return <code>true</code>:</strong></p>
+<ul>
+<li>x86-64 is the original fully-featured reference backend; it never declines.</li>
+<li>aarch64 now lowers everything too — large frame/field/sp offsets are
+materialized through scratch registers rather than bailing, and the one shape
+that needed unported caller-relative codegen (the <code>...</code>-forwarding <em>deferral</em>)
+is disabled upstream in <code>forward_rest_deferral</code> instead of bailing in the
+backend. See the header comment at
+<a href="../monoruby/src/codegen/arch/aarch64/compile.rs#L1">aarch64/compile.rs:1</a>:
+<em>“Every <code>AsmInst</code> and side exit is lowered … aarch64 never bails out of JIT
+compilation; <code>compile_asmir</code>’s <code>bool</code> is vestigial.”</em></li>
+</ul>
+<p>There is no <code>return false</code> anywhere in the aarch64 lowering (<code>compile.rs</code>,
+<code>guard.rs</code>). The driver chain (<code>gen_asm</code> / <code>gen_machine_code</code> / <code>jit_compile</code>)
+no longer acts on the result either; the <code>bool</code> is kept only because flipping
+~150 signatures to <code>()</code> is pure churn.</p>
+<hr>
+<h2 id="2-asminst-coverage--full-on-both-arches"><a class="header" href="#2-asminst-coverage--full-on-both-arches">2. AsmInst coverage — full on both arches</a></h2>
+<p>The large majority of <code>AsmInst</code> variants are dispatched through the shared
+<code>compile_asmir</code> match and lowered by per-arch emit primitives. Structurally
+identical families covered on both arches include:</p>
+<ul>
+<li>Register / stack moves: <code>RegMove</code>, <code>RegToAcc</code>, <code>AccToStack</code>, <code>RegToStack</code>,
+<code>StackToReg</code>, <code>LitToReg</code>, <code>LitToStack</code>.</li>
+<li>Control flow: <code>CondBr</code>, <code>NilBr</code>, <code>CheckLocal</code>, <code>OptCase</code>, <code>Deopt</code>,
+<code>HandleError</code>, <code>Ret</code>, <code>MethodRet</code>, <code>BlockBreak</code>.</li>
+<li>Guards: <code>GuardClass</code>, <code>GuardClassVersion</code>, <code>GuardConstBaseClass</code>,
+<code>GuardConstVersion</code>, <code>GuardArrayTy</code>, <code>GuardFrozen</code>, <code>GuardCapture</code>,
+<code>CheckBOP</code>, <code>CheckStack</code>, <code>ExecGc</code>.</li>
+<li>Arithmetic: <code>IntegerBinOp</code>, <code>IntegerCmp</code>, <code>IntegerCmpBr</code>, <code>FloatBinOp</code>,
+<code>FloatUnOp</code>, <code>FloatCmp</code>, <code>FloatCmpBr</code>, <code>FixnumNeg</code>, <code>FixnumBitNot</code>,
+<code>RegAdd</code>, <code>RegSub</code>.</li>
+<li>FP transfer: <code>FprMove</code>, <code>FprSwap</code>, <code>F64ToFpr</code>, <code>FixnumToFpr</code>, <code>FloatToFpr</code>,
+<code>FprToStack</code>, <code>I64ToBoth</code>, <code>FprSave</code>, <code>FprRestore</code>, <code>CFunc_F_F</code>,
+<code>CFunc_FF_F</code>.</li>
+<li>Allocation / C-call: <code>CreateArray</code>, <code>NewArray</code>, <code>NewHash</code>, <code>NewRange</code>,
+<code>ConcatStr</code>, <code>ToA</code>, <code>DeepCopyLit</code>, <code>ConcatRegexp</code>, <code>ExpandArray</code>,
+<code>GenericBinOp</code>, <code>OptEqCmp</code>, <code>ArrayTEq</code>.</li>
+<li>Variables: <code>LoadGVar</code>, <code>StoreGVar</code>, <code>LoadCVar</code>, <code>StoreCVar</code>, <code>CheckCVar</code>,
+<code>LoadDynVar</code>, <code>StoreDynVar</code>, ivar/struct-slot inline &amp; heap loads/stores,
+constants (<code>StoreConstant</code>, <code>GuardConst*</code>).</li>
+<li><code>defined?</code> family, method/class definition (<code>MethodDef</code>, <code>ClassDef</code>,
+<code>SingletonClassDef</code>, …), method-call prologue (<code>GuardClassVersion</code>,
+<code>SetupMethodFrame</code>, <code>SetArguments</code>, <code>Call</code>, <code>Init</code>, <code>Preparation</code>),
+exceptions (<code>Raise</code>, <code>Retry</code>, <code>Redo</code>, <code>EnsureEnd</code>), <code>Yield</code>, <code>Inline</code>,
+and the specialized inlined-frame family.</li>
+</ul>
+<p>Both backends emit all of these unconditionally. The aarch64 wildcard in
+<code>compile_asmir_arch</code> is <code>unreachable!("handled by the shared compile_asmir dispatcher")</code> — it can no longer be a bail.</p>
+<h3 id="how-aarch64-lowers-what-used-to-bail"><a class="header" href="#how-aarch64-lowers-what-used-to-bail">How aarch64 lowers what used to bail</a></h3>
+<p>The pre-<code>#704</code> bail sites were overwhelmingly <strong>12-bit immediate-range limits</strong>
+(aarch64 fixed-width instructions encode only small immediates). They are now
+handled, not declined:</p>
+<ul>
+<li><strong>LFP-relative frame offsets, callee-frame / prologue / loop-JIT <code>sub sp</code>,
+RSP-relative argument stores, block-arg offsets, class-def field offsets</strong> —
+offsets that overflow the field are materialized into a scratch register
+(<code>mov xN, #imm</code> + register-offset addressing) instead of bailing. See the
+<code>a64_frame_*</code> / <code>a64_sp_*</code> / <code>a64_rsp_*</code> helpers in <code>compile.rs</code>.</li>
+<li><strong>RValue heap-field offsets</strong> (inline/heap ivar &amp; struct-slot access) — same
+scratch-materialization treatment.</li>
+<li><strong>Float <code>FloatBinOp</code> / <code>FloatUnOp</code></strong> — the full <code>BinOpK</code> / <code>UnOpK</code> set is
+lowered (the old port handled only <code>Add|Sub|Mul|Div</code> / <code>Neg|Pos</code>).</li>
+<li><strong>Live FP-pool register across a runtime call</strong> — the runtime-call primitives
+save/restore the live xmm pool (<code>emit_fpr_save</code> / <code>emit_fpr_restore</code>) around
+the call, so they no longer bail on a live pool register.</li>
+<li><strong>Deopt write-back &amp; forwarded arguments</strong> — the side-exit generator
+reconstructs live frame state for all shapes; the single unported shape (the
+deferred-source <code>...</code>-forwarding deferral, <code>g(*rest, **kw, &amp;blk)</code>) is
+prevented upstream by <code>forward_rest_deferral</code>, so it never reaches the
+backend.</li>
+</ul>
+<hr>
+<h2 id="3-former-3-aarch64-bail-conditions--removed"><a class="header" href="#3-former-3-aarch64-bail-conditions--removed">3. (former §3 “aarch64 bail conditions” — removed)</a></h2>
+<p>This section catalogued the aarch64 bail sites. With the full port (<code>#704</code>)
+there are no bail sites left; the content has been folded into §2’s “How
+aarch64 lowers what used to bail”. The remaining <em>non-bail</em> asymmetries are in
+§4.</p>
+<hr>
+<h2 id="4-remaining-asymmetry-recompilation--eviction-patching-not-coverage"><a class="header" href="#4-remaining-asymmetry-recompilation--eviction-patching-not-coverage">4. Remaining asymmetry: recompilation &amp; eviction patching (not coverage)</a></h2>
+<p>Two mechanisms still differ, both centered on <strong>patching / recompiling
+already-emitted code</strong>, and both scoped to <strong>non-specialized</strong> frames. Neither
+is a coverage gap: where x86 patches or recompiles in place, aarch64 deopts to
+the VM, which then re-JITs through the normal warm-up counters. Correctness is
+identical; only the recompile <em>strategy</em> (and thus steady-state performance
+after a class-version change or BOP redefinition) differs.</p>
+<h3 id="41-class-version-miss-recompilation"><a class="header" href="#41-class-version-miss-recompilation">4.1 Class-version-miss recompilation</a></h3>
+<ul>
+<li><strong>x86-64:</strong> <code>guard_class_version</code>
+(<a href="../monoruby/src/codegen/arch/x86_64/guard.rs#L28">x86_64/guard.rs:28</a>)
+emits a fast inline version check (page 0) plus an outlined
+recompile-and-recover slow path (page 1) via <code>gen_recompile</code>, distinguishing
+loop vs. method recompiles via <code>position</code> and offering a <code>with_recovery</code>
+jump-back. On a version miss it recompiles the whole method/loop <strong>in place</strong>
+and resumes.</li>
+<li><strong>aarch64:</strong> <code>a64_guard_class_version</code>
+(<a href="../monoruby/src/codegen/arch/aarch64/guard.rs#L89">aarch64/guard.rs:89</a>)
+emits the inline check and <strong>just deopts on miss</strong> — <em>“Unlike x86 we do not
+recompile on miss yet — just deopt.”</em> It ignores the x86 recompile params
+(<code>position</code>, <code>with_recovery</code>) it has no recompiler for.</li>
+<li><strong>Specialized frames are symmetric:</strong> the specialized class-version guard
+<em>does</em> recompile on both arches. x86 uses <code>guard_class_version_specialized</code> /
+<code>gen_recompile_specialized</code>
+(<a href="../monoruby/src/codegen/arch/x86_64/guard.rs#L57">x86_64/guard.rs:57</a>);
+aarch64 uses <code>GuardClassVersionSpecialized</code> / <code>RecompileDeoptSpecialized</code> →
+<code>a64_call_recompile_specialized</code>
+(<a href="../monoruby/src/codegen/arch/aarch64/compile.rs#L4755">aarch64/compile.rs:4755</a>),
+which rewrites the specialized body’s <code>SpecializedCall</code> <code>bl</code>.</li>
+</ul>
+<p>So the gap is specifically the <strong>non-specialized method/loop class-version
+guard</strong>: x86 recompiles, aarch64 deopts.</p>
+<h3 id="42-eviction-via-return-address-patching-bop-redefinition"><a class="header" href="#42-eviction-via-return-address-patching-bop-redefinition">4.2 Eviction via return-address patching (BOP redefinition)</a></h3>
+<ul>
+<li><strong>x86-64:</strong> the regular <code>Call</code> / <code>Yield</code> records, per call site, the return
+address plus a patch point (<code>emit_call</code> → <code>set_deopt_with_return_addr</code>,
+<a href="../monoruby/src/codegen/arch/x86_64/compile/mod.rs#L1285">x86_64/compile/mod.rs:1285</a>).
+On <strong>BOP (basic-op) redefinition</strong> it rewrites the live return path to
+redirect into a deopt handler — <em>without</em> recompiling.</li>
+<li><strong>aarch64:</strong> <code>a64_do_call</code>
+(<a href="../monoruby/src/codegen/arch/aarch64/compile.rs#L825">aarch64/compile.rs:825</a>)
+<strong>skips</strong> the return-address patching for the regular <code>Call</code>/<code>Yield</code> —
+<em>“The eviction-on-return patching (<code>set_deopt_with_return_addr</code>) is x86-only
+(runtime branch patching), so it is skipped — class-version changes are
+caught by <code>GuardClassVersion</code> deopts instead.”</em></li>
+<li><strong>Specialized calls/yields are symmetric:</strong> aarch64 <em>does</em> implement
+return-address patching for the specialized inlined-frame path —
+<code>do_specialized_call</code>
+(<a href="../monoruby/src/codegen/arch/aarch64/compile.rs#L1068">aarch64/compile.rs:1068</a>)
+records the return address via <code>set_deopt_with_return_addr</code>
+(<a href="../monoruby/src/codegen/arch/aarch64/compile.rs#L2433">aarch64/compile.rs:2433</a>),
+and <code>emit_immediate_evict</code>
+(<a href="../monoruby/src/codegen/arch/aarch64/compile.rs#L2416">aarch64/compile.rs:2416</a>)
+overwrites the recorded instruction on eviction.</li>
+</ul>
+<p>So the gap is specifically the <strong>non-specialized <code>Call</code>/<code>Yield</code></strong>: x86 patches
+the return path for BOP eviction, aarch64 relies on the inline class-version
+deopt.</p>
+<hr>
+<h2 id="5-guard-logic-comparison"><a class="header" href="#5-guard-logic-comparison">5. Guard logic comparison</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Guard</th><th>x86-64</th><th>aarch64</th></tr>
+</thead>
+<tbody>
+<tr><td><code>guard_class</code> immediates</td><td>Fixnum/nil/true/false/symbol/float via <code>testq</code>/<code>cmpq</code></td><td>Fixnum/nil/true/false/symbol/float via <code>tbz</code>/<code>tbnz</code>/<code>cmp</code> (<a href="../monoruby/src/codegen/arch/aarch64/guard.rs#L14">guard.rs:14</a>)</td></tr>
+<tr><td><code>guard_class</code> heap</td><td><code>guard_rvalue</code> (low-3-bits + class compare)</td><td><code>a64_guard_rvalue</code> (same logic, <code>and</code>/<code>cbnz</code>/<code>ldr w</code>, <a href="../monoruby/src/codegen/arch/aarch64/guard.rs#L68">guard.rs:68</a>)</td></tr>
+<tr><td><code>guard_class2</code> (BigNum→VM)</td><td>yes — x86-only helper (<a href="../monoruby/src/codegen/arch/x86_64/guard.rs#L177">guard.rs:177</a>), called from the monomorphic method-entry patch path (<code>codegen/patch.rs:158</code>)</td><td>not present</td></tr>
+<tr><td><code>guard_array_ty</code></td><td>yes (<code>ObjTy::ARRAY</code> at <code>RVALUE_OFFSET_TY</code>)</td><td>yes</td></tr>
+<tr><td><code>guard_capture</code></td><td>yes (<code>branch_if_captured</code>)</td><td>yes</td></tr>
+<tr><td><code>float_to_f64</code> unbox</td><td>yes (flonum / heap-Float, 0.0 sign-bit trick)</td><td>yes (mirrored)</td></tr>
+<tr><td>class-version guard</td><td>inline check <strong>+ recompile + recovery</strong> (page split, §4.1)</td><td>inline check, <strong>deopt only</strong> for non-specialized; recompile for specialized frames (§4.1)</td></tr>
+<tr><td>eviction on BOP redefinition</td><td>return-address patching for regular &amp; specialized calls (§4.2)</td><td>return-address patching for <strong>specialized</strong> calls only; regular calls rely on class-version deopt (§4.2)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Both <code>a64_guard_class</code> and <code>a64_guard_rvalue</code> always emit (they return a <code>bool</code>
+for symmetry with x86, but never return <code>false</code> — every <code>ClassId</code> is handled,
+immediates inline and everything else via the heap fallback).</p>
+<hr>
+<h2 id="5b-local-slot-addressing-rbp-x86-vs-lfp-aarch64"><a class="header" href="#5b-local-slot-addressing-rbp-x86-vs-lfp-aarch64">5b. Local-slot addressing: rbp (x86) vs LFP (aarch64)</a></h2>
+<p>The two backends address a frame’s own local/temporary slots through different
+base registers, and this leaks into one correctness-relevant corner:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>x86-64</th><th>aarch64</th></tr>
+</thead>
+<tbody>
+<tr><td><code>LMem::Slot</code> lowering</td><td><code>[rbp - rbp_local(slot)]</code> (native frame pointer)</td><td><code>[x22 - (slot*8 + LFP_SELF)]</code> (LFP)</td></tr>
+<tr><td>deopt write-back (<code>wb.gp</code>)</td><td><code>[r14 - conv(slot)]</code> (LFP)</td><td><code>[x22 - …]</code> (LFP)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Normally rbp and the LFP point at the same stack frame, so the choice is
+invisible. They <strong>diverge after <code>move_frame_to_heap</code></strong>: when a callee captures
+the caller’s frame (e.g. turns a block into a Proc — <code>to_enum(:m) { size }</code>,
+<code>lazy</code>, …), the live frame becomes a heap copy that the LFP (reloaded from
+<code>cfp.lfp</code> after the call) points at, while rbp still names the abandoned stack
+frame. The JIT handles this by emitting a <code>guard_capture</code> after such a call that
+deopts to the VM when capture happened; the deopt’s write-back re-homes
+register-resident (<code>wb.gp</code> / <code>wb.fpr</code>) slots <strong>via the LFP</strong>, so they reach the
+heap copy.</p>
+<p>A slot in <code>LinkMode::S</code> (value already at its stack home) is <em>not</em> in the
+write-back — it is assumed materialized. On x86 that materialization is
+rbp-relative, so a call <strong>result</strong> written to an <code>S</code> slot after a capturing call
+lands on the dead stack frame and is lost (the VM then reads the stale heap
+copy). With a non-empty GP pool this was masked because results stayed pool-
+resident (<code>G</code>) and the deopt re-homed them via the LFP; it surfaces once the
+pool is empty (the aarch64 default, and the x86 <code>GP_ALLOC_POOL = &amp;[]</code> config).
+aarch64 never had the bug because <em>all</em> its slot stores are already LFP-relative.</p>
+<p>The fix is <code>AsmInst::RegToLfpStack</code> / <code>LMem::LfpSlot</code> (this commit): the result
+of a possibly-capturing call (the <code>send</code> / <code>compile_yield</code> paths, gated on
+<code>!no_capture_guard()</code>) is stored via the LFP (<code>def_rax2acc_capturing</code>) so it
+follows the frame onto the heap — matching what aarch64 does for every slot, and
+what the deopt write-back does for <code>G</code>/<code>F</code> slots. On aarch64 <code>LfpSlot</code> lowers
+identically to <code>Slot</code>.</p>
+<hr>
+<h2 id="6-practical-consequences"><a class="header" href="#6-practical-consequences">6. Practical consequences</a></h2>
+<ul>
+<li><strong>Correctness is equal.</strong> Both backends produce correct results.</li>
+<li><strong>Coverage is equal.</strong> Both backends JIT every method/loop the front-end
+produces; aarch64 no longer falls back to the VM for any instruction shape.</li>
+<li><strong>Steady-state recompile behavior differs</strong> in two narrow, non-specialized
+cases (§4): after a class-version change, x86 recompiles the method/loop in
+place while aarch64 deopts and re-JITs via warm-up counters; and on BOP
+redefinition, x86 patches the live return path of regular calls while aarch64
+relies on the inline class-version deopt. Both eventually reach an equivalent
+JIT-compiled steady state; the difference is the transition cost.</li>
+<li><strong><code>guard_class2</code> / BigNum routing</strong> is an x86-only method-entry guard helper
+(<code>patch.rs</code>); aarch64 has no equivalent on that path.</li>
+</ul>
+<h3 id="one-line-summary"><a class="header" href="#one-line-summary">One-line summary</a></h3>
+<blockquote>
+<p>x86-64 and aarch64 now share the entire AsmIR front-end <em>and</em> full AsmInst
+coverage — aarch64 lowers everything (large immediates via scratch
+registers), so the <code>bool</code> bail return is vestigial. The only remaining
+asymmetries are non-coverage: x86 recompiles-in-place / patches live return
+addresses for <strong>non-specialized</strong> class-version misses and BOP eviction,
+where aarch64 deopts to the VM and re-JITs (specialized frames are symmetric);
+plus the x86-only <code>guard_class2</code> BigNum-routing helper.</p>
+</blockquote>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/arg_forwarding_jit.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/gc.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/arg_forwarding_jit.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/gc.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

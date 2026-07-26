@@ -1,0 +1,517 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Signal handling (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d8eaad21.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-e1173681.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="シグナル処理"><a class="header" href="#シグナル処理">シグナル処理</a></h1>
+<p>monoruby の POSIX シグナル処理の<strong>現行実装</strong>を、コードに即して解説する。
+シグナルは GC・プリエンプションと同じ<strong>セーフポイント機構</strong>(<code>doc/safepoint.md</code>)の上に
+載っており、非同期に到着したシグナルを「フラグを立てて次のセーフポイントで Ruby 例外 /
+<code>Signal.trap</code> ハンドラに変換する」遅延配送モデルで扱う。</p>
+<blockquote>
+<p>注: コードコメントが参照する節ラベル(A2 / A3 / A4 / A6 / A7 / B+)は本書の見出しに対応する。</p>
+</blockquote>
+<p>主な実装ファイル:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>対象</th><th>ファイル</th></tr>
+</thead>
+<tbody>
+<tr><td>ペンディングビットマップ・signo↔例外・disposition</td><td><code>codegen/signal_table.rs</code></td></tr>
+<tr><td>ハンドラスタブ(async-signal-safe)</td><td><code>codegen/arch/{x86_64,aarch64}/jit_module.rs</code>(<code>signal_handler_for</code>)</td></tr>
+<tr><td>sigaction インストール・スタブ事前生成</td><td><code>codegen/codegen.rs</code></td></tr>
+<tr><td>セーフポイント配送</td><td><code>executor.rs</code>(<code>execute_gc</code>)</td></tr>
+<tr><td><code>Signal</code> / <code>Kernel#trap</code> ビルトイン・名前表</td><td><code>builtins/process.rs</code> / <code>builtins/kernel.rs</code></td></tr>
+<tr><td>trap テーブル(GC ルート)</td><td><code>globals/globals.rs</code></td></tr>
+<tr><td><code>signal_interrupt</code> マーカー</td><td><code>globals/error.rs</code></td></tr>
+<tr><td>ブロッキング IO 統合</td><td><code>builtins/io.rs</code>(<code>blocking_io_region</code>)/ <code>value/rvalue/io.rs</code></td></tr>
+<tr><td>ハングウォッチドッグ</td><td><code>watchdog.rs</code></td></tr>
+<tr><td>終了時のシグナル死</td><td><code>main.rs</code> / <code>executor.rs</code>(<code>terminate_with_signal</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="1-全体設計--遅延配送"><a class="header" href="#1-全体設計--遅延配送">1. 全体設計 — 遅延配送</a></h2>
+<p>シグナルハンドラは async-signal 文脈で走るため、そこでは Rust のアロケータ・<code>RefCell</code>・
+libc 呼び出しに触れられない。そこで <strong>2 段階</strong>にする:</p>
+<ol>
+<li><strong>記録(async-signal 文脈)</strong>: ハンドラスタブは、プロセスグローバルなビットマップに
+自分のビットを OR し、poll フラグ(<code>alloc_flag</code>)を <code>+= 10</code> して即 <code>ret</code>。メモリの
+ADD と OR だけで、Rust には一切入らない。</li>
+<li><strong>配送(セーフポイント)</strong>: 次に VM/JIT がセーフポイント(callee-entry / ループ
+バックエッジ、<code>doc/safepoint.md</code> §4)へ到達すると <code>execute_gc</code>(<code>executor.rs</code>)が
+ビットマップを drain し、最小番号のシグナルを Ruby 例外 / <code>Signal.trap</code> ハンドラ呼び出しに
+変換する。</li>
+</ol>
+<p>この構造により、シグナルは GC・プリエンプションと同一の <code>alloc_flag</code>・同一の poll・
+同一の <code>execute_gc</code> を共有する。<code>+= 10</code> はトリガ帯(<code>&gt;= 8</code>)を確実に踏むためのナッジ。</p>
+<hr>
+<h2 id="2-ペンディングビットマップsignal_tablers"><a class="header" href="#2-ペンディングビットマップsignal_tablers">2. ペンディングビットマップ(<code>signal_table.rs</code>)</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub(crate) static PENDING_SIGNALS: AtomicU32 = AtomicU32::new(0);
+<span class="boring">}</span></code></pre>
+<ul>
+<li><strong>プロセスグローバル</strong>な <code>AtomicU32</code>。ビット <code>n</code> = シグナル <code>n+1</code>(SIGINT=2 ⇒ bit1)。</li>
+<li>プロセスグローバルにする理由: <code>sigaction</code> はプロセス全体に効くので、<code>Codegen</code> ごとに
+ビットマップを分けると、2 個目の <code>Codegen</code> がハンドラを自分のビットマップへ向け直した際に
+シグナルを取りこぼす。1 枚のグローバルにすれば、記録側(スタブ)と drain 側が
+どの <code>Codegen</code> がインストールしたかによらず一致する。</li>
+<li><code>pending_signals_addr()</code> — スタブに焼き込む絶対アドレス。</li>
+<li><code>take_pending_signals()</code> — <code>swap(0, Relaxed)</code> でアトミックに drain。</li>
+<li><code>lowest_pending_signo(bitmap)</code> — <code>bitmap.trailing_zeros() + 1</code>。<strong>最小番号の signo が優先</strong>
+(§6)。1 回の drain で配送するのは 1 シグナルだけ。</li>
+</ul>
+<h3 id="ハンドラスタブa2-の一部signal_handler_for"><a class="header" href="#ハンドラスタブa2-の一部signal_handler_for">ハンドラスタブ(A2 の一部;<code>signal_handler_for</code>)</a></h3>
+<p>x86-64(<code>jit_module.rs</code>)が出力する内容そのもの:</p>
+<pre><code class="language-asm">addl [rip + alloc_flag], 10   ; 次の poll を必ず発火させる
+movq rax, (ps_addr)
+orl  [rax], (bit)             ; PENDING_SIGNALS に自分のビットを OR
+ret
+</code></pre>
+<ul>
+<li><strong>Rust を呼ばない</strong>。メモリの ADD と OR、そして <code>ret</code> のみ。<code>rax</code> はシグナルハンドラの
+C ABI で caller-saved。</li>
+<li>RMW は <strong>LOCK 前置しない</strong>(async-signal 文脈では <code>ldxr/stxr</code> 相当が使えない)。ネストした
+シグナルで増分/ビットを稀に取りこぼしうるが無害(次の poll が拾う)。</li>
+<li>aarch64(<code>jit_module.rs</code>)も対称。ただし alloc_flag のアドレス取得法が異なる
+(x86 は rip 相対、aarch64 はラベルアドレス)。</li>
+</ul>
+<p><strong>async-signal-safe な理由</strong>: 静的に既知の絶対アドレスへのロード/ストアと <code>ret</code> だけ。
+ロックなし・確保なし・libc 呼び出しなし・再入 Rust なし。</p>
+<hr>
+<h2 id="3-sigaction-のインストールa3"><a class="header" href="#3-sigaction-のインストールa3">3. sigaction のインストール(A3)</a></h2>
+<p><code>codegen.rs</code> の <code>sigaction_to</code> / <code>install_signal_stub</code> がプロセスワイドに <code>libc::sigaction</code> する。</p>
+<ul>
+<li><strong><code>SA_RESTART</code> を付けない</strong>(<code>flags = 0</code>)。これは意図的(§8)。シグナルがブロッキング
+syscall を EINTR で中断させ、インタプリタを poll 地点へ到達させるため。</li>
+<li><strong>スタブ事前生成(A2)</strong>: <code>Codegen::new</code> 時に <code>TRAPPABLE_SIGNALS</code> 全てのスタブを
+<code>signal_stubs: HashMap&lt;i32, CodePtr&gt;</code> に用意する。ゆえに実行時の trap は <code>sigaction(2)</code>
+だけで済み、稼働中のバッファに JIT コード生成を行わない。</li>
+<li><strong>デフォルトインストール</strong>: 起動時に <code>POSIX_SIGNALS</code>(HUP, INT, QUIT, ALRM, TERM,
+USR1, USR2)へ自動で <code>sigaction</code>。CHLD/CONT/WINCH/TSTP や PIPE は既定では張らない。
+ウォッチドッグが armed のとき(§9)は SIGALRM をスキップしてハンドラを奪わない。</li>
+</ul>
+<h3 id="シグナル集合"><a class="header" href="#シグナル集合">シグナル集合</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>集合</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>POSIX_SIGNALS</code></td><td>デフォルトで <code>sigaction</code> する集合。既定で rescuable な <code>SignalException</code>(INT のみ <code>Interrupt</code>)へ変換される。</td></tr>
+<tr><td><code>TRAPPABLE_SIGNALS</code></td><td><code>Signal.trap</code> でハンドラを張ってよい集合(Linux/非 Linux で cfg 分岐)。KILL/STOP(捕捉不能)、SEGV/BUS/FPE/ILL/TRAP/ABRT(フォールト)を除外。SIGPWR は Linux のみ。</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="4-セーフポイントでの配送a6execute_gc"><a class="header" href="#4-セーフポイントでの配送a6execute_gc">4. セーフポイントでの配送(A6;<code>execute_gc</code>)</a></h2>
+<p><code>execute_gc</code>(<code>executor.rs</code>)がセーフポイントで実行する処理のうち、シグナル部分:</p>
+<ol>
+<li><code>watchdog::poll()</code>(§9)。</li>
+<li><code>preempt::consume_poll_flag()</code> でプリエンプトビットを剥がす。</li>
+<li><strong>シグナル drain</strong>: <code>take_pending_signals()</code> → <code>lowest_pending_signo()</code>。signo があれば
+<code>globals.signal_disposition(signo)</code> で分岐:
+<ul>
+<li><code>Handler(handler)</code> → <code>arg = Value::integer(signo)</code>、<code>#call</code> を <code>invoke_method_inner</code> で
+呼ぶ。<code>Err</code> なら <code>set_error</code> + <code>return None</code>。</li>
+<li><code>Ignore{..}</code> → no-op(防御的。SIG_IGN のシグナルは通常ビットを立てない)。</li>
+<li><code>Default | SystemDefault</code> → <code>signo_to_error(signo)</code>。<code>Some(err)</code> なら
+<code>set_error(err); return None</code>。マップ外は何もしない。</li>
+<li>同じ drain 窓に複数立っていても<strong>最小 signo だけ</strong>配送し、残りは捨てる
+(CRuby も coalesce したシグナルの全配送を保証しない)。</li>
+</ul>
+</li>
+<li>GC 本体(ベース値 <code>&gt;= 8</code> のとき)。</li>
+<li>プリエンプション(<code>scheduler::pass</code>)。</li>
+</ol>
+<p><strong>シグナル配送は GC・プリエンプションより前</strong>に同じ poll 内で行われる。
+<code>execute_gc</code> は<strong>ハンドラ呼び出し中に CODEGEN 借用を保持しない</strong>ので、trap ハンドラが
+その内部で JIT コンパイルや GC を起こしても自由に再入できる。</p>
+<hr>
+<h2 id="5-signo--既定例外a4signo_to_error"><a class="header" href="#5-signo--既定例外a4signo_to_error">5. signo → 既定例外(A4;<code>signo_to_error</code>)</a></h2>
+<p><code>Signal.trap</code> ハンドラが無い場合、<code>Default</code>/<code>SystemDefault</code> は既定例外に落ちる:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>signo</th><th>例外</th></tr>
+</thead>
+<tbody>
+<tr><td>SIGINT</td><td><code>Interrupt</code>(専用クラス。<code>Interrupt &lt; SignalException</code>)</td></tr>
+<tr><td>SIGTERM / SIGHUP / SIGQUIT / SIGALRM / SIGPIPE / SIGUSR1 / SIGUSR2</td><td><code>SignalException("SIG…")</code></td></tr>
+<tr><td>その他</td><td><code>None</code>(防御的フォールスルー)</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>Interrupt &lt; SignalException</code>(A4)なので、<code>rescue SignalException</code> は SIGINT も捕まえる。
+これらはいずれも rescuable な例外として VM の unwind 経路に乗る。</p>
+<hr>
+<h2 id="6-signaltrap--kerneltrapa7"><a class="header" href="#6-signaltrap--kerneltrapa7">6. <code>Signal.trap</code> / <code>Kernel#trap</code>(A7)</a></h2>
+<h3 id="登録"><a class="header" href="#登録">登録</a></h3>
+<ul>
+<li>モジュール <code>Signal</code> に <code>list</code> / <code>signame</code> / <code>trap</code>(<code>builtins/process.rs</code>)。</li>
+<li><code>Kernel#trap</code>(<code>builtins/kernel.rs</code>)は同じ <code>process::signal_trap</code> に委譲。</li>
+</ul>
+<h3 id="signaltrap--kerneltrap-の挙動"><a class="header" href="#signaltrap--kerneltrap-の挙動"><code>Signal.trap</code> / <code>Kernel#trap</code> の挙動</a></h3>
+<ol>
+<li><code>trap_signo</code> で signo を解決(Integer は妥当な signo、Symbol/String/<code>#to_str</code> は名前で。
+<code>"SIG"</code> 有無どちらも可。<code>#to_int</code> は呼ばない。それ以外は <code>ArgumentError: bad signal type</code>)。</li>
+<li>KILL/STOP(捕捉不能)→ <code>ArgumentError: "Signal already used by VM or OS"</code>。
+予約シグナル(SEGV/BUS/ILL/FPE/VTALRM, EXIT)→ <code>ArgumentError: "can't trap reserved signal"</code>。</li>
+<li>disposition はコマンド引数(<code>command_disposition</code>)かブロック
+(<code>Handler(generate_proc(...))</code>)から決まる(コマンド優先)。</li>
+<li><strong>先に OS レベルでインストールし、その後 trap テーブルへ記録</strong>する。<code>CODEGEN</code> 借用下で
+disposition ごとに <code>install_signal_stub</code> / <code>install_signal_ignore</code> /
+<code>install_signal_default</code> / <code>install_signal_system_default</code> を呼ぶ。失敗時は <code>Errno</code>。
+<code>set_signal_disposition</code> が<strong>前の disposition</strong> を返し、<code>disposition_to_value</code> で Ruby 値に
+変換して返す。</li>
+</ol>
+<h3 id="コマンド文字列と-disposition"><a class="header" href="#コマンド文字列と-disposition">コマンド文字列と disposition</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>コマンド引数</th><th>disposition</th><th>Ruby へ返る表現</th></tr>
+</thead>
+<tbody>
+<tr><td><code>nil</code></td><td><code>Ignore{from_nil:true}</code></td><td><code>nil</code></td></tr>
+<tr><td><code>""</code> / <code>"SIG_IGN"</code> / <code>"IGNORE"</code></td><td><code>Ignore{from_nil:false}</code></td><td><code>"IGNORE"</code></td></tr>
+<tr><td><code>"SIG_DFL"</code> / <code>"DEFAULT"</code></td><td><code>Default</code></td><td><code>"DEFAULT"</code></td></tr>
+<tr><td><code>"SYSTEM_DEFAULT"</code></td><td><code>SystemDefault</code></td><td><code>"SYSTEM_DEFAULT"</code></td></tr>
+<tr><td>その他の String/Symbol</td><td><code>ArgumentError: unsupported command</code></td><td>—</td></tr>
+<tr><td>String/Symbol 以外のオブジェクト</td><td><code>Handler(cmd)</code></td><td>そのオブジェクト</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>SignalDisposition</code>(<code>signal_table.rs</code>)は <code>Default</code> / <code>SystemDefault</code>(OS の <code>SIG_DFL</code>)/
+<code>Ignore{from_nil}</code> / <code>Handler(Value)</code> の 4 種。</p>
+<h3 id="trap-テーブルglobalsrs"><a class="header" href="#trap-テーブルglobalsrs">trap テーブル(<code>globals.rs</code>)</a></h3>
+<ul>
+<li><code>signal_handlers: Vec&lt;SignalDisposition&gt;</code>(signo で添字、0 は未使用)。初期値は全 <code>SystemDefault</code>、
+<code>POSIX_SIGNALS</code> のみ <code>Default</code>。</li>
+<li><code>signal_disposition(signo)</code> / <code>set_signal_disposition(signo, disp)</code>(後者は前値を返す)。</li>
+<li><strong>GC ルート</strong>: <code>Globals::mark</code> が各 <code>Handler(v)</code> をマークする(trap ハンドラの Proc は
+この表からしか到達できないが、将来任意の poll 地点で呼ばれうるため)。</li>
+</ul>
+<h3 id="名前--番号signal_table"><a class="header" href="#名前--番号signal_table">名前 ↔ 番号(<code>SIGNAL_TABLE</code>)</a></h3>
+<p><code>process.rs</code> の <code>SIGNAL_TABLE</code> が唯一の真実:<code>Signal.list</code>(名前→番号 Hash)、
+<code>Signal.signame</code>(番号→名前)、<code>trap</code>、<code>Process.kill</code> が共有する。正準名がエイリアスに先行
+(IOT=ABRT, CLD=CHLD, POLL=IO)。cfg 分岐(POLL/PWR は Linux、EMT/INFO はそれ以外)。</p>
+<hr>
+<h2 id="7-eintr--ブロッキング-io-統合"><a class="header" href="#7-eintr--ブロッキング-io-統合">7. EINTR / ブロッキング IO 統合</a></h2>
+<h3 id="sa_restart-を付けない理由3-再掲"><a class="header" href="#sa_restart-を付けない理由3-再掲"><code>SA_RESTART</code> を付けない理由(§3 再掲)</a></h3>
+<p>シグナルはブロッキング syscall を EINTR で中断させ、インタプリタを poll 地点へ運ぶ必要がある。
+<code>SA_RESTART</code> を付けると、0 バイト転送で中断した <code>read(2)</code> が透過的に再開され、アイドルな
+パイプでブロックしたプロセスを SIGTERM で終了させられなくなる。ブロッキングプリミティブは
+<strong>シグナルの伴わない素の EINTR は自前で再試行</strong>する。
+(ウォッチドッグ自身の SIGALRM は変換経路ではないので <code>SA_RESTART</code> を使う。)</p>
+<h3 id="signal_interrupt-マーカーglobalserrorrs"><a class="header" href="#signal_interrupt-マーカーglobalserrorrs"><code>signal_interrupt</code> マーカー(<code>globals/error.rs</code>)</a></h3>
+<ul>
+<li><code>MonorubyErr::signal_interrupt()</code> — 「ブロッキング IO プリミティブが、シグナル保留中に
+EINTR を見た」ことを表す内部マーカー例外(メッセージ <code>__monoruby_signal_interrupt__</code>)。</li>
+<li><code>is_signal_interrupt()</code> で呼び出し側が判定。非ブロッキングの would-block 用に
+<code>is_would_block_interrupt</code> という同型マーカーもある(<code>doc/threads.md</code> §7)。</li>
+<li>プリミティブ(<code>value/rvalue/io.rs</code> の割り込み可能 read/write)は、EINTR がシグナル保留と
+重なったとき素の再試行をやめて <code>signal_interrupt()</code> を返す。シグナルの無い素の EINTR は
+再試行。入口で既にシグナル保留(EINTR なしでビットが立っている)なら、それも浮上させる。</li>
+</ul>
+<h3 id="blocking_io_regionbuiltinsiors"><a class="header" href="#blocking_io_regionbuiltinsiors"><code>blocking_io_region</code>(<code>builtins/io.rs</code>)</a></h3>
+<p>ブロッキング IO を包む単一のチョークポイント:</p>
+<ol>
+<li>入口で保留シグナルを先に drain(<code>PENDING_SIGNALS != 0</code> なら <code>execute_gc</code>)。</li>
+<li><code>f()</code> を実行。</li>
+<li><code>is_signal_interrupt()</code> なら poll 地点(<code>execute_gc</code>)を通す。既定 disposition は変換した
+SignalException を read の外へ raise、trap ハンドラなら実行して正常復帰時に操作を再開
+(消費済みバイトは pushback 済みなので失われない)。</li>
+<li><code>is_would_block_interrupt()</code> ならスケジューラの fd ポーラで park(<code>doc/threads.md</code> §7)。</li>
+</ol>
+<h3 id="その他の-eintrpoll-経路いずれも-sa_restart-なし"><a class="header" href="#その他の-eintrpoll-経路いずれも-sa_restart-なし">その他の EINTR→poll 経路(いずれも <code>SA_RESTART</code> なし)</a></h3>
+<p><code>Process.waitpid</code>、<code>Kernel#sleep</code>(nanosleep 前に保留シグナルを drain)、<code>IO#write</code>/flush、
+スケジューラの待機(<code>park_until_deadline</code> / fd 待ち)、<code>native_pool</code>(素の EINTR は再試行)。
+<strong>自分宛の <code>Process.kill</code></strong> は、単一スレッドではシグナルが <code>kill(2)</code> 復帰前に配送されビットが
+既に立っているので、<code>kill</code> 呼び出し内で <code>execute_gc</code> を<strong>インライン</strong>で回して配送する(CRuby 同様)。</p>
+<hr>
+<h2 id="8-ハングウォッチドッグbwatchdogrs"><a class="header" href="#8-ハングウォッチドッグbwatchdogrs">8. ハングウォッチドッグ(B+;<code>watchdog.rs</code>)</a></h2>
+<p>単一スレッド・非プリエンプティブなプログラムは、前進のないままスピン/ブロックしうる。
+<code>MONORUBY_HANG_WATCHDOG_SEC=N</code>(N&gt;0)で N 秒間 poll 地点に到達しなければ強制終了する
+ウォッチドッグを arm する(既定では無効)。</p>
+<ul>
+<li>状態は <code>BUDGET</code> / <code>COUNTDOWN</code>(<code>AtomicI32</code>)。<code>arm_from_env()</code> が <strong>SIGALRM</strong>(こちらは
+<code>SA_RESTART</code> 付き)ハンドラと <strong>1 Hz の <code>setitimer(ITIMER_REAL)</code></strong> を仕込む。</li>
+<li>armed 中はウォッチドッグが SIGALRM を<strong>所有</strong>する(<code>Codegen::new</code> のデフォルトインストールは
+SIGALRM をスキップ)。</li>
+<li><code>poll()</code> は <code>execute_gc</code> から呼ばれ、<code>COUNTDOWN</code> を <code>BUDGET</code> に戻す(=「前進した」)。
+無効時は relaxed ロード 1 回だけ。</li>
+<li><code>handler(signo)</code> は async-signal-safe(atomics + <code>write(2)</code> + <code>_exit(2)</code> のみ)。毎秒
+<code>COUNTDOWN</code> を 1 減らし、0 で fd 2 に中断メッセージを書いて <code>_exit(134)</code>。
+<strong>中断判断は poll 地点ではなくハンドラに置く</strong> — 本当にハングしていれば poll 地点に
+そもそも到達しないため。</li>
+</ul>
+<hr>
+<h2 id="9-スレッド--スケジューラとの関係"><a class="header" href="#9-スレッド--スケジューラとの関係">9. スレッド / スケジューラとの関係</a></h2>
+<ul>
+<li><strong>どのスレッドが変換するか</strong>: poll 地点(<code>execute_gc</code>)に到達したスレッド。シグナルは
+main ではなく<strong>ポーリングしたスレッド</strong>で変換される(<code>doc/threads.md</code> §10 の既知の制限。
+CRuby は main へ配送)。</li>
+<li>poll フラグは GC の <code>alloc_flag</code> と同一の <code>u32</code>。書き手はページ充填 <code>+=1</code>、
+<strong>シグナルスタブ <code>+=10</code></strong>、malloc/<code>GC.start</code> の <code>&gt;=8</code> 持ち上げ、プリエンプトタイマ
+<code>|= 1&lt;&lt;30</code>(<code>doc/threads.md</code> §8.2 / <code>doc/gc.md</code> §4.1)。</li>
+<li>グリーンスレッドをまたぐブロッキング IO はスケジューラの fd ポーラで park する。
+シグナルによる EINTR が待機を起こし poll 地点を通すので、他スレッドが park していても
+シグナル応答性が保たれる。</li>
+</ul>
+<hr>
+<h2 id="10-終了時の-signalexceptionシグナル死"><a class="header" href="#10-終了時の-signalexceptionシグナル死">10. 終了時の SignalException(シグナル死)</a></h2>
+<p>捕捉されなかった <code>SignalException</code> / <code>Interrupt</code> は、プロセスを <code>exit(1)</code> ではなく
+<strong>同じシグナルで自死</strong>させる(<code>main.rs::handle_error</code>):</p>
+<ul>
+<li><code>Interrupt</code> はまずエラーレポートを出力、素の <code>SignalException</code> は静かに死ぬ。</li>
+<li><code>terminate_with_signal(signo)</code>(<code>executor.rs</code>)が <code>SIG_DFL</code> に戻し、<code>sigprocmask</code> で
+ブロック解除して <code>kill(getpid(), signo)</code>。これで親プロセスからはシグナル死に見え
+(<code>$?.signaled?</code> / <code>termsig</code>)、<code>Process.kill("TERM", child); $?.signaled?</code> が CRuby 同様に動く。</li>
+</ul>
+<hr>
+<h2 id="11-まとめ"><a class="header" href="#11-まとめ">11. まとめ</a></h2>
+<ul>
+<li>シグナルは async-signal 文脈で<strong>ビットを立てて <code>alloc_flag</code> をナッジするだけ</strong>、実配送は
+次のセーフポイント(<code>doc/safepoint.md</code>)で <code>execute_gc</code> が行う遅延モデル。GC・
+プリエンプションと poll・フラグ・入口関数を完全に共有する。</li>
+<li>ビットマップ・trap テーブルはプロセス/インタプリタ単位で、trap ハンドラは GC ルート。</li>
+<li><code>SA_RESTART</code> を意図的に外し、ブロッキング IO は <code>signal_interrupt</code> マーカー経由で
+EINTR を poll 地点へ運ぶ(SIGTERM 応答性の担保)。</li>
+<li>最小 signo 優先(A6)、SIGINT→<code>Interrupt</code>(A4)、<code>Signal.trap</code>(A7)、スタブ事前生成(A2)、
+デフォルトインストール(A3)、ハングウォッチドッグ(B+)。</li>
+<li>捕捉されない SignalException は同じシグナルで自死し、親に正しいシグナル死を見せる。</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/safepoint.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/exception_handling.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/safepoint.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/exception_handling.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

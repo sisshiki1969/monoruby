@@ -1,0 +1,476 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>JIT argument forwarding (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d8eaad21.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-e1173681.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="jit-最適化方針-argument-forwarding-def-fa--g-end"><a class="header" href="#jit-最適化方針-argument-forwarding-def-fa--g-end">JIT 最適化方針: Argument Forwarding (<code>def f(a, ...) g(...) end</code>)</a></h1>
+<p>本書は argument forwarding（<code>...</code>）を JIT で最適化するための実装方針を、
+現行コードの該当箇所に紐づけて記述する。原則・段階分け・deopt 安全性
+（呼び出し元が特に注意を要求した点）を中心にまとめる。</p>
+<h2 id="1-現状のコスト構造"><a class="header" href="#1-現状のコスト構造">1. 現状のコスト構造</a></h2>
+<p><code>...</code> は <code>ParamKind::Forwarding</code>（<code>ruruby-parse/src/node.rs:263</code>）として
+パースされ、<code>monoruby/src/globals/store.rs:943-952</code> で</p>
+<ul>
+<li>合成 <strong>rest</strong> スロット</li>
+<li>合成 <strong>kw_rest</strong> スロット（<code>SlotId(1 + args_names.len())</code>）</li>
+<li>匿名 <strong>block</strong> パラメータ</li>
+</ul>
+<p>へ脱糖される（<code>ParamsInfo::forwarding = true</code>、<code>globals/store/iseq.rs:608</code>）。</p>
+<p><code>g(...)</code> 呼び出しは <code>bytecodegen/method_call/arguments.rs:70-140</code> の
+<code>handle_forward</code> が、</p>
+<ul>
+<li><code>splat_pos</code> に mother の rest を指す位置（純転送は <code>(pos_start, 1, vec![0])</code>、
+先頭引数つきは <code>splat_pos.push(len)</code> で末尾）、</li>
+<li><code>hash_splat_pos = [kw_rest]</code>、</li>
+<li><code>BlockArgProxy</code>（<code>inst.rs:120</code>、エンコード <code>encode.rs:374-378</code>）</li>
+</ul>
+<p>を持つ <code>CallSite { forwarding: true }</code> を生成する。</p>
+<p>実行時コストは 2 箇所:</p>
+<ol>
+<li><strong>caller → <code>f</code></strong>: <code>set_callee_frame_arguments</code>
+(<code>codegen/runtime/args.rs:134-216</code>)。<code>a</code> を超える位置引数を rest
+<strong>Array</strong> に確保し、余剰 keyword を kw_rest <strong>Hash</strong> に確保する
+(<code>fill_positional_args</code> <code>args.rs:354-372</code>)。</li>
+<li><strong><code>f</code> → <code>g(...)</code></strong>: <code>is_simple_call</code>（<code>globals/store/function.rs:1241</code>）が
+<code>has_splat()</code> により偽 → JIT は specialize 不可で
+<code>AsmInst::SetArguments</code>（<code>codegen/jitgen/compile/method_call.rs:992</code>、
+lowering <code>asmir/compile.rs:332</code>）→ <code>jit_generic_set_arguments</code> の
+汎用パスへ落ちる。</li>
+</ol>
+<p>純 <code>g(...)</code>（<code>args.rs:183-188</code>、<code>pos_args==1 &amp;&amp; splat_pos==[0]</code>）は
+rest Array をそのまま <code>fill_positional_args1</code> に渡すため中間 <code>Vec</code> は
+出ない。先頭引数つき <code>g(x, ...)</code> は <code>args.rs:189-207</code> の汎用 splat 分岐で
+呼び出し毎に <code>Vec&lt;Value&gt;</code> を確保する。</p>
+<h2 id="2-核心的観察--forwarding-は不透明パイプ"><a class="header" href="#2-核心的観察--forwarding-は不透明パイプ">2. 核心的観察 — forwarding は不透明パイプ</a></h2>
+<p>Ruby では <code>...</code> は名前を持てず、<code>f</code> のコードから rest/kw_rest/block を
+観測する手段が一切ない。唯一の読み手は <code>handle_forward</code> 生成の転送先
+callsite と <code>BlockArgProxy</code> だけ。したがって <code>f</code> が確保する rest Array /
+kw Hash は次を<strong>除き</strong> Ruby から決して観測されない:</p>
+<ul>
+<li><code>f</code> がインタプリタへ <strong>deopt</strong>（呼出規約上 rest/kw_rest スロットに実体を期待）</li>
+<li>フレームが capture される（<code>binding</code>、外側 proc 等。
+<code>possibly_capture_without_block</code> / <code>branch_if_captured</code> が既存ガード）</li>
+</ul>
+<p>これは JIT が float を XMM に保持し deopt 時のみ stack へ書き戻す
+<strong>WriteBack</strong>（<code>doc/jit_architecture.md:188-197</code>）と同型の
+「遅延実体化（lazy materialization）」問題である。</p>
+<h2 id="3-段階的実装計画"><a class="header" href="#3-段階的実装計画">3. 段階的実装計画</a></h2>
+<h3 id="increment-1--fg-呼び出しの-specializearray-は温存実装済み--required-only-g先頭引数対応"><a class="header" href="#increment-1--fg-呼び出しの-specializearray-は温存実装済み--required-only-g先頭引数対応">Increment 1 — f→g 呼び出しの specialize（Array は温存）【実装済み — required-only g、先頭引数対応】</a></h3>
+<p>実装済みスコープ: forwarding <code>g(x.., ...)</code>（<code>callsite.forwarding</code>
+かつ <strong>末尾単一 splat</strong> <code>splat_pos==[pos_num-1]</code>、先頭 <code>lead_num = pos_num-1</code> 個の通常引数 + <code>...</code> rest）で、<code>g</code> が iseq かつ
+<strong>required 引数のみ</strong>（<code>no_keyword &amp;&amp; !is_rest &amp;&amp; opt_num==0 &amp;&amp; post_num==0</code>）かつ <code>req_num()+1 &gt;= pos_num</code>（= <code>req_num &gt;= lead_num</code>）
+の場合。純転送 <code>g(...)</code> は <code>lead_num==0</code> の特殊形として同経路に内包。
+<code>AsmInst::SetArgumentsForwarded</code>（<code>asmir.rs</code>、lowering は
+<code>asmir/compile/method_call.rs::jit_set_arguments_forwarded</code>、
+<code>object_send_splat_arg0</code> / <code>object_send_handle_arguments</code> の実証済み
+パターンを範とする）を <code>compile/method_call.rs::set_arguments</code> の
+非 simple 分岐に追加。</p>
+<p>asm（書込み前ガード → ミスは無ロールバックでフォールバック）:
+self を <code>LFP_SELF</code> へ → <code>lead_num</code> 個の先頭引数を frame slot
+<code>args+i</code> から callee slot <code>i</code> へ unroll コピー → <code>args+lead_num</code> の
+<code>...</code> Array を読み tag/<code>RVALUE_OFFSET_TY==ARRAY</code> 検査 →
+<code>RVALUE_OFFSET_ARY_CAPA</code>/<code>HEAP_LEN</code>/<code>INLINE</code>/<code>HEAP_PTR</code> で len と
+要素基底取得（inline/heap 両対応）→ <strong>長さガード
+<code>cmpq len,(expected_len)</code></strong>（<code>expected_len = req_num - lead_num</code>、
+即値）→ forwarded kw_rest が非 nil なら脱出 → callee slot
+<code>lead_num..</code> へ src 昇順 / dst 降順の 2 ポインタコピー → 成功
+sentinel <code>rax=NIL_VALUE</code>（<code>handle_error</code> は <code>testq rax,rax; jeq</code>）。
+ガードミスは page1 <code>fallback:</code> で既存 <code>jit_set_arguments</code>
+（<code>jit_generic_set_arguments</code>）にバイト一致委譲。Array 温存ゆえ
+deopt は自明に安全。</p>
+<p>検証: Ruby 4.0.4 比較ハーネスで forwarding 20/20 グリーン。
+新規ケース: pure（inline≤5 / heap&gt;5（<code>ARRAY_INLINE_CAPA=5</code>）/
+0-arity）、arity 不一致→ArgumentError 等価、kw 転送→フォールバック、
+block 透過、3 段連鎖＋値コピー不変、先頭引数（lead=1 / multi+heap /
+空 rest / lead 過多→ゲート却下 ArgumentError 等価 / block＋ミス）。
+ゲート発火（純: lead=0、先頭: lead=1）を JIT 実コンパイル下で計装
+確認。gc-stress 緑。フルスイープで環境性失敗集合に対し新規退行ゼロ。</p>
+<h4 id="optpostrest-を持つ-gruntime-ヘルパ方式実装済み"><a class="header" href="#optpostrest-を持つ-gruntime-ヘルパ方式実装済み">opt/post/rest を持つ <code>g</code>（runtime ヘルパ方式）【実装済み】</a></h4>
+<p>rest 付き <code>g</code>（<code>def g(a,*r)</code> 等）は <code>*rest</code> 配列の新規確保が CRuby
+セマンティクス上不可避で、Increment 2（SmallVec 化）後の汎用パス比
+の利得は限界的、かつ手書きアロケーション asm は GC/ライトバリア絡み
+で破壊リスクが高い。よって <strong>専用 runtime ヘルパ</strong>方式を採用:</p>
+<ul>
+<li>新 <code>runtime::jit_forwarded_set_arguments</code>（<code>jit_generic_set_arguments</code>
+と同シグネチャ）。forwarding 形状（末尾単一 splat、<code>lead = pos_num-1</code>）が静的に既知なので、<strong>転送 kw が空</strong>の常套ケースは
+汎用 <code>set_callee_frame_arguments</code> の <code>splat_pos</code> 走査・余剰 kw <code>ex</code>
+機構をスキップして positional buffer を直接構築し
+<code>fill_positional_args1</code>（req/opt/rest/post を正しく処理）へ。
+kw が実際に転送される稀ケースは実証済み汎用関数へ委譲し、
+微妙な kw→rest セマンティクスをバイト一致で保つ。</li>
+<li><code>AsmInst::SetArgumentsForwardedHelper</code> の lowering は
+<code>jit_set_arguments</code> と同一の実証済み asm 形状（レジスタ設定・
+rsp 調整・エラー処理）で <strong>call 先のみ差し替え</strong>。手書き asm
+ループ・アロケーションは一切追加せず asm リスクは増えない。</li>
+<li>ゲート: required-only 分岐の後段に
+<code>forwarding &amp;&amp; splat_pos==[pos_num-1] &amp;&amp; is_iseq &amp;&amp; no_keyword</code>。
+required-only（確保ゼロ inline）が先取り、rest/opt/post が本経路、
+kw パラメータ持ち callee は汎用据置。</li>
+</ul>
+<p>検証: forwarding 26/26（新規 6: pure rest / rest-only＋先頭 /
+opt+post+rest / kw 転送→委譲 / block 透過 / 連鎖＋rest 変異不変）。
+ヘルパ発火を実 JIT 下で pure(pos_num=1)・先頭(pos_num=2) ともに
+計装確認・結果厳密一致。gc-stress 緑。フルスイープ退行ゼロ。</p>
+<h3 id="increment-4--super-暗黙転送単一-splat-任意位置実装済み"><a class="header" href="#increment-4--super-暗黙転送単一-splat-任意位置実装済み">Increment 4 — <code>super</code> 暗黙転送（単一 splat 任意位置）【実装済み】</a></h3>
+<p><code>jit_check_super</code>（<code>compile.rs:894</code>）が super 先 FuncId をコンパイル
+時解決し、<code>handle_super_forward</code>（<code>arguments.rs:142-213</code>）は
+<code>forwarding=true</code> の CallSite を生成するため、super も同じ
+<code>set_arguments</code> 経路に乗る。計装調査の結果:</p>
+<ul>
+<li><code>def m(a,b); super; end</code>（splat なし）→ 既に <code>is_simple</code> 特化済み。</li>
+<li><code>def m(a,*r); super; end</code>（rest 末尾、<code>sp=[1]=[pn-1]</code>）→ Increment 1
+系で既に specialize 済み。</li>
+<li><code>def m(a,*r,z); super; end</code>（<strong>rest の後ろに post</strong>、<code>sp=[1]≠[pn-1]</code>）
+→ 従来は汎用パス。<strong>未特化はこの形</strong>だった。</li>
+</ul>
+<p>ヘルパゲートを <code>splat_pos==[pos_num-1]</code> から
+<code>splat_pos.len()==1</code>（任意位置の単一 splat）へ一般化し、
+<code>jit_forwarded_set_arguments</code> の fast path を
+<code>sp=splat_pos[0]</code> として <strong>lead[0..sp] ++ splat配列 ++ post[sp+1..]</strong>
+（汎用 splat 分岐とバイト一致の順序）を直接構築するよう一般化。
+zero-alloc inline 路は trailing+required-only のまま据置（post を
+跨ぐ asm は複雑化＝リスクのため安全なヘルパへ誘導）。<strong>asm/AsmInst
+変更なし</strong>（ヘルパは callsite から <code>splat_pos</code> を読むのみ）。</p>
+<p>検証: forwarding 31/31（新規 5: super rest+post / rest 末尾 /
+opt+rest+post / splat 無し透過 / block 透過）。rest+post super が
+従来 GENERIC → 本変更で HELPER 経路へ移行を実 JIT 計装確認、
+結果 CRuby 一致。gc-stress 緑。フルスイープ退行ゼロ。</p>
+<p>未対応（フォールバック据置）:
+kw パラメータを持つ callee への転送/<code>super</code>（汎用据置）。</p>
+<hr>
+<p>（以下は当初計画の原文）</p>
+<p>最も低リスク。<code>f</code> の caller が確保した rest Array を<strong>温存</strong>したまま、
+<code>g(...)</code> 呼び出しのみを最適化する。Array が実在するため deopt は
+インタプリタが実 Array を普通に使うだけで安全（新規の heap 実体化不要）。</p>
+<ul>
+<li>述語追加（<code>globals/store/function.rs</code> 付近）: <code>callsite.forwarding</code>
+かつ callee が iseq、転送束ねが「末尾単一 splat（= rest Array）+
+forwarded kw_rest + proxy block」の形であることを判定。</li>
+<li><code>compile/method_call.rs::set_arguments</code>（871-995）の非 simple 分岐
+（989 の <code>else</code>）に、上記形のときだけ通る専用 lowering を追加。
+既存 simple/汎用パスはバイト一致で不変に保つ（blast radius 限定）。</li>
+<li>専用 lowering: rest Array 長を実行時に読み、観測値 <code>N</code> に対する
+<strong>長さガード</strong>（<code>GuardArrayTy</code> 系 <code>asmir.rs:932,367</code> を範とする新ガード）
+を張り、一致時は simple 充填路（<code>fetch_for_callee</code> /
+<code>fetch_rest_for_callee</code>、<code>state/read_slot.rs:195-244</code>）で
+Array 要素を <code>g</code> フレームへ直接 mov。不一致は <strong>deopt</strong>
+（実 Array が在るのでインタプリタ復帰は自明に正しい）。</li>
+<li>これにより <code>g</code> の specialize / inline（<code>specialized_iseq</code>、
+<code>method_call.rs:254-272</code>）が forwarding 越しに可能になる。</li>
+<li>単相 forwarding（<code>def log(...); real(...); end</code> 等、常に同 arity）で
+長さガードはほぼ当たり、deopt スラッシュは起きない。</li>
+</ul>
+<p>検証: 純/先頭引数つきの positional forwarding（本環境で検証可能）、
+長さ不一致を強制する deopt テスト、<code>--features deopt</code>。</p>
+<h3 id="increment-2--mixed-経路の-vec-排除実装済み"><a class="header" href="#increment-2--mixed-経路の-vec-排除実装済み">Increment 2 — mixed 経路の <code>Vec</code> 排除【実装済み】</a></h3>
+<p><code>set_callee_frame_arguments</code> の汎用 splat 分岐（<code>args.rs:189-</code> 付近）は
+forwarding（<code>g(x, ...)</code> / <code>super(x, ...)</code>）等で呼び出し毎に
+<code>Vec&lt;Value&gt;</code> をヒープ確保していた。これを <code>smallvec::SmallVec&lt;[Value; 8]&gt;</code>
+に置換し、引数列が短い通常ケースでヒープ確保を消去（巨大引数列のみ
+heap へスピル）。分配ロジック（<code>fill_positional_args1</code>）は不変で共有、
+x86 非依存・低 blast radius。Ruby 4.0.4 比較ハーネスで
+forwarding スイート全 8 件＋<code>method_call</code> 全 64 件グリーンを確認。</p>
+<h3 id="increment-3--f-側-rest-array--kw-hash-の確保省略要-deopt-実体化"><a class="header" href="#increment-3--f-側-rest-array--kw-hash-の確保省略要-deopt-実体化">Increment 3 — f 側 rest Array / kw Hash の確保省略（要 deopt 実体化）</a></h3>
+<p>最大の利得かつ最大のリスク。<code>f</code> が forwarding-transparent
+（<code>forwarding() &amp;&amp; 非capture</code>）な JIT パスで rest Array / kw Hash の
+確保を発行せず、抽象状態に新 <code>LinkMode</code>（<code>ForwardRest{src_base,src_len}</code> /
+<code>ForwardKw{..}</code>、<code>jitgen/state.rs</code>・<code>context.rs</code>）として記録。転送元
+（caller 引数領域）を pin し、<code>f</code> 内の全転送 callsite を跨いで維持する。</p>
+<p><strong>Deopt 安全性（呼出元が注意を要求した点）</strong>:</p>
+<ul>
+<li>(D1) <code>f</code> 内 deopt: 各側方退出で pin 済み転送元から rest Array /
+kw Hash を<strong>新規確保して rest/kw_rest スロットへ書き戻し</strong>、block を
+復元する遅延実体化を <code>WriteBack</code>（<code>doc/jit_architecture.md:191</code>）へ
+追加。float spill-on-deopt と同枠組み、生成物が heap obj になる差のみ。
+<code>*rest</code> 意味通り「毎回新 Array」で意味論も整合。</li>
+<li>(D2) <code>g(...)</code> 直前/呼出ガード失敗: <code>set_arguments</code> は既に
+<code>reg_sub Rsp</code> → 充填 → <code>reg_add Rsp</code> 順。pin 転送元を呼出確定まで
+上書きしない順序を守り、ガード失敗時も束ね再構築可能に保つ。</li>
+<li>(D3) 多重転送 <code>def f(...); g(...); h(...); end</code>: pin を最初の転送で
+解放せず最終転送 or deopt まで維持。</li>
+</ul>
+<h3 id="increment-4--super-暗黙転送block-透過"><a class="header" href="#increment-4--super-暗黙転送block-透過">Increment 4 — <code>super</code> 暗黙転送・block 透過</a></h3>
+<p><code>handle_super_forward</code>（<code>arguments.rs:142-213</code>）。block 転送が
+<code>move_frame_to_heap</code> を誘発する specialize 拒否（<code>method_call.rs:72-86</code>、
+<code>has_block_arg()</code>）と最も込み入って干渉するため最後に。block は
+<code>LFP_BLOCK</code> に既存、透過専用パスを用意して解決する。</p>
+<h2 id="4-フォールバック条件現行-eager-パス据置"><a class="header" href="#4-フォールバック条件現行-eager-パス据置">4. フォールバック条件（現行 eager パス据置）</a></h2>
+<ul>
+<li><code>f</code> が <code>binding</code> / フレーム capture / <code>possibly_capture_without_block</code></li>
+<li><code>g</code> が単相に未解決（megamorphic / 未キャッシュ）</li>
+<li><code>single_arg_expand</code>（block-style callee）対象の転送</li>
+<li>本書が扱わない束ね形（複数 splat、<code>ex</code> あり 等）</li>
+</ul>
+<h2 id="5-変更ファイル一覧"><a class="header" href="#5-変更ファイル一覧">5. 変更ファイル一覧</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>箇所</th><th>内容</th><th>Increment</th></tr>
+</thead>
+<tbody>
+<tr><td><code>globals/store/function.rs</code></td><td>forwarding-shape 述語</td><td>1</td></tr>
+<tr><td><code>codegen/jitgen/compile/method_call.rs::set_arguments</code></td><td>forwarding 専用 lowering</td><td>1</td></tr>
+<tr><td><code>codegen/jitgen/asmir.rs</code> / <code>asmir/compile.rs</code></td><td>長さガード asm 命令</td><td>1</td></tr>
+<tr><td><code>codegen/runtime/args.rs</code></td><td>mixed <code>Vec</code> 排除</td><td>2</td></tr>
+<tr><td><code>codegen/jitgen/state.rs</code> / <code>context.rs</code></td><td><code>LinkMode::ForwardRest/ForwardKw</code>、pin 管理</td><td>3</td></tr>
+<tr><td><code>codegen/jitgen/asmir/compile/init_method.rs</code> ＋ prologue</td><td>確保抑止・束ね記録</td><td>3</td></tr>
+<tr><td><code>codegen/jitgen/deoptimize.rs</code>（<code>WriteBack</code>）</td><td>遅延実体化</td><td>3</td></tr>
+<tr><td><code>bytecodegen/method_call/arguments.rs</code></td><td><code>super</code> 透過調整</td><td>4</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="6-検証戦略"><a class="header" href="#6-検証戦略">6. 検証戦略</a></h2>
+<ul>
+<li><code>run_test</code> で forwarding 形状マトリクス + deopt 強制版（型変化ガード /
+BOP 再定義 / block 経由）を回し遅延実体化を踏ませる。</li>
+<li><code>--features deopt</code> と <code>*rest</code> 同一性（呼出毎 fresh）テスト。</li>
+<li><code>--features gc-log</code> でホットパスの Array/Hash 確保ゼロをベンチ確認。</li>
+<li>注: Ruby 3.4↔3.3 の Hash inspect 差（<code>build.rs</code> <code>MIN_RUBY_VERSION=(4,0)</code>）
+のため keyword を印字する比較は Ruby 4.0 環境で行うこと。positional
+転送は Ruby 3.3 環境でも検証可能。</li>
+</ul>
+<h2 id="7-検証環境の構築ネットワーク制限下"><a class="header" href="#7-検証環境の構築ネットワーク制限下">7. 検証環境の構築（ネットワーク制限下）</a></h2>
+<p>CRuby 比較ハーネスは Ruby ≥4.0 を要求するが、apt/cache.ruby-lang.org は
+遮断される一方 github.com は到達可能。再現手順:</p>
+<ol>
+<li><code>git clone --depth 1 --branch ruby_4_0 https://github.com/ruby/ruby.git</code></li>
+<li><code>./autogen.sh &amp;&amp; ./configure --prefix=/usr/local --disable-install-doc</code></li>
+<li><code>make -j$(nproc)</code> → <code>make install-local</code>
+（<code>make install</code> は bundled gems 取得で失敗するため <code>install-local</code>）</li>
+<li>bundled/default gems 未取得のため <code>export RUBYOPT=--disable-gems</code></li>
+<li><code>ruby -e 'puts RUBY_VERSION' &gt; ~/.monoruby/ruby_version</code>、
+<code>ruby -e 'puts($:)' &gt; ~/.monoruby/library_path</code>、<code>touch monoruby/build.rs</code></li>
+</ol>
+<p>これで <code>cargo test</code> の CRuby 比較が Ruby 4.0.4 で機能する。</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/inline.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/arch_difference.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/inline.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/arch_difference.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

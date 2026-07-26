@@ -1,0 +1,724 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>GC — mechanism and implementation (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d8eaad21.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-e1173681.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="monoruby-の-gc--機構と実装"><a class="header" href="#monoruby-の-gc--機構と実装">monoruby の GC — 機構と実装</a></h1>
+<p>monoruby のガベージコレクタの<strong>現行実装</strong>を、コードに即して解説するドキュメント。
+本書は「いま実際に動いているもの」を対象とする。</p>
+<blockquote>
+<p>補足: <code>CLAUDE.md</code> は GC を「mark-and-sweep」と一言で書いているが、現行実装は
+より正確には <strong>非移動(non-moving)・単一スレッド・stop-the-world の
+世代別 mark &amp; sweep</strong>(CRuby の RGenGC に相当)である。世代別化は既に有効で、
+オブジェクトは実際に old 世代へ昇格し、マイナー/メジャー GC が使い分けられる。
+<code>alloc.rs</code> に残る一部コメント(「old_bits is always empty」「not enabled yet」等)は
+実装より古い名残りである。実挙動は本書と該当コードを正とする。</p>
+</blockquote>
+<p>主な実装ファイル:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>対象</th><th>ファイル</th></tr>
+</thead>
+<tbody>
+<tr><td>アロケータ・ページ・GC 本体</td><td><code>monoruby/src/alloc.rs</code></td></tr>
+<tr><td><code>RValue</code> のヘッダ / マーク / 書き込みバリア</td><td><code>monoruby/src/value/rvalue.rs</code></td></tr>
+<tr><td>セーフポイント・ルート走査・<code>execute_gc</code></td><td><code>monoruby/src/executor.rs</code></td></tr>
+<tr><td>GC poll のコード生成</td><td><code>monoruby/src/codegen/arch/{x86_64,aarch64}/…</code></td></tr>
+<tr><td><code>GC</code> モジュールのビルトイン</td><td><code>monoruby/src/builtins/gc.rs</code></td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="1-全体像"><a class="header" href="#1-全体像">1. 全体像</a></h2>
+<ul>
+<li><strong>非移動 (non-moving)</strong>: オブジェクトは一度確保したセルから動かない。コピーや
+コンパクションを行わないので、生ポインタ(<code>*const RValue</code>)を保持したまま GC を
+跨いでも安全。ページ・フリーリスト・スイープ機構をそのまま世代別化に流用できる。</li>
+<li><strong>単一スレッド・stop-the-world</strong>: monoruby の VM は 1 本の OS スレッドで走る。
+GC は VM セーフポイントで同期的に実行され、並行 GC やインクリメンタル GC は
+持たない。</li>
+<li><strong>世代別 (generational)</strong>: 弱い世代別仮説(多くのオブジェクトは若くして死ぬ)に
+基づき、マイナー GC ではマーク対象を「若い世代 + old→young 参照」に限定する。
+長命オブジェクトを多数抱えるワークロード(Rails 系・optcarrot 等)でのマーク
+コストを削減する。</li>
+<li><strong>保守的ではない (precise)</strong>: ルートは明示的に列挙してマークする(スタックの
+値スキャンではない)。JIT コンパイル済みコードのセーフポイントでは、生きた
+レジスタをスタックに退避してからマークする。</li>
+</ul>
+<p>コンパイルパイプライン全体における GC の位置づけは <code>CLAUDE.md</code> の
+“Custom GC (<code>alloc.rs</code>)” と本書を対応させて読むとよい。</p>
+<p>オブジェクトの状態遷移(世代間の移動と OLD / WB_ARMED / age
+各フラグの変化)を 1 枚にまとめた図が
+<a href="gc_state_transitions.svg">gc_state_transitions.svg</a> にある(§6・§7 の図解版)。</p>
+<hr>
+<h2 id="2-ヒープのレイアウト"><a class="header" href="#2-ヒープのレイアウト">2. ヒープのレイアウト</a></h2>
+<h3 id="21-アロケータ"><a class="header" href="#21-アロケータ">2.1 アロケータ</a></h3>
+<pre><code>thread_local! { pub static ALLOC: RefCell&lt;Allocator&lt;RValue&gt;&gt; }   // alloc.rs
+</code></pre>
+<p><code>Allocator&lt;RValue&gt;</code> はスレッドローカルなシングルトン(<code>alloc.rs:155</code>)。
+<code>RValue</code> は 64 バイト固定(<code>GCBOX_SIZE</code>、<code>Allocator::new</code> で
+<code>assert_eq!(64, GCBOX_SIZE)</code>)。</p>
+<p>主なフィールド(<code>alloc.rs:299</code> 付近):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>フィールド</th><th>意味</th></tr>
+</thead>
+<tbody>
+<tr><td><code>current_page</code> / <code>head_page</code> / <code>pages</code></td><td>現ページ / 最上位ページ / 割り当て済みページ一覧</td></tr>
+<tr><td><code>used_in_current</code></td><td>現ページのバンプ位置</td></tr>
+<tr><td><code>free</code> / <code>free_list_count</code></td><td>フリーリスト先頭と要素数</td></tr>
+<tr><td><code>free_pages</code></td><td>空きになって再利用待ちのページ</td></tr>
+<tr><td><code>total_gc_counter</code> / <code>minor_gc_count</code> / <code>major_gc_count</code></td><td>GC 回数の各カウンタ</td></tr>
+<tr><td><code>minors_since_major</code></td><td>直近メジャー以降のマイナー回数(kind 判定に使用)</td></tr>
+<tr><td><code>old_count</code></td><td>old 世代オブジェクト数(昇格で +1、メジャーで 0 リセット)</td></tr>
+<tr><td><code>old_major_threshold</code></td><td>適応的メジャー閾値(<code>old_count</code> がこれに達したら次はメジャー)</td></tr>
+<tr><td><code>promoting</code></td><td>マーク中に昇格候補を収集するか(実マーク中のみ true)</td></tr>
+<tr><td><code>aging</code></td><td>今サイクルで生存した昇格候補(マーク後に加齢)</td></tr>
+<tr><td><code>remembered</code></td><td>remembered set(old→young 参照を持つ old オブジェクト)</td></tr>
+<tr><td><code>alloc_flag</code></td><td>GC 起動フラグ(<code>u32</code>)のアドレス</td></tr>
+<tr><td><code>heap_frames</code></td><td>ヒープに退避したフレームバッファの登録表(§9)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="22-アリーナとページ"><a class="header" href="#22-アリーナとページ">2.2 アリーナとページ</a></h3>
+<pre><code>const SIZE: usize        = 64;
+const GCBOX_SIZE: usize  = size_of::&lt;RValue&gt;();          // 64
+const PAGE_LEN: usize    = 64 * SIZE;                     // 4096 セル/ページ
+const DATA_LEN: usize    = 64 * (SIZE - 1);               // 4032 データセル
+const THRESHOLD: usize   = 64 * (SIZE - 2);               // 3968(alloc_flag を立てる位置)
+const ALLOC_SIZE: usize  = PAGE_LEN * GCBOX_SIZE;         // 262144 = 256KB
+const MAX_PAGES: usize   = 8192;
+</code></pre>
+<ul>
+<li>アリーナは起動時に <strong><code>ALLOC_SIZE * MAX_PAGES</code>(= 2GB)を 1 回だけ予約</strong>する
+(<code>Allocator::new</code>、<code>System.alloc</code>)。実 RSS はページを使うぶんだけ増える
+(予約は仮想アドレス空間)。ページは 256KB 境界に整列。</li>
+<li>ページからポインタへの逆引きは<strong>アドレスマスク</strong>で O(1):
+<code>get_page(ptr) = ptr &amp; !(ALLOC_SIZE - 1)</code>(<code>alloc.rs:1375</code>)。これにより任意の
+<code>*const RValue</code> から所属ページ(とマークビット)を即座に求められる。</li>
+</ul>
+<p><code>Page&lt;T&gt;</code>(<code>alloc.rs:1449</code>)の構造:</p>
+<pre><code>struct Page&lt;T&gt; {
+    data:      [T; DATA_LEN],       // 4032 セル
+    mark_bits: [u64; SIZE - 1],     // 63 ワード = セル1つにつき1ビットのマークビットマップ
+    old_bits:  [u64; SIZE - 1],     // 63 ワード = old 世代ビットマップ(mark_bits と並行)
+}
+</code></pre>
+<p><code>size_of::&lt;Page&lt;T&gt;&gt;() &lt;= ALLOC_SIZE</code> が <code>Allocator::new</code> で保証される。
+<code>data</code> の後ろにビットマップ 2 枚が同居する(セル本体の外にマークを置く
+mark-external 方式なので、生存中のオブジェクト内容を汚さない)。</p>
+<hr>
+<h2 id="3-割り当てallocatoralloc"><a class="header" href="#3-割り当てallocatoralloc">3. 割り当て(<code>Allocator::alloc</code>)</a></h2>
+<p><code>alloc.rs:779</code>。順序は以下:</p>
+<ol>
+<li><strong>フリーリスト</strong>が空でなければそこから 1 セル pop(<code>self.free</code>)。直前の GC で
+スイープされたセルの再利用。</li>
+<li>空でなければ<strong>現ページのバンプ割り当て</strong>。
+<ul>
+<li><code>used_in_current == THRESHOLD</code>(3968)に達したら <code>set_alloc_flag()</code> で
+<code>alloc_flag += 1</code>(GC を要求;§4)。</li>
+<li><code>used_in_current == DATA_LEN</code>(4032)でページ満杯 → <code>free_pages</code> から再利用、
+なければ <code>new_page()</code> で新規ページ。新ページは <code>clear_old_bits()</code> で
+old ビットマップを 0 初期化(マイナー GC のシード整合性のため)。</li>
+</ul>
+</li>
+</ol>
+<h3 id="jit-インライン高速パス"><a class="header" href="#jit-インライン高速パス">JIT インライン高速パス</a></h3>
+<p>フリーリストからの pop は JIT がインライン展開できるよう、アロケータが
+生アドレスを公開している:</p>
+<ul>
+<li><code>free_list_head_addr()</code>(<code>self.free</code>) — <code>alloc.rs:658</code></li>
+<li><code>free_list_count_addr()</code> / <code>total_allocated_addr()</code> — 統計の同期用</li>
+</ul>
+<p>JIT コードはセーフポイント外でのみこれらを触る(Rust 側が <code>ALLOC</code> を借用中や
+<code>gc()</code> 実行中は触らない)ため、単一スレッド前提でエイリアスは生じない。</p>
+<hr>
+<h2 id="4-gc-のトリガとセーフポイント"><a class="header" href="#4-gc-のトリガとセーフポイント">4. GC のトリガとセーフポイント</a></h2>
+<p>GC は「アロケーションの延長で即実行」はしない。JIT の生きたレジスタが未退避の
+まま GC ルート走査に入るのは危険なため、<strong>フラグを立てて次のセーフポイントで
+実行</strong>する。</p>
+<h3 id="41-起動フラグ-alloc_flagu32"><a class="header" href="#41-起動フラグ-alloc_flagu32">4.1 起動フラグ <code>alloc_flag</code>(<code>u32</code>)</a></h3>
+<p>VM/JIT が参照する単一の <code>u32</code>。<strong>8 以上(ベース値)でトリガ帯</strong>。これを立てる経路:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>経路</th><th>実装</th><th>フラグ操作</th></tr>
+</thead>
+<tbody>
+<tr><td>ページ充填</td><td><code>set_alloc_flag</code>(<code>alloc.rs:681</code>)</td><td>ほぼ満杯ページごとに <code>+= 1</code>(約 8 ページで 8 に到達)</td></tr>
+<tr><td>malloc 圧(§8)</td><td><code>request_gc_if_malloc_over</code>(<code>alloc.rs:123</code>)</td><td>8 未満なら <code>8</code> を書く</td></tr>
+<tr><td><code>GC.start</code></td><td><code>request_gc(true)</code>(<code>alloc.rs:84</code>)</td><td>8 未満なら <code>8</code> を書く + メジャー強制</td></tr>
+<tr><td>シグナル配送</td><td>シグナルハンドラ(<code>jit_module.rs</code>)</td><td><code>+= 10</code>(<code>doc/signal.md</code>)</td></tr>
+<tr><td>プリエンプト tick</td><td>タイマ OS スレッド(<code>preempt.rs</code>)</td><td><code>|= 1 &lt;&lt; 30</code>(<code>PREEMPT_BIT</code>;<code>doc/threads.md</code> §8)</td></tr>
+</tbody>
+</table>
+</div>
+<p>「8 未満のときだけ 8 を書く」ことで、ページ充填の累積値やシグナルの <code>+10</code> を
+踏み潰さず、ちょうど 1 回の収集を要求する。</p>
+<blockquote>
+<p><strong>この <code>u32</code> はプリエンプションの poll フラグと同一の語</strong>である(<code>doc/threads.md</code> §8)。
+タイマ OS スレッドが上位ビット <code>PREEMPT_BIT</code>(= <code>1 &lt;&lt; 30</code>。ビット 31 でないのは
+x86-64 poll <code>cmpl …; jge</code> が<strong>符号付き</strong>比較で、ビット 31 だと負値に読めて発火しないため)を
+立てる。別スレッドから書くのでフラグアクセスはすべてアトミックになった。GC 判定は
+<strong>ベース値</strong>(プリエンプトビットを剥がした値)が <code>&gt;= 8</code> かどうかで行うので、純粋な
+プリエンプト tick が偽の full GC を起こすことはない(§4.3 手順 2)。GC 完了後の
+<code>unset_alloc_flag</code>(<code>alloc.rs:694</code>)は <code>fetch_and(PREEMPT_BIT)</code> でベース帯だけ落とし、
+並行して立ったプリエンプトビットは保存する。</p>
+</blockquote>
+<h3 id="42-poll-のコード生成"><a class="header" href="#42-poll-のコード生成">4.2 poll のコード生成</a></h3>
+<p><code>execute_gc_inner</code>(<code>codegen/arch/x86_64/jit_module.rs:255</code>)が poll を出力:</p>
+<pre><code class="language-asm">cmpl [rip + alloc_flag], 8
+jge  gc          ; フラグ &gt;= 8 なら収集パスへ
+exit:
+; gc: (別ページ)
+;   write_back(生きたレジスタを退避)
+;   call exec_gc      ; = execute_gc()
+;   testq rax, rax
+;   jne  exit         ; nil 以外(=正常)なら復帰
+;   jmp  error        ; None(=例外/シグナル)なら伝播
+</code></pre>
+<p>この poll は<strong>呼び出し先エントリ(callee entry)とループのバックエッジ</strong>という
+セーフポイントで実行される(<code>vm_execute_gc</code>;<code>vmgen/init_method.rs</code> / <code>vm_loop_start</code> ほか。
+call-site には poll を置かない — <code>doc/threads.md</code> §8.3)。aarch64 backend も
+同等のフラグ比較を出力する。</p>
+<h3 id="43-execute_gcexecutorrs3743"><a class="header" href="#43-execute_gcexecutorrs3743">4.3 <code>execute_gc</code>(<code>executor.rs:3743</code>)</a></h3>
+<p>セーフポイントから呼ばれる <code>extern "C"</code> 関数。順に:</p>
+<ol>
+<li><code>watchdog::poll()</code> — ハングウォッチドッグのカウントダウンをリセット。</li>
+<li><code>preempt::consume_poll_flag()</code> で<strong>プリエンプトビットを剥がし</strong>、<code>(ベース値, プリエンプトか)</code>
+を得る(§4.1 の注)。以降の GC 判定はベース値で行う。</li>
+<li><strong>保留シグナルの処理</strong> — <code>pending_signals</code> ビットマップを drain し、最小番号の
+シグナルを <code>Signal.trap</code> ハンドラ呼び出し / 既定例外(SIGINT ⇒ <code>Interrupt</code> 等)に
+変換(<code>doc/signal.md</code>)。</li>
+<li><strong>ベース値が <code>&gt;= 8</code> のときだけ</strong> GC 本体を実行:<code>parent_fiber</code> を辿って
+**ルート Executor(最上位ファイバ)**へ行き、
+<code>ALLOC.with(|a| a.borrow_mut().gc(&amp;Root { globals, executor }))</code>。</li>
+<li>プリエンプトビットが立っていて <code>scheduler::preempt_ok()</code> なら <code>scheduler::pass</code>
+(タイムスライス切替。<code>doc/threads.md</code> §8.4)。</li>
+</ol>
+<hr>
+<h2 id="5-オブジェクトヘッダとフラグ"><a class="header" href="#5-オブジェクトヘッダとフラグ">5. オブジェクトヘッダとフラグ</a></h2>
+<p><code>RValue</code> 先頭の <code>Header</code> は union(<code>rvalue.rs</code>):</p>
+<pre><code>union Header { next: Option&lt;NonNull&lt;RValue&gt;&gt;, meta: Metadata }
+
+struct Metadata {          // rvalue.rs:2373
+    flag:  u16,
+    ty:    Option&lt;ObjTy&gt;,  // 1 バイト
+    _padding: u8,          // JIT の 2 バイト cmpw が隣接バイトを読むため 0 固定
+    class: Option&lt;ClassId&gt;,
+}
+</code></pre>
+<ul>
+<li>フリーリスト上のセルは <code>next</code>(次の空きセル)として解釈され、生存セルは <code>meta</code>。</li>
+<li><code>_padding</code> を 0 に固定するのは、JIT が型判定に <code>cmpw [ty]</code>(2 バイト)を使い
+隣接バイトも読むため。したがって<strong>世代別 GC の age は <code>ty</code> の隣ではなく
+<code>flag</code> の上位バイトに置く</strong>。</li>
+</ul>
+<h3 id="flag-u16-のビット割り当てrvaluers2447-以降"><a class="header" href="#flag-u16-のビット割り当てrvaluers2447-以降"><code>flag: u16</code> のビット割り当て(<code>rvalue.rs:2447</code> 以降)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>ビット</th><th>マスク</th><th>意味</th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td><code>0b0000_0001</code></td><td>LIVE(生存;確保時 <code>flag = 1</code>)</td></tr>
+<tr><td>1</td><td><code>0b0000_0010</code></td><td>FROZEN</td></tr>
+<tr><td>2</td><td><code>0b0000_0100</code></td><td>CHILLED(<code>Symbol#to_s</code> 由来の準 frozen 文字列)</td></tr>
+<tr><td>3</td><td><code>0b0000_1000</code></td><td><strong>OLD</strong>(old 世代へ昇格済み)</td></tr>
+<tr><td>4</td><td><code>0b0001_0000</code></td><td>WB_UNPROTECTED(shady 用に予約。現状<strong>未使用</strong> — §7.3)</td></tr>
+<tr><td>5</td><td><code>0b0010_0000</code></td><td>空き(旧 REMEMBERED。「remembered set 登録済み」は専用ビットではなく <strong><code>OLD ∧ ¬WB_ARMED</code> で導出</strong>する)</td></tr>
+<tr><td>6</td><td><code>0b0100_0000</code></td><td><strong>WB_ARMED</strong>(old かつ未 remembered = 書き込みバリアの slow path 対象)</td></tr>
+<tr><td>7</td><td><code>0b1000_0000</code></td><td>CHILLED_LITERAL(リテラル由来の chilled 文字列;警告文言の出し分け用)</td></tr>
+<tr><td>8..15</td><td>上位バイト</td><td><strong>age</strong>(生存回数;<code>RGENGC_OLD_AGE</code> で昇格。上位バイトは age 専用 — 下位バイトのフラグはここに置かないこと)</td></tr>
+</tbody>
+</table>
+</div>
+<p>新規オブジェクトは <code>flag == 1</code> なので、OLD / WB_ARMED はともに 0
+(= young・バリア対象外)、age は 0 から始まる。</p>
+<p>old オブジェクトの 2 状態は WB_ARMED 1 ビットで表す:
+<strong>armed = OLD ∧ WB_ARMED</strong>、<strong>remembered = OLD ∧ ¬WB_ARMED</strong>。
+remembered set の実体(列挙)は <code>Allocator::remembered</code>(Vec)であり、ヘッダ側は
+バリアの高速パスが見る WB_ARMED だけを持つ。<code>arm_barrier</code>(WB_ARMED を立てる)と
+<code>enter_remembered</code>(WB_ARMED を落とす)は単一ビットの反転で、
+書き込みバリアの高速パスはこの 1 ビット(WB_ARMED)テストだけで済む。
+「OLD=0 なのに WB_ARMED=1」は発生しない不正状態である。</p>
+<hr>
+<h2 id="6-世代別-gc-本体allocatorgc-allocrs864"><a class="header" href="#6-世代別-gc-本体allocatorgc-allocrs864">6. 世代別 GC 本体(<code>Allocator::gc</code>, <code>alloc.rs:864</code>)</a></h2>
+<h3 id="61-マイナー--メジャーの選択decide_gc_kind-allocrs854"><a class="header" href="#61-マイナー--メジャーの選択decide_gc_kind-allocrs854">6.1 マイナー / メジャーの選択(<code>decide_gc_kind</code>, <code>alloc.rs:854</code>)</a></h3>
+<pre><code>old_count &gt;= old_major_threshold  ||  minors_since_major &gt;= MAX_MINORS_PER_MAJOR
+    → Major     それ以外 → Minor
+</code></pre>
+<ul>
+<li><strong>適応的メジャー閾値</strong> <code>old_major_threshold</code>: メジャー直後に
+<code>max(old_count * OLD_GROWTH_FACTOR, OLD_OBJECT_FLOOR)</code> へ再設定
+(<code>OLD_GROWTH_FACTOR = 2</code>, <code>OLD_OBJECT_FLOOR = 16384</code>)。old 世代が安定していれば
+メジャーは稀(世代別の利得を保つ)、浮遊ゴミを昇格し続けるワークロードでは
+頻繁にメジャーして RSS を抑える。CRuby の <code>RGENGC_OLD_OBJECT_LIMIT_FACTOR</code> に相当。</li>
+<li><strong><code>MAX_MINORS_PER_MAJOR = 64</code></strong>: 安全上限。適応閾値が発火しなくても、64 回に 1 度は
+必ずメジャーして remembered set を作り直し、浮遊 old ゴミを回収する。</li>
+<li><code>GC.start</code> は <code>GC_FORCE_MAJOR</code> を立てるので、次の収集は無条件にメジャー。</li>
+</ul>
+<h3 id="62-マークビットマップの準備"><a class="header" href="#62-マークビットマップの準備">6.2 マークビットマップの準備</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>kind</th><th>操作</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Major</strong></td><td><code>clear_mark()</code>(mark_bits=0)+ <code>clear_old()</code>(old_bits=0, <code>old_count=0</code>)+ <code>remembered.clear()</code>。全オブジェクトが収集候補に戻り、ルートから再マーク・全スイープ。</td></tr>
+<tr><td><strong>Minor</strong></td><td><code>seed_marks()</code>。各ページで <code>mark_bits ← old_bits</code> をコピー(<code>seed_mark_from_old</code>)。old オブジェクトは<strong>最初からマーク済み</strong>とみなされ、再走査もスイープもされない。</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="63-マークフェーズ"><a class="header" href="#63-マークフェーズ">6.3 マークフェーズ</a></h3>
+<ol>
+<li><code>self.promoting = true</code> にしてから <code>root.mark(self)</code>(ルートは §8)。</li>
+<li><code>RValue::mark</code>(<code>rvalue.rs:757</code>)は <code>gc_check_and_mark</code> でビットを立て、未マーク
+だった場合のみ <code>mark_children</code> で子を辿る(深さ優先)。</li>
+<li><code>gc_check_and_mark</code>(<code>alloc.rs:1007</code>)は、初めてマークしたセルが <code>promoting</code> かつ
+<code>is_promotable()</code> なら <code>aging</code> に積む(昇格候補の収集)。ヘッダ書き換えは
+マーク走査が握る <code>&amp;self</code> とエイリアスしないよう<strong>マーク後に遅延</strong>する。</li>
+<li><strong>Minor のみ</strong> <code>mark_remembered()</code>:remembered set の各 old オブジェクトの
+<em>子だけ</em>を <code>mark_children</code> で辿る(親 old は既にシードマーク済み)。これにより
+「old からしか参照されていない young オブジェクト」に到達する。走査後、若い子が
+いなくなった entry は set から外して <code>arm_barrier</code>(自己クリーニング;
+<code>alloc.rs:1213</code>)。</li>
+<li><code>self.promoting = false</code>。</li>
+</ol>
+<h3 id="64-加齢と昇格apply_aging-allocrs1048"><a class="header" href="#64-加齢と昇格apply_aging-allocrs1048">6.4 加齢と昇格(<code>apply_aging</code>, <code>alloc.rs:1048</code>)</a></h3>
+<p>マーク完了後(生きた <code>&amp;self</code> が無い状態)に:</p>
+<ul>
+<li><strong>Pass 1</strong>: <code>aging</code> の各生存者の age を +1(<code>age_and_check_promote</code>)。
+<code>age &gt;= RGENGC_OLD_AGE</code>(= 3)に達したものを昇格:<code>old_bits</code> をセット +
+ヘッダ OLD をセット + <code>old_count += 1</code>。
+→ <strong>即時昇格ではなく「3 回生存したら昇格」</strong>。1 回の収集でたまたま生きていた
+短命オブジェクトを old に上げてしまい浮遊ゴミ化するのを避ける。</li>
+<li><strong>Pass 2</strong>: remember-on-promote。昇格したオブジェクトが<strong>まだ young を参照して
+いる</strong>(<code>young_child_exists</code>)なら remembered set に追加(バリア導入前から存在した
+old→young 辺をカバー)。young 参照が無ければ <code>arm_barrier</code> して以後の young ストアに
+備える。</li>
+</ul>
+<h3 id="65-マイナー後の検証gc-verify-フィーチャ"><a class="header" href="#65-マイナー後の検証gc-verify-フィーチャ">6.5 マイナー後の検証(<code>gc-verify</code> フィーチャ)</a></h3>
+<p>マイナー GC の後、シード無し・昇格無しでルートから全ライブグラフを独立に再マーク
+する(<code>alloc.rs:964</code>)。もしマイナーが到達可能なオブジェクトを解放していれば
+(バリア漏れ/remembered set 漏れ)、この走査が解放済みセルに到達し
+<code>RValue::mark</code> の <code>is_live</code> アサートが発火する。世代別 GC の健全性テスト。</p>
+<hr>
+<h2 id="7-書き込みバリア"><a class="header" href="#7-書き込みバリア">7. 書き込みバリア</a></h2>
+<p>world 停止型・非移動なので、必要なのは <strong>old→young 辺を remembered set に記録する
+だけ</strong>の単純なバリア。</p>
+<p>バリアと remembered set が「なぜ必要か」(世代別 GC なし / remembered set なしの
+minor GC / 完全な minor GC の 3 通りでのマーク走査の比較と、バリアが必要な辺の
+分類)を図解したものが <a href="gc_write_barrier.svg">gc_write_barrier.svg</a> にある。</p>
+<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="gc_write_barrier.svg" alt="write barrier と remembered set"><span class="img-wrapper"><img src="gc_write_barrier.svg" alt="write barrier と remembered set"></span></label></p>
+<h3 id="71-実体rvaluewrite_barrier-rvaluers1115"><a class="header" href="#71-実体rvaluewrite_barrier-rvaluers1115">7.1 実体(<code>RValue::write_barrier</code>, <code>rvalue.rs:1115</code>)</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub(crate) fn write_barrier(&amp;mut self, child: Value) {
+    if self.is_wb_armed() &amp;&amp; !child.is_packed_value() {
+        self.enter_remembered_set();
+    }
+}
+<span class="boring">}</span></code></pre>
+<ul>
+<li><strong>高速パスはヘッダ 1 ビットのテスト</strong>(<code>is_wb_armed</code> = WB_ARMED ビット)。
+young オブジェクトも、既に remembered な old オブジェクトも、このビットが 0 なので
+即 return(アロケータに触れない)。</li>
+<li>子の世代は見ない(old→old を覚える過剰近似は無害)。即値(<code>is_packed_value</code>)は除外。</li>
+<li><code>write_barrier_bulk</code>(<code>rvalue.rs:1128</code>)は <code>Array#concat</code> / <code>Hash#[]=</code> などの
+複数要素ストア用。個々の子を見ず、armed なら無条件に記録する過剰近似。</li>
+</ul>
+<p>呼び出しは「参照型フィールド(ivar / 配列・ハッシュ要素 / struct スロット)へ
+<code>child</code> を格納した<strong>後</strong>」。インタプリタ経路(<code>set_ivar</code>、Array/Hash ラッパ、
+<code>Value::set_struct_slot</code> 等)と、JIT が出力するインラインバリア
+(<code>emit_write_barrier_rdi</code>)の両方でカバーされる。</p>
+<h3 id="72-状態遷移"><a class="header" href="#72-状態遷移">7.2 状態遷移</a></h3>
+<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="gc_state_transitions.svg" alt="世代別 GC オブジェクト状態遷移図"><span class="img-wrapper"><img src="gc_state_transitions.svg" alt="世代別 GC オブジェクト状態遷移図"></span></label></p>
+<pre><code>young(flag=1) ──[age&gt;=3 で昇格]──▶ old
+   昇格時に young 子あり ─▶ enter_remembered (WB_ARMED=0) ── remembered set 登録
+   昇格時に young 子なし ─▶ arm_barrier      (WB_ARMED=1) ── 以後の young ストアを待つ
+   armed な old に young ストア ─▶ write_barrier ─▶ enter_remembered_set ── set 登録 + WB_ARMED=0
+   minor 走査で young 子が消えた remembered ─▶ arm_barrier に戻す(自己クリーニング)
+</code></pre>
+<p>生きている old については「WB_ARMED=0 ⇔ <code>Allocator::remembered</code> に登録済み」が
+不変条件(専用の REMEMBERED ビットは持たない — §5)。remembered set の大きさは
+「生きた old→young 辺の数」に比例し続ける(かつて young 子を持っていた全昇格
+オブジェクトには比例しない)。</p>
+<h3 id="73-昇格可能性is_promotable-rvaluers918"><a class="header" href="#73-昇格可能性is_promotable-rvaluers918">7.3 昇格可能性(<code>is_promotable</code>, <code>rvalue.rs:918</code>)</a></h3>
+<p>昇格してよいのは「<strong>そのオブジェクトへの Value 格納経路がすべてバリア保護されている</strong>」
+型のみ。現状 <code>ty()</code> で判定し、以下が <code>true</code>:</p>
+<pre><code>OBJECT | STRING | BIGNUM | FLOAT | ARRAY | STRUCT | HASH
+</code></pre>
+<ul>
+<li>OBJECT と各リーフ(String バイト列 / Bignum / ヒープ Float)は ivar 経由でしか
+Value を持たず、ivar ストアは全経路バリア済み。</li>
+<li>Array/Struct の要素ストア、Hash ストアもインタプリタ・JIT 双方でバリア済み。</li>
+<li>それ以外の型は昇格しない(マイナーで毎回走査される young のまま)。</li>
+</ul>
+<blockquote>
+<p><strong>WB_UNPROTECTED(bit4)</strong> は「shady(バリアで追えない)オブジェクトは昇格しない」
+ための予約フラグだが、現状 <code>is_promotable</code> は型のみで判定し、このフラグは
+参照されていない(<code>set_wb_unprotected</code> の呼び出し箇所は無い)。将来のための予約。</p>
+</blockquote>
+<hr>
+<h2 id="8-ルートマーク開始点"><a class="header" href="#8-ルートマーク開始点">8. ルート(マーク開始点)</a></h2>
+<p><code>Root</code>(<code>executor.rs:3713</code>)の <code>mark</code>(<code>executor.rs:3719</code>)が起点:</p>
+<pre><code>Root::mark → YIELDER.mark      (ブロック/ファイバの yielder)
+           → Globals::mark     (globals.rs)
+           → Executor::mark    (executor.rs:248)
+           → scheduler::mark    (executor.rs:3729 — グリーンスレッドの root)
+</code></pre>
+<p><code>Executor::mark</code>(<code>executor.rs:248</code>)が辿るもの:</p>
+<ul>
+<li><code>temp_stack</code> の全 Value(ビルトインが GC を跨いで生かしたい一時値の退避先)。</li>
+<li><code>cfp</code> 連鎖の各 <code>lfp()</code>(= すべての生きたスタックフレームのローカル変数・レシーバ等)。</li>
+<li><code>lexical_class</code> 上の <code>DefinitionContext::Receiver(Value)</code>
+(<code>instance_eval</code>/<code>instance_exec</code> 中のレシーバ)。</li>
+<li>保留例外 <code>exception</code>(<code>MonorubyErr</code> は packed Value を持つ;<code>MonorubyErr::mark</code>)。</li>
+<li>マッチ処理の一時退避 <code>sp_match_regex</code> / <code>sp_match_haystack</code>。</li>
+<li><code>deferred_unwind</code>(ensure で中断した <code>MethodReturn</code>/<code>Throw</code> が握る Value と Lfp)。</li>
+</ul>
+<p><code>Globals::mark</code> はクラステーブル・定数・グローバル変数・呼び出しサイト等の
+恒久ルートをマークする。</p>
+<h3 id="グリーンスレッドschedulermark"><a class="header" href="#グリーンスレッドschedulermark">グリーンスレッド(<code>scheduler::mark</code>)</a></h3>
+<p>green thread 導入後、GC ルートには<strong>スケジューラの生存スレッド registry</strong>が加わった
+(<code>scheduler::mark</code>, <code>scheduler.rs</code>)。<code>Scheduler::mark</code> は <code>threads</code> / <code>current</code> / <code>main</code> /
+<code>ready</code> / <code>sleepers</code> / <code>io_waiters</code> の全 Thread オブジェクトをマークし、<code>in_scheduler</code>
+中は main の Executor(<code>main_exec</code>)も deref してマークする。各 Thread は
+<code>impl GC for ThreadInner</code> を通じて自分の <code>handle</code> Executor(→ その CFP チェーン)と
+proc/args/result/exception/joiners/pending/masks/last_status をマークする。</p>
+<p>したがって GC は事実上<strong>複数の Executor</strong>をマークする:各 green thread の <code>handle</code> と、
+<code>main_exec</code> 経由で辿る埋め込み側所有の main Executor。切替はセーフポイントでしか
+起きないので、サスペンド中のどのスレッドのフレームも GC-complete
+(詳細は <code>doc/threads.md</code> §2・§3.4・§8)。</p>
+<hr>
+<h2 id="9-スイープと空きページの回収"><a class="header" href="#9-スイープと空きページの回収">9. スイープと空きページの回収</a></h2>
+<h3 id="スイープsweep-allocrs1269"><a class="header" href="#スイープsweep-allocrs1269">スイープ(<code>sweep</code>, <code>alloc.rs:1269</code>)</a></h3>
+<p>ページごとに <code>mark_bits</code> を 64 ビット単位で走査(<code>sweep_bits</code>)。未マークセルを
+<code>free()</code>(型に応じて <code>ManuallyDrop::drop</code>;<code>rvalue.rs:785</code>)してフリーリストに連結。
+<code>trailing_ones</code> でマーク済みの連続領域を一気に飛ばす最適化がある。最後に
+<code>self.free</code> がフリーリスト先頭に、<code>free_list_count</code> が回収数になる。</p>
+<p><code>free()</code> は多重呼び出しに耐える(<code>is_live()</code> を先頭で確認)。フリーリスト上のセルは
+次のスイープでもう一度 free されうるため。</p>
+<h3 id="空きページの回収salvage_empty_pages-allocrs1250"><a class="header" href="#空きページの回収salvage_empty_pages-allocrs1250">空きページの回収(<code>salvage_empty_pages</code>, <code>alloc.rs:1250</code>)</a></h3>
+<p>スイープ前に、全セルが未マーク(<code>all_dead</code>)のページを <code>pages</code> から外して
+中身をドロップし <code>free_pages</code> へ戻す。以後の割り当てで再利用される(OS へは返さず、
+アリーナ予約内で回す)。</p>
+<hr>
+<h2 id="10-ヒープに退避したフレームheap_frames"><a class="header" href="#10-ヒープに退避したフレームheap_frames">10. ヒープに退避したフレーム(<code>heap_frames</code>)</a></h2>
+<p>クロージャ等でスタックフレームがその生成メソッドより長生きする場合、フレームは
+<code>move_frame_to_heap</code> / <code>heap_frame</code> により <code>Box&lt;[u64]&gt;</code> としてヒープへ退避され、
+<code>Box::into_raw</code> でリークされる。この生バッファを GC が回収できるよう、LFP アドレスを
+キーに <code>heap_frames</code> へ登録する(<code>register_heap_frame</code>, <code>alloc.rs:563</code>)。</p>
+<ul>
+<li>マーク時、生きた LFP から到達したフレームに <code>marked</code> を立てる。</li>
+<li><code>sweep_heap_frames</code>(<code>alloc.rs:603</code>)が、<strong>2 サイクル連続で未マーク</strong>だった
+フレームの <code>Box&lt;[u64]&gt;</code> を解放する(1 サイクルの猶予は昇格→ルート格納の窓を
+カバーするため)。</li>
+<li>キーは 8 バイト整列の LFP アドレスなので、既定の SipHash ではなく Fibonacci ハッシュ
+1 回(<code>AddrHasher</code>)で引く(<code>gc-stress</code> 下では毎確保ごとに引かれるため速度が効く)。</li>
+</ul>
+<p><code>heap_frames</code> が空のときは関連処理を丸ごとスキップし、コスト 0(optcarrot 等は
+フレーム退避が稀)。</p>
+<hr>
+<h2 id="11-malloc-連動トリガ外部バッファ圧"><a class="header" href="#11-malloc-連動トリガ外部バッファ圧">11. malloc 連動トリガ(外部バッファ圧)</a></h2>
+<p><code>RValue</code> アリーナの圧力だけでは、<code>String#&lt;&lt;</code> ループのように <strong><code>RValue</code> をほとんど
+作らずに malloc メモリだけ膨らむ</strong>ケースを検知できない。そこでグローバル
+アロケータ自身が外部バッファ量を追跡する:</p>
+<ul>
+<li><code>RurubyAlloc</code>(<code>#[global_allocator]</code>, <code>alloc.rs:7</code>)が <code>alloc</code>/<code>dealloc</code> で
+<code>MALLOC_AMOUNT</code> を増減。</li>
+<li><strong><code>MALLOC_TRACK_LIMIT = 64MB</code> 以上の確保は無視</strong>。これは JIT メモリ予約
+(monoasm が起動時に 3 × 256MB を確保)のような一過性インフラ確保を除外するため。
+無視すると閾値が GB 級に張り付き、通常の String/Array/Hash 成長で永遠に GC が
+発火しなくなる。同じ判定で <code>dealloc</code> も gate するので <code>MALLOC_AMOUNT</code> は
+アンダーフローしない。</li>
+<li><code>request_gc_if_malloc_over</code>(<code>alloc.rs:123</code>)が <code>MALLOC_AMOUNT &gt;= MALLOC_GC_THRESHOLD</code>
+で <code>alloc_flag</code> を 8 に持ち上げる(GC 要求;割り当てフリーで安全)。</li>
+<li>閾値 <code>MALLOC_GC_THRESHOLD</code> は各 GC 後に
+<code>malloced + max(malloced/2, MALLOC_THRESHOLD)</code> へ再設定(<code>alloc.rs:986</code>)。
+加算のみだと巨大ヒープでも 256KB ごとに GC してしまうので、乗算項で比例させる。</li>
+<li>この経路の収集は<strong>メジャー強制しない</strong>(一過性バッファは若くして死ぬのでマイナーで
+回収でき、old のバッファゴミは §6.1 のメジャートリガが拾う)。</li>
+</ul>
+<hr>
+<h2 id="12-gc-の制御gc-モジュール-builtinsgcrs"><a class="header" href="#12-gc-の制御gc-モジュール-builtinsgcrs">12. GC の制御(<code>GC</code> モジュール, <code>builtins/gc.rs</code>)</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>メソッド</th><th>実装</th><th>挙動</th></tr>
+</thead>
+<tbody>
+<tr><td><code>GC.start</code></td><td><code>request_gc(true)</code></td><td>次セーフポイントで<strong>メジャー</strong>収集を要求。引数(<code>full_mark:</code> 等)は互換のため受けるが無視(常に full)。インライン実行は危険なので即実行はしない。</td></tr>
+<tr><td><code>GC.disable</code> / <code>GC.enable</code></td><td><code>Globals::gc_enable(false/true)</code></td><td>GC の有効/無効を切り替え、直前の disable 状態を bool で返す。<code>GC_ENABLED</code>(§4 の malloc 経路が参照)も同期。</td></tr>
+<tr><td><code>GC.count</code></td><td><code>total_gc_counter</code></td><td>総 GC 回数。</td></tr>
+<tr><td><code>GC.stat</code></td><td><code>stat</code>(CRuby 互換キー)</td><td><code>count</code> 等一部のキーだけが実カウンタに対応、他は 0 を返す。</td></tr>
+</tbody>
+</table>
+</div>
+<p>コマンドラインでは <code>--no-gc</code> で GC を無効化できる。GC 無効時は <code>gc()</code> が即 return
+するため、<code>request_gc_if_malloc_over</code> は <code>GC_ENABLED</code> を見て要求自体をスキップする
+(さもないとフラグがトリガ帯に張り付いて poll が空回りする)。</p>
+<hr>
+<h2 id="13-デバッグ検証用フィーチャ"><a class="header" href="#13-デバッグ検証用フィーチャ">13. デバッグ・検証用フィーチャ</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>フィーチャ</th><th>効果</th></tr>
+</thead>
+<tbody>
+<tr><td><code>gc-log</code></td><td>終了時に GC 統計を出力(old 数の実 popcount 等)。</td></tr>
+<tr><td><code>gc-debug</code></td><td>GC 中の各種アサート・ダンプ。<code>old_count</code> と実 popcount の一致検証など。</td></tr>
+<tr><td><code>gc-stress</code></td><td><strong>毎回のアロケーションで GC</strong> を走らせる(<code>bin/test</code> が使用)。世代別のバリア/remembered set 漏れを最も強く炙り出す。</td></tr>
+<tr><td><code>gc-verify</code></td><td>マイナー GC 後に独立フル再マークで健全性検証(§6.5)。</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="14-まとめ"><a class="header" href="#14-まとめ">14. まとめ</a></h2>
+<ul>
+<li>monoruby の GC は <strong>非移動・単一スレッド・stop-the-world の世代別 mark &amp; sweep</strong>。</li>
+<li>256KB ページ + マーク/old の 2 枚のビットマップ(mark-external)で、非移動と
+世代別を両立。ページはアドレスマスクで O(1) 逆引き。</li>
+<li>割り当てはフリーリスト → バンプ。閾値到達で <code>alloc_flag</code> を立て、<strong>次のセーフ
+ポイント</strong>で <code>execute_gc</code> が同期収集する(JIT レジスタ退避のため即実行はしない)。</li>
+<li>世代別の心臓部は、<strong>3 回生存で昇格(aging)</strong>・<strong>適応的メジャー閾値</strong>・
+<strong>1 ビット高速パスの書き込みバリア + remembered set(自己クリーニング付き)</strong>。
+マイナーは old をシードマークして young + old→young 辺だけを辿る。</li>
+<li>外部 malloc 圧・シグナル・<code>GC.start</code> も同じ <code>alloc_flag</code> 経由で同一のセーフ
+ポイント収集に集約される。</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/arch_difference.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/threads.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/arch_difference.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/threads.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

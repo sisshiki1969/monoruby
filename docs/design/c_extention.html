@@ -1,0 +1,612 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>C extension support — design notes (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d8eaad21.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-e1173681.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="monoruby-における-ruby-c-拡張サポートの設計検討"><a class="header" href="#monoruby-における-ruby-c-拡張サポートの設計検討">monoruby における Ruby C 拡張サポートの設計検討</a></h1>
+<p>本ドキュメントは、monoruby で CRuby の C 拡張 (<code>.so</code>) をロード・実行する仕組みを導入する際の検討内容をまとめたものである。</p>
+<hr>
+<h2 id="1-monoruby-側の現状調査"><a class="header" href="#1-monoruby-側の現状調査">1. monoruby 側の現状調査</a></h2>
+<h3 id="11-既存インフラ活用できるもの"><a class="header" href="#11-既存インフラ活用できるもの">1.1 既存インフラ（活用できるもの）</a></h3>
+<ul>
+<li><strong><code>Value</code> の C ABI 互換性</strong>: <code>Value</code> は <code>#[repr(transparent)] struct Value(NonZeroU64)</code> で定義されており (<code>monoruby/src/value.rs:148</code>)、C ABI 上は単なる <code>u64</code> として渡せる。</li>
+<li><strong>ビルトイン関数の安定 ABI</strong>: <code>extern "C" fn(&amp;mut Executor, &amp;mut Globals, Lfp, BytecodePtr) -&gt; Option&lt;Value&gt;</code> という固定シグネチャ (<code>monoruby/src/executor.rs:16</code>)。</li>
+<li><strong><code>libc::dlopen</code> / <code>dlsym</code> の利用例</strong>: Fiddle/FFI 用に既に実装済み (<code>monoruby/src/builtins/kernel.rs:1628-1692</code>)。<code>libloading</code> クレートは使わず、<code>libc</code> の生 API を直接呼ぶパターン。</li>
+<li><strong><code>require.rs</code> は <code>.so</code> を認識</strong>: ただし現状は <code>~/.monoruby/lib/</code> 内の <code>.rb</code> スタブにリダイレクトするのみで、ダイナミックロードは行わない (<code>monoruby/src/globals/require.rs:157-171</code>)。</li>
+</ul>
+<h3 id="12-不足しているもの"><a class="header" href="#12-不足しているもの">1.2 不足しているもの</a></h3>
+<ul>
+<li>CRuby C API 互換シム（<code>rb_define_method</code>, <code>rb_funcall</code>, <code>VALUE</code>, <code>ID</code> 等）は <strong>一切存在しない</strong>。</li>
+<li>外部 C コードが保持する <code>Value</code> を GC ルートとして登録する仕組みも未整備。<code>GCRoot</code> は <code>Globals</code>/<code>Executor</code> ツリーのみを辿る (<code>monoruby/src/alloc.rs:39-47</code>)。</li>
+</ul>
+<hr>
+<h2 id="2-設計方針3-つの選択肢"><a class="header" href="#2-設計方針3-つの選択肢">2. 設計方針：3 つの選択肢</a></h2>
+<h3 id="path-a--cruby-c-api-完全互換層"><a class="header" href="#path-a--cruby-c-api-完全互換層">Path A — CRuby C API 完全互換層</a></h3>
+<p><code>ruby.h</code> 互換ヘッダと <code>libruby.so</code> 相当のシムを書き、<code>nokogiri</code> 等の既存 gem を無改造で動かす。TruffleRuby/Artichoke 系のアプローチ。</p>
+<ul>
+<li><strong>長所</strong>: gem エコシステムが手に入る。</li>
+<li><strong>短所</strong>: API 面積が膨大（数百シンボル）。<code>Value</code> のタグレイアウトが CRuby <code>VALUE</code> と異なる（<code>Qnil=8 vs 0x04</code>、Fixnum タグ位置等）ため二値互換は不可能で、全境界に変換が要る。<code>rb_protect</code>/<code>setjmp</code> モデルや GVL も必要。</li>
+</ul>
+<h3 id="path-b--monoruby-ネイティブ拡張-api"><a class="header" href="#path-b--monoruby-ネイティブ拡張-api">Path B — monoruby ネイティブ拡張 API</a></h3>
+<p><code>mr_*</code> プレフィックスの新 API を定義し、新規に C 拡張を書く人向けにする。</p>
+<ul>
+<li><strong>長所</strong>: 小さく完結する。<code>Value</code> をそのまま <code>MrValue = uint64_t</code> として晒せる。</li>
+<li><strong>短所</strong>: 既存 gem は移植が必要。</li>
+</ul>
+<h3 id="path-c--b-を土台に-a-を段階的に積む推奨"><a class="header" href="#path-c--b-を土台に-a-を段階的に積む推奨">Path C — B を土台に A を段階的に積む（推奨）</a></h3>
+<p>まず B の機構（<code>.so</code> ロード / <code>Init_xxx</code> 呼び出し / GC ピン留め / 登録 API）を作り、その上に CRuby 互換シム関数を「よく使われるものから順に」薄く積み上げる。</p>
+<h3 id="path-b-の具体ステップ最小ゴールhello-world-so"><a class="header" href="#path-b-の具体ステップ最小ゴールhello-world-so">Path B の具体ステップ（最小ゴール：hello-world <code>.so</code>）</a></h3>
+<ol>
+<li><strong><code>require.rs</code></strong> — <code>search_load_path</code> で <code>.so</code> を見つけたら、現行の <code>.rb</code> スタブ置換ではなく新関数 <code>load_native_extension(path)</code> へ分岐。</li>
+<li><strong>dlopen</strong> — <code>kernel.rs</code> の既存パターンを再利用して <code>.so</code> をロード。</li>
+<li><strong><code>Init_&lt;basename&gt;</code> を dlsym</strong> して <code>extern "C" fn(*mut MrContext)</code> として呼ぶ。</li>
+<li><strong><code>monoruby_ext.h</code></strong> を新設し、以下を C 側に export：
+<ul>
+<li><code>typedef uint64_t MrValue;</code></li>
+<li><code>MrClassId mr_define_class(MrContext*, const char* name, MrClassId super);</code></li>
+<li><code>void mr_define_method(MrContext*, MrClassId, const char* name, MrBuiltinFn fn, int arity);</code></li>
+<li><code>MrValue mr_str_new(MrContext*, const char*, size_t);</code> / <code>mr_int_value</code> / <code>mr_funcall</code> / <code>mr_gc_register</code></li>
+</ul>
+</li>
+<li><strong>GC ルート登録</strong> — <code>alloc.rs</code> の <code>GCRoot</code> ツリーに「外部 C 側から保持中の Value」コンテナを追加（<code>Globals</code> に <code>Vec&lt;Value&gt;</code> の固定根として）。</li>
+<li><strong>ABI バージョン</strong> — <code>Init_xxx</code> には <code>MrContext</code> の先頭に <code>abi_version: u32</code> を入れて将来拡張可能に。</li>
+</ol>
+<h3 id="主要な落とし穴"><a class="header" href="#主要な落とし穴">主要な落とし穴</a></h3>
+<ul>
+<li><strong><code>Value</code> の bit layout は CRuby と非互換</strong> — Path A を将来やる場合、境界での変換テーブルが必須。</li>
+<li><strong>例外伝播</strong> — <code>rb_raise</code> 互換は <code>setjmp/longjmp</code> か Rust の <code>panic=unwind</code> を経由する必要があり、JIT のフレームを巻き戻せるか要検証。</li>
+<li><strong><code>Lfp</code> / <code>BytecodePtr</code></strong> — C 側へ晒すと ABI が固定化されて VM リファクタを縛るので、<code>MrContext</code> で抽象化するのが安全。</li>
+<li><strong>mkmf</strong> — <code>extconf.rb</code> が CRuby の <code>ruby.h</code> を見つけにいく前提なので、monoruby 専用の <code>mkmf</code> 置換 or <code>ruby.h</code> 互換ヘッダ生成が必要。</li>
+<li><strong>スレッド/Fiber</strong> — <code>rb_thread_create</code> 等は monoruby が単一ネイティブスレッド前提なので、Path A でも対応外にする方が現実的。</li>
+</ul>
+<hr>
+<h2 id="3-truffleruby-のアプローチ参考事例"><a class="header" href="#3-truffleruby-のアプローチ参考事例">3. TruffleRuby のアプローチ（参考事例）</a></h2>
+<h3 id="31-sulong-時代過去の主流"><a class="header" href="#31-sulong-時代過去の主流">3.1 Sulong 時代（過去の主流）</a></h3>
+<p>C 拡張を <strong>LLVM ビットコード</strong> にコンパイルし、GraalVM 内蔵の LLVM インタプリタ（Sulong）が同一 JVM プロセス内で実行。本来不透明な「ネイティブコード内での VALUE 操作」を Truffle/Graal 側からインターセプトできた。</p>
+<h3 id="32-value-の表現"><a class="header" href="#32-value-の表現">3.2 VALUE の表現</a></h3>
+<p>CRuby の <code>VALUE</code> (<code>unsigned long</code>) を直接受け取らず、<strong><code>ValueWrapper</code></strong> という Java/Truffle 側のラッパーオブジェクトと、ネイティブ整数ハンドルの二形態を行き来させる：</p>
+<ul>
+<li>C 境界に渡す前に <strong>wrap</strong>、Ruby に戻すときに <strong>unwrap</strong>。</li>
+<li><code>nil</code>/<code>true</code>/<code>false</code>/小整数/即値はインライン化（特別ケース）。</li>
+<li>それ以外は <strong>4096 エントリ単位の handle block</strong> に <strong>WeakReference</strong> で格納し、<code>RubyFiber</code> が <code>HandleBlockHolder</code> で管理。</li>
+</ul>
+<p>つまり CRuby の VALUE と二値互換にはせず、<strong>境界で必ず変換する</strong> 設計を選んでいる。</p>
+<h3 id="33-c-api-の実装場所"><a class="header" href="#33-c-api-の実装場所">3.3 C API の実装場所</a></h3>
+<p><code>rb_define_method</code> 等の数百個ある関数は <strong>C ではなく Ruby (および Java/Truffle ノード) で実装</strong> されている：</p>
+<blockquote>
+<p><em>“Most API functions are defined in the C header file, the C implementation file, and then either implemented as a call to a method… using polyglot_invoke to do a foreign call from C into Ruby, or we implement the function in Ruby in the <code>Truffle::CExt</code> module.”</em></p>
+</blockquote>
+<p>C 側には薄いシムだけ置き、本体は Ruby 側 <code>Truffle::CExt</code> モジュールにある。互換 API の実装コストを劇的に下げる戦略。</p>
+<h3 id="34-gc-統合"><a class="header" href="#34-gc-統合">3.4 GC 統合</a></h3>
+<p>TruffleRuby の GC は VALUE を理解しないため、3 層のレシピで生存性を担保：</p>
+<ol>
+<li><strong><code>ExtensionCallStack</code></strong> — C 呼び出しごとに <code>preservedObjects</code> リストを積み、その呼び出し中に作られた ValueWrapper を強参照で pin。</li>
+<li><strong>Handle blocks</strong> は弱参照だが、<strong>ValueWrapper 側がブロックを強参照</strong> することで、wrap が生きている限りブロックも生きる。</li>
+<li><strong><code>DATA_PTR</code> 経由の mark 関数</strong> を記録しておき、C 呼び出し終了時に実行して可達オブジェクトを集める。</li>
+</ol>
+<h3 id="35-最近の方針転換sulong-からネイティブ実行へ"><a class="header" href="#35-最近の方針転換sulong-からネイティブ実行へ">3.5 最近の方針転換：Sulong からネイティブ実行へ</a></h3>
+<p>近年、<strong>Sulong 経由をやめてシステムツールチェイン（gcc/clang）でビルド・ネイティブ実行する方式に移行</strong>している：</p>
+<blockquote>
+<p><em>“C/C++ extensions are now compiled using the system toolchain and executed natively instead of using GraalVM LLVM (Sulong), which leads to faster startup, no warmup, better compatibility, smaller distribution and faster installation.”</em></p>
+</blockquote>
+<p>LLVM 経由の透過性メリットより、起動時間・warmup・互換性・配布サイズの実利が勝った。</p>
+<h3 id="36-monoruby-への示唆"><a class="header" href="#36-monoruby-への示唆">3.6 monoruby への示唆</a></h3>
+<ol>
+<li><strong>Bit 互換は捨てる</strong> — TruffleRuby ほど高度な仕組みを使っても VALUE は wrap/unwrap が必須だった。</li>
+<li><strong>C API の大半を Ruby/Rust 側で実装する戦略が有効</strong> — TruffleRuby 式に「C シムは数十行、本体は <code>Monoruby::CExt</code> モジュール」にすれば互換シム数百個の重みが下がる。</li>
+<li><strong>GC は per-call pin stack 方式</strong> — C 呼び出しスコープごとに <code>Vec&lt;Value&gt;</code> を一つ push し、その間に作られた外部参照可能な Value を pin、呼び出し終了で pop。</li>
+<li><strong>LLVM ビットコード解釈は不要</strong> — TruffleRuby ですら捨てた手段なので、monoruby は最初から <code>dlopen</code>/<code>dlsym</code> のネイティブ実行で良い。</li>
+</ol>
+<hr>
+<h2 id="4-オブジェクトレイアウト不一致の吸収方法"><a class="header" href="#4-オブジェクトレイアウト不一致の吸収方法">4. オブジェクトレイアウト不一致の吸収方法</a></h2>
+<p>CRuby C 拡張は <code>RSTRING_PTR</code>/<code>RARRAY_PTR</code>/<code>RBASIC</code>/<code>RDATA</code>/<code>RTYPEDDATA</code> 等のマクロを多用し、その多くは CRuby のメモリレイアウトを前提としている。これをどう吸収するか。</p>
+<h3 id="41-truffleruby-の-3-層対策"><a class="header" href="#41-truffleruby-の-3-層対策">4.1 TruffleRuby の 3 層対策</a></h3>
+<h4 id="①-sulong-時代llvm-load-命令そのものをインターセプト"><a class="header" href="#①-sulong-時代llvm-load-命令そのものをインターセプト">① Sulong 時代：LLVM load 命令そのものをインターセプト</a></h4>
+<blockquote>
+<p><em>“in our C interpreter rather than the <code>struct</code> field reads just being a load from an address in memory, we can instead insert any logic we want.”</em></p>
+</blockquote>
+<p>C ソースを <code>gcc -emit-llvm</code> でビットコードにし、Sulong が解釈実行。<code>obj-&gt;len</code> のフィールドアクセスは LLVM ビットコード上では <code>getelementptr + load</code> 命令だが、<strong>その load 命令自体を Ruby メソッド呼び出しに差し替える</strong>。インラインキャッシュも入る。</p>
+<h4 id="②-c-ソースのプリプロセッサパイプライン"><a class="header" href="#②-c-ソースのプリプロセッサパイプライン">② C ソースのプリプロセッサ・パイプライン</a></h4>
+<p><code>gcc</code>/<code>clang</code> に渡す前に <strong>C ソースを書き換える</strong>。<code>ruby.h</code> 互換ヘッダの再定義と組み合わせて、問題のあるマクロを関数呼び出しに変換する。ネイティブ実行モードに移行した今、<strong>主たる手段</strong>になっている。</p>
+<h4 id="③-個別マクロごとの吸収戦略"><a class="header" href="#③-個別マクロごとの吸収戦略">③ 個別マクロごとの吸収戦略</a></h4>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>マクロ</th><th>TruffleRuby での扱い</th></tr>
+</thead>
+<tbody>
+<tr><td><code>RSTRING_PTR(s)</code></td><td>初回呼び出しで「rope」表現に<strong>永久変換</strong>してネイティブメモリに固定。以降そのポインタを返す。</td></tr>
+<tr><td><code>RARRAY_PTR(a)</code></td><td><code>VALUE*</code> に見える<strong>プロキシオブジェクト</strong>を返す。読み書き・ポインタ算術は配列＋オフセットを内部的に追跡。</td></tr>
+<tr><td><code>RDATA(obj)-&gt;data = ptr;</code></td><td>プロキシポインタ。<code>data</code> フィールドへの代入を<strong>インスタンス変数への書き込みに転送</strong>。</td></tr>
+<tr><td><code>RTYPEDDATA</code></td><td>TypedData とデータ構造を<strong>常に同一アロケーションに置く</strong>（embedded TypedData 相当）。</td></tr>
+<tr><td><code>RBASIC-&gt;flags</code>/<code>-&gt;klass</code></td><td>フィールドアクセスを intercept → Ruby 側の状態/クラスにマップ。</td></tr>
+<tr><td><code>RB_TYPE_P</code> 等の判定マクロ</td><td>ヘッダ側で関数呼び出しに再定義。</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="42-monoruby-への適用案"><a class="header" href="#42-monoruby-への適用案">4.2 monoruby への適用案</a></h3>
+<p>monoruby はネイティブ実行しか取らない以上、<strong>Sulong 式の load 命令インターセプトは使えない</strong>。TruffleRuby が現在採っている②③の組み合わせが現実的：</p>
+<h4 id="a-rubyh-互換ヘッダで全マクロを関数化"><a class="header" href="#a-rubyh-互換ヘッダで全マクロを関数化">A. <code>ruby.h</code> 互換ヘッダで全マクロを関数化</a></h4>
+<pre><code class="language-c">// monoruby が提供する ruby.h
+#define RSTRING_PTR(s)   mr_rstring_ptr((MrValue)(s))
+#define RSTRING_LEN(s)   mr_rstring_len((MrValue)(s))
+#define RARRAY_LEN(a)    mr_rarray_len((MrValue)(a))
+#define RARRAY_AREF(a,i) mr_rarray_aref((MrValue)(a),(i))
+#define RB_TYPE_P(o,t)   mr_type_p((MrValue)(o),(t))
+#define NIL_P(o)         ((o) == Qnil)
+</code></pre>
+<p>CRuby 自身も近年マクロ群の多くを <code>static inline</code> 関数化しており、<strong>ABI ではなく API 互換</strong>で十分動く拡張は多い。</p>
+<h4 id="b-lazy-materialization必要時にネイティブ化"><a class="header" href="#b-lazy-materialization必要時にネイティブ化">B. lazy materialization（必要時にネイティブ化）</a></h4>
+<ul>
+<li><code>RSTRING_PTR(s)</code>: 初回呼び出しで <code>RValue::String</code> のバイト列をネイティブ固定アロケータにコピー＆pin。<code>Globals</code> の pin テーブルに登録。以降は同じポインタを返す。書き込み後は <code>rb_str_modify</code> 呼出を要求する CRuby 慣習に乗る。</li>
+<li><code>RARRAY_PTR(a)</code>: 同様だが、書き込みのある場所では使わない方針を貫く（CRuby でも <code>rb_ary_store(a, i, v)</code> 推奨）。読み専用なら lazy ネイティブコピー。</li>
+</ul>
+<h4 id="c-rtypeddata-は-co-allocation-設計"><a class="header" href="#c-rtypeddata-は-co-allocation-設計">C. <code>RTYPEDDATA</code> は co-allocation 設計</a></h4>
+<p><code>TypedData_Make_Struct</code> を呼ぶと、monoruby の <code>RValue</code> ヘッダ + ユーザデータ構造を<strong>同一ネイティブアロケーション</strong>として確保。<code>((struct RTypedData*)obj)-&gt;data</code> への直接アクセスが成立するよう、レイアウトを CRuby 互換にする（GC も普通に mark 関数を呼ぶだけ）。</p>
+<h4 id="d-諦めるべきマクロ"><a class="header" href="#d-諦めるべきマクロ">D. 諦めるべきマクロ</a></h4>
+<ul>
+<li><code>RARRAY_PTR(a)[i] = v</code> の <strong>lvalue 書き込み</strong> — TruffleRuby はプロキシで吸収したがネイティブ実行では不可能。これに依存する gem は未対応とし、porting 時に <code>rb_ary_store</code> への置換を要求。</li>
+<li><code>RHASH</code> の内部構造直接アクセス — CRuby 自身が 3.0 頃から非推奨化済み。</li>
+<li><code>RSTRUCT_PTR</code> 等の lvalue 系も同様。</li>
+</ul>
+<h3 id="43-まとめ"><a class="header" href="#43-まとめ">4.3 まとめ</a></h3>
+<p>「マクロをどう吸収するか」の答えは <strong>3 層</strong>：</p>
+<ol>
+<li><strong>ABI 互換は諦める</strong>（TruffleRuby も諦めた）。</li>
+<li><strong>API 互換ヘッダ + マクロを関数呼び出しに再定義</strong>（最も効くてこ）。</li>
+<li><strong>書き換え不能なポインタ寿命保証は lazy native materialize + pin、書き込み系は co-allocation で物理レイアウトを合わせる</strong>。</li>
+</ol>
+<hr>
+<h2 id="5-再コンパイルの必要性"><a class="header" href="#5-再コンパイルの必要性">5. 再コンパイルの必要性</a></h2>
+<h3 id="51-結論再コンパイルは必須"><a class="header" href="#51-結論再コンパイルは必須">5.1 結論：再コンパイルは必須</a></h3>
+<p>CRuby でビルド済みの <code>.so</code> をそのまま monoruby にロードすることは原理的に不可能：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>不一致点</th><th>影響</th></tr>
+</thead>
+<tbody>
+<tr><td><strong><code>Value</code> のビットレイアウト</strong></td><td><code>Qnil = 0x04 vs 0x08</code>、Fixnum タグ位置等が違う。<code>.so</code> 内に埋め込まれた即値定数がそのまま意味を持たない。</td></tr>
+<tr><td><strong>エクスポートシンボル名</strong></td><td><code>.so</code> は <code>rb_define_method</code>、<code>rb_str_new</code> 等を <code>dlopen</code> 時にリンク解決する。monoruby はこれらを自前のシムで実装するので、<strong>シンボルテーブル自体は同名で提供できる</strong>が、ABI が合わなければ即クラッシュ。</td></tr>
+<tr><td><strong>マクロ展開結果</strong></td><td><code>RSTRING_PTR(s)</code> を CRuby ヘッダで展開するか monoruby ヘッダで展開するかで生成コードが全く違う。これは<strong>ヘッダ依存</strong>＝<strong>ビルド時依存</strong>。</td></tr>
+<tr><td><strong>構造体オフセット</strong></td><td><code>((RBasic*)obj)-&gt;klass</code> を生コード上のオフセットとしてアクセスされた場合、monoruby の RValue 配置と合わない限り破綻。</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="52-ただし再コンパイルは実用上ほぼ自動化される"><a class="header" href="#52-ただし再コンパイルは実用上ほぼ自動化される">5.2 ただし「再コンパイル」は実用上ほぼ自動化される</a></h3>
+<p>これは TruffleRuby・JRuby・Artichoke でも同じ前提で、ユーザ体験としては <strong><code>gem install nokogiri</code> するだけ</strong> で済むよう作る：</p>
+<ol>
+<li><strong>monoruby 用 <code>mkmf</code> を提供</strong> — <code>extconf.rb</code> が <code>require "mkmf"</code> したときに、monoruby の include パス（<code>~/.monoruby/include/ruby.h</code>）と link フラグを返す。</li>
+<li><strong><code>gem install</code> のフロー</strong>:
+<pre><code>$ monoruby -S gem install nokogiri
+→ extconf.rb 実行（monoruby の mkmf）
+→ Makefile 生成（-I ~/.monoruby/include, -lmonoruby_ext 等）
+→ gcc/clang でビルド → nokogiri.so が monoruby ヘッダで再生成される
+→ ~/.monoruby/gems/... に配置
+</code></pre>
+</li>
+<li><strong>ユーザは何も意識しない</strong> — 「初回 gem install でビルドが走る」のは CRuby でも同じ体験。</li>
+</ol>
+<p>つまり「再コンパイル必須」は <strong>ABI 互換を諦める代わりに API 互換を取る</strong> という現実解で、ユーザの心理的負担はほぼゼロ。</p>
+<hr>
+<h2 id="6-gem-install-での-c-拡張コンパイル詳細"><a class="header" href="#6-gem-install-での-c-拡張コンパイル詳細">6. <code>gem install</code> での C 拡張コンパイル詳細</a></h2>
+<h3 id="61-全体フロー"><a class="header" href="#61-全体フロー">6.1 全体フロー</a></h3>
+<pre><code>gem install nokogiri
+  │
+  ▼
+① Gem::Installer            # gemspec読込、依存解決、ファイル展開
+  │
+  ▼
+② Gem::Ext::Builder.build_extensions   # gemspecの extensions 配列を順次処理
+  │
+  ▼ extconf.rb がある場合
+③ Gem::Ext::ExtConfBuilder.build
+  │  ├─ tmpdir 作成
+  │  ├─ ruby extconf.rb [build_args]    # ← ここで Makefile 生成
+  │  ├─ make DESTDIR=...
+  │  ├─ make install DESTDIR=...
+  │  └─ make clean &amp; tmpdir削除
+  │
+  ▼
+④ .so を gemの lib/ と extensions ディレクトリへ配置
+  │
+  ▼
+⑤ Gem::Specification 登録 → require できる状態に
+</code></pre>
+<p><code>Gem::Ext::Builder</code> は他に <code>RakeBuilder</code>（<code>Rakefile</code>）/<code>ConfigureBuilder</code>（<code>configure</code>）/<code>CmakeBuilder</code>（<code>CMakeLists.txt</code>）も持つ。</p>
+<h3 id="62-extconfrb-の中身"><a class="header" href="#62-extconfrb-の中身">6.2 extconf.rb の中身</a></h3>
+<p>典型例：</p>
+<pre><code class="language-ruby">require "mkmf"
+
+# システム探査
+have_header("zlib.h")               or abort "zlib.h not found"
+have_library("z", "deflate")        or abort "libz not found"
+have_func("strlcpy", "string.h")
+find_executable("xml2-config")
+
+# プリプロセッサ定数生成
+$CFLAGS  &lt;&lt; " -Wall -O2"
+$LDFLAGS &lt;&lt; " -lpthread"
+
+create_header                       # extconf.h を生成
+create_makefile("nokogiri/nokogiri") # ← Makefile を生成
+</code></pre>
+<p><code>have_header</code>/<code>have_library</code>/<code>have_func</code> は <strong>実際にテスト用の小さな C ソースをコンパイル＆リンクして判定</strong> している（<code>try_compile</code>/<code>try_link</code>）。</p>
+<h3 id="63-mkmf-が参照する-rbconfig-キー"><a class="header" href="#63-mkmf-が参照する-rbconfig-キー">6.3 mkmf が参照する RbConfig キー</a></h3>
+<p><strong>これが monoruby 移植の核</strong>：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>キー</th><th>用途</th><th>例</th></tr>
+</thead>
+<tbody>
+<tr><td><code>rubyhdrdir</code></td><td><code>ruby.h</code> の場所</td><td><code>/usr/include/ruby-3.4.0</code></td></tr>
+<tr><td><code>rubyarchhdrdir</code></td><td>アーキ別ヘッダ</td><td><code>/usr/include/ruby-3.4.0/x86_64-linux</code></td></tr>
+<tr><td><code>archdir</code></td><td>標準ライブラリ <code>.so</code> の場所</td><td><code>/usr/lib/ruby/3.4.0/x86_64-linux</code></td></tr>
+<tr><td><code>sitearchdir</code></td><td>サイト拡張 <code>.so</code> の配置先</td><td><code>/usr/local/lib/ruby/site_ruby/3.4.0/x86_64-linux</code></td></tr>
+<tr><td><code>vendorarchdir</code></td><td>ベンダ拡張 <code>.so</code> の配置先</td><td>（配布パッケージ用）</td></tr>
+<tr><td><code>CC</code></td><td>C コンパイラ</td><td><code>gcc</code></td></tr>
+<tr><td><code>CXX</code></td><td>C++ コンパイラ</td><td><code>g++</code></td></tr>
+<tr><td><code>CFLAGS</code>/<code>CPPFLAGS</code></td><td>コンパイル時フラグ</td><td><code>-O3 -fPIC ...</code></td></tr>
+<tr><td><code>LDSHARED</code></td><td>共有ライブラリのリンクコマンド</td><td><code>gcc -shared</code></td></tr>
+<tr><td><code>DLDFLAGS</code></td><td>リンク時フラグ</td><td><code>-Wl,--no-undefined</code></td></tr>
+<tr><td><code>LIBRUBYARG</code></td><td>Ruby ランタイムのリンク引数</td><td><code>-lruby</code></td></tr>
+<tr><td><code>DLEXT</code></td><td>共有ライブラリ拡張子</td><td><code>so</code>/<code>bundle</code>/<code>dll</code></td></tr>
+<tr><td><code>arch</code></td><td>プラットフォーム識別子</td><td><code>x86_64-linux</code></td></tr>
+<tr><td><code>ruby_version</code></td><td>ABI バージョン</td><td><code>3.4.0</code></td></tr>
+<tr><td><code>target_os</code>/<code>target_cpu</code></td><td>クロスコンパイル制御</td><td></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="64-生成される-makefile-の典型形"><a class="header" href="#64-生成される-makefile-の典型形">6.4 生成される Makefile の典型形</a></h3>
+<pre><code class="language-makefile">SHELL = /bin/sh
+RUBYARCHDIR = $(sitearchdir)$(target_prefix)/nokogiri
+RUBYHDRDIR  = /usr/include/ruby-3.4.0
+arch_hdrdir = /usr/include/ruby-3.4.0/x86_64-linux
+
+CC      = gcc
+LDSHARED = gcc -shared
+CFLAGS  = -fPIC -O3 -Wall ...
+INCFLAGS = -I. -I$(arch_hdrdir) -I$(RUBYHDRDIR) -I$(srcdir)
+DLDFLAGS = -Wl,--no-undefined
+DLEXT    = so
+TARGET   = nokogiri
+DLLIB    = $(TARGET).$(DLEXT)
+
+OBJS = nokogiri.o xml_node.o ...
+
+$(DLLIB): $(OBJS)
+	$(LDSHARED) -o $@ $(OBJS) $(LIBPATH) $(DLDFLAGS) $(LIBS)
+
+install: $(DLLIB)
+	$(INSTALL_PROG) $(DLLIB) $(RUBYARCHDIR)
+</code></pre>
+<p>ポイント：</p>
+<ul>
+<li><strong><code>-I$(RUBYHDRDIR)</code></strong> で <code>ruby.h</code> を取りに行く（=monoruby ではここが我々のヘッダ群を指す必要あり）。</li>
+<li><strong><code>LDSHARED</code></strong> で <code>.so</code> を作る。多くの環境では <code>libruby</code> への動的リンクは<strong>しない</strong>。Ruby シンボルは<strong>実行時にメインプロセスが提供する</strong>前提。</li>
+<li><strong>インストール先</strong>は <code>$(RUBYARCHDIR) = $(sitearchdir)/&lt;gem-name&gt;</code> 配下。</li>
+</ul>
+<h3 id="65-ビルド成果物の配置"><a class="header" href="#65-ビルド成果物の配置">6.5 ビルド成果物の配置</a></h3>
+<p>RubyGems は <code>.so</code> を <strong>2 か所</strong>に配置する：</p>
+<pre><code>~/.gem/ruby/3.4.0/
+  ├── gems/nokogiri-1.16.0/lib/nokogiri/nokogiri.so   # require先
+  └── extensions/x86_64-linux/3.4.0/nokogiri-1.16.0/  # ビルド成果保管
+       ├── nokogiri.so
+       ├── gem_make.out                                # ビルドログ
+       └── mkmf.log                                    # mkmfの探査ログ
+</code></pre>
+<p><code>extensions/&lt;arch&gt;/&lt;abi&gt;/&lt;gem&gt;</code> の階層で<strong>プラットフォーム＆Ruby ABI ごとに別管理</strong>される。</p>
+<h3 id="66-require-できるようになる仕組み"><a class="header" href="#66-require-できるようになる仕組み">6.6 require できるようになる仕組み</a></h3>
+<ol>
+<li><code>Gem::Specification</code> が gem の <code>lib/</code> を <code>$LOAD_PATH</code> に追加。</li>
+<li><code>require "nokogiri"</code> で <code>nokogiri.rb</code> をロード。</li>
+<li><code>nokogiri.rb</code> 内部で <code>require "nokogiri/nokogiri"</code> → <code>.so</code> をロード。</li>
+<li><code>dlopen</code> 後、<code>Init_nokogiri()</code> が呼ばれて <code>rb_define_class</code> 等で世界に登録。</li>
+</ol>
+<h3 id="67-失敗時の挙動とログ"><a class="header" href="#67-失敗時の挙動とログ">6.7 失敗時の挙動とログ</a></h3>
+<ul>
+<li><code>mkmf.log</code> に <strong>試行コンパイルの全コマンドと出力</strong> が残る。</li>
+<li><code>gem_make.out</code> に make の標準出力/エラー全文。</li>
+<li><code>Gem::Ext::ExtConfBuilder</code> は Cause exception を投げ、エラーメッセージにこれらのパスを含める。</li>
+</ul>
+<h3 id="68-主要ファイルrubygems-側"><a class="header" href="#68-主要ファイルrubygems-側">6.8 主要ファイル（RubyGems 側）</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>パス</th><th>役割</th></tr>
+</thead>
+<tbody>
+<tr><td><code>lib/rubygems/installer.rb</code></td><td><code>Gem::Installer</code> — gem 展開、ext 呼び出し</td></tr>
+<tr><td><code>lib/rubygems/ext/builder.rb</code></td><td><code>Gem::Ext::Builder</code> — 種別判定とディスパッチ</td></tr>
+<tr><td><code>lib/rubygems/ext/ext_conf_builder.rb</code></td><td>extconf.rb 方式の実行</td></tr>
+<tr><td><code>lib/rubygems/ext/rake_builder.rb</code> 等</td><td>別方式（Rake/configure/cmake）</td></tr>
+<tr><td><code>lib/mkmf.rb</code></td><td>Ruby 本体に同梱、<code>MakeMakefile</code> モジュール</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="7-monoruby-に持ち込むときの押さえどころ"><a class="header" href="#7-monoruby-に持ち込むときの押さえどころ">7. monoruby に持ち込むときの押さえどころ</a></h2>
+<p>「再コンパイル必須」を前提にすると、<strong>monoruby 側でやることは以下 5 点</strong>に絞れる：</p>
+<h3 id="71-rbconfigconfig-を提供"><a class="header" href="#71-rbconfigconfig-を提供">7.1 <code>RbConfig::CONFIG</code> を提供</a></h3>
+<p>monoruby では <code>RbConfig::CONFIG</code> ハッシュを上書きまたは新規定義し、上記キーを <strong>monoruby 用の値</strong> に設定：</p>
+<pre><code class="language-ruby">RbConfig::CONFIG["rubyhdrdir"]    = "#{ENV['HOME']}/.monoruby/include"
+RbConfig::CONFIG["sitearchdir"]   = "#{ENV['HOME']}/.monoruby/site/#{arch}"
+RbConfig::CONFIG["LDSHARED"]      = "gcc -shared"
+RbConfig::CONFIG["DLEXT"]         = "so"
+RbConfig::CONFIG["arch"]          = "x86_64-linux-monoruby"   # ← 重要
+RbConfig::CONFIG["ruby_version"]  = "monoruby-0.x"
+RbConfig::CONFIG["LIBRUBYARG"]    = "-lmonoruby_ext"
+RbConfig::CONFIG["CFLAGS"]        &lt;&lt; " -DMONORUBY=1"
+</code></pre>
+<p><strong><code>arch</code> を独自値にする</strong> ことで <code>extensions/&lt;arch&gt;/...</code> が CRuby とぶつからない。</p>
+<h3 id="72-monorubyinclude-に互換-rubyh-を配置"><a class="header" href="#72-monorubyinclude-に互換-rubyh-を配置">7.2 <code>~/.monoruby/include/</code> に互換 <code>ruby.h</code> を配置</a></h3>
+<p>マクロを関数化したヘッダ群を <code>build.rs</code> で配布。</p>
+<h3 id="73-mkmfrb-はそのまま使える可能性が高い"><a class="header" href="#73-mkmfrb-はそのまま使える可能性が高い">7.3 <code>mkmf.rb</code> はそのまま使える可能性が高い</a></h3>
+<p>mkmf は Ruby で書かれており <code>RbConfig::CONFIG</code> を読むだけなので、 <strong>CRuby 由来の mkmf.rb を <code>~/.monoruby/lib/</code> にそのまま置く</strong> ことで動く可能性が高い。細部の <code>try_link</code> がリンカ呼び出しをするので、<code>LDSHARED</code>/<code>LIBRUBYARG</code> が正しく定義されていれば良い。</p>
+<h3 id="74-rubygems-も大部分流用可能"><a class="header" href="#74-rubygems-も大部分流用可能">7.4 RubyGems も大部分流用可能</a></h3>
+<p>RubyGems も Ruby スクリプト群なので、<strong>そのまま monoruby で実行できれば良い</strong>。<code>Gem.dir</code>/<code>Gem.path</code> を monoruby 向けに上書きする小さなパッチで済む見込み。</p>
+<h3 id="75-シムライブラリ-libmonoruby_extso-を配布"><a class="header" href="#75-シムライブラリ-libmonoruby_extso-を配布">7.5 シムライブラリ <code>libmonoruby_ext.so</code> を配布</a></h3>
+<p><code>rb_define_method</code> 等のシンボルを export。<code>-lmonoruby_ext</code> で <code>.so</code> がリンクし、<code>dlopen</code> 時に monoruby プロセス側でこれらの実体を提供する（あるいは <code>--export-dynamic</code> で monoruby 本体が提供）。</p>
+<hr>
+<h2 id="8-実装最小ライン"><a class="header" href="#8-実装最小ライン">8. 実装最小ライン</a></h2>
+<p>「<code>gem install</code> が monoruby でも動く」を最初のマイルストーンにするなら：</p>
+<ol>
+<li>RubyGems を monoruby 上で起動できるところまで（<code>gem</code> コマンドが立ち上がる）。</li>
+<li><code>RbConfig::CONFIG</code> を monoruby 値で完備。</li>
+<li>互換 <code>ruby.h</code> を配布。</li>
+<li>ダミーシム <code>libmonoruby_ext.so</code>（<code>rb_define_method</code> を 1 個だけ実装）。</li>
+<li><strong>hello-world の C 拡張 gem</strong> を作って <code>gem install ./hello.gem</code> が通ることを確認。</li>
+</ol>
+<p>ここから順に実装する <code>rb_*</code> シンボル数を増やしていけば、徐々に実 gem が通るようになる。TruffleRuby も事実上この道を辿った。</p>
+<hr>
+<h2 id="9-参考リンク"><a class="header" href="#9-参考リンク">9. 参考リンク</a></h2>
+<ul>
+<li>TruffleRuby cexts.md (contributor docs): https://github.com/oracle/truffleruby/blob/master/doc/contributor/cexts.md</li>
+<li>TruffleRuby cext-values.md (handle/GC management): https://github.com/oracle/truffleruby/blob/master/doc/contributor/cext-values.md</li>
+<li>Better support for C extensions in TruffleRuby (aardvark179): https://aardvark179.github.io/blog/capi.html/</li>
+<li>Very High Performance C Extensions For JRuby+Truffle (Chris Seaton): https://chrisseaton.com/truffleruby/cext/</li>
+<li>Ruby Objects as C Structs and Vice Versa (Chris Seaton): https://chrisseaton.com/truffleruby/structs/</li>
+<li>Issue #1772: Cannot load more than one byte from RSTRING_PTR: https://github.com/oracle/truffleruby/issues/1772</li>
+<li>Feature #21853: Make Embedded TypedData a public API: https://bugs.ruby-lang.org/issues/21853</li>
+<li>A Rubyist’s Walk Along the C-side (Part 7): TypedData Objects: https://blog.peterzhu.ca/ruby-c-ext-part-7/</li>
+<li>Gems with Extensions - RubyGems Guides: https://guides.rubygems.org/gems-with-extensions/</li>
+<li>RubyGems Ext::ExtConfBuilder source: https://github.com/rubygems/rubygems/blob/master/lib/rubygems/ext/ext_conf_builder.rb</li>
+<li>ruby/lib/mkmf.rb (Ruby 本体): https://github.com/ruby/ruby/blob/master/lib/mkmf.rb</li>
+<li>MakeMakefile module documentation: https://www.rubydoc.info/stdlib/mkmf/MakeMakefile</li>
+<li>Hacking extconf.rb (Yorick Peterse): https://yorickpeterse.com/articles/hacking-extconf-rb/</li>
+<li>Don’t be terrified of building native extensions (Pat Shaughnessy): https://patshaughnessy.net/2011/10/31/dont-be-terrified-of-building-native-extensions</li>
+<li>RbConfig module reference: https://docs.ruby-lang.org/en/3.0/RbConfig.html</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/encoding_char_iteration_design.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/ruby_spec_skip_tags.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/encoding_char_iteration_design.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/ruby_spec_skip_tags.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

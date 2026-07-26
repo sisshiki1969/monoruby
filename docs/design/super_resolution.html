@@ -1,0 +1,509 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>super resolution via the caller PC (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d8eaad21.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-e1173681.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="super-のメソッド名解決と呼び出し元-pc-を用いた実装"><a class="header" href="#super-のメソッド名解決と呼び出し元-pc-を用いた実装">super のメソッド名解決と呼び出し元 PC を用いた実装</a></h1>
+<p><code>super</code> は「いま実行中のメソッドと<strong>同じ名前</strong>のメソッドを、祖先チェーンの
+<strong>現在位置より先</strong>から探して呼ぶ」命令である。単純に見えるが、「同じ名前とは
+どの名前か」「現在位置とはどこか」の 2 点が自明でなく、CRuby は両方をメソッド
+エントリ(callable method entry)に持たせて解決している。monoruby はフレームに
+メソッドエントリを持たない(FuncId しか持たない)ため、同じ情報を
+<strong>呼び出し元 PC(cont-frame スロット)から復元</strong>する。本書はその機構を説明する。</p>
+<p>対象ソース:</p>
+<ul>
+<li><code>monoruby/src/codegen/runtime.rs</code> — <code>entered_by</code> / <code>super_run</code> /
+<code>super_resolution</code> / <code>find_super</code> / <code>defined_super</code> / <code>find_method</code></li>
+<li><code>monoruby/src/globals/store/class.rs</code> — <code>body_dispatched_by</code> /
+<code>super_occurrences</code> / <code>check_super</code> / <code>check_super_at</code> /
+<code>change_method_visibility_for_class</code></li>
+<li><code>monoruby/src/globals/store.rs</code> — <code>MethodTableEntry</code></li>
+<li><code>monoruby/src/codegen/jitgen/compile/method_call.rs</code> — JIT 側の
+ambiguous-super ガード</li>
+</ul>
+<hr>
+<h2 id="1-cruby-の意味論"><a class="header" href="#1-cruby-の意味論">1. CRuby の意味論</a></h2>
+<p>CRuby では、メソッド呼び出しのたびに <strong>callable method entry (cme)</strong> が
+フレームに紐付く。cme は以下を保持する:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>フィールド</th><th>意味</th><th>super での役割</th></tr>
+</thead>
+<tbody>
+<tr><td><code>called_id</code></td><td>呼び出しに使われた名前</td><td>(直接は使わない)</td></tr>
+<tr><td><code>def-&gt;original_id</code></td><td>定義時の名前</td><td><strong>super はこの名前で検索する</strong></td></tr>
+<tr><td><code>defined_class</code></td><td>メソッドが見つかった ICLASS(チェーン上の位置)</td><td><strong>この位置の直後から検索を始める</strong></td></tr>
+</tbody>
+</table>
+</div>
+<p>この 2 つの情報がどう効くかを、問題になるケースごとに見る。</p>
+<h3 id="11-一つの本体が複数の名前を持つ場合define_method"><a class="header" href="#11-一つの本体が複数の名前を持つ場合define_method">1.1 一つの本体が複数の名前を持つ場合(define_method)</a></h3>
+<pre><code class="language-ruby">sub = Class.new(sup) do
+  [:a, :b].each do |name|
+    define_method(name) { super() }
+  end
+end
+</code></pre>
+<p><code>define_method</code> は呼び出しごとに<strong>独立したメソッドエントリ</strong>を作る
+(<code>original_id</code> はそれぞれ <code>:a</code> / <code>:b</code>)。ブロック本体は共有されていても、
+<code>sub.new.a</code> の super は <code>:a</code> を、<code>sub.new.b</code> の super は <code>:b</code> を検索する。
+つまり super の検索名は「本体に焼き付いた名前」ではなく
+「<strong>その呼び出しでディスパッチされたエントリの original_id</strong>」である。</p>
+<h3 id="12-alias-の場合"><a class="header" href="#12-alias-の場合">1.2 alias の場合</a></h3>
+<pre><code class="language-ruby">class Alias3 &lt; Alias2
+  alias_method :name3, :name   # Alias2#name を :name3 として登録
+end
+Alias3.new.name3   # 中の super は :name で検索される
+</code></pre>
+<p>alias が作るエントリは <code>original_id = :name</code> を保持する。<code>name3</code> で呼ばれても
+super は <strong>元の定義名 <code>:name</code></strong> で検索する。さらに <code>defined_class</code> は
+<strong>元の定義位置(Alias2)</strong> を指すため、super は Alias2 の直後
+(= Alias1)から探し始める。alias を登録した Alias3 は位置として数えない。</p>
+<h3 id="13-同じ本体がチェーンに複数回現れる場合"><a class="header" href="#13-同じ本体がチェーンに複数回現れる場合">1.3 同じ本体がチェーンに複数回現れる場合</a></h3>
+<pre><code class="language-ruby">class Base
+  def self.whatever
+    mod = Module.new do
+      def a(ary); ary &lt;&lt; "anon"; super; end
+    end
+    include mod
+  end
+  def a(ary); ary &lt;&lt; "non-anon"; end
+end
+class Twice &lt; Base
+  whatever   # 匿名モジュール 1 個目
+  whatever   # 2 個目(同じ `def a` バイトコードの再実行)
+end
+Twice.new.a([])  #=&gt; ["anon", "anon", "non-anon"]
+</code></pre>
+<p>チェーンは <code>Twice → mod2 → mod1 → Base</code>。mod2#a の super は mod1#a
+(<strong>同じ本体!</strong>)を呼び、mod1#a の super が Base#a を呼ぶ。CRuby では各
+フレームの cme が異なる <code>defined_class</code>(mod2 の ICLASS / mod1 の ICLASS)を
+持つため、同じ本体でも「チェーン上のどの出現か」を区別できる。</p>
+<h3 id="14-可視性の再宣言は位置ではない"><a class="header" href="#14-可視性の再宣言は位置ではない">1.4 可視性の再宣言は「位置」ではない</a></h3>
+<pre><code class="language-ruby">class C
+  include A   # private def derp(msg)
+  include B   # private def derp; super('...'); end
+  public :derp
+end
+</code></pre>
+<p><code>public :derp</code> は C に <strong>ZSUPER メソッドエントリ</strong>(可視性だけを上書きする
+委譲エントリ)を作る。これは定義ではないので、B#derp の super の起点は
+あくまで B の位置であり、C を位置として数えて B 自身へ再入してはならない。</p>
+<hr>
+<h2 id="2-monoruby-の表現とギャップ"><a class="header" href="#2-monoruby-の表現とギャップ">2. monoruby の表現とギャップ</a></h2>
+<p>monoruby のフレーム(LFP/CFP)が持つメソッド識別情報は <strong>FuncId のみ</strong>である。
+<code>FuncInfo</code> には名前が 1 つ焼き付く(<code>FuncInfo::name()</code>)が、これは
+「最初に登録されたときの名前」であり、上記 1.1〜1.3 の情報をすべて失う:</p>
+<ul>
+<li>define_method で複数名に登録された本体 → 名前は最初の 1 つだけ</li>
+<li>同じ <code>def</code> バイトコードの再実行 → 同一 FuncId がチェーンの複数位置に登録
+され、フレームからはどの出現か分からない</li>
+<li>alias → FuncId は共有(エントリ側に <code>original_name</code> は残る)</li>
+</ul>
+<p>一方、メソッドテーブル側(<code>MethodTableEntry</code>)には必要な情報が揃っている:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub(crate) struct MethodTableEntry {
+    owner: ClassId,
+    func_id: Option&lt;FuncId&gt;,
+    visibility: Visibility,
+    is_basic_op: bool,
+    original_name: IdentId,     // alias / define_method(Method) 経由の元定義名
+    visibility_shadow: bool,    // `public :inherited` 型の可視性シャドウ
+}
+<span class="boring">}</span></code></pre>
+<p>欠けているのは「<strong>このフレームはどのエントリでディスパッチされたか</strong>」という
+動的情報だけである。これを呼び出し元 PC から復元する。</p>
+<hr>
+<h2 id="3-呼び出し元-pccont-frame-スロット"><a class="header" href="#3-呼び出し元-pccont-frame-スロット">3. 呼び出し元 PC(cont-frame スロット)</a></h2>
+<h3 id="31-スロットの位置と書き込み"><a class="header" href="#31-スロットの位置と書き込み">3.1 スロットの位置と書き込み</a></h3>
+<p>すべての呼び出しで、callee フレームの <strong>CFP+24</strong>(<code>Cfp::caller_pc_slot</code>,
+<code>executor/frame.rs</code>)に「呼び出し元の<strong>コールサイト</strong>のバイトコード PC」が
+入る。書き込み経路は 3 つ:</p>
+<ol>
+<li><strong>VM tier</strong> — <code>push_cont_frame</code>(<code>arch/x86_64/vmgen/method_call.rs</code>):
+<code>subq rsp, 8; pushq r13; subq [rsp], 16</code>。ディスパッチ時の r13 は
+コールサイト + 16(send は 2 バイトコード単位 = 32 バイト)なので
+16 を引いてコールサイト先頭を保存する。aarch64 は最初からコールサイト PC を
+保存する。</li>
+<li><strong>JIT tier</strong>(#889) — cont-frame 16 バイト領域は cont モードの
+<code>FprSave</code> が予約済み(xmm 退避はその上に置かれる)なので、
+<code>AsmInst::ContFramePc</code> が <code>movq [rsp], pc</code>(a64: <code>str x10, [sp]</code>)を
+send / specialized send / yield / specialized yield の 4 箇所すべてで発行する。</li>
+<li><strong>invoker / native 経路</strong> — 書かれない(ゴミが残る)。読む側が必ず検証する。</li>
+</ol>
+<h3 id="32-読み出しと検証"><a class="header" href="#32-読み出しと検証">3.2 読み出しと検証</a></h3>
+<p>読み手(<code>Kernel#caller</code> と本機構)は共通のパターンで検証する
+(<code>runtime.rs::entered_by</code>):</p>
+<pre><code>slot != 0 かつ slot % 8 == 0
+→ BytecodePtr として解釈
+→ 呼び出し元フレーム(cfp.prev())の iseq の範囲内か(contains_pc)
+→ その位置のオペコードが send 系か
+</code></pre>
+<p>send 系オペコード(<code>bytecodegen/encode.rs</code>):</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>opcode</th><th>命令</th></tr>
+</thead>
+<tbody>
+<tr><td>30 / 31</td><td>メソッド呼び出し(simple / generic)</td></tr>
+<tr><td>32 / 33</td><td><strong>super</strong></td></tr>
+<tr><td>34 / 35</td><td>yield</td></tr>
+</tbody>
+</table>
+</div>
+<p>30〜33 の第 1 ワード下位 32 ビットが <strong>CallSiteId</strong> であり、
+<code>CallSiteInfo::name</code> から「<strong>呼び出しに使われた名前</strong>」が得られる。
+検証に失敗した場合(invoker 境界など)は <code>None</code> を返し、後述の
+フォールバックに落ちる。</p>
+<hr>
+<h2 id="4-解決アルゴリズムfind_super"><a class="header" href="#4-解決アルゴリズムfind_super">4. 解決アルゴリズム(<code>find_super</code>)</a></h2>
+<p><code>super</code> 実行時、ランタイムは次の 2 つを復元する
+(<code>runtime.rs::super_resolution</code>)。</p>
+<h3 id="41-呼び出し名の復元--original_name-への写像"><a class="header" href="#41-呼び出し名の復元--original_name-への写像">4.1 呼び出し名の復元 → original_name への写像</a></h3>
+<ol>
+<li>メソッドフレームを特定する。ブロック内の super は外側メソッドに属するため、
+<code>lfp.outermost()</code>(proc-method 境界で停止する外側連鎖)でメソッド LFP を
+求め、その LFP を実行している CFP まで下る。</li>
+<li>そのフレームの cont-frame スロットを <code>entered_by</code> で復号し、通常 send
+(opcode 30/31)なら CallSiteId → <code>CallSiteInfo::name</code> =
+<strong>呼ばれた名前</strong> を得る。</li>
+<li>呼ばれた名前をレシーバクラスのメソッドテーブルで引き、
+<strong>そのエントリが本当にこのフレームの本体へディスパッチするか</strong>検証する:
+<ul>
+<li><code>entry.func_id == 実行中 FuncId</code>、または</li>
+<li>エントリが proc-method ラッパー(<code>FuncKind::Proc</code>)で
+<code>proc.func_id() == 実行中 FuncId</code>
+(define_method はラッパー FuncId を登録するが、実行フレームには
+ブロック本体の FuncId が乗るため)。</li>
+</ul>
+</li>
+<li>検証に通れば <strong><code>entry.original_name</code></strong> を検索名とする。これで
+define_method 複数名(1.1: original_name = 各インストール名)と
+alias(1.2: original_name = 元定義名)の両方が CRuby と一致する。</li>
+<li>復元できない場合は従来どおり <code>FuncInfo::name()</code>(焼き付け名)に
+フォールバックする。</li>
+</ol>
+<h3 id="42-出現インデックスoccurrenceの復元"><a class="header" href="#42-出現インデックスoccurrenceの復元">4.2 出現インデックス(occurrence)の復元</a></h3>
+<p>同じ本体がチェーンに複数回現れるケース(1.3)のために、
+「このフレームはその本体の<strong>何番目の出現</strong>か」を数える
+(<code>runtime.rs::super_run</code>):</p>
+<pre><code>k = 1, cfp = メソッドフレーム
+loop:
+  entered_by(cfp) が super オペコード(32/33)で、かつ
+  呼び出し元フレームが 同じ本体(method_func_id 一致)を
+  同じレシーバ(self 一致)で実行している
+    → k += 1 して呼び出し元へ(super 連鎖の 1 ホップ)
+  通常 send → 連鎖の底。 (k, そのコールサイト, exact=true)
+  別本体からの super → (k, なし, exact=true)
+  復号失敗 → (k, なし, exact=false)
+</code></pre>
+<p>super 連鎖であることをオペコードで確認するのが重要で、単なる再帰呼び出し
+(<code>obj.a</code> を a の中から呼ぶ)は連鎖を切る。再帰はディスパッチをチェーン先頭から
+やり直すので、出現カウントもリセットされるのが正しい。</p>
+<h3 id="43-チェーン検索check_super_at"><a class="header" href="#43-チェーン検索check_super_at">4.3 チェーン検索(<code>check_super_at</code>)</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>check_super_at(self_class, current_fid, name, occurrence: Option&lt;usize&gt;)
+<span class="boring">}</span></code></pre>
+<p>チェーンを歩き、<strong>定義位置</strong>を <code>body_dispatched_by</code> で判定する:</p>
+<blockquote>
+<p>クラス/モジュール m の<strong>自身の</strong>メソッドテーブルが <code>name</code> を実行中本体へ
+ディスパッチする(直接、または proc-method ラッパー経由)。ただし
+<code>visibility_shadow</code> エントリは除外。</p>
+</blockquote>
+<ul>
+<li>名前で引く(FuncId の登録位置全部ではなく)ことで alias 登録先(1.2)を
+位置から除外する。</li>
+<li><code>visibility_shadow</code> の除外が 1.4 に対応する。owner 登録の有無では判定
+できない(同じクラスへの <code>alias_method</code> が owner を汚染するため)。</li>
+</ul>
+<p><code>occurrence = Some(k)</code> なら <strong>k 番目</strong>の定義位置から先を検索し、見つかった
+ものを(<strong>同一 FuncId でも</strong>)返す — これが 1.3 の「同じ本体へ super する」
+挙動である。<code>None</code>(復号失敗時)なら従来のヒューリスティック
+「同一 FuncId が見つかったら次の出現まで歩き続ける」で前進を保証する。</p>
+<p>名前ベースの位置が 1 つも見つからない場合(stale な可視性シャドウが
+差し替え済みの旧本体をディスパッチした場合など)は、#890 以前の
+<strong>owner 登録ベースの走査</strong>にフォールバックし、それも失敗したら
+レシーバクラスからの直接検索(UnboundMethod#bind 対応)を試す。</p>
+<hr>
+<h2 id="5-キャッシュとの整合"><a class="header" href="#5-キャッシュとの整合">5. キャッシュとの整合</a></h2>
+<p>super の解決結果はコールサイトのインラインキャッシュに
+(レシーバクラス, FuncId) で刻まれるが、上記のとおり super の正解は
+<strong>フレーム依存</strong>になり得る(同一コールサイト・同一レシーバクラスでも、
+呼び名や出現位置で行き先が変わる)。そのため:</p>
+<ul>
+<li><strong>VM</strong>: <code>find_super</code> が cacheable フラグを返す。
+<code>!is_block_style &amp;&amp; super_occurrences(...) &lt;= 1</code> のときだけキャッシュ可。
+不可なら <code>find_method</code> はキャッシュタグに <strong>ClassId 0</strong> を返す
+(<code>ClassId</code> は <code>NonZeroU32</code> なので実クラスと一致せず、そのサイトは
+毎回スローパスで再解決される)。</li>
+<li><strong>JIT</strong>(<code>jitgen/compile/method_call.rs</code>): コンパイル時に同じ条件
+(mother FuncId が block-style、または出現数 &gt; 1)を検出したら、その
+super サイトは <strong>plain-deopt</strong>(VM 実行)にする。<code>Recompile</code> にすると
+VM がキャッシュを温めない(タグ 0)ため再コンパイルが収束しない。</li>
+<li>コンパイル時/キャッシュ更新用の <code>check_super</code>(3 引数版)は、出現数 &gt; 1
+なら <code>None</code> を返して辞退する。</li>
+</ul>
+<p><code>defined?(super)</code> (<code>defined_super</code>) も同じ <code>super_resolution</code> +
+<code>check_super_at</code> を使い、実行時セマンティクスと一致させている。</p>
+<hr>
+<h2 id="6-既知の限界"><a class="header" href="#6-既知の限界">6. 既知の限界</a></h2>
+<ul>
+<li><strong>invoker 境界</strong>: <code>Method#call</code> / <code>send</code> / Fiber などで入ったフレームは
+cont-frame スロットが無効なので、呼び出し名の復元も出現カウントも
+フォールバックに落ちる(焼き付け名 + 旧ヒューリスティック)。
+define_method 複数名のメソッドを <code>send</code> で呼ぶと、super の検索名は
+焼き付け名になる。</li>
+<li><strong>可視性シャドウの staleness</strong>: <code>public :derp</code> はシャドウエントリに
+継承先の FuncId をコピーするため、その後に継承元が再定義されると
+シャドウが旧本体をディスパッチする(CRuby の ZSUPER エントリは委譲なので
+この問題がない)。可視性を再宣言すればスーパークラス解決で再同期される。
+super 解決側は owner-walk フォールバックで旧本体からでも前進できる。</li>
+<li>出現カウントは「連続する super 連鎖」を前提にしており、途中に
+invoker 境界が挟まると <code>exact=false</code> となり旧ヒューリスティックに
+切り替わる(過小カウントによる無限 super ループを防ぐため)。</li>
+</ul>
+<h2 id="7-関連-pr"><a class="header" href="#7-関連-pr">7. 関連 PR</a></h2>
+<ul>
+<li>#887 — VM tier がコールサイト PC を cont-frame スロットに保存、
+<code>Kernel#caller</code> の行番号解決</li>
+<li>#888 — specialized JIT 呼び出しの lazy 解決(#889 で置換)</li>
+<li>#889 — JIT/specialized 呼び出しも eager にコールサイト PC を保存
+(<code>AsmInst::ContFramePc</code>)</li>
+<li>#890 — 本書の super 解決機構</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/cref.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/encoding_char_iteration_design.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/cref.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/encoding_char_iteration_design.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

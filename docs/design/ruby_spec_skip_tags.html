@@ -1,0 +1,556 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>ruby/spec hang countermeasures (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-d8eaad21.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-e1173681.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="rubyspec-ハング対策-skiptxt--tags-移行"><a class="header" href="#rubyspec-ハング対策-skiptxt--tags-移行">ruby/spec ハング対策: <code>skip.txt</code> → <code>tags/</code> 移行</a></h1>
+<p>monoruby が ruby/spec スイートのハングをどう回避しているか、そして粗い
+ファイル単位スキップリストを「本当に救えない5ファイル」まで絞り込んだ監査の
+記録。<code>#899</code> 以降の単一スレッド化ランタイムを前提とする（最新反映時点）。</p>
+<blockquote>
+<p><strong>更新（重要・経緯）: tags が fast-path で効かなかった原因はタグの <em>置き場所</em>
+のずれで、CI 側の1行修正で解消。tags を復活し <code>skip.txt</code> は5ファイルへ戻した。</strong></p>
+<p>一度は「rubyspec-stats の fast-path が tags を適用しない」と判断し、ハングする
+6ファイルを <code>skip.txt</code> へ戻した（#903）。しかし真因は別だった:</p>
+<ul>
+<li>fast-path は既に <code>mspec ci</code> を使っており、<code>mspec ci</code> は <code>fails</code>/<code>critical</code>/
+<code>unstable</code>/<code>incomplete</code>/<code>unsupported</code> タグを既定で除外する（＝タグ適用モード
+自体は有効）。</li>
+<li>mspec は各 spec のタグファイルパスを spec パスから <code>tags_patterns</code> で導出する。
+config 無し（<code>-B</code> 無し）だと <strong>組み込み既定</strong> <code>[[%r(spec/), 'spec/tags/'], [/_spec.rb$/, '_tags.txt']]</code> が使われる。rubyspec-stats は ruby/spec を
+<code>spec/ruby/</code> に clone するので、<code>spec/ruby/core/io/select_spec.rb</code> の導出先は
+<strong><code>spec/tags/ruby/core/io/select_tags.txt</code></strong>（<code>ruby/</code> セグメント入り）になる。</li>
+<li>ところが CI は monoruby の tags を <code>spec/tags/</code>（＝<code>spec/tags/core/...</code>）へ
+コピーしていた。<strong><code>ruby/</code> 1セグメント分ずれて</strong>タグが見つからず、除外されず、
+ハングしていた。</li>
+</ul>
+<p>修正（rubyspec-stats/.github/workflows/ci.yml、コピー先を <code>spec/tags/ruby/</code> に）:</p>
+<pre><code class="language-sh">mkdir -p spec/tags/ruby
+[ -d monoruby-repo/spec/tags ] &amp;&amp; cp -R monoruby-repo/spec/tags/. spec/tags/ruby/ || true
+</code></pre>
+<p>これで <code>mspec ci</code> が <code>spec/tags/ruby/&lt;cat&gt;/&lt;name&gt;_tags.txt</code> を読み、ハングする
+example だけが除外され、fast-path が 90 秒予算内で完走する（fallback 不要）。
+したがって tags を復活し（<code>argf/read</code>, <code>argf/readlines</code>, <code>io/copy_stream</code>,
+<code>io/select</code>, <code>socket tcp_/udp_server_loop</code>）、<code>skip.txt</code> からは対応6行を外して
+5ファイル（救えない CRASH/プロセス死のみ）へ戻した。ファイル単位 skip では
+落ちていた <em>ハングしない</em> example（<code>io/copy_stream</code> の63件など）が統計へ復帰する。
+<strong>この CI 側修正と本コミットは同時にデプロイすること</strong>（CI 未修正のまま skip を
+外すと fast-path が再びハングする）。</p>
+</blockquote>
+<h2 id="背景"><a class="header" href="#背景">背景</a></h2>
+<p>外部の <strong>rubyspec-stats</strong> CI が ruby/spec を monoruby に対して定期実行し、
+passing/total の推移を追跡している。<em>ハングする</em>（返ってこない）spec は
+カテゴリ実行全体を止めてしまうため除外が必要。除外手段は2つある。</p>
+<ul>
+<li><strong><code>spec/skip.txt</code></strong> — <strong>ファイル単位</strong>の粗い除外リスト
+（<code>spec/ruby/core/thread/backtrace_spec.rb</code> のようなパス）。ファイルごと
+除外すると<em>全 example</em> が分子・分母の両方から落ち、真の合格率を過小評価する。</li>
+<li><strong><code>spec/tags/</code></strong> — mspec ネイティブの <strong>example 単位</strong>タグ機構。spec ファイル
+<code>&lt;cat&gt;/&lt;name&gt;_spec.rb</code> に対し、mspec は <code>tags/&lt;cat&gt;/&lt;name&gt;_tags.txt</code> を
+自動読み込みする。<code>fails:&lt;full description&gt;</code> の1行で、その example 1件だけを
+<code>mspec ci</code> が除外し、ファイル内の残りは実行・カウントされる。</li>
+</ul>
+<p>本移行の目的: <em>少数</em>の特定 example だけでハングするファイルについて、
+ファイル単位スキップを example 単位の <code>fails:</code> タグへ置き換え、生き残る
+example を統計へ復帰させること。</p>
+<h3 id="タグファイル形式"><a class="header" href="#タグファイル形式">タグファイル形式</a></h3>
+<p>1行1タグ: <code>&lt;class&gt;:&lt;full description&gt;</code>。</p>
+<ul>
+<li>
+<p><code>&lt;class&gt;</code> — <code>fails:</code> を使う（<code>mspec ci</code> が自動除外）。</p>
+</li>
+<li>
+<p><code>&lt;full description&gt;</code> — ネストした <code>describe</code>/<code>context</code> 文字列と <code>it</code> 文字列を
+半角スペースで連結したもの。例:</p>
+<pre><code># spec/tags/core/io/select_tags.txt
+fails:IO.select returns supplied objects when they are ready for I/O
+fails:IO.select returns the pipe read end in read set if the pipe write end is closed concurrently
+</code></pre>
+</li>
+</ul>
+<h3 id="mspec-のタグパス解決"><a class="header" href="#mspec-のタグパス解決">mspec のタグパス解決</a></h3>
+<p><code>spec/default.mspec</code> の <code>tags_patterns</code> により、spec リポジトリのルート基準で
+<code>core/thread/backtrace_spec.rb</code> → <code>tags/core/thread/backtrace_tags.txt</code> と
+変換される。rubyspec-stats CI は monoruby の <code>spec/tags/</code> を spec チェックアウト
+側へ配置して mspec に読ませる。ローカル検証では symlink で同じ配線を再現する。</p>
+<pre><code class="language-sh">ln -sfn /path/to/monoruby/spec/tags /path/to/spec/tags
+</code></pre>
+<h2 id="bisect-手法ローカル"><a class="header" href="#bisect-手法ローカル">bisect 手法（ローカル）</a></h2>
+<p>CI には “Bisect monoruby core hang” ワークフローがあるが、監査全体は
+現 master バイナリ・sibling の <code>spec/</code>・<code>mspec/</code> チェックアウト・timeout が
+あればローカルで再現できる。</p>
+<p><strong>重要:</strong> bisect は必ず<em>現 master</em> バイナリで行うこと。インストール済みの
+リリースは関連修正より古い場合がある。例えば <code>#899</code>（「ruby/spec のハングを
+止めるため単一スレッドの最小面へ削減」）は多くのハングを解消したため、古い
+バイナリはハングを見落とすと同時に、無いはずのハングを作り出す。</p>
+<pre><code class="language-sh">cargo install --path monoruby --force        # 現 master バイナリ
+</code></pre>
+<p>ファイルごとに specdoc フォーマッタ + timeout で実行する。specdoc は各 example
+の説明を<em>実行前に</em>出力するので、<strong>timeout 直前の最後の <code>- …</code> 行がハングしている
+example</strong> になる。</p>
+<pre><code class="language-sh">timeout 45 mspec run -t monoruby -fs &lt;cat&gt;/&lt;name&gt;_spec.rb
+</code></pre>
+<p>exit code による分類:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>exit</th><th>意味</th></tr>
+</thead>
+<tbody>
+<tr><td><code>0</code> / <code>1</code></td><td>完走（1 = failures/errors あり。それでも実行は完了）</td></tr>
+<tr><td><code>124</code></td><td><strong>ハング</strong> — <code>timeout</code> 発火。最後の <code>- …</code> 行が犯人</td></tr>
+<tr><td><code>134</code> (SIGABRT)</td><td>monoruby が abort（<code>extern "C"</code> 境界での Rust panic）</td></tr>
+<tr><td><code>143</code> (SIGTERM)</td><td>プロセスがシグナルで死亡（シグナル配送系 spec）</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>複数</strong>の example がハングするファイルは反復する: 見つけた example の
+<code>fails:</code> タグを追加し、タグを有効にして再実行
+（<code>mspec run -fs --excl-tag fails …</code> または <code>mspec ci …</code>）して次を炙り出し、
+ファイルが完走するまで繰り返す。</p>
+<blockquote>
+<p>バッファリングの罠: mspec を <code>timeout</code> 下で <code>grep</code>/<code>tail</code> にパイプすると、
+SIGTERM でバッファ済み stdout が失われることがある。ファイルへリダイレクト
+してから読み直すこと。</p>
+</blockquote>
+<h2 id="監査結果元の-skiptxt-40ファイル"><a class="header" href="#監査結果元の-skiptxt-40ファイル">監査結果（元の <code>skip.txt</code> 40ファイル）</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>分類</th><th>件数</th><th>処置</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>HANG</strong>（少数 example）</td><td>6</td><td>5件を <code>fails:</code> タグへ移行、1件は skip 維持</td></tr>
+<tr><td><strong>COMPLETED</strong>（もうハングしない）</td><td>30</td><td>skip から除去、タグ不要</td></tr>
+<tr><td><strong>CRASH — SIGABRT</strong></td><td>1</td><td>skip 維持（monoruby バグ）</td></tr>
+<tr><td><strong>CRASH — SIGTERM</strong></td><td>3</td><td>skip 維持（シグナル配送）</td></tr>
+</tbody>
+</table>
+</div>
+<p>大きな COMPLETED バケットが最大の発見: <strong><code>skip.txt</code> は陳腐化していた</strong> —
+<code>#899</code> 以降、リストの4分の3はもうハングしない（代わりに即エラー/失敗で完走）
+ため、盲目的に skip 維持することが合格率を過小評価していた。</p>
+<h3 id="タグへ移行6ファイル"><a class="header" href="#タグへ移行6ファイル">タグへ移行（6ファイル）</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>spec ファイル</th><th>タグ付けした example</th></tr>
+</thead>
+<tbody>
+<tr><td><code>core/argf/read_spec.rb</code></td><td><code>ARGF.read reads the contents of a special device file</code>（<code>/dev/zero</code> を <code>read(100)</code> — 長さ制限を無視して無限読み込み）</td></tr>
+<tr><td><code>core/argf/readlines_spec.rb</code></td><td><code>ARGF.readlines returns an empty Array when end of stream reached</code></td></tr>
+<tr><td><code>core/io/copy_stream_spec.rb</code></td><td><code>IO.copy_stream with a destination that does partial reads calls #write repeatedly on the destination Object</code></td></tr>
+<tr><td><code>core/io/select_spec.rb</code></td><td><code>IO.select returns supplied objects when they are ready for I/O</code> <strong>と</strong> <code>IO.select returns the pipe read end in read set if the pipe write end is closed concurrently</code></td></tr>
+<tr><td><code>library/socket/socket/tcp_server_loop_spec.rb</code></td><td><code>Socket.tcp_server_loop when a connection is available yields a Socket and an Addrinfo</code></td></tr>
+<tr><td><code>library/socket/socket/udp_server_loop_spec.rb</code></td><td><code>Socket.udp_server_loop when a connection is available yields the message and a Socket::UDPSource</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>各ファイルは <code>mspec ci</code>（<code>fails:</code> タグを除外）で完走し、残りのハングが無いことを
+検証済み。</p>
+<h3 id="skiptxt-に維持5ファイル"><a class="header" href="#skiptxt-に維持5ファイル"><code>skip.txt</code> に維持（5ファイル）</a></h3>
+<p>タグでは救えないもの — プロセスごと死ぬか、全 example がハングする:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>spec ファイル</th><th>理由</th></tr>
+</thead>
+<tbody>
+<tr><td><code>core/enumerator/new_spec.rb</code></td><td><code>builtins::array::eq</code>（<code>Array#==</code>）での非巻き戻し Rust panic → SIGABRT。隠すのではなく修正すべき monoruby バグ。</td></tr>
+<tr><td><code>core/exception/signal_exception_spec.rb</code></td><td>実際にシグナルを配送 → SIGTERM でプロセス死</td></tr>
+<tr><td><code>core/exception/signm_spec.rb</code></td><td>先頭 example で死亡（SIGTERM）</td></tr>
+<tr><td><code>core/exception/signo_spec.rb</code></td><td>先頭 example で死亡（SIGTERM）</td></tr>
+<tr><td><code>library/expect/expect_spec.rb</code></td><td>6 example 全てが <code>IO#expect</code> でブロック。全部タグ付けはファイルごと skip と等価</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="解除した30件の検証"><a class="header" href="#解除した30件の検証">解除した30件の検証</a></h2>
+<p><code>mspec ci</code> はカテゴリ内のファイルを<strong>1プロセス</strong>で順次実行するため、以前
+スキップされていたファイルがグローバル状態（fd, <code>at_exit</code>, シグナル trap,
+Mutex/Queue/Thread の状態）を残し、<em>後続</em>ファイルをハングさせる恐れがある。
+これが起きないことを2段階で確認した。</p>
+<ol>
+<li><strong>解除30ファイルを1つの <code>mspec ci</code> プロセスで実行</strong> — 約35秒で完走、
+815 examples、ハング0。</li>
+<li><strong>状態依存が強いカテゴリの全体実行</strong>（未スキップの隣接 spec も込み）:
+<code>core/thread</code>（全53ファイル）・<code>core/mutex</code>・<code>core/queue</code>・
+<code>core/sizedqueue</code> — 全て完走、ハングなし。</li>
+</ol>
+<p>単一スレッド化（<code>#899</code>）により残留バックグラウンドスレッド起因のハングは
+起こりにくく、この結果と整合する。I/O 依存の非常に大きいカテゴリ
+（<code>core/io</code>・<code>core/kernel</code>・<code>core/file</code>）は全体実行していない — 無関係な
+ブロッキング spec が誤検知ハングを生むため。該当ファイル群は検証(1)で
+カバー済み。</p>
+<h2 id="最終状態"><a class="header" href="#最終状態">最終状態</a></h2>
+<ul>
+<li><code>spec/skip.txt</code>: <strong>空</strong>（0 ファイル）。かつて「救えない」としていた5ファイルも、
+crash/hang の原因は <em>特定の1〜数 example</em> に限られることを突き止め、その example
+だけを <code>fails:</code> タグで除外すれば残りは完走することを確認したため、すべて tags へ
+移行した。</li>
+<li><code>spec/tags/</code>: <strong>5 ファイル</strong>。各ファイルで crash/hang する example のみ除外:
+<ul>
+<li>I/O 系ブロッキング（tag 適用で fast-path 完走）: <code>core/io/copy_stream</code>、
+<code>core/io/select</code>（2件）、<code>library/socket/socket/{tcp,udp}_server_loop</code>、
+<code>library/expect/expect</code>（<code>IO#expect</code> がブロックする4件のみ。閉じた IO / EOF の
+2件は即返るので除外しない）。</li>
+<li>（<code>core/enumerator/new</code> は issue #905 の <code>as_array</code> panic を根治したため tag を
+撤去。<code>#yield returns nil</code> は現在 pass する。）</li>
+<li>（<code>core/exception/{signal_exception,signm,signo}</code> は signal handling 実装
+（SIGTERM 等 → <code>SignalException</code> 変換、未捕捉時は SIG_DFL 再送でシグナル死）に
+より tag を撤去。<code>signal_exception</code> は16 example 全 pass、<code>signm</code>/<code>signo</code> も
+pass する。）</li>
+<li>（<code>core/argf/{read,readlines}</code> は ARGF の修正により tag を撤去。真因は2点:
+(1) <code>ARGF#read</code> が長さ引数を無視して EOF まで読むため <code>/dev/zero</code> で無限読み
+（メモリ無制限増加 → 環境により HANG または OOM/abort）。<code>read(length, outbuf)</code> を CRuby 準拠に実装（ファイル境界をまたぎ length で停止、EOF で
+nil、length 0 で “”）。(2) ARGV のファイルを消費し尽くした後に <code>advance</code> が
+<code>$stdin</code> へフォールバックし、<code>ARGF.read; ARGF.readlines</code> が stdin 読みで
+永久ブロック。ストリーム管理を <code>__stream</code>/<code>__finish_stream</code> に統一し、消費
+後は exhausted（stdin フォールバック無し）とした。<code>read_spec</code> は 16 example
+中 failure 1（エンコーディング別件）、<code>readlines_spec</code> は全 pass。）</li>
+<li>CI 側で tags のコピー先を <code>spec/tags/ruby/</code> に修正済み（上部「更新」参照）なので
+<code>mspec ci</code> がタグを読み、crash/hang する example だけ除外して fast-path が完走する。</li>
+<li><code>library/cgi/unescapeURIComponent</code> は報告にあったが実際はハングしない
+（約0.35秒）ので対象外。</li>
+</ul>
+</li>
+</ul>
+<h2 id="フォローアップ"><a class="header" href="#フォローアップ">フォローアップ</a></h2>
+<ul>
+<li><del><strong><code>core/enumerator/new</code> の <code>as_array</code> panic</strong>（issue #905）</del> — <strong>修正済み</strong>。
+真因は2点: (1) generator の駆動（<code>generator_yield_values</code>）が resume 時にも
+<code>yielder</code> を渡していたため <code>Yielder#yield</code> が nil ではなく Yielder 自身を返し、
+ユーザ側（<code>r &lt;&lt; y.yield(1)</code>）へ Yielder が漏れていた。(2) <code>Yielder</code> が <code>Array</code> の
+サブクラスで、継承した <code>Array#inspect</code> 等が非配列の Yielder に <code>Value::as_array</code>
+を実行して非巻き戻し panic → abort。resume 値を <code>nil</code> にし、<code>Yielder</code> の親クラスを
+<code>Object</code> に変更（CRuby 準拠）。tag は撤去し <code>#yield returns nil</code> は pass する。</li>
+<li><del><strong>SIGTERM → <code>SignalException</code> 変換</strong></del> — <strong>実装済み</strong>。CRuby と同一の
+デフォルト変換セット（HUP/INT/QUIT/ALRM/TERM/USR1/USR2）を async ハンドラで
+受けて poll 点で <code>SignalException</code>（INT は <code>Interrupt</code>）として raise。未捕捉時は
+<code>SIG_DFL</code> を復元して自己再送し、プロセスは<em>そのシグナルで</em>死ぬ（<code>$?.signaled?</code> /
+<code>termsig</code> が CRuby 準拠。Interrupt のみレポートを出力、素の SignalException は
+無音 — CRuby と同じ）。自分宛て <code>Process.kill</code> は kill 内で同期的に raise。
+<code>Kernel#sleep</code> は nanosleep + EINTR ポーリングで割り込み可能化。
+<code>pending_signals</code> ビットマップはプロセスグローバルへ移動（シグナルはプロセス
+資源のため。複数 Codegen 環境での取りこぼしを根治）。付随して
+<code>IO.popen(文字列)</code> のシェル経由をメタ文字必要時のみに限定（シグナル死の
+<code>signaled?</code>/<code>termsig</code> を保持。POSIX シェル組み込みは従来どおり sh 経由）、
+バッククォートが <code>$?</code> を設定するように修正。3件の tag を撤去。
+<strong>既知の限界</strong>: Rust が EINTR を内部再試行するブロッキング read/write 中は
+1発の SIGTERM では死なない（pending bit は立つが poll に到達しない）。健全な
+実行は即変換されるが、真にハングしたプロセスの kill には <code>timeout -k</code>
+（KILL フォールバック）を推奨。</li>
+<li><del><strong><code>core/io</code> の fd 二重クローズ crash</strong></del> — <strong>修正済み</strong>。原因は
+<code>IO.new(other_io.fileno)</code> / <code>IO.open(fd)</code> / <code>File.open(fd)</code> が、既に別の
+monoruby IO が所有する fd を <em>2つ目の</em> 閉じる <code>OwnedFd</code> として包み、
+Drop 時に二重 <code>close(2)</code> して Rust std の IO-safety abort を踏むこと。
+スレッドローカルの所有 fd 集合（<code>OWNED_FDS</code>）を導入し、既に所有済みの fd を
+<code>IO.new</code>/<code>open</code> した場合は <em>借用</em>（<code>autoclose = false</code>、<code>into_raw_fd</code> で閉じずに
+解放）とすることで、閉じるのは元の所有者だけになるようにした。fileno の同一性は
+保たれる。これにより <code>core/io</code>（103ファイル / 1483 example）・<code>core/file</code>・
+<code>core/kernel</code> がカテゴリ一括実行で crash せず完走するようになった。</li>
+</ul>
+<h2 id="グリーンスレッド導入後のタイムアウト-tags2026-07-追加--撤去済み"><a class="header" href="#グリーンスレッド導入後のタイムアウト-tags2026-07-追加--撤去済み">グリーンスレッド導入後のタイムアウト tags（2026-07 追加 → 撤去済み）</a></h2>
+<blockquote>
+<p><strong>2026-07 更新</strong>: 以下の 5 タグ（+ <code>kernel/exit</code>）は、タイムスライス・
+プリエンプション（doc/threads.md §8）とカーネルブロッキング
+syscall のネイティブワーカーオフロード（同 §9）の実装により
+<strong>ハングしなくなったため撤去した</strong>。一部の example は依然セマンティクス
+差で fail/error するが、それは統計に出すのが rubyspec-stats の方針
+（tags はハング専用）。以下は当時の記録として残す。</p>
+</blockquote>
+<p>限定的マルチスレッド（協調グリーンスレッド、M:1）の導入で spec-core モニタの
+5ファイルが 60 秒のファイル予算を超えるようになり、rubyspec-stats CI が失敗した。
+example 単位で切り分け、各ファイルとも<strong>犯人1例</strong>を <code>fails</code> tag で除外
+（除外後は全ファイルが数秒で完走）。いずれも既知の制限に帰着する:</p>
+<ul>
+<li><code>core/thread/list_tags.txt</code> — <code>Thread.list returns instances of Thread and not null or nil values</code>: <code>begin … end while spawner.alive?</code> という
+<strong>ブロッキング呼び出しゼロのループ</strong>で main が回り続け、協調スケジューリング
+では spawner スレッドに永遠に CPU が渡らない。タイムスライス・
+プリエンプション（SIGALRM watchdog → poll 点で強制 yield、doc/threads.md §8-1）
+の実装で解除できる。</li>
+<li><del><code>core/thread/report_on_exception_tags.txt</code></del> — <strong>解除済み</strong>。真因は 2 つ:
+(1) <code>ThreadInner::pending</code> が 1 スロットで <code>#kill</code> が直前の <code>#raise</code> を
+上書きしていた → CRuby の <code>pending_interrupt_queue</code> と同じ FIFO
+<code>VecDeque</code> に変更(raise が先に配達され、スレッドは例外で死ぬ)。
+(2) 「ハング」の正体はクラスメソッド <code>Thread.report_on_exception=</code> の欠落 —
+upstream <code>spec_helper.rb</code> が「true で raise する shim」を注入しスレッド本体が
+即死、<code>Thread.pass until ready …</code> が無限ループしていた → クラスレベル
+アクセサを追加。あわせてレポート出力を Ruby レベル <code>$stderr</code> 経由の
+CRuby 形式(<code>#&lt;Thread:0xADDR run&gt; terminated with exception …</code>)に変更
+(mspec の output matcher は <code>$stderr</code> 差し替えで捕捉するため必須)。</li>
+<li><code>core/mutex/lock_tags.txt</code> — <code>Mutex#lock does not raise deadlock if a fiber's attempt to lock was interrupted</code>: fiber 内の <code>Mutex#lock</code> 待ちへの割り込み
+（<code>Thread#raise</code>）で待機が解けず永久ブロック。fiber が thread の代理で park
+する経路の interrupt 配送が未対応。</li>
+<li><code>core/file/open_tags.txt</code> — <code>File.open on a FIFO opens it as a normal file</code>:
+FIFO の <code>open(2)</code> は相手側が開くまで<strong>カーネル内でブロック</strong>する。M:1 では
+writer スレッドの open がプロセス全体を止め、reader スレッドが走れず
+デッドロック。<code>O_NONBLOCK</code> オープン + fd ポーラ待ちのエミュレーションが
+必要（blocking_io_region は開いた後の read/write のみカバー）。</li>
+<li><code>core/file/flock_tags.txt</code> — <code>File#flock blocks if trying to lock an exclusively locked file</code>: サブプロセスが保持する排他ロックへの <code>flock</code> 待ちが
+約 55 秒（内部期待のタイムアウトまで）ブロックし、単独でファイル予算を
+ほぼ使い切る。<code>flock(2)</code> の LOCK_NB + リトライによるスケジューラ統合で
+解除できる。</li>
+</ul>
+<h2 id="タイムアウトの自動検知自動タグ付けspec-core-モニタ"><a class="header" href="#タイムアウトの自動検知自動タグ付けspec-core-モニタ">タイムアウトの自動検知・自動タグ付け（spec-core モニタ）</a></h2>
+<p>上記のような「グリーンスレッド化で新たにハングする example」を手作業で
+切り分ける運用を自動化した。仕組み（<code>.github/workflows/spec-core.yml</code> +
+<code>.github/scripts/bisect-spec-timeouts.sh</code>）:</p>
+<ol>
+<li><strong>モニタ自身が tags を適用</strong>: リポジトリの <code>spec/tags/</code> を ruby/spec
+チェックアウトへコピーし、全ラン <code>--excl-tag fails</code> で実行する。
+タグ済みのハング example が毎回 60 秒予算を食い潰すのを防ぐ
+（統計上は tagged として除外カウントされる）。</li>
+<li><strong>検知</strong>: 従来どおり、ファイル単位 <code>timeout -k 5 60</code> で完走しなかった
+ファイルが <code>timeouts.csv</code> に記録される。</li>
+<li><strong>同定</strong>: <code>bisect-spec-timeouts.sh</code> が各タイムアウトファイルの example
+一覧を <code>mspec --dry-run -f s</code> で取得し（describe の連結 = tag 名）、
+1 example ずつ <code>timeout -k 5 60</code> 付きで個別実行。
+<ul>
+<li>exit 124/137 → <code>hang</code>（真のハング）</li>
+<li>単独で 30 秒以上 → <code>slow</code>（単独で予算を圧迫する近予算バーナー）</li>
+<li>どちらも該当なし → <code>cumulative-only</code>（合算超過。タグ付けせず
+予算見直し対象として報告のみ）</li>
+<li>病的ケース対策: dry-run にも 60 秒、1 ファイルの bisect に
+900 秒の上限。</li>
+</ul>
+</li>
+<li><strong>タグ更新と PR</strong>: 見つかった culprit を <code>spec/tags/&lt;cat&gt;/&lt;file&gt;_tags.txt</code>
+へ重複排除で追記し、差分があれば固定ブランチ <code>auto/spec-timeout-tags</code>
+に commit して PR を自動作成する（既存 PR があれば force-push +
+body 更新で同じ PR が更新される＝冪等）。<strong>マージは人間が判断する</strong>:
+tag が妥当（既知の制限）か、退行として修正すべきかのレビューを挟む。
+結果テーブルはラン summary・PR body・artifact
+（<code>timeout_culprits.{csv,md}</code>）に出力される。</li>
+</ol>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/c_extention.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/progress_2025-2026.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/c_extention.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/progress_2025-2026.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>
