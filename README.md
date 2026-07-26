@@ -78,7 +78,7 @@ Monthly highlights of improvements since January 2026 (with representative PRs).
 
 - Written in Rust from scratch. No dependencies on any other Ruby implementations.
 - Fast. Currently, monoruby is comparable to ruby3.4.1+YJIT in the optcarrot benchmark.
-- Hand-written original parser.
+- Parses Ruby source with [prism](https://github.com/ruby/prism), the official Ruby parser (the original hand-written parser was replaced in May 2026).
 - Register-based bytecode.
 - Bytecode executor (virtual machine) emitting machine code directly, for both x86-64 and aarch64 (Apple Silicon).
 - A compact and fast just-in-time compiler with full backends for x86-64 and aarch64. (internally using self-made dynamic assembler [monoasm](https://github.com/sisshiki1969/monoasm))
@@ -166,6 +166,8 @@ Inputs and outputs:
 | `ruby-version`              | output | `RUBY_VERSION` reported by the installed monoruby                      |
 
 ## Benchmark
+
+Up-to-date benchmark results (yjit-bench, measured on every push to master) and a ruby/spec compliance dashboard are published on [the project portal](https://sisshiki1969.github.io/monoruby/). The numbers below are from older one-off measurements.
 
 ### 1. Optcarrot banechmark
 
