@@ -58,6 +58,12 @@
     box-shadow: 0 2px 6px rgba(21, 101, 192, 0.25);
   }
   .cta .primary-blue:hover { background: var(--accent-blue-dark); }
+  .cta .primary-purple {
+    background: #6a1b9a;
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(106, 27, 154, 0.25);
+  }
+  .cta .primary-purple:hover { background: #4a148c; }
   .cta .secondary {
     background: #f0f0f0;
     color: var(--fg);
@@ -98,6 +104,7 @@
 <body>
 
 <nav class="cta">
+  <a class="primary-purple" href="./docs/">Documentation →</a>
   <a class="primary-blue" href="./bench/">Performance vs YJIT (x86-64) →</a>
   <a class="primary-blue" href="./bench-arm64/">Performance vs YJIT (aarch64) →</a>
   <a class="primary" href="./spec/">ruby/spec compliance dashboard →</a>
