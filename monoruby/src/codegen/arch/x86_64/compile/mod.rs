@@ -201,16 +201,16 @@ impl Codegen {
                 deferred_src,
             } => {
                 let offset = store[callee_fid].get_offset();
-                // D1 source-routed: the forwarded count is the statically
-                // known caller arg count; missing optional slots are
-                // None-filled (gate guarantees req <= lead+len <= reqopt).
-                // Eager: gate guarantees a req-only callee with
-                // req_num() >= lead_num, so the length guard is exact.
-                let (expected_len, none_fill) = if let Some((_, len)) = deferred_src {
-                    let n = len as usize;
-                    (n, store[callee_fid].reqopt_num() - lead_num - n)
-                } else {
-                    (store[callee_fid].req_num() - lead_num, 0)
+                // D1 source-routed: the whole bind is a compile-time
+                // constant (see `forwarded_deferred_layout`). Eager: the
+                // gate guarantees a plain req-only callee with
+                // `req_num() >= lead_num`, so the length guard is exact.
+                let layout = deferred_src.map(|(_, len)| {
+                    store[callee_fid].forwarded_deferred_layout(lead_num, len as usize)
+                });
+                let expected_len = match &layout {
+                    Some(l) => l.from_src,
+                    None => store[callee_fid].req_num() - lead_num,
                 };
                 self.jit_set_arguments_forwarded(
                     callid,
@@ -219,7 +219,7 @@ impl Codegen {
                     args,
                     lead_num,
                     expected_len,
-                    none_fill,
+                    layout,
                     recv,
                     kwrest_guard,
                     deferred_src,

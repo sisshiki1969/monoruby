@@ -527,12 +527,12 @@ impl Codegen {
     /// the fixed temps below avoid it.
     pub(super) fn a64_set_arguments_forwarded_deferred(
         &mut self,
+        offset: usize,
         recv: SlotId,
         args: SlotId,
         lead_num: usize,
-        expected_len: usize,
-        none_fill: usize,
         src: SlotId,
+        layout: ForwardedLayout,
     ) -> bool {
         // Fixed lowering temps (x9..x15 are never GP-mapped; x10 is the
         // internal scratch of `a64_frame_load/store`, so it is left free):
@@ -543,9 +543,47 @@ impl Codegen {
         const VAL: u32 = 12;
         const CALLER_FP: u32 = 11;
         let lfp = GP::R14.a64().0; // x22: f's own LFP
+        let expected_len = layout.from_src;
+        // A `*rest` callee gets its `Array` built straight off the
+        // caller's slots (the elements are a contiguous tail of the
+        // forwarded window — see `forwarded_deferred_layout`). Emitted
+        // *first*, before any callee slot is written and before `x13` is
+        // taken: the call clobbers the x9..x15 temps and its LR push
+        // would otherwise land in the frame under construction. `sp` is
+        // lowered past the whole callee frame for the duration, as the
+        // helper path does. GC-safe for the same reason the side-exit
+        // materialization is: every element is still live in the
+        // caller's frame slots, which are scanned.
+        if let Some(rest) = layout.rest {
+            monoasm_arm64!(&mut self.jit,
+                str x30, [sp, #-16]!;                 // save LR
+                ldr x11, [x29];                       // caller frame pointer
+                mov x9, (rbp_local(src + rest.src_offset) as u64);
+                sub x0, x11, x9;                      // highest-address element
+                mov x1, (rest.len as u64);
+            );
+            self.a64_sp_sub(offset as u32);
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (crate::runtime::create_array as *const () as u64);
+                blr x9;
+            );
+            self.a64_sp_add(offset as u32);
+            monoasm_arm64!(&mut self.jit,
+                ldr x30, [sp], #16;                   // restore LR
+                sub x13, sp, #(RSP_LOCAL_FRAME as u32);
+                mov x12, x0;
+            );
+            self.a64_frame_store(VAL, CLFP, (LFP_ARG0 + 8 * rest.pos as i32) as u32);
+        }
         monoasm_arm64!(&mut self.jit,
             sub x13, sp, #(RSP_LOCAL_FRAME as u32);
         );
+        // A bare `**kwrest` gets `nil` — "no keyword arguments" everywhere
+        // downstream, matching the runtime's `store_empty_kw_rest`.
+        if let Some(kw_rest) = layout.kw_rest {
+            monoasm_arm64!(&mut self.jit, mov x12, (NIL_VALUE as u64););
+            self.a64_frame_store(VAL, CLFP, (LFP_SELF + 8 * kw_rest.0 as i32) as u32);
+        }
         // self <- f's own recv slot
         self.a64_frame_load(VAL, lfp, conv(recv) as u32);
         self.a64_frame_store(VAL, CLFP, LFP_SELF as u32);
@@ -563,9 +601,9 @@ impl Codegen {
             }
         }
         // None-fill the statically-uncovered trailing optionals (0 sentinel)
-        if none_fill != 0 {
+        if layout.none_fill != 0 {
             monoasm_arm64!(&mut self.jit, mov x12, (0u64););
-            for j in 0..none_fill {
+            for j in 0..layout.none_fill {
                 self.a64_frame_store(
                     VAL,
                     CLFP,
