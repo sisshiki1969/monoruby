@@ -62,6 +62,12 @@ jobs:
           fail_ci_if_error: false
 
   darwin:
+    # checks: write lets the in-step heartbeat publish a `darwin-heartbeat`
+    # check run that SURVIVES runner death (see the Test step); contents:
+    # read is for checkout. Everything else needs no token.
+    permissions:
+      checks: write
+      contents: read
     # Native Apple Silicon (arm64-apple-darwin) runner. build.rs sets the `jit`
     # cfg on arm64 (only `jit_x86` is x86-only), so this builds and runs the
     # AArch64 JIT (AsmIR→A64 backend, asmir/compile_stub.rs) — instructions not
@@ -130,38 +136,74 @@ jobs:
       - name: Test (VM + AArch64 JIT, arm64-apple-darwin)
         # The arm64 JIT/runtime intermittently hangs by exhausting memory: the
         # macOS runner OOM-dies ("loses communication") before any stack can be
-        # captured, and when the runner dies the job's streamed logs become
-        # unavailable through the API as well — so past hangs left ZERO
-        # forensics. Guards, in order of importance:
+        # captured, and when the runner dies the job's streamed logs AND the
+        # artifact step are lost as well (confirmed 2026-07-26: a run with the
+        # in-log heartbeat still left zero forensics) — so past hangs left
+        # nothing. Guards, in order of importance:
+        #   * MONORUBY_MALLOC_HARD_LIMIT=3G (env below): monoruby's global
+        #     allocator aborts WITH a size report + backtrace the moment an
+        #     allocation would exceed 3 GB. Unlike any polling watchdog this
+        #     also catches a single multi-GB request, and nextest then names
+        #     the aborted test. This is the primary defense.
+        #   * a `darwin-heartbeat` check run updated every ~60 s from inside
+        #     the step (last log lines + memory trajectory + any watchdog
+        #     forensics). It lives on the GitHub side, so it SURVIVES runner
+        #     death — the progress log of record for silent hangs.
         #   * retry — cap each attempt at 25 min and retry once, so a clean
         #     hang fails fast (normal pass ~11 min) and the rerun recovers;
-        #   * a background memory watchdog that must fire BEFORE the runner
-        #     dies. It watches every monoruby AND ruby process (bin/test diffs
-        #     against CRuby and runs mspec, so the hog can be either side) and
-        #     additionally the system-wide free memory: it fires when one
-        #     process exceeds ~3 GB, the watched sum exceeds ~4 GB, or free
-        #     memory drops under ~700 MB while a watched process exists. On
-        #     firing it logs the last [phase] marker + the culprit's command
-        #     line, `sample`s its stack, and kills it (the retry recovers);
-        #   * a 30-second heartbeat line (elapsed / free memory / top process /
-        #     tail of the test log) so even a log truncated by runner death
-        #     shows how far the run got and how memory moved — this is the
-        #     "progress log" for otherwise-silent hangs;
-        #   * bin/test output is tee'd to $RUNNER_TEMP and uploaded as an
-        #     artifact even on failure (see the next step), which preserves the
-        #     full log of a timed-out attempt that the retry then recovered.
+        #   * a background memory watchdog: watches every monoruby AND ruby
+        #     process (bin/test diffs against CRuby and runs mspec) plus the
+        #     system-wide free memory; fires at >3 GB per process / >4 GB
+        #     watched sum / <700 MB free, logs the last [phase] marker + the
+        #     culprit's command line, `sample`s its stack, kills it;
+        #   * a 30-second heartbeat line in the streamed log, and bin/test
+        #     output tee'd to $RUNNER_TEMP + uploaded as an artifact when the
+        #     runner survives (preserves the log of a timed-out attempt that
+        #     the retry then recovered).
         # Per-test hangs inside the nextest phase are additionally named and
         # killed by .config/nextest.toml (slow-timeout terminate-after).
         # The manual .github/workflows/darwin-hang-debug.yml drives the same
         # idea in a loop for active reproduction.
         uses: nick-fields/retry@v3
+        env:
+          MONORUBY_MALLOC_HARD_LIMIT: 3G
+          GH_TOKEN: ${{ github.token }}
         with:
           timeout_minutes: 25
           max_attempts: 2
           command: |
             set -o pipefail
             LOG="$RUNNER_TEMP/bin-test-attempt-$(date -u +%H%M%S).log"
+            FORENSICS="$RUNNER_TEMP/watchdog-forensics.log"
+            CR_ID_FILE="$RUNNER_TEMP/hb-checkrun-id"
             echo "attempt log: $LOG"
+            # Durable heartbeat: a neutral check run on the head commit,
+            # PATCHed with the latest progress. It survives runner death.
+            HB_SHA=$(jq -r '.pull_request.head.sha // .after // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+            HB_SHA=${HB_SHA:-$GITHUB_SHA}
+            hb_post() {
+              [ -n "${GH_TOKEN:-}" ] || return 0
+              if [ ! -s "$CR_ID_FILE" ]; then
+                curl -sf -X POST -H "Authorization: Bearer $GH_TOKEN" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/$GITHUB_REPOSITORY/check-runs" \
+                  -d "{\"name\":\"darwin-heartbeat\",\"head_sha\":\"$HB_SHA\",\"status\":\"completed\",\"conclusion\":\"neutral\"}" \
+                  | jq -r '.id // empty' > "$CR_ID_FILE" 2>/dev/null || true
+              fi
+              hbid=$(cat "$CR_ID_FILE" 2>/dev/null || true)
+              [ -n "$hbid" ] || return 0
+              { if [ -s "$FORENSICS" ]; then
+                  echo '### watchdog forensics'; echo '```'; tail -c 20000 "$FORENSICS"; echo '```'
+                fi
+                echo '### bin/test log tail'; echo '```'; tail -n 120 "$LOG" 2>/dev/null || true; echo '```'
+              } > "$RUNNER_TEMP/hb-body.md"
+              jq -n --arg s "$1" --rawfile t "$RUNNER_TEMP/hb-body.md" \
+                '{output:{title:"darwin bin/test heartbeat (survives runner death)",summary:$s,text:($t|.[0:60000])}}' \
+                | curl -sf -X PATCH -H "Authorization: Bearer $GH_TOKEN" \
+                    -H "Accept: application/vnd.github+json" \
+                    "https://api.github.com/repos/$GITHUB_REPOSITORY/check-runs/$hbid" \
+                    -d @- > /dev/null 2>&1 || true
+            }
             RSS_LIMIT_KB=3000000
             SUM_LIMIT_KB=4000000
             SYS_FREE_FLOOR_KB=700000
@@ -182,23 +224,30 @@ jobs:
                   '/Pages free/ {f=$3} /Pages inactive/ {i=$3} /Pages purgeable/ {p=$3} END {print (f+i+p)*16}')
                 if [ "${toprss:-0}" -gt "$RSS_LIMIT_KB" ] || [ "${sum:-0}" -gt "$SUM_LIMIT_KB" ] \
                    || { [ "${freekb:-999999999}" -lt "$SYS_FREE_FLOOR_KB" ] && [ "${toppid:-0}" -gt 0 ]; }; then
-                  echo "==================== MEMORY WATCHDOG fired @ $(date -u +%H:%M:%S) ===================="
-                  echo "sys_free_kb=$freekb sum_rss_kb=$sum top=$topcmd pid=$toppid rss_kb=$toprss"
-                  echo "(caps: per-proc=$RSS_LIMIT_KB sum=$SUM_LIMIT_KB sys-floor=$SYS_FREE_FLOOR_KB)"
-                  echo "---- last phase reached ----"; grep '^\[phase' "$LOG" 2>/dev/null | tail -1 || true
-                  echo "---- watched processes (pid rss_kb etime command) ----"
-                  ps -Ao pid,rss,etime,command | awk 'NR>1 { n=split($4,a,"/"); b=a[n]; if (b ~ /^(monoruby|ruby)/) print }'
-                  echo "---- CULPRIT command line (pid $toppid) ----"; ps -p "$toppid" -o command= 2>/dev/null || true
-                  echo "---- sample pid $toppid (2s) ----"; /usr/bin/sample "$toppid" 2 2>&1 | sed -n '1,160p' || true
-                  echo "---- killing pid $toppid ----"; kill -9 "$toppid" 2>/dev/null || true
+                  { echo "==================== MEMORY WATCHDOG fired @ $(date -u +%H:%M:%S) ===================="
+                    echo "sys_free_kb=$freekb sum_rss_kb=$sum top=$topcmd pid=$toppid rss_kb=$toprss"
+                    echo "(caps: per-proc=$RSS_LIMIT_KB sum=$SUM_LIMIT_KB sys-floor=$SYS_FREE_FLOOR_KB)"
+                    echo "---- last phase reached ----"; grep '^\[phase' "$LOG" 2>/dev/null | tail -1 || true
+                    echo "---- watched processes (pid rss_kb etime command) ----"
+                    ps -Ao pid,rss,etime,command | awk 'NR>1 { n=split($4,a,"/"); b=a[n]; if (b ~ /^(monoruby|ruby)/) print }'
+                    echo "---- CULPRIT command line (pid $toppid) ----"; ps -p "$toppid" -o command= 2>/dev/null || true
+                    echo "---- sample pid $toppid (2s) ----"; /usr/bin/sample "$toppid" 2 2>&1 | sed -n '1,160p' || true
+                    echo "---- killing pid $toppid ----"; kill -9 "$toppid" 2>/dev/null || true
+                  } 2>&1 | tee -a "$FORENSICS"
+                  hb_post "WATCHDOG FIRED $(date -u +%H:%M:%S): top=$topcmd rss_kb=${toprss:-0} sys_free_kb=${freekb:-?}"
                   sleep 8
                 fi
                 pass=$((pass+1))
                 if [ $((pass % 8)) -eq 0 ]; then
-                  printf '[hb %s +%ss] sys_free_kb=%s watched_sum_kb=%s top=%s(%sKB) tail: %s\n' \
+                  gtop=$(ps -Ao pid,rss,comm -m 2>/dev/null | awk 'NR==2 {n=split($3,a,"/"); print a[n]"("$2"KB)"}')
+                  hbline=$(printf '[hb %s +%ss] sys_free_kb=%s watched_sum_kb=%s top=%s(%sKB) global_top=%s tail: %s' \
                     "$(date -u +%H:%M:%S)" "$(( $(date +%s) - t0 ))" "${freekb:-?}" "$sum" \
-                    "$topcmd" "${toprss:-0}" \
-                    "$(tail -c 400 "$LOG" 2>/dev/null | tr '\n' ' ' | tail -c 160)"
+                    "$topcmd" "${toprss:-0}" "${gtop:--}" \
+                    "$(tail -c 400 "$LOG" 2>/dev/null | tr '\n' ' ' | tail -c 160)")
+                  echo "$hbline"
+                  if [ $((pass % 16)) -eq 0 ]; then
+                    hb_post "$hbline"
+                  fi
                 fi
                 sleep 4
               done ) &
