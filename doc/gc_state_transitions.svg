@@ -1,101 +1,107 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="700" viewBox="0 0 1080 700" font-family="Helvetica, Arial, 'Hiragino Sans', 'Noto Sans CJK JP', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="910" viewBox="0 0 1400 910" font-family="Helvetica, Arial, sans-serif">
   <defs>
-    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
     </marker>
-    <marker id="arwA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <marker id="arwA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#b45309"/>
     </marker>
-    <marker id="arwR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <marker id="arwR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#be123c"/>
     </marker>
-    <marker id="arwG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <marker id="arwG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#15803d"/>
     </marker>
-    <marker id="arwP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <marker id="arwP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#a21caf"/>
     </marker>
   </defs>
 
-  <rect x="0" y="0" width="1080" height="700" fill="#ffffff"/>
-  <rect x="4" y="4" width="1072" height="692" fill="none" stroke="#e2e8f0" stroke-width="2" rx="10"/>
+  <rect x="0" y="0" width="1400" height="910" fill="#ffffff"/>
+  <rect x="4" y="4" width="1392" height="902" fill="none" stroke="#e2e8f0" stroke-width="2" rx="12"/>
 
   <!-- title -->
-  <text x="540" y="40" text-anchor="middle" font-size="22" font-weight="bold" fill="#0f172a">monoruby 世代別 GC — オブジェクト状態遷移</text>
-  <text x="540" y="62" text-anchor="middle" font-size="12" fill="#64748b">フラグ: OLD(old 昇格済み)/ WB_PENDING(バリア監視中)/ REMEMBERED(remembered set 登録済み)/ age(生存回数)</text>
+  <text x="700" y="52" text-anchor="middle" font-size="32" font-weight="bold" fill="#0f172a">monoruby Generational GC — Object State Transitions</text>
+  <text x="700" y="84" text-anchor="middle" font-size="17" fill="#64748b">Flags: OLD = promoted · WB_PENDING = barrier armed · REMEMBERED = in remembered set · age = survivals</text>
 
   <!-- major GC demote (OLD -> YOUNG) -->
-  <path d="M 840 148 C 840 100, 215 100, 215 148" fill="none" stroke="#be123c" stroke-width="2" stroke-dasharray="7 4" marker-end="url(#arwR)"/>
-  <text x="528" y="94" text-anchor="middle" font-size="12" font-weight="bold" fill="#be123c">major GC: 世代情報をリセット — 全オブジェクトが young へ降格(生存すれば再昇格)</text>
+  <path d="M 1090 208 C 1090 95, 305 95, 305 208" fill="none" stroke="#be123c" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#arwR)"/>
+  <text x="700" y="165" text-anchor="middle" font-size="17" font-weight="bold" fill="#be123c">major GC: clear generation state — every object demoted to young</text>
+  <text x="700" y="188" text-anchor="middle" font-size="15" fill="#be123c">(old_bits cleared, remembered set emptied; survivors re-promote in the same cycle)</text>
 
   <!-- YOUNG -->
-  <rect x="60" y="150" width="310" height="200" rx="12" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
-  <text x="215" y="182" text-anchor="middle" font-size="16" font-weight="bold" fill="#1d4ed8">YOUNG(若い世代)</text>
-  <text x="215" y="212" text-anchor="middle" font-size="13" fill="#0f172a">OLD = 0 / WB_PENDING = 0 / REMEMBERED = 0</text>
-  <text x="215" y="234" text-anchor="middle" font-size="13" fill="#0f172a">age = 0 〜 2</text>
-  <text x="215" y="266" text-anchor="middle" font-size="12" fill="#3b82f6">毎回の GC(minor / major)で走査・sweep 対象</text>
+  <rect x="70" y="210" width="470" height="300" rx="14" fill="#eff6ff" stroke="#3b82f6" stroke-width="2.5"/>
+  <text x="305" y="248" text-anchor="middle" font-size="20" font-weight="bold" fill="#1d4ed8">YOUNG (old_bit = 0)</text>
+  <text x="305" y="284" text-anchor="middle" font-size="17" fill="#0f172a">OLD = 0 / WB_PENDING = 0 / REMEMBERED = 0</text>
+  <text x="305" y="314" text-anchor="middle" font-size="17" fill="#0f172a">age = 0 – 2</text>
+  <text x="305" y="350" text-anchor="middle" font-size="15.5" fill="#3b82f6">scanned &amp; swept by every GC (minor and major)</text>
 
   <!-- self loop: survive -->
-  <path d="M 140 350 C 120 400, 250 400, 230 352" fill="none" stroke="#475569" stroke-width="1.8" marker-end="url(#arw)"/>
-  <text x="185" y="404" text-anchor="middle" font-size="12" fill="#475569">GC で生存するたび age +1</text>
+  <path d="M 170 510 C 145 575, 320 575, 295 512" fill="none" stroke="#475569" stroke-width="2.5" marker-end="url(#arw)"/>
+  <text x="232" y="600" text-anchor="middle" font-size="15.5" fill="#475569">survives a GC → age +1</text>
 
   <!-- alloc entry -->
-  <line x1="12" y1="190" x2="58" y2="190" stroke="#15803d" stroke-width="2" marker-end="url(#arwG)"/>
-  <text x="14" y="160" font-size="13" font-weight="bold" fill="#15803d">alloc()</text>
-  <text x="14" y="176" font-size="11" fill="#15803d">フラグ全て 0</text>
+  <line x1="18" y1="260" x2="66" y2="260" stroke="#15803d" stroke-width="2.5" marker-end="url(#arwG)"/>
+  <text x="14" y="222" font-size="17" font-weight="bold" fill="#15803d">alloc()</text>
+  <text x="14" y="244" font-size="14" fill="#15803d">all flags 0</text>
+
+  <!-- reuse arrow DEAD -> YOUNG -->
+  <path d="M 68 780 C 20 780, 20 285, 66 285" fill="none" stroke="#15803d" stroke-width="2.2" stroke-dasharray="6 5" marker-end="url(#arwG)"/>
+  <text x="36" y="640" font-size="15" fill="#15803d" transform="rotate(-90 36 640)">reused by alloc()</text>
 
   <!-- promotion: YOUNG -> OLD/armed -->
-  <line x1="370" y1="220" x2="656" y2="220" stroke="#b45309" stroke-width="2" marker-end="url(#arwA)"/>
-  <text x="513" y="184" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#0f172a">3 回生存(age = 3)で昇格: OLD ← 1</text>
-  <text x="513" y="204" text-anchor="middle" font-size="12" fill="#b45309">young の子なし → WB_PENDING ← 1</text>
+  <text x="560" y="300" font-size="15.5" font-weight="bold" fill="#0f172a">age = 3 → promote: OLD ← 1</text>
+  <text x="560" y="322" font-size="15" fill="#b45309">no young child → WB_PENDING ← 1</text>
+  <line x1="540" y1="350" x2="856" y2="375" stroke="#b45309" stroke-width="2.5" marker-end="url(#arwA)"/>
 
   <!-- promotion: YOUNG -> OLD/remembered -->
-  <line x1="370" y1="310" x2="656" y2="512" stroke="#15803d" stroke-width="2" marker-end="url(#arwG)"/>
-  <text x="380" y="478" font-size="12.5" font-weight="bold" fill="#0f172a">3 回生存で昇格: OLD ← 1</text>
-  <text x="380" y="497" font-size="12" fill="#15803d">young の子あり → REMEMBERED ← 1</text>
-  <text x="380" y="515" font-size="11" fill="#15803d">+ set 登録(remember-on-promote)</text>
+  <line x1="540" y1="470" x2="856" y2="630" stroke="#15803d" stroke-width="2.5" marker-end="url(#arwG)"/>
+  <text x="548" y="644" font-size="15.5" font-weight="bold" fill="#0f172a">age = 3 → promote: OLD ← 1</text>
+  <text x="548" y="668" font-size="15" fill="#15803d">young child → REMEMBERED ← 1</text>
+  <text x="548" y="690" font-size="14.5" fill="#15803d">(remember-on-promote → push to set)</text>
+
+  <!-- OLD container -->
+  <rect x="830" y="210" width="520" height="560" rx="14" fill="#fffbeb" stroke="#d97706" stroke-width="2.5"/>
+  <text x="1090" y="248" text-anchor="middle" font-size="20" font-weight="bold" fill="#b45309">OLD (old_bit = 1)</text>
+  <text x="1090" y="274" text-anchor="middle" font-size="15.5" fill="#b45309">never scanned or swept by a minor GC</text>
 
   <!-- OLD / armed -->
-  <rect x="660" y="150" width="360" height="150" rx="12" fill="#fffbeb" stroke="#d97706" stroke-width="2"/>
-  <text x="840" y="182" text-anchor="middle" font-size="16" font-weight="bold" fill="#b45309">OLD / armed(バリア監視中)</text>
-  <text x="840" y="212" text-anchor="middle" font-size="13" fill="#0f172a">OLD = 1 / WB_PENDING = 1 / REMEMBERED = 0</text>
-  <text x="840" y="240" text-anchor="middle" font-size="12" fill="#b45309">minor GC では走査も sweep もされない</text>
-  <text x="840" y="260" text-anchor="middle" font-size="12" fill="#b45309">(young への参照を持たない old の定常状態)</text>
+  <rect x="860" y="295" width="460" height="140" rx="10" fill="#ffffff" stroke="#b45309" stroke-width="2"/>
+  <text x="1090" y="327" text-anchor="middle" font-size="19" font-weight="bold" fill="#7c2d12">old / armed — barrier watching</text>
+  <text x="1090" y="357" text-anchor="middle" font-size="16.5" fill="#0f172a">OLD = 1 / WB_PENDING = 1 / REMEMBERED = 0</text>
+  <text x="1090" y="385" text-anchor="middle" font-size="15" fill="#475569">not in the remembered set</text>
+  <text x="1090" y="410" text-anchor="middle" font-size="14.5" fill="#64748b">steady state: no young children</text>
 
   <!-- armed -> remembered -->
-  <line x1="730" y1="300" x2="730" y2="456" stroke="#7c2d12" stroke-width="2" marker-end="url(#arw)"/>
-  <text x="786" y="330" font-size="12" font-weight="bold" fill="#7c2d12">↓ young を格納(write barrier 発火)</text>
-  <text x="786" y="349" font-size="12" fill="#7c2d12">WB_PENDING → 0, REMEMBERED → 1</text>
-  <text x="786" y="367" font-size="12" fill="#7c2d12">remembered set に登録</text>
+  <line x1="920" y1="435" x2="920" y2="586" stroke="#7c2d12" stroke-width="2.5" marker-end="url(#arw)"/>
+  <text x="950" y="468" font-size="15.5" font-weight="bold" fill="#7c2d12">↓ young stored → write barrier fires</text>
+  <text x="950" y="491" font-size="15" fill="#7c2d12">WB_PENDING → 0, REMEMBERED → 1</text>
+  <text x="950" y="512" font-size="15" fill="#7c2d12">pushed to the remembered set</text>
 
   <!-- remembered -> armed -->
-  <line x1="766" y1="456" x2="766" y2="302" stroke="#15803d" stroke-width="2" marker-end="url(#arwG)"/>
-  <text x="786" y="398" font-size="12" font-weight="bold" fill="#15803d">↑ minor GC: young の子が消滅</text>
-  <text x="786" y="417" font-size="12" fill="#15803d">REMEMBERED → 0, WB_PENDING → 1</text>
-  <text x="786" y="435" font-size="11" fill="#15803d">set から除外 — 次の young 格納をまた監視</text>
+  <line x1="1290" y1="586" x2="1290" y2="437" stroke="#15803d" stroke-width="2.5" marker-end="url(#arwG)"/>
+  <text x="950" y="540" font-size="15.5" font-weight="bold" fill="#15803d">↑ minor GC: young children gone</text>
+  <text x="950" y="562" font-size="15" fill="#15803d">REMEMBERED → 0, WB_PENDING → 1</text>
+  <text x="950" y="583" font-size="15" fill="#15803d">dropped from the set</text>
 
   <!-- OLD / remembered -->
-  <rect x="660" y="460" width="360" height="160" rx="12" fill="#f0fdf4" stroke="#15803d" stroke-width="2"/>
-  <text x="840" y="492" text-anchor="middle" font-size="16" font-weight="bold" fill="#14532d">OLD / remembered(old→young 辺あり)</text>
-  <text x="840" y="522" text-anchor="middle" font-size="13" fill="#0f172a">OLD = 1 / WB_PENDING = 0 / REMEMBERED = 1</text>
-  <text x="840" y="550" text-anchor="middle" font-size="12" fill="#15803d">remembered set に登録済み</text>
-  <text x="840" y="570" text-anchor="middle" font-size="12" fill="#15803d">minor GC は自身をスキップし、子だけを走査</text>
+  <rect x="860" y="590" width="460" height="155" rx="10" fill="#ffffff" stroke="#15803d" stroke-width="2"/>
+  <text x="1090" y="622" text-anchor="middle" font-size="19" font-weight="bold" fill="#14532d">old / remembered — has old→young edges</text>
+  <text x="1090" y="652" text-anchor="middle" font-size="16.5" fill="#0f172a">OLD = 1 / WB_PENDING = 0 / REMEMBERED = 1</text>
+  <text x="1090" y="680" text-anchor="middle" font-size="15" fill="#475569">in the remembered set</text>
+  <text x="1090" y="706" text-anchor="middle" font-size="15" fill="#15803d">minor GC scans only its children</text>
 
   <!-- DEAD -->
-  <rect x="60" y="500" width="310" height="120" rx="12" fill="#f1f5f9" stroke="#64748b" stroke-width="2"/>
-  <text x="215" y="532" text-anchor="middle" font-size="15" font-weight="bold" fill="#334155">解放済み(フリーリスト)</text>
-  <text x="215" y="560" text-anchor="middle" font-size="12" fill="#475569">sweep が free() してフリーリストへ連結</text>
-  <text x="215" y="580" text-anchor="middle" font-size="12" fill="#475569">ヘッダは次の空きセルへのポインタになる</text>
+  <rect x="70" y="700" width="470" height="130" rx="14" fill="#f1f5f9" stroke="#64748b" stroke-width="2.5"/>
+  <text x="305" y="737" text-anchor="middle" font-size="19" font-weight="bold" fill="#334155">Freed (free list)</text>
+  <text x="305" y="767" text-anchor="middle" font-size="16" fill="#0f172a">header = pointer to the next free cell</text>
+  <text x="305" y="794" text-anchor="middle" font-size="15" fill="#475569">sweep: free() every unmarked cell</text>
 
   <!-- YOUNG -> DEAD -->
-  <line x1="300" y1="350" x2="300" y2="498" stroke="#be123c" stroke-width="2" marker-end="url(#arwR)"/>
-  <text x="310" y="440" font-size="12" fill="#be123c">GC で未マーク → sweep</text>
+  <line x1="420" y1="510" x2="420" y2="696" stroke="#be123c" stroke-width="2.5" marker-end="url(#arwR)"/>
+  <text x="434" y="610" font-size="15.5" fill="#be123c">unmarked → swept</text>
 
   <!-- OLD -> DEAD -->
-  <path d="M 658 596 C 520 650, 470 570, 374 566" fill="none" stroke="#be123c" stroke-width="2" stroke-dasharray="7 4" marker-end="url(#arwR)"/>
-  <text x="516" y="648" text-anchor="middle" font-size="12" fill="#be123c">major GC で未マークなら回収(minor では回収されない)</text>
-
-  <!-- DEAD -> YOUNG (reuse) -->
-  <path d="M 58 545 C 22 545, 22 300, 56 300" fill="none" stroke="#15803d" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#arwG)"/>
-  <text x="30" y="480" font-size="11.5" fill="#15803d" transform="rotate(-90 30 480)">alloc() で再利用</text>
+  <path d="M 1090 770 C 1090 870, 700 800, 545 795" fill="none" stroke="#be123c" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#arwR)"/>
+  <text x="620" y="868" font-size="15" fill="#be123c">old is collected only by a major GC</text>
 </svg>
