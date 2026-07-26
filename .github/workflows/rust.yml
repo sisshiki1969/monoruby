@@ -197,10 +197,14 @@ jobs:
               fi
               hbid=$(cat "$CR_ID_FILE" 2>/dev/null || true)
               [ -n "$hbid" ] || return 0
-              { if [ -s "$FORENSICS" ]; then
-                  echo '### watchdog forensics'; echo '```'; tail -c 20000 "$FORENSICS"; echo '```'
+              { echo '### in-flight monoruby/ruby processes (nextest passes the test name in argv)'
+                echo '```'
+                ps -Ao pid,rss,etime,command | awk 'NR>1 { n=split($4,a,"/"); b=a[n]; if (b ~ /^(monoruby|ruby)/) print }' | head -30
+                echo '```'
+                if [ -s "$FORENSICS" ]; then
+                  echo '### watchdog forensics'; echo '```'; tail -c 18000 "$FORENSICS"; echo '```'
                 fi
-                echo '### bin/test log tail'; echo '```'; tail -n 120 "$LOG" 2>/dev/null || true; echo '```'
+                echo '### bin/test log tail'; echo '```'; tail -n 100 "$LOG" 2>/dev/null || true; echo '```'
               } > "$RUNNER_TEMP/hb-body.md"
               jq -n --arg s "$1" --rawfile t "$RUNNER_TEMP/hb-body.md" \
                 '{output:{title:"darwin bin/test heartbeat (survives runner death)",summary:$s,text:($t|.[0:60000])}}' \
@@ -245,14 +249,15 @@ jobs:
                 pass=$((pass+1))
                 if [ $((pass % 8)) -eq 0 ]; then
                   gtop=$(ps -Ao pid,rss,comm -m 2>/dev/null | awk 'NR==2 {n=split($3,a,"/"); print a[n]"("$2"KB)"}')
-                  hbline=$(printf '[hb %s +%ss] sys_free_kb=%s watched_sum_kb=%s top=%s(%sKB) global_top=%s tail: %s' \
-                    "$(date -u +%H:%M:%S)" "$(( $(date +%s) - t0 ))" "${freekb:-?}" "$sum" \
+                  diskfree=$(df -k / 2>/dev/null | awk 'NR==2 {print $4}')
+                  hbline=$(printf '[hb %s +%ss] sys_free_kb=%s disk_free_kb=%s watched_sum_kb=%s top=%s(%sKB) global_top=%s tail: %s' \
+                    "$(date -u +%H:%M:%S)" "$(( $(date +%s) - t0 ))" "${freekb:-?}" "${diskfree:-?}" "$sum" \
                     "$topcmd" "${toprss:-0}" "${gtop:--}" \
                     "$(tail -c 400 "$LOG" 2>/dev/null | tr '\n' ' ' | tail -c 160)")
                   echo "$hbline"
-                  if [ $((pass % 16)) -eq 0 ]; then
-                    hb_post "$hbline"
-                  fi
+                  # Death leaves at most ~30 s of blind window; the posted
+                  # body names the tests in flight via their argv.
+                  hb_post "$hbline"
                 fi
                 sleep 4
               done ) &
