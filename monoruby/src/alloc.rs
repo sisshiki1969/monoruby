@@ -258,7 +258,9 @@ pub trait GCBox: PartialEq {
 
     ///
     /// Mark this object as recorded in the remembered set (clears the
-    /// armed flag). Used when it is added to the set.
+    /// WB_ARMED flag; an old object with WB_ARMED clear *is*
+    /// "remembered" — there is no separate bit). Used when it is added
+    /// to the set.
     ///
     fn enter_remembered(&mut self);
 
@@ -910,7 +912,7 @@ impl<T: GCBox> Allocator<T> {
                 // Every object is demoted and re-aged from scratch, so the
                 // remembered set is rebuilt by this cycle's `apply_aging`.
                 // (Demoted objects are young again — fully scanned — so
-                // their now-stale armed/remembered header bits are
+                // their now-stale OLD/WB_ARMED header bits are
                 // harmless until re-promotion resets them.)
                 self.remembered.clear();
             }

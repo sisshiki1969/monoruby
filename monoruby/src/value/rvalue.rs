@@ -1101,12 +1101,12 @@ impl RValue {
 
     /// Old object that is not (yet) in the remembered set — a young store
     /// to it must take the barrier slow path.
-    pub(crate) fn is_wb_pending(&self) -> bool {
-        self.header.is_wb_pending()
+    pub(crate) fn is_wb_armed(&self) -> bool {
+        self.header.is_wb_armed()
     }
 
-    /// Record `self` in the remembered set: flip its state to "remembered"
-    /// (clears the armed flag) and append it to the allocator's set.
+    /// Record `self` in the remembered set: disarm the barrier (clear
+    /// WB_ARMED) and append it to the allocator's set.
     fn enter_remembered_set(&mut self) {
         self.header.enter_remembered();
         crate::alloc::ALLOC
@@ -1118,12 +1118,12 @@ impl RValue {
     ///
     /// Call *after* storing `child` into a reference-typed field of
     /// `self` (an ivar, an array/hash element, a struct slot, …). If
-    /// `self` is old and not yet remembered (`is_wb_pending`) and `child`
+    /// `self` is old and not yet remembered (`is_wb_armed`) and `child`
     /// is a heap object, `self` is recorded in the remembered set so a
     /// subsequent minor GC can still reach `child` without scanning the
     /// whole old generation.
     ///
-    /// Fast path is a single header-bit test (`is_wb_pending`): young
+    /// Fast path is a single header-bit test (`is_wb_armed`): young
     /// objects *and* already-remembered old objects both return
     /// immediately without touching the allocator. We do not check the
     /// child's generation (remembering an old→old edge is a harmless
@@ -1132,7 +1132,7 @@ impl RValue {
     ///
     #[inline]
     pub(crate) fn write_barrier(&mut self, child: Value) {
-        if self.is_wb_pending() && !child.is_packed_value() {
+        if self.is_wb_armed() && !child.is_packed_value() {
             self.enter_remembered_set();
         }
     }
@@ -1145,7 +1145,7 @@ impl RValue {
     ///
     #[inline]
     pub(crate) fn write_barrier_bulk(&mut self) {
-        if self.is_wb_pending() {
+        if self.is_wb_armed() {
             self.enter_remembered_set();
         }
     }
@@ -2425,7 +2425,7 @@ impl Header {
 
     /// A copy of this header for a newborn object (`#dup` / `#clone` /
     /// literal instantiation): the generational-GC state — age (bits
-    /// 8..15), OLD, REMEMBERED, WB_PENDING — is reset so the copy starts
+    /// 8..15), OLD, WB_ARMED — is reset so the copy starts
     /// young and unbarriered, instead of inheriting the source's GC
     /// state without being registered in the page-side `old_bits` /
     /// remembered-set bookkeeping (issue #977). LIVE, WB_UNPROTECTED,
@@ -2478,15 +2478,17 @@ impl Header {
         unsafe { self.meta.flag |= 0b100 | CHILLED_LITERAL_BIT }
     }
 
-    // --- Generational GC flags (flag bits 3..5) ---
+    // --- Generational GC flags (flag bits 3, 4, 6) ---
     //
-    // bit3 `0b0_1000`  = OLD            (promoted to old generation)
-    // bit4 `0b1_0000`  = WB_UNPROTECTED (shady; never promoted)
-    // bit5 `0b10_0000` = REMEMBERED     (in the remembered set)
+    // bit3 `0b000_1000` = OLD            (promoted to old generation)
+    // bit4 `0b001_0000` = WB_UNPROTECTED (shady; never promoted)
+    // bit5 `0b010_0000` = (free — was REMEMBERED; "in the remembered
+    //                     set" is now derived as `OLD && !WB_ARMED`,
+    //                     and the set itself is `Allocator::remembered`)
+    // bit6 `0b100_0000` = WB_ARMED       (see `is_wb_armed`)
     //
-    // A freshly allocated object has `flag == 1`, so all three bits
-    // start clear (young, barrier-untracked, not remembered). See
-    // `doc/gc.md`.
+    // A freshly allocated object has `flag == 1`, so all these bits
+    // start clear (young, barrier-untracked). See `doc/gc.md`.
 
     #[allow(dead_code)]
     fn is_old(&self) -> bool {
@@ -2513,50 +2515,41 @@ impl Header {
         unsafe { self.meta.flag |= 0b1_0000 }
     }
 
-    #[allow(dead_code)]
-    fn is_remembered(&self) -> bool {
-        unsafe { self.meta.flag & 0b10_0000 != 0 }
-    }
-
-    #[allow(dead_code)]
-    fn set_remembered(&mut self) {
-        unsafe { self.meta.flag |= 0b10_0000 }
-    }
-
-    #[allow(dead_code)]
-    fn clear_remembered(&mut self) {
-        unsafe { self.meta.flag &= !0b10_0000 }
-    }
-
     ///
-    /// Generational GC write-barrier "armed" flag (bit 6): set iff the
-    /// object is old and *not* in the remembered set, i.e. a young store
-    /// to it must take the barrier slow path. Testing this single bit is
-    /// what makes the JIT/Rust barrier fast path one instruction — young
-    /// objects and already-remembered old objects both have it clear.
-    /// `arm_barrier` / `enter_remembered` keep it mutually exclusive with
-    /// `REMEMBERED`. See `doc/gc.md`.
+    /// Generational GC write-barrier "armed" flag (bit 6, WB_ARMED): set
+    /// iff the object is old and *not* in the remembered set, i.e. a
+    /// young store to it must take the barrier slow path. Testing this
+    /// single bit is what makes the JIT/Rust barrier fast path one
+    /// instruction — young objects and already-remembered old objects
+    /// both have it clear. There is no separate REMEMBERED bit:
+    /// membership in the remembered set is `OLD && !WB_ARMED` (the set
+    /// itself lives in `Allocator::remembered`), so `arm_barrier` /
+    /// `enter_remembered` are single-bit flips of this flag. See
+    /// `doc/gc.md`.
     ///
-    fn is_wb_pending(&self) -> bool {
+    fn is_wb_armed(&self) -> bool {
         unsafe { self.meta.flag & 0b100_0000 != 0 }
     }
 
-    /// Old, not remembered: arm the barrier (WB_PENDING set, REMEMBERED clear).
+    /// Old, not remembered: arm the barrier (set WB_ARMED). Also used to
+    /// re-arm when the object is dropped from the remembered set.
     fn arm_barrier(&mut self) {
-        unsafe { self.meta.flag = (self.meta.flag | 0b100_0000) & !0b10_0000 }
+        unsafe { self.meta.flag |= 0b100_0000 }
     }
 
-    /// Recorded in the remembered set (REMEMBERED set, WB_PENDING clear).
+    /// Recorded in the remembered set: disarm the barrier (clear
+    /// WB_ARMED; an old object with WB_ARMED clear *is* "remembered").
+    /// The clear is not always a no-op: an old object demoted by a major
+    /// GC keeps a stale WB_ARMED until re-promotion passes through here.
     fn enter_remembered(&mut self) {
-        unsafe { self.meta.flag = (self.meta.flag | 0b10_0000) & !0b100_0000 }
+        unsafe { self.meta.flag &= !0b100_0000 }
     }
 
     /// Generational GC age (number of collections survived), stored in
     /// the high byte of `flag` so the type byte's neighbour stays zero
     /// (see `Metadata::_padding`). The low byte holds the live/frozen/
-    /// chilled/OLD/REMEMBERED/WB_PENDING flags and is read by the write
-    /// barrier; age occupies bits 8..15, untouched by those byte-wide
-    /// flag tests.
+    /// chilled/OLD/WB_ARMED flags and is read by the write barrier; age
+    /// occupies bits 8..15, untouched by those byte-wide flag tests.
     fn age(&self) -> u8 {
         unsafe { (self.meta.flag >> 8) as u8 }
     }
@@ -2644,8 +2637,7 @@ mod header_flag_tests {
         let n = h.newborn();
         assert_eq!(n.age(), 0, "newborn inherited the age counter");
         assert!(!n.is_old(), "newborn inherited the OLD bit");
-        assert!(!n.is_remembered(), "newborn inherited REMEMBERED");
-        assert!(!n.is_wb_pending(), "newborn inherited WB_PENDING");
+        assert!(!n.is_wb_armed(), "newborn inherited WB_ARMED");
         assert!(n.is_live());
         assert!(n.is_frozen(), "newborn dropped the frozen bit");
         assert!(n.is_chilled(), "newborn dropped the chilled bit");
@@ -2655,6 +2647,23 @@ mod header_flag_tests {
         h.set_old();
         h.arm_barrier();
         let n = h.newborn();
-        assert!(!n.is_wb_pending(), "newborn born with the barrier armed");
+        assert!(!n.is_wb_armed(), "newborn born with the barrier armed");
+    }
+
+    // "In the remembered set" has no bit of its own: for an old object it
+    // is exactly `!WB_ARMED`, and `arm_barrier` / `enter_remembered` are
+    // single-bit flips of WB_ARMED.
+    #[test]
+    fn armed_and_remembered_are_one_bit() {
+        let mut h = string_header();
+        h.set_old();
+        h.arm_barrier();
+        assert!(h.is_wb_armed(), "promotion with no young child must arm");
+        h.enter_remembered();
+        assert!(!h.is_wb_armed(), "entering the set must disarm");
+        h.arm_barrier();
+        assert!(h.is_wb_armed(), "re-arming after set self-clean failed");
+        assert!(h.is_old(), "barrier flips must not touch OLD");
+        assert_eq!(h.age(), 0, "barrier flips must not touch the age");
     }
 }

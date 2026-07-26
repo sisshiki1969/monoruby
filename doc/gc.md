@@ -41,7 +41,7 @@ monoruby のガベージコレクタの**現行実装**を、コードに即し�
 コンパイルパイプライン全体における GC の位置づけは `CLAUDE.md` の
 "Custom GC (`alloc.rs`)" と本書を対応させて読むとよい。
 
-オブジェクトの状態遷移(世代間の移動と OLD / WB_PENDING / REMEMBERED / age
+オブジェクトの状態遷移(世代間の移動と OLD / WB_ARMED / age
 各フラグの変化)を 1 枚にまとめた図が
 [gc_state_transitions.svg](gc_state_transitions.svg) にある(§6・§7 の図解版)。
 
@@ -236,18 +236,21 @@ struct Metadata {          // rvalue.rs:2373
 | 2 | `0b0000_0100` | CHILLED(`Symbol#to_s` 由来の準 frozen 文字列) |
 | 3 | `0b0000_1000` | **OLD**(old 世代へ昇格済み) |
 | 4 | `0b0001_0000` | WB_UNPROTECTED(shady 用に予約。現状**未使用** — §7.3) |
-| 5 | `0b0010_0000` | **REMEMBERED**(remembered set に登録済み) |
-| 6 | `0b0100_0000` | **WB_PENDING / armed**(old かつ未 remembered = 書き込みバリアの slow path 対象) |
+| 5 | `0b0010_0000` | 空き(旧 REMEMBERED。「remembered set 登録済み」は専用ビットではなく **`OLD ∧ ¬WB_ARMED` で導出**する) |
+| 6 | `0b0100_0000` | **WB_ARMED**(old かつ未 remembered = 書き込みバリアの slow path 対象) |
 | 7 | `0b1000_0000` | CHILLED_LITERAL(リテラル由来の chilled 文字列;警告文言の出し分け用) |
 | 8..15 | 上位バイト | **age**(生存回数;`RGENGC_OLD_AGE` で昇格。上位バイトは age 専用 — 下位バイトのフラグはここに置かないこと) |
 
-新規オブジェクトは `flag == 1` なので、OLD / REMEMBERED / WB_PENDING はすべて 0
+新規オブジェクトは `flag == 1` なので、OLD / WB_ARMED はともに 0
 (= young・バリア対象外)、age は 0 から始まる。
 
-`arm_barrier`(WB_PENDING を立て REMEMBERED を落とす)と
-`enter_remembered`(REMEMBERED を立て WB_PENDING を落とす)は、この 2 ビットを
-**排他**に保つ。書き込みバリアの高速パスがこの 1 ビット(WB_PENDING)テストだけで
-済むのはこの排他性による。
+old オブジェクトの 2 状態は WB_ARMED 1 ビットで表す:
+**armed = OLD ∧ WB_ARMED**、**remembered = OLD ∧ ¬WB_ARMED**。
+remembered set の実体(列挙)は `Allocator::remembered`(Vec)であり、ヘッダ側は
+バリアの高速パスが見る WB_ARMED だけを持つ。`arm_barrier`(WB_ARMED を立てる)と
+`enter_remembered`(WB_ARMED を落とす)は単一ビットの反転で、
+書き込みバリアの高速パスはこの 1 ビット(WB_ARMED)テストだけで済む。
+「OLD=0 なのに WB_ARMED=1」は発生しない不正状態である。
 
 ---
 
@@ -329,13 +332,13 @@ minor GC / 完全な minor GC の 3 通りでのマーク走査の比較と、�
 
 ```rust
 pub(crate) fn write_barrier(&mut self, child: Value) {
-    if self.is_wb_pending() && !child.is_packed_value() {
+    if self.is_wb_armed() && !child.is_packed_value() {
         self.enter_remembered_set();
     }
 }
 ```
 
-- **高速パスはヘッダ 1 ビットのテスト**(`is_wb_pending` = WB_PENDING ビット)。
+- **高速パスはヘッダ 1 ビットのテスト**(`is_wb_armed` = WB_ARMED ビット)。
   young オブジェクトも、既に remembered な old オブジェクトも、このビットが 0 なので
   即 return(アロケータに触れない)。
 - 子の世代は見ない(old→old を覚える過剰近似は無害)。即値(`is_packed_value`)は除外。
@@ -353,14 +356,16 @@ pub(crate) fn write_barrier(&mut self, child: Value) {
 
 ```
 young(flag=1) ──[age>=3 で昇格]──▶ old
-   昇格時に young 子あり ─▶ enter_remembered (REMEMBERED=1, WB_PENDING=0) ── remembered set 登録
-   昇格時に young 子なし ─▶ arm_barrier      (WB_PENDING=1, REMEMBERED=0) ── 以後の young ストアを待つ
-   armed な old に young ストア ─▶ write_barrier ─▶ enter_remembered_set ── set 登録 + WB_PENDING=0
+   昇格時に young 子あり ─▶ enter_remembered (WB_ARMED=0) ── remembered set 登録
+   昇格時に young 子なし ─▶ arm_barrier      (WB_ARMED=1) ── 以後の young ストアを待つ
+   armed な old に young ストア ─▶ write_barrier ─▶ enter_remembered_set ── set 登録 + WB_ARMED=0
    minor 走査で young 子が消えた remembered ─▶ arm_barrier に戻す(自己クリーニング)
 ```
 
-REMEMBERED と WB_PENDING は常に排他。remembered set の大きさは「生きた old→young 辺の
-数」に比例し続ける(かつて young 子を持っていた全昇格オブジェクトには比例しない)。
+生きている old については「WB_ARMED=0 ⇔ `Allocator::remembered` に登録済み」が
+不変条件(専用の REMEMBERED ビットは持たない — §5)。remembered set の大きさは
+「生きた old→young 辺の数」に比例し続ける(かつて young 子を持っていた全昇格
+オブジェクトには比例しない)。
 
 ### 7.3 昇格可能性(`is_promotable`, `rvalue.rs:918`)
 

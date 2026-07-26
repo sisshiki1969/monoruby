@@ -22,7 +22,7 @@
 
   <!-- title -->
   <text x="700" y="52" text-anchor="middle" font-size="32" font-weight="bold" fill="#0f172a">monoruby Generational GC — Object State Transitions</text>
-  <text x="700" y="84" text-anchor="middle" font-size="17" fill="#64748b">Flags: OLD = promoted · WB_PENDING = barrier armed · REMEMBERED = in remembered set · age = survivals</text>
+  <text x="700" y="84" text-anchor="middle" font-size="17" fill="#64748b">Flags: OLD = promoted · WB_ARMED = barrier armed · age = survivals · "remembered" is derived: OLD &amp; !WB_ARMED</text>
 
   <!-- major GC demote (OLD -> YOUNG) -->
   <path d="M 1090 208 C 1090 95, 305 95, 305 208" fill="none" stroke="#be123c" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#arwR)"/>
@@ -32,7 +32,7 @@
   <!-- YOUNG -->
   <rect x="70" y="210" width="470" height="300" rx="14" fill="#eff6ff" stroke="#3b82f6" stroke-width="2.5"/>
   <text x="305" y="248" text-anchor="middle" font-size="20" font-weight="bold" fill="#1d4ed8">YOUNG (old_bit = 0)</text>
-  <text x="305" y="284" text-anchor="middle" font-size="17" fill="#0f172a">OLD = 0 / WB_PENDING = 0 / REMEMBERED = 0</text>
+  <text x="305" y="284" text-anchor="middle" font-size="17" fill="#0f172a">OLD = 0 / WB_ARMED = 0</text>
   <text x="305" y="314" text-anchor="middle" font-size="17" fill="#0f172a">age = 0 – 2</text>
   <text x="305" y="350" text-anchor="middle" font-size="15.5" fill="#3b82f6">scanned &amp; swept by every GC (minor and major)</text>
 
@@ -51,14 +51,14 @@
 
   <!-- promotion: YOUNG -> OLD/armed -->
   <text x="560" y="300" font-size="15.5" font-weight="bold" fill="#0f172a">age = 3 → promote: OLD ← 1</text>
-  <text x="560" y="322" font-size="15" fill="#b45309">no young child → WB_PENDING ← 1</text>
+  <text x="560" y="322" font-size="15" fill="#b45309">no young child → WB_ARMED ← 1</text>
   <line x1="540" y1="350" x2="856" y2="375" stroke="#b45309" stroke-width="2.5" marker-end="url(#arwA)"/>
 
   <!-- promotion: YOUNG -> OLD/remembered -->
   <line x1="540" y1="470" x2="856" y2="630" stroke="#15803d" stroke-width="2.5" marker-end="url(#arwG)"/>
   <text x="548" y="644" font-size="15.5" font-weight="bold" fill="#0f172a">age = 3 → promote: OLD ← 1</text>
-  <text x="548" y="668" font-size="15" fill="#15803d">young child → REMEMBERED ← 1</text>
-  <text x="548" y="690" font-size="14.5" fill="#15803d">(remember-on-promote → push to set)</text>
+  <text x="548" y="668" font-size="15" fill="#15803d">young child → pushed to the set</text>
+  <text x="548" y="690" font-size="14.5" fill="#15803d">(remember-on-promote, WB_ARMED ← 0)</text>
 
   <!-- OLD container -->
   <rect x="830" y="210" width="520" height="560" rx="14" fill="#fffbeb" stroke="#d97706" stroke-width="2.5"/>
@@ -68,26 +68,26 @@
   <!-- OLD / armed -->
   <rect x="860" y="295" width="460" height="140" rx="10" fill="#ffffff" stroke="#b45309" stroke-width="2"/>
   <text x="1090" y="327" text-anchor="middle" font-size="19" font-weight="bold" fill="#7c2d12">old / armed — barrier watching</text>
-  <text x="1090" y="357" text-anchor="middle" font-size="16.5" fill="#0f172a">OLD = 1 / WB_PENDING = 1 / REMEMBERED = 0</text>
+  <text x="1090" y="357" text-anchor="middle" font-size="16.5" fill="#0f172a">OLD = 1 / WB_ARMED = 1</text>
   <text x="1090" y="385" text-anchor="middle" font-size="15" fill="#475569">not in the remembered set</text>
   <text x="1090" y="410" text-anchor="middle" font-size="14.5" fill="#64748b">steady state: no young children</text>
 
   <!-- armed -> remembered -->
   <line x1="920" y1="435" x2="920" y2="586" stroke="#7c2d12" stroke-width="2.5" marker-end="url(#arw)"/>
   <text x="950" y="468" font-size="15.5" font-weight="bold" fill="#7c2d12">↓ young stored → write barrier fires</text>
-  <text x="950" y="491" font-size="15" fill="#7c2d12">WB_PENDING → 0, REMEMBERED → 1</text>
+  <text x="950" y="491" font-size="15" fill="#7c2d12">WB_ARMED → 0</text>
   <text x="950" y="512" font-size="15" fill="#7c2d12">pushed to the remembered set</text>
 
   <!-- remembered -> armed -->
   <line x1="1290" y1="586" x2="1290" y2="437" stroke="#15803d" stroke-width="2.5" marker-end="url(#arwG)"/>
   <text x="950" y="540" font-size="15.5" font-weight="bold" fill="#15803d">↑ minor GC: young children gone</text>
-  <text x="950" y="562" font-size="15" fill="#15803d">REMEMBERED → 0, WB_PENDING → 1</text>
+  <text x="950" y="562" font-size="15" fill="#15803d">WB_ARMED → 1</text>
   <text x="950" y="583" font-size="15" fill="#15803d">dropped from the set</text>
 
   <!-- OLD / remembered -->
   <rect x="860" y="590" width="460" height="155" rx="10" fill="#ffffff" stroke="#15803d" stroke-width="2"/>
   <text x="1090" y="622" text-anchor="middle" font-size="19" font-weight="bold" fill="#14532d">old / remembered — has old→young edges</text>
-  <text x="1090" y="652" text-anchor="middle" font-size="16.5" fill="#0f172a">OLD = 1 / WB_PENDING = 0 / REMEMBERED = 1</text>
+  <text x="1090" y="652" text-anchor="middle" font-size="16.5" fill="#0f172a">OLD = 1 / WB_ARMED = 0</text>
   <text x="1090" y="680" text-anchor="middle" font-size="15" fill="#475569">in the remembered set</text>
   <text x="1090" y="706" text-anchor="middle" font-size="15" fill="#15803d">minor GC scans only its children</text>
 
