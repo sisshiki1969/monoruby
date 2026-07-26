@@ -83,6 +83,12 @@ Monthly highlights of improvements since January 2026 (with representative PRs).
 - Bytecode executor (virtual machine) emitting machine code directly, for both x86-64 and aarch64 (Apple Silicon).
 - A compact and fast just-in-time compiler with full backends for x86-64 and aarch64. (internally using self-made dynamic assembler [monoasm](https://github.com/sisshiki1969/monoasm))
 
+## Compatibility
+
+Conformance with Ruby has improved dramatically over the course of 2026, driven by an extensive [ruby/spec](https://github.com/ruby/spec)-based compliance effort.
+As of July 2026, monoruby passes 100% of the command-line specs, 99.6% of the language specs, and about 90% of the core-library specs.
+Daily-updated pass statistics, compared with CRuby / TruffleRuby / JRuby, are published at [rubyspec-stats](https://sisshiki1969.github.io/rubyspec-stats/).
+
 ## Prerequisites
 
 ### Platform
