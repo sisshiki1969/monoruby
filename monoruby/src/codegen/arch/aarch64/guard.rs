@@ -62,6 +62,37 @@ impl Codegen {
         true
     }
 
+    /// Method-entry variant of [`a64_guard_class`] for the class-guard stub:
+    /// identical except a heap `Integer` (BigNum) receiver is routed straight to
+    /// `vm_entry` — the JIT body is compiled for fixnum `Integer` and can't run
+    /// a BigNum — instead of falling into the guard-miss / profile-patch chain
+    /// (which would keep re-compiling a specialization that rejects it anyway).
+    /// Mirrors x86 `guard_class2`. Only `INTEGER_CLASS` differs from
+    /// `a64_guard_class`: a heap `Float` is still handled by the Float JIT body,
+    /// so `FLOAT_CLASS` and every other class delegate unchanged.
+    pub(in crate::codegen) fn a64_guard_class2(
+        &mut self,
+        reg: GP,
+        class_id: ClassId,
+        fail: &DestLabel,
+    ) {
+        if class_id == INTEGER_CLASS {
+            let r = reg.a64().0;
+            let vm_entry = self.vm_entry();
+            let exit = self.jit.label();
+            monoasm_arm64!(&mut self.jit,
+                tbnz x(r), #(0), exit;   // fixnum -> JIT body
+            );
+            self.a64_guard_rvalue(r, INTEGER_CLASS, fail); // heap non-Integer -> miss
+            monoasm_arm64!(&mut self.jit,
+                b vm_entry;              // heap Integer (BigNum) -> VM
+            );
+            self.jit.bind_label(exit);
+        } else {
+            self.a64_guard_class(reg, class_id, fail);
+        }
+    }
+
     /// Heap-object class guard: branch to `fail` unless `reg` is a heap pointer
     /// (low 3 bits zero) whose RValue class equals `class_id`. Mirrors x86
     /// `guard_rvalue`.

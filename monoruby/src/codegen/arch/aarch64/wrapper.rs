@@ -201,10 +201,12 @@ impl Codegen {
         let next_counter = Box::into_raw(Box::new(COUNT_RECOMPILE_ARECV_CLASS)) as u64;
         monoasm_arm64!(&mut self.jit,
             guard:
-            ldur x0, [x(LFP.0), #(-(LFP_SELF as i32))];  // self (GP::Rax == x0; a64_guard_class uses x9/x10)
+            ldur x0, [x(LFP.0), #(-(LFP_SELF as i32))];  // self (GP::Rax == x0; the guard uses x9/x10)
         );
-        // self.class != self_class -> miss
-        self.a64_guard_class(GP::Rax, self_class, &miss);
+        // self.class != self_class -> miss; a heap Integer (BigNum) receiver is
+        // routed straight to vm_entry by `a64_guard_class2` rather than the miss
+        // chain (the JIT body only handles fixnum Integer).
+        self.a64_guard_class2(GP::Rax, self_class, &miss);
         monoasm_arm64!(&mut self.jit,
             b jit_entry;             // matched -> tail-call the JIT code
         miss:
