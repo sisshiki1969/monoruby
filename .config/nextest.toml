@@ -1,0 +1,10 @@
+# Kill and NAME any test that hangs. After `period` a test is reported as
+# SLOW (with its name) in the live output — a heartbeat for the CI log; after
+# `terminate-after` x `period` (10 min) it is terminated and reported by name
+# instead of stalling the whole run. Background: the darwin CI runner
+# intermittently hangs / OOM-dies inside the nextest phase with no culprit
+# named (the 25-min attempt cap or the runner's death hid the test name).
+# 10 min is far above any legitimate single test, including under gc-stress
+# on the slow macOS runner, and far below the 25-min attempt cap.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 10 }
