@@ -2330,15 +2330,14 @@ impl Codegen {
                 deferred_src,
             } => {
                 let offset = store[callee_fid].get_offset();
-                // D1 source-routed: the forwarded count is the statically
-                // known caller arg count; missing optional slots are
-                // None-filled (gate guarantees req <= lead+len <= reqopt).
+                // D1 source-routed: the whole bind is a compile-time
+                // constant (see `forwarded_deferred_layout`).
                 return match deferred_src {
                     Some((src, len)) => {
-                        let n = len as usize;
-                        let none_fill = store[callee_fid].reqopt_num() - lead_num - n;
+                        let layout = store[callee_fid]
+                            .forwarded_deferred_layout(lead_num, len as usize);
                         self.a64_set_arguments_forwarded_deferred(
-                            recv, args, lead_num, n, none_fill, src,
+                            offset, recv, args, lead_num, src, layout,
                         )
                     }
                     // Eager (rest Array materialized): the callee is req-only

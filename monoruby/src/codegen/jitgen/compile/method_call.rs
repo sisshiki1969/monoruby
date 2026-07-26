@@ -1212,10 +1212,24 @@ impl AbstractState {
         } else if callsite.forwarding
             && callsite.pos_num >= 1
             && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]
-            && callee.no_keyword()
-            && !callee.is_rest()
             && callee.post_num() == 0
             && callee.reqopt_num() + 1 >= callsite.pos_num
+            // A bare `**kwrest` is fine — the lowering stores `nil` into
+            // that slot, exactly as the runtime's `store_empty_kw_rest`
+            // does. Requiring the call site to carry keyword syntax is
+            // what preserves ruby2_keywords (see `forwarded_fast_path_ok`
+            // in runtime/args.rs, which this mirrors); a `...` forward
+            // always carries the `**kwrest` hash-splat.
+            && (callee.no_keyword() || (callee.kw_names().is_empty() && callsite.kw_may_exists()))
+            // A block-style callee auto-splats a lone Array argument
+            // (`single_arg_expand`); the direct fills below do not model
+            // that, so leave those to the generic path — matching the
+            // runtime's own fast-path gate.
+            && !callee.single_arg_expand()
+            // An *implicit* rest (`|a,|`) does not accept extra args, so
+            // the "surplus goes to the rest" reasoning below needs an
+            // explicit `*rest`.
+            && (!callee.is_rest() || callee.is_explicit_rest())
         {
             // Forwarding `g(x.., ...)` where `g` takes only required (and
             // possibly optional) positionals and the only splat is the
@@ -1235,11 +1249,13 @@ impl AbstractState {
             // D1: if `f`'s `...` rest array was deferred at frame entry,
             // route the copy straight from the caller's source slots.
             // Only when the forwarded arity statically binds to `g`'s
-            // positional params — `req <= lead+len <= req+opt` with no
-            // post/rest, so the fill layout (copied slots + None-filled
-            // optionals, whose defaults the callee prologue then runs) is
-            // a compile-time constant and no `ArgumentError`-shaped case
-            // remains — and only for the `g(*rest, **kwrest, &blk)`
+            // positional params — `req <= lead+len`, no post, and the
+            // surplus over `req+opt` either absorbed by an explicit
+            // `*rest` or absent — so the whole fill layout (copied slots,
+            // None-filled optionals whose defaults the callee prologue
+            // runs, and the rest `Array`'s contiguous source window) is a
+            // compile-time constant and no `ArgumentError`-shaped case
+            // remains. Also only for the `g(*rest, **kwrest, &blk)`
             // trampoline shape (`kwrest_guard.is_some()`; the structural
             // gate guarantees no kw reaches `f`, so the forwarded
             // `**kwrest` is nil). `ir.set_deferred_rest` makes the
@@ -1250,7 +1266,8 @@ impl AbstractState {
                 Some((src, len))
                     if {
                         let n = lead_num + len as usize;
-                        callee.req_num() <= n && n <= callee.reqopt_num()
+                        callee.req_num() <= n
+                            && (callee.is_rest() || n <= callee.reqopt_num())
                     } && kwrest_guard.is_some() =>
                 {
                     ir.set_deferred_rest();
@@ -1268,11 +1285,16 @@ impl AbstractState {
             };
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
-            if deferred_src.is_none() && callee.opt_num() != 0 {
-                // Eager Array into an optional-taking callee: the bind
-                // length is only known at run time — keep the proven
-                // specialized runtime helper (same as before this branch
-                // accepted optional callees).
+            if deferred_src.is_none()
+                && (callee.opt_num() != 0 || callee.is_rest() || !callee.no_keyword())
+            {
+                // Eager (the `...` Array really was materialized): the
+                // bind length is only known at run time, so anything but
+                // a plain req-only callee — optional params, a `*rest`
+                // to size, or a `**kwrest` slot to initialize — keeps the
+                // proven specialized runtime helper. The inline fast path
+                // below guards on an exact length and would have to
+                // re-derive all of that at run time.
                 ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
             } else {
                 ir.push(AsmInst::SetArgumentsForwarded {
@@ -1420,6 +1442,59 @@ mod tests {
               i += 1
             end
             res
+            "#,
+        );
+    }
+
+    /// D1 forwarding-rest deferral into a `*rest` / bare-`**kwrest`
+    /// callee: the rest `Array` is built directly from the caller's
+    /// slots (single `create_array`, no intermediate) and the kwrest
+    /// slot is nil-initialized. Cover empty/short/long binds, leading
+    /// args, opt+rest mixes, arity errors, and the freshness of the
+    /// built Array (mutating one result must not affect another call).
+    #[test]
+    fn forwarded_rest_callee() {
+        run_test(
+            r#"
+            def r0(*a) = [:r0, a]
+            def r1(x, *a) = [:r1, x, a]
+            def ro(x, y = :dy, *a) = [:ro, x, y, a]
+            def rk(*a, **k) = [:rk, a, k]
+            def f0(...) = r0(...)
+            def f1(...) = r1(...)
+            def fo(...) = ro(...)
+            def fk(...) = rk(...)
+            def lead(x, ...) = ro(x, ...)
+            def cap(*a) = a
+            def fc(...) = cap(...)
+            res = []
+            res << f0() << f0(1, 2, 3)
+            res << f1(1) << f1(1, 2, 3)
+            res << fo(1) << fo(1, 2) << fo(1, 2, 3, 4)
+            res << fk() << fk(1, 2)
+            res << lead(:L) << lead(:L, 1, 2, 3)
+            res << (begin; f1(); rescue ArgumentError => e; e.message; end)
+            x = fc(1, 2); y = fc(1, 2); x << 3
+            res << x << y
+            res
+            "#,
+        );
+    }
+
+    /// The motivating shape: Struct construction through the Ruby
+    /// `Class#new` — `Struct#initialize` is a rest + kwrest native.
+    #[test]
+    fn forwarded_struct_rest_native() {
+        run_test_with_prelude(
+            r#"
+            res = []
+            100.times { res = [S.new(1, 2).to_a, S.new(1).to_a, K.new(x: 5).x] }
+            res << (begin; S.new(1, 2, 3); rescue ArgumentError => e; e.message; end)
+            res
+            "#,
+            r#"
+            S = Struct.new(:a, :b)
+            K = Struct.new(:x, keyword_init: true)
             "#,
         );
     }

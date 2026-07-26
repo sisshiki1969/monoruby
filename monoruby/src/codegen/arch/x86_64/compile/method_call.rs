@@ -602,12 +602,13 @@ impl Codegen {
         args: SlotId,
         lead_num: usize,
         expected_len: usize,
-        none_fill: usize,
+        layout: Option<ForwardedLayout>,
         recv: SlotId,
         kwrest_guard: Option<SlotId>,
         deferred_src: Option<(SlotId, u16)>,
     ) {
         if let Some((src, _len)) = deferred_src {
+            let layout = layout.expect("a source-routed forward always carries its layout");
             // D1: the `...` rest `Array` was deferred. `recv` and the
             // `lead_num` leading args are `f`'s own slots (`f`'s rbp).
             // The forwarded positionals come from the *caller* frame:
@@ -621,6 +622,42 @@ impl Codegen {
             // covered by the forwarded args) get `None` (0), exactly as
             // `fill_positional_args` writes for an absent optional — the
             // callee prologue's `CheckLocal` then runs the defaults.
+            //
+            // A `*rest` callee gets its `Array` built straight off the
+            // caller's slots, with no intermediate: the elements are a
+            // contiguous tail of the forwarded window (see
+            // `forwarded_deferred_layout`), which is exactly the shape
+            // `create_array` consumes. It is emitted *first*, before any
+            // callee slot is written, so the call cannot disturb the
+            // frame under construction: `rsp` is lowered past the whole
+            // callee frame for the duration (as `jit_set_arguments`
+            // does), and nothing of the frame exists yet anyway. It is
+            // GC-safe for the same reason the side-exit materialization
+            // (`gen_forward_rest_materialize`) is: every element is
+            // still live in the caller's frame slots, which are on the
+            // control-frame chain and scanned.
+            if let Some(rest) = layout.rest {
+                let elem0 = rbp_local(src + rest.src_offset);
+                monoasm! { &mut self.jit,
+                    movq rcx, [rbp];            // caller rbp
+                    lea  rdi, [rcx - (elem0)];  // highest-address element
+                    movq rsi, (rest.len);
+                    subq rsp, (offset);
+                    movq rax, (runtime::create_array);
+                    call rax;
+                    addq rsp, (offset);
+                    movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * rest.pos as usize) as i32)], rax;
+                }
+            }
+            // A bare `**kwrest` gets `nil` — "no keyword arguments"
+            // everywhere downstream, matching the runtime's
+            // `store_empty_kw_rest`.
+            if let Some(kw_rest) = layout.kw_rest {
+                monoasm! { &mut self.jit,
+                    movq rax, (NIL_VALUE);
+                    movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF + (8 * kw_rest.0 as usize) as i32)], rax;
+                }
+            }
             monoasm! { &mut self.jit,
                 movq rax, [rbp - (rbp_local(recv))];
                 movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
@@ -640,7 +677,7 @@ impl Codegen {
                     movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * (lead_num + j)) as i32)], rax;
                 }
             }
-            for j in 0..none_fill {
+            for j in 0..layout.none_fill {
                 monoasm! { &mut self.jit,
                     movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * (lead_num + expected_len + j)) as i32)], 0;
                 }

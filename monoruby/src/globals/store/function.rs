@@ -794,6 +794,39 @@ struct FuncExt {
     wrapper: Option<(monoasm::CodePtr, usize, monoasm::CodePtr, usize)>,
 }
 
+///
+/// The callee's `*rest` `Array` in a D1 source-routed forwarding call:
+/// build it from `len` values starting at the caller's argument slot
+/// `src + src_offset`, and store it in positional slot `pos`.
+///
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RestBuild {
+    /// Rest-parameter index among the callee's positional params.
+    pub pos: u16,
+    /// Offset into the caller's forwarded argument window.
+    pub src_offset: usize,
+    /// Number of elements (0 for an empty rest).
+    pub len: usize,
+}
+
+///
+/// Static callee-frame layout of a D1 source-routed forwarding call.
+/// See `FuncInfo::forwarded_deferred_layout`.
+///
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ForwardedLayout {
+    /// Values copied from the caller's slots into req/opt slots (the
+    /// `lead_num` leading args fill the positions before these).
+    pub from_src: usize,
+    /// Trailing optional slots left uncovered; they get the `None`
+    /// sentinel so the callee prologue runs their default expressions.
+    pub none_fill: usize,
+    /// The callee's `*rest`, when it declares one.
+    pub rest: Option<RestBuild>,
+    /// The callee's bare `**kwrest` slot, initialized to `nil`.
+    pub kw_rest: Option<SlotId>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FuncInfo {
     /// function data.
@@ -1199,6 +1232,44 @@ impl FuncInfo {
 
     pub(crate) fn rest_pos(&self) -> Option<u16> {
         self.ext.params.is_rest()
+    }
+
+    ///
+    /// Static callee-frame layout for a D1 source-routed forwarding call
+    /// (`def f(...) = g(...)` whose `...` rest was deferred).
+    ///
+    /// `lead_num` ordinary leading args sit in `f`'s own slots and
+    /// `len` forwarded positionals in the *caller's* argument slots, so
+    /// the total positional count `n = lead_num + len` is a compile-time
+    /// constant and the whole bind is static. The gate in
+    /// `jitgen/compile/method_call.rs` guarantees `req <= n`, no post
+    /// params, `reqopt >= lead_num`, and — when `n > reqopt` — an
+    /// explicit `*rest` to absorb the surplus.
+    ///
+    /// Because the leading args always occupy the first positions and
+    /// are always consumed by req/opt (`reqopt >= lead_num`), the values
+    /// that land in the rest `Array` are exactly a *contiguous* tail of
+    /// the caller's source slots — which is what lets the backends build
+    /// it with a single `create_array` straight off the caller frame,
+    /// with no intermediate.
+    ///
+    pub(crate) fn forwarded_deferred_layout(&self, lead_num: usize, len: usize) -> ForwardedLayout {
+        let n = lead_num + len;
+        let reqopt = self.reqopt_num();
+        // Values bound to req/opt slots; the surplus (if any) goes to `*rest`.
+        let bound = n.min(reqopt);
+        ForwardedLayout {
+            from_src: bound - lead_num,
+            none_fill: reqopt - bound,
+            rest: self
+                .rest_pos()
+                .map(|pos| RestBuild {
+                    pos,
+                    src_offset: bound - lead_num,
+                    len: n - bound,
+                }),
+            kw_rest: self.kw_rest(),
+        }
     }
 
     pub(crate) fn is_block_style(&self) -> bool {
