@@ -367,6 +367,19 @@ impl Codegen {
         let guard_addr = self.jit.get_label_address(&guard).as_ptr() as u64;
         // SAFETY: `slot` is the dispatch word recorded by `compile_patch`.
         unsafe { *(slot as *mut u64) = guard_addr };
+        // Re-point the guard-free dispatch slot at the recompiled body so
+        // every JIT call site that dispatches through it (skipping the
+        // wrapper's re-guard) redirects too — the aarch64 analogue of x86
+        // repatching the `patch_point` jump. The slot exists whenever
+        // `compile_patch` compiled this (iseq, class) pair, which is a
+        // precondition for reaching the recompiler.
+        if let Some(guard_free) = globals.store[iseq_id].get_jit_guard_free_slot(self_class) {
+            let entry_addr = self.jit.get_label_address(&jit_entry).as_ptr() as u64;
+            // SAFETY: heap-leaked `u64` published by `compile_patch`; valid
+            // for the process lifetime, single-threaded write (see
+            // `invalidate_jit_code`).
+            unsafe { *(guard_free as *mut u64) = entry_addr };
+        }
         Some(())
     }
 

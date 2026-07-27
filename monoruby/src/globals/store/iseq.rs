@@ -174,6 +174,19 @@ pub struct ISeqInfo {
     /// (aarch64 installs JIT code via this slot, not x86 branch patching).
     #[cfg(target_arch = "aarch64")]
     pub(super) jit_slot: HashMap<ClassId, u64>,
+    /// aarch64 only: per-self-class address of the *guard-free* dispatch slot
+    /// — a heap-leaked `u64` holding the current specialized `jit_entry`
+    /// address (past the wrapper's counter logic and the class-guard chain).
+    /// JIT call sites whose receiver class is statically known (and already
+    /// guarded at the call site) dispatch through this slot, skipping the
+    /// wrapper's redundant `self.class` re-guard — the aarch64 analogue of
+    /// x86's direct `call` into the guard-free entry via its `patch_point`.
+    /// `compile_patch` publishes it, `recompile_method` re-points it at the
+    /// recompiled body (the analogue of x86 repatching `patch_point`), and
+    /// `invalidate_jit_code` zeroes it (callers then fall back to the wrapper
+    /// codeptr).
+    #[cfg(target_arch = "aarch64")]
+    pub(super) jit_guard_free_slot: HashMap<ClassId, u64>,
     /// Bounded per-self-class warm-up profile used to decide *which* receiver
     /// class is hot enough to specialize for. Without it, the first call that
     /// trips the global warm-up counter compiles for whatever class happens to
@@ -314,6 +327,8 @@ impl ISeqInfo {
             jit_entry: HashMap::default(),
             #[cfg(target_arch = "aarch64")]
             jit_slot: HashMap::default(),
+            #[cfg(target_arch = "aarch64")]
+            jit_guard_free_slot: HashMap::default(),
             jit_class_profile: Vec::new(),
             jit_invalidated: false,
             bb_info: BasicBlockInfo::default(),
@@ -634,6 +649,34 @@ impl ISeqInfo {
         self.jit_slot.get(&self_class).copied()
     }
 
+    /// aarch64 only: record the *guard-free* dispatch-slot address for a self
+    /// class (see `jit_guard_free_slot`). Called from `compile_patch` after
+    /// the specialized body is finalized — and only on the FIRST publish for
+    /// this class: callers bake the slot address into their code, so a
+    /// republish must update the existing word in place (`compile_patch` does
+    /// that), never insert a fresh one — an orphaned old cell would be
+    /// invisible to `invalidate_jit_code`'s zeroing and the recompiler's
+    /// re-pointing.
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) fn set_jit_guard_free_slot(&mut self, self_class: ClassId, slot: u64) {
+        let old = self.jit_guard_free_slot.insert(self_class, slot);
+        debug_assert!(
+            old.is_none(),
+            "guard-free slot republished for {self_class:?}: the old cell is now orphaned"
+        );
+    }
+
+    /// aarch64 only: the guard-free dispatch-slot address for a self class,
+    /// if compiled. `None` once invalidated (the slots are also zeroed then,
+    /// but new call-site lowering must stop resolving them entirely).
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) fn get_jit_guard_free_slot(&self, self_class: ClassId) -> Option<u64> {
+        if self.jit_invalidated {
+            return None;
+        }
+        self.jit_guard_free_slot.get(&self_class).copied()
+    }
+
     pub(crate) fn get_cache_map(
         &self,
         self_class: ClassId,
@@ -698,6 +741,16 @@ impl ISeqInfo {
                 unsafe { *(slot_addr as *mut u64) = 0 };
             }
             self.jit_slot.clear();
+            // Guard-free dispatch slots too: a zeroed slot makes the caller's
+            // `cbz` fallback take the wrapper codeptr (whose own dispatch word
+            // was just zeroed above → VM). Callers are themselves invalidated
+            // on the paths that matter, so this is defense in depth.
+            for &slot_addr in self.jit_guard_free_slot.values() {
+                // SAFETY: heap-leaked `u64` recorded by `set_jit_guard_free_slot`;
+                // same lifetime/race argument as `jit_slot` above.
+                unsafe { *(slot_addr as *mut u64) = 0 };
+            }
+            self.jit_guard_free_slot.clear();
         }
     }
 

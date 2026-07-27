@@ -754,6 +754,21 @@ impl Codegen {
     /// frame, set PC, `blr` the callee codeptr, then restore the caller's
     /// cfp/lfp. Mirrors x86 `do_call` (set_lfp + push_frame + call + pop_frame)
     /// and the VM invoker's `aftargs` sequence.
+    ///
+    /// With `jit_slot` (an iseq callee already compiled for the call site's
+    /// statically-guarded receiver class), the call dispatches through the
+    /// **guard-free slot**: `ldr` the current specialized entry from the heap
+    /// word and `blr` it directly, skipping the wrapper's counter logic and
+    /// the class-guard chain's redundant `self.class` re-check — the aarch64
+    /// analogue of x86's direct `call jit_entry`. `x21` (PC) is set to the
+    /// callee's bytecode base on the direct path too (not just the `cbz`
+    /// wrapper fallback): unlike x86 — whose bodies re-materialize `r13` from
+    /// baked immediates — aarch64 JIT bodies read the incoming `x21` at a few
+    /// VM-derived sites (see the inline comment), so the specialized entry
+    /// needs the same `x21` the wrapper path has always delivered. The `cbz`
+    /// fallback takes the plain wrapper `codeptr` when the slot was zeroed by
+    /// `invalidate_jit_code`.
+    ///
     /// Returns the call's return address (the instruction after the `blr`,
     /// i.e. pop_frame's first instruction) so `emit_call` can register it for
     /// BOP-redefinition eviction (mirrors x86 `emit_call`'s
@@ -764,6 +779,7 @@ impl Codegen {
         is_iseq: bool,
         callee_pc: Option<BytecodePtrBase>,
         call_site_bc_ptr: BytecodePtr,
+        jit_slot: Option<u64>,
     ) -> CodePtr {
         let codeptr_addr = codeptr.as_ptr() as u64;
         // set_lfp + push_frame (EXEC=x19, LFP=x22).
@@ -775,24 +791,51 @@ impl Codegen {
             sub x22, sp, #(RSP_LOCAL_FRAME as u32);  // callee LFP
             stur x22, [sp, #(-((RSP_CFP + CFP_LFP) as i32))];  // new_cfp.lfp = LFP
         );
-        if is_iseq {
-            // iseq: PC <- callee pc (read by the VM tier / prologue).
-            if let Some(pc) = callee_pc {
-                let pc_ptr = pc.as_ptr() as u64;
-                monoasm_arm64!(&mut self.jit, mov x21, (pc_ptr););
-            }
+        if let Some(slot) = jit_slot {
+            // Guard-free dispatch (iseq callees only; the resolver never
+            // yields a slot for builtins). x21 (PC) is set on BOTH arms:
+            // unlike x86 — whose compiled bodies re-materialize r13 from baked
+            // immediates wherever they need a pc — aarch64 JIT bodies contain
+            // VM-derived sequences that *read* the incoming x21 (the
+            // `sub x3, x21, #16` call-site-pc computations in `emit_yield`,
+            // `object_send_inline` and `a64_jit_class_def_sub`), so a
+            // specialized entry must see the same x21 environment the wrapper
+            // path has always provided (x21 = callee bytecode base).
+            debug_assert!(is_iseq);
+            let do_call = self.jit.label();
+            let pc_ptr = callee_pc.unwrap().as_ptr() as u64;
+            monoasm_arm64!(&mut self.jit,
+                mov x21, (pc_ptr);
+                mov x9, (slot);
+                ldr x10, [x9];                       // current specialized entry
+                cbnz x10, do_call;
+                // Slot zeroed (BOP invalidation): fall back to the wrapper
+                // codeptr (its counter path branches to vm_entry, which also
+                // reads PC).
+                mov x10, (codeptr_addr);
+            do_call:
+                blr x10;                             // result in x0
+            );
         } else {
-            // builtin: x3 is the 4th C-arg = the `pc` parameter, which with-pc
-            // builtins use as the call-site bytecode pointer. The native-func
-            // wrapper passes x3 through untouched (mirrors x86 do_call setting
-            // rcx to the call-site bc ptr).
-            let cs = call_site_bc_ptr.as_ptr() as u64;
-            monoasm_arm64!(&mut self.jit, mov x3, (cs););
+            if is_iseq {
+                // iseq: PC <- callee pc (read by the VM tier / prologue).
+                if let Some(pc) = callee_pc {
+                    let pc_ptr = pc.as_ptr() as u64;
+                    monoasm_arm64!(&mut self.jit, mov x21, (pc_ptr););
+                }
+            } else {
+                // builtin: x3 is the 4th C-arg = the `pc` parameter, which with-pc
+                // builtins use as the call-site bytecode pointer. The native-func
+                // wrapper passes x3 through untouched (mirrors x86 do_call setting
+                // rcx to the call-site bc ptr).
+                let cs = call_site_bc_ptr.as_ptr() as u64;
+                monoasm_arm64!(&mut self.jit, mov x3, (cs););
+            }
+            monoasm_arm64!(&mut self.jit,
+                mov x10, (codeptr_addr);
+                blr x10;                             // result in x0
+            );
         }
-        monoasm_arm64!(&mut self.jit,
-            mov x10, (codeptr_addr);
-            blr x10;                                 // result in x0
-        );
         let return_addr = self.jit.get_current_address();
         // pop_frame: restore caller cfp + lfp from x29 (== x86 rbp).
         monoasm_arm64!(&mut self.jit,
@@ -1084,8 +1127,13 @@ impl Codegen {
         );
     }
 
-    /// The call itself. `jit_entry` is unused — aarch64 always calls `codeptr`
-    /// directly (no JIT-entry dispatch).
+    /// The call itself. `jit_entry` (an x86 `DestLabel`) is unused; the
+    /// aarch64 twin is `jit_slot` — the guard-free dispatch-slot address for a
+    /// callee already compiled for this call site's statically-guarded
+    /// receiver class. When present, `a64_do_call` dispatches through it,
+    /// skipping the wrapper's counter logic and redundant `self.class`
+    /// re-guard (see `a64_do_call`); otherwise it calls the wrapper `codeptr`
+    /// as before.
     ///
     /// Like x86, the call's return address is registered for BOP-redefinition
     /// eviction: when a basic op is redefined *inside* the callee, the caller's
@@ -1102,10 +1150,12 @@ impl Codegen {
         callee_pc: Option<BytecodePtrBase>,
         call_site_bc_ptr: BytecodePtr,
         _jit_entry: Option<DestLabel>,
+        jit_slot: Option<u64>,
         evict: AsmEvict,
         evict_label: &DestLabel,
     ) {
-        let return_addr = self.a64_do_call(codeptr, is_iseq, callee_pc, call_site_bc_ptr);
+        let return_addr =
+            self.a64_do_call(codeptr, is_iseq, callee_pc, call_site_bc_ptr, jit_slot);
         self.set_deopt_with_return_addr(return_addr, evict, evict_label);
     }
 
