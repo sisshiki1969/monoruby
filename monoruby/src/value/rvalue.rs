@@ -66,6 +66,11 @@ pub const OBJECT_INLINE_IVAR: usize = 6;
 /// `set_age` overwrites wholesale (issue #975: this bit previously sat
 /// on bit 8 and corrupted / was corrupted by the age counter).
 const CHILLED_LITERAL_BIT: u16 = 0b1000_0000;
+/// Flag bits a newborn copy inherits from its source (see
+/// `Header::newborn`): everything except the generational-GC state. Shared
+/// with the JIT, whose inline literal copy masks the template's header word
+/// with exactly this, so the two cannot drift apart.
+pub const NEWBORN_FLAG_MASK: u16 = 0b0001_0111 | CHILLED_LITERAL_BIT;
 pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.flag);
 pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
 pub const RVALUE_OFFSET_CLASS: usize = std::mem::offset_of!(RValue, header.meta.class);
@@ -1188,6 +1193,33 @@ impl RValue {
             .ivar_names()
             .filter_map(|(name, id)| self.get_ivar_by_ivarid(*id).map(|v| (*name, v)))
             .collect()
+    }
+
+    ///
+    /// The elements of a literal template that the JIT may copy inline
+    /// instead of calling `Value::value_deep_copy`, or `None` when the
+    /// literal needs the general deep copy.
+    ///
+    /// Qualifying literals are short Arrays — short enough that the copy's
+    /// slots live inline, so no heap buffer is needed — whose elements are
+    /// all immediates. `Value::deep_copy` is the identity on an immediate,
+    /// so for those a deep copy is a plain word copy. A template carrying
+    /// instance variables is excluded, since the copy must clone them.
+    ///
+    /// The elements are safe to bake into machine code: they are
+    /// immediates (never GC pointers), and the template itself is owned by
+    /// the bytecode and never mutated.
+    ///
+    pub(crate) fn inline_copyable_array(&self) -> Option<Vec<Value>> {
+        if self.ty() != ObjTy::ARRAY || self.var_table.is_some() {
+            return None;
+        }
+        // SAFETY: the type check above proves the `array` variant is active.
+        let ary = unsafe { &self.kind.array };
+        if ary.len() > ARRAY_INLINE_CAPA || ary.iter().any(|e| e.try_rvalue().is_some()) {
+            return None;
+        }
+        Some(ary.iter().copied().collect())
     }
 
     pub(crate) fn get_ivar_by_ivarid(&self, id: IvarId) -> Option<Value> {
@@ -2444,7 +2476,7 @@ impl Header {
     /// itself.
     fn newborn(&self) -> Header {
         let mut header = *self;
-        unsafe { header.meta.flag &= 0b0001_0111 | CHILLED_LITERAL_BIT };
+        unsafe { header.meta.flag &= NEWBORN_FLAG_MASK };
         header
     }
 

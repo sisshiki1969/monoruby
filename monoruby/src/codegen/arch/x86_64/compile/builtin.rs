@@ -141,48 +141,67 @@ impl Codegen {
 
     /// `Class#allocate`: `alloc_func(class_id, globals)` → rax.
     ///
-    /// With `inline_object` (a plain object produced by
-    /// `default_alloc_func`, with no spilled ivar table), the whole
-    /// allocation is emitted here instead: pop a cell from the GC free list
-    /// and write the header, `var_table = None` and `OBJECT_INLINE_IVAR`
-    /// nil slots — which is the entire payload of `RValue::new_object`.
-    /// An empty free list falls back to the call.
+    /// With an `inline` payload the whole allocation is emitted here
+    /// instead: pop a cell (`emit_alloc_cell`) and write exactly what the
+    /// stock allocator would have produced. The runtime call is kept as the
+    /// fallback for the page-boundary cases.
     pub(crate) fn emit_class_allocate(
         &mut self,
         class_id: u32,
         alloc_func: u64,
-        inline_object: bool,
+        inline: Option<InlineAlloc>,
     ) {
-        if inline_object && !self.alloc_free_head_addr.is_null() {
-            let slow = self.jit.label();
-            let cont = self.jit.label();
-            // 8-byte object header: flag=1 (live) | ty=OBJECT<<16 | class<<32.
-            let header: u64 =
-                ((class_id as u64) << 32) | ((ObjTy::OBJECT.get() as u64) << 16) | 1;
-            self.emit_alloc_cell(header, &slow);
-            monoasm! { &mut self.jit,
-                movq [rax + (RVALUE_OFFSET_VAR)], 0;  // var_table = None
-            }
+        let Some(inline) = inline.filter(|_| !self.alloc_free_head_addr.is_null()) else {
+            self.class_allocate_call(class_id, alloc_func);
+            return;
+        };
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        // 8-byte object header: flag=1 (live) | ty<<16 | class<<32.
+        let ty = match inline {
+            InlineAlloc::Object => ObjTy::OBJECT,
+            InlineAlloc::Struct(_) => ObjTy::STRUCT,
+        };
+        let header: u64 = ((class_id as u64) << 32) | ((ty.get() as u64) << 16) | 1;
+        self.emit_alloc_cell(CellHeader::Imm(header), &slow);
+        monoasm! { &mut self.jit,
+            movq [rax + (RVALUE_OFFSET_VAR)], 0;  // var_table = None
+        }
+        match inline {
             // `ObjKind::object()` == `[None; OBJECT_INLINE_IVAR]` at the
             // head of the `kind` union (the same `RVALUE_OFFSET_KIND +
             // ivarid * 8` addressing the ivar emitters use), and `None`
             // for `Option<Value>` is a zero word.
-            for k in 0..OBJECT_INLINE_IVAR {
-                let off = RVALUE_OFFSET_KIND as i32 + (k as i32) * 8;
-                monoasm! { &mut self.jit,
-                    movq [rax + (off)], 0;
+            InlineAlloc::Object => {
+                for k in 0..OBJECT_INLINE_IVAR {
+                    let off = RVALUE_OFFSET_KIND as i32 + (k as i32) * 8;
+                    monoasm! { &mut self.jit,
+                        movq [rax + (off)], 0;
+                    }
                 }
             }
-            monoasm! { &mut self.jit,
-                jmp  cont;
-            slow:
+            // `StructInner::new(len)` == a `SmallVec` holding `len` nils:
+            // the smallvec's capacity field doubles as the inline length,
+            // and slots past `len` stay untouched, exactly as in Rust.
+            InlineAlloc::Struct(len) => {
+                monoasm! { &mut self.jit,
+                    movq [rax + (RVALUE_OFFSET_ARY_CAPA)], (len as i32);
+                }
+                for k in 0..len {
+                    let off = RVALUE_OFFSET_INLINE as i32 + (k as i32) * 8;
+                    monoasm! { &mut self.jit,
+                        movq [rax + (off)], (NIL_VALUE as i32);
+                    }
+                }
             }
-            self.class_allocate_call(class_id, alloc_func);
-            monoasm! { &mut self.jit,
-            cont:
-            }
-        } else {
-            self.class_allocate_call(class_id, alloc_func);
+        }
+        monoasm! { &mut self.jit,
+            jmp  cont;
+        slow:
+        }
+        self.class_allocate_call(class_id, alloc_func);
+        monoasm! { &mut self.jit,
+        cont:
         }
     }
 

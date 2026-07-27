@@ -997,7 +997,7 @@ impl Codegen {
     ///
     /// #### destroy
     /// - rdi, rcx
-    pub(crate) fn emit_alloc_cell(&mut self, header: u64, slow: &DestLabel) {
+    pub(crate) fn emit_alloc_cell(&mut self, header: CellHeader, slow: &DestLabel) {
         let free_head = self.alloc_free_head_addr as u64;
         let free_count = self.alloc_free_count_addr as u64;
         let total = self.alloc_total_addr as u64;
@@ -1035,7 +1035,23 @@ impl Codegen {
         done:
             movq rdi, (total);
             addq [rdi], 1;
-            movq rdi, (header);
+        }
+        match header {
+            CellHeader::Imm(h) => monoasm! { &mut self.jit,
+                movq rdi, (h);
+            },
+            CellHeader::NewbornOf(src) => {
+                // Keep class/type (the upper 48 bits) and the non-GC flags.
+                let mask: u64 = !0xffffu64 | NEWBORN_FLAG_MASK as u64;
+                monoasm! { &mut self.jit,
+                    movq rdi, (src);
+                    movq rdi, [rdi];
+                    movq rcx, (mask);
+                    andq rdi, rcx;
+                }
+            }
+        }
+        monoasm! { &mut self.jit,
             movq [rax + (RVALUE_OFFSET_FLAG)], rdi;   // header (offset 0); overwrites the free link
         }
     }
@@ -1064,7 +1080,7 @@ impl Codegen {
         // 8-byte object header: flag=1 (live) | ty=ARRAY<<16 | class=ARRAY_CLASS<<32.
         let header: u64 =
             ((ARRAY_CLASS.u32() as u64) << 32) | ((ObjTy::ARRAY.get() as u64) << 16) | 1;
-        self.emit_alloc_cell(header, &slow);
+        self.emit_alloc_cell(CellHeader::Imm(header), &slow);
         monoasm! { &mut self.jit,
             movq [rax + (RVALUE_OFFSET_VAR)], 0;      // var_table = None
             movq [rax + (RVALUE_OFFSET_ARY_CAPA)], (len as i32);  // inline length (capa == len <= 5)
@@ -1174,12 +1190,46 @@ impl Codegen {
     }
 
     /// rax <- a deep copy of literal `v` (fresh mutable object per evaluation).
+    ///
+    /// A short all-immediate Array literal (`[1, 2]` and friends, which
+    /// `bytecodegen` bakes as a constant rather than compiling to
+    /// `NewArray`) is copied inline: its deep copy is just a header, the
+    /// inline length, and the element words. Everything else calls
+    /// `value_deep_copy`.
     pub(in crate::codegen::jitgen) fn emit_deep_copy_lit(
         &mut self,
         v: Value,
         using_fpr: UsingFpr,
     ) -> bool {
+        let Some(elems) = v
+            .inline_copyable_array()
+            .filter(|_| !self.alloc_free_head_addr.is_null())
+        else {
+            self.deepcopy_literal(v, using_fpr);
+            return true;
+        };
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        self.emit_alloc_cell(CellHeader::NewbornOf(v.id()), &slow);
+        monoasm! { &mut self.jit,
+            movq [rax + (RVALUE_OFFSET_VAR)], 0;  // var_table = None
+            movq [rax + (RVALUE_OFFSET_ARY_CAPA)], (elems.len() as i32);  // inline length
+        }
+        for (k, e) in elems.iter().enumerate() {
+            let off = RVALUE_OFFSET_INLINE as i32 + (k as i32) * 8;
+            monoasm! { &mut self.jit,
+                movq rcx, (e.id());
+                movq [rax + (off)], rcx;
+            }
+        }
+        monoasm! { &mut self.jit,
+            jmp  cont;
+        slow:
+        }
         self.deepcopy_literal(v, using_fpr);
+        monoasm! { &mut self.jit,
+        cont:
+        }
         true
     }
 

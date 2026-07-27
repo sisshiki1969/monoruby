@@ -352,14 +352,26 @@ pub extern "C" fn default_alloc_func(class_id: ClassId, globals: &mut crate::Glo
 /// `allocate` before `Struct.new` finished initialising the subclass)
 /// we fall back to a zero-length slot vector.
 pub extern "C" fn struct_alloc_func(class_id: ClassId, globals: &mut crate::Globals) -> Value {
-    use crate::IdentId;
     use crate::value::Value;
-    // Walk the class chain looking for `/members` (set on the immediate
-    // subclass produced by `Struct.new(...)`, not propagated to deeper
-    // descendants like `Class.new(MyStruct)`).
-    let mut cls = globals.store[class_id].get_module();
-    let len = loop {
-        if let Some(m) = globals.store.get_ivar(cls.as_val(), IdentId::get_id("/members"))
+    let len = struct_members_len(&globals.store, class_id);
+    Value::struct_object(class_id, len)
+}
+
+/// Number of members of the `Struct` subclass `class_id`, i.e. the length of
+/// the `/members` array found by walking the class chain (it is set on the
+/// immediate subclass produced by `Struct.new(...)` and not propagated to
+/// deeper descendants like `Class.new(MyStruct)`). Zero when there is none.
+///
+/// Shared by `struct_alloc_func` and by the JIT, which bakes the count into
+/// an inline allocation instead of repeating this walk on every
+/// construction. Baking is sound for the same reason the struct
+/// reader/writer wrappers may bake a slot index and an inline/heap choice:
+/// a `Struct` subclass's shape is fixed when `Struct.new(...)` creates it.
+pub fn struct_members_len(store: &super::Store, class_id: ClassId) -> usize {
+    use crate::IdentId;
+    let mut cls = store[class_id].get_module();
+    loop {
+        if let Some(m) = store.get_ivar(cls.as_val(), IdentId::get_id("/members"))
             && let Some(arr) = m.try_array_ty()
         {
             break arr.len();
@@ -368,8 +380,7 @@ pub extern "C" fn struct_alloc_func(class_id: ClassId, globals: &mut crate::Glob
             Some(s) => cls = s,
             None => break 0,
         }
-    };
-    Value::struct_object(class_id, len)
+    }
 }
 
 impl alloc::GC<RValue> for ClassInfo {

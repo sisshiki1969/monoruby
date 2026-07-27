@@ -1488,7 +1488,7 @@ impl Codegen {
     ///
     /// #### destroy
     /// - x9, x11, x12
-    pub(crate) fn emit_alloc_cell(&mut self, header: u64, slow: &DestLabel) {
+    pub(crate) fn emit_alloc_cell(&mut self, header: CellHeader, slow: &DestLabel) {
         let rax = GP::Rax.a64().0; // x0 (result)
         let free_head = self.alloc_free_head_addr as u64;
         let free_count = self.alloc_free_count_addr as u64;
@@ -1540,7 +1540,23 @@ impl Codegen {
             ldr x12, [x9];
             add x12, x12, #1;
             str x12, [x9];
-            mov x11, (header);
+        );
+        match header {
+            CellHeader::Imm(h) => monoasm_arm64!(&mut self.jit,
+                mov x11, (h);
+            ),
+            CellHeader::NewbornOf(src) => {
+                // Keep class/type (the upper 48 bits) and the non-GC flags.
+                let mask: u64 = !0xffffu64 | NEWBORN_FLAG_MASK as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x11, (src);
+                    ldr x11, [x11];
+                    mov x12, (mask);
+                    and x11, x11, x12;
+                );
+            }
+        }
+        monoasm_arm64!(&mut self.jit,
             str x11, [x(rax)];         // header (offset 0); overwrites the free link
         );
     }
@@ -1565,7 +1581,7 @@ impl Codegen {
         // 8-byte object header: flag=1 | ty=ARRAY<<16 | class=ARRAY_CLASS<<32.
         let header: u64 =
             ((ARRAY_CLASS.u32() as u64) << 32) | ((ObjTy::ARRAY.get() as u64) << 16) | 1;
-        self.emit_alloc_cell(header, &slow);
+        self.emit_alloc_cell(CellHeader::Imm(header), &slow);
         monoasm_arm64!(&mut self.jit,
             mov x12, #0;
             str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
@@ -1761,11 +1777,49 @@ impl Codegen {
 
     /// rax <- a deep copy of literal `v` (a fresh mutable object per
     /// evaluation). Mirrors x86 `deepcopy_literal`.
+    ///
+    /// A short all-immediate Array literal (`[1, 2]` and friends, which
+    /// `bytecodegen` bakes as a constant rather than compiling to
+    /// `NewArray`) is copied inline: its deep copy is just a header, the
+    /// inline length, and the element words. Everything else calls
+    /// `value_deep_copy`.
     pub(in crate::codegen::jitgen) fn emit_deep_copy_lit(
         &mut self,
         v: Value,
         using_fpr: UsingFpr,
     ) -> bool {
+        if let Some(elems) = v
+            .inline_copyable_array()
+            .filter(|_| !self.alloc_free_head_addr.is_null())
+        {
+            let rax = GP::Rax.a64().0; // x0 (result)
+            let slow = self.jit.label();
+            let cont = self.jit.label();
+            self.emit_alloc_cell(CellHeader::NewbornOf(v.id()), &slow);
+            monoasm_arm64!(&mut self.jit,
+                mov x12, #0;
+                str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
+                mov x12, (elems.len() as u64);
+                str x12, [x(rax), #(RVALUE_OFFSET_ARY_CAPA as u32)]; // inline length
+            );
+            for (k, e) in elems.iter().enumerate() {
+                let off = RVALUE_OFFSET_INLINE as u32 + (k as u32) * 8;
+                monoasm_arm64!(&mut self.jit,
+                    mov x12, (e.id());
+                    str x12, [x(rax), #(off)];
+                );
+            }
+            monoasm_arm64!(&mut self.jit, b cont;);
+            self.jit.bind_label(slow);
+            self.deep_copy_lit_call(v, using_fpr);
+            self.jit.bind_label(cont);
+            return true;
+        }
+        self.deep_copy_lit_call(v, using_fpr);
+        true
+    }
+
+    fn deep_copy_lit_call(&mut self, v: Value, using_fpr: UsingFpr) {
         let imm = v.id();
         let f = Value::value_deep_copy as *const () as u64;
         self.emit_fpr_save(using_fpr, false);
@@ -1777,7 +1831,6 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
-        true
     }
 
     // ---- floating-point transfer primitives (aarch64) ---------------------
