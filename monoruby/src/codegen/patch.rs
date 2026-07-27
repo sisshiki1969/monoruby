@@ -72,6 +72,36 @@ impl Codegen {
         // `self_class`'s entry; `jit_compile_patch` passes the right one for
         // both the head class and chained classes).
         globals.store[iseq_id].set_jit_slot(self_class, slot.as_ptr() as u64);
+        // Publish the *guard-free* dispatch slot: a heap word holding the bare
+        // `jit_entry` address (past the wrapper counter logic and the
+        // class-guard chain). JIT call sites that statically know — and have
+        // already guarded — the receiver class dispatch through it, skipping
+        // the redundant re-guard (see `ISeqInfo::jit_guard_free_slot`).
+        // `recompile_method` re-points it; `invalidate_jit_code` zeroes it.
+        //
+        // ONE CELL PER (iseq, class), FOREVER: earlier-compiled callers bake
+        // the slot's *address* into their code, so a second `compile_patch`
+        // for the same pair (reachable when a whole-method recompile rebuilds
+        // the class-guard chain with a fresh empty `next_slot`, dropping the
+        // chained classes, which then re-warm through `jit_profile_patch`)
+        // must update the EXISTING word in place — allocating a fresh Box
+        // would orphan the baked one, making it invisible to both
+        // `invalidate_jit_code`'s zeroing and future recompiles' re-pointing
+        // (x86's twin invariant: it repatches its `patch_point` in place and
+        // panics on a double `add_jit_code`).
+        let entry_addr = self.jit.get_label_address(&jit_entry).as_ptr() as u64;
+        match globals.store[iseq_id].get_jit_guard_free_slot(self_class) {
+            Some(guard_free) => {
+                // SAFETY: heap-leaked `u64` published by an earlier
+                // `compile_patch`; valid for the process lifetime,
+                // single-threaded write (M:1 green threads).
+                unsafe { *(guard_free as *mut u64) = entry_addr };
+            }
+            None => {
+                let guard_free = Box::into_raw(Box::new(entry_addr)) as u64;
+                globals.store[iseq_id].set_jit_guard_free_slot(self_class, guard_free);
+            }
+        }
         Some(())
     }
 

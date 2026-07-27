@@ -974,6 +974,12 @@ pub(in crate::codegen) enum LInst {
         call_site_bc_ptr: BytecodePtr,
         /// x86 JIT entry for this recv_class (`store[iseq].get_jit_entry`).
         jit_entry: Option<DestLabel>,
+        /// aarch64 guard-free dispatch-slot address for this recv_class
+        /// (`store[iseq].get_jit_guard_free_slot`): a heap word holding the
+        /// current specialized entry, letting the call skip the wrapper's
+        /// redundant `self.class` re-guard. `None` on x86 (which uses
+        /// `jit_entry` directly) and for uncompiled/unknown-class callees.
+        jit_slot: Option<u64>,
         evict: AsmEvict,
         evict_label: DestLabel,
     },

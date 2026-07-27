@@ -378,3 +378,40 @@ fn class_def_in_expression_position_730() {
         "##,
     );
 }
+
+// Guard-free slot dispatch (aarch64) — a shared method dispatched through the
+// guard-free slot must stay correct across a whole-method recompile
+// (class-version bump) that RE-POINTS the slot at the recompiled body. Uses
+// chained receiver classes (A head, B chained) so both a head slot and a
+// chained-class slot participate, and avoids `+` entirely (`.times`/`<<`/
+// `.succ`) because `run_test` re-runs the snippet 25× in one process — a
+// mid-snippet `Integer#+` redefine would break loop counters on the re-runs.
+// (The BOP-zeroing + wrapper-fallback leg is covered by the redefine_bop_*
+// tests above, which already run with guard-free dispatch active.) On x86 this
+// is plain dispatch; on aarch64 it drives the jit_guard_free_slot machinery.
+#[test]
+fn guard_free_dispatch_across_recompile() {
+    run_test(
+        r##"
+        class Base
+          def helper(x); x.succ; end
+          def m(v); [helper(v), helper(v)]; end
+        end
+        class A < Base; end
+        class B < Base; end
+        a = A.new; b = B.new
+        res = 0
+        300.times { |i| res += a.m(i)[0]; res += b.m(i)[1] }   # compile m for A (head) + B (chained)
+        def caller(o)
+          r = []
+          50.times { |j| r << o.m(j) }
+          r.length
+        end
+        3.times { caller(a); caller(b) }                       # callers bake the guard-free slots
+        # class-version bumps drive whole-method recompiles that re-point the
+        # slots; every subsequent guard-free dispatch must reach the new body.
+        3.times { |k| eval("class Dummy#{k}; def zz; #{k}; end; end"); a.m(1); b.m(1) }
+        [res, caller(a), caller(b), a.m(5), b.m(7)]
+        "##,
+    );
+}

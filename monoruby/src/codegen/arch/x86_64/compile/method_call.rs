@@ -234,6 +234,8 @@ impl Codegen {
         callee_pc: Option<BytecodePtrBase>,
         call_site_bc_ptr: BytecodePtr,
         jit_entry: Option<DestLabel>,
+        // aarch64 guard-free dispatch slot; x86 dispatches via `jit_entry`.
+        _jit_slot: Option<u64>,
         evict: AsmEvict,
         evict_label: &DestLabel,
     ) {

@@ -480,12 +480,24 @@ impl Codegen {
                 // x86 JIT-entry lookup (aarch64 ignores it; the lookup is a
                 // side-effect-free table read, so pre-resolving here is safe).
                 let jit_entry = is_iseq.and_then(|iseq| store[iseq].get_jit_entry(recv_class));
+                // aarch64 guard-free dispatch-slot lookup (x86 ignores it).
+                // `recv_class` is statically established at this call site
+                // (class-version + receiver guards precede every AsmInst::Call),
+                // which is exactly the precondition for skipping the wrapper's
+                // `self.class` re-guard — same soundness argument as x86's
+                // direct `call jit_entry`.
+                #[cfg(target_arch = "aarch64")]
+                let jit_slot =
+                    is_iseq.and_then(|iseq| store[iseq].get_jit_guard_free_slot(recv_class));
+                #[cfg(not(target_arch = "aarch64"))]
+                let jit_slot = None;
                 self.encode_linst(LInst::Call {
                     codeptr,
                     is_iseq: is_iseq.is_some(),
                     callee_pc,
                     call_site_bc_ptr: pc,
                     jit_entry,
+                    jit_slot,
                     evict,
                     evict_label,
                 });
@@ -1464,6 +1476,7 @@ impl Codegen {
                 callee_pc,
                 call_site_bc_ptr,
                 jit_entry,
+                jit_slot,
                 evict,
                 evict_label,
             } => {
@@ -1473,6 +1486,7 @@ impl Codegen {
                     callee_pc,
                     call_site_bc_ptr,
                     jit_entry,
+                    jit_slot,
                     evict,
                     &evict_label,
                 );
