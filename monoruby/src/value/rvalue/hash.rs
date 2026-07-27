@@ -362,6 +362,14 @@ impl HashmapInner {
         self.content.compare_by_identity(vm, globals)
     }
 
+    /// Set the key-comparison mode of an empty hash, in either direction.
+    /// See `HashContent::set_compare_by_identity_empty`.
+    pub fn set_compare_by_identity_empty(&mut self, ident: bool) -> Result<()> {
+        self.check_iter()?;
+        self.content.set_compare_by_identity_empty(ident);
+        Ok(())
+    }
+
     /*pub fn entry_and_modify<F>(&mut self, k: Value, f: F)
     where
         F: FnOnce(&mut Value),
@@ -733,6 +741,31 @@ impl HashContent {
             HashContent::IdentMap(_) => {}
         }
         Ok(())
+    }
+
+    ///
+    /// Set the key-comparison mode of an **empty** map, in either direction.
+    ///
+    /// This is the primitive behind CRuby's `rb_hash_replace`, which adopts
+    /// the source hash's comparison mode wholesale — including turning
+    /// identity comparison *off*, which `compare_by_identity` (a one-way
+    /// door, like `Hash#compare_by_identity`) cannot do. Turning it off on a
+    /// populated map would have to merge keys that are `eql?` but not
+    /// identical, silently dropping entries; requiring an empty map keeps
+    /// the primitive lossless. Callers that rebuild a container (`Set#replace`
+    /// / `#map!` / `#flatten!`) clear it first anyway.
+    ///
+    pub(crate) fn set_compare_by_identity_empty(&mut self, ident: bool) {
+        assert_eq!(0, self.len(), "the map must be empty to change its mode");
+        match (&self, ident) {
+            (HashContent::Map(_), true) => {
+                *self = HashContent::IdentMap(Box::new(RubyMap::default()));
+            }
+            (HashContent::IdentMap(_), false) => {
+                *self = HashContent::Map(Box::new(RubyMap::default()));
+            }
+            _ => {}
+        }
     }
 }
 
