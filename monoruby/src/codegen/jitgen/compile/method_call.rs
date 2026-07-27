@@ -311,22 +311,53 @@ impl<'a> JitContext<'a> {
                 // accepts kwargs — required-kw-missing and unknown-kw
                 // would silently fold otherwise. Restrict folding to the
                 // "neither side touches kwargs" case to avoid that.
-                if self.store.is_simple_call(func_id, callid)
+                let simple_fold = self.store.is_simple_call(func_id, callid)
                     && self.store[func_id].no_keyword()
-                    && !callsite.kw_may_exists()
-                {
-                    match self.store[iseq].hint {
+                    && !callsite.kw_may_exists();
+                // A `...`-forwarding call site never satisfies
+                // `is_simple_call` (its splat and hash-splat disqualify it),
+                // so the fold above never sees the
+                // `o.__builtin_initialize__(...)` inside the Ruby
+                // `Class#new` — i.e. the overwhelmingly common
+                // `def initialize(x); end`. When the frame's forwarded `...`
+                // rest was deferred (D1) the argument shape is a
+                // compile-time constant, which is all the fold needs; see
+                // `forwarded_trivial_pos_num`.
+                let forwarded_fold = !simple_fold
+                    && self
+                        .forwarded_trivial_pos_num(state, callsite)
+                        .is_some_and(|n| {
+                            let callee = &self.store[func_id];
+                            callee.no_keyword()
+                                && !callee.single_arg_expand()
+                                && callee.positional_arity_ok(n)
+                        });
+                if simple_fold || forwarded_fold {
+                    let folded = match self.store[iseq].hint {
                         ISeqHint::ConstReturn(v) => {
                             state.def_C(dst, v);
-                            return Ok(CompileResult::Continue);
+                            true
                         }
                         ISeqHint::SelfReturn => {
                             if let Some(dst) = dst {
                                 state.copy_slot(ir, callsite.recv, dst);
                             }
-                            return Ok(CompileResult::Continue);
+                            true
                         }
-                        ISeqHint::Normal => {}
+                        ISeqHint::Normal => false,
+                    };
+                    if folded {
+                        if forwarded_fold {
+                            // Eliding the call *is* the forwarding consume:
+                            // no one reads the rest `Array`, so keep the
+                            // caller-side `create_array` skip on (without
+                            // this the producer would materialize an Array
+                            // nothing ever looks at). Deopt side exits still
+                            // rebuild it from the frame's D1 annotation,
+                            // which is left in place.
+                            ir.set_deferred_rest();
+                        }
+                        return Ok(CompileResult::Continue);
                     }
                 }
                 // Use `is_C_immediate` here, not `is_C`: heap-resident
@@ -396,6 +427,48 @@ impl<'a> JitContext<'a> {
         state.send(ir, &self.store, callid, fid, recv_class, outer_lfp);
 
         Ok(CompileResult::Continue)
+    }
+
+    ///
+    /// The statically-known positional-argument count of a `...`-forwarding
+    /// call site, or `None` when the shape is not a compile-time constant.
+    ///
+    /// This is the trivial-method fold's (`ISeqHint`) entry for forwarding
+    /// call sites, which `is_simple_call` rejects out of hand. It leans
+    /// entirely on the D1 deferral annotation: `forward_rest_deferral` only
+    /// annotates a *pure forwarding trampoline* (`def f(...) = g(...)`,
+    /// single basic block) whose own caller passes no keywords and no `&blk`
+    /// through a simple (splat-free) call site. So for an annotated frame:
+    ///
+    /// * the forwarded positional count is exactly the caller's `pos_num`
+    ///   (`len` below), and
+    /// * `f`'s `**kwrest` local is statically nil — the `...` forward's
+    ///   hash-splat contributes no keywords, which is what lets the fold
+    ///   ignore `kw_may_exists` (true here only because of that nil splat).
+    ///
+    /// The consuming site must therefore add no keyword of its own
+    /// (`def f(...) = g(k: 1, ...)`) and no second hash-splat
+    /// (`def f(...) = g(**h, ...)`), and its only splat must be the trailing
+    /// `...` rest. The *callee*-side conditions (no keyword surface, arity
+    /// binds without `ArgumentError`) are checked by the caller of this fn.
+    ///
+    fn forwarded_trivial_pos_num(
+        &self,
+        state: &AbstractState,
+        callsite: &CallSiteInfo,
+    ) -> Option<usize> {
+        if !callsite.forwarding || callsite.pos_num == 0 {
+            return None;
+        }
+        if callsite.splat_pos.as_slice() != [callsite.pos_num - 1]
+            || !callsite.kw_args.is_empty()
+            || callsite.hash_splat_pos.len() != 1
+        {
+            return None;
+        }
+        let lead_num = callsite.pos_num - 1;
+        let (_, len) = state.deferred_rest_src(callsite.args + lead_num)?;
+        Some(lead_num + len as usize)
     }
 
     ///
@@ -1284,19 +1357,13 @@ impl AbstractState {
                 }
             };
             self.write_back_recv_and_callargs(ir, callsite);
-            let error = ir.new_error(self);
-            if deferred_src.is_none()
-                && (callee.opt_num() != 0 || callee.is_rest() || !callee.no_keyword())
-            {
-                // Eager (the `...` Array really was materialized): the
-                // bind length is only known at run time, so anything but
-                // a plain req-only callee — optional params, a `*rest`
-                // to size, or a `**kwrest` slot to initialize — keeps the
-                // proven specialized runtime helper. The inline fast path
-                // below guards on an exact length and would have to
-                // re-derive all of that at run time.
-                ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
-            } else {
+            if deferred_src.is_some() {
+                // D1 cannot fail: the gate proved the fill layout is a
+                // compile-time constant, so the lowering has no length
+                // guard, no fallback, and no call that can raise. Emit it
+                // without an error side exit — a `HandleError` here would
+                // test a constant-`nil` sentinel against a handler nothing
+                // can ever branch to.
                 ir.push(AsmInst::SetArgumentsForwarded {
                     callid,
                     callee_fid,
@@ -1306,8 +1373,30 @@ impl AbstractState {
                     kwrest_guard,
                     deferred_src,
                 });
+            } else {
+                let error = ir.new_error(self);
+                if callee.opt_num() != 0 || callee.is_rest() || !callee.no_keyword() {
+                    // Eager (the `...` Array really was materialized): the
+                    // bind length is only known at run time, so anything but
+                    // a plain req-only callee — optional params, a `*rest`
+                    // to size, or a `**kwrest` slot to initialize — keeps the
+                    // proven specialized runtime helper. The inline fast path
+                    // below guards on an exact length and would have to
+                    // re-derive all of that at run time.
+                    ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
+                } else {
+                    ir.push(AsmInst::SetArgumentsForwarded {
+                        callid,
+                        callee_fid,
+                        recv,
+                        args,
+                        lead_num,
+                        kwrest_guard,
+                        deferred_src,
+                    });
+                }
+                ir.handle_error(error);
             }
-            ir.handle_error(error);
         } else if callsite.forwarding
             && callsite.splat_pos.len() == 1
             && callsite.splat_pos[0] < callsite.pos_num
@@ -1398,6 +1487,77 @@ mod tests {
             res << (begin; fs(1, 2, 3); rescue ArgumentError => e; e.message; end)
             res << fs(1)
             res << $effects.size
+            res
+            "#,
+        );
+    }
+
+    /// Trivial-method (`ISeqHint`) fold through a `...` forward. The Ruby
+    /// `Class#new` reaches `initialize` via `o.__builtin_initialize__(...)`,
+    /// a forwarding call site `is_simple_call` always rejects — so the fold
+    /// applies only once the D1 deferral makes the forwarded argument shape
+    /// a compile-time constant. Covers what the fold must NOT swallow:
+    /// arity and keyword errors still raise, an impure default still runs,
+    /// and a real `initialize` still executes.
+    #[test]
+    fn trivial_initialize_folded() {
+        run_test(
+            r#"
+            $effects = []
+            class Fold
+              def initialize(x); end
+            end
+            class FoldRest
+              def initialize(*a); end
+            end
+            class FoldOpt
+              def initialize(x, y = 1); end
+            end
+            class Impure
+              def initialize(x = ($effects << :d; 1)); end
+            end
+            class Real
+              def initialize(x); @x = x; end
+              attr_reader :x
+            end
+            res = []
+            r = []; 100.times {|i| r << Fold.new(i).class }; res << r.uniq
+            r = []; 100.times {|i| r << FoldRest.new(i, i, i).class }; res << r.uniq
+            r = []; 100.times {|i| r << FoldOpt.new(i).class }; res << r.uniq
+            r = []; 100.times {|i| r << Impure.new.class }; res << r.uniq
+            r = []; 100.times {|i| r << Real.new(i).x }; res << r.last
+            res << (begin; Fold.new; rescue ArgumentError => e; e.class; end)
+            res << (begin; Fold.new(1, 2); rescue ArgumentError => e; e.class; end)
+            res << (begin; Fold.new(1, k: 2); rescue ArgumentError => e; e.class; end)
+            res << Fold.new(1) { :blk }.class
+            res << $effects.size
+            res
+            "#,
+        );
+    }
+
+    /// The same fold on a plain `def f(...) = g(...)` trampoline (not just
+    /// the `Class#new` shape), and the invalidation path: once a folded
+    /// callee is redefined with a body that has a side effect, the compiled
+    /// caller must stop folding and run it.
+    #[test]
+    fn trivial_forwarded_fold_and_redefine() {
+        run_test(
+            r#"
+            $log = []
+            def g(x) = 42
+            def f(...) = g(...)
+            res = []
+            r = []; 100.times {|i| r << f(i) }; res << r.uniq
+            class Re
+              def initialize(x); end
+            end
+            100.times {|i| Re.new(i) }
+            class Re
+              def initialize(x); $log << x; end
+            end
+            Re.new(7)
+            res << $log
             res
             "#,
         );
