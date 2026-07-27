@@ -520,9 +520,10 @@ impl Codegen {
     ///   defaults.
     ///
     /// Statically-bound arity and a nil forwarded `**kwrest` are gate
-    /// invariants, so there is no length/kw guard and no fallback. Leaves
-    /// `x0 = NIL_VALUE` (the success sentinel the following `HandleError`
-    /// checks). Scratch: x9..x15 are reserved lowering temps (never GP-mapped);
+    /// invariants, so there is no length/kw guard and no fallback — nothing
+    /// here can fail, so no success sentinel is produced and the caller emits
+    /// no `HandleError`.
+    /// Scratch: x9..x15 are reserved lowering temps (never GP-mapped);
     /// x10 is used internally by `a64_frame_load/store` for large offsets, so
     /// the fixed temps below avoid it.
     pub(super) fn a64_set_arguments_forwarded_deferred(
@@ -611,7 +612,6 @@ impl Codegen {
                 );
             }
         }
-        monoasm_arm64!(&mut self.jit, mov x0, (NIL_VALUE as u64););
         true
     }
 

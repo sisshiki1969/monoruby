@@ -592,6 +592,8 @@ impl Codegen {
     ///
     /// ### out
     /// - rax: NIL_VALUE on success (non-zero), None(0) for error.
+    ///   The `deferred_src` (D1) path cannot fail, so it produces no
+    ///   sentinel at all — its caller emits no `HandleError`.
     ///
     /// ### destroy
     /// - caller save registers
@@ -684,9 +686,8 @@ impl Codegen {
                     movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * (lead_num + expected_len + j)) as i32)], 0;
                 }
             }
-            monoasm! { &mut self.jit,
-                movq rax, (NIL_VALUE);
-            }
+            // No success sentinel: nothing above can fail, and the caller
+            // emits no `HandleError` for D1.
             return;
         }
         let fallback = self.jit.label();

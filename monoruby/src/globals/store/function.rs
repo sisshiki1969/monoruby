@@ -1454,6 +1454,21 @@ impl FuncInfo {
         let max = self.max_positional_args();
         min <= pos_num && pos_num <= max
     }
+
+    ///
+    /// Whether `pos_num` positional arguments bind to this function's
+    /// positional parameters without raising `ArgumentError`. A block-style
+    /// callee never raises on arity (surplus args are dropped, missing ones
+    /// bound to nil).
+    ///
+    pub(crate) fn positional_arity_ok(&self, pos_num: usize) -> bool {
+        self.is_block_style()
+            || if self.is_rest() {
+                pos_num >= self.min_positional_args()
+            } else {
+                self.positional_within_range(pos_num)
+            }
+    }
 }
 
 impl Store {
@@ -1503,14 +1518,7 @@ impl Store {
                 return false;
             }
         }
-        !callsite.has_splat()
-            && !callsite.has_hash_splat()
-            && (info.is_block_style()
-                || if info.is_rest() {
-                    pos_num >= info.min_positional_args()
-                } else {
-                    info.positional_within_range(pos_num)
-                })
+        !callsite.has_splat() && !callsite.has_hash_splat() && info.positional_arity_ok(pos_num)
     }
 
     ///
