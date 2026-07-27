@@ -10,6 +10,7 @@ mod init_method;
 mod method_call;
 mod variables;
 
+use crate::alloc::{BUMP_INLINE_LIMIT, CELL_SIZE_SHIFT, PAGE_DATA_OFFSET};
 use super::compile_shared::{extend_ivar, unreachable};
 use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind};
 
@@ -978,6 +979,83 @@ impl Codegen {
         true
     }
 
+    /// Inline GC-cell allocation, shared by every inline constructor (array
+    /// literals, plain objects). Mirrors `Allocator::alloc`'s two fast
+    /// paths — pop a recycled cell from the free list, else bump-allocate
+    /// out of the current page — and writes the 8-byte object header,
+    /// leaving `var_table` and the type-specific body to the caller.
+    ///
+    /// Jumps to `slow` only where the runtime does real work: at
+    /// `BUMP_INLINE_LIMIT` the allocator sets the GC alloc flag and starts a
+    /// new page. The caller must emit a runtime fallback there.
+    ///
+    /// Callers must first check that `alloc_free_head_addr` is non-null (the
+    /// allocator addresses are captured once at `Codegen::new`).
+    ///
+    /// #### out
+    /// - rax: the fresh cell, header already stored
+    ///
+    /// #### destroy
+    /// - rdi, rcx
+    pub(crate) fn emit_alloc_cell(&mut self, header: CellHeader, slow: &DestLabel) {
+        let free_head = self.alloc_free_head_addr as u64;
+        let free_count = self.alloc_free_count_addr as u64;
+        let total = self.alloc_total_addr as u64;
+        let used = self.alloc_used_addr as u64;
+        let page = self.alloc_page_addr as u64;
+        let bump = self.jit.label();
+        let done = self.jit.label();
+        monoasm! { &mut self.jit,
+            movq rdi, (free_head);
+            movq rax, [rdi];          // rax = free-list head (cell ptr, or 0 = None)
+            testq rax, rax;
+            jz   bump;
+            movq rcx, [rax];          // rcx = (*cell).header.next (free link @ offset 0)
+            movq [rdi], rcx;          // free = next
+            movq rdi, (free_count);
+            subq [rdi], 1;
+            jmp  done;
+        bump:
+            movq rdi, (used);
+            movq rcx, [rdi];          // rcx = used_in_current
+            cmpq rcx, (BUMP_INLINE_LIMIT);
+            jae  slow;                // alloc-flag / new-page territory
+            movq rax, (page);
+            movq rax, [rax];          // rax = current page
+            shlq rcx, (CELL_SIZE_SHIFT);
+            addq rax, rcx;            // + used_in_current * CELL_SIZE
+        }
+        if PAGE_DATA_OFFSET != 0 {
+            monoasm! { &mut self.jit,
+                addq rax, (PAGE_DATA_OFFSET);
+            }
+        }
+        monoasm! { &mut self.jit,
+            addq [rdi], 1;            // used_in_current += 1
+        done:
+            movq rdi, (total);
+            addq [rdi], 1;
+        }
+        match header {
+            CellHeader::Imm(h) => monoasm! { &mut self.jit,
+                movq rdi, (h);
+            },
+            CellHeader::NewbornOf(src) => {
+                // Keep class/type (the upper 48 bits) and the non-GC flags.
+                let mask: u64 = !0xffffu64 | NEWBORN_FLAG_MASK as u64;
+                monoasm! { &mut self.jit,
+                    movq rdi, (src);
+                    movq rdi, [rdi];
+                    movq rcx, (mask);
+                    andq rdi, rcx;
+                }
+            }
+        }
+        monoasm! { &mut self.jit,
+            movq [rax + (RVALUE_OFFSET_FLAG)], rdi;   // header (offset 0); overwrites the free link
+        }
+    }
+
     /// Inline allocation of a small (`1..=ARRAY_INLINE_CAPA`) no-splat array
     /// literal: pop a recycled cell from the GC free list and initialise it
     /// directly as an inline-storage Array, with no runtime call. When the
@@ -999,25 +1077,11 @@ impl Codegen {
     ) {
         let slow = self.jit.label();
         let cont = self.jit.label();
-        let free_head = self.alloc_free_head_addr as u64;
-        let free_count = self.alloc_free_count_addr as u64;
-        let total = self.alloc_total_addr as u64;
         // 8-byte object header: flag=1 (live) | ty=ARRAY<<16 | class=ARRAY_CLASS<<32.
         let header: u64 =
             ((ARRAY_CLASS.u32() as u64) << 32) | ((ObjTy::ARRAY.get() as u64) << 16) | 1;
+        self.emit_alloc_cell(CellHeader::Imm(header), &slow);
         monoasm! { &mut self.jit,
-            movq rdi, (free_head);
-            movq rax, [rdi];          // rax = free-list head (cell ptr, or 0 = None)
-            testq rax, rax;
-            jz   slow;
-            movq rcx, [rax];          // rcx = (*cell).header.next (free link @ offset 0)
-            movq [rdi], rcx;          // free = next
-            movq rdi, (free_count);
-            subq [rdi], 1;
-            movq rdi, (total);
-            addq [rdi], 1;
-            movq rdi, (header);
-            movq [rax + (RVALUE_OFFSET_FLAG)], rdi;   // header (offset 0); overwrites the free link
             movq [rax + (RVALUE_OFFSET_VAR)], 0;      // var_table = None
             movq [rax + (RVALUE_OFFSET_ARY_CAPA)], (len as i32);  // inline length (capa == len <= 5)
         }
@@ -1126,12 +1190,46 @@ impl Codegen {
     }
 
     /// rax <- a deep copy of literal `v` (fresh mutable object per evaluation).
+    ///
+    /// A short all-immediate Array literal (`[1, 2]` and friends, which
+    /// `bytecodegen` bakes as a constant rather than compiling to
+    /// `NewArray`) is copied inline: its deep copy is just a header, the
+    /// inline length, and the element words. Everything else calls
+    /// `value_deep_copy`.
     pub(in crate::codegen::jitgen) fn emit_deep_copy_lit(
         &mut self,
         v: Value,
         using_fpr: UsingFpr,
     ) -> bool {
+        let Some(elems) = v
+            .inline_copyable_array()
+            .filter(|_| !self.alloc_free_head_addr.is_null())
+        else {
+            self.deepcopy_literal(v, using_fpr);
+            return true;
+        };
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        self.emit_alloc_cell(CellHeader::NewbornOf(v.id()), &slow);
+        monoasm! { &mut self.jit,
+            movq [rax + (RVALUE_OFFSET_VAR)], 0;  // var_table = None
+            movq [rax + (RVALUE_OFFSET_ARY_CAPA)], (elems.len() as i32);  // inline length
+        }
+        for (k, e) in elems.iter().enumerate() {
+            let off = RVALUE_OFFSET_INLINE as i32 + (k as i32) * 8;
+            monoasm! { &mut self.jit,
+                movq rcx, (e.id());
+                movq [rax + (off)], rcx;
+            }
+        }
+        monoasm! { &mut self.jit,
+            jmp  cont;
+        slow:
+        }
         self.deepcopy_literal(v, using_fpr);
+        monoasm! { &mut self.jit,
+        cont:
+        }
         true
     }
 

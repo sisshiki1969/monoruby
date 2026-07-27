@@ -2432,6 +2432,12 @@ impl Value {
         unsafe { self.rvalue_mut().as_array_mut() }
     }
 
+    /// See `RValue::inline_copyable_array`: the elements of a literal the
+    /// JIT can copy inline instead of calling `value_deep_copy`.
+    pub(crate) fn inline_copyable_array(&self) -> Option<Vec<Value>> {
+        self.try_rvalue()?.inline_copyable_array()
+    }
+
     pub(crate) fn try_array_ty(&self) -> Option<Array> {
         let rv = self.try_rvalue()?;
         match rv.ty() {

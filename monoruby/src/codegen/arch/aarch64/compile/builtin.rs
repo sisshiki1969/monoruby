@@ -180,7 +180,72 @@ impl Codegen {
     /// (a u32) and the resolved allocator pointer are embedded as constants;
     /// arg0 = class_id, arg1 = globals (GLOBALS/x20). Result Value in Rax (x0).
     /// FP pool saved by the surrounding fpr_save.
-    pub(crate) fn emit_class_allocate(&mut self, class_id: u32, alloc_func: u64) {
+    ///
+    /// With an `inline` payload the whole allocation is emitted here
+    /// instead: pop a cell (`emit_alloc_cell`) and write exactly what the
+    /// stock allocator would have produced. The runtime call is kept as the
+    /// fallback for the page-boundary cases.
+    pub(crate) fn emit_class_allocate(
+        &mut self,
+        class_id: u32,
+        alloc_func: u64,
+        inline: Option<InlineAlloc>,
+    ) {
+        let Some(inline) = inline.filter(|_| !self.alloc_free_head_addr.is_null()) else {
+            self.class_allocate_call(class_id, alloc_func);
+            return;
+        };
+        let rax = GP::Rax.a64().0; // x0 (result)
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        // 8-byte object header: flag=1 (live) | ty<<16 | class<<32.
+        let ty = match inline {
+            InlineAlloc::Object => ObjTy::OBJECT,
+            InlineAlloc::Struct(_) => ObjTy::STRUCT,
+        };
+        let header: u64 = ((class_id as u64) << 32) | ((ty.get() as u64) << 16) | 1;
+        self.emit_alloc_cell(CellHeader::Imm(header), &slow);
+        monoasm_arm64!(&mut self.jit,
+            mov x12, #0;
+            str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
+        );
+        match inline {
+            // `ObjKind::object()` == `[None; OBJECT_INLINE_IVAR]` at the
+            // head of the `kind` union (the same `RVALUE_OFFSET_KIND +
+            // ivarid * 8` addressing the ivar emitters use), and `None`
+            // for `Option<Value>` is a zero word.
+            InlineAlloc::Object => {
+                for k in 0..OBJECT_INLINE_IVAR {
+                    let off = RVALUE_OFFSET_KIND as u32 + (k as u32) * 8;
+                    monoasm_arm64!(&mut self.jit,
+                        str x12, [x(rax), #(off)];
+                    );
+                }
+            }
+            // `StructInner::new(len)` == a `SmallVec` holding `len` nils:
+            // the smallvec's capacity field doubles as the inline length,
+            // and slots past `len` stay untouched, exactly as in Rust.
+            InlineAlloc::Struct(len) => {
+                monoasm_arm64!(&mut self.jit,
+                    mov x12, (len as u64);
+                    str x12, [x(rax), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+                    mov x12, (NIL_VALUE);
+                );
+                for k in 0..len {
+                    let off = RVALUE_OFFSET_INLINE as u32 + (k as u32) * 8;
+                    monoasm_arm64!(&mut self.jit,
+                        str x12, [x(rax), #(off)];
+                    );
+                }
+            }
+        }
+        monoasm_arm64!(&mut self.jit, b cont;);
+        self.jit.bind_label(slow);
+        self.class_allocate_call(class_id, alloc_func);
+        self.jit.bind_label(cont);
+    }
+
+    fn class_allocate_call(&mut self, class_id: u32, alloc_func: u64) {
         monoasm_arm64!(&mut self.jit,
             mov x0, (class_id as u64); // class_id -> arg0 (low 32 bits read)
             mov x1, x20;               // globals -> arg1

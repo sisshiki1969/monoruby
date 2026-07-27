@@ -594,6 +594,43 @@ struct CompilationUnitInfo {
 }
 
 ///
+/// What `Class#allocate` may build inline instead of calling the class's
+/// `alloc_func`. Decided at compile time by `gen_class_allocate_inline`,
+/// which knows the receiver class exactly (it is identity-guarded), and
+/// consumed by each backend's `emit_class_allocate`.
+///
+/// Both payloads are small enough to write with a handful of stores, so the
+/// call disappears entirely — the cell itself comes from `emit_alloc_cell`.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InlineAlloc {
+    /// A plain object (`default_alloc_func`): header, `var_table = None`,
+    /// and `OBJECT_INLINE_IVAR` nil ivar slots.
+    Object,
+    /// A `Struct` subclass instance (`struct_alloc_func`) with `len`
+    /// members, all nil. Only used when `len <= STRUCT_INLINE_SLOTS`, so
+    /// the slots live inline and no heap buffer is needed.
+    Struct(u16),
+}
+
+///
+/// Where an inline allocation's 8-byte object header comes from.
+///
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CellHeader {
+    /// A header known at compile time: a fresh object of a statically
+    /// known class and type.
+    Imm(u64),
+    /// `Header::newborn()` of the template object at this address — its
+    /// header word with the generational-GC state masked off
+    /// (`NEWBORN_FLAG_MASK`). Used by literal instantiation, where the
+    /// copy inherits the template's class, type and frozen/chilled bits
+    /// but must start young. Read at run time rather than baked, so a
+    /// template whose bits change later can never desync the copies.
+    NewbornOf(u64),
+}
+
+///
 /// Machine code generator
 ///
 pub struct Codegen {
@@ -614,6 +651,11 @@ pub struct Codegen {
     alloc_free_head_addr: *mut usize,
     alloc_free_count_addr: *mut usize,
     alloc_total_addr: *mut usize,
+    /// Bump-allocation state (`current_page` / `used_in_current`), so the
+    /// inline path also covers a heap that is still growing — where the
+    /// free list stays empty and every allocation would otherwise call out.
+    alloc_used_addr: *mut usize,
+    alloc_page_addr: *mut usize,
 
     compilation_unit: Vec<CompilationUnitInfo>,
 
@@ -968,6 +1010,8 @@ impl Codegen {
             alloc_free_head_addr: std::ptr::null_mut(),
             alloc_free_count_addr: std::ptr::null_mut(),
             alloc_total_addr: std::ptr::null_mut(),
+            alloc_used_addr: std::ptr::null_mut(),
+            alloc_page_addr: std::ptr::null_mut(),
             compilation_unit: Vec::new(),
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
@@ -1046,6 +1090,8 @@ impl Codegen {
             codegen.alloc_free_head_addr = alloc.free_list_head_addr();
             codegen.alloc_free_count_addr = alloc.free_list_count_addr();
             codegen.alloc_total_addr = alloc.total_allocated_addr();
+            codegen.alloc_used_addr = alloc.used_in_current_addr();
+            codegen.alloc_page_addr = alloc.current_page_addr();
         });
 
         codegen

@@ -270,6 +270,23 @@ const ALLOC_SIZE: usize = PAGE_LEN * GCBOX_SIZE; // 2^18 = 256kb
 const MALLOC_THRESHOLD: usize = 256 * 1024;
 const MAX_PAGES: usize = 8192;
 
+/// Byte offset of the cell array inside a page, and the cell stride, so the
+/// JIT's inline bump fast path can compute a cell address as
+/// `current_page + PAGE_DATA_OFFSET + used_in_current * CELL_SIZE` — the
+/// same address `Page::get_cell` returns.
+pub(crate) const PAGE_DATA_OFFSET: usize = std::mem::offset_of!(Page<RValue>, data);
+pub(crate) const CELL_SIZE: usize = GCBOX_SIZE;
+/// The inline path scales the bump index with a shift.
+const _: () = assert!(CELL_SIZE.is_power_of_two());
+pub(crate) const CELL_SIZE_SHIFT: u32 = CELL_SIZE.trailing_zeros();
+
+/// Bump index at which the inline fast path must hand back to
+/// `Allocator::alloc`: at `THRESHOLD` the runtime sets the GC alloc flag and
+/// at `DATA_LEN` it starts a new page, neither of which is worth inlining
+/// (together they are 64 of every 4032 allocations). Anything below this is
+/// a plain bump.
+pub(crate) const BUMP_INLINE_LIMIT: usize = THRESHOLD;
+
 /// Hard cap on the number of minor (young-generation) collections between
 /// two major (full-heap) collections. This is only a safety bound — to
 /// rebuild the remembered set and bound floating old garbage even if the
@@ -781,6 +798,27 @@ impl<T: GCBox> Allocator<T> {
     ///
     pub(crate) fn total_allocated_addr(&self) -> *mut usize {
         &self.total_allocated_objects as *const _ as *mut usize
+    }
+
+    ///
+    /// Address of `self.current_page`, the page bump allocation is carving
+    /// cells out of. A `PageRef` is a non-null pointer, so reading it as
+    /// `*mut usize` yields the page address. Exposed (with
+    /// `used_in_current_addr`) so the JIT can inline the bump fast path;
+    /// the free list alone is not enough, because a workload whose objects
+    /// stay live never refills it.
+    ///
+    pub(crate) fn current_page_addr(&self) -> *mut usize {
+        &self.current_page as *const _ as *mut usize
+    }
+
+    ///
+    /// Address of `self.used_in_current`, the bump index into
+    /// `current_page`. Incremented by the inline fast path exactly as
+    /// `alloc` does.
+    ///
+    pub(crate) fn used_in_current_addr(&self) -> *mut usize {
+        &self.used_in_current as *const _ as *mut usize
     }
 
     ///

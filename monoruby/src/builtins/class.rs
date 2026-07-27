@@ -65,10 +65,39 @@ pub(super) fn gen_class_allocate_inline(
     let deopt = ir.new_deopt(state);
     ir.guard_value_identity(self_module.as_val(), deopt);
 
+    // Both stock allocators produce a payload small enough to write with
+    // a few stores, so for them the call is replaced by an inline
+    // allocation. Any class with its own `alloc_func` (Array, Hash,
+    // String, Range, IO, …) builds something else and keeps the call.
+    //
+    // * `default_alloc_func` — a plain object: header plus
+    //   `OBJECT_INLINE_IVAR` nil slots. Requires the class's ivar count to
+    //   fit those slots, because beyond them the allocator pre-sizes the
+    //   spilled ivar table, which needs a malloc. That check is a pure
+    //   optimization gate, not a correctness one: `var_table: None` is
+    //   valid for any object (it is what `RValue::new_object` stores) and
+    //   the table grows on demand, so a class that gains ivars after this
+    //   compile stays correct — it merely loses the pre-sizing.
+    // * `struct_alloc_func` — a `Struct` subclass instance: header plus
+    //   `len` nil slots. The member count is baked here so the per-
+    //   allocation `/members` class-chain walk disappears; only structs
+    //   that fit `STRUCT_INLINE_SLOTS` qualify, so the inline/heap choice
+    //   in the slot layout can never be mis-encoded.
+    let inline_alloc = if std::ptr::fn_addr_eq(alloc_func, crate::default_alloc_func as AllocFunc)
+        && store[class_id].ivar_len() <= OBJECT_INLINE_IVAR
+    {
+        Some(InlineAlloc::Object)
+    } else if std::ptr::fn_addr_eq(alloc_func, crate::struct_alloc_func as AllocFunc) {
+        let len = crate::struct_members_len(store, class_id);
+        (len <= STRUCT_INLINE_SLOTS).then_some(InlineAlloc::Struct(len as u16))
+    } else {
+        None
+    };
+
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
-        r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64)
+        r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64, inline_alloc)
     });
     ir.fpr_restore(using_fpr);
     // The allocator produces an instance of exactly `class_id`. Record

@@ -10,6 +10,7 @@
 //! vestigial. See `doc/aarch64-jitgen-plan.md`.
 
 use super::*;
+use crate::alloc::{BUMP_INLINE_LIMIT, CELL_SIZE_SHIFT, PAGE_DATA_OFFSET};
 use crate::codegen::jitgen::asmir::ArrayIndexKind;
 use crate::codegen::jitgen::asmir::compile_shared::{
     extend_ivar, set_array_integer_index, set_ivar, unreachable,
@@ -1469,6 +1470,97 @@ impl Codegen {
         self.emit_fpr_restore(using_fpr, false);
     }
 
+    /// Inline GC-cell allocation, shared by every inline constructor (array
+    /// literals, plain objects). Mirrors `Allocator::alloc`'s two fast
+    /// paths — pop a recycled cell from the free list, else bump-allocate
+    /// out of the current page — and writes the 8-byte object header,
+    /// leaving `var_table` and the type-specific body to the caller.
+    ///
+    /// Jumps to `slow` only where the runtime does real work: at
+    /// `BUMP_INLINE_LIMIT` the allocator sets the GC alloc flag and starts a
+    /// new page. The caller must emit a runtime fallback there.
+    ///
+    /// Callers must first check that `alloc_free_head_addr` is non-null (the
+    /// allocator addresses are captured once at `Codegen::new`).
+    ///
+    /// #### out
+    /// - x0 (Rax): the fresh cell, header already stored
+    ///
+    /// #### destroy
+    /// - x9, x11, x12
+    pub(crate) fn emit_alloc_cell(&mut self, header: CellHeader, slow: &DestLabel) {
+        let rax = GP::Rax.a64().0; // x0 (result)
+        let free_head = self.alloc_free_head_addr as u64;
+        let free_count = self.alloc_free_count_addr as u64;
+        let total = self.alloc_total_addr as u64;
+        let used = self.alloc_used_addr as u64;
+        let page = self.alloc_page_addr as u64;
+        let bump = self.jit.label();
+        let done = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (free_head);
+            ldr x(rax), [x9];          // rax = free-list head (cell ptr, or 0 = None)
+            cbz x(rax), bump;
+            ldr x12, [x(rax)];         // x12 = (*cell).header.next (free link @ offset 0)
+            str x12, [x9];             // free = next
+            mov x9, (free_count);
+            ldr x12, [x9];
+            sub x12, x12, #1;
+            str x12, [x9];
+            b done;
+        );
+        self.jit.bind_label(bump.clone());
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (used);
+            ldr x12, [x9];             // x12 = used_in_current
+            mov x11, (BUMP_INLINE_LIMIT as u64);
+            cmp x12, x11;
+        );
+        // alloc-flag / new-page territory: hand back to the runtime.
+        self.jit.bcond_label(monoasm::Cond::Hs, slow);
+        monoasm_arm64!(&mut self.jit,
+            mov x11, (page);
+            ldr x(rax), [x11];         // rax = current page
+            lsl x11, x12, #(CELL_SIZE_SHIFT);
+            add x(rax), x(rax), x11;   // + used_in_current * CELL_SIZE
+        );
+        if PAGE_DATA_OFFSET != 0 {
+            monoasm_arm64!(&mut self.jit,
+                mov x11, (PAGE_DATA_OFFSET as u64);
+                add x(rax), x(rax), x11;
+            );
+        }
+        monoasm_arm64!(&mut self.jit,
+            add x12, x12, #1;
+            str x12, [x9];             // used_in_current += 1
+        );
+        self.jit.bind_label(done.clone());
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (total);
+            ldr x12, [x9];
+            add x12, x12, #1;
+            str x12, [x9];
+        );
+        match header {
+            CellHeader::Imm(h) => monoasm_arm64!(&mut self.jit,
+                mov x11, (h);
+            ),
+            CellHeader::NewbornOf(src) => {
+                // Keep class/type (the upper 48 bits) and the non-GC flags.
+                let mask: u64 = !0xffffu64 | NEWBORN_FLAG_MASK as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x11, (src);
+                    ldr x11, [x11];
+                    mov x12, (mask);
+                    and x11, x11, x12;
+                );
+            }
+        }
+        monoasm_arm64!(&mut self.jit,
+            str x11, [x(rax)];         // header (offset 0); overwrites the free link
+        );
+    }
+
     /// Inline allocation of a small (`1..=ARRAY_INLINE_CAPA`) no-splat array
     /// literal: pop a recycled cell from the GC free list and initialise it
     /// directly as an inline-storage Array, falling back to the runtime
@@ -1486,28 +1578,11 @@ impl Codegen {
         let lfp = GP::R14.a64().0; // x22
         let slow = self.jit.label();
         let cont = self.jit.label();
-        let free_head = self.alloc_free_head_addr as u64;
-        let free_count = self.alloc_free_count_addr as u64;
-        let total = self.alloc_total_addr as u64;
         // 8-byte object header: flag=1 | ty=ARRAY<<16 | class=ARRAY_CLASS<<32.
         let header: u64 =
             ((ARRAY_CLASS.u32() as u64) << 32) | ((ObjTy::ARRAY.get() as u64) << 16) | 1;
+        self.emit_alloc_cell(CellHeader::Imm(header), &slow);
         monoasm_arm64!(&mut self.jit,
-            mov x9, (free_head);
-            ldr x(rax), [x9];          // rax = free-list head (cell ptr, or 0 = None)
-            cbz x(rax), slow;
-            ldr x12, [x(rax)];         // x12 = (*cell).header.next (free link @ offset 0)
-            str x12, [x9];             // free = next
-            mov x9, (free_count);
-            ldr x12, [x9];
-            sub x12, x12, #1;
-            str x12, [x9];
-            mov x9, (total);
-            ldr x12, [x9];
-            add x12, x12, #1;
-            str x12, [x9];
-            mov x11, (header);
-            str x11, [x(rax)];                              // header (offset 0)
             mov x12, #0;
             str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
             mov x12, (len as u64);
@@ -1702,11 +1777,49 @@ impl Codegen {
 
     /// rax <- a deep copy of literal `v` (a fresh mutable object per
     /// evaluation). Mirrors x86 `deepcopy_literal`.
+    ///
+    /// A short all-immediate Array literal (`[1, 2]` and friends, which
+    /// `bytecodegen` bakes as a constant rather than compiling to
+    /// `NewArray`) is copied inline: its deep copy is just a header, the
+    /// inline length, and the element words. Everything else calls
+    /// `value_deep_copy`.
     pub(in crate::codegen::jitgen) fn emit_deep_copy_lit(
         &mut self,
         v: Value,
         using_fpr: UsingFpr,
     ) -> bool {
+        if let Some(elems) = v
+            .inline_copyable_array()
+            .filter(|_| !self.alloc_free_head_addr.is_null())
+        {
+            let rax = GP::Rax.a64().0; // x0 (result)
+            let slow = self.jit.label();
+            let cont = self.jit.label();
+            self.emit_alloc_cell(CellHeader::NewbornOf(v.id()), &slow);
+            monoasm_arm64!(&mut self.jit,
+                mov x12, #0;
+                str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
+                mov x12, (elems.len() as u64);
+                str x12, [x(rax), #(RVALUE_OFFSET_ARY_CAPA as u32)]; // inline length
+            );
+            for (k, e) in elems.iter().enumerate() {
+                let off = RVALUE_OFFSET_INLINE as u32 + (k as u32) * 8;
+                monoasm_arm64!(&mut self.jit,
+                    mov x12, (e.id());
+                    str x12, [x(rax), #(off)];
+                );
+            }
+            monoasm_arm64!(&mut self.jit, b cont;);
+            self.jit.bind_label(slow);
+            self.deep_copy_lit_call(v, using_fpr);
+            self.jit.bind_label(cont);
+            return true;
+        }
+        self.deep_copy_lit_call(v, using_fpr);
+        true
+    }
+
+    fn deep_copy_lit_call(&mut self, v: Value, using_fpr: UsingFpr) {
         let imm = v.id();
         let f = Value::value_deep_copy as *const () as u64;
         self.emit_fpr_save(using_fpr, false);
@@ -1718,7 +1831,6 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
-        true
     }
 
     // ---- floating-point transfer primitives (aarch64) ---------------------
