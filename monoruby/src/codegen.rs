@@ -614,6 +614,11 @@ pub struct Codegen {
     alloc_free_head_addr: *mut usize,
     alloc_free_count_addr: *mut usize,
     alloc_total_addr: *mut usize,
+    /// Bump-allocation state (`current_page` / `used_in_current`), so the
+    /// inline path also covers a heap that is still growing — where the
+    /// free list stays empty and every allocation would otherwise call out.
+    alloc_used_addr: *mut usize,
+    alloc_page_addr: *mut usize,
 
     compilation_unit: Vec<CompilationUnitInfo>,
 
@@ -968,6 +973,8 @@ impl Codegen {
             alloc_free_head_addr: std::ptr::null_mut(),
             alloc_free_count_addr: std::ptr::null_mut(),
             alloc_total_addr: std::ptr::null_mut(),
+            alloc_used_addr: std::ptr::null_mut(),
+            alloc_page_addr: std::ptr::null_mut(),
             compilation_unit: Vec::new(),
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
@@ -1046,6 +1053,8 @@ impl Codegen {
             codegen.alloc_free_head_addr = alloc.free_list_head_addr();
             codegen.alloc_free_count_addr = alloc.free_list_count_addr();
             codegen.alloc_total_addr = alloc.total_allocated_addr();
+            codegen.alloc_used_addr = alloc.used_in_current_addr();
+            codegen.alloc_page_addr = alloc.current_page_addr();
         });
 
         codegen

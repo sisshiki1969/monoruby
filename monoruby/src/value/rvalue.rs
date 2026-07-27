@@ -76,6 +76,17 @@ pub const RVALUE_OFFSET_INLINE: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_IN
 pub const RVALUE_OFFSET_HEAP_PTR: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_HEAP_PTR;
 pub const RVALUE_OFFSET_HEAP_LEN: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_HEAP_LEN;
 
+/// The JIT addresses an `ObjTy::OBJECT`'s inline ivar slots as
+/// `RVALUE_OFFSET_KIND + 8 * i` (see the ivar load/store emitters and the
+/// inline `Class#allocate`, which nil-fills all of them). Note this is
+/// `RVALUE_OFFSET_KIND`, *not* `RVALUE_OFFSET_INLINE` — the latter is the
+/// smallvec payload used by Array/Struct slots. Sound only while all
+/// `OBJECT_INLINE_IVAR` slots stay inside the cell: a layout change that
+/// grew `kind`'s prefix would silently write past the object, so pin it
+/// here rather than in one backend.
+const _: () =
+    assert!(RVALUE_OFFSET_KIND + OBJECT_INLINE_IVAR * 8 <= std::mem::size_of::<RValue>());
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ObjTy(std::num::NonZeroU8);
 

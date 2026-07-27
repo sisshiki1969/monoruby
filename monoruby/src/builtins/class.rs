@@ -65,10 +65,34 @@ pub(super) fn gen_class_allocate_inline(
     let deopt = ir.new_deopt(state);
     ir.guard_value_identity(self_module.as_val(), deopt);
 
+    // A plain object (the inherited `default_alloc_func`) is just a
+    // header plus `OBJECT_INLINE_IVAR` nil slots, so it can be built
+    // inline from the GC free list with no call at all. Two compile-time
+    // conditions:
+    //
+    // * the class must actually use the default allocator — every class
+    //   with its own `alloc_func` (Array, Hash, String, Range, Struct, …)
+    //   builds a different payload and keeps the call;
+    // * its ivar count must fit the inline slots — beyond that
+    //   `default_alloc_func` pre-sizes the spilled ivar table, which
+    //   needs a malloc.
+    //
+    // The ivar check is a pure optimization gate, not a correctness one:
+    // `var_table: None` is valid for any object (that is what
+    // `RValue::new_object` itself stores) and the table grows on demand,
+    // so a class that gains ivars after this compile stays correct — it
+    // merely loses the pre-sizing until the code is recompiled.
+    let inline_object = std::ptr::fn_addr_eq(alloc_func, crate::default_alloc_func as AllocFunc)
+        && store[class_id].ivar_len() <= OBJECT_INLINE_IVAR;
+
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
-        r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64)
+        r#gen.emit_class_allocate(
+            class_id.u32(),
+            alloc_func as *const () as u64,
+            inline_object,
+        )
     });
     ir.fpr_restore(using_fpr);
     // The allocator produces an instance of exactly `class_id`. Record

@@ -10,6 +10,7 @@ mod init_method;
 mod method_call;
 mod variables;
 
+use crate::alloc::{BUMP_INLINE_LIMIT, CELL_SIZE_SHIFT, PAGE_DATA_OFFSET};
 use super::compile_shared::{extend_ivar, unreachable};
 use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind};
 
@@ -978,6 +979,67 @@ impl Codegen {
         true
     }
 
+    /// Inline GC-cell allocation, shared by every inline constructor (array
+    /// literals, plain objects). Mirrors `Allocator::alloc`'s two fast
+    /// paths — pop a recycled cell from the free list, else bump-allocate
+    /// out of the current page — and writes the 8-byte object header,
+    /// leaving `var_table` and the type-specific body to the caller.
+    ///
+    /// Jumps to `slow` only where the runtime does real work: at
+    /// `BUMP_INLINE_LIMIT` the allocator sets the GC alloc flag and starts a
+    /// new page. The caller must emit a runtime fallback there.
+    ///
+    /// Callers must first check that `alloc_free_head_addr` is non-null (the
+    /// allocator addresses are captured once at `Codegen::new`).
+    ///
+    /// #### out
+    /// - rax: the fresh cell, header already stored
+    ///
+    /// #### destroy
+    /// - rdi, rcx
+    pub(crate) fn emit_alloc_cell(&mut self, header: u64, slow: &DestLabel) {
+        let free_head = self.alloc_free_head_addr as u64;
+        let free_count = self.alloc_free_count_addr as u64;
+        let total = self.alloc_total_addr as u64;
+        let used = self.alloc_used_addr as u64;
+        let page = self.alloc_page_addr as u64;
+        let bump = self.jit.label();
+        let done = self.jit.label();
+        monoasm! { &mut self.jit,
+            movq rdi, (free_head);
+            movq rax, [rdi];          // rax = free-list head (cell ptr, or 0 = None)
+            testq rax, rax;
+            jz   bump;
+            movq rcx, [rax];          // rcx = (*cell).header.next (free link @ offset 0)
+            movq [rdi], rcx;          // free = next
+            movq rdi, (free_count);
+            subq [rdi], 1;
+            jmp  done;
+        bump:
+            movq rdi, (used);
+            movq rcx, [rdi];          // rcx = used_in_current
+            cmpq rcx, (BUMP_INLINE_LIMIT);
+            jae  slow;                // alloc-flag / new-page territory
+            movq rax, (page);
+            movq rax, [rax];          // rax = current page
+            shlq rcx, (CELL_SIZE_SHIFT);
+            addq rax, rcx;            // + used_in_current * CELL_SIZE
+        }
+        if PAGE_DATA_OFFSET != 0 {
+            monoasm! { &mut self.jit,
+                addq rax, (PAGE_DATA_OFFSET);
+            }
+        }
+        monoasm! { &mut self.jit,
+            addq [rdi], 1;            // used_in_current += 1
+        done:
+            movq rdi, (total);
+            addq [rdi], 1;
+            movq rdi, (header);
+            movq [rax + (RVALUE_OFFSET_FLAG)], rdi;   // header (offset 0); overwrites the free link
+        }
+    }
+
     /// Inline allocation of a small (`1..=ARRAY_INLINE_CAPA`) no-splat array
     /// literal: pop a recycled cell from the GC free list and initialise it
     /// directly as an inline-storage Array, with no runtime call. When the
@@ -999,25 +1061,11 @@ impl Codegen {
     ) {
         let slow = self.jit.label();
         let cont = self.jit.label();
-        let free_head = self.alloc_free_head_addr as u64;
-        let free_count = self.alloc_free_count_addr as u64;
-        let total = self.alloc_total_addr as u64;
         // 8-byte object header: flag=1 (live) | ty=ARRAY<<16 | class=ARRAY_CLASS<<32.
         let header: u64 =
             ((ARRAY_CLASS.u32() as u64) << 32) | ((ObjTy::ARRAY.get() as u64) << 16) | 1;
+        self.emit_alloc_cell(header, &slow);
         monoasm! { &mut self.jit,
-            movq rdi, (free_head);
-            movq rax, [rdi];          // rax = free-list head (cell ptr, or 0 = None)
-            testq rax, rax;
-            jz   slow;
-            movq rcx, [rax];          // rcx = (*cell).header.next (free link @ offset 0)
-            movq [rdi], rcx;          // free = next
-            movq rdi, (free_count);
-            subq [rdi], 1;
-            movq rdi, (total);
-            addq [rdi], 1;
-            movq rdi, (header);
-            movq [rax + (RVALUE_OFFSET_FLAG)], rdi;   // header (offset 0); overwrites the free link
             movq [rax + (RVALUE_OFFSET_VAR)], 0;      // var_table = None
             movq [rax + (RVALUE_OFFSET_ARY_CAPA)], (len as i32);  // inline length (capa == len <= 5)
         }

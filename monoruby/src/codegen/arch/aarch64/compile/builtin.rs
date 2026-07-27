@@ -180,7 +180,51 @@ impl Codegen {
     /// (a u32) and the resolved allocator pointer are embedded as constants;
     /// arg0 = class_id, arg1 = globals (GLOBALS/x20). Result Value in Rax (x0).
     /// FP pool saved by the surrounding fpr_save.
-    pub(crate) fn emit_class_allocate(&mut self, class_id: u32, alloc_func: u64) {
+    ///
+    /// With `inline_object` (a plain object produced by
+    /// `default_alloc_func`, with no spilled ivar table), the whole
+    /// allocation is emitted here instead: pop a cell from the GC free list
+    /// and write the header, `var_table = None` and `OBJECT_INLINE_IVAR`
+    /// nil slots — which is the entire payload of `RValue::new_object`.
+    /// An empty free list falls back to the call.
+    pub(crate) fn emit_class_allocate(
+        &mut self,
+        class_id: u32,
+        alloc_func: u64,
+        inline_object: bool,
+    ) {
+        if inline_object && !self.alloc_free_head_addr.is_null() {
+            let rax = GP::Rax.a64().0; // x0 (result)
+            let slow = self.jit.label();
+            let cont = self.jit.label();
+            // 8-byte object header: flag=1 (live) | ty=OBJECT<<16 | class<<32.
+            let header: u64 =
+                ((class_id as u64) << 32) | ((ObjTy::OBJECT.get() as u64) << 16) | 1;
+            self.emit_alloc_cell(header, &slow);
+            monoasm_arm64!(&mut self.jit,
+                mov x12, #0;
+                str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
+            );
+            // `ObjKind::object()` == `[None; OBJECT_INLINE_IVAR]` at the
+            // head of the `kind` union (the same `RVALUE_OFFSET_KIND +
+            // ivarid * 8` addressing the ivar emitters use), and `None`
+            // for `Option<Value>` is a zero word.
+            for k in 0..OBJECT_INLINE_IVAR {
+                let off = RVALUE_OFFSET_KIND as u32 + (k as u32) * 8;
+                monoasm_arm64!(&mut self.jit,
+                    str x12, [x(rax), #(off)];
+                );
+            }
+            monoasm_arm64!(&mut self.jit, b cont;);
+            self.jit.bind_label(slow);
+            self.class_allocate_call(class_id, alloc_func);
+            self.jit.bind_label(cont);
+        } else {
+            self.class_allocate_call(class_id, alloc_func);
+        }
+    }
+
+    fn class_allocate_call(&mut self, class_id: u32, alloc_func: u64) {
         monoasm_arm64!(&mut self.jit,
             mov x0, (class_id as u64); // class_id -> arg0 (low 32 bits read)
             mov x1, x20;               // globals -> arg1
