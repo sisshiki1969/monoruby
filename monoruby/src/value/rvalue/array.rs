@@ -403,35 +403,6 @@ impl ArrayInner {
         }
     }
 
-    /// Convert a Value to an array index, treating nil as a given default.
-    /// Used for Range begin/end in Array#[]=.
-    pub(crate) fn get_array_index_checked(
-        &self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-        index: Value,
-    ) -> Result<usize> {
-        let index = index.coerce_to_int_i64(vm, globals)?;
-        match self.get_array_index(index) {
-            Some(i) => Ok(i),
-            None => Err(MonorubyErr::index_too_small(index, -(self.len() as i64))),
-        }
-    }
-
-    /// Like get_array_index_checked, but treats nil as `default`.
-    pub(crate) fn get_array_index_nil_or(
-        &self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-        index: Value,
-        default: usize,
-    ) -> Result<usize> {
-        if index.is_nil() {
-            return Ok(default);
-        }
-        self.get_array_index_checked(vm, globals, index)
-    }
-
     pub(crate) fn get_elem2(
         &self,
         vm: &mut Executor,

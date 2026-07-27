@@ -142,24 +142,6 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     globals.object_class().include_module(kernel).unwrap();
 }
 
-#[derive(Debug, Clone, Copy)]
-#[repr(transparent)]
-pub struct Arg(*const Option<Value>);
-
-impl std::ops::Index<usize> for Arg {
-    type Output = Option<Value>;
-    fn index(&self, index: usize) -> &Option<Value> {
-        unsafe { &*self.0.sub(index) }
-    }
-}
-
-impl std::ops::Add<usize> for Arg {
-    type Output = Arg;
-    fn add(self, rhs: usize) -> Arg {
-        Arg(unsafe { self.0.sub(rhs) })
-    }
-}
-
 /// Parse `s` as a floating-point number using CRuby's `String#to_f`
 /// rules: leading whitespace and an optional sign are allowed,
 /// underscores may sit *between* two digits (a leading `_` or `__`

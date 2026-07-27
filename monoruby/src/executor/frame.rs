@@ -116,18 +116,6 @@ impl Cfp {
         self.lfp().yield_home().block().is_some()
     }
 
-    pub(crate) fn caller(&self) -> Option<Cfp> {
-        let target_lfp = self.lfp().outer()?;
-        let mut cfp = *self;
-        loop {
-            let cfp_prev = cfp.prev()?;
-            if cfp_prev.lfp() == target_lfp {
-                return Some(cfp);
-            }
-            cfp = cfp_prev;
-        }
-    }
-
     ///
     /// Set LFP.
     ///
@@ -428,24 +416,6 @@ impl Lfp {
     /// (`Executor::current_lep`) has already resolved the LEP.
     pub(crate) fn set_svar_slot_value(self, val: Value) {
         self.set_svar_slot(val);
-    }
-
-    // Read **this** frame's raw `LFP_SVAR` slot (no outer-chain walk),
-    // returning `None` for the zero "no container yet" sentinel. Unlike
-    // [`Lfp::svar`] this does not walk to the LEP — pass a frame that is
-    // already the method frame (e.g. from [`Lfp::mfp`]).
-    //pub(crate) fn svar_slot_value(self) -> Option<Value> {
-    //    self.svar_slot()
-    //}
-
-    /// Restore **this** frame's `LFP_SVAR` slot to a previously saved
-    /// value (or the zero "no container" sentinel when `val` is `None`).
-    /// Used to isolate `$~` / `$_` for a synchronously-run thread body
-    /// (see `builtins::thread::invoke_body`): the home method frame's
-    /// container is saved, cleared for the body, then restored here.
-    pub(crate) fn restore_svar_slot(self, val: Option<Value>) {
-        let raw = val.map(|v| v.id()).unwrap_or(0);
-        unsafe { *(self.sub(LFP_SVAR as _) as *mut u64) = raw }
     }
 
     ///

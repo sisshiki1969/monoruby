@@ -2387,7 +2387,7 @@ fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     ))
 }
 
-fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array) -> Result<Value> {
+fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, ary: Array) -> Result<Value> {
     // The merge buffer must be scanned by the GC: while a merge is in
     // flight it holds the only reference to one run's elements (their
     // slots in `ary` have already been overwritten with merge output),

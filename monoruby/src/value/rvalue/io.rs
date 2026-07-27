@@ -564,16 +564,6 @@ impl IoInner {
         }
     }
 
-    pub(crate) fn from_raw_fd(
-        fd: i32,
-        name: String,
-        has_path: bool,
-        readable: bool,
-        writable: bool,
-    ) -> Self {
-        Self::from_raw_fd_autoclose(fd, name, has_path, readable, writable, true)
-    }
-
     /// Like `from_raw_fd`, but with an explicit initial `autoclose`. When
     /// `autoclose` is true this `FileDescriptor` becomes the fd's owner and
     /// is recorded in `OWNED_FDS`; when false it merely borrows the fd (the
