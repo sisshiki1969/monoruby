@@ -1,13 +1,14 @@
 #!/bin/bash
 set -e
 
-RUSTFLAGS=-Cforce-frame-pointers cargo install --path monoruby
+cargo install --path monoruby
+MONORUBY="${MONORUBY:-$(command -v monoruby)}"
 
 # Run ruby/spec with instrumented binary for coverage
 if [ -d "../spec" ] && [ -d "../mspec" ]; then
   echo "Running ruby/spec for coverage..."
   cd ../spec
-  for cat in basicobject true false nil integer float comparable math builtin_constants class numeric rational struct systemexit method unboundmethod; do
+  for cat in basicobject true false nil integer float comparable math builtin_constants class numeric rational struct systemexit method unboundmethod set; do
     echo "=== core/$cat ==="
     ../mspec/bin/mspec core/$cat -t "$MONORUBY"
   done
