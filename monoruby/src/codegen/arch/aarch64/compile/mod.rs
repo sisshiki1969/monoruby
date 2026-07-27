@@ -1808,22 +1808,26 @@ impl Codegen {
         self.a64_block_break(pc);
     }
 
-    /// Record this position (the return continuation of a specialized call) as
-    /// the return-address patch point for `evict`. On BOP redefinition,
-    /// `Codegen::immediate_eviction` overwrites the instruction here with a
-    /// `B deopt` so the stale specialized frame deopts on return. Mirrors x86.
+    /// Record this position (the return continuation of a call, after the
+    /// result store) as the return-address patch point for `evict`. On BOP
+    /// redefinition, `Codegen::immediate_eviction` overwrites the instruction
+    /// here with a `B deopt` so the stale frame deopts on return instead of
+    /// resuming its compiled body (whose inline integer arithmetic / folds
+    /// assume the builtin op). Mirrors x86.
     pub(in crate::codegen::jitgen) fn emit_immediate_evict(&mut self, evict: AsmEvict) {
-        // Only specialized calls register a return address on aarch64; normal
-        // calls (`emit_call`) ignore `evict` and rely on the callee's own entry
-        // guard rather than return-address patching. So an unregistered evict
-        // here is a normal call with nothing to patch — skip it. (On x86 every
-        // call registers, so the lookup always succeeds there.)
-        if let Some(&return_addr) = self.asm_return_addr_table.get(&evict) {
-            let patch_point = self.jit.get_current_address();
-            self.return_addr_table
-                .entry(return_addr)
-                .and_modify(|e| e.0 = Some(patch_point));
-        }
+        // Every `ImmediateEvict` producer (normal call, generic yield,
+        // specialized call/yield) registers its own return address in the same
+        // block, so the id ALWAYS resolves to the fresh same-block entry.
+        // `unwrap` (x86 parity) is load-bearing: AsmEvict ids restart per
+        // block and `asm_return_addr_table` is never cleared, so a producer
+        // that forgot to register would otherwise silently read a stale
+        // same-id entry from an earlier block and repoint an unrelated live
+        // call site's patch point — a miscompile. Panic loudly instead.
+        let return_addr = *self.asm_return_addr_table.get(&evict).unwrap();
+        let patch_point = self.jit.get_current_address();
+        self.return_addr_table
+            .entry(return_addr)
+            .and_modify(|e| e.0 = Some(patch_point));
     }
 
     /// Register a specialized call's return address so `immediate_eviction` can

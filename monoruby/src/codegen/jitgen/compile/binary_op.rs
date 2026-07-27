@@ -81,21 +81,20 @@ impl<'a> JitContext<'a> {
             }
             _ => match state.binop_type(lhs, rhs, ic) {
                 BinaryOpType::Integer(l, r) => {
-                    // A constant-fold bakes the result (e.g. `100 * 100` -> 10000)
-                    // assuming the builtin operator, with no runtime trace of the
-                    // op. Guard that assumption: emit `CheckBOP` *before* the fold
-                    // (so the deopt write-back still sees the operand literals
-                    // live) with the deopt PC at this op, so a later BOP
-                    // redefinition deopts and the interpreter re-runs the op
-                    // through the de-optimized VM handler. x86 recovers via the
-                    // class-version-guard recompile path, so gate this to the
-                    // aarch64 (no-recompile) build. Limited to the fold case: the
-                    // register fast-path keeps its operands at runtime, so it is
-                    // not worth a guard on every arithmetic op.
-                    #[cfg(target_arch = "aarch64")]
-                    if state.check_concrete_i64(l, r).is_some() {
-                        ir.check_bop(state);
-                    }
+                    // Both the constant fold (`100 * 100` -> 10000) and the
+                    // register fast-path's inline arithmetic assume the builtin
+                    // operator with no per-op runtime guard. A basic-op
+                    // redefinition is instead handled method-wide by
+                    // `set_bop_redefine`, identically on both arches: compiled
+                    // method entries are reverted (x86 `apply_jmp_patch_address`
+                    // to `vm_entry`; aarch64 dispatch-slot zeroing in
+                    // `invalidate_jit_code`), the VM's `loop_start` handler is
+                    // swapped for the no-opt one so stale OSR loop bodies are
+                    // never re-entered, and on-stack frames deopt on return via
+                    // `immediate_eviction`'s return-address patching (both
+                    // arches; see `emit_call`). A `def` executed *inside* JIT
+                    // code is caught by the `check_bop` after
+                    // `MethodDef`/`SingletonMethodDef`.
                     state.binop_integer(ir, kind, dst, l, r);
                     Ok(CompileResult::Continue)
                 }

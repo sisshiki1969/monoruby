@@ -1331,8 +1331,16 @@ impl Codegen {
         self.jit.set_writable();
         let dest = self.jit.get_label_address(deopt);
         // Byte displacement from the patch point to the deopt handler; both are
-        // 4-byte aligned, so imm26 = disp / 4 (B's range is ±128 MiB).
+        // 4-byte aligned, so imm26 = disp / 4 (B's range is ±128 MiB). In the
+        // intended use the evict handler sits in the same compilation unit as
+        // the call site, so the distance is tiny — assert the range so an
+        // out-of-range pair (a table-corruption symptom) panics instead of
+        // silently branching to a masked wrong target.
         let disp = dest - patch_point;
+        debug_assert!(
+            (-(1i64 << 27)..(1i64 << 27)).contains(&(disp as i64)),
+            "patch_return_to_deopt: B displacement out of imm26 range: {disp:#x}"
+        );
         let imm26 = ((disp >> 2) as u32) & 0x03ff_ffff;
         let word = 0x1400_0000u32 | imm26;
         unsafe { (patch_point.as_ptr() as *mut u32).write(word) };
@@ -1360,6 +1368,10 @@ impl Codegen {
         self.jit.set_writable();
         let dest = self.jit.get_label_address(entry);
         let disp = dest - patch_point;
+        debug_assert!(
+            (-(1i64 << 27)..(1i64 << 27)).contains(&(disp as i64)),
+            "patch_call_to_entry: BL displacement out of imm26 range: {disp:#x}"
+        );
         let imm26 = ((disp >> 2) as u32) & 0x03ff_ffff;
         let word = 0x9400_0000u32 | imm26;
         // SAFETY: `patch_point` is the 4-byte-aligned address of the `bl`

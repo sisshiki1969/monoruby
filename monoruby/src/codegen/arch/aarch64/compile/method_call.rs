@@ -753,17 +753,18 @@ impl Codegen {
     /// Lower `Call` (the call itself): set the callee LFP, push a control
     /// frame, set PC, `blr` the callee codeptr, then restore the caller's
     /// cfp/lfp. Mirrors x86 `do_call` (set_lfp + push_frame + call + pop_frame)
-    /// and the VM invoker's `aftargs` sequence. The eviction-on-return
-    /// patching (`set_deopt_with_return_addr`) is x86-only (runtime branch
-    /// patching), so it is skipped — class-version changes are caught by
-    /// `GuardClassVersion` deopts instead.
+    /// and the VM invoker's `aftargs` sequence.
+    /// Returns the call's return address (the instruction after the `blr`,
+    /// i.e. pop_frame's first instruction) so `emit_call` can register it for
+    /// BOP-redefinition eviction (mirrors x86 `emit_call`'s
+    /// `get_current_address` after the `call`).
     pub(super) fn a64_do_call(
         &mut self,
         codeptr: CodePtr,
         is_iseq: bool,
         callee_pc: Option<BytecodePtrBase>,
         call_site_bc_ptr: BytecodePtr,
-    ) {
+    ) -> CodePtr {
         let codeptr_addr = codeptr.as_ptr() as u64;
         // set_lfp + push_frame (EXEC=x19, LFP=x22).
         monoasm_arm64!(&mut self.jit,
@@ -792,12 +793,14 @@ impl Codegen {
             mov x10, (codeptr_addr);
             blr x10;                                 // result in x0
         );
+        let return_addr = self.jit.get_current_address();
         // pop_frame: restore caller cfp + lfp from x29 (== x86 rbp).
         monoasm_arm64!(&mut self.jit,
             sub x10, x29, #(BP_CFP as u32);
             str x10, [x19, #(EXECUTOR_CFP as u32)];
             ldur x22, [x29, #(-((BP_CFP + CFP_LFP) as i32))];
         );
+        return_addr
     }
 
     // ---- specialized (inlined) frame lowering (aarch64) -------------------
@@ -1081,12 +1084,17 @@ impl Codegen {
         );
     }
 
-    /// The call itself. aarch64 has no runtime branch patching, so the `evict`
-    /// return-address patch point is not registered (class-version guards cover
-    /// the staleness it would otherwise catch); the x86-only params are unused.
-    /// aarch64 always calls `codeptr` directly (no JIT-entry dispatch or
-    /// return-address patching — class-version guards cover invalidation), so
-    /// `jit_entry` / `evict` / `evict_label` are unused here.
+    /// The call itself. `jit_entry` is unused — aarch64 always calls `codeptr`
+    /// directly (no JIT-entry dispatch).
+    ///
+    /// Like x86, the call's return address is registered for BOP-redefinition
+    /// eviction: when a basic op is redefined *inside* the callee, the caller's
+    /// own compiled body (inline integer arithmetic, folds) is stale the moment
+    /// the callee returns, and the callee's entry guards cannot protect the
+    /// *caller*. `immediate_eviction` finds this frame's return address in
+    /// `return_addr_table` and overwrites the recorded patch point (bound by
+    /// the following `ImmediateEvict`, after the result store) with a `B evict`
+    /// so the frame deopts instead of resuming stale code.
     pub(in crate::codegen::jitgen) fn emit_call(
         &mut self,
         codeptr: CodePtr,
@@ -1094,10 +1102,11 @@ impl Codegen {
         callee_pc: Option<BytecodePtrBase>,
         call_site_bc_ptr: BytecodePtr,
         _jit_entry: Option<DestLabel>,
-        _evict: AsmEvict,
-        _evict_label: &DestLabel,
+        evict: AsmEvict,
+        evict_label: &DestLabel,
     ) {
-        self.a64_do_call(codeptr, is_iseq, callee_pc, call_site_bc_ptr);
+        let return_addr = self.a64_do_call(codeptr, is_iseq, callee_pc, call_site_bc_ptr);
+        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
     }
 
     /// Keyword-rest fixup: if the `slot` is nil, replace it with a fresh empty
@@ -1130,16 +1139,23 @@ impl Codegen {
     /// Lower the generic `Yield` (block call whose target is resolved at runtime
     /// via `get_yield_data`). Mirrors x86 `gen_yield`: fetch the block's
     /// ProcData, build the callee block frame, massage arguments, then call the
-    /// block's funcdata indirectly. The eviction-on-return patching is x86-only
-    /// (runtime branch patching), so it is skipped — class-version guards cover
-    /// it. `error` catches a missing block, an argument error, or a callee
+    /// block's funcdata indirectly. Like every other machine-level call, the
+    /// block call's return address is registered for BOP-redefinition eviction
+    /// (see `emit_call`) — a yielded block can redefine a basic op, and the
+    /// yielding frame must then deopt on resume instead of running its stale
+    /// compiled continuation. Registering here also keeps the
+    /// `emit_immediate_evict` invariant that every `ImmediateEvict`'s evict id
+    /// was registered by its own site in the same block (AsmEvict ids restart
+    /// per block, so an unregistered producer would read a stale same-id entry
+    /// from `asm_return_addr_table` and hijack an unrelated site's patch
+    /// point). `error` catches a missing block, an argument error, or a callee
     /// raise. Bails on an out-of-range callee-frame offset.
     pub(in crate::codegen::jitgen) fn emit_yield(
         &mut self,
         callid: CallSiteId,
         error: &DestLabel,
-        _evict: AsmEvict,
-        _evict_label: &DestLabel,
+        evict: AsmEvict,
+        evict_label: &DestLabel,
     ) -> bool {
         // Closely mirrors the proven VM `a64_op_yield`. x25/x26 are callee-saved
         // and used by neither the JIT global set (x19-x23) nor JIT'd code, so
@@ -1218,12 +1234,16 @@ impl Codegen {
             ldr x21, [x26, #(FUNCDATA_PC as u32)];        // PC <- callee pc
             ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
             blr x10;                                       // result in x0
+        );
+        let return_addr = self.jit.get_current_address();
+        monoasm_arm64!(&mut self.jit,
             sub x11, sp, #(RSP_CFP as u32);
             ldr x10, [x11];
             str x10, [x19, #(EXECUTOR_CFP as u32)];
             sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
             ldr x22, [x10];
         );
+        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
         true
     }
 

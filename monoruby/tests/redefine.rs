@@ -169,19 +169,18 @@ fn redefine_bop_polymorphic_chain() {
     );
 }
 
-// KNOWN, PRE-EXISTING, CROSS-ARCH BUG (bug B): an off-stack method that stays
-// VM-interpreted but has an OSR/loop-JIT'd hot loop keeps entering the stale
-// loop body after a basic-op redefinition. The compiled loop entry lives in the
-// bytecode (`BytecodePtr::write2`, `[pc-8]`) and `vm_loop_start` jumps to it
-// (`jmp rax` / `br x10`) with no `jit_invalidated`/class-version check, and
-// `set_bop_redefine` reverts method entries but never the OSR bytecode-PC
-// entries — on BOTH x86 and aarch64. Slot-zeroing (which fixed the method-JIT
-// twin, bug A) cannot reach these entries. Fixing this needs a cross-arch design
-// decision (revert every loop's `[pc-8]`, or guard the loop entry); until then
-// this miscompiles (`x * x` here reads the pre-redefinition product). Un-ignore
-// once OSR-entry invalidation lands.
+// Regression (bug B): an off-stack method that stays VM-interpreted but has an
+// OSR/loop-JIT'd hot loop must not re-enter the stale loop body after a
+// basic-op redefinition. The compiled loop entry lives in the bytecode
+// (`BytecodePtr::write2`, `[pc+8]`) and the VM's `loop_start` handler branches
+// to it with no version check, and nothing reverts OSR bytecode-PC entries —
+// so the protection is the `remove_vm_bop_optimization` dispatch-table swap
+// that replaces `loop_start` with the no-opt handler (plain advance+dispatch),
+// making stale OSR entries unreachable. x86 always had that swap
+// (`dispatch[14] = vm_loop_start_no_opt`); the aarch64
+// `remove_vm_bop_optimization` was missing it, so `x * x` here kept returning
+// the pre-redefinition product (14700 instead of 300000).
 #[test]
-#[ignore = "bug B: off-stack OSR loop-JIT ignores BOP redefine (pre-existing, cross-arch)"]
 fn redefine_bop_offstack_osr_loop() {
     run_test(
         r##"
@@ -199,6 +198,150 @@ fn redefine_bop_offstack_osr_loop() {
           def *(o); 1000; end
         end
         osr_sum(7)
+        "##,
+    );
+}
+
+// Same, with a *folded* loop body (`7 * 7` bakes 49 at compile time with no
+// runtime trace). Historically this exact case was protected on aarch64 by a
+// compensating per-execution `CheckBOP` before every folded op; that guard is
+// now gone (the dispatch-table swap covers it method-wide), so this test pins
+// the fold variant against regressions in the swap.
+#[test]
+fn redefine_bop_offstack_osr_loop_fold() {
+    run_test(
+        r##"
+        def osr_fold_sum
+          total = 0
+          i = 0
+          while i < 300
+            total = total + (7 * 7)
+            i = i + 1
+          end
+          total
+        end
+        osr_fold_sum
+        class Integer
+          def *(o); 1000; end
+        end
+        osr_fold_sum
+        "##,
+    );
+}
+
+// Regression (bug C): an ON-STACK caller must not resume its stale compiled
+// body after a callee redefines a basic op. Two aarch64 gaps conspired here:
+// (1) `emit_call` did not register normal calls' return addresses, so
+// `immediate_eviction` could not patch the caller's return continuation
+// (x86 registers every call); (2) arch-neutral: the `check_bop_redefine`
+// eviction ran *before* the store mutation (and only on the `def` path), so
+// the very definition that set the BOP flags never triggered it — it only ran
+// on the *next* def, one redefinition too late. The eviction now fires inside
+// the `Executor::add_method` / `add_method_with_original` /
+// `alias_method_for_class` funnel (after the store mutation, before the
+// `method_added` hook), covering every definition route. With both fixed, the
+// caller deopts when the callee returns, and the redefined `+` is observed
+// (999, not the stale inline 8).
+#[test]
+fn redefine_bop_onstack_caller() {
+    run_test(
+        r##"
+        $flag = false
+        def maybe_redefine
+          if $flag
+            Integer.class_eval("def +(o); 999; end")
+          end
+          nil
+        end
+        def parent_dyn(a, b)
+          maybe_redefine
+          a + b        # non-fold inline add after the call
+        end
+        def parent_fold
+          maybe_redefine
+          5 + 3        # constant fold after the call
+        end
+        100.times { parent_dyn(5, 3); parent_fold }
+        $flag = true
+        [parent_dyn(5, 3), parent_fold]
+        "##,
+    );
+}
+
+// Same on-stack scenario reached through a GENERIC `yield` instead of a method
+// call: the yielded block redefines the basic op, and the yielding frame must
+// deopt on resume instead of running its stale compiled continuation. On
+// aarch64, `emit_yield` historically ignored its `evict` (only method calls /
+// specialized calls registered return addresses) — which both left
+// yield-suspended frames un-evictable AND broke `emit_immediate_evict`'s
+// same-block-registration invariant (AsmEvict ids restart per block; a generic
+// yield's `ImmediateEvict` would read a stale same-id entry from an earlier
+// block's call and hijack that unrelated call site's patch point). The fix
+// registers the yield's block-call return address exactly like x86.
+#[test]
+fn redefine_bop_onstack_yield() {
+    run_test(
+        r##"
+        def m_dyn(a, b)
+          yield
+          a + b
+        end
+        def m_fold
+          yield
+          5 + 3
+        end
+        100.times { m_dyn(5, 3) {}; m_fold {} }
+        r1 = m_dyn(5, 3) { Integer.class_eval("def +(o); 999; end") }
+        r2 = m_fold {}
+        [r1, r2]
+        "##,
+    );
+}
+
+// Same on-stack scenario, but the basic op is redefined WITHOUT the `def`
+// keyword: via `Module#define_method` and via `alias_method`. These set the
+// BOP flags through `insert_method` exactly like `def`, but historically only
+// the `def` bytecode path ran the eviction check — the funnel placement in
+// `Executor::add_method` / `alias_method_for_class` covers them.
+#[test]
+fn redefine_bop_onstack_caller_define_method_alias() {
+    run_test(
+        r##"
+        $flag = false
+        def maybe_redefine
+          if $flag
+            Integer.class_eval { define_method(:+) { |o| 999 } }
+          end
+          nil
+        end
+        def parent_dyn(a, b)
+          maybe_redefine
+          a + b
+        end
+        100.times { parent_dyn(5, 3) }
+        $flag = true
+        [parent_dyn(5, 3), parent_dyn(5, 3)]
+        "##,
+    );
+    run_test(
+        r##"
+        class Integer
+          def sub_impl(o); 777; end
+        end
+        $flag = false
+        def maybe_redefine
+          if $flag
+            Integer.class_eval { alias_method :-, :sub_impl }
+          end
+          nil
+        end
+        def parent_dyn(a, b)
+          maybe_redefine
+          a - b
+        end
+        100.times { parent_dyn(5, 3) }
+        $flag = true
+        [parent_dyn(5, 3), parent_dyn(5, 3)]
         "##,
     );
 }
