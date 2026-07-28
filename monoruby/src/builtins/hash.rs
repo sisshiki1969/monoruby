@@ -50,7 +50,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "replace", replace, 1);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
     globals.define_builtin_func(HASH_CLASS, "delete", delete, 1);
-    // collect/map: implemented in Ruby (builtins.rb) for arity adaptation and subclass support
+    // collect/map: implemented in Ruby (builtins/hash.rb) for arity adaptation and subclass support
     globals.define_builtin_funcs(HASH_CLASS, "each", &["each_pair"], each, 0);
     globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
     globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
@@ -188,7 +188,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// - initialize {|hash, key| ... } -> self
 ///
 /// Private hook called by `Hash.new`. Mirrors the previous Ruby
-/// implementation in `builtins.rb`:
+/// implementation in `builtins/hash.rb`:
 ///   - frozen receivers raise `FrozenError` before any mutation;
 ///   - giving both a positional `ifnone` *and* a block is
 ///     `ArgumentError("wrong number of arguments (given 1, expected 0)")`;

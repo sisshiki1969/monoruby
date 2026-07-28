@@ -622,3 +622,29 @@ class Array
     self
   end
 end
+class Array
+  def values_at(*selectors)
+    result = []
+    selectors.each do |s|
+      if s.is_a?(Range)
+        b = s.begin
+        e = s.end
+        b = b.nil? ? 0 : b.to_int
+        endless = e.nil?
+        e = endless ? size - 1 : e.to_int
+        b += size if b < 0
+        e += size if e < 0
+        e -= 1 if !endless && s.exclude_end?
+        next if b < 0
+        i = b
+        while i <= e
+          result << self[i]
+          i += 1
+        end
+      else
+        result << self[s]
+      end
+    end
+    result
+  end
+end

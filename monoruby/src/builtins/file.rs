@@ -162,7 +162,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "birthtime", file_birthtime, 1);
 
     // File::Stat — the class body (accessors / predicates) lives in
-    // `builtins/builtins.rb`; here we own construction. `File.stat`,
+    // `builtins/file_stat.rb`; here we own construction. `File.stat`,
     // `File.lstat`, and `File::Stat.new` all populate the fields from
     // a real stat(2) / lstat(2), raising the matching Errno on
     // failure. The instance ivars (@dev, @ino, …) are read by the
@@ -2420,7 +2420,7 @@ fn time_from_secs_nsec(
 
 /// Populate a `File::Stat` instance's ivars from a `std::fs::Metadata`
 /// (which wraps a `struct stat`). The Ruby accessors in
-/// `builtins/builtins.rb` read these fields.
+/// `builtins/file_stat.rb` read these fields.
 fn fill_stat_ivars(
     vm: &mut Executor,
     globals: &mut Globals,
