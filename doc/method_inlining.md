@@ -65,11 +65,35 @@ AsmInst・ガード構成をそのまま流用する。
   - `Ret`(80)
 - 命令数上限(`MAX_INLINE_BYTECODE_LEN`)以下
 
-呼び出しサイト側の条件:
+呼び出しサイト側の条件(2形状):
 
-- `is_simple_call` が成立(splat / hash-splat / kw なし、arity 一致)
-- ブロックを渡さない(`block_fid.is_none() && block_arg.is_none()`)
-- `pos_num == callee.req_num()`
+1. **単純呼び出し**
+   - `is_simple_call` が成立(splat / hash-splat / kw なし、arity 一致)
+   - ブロックを渡さない(`block_fid.is_none() && block_arg.is_none()`)
+   - `pos_num == callee.req_num()`
+2. **D1 で source-route された forwarding サイト**(`g(lead.., ...)` で
+   末尾 `...` の rest が遅延実体化されているもの — 代表例は specialized
+   コンパイルされた `Class#new` 内の `o.__builtin_initialize__(...)`)
+   - `callsite.forwarding` かつ splat が末尾のみ、kw なし、hash-splat 1個
+   - `state.deferred_rest_src` が `(src, len)` を返す(= D1 注釈あり)
+   - 実効 arity `lead_num + len == callee.req_num()`
+   - 転送される引数は**動的呼び出し元(1段上)のフレームのスロット**への
+     別名(`InlineOperand::OuterSlot`)になる。`set_arguments` の
+     `defer_rest` 分岐が呼び出し時にソーススロットを `write_back_range`
+     でメモリ常駐化しており、D1 の構造ゲートが「呼び出し元はちょうど
+     1段上の最外周フレーム」を保証するので、
+     `AsmInst::LoadCallerFrameSlot`(`[rbp]` 経由、
+     `SetArgumentsForwarded` の deferred_src コピーと同じアドレッシング)
+     で読める
+   - `...` はブロックも転送するため `block_arg` は常に `Some` だが、
+     許可命令セットにブロックを観測する手段がない(yield も呼び出しも
+     ない)ので無視して正確。ただし `block_fid.is_none()` は要求
+   - インライン化が forwarding の消費そのものになるため
+     `ir.set_deferred_rest()` を発行(呼び出し元の `create_array` スキップ
+     を維持。D1 注釈は deopt 時の再構築のため残す)
+
+共通条件:
+
 - ivar アクセスを含む場合、レシーバクラスが即値クラス
   (`is_always_frozen` / 非ヒープ)でない
 
@@ -232,6 +256,10 @@ InlineOperand =
 
 ## 5. 将来拡張
 
+- ~~**`Class#new` → `initialize` 経路**~~: 実装済み(上記 forwarding サイト
+  対応)。specialized `new` の中で initialize がフレームレス化され、
+  `Point.new(x, y)` は「specialized `new` フレーム + allocate + インライン
+  ivar ストア」になる。
 - **可変 `Literal`**(String リテラル): `value_deep_copy` は raise しない。
   FPR 退避を伴う C 呼び出しのため第1段階では除外。
 - **`swap!` パターン**: caller フレームの `prologue_bytes` を

@@ -259,6 +259,22 @@ impl Codegen {
         );
     }
 
+    ///
+    /// Load a slot of the dynamic caller's frame (one level up). This
+    /// frame's prologue saved the caller's rbp at `[rbp]`; the D1
+    /// structural gate guarantees the caller is exactly one (outermost,
+    /// non-specialized) level up, so the slot is rbp-local there.
+    ///
+    /// #### destroy
+    /// - rax, dst
+    ///
+    pub(in crate::codegen::jitgen) fn load_caller_frame_slot(&mut self, slot: SlotId, dst: GP) {
+        monoasm!( &mut self.jit,
+            movq rax, [rbp];
+            movq R(dst as _), [rax - (rbp_local(slot))];
+        );
+    }
+
     pub(in crate::codegen::jitgen) fn load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId) {
         monoasm!( &mut self.jit,
             movq rax, [rbp + ((offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(reg) as usize))];

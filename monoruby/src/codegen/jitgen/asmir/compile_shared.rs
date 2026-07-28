@@ -913,6 +913,13 @@ impl Codegen {
                     cg.method_return_specialized(off);
                 });
             }
+            // Dynamic-caller slot access for frame-free inlining at a D1
+            // source-routed forwarding site (see the AsmInst doc).
+            AsmInst::LoadCallerFrameSlot { slot, dst } => {
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.load_caller_frame_slot(slot, dst);
+                });
+            }
             // Outer-scope local access at a pre-resolved frame offset.
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
                 let off = offset.unwrap_concrete();

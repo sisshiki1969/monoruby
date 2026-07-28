@@ -25,6 +25,13 @@ enum InlineOperand {
     /// each consumer re-loads; this is only valid while no store to the same
     /// ivar has intervened (enforced by the analysis).
     PendingIvar(IvarId),
+    /// An alias of a slot in the *dynamic caller's* frame, one level up —
+    /// a D1 source-routed forwarded argument (`g(...)` whose `...` rest was
+    /// deferred). The D1 gate guarantees the caller is exactly one
+    /// (outermost) level up and `set_arguments`' `defer_rest` spill makes
+    /// the slot memory-resident for the whole window; like `CallerSlot`,
+    /// nothing writes it during the inlined body.
+    OuterSlot(SlotId),
 }
 
 struct InlineStore {
@@ -61,6 +68,16 @@ impl<'a> JitContext<'a> {
     /// Returns `None` when the body does not qualify (the caller falls
     /// through to specialization / generic dispatch).
     ///
+    /// Two call-site shapes are admitted (`simple` distinguishes them):
+    ///
+    /// * a simple call (`simple_fold` held at the hook) — arguments are the
+    ///   caller's own arg slots;
+    /// * a D1 source-routed forwarding site (`g(lead.., ...)` whose `...`
+    ///   rest was deferred — notably `Class#new`'s
+    ///   `o.__builtin_initialize__(...)` when `new` is compiled specialized
+    ///   for a concrete outer call site) — forwarded arguments alias the
+    ///   dynamic caller's slots (`OuterSlot`).
+    ///
     /// The class-version guard and the receiver-class guard have already
     /// been emitted by `compile_method_call`.
     ///
@@ -72,21 +89,81 @@ impl<'a> JitContext<'a> {
         recv_class: ClassId,
         fid: FuncId,
         iseq: ISeqId,
+        simple: bool,
     ) -> Option<CompileResult> {
-        match self.analyze_inline_iseq(callid, recv_class, fid, iseq) {
+        let (arg_ops, forwarded) = self.inline_call_shape(state, callid, simple)?;
+        match self.analyze_inline_iseq(&arg_ops, callid, recv_class, fid, iseq) {
             InlineAnalysis::Inlinable(plan) => {
                 #[cfg(feature = "jit-log")]
                 eprintln!(
-                    "    inline_iseq: {} stores={}",
+                    "    inline_iseq: {} stores={} forwarded={forwarded}",
                     self.store[fid].name().map_or_else(String::new, |n| n.to_string()),
                     plan.stores.len(),
                 );
+                if forwarded {
+                    // Inlining *is* the forwarding consume and reads the
+                    // arguments straight from the source slots, so keep the
+                    // caller-side `create_array` skip on. The D1 annotation
+                    // is left in place: side exits still rebuild the rest
+                    // `Array` for an interpreter resuming inside the
+                    // trampoline frame.
+                    ir.set_deferred_rest();
+                }
                 Some(self.compile_inline_iseq(state, ir, callid, recv_class, plan))
             }
             InlineAnalysis::IvarIdNotFound => Some(CompileResult::Recompile(
                 RecompileReason::IvarIdNotFound,
             )),
             InlineAnalysis::NotInlinable => None,
+        }
+    }
+
+    ///
+    /// Classify the call-site shape and bind the callee's positional
+    /// parameters to symbolic operands. Returns `(operands, forwarded)`,
+    /// or `None` when the shape is not inlinable.
+    ///
+    fn inline_call_shape(
+        &self,
+        state: &AbstractState,
+        callid: CallSiteId,
+        simple: bool,
+    ) -> Option<(Vec<InlineOperand>, bool)> {
+        let callsite = &self.store[callid];
+        if callsite.block_fid.is_some() {
+            return None;
+        }
+        if simple {
+            if callsite.block_arg.is_some() {
+                return None;
+            }
+            let ops = (0..callsite.pos_num)
+                .map(|i| InlineOperand::CallerSlot(callsite.args + i))
+                .collect();
+            Some((ops, false))
+        } else if callsite.forwarding
+            && callsite.pos_num >= 1
+            && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]
+            && callsite.kw_args.is_empty()
+            && callsite.hash_splat_pos.len() == 1
+        {
+            // `g(lead.., ...)` whose trailing `...` rest is D1-deferred:
+            // the forwarded positionals are the dynamic caller's source
+            // slots, and the structural gate guarantees the forwarded
+            // `**kwrest` is statically nil (no keywords reached the
+            // trampoline). The `...` also forwards `&blk` (`block_arg` is
+            // always `Some` here) — the callee body cannot observe a block
+            // (no `yield`, no calls in the admitted set), so ignoring it
+            // is exact.
+            let lead_num = callsite.pos_num - 1;
+            let (src, len) = state.deferred_rest_src(callsite.args + lead_num)?;
+            let mut ops: Vec<InlineOperand> = (0..lead_num)
+                .map(|i| InlineOperand::CallerSlot(callsite.args + i))
+                .collect();
+            ops.extend((0..len as usize).map(|i| InlineOperand::OuterSlot(src + i)));
+            Some((ops, true))
+        } else {
+            None
         }
     }
 
@@ -99,6 +176,7 @@ impl<'a> JitContext<'a> {
     ///
     fn analyze_inline_iseq(
         &self,
+        arg_ops: &[InlineOperand],
         callid: CallSiteId,
         recv_class: ClassId,
         fid: FuncId,
@@ -106,9 +184,6 @@ impl<'a> JitContext<'a> {
     ) -> InlineAnalysis {
         use InlineOperand::*;
         let callsite = &self.store[callid];
-        if callsite.block_fid.is_some() || callsite.block_arg.is_some() {
-            return InlineAnalysis::NotInlinable;
-        }
         let info = &self.store[fid];
         // required-positional-only callee, exact arity match.
         if info.is_block_style()
@@ -116,7 +191,7 @@ impl<'a> JitContext<'a> {
             || info.post_num() != 0
             || info.is_rest()
             || !info.no_keyword()
-            || callsite.pos_num != info.req_num()
+            || arg_ops.len() != info.req_num()
         {
             return InlineAnalysis::NotInlinable;
         }
@@ -135,8 +210,8 @@ impl<'a> JitContext<'a> {
         // locals and temps start as nil (`InitMethod` nil-fills them).
         let mut env = vec![Const(Value::nil()); iseq_info.total_reg_num()];
         env[0] = CallerSlot(callsite.recv);
-        for i in 0..callsite.pos_num {
-            env[i + 1] = CallerSlot(callsite.args + i);
+        for (i, op) in arg_ops.iter().enumerate() {
+            env[i + 1] = *op;
         }
         // last stored value per ivar, for store-to-load forwarding.
         let mut ivar_env: Vec<(IvarId, InlineOperand)> = vec![];
@@ -269,6 +344,11 @@ impl<'a> JitContext<'a> {
                     self.push_inline_ivar_load(ir, ivarid, is_object_ty, gp);
                     state.bind_gp_resident(gp, dst);
                 }
+                InlineOperand::OuterSlot(slot) => {
+                    let gp = state.alloc_gp_for(ir, dst, Guarded::Value);
+                    ir.push(AsmInst::LoadCallerFrameSlot { slot, dst: gp });
+                    state.bind_gp_resident(gp, dst);
+                }
             }
         }
         CompileResult::Continue
@@ -298,6 +378,13 @@ impl<'a> JitContext<'a> {
             InlineOperand::PendingIvar(ivarid) => {
                 state.load(ir, recv, GP::Rdi);
                 self.push_inline_ivar_load(ir, ivarid, is_object_ty, GP::Rax);
+                GP::Rax
+            }
+            InlineOperand::OuterSlot(slot) => {
+                ir.push(AsmInst::LoadCallerFrameSlot {
+                    slot,
+                    dst: GP::Rax,
+                });
                 GP::Rax
             }
         }
@@ -684,6 +771,95 @@ mod tests {
               while i < 50
                 o = objs[i % 2]
                 res << o.v
+                i += 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn inline_iseq_forwarded_new() {
+        // `Class#new`'s `o.__builtin_initialize__(...)` under a specialized
+        // `new`: initialize is inlined frame-free at the D1 source-routed
+        // forwarding site. Includes a block-passing `new` (the forwarded
+        // block is ignored by an initialize that takes none — exact).
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            class Point
+              def initialize(x, y)
+                @x = x
+                @y = y
+              end
+              def x
+                @x
+              end
+              def y
+                @y
+              end
+            end
+            def drive
+              res = []
+              i = 0
+              while i < 50
+                pt = Point.new(i, i * 2)
+                res << pt.x << pt.y
+                pt2 = Point.new(i, i) { |a| a }
+                res << pt2.x << pt2.y
+                i += 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn inline_iseq_forwarded_trampoline() {
+        // A pure forwarding trampoline whose target is inline-eligible:
+        // the target is inlined at the forwarded site, both with and
+        // without leading arguments (CallerSlot + OuterSlot mix).
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            class C
+              def initialize
+                @a = nil
+                @b = nil
+              end
+              def set(a, b)
+                @a = a
+                @b = b
+                self
+              end
+              def a
+                @a
+              end
+              def b
+                @b
+              end
+              def tset(...)
+                set(...)
+              end
+              def tset2(a, ...)
+                set(a, ...)
+              end
+            end
+            def drive
+              res = []
+              o = C.new
+              i = 0
+              while i < 50
+                o.tset(i, i + 1)
+                res << o.a << o.b
+                o.tset2(i * 2, i * 3)
+                res << o.a << o.b
                 i += 1
               end
               res

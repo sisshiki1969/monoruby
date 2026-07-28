@@ -365,12 +365,14 @@ impl<'a> JitContext<'a> {
                 // frame, no call, no GC poll — every guard is hoisted to
                 // this call site and deopts to the `MethodCall` pc, where
                 // no side effect has happened yet. See
-                // doc/method_inlining.md. Gated on `simple_fold` (the same
-                // arity/keyword conditions as the trivial-method fold).
-                if simple_fold
-                    && let Some(result) =
-                        self.try_inline_iseq(state, ir, callid, recv_class, func_id, iseq)
-                {
+                // doc/method_inlining.md. Simple sites are gated on
+                // `simple_fold` (the same arity/keyword conditions as the
+                // trivial-method fold); a D1 source-routed forwarding site
+                // (`Class#new`'s `o.__builtin_initialize__(...)` under a
+                // specialized `new`) self-gates inside.
+                if let Some(result) = self.try_inline_iseq(
+                    state, ir, callid, recv_class, func_id, iseq, simple_fold,
+                ) {
                     return Ok(result);
                 }
                 // Use `is_C_immediate` here, not `is_C`: heap-resident

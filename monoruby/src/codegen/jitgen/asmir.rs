@@ -2080,6 +2080,26 @@ pub(super) enum AsmInst {
         offset: DynVarOffset,
         reg: SlotId,
     },
+    ///
+    /// dst = a slot of the *dynamic caller's* frame, one level up:
+    /// `[rbp]` holds the caller's rbp saved by this frame's prologue,
+    /// and the slot lives at `[caller_rbp - rbp_local(slot)]`.
+    ///
+    /// Used by frame-free inlining at a D1 source-routed forwarding
+    /// site (`try_inline_iseq`): the D1 structural gate guarantees the
+    /// dynamic caller is exactly one (outermost, non-specialized) level
+    /// up, and `set_arguments`' `defer_rest` spill guarantees the
+    /// source slots are memory-resident. Same addressing as the
+    /// `SetArgumentsForwarded` `deferred_src` copy loop and
+    /// `gen_forward_rest_materialize`.
+    ///
+    /// #### destroy
+    /// - dst (x86); x9/x10 lowering scratch (aarch64)
+    ///
+    LoadCallerFrameSlot {
+        slot: SlotId,
+        dst: GP,
+    },
     /// DynVar(dst) = src
     StoreDynVar {
         dst: DynVar,

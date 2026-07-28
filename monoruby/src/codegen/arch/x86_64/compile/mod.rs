@@ -161,6 +161,7 @@ impl Codegen {
             | AsmInst::SpecializedYield { .. }
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
+            | AsmInst::LoadCallerFrameSlot { .. }
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
             | AsmInst::ArrayIndexAssign { .. }

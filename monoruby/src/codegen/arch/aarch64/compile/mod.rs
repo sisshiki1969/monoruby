@@ -396,6 +396,19 @@ impl Codegen {
         self.a64_frame_store(0, lfp, conv(dst) as u32);
     }
 
+    /// Load a slot of the dynamic caller's frame (one level up). Twin of x86
+    /// `load_caller_frame_slot`: this frame's prologue saved the caller's
+    /// frame pointer at `[x29]`, and the D1 structural gate guarantees the
+    /// caller is exactly one (outermost, non-specialized) level up, so the
+    /// slot lives at `[caller_fp - rbp_local(slot)]` — the same addressing
+    /// as `a64_gen_forward_rest_materialize`. x9/x10 are lowering scratch
+    /// (`dst` never maps to them — see `GP::a64`).
+    pub(in crate::codegen::jitgen) fn load_caller_frame_slot(&mut self, slot: SlotId, dst: GP) {
+        let d = dst.a64().0;
+        monoasm_arm64!(&mut self.jit, ldr x9, [x29];);
+        self.a64_frame_load(d, 9, rbp_local(slot) as u32);
+    }
+
     /// `[sp - off] <- x9`. The callee frame is built at negative offsets from
     /// the current sp (mirrors x86 `[rsp - off]`).
     fn a64_store_x9_below_sp(&mut self, off: u32) {
