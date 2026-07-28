@@ -2839,6 +2839,17 @@ mod tests {
     }
 
     #[test]
+    fn file_size_realpath_error_paths() {
+        // realpath's basedir also goes through #to_path; File.size error
+        // paths: #to_io returning a non-IO, a closed IO, a missing path;
+        // birthtime returns a Time (or NotImplementedError on filesystems
+        // without btime — identical in both interpreters).
+        run_test_once(
+            r##"(f="/tmp/mono_ep_#{Process.pid}"; File.write(f,"abc"); base=Object.new; def base.to_path; "/tmp"; end; rel="mono_ep_#{Process.pid}"; a=(File.realpath(rel, base)==File.realpath(f)); bad=Object.new; def bad.to_io; "x"; end; b=(begin; File.size(bad); rescue => e; e.class; end); io=File.open(f); io.close; c2=Object.new; c2.define_singleton_method(:to_io){io}; c=(begin; File.size(c2); rescue => e; e.class; end); d=(begin; File.size("/tmp/mono_ep_none_#{Process.pid}"); rescue => e; e.class; end); g=(begin; File.birthtime(f).class; rescue Exception => e; e.class; end); File.delete(f); [a,b,c,d,g])"##,
+        );
+    }
+
+    #[test]
     fn file_instance_method_coverage() {
         // File# instance timestamps, #truncate (ftruncate on the fd), and
         // #chmod/#chown (return 0).
