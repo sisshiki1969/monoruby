@@ -18,6 +18,7 @@ mod ffi;
 mod fiber;
 mod fiddle;
 mod file;
+mod fnmatch;
 mod gc;
 mod hash;
 mod io;
