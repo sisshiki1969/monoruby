@@ -95,8 +95,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(file, "absolute_path", absolute_path, 1, 2, false);
     globals.define_builtin_class_func(file, "absolute_path?", absolute_path_, 1);
     globals.define_builtin_class_func(file, "split", file_split, 1);
-    globals.define_builtin_class_func_rest(file, "delete", delete);
-    globals.define_builtin_class_func_rest(file, "unlink", delete);
+    globals.define_builtin_class_funcs_rest(file, "delete", &["unlink"], delete);
     globals.define_builtin_class_func_rest(file, "chmod", chmod);
     globals.define_builtin_class_func(file, "symlink", file_symlink, 2);
     globals.define_builtin_class_func(file, "readlines", readlines, 1);
@@ -173,7 +172,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "stat", file_stat, 1);
     globals.define_builtin_class_func(file, "lstat", file_lstat, 1);
     globals.define_builtin_func(stat, "initialize", stat_initialize, 1);
+    globals.define_builtin_func(IO_CLASS, "stat", file_instance_stat, 0);
     globals.define_builtin_func(file, "stat", file_instance_stat, 0);
+    globals.define_builtin_func(file, "lstat", file_instance_lstat, 0);
 
     globals.define_builtin_singleton_func(
         globals.get_load_path(),
@@ -296,7 +297,9 @@ fn file_binread(
     {
         let n = arg2.coerce_to_int_i64(vm, globals)?;
         if n < 0 {
-            return Err(MonorubyErr::argumenterr(format!("negative offset {}", n)));
+            // CRuby: the lseek(2) failure surfaces as Errno::EINVAL.
+            let err = std::io::Error::from_raw_os_error(libc::EINVAL);
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "seek"));
         }
         Some(n)
     } else {
@@ -754,10 +757,23 @@ fn file_extname(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let filename = to_path(vm, globals, lfp.arg(0))?;
-    let extname = match filename.extension() {
-        Some(ostr) => format!(".{}", ostr.to_string_lossy()),
-        None => "".to_string(),
+    let filename = to_path_str(vm, globals, lfp.arg(0))?;
+    // Work on the final path component; an extension is the part after the
+    // last dot, but a basename that is nothing but dots ("...", "..") or
+    // starts with its only dot (".profile") has no extension.
+    let base = filename.rsplit('/').next().unwrap_or("");
+    let extname = match base.rfind('.') {
+        // No extension when nothing but dots precedes the last dot:
+        // ".profile" / ".." / "...a" → "".
+        Some(pos) if !base[..pos].is_empty() && !base[..pos].bytes().all(|b| b == b'.') => {
+            if pos + 1 < base.len() {
+                base[pos..].to_string()
+            } else {
+                // Trailing dot: "foo." → "." on non-Windows CRuby.
+                ".".to_string()
+            }
+        }
+        _ => "".to_string(),
     };
     Ok(Value::string(extname))
 }
@@ -906,7 +922,7 @@ fn file_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[monoruby_builtin]
 fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut pathname = if let Some(arg1) = lfp.try_arg(1) {
-        let path_str = arg1.coerce_to_string(vm, globals)?;
+        let path_str = to_path_str(vm, globals, arg1)?;
         let path = std::path::PathBuf::from(&path_str);
         match path.canonicalize() {
             Ok(path) => path,
@@ -927,9 +943,11 @@ fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             }
         }
     };
-    pathname.push(std::path::PathBuf::from(
-        lfp.arg(0).coerce_to_string(vm, globals)?,
-    ));
+    pathname.push(std::path::PathBuf::from(to_path_str(
+        vm,
+        globals,
+        lfp.arg(0),
+    )?));
     let pathname_str = pathname.to_string_lossy().to_string();
     match pathname.canonicalize() {
         Ok(file) => Ok(Value::string(file.to_string_lossy().to_string())),
@@ -1288,7 +1306,7 @@ fn umask(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn fnmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let pattern = lfp.arg(0).coerce_to_string(vm, globals)?;
-    let path_str = lfp.arg(1).coerce_to_string(vm, globals)?;
+    let path_str = to_path_str(vm, globals, lfp.arg(1))?;
     let flags = if let Some(arg2) = lfp.try_arg(2) {
         arg2.coerce_to_int_i64(vm, globals)? as u32
     } else {
@@ -1460,7 +1478,7 @@ fn absolute_path_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let file_name = lfp.arg(0).coerce_to_string(vm, globals)?;
+    let file_name = to_path_str(vm, globals, lfp.arg(0))?;
     Ok(Value::bool(file_name.starts_with('/')))
 }
 
@@ -1569,7 +1587,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let args = lfp.arg(0).as_array();
     let mut count = 0i64;
     for arg in args.iter() {
-        let path = arg.coerce_to_str(vm, globals)?;
+        let path = to_path_str(vm, globals, *arg)?;
         std::fs::remove_file(&path)
             .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
         count += 1;
@@ -1591,7 +1609,7 @@ fn chmod(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mode = args[0].coerce_to_int_i64(_vm, globals)? as u32;
     let mut count = 0i64;
     for arg in args[1..].iter() {
-        let path = arg.coerce_to_str(_vm, globals)?;
+        let path = to_path_str(_vm, globals, *arg)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).map_err(|e| {
             MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_chmod", &path)
@@ -1616,8 +1634,8 @@ fn file_symlink(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let old = lfp.arg(0).coerce_to_str(vm, globals)?;
-    let new = lfp.arg(1).coerce_to_str(vm, globals)?;
+    let old = to_path_str(vm, globals, lfp.arg(0))?;
+    let new = to_path_str(vm, globals, lfp.arg(1))?;
     std::os::unix::fs::symlink(&old, &new)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_symlink", &new))?;
     Ok(Value::integer(0))
@@ -1652,12 +1670,53 @@ fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/size.html]
 #[monoruby_builtin]
 fn file_size(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = to_path(vm, globals, lfp.arg(0))?;
-    let path_str = path.to_string_lossy();
-    let metadata = std::fs::metadata(&path).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_size", &path_str)
-    })?;
-    Ok(Value::integer(metadata.len() as i64))
+    match size_source(vm, globals, lfp.arg(0))? {
+        SizeSource::Path(path) => {
+            let path_str = path.to_string_lossy();
+            let metadata = std::fs::metadata(&path).map_err(|e| {
+                MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_size", &path_str)
+            })?;
+            Ok(Value::integer(metadata.len() as i64))
+        }
+        SizeSource::Fd(fd) => Ok(Value::integer(fstat_size(fd)?)),
+    }
+}
+
+enum SizeSource {
+    Path(std::path::PathBuf),
+    Fd(i32),
+}
+
+/// `File.size` / `File.size?` accept a path (via `#to_path` / `#to_str`)
+/// or an IO-convertible object (via `#to_io`, fstat(2) on its fd) —
+/// CRuby's `rb_stat` order: path coercion first, then `#to_io`.
+fn size_source(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<SizeSource> {
+    match to_path(vm, globals, arg) {
+        Ok(path) => Ok(SizeSource::Path(path)),
+        Err(path_err) => {
+            let to_io = IdentId::get_id("to_io");
+            if globals.check_method(arg, to_io).is_none() {
+                return Err(path_err);
+            }
+            let io = vm.invoke_method_inner(globals, to_io, arg, &[], None, None)?;
+            if io.try_rvalue().map(|rv| rv.ty()) != Some(ObjTy::IO) {
+                return Err(path_err);
+            }
+            Ok(SizeSource::Fd(io.as_io_inner().fileno()?))
+        }
+    }
+}
+
+/// Size of an open descriptor via fstat(2).
+fn fstat_size(fd: i32) -> Result<i64> {
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `st` is a properly sized out-buffer for fstat(2).
+    let rc = unsafe { libc::fstat(fd, st.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(MonorubyErr::ioerr("closed stream"));
+    }
+    // SAFETY: fstat succeeded, so `st` is initialized.
+    Ok(unsafe { st.assume_init() }.st_size as i64)
 }
 
 ///
@@ -1669,17 +1728,20 @@ fn file_size(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/size=3f.html]
 #[monoruby_builtin]
 fn file_size_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = to_path(vm, globals, lfp.arg(0))?;
-    match std::fs::metadata(&path) {
-        Ok(metadata) => {
-            let size = metadata.len();
-            if size == 0 {
-                Ok(Value::nil())
-            } else {
-                Ok(Value::integer(size as i64))
-            }
-        }
-        Err(_) => Ok(Value::nil()),
+    let size = match size_source(vm, globals, lfp.arg(0))? {
+        SizeSource::Path(path) => match std::fs::metadata(&path) {
+            Ok(metadata) => metadata.len() as i64,
+            Err(_) => return Ok(Value::nil()),
+        },
+        SizeSource::Fd(fd) => match fstat_size(fd) {
+            Ok(size) => size,
+            Err(_) => return Ok(Value::nil()),
+        },
+    };
+    if size == 0 {
+        Ok(Value::nil())
+    } else {
+        Ok(Value::integer(size))
     }
 }
 
@@ -1694,14 +1756,10 @@ fn file_size_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let io = self_.as_io_inner();
-    match io.name() {
-        Some(name) => {
-            let metadata = std::fs::metadata(name)
-                .map_err(|e| MonorubyErr::runtimeerr(format!("{}: {}", name, e)))?;
-            Ok(Value::integer(metadata.len() as i64))
-        }
-        None => Err(MonorubyErr::runtimeerr("size not available for this IO")),
-    }
+    // fstat(2) on the open descriptor: works after the path was unlinked
+    // and raises IOError (via `fileno`) on a closed stream.
+    let fd = io.fileno()?;
+    Ok(Value::integer(fstat_size(fd)?))
 }
 
 ///
@@ -2021,10 +2079,14 @@ fn file_truncate(
     let path_str = path.to_string_lossy().to_string();
     let length = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
     if length < 0 {
-        return Err(MonorubyErr::argumenterr(format!(
-            "negative length {}",
-            length
-        )));
+        // CRuby surfaces the truncate(2) failure: Errno::EINVAL.
+        let err = std::io::Error::from_raw_os_error(libc::EINVAL);
+        return Err(MonorubyErr::errno_with_path(
+            &globals.store,
+            &err,
+            "truncate",
+            &path_str,
+        ));
     }
     let file = std::fs::OpenOptions::new()
         .write(true)
@@ -2055,11 +2117,11 @@ fn file_truncate_instance(
     _: BytecodePtr,
 ) -> Result<Value> {
     let length = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    lfp.self_val().as_io_inner().ensure_writable()?;
     if length < 0 {
-        return Err(MonorubyErr::argumenterr(format!(
-            "negative length {}",
-            length
-        )));
+        // CRuby surfaces the ftruncate(2) failure: Errno::EINVAL.
+        let err = std::io::Error::from_raw_os_error(libc::EINVAL);
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "ftruncate"));
     }
     let fd = lfp.self_val().as_io_inner().fileno()?;
     // SAFETY: `fd` is this File's open descriptor; `ftruncate` only resizes it.
@@ -2077,6 +2139,16 @@ fn value_to_timeval(
     globals: &mut Globals,
     val: Value,
 ) -> Result<libc::timeval> {
+    // CRuby: a nil time means "now" (`File.utime(nil, nil, path)`).
+    if val.is_nil() {
+        let mut tv = libc::timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        };
+        // SAFETY: plain gettimeofday(2) into a valid out-buffer.
+        unsafe { libc::gettimeofday(&mut tv, std::ptr::null_mut()) };
+        return Ok(tv);
+    }
     if let Some(rv) = val.try_rvalue()
         && rv.ty() == ObjTy::TIME
     {
@@ -2417,7 +2489,28 @@ fn file_birthtime(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    file_time_attr(vm, globals, lfp, |m| m.created())
+    let path = to_path(vm, globals, lfp.arg(0))?;
+    let path_str = path.to_string_lossy().to_string();
+    let metadata = std::fs::metadata(&path).map_err(|e| {
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path_str)
+    })?;
+    match metadata.created() {
+        Ok(t) => system_time_to_value(vm, globals, t),
+        // A filesystem that does not record the birth time (statx btime
+        // unsupported) raises NotImplementedError, like CRuby.
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
+            Err(MonorubyErr::not_implemented_err(
+                &globals.store,
+                "birthtime is unimplemented on this filesystem",
+            ))
+        }
+        Err(e) => Err(MonorubyErr::errno_with_path(
+            &globals.store,
+            &e,
+            "rb_file_s_time",
+            &path_str,
+        )),
+    }
 }
 
 /// Build a `Time` value from a (seconds, nanoseconds) pair via
@@ -2524,12 +2617,14 @@ fn file_lstat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 }
 
 ///
-/// ### File#stat
+/// ### IO#stat / File#stat
 /// - stat -> File::Stat
 ///
-/// Instance method: stats the path the File was opened with.
+/// Instance method: fstat(2) on the open descriptor — works for pipes
+/// and after the path was unlinked, and raises IOError on a closed
+/// stream (via `fileno`).
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/File/i/stat.html]
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/stat.html]
 #[monoruby_builtin]
 fn file_instance_stat(
     vm: &mut Executor,
@@ -2537,11 +2632,48 @@ fn file_instance_stat(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    let fd = lfp.self_val().as_io_inner().fileno()?;
+    // Borrow the fd as a std File without taking ownership (ManuallyDrop:
+    // no close on drop) just to read its metadata.
+    use std::os::fd::FromRawFd;
+    // SAFETY: `fd` is this IO's live descriptor; the ManuallyDrop wrapper
+    // guarantees we never close it here.
+    let borrowed = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
+    let metadata = borrowed
+        .metadata()
+        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, "fstat"))?;
+    let stat_class = vm
+        .get_qualified_constant(globals, OBJECT_CLASS, &["File", "Stat"])?
+        .as_class();
+    let obj = Value::object(stat_class.id());
+    fill_stat_ivars(vm, globals, obj, &metadata)?;
+    Ok(obj)
+}
+
+///
+/// ### File#lstat
+/// - lstat -> File::Stat
+///
+/// Instance method: like `#stat`, but does not follow the symlink the
+/// File was opened through (lstat(2) on the original path).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/File/i/lstat.html]
+#[monoruby_builtin]
+fn file_instance_lstat(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let path = match lfp.self_val().as_io_inner().path() {
         Some(p) => Value::string(p),
-        None => return Err(MonorubyErr::runtimeerr("File#stat: no path for this stream")),
+        None => {
+            return Err(MonorubyErr::runtimeerr(
+                "File#lstat: no path for this stream",
+            ));
+        }
     };
-    build_stat(vm, globals, path, true)
+    build_stat(vm, globals, path, false)
 }
 
 ///
@@ -2653,6 +2785,69 @@ fn file_realdirpath(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn file_to_path_coercion() {
+        // Path arguments accept #to_path objects (CRuby's rb_get_path):
+        // absolute_path?, fnmatch, chmod, symlink, lstat, realpath, delete.
+        run_test_once(
+            r##"(o=Object.new; def o.to_path; "/tmp/mono_tp_#{Process.pid}"; end; p2=Object.new; def p2.to_path; "/tmp/mono_tp2_#{Process.pid}"; end; File.write(o.to_path, "abc"); a=File.absolute_path?(o); b=File.fnmatch("*tp*", o); File.chmod(0o644, o); File.symlink(o, p2); c=File.lstat(p2.to_path).symlink?; d=(File.realpath(p2)==File.realpath(o.to_path)); e2=File.delete(p2, o); [a,b,c,d,e2])"##,
+        );
+    }
+
+    #[test]
+    fn file_size_to_io_and_fd() {
+        // File.size/size? accept #to_io objects (fstat on the fd); File#size
+        // survives an unlink (fstat) and raises IOError once closed.
+        run_test_once(
+            r##"(f="/tmp/mono_sz_#{Process.pid}"; File.write(f,"12345"); io=File.open(f); o=Object.new; o.define_singleton_method(:to_io){io}; a=File.size(o); b=File.size?(o); c=File.size?("/tmp/mono_sz_none_#{Process.pid}"); e0="/tmp/mono_sz_e_#{Process.pid}"; File.write(e0,""); d=File.size?(e0); h=io.size; File.delete(f); i=io.size; io.close; j=(begin; io.size; rescue => e; e.class; end); File.delete(e0); [a,b,c,d,h,i,j])"##,
+        );
+    }
+
+    #[test]
+    fn file_utime_nil_truncate_einval_binread_offset() {
+        // utime(nil, nil) = "now"; truncate/-length → Errno::EINVAL;
+        // #truncate on a read-only stream → IOError; binread with a
+        // negative offset → Errno::EINVAL.
+        run_test_once(
+            r##"(f="/tmp/mono_ut_#{Process.pid}"; File.write(f,"x"*10); n=File.utime(nil, nil, f); a=(Time.now - File.mtime(f) < 600); b=(begin; File.truncate(f, -5); rescue => e; e.class; end); io=File.open(f, "r"); c=(begin; io.truncate(3); rescue => e; e.class; end); io.close; w=File.open(f, "a"); d=(begin; w.truncate(-1); rescue => e; e.class; end); w.close; e2=(begin; File.binread(f, 2, -3); rescue => x; x.class; end); g=File.binread(f, 3, 2); File.delete(f); [n,a,b,c,d,e2,g])"##,
+        );
+    }
+
+    #[test]
+    fn file_extname_edges() {
+        run_tests(&[
+            r##"File.extname("foo.")"##,
+            r##"File.extname(".foo.")"##,
+            r##"File.extname("...")"##,
+            r##"File.extname("..a")"##,
+            r##"File.extname(".profile")"##,
+            r##"File.extname("/a.b/c")"##,
+            r##"File.extname("a.b.c.d.e")"##,
+            r##"File.dirname("/////foo/bar/")"##,
+        ]);
+    }
+
+    #[test]
+    fn file_aliases_and_fd_stat() {
+        // unlink/delete and empty?/zero? are true aliases (Method#==);
+        // IO#stat / File#stat are fstat(2)-based; File#lstat keeps the
+        // opened path's symlink.
+        run_test_once(
+            r##"(a=(File.method(:unlink)==File.method(:delete)); b=(File.method(:empty?)==File.method(:zero?)); f="/tmp/mono_st_#{Process.pid}"; File.write(f,"12345678"); File.chmod(0o644, f); st=File.stat(f); c=st.inspect.include?("mode=0100644"); io=File.open(f); d=io.stat.file?; e2=io.lstat.file?; io.close; File.delete(f); [a,b,c,d,e2])"##,
+        );
+    }
+
+    #[test]
+    fn file_size_realpath_error_paths() {
+        // realpath's basedir also goes through #to_path; File.size error
+        // paths: #to_io returning a non-IO, a closed IO, a missing path;
+        // birthtime returns a Time (or NotImplementedError on filesystems
+        // without btime — identical in both interpreters).
+        run_test_once(
+            r##"(f="/tmp/mono_ep_#{Process.pid}"; File.write(f,"abc"); base=Object.new; def base.to_path; "/tmp"; end; rel="mono_ep_#{Process.pid}"; a=(File.realpath(rel, base)==File.realpath(f)); bad=Object.new; def bad.to_io; "x"; end; b=(begin; File.size(bad); rescue => e; e.class; end); io=File.open(f); io.close; c2=Object.new; c2.define_singleton_method(:to_io){io}; c=(begin; File.size(c2); rescue => e; e.class; end); d=(begin; File.size("/tmp/mono_ep_none_#{Process.pid}"); rescue => e; e.class; end); g=(begin; File.birthtime(f).class; rescue Exception => e; e.class; end); File.delete(f); [a,b,c,d,g])"##,
+        );
+    }
 
     #[test]
     fn file_instance_method_coverage() {

@@ -61,8 +61,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(IO_CLASS, "pipe", io_pipe, 0, 3, false);
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
-    globals.define_builtin_func(IO_CLASS, "fileno", io_fileno, 0);
-    globals.define_builtin_func(IO_CLASS, "to_i", io_fileno, 0);
+    globals.define_builtin_funcs(IO_CLASS, "fileno", &["to_i"], io_fileno, 0);
     globals.define_builtin_func(IO_CLASS, "to_io", io_to_io, 0);
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
@@ -1414,17 +1413,25 @@ fn close_write(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    let fully_closed = match io {
+    match io {
         IoInner::Popen(popen) => {
             let popen = Rc::get_mut(popen).unwrap();
             popen.writer = None;
-            popen.reader.is_none()
+            if popen.reader.is_none() {
+                *io = IoInner::Closed(None);
+            }
         }
-        IoInner::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
-        _ => return Err(MonorubyErr::ioerr("closing non-duplex IO for writing")),
-    };
-    if fully_closed {
-        *io = IoInner::Closed(None);
+        // CRuby: no-op on an already-closed stream.
+        IoInner::Closed(..) => {}
+        // CRuby: a stream that is not readable (nothing left once the
+        // write side goes) is simply closed; only a readable non-duplex
+        // stream refuses.
+        _ if io.is_readable() => {
+            return Err(MonorubyErr::ioerr("closing non-duplex IO for writing"));
+        }
+        _ => {
+            io.close()?;
+        }
     }
     Ok(Value::nil())
 }
@@ -1439,17 +1446,24 @@ fn close_read(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    let fully_closed = match io {
+    match io {
         IoInner::Popen(popen) => {
             let popen = Rc::get_mut(popen).unwrap();
             popen.reader = None;
-            popen.writer.is_none()
+            if popen.writer.is_none() {
+                *io = IoInner::Closed(None);
+            }
         }
-        IoInner::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
-        _ => return Err(MonorubyErr::ioerr("closing non-duplex IO for reading")),
-    };
-    if fully_closed {
-        *io = IoInner::Closed(None);
+        // CRuby: no-op on an already-closed stream.
+        IoInner::Closed(..) => {}
+        // CRuby: a stream that is not writable is simply closed; only a
+        // writable non-duplex stream refuses.
+        _ if io.is_writable() => {
+            return Err(MonorubyErr::ioerr("closing non-duplex IO for reading"));
+        }
+        _ => {
+            io.close()?;
+        }
     }
     Ok(Value::nil())
 }
@@ -1487,28 +1501,7 @@ fn assign_sync(
 fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
     let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
-    let whence = match lfp.try_arg(1) {
-        None => 0i32,
-        Some(v) if v.is_nil() => 0i32,
-        Some(v) => {
-            if let Some(sym) = v.try_symbol() {
-                let name = sym.get_name();
-                match name.as_str() {
-                    "SET" | "START" | "BEGIN" => 0,
-                    "CUR" => 1,
-                    "END" => 2,
-                    _ => {
-                        return Err(MonorubyErr::argumenterr(format!(
-                            "invalid whence: :{}",
-                            name
-                        )));
-                    }
-                }
-            } else {
-                v.coerce_to_int_i64(vm, globals)? as i32
-            }
-        }
-    };
+    let whence = parse_whence(vm, globals, lfp.try_arg(1))?;
     let mut self_ = lfp.self_val();
     self_
         .as_io_inner_mut()
@@ -2491,10 +2484,10 @@ fn io_advise(
     match name.as_str() {
         "normal" | "sequential" | "random" | "willneed" | "dontneed" | "noreuse" => {}
         _ => {
-            return Err(MonorubyErr::runtimeerr(format!(
-                "advise: unknown advice :{}",
-                name
-            )));
+            return Err(MonorubyErr::not_implemented_err(
+                &globals.store,
+                format!("Unsupported advice: :{}", name),
+            ));
         }
     }
     if let Some(arg1) = lfp.try_arg(1) {
@@ -2837,17 +2830,39 @@ fn io_sysseek(
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
     let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
-    let whence = match lfp.try_arg(1) {
-        None => 0i32,
-        Some(v) if v.is_nil() => 0i32,
-        Some(v) => v.coerce_to_int_i64(vm, globals)? as i32,
-    };
+    let whence = parse_whence(vm, globals, lfp.try_arg(1))?;
     let mut self_ = lfp.self_val();
     let pos = self_
         .as_io_inner_mut()
         .seek(offset, whence)
         .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
     Ok(Value::integer(pos as i64))
+}
+
+/// Parse a `whence` argument for `#seek` / `#sysseek`: an Integer
+/// (`IO::SEEK_SET` = 0, `IO::SEEK_CUR` = 1, `IO::SEEK_END` = 2) or one of
+/// the symbols `:SET` / `:START` / `:BEGIN` / `:CUR` / `:END`.
+fn parse_whence(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) -> Result<i32> {
+    match arg {
+        None => Ok(0),
+        Some(v) if v.is_nil() => Ok(0),
+        Some(v) => {
+            if let Some(sym) = v.try_symbol() {
+                let name = sym.get_name();
+                match name.as_str() {
+                    "SET" | "START" | "BEGIN" => Ok(0),
+                    "CUR" => Ok(1),
+                    "END" => Ok(2),
+                    // CRuby falls through to #to_int for unknown symbols.
+                    _ => Err(MonorubyErr::typeerr(
+                        "no implicit conversion of Symbol into Integer",
+                    )),
+                }
+            } else {
+                Ok(v.coerce_to_int_i64(vm, globals)? as i32)
+            }
+        }
+    }
 }
 
 ///
@@ -4700,6 +4715,34 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn io_sysseek_whence_symbols_and_advise() {
+        // sysseek accepts :SET/:CUR/:END (and integers); an unknown symbol
+        // is ArgumentError; an unknown advice is NotImplementedError.
+        run_test_once(
+            r##"(f="/tmp/mono_ss_#{Process.pid}"; File.write(f,"0123456789"); io=File.open(f); a=io.sysseek(3, :SET); b=io.sysseek(2, :CUR); c=io.sysseek(-1, :END); d=io.sysseek(4, IO::SEEK_SET); e2=io.sysseek(1); g=(begin; io.sysseek(0, :XX); rescue => e; e.class; end); h=(begin; io.advise(:bogus); rescue Exception => e; [e.class, e.message]; end); io.close; File.delete(f); [a,b,c,d,e2,g,h])"##,
+        );
+    }
+
+    #[test]
+    fn io_close_halves_on_non_duplex() {
+        // close_read/close_write: no-op on a closed stream; fully close a
+        // non-duplex stream missing the other side; refuse when the other
+        // side is live.
+        run_test_once(
+            r##"(f="/tmp/mono_ch_#{Process.pid}"; File.write(f,"x"); r=File.open(f); r.close_read; a=r.closed?; r.close_read; b=File.open(f){|x| begin; x.close_write; rescue => e; e.class; end}; w=File.open(f,"w"); w.close_write; c=w.closed?; w.close_write; d=File.open(f,"w"){|x| begin; x.close_read; rescue => e; e.class; end}; e2=File.open(f){|x| x.close_read; x.closed?}; File.delete(f); [a,b,c,d,e2])"##,
+        );
+    }
+
+    #[test]
+    fn io_sync_putc_to_i() {
+        // #sync round-trips (default: true only for stderr), #putc handles
+        // String/Integer/#to_int and closed streams, #to_i aliases #fileno.
+        run_test_once(
+            r##"(f="/tmp/mono_sy_#{Process.pid}"; io=File.open(f,"w"); a=[io.sync, STDERR.sync]; io.sync="x"; b=io.sync; io.putc("AB"); io.putc(66); o=Object.new; def o.to_int; 67; end; io.putc(o); c=(io.to_i==io.fileno); d=(IO.instance_method(:to_i)==IO.instance_method(:fileno)); io.close; e2=(begin; io.putc("a"); rescue => e; e.class; end); g=File.read(f); h=[IO.include?(File::Constants), IO.include?(Enumerable), File::SYNC.is_a?(Integer), File::Constants::SHARE_DELETE, File::NOCTTY.is_a?(Integer), File::Constants::FNM_DOTMATCH]; File.delete(f); [a,b,c,d,e2,g,h])"##,
+        );
+    }
 
     #[test]
     fn io_test() {

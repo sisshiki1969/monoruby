@@ -365,12 +365,23 @@ class File
     def owned?    ; @uid == Process.euid ; end
     def grpowned? ; @gid == Process.egid ; end
 
-    def readable?       ; (@mode & 0o400) != 0 ; end
-    def readable_real?  ; readable? ; end
-    def writable?       ; (@mode & 0o200) != 0 ; end
-    def writable_real?  ; writable? ; end
-    def executable?     ; (@mode & 0o100) != 0 ; end
-    def executable_real? ; executable? ; end
+    def readable?       ; _access_ok?(Process.euid, Process.egid, 4) ; end
+    def readable_real?  ; _access_ok?(Process.uid, Process.gid, 4) ; end
+    def writable?       ; _access_ok?(Process.euid, Process.egid, 2) ; end
+    def writable_real?  ; _access_ok?(Process.uid, Process.gid, 2) ; end
+    def executable?     ; _access_ok?(Process.euid, Process.egid, 1) ; end
+    def executable_real? ; _access_ok?(Process.uid, Process.gid, 1) ; end
+
+    # access(2)-style permission check against this stat's mode bits.
+    # The superuser reads/writes anything and executes whenever any x
+    # bit is set (CRuby's eaccess semantics).
+    private def _access_ok?(uid, gid, bit)
+      if uid == 0
+        return bit != 1 || (@mode & 0o111) != 0
+      end
+      shift = @uid == uid ? 6 : (@gid == gid ? 3 : 0)
+      ((@mode >> shift) & bit) != 0
+    end
 
     def dev_major  ; @dev >> 8 ; end
     def dev_minor  ; @dev & 0xff ; end
@@ -387,10 +398,11 @@ class File
     end
 
     def inspect
+      # Times use Time#inspect (fractional seconds included), like CRuby.
       "#<File::Stat dev=0x#{@dev.to_s(16)}, ino=#{@ino}, mode=0#{@mode.to_s(8)}, " \
       "nlink=#{@nlink}, uid=#{@uid}, gid=#{@gid}, rdev=0x#{@rdev.to_s(16)}, " \
       "size=#{@size}, blksize=#{@blksize}, blocks=#{@blocks}, " \
-      "atime=#{@atime}, mtime=#{@mtime}, ctime=#{@ctime}>"
+      "atime=#{@atime.inspect}, mtime=#{@mtime.inspect}, ctime=#{@ctime.inspect}>"
     end
   end
 end
@@ -647,7 +659,9 @@ class File
     idx = s.rindex("/")
     return "." if idx.nil?             # no directory part
     prefix = s[0...idx].sub(%r{/+\z}, "")
-    prefix.empty? ? "/" : prefix       # empty prefix only for absolute paths
+    return "/" if prefix.empty?        # empty prefix only for absolute paths
+    # Collapse a run of leading slashes to one ("/////foo/bar" → "/foo").
+    prefix.sub(%r{\A/+}, "/")
   end
   private_class_method :_dirname_once
 
@@ -663,8 +677,10 @@ class File
     s == 0
   end
 
-  def self.empty?(path)
-    File.zero?(path)
+  # A true alias (same method entry), so `File.method(:empty?) ==
+  # File.method(:zero?)` holds like in CRuby.
+  class << self
+    alias_method :empty?, :zero?
   end
 
   def self.readable_real?(path)

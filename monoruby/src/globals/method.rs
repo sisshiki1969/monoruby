@@ -634,6 +634,23 @@ impl Globals {
         self.new_builtin_fn_rest(class_id, name, address, Visibility::Public)
     }
 
+    /// Rest-args class method registered under `name` and each `alias`,
+    /// all sharing one `FuncId` (so `Method#==` sees them as aliases).
+    pub(crate) fn define_builtin_class_funcs_rest(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+    ) -> FuncId {
+        let class_id = self.store.get_metaclass(class_id).id();
+        let fid = self.new_builtin_fn_rest(class_id, name, address, Visibility::Public);
+        for alias in alias {
+            self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
+        }
+        fid
+    }
+
     pub(crate) fn define_builtin_class_func_with(
         &mut self,
         class_id: ClassId,

@@ -623,6 +623,7 @@ module File::Constants
   FNM_SYSCASE = 0
   FNM_NOESCAPE = 1
   FNM_PATHNAME = 2
+  FNM_DOTMATCH = 4
   FNM_CASEFOLD = 8
   FNM_EXTGLOB = 16
   # Open(2) flags and flock(2) operations (Linux values), mirrored on
@@ -635,7 +636,15 @@ module File::Constants
   CREAT    = 64
   EXCL     = 128
   TRUNC    = 512
+  NOCTTY   = 256
   NONBLOCK = 2048
+  DSYNC    = 4096
+  SYNC     = 1052672
+  RSYNC    = 1052672
+  DIRECT   = 16384
+  NOFOLLOW = 131072
+  # No-op outside Windows; defined for source compatibility (CRuby).
+  SHARE_DELETE = 0
   BINARY   = 0
   LOCK_SH  = 1
   LOCK_EX  = 2
@@ -662,7 +671,14 @@ class File
   CREAT    = 64
   EXCL     = 128
   TRUNC    = 512
+  NOCTTY   = 256
   NONBLOCK = 2048
+  DSYNC    = 4096
+  SYNC     = 1052672
+  RSYNC    = 1052672
+  DIRECT   = 16384
+  NOFOLLOW = 131072
+  SHARE_DELETE = 0
   LOCK_SH  = 1
   LOCK_EX  = 2
   LOCK_UN  = 8
@@ -2065,6 +2081,10 @@ module ObjectSpace
 end
 
 class IO
+  include File::Constants
+  # Enumerable is mixed in after `require_relative 'enumerable'` at the
+  # bottom of this file (the module is not defined yet at this point).
+
   SEEK_SET = 0
   SEEK_CUR = 1
   SEEK_END = 2
@@ -2089,9 +2109,33 @@ class IO
     include IO::WaitWritable
   end
 
+  # The sync flag is per-object bookkeeping only: monoruby's writes are
+  # unbuffered, so semantically every IO behaves as if sync were on. The
+  # flag still round-trips through #sync= and defaults to true for the
+  # process's stderr (fd 2), matching CRuby.
   def sync
     raise IOError, "closed stream" if closed?
-    false
+    s = @sync
+    s.nil? ? fileno == 2 : s
+  end
+
+  def sync=(v)
+    raise IOError, "closed stream" if closed?
+    @sync = v ? true : false
+    v
+  end
+
+  # CRuby's IO#putc: a String argument writes its first character, any
+  # other argument is converted with #to_int and the low byte is written.
+  def putc(ch)
+    if ch.is_a?(String)
+      write(ch[0])
+    else
+      i = ch.is_a?(Integer) ? ch : (ch.respond_to?(:to_int) ? ch.to_int : nil)
+      raise TypeError, "no implicit conversion of #{ch.class} into Integer" if i.nil?
+      write((i & 0xff).chr)
+    end
+    ch
   end
 
   # CRuby raises EOFError (not RuntimeError) at end of stream for the
@@ -2388,6 +2432,7 @@ class Data
 end unless defined?(::Data)
 
 require_relative 'enumerable'
+IO.include(Enumerable)
 require_relative 'arithmetic_sequence'
 require_relative 'numeric'
 require_relative 'integer'
