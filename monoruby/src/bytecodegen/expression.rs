@@ -340,6 +340,28 @@ impl<'a> BytecodeGen<'a> {
                 let method = IdentId::get_id_from_string(method);
                 self.gen_method_call(method, None, arglist, safe_nav, false, UseMode2::Store(dst), loc)?;
             }
+            // `__ENCODING__` is a bare `Ident` that is *not* a call; keep it on
+            // the generic path so the read arm in `gen_expr_inner` handles it.
+            NodeKind::Ident(method) if method != "__ENCODING__" => {
+                // A bare-identifier vcall (`a = foo`). Store straight into `dst`
+                // instead of landing in a temp and moving.
+                let method = IdentId::get_id_from_string(method);
+                self.gen_method_call(
+                    method,
+                    None,
+                    ArgList::default(),
+                    false,
+                    true,
+                    UseMode2::Store(dst),
+                    loc,
+                )?;
+            }
+            NodeKind::Super(arglist) => {
+                self.gen_super(arglist.map(|arglist| *arglist), UseMode2::Store(dst), loc)?;
+            }
+            NodeKind::Yield(box arglist) => {
+                self.gen_yield(arglist, UseMode2::Store(dst), loc)?;
+            }
             NodeKind::Return(box val) => {
                 if self.return_escapes() {
                     return self.gen_method_return(val, UseMode2::Store(dst));
