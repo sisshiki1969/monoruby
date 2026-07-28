@@ -360,6 +360,19 @@ impl<'a> JitContext<'a> {
                         return Ok(CompileResult::Continue);
                     }
                 }
+                // Frame-free inlining of an exception-free body (literals /
+                // local moves / self-ivar access / return only): no callee
+                // frame, no call, no GC poll — every guard is hoisted to
+                // this call site and deopts to the `MethodCall` pc, where
+                // no side effect has happened yet. See
+                // doc/method_inlining.md. Gated on `simple_fold` (the same
+                // arity/keyword conditions as the trivial-method fold).
+                if simple_fold
+                    && let Some(result) =
+                        self.try_inline_iseq(state, ir, callid, recv_class, func_id, iseq)
+                {
+                    return Ok(result);
+                }
                 // Use `is_C_immediate` here, not `is_C`: heap-resident
                 // `LinkMode::C` (e.g. class constants newly folded by
                 // `load_constant`) would otherwise trigger specialization

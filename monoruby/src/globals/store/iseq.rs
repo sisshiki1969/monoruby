@@ -473,7 +473,6 @@ impl ISeqInfo {
     ///
     /// Get length of bytecode.
     ///
-    #[cfg(feature = "emit-bc")]
     pub(crate) fn bytecode_len(&self) -> usize {
         self.bytecode.as_ref().unwrap().len()
     }

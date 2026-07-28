@@ -6,6 +6,7 @@ mod binary_op;
 #[cfg(feature = "emit-cfg")]
 mod dump_cfg;
 mod index;
+mod inline_iseq;
 mod loop_analysis;
 mod method_call;
 mod variables;
