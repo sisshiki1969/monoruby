@@ -61,8 +61,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(IO_CLASS, "pipe", io_pipe, 0, 3, false);
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
-    globals.define_builtin_func(IO_CLASS, "fileno", io_fileno, 0);
-    globals.define_builtin_func(IO_CLASS, "to_i", io_fileno, 0);
+    globals.define_builtin_funcs(IO_CLASS, "fileno", &["to_i"], io_fileno, 0);
     globals.define_builtin_func(IO_CLASS, "to_io", io_to_io, 0);
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
@@ -1414,17 +1413,25 @@ fn close_write(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    let fully_closed = match io {
+    match io {
         IoInner::Popen(popen) => {
             let popen = Rc::get_mut(popen).unwrap();
             popen.writer = None;
-            popen.reader.is_none()
+            if popen.reader.is_none() {
+                *io = IoInner::Closed(None);
+            }
         }
-        IoInner::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
-        _ => return Err(MonorubyErr::ioerr("closing non-duplex IO for writing")),
-    };
-    if fully_closed {
-        *io = IoInner::Closed(None);
+        // CRuby: no-op on an already-closed stream.
+        IoInner::Closed(..) => {}
+        // CRuby: a stream that is not readable (nothing left once the
+        // write side goes) is simply closed; only a readable non-duplex
+        // stream refuses.
+        _ if io.is_readable() => {
+            return Err(MonorubyErr::ioerr("closing non-duplex IO for writing"));
+        }
+        _ => {
+            io.close()?;
+        }
     }
     Ok(Value::nil())
 }
@@ -1439,17 +1446,24 @@ fn close_read(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    let fully_closed = match io {
+    match io {
         IoInner::Popen(popen) => {
             let popen = Rc::get_mut(popen).unwrap();
             popen.reader = None;
-            popen.writer.is_none()
+            if popen.writer.is_none() {
+                *io = IoInner::Closed(None);
+            }
         }
-        IoInner::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
-        _ => return Err(MonorubyErr::ioerr("closing non-duplex IO for reading")),
-    };
-    if fully_closed {
-        *io = IoInner::Closed(None);
+        // CRuby: no-op on an already-closed stream.
+        IoInner::Closed(..) => {}
+        // CRuby: a stream that is not writable is simply closed; only a
+        // writable non-duplex stream refuses.
+        _ if io.is_writable() => {
+            return Err(MonorubyErr::ioerr("closing non-duplex IO for reading"));
+        }
+        _ => {
+            io.close()?;
+        }
     }
     Ok(Value::nil())
 }
@@ -2491,10 +2505,10 @@ fn io_advise(
     match name.as_str() {
         "normal" | "sequential" | "random" | "willneed" | "dontneed" | "noreuse" => {}
         _ => {
-            return Err(MonorubyErr::runtimeerr(format!(
-                "advise: unknown advice :{}",
-                name
-            )));
+            return Err(MonorubyErr::not_implemented_err(
+                &globals.store,
+                format!("Unsupported advice: :{}", name),
+            ));
         }
     }
     if let Some(arg1) = lfp.try_arg(1) {
@@ -2837,17 +2851,36 @@ fn io_sysseek(
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
     let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
-    let whence = match lfp.try_arg(1) {
-        None => 0i32,
-        Some(v) if v.is_nil() => 0i32,
-        Some(v) => v.coerce_to_int_i64(vm, globals)? as i32,
-    };
+    let whence = parse_whence(vm, globals, lfp.try_arg(1))?;
     let mut self_ = lfp.self_val();
     let pos = self_
         .as_io_inner_mut()
         .seek(offset, whence)
         .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
     Ok(Value::integer(pos as i64))
+}
+
+/// Parse a `whence` argument for `#seek` / `#sysseek`: an Integer
+/// (`IO::SEEK_SET` = 0, `IO::SEEK_CUR` = 1, `IO::SEEK_END` = 2) or one of
+/// the symbols `:SET` / `:START` / `:BEGIN` / `:CUR` / `:END`.
+fn parse_whence(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) -> Result<i32> {
+    match arg {
+        None => Ok(0),
+        Some(v) if v.is_nil() => Ok(0),
+        Some(v) => {
+            if let Some(sym) = v.try_symbol() {
+                let name = sym.get_name();
+                match name.as_str() {
+                    "SET" | "START" | "BEGIN" => Ok(0),
+                    "CUR" => Ok(1),
+                    "END" => Ok(2),
+                    _ => Err(MonorubyErr::argumenterr(format!("invalid whence: :{}", name))),
+                }
+            } else {
+                Ok(v.coerce_to_int_i64(vm, globals)? as i32)
+            }
+        }
+    }
 }
 
 ///
