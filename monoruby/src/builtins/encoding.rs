@@ -648,6 +648,72 @@ pub(super) struct TranscodeOpts {
     pub invalid_replace: bool,
     pub undef_replace: bool,
     pub replace: Option<String>,
+    /// Newline decorators: `universal_newline:` normalizes CRLF / CR
+    /// to LF on the decode side; `crlf_newline:` / `cr_newline:`
+    /// rewrite LF on the encode side.
+    pub universal_newline: bool,
+    pub crlf_newline: bool,
+    pub cr_newline: bool,
+}
+
+impl TranscodeOpts {
+    fn has_newline(&self) -> bool {
+        self.universal_newline || self.crlf_newline || self.cr_newline
+    }
+
+    /// Apply the newline decorators to decoded text.
+    fn apply_newline(&self, s: &str) -> String {
+        let mut out = s.to_string();
+        if self.universal_newline {
+            out = out.replace("\r\n", "\n").replace('\r', "\n");
+        }
+        if self.crlf_newline {
+            out = out.replace('\n', "\r\n");
+        } else if self.cr_newline {
+            out = out.replace('\n', "\r");
+        }
+        out
+    }
+}
+
+/// The endianness-less dummy `UTF-16` / `UTF-32` as an encode target:
+/// returns the big-endian concrete encoding CRuby writes after a BOM.
+fn dummy_wide_target(enc: crate::value::Encoding) -> Option<crate::value::Encoding> {
+    if let crate::value::Encoding::Other(_) = enc {
+        match enc.name() {
+            "UTF-16" => Some(crate::value::Encoding::Utf16Be),
+            "UTF-32" => Some(crate::value::Encoding::Utf32Be),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Byte-level [`TranscodeOpts::apply_newline`], sound for any
+/// ASCII-compatible encoding (no multibyte sequence contains the 0x0A /
+/// 0x0D bytes in those encodings).
+fn apply_newline_bytes(bytes: &[u8], opts: &TranscodeOpts) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if opts.universal_newline && b == b'\r' {
+            // CRLF or bare CR → LF.
+            if bytes.get(i + 1) == Some(&b'\n') {
+                i += 1;
+            }
+            out.push(b'\n');
+        } else if b == b'\n' && opts.crlf_newline {
+            out.extend_from_slice(b"\r\n");
+        } else if b == b'\n' && opts.cr_newline {
+            out.push(b'\r');
+        } else {
+            out.push(b);
+        }
+        i += 1;
+    }
+    out
 }
 
 impl TranscodeOpts {
@@ -811,20 +877,39 @@ pub(super) fn transcode_bytes_with_opts(
 ) -> Result<Vec<u8>> {
     use crate::value::Encoding as E;
     if src_enc == dst_enc {
-        return Ok(src_bytes.to_vec());
+        // The newline decorators still apply to a same-encoding
+        // "conversion" (`"a\n".encode("UTF-8", crlf_newline: true)`).
+        if opts.has_newline() && src_enc.is_ascii_compatible() {
+            return Ok(apply_newline_bytes(src_bytes, opts));
+        }
+        if !opts.has_newline() {
+            return Ok(src_bytes.to_vec());
+        }
+        // Non-ASCII-compatible encodings fall through to the decode /
+        // re-encode pipeline so the decorators run on real characters.
     }
-    // Fast path: 7-bit content + ascii-compatible source AND
-    // destination copies through unchanged. Covers both the
-    // "BINARY ASCII → UTF-8" and "UsAscii → X" cases. Required
-    // because encoding_rs's `us-ascii` → `windows-1252` mapping
-    // isn't what CRuby does, and BINARY isn't a real encoding_rs
-    // encoding. We require the *source* to also be
-    // ASCII-compatible — `Iso2022Jp` looks like 7-bit input on
-    // the wire (it's a 7-bit encoding), but its bytes carry ESC
-    // sequences that change interpretation, so the identity copy
-    // would silently retag escape codes as ASCII characters.
+    // Fast path: 7-bit content + an ascii-compatible source copies
+    // through unchanged into any byte-oriented destination. Covers the
+    // "BINARY ASCII → UTF-8" and "UsAscii → X" cases (encoding_rs's
+    // `us-ascii` → `windows-1252` mapping isn't what CRuby does, and
+    // BINARY isn't a real encoding_rs encoding) and the dummy
+    // destinations CRuby has no generic converter for (Emacs-Mule,
+    // UTF-7, …): 7-bit content is valid in all of them, so `encode`
+    // succeeds even though `Encoding::Converter.new` would raise.
+    // We require the *source* to be ASCII-compatible — `Iso2022Jp`
+    // looks like 7-bit input on the wire (it's a 7-bit encoding), but
+    // its bytes carry ESC sequences that change interpretation, so the
+    // identity copy would silently retag escape codes as ASCII
+    // characters.
     let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
-    if all_ascii && src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() {
+    if all_ascii
+        && src_enc.is_ascii_compatible()
+        && !is_utf16_or_32(dst_enc)
+        && dummy_wide_target(dst_enc).is_none()
+    {
+        if opts.has_newline() {
+            return Ok(apply_newline_bytes(src_bytes, opts));
+        }
         return Ok(src_bytes.to_vec());
     }
     // 7-bit content from any ASCII-compatible source (incl. BINARY,
@@ -834,11 +919,29 @@ pub(super) fn transcode_bytes_with_opts(
     // works in CRuby; without this it raised ConverterNotFound.
     if all_ascii && src_enc.is_ascii_compatible() && is_utf16_or_32(dst_enc) {
         let s = std::str::from_utf8(src_bytes).expect("bytes < 0x80 are valid UTF-8");
+        if opts.has_newline() {
+            return Ok(encode_utf16_32(&opts.apply_newline(s), dst_enc));
+        }
         return Ok(encode_utf16_32(s, dst_enc));
     }
     // BINARY → ascii-compat with non-ASCII bytes is "undef":
-    // there's no Unicode for "byte 0x82 in BINARY".
+    // there's no Unicode for "byte 0x82 in BINARY". A codec-less
+    // destination (Emacs-Mule, Big5-UAO, …) is "converter not found"
+    // instead — there is no transcoder to be undefined *in*.
     if src_enc == E::Ascii8 && dst_enc.is_ascii_compatible() {
+        if matches!(dst_enc, E::NamedByte(_))
+            && encoding_to_rs(dst_enc).is_none()
+            && single_byte_table(dst_enc).is_none()
+        {
+            return Err(MonorubyErr::converter_not_found_error(
+                store,
+                format!(
+                    "code converter not found ({} to {})",
+                    src_enc.name(),
+                    dst_enc.name()
+                ),
+            ));
+        }
         return Err(MonorubyErr::undefined_conversion_error(
             store,
             format!(
@@ -929,6 +1032,23 @@ pub(super) fn transcode_bytes_with_opts(
                 dst_enc.name()
             ),
         ));
+    }
+    // Newline decorators run on the decoded text, between the decode
+    // and encode halves.
+    let decoded: std::borrow::Cow<str> = if opts.has_newline() {
+        std::borrow::Cow::Owned(opts.apply_newline(&decoded))
+    } else {
+        decoded
+    };
+    // The endianness-less dummy UTF-16 / UTF-32: CRuby's encoder emits a
+    // BOM followed by the big-endian form.
+    if let Some(wide) = dummy_wide_target(dst_enc) {
+        let mut out: Vec<u8> = match wide {
+            E::Utf16Be => vec![0xFE, 0xFF],
+            _ => vec![0x00, 0x00, 0xFE, 0xFF],
+        };
+        out.extend(encode_utf16_32(&decoded, wide));
+        return Ok(out);
     }
     // UsAscii destination: only ASCII characters are representable.
     // Non-ASCII content raises UndefinedConversionError unless
@@ -1292,13 +1412,10 @@ pub(super) fn encode(
         None => return Ok(self_val.dup()),
     };
     let opts = parse_transcode_opts(lfp);
-    let bytes = transcode_bytes_with_opts(
-        self_val.as_rstring_inner().as_bytes(),
-        src_enc,
-        dst_enc,
-        &opts,
-        &globals.store,
-    )?;
+    let fallback = parse_fallback_opt(lfp);
+    let src_bytes = self_val.as_rstring_inner().as_bytes().to_vec();
+    let bytes =
+        transcode_with_fallback(vm, globals, &src_bytes, src_enc, dst_enc, &opts, fallback)?;
     Ok(Value::string_from_inner(
         crate::value::RStringInner::from_encoding_scanned(&bytes, dst_enc),
     ))
@@ -1336,13 +1453,10 @@ pub(super) fn encode_(
         None => return Ok(self_val),
     };
     let opts = parse_transcode_opts(lfp);
-    let bytes = transcode_bytes_with_opts(
-        self_val.as_rstring_inner().as_bytes(),
-        src_enc,
-        dst_enc,
-        &opts,
-        &globals.store,
-    )?;
+    let fallback = parse_fallback_opt(lfp);
+    let src_bytes = self_val.as_rstring_inner().as_bytes().to_vec();
+    let bytes =
+        transcode_with_fallback(vm, globals, &src_bytes, src_enc, dst_enc, &opts, fallback)?;
     self_val.replace_with_inner(crate::value::RStringInner::from_encoding_scanned(
         &bytes, dst_enc,
     ));
@@ -1383,7 +1497,150 @@ fn parse_transcode_opts(lfp: Lfp) -> TranscodeOpts {
             out.undef_replace = true;
         }
     }
+    for (key, flag) in [
+        ("universal_newline", 0usize),
+        ("crlf_newline", 1),
+        ("cr_newline", 2),
+    ] {
+        if let Some(v) = find_hash_value_for_symbol(&hash, key)
+            && v.as_bool()
+        {
+            match flag {
+                0 => out.universal_newline = true,
+                1 => out.crlf_newline = true,
+                _ => out.cr_newline = true,
+            }
+        }
+    }
     out
+}
+
+/// Pull the `fallback:` option value off `String#encode`'s kwargs (the
+/// conversion-time callback consulted for undefined characters). Kept
+/// out of [`TranscodeOpts`] because invoking it needs the VM.
+fn parse_fallback_opt(lfp: Lfp) -> Option<Value> {
+    let opts_val = get_options_hash_value(lfp)?;
+    let hash = opts_val.try_hash_ty()?;
+    let v = find_hash_value_for_symbol(&hash, "fallback")?;
+    if v.is_nil() { None } else { Some(v) }
+}
+
+/// Whether `err` is an `Encoding::UndefinedConversionError`.
+fn is_undefined_conversion_error(store: &Store, err: &MonorubyErr) -> bool {
+    let crate::MonorubyErrKind::Other(cid) = err.kind() else {
+        return false;
+    };
+    let Some(enc_const) = store.get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING) else {
+        return false;
+    };
+    store
+        .get_constant_noautoload(enc_const.as_class_id(), IdentId::get_id("UndefinedConversionError"))
+        .map(|c| c.as_class_id())
+        == Some(*cid)
+}
+
+/// Transcode with `String#encode`'s `fallback:` semantics: run the
+/// plain conversion first, and when it fails with an
+/// `UndefinedConversionError`, retry character by character consulting
+/// the fallback object — anything responding to `[]` (Hash, Proc,
+/// Method, an object with `#[]`) — for each unrepresentable character.
+/// `nil` from the fallback re-raises the original error; a non-String
+/// result goes through `#to_str` (never `#to_s`); a replacement the
+/// destination cannot encode raises `ArgumentError: too big fallback
+/// string`, all per CRuby.
+fn transcode_with_fallback(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src_bytes: &[u8],
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    opts: &TranscodeOpts,
+    fallback: Option<Value>,
+) -> Result<Vec<u8>> {
+    let first = transcode_bytes_with_opts(src_bytes, src_enc, dst_enc, opts, &globals.store);
+    let (err, fallback) = match (first, fallback) {
+        (Ok(b), _) => return Ok(b),
+        (Err(e), None) => return Err(e),
+        (Err(e), Some(f)) => (e, f),
+    };
+    if !is_undefined_conversion_error(&globals.store, &err) {
+        return Err(err);
+    }
+    let index_id = IdentId::get_id("[]");
+    if globals.check_method(fallback, index_id).is_none() {
+        return Err(err);
+    }
+    // Decode the whole source to characters first (honouring
+    // `invalid:` and the newline decorators), then encode one
+    // character at a time.
+    let decode_opts = TranscodeOpts {
+        invalid_replace: opts.invalid_replace,
+        replace: opts.replace.clone(),
+        ..Default::default()
+    };
+    let decoded_bytes = transcode_bytes_with_opts(
+        src_bytes,
+        src_enc,
+        crate::value::Encoding::Utf8,
+        &decode_opts,
+        &globals.store,
+    )?;
+    let mut decoded = String::from_utf8_lossy(&decoded_bytes).into_owned();
+    if opts.has_newline() {
+        decoded = opts.apply_newline(&decoded);
+    }
+    let mut out: Vec<u8> = Vec::with_capacity(decoded.len());
+    for c in decoded.chars() {
+        let mut buf = [0u8; 4];
+        let cs = c.encode_utf8(&mut buf);
+        match transcode_bytes_with_opts(
+            cs.as_bytes(),
+            crate::value::Encoding::Utf8,
+            dst_enc,
+            &TranscodeOpts::default(),
+            &globals.store,
+        ) {
+            Ok(b) => out.extend_from_slice(&b),
+            Err(cerr) => {
+                if !is_undefined_conversion_error(&globals.store, &cerr) {
+                    return Err(cerr);
+                }
+                let rep =
+                    vm.invoke_method_inner(globals, index_id, fallback, &[Value::string_from_str(cs)], None, None)?;
+                if rep.is_nil() {
+                    return Err(cerr);
+                }
+                let rep_str = if rep.is_str().is_some() {
+                    rep
+                } else if globals.check_method(rep, IdentId::TO_STR).is_some() {
+                    let converted = vm.invoke_method_inner(globals, IdentId::TO_STR, rep, &[], None, None)?;
+                    if converted.is_str().is_none() {
+                        return Err(MonorubyErr::typeerr(format!(
+                            "no implicit conversion of {} into String",
+                            globals.get_class_name(rep.class())
+                        )));
+                    }
+                    converted
+                } else {
+                    return Err(MonorubyErr::typeerr(format!(
+                        "no implicit conversion of {} into String",
+                        globals.get_class_name(rep.class())
+                    )));
+                };
+                let inner = rep_str.as_rstring_inner();
+                let rep_bytes = transcode_bytes_with_opts(
+                    inner.as_bytes(),
+                    inner.encoding(),
+                    dst_enc,
+                    &TranscodeOpts::default(),
+                    &globals.store,
+                )
+                .map_err(|_| MonorubyErr::argumenterr("too big fallback string"))?;
+                out.extend_from_slice(&rep_bytes);
+            }
+        }
+    }
+    Ok(out)
 }
 
 ///
@@ -4004,6 +4261,35 @@ fn is_dummy_encoding(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn encode_fallback_option() {
+        // fallback: consulted per undefined character — Hash (with
+        // default / default_proc), proc, #[] object; #to_str on the
+        // result; nil / missing key re-raises; unencodable replacement
+        // is "too big fallback string".
+        crate::tests::run_test_once(
+            r##"(r=[]; r << "B�".encode(Encoding::US_ASCII, fallback: { "�" => "bar" }); r << "B�".encode(Encoding::US_ASCII, fallback: proc { |c| c.bytes.inspect }); h={}; h.default="dbar"; r << "B�".encode(Encoding::US_ASCII, fallback: h); o=Object.new; def o.to_str; "tbar"; end; r << "B�".encode(Encoding::US_ASCII, fallback: { "�" => o }); r << (begin; "B�".encode(Encoding::US_ASCII, fallback: { "x" => "y" }); rescue => e; e.class; end); r << (begin; "B�".encode(Encoding::US_ASCII, fallback: { "�" => "￮" }); rescue => e; [e.class, e.message]; end); r << (begin; "B�".encode(Encoding::US_ASCII, fallback: { "�" => Object.new }); rescue => e; e.class; end); r << (begin; "B�".encode(Encoding::US_ASCII, fallback: Object.new); rescue => e; e.class; end); r)"##,
+        );
+    }
+
+    #[test]
+    fn encode_newline_decorators() {
+        crate::tests::run_test_once(
+            r##"(a="a\nb\nc".encode("UTF-8", crlf_newline: true); b="a\nb".encode("UTF-8", cr_newline: true); c="a\r\nb\rc\n".encode("UTF-8", universal_newline: true); d="a\nb".encode(Encoding::US_ASCII, crlf_newline: true); e2="a\nb".encode("UTF-16LE", crlf_newline: true).bytes; [a,b,c,d,e2])"##,
+        );
+    }
+
+    #[test]
+    fn encode_seven_bit_and_dummy_wide() {
+        // 7-bit content converts into codec-less encodings; 8-bit
+        // raises ConverterNotFoundError; the dummy UTF-16 target gets a
+        // BOM + big-endian body and #lines does not split it; dummy
+        // UTF-7 #lines raises.
+        crate::tests::run_test_once(
+            r##"(a="\x79".dup.force_encoding(Encoding::BINARY).encode(Encoding::Emacs_Mule); b=(begin; [0x80].pack("C").force_encoding(Encoding::BINARY).encode(Encoding::Emacs_Mule); rescue => e; e.class; end); c=(begin; Encoding::Converter.new(Encoding::Emacs_Mule, Encoding::BINARY); rescue => e; e.class; end); s="a\nb".encode(Encoding::UTF_16); d=s.bytes; e2=s.encoding.name; f=s.lines.map(&:bytes); g="\x00\n\n\x00".dup.force_encoding(Encoding::UTF_16); h=(g.lines == [g]); i=(begin; "a\nb".dup.force_encoding(Encoding::UTF_7).lines; rescue => e; e.class; end); [a,b,c,d,e2,f,h,i])"##,
+        );
+    }
+
     #[test]
     fn encode_named_byte_encodings() {
         // String#encode routes the named byte encodings through the
