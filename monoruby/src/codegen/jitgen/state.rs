@@ -303,6 +303,21 @@ impl AbstractFrame {
         self.gp_regfile.bind(gp, dst, /* dirty */ true);
     }
 
+    /// Allocate a pool register **without binding it to a slot** — raw scratch
+    /// for the frame-free inliner's cycle-breaking `Hold` (see
+    /// `compile/inline_iseq.rs`). The register stays "free" in the register
+    /// file, so the value in it survives only as long as nothing allocates or
+    /// flushes: the inliner's uninterruptible store window (inline ivar
+    /// stores and pure loads only — no `get_using_fpr`, no `alloc_gp_for`)
+    /// guarantees exactly that until the last consumer.
+    pub(in crate::codegen::jitgen) fn alloc_scratch_gp(&mut self, ir: &mut AsmIr) -> GP {
+        let (gp, spill) = self.gp_regfile.alloc_reg(&[]);
+        if let Some((reg, slot)) = spill {
+            ir.reg2stack(reg, slot);
+        }
+        gp
+    }
+
     /// Define `dst` from a concrete (non-immediate) literal by loading it
     /// straight into a GP-pool register (a resident) rather than through rax to
     /// the stack home. The literal is a heap value (frozen String/Array/…), so

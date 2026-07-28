@@ -32,16 +32,44 @@ enum InlineOperand {
     /// the slot memory-resident for the whole window; like `CallerSlot`,
     /// nothing writes it during the inlined body.
     OuterSlot(SlotId),
+    /// Emission-internal (never appears in `env`): the value currently in
+    /// the cycle-breaking scratch register loaded by `ScheduledOp::Hold`.
+    /// Placed by the store scheduler when a pending ivar load must survive
+    /// the store to its own ivar (a swap/rotate cycle, or a returned value
+    /// read before an overwrite).
+    Held,
 }
 
 struct InlineStore {
     ivarid: IvarId,
     src: InlineOperand,
+    /// `true` when this store lowers to the bounds-checked `StoreIVarHeap`,
+    /// whose cold path (`set_ivar`) clobbers caller-saved registers — a
+    /// `Hold` cannot stay live across it.
+    heap: bool,
+}
+
+enum ScheduledOp {
+    /// Load the *initial* value of `ivarid` into an unbound pool scratch
+    /// register (`alloc_scratch_gp`); subsequent `InlineOperand::Held`
+    /// operands consume it. At most one `Hold` is live at a time, and no
+    /// heap-type store may appear in a plan containing a `Hold` (see the
+    /// scheduler).
+    Hold { ivarid: IvarId },
+    Store(InlineStore),
 }
 
 pub(super) struct InlinePlan {
-    stores: Vec<InlineStore>,
+    ops: Vec<ScheduledOp>,
     ret: InlineOperand,
+}
+
+impl InlinePlan {
+    fn has_store(&self) -> bool {
+        self.ops
+            .iter()
+            .any(|op| matches!(op, ScheduledOp::Store(_)))
+    }
 }
 
 enum InlineAnalysis {
@@ -96,9 +124,16 @@ impl<'a> JitContext<'a> {
             InlineAnalysis::Inlinable(plan) => {
                 #[cfg(feature = "jit-log")]
                 eprintln!(
-                    "    inline_iseq: {} stores={} forwarded={forwarded}",
+                    "    inline_iseq: {} stores={} holds={} forwarded={forwarded}",
                     self.store[fid].name().map_or_else(String::new, |n| n.to_string()),
-                    plan.stores.len(),
+                    plan.ops
+                        .iter()
+                        .filter(|op| matches!(op, ScheduledOp::Store(_)))
+                        .count(),
+                    plan.ops
+                        .iter()
+                        .filter(|op| matches!(op, ScheduledOp::Hold { .. }))
+                        .count(),
                 );
                 if forwarded {
                     // Inlining *is* the forwarding consume and reads the
@@ -213,6 +248,7 @@ impl<'a> JitContext<'a> {
         for (i, op) in arg_ops.iter().enumerate() {
             env[i + 1] = *op;
         }
+        let is_object_ty = self.store[recv_class].is_object_ty_instance();
         // last stored value per ivar, for store-to-load forwarding.
         let mut ivar_env: Vec<(IvarId, InlineOperand)> = vec![];
         let mut stores: Vec<InlineStore> = vec![];
@@ -243,29 +279,115 @@ impl<'a> JitContext<'a> {
                     let Some(id) = self.store[recv_class].get_ivarid(name) else {
                         return InlineAnalysis::IvarIdNotFound;
                     };
-                    // A pending (not yet materialized) load of this ivar must
-                    // not survive the store: its later materialization would
-                    // re-read the NEW value. (e.g. `tmp = @a; @a = @b; @b = tmp`)
-                    if env.iter().any(|op| *op == PendingIvar(id))
-                        || ivar_env.iter().any(|(_, op)| *op == PendingIvar(id))
-                    {
-                        return InlineAnalysis::NotInlinable;
-                    }
                     let val = env[src.0 as usize];
-                    stores.push(InlineStore { ivarid: id, src: val });
+                    stores.push(InlineStore {
+                        ivarid: id,
+                        src: val,
+                        heap: !(is_object_ty && id.is_inline()),
+                    });
                     ivar_env.push((id, val));
                 }
                 TraceIr::Ret(ret) => {
-                    return InlineAnalysis::Inlinable(InlinePlan {
-                        stores,
-                        ret: env[ret.0 as usize],
-                    });
+                    // The result operand is irrelevant when the call site
+                    // discards it — don't let it force a Hold.
+                    let ret = if callsite.dst.is_some() {
+                        env[ret.0 as usize]
+                    } else {
+                        Const(Value::nil())
+                    };
+                    return match Self::schedule_inline_stores(stores, ret) {
+                        Some(plan) => InlineAnalysis::Inlinable(plan),
+                        None => InlineAnalysis::NotInlinable,
+                    };
                 }
                 _ => return InlineAnalysis::NotInlinable,
             }
         }
         // fell off the end without a `Ret` terminal.
         InlineAnalysis::NotInlinable
+    }
+
+    ///
+    /// Order the stores so that every `PendingIvar(X)` operand (a read of
+    /// X's *initial* value, materialized right before its consuming store)
+    /// is emitted before the store to X.
+    ///
+    /// Because the body is uninterruptible, intermediate ivar states are
+    /// unobservable: only the final store per ivar is kept (dead-store
+    /// elimination), and the surviving stores may be freely reordered
+    /// under the read-before-overwrite constraint above. Each store has
+    /// exactly one source, so the "reads the initial value of" graph is
+    /// functional and its cycles (swap / rotate patterns) are disjoint;
+    /// one cycle is broken by holding the initial value of its entry ivar
+    /// in a scratch register (`ScheduledOp::Hold`), after which the rest
+    /// of the cycle chains in reverse dependency order.
+    ///
+    /// Bails out (`None`, falling back to specialization) when:
+    /// * two `Hold`s would have to be live at once (e.g. a cycle plus a
+    ///   returned initial value of another overwritten ivar), or
+    /// * a plan needing a `Hold` contains a heap-type store, whose cold
+    ///   path (`set_ivar`) clobbers the scratch register.
+    ///
+    fn schedule_inline_stores(
+        stores: Vec<InlineStore>,
+        mut ret: InlineOperand,
+    ) -> Option<InlinePlan> {
+        use InlineOperand::*;
+        // dead-store elimination: keep the final store per ivar, in the
+        // order of the final occurrences.
+        let mut remaining: Vec<InlineStore> = vec![];
+        for s in stores.into_iter() {
+            remaining.retain(|t| t.ivarid != s.ivarid);
+            remaining.push(s);
+        }
+        let any_heap = remaining.iter().any(|s| s.heap);
+
+        let mut ops: Vec<ScheduledOp> = vec![];
+        let mut held_consumers = 0usize; // Held uses not yet scheduled (ret excluded)
+        let mut ret_holds = false; // ret consumes the Held value (live to the end)
+        while !remaining.is_empty() {
+            // A store to X is emittable when no *other* remaining operand
+            // (nor the result) still reads X's initial value. Its own
+            // source is materialized before the store executes, so a
+            // self-reference (`@a = @a`) does not block.
+            let pos = (0..remaining.len()).find(|&i| {
+                let x = remaining[i].ivarid;
+                !remaining
+                    .iter()
+                    .enumerate()
+                    .any(|(j, s)| j != i && s.src == PendingIvar(x))
+                    && ret != PendingIvar(x)
+            });
+            if let Some(pos) = pos {
+                let s = remaining.remove(pos);
+                if s.src == Held {
+                    held_consumers -= 1;
+                }
+                ops.push(ScheduledOp::Store(s));
+            } else {
+                // Every remaining store is blocked: a cycle. Break it by
+                // holding the initial value of the first store's ivar.
+                if held_consumers != 0 || ret_holds || any_heap {
+                    return None;
+                }
+                let x = remaining[0].ivarid;
+                for s in remaining.iter_mut() {
+                    if s.src == PendingIvar(x) {
+                        s.src = Held;
+                        held_consumers += 1;
+                    }
+                }
+                if ret == PendingIvar(x) {
+                    ret = Held;
+                    ret_holds = true;
+                }
+                ops.push(ScheduledOp::Hold { ivarid: x });
+            }
+        }
+        // A returned initial value of an overwritten ivar reaches here as a
+        // still-pending `ret` only via the cycle path above (the emittable
+        // check includes `ret`), so no post-pass is needed.
+        Some(InlinePlan { ops, ret })
     }
 
     ///
@@ -290,39 +412,62 @@ impl<'a> JitContext<'a> {
         };
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
 
-        if !plan.stores.is_empty() {
+        let has_store = plan.has_store();
+        if has_store {
             // The receiver cannot become frozen mid-body (no calls), so one
             // hoisted guard covers every store.
             state.load(ir, recv, GP::Rdi);
             let deopt = ir.new_deopt(state);
             ir.guard_frozen(deopt);
         }
-        for InlineStore { ivarid, src } in &plan.stores {
-            let src_gp = self.materialize_inline_operand(state, ir, *src, recv, is_object_ty);
-            // Reload the receiver: materialization may clobber rdi. This
-            // load itself cannot clobber `src_gp` — the receiver is a heap
-            // value, so no boxing call is involved.
-            state.load(ir, recv, GP::Rdi);
-            if is_object_ty && ivarid.is_inline() {
-                ir.push(AsmInst::StoreIVarInline {
-                    src: src_gp,
-                    ivarid: *ivarid,
-                });
-            } else {
-                // The bounds-checked store: its cold path calls `set_ivar`
-                // (which may grow the ivar table — an allocation, but no
-                // raise and no inline GC), so flush the GP pool first,
-                // exactly like `attr_writer`.
-                let using_fpr = state.get_using_fpr(ir);
-                ir.push(AsmInst::StoreIVarHeap {
-                    src: src_gp,
-                    ivarid: *ivarid,
-                    is_object_ty,
-                    using_fpr,
-                });
+        // The cycle-breaking scratch register (unbound in the register
+        // file). Nothing between the `Hold` and its last consumer can
+        // clobber it: the scheduler excludes heap-type stores from a plan
+        // with a `Hold`, and everything else in the window (inline stores,
+        // pure loads, `lit2reg`) leaves pool registers alone.
+        let mut held_gp: Option<GP> = None;
+        for op in &plan.ops {
+            match op {
+                ScheduledOp::Hold { ivarid } => {
+                    state.load(ir, recv, GP::Rdi);
+                    let gp = state.alloc_scratch_gp(ir);
+                    self.push_inline_ivar_load(ir, *ivarid, is_object_ty, gp);
+                    held_gp = Some(gp);
+                }
+                ScheduledOp::Store(InlineStore { ivarid, src, heap }) => {
+                    let src_gp = if *src == InlineOperand::Held {
+                        held_gp.unwrap()
+                    } else {
+                        self.materialize_inline_operand(state, ir, *src, recv, is_object_ty)
+                    };
+                    // Reload the receiver: materialization may clobber rdi.
+                    // This load itself cannot clobber `src_gp` — the
+                    // receiver is a heap value, so no boxing call is
+                    // involved.
+                    state.load(ir, recv, GP::Rdi);
+                    if !heap {
+                        ir.push(AsmInst::StoreIVarInline {
+                            src: src_gp,
+                            ivarid: *ivarid,
+                        });
+                    } else {
+                        // The bounds-checked store: its cold path calls
+                        // `set_ivar` (which may grow the ivar table — an
+                        // allocation, but no raise and no inline GC), so
+                        // flush the GP pool first, exactly like
+                        // `attr_writer`.
+                        let using_fpr = state.get_using_fpr(ir);
+                        ir.push(AsmInst::StoreIVarHeap {
+                            src: src_gp,
+                            ivarid: *ivarid,
+                            is_object_ty,
+                            using_fpr,
+                        });
+                    }
+                }
             }
         }
-        if !plan.stores.is_empty() {
+        if has_store {
             state.unset_side_effect_guard();
         }
 
@@ -348,6 +493,11 @@ impl<'a> JitContext<'a> {
                     let gp = state.alloc_gp_for(ir, dst, Guarded::Value);
                     ir.push(AsmInst::LoadCallerFrameSlot { slot, dst: gp });
                     state.bind_gp_resident(gp, dst);
+                }
+                InlineOperand::Held => {
+                    // The scheduler placed a `Hold` whose last consumer is
+                    // the result; store it straight to dst's home.
+                    state.def_reg2acc(ir, held_gp.unwrap(), dst);
                 }
             }
         }
@@ -387,6 +537,7 @@ impl<'a> JitContext<'a> {
                 });
                 GP::Rax
             }
+            InlineOperand::Held => unreachable!("Held is consumed by the caller"),
         }
     }
 
@@ -556,10 +707,10 @@ mod tests {
     }
 
     #[test]
-    fn inline_iseq_swap_rejected() {
-        // `tmp = @x; @x = @y; @y = tmp` must NOT be inlined (the pending
-        // load of @x would cross the store to @x) — but it must still run
-        // correctly via the normal path.
+    fn inline_iseq_swap() {
+        // `tmp = @x; @x = @y; @y = tmp`: a 2-cycle in the read-initial
+        // graph, broken by one `Hold` (the initial @x is kept in a scratch
+        // register across the store to @x).
         run_test_with_prelude(
             r##"
             drive
@@ -771,6 +922,140 @@ mod tests {
               while i < 50
                 o = objs[i % 2]
                 res << o.v
+                i += 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn inline_iseq_swap_variants() {
+        // Scheduler coverage: a 3-rotation (one Hold, rest chains), an
+        // acyclic chain (no Hold), dead stores, a returned initial value
+        // of an overwritten ivar (ret-Hold), and two sequential swaps
+        // (two Holds, never live at once).
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            class P
+              def initialize
+                @x = 1
+                @y = 2
+                @z = 3
+                @a = 4
+                @b = 5
+              end
+              def rot3
+                t = @x
+                @x = @y
+                @y = @z
+                @z = t
+              end
+              def chain
+                @a = @b
+                @b = @x
+                self
+              end
+              def dead
+                @a = 100
+                @a = @b
+                @a
+              end
+              def take
+                t = @a
+                @a = 0
+                t
+              end
+              def dswap
+                t = @x
+                @x = @y
+                @y = t
+                u = @a
+                @a = @b
+                @b = u
+                self
+              end
+              def all
+                [@x, @y, @z, @a, @b]
+              end
+            end
+            def drive
+              res = []
+              i = 0
+              while i < 50
+                o = P.new
+                o.rot3
+                res << o.all
+                res << o.chain.all
+                res << o.dead
+                res << o.take << o.all
+                res << o.dswap.all
+                i += 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn inline_iseq_swap_fallbacks() {
+        // Shapes the scheduler refuses (heap-type stores with a Hold; two
+        // Holds live at once): must still run correctly via specialization.
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            class H
+              def initialize
+                @a = 1
+                @b = 2
+                @c = 3
+                @d = 4
+                @e = 5
+                @f = 6
+                @g = 7
+                @h = 8
+              end
+              def swap_heap
+                t = @g
+                @g = @h
+                @h = t
+              end
+              def all
+                [@g, @h]
+              end
+            end
+            class Q
+              def initialize
+                @a = 1
+                @b = 2
+              end
+              def cycle_and_ret
+                t = @b
+                x = @a
+                @a = @b
+                @b = x
+                t
+              end
+              def all
+                [@a, @b]
+              end
+            end
+            def drive
+              res = []
+              i = 0
+              while i < 50
+                h = H.new
+                h.swap_heap
+                res << h.all
+                q = Q.new
+                res << q.cycle_and_ret << q.all
                 i += 1
               end
               res
