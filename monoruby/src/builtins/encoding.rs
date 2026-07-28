@@ -223,6 +223,44 @@ pub(super) fn init_encoding(globals: &mut Globals) {
     {
         globals.set_constant_by_str(enc.id(), "UTF_8_MAC", utf8_mac);
     }
+    // CP-numbered alias constants sharing their object with the
+    // canonical encoding, per CRuby (`Encoding::CP1251 ==
+    // Encoding::Windows_1251`, `Encoding::CP437 == Encoding::IBM437`,
+    // `Encoding::CP936 == Encoding::GBK`).
+    for (alias, canonical) in [
+        ("CP1250", "Windows_1250"),
+        ("CP1251", "Windows_1251"),
+        ("CP1252", "Windows_1252"),
+        ("CP1253", "Windows_1253"),
+        ("CP1254", "Windows_1254"),
+        ("CP1255", "Windows_1255"),
+        ("CP1256", "Windows_1256"),
+        ("CP1257", "Windows_1257"),
+        ("CP1258", "Windows_1258"),
+        ("CP437", "IBM437"),
+        ("CP737", "IBM737"),
+        ("CP775", "IBM775"),
+        ("CP850", "IBM850"),
+        ("CP852", "IBM852"),
+        ("CP855", "IBM855"),
+        ("CP857", "IBM857"),
+        ("CP860", "IBM860"),
+        ("CP861", "IBM861"),
+        ("CP862", "IBM862"),
+        ("CP863", "IBM863"),
+        ("CP864", "IBM864"),
+        ("CP865", "IBM865"),
+        ("CP866", "IBM866"),
+        ("CP869", "IBM869"),
+        ("CP936", "GBK"),
+    ] {
+        if let Some(val) = globals
+            .store
+            .get_constant_noautoload(enc.id(), IdentId::get_id(canonical))
+        {
+            globals.set_constant_by_str(enc.id(), alias, val);
+        }
+    }
 
     // Encoding::CompatibilityError < EncodingError < StandardError.
     // The fourth `define_class` argument is the *lexical parent* —
@@ -494,12 +532,93 @@ fn encoding_to_rs(enc: crate::value::Encoding) -> Option<&'static encoding_rs::E
         E::EucJp => b"euc-jp",
         E::Sjis(_) => b"shift_jis",
         E::Iso2022Jp => b"iso-2022-jp",
+        // Named byte-oriented encodings with an encoding_rs codec.
+        // WHATWG deviations accepted here (they only widen coverage):
+        // "big5" is the HKSCS-extended table, "euc-kr" is windows-949
+        // (a CP949 superset of EUC-KR), and "windows-874" is a
+        // TIS-620 superset.
+        E::NamedByte(_) => match enc.name() {
+            "Windows-1250" => b"windows-1250",
+            "Windows-1251" => b"windows-1251",
+            "Windows-1252" => b"windows-1252",
+            "Windows-1253" => b"windows-1253",
+            "Windows-1254" => b"windows-1254",
+            "Windows-1255" => b"windows-1255",
+            "Windows-1256" => b"windows-1256",
+            "Windows-1257" => b"windows-1257",
+            "Windows-1258" => b"windows-1258",
+            "KOI8-R" => b"koi8-r",
+            "KOI8-U" => b"koi8-u",
+            "IBM866" => b"ibm866",
+            "Big5" | "Big5-HKSCS" => b"big5",
+            "GBK" | "GB2312" => b"gbk",
+            "GB18030" => b"gb18030",
+            "EUC-KR" | "CP949" => b"euc-kr",
+            "TIS-620" => b"windows-874",
+            // Big5-UAO / EUC-TW / GB12345 and the DOS codepages other
+            // than IBM866 have no encoding_rs codec; IBM437 is served
+            // by the in-tree single-byte table instead.
+            _ => return None,
+        },
         // Handled by callers as fast paths / no native codec.
-        E::Utf32Le | E::Utf32Be | E::Ascii8 | E::UsAscii | E::Other(_) | E::NamedByte(_) => {
-            return None
-        }
+        E::Utf32Le | E::Utf32Be | E::Ascii8 | E::UsAscii | E::Other(_) => return None,
     };
     encoding_rs::Encoding::for_label(label)
+}
+
+/// High-half (0x80..=0xFF) Unicode mapping for single-byte encodings
+/// monoruby transcodes with an in-tree table because encoding_rs has
+/// no codec for them. Bytes < 0x80 are ASCII in all of these.
+fn single_byte_table(enc: crate::value::Encoding) -> Option<&'static [char; 128]> {
+    /// IBM437 (the original IBM PC / DOS codepage).
+    const IBM437: [char; 128] = [
+        'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å', //
+        'É', 'æ', 'Æ', 'ô', 'ö', 'ò', 'û', 'ù', 'ÿ', 'Ö', 'Ü', '¢', '£', '¥', '₧', 'ƒ', //
+        'á', 'í', 'ó', 'ú', 'ñ', 'Ñ', 'ª', 'º', '¿', '⌐', '¬', '½', '¼', '¡', '«', '»', //
+        '░', '▒', '▓', '│', '┤', '╡', '╢', '╖', '╕', '╣', '║', '╗', '╝', '╜', '╛', '┐', //
+        '└', '┴', '┬', '├', '─', '┼', '╞', '╟', '╚', '╔', '╩', '╦', '╠', '═', '╬', '╧', //
+        '╨', '╤', '╥', '╙', '╘', '╒', '╓', '╫', '╪', '┘', '┌', '█', '▄', '▌', '▐', '▀', //
+        'α', 'ß', 'Γ', 'π', 'Σ', 'σ', 'µ', 'τ', 'Φ', 'Θ', 'Ω', 'δ', '∞', 'φ', 'ε', '∩', //
+        '≡', '±', '≥', '≤', '⌠', '⌡', '÷', '≈', '°', '∙', '·', '√', 'ⁿ', '²', '■',
+        '\u{A0}',
+    ];
+    if let crate::value::Encoding::NamedByte(_) = enc {
+        if enc.name() == "IBM437" {
+            return Some(&IBM437);
+        }
+    }
+    None
+}
+
+/// Decode a single-byte-table encoding into a Rust `String`. Every
+/// byte maps (the tables are total), so this cannot fail.
+fn table_decode(bytes: &[u8], table: &[char; 128]) -> String {
+    bytes
+        .iter()
+        .map(|&b| {
+            if b < 0x80 {
+                b as char
+            } else {
+                table[(b - 0x80) as usize]
+            }
+        })
+        .collect()
+}
+
+/// Encode `s` through a single-byte table. Returns `Err(c)` on the
+/// first character the encoding cannot represent.
+fn table_encode(s: &str, table: &[char; 128]) -> std::result::Result<Vec<u8>, char> {
+    let mut out = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii() {
+            out.push(c as u8);
+        } else if let Some(pos) = table.iter().position(|&t| t == c) {
+            out.push(0x80 + pos as u8);
+        } else {
+            return Err(c);
+        }
+    }
+    Ok(out)
 }
 
 /// Transcode `src_bytes` from `src_enc` to `dst_enc`. Returns
@@ -747,6 +866,9 @@ pub(super) fn transcode_bytes_with_opts(
             }
             return Ok(decoded.into_bytes());
         }
+        if let Some(table) = single_byte_table(src_enc) {
+            return Ok(table_decode(src_bytes, table).into_bytes());
+        }
         if let Some(src_rs) = encoding_to_rs(src_enc) {
             let (decoded, decode_err) = src_rs.decode_without_bom_handling(src_bytes);
             if decode_err {
@@ -768,6 +890,13 @@ pub(super) fn transcode_bytes_with_opts(
     let (decoded, decode_err): (std::borrow::Cow<str>, bool) = if is_utf16_or_32(src_enc) {
         let (s, e) = decode_utf16_32(src_bytes, src_enc);
         (std::borrow::Cow::Owned(s), e)
+    } else if let Some(table) = single_byte_table(src_enc) {
+        // Table encodings are total over the byte range — no invalid
+        // sequences possible.
+        (
+            std::borrow::Cow::Owned(table_decode(src_bytes, table)),
+            false,
+        )
     } else {
         let src_rs = match encoding_to_rs(src_enc) {
             Some(s) => s,
@@ -830,6 +959,37 @@ pub(super) fn transcode_bytes_with_opts(
     // representable, so there is no undefined-conversion case.
     if is_utf16_or_32(dst_enc) {
         return Ok(encode_utf16_32(&decoded, dst_enc));
+    }
+    // Single-byte-table destination (IBM437 &c.): encode via the
+    // reverse table, honoring `undef: :replace`.
+    if let Some(table) = single_byte_table(dst_enc) {
+        return match table_encode(&decoded, table) {
+            Ok(v) => Ok(v),
+            Err(bad) if !opts.undef_replace => Err(MonorubyErr::undefined_conversion_error(
+                store,
+                format!(
+                    "U+{:04X} from {} to {}",
+                    bad as u32,
+                    src_enc.name(),
+                    dst_enc.name()
+                ),
+            )),
+            Err(_) => {
+                let replace = opts.replace_str(dst_enc);
+                let mut out = Vec::with_capacity(decoded.len());
+                for c in decoded.chars() {
+                    let mut buf = [0u8; 4];
+                    match table_encode(c.encode_utf8(&mut buf), table) {
+                        Ok(v) => out.extend_from_slice(&v),
+                        Err(_) => match table_encode(&replace, table) {
+                            Ok(r) => out.extend_from_slice(&r),
+                            Err(_) => out.push(b'?'),
+                        },
+                    }
+                }
+                Ok(out)
+            }
+        };
     }
     let dst_rs = match encoding_to_rs(dst_enc) {
         Some(d) => d,
@@ -1539,12 +1699,14 @@ fn validate_converter_pair(
         return Ok(());
     }
     let src_supported = encoding_to_rs(src).is_some()
+        || single_byte_table(src).is_some()
         || is_utf16_or_32(src)
         || matches!(
             src,
             crate::value::Encoding::Ascii8 | crate::value::Encoding::UsAscii
         );
     let dst_supported = encoding_to_rs(dst).is_some()
+        || single_byte_table(dst).is_some()
         || is_utf16_or_32(dst)
         || matches!(
             dst,
@@ -3233,7 +3395,10 @@ fn enc_name_to_const(name: &str) -> Option<&'static str> {
         "GB2312" | "EUC_CN" => Some("GB2312"),
         "GBK" | "CP936" => Some("GBK"),
         "GB18030" => Some("GB18030"),
-        "BIG5" | "BIG5_HKSCS" => Some("Big5"),
+        "GB12345" => Some("GB12345"),
+        "BIG5" => Some("Big5"),
+        "BIG5_HKSCS" => Some("Big5_HKSCS"),
+        "BIG5_UAO" => Some("Big5_UAO"),
 
         // Korean encodings
         "EUC_KR" | "EUCKR" => Some("EUC_KR"),
@@ -3839,6 +4004,28 @@ fn is_dummy_encoding(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn encode_named_byte_encodings() {
+        // String#encode routes the named byte encodings through the
+        // transcoder: Windows-125x / KOI8-R / IBM866 via encoding_rs,
+        // IBM437 via the in-tree table. Round-trips compare bytes.
+        run_test_once(
+            r##"(a="é".encode("Windows-1250").bytes; b="é".encode("Windows-1250").encoding.name; c="Ω≈±".encode("IBM437").bytes; d="Ω≈±".encode("IBM437").encode("UTF-8"); e2="Привет".encode("KOI8-R").bytes; f="Привет".encode("KOI8-R").encode("UTF-8"); g="Тест".encode("IBM866").bytes; h="абв".encode("Windows-1251").encode("UTF-8"); [a,b,c,d,e2,f,g,h])"##,
+        );
+        run_test_once(
+            r##"(a=(begin; "→".encode("IBM437"); rescue Encoding::UndefinedConversionError => e; e.class; end); b="a→b".encode("IBM437", undef: :replace); [a, b.bytes])"##,
+        );
+    }
+
+    #[test]
+    fn encode_named_byte_constants_and_converter() {
+        // CP-numbered constants alias the canonical objects; the
+        // Converter handles named byte encodings; ASCII-only content
+        // passes through dummy encodings (Big5-UAO) unchanged.
+        run_test_once(
+            r##"(a=(Encoding::CP1251 == Encoding::Windows_1251); b=(Encoding::CP437 == Encoding::IBM437); c=Encoding::CP1250.name; ec=Encoding::Converter.new("UTF-8", "Windows-1251"); d=ec.convert("да").bytes; e2=ec.destination_encoding.name; f="abc".dup.force_encoding("Big5-UAO").encode("UTF-8"); [a,b,c,d,e2,f])"##,
+        );
+    }
     use crate::tests::*;
 
     #[test]
