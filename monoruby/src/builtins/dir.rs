@@ -155,46 +155,93 @@ fn mkdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-/// File::FNM_DOTMATCH: wildcards match dotfiles too.
+/// `File::FNM_*` flag bits honoured by `Dir.glob`.
+const FNM_NOESCAPE: i64 = 1;
 const FNM_DOTMATCH: i64 = 4;
+const FNM_CASEFOLD: i64 = 8;
+
+/// Translate `Dir.glob`'s Integer flags into the per-segment matcher
+/// flags. macOS's default filesystem is case-insensitive; CRuby
+/// compiles with `HAVE_CASEFOLD_FILESYSTEM` there and folds every
+/// glob, so mirror that.
+fn seg_flags(flags: i64) -> u32 {
+    use super::fnmatch as fm;
+    let mut f = 0;
+    if flags & FNM_DOTMATCH != 0 {
+        f |= fm::FNM_DOTMATCH;
+    }
+    if flags & FNM_NOESCAPE != 0 {
+        f |= fm::FNM_NOESCAPE;
+    }
+    if flags & FNM_CASEFOLD != 0 {
+        f |= fm::FNM_CASEFOLD;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        f |= fm::FNM_CASEFOLD;
+    }
+    f
+}
 
 #[derive(Debug, Clone)]
 struct PathPair {
+    /// Filesystem path (used for directory reads / existence checks).
     path: PathBuf,
-    full: PathBuf,
+    /// The user-facing match string, built verbatim from the pattern:
+    /// `.` / `..` components and doubled slashes are preserved exactly
+    /// as written (CRuby glob output).
+    full: String,
 }
 
 impl PathPair {
-    fn new(path: PathBuf, full: PathBuf) -> Self {
+    fn new(path: PathBuf, full: String) -> Self {
         Self { path, full }
+    }
+
+    /// Append one output component with a separator (unless at the
+    /// very start or just after the absolute root). A preceding
+    /// [`Self::extra_slash`] shows through as a doubled `/`.
+    fn push_out(&mut self, name: &str) {
+        if !(self.full.is_empty() || self.full == "/") {
+            self.full.push('/');
+        }
+        self.full.push_str(name);
     }
 
     fn push(&mut self, name: &str) {
         self.path.push(name);
-        self.full.push(name);
+        self.push_out(name);
     }
 
     fn parent(&mut self) {
         self.path.pop();
-        self.full.push("..");
+        self.push_out("..");
     }
 
     fn current(&mut self) {
-        self.full.push(".");
+        self.push_out(".");
+    }
+
+    /// An interior empty pattern segment (`a//b`): the extra `/` is
+    /// preserved in the output verbatim.
+    fn extra_slash(&mut self) {
+        self.full.push('/');
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum PathComponent {
-    /// A literal name or single-level glob pattern (e.g. `*.rs`).
-    Name(globset::Glob),
+    /// A literal name or single-level glob pattern (matched with
+    /// [`super::fnmatch::match_segment`]).
+    Name(String),
     /// `..` — go up one directory.
     Parent,
     /// `.` — stay in current directory.
     Current,
-    /// Trailing separator: emit the current path as a match.
-    None,
-    /// `**` — match zero or more directory levels recursively.
+    /// An interior empty segment (`a//b`) — preserved in the output.
+    ExtraSlash,
+    /// A `**` segment followed by `/` — match zero or more directory
+    /// levels recursively.
     Globstar,
 }
 
@@ -361,175 +408,33 @@ fn glob_impl(
     base: Option<String>,
     sort: bool,
 ) -> Result<Vec<RStringInner>> {
-    let dotmatch = (flags & FNM_DOTMATCH) != 0;
-
+    let noescape = flags & FNM_NOESCAPE != 0;
     let mut all_matches = vec![];
     for pattern_str in &patterns {
-        let mut matches = vec![];
-        process_glob_pattern(pattern_str, base.as_deref(), dotmatch, &mut matches)?;
-        matches.dedup();
-        if sort {
-            matches.sort_by(|a, b| a.cmp(b));
+        // Brace alternations expand first, in source order, and each
+        // expansion contributes its own (individually sorted) result
+        // group — duplicates across groups are kept (CRuby:
+        // `Dir.glob("{a,a}")` lists `a` twice).
+        for pat in super::fnmatch::expand_braces(pattern_str, noescape) {
+            let mut matches = vec![];
+            process_glob_pattern(&pat, base.as_deref(), flags, &mut matches)?;
+            if sort {
+                matches.sort();
+            }
+            all_matches.extend(matches);
         }
-        all_matches.extend(matches);
     }
-
-    let all_matches: Vec<RStringInner> = all_matches
+    Ok(all_matches
         .into_iter()
-        .map(|s| RStringInner::from_string(s))
-        .collect();
-    Ok(all_matches)
+        .map(RStringInner::from_string)
+        .collect())
 }
 
-/// Split `s` at top-level commas, ignoring commas inside nested `{...}`.
-/// Backslash-escaped `\{`, `\}`, and `\,` are treated as literal characters
-/// (CRuby glob semantics) and do not affect brace depth or splitting.
-fn split_by_top_level_comma(s: &str) -> Vec<&str> {
-    let mut result = vec![];
-    let mut depth = 0usize;
-    let mut start = 0;
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b'\\' && i + 1 < bytes.len() {
-            // Skip the escape and the next byte verbatim.
-            i += 2;
-            continue;
-        }
-        match c {
-            b'{' => depth += 1,
-            b'}' => depth = depth.saturating_sub(1),
-            b',' if depth == 0 => {
-                result.push(&s[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    result.push(&s[start..]);
-    result
-}
-
-/// Expand brace alternations in `pattern`, returning all expanded strings.
-///
-/// Examples:
-/// - `{,*,*/*}.gemspec` → `[".gemspec", "*.gemspec", "*/*.gemspec"]`
-/// - `d{a,c}*`          → `["da*", "dc*"]`
-/// - `{a,b}{c,d}`       → `["ac", "ad", "bc", "bd"]`
-///
-/// Backslash escapes (`\{`, `\}`) are treated as literal characters and do
-/// not start or close a brace group — matching CRuby's glob semantics.
-/// Unmatched braces are returned as-is.
-fn expand_braces(pattern: &str) -> Vec<String> {
-    // Find the first top-level `{`, skipping escaped braces.
-    let mut depth = 0usize;
-    let mut open = None;
-    let bytes = pattern.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b'\\' && i + 1 < bytes.len() {
-            // Escape sequence: skip both bytes.
-            i += 2;
-            continue;
-        }
-        match c {
-            b'{' => {
-                if depth == 0 {
-                    open = Some(i);
-                }
-                depth += 1;
-            }
-            b'}' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    if let Some(start) = open {
-                        let prefix = &pattern[..start];
-                        let inside = &pattern[start + 1..i];
-                        let suffix = &pattern[i + 1..];
-                        let mut results = vec![];
-                        for alt in split_by_top_level_comma(inside) {
-                            let expanded = format!("{}{}{}", prefix, alt, suffix);
-                            results.extend(expand_braces(&expanded));
-                        }
-                        return results;
-                    }
-                    break;
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    // No complete brace group found — return as-is.
-    vec![pattern.to_string()]
-}
-
-/// Translate a single glob path segment from CRuby conventions into the
-/// dialect that `globset::Glob::new` accepts:
-///
-/// - `\{` and `\}` (escaped braces) become `[{]` / `[}]` so the literal
-///   character survives when `globset` would otherwise treat them as
-///   alternate-group delimiters.
-/// - Any remaining unescaped `{` / `}` after `expand_braces` ran are
-///   leftovers from unbalanced input; convert them to `[{]` / `[}]` too so
-///   the segment compiles instead of erroring out.
-/// - A trailing dangling `\` is doubled to `\\` (literal backslash) since
-///   CRuby treats it as a literal backslash and `globset` errors out.
-fn normalize_glob_segment(seg: &str) -> String {
-    let bytes = seg.as_bytes();
-    let mut out = String::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b'\\' {
-            if i + 1 >= bytes.len() {
-                // Trailing dangling backslash → literal backslash.
-                out.push_str("\\\\");
-                i += 1;
-                continue;
-            }
-            let next = bytes[i + 1];
-            if next == b'{' {
-                out.push_str("[{]");
-                i += 2;
-                continue;
-            }
-            if next == b'}' {
-                out.push_str("[}]");
-                i += 2;
-                continue;
-            }
-            // Other escapes pass through to globset, which already handles
-            // them (`\*`, `\?`, `\\`, etc.).
-            out.push(c as char);
-            out.push(next as char);
-            i += 2;
-            continue;
-        }
-        if c == b'{' {
-            out.push_str("[{]");
-            i += 1;
-            continue;
-        }
-        if c == b'}' {
-            out.push_str("[}]");
-            i += 1;
-            continue;
-        }
-        out.push(c as char);
-        i += 1;
-    }
-    out
-}
-
-/// Parse one glob pattern string and append matches to `matches`.
+/// Parse one (brace-free) glob pattern string and append matches.
 fn process_glob_pattern(
     pattern_str: &str,
     base: Option<&str>,
-    dotmatch: bool,
+    flags: i64,
     matches: &mut Vec<String>,
 ) -> Result<()> {
     if pattern_str.is_empty() {
@@ -537,114 +442,170 @@ fn process_glob_pattern(
         return Ok(());
     }
 
-    // Expand brace alternations before path-splitting, so that patterns like
-    // `{,*,*/*}.gemspec` (where `{}` contains `/`) are handled correctly.
-    let expanded = expand_braces(pattern_str);
-    if expanded.len() != 1 || expanded[0] != pattern_str {
-        for pat in expanded {
-            process_glob_pattern(&pat, base, dotmatch, matches)?;
+    let mut segments: Vec<&str> = pattern_str.split('/').collect();
+    let absolute = segments.len() > 1 && segments[0].is_empty();
+    if absolute {
+        segments.remove(0);
+    }
+    // Trailing separators: `a/` matches only directories and the
+    // separators are preserved in the output (`a//` → `"a//"`).
+    let mut trailing = 0usize;
+    while segments.last() == Some(&"") {
+        segments.pop();
+        trailing += 1;
+    }
+    if absolute && segments.is_empty() {
+        // The pattern was just "/" (or "//"…).
+        if std::path::Path::new("/").exists() {
+            matches.push("/".to_string());
         }
         return Ok(());
     }
 
-    let mut segments = pattern_str.split(std::path::MAIN_SEPARATOR_STR).peekable();
-
-    // Determine the root PathPair.
-    let path = if segments.peek() == Some(&"") {
-        // Absolute path — starts with `/`.
-        segments.next();
-        if segments.peek().is_none() {
-            // Pattern was exactly "/".
-            if std::path::Path::new("/").exists() {
-                matches.push("/".to_string());
-            }
-            return Ok(());
-        }
-        PathPair::new(PathBuf::from("/"), PathBuf::from("/"))
+    let root = if absolute {
+        PathPair::new(PathBuf::from("/"), "/".to_string())
     } else if let Some(base) = base {
         let mut p = std::env::current_dir().unwrap();
         p.push(base);
         match p.canonicalize() {
-            Ok(p) => PathPair::new(p, PathBuf::new()),
+            Ok(p) => PathPair::new(p, String::new()),
             Err(_) => return Ok(()),
         }
     } else {
-        PathPair::new(std::env::current_dir().unwrap(), PathBuf::new())
+        PathPair::new(std::env::current_dir().unwrap(), String::new())
     };
 
-    // Build the component list from the remaining path segments.
-    let segments: Vec<&str> = segments.collect();
-    let last_idx = segments.len().saturating_sub(1);
     let mut components: Vec<PathComponent> = vec![];
-    for (i, seg) in segments.iter().enumerate() {
-        components.push(match *seg {
-            "." => PathComponent::Current,
-            ".." => PathComponent::Parent,
-            "" => PathComponent::None,
-            // `**` recurses only when it is a full directory component
-            // (i.e. followed by `/`). A trailing `**` with no slash — the
-            // last segment — behaves like `*`, matching just this level
-            // (CRuby: `Dir.glob("**") == Dir.glob("*")`).
-            "**" if i == last_idx => glob_name_component("*")?,
-            "**" => PathComponent::Globstar,
-            s => glob_name_component(s)?,
-        });
+    for seg in &segments {
+        match *seg {
+            "." => components.push(PathComponent::Current),
+            ".." => components.push(PathComponent::Parent),
+            // Interior empty segment: an extra `/` in the output —
+            // except right after `**`, which swallows it
+            // (`a/**//b` prints single-slashed).
+            "" => {
+                if components.last() != Some(&PathComponent::Globstar) {
+                    components.push(PathComponent::ExtraSlash);
+                }
+            }
+            "**" => components.push(PathComponent::Globstar),
+            s => components.push(PathComponent::Name(s.to_string())),
+        }
+    }
+    // A trailing `**` with no `/` after it behaves like `*` — just this
+    // level (CRuby: `Dir.glob("**") == Dir.glob("*")`).
+    if trailing == 0 && components.last() == Some(&PathComponent::Globstar) {
+        components.pop();
+        components.push(PathComponent::Name("*".to_string()));
+    }
+    // `**//` prints a single trailing slash.
+    if trailing > 1 && components.last() == Some(&PathComponent::Globstar) {
+        trailing = 1;
     }
 
-    traverse_dir(path, components, matches, dotmatch)
+    traverse_dir(
+        root,
+        components,
+        trailing,
+        base.is_some(),
+        Reached::default(),
+        matches,
+        seg_flags(flags),
+    )
 }
 
-/// Compile a single glob path segment into a `PathComponent::Name` matcher.
-fn glob_name_component(s: &str) -> Result<PathComponent> {
-    let normalized = normalize_glob_segment(s);
-    // macOS's default filesystem (APFS / HFS+) is case-insensitive but
-    // case-preserving. CRuby compiles with `HAVE_CASEFOLD_FILESYSTEM` and
-    // silently adds FNM_CASEFOLD to every Dir.glob there, so `glob("C*")`
-    // also matches `c.rb`. Mirror that on macOS so the monoruby/CRuby
-    // differential tests agree (e.g. the `Dir.glob("./././C*")` arm of the
-    // `glob` test). `mut` is used only on macos (`case_insensitive` below).
-    #[allow(unused_mut)]
-    let mut b = globset::GlobBuilder::new(&normalized);
-    #[cfg(target_os = "macos")]
-    b.case_insensitive(true);
-    match b.build() {
-        Ok(g) => Ok(PathComponent::Name(g)),
-        Err(e) => Err(MonorubyErr::runtimeerr(format!(
-            "invalid glob pattern {:?}: {}",
-            s, e
-        ))),
+/// How the current traversal position was reached — drives CRuby's
+/// rules for synthesizing the "." entry (probed on 4.0.2).
+#[derive(Debug, Clone, Copy, Default)]
+struct Reached {
+    /// A wildcard component has matched an entry, or a `**` has
+    /// descended a level: the prefix is no longer a concrete
+    /// (literal) path.
+    wildcard: bool,
+    /// A `**` component was crossed (even at zero levels).
+    globstar: bool,
+}
+
+/// Whether a segment pattern contains an unescaped metacharacter.
+fn has_meta(pat: &str) -> bool {
+    let mut chars = pat.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                let _ = chars.next();
+            }
+            '*' | '?' | '[' => return true,
+            _ => {}
+        }
     }
+    false
 }
 
 fn traverse_dir(
     mut path: PathPair,
     mut glob_rest: Vec<PathComponent>,
+    trailing: usize,
+    base_given: bool,
+    reached: Reached,
     matches: &mut Vec<String>,
-    dotmatch: bool,
+    sf: u32,
 ) -> Result<()> {
+    let dotmatch = sf & super::fnmatch::FNM_DOTMATCH != 0;
     loop {
         if glob_rest.is_empty() {
-            matches.push(path.full.to_string_lossy().to_string());
+            if trailing > 0 {
+                // Only directories match a trailing `/`, and the
+                // separators show up in the output.
+                if path.path.is_dir() {
+                    if path.full.is_empty() {
+                        // `**/` matching zero levels: with `base:` CRuby
+                        // reports the base directory itself as "/";
+                        // without it, nothing.
+                        if base_given {
+                            matches.push("/".to_string());
+                        }
+                    } else if path.full == "/" {
+                        matches.push("/".to_string());
+                    } else {
+                        matches.push(format!("{}{}", path.full, "/".repeat(trailing)));
+                    }
+                }
+            } else {
+                matches.push(path.full.clone());
+            }
             return Ok(());
         }
         match glob_rest.remove(0) {
-            PathComponent::None => {
-                matches.push(path.full.to_string_lossy().to_string());
-                return Ok(());
-            }
             PathComponent::Parent => {
                 path.parent();
             }
             PathComponent::Current => {
                 path.current();
             }
+            PathComponent::ExtraSlash => {
+                path.extra_slash();
+            }
 
-            // `**` — match zero or more directory levels.
+            // `**/` — match zero or more directory levels.
             PathComponent::Globstar => {
-                // Zero levels: apply remaining components at the current directory.
-                traverse_dir(path.clone(), glob_rest.clone(), matches, dotmatch)?;
+                // Zero levels: apply remaining components here.
+                traverse_dir(
+                    path.clone(),
+                    glob_rest.clone(),
+                    trailing,
+                    base_given,
+                    Reached {
+                        globstar: true,
+                        ..reached
+                    },
+                    matches,
+                    sf,
+                )?;
 
-                // One or more levels: descend into each subdirectory and keep `**`.
+                // One or more levels: descend into each subdirectory and
+                // keep the `**`. Dot-directories are skipped without
+                // FNM_DOTMATCH; symlinked directories are not followed
+                // (`file_type` does not traverse the link), like CRuby.
                 let entries = match std::fs::read_dir(&path.path) {
                     Ok(e) => e,
                     Err(_) => return Ok(()),
@@ -669,51 +630,69 @@ fn traverse_dir(
                     new_path.push(&name);
                     let mut new_glob = vec![PathComponent::Globstar];
                     new_glob.extend(glob_rest.iter().cloned());
-                    traverse_dir(new_path, new_glob, matches, dotmatch)?;
+                    traverse_dir(
+                        new_path,
+                        new_glob,
+                        trailing,
+                        base_given,
+                        Reached {
+                            wildcard: true,
+                            globstar: true,
+                        },
+                        matches,
+                        sf,
+                    )?;
                 }
                 return Ok(());
             }
 
-            // Literal name or single-level glob pattern for one path segment.
-            PathComponent::Name(glob) => {
-                let glob = glob.compile_matcher();
+            // Literal name or single-level glob pattern for one segment.
+            PathComponent::Name(pat) => {
                 let entries = match std::fs::read_dir(&path.path) {
                     Ok(e) => e,
                     Err(_) => return Ok(()),
                 };
-                let pat_starts_with_dot = glob.glob().glob().starts_with('.');
-                let mut to_visit: Vec<(String, PathPair)> = entries
+                // The leading-period guard lives in the matcher: `*`
+                // skips dot-entries unless the pattern itself starts
+                // with `.` or FNM_DOTMATCH is set.
+                let mut names: Vec<String> = entries
                     .flatten()
                     .filter_map(|e| {
                         let name = e.file_name().to_string_lossy().to_string();
-                        if name.starts_with('.') && !pat_starts_with_dot && !dotmatch {
-                            return None;
-                        }
-                        if glob.is_match_candidate(&globset::Candidate::new(&name)) {
-                            let mut new_path = path.clone();
-                            new_path.push(&name);
-                            Some((name, new_path))
-                        } else {
-                            None
-                        }
+                        super::fnmatch::match_segment(&pat, &name, sf).then_some(name)
                     })
                     .collect();
-
-                // Synthesize "." (the directory itself): read_dir omits it, but
-                // CRuby includes it when the pattern matches dot-files and "."
-                // itself matches the pattern.  ".." is never included (CRuby also
-                // excludes it).
-                if (pat_starts_with_dot || dotmatch)
-                    && glob.is_match_candidate(&globset::Candidate::new("."))
-                {
-                    let mut dot_path = path.clone();
-                    dot_path.push(".");
-                    to_visit.push((".".to_string(), dot_path));
+                // Synthesize "." (read_dir omits it; ".." is never
+                // reported, CRuby 3.1+). CRuby's rules, probed on 4.0.2:
+                // "." appears only under a concrete (all-literal) prefix
+                // — `Dir.glob("nested/*", DOTMATCH)` has "nested/." but
+                // `Dir.glob("nest*/*", DOTMATCH)` does not — and, for
+                // dot-leading patterns without FNM_DOTMATCH, only when
+                // no `**` was crossed (`nested/**/.*` omits "nested/.",
+                // `nested/.*` includes it).
+                let starts_dot = pat.starts_with('.');
+                let allow_dot =
+                    !reached.wildcard && (dotmatch || (starts_dot && !reached.globstar));
+                if allow_dot && super::fnmatch::match_segment(&pat, ".", sf) {
+                    names.push(".".to_string());
                 }
-
-                to_visit.sort_by(|a, b| a.0.cmp(&b.0));
-                for (_, new_path) in to_visit {
-                    traverse_dir(new_path, glob_rest.clone(), matches, dotmatch)?;
+                names.sort();
+                let pat_meta = has_meta(&pat);
+                for name in names {
+                    let mut new_path = path.clone();
+                    new_path.push(&name);
+                    traverse_dir(
+                        new_path,
+                        glob_rest.clone(),
+                        trailing,
+                        base_given,
+                        Reached {
+                            wildcard: reached.wildcard || pat_meta,
+                            ..reached
+                        },
+                        matches,
+                        sf,
+                    )?;
                 }
                 return Ok(());
             }
