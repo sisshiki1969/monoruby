@@ -261,6 +261,10 @@ pub(crate) const NAMED_BYTE_ENCODINGS: &[(&str, &str)] = &[
     ("IBM865", "IBM865"),
     ("IBM866", "IBM866"),
     ("IBM869", "IBM869"),
+    // Not a national codepage, but the same shape: ASCII-compatible,
+    // name-preserved, no codec (so `Encoding::Converter.new` refuses
+    // it while 7-bit content still converts).
+    ("Emacs-Mule", "Emacs_Mule"),
 ];
 
 /// Look up a [`Encoding::NamedByte`] index by its normalized
@@ -565,10 +569,12 @@ impl Encoding {
             "IBM866" | "CP866" => Ok(Encoding::NamedByte(named_byte_index("IBM866").unwrap())),
             "IBM869" | "CP869" => Ok(Encoding::NamedByte(named_byte_index("IBM869").unwrap())),
 
+            "EMACS_MULE" => Ok(Encoding::NamedByte(named_byte_index("Emacs_Mule").unwrap())),
+
             // Byte encodings we still fold onto ASCII-8BIT without
-            // name preservation (dummy / stateful, or Mac* — kept as
-            // the prior behaviour to avoid ASCII-compat edge cases).
-            "EMACS_MULE" | "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN"
+            // name preservation (Mac* — kept as the prior behaviour to
+            // avoid ASCII-compat edge cases).
+            "MACCYRILLIC" | "MACGREEK" | "MACICELAND" | "MACROMAN"
             | "MACROMANIA" | "MACTHAI" | "MACTURKISH" | "MACUKRAINE" => Ok(Encoding::Ascii8),
 
             _ => Err(MonorubyErr::argumenterr(format!(

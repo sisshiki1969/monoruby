@@ -4697,6 +4697,25 @@ fn build_lines(
     rs_arg: Option<Value>,
     chomp: bool,
 ) -> Result<Vec<Value>> {
+    // Dummy encodings (CRuby): the wide ones (UTF-16 / UTF-32 without
+    // endianness) have no visible line structure — the whole string is
+    // one line; the byte-oriented ones (UTF-7, …) fail converting the
+    // separator into the string's encoding.
+    let enc = receiver.as_rstring_inner().encoding();
+    if let crate::value::Encoding::Other(_) = enc {
+        match enc.name() {
+            "UTF-16" | "UTF-32" => {
+                let len = receiver.as_rstring_inner().len();
+                return Ok(vec![string_substring(receiver, 0, len)]);
+            }
+            name => {
+                return Err(MonorubyErr::converter_not_found_error(
+                    &globals.store,
+                    format!("code converter not found (UTF-8 to {})", name),
+                ));
+            }
+        }
+    }
     let ranges = line_ranges(vm, globals, receiver, rs_arg, chomp)?;
     Ok(ranges
         .into_iter()
