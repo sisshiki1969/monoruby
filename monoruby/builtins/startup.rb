@@ -2082,7 +2082,8 @@ end
 
 class IO
   include File::Constants
-  include Enumerable
+  # Enumerable is mixed in after `require_relative 'enumerable'` at the
+  # bottom of this file (the module is not defined yet at this point).
 
   SEEK_SET = 0
   SEEK_CUR = 1
@@ -2431,6 +2432,7 @@ class Data
 end unless defined?(::Data)
 
 require_relative 'enumerable'
+IO.include(Enumerable)
 require_relative 'arithmetic_sequence'
 require_relative 'numeric'
 require_relative 'integer'
