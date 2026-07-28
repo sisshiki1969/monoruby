@@ -40,7 +40,7 @@ pub(super) fn init(globals: &mut Globals) {
 
     // Methods that need libc syscalls or external state. The rest of Dir's
     // surface (initialize/open/read/close/pos/each/children/empty? …) lives
-    // in monoruby/builtins/builtins.rb so the iterator state can be plain
+    // in monoruby/builtins/dir.rb so the iterator state can be plain
     // Ruby ivars.
     globals.define_builtin_class_func(klass, "fchdir", fchdir, 1);
     globals.define_builtin_class_func(klass, "chroot", chroot, 1);
