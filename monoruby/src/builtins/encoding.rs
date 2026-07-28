@@ -2835,10 +2835,26 @@ fn stream_convert(
             // encoding_rs stops *before* the byte(s) that disproved
             // the sequence; CRuby reads one more coding unit and
             // reports it as the read-again bytes (`"\xF1" followed by
-            // "a" on UTF-8`). Pull that unit in ourselves.
+            // "a" on UTF-8`). Pull that unit in ourselves — but only
+            // when the malformed run is a plausible prefix of a longer
+            // sequence (a fresh decoder fed just those bytes is still
+            // waiting for more). An inherently invalid byte like a
+            // lone `\x80` on UTF-8 needs no disproving byte, and CRuby
+            // leaves the following bytes in src with empty read-again.
+            let is_plausible_prefix = || {
+                let mut probe = src_rs.new_decoder();
+                let mut probe_dst = vec![0u8; meta.error_bytes.len() * 4 + 16];
+                let (r, read, _) = probe.decode_to_utf8_without_replacement(
+                    &meta.error_bytes,
+                    &mut probe_dst,
+                    false,
+                );
+                matches!(r, DecoderResult::InputEmpty) && read == meta.error_bytes.len()
+            };
             if matches!(kind, StreamConvertResult::InvalidByteSequence)
                 && meta.readagain_bytes.is_empty()
                 && consumed < src_bytes.len()
+                && is_plausible_prefix()
             {
                 let unit = if src_rs.name().starts_with("UTF-16") { 2 } else { 1 };
                 let take = unit.min(src_bytes.len() - consumed);
@@ -3863,10 +3879,9 @@ fn enc_err_error_char(
 }
 
 /// `Encoding::InvalidByteSequenceError#incomplete_input?` —
-/// whether the bad bytes were a (partial) leading prefix of a
-/// valid sequence rather than an outright invalid byte. monoruby's
-/// transcoder doesn't track partial-vs-complete; report `false`
-/// to match the more conservative answer.
+/// whether the error was caused by input ending mid-sequence
+/// (a partial leading prefix of a valid sequence) rather than an
+/// outright invalid byte.
 #[monoruby_builtin]
 fn enc_err_incomplete_input_p(
     _vm: &mut Executor,
@@ -3874,12 +3889,27 @@ fn enc_err_incomplete_input_p(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // Converter-produced errors carry the flag; errors raised from
-    // `String#encode` &c. answer nil (CRuby).
-    Ok(globals
+    // Converter-produced errors carry the flag as an ivar. Errors
+    // raised from `String#encode` &c. are plain messages; classify
+    // from the transcoder-generated message shape (CRuby answers
+    // false there — string input is always "complete"). A freshly
+    // `.new`ed error, whose message matches neither shape, answers
+    // nil like CRuby.
+    if let Some(v) = globals
         .store
         .get_ivar(lfp.self_val(), IdentId::get_id("@incomplete_input"))
-        .unwrap_or(Value::nil()))
+    {
+        return Ok(v);
+    }
+    if let Some(msg) = enc_err_message(globals, lfp.self_val()) {
+        if msg.starts_with("incomplete \"") {
+            return Ok(Value::bool(true));
+        }
+        if msg.contains("invalid byte sequence") || msg.contains("\" followed by \"") {
+            return Ok(Value::bool(false));
+        }
+    }
+    Ok(Value::nil())
 }
 
 ///
