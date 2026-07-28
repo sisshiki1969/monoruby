@@ -356,6 +356,14 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         enc_err_incomplete_input_p,
         0,
     );
+    globals.define_builtin_func(invalid_byte.id(), "error_bytes", enc_err_error_bytes, 0);
+    globals.define_builtin_func(
+        invalid_byte.id(),
+        "readagain_bytes",
+        enc_err_readagain_bytes,
+        0,
+    );
+    globals.define_builtin_func(undef_conv.id(), "error_bytes", enc_err_error_bytes, 0);
 
     // Encoding class methods
     globals.define_builtin_class_func(enc.id(), "default_external", enc_default_external, 0);
@@ -420,12 +428,17 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         converter_asciicompat_encoding,
         1,
     );
-    globals.define_builtin_class_func(
+    globals.define_builtin_class_func_with_kw(
         converter.id(),
         "search_convpath",
         converter_search_convpath,
         2,
+        3,
+        false,
+        &[],
+        true,
     );
+    globals.define_builtin_func(converter.id(), "convpath", converter_convpath, 0);
     globals.define_builtin_func(
         converter.id(),
         "source_encoding",
@@ -458,7 +471,7 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         0,
     );
     globals.define_builtin_func(converter.id(), "last_error", converter_last_error, 0);
-    globals.define_builtin_func(converter.id(), "putback", converter_putback, 0);
+    globals.define_builtin_func_with(converter.id(), "putback", converter_putback, 0, 1, false);
     globals.define_builtin_func(converter.id(), "==", converter_eq, 1);
     // `primitive_convert(src, dst, dst_offset = 0, dst_bytesize = nil, opts = {})`
     // — chunked variant of `convert` that mutates `src` and `dst`
@@ -1911,6 +1924,14 @@ const CONVERTER_ERRINFO_IVAR: &str = "/converter_errinfo";
 /// Prepended to the next call's source bytes so streaming works
 /// across multiple calls. Stored as a binary String value.
 const CONVERTER_PENDING_IVAR: &str = "/converter_pending";
+/// Read-again bytes buffered by an `:invalid_byte_sequence` outcome,
+/// returned (and drained) by `Encoding::Converter#putback`.
+const CONVERTER_READAGAIN_IVAR: &str = "/converter_readagain";
+/// Structured data of the last conversion error (for `#last_error` /
+/// the error-object attribute readers): `[kind, msg, error_bytes,
+/// readagain_bytes, stage_src, stage_dst]`, or absent/nil when the
+/// last outcome was not an error.
+const CONVERTER_LAST_ERROR_IVAR: &str = "/converter_last_error";
 /// Conversion flags configured at construction (`invalid: :replace`
 /// / `undef: :replace` kwargs, or the `INVALID_REPLACE` /
 /// `UNDEF_REPLACE` Integer-flag bits). Stored as a Fixnum:
@@ -1939,6 +1960,9 @@ fn converter_transcode_opts(globals: &Globals, recv: Value) -> TranscodeOpts {
     {
         opts.invalid_replace = n & CONVERTER_FLAG_INVALID_REPLACE != 0;
         opts.undef_replace = n & CONVERTER_FLAG_UNDEF_REPLACE != 0;
+        // The newline-decorator bits are kept in the flags ivar for
+        // `#convpath`; wiring them into the transcode itself arrives
+        // with the TranscodeOpts decorator support (PR #1018).
     }
     opts
 }
@@ -2135,6 +2159,8 @@ fn converter_new(
         if n & 0x0000_0020 != 0 {
             flags |= CONVERTER_FLAG_UNDEF_REPLACE;
         }
+        // Newline decorator bits pass through verbatim.
+        flags |= n & (0x0000_0100 | 0x0000_1000 | 0x0000_2000);
     }
     if let Some(hash) = opts_hash {
         {
@@ -2147,6 +2173,17 @@ fn converter_new(
                 && v.try_symbol().map(|s| s.get_name() == "replace") == Some(true)
             {
                 flags |= CONVERTER_FLAG_UNDEF_REPLACE;
+            }
+            for (key, bit) in [
+                ("universal_newline", 0x0000_0100i64),
+                ("crlf_newline", 0x0000_1000),
+                ("cr_newline", 0x0000_2000),
+            ] {
+                if let Some(v) = find_hash_value_for_symbol(&hash, key)
+                    && v.as_bool()
+                {
+                    flags |= bit;
+                }
             }
             if let Some(rep) = find_hash_value_for_symbol(&hash, "replace") {
                 // `replace: nil` → keep the destination's default
@@ -2341,23 +2378,69 @@ fn converter_convert(
     // Honour the configured replacement + `invalid:`/`undef:
     // :replace` flags (a user-set `#replacement=` too).
     let opts = converter_transcode_opts(globals, recv);
-    let out = transcode_bytes_with_opts(&bytes, src, dst, &opts, &globals.store)?;
-    // A successful `convert` leaves the converter "drained":
-    // `primitive_errinfo` reports `[:source_buffer_empty, nil×4]`
-    // (overwriting any stale tuple from a prior `primitive_convert`).
-    let errinfo = Value::array_from_iter(
-        [
-            Value::symbol_from_str("source_buffer_empty"),
-            Value::nil(),
-            Value::nil(),
-            Value::nil(),
-            Value::nil(),
-        ]
-        .into_iter(),
-    );
-    let _ = globals
+    if opts.invalid_replace || opts.undef_replace {
+        // Replacement mode cannot error on content — the single-shot
+        // transcoder suffices.
+        let out = transcode_bytes_with_opts(&bytes, src, dst, &opts, &globals.store)?;
+        let meta = ErrMeta::default();
+        store_conversion_outcome(
+            globals,
+            recv,
+            StreamConvertResult::SourceBufferEmpty,
+            &meta,
+            src,
+            dst,
+        );
+        return Ok(Value::string_from_inner(
+            crate::value::RStringInner::from_encoding_scanned(&out, dst),
+        ));
+    }
+    // Streamed conversion: prepend bytes buffered by a previous
+    // partial call, convert with `partial_input` semantics (a
+    // trailing incomplete character is buffered, not an error), and
+    // raise — leaving `primitive_errinfo` / `last_error` /
+    // `putback` observable — on invalid / undefined input.
+    let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
+    let mut input: Vec<u8> = globals
         .store
-        .set_ivar(recv, IdentId::get_id(CONVERTER_ERRINFO_IVAR), errinfo);
+        .get_ivar(recv, pending_id)
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    input.extend_from_slice(&bytes);
+    let (result, consumed, out, meta) = stream_convert(&input, src, dst, None, true, &opts);
+    match result {
+        StreamConvertResult::Finished
+        | StreamConvertResult::SourceBufferEmpty
+        | StreamConvertResult::DestinationBufferFull => {
+            let tail = &input[consumed..];
+            let pending_val = if tail.is_empty() {
+                Value::nil()
+            } else {
+                binary_string(tail)
+            };
+            let _ = globals.store.set_ivar(recv, pending_id, pending_val);
+            store_conversion_outcome(
+                globals,
+                recv,
+                StreamConvertResult::SourceBufferEmpty,
+                &ErrMeta::default(),
+                src,
+                dst,
+            );
+        }
+        _ => {
+            let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
+            let msg = store_conversion_outcome(globals, recv, result, &meta, src, dst)
+                .unwrap_or_default();
+            return Err(
+                if matches!(result, StreamConvertResult::UndefinedConversion) {
+                    MonorubyErr::undefined_conversion_error(&globals.store, msg)
+                } else {
+                    MonorubyErr::invalid_byte_sequence_error(&globals.store, msg)
+                },
+            );
+        }
+    }
     Ok(Value::string_from_inner(
         crate::value::RStringInner::from_encoding_scanned(&out, dst),
     ))
@@ -2385,7 +2468,33 @@ fn converter_finish(
         IdentId::get_id(CONVERTER_FINISHED_IVAR),
         Value::bool(true),
     );
+    let src_enc = converter_get_src(globals, recv);
     let dst = converter_get_dst(globals, recv);
+    // Input buffered by a partial `#convert` that never completed is an
+    // incomplete-input error at finish time (CRuby).
+    let pending_id = IdentId::get_id(CONVERTER_PENDING_IVAR);
+    let pending: Vec<u8> = globals
+        .store
+        .get_ivar(recv, pending_id)
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    if !pending.is_empty() {
+        let _ = globals.store.set_ivar(recv, pending_id, Value::nil());
+        let meta = ErrMeta {
+            error_bytes: pending,
+            readagain_bytes: vec![],
+        };
+        let msg = store_conversion_outcome(
+            globals,
+            recv,
+            StreamConvertResult::IncompleteInput,
+            &meta,
+            src_enc,
+            dst,
+        )
+        .unwrap_or_default();
+        return Err(MonorubyErr::invalid_byte_sequence_error(&globals.store, msg));
+    }
     Ok(Value::string_from_inner(
         crate::value::RStringInner::from_encoding_scanned(b"", dst),
     ))
@@ -2465,6 +2574,17 @@ impl StreamConvertResult {
 ///   re-fed on the next call.
 /// - `out_bytes` — bytes to append to the destination buffer at
 ///   `dst_offset`.
+/// Byte-level detail of a conversion error, for `primitive_errinfo`,
+/// `putback` and `last_error`.
+#[derive(Debug, Clone, Default)]
+struct ErrMeta {
+    /// The bytes that are definitely part of the erroneous sequence.
+    error_bytes: Vec<u8>,
+    /// Bytes consumed while detecting the error that should be
+    /// re-examined (CRuby's read-again bytes).
+    readagain_bytes: Vec<u8>,
+}
+
 fn stream_convert(
     src_bytes: &[u8],
     src_enc: crate::value::Encoding,
@@ -2472,7 +2592,7 @@ fn stream_convert(
     max_dst_bytes: Option<usize>,
     partial_input: bool,
     opts: &TranscodeOpts,
-) -> (StreamConvertResult, usize, Vec<u8>) {
+) -> (StreamConvertResult, usize, Vec<u8>, ErrMeta) {
     use crate::value::Encoding as E;
     // Identity-copy fast path: only safe when the *source* is
     // known-valid for its declared encoding. Same-encoding pairs
@@ -2489,7 +2609,7 @@ fn stream_convert(
         } else {
             StreamConvertResult::Finished
         };
-        return (result, limit, src_bytes[..limit].to_vec());
+        return (result, limit, src_bytes[..limit].to_vec(), ErrMeta::default());
     }
     // US-ASCII / ASCII-8BIT destination: `encoding_rs` has no
     // encoder for these. Decode the source to UTF-8 *without*
@@ -2516,13 +2636,21 @@ fn stream_convert(
                 } else if opts.undef_replace {
                     out.extend_from_slice(repl.as_bytes());
                 } else {
-                    return (StreamConvertResult::UndefinedConversion, src_bytes.len(), out);
+                    return (
+                        StreamConvertResult::UndefinedConversion,
+                        src_bytes.len(),
+                        out,
+                        ErrMeta {
+                            error_bytes: ch.to_string().into_bytes(),
+                            readagain_bytes: vec![],
+                        },
+                    );
                 }
                 if let Some(max) = max_dst_bytes
                     && out.len() > max
                 {
                     out.truncate(max);
-                    return (StreamConvertResult::DestinationBufferFull, src_bytes.len(), out);
+                    return (StreamConvertResult::DestinationBufferFull, src_bytes.len(), out, ErrMeta::default());
                 }
             }};
         }
@@ -2546,6 +2674,7 @@ fn stream_convert(
                                 StreamConvertResult::InvalidByteSequence,
                                 src_bytes.len(),
                                 out,
+                                ErrMeta::default(),
                             );
                         }
                         out.extend_from_slice(repl.as_bytes());
@@ -2569,11 +2698,11 @@ fn stream_convert(
                     }
                 }
                 Err(_) => {
-                    return (StreamConvertResult::InvalidByteSequence, src_bytes.len(), out);
+                    return (StreamConvertResult::InvalidByteSequence, src_bytes.len(), out, ErrMeta::default());
                 }
             }
         }
-        return (StreamConvertResult::Finished, src_bytes.len(), out);
+        return (StreamConvertResult::Finished, src_bytes.len(), out, ErrMeta::default());
     }
     // Resolve the encoding_rs encoders. The Converter constructor
     // already validated this pair, so the lookups should succeed —
@@ -2582,10 +2711,20 @@ fn stream_convert(
         // BINARY → ascii-compat with non-ASCII bytes → undefined
         // (matches `transcode_bytes_with_opts`'s behaviour).
         if src_enc == E::Ascii8 && dst_enc.is_ascii_compatible() && !all_ascii {
-            return (StreamConvertResult::UndefinedConversion, 1, Vec::new());
+            return (
+                StreamConvertResult::UndefinedConversion,
+                1,
+                Vec::new(),
+                ErrMeta::default(),
+            );
         }
         // Anything else falls through as a no-op pass.
-        return (StreamConvertResult::Finished, src_bytes.len(), src_bytes.to_vec());
+        return (
+            StreamConvertResult::Finished,
+            src_bytes.len(),
+            src_bytes.to_vec(),
+            ErrMeta::default(),
+        );
     };
 
     let mut decoder = src_rs.new_decoder();
@@ -2629,7 +2768,7 @@ fn stream_convert(
         // variable number of bytes per codepoint, so we re-feed
         // src incrementally to a probe decoder until it produces
         // exactly the matching utf8 prefix.
-        (_, EncoderResult::Unmappable(_c)) => {
+        (_, EncoderResult::Unmappable(c)) => {
             // encoding_rs's `utf8_read` already advances *past* the
             // unmappable codepoint (the encoder consumes the bytes
             // and then reports the char it couldn't map). So
@@ -2641,6 +2780,12 @@ fn stream_convert(
                 StreamConvertResult::UndefinedConversion,
                 src_through_error.unwrap_or(src_read),
                 out_buf,
+                ErrMeta {
+                    // The erroneous bytes are reported in the stage
+                    // source encoding — the UTF-8 pivot.
+                    error_bytes: c.to_string().into_bytes(),
+                    readagain_bytes: vec![],
+                },
             )
         }
         // Output buffer hit its cap. Caller should grow it and call
@@ -2653,12 +2798,25 @@ fn stream_convert(
                 StreamConvertResult::DestinationBufferFull,
                 src_read,
                 out_buf,
+                ErrMeta::default(),
             )
         }
         // Decoder hit an invalid sequence in the middle of the input.
         // `bad_len` is the length of the malformed run; the decoder
         // already advanced past it as part of `src_read`.
-        (DecoderResult::Malformed(_, _), EncoderResult::InputEmpty) => {
+        (DecoderResult::Malformed(mal_len, extra), EncoderResult::InputEmpty) => {
+            // `Malformed(m, e)`: the erroneous run is the `m` bytes
+            // ending `e` bytes before the decoder's read position; the
+            // trailing `e` bytes were consumed to detect the error and
+            // are CRuby's read-again bytes.
+            let mal_len = mal_len as usize;
+            let extra = extra as usize;
+            let err_start = src_read.saturating_sub(extra + mal_len);
+            let mut meta = ErrMeta {
+                error_bytes: src_bytes[err_start..src_read - extra].to_vec(),
+                readagain_bytes: src_bytes[src_read - extra..src_read].to_vec(),
+            };
+            let mut consumed = src_read;
             // Distinguish "incomplete tail" from "junk in middle":
             // if there are bytes after the malformed run, it's junk;
             // otherwise the partial_input flag picks between
@@ -2674,20 +2832,64 @@ fn stream_convert(
             } else {
                 StreamConvertResult::InvalidByteSequence
             };
-            (kind, src_read, out_buf)
+            // encoding_rs stops *before* the byte(s) that disproved
+            // the sequence; CRuby reads one more coding unit and
+            // reports it as the read-again bytes (`"\xF1" followed by
+            // "a" on UTF-8`). Pull that unit in ourselves — but only
+            // when the malformed run is a plausible prefix of a longer
+            // sequence (a fresh decoder fed just those bytes is still
+            // waiting for more). An inherently invalid byte like a
+            // lone `\x80` on UTF-8 needs no disproving byte, and CRuby
+            // leaves the following bytes in src with empty read-again.
+            let is_plausible_prefix = || {
+                let mut probe = src_rs.new_decoder();
+                let mut probe_dst = vec![0u8; meta.error_bytes.len() * 4 + 16];
+                let (r, read, _) = probe.decode_to_utf8_without_replacement(
+                    &meta.error_bytes,
+                    &mut probe_dst,
+                    false,
+                );
+                matches!(r, DecoderResult::InputEmpty) && read == meta.error_bytes.len()
+            };
+            if matches!(kind, StreamConvertResult::InvalidByteSequence)
+                && meta.readagain_bytes.is_empty()
+                && consumed < src_bytes.len()
+                && is_plausible_prefix()
+            {
+                let unit = if src_rs.name().starts_with("UTF-16") { 2 } else { 1 };
+                let take = unit.min(src_bytes.len() - consumed);
+                meta.readagain_bytes = src_bytes[consumed..consumed + take].to_vec();
+                consumed += take;
+            }
+            (kind, consumed, out_buf, meta)
         }
         // Decoder finished cleanly. With `last=false` (partial_input
         // mode) report source_buffer_empty so the caller knows
         // they may feed more; otherwise it's a clean finish.
         (DecoderResult::InputEmpty, EncoderResult::InputEmpty) => {
             if !last {
+                // The decoder may be holding a trailing incomplete
+                // sequence in its internal state, which we do not keep
+                // across calls. Re-probe with `last = true` to find
+                // where that tail starts so the caller can buffer it.
+                let mut consumed = src_read;
+                let mut probe = src_rs.new_decoder();
+                let mut probe_dst = vec![0u8; src_bytes.len() * 4 + 16];
+                let (probe_res, probe_read, _) =
+                    probe.decode_to_utf8_without_replacement(src_bytes, &mut probe_dst, true);
+                if let DecoderResult::Malformed(m2, e2) = probe_res
+                    && probe_read == src_bytes.len()
+                {
+                    consumed = probe_read.saturating_sub(m2 as usize + e2 as usize);
+                }
                 (
                     StreamConvertResult::SourceBufferEmpty,
-                    src_read,
+                    consumed,
                     out_buf,
+                    ErrMeta::default(),
                 )
             } else {
-                (StreamConvertResult::Finished, src_read, out_buf)
+                (StreamConvertResult::Finished, src_read, out_buf, ErrMeta::default())
             }
         }
         // Decoder ran out of room in the UTF-8 staging buffer. Our
@@ -2698,6 +2900,7 @@ fn stream_convert(
             StreamConvertResult::DestinationBufferFull,
             src_read,
             out_buf,
+            ErrMeta::default(),
         ),
     }
 }
@@ -2768,6 +2971,245 @@ fn probe_incomplete_tail(
     let _ = probe.decode_to_utf8_without_replacement(&src_bytes[..end], &mut probe_dst, false);
     let (probe_result, _, _) = probe.decode_to_utf8_without_replacement(&[], &mut probe_dst, false);
     matches!(probe_result, encoding_rs::DecoderResult::InputEmpty)
+}
+
+
+/// Quote a byte run CRuby-style for conversion-error messages:
+/// printable ASCII stays literal, everything else becomes `\xHH`.
+fn quote_error_bytes(bytes: &[u8]) -> String {
+    let mut out = String::from("\"");
+    for &b in bytes {
+        if (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("\\x{:02X}", b));
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The (stage-source, stage-destination) encoding names reported for a
+/// conversion error: decode-stage errors fail into the UTF-8 pivot
+/// unless the source already is UTF-8-compatible; encode-stage errors
+/// fail out of the pivot.
+fn error_stage_names(
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+    decode_stage: bool,
+) -> (String, String) {
+    if decode_stage {
+        let stage_dst = if src_enc.is_utf8_compatible() {
+            dst_enc.name().to_string()
+        } else {
+            "UTF-8".to_string()
+        };
+        (src_enc.name().to_string(), stage_dst)
+    } else {
+        let stage_src = if src_enc.is_utf8_compatible() {
+            src_enc.name().to_string()
+        } else {
+            "UTF-8".to_string()
+        };
+        (stage_src, dst_enc.name().to_string())
+    }
+}
+
+/// Build the CRuby-compatible message for a conversion error.
+fn conversion_error_message(
+    result: StreamConvertResult,
+    meta: &ErrMeta,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> String {
+    let (stage_src, stage_dst) = match result {
+        StreamConvertResult::UndefinedConversion => error_stage_names(src_enc, dst_enc, false),
+        _ => error_stage_names(src_enc, dst_enc, true),
+    };
+    match result {
+        StreamConvertResult::UndefinedConversion => {
+            let cp = std::str::from_utf8(&meta.error_bytes)
+                .ok()
+                .and_then(|s| s.chars().next())
+                .map(|c| c as u32)
+                .unwrap_or(0);
+            if src_enc.is_utf8_compatible() {
+                format!("U+{:04X} from {} to {}", cp, stage_src, stage_dst)
+            } else {
+                // Two-hop path: show the whole conversion chain.
+                format!(
+                    "U+{:04X} to {} in conversion from {} to UTF-8 to {}",
+                    cp,
+                    stage_dst,
+                    src_enc.name(),
+                    dst_enc.name()
+                )
+            }
+        }
+        StreamConvertResult::IncompleteInput => {
+            format!(
+                "incomplete {} on {}",
+                quote_error_bytes(&meta.error_bytes),
+                stage_src
+            )
+        }
+        _ => {
+            if meta.readagain_bytes.is_empty() {
+                format!(
+                    "invalid byte sequence {} on {}",
+                    quote_error_bytes(&meta.error_bytes),
+                    stage_src
+                )
+            } else {
+                format!(
+                    "{} followed by {} on {}",
+                    quote_error_bytes(&meta.error_bytes),
+                    quote_error_bytes(&meta.readagain_bytes),
+                    stage_src
+                )
+            }
+        }
+    }
+}
+
+/// A BINARY-tagged String value from raw bytes.
+fn binary_string(bytes: &[u8]) -> Value {
+    let mut s = crate::value::RStringInner::from_encoding_scanned(bytes, crate::value::Encoding::Ascii8);
+    s.set_encoding(crate::value::Encoding::Ascii8);
+    Value::string_from_inner(s)
+}
+
+/// Record the outcome of a conversion step on the converter object:
+/// the `primitive_errinfo` tuple, the read-again buffer, and the
+/// structured last-error data. Returns the error message when the
+/// outcome was an error (for the raising callers).
+fn store_conversion_outcome(
+    globals: &mut Globals,
+    recv: Value,
+    result: StreamConvertResult,
+    meta: &ErrMeta,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> Option<String> {
+    let is_error = matches!(
+        result,
+        StreamConvertResult::InvalidByteSequence
+            | StreamConvertResult::UndefinedConversion
+            | StreamConvertResult::IncompleteInput
+    );
+    let errinfo = if is_error {
+        let decode_stage = !matches!(result, StreamConvertResult::UndefinedConversion);
+        let (stage_src, stage_dst) = error_stage_names(src_enc, dst_enc, decode_stage);
+        Value::array_from_iter(
+            [
+                Value::symbol_from_str(result.symbol_name()),
+                Value::string(stage_src),
+                Value::string(stage_dst),
+                binary_string(&meta.error_bytes),
+                binary_string(&meta.readagain_bytes),
+            ]
+            .into_iter(),
+        )
+    } else {
+        Value::array_from_iter(
+            [
+                Value::symbol_from_str(result.symbol_name()),
+                Value::nil(),
+                Value::nil(),
+                Value::nil(),
+                Value::nil(),
+            ]
+            .into_iter(),
+        )
+    };
+    let _ = globals
+        .store
+        .set_ivar(recv, IdentId::get_id(CONVERTER_ERRINFO_IVAR), errinfo);
+    // Read-again buffer, for `#putback`.
+    let ra = if matches!(result, StreamConvertResult::InvalidByteSequence) {
+        binary_string(&meta.readagain_bytes)
+    } else {
+        Value::nil()
+    };
+    let _ = globals
+        .store
+        .set_ivar(recv, IdentId::get_id(CONVERTER_READAGAIN_IVAR), ra);
+    // Structured last-error data, for `#last_error`.
+    if is_error {
+        let msg = conversion_error_message(result, meta, src_enc, dst_enc);
+        let decode_stage = !matches!(result, StreamConvertResult::UndefinedConversion);
+        let (stage_src, stage_dst) = error_stage_names(src_enc, dst_enc, decode_stage);
+        let data = Value::array_from_iter(
+            [
+                Value::symbol_from_str(result.symbol_name()),
+                Value::string(msg.clone()),
+                binary_string(&meta.error_bytes),
+                binary_string(&meta.readagain_bytes),
+                Value::string(stage_src),
+                Value::string(stage_dst),
+            ]
+            .into_iter(),
+        );
+        let _ = globals
+            .store
+            .set_ivar(recv, IdentId::get_id(CONVERTER_LAST_ERROR_IVAR), data);
+        Some(msg)
+    } else {
+        let _ = globals
+            .store
+            .set_ivar(recv, IdentId::get_id(CONVERTER_LAST_ERROR_IVAR), Value::nil());
+        None
+    }
+}
+
+/// Materialise the stored last-error data into a fresh exception
+/// object with the attribute ivars set.
+fn build_last_error_object(globals: &mut Globals, recv: Value) -> Value {
+    let Some(data) = globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_LAST_ERROR_IVAR))
+        .filter(|v| !v.is_nil())
+    else {
+        return Value::nil();
+    };
+    let ary = data.as_array();
+    let kind = ary[0];
+    let msg = ary[1].is_str().map(|s| s.to_string()).unwrap_or_default();
+    let class_name = if kind == Value::symbol_from_str("undefined_conversion") {
+        "UndefinedConversionError"
+    } else {
+        "InvalidByteSequenceError"
+    };
+    let Some(enc_const) = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::ENCODING)
+    else {
+        return Value::nil();
+    };
+    let Some(cls) = globals
+        .store
+        .get_constant_noautoload(enc_const.as_class_id(), IdentId::get_id(class_name))
+    else {
+        return Value::nil();
+    };
+    let obj = Value::new_exception_from(msg, cls.as_class_id());
+    let _ = globals.store.set_ivar(obj, IdentId::get_id("@error_bytes"), ary[2]);
+    let _ = globals
+        .store
+        .set_ivar(obj, IdentId::get_id("@readagain_bytes"), ary[3]);
+    let incomplete = kind == Value::symbol_from_str("incomplete_input");
+    let _ = globals.store.set_ivar(
+        obj,
+        IdentId::get_id("@incomplete_input"),
+        Value::bool(incomplete),
+    );
+    let _ = globals
+        .store
+        .set_ivar(obj, IdentId::get_id("@source_encoding_name"), ary[4]);
+    let _ = globals
+        .store
+        .set_ivar(obj, IdentId::get_id("@destination_encoding_name"), ary[5]);
+    obj
 }
 
 ///
@@ -2902,7 +3344,7 @@ fn converter_primitive_convert(
     let dst_enc = converter_get_dst(globals, recv);
 
     let conv_opts = converter_transcode_opts(globals, recv);
-    let (result, src_consumed, out_bytes) = stream_convert(
+    let (result, src_consumed, out_bytes, meta) = stream_convert(
         &src_bytes,
         src_enc,
         dst_enc,
@@ -2973,47 +3415,8 @@ fn converter_primitive_convert(
     let new_dst = crate::value::RStringInner::from_encoding_scanned(&new_dst_bytes, dst_enc);
     dst_arg.replace_with_inner(new_dst);
 
-    // Stash the errinfo tuple for `Encoding::Converter#primitive_errinfo`.
-    // CRuby's non-error results (`:source_buffer_empty`, `:finished`,
-    // `:destination_buffer_full`) carry only the state symbol — the
-    // four trailing fields are `nil`. Error results keep the
-    // src/dst names; the precise erroneous / read-again byte runs
-    // (and the transcoding-path leg encodings) are a separate
-    // follow-up — left as empty strings here, unchanged.
-    let is_error = matches!(
-        result,
-        StreamConvertResult::InvalidByteSequence
-            | StreamConvertResult::UndefinedConversion
-            | StreamConvertResult::IncompleteInput
-    );
-    let errinfo = if is_error {
-        Value::array_from_iter(
-            [
-                Value::symbol_from_str(result.symbol_name()),
-                Value::string_from_str(src_enc.name()),
-                Value::string_from_str(dst_enc.name()),
-                Value::string_from_str(""),
-                Value::string_from_str(""),
-            ]
-            .into_iter(),
-        )
-    } else {
-        Value::array_from_iter(
-            [
-                Value::symbol_from_str(result.symbol_name()),
-                Value::nil(),
-                Value::nil(),
-                Value::nil(),
-                Value::nil(),
-            ]
-            .into_iter(),
-        )
-    };
-    let _ = globals.store.set_ivar(
-        recv,
-        IdentId::get_id(CONVERTER_ERRINFO_IVAR),
-        errinfo,
-    );
+    // Record errinfo / read-again / last-error state.
+    store_conversion_outcome(globals, recv, result, &meta, src_enc, dst_enc);
 
     Ok(Value::symbol_from_str(result.symbol_name()))
 }
@@ -3062,19 +3465,19 @@ fn converter_primitive_errinfo(
 /// ### Encoding::Converter#last_error
 /// - last_error -> Exception | nil
 ///
-/// CRuby returns the most recent `Encoding::*Error` raised by
-/// `primitive_convert`. monoruby's `convert` raises immediately
-/// on errors instead of stashing them, so there's never a stored
-/// last-error to report — return `nil`.
+/// Returns the most recent conversion error as a fresh exception
+/// object (with `error_bytes` / `readagain_bytes` /
+/// `incomplete_input?` readable), or `nil` when the last outcome was
+/// not an error.
 ///
 #[monoruby_builtin]
 fn converter_last_error(
     _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
+    globals: &mut Globals,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::nil())
+    Ok(build_last_error_object(globals, lfp.self_val()))
 }
 
 ///
@@ -3082,20 +3485,41 @@ fn converter_last_error(
 /// - putback -> String
 /// - putback(max_numbytes) -> String
 ///
-/// CRuby returns the bytes left in the converter's input buffer
-/// after a `primitive_convert` step. monoruby's `convert` is
-/// single-shot, so the buffer is always drained — return an
-/// empty BINARY string to match CRuby's "nothing left" answer.
+/// Returns (and drains) the read-again bytes buffered by an
+/// `:invalid_byte_sequence` outcome, tagged with the converter's
+/// source encoding. With an integer argument, at most that many
+/// bytes are returned.
 ///
 #[monoruby_builtin]
 fn converter_putback(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut s = crate::value::RStringInner::from_string_scanned(String::new());
-    s.set_encoding(crate::value::Encoding::Ascii8);
+    let recv = lfp.self_val();
+    let ra_id = IdentId::get_id(CONVERTER_READAGAIN_IVAR);
+    let buffered: Vec<u8> = globals
+        .store
+        .get_ivar(recv, ra_id)
+        .and_then(|v| v.is_rstring_inner().map(|s| s.as_bytes().to_vec()))
+        .unwrap_or_default();
+    let take = match lfp.try_arg(0) {
+        Some(v) if !v.is_nil() => {
+            (v.coerce_to_int_i64(vm, globals)?.max(0) as usize).min(buffered.len())
+        }
+        _ => buffered.len(),
+    };
+    let (out, rest) = buffered.split_at(take);
+    let rest_val = if rest.is_empty() {
+        Value::nil()
+    } else {
+        binary_string(rest)
+    };
+    let _ = globals.store.set_ivar(recv, ra_id, rest_val);
+    let src_enc = converter_get_src(globals, recv);
+    let mut s = crate::value::RStringInner::from_encoding_scanned(out, src_enc);
+    s.set_encoding(src_enc);
     Ok(Value::string_from_inner(s))
 }
 
@@ -3189,8 +3613,70 @@ fn converter_search_convpath(
     let src = resolve_dst_encoding(vm, globals, lfp.arg(0))?;
     let dst = resolve_dst_encoding(vm, globals, lfp.arg(1))?;
     validate_converter_pair(src, dst, &globals.store)?;
-    let pair = Value::array2(encoding_value(globals, src), encoding_value(globals, dst));
-    Ok(Value::array1(pair))
+    // The optional third argument / kwargs carry decorator options
+    // (the kwargs hash may land in either trailing slot).
+    let crlf = (2..=3)
+        .filter_map(|i| lfp.try_arg(i))
+        .find_map(|v| v.try_hash_ty())
+        .and_then(|h| find_hash_value_for_symbol(&h, "crlf_newline"))
+        .map(|v| v.as_bool())
+        .unwrap_or(false);
+    Ok(build_convpath(globals, src, dst, crlf))
+}
+
+/// The conversion path CRuby reports: encodings convert directly to /
+/// from UTF-8; everything else pivots through it. Decorators append
+/// their name as a trailing String element.
+fn build_convpath(
+    globals: &mut Globals,
+    src: crate::value::Encoding,
+    dst: crate::value::Encoding,
+    crlf: bool,
+) -> Value {
+    use crate::value::Encoding as E;
+    let mut elems: Vec<Value> = vec![];
+    if src == E::Utf8 || dst == E::Utf8 || src == dst {
+        elems.push(Value::array2(
+            encoding_value(globals, src),
+            encoding_value(globals, dst),
+        ));
+    } else {
+        elems.push(Value::array2(
+            encoding_value(globals, src),
+            encoding_value(globals, E::Utf8),
+        ));
+        elems.push(Value::array2(
+            encoding_value(globals, E::Utf8),
+            encoding_value(globals, dst),
+        ));
+    }
+    if crlf {
+        elems.push(Value::string_from_str("crlf_newline"));
+    }
+    Value::array_from_vec(elems)
+}
+
+///
+/// ### Encoding::Converter#convpath
+/// - convpath -> Array
+///
+#[monoruby_builtin]
+fn converter_convpath(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let recv = lfp.self_val();
+    let src = converter_get_src(globals, recv);
+    let dst = converter_get_dst(globals, recv);
+    let crlf = globals
+        .store
+        .get_ivar(recv, IdentId::get_id(CONVERTER_FLAGS_IVAR))
+        .and_then(|v| v.try_fixnum())
+        .map(|n| n & 0x1000 != 0)
+        .unwrap_or(false);
+    Ok(build_convpath(globals, src, dst, crlf))
 }
 
 ///
@@ -3295,6 +3781,13 @@ fn enc_err_source_encoding_name(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    if let Some(v) = globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("@source_encoding_name"))
+        .filter(|v| !v.is_nil())
+    {
+        return Ok(v);
+    }
     if let Some(msg) = enc_err_message(globals, lfp.self_val())
         && let Some((src, _)) = parse_enc_err_pair(&msg)
     {
@@ -3310,6 +3803,13 @@ fn enc_err_destination_encoding_name(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    if let Some(v) = globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("@destination_encoding_name"))
+        .filter(|v| !v.is_nil())
+    {
+        return Ok(v);
+    }
     if let Some(msg) = enc_err_message(globals, lfp.self_val())
         && let Some((_, dst)) = parse_enc_err_pair(&msg)
     {
@@ -3379,18 +3879,71 @@ fn enc_err_error_char(
 }
 
 /// `Encoding::InvalidByteSequenceError#incomplete_input?` —
-/// whether the bad bytes were a (partial) leading prefix of a
-/// valid sequence rather than an outright invalid byte. monoruby's
-/// transcoder doesn't track partial-vs-complete; report `false`
-/// to match the more conservative answer.
+/// whether the error was caused by input ending mid-sequence
+/// (a partial leading prefix of a valid sequence) rather than an
+/// outright invalid byte.
 #[monoruby_builtin]
 fn enc_err_incomplete_input_p(
     _vm: &mut Executor,
-    _globals: &mut Globals,
-    _lfp: Lfp,
+    globals: &mut Globals,
+    lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    Ok(Value::bool(false))
+    // Converter-produced errors carry the flag as an ivar. Errors
+    // raised from `String#encode` &c. are plain messages; classify
+    // from the transcoder-generated message shape (CRuby answers
+    // false there — string input is always "complete"). A freshly
+    // `.new`ed error, whose message matches neither shape, answers
+    // nil like CRuby.
+    if let Some(v) = globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("@incomplete_input"))
+    {
+        return Ok(v);
+    }
+    if let Some(msg) = enc_err_message(globals, lfp.self_val()) {
+        if msg.starts_with("incomplete \"") {
+            return Ok(Value::bool(true));
+        }
+        if msg.contains("invalid byte sequence") || msg.contains("\" followed by \"") {
+            return Ok(Value::bool(false));
+        }
+    }
+    Ok(Value::nil())
+}
+
+///
+/// ### Encoding::InvalidByteSequenceError#error_bytes
+/// - error_bytes -> String | nil
+///
+#[monoruby_builtin]
+fn enc_err_error_bytes(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("@error_bytes"))
+        .unwrap_or(Value::nil()))
+}
+
+///
+/// ### Encoding::InvalidByteSequenceError#readagain_bytes
+/// - readagain_bytes -> String | nil
+///
+#[monoruby_builtin]
+fn enc_err_readagain_bytes(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("@readagain_bytes"))
+        .unwrap_or(Value::nil()))
 }
 
 ///
@@ -4273,6 +4826,15 @@ mod tests {
     }
 
     #[test]
+    fn converter_streaming_state() {
+        // primitive_convert error reporting: errinfo tuples, read-again
+        // buffering (putback), last_error objects with byte attributes.
+        crate::tests::run_test_once(
+            r##"(r=[]; ec=Encoding::Converter.new("utf-8","iso-8859-1"); r << ec.primitive_errinfo << ec.last_error; r << ec.primitive_convert(+"\xf1abcd", +""); r << ec.primitive_errinfo; e=ec.last_error; r << e.class << [e.error_bytes, e.readagain_bytes, e.incomplete_input?]; r << ec.primitive_convert("ok".dup.force_encoding("utf-8"), +"") << ec.primitive_errinfo << ec.last_error; ec2=Encoding::Converter.new("EUC-JP","ISO-8859-1"); s=+"abc\xa1def"; d=+""; r << ec2.primitive_convert(s,d,nil,10) << [s,d] << ec2.putback << ec2.putback; s=ec2.putback+s; r << ec2.primitive_convert(s,d,nil,10) << [s,d]; ec3=Encoding::Converter.new("utf-16le","iso-8859-1"); s3=+"\x00\xd8\x61\x00"; r << ec3.primitive_convert(s3,+"") << ec3.primitive_errinfo.map{|x| x.is_a?(String) ? x.bytes : x} << ec3.putback(2).bytes; ec4=Encoding::Converter.new("EUC-JP","ISO-8859-1"); r << ec4.primitive_convert(+"\xa4",+"",nil,10) << ec4.primitive_errinfo << ec4.last_error.class << ec4.last_error.incomplete_input?; r)"##,
+        );
+    }
+
+    #[test]
     fn encode_newline_decorators() {
         crate::tests::run_test_once(
             r##"(a="a\nb\nc".encode("UTF-8", crlf_newline: true); b="a\nb".encode("UTF-8", cr_newline: true); c="a\r\nb\rc\n".encode("UTF-8", universal_newline: true); d="a\nb".encode(Encoding::US_ASCII, crlf_newline: true); e2="a\nb".encode("UTF-16LE", crlf_newline: true).bytes; [a,b,c,d,e2])"##,
@@ -4287,6 +4849,16 @@ mod tests {
         // UTF-7 #lines raises.
         crate::tests::run_test_once(
             r##"(a="\x79".dup.force_encoding(Encoding::BINARY).encode(Encoding::Emacs_Mule); b=(begin; [0x80].pack("C").force_encoding(Encoding::BINARY).encode(Encoding::Emacs_Mule); rescue => e; e.class; end); c=(begin; Encoding::Converter.new(Encoding::Emacs_Mule, Encoding::BINARY); rescue => e; e.class; end); s="a\nb".encode(Encoding::UTF_16); d=s.bytes; e2=s.encoding.name; f=s.lines.map(&:bytes); g="\x00\n\n\x00".dup.force_encoding(Encoding::UTF_16); h=(g.lines == [g]); i=(begin; "a\nb".dup.force_encoding(Encoding::UTF_7).lines; rescue => e; e.class; end); [a,b,c,d,e2,f,h,i])"##,
+        );
+    }
+
+    #[test]
+    fn converter_convert_finish_and_convpath() {
+        // #convert buffers partial input and raises with observable
+        // state; #finish flags buffered incompletes; convpath /
+        // search_convpath report the UTF-8 pivot and decorators.
+        crate::tests::run_test_once(
+            r##"(t=lambda{|&b| begin; b.call; rescue Exception => e; [e.class, e.message]; end}; r=[]; ec=Encoding::Converter.new("utf-8","iso-8859-1"); r << t.call{ec.convert("\xf1abcd")} << ec.primitive_errinfo << ec.last_error.class; ec2=Encoding::Converter.new("iso-8859-1","Big5"); r << t.call{ec2.convert("\xE9")}[0] << ec2.last_error.message.include?("from ISO-8859-1 to UTF-8 to Big5"); ec3=Encoding::Converter.new("EUC-JP","ISO-8859-1"); r << ec3.convert("\xa4") << t.call{ec3.finish} << ec3.primitive_errinfo; r << Encoding::Converter.new("ASCII","UTF-8").convpath.map{|p| p.map(&:name)} << Encoding::Converter.new("ascii","Big5").convpath.map{|p| p.map(&:name)}; r << Encoding::Converter.new("iso-8859-1","EUC-JP",crlf_newline: true).convpath.last; r << Encoding::Converter.search_convpath("ISO-8859-1","EUC-JP",crlf_newline: true).last; r << Encoding::InvalidByteSequenceError.new.incomplete_input?; r)"##,
         );
     }
 
