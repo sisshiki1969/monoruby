@@ -315,6 +315,22 @@ impl<'a> BytecodeGen<'a> {
                 let name = IdentId::get_id_from_string(name);
                 self.emit_load_cvar(dst.into(), name, loc);
             }
+            // `__ENCODING__` — evaluate to the source-encoding `Encoding`
+            // object. Load it as the constant `::Encoding::<NAME>` (rather
+            // than a baked literal) so it keeps object identity with the
+            // registered `Encoding` singleton.
+            NodeKind::SourceEncoding => {
+                let const_name =
+                    crate::builtins::encoding::encoding_constant_name(self.source_encoding());
+                self.emit_load_const(
+                    Some(dst),
+                    None,
+                    true,
+                    const_name.to_string(),
+                    vec!["Encoding".to_string()],
+                    loc,
+                );
+            }
             NodeKind::MethodCall {
                 box receiver,
                 method,
@@ -340,9 +356,7 @@ impl<'a> BytecodeGen<'a> {
                 let method = IdentId::get_id_from_string(method);
                 self.gen_method_call(method, None, arglist, safe_nav, false, UseMode2::Store(dst), loc)?;
             }
-            // `__ENCODING__` is a bare `Ident` that is *not* a call; keep it on
-            // the generic path so the read arm in `gen_expr_inner` handles it.
-            NodeKind::Ident(method) if method != "__ENCODING__" => {
+            NodeKind::Ident(method) => {
                 // A bare-identifier vcall (`a = foo`). Store straight into `dst`
                 // instead of landing in a temp and moving.
                 let method = IdentId::get_id_from_string(method);
@@ -445,10 +459,10 @@ impl<'a> BytecodeGen<'a> {
                 | NodeKind::Rational(..)
                 | NodeKind::RImaginary(..)
                 | NodeKind::String(_)
-                | NodeKind::EncodedString(..) => return Ok(()),
+                | NodeKind::EncodedString(..)
                 // `__ENCODING__` is a pure pseudo-variable; in void
                 // context it has no effect.
-                NodeKind::Ident(name) if name == "__ENCODING__" => return Ok(()),
+                | NodeKind::SourceEncoding => return Ok(()),
                 _ => {}
             }
         }
@@ -478,26 +492,10 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Const { .. }
             | NodeKind::InstanceVar(_)
             | NodeKind::ClassVar(_)
-            | NodeKind::GlobalVar(_) => {
+            | NodeKind::GlobalVar(_)
+            | NodeKind::SourceEncoding => {
                 let ret = self.push().into();
                 self.gen_store_expr(ret, expr)?;
-            }
-            // `__ENCODING__` — parsed as a bare `Ident`; evaluate to the
-            // source-encoding `Encoding` object. Load it as the constant
-            // `::Encoding::<NAME>` (rather than a baked literal) so it keeps
-            // object identity with the registered `Encoding` singleton.
-            NodeKind::Ident(method) if method == "__ENCODING__" => {
-                let ret = self.push().into();
-                let const_name =
-                    crate::builtins::encoding::encoding_constant_name(self.source_encoding());
-                self.emit_load_const(
-                    Some(ret),
-                    None,
-                    true,
-                    const_name.to_string(),
-                    vec!["Encoding".to_string()],
-                    loc,
-                );
             }
             NodeKind::BinOp(op, box lhs, box rhs) => {
                 self.gen_binop(op, lhs, rhs, use_mode, loc)?;
@@ -2399,5 +2397,13 @@ mod tests {
         run_test(r#"__ENCODING__.equal?(Encoding::UTF_8)"#);
         // Void context is a no-op.
         run_test(r#"__ENCODING__; 42"#);
+        // Store position inside a method / block: `SourceEncoding` is not a
+        // call, so it must not take the vcall path.
+        run_test(r#"def g; e = __ENCODING__; e.name; end; g"#);
+        run_test(r#"-> { e = __ENCODING__; e.name }.call"#);
+        run_test(r#"r = nil; 3.times { r = __ENCODING__ }; r.equal?(Encoding::UTF_8)"#);
+        // `defined?` reports a pseudo-variable, never a method.
+        run_test(r#"defined?(!__ENCODING__)"#);
+        run_test(r#"defined?(__ENCODING__.name)"#);
     }
 }

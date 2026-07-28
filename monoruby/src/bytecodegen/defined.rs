@@ -201,11 +201,9 @@ impl<'a> BytecodeGen<'a> {
                 }
                 self.check_defined(r, nil_label, ret, false)?;
             }
+            // `__ENCODING__` is a pseudo-variable, always defined.
+            NodeKind::SourceEncoding => return Ok(()),
             NodeKind::Ident(name) => {
-                // `__ENCODING__` is a pseudo-variable, always defined.
-                if name == "__ENCODING__" {
-                    return Ok(());
-                }
                 let name = IdentId::get_id_from_string(name);
                 self.emit(
                     BytecodeInst::DefinedMethod {
@@ -427,9 +425,8 @@ fn defined_str(node: &Node) -> &'static str {
                 "expression"
             }
         }
-        // `__ENCODING__` is a pseudo-variable (parsed as a bare Ident),
-        // not a method call.
-        NodeKind::Ident(name) if name == "__ENCODING__" => "expression",
+        // `__ENCODING__` is a pseudo-variable, not a method call.
+        NodeKind::SourceEncoding => "expression",
         NodeKind::BinOp(..)
         | NodeKind::FuncCall { .. }
         | NodeKind::MethodCall { .. }

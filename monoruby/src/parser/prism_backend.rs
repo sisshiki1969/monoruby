@@ -1822,11 +1822,13 @@ impl<'pr> Lowerer<'pr> {
                 }
             }
             prism::Node::SourceEncodingNode { .. } => {
-                // ruruby parses `__ENCODING__` as a bare identifier
-                // (`NodeKind::Ident("__ENCODING__")`) which bytecodegen
-                // turns into a method call resolved at runtime.
+                // `__ENCODING__` — unlike its `__FILE__` / `__LINE__`
+                // siblings above it cannot be folded to a literal (the
+                // `Encoding` object has identity), so it keeps its own
+                // node kind and bytecodegen loads the corresponding
+                // `::Encoding::<NAME>` constant.
                 Node {
-                    kind: NodeKind::Ident("__ENCODING__".to_string()),
+                    kind: NodeKind::SourceEncoding,
                     loc,
                 }
             }

@@ -46,6 +46,17 @@ pub enum NodeKind {
 
     LocalVar(usize, String),
     Ident(String),
+    /// `__ENCODING__` — the pseudo-variable evaluating to the `Encoding`
+    /// object for the source file's encoding.
+    ///
+    /// Its two siblings, `__FILE__` and `__LINE__`, are folded to a
+    /// `String` / `Integer` literal at parse time. `__ENCODING__` cannot
+    /// be: an `Encoding` is a heap object with identity
+    /// (`__ENCODING__.equal?(Encoding::UTF_8)`), so bytecodegen loads it
+    /// as the constant `::Encoding::<NAME>` instead. It therefore needs a
+    /// node of its own rather than riding on `Ident`, which every other
+    /// consumer reads as a bare-identifier method call (vcall).
+    SourceEncoding,
     InstanceVar(String),
     GlobalVar(String),
     ClassVar(String),

@@ -332,6 +332,7 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::EncodedString(..)
             | NodeKind::Symbol(_)
             | NodeKind::Ident(_)
+            | NodeKind::SourceEncoding
             | NodeKind::InstanceVar(_)
             | NodeKind::GlobalVar(_)
             | NodeKind::ClassVar(_)
