@@ -632,12 +632,6 @@ fn file_dirname(
     if dirname.is_empty() {
         dirname += "."
     };
-    // Collapse a run of leading slashes to one: "/////foo/bar" → "/foo"
-    // (CRuby, non-Windows).
-    if dirname.starts_with("//") {
-        let trimmed = dirname.trim_start_matches('/');
-        dirname = format!("/{trimmed}");
-    }
     Ok(Value::string(dirname))
 }
 
@@ -2791,6 +2785,58 @@ fn file_realdirpath(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn file_to_path_coercion() {
+        // Path arguments accept #to_path objects (CRuby's rb_get_path):
+        // absolute_path?, fnmatch, chmod, symlink, lstat, realpath, delete.
+        run_test_once(
+            r##"(o=Object.new; def o.to_path; "/tmp/mono_tp_#{Process.pid}"; end; p2=Object.new; def p2.to_path; "/tmp/mono_tp2_#{Process.pid}"; end; File.write(o.to_path, "abc"); a=File.absolute_path?(o); b=File.fnmatch("*tp*", o); File.chmod(0o644, o); File.symlink(o, p2); c=File.lstat(p2.to_path).symlink?; d=(File.realpath(p2)==File.realpath(o.to_path)); e2=File.delete(p2, o); [a,b,c,d,e2])"##,
+        );
+    }
+
+    #[test]
+    fn file_size_to_io_and_fd() {
+        // File.size/size? accept #to_io objects (fstat on the fd); File#size
+        // survives an unlink (fstat) and raises IOError once closed.
+        run_test_once(
+            r##"(f="/tmp/mono_sz_#{Process.pid}"; File.write(f,"12345"); io=File.open(f); o=Object.new; o.define_singleton_method(:to_io){io}; a=File.size(o); b=File.size?(o); c=File.size?("/tmp/mono_sz_none_#{Process.pid}"); e0="/tmp/mono_sz_e_#{Process.pid}"; File.write(e0,""); d=File.size?(e0); h=io.size; File.delete(f); i=io.size; io.close; j=(begin; io.size; rescue => e; e.class; end); File.delete(e0); [a,b,c,d,h,i,j])"##,
+        );
+    }
+
+    #[test]
+    fn file_utime_nil_truncate_einval_binread_offset() {
+        // utime(nil, nil) = "now"; truncate/-length → Errno::EINVAL;
+        // #truncate on a read-only stream → IOError; binread with a
+        // negative offset → Errno::EINVAL.
+        run_test_once(
+            r##"(f="/tmp/mono_ut_#{Process.pid}"; File.write(f,"x"*10); n=File.utime(nil, nil, f); a=(Time.now - File.mtime(f) < 600); b=(begin; File.truncate(f, -5); rescue => e; e.class; end); io=File.open(f, "r"); c=(begin; io.truncate(3); rescue => e; e.class; end); io.close; w=File.open(f, "a"); d=(begin; w.truncate(-1); rescue => e; e.class; end); w.close; e2=(begin; File.binread(f, 2, -3); rescue => x; x.class; end); g=File.binread(f, 3, 2); File.delete(f); [n,a,b,c,d,e2,g])"##,
+        );
+    }
+
+    #[test]
+    fn file_extname_edges() {
+        run_tests(&[
+            r##"File.extname("foo.")"##,
+            r##"File.extname(".foo.")"##,
+            r##"File.extname("...")"##,
+            r##"File.extname("..a")"##,
+            r##"File.extname(".profile")"##,
+            r##"File.extname("/a.b/c")"##,
+            r##"File.extname("a.b.c.d.e")"##,
+            r##"File.dirname("/////foo/bar/")"##,
+        ]);
+    }
+
+    #[test]
+    fn file_aliases_and_fd_stat() {
+        // unlink/delete and empty?/zero? are true aliases (Method#==);
+        // IO#stat / File#stat are fstat(2)-based; File#lstat keeps the
+        // opened path's symlink.
+        run_test_once(
+            r##"(a=(File.method(:unlink)==File.method(:delete)); b=(File.method(:empty?)==File.method(:zero?)); f="/tmp/mono_st_#{Process.pid}"; File.write(f,"12345678"); File.chmod(0o644, f); st=File.stat(f); c=st.inspect.include?("mode=0100644"); io=File.open(f); d=io.stat.file?; e2=io.lstat.file?; io.close; File.delete(f); [a,b,c,d,e2])"##,
+        );
+    }
 
     #[test]
     fn file_instance_method_coverage() {
