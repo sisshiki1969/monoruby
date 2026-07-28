@@ -659,7 +659,9 @@ class File
     idx = s.rindex("/")
     return "." if idx.nil?             # no directory part
     prefix = s[0...idx].sub(%r{/+\z}, "")
-    prefix.empty? ? "/" : prefix       # empty prefix only for absolute paths
+    return "/" if prefix.empty?        # empty prefix only for absolute paths
+    # Collapse a run of leading slashes to one ("/////foo/bar" → "/foo").
+    prefix.sub(%r{\A/+}, "/")
   end
   private_class_method :_dirname_once
 
