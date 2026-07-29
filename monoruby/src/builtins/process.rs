@@ -1251,8 +1251,7 @@ mod tests {
     }
 
     #[test]
-    #[test]
-    fn signal_trap_exit_pseudo_signal() {
+        fn signal_trap_exit_pseudo_signal() {
         // EXIT is an exit hook, not a signal: trapping it succeeds, a
         // never-trapped EXIT reports nil, re-trapping reports the
         // previous handler, and "DEFAULT" unsets it.
@@ -1268,8 +1267,7 @@ mod tests {
     }
 
     #[test]
-    #[test]
-    fn signal_trap_exit_dispositions() {
+        fn signal_trap_exit_dispositions() {
         // nil / IGNORE clear the EXIT hook like DEFAULT; a handler set
         // and left in place survives a GC (the hook is a root).
         run_test_once(

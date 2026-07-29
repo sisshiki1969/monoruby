@@ -5862,9 +5862,7 @@ mod tests {
     // macOS. CRuby comparison still runs once for output parity.
 
     #[test]
-    #[test]
-    #[test]
-    fn io_dup_ioctl_and_exact_reads() {
+        fn io_dup_ioctl_and_exact_reads() {
         // #dup wraps a dup(2)'d fd (distinct fileno, shared offset,
         // cloexec+autoclose set, IOError after close / on closed source);
         // sized reads consume the fd exactly, so syswrite lands at the
@@ -5894,6 +5892,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn io_popen_argv_env_opts_forms() {
         // Array form [env, cmd, arg..., exec_opts], outside env hash,
         // chdir: (String and #to_path), subclass instantiation, and
@@ -5917,6 +5916,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn io_popen_read_stdout() {
         run_test_once(
             r#"

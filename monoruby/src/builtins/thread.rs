@@ -1836,9 +1836,7 @@ mod tests {
     }
 
     #[test]
-    #[test]
-    #[test]
-    fn thread_new_initialize_protocol() {
+        fn thread_new_initialize_protocol() {
         // Thread.new dispatches #initialize (subclass overrides run and
         // must reach super); missing super or block raise ThreadError;
         // re-initializing a live thread raises; Thread#to_s carries the
@@ -1869,6 +1867,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn thread_raise_same_thread_matrix() {
         run_test_once(
             r##"
@@ -1891,6 +1890,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn thread_cross_thread_raise_stays_in_caller() {
         // A raise inside a Ruby-implemented Thread instance method must
         // surface in the *caller*, not be queued into the receiver thread
@@ -1920,6 +1920,16 @@ mod tests {
                 Thread.instance_method(:exit) == Thread.instance_method(:kill),
                 Thread.method(:fork) == Thread.method(:start),
                 Thread::Backtrace.limit]"#,
+        );
+        // Thread.start / .fork queue the body directly (no #initialize)
+        // and forward arguments; to_s carries the spawn site.
+        run_test_once(
+            r#"
+            a = Thread.start(1, 2) { |x, y| x + y }.value
+            b = Thread.fork { :forked }.value
+            c = !!(Thread.start {}.tap(&:join).to_s =~ /:\d+ (run|dead)>\z/)
+            [a, b, c]
+            "#,
         );
         // Thread.allocate: allocator undefined (TypeError); Thread.start
         // without a block: ArgumentError (unlike Thread.new's ThreadError).
