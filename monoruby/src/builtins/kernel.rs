@@ -70,7 +70,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         3,
         false,
         &["cause"],
-        false,
+        true,
     );
     // CRuby aliases `fail` to the same `rb_f_raise` callback (variadic).
     // Use the identical signature so `cause:` ends up at the same
@@ -83,7 +83,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         3,
         false,
         &["cause"],
-        false,
+        true,
     );
     globals.define_builtin_module_inline_func(
         kernel_class,
@@ -963,11 +963,31 @@ fn fix_system_exit_status(globals: &mut Globals, err: &mut MonorubyErr, ex: Valu
 #[monoruby_builtin]
 fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // `cause:` kwarg is at slot 3 (positional_max=3 for the shared
-    // raise/fail trampoline). CRuby: passing `cause:` with no
-    // positional arguments raises `ArgumentError "only cause is given
-    // with no arguments"`.
+    // raise/fail trampoline); leftover keywords (kw_rest) land in slot
+    // 4. CRuby extracts only `cause:` from genuine keywords — any
+    // remaining keywords act as a trailing positional Hash (the
+    // message), per https://bugs.ruby-lang.org/issues/8257#note-36
+    // (`raise(data_error, data: 42)`).
     let cause_kwarg = lfp.try_arg(3);
-    if lfp.try_arg(0).is_none() {
+    let kw_rest = lfp
+        .try_arg(4)
+        .filter(|v| v.try_hash_ty().is_some_and(|h| h.len() != 0));
+    let mut args = vec![];
+    if let Some(a0) = lfp.try_arg(0) {
+        args.push(a0);
+        if let Some(a1) = lfp.try_arg(1) {
+            args.push(a1);
+            if let Some(a2) = lfp.try_arg(2) {
+                args.push(a2);
+            }
+        }
+    }
+    if let Some(kw) = kw_rest {
+        args.push(kw);
+    }
+    if args.is_empty() {
+        // CRuby: passing `cause:` with no positional arguments raises
+        // `ArgumentError "only cause is given with no arguments"`.
         if cause_kwarg.is_some() {
             return Err(MonorubyErr::argumenterr(
                 "only cause is given with no arguments",
@@ -980,13 +1000,6 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             return Err(err.with_original(ex));
         } else {
             return Err(MonorubyErr::runtimeerr(""));
-        }
-    }
-    let mut args = vec![lfp.arg(0)];
-    if let Some(a1) = lfp.try_arg(1) {
-        args.push(a1);
-        if let Some(a2) = lfp.try_arg(2) {
-            args.push(a2);
         }
     }
     Err(make_exception_error(vm, globals, &args, cause_kwarg)?)
@@ -1030,12 +1043,14 @@ pub(crate) fn make_exception_error(
         Ok(())
     }
     let a0 = args[0];
-    let msg_arg = args.get(1).copied().filter(|v| v.try_hash_ty().is_none());
-    // A nil backtrace means "keep the runtime capture".
-    let bt_arg = args
-        .get(2)
-        .copied()
-        .filter(|v| !v.is_nil() && v.try_hash_ty().is_none());
+    // A Hash is a legitimate message (`raise(data_error, {data: 42})`
+    // constructs via `data_error.exception({data: 42})`); keyword
+    // separation happens in the callers, never here.
+    let msg_arg = args.get(1).copied();
+    // A nil backtrace means "keep the runtime capture"; anything else
+    // goes through `#set_backtrace` dispatch, whose own validation
+    // raises the CRuby-matching TypeError for bad types.
+    let bt_arg = args.get(2).copied().filter(|v| !v.is_nil());
     if a0.is_exception().is_some() {
         // A message override makes CRuby return a *new* exception via
         // `exc.exception(msg)`, so identity is not preserved.
@@ -1055,6 +1070,16 @@ pub(crate) fn make_exception_error(
             return Err(MonorubyErr::typeerr("exception object expected"));
         };
         let mut err = MonorubyErr::new_from_exception(ex);
+        // `set_backtrace(nil)` cleared the stored backtrace: this raise
+        // captures a *fresh* one, so don't drag the object's stale
+        // trace along (take_ex_obj re-installs the new capture).
+        if globals
+            .store
+            .get_ivar(obj, IdentId::get_id("/backtrace"))
+            .is_some_and(|v| v.is_nil())
+        {
+            err.trace.clear();
+        }
         fix_system_exit_status(globals, &mut err, obj);
         return apply_cause(globals, err.with_original(obj), Some(obj), cause_kwarg);
     }
@@ -1138,7 +1163,7 @@ fn apply_cause(
 }
 
 /// Whether `target` appears in the `#cause` chain reachable from `start`.
-fn cause_chain_contains(globals: &Globals, start: Value, target: Value) -> bool {
+pub(crate) fn cause_chain_contains(globals: &Globals, start: Value, target: Value) -> bool {
     let cause_id = IdentId::get_id("/cause");
     let mut cur = start;
     loop {
@@ -7447,5 +7472,62 @@ mod tests {
         // Array's builtin `initialize_copy` (alias of replace) keeps dup a
         // shallow, independent copy.
         run_test(r#"a = [1, 2, 3]; b = a.dup; b << 4; [a, b]"#);
+    }
+
+    #[test]
+    fn raise_keyword_separation_and_message_forms() {
+        run_tests(&[
+            // A Hash message constructs through the class, both as a
+            // positional hash and as folded-back leftover keywords
+            // (CRuby extracts only `cause:` from genuine keywords).
+            r#"de = Class.new(StandardError) { attr_reader :data; def initialize(d); @data = d; end }
+               begin; raise(de, {data: 42}); rescue Exception => e; [e.class.equal?(de), e.data]; end"#,
+            r#"de = Class.new(StandardError) { attr_reader :data; def initialize(d); @data = d; end }
+               begin; raise(de, data: 42); rescue Exception => e; [e.class.equal?(de), e.data]; end"#,
+            // A positional `{cause: ...}` hash is a message argument —
+            // and a String followed by a message is a TypeError.
+            r#"begin; raise("message", {cause: RuntimeError.new}); rescue TypeError => e; e.message; end"#,
+            // Only an exception class: zero-arg construction, message
+            // defaults to the class name even when the subclass
+            // initialize never calls super.
+            r#"k = Class.new(Exception) { def initialize; end }
+               begin; raise(k); rescue Exception => e; e.message == k.to_s; end"#,
+            // Genuine `cause:` keyword still works, alone it is an
+            // ArgumentError.
+            r#"begin; raise("m", cause: RuntimeError.new("c")); rescue => e; [e.message, e.cause.message]; end"#,
+            r#"begin; raise(cause: RuntimeError.new); rescue ArgumentError => e; e.message; end"#,
+        ]);
+    }
+
+    #[test]
+    fn raise_reraise_backtrace_and_cause_cycle() {
+        run_tests(&[
+            // `set_backtrace(nil)` + re-raise captures a fresh
+            // backtrace at the new raise site.
+            r#"begin; raise "x"; rescue => e; end
+               e.set_backtrace(nil)
+               begin; raise e; rescue => r; end
+               [r.equal?(e), r.backtrace.class.to_s, r.backtrace.empty?]"#,
+            // Re-raising an exception that already sits in `$!`'s cause
+            // chain must not chain implicitly (no cycle).
+            r#"
+            out = []
+            e1 = nil
+            begin
+              begin
+                raise "Error 1"
+              rescue => e1
+                begin
+                  raise "Error 2"
+                rescue => e2
+                  out << e1.cause.nil? << (e2.cause == e1)
+                  raise e1
+                end
+              end
+            rescue => e
+              out << e.equal?(e1) << e.cause.nil?
+            end
+            out"#,
+        ]);
     }
 }

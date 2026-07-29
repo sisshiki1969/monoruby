@@ -374,7 +374,11 @@ fn exception_new(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().expect_class(globals)?.id();
-    let obj = Value::new_exception_from("".to_string(), class_id);
+    // Seed the message with the class name (CRuby's default when the
+    // mesg field is never assigned): a subclass `initialize` that
+    // doesn't call super must still report `klass.to_s` from
+    // `#message`.
+    let obj = Value::new_exception_from(class_id.get_name(globals), class_id);
 
     vm.invoke_method_inner(
         globals,
