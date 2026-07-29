@@ -621,6 +621,12 @@ impl Executor {
     ///   the process fail with status 1 (unless a `SystemExit` chose a
     ///   status explicitly).
     pub(crate) fn run_exit_handlers(&mut self, globals: &mut Globals) -> Option<i32> {
+        // The `Signal.trap(:EXIT)` handler runs before the at_exit
+        // handlers (CRuby order). Pushing it last makes the LIFO pop
+        // below run it first, with identical error semantics.
+        if let Some(handler) = globals.exit_trap_handler.take() {
+            globals.at_exit_handlers.push(handler);
+        }
         if globals.at_exit_handlers.is_empty() && globals.finalizers.is_empty() {
             return None;
         }

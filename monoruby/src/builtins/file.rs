@@ -2,7 +2,7 @@ use super::*;
 use std::path::Path;
 use std::{
     fs::File,
-    io::{Seek, SeekFrom, Write},
+    io::{Seek, SeekFrom},
 };
 
 //
@@ -27,20 +27,13 @@ pub(super) fn init(globals: &mut Globals) {
     // arity opening alone closes a 25-strong cluster in
     // `core/kernel` (mspec's `before :each` writes a fixture file
     // with `perm: 0o700`).
-    globals.define_builtin_class_func_with_kw(
-        file, "write", file_write, 2, 3, false,
-        &["mode", "perm", "encoding"], false,
-    );
-    globals.define_builtin_class_func_with(file, "binwrite", file_binwrite, 2, 3, false);
+    // File.write / File.binwrite are inherited from IO (implemented in
+    // Ruby, builtins/io.rb) — CRuby defines them on IO too.
     globals.define_builtin_class_func_with(file, "read", file_read, 1, 4, false);
     globals.define_builtin_class_func_with(file, "binread", file_binread, 1, 3, false);
 
     // IO class methods that share semantics with File.* class methods.
-    globals.define_builtin_class_func_with_kw(
-        IO_CLASS, "write", file_write, 2, 3, false,
-        &["mode", "perm", "encoding"], false,
-    );
-    globals.define_builtin_class_func_with(IO_CLASS, "binwrite", file_binwrite, 2, 3, false);
+    // (IO.write / IO.binwrite live in builtins/io.rb.)
     globals.define_builtin_class_func_with(IO_CLASS, "binread", file_binread, 1, 3, false);
     globals.define_builtin_class_func(IO_CLASS, "try_convert", io_try_convert, 1);
     globals.define_builtin_class_func_rest(file, "join", file_join);
@@ -184,52 +177,6 @@ pub(super) fn init(globals: &mut Globals) {
     );
 }
 
-///
-/// ### File.write
-/// - write(path, string, opt={}) -> Integer
-/// - [NOT SUPPORTED] write(path, string, offset=nil, opt={}) -> Integer
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/write.html]
-#[monoruby_builtin]
-fn file_write(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let name = lfp.arg(0).coerce_to_string(vm, globals)?;
-    let mut file = match File::create(&name) {
-        Ok(file) => file,
-        Err(err) => {
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &err,
-                "rb_sysopen",
-                &name,
-            ));
-        }
-    };
-    let val = lfp.arg(1);
-    let len = if let Some(s) = val.is_rstring() {
-        if let Err(err) = file.write_all(&s) {
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &err,
-                "rb_io_write",
-                &name,
-            ));
-        };
-        s.len()
-    } else {
-        let v = val.to_s(&globals.store).into_bytes();
-        if let Err(err) = file.write_all(&v) {
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &err,
-                "rb_io_write",
-                &name,
-            ));
-        };
-        v.len()
-    };
-
-    Ok(Value::integer(len as i64))
-}
 
 ///
 /// ### IO.read
@@ -355,87 +302,6 @@ fn file_binread(
     }
 }
 
-///
-/// ### IO.binwrite / File.binwrite
-/// - binwrite(path, string, offset = nil) -> Integer
-///
-/// Writes `string` to the file at `path` in binary mode and returns the
-/// number of bytes written. With no `offset`, the file is created if missing
-/// and truncated to the length of `string`. With an `offset`, the file is
-/// created if missing but **not** truncated; bytes are written starting at
-/// `offset`.
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/binwrite.html]
-#[monoruby_builtin]
-fn file_binwrite(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let name = lfp.arg(0).coerce_to_string(vm, globals)?;
-    let val = lfp.arg(1);
-    let bytes = if let Some(s) = val.is_rstring() {
-        s.to_vec()
-    } else {
-        val.to_s(&globals.store).into_bytes()
-    };
-    let offset = if let Some(arg2) = lfp.try_arg(2)
-        && !arg2.is_nil()
-    {
-        Some(arg2.coerce_to_int_i64(vm, globals)?)
-    } else {
-        None
-    };
-    let mut file = match offset {
-        None => match File::create(&name) {
-            Ok(f) => f,
-            Err(err) => {
-                return Err(MonorubyErr::errno_with_path(
-                    &globals.store,
-                    &err,
-                    "rb_sysopen",
-                    &name,
-                ));
-            }
-        },
-        Some(off) => {
-            let mut f = match std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(&name)
-            {
-                Ok(f) => f,
-                Err(err) => {
-                    return Err(MonorubyErr::errno_with_path(
-                        &globals.store,
-                        &err,
-                        "rb_sysopen",
-                        &name,
-                    ));
-                }
-            };
-            if let Err(err) = f.seek(SeekFrom::Start(off as u64)) {
-                return Err(MonorubyErr::errno_with_path(
-                    &globals.store,
-                    &err,
-                    "rb_io_seek",
-                    &name,
-                ));
-            }
-            f
-        }
-    };
-    if let Err(err) = file.write_all(&bytes) {
-        return Err(MonorubyErr::errno_with_path(
-            &globals.store,
-            &err,
-            "rb_io_write",
-            &name,
-        ));
-    }
-    Ok(Value::integer(bytes.len() as i64))
-}
 
 ///
 /// ### IO.try_convert
@@ -983,14 +849,19 @@ pub(super) fn mode_string_from_flags(flags: i64) -> String {
     match access {
         // RDONLY
         0 => "r".to_string(),
-        // WRONLY
+        // WRONLY. `WRONLY|CREAT` *without* `TRUNC` has no public mode
+        // string; the internal spellings "w-" (write+create) / "-w"
+        // (write only) keep it lossless — `IO.write` with an offset
+        // depends on the file NOT being truncated.
         1 => {
             if append {
                 "a".to_string()
-            } else if trunc || create {
+            } else if trunc {
                 "w".to_string()
+            } else if create {
+                "w-".to_string()
             } else {
-                "w".to_string()
+                "-w".to_string()
             }
         }
         // RDWR
@@ -1136,13 +1007,17 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let mode_base = mode.split(':').next().unwrap().replace('b', "");
     let (readable, writable) = match mode_base.as_str() {
         "r" => (true, false),
-        "w" | "a" => (false, true),
+        "w" | "a" | "w-" | "-w" => (false, true),
         "r+" | "+r" | "w+" | "+w" | "a+" | "+a" => (true, true),
         _ => (true, false),
     };
     let opt = match mode_base.as_str() {
         "r" => opt.read(true),
         "w" => opt.write(true).create(true).truncate(true),
+        // Internal spellings (mode_string_from_flags): write+create
+        // without truncation, and bare write-only.
+        "w-" => opt.write(true).create(true),
+        "-w" => opt.write(true),
         "a" => opt.write(true).create(true).append(true),
         "r+" | "+r" => opt.read(true).write(true),
         "w+" | "+w" => opt.read(true).write(true).create(true).truncate(true),
@@ -1168,6 +1043,8 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         let flags = match mode_base.as_str() {
             "r" => libc::O_RDONLY,
             "w" => libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+            "w-" => libc::O_WRONLY | libc::O_CREAT,
+            "-w" => libc::O_WRONLY,
             "a" => libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND,
             "r+" | "+r" => libc::O_RDWR,
             "w+" | "+w" => libc::O_RDWR | libc::O_CREAT | libc::O_TRUNC,
@@ -1236,8 +1113,8 @@ fn write(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         };
         count += bytes.len() as i64;
         let mut done = 0;
-        super::io::blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, || {
-            lfp.self_val().as_io_inner_mut().write(&bytes, &mut done)
+        super::io::blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {
+            lfp.self_val().as_io_inner_mut().write(&bytes, &mut done, _store)
         })?;
     }
     Ok(Value::integer(count))
@@ -3729,6 +3606,28 @@ mod tests {
               ensure
                 f.close
               end
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+
+    #[test]
+    fn file_open_integer_flags_no_truncate() {
+        // WRONLY|CREAT without TRUNC must not truncate an existing
+        // file; bare WRONLY opens an existing file without creating.
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_flags_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "hello")
+              File.open(path, File::WRONLY | File::CREAT) { |f| f.write("A") }
+              a = File.read(path)
+              File.open(path, File::WRONLY) { |f| f.write("B") }
+              b = File.read(path)
+              [a, b]
             ensure
               File.unlink(path) rescue nil
             end

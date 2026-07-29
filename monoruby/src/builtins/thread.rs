@@ -22,8 +22,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.store[THREAD_CLASS].set_alloc_func(thread_alloc_func);
 
     globals.define_builtin_class_func_rest(THREAD_CLASS, "new", thread_new);
-    globals.define_builtin_class_func_rest(THREAD_CLASS, "start", thread_new);
-    globals.define_builtin_class_func_rest(THREAD_CLASS, "fork", thread_new);
+    globals.define_builtin_class_func_rest(THREAD_CLASS, "start", thread_start);
+    // `fork` is re-pointed at `start` as a true alias in builtins/thread.rb
+    // (ruby/spec checks `Thread.method(:fork) == Thread.method(:start)`).
+    globals.define_builtin_class_func_rest(THREAD_CLASS, "fork", thread_start);
     globals.define_builtin_class_func(THREAD_CLASS, "current", thread_current, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "main", thread_main, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "pass", thread_pass, 0);
@@ -324,6 +326,25 @@ fn thread_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
     // `thread` is reachable via the scheduler registry.
     scheduler::pass(vm, globals)?;
     Ok(thread)
+}
+
+/// `Thread.start` / `Thread.fork`: same as `Thread.new`, but a missing
+/// block is an `ArgumentError` ("tried to create Proc object without a
+/// block") rather than `Thread.new`'s `ThreadError` (CRuby).
+#[monoruby_builtin]
+fn thread_start(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    if lfp.block().is_none() {
+        return Err(MonorubyErr::argumenterr(
+            "tried to create Proc object without a block",
+        ));
+    }
+    // `#[monoruby_builtin]` renames the Result-returning body to `__<name>`.
+    __thread_new(vm, globals, lfp, pc)
 }
 
 ///
@@ -1730,6 +1751,59 @@ mod tests {
               [a, b]
             end
             t.value
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_cross_thread_raise_stays_in_caller() {
+        // A raise inside a Ruby-implemented Thread instance method must
+        // surface in the *caller*, not be queued into the receiver thread
+        // (a bare `raise` there would dispatch to the async Thread#raise
+        // since `self` is the receiver Thread — see builtins/thread.rb).
+        run_test_once(
+            r##"
+            q = Thread::Queue.new
+            th = Thread.new { q.pop }
+            r = []
+            begin; th.thread_variable_get(123); rescue TypeError => e; r << e.message; end
+            begin; th.fetch(:cat); rescue KeyError => e; r << e.class.to_s; end
+            begin; th.priority = Object.new; rescue TypeError => e; r << e.message; end
+            begin; th.name = 123; rescue TypeError => e; r << e.message; end
+            begin; th.name = "a\0b"; rescue ArgumentError => e; r << e.message; end
+            q.push(nil); th.join
+            r << th.status.inspect
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn thread_aliases_and_limits() {
+        run_test(
+            r#"[Thread.instance_method(:terminate) == Thread.instance_method(:kill),
+                Thread.instance_method(:exit) == Thread.instance_method(:kill),
+                Thread.method(:fork) == Thread.method(:start),
+                Thread::Backtrace.limit]"#,
+        );
+        // Thread.allocate: allocator undefined (TypeError); Thread.start
+        // without a block: ArgumentError (unlike Thread.new's ThreadError).
+        run_test_error(r#"Thread.allocate"#);
+        run_test_error(r#"Thread.start"#);
+        run_test_error(r#"Thread.new"#);
+    }
+
+    #[test]
+    fn thread_variable_set_nil_removes() {
+        // Assigning nil makes thread_variable? false while the key stays
+        // listed in #thread_variables (CRuby); false is a real value.
+        run_test_once(
+            r#"
+            t = Thread.new {}.join
+            t.thread_variable_set(:a, 1)
+            t.thread_variable_set(:a, nil)
+            t.thread_variable_set(:b, false)
+            [t.thread_variable?(:a), t.thread_variable?(:b), t.thread_variables, t.thread_variable_get(:a)]
             "#,
         );
     }
