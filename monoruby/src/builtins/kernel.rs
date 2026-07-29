@@ -982,40 +982,105 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             return Err(MonorubyErr::runtimeerr(""));
         }
     }
-    if let Some(ex) = lfp.arg(0).is_exception() {
-        let mut err = MonorubyErr::new_from_exception(ex);
-        fix_system_exit_status(globals, &mut err, lfp.arg(0));
-        if let Some(arg1) = lfp.try_arg(1) {
-            if arg1.try_hash_ty().is_none() {
-                // A message override makes CRuby return a *new* exception
-                // (`exc.exception(msg)`), so identity is not preserved.
-                err.set_msg(arg1.coerce_to_str(vm, globals)?);
-                return Err(apply_cause(globals, err, None, cause_kwarg)?);
-            }
+    let mut args = vec![lfp.arg(0)];
+    if let Some(a1) = lfp.try_arg(1) {
+        args.push(a1);
+        if let Some(a2) = lfp.try_arg(2) {
+            args.push(a2);
         }
-        let raised = lfp.arg(0);
-        return Err(apply_cause(globals, err.with_original(raised), Some(raised), cause_kwarg)?);
-    } else if let Some(klass) = lfp.arg(0).is_class() {
-        if klass.id() == STOP_ITERATION_CLASS {
+    }
+    Err(make_exception_error(vm, globals, &args, cause_kwarg)?)
+}
+
+/// CRuby's `rb_make_exception` plus backtrace/cause application, shared
+/// by `Kernel#raise` / `Kernel#fail` and `Thread#raise`:
+/// - `args[0]`: an Exception object, an Exception class, a String
+///   message (only as the sole argument), or an object responding to
+///   `#exception`.
+/// - `args[1]`: a message override, dispatched through `#exception` /
+///   `.new` (so identity is not preserved and user overrides run).
+/// - `args[2]`: a custom backtrace, applied via `#set_backtrace`
+///   dispatch so its validation (and TypeError message) matches
+///   `Exception#set_backtrace`.
+///
+/// Returns `Ok(err)` with the error to raise; argument-validation
+/// failures come back as `Err` and are raised as themselves.
+pub(crate) fn make_exception_error(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    args: &[Value],
+    cause_kwarg: Option<Value>,
+) -> Result<MonorubyErr> {
+    fn apply_backtrace(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        ex: Value,
+        bt: Option<Value>,
+    ) -> Result<()> {
+        if let Some(bt) = bt {
+            vm.invoke_method_inner(
+                globals,
+                IdentId::get_id("set_backtrace"),
+                ex,
+                &[bt],
+                None,
+                None,
+            )?;
+        }
+        Ok(())
+    }
+    let a0 = args[0];
+    let msg_arg = args.get(1).copied().filter(|v| v.try_hash_ty().is_none());
+    // A nil backtrace means "keep the runtime capture".
+    let bt_arg = args
+        .get(2)
+        .copied()
+        .filter(|v| !v.is_nil() && v.try_hash_ty().is_none());
+    if a0.is_exception().is_some() {
+        // A message override makes CRuby return a *new* exception via
+        // `exc.exception(msg)`, so identity is not preserved.
+        let obj = match msg_arg {
+            Some(m) => vm.invoke_method_inner(
+                globals,
+                IdentId::get_id("exception"),
+                a0,
+                &[m],
+                None,
+                None,
+            )?,
+            None => a0,
+        };
+        apply_backtrace(vm, globals, obj, bt_arg)?;
+        let Some(ex) = obj.is_exception() else {
+            return Err(MonorubyErr::typeerr("exception object expected"));
+        };
+        let mut err = MonorubyErr::new_from_exception(ex);
+        fix_system_exit_status(globals, &mut err, obj);
+        return apply_cause(globals, err.with_original(obj), Some(obj), cause_kwarg);
+    }
+    if let Some(klass) = a0.is_class() {
+        if klass.id() == STOP_ITERATION_CLASS && msg_arg.is_none() && bt_arg.is_none() {
             let err = MonorubyErr::stopiterationerr("".to_string());
-            return Err(apply_cause(globals, err, None, cause_kwarg)?);
+            return apply_cause(globals, err, None, cause_kwarg);
         } else if klass.is_exception() {
-            let mut args = vec![];
-            if let Some(arg1) = lfp.try_arg(1) {
-                if arg1.try_hash_ty().is_none() {
-                    args.push(arg1);
-                }
-            }
+            let cargs: Vec<Value> = msg_arg.into_iter().collect();
             let ex =
-                vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &args, None, None)?;
+                vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &cargs, None, None)?;
+            apply_backtrace(vm, globals, ex, bt_arg)?;
             let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
             fix_system_exit_status(globals, &mut err, ex);
-            let err = err.with_original(ex);
-            return Err(apply_cause(globals, err, Some(ex), cause_kwarg)?);
+            return apply_cause(globals, err.with_original(ex), Some(ex), cause_kwarg);
         }
-    } else if let Some(message) = lfp.arg(0).is_rstring() {
+        return Err(MonorubyErr::typeerr("exception class/object expected"));
+    }
+    if let Some(message) = a0.is_rstring() {
+        // A bare String message is only accepted as the sole positional
+        // argument (`raise "a", "b"` is a TypeError in CRuby).
+        if msg_arg.is_some() {
+            return Err(MonorubyErr::typeerr("exception class/object expected"));
+        }
         let err = MonorubyErr::runtimeerr(message.to_str()?);
-        return Err(apply_cause(globals, err, None, cause_kwarg)?);
+        return apply_cause(globals, err, None, cause_kwarg);
     }
     // Duck-typed exception. CRuby drives `arg0.exception(msg)` (or
     // `arg0.exception` if no message was given); the result must be
@@ -1024,19 +1089,14 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // "exception class/object expected" emitted when arg0 doesn't
     // even respond to `#exception`).
     let exception_id = IdentId::get_id("exception");
-    if globals.check_method(lfp.arg(0), exception_id).is_some() {
-        let mut args = vec![];
-        if let Some(arg1) = lfp.try_arg(1) {
-            if arg1.try_hash_ty().is_none() {
-                args.push(arg1);
-            }
-        }
-        let result =
-            vm.invoke_method_inner(globals, exception_id, lfp.arg(0), &args, None, None)?;
+    if globals.check_method(a0, exception_id).is_some() {
+        let cargs: Vec<Value> = msg_arg.into_iter().collect();
+        let result = vm.invoke_method_inner(globals, exception_id, a0, &cargs, None, None)?;
         match result.is_exception() {
             Some(ex) => {
+                apply_backtrace(vm, globals, result, bt_arg)?;
                 let err = MonorubyErr::new_from_exception(ex).with_original(result);
-                return Err(apply_cause(globals, err, Some(result), cause_kwarg)?);
+                return apply_cause(globals, err, Some(result), cause_kwarg);
             }
             None => return Err(MonorubyErr::typeerr("exception object expected")),
         }
@@ -7066,6 +7126,55 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn kernel_raise_argument_matrix() {
+        // The shared rb_make_exception surface: String-with-extra-arg
+        // TypeError, custom backtraces (Array / single String / nil /
+        // invalid), message override through #exception, duck-typed
+        // #exception results, and StopIteration.
+        run_test_once(
+            r##"
+            def t; yield; rescue Exception => e; [e.class.to_s, e.message[0, 60]]; end
+            r = []
+            r << t { raise "s1", "s2" }
+            r << (begin; raise RuntimeError, "m", ["a.rb:1"]; rescue => e; e.backtrace; end)
+            r << (begin; raise RuntimeError, "m", "single.rb:2"; rescue => e; e.backtrace; end)
+            r << (begin; raise RuntimeError, "m", nil; rescue => e; e.backtrace.class.to_s; end)
+            r << t { raise RuntimeError, "m", [123] }[0]
+            e0 = RuntimeError.new("orig")
+            r << (begin; raise e0, "newmsg", ["b.rb:2"]; rescue => e; [e.message, e.backtrace, e.equal?(e0)]; end)
+            o = Object.new
+            def o.exception(*a); StandardError.new(a.inspect); end
+            r << t { raise o, "foo" }
+            b = Object.new
+            def b.exception(*a); "notex"; end
+            r << t { raise b }
+            r << t { raise 123 }
+            r << t { raise StopIteration }[0]
+            r << t { raise StopIteration, "m" }
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn kernel_raise_cause_matrix() {
+        run_test_once(
+            r##"
+            def t; yield; rescue Exception => e; [e.class.to_s, (e.cause && e.cause.class.to_s)]; end
+            r = []
+            r << t { raise "a", cause: TypeError.new("c") }
+            r << t { begin; raise "x"; rescue; raise "y", cause: nil; end }
+            r << t { raise "a", cause: 123 }[0]
+            e1 = RuntimeError.new("s")
+            r << t { raise e1, cause: e1 }
+            a = RuntimeError.new("a"); b = RuntimeError.new("b")
+            r << (begin; begin; raise a, cause: b; rescue; end; begin; raise b, cause: a; rescue => e; e.class.to_s; end; end)
+            r
+            "##,
+        );
+    }
+
     fn kernel_raise_class() {
         run_test_error("raise ArgumentError");
         run_test_error(r#"raise TypeError, "custom""#);

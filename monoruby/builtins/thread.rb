@@ -12,10 +12,11 @@ class Thread
   # asynchronous interruption — #raise / #kill — is not implemented yet,
   # so there is nothing to mask).
 
-  def self.each_caller_location
-    caller_locations(1).each do |loc|
-      yield loc
-    end
+  def self.each_caller_location(&block)
+    Kernel.raise LocalJumpError, "no block given" unless block
+    locs = caller_locations(1)
+    locs.each(&block) if locs
+    nil
   end
 
   # Whether a detected deadlock is ignored rather than aborting. monoruby
@@ -230,6 +231,22 @@ class Thread
   # this is a distinct-per-object token rather than a real kernel tid.
   def native_thread_id
     alive? ? object_id : nil
+  end
+
+  # Thread#backtrace / #backtrace_locations: the native `__backtrace`
+  # yields the raw frame strings (nil for a dead thread); the argument
+  # slicing and Location wrapping live here.
+  def backtrace(*args)
+    bt = __backtrace
+    return bt if bt.nil?
+    Thread::Backtrace.__slice(bt, args)
+  end
+
+  def backtrace_locations(*args)
+    bt = __backtrace
+    return nil if bt.nil?
+    sliced = Thread::Backtrace.__slice(bt, args)
+    sliced && sliced.map { |f| Thread::Backtrace::Location.new(f) }
   end
 
   # True aliases (ruby/spec checks `instance_method(:terminate) ==
@@ -688,6 +705,49 @@ class Thread
     # (nil when unset) as Kernel.__backtrace_limit.
     def self.limit
       Kernel.__backtrace_limit || -1
+    end
+
+    # Slice a raw backtrace per the Thread#backtrace(_locations) /
+    # Kernel#caller(_locations) argument forms: (), (start), (start,
+    # length) or (range). Array#[] slice semantics apply (an exactly
+    # consumed start yields [], beyond it nil), plus CRuby's
+    # ArgumentErrors for negative values. Lives on Backtrace (not
+    # Thread) so a bare `raise` cannot dispatch to Thread#raise.
+    def self.__slice(bt, args)
+      case args.size
+      when 0
+        bt
+      when 1
+        a = args[0]
+        if a.is_a?(Range)
+          bt[a]
+        else
+          a = __slice_int(a)
+          raise ArgumentError, "negative level (#{a})" if a < 0
+          bt[a..]
+        end
+      when 2
+        s = __slice_int(args[0])
+        raise ArgumentError, "negative level (#{s})" if s < 0
+        if args[1].nil?
+          bt[s..]
+        else
+          l = __slice_int(args[1])
+          raise ArgumentError, "negative size (#{l})" if l < 0
+          bt[s, l]
+        end
+      else
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..2)"
+      end
+    end
+
+    def self.__slice_int(v)
+      return v if v.is_a?(Integer)
+      if v.respond_to?(:to_int)
+        r = v.to_int
+        return r if r.is_a?(Integer)
+      end
+      raise TypeError, "no implicit conversion of #{v.class} into Integer"
     end
 
     class Location

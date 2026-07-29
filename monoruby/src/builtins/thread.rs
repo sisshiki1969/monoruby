@@ -35,7 +35,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(THREAD_CLASS, "join", thread_join, 0, 1, false);
     globals.define_builtin_func(THREAD_CLASS, "value", thread_value, 0);
     globals.define_builtin_func(THREAD_CLASS, "status", thread_status, 0);
-    globals.define_builtin_func(THREAD_CLASS, "backtrace", thread_backtrace, 0);
+    // Raw, unsliced form; the public Thread#backtrace /
+    // #backtrace_locations (argument slicing, Location wrapping) are
+    // Ruby (builtins/thread.rb).
+    globals.define_builtin_func(THREAD_CLASS, "__backtrace", thread_backtrace, 0);
     globals.define_builtin_func(THREAD_CLASS, "alive?", thread_alive, 0);
     globals.define_builtin_func(THREAD_CLASS, "stop?", thread_stop_p, 0);
     globals.define_builtin_func(THREAD_CLASS, "wakeup", thread_wakeup, 0);
@@ -188,39 +191,40 @@ fn pending_interrupt_p(
     )))
 }
 
-/// Build the exception for an asynchronous `Thread#raise` from its
-/// arguments (a simplified `Kernel#raise`): no args -> RuntimeError;
-/// exception object (+ optional message override); exception class
-/// (+ optional message); a String message.
+/// Build the exception for a `Thread#raise` from its rest-args (CRuby's
+/// `rb_make_exception`, shared with `Kernel#raise`): no args -> a fresh
+/// `RuntimeError` with an empty message (NOT Kernel#raise's `$!`
+/// re-raise); otherwise exception object / class / String / duck-typed
+/// `#exception`, with optional message-override, backtrace, and a
+/// trailing `cause:` keyword hash.
 fn build_async_error(
     vm: &mut Executor,
     globals: &mut Globals,
     args: &[Value],
 ) -> Result<MonorubyErr> {
-    let Some(a0) = args.first().copied() else {
-        return Ok(MonorubyErr::runtimeerr("unhandled exception"));
+    // Rest-args calling convention: a trailing `{cause: ...}` hash is
+    // the keyword argument.
+    let (args, cause_kwarg) = match args.last() {
+        Some(last) => match last.try_hash_ty() {
+            Some(h) if h.len() == 1 => {
+                match h.get(Value::symbol_from_str("cause"), vm, globals)? {
+                    Some(c) => (&args[..args.len() - 1], Some(c)),
+                    None => (args, None),
+                }
+            }
+            _ => (args, None),
+        },
+        None => (args, None),
     };
-    if let Some(ex) = a0.is_exception() {
-        let mut err = MonorubyErr::new_from_exception(ex);
-        if let Some(msg) = args.get(1) {
-            err.set_msg(msg.coerce_to_str(vm, globals)?);
-            return Ok(err);
+    if args.is_empty() {
+        if cause_kwarg.is_some() {
+            return Err(MonorubyErr::argumenterr(
+                "only cause is given with no arguments",
+            ));
         }
-        return Ok(err.with_original(a0));
+        return Ok(MonorubyErr::runtimeerr(""));
     }
-    if let Some(klass) = a0.is_class() {
-        if klass.is_exception() {
-            let cargs: Vec<Value> = args.get(1).copied().into_iter().collect();
-            let ex = vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &cargs, None, None)?;
-            let err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
-            return Ok(err.with_original(ex));
-        }
-        return Err(MonorubyErr::typeerr("exception class/object expected"));
-    }
-    if let Some(msg) = a0.is_rstring() {
-        return Ok(MonorubyErr::runtimeerr(msg.to_str()?));
-    }
-    Err(MonorubyErr::typeerr("exception class/object expected"))
+    super::kernel::make_exception_error(vm, globals, args, cause_kwarg)
 }
 
 ///
@@ -1756,6 +1760,29 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn thread_raise_same_thread_matrix() {
+        run_test_once(
+            r##"
+            def t; yield; rescue Exception => e; [e.class.to_s, e.message[0, 50], (e.cause && e.cause.class.to_s)]; end
+            r = []
+            r << t { Thread.current.raise }
+            r << t { begin; raise "orig"; rescue; Thread.current.raise; end }
+            r << t { Thread.current.raise("msg", "extra") }[0]
+            o = Object.new
+            def o.exception(*a); StandardError.new(a.inspect); end
+            r << t { Thread.current.raise(o, "foo") }
+            b = Object.new
+            def b.exception(*a); "notex"; end
+            r << t { Thread.current.raise(b) }[0..1]
+            r << t { Thread.current.raise(RuntimeError, "m", cause: TypeError.new("c")) }
+            r << t { Thread.current.raise(cause: TypeError.new("c")) }[0..1]
+            r << (begin; Thread.current.raise(RuntimeError, "m", ["bt.rb:9"]); rescue => e; e.backtrace; end)
+            r
+            "##,
+        );
+    }
+
     fn thread_cross_thread_raise_stays_in_caller() {
         // A raise inside a Ruby-implemented Thread instance method must
         // surface in the *caller*, not be queued into the receiver thread
