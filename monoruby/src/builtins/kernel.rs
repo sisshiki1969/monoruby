@@ -816,13 +816,11 @@ fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let print_id = IdentId::get_id("print");
     if args.len() == 0 {
         // `print` with no arguments writes `$_` (the caller's
-        // frame-local last-read line). A `nil` `$_` prints nothing.
-        // `vm.get_last_read_line` resolves the LEP past this native
-        // frame, so it sees the Ruby caller's `$_`, not print's own.
+        // frame-local last-read line). `vm.get_last_read_line` resolves
+        // the LEP past this native frame, so it sees the Ruby caller's
+        // `$_`, not print's own. Passed down explicitly (a nil `$_`
+        // prints as "") so `IO#print` still appends `$\`.
         let lastline = vm.get_last_read_line();
-        if lastline.is_nil() {
-            return Ok(Value::nil());
-        }
         vm.invoke_method_inner(globals, print_id, stdout, &[lastline], None, None)?;
     } else {
         let argvec: Vec<Value> = args.iter().cloned().collect();

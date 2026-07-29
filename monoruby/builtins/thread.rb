@@ -29,7 +29,36 @@ class Thread
     @@ignore_deadlock = flag
   end
 
-  attr_accessor :name
+  # NOTE: every raise inside an *instance* method of Thread must be the
+  # explicit `Kernel.raise` — a bare `raise` dispatches on `self`, and
+  # `self` here is the receiver Thread, so it would silently become the
+  # asynchronous `Thread#raise` *into that thread* (queueing the
+  # exception there and returning nil to the caller) whenever the
+  # receiver is not the current thread.
+
+  attr_reader :name
+
+  # CRuby coerces the name with #to_str (TypeError otherwise), rejects
+  # embedded NULs, and allows nil to clear the name.
+  def name=(name)
+    unless name.nil?
+      unless name.is_a?(String)
+        if name.respond_to?(:to_str)
+          name = name.to_str
+          unless name.is_a?(String)
+            Kernel.raise TypeError,
+              "can't convert #{name.class} to String (#{name.class}#to_str gives #{name.class})"
+          end
+        else
+          Kernel.raise TypeError, "no implicit conversion of #{name.class} into String"
+        end
+      end
+      if name.include?("\0")
+        Kernel.raise ArgumentError, "string contains null byte"
+      end
+    end
+    @name = name
+  end
 
   # Reported when a thread dies with an unhandled exception (read by the
   # native finalizer). Falls back to the class-level default
@@ -114,7 +143,7 @@ class Thread
       if key.respond_to?(:to_str)
         key.to_str.to_sym
       else
-        raise TypeError, "#{key.inspect} is not a symbol nor a string"
+        Kernel.raise TypeError, "#{key.inspect} is not a symbol nor a string"
       end
     end
   end
@@ -126,7 +155,7 @@ class Thread
   end
 
   def []=(key, value)
-    raise FrozenError, "can't modify frozen thread locals" if frozen?
+    Kernel.raise FrozenError, "can't modify frozen thread locals" if frozen?
     (@fiber_locals ||= {})[__thread_key(key)] = value
   end
 
@@ -141,7 +170,7 @@ class Thread
 
   def fetch(key, *default)
     if default.size > 1
-      raise ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)"
+      Kernel.raise ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)"
     end
     k = __thread_key(key)
     if @fiber_locals && @fiber_locals.key?(k)
@@ -152,7 +181,7 @@ class Thread
     elsif !default.empty?
       default[0]
     else
-      raise KeyError.new("key not found: #{key.inspect}", receiver: self, key: key)
+      Kernel.raise KeyError.new("key not found: #{key.inspect}", receiver: self, key: key)
     end
   end
 
@@ -162,13 +191,16 @@ class Thread
   end
 
   def thread_variable_set(key, value)
-    raise FrozenError, "can't modify frozen thread locals" if frozen?
+    Kernel.raise FrozenError, "can't modify frozen thread locals" if frozen?
     (@thread_variables ||= {})[__thread_key(key)] = value
   end
 
   def thread_variable?(key)
+    # CRuby: assigning nil "removes" the variable as far as this
+    # predicate is concerned (the key itself stays listed in
+    # #thread_variables) — so test the value, not key presence.
     k = __thread_key(key)
-    !!(@thread_variables && @thread_variables.key?(k))
+    !!(@thread_variables && !@thread_variables[k].nil?)
   end
 
   def thread_variables
@@ -184,7 +216,7 @@ class Thread
   def priority=(value)
     unless value.is_a?(Integer)
       unless value.respond_to?(:to_int) && (value = value.to_int).is_a?(Integer)
-        raise TypeError, "no implicit conversion of #{value.class} into Integer"
+        Kernel.raise TypeError, "no implicit conversion of #{value.class} into Integer"
       end
     end
     # CRuby clamps the stored priority to -3..3.
@@ -200,6 +232,20 @@ class Thread
     alive? ? object_id : nil
   end
 
+  # True aliases (ruby/spec checks `instance_method(:terminate) ==
+  # instance_method(:kill)` and `method(:fork) == method(:start)`).
+  alias terminate kill
+  alias exit kill
+  class << self
+    alias fork start
+
+    # Thread has no allocator: instances are only created through
+    # Thread.new/start/fork (CRuby raises the same TypeError).
+    def allocate
+      Kernel.raise TypeError, "allocator undefined for Thread"
+    end
+  end
+
   # The object returned by `Process.detach`. Reaping one specific child via
   # `Process.wait2` is a *terminating* operation (unlike an arbitrary thread
   # body), so — unlike a general Thread, which defines no #join / #value —
@@ -211,7 +257,9 @@ class Thread
     # a Waiter is an inert shell around one specific child pid, so build
     # it via allocate.
     def self.new(pid)
-      w = allocate
+      # Not `allocate` — Thread.allocate deliberately raises TypeError
+      # (no user-visible allocator); the privileged spelling still works.
+      w = __builtin_allocate__
       w.__send__(:__init_waiter, pid)
       w
     end
@@ -635,6 +683,13 @@ class Thread
   end
 
   class Backtrace
+    # Maximum backtrace length set by --backtrace-limit, or -1 when the
+    # option was not given (CRuby). The runtime exposes the raw option
+    # (nil when unset) as Kernel.__backtrace_limit.
+    def self.limit
+      Kernel.__backtrace_limit || -1
+    end
+
     class Location
       def initialize(frame)
         @frame = frame.to_s

@@ -1071,6 +1071,14 @@ impl Codegen {
             }
         }
 
+        // CRuby ignores SIGPIPE at startup so a write(2) to a closed pipe
+        // surfaces as `Errno::EPIPE` instead of killing the process. The
+        // recorded disposition (globals.rs) is `Ignore { from_nil: true }`,
+        // which is what `Signal.trap("PIPE", ...)` reports as nil.
+        if !codegen.install_signal_ignore(libc::SIGPIPE) {
+            panic!("Failed to ignore SIGPIPE");
+        }
+
         #[cfg(feature = "perf")]
         codegen.perf_info(pair, "monoruby-vm");
 

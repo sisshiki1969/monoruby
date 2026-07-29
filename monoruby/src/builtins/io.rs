@@ -62,6 +62,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_rest(IO_CLASS, "popen", io_popen);
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
     globals.define_builtin_funcs(IO_CLASS, "fileno", &["to_i"], io_fileno, 0);
+    globals.define_builtin_func_with(IO_CLASS, "fcntl", io_fcntl, 1, 2, false);
     globals.define_builtin_func(IO_CLASS, "to_io", io_to_io, 0);
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
@@ -278,7 +279,14 @@ pub(super) fn io_init_from_fd(
                 Some(v.coerce_to_string(vm, globals)?)
             } else {
                 let flags = v.coerce_to_int_i64(vm, globals)?;
-                Some(super::file::mode_string_from_flags(flags))
+                let m = super::file::mode_string_from_flags(flags);
+                // The internal no-truncate spellings ("w-"/"-w") only
+                // affect File-open truncation; wrapping an existing fd
+                // never truncates, so they mean plain write-only here.
+                Some(match m.as_str() {
+                    "w-" | "-w" => "w".to_string(),
+                    _ => m,
+                })
             }
         }
     };
@@ -877,8 +885,8 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         vm.to_s(globals, lfp.arg(0))?.into_bytes()
     };
     let mut done = 0;
-    blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, || {
-        lfp.self_val().as_io_inner_mut().write(&bytes, &mut done)
+    blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {
+        lfp.self_val().as_io_inner_mut().write(&bytes, &mut done, _store)
     })?;
     lfp.self_val().as_io_inner_mut().flush()?;
     Ok(lfp.self_val())
@@ -892,32 +900,66 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/puts.html]
 #[monoruby_builtin]
 fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    fn decompose(collector: &mut Vec<Value>, val: Value, seen: &mut Vec<u64>) {
-        match val.try_array_ty() {
-            Some(ary) => {
-                let id = val.id();
-                if seen.contains(&id) {
-                    collector.push(Value::string("[...]".to_string()));
-                } else {
-                    seen.push(id);
-                    ary.iter().for_each(|v| decompose(collector, *v, seen));
-                    seen.pop();
+    // CRuby's rb_io_puts: a real Array recurses; any other non-String is
+    // first offered `#to_ary` (an Array result recurses, `nil` falls back
+    // to `#to_s`, anything else is the usual conversion TypeError).
+    fn decompose(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        collector: &mut Vec<Value>,
+        val: Value,
+        seen: &mut Vec<u64>,
+    ) -> Result<()> {
+        if let Some(ary) = val.try_array_ty() {
+            let id = val.id();
+            if seen.contains(&id) {
+                collector.push(Value::string("[...]".to_string()));
+            } else {
+                seen.push(id);
+                for v in ary.iter() {
+                    decompose(vm, globals, collector, *v, seen)?;
                 }
+                seen.pop();
             }
-            None => collector.push(val),
+            return Ok(());
         }
+        if val.is_rstring().is_none()
+            && globals
+                .store
+                .check_method(val, IdentId::get_id("to_ary"))
+                .is_some()
+        {
+            let converted =
+                vm.invoke_method_inner(globals, IdentId::get_id("to_ary"), val, &[], None, None)?;
+            if converted.try_array_ty().is_some() {
+                return decompose(vm, globals, collector, converted, seen);
+            }
+            if !converted.is_nil() {
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {} to Array ({}#to_ary gives {})",
+                    val.get_real_class_name(&globals.store),
+                    val.get_real_class_name(&globals.store),
+                    converted.get_real_class_name(&globals.store)
+                )));
+            }
+        }
+        collector.push(val);
+        Ok(())
     }
     let mut collector = Vec::new();
     let mut seen = Vec::new();
     let args = lfp.arg(0).as_array();
+    let no_args = args.is_empty();
     for v in args.iter().cloned() {
-        decompose(&mut collector, v, &mut seen);
+        decompose(vm, globals, &mut collector, v, &mut seen)?;
     }
 
     let self_val = lfp.self_val();
     let write_id = IdentId::get_id("write");
-    if collector.is_empty() {
-        // puts with no args writes a newline
+    if no_args {
+        // puts with no args writes a newline. (An empty *array* argument
+        // decomposes to nothing and writes nothing — only the genuinely
+        // argument-less call gets the bare newline.)
         let newline = Value::string_from_str("\n");
         vm.invoke_method_inner(globals, write_id, self_val, &[newline], None, None)?;
     } else {
@@ -962,14 +1004,46 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let write_id = IdentId::get_id("write");
-    for v in lfp.arg(0).as_array().iter().cloned() {
-        let str_val = if v.is_rstring().is_some() {
-            v
+    // Each object goes through `#to_s` (never `#to_str`); the output
+    // field separator `$,` goes between objects and the output record
+    // separator `$\` is appended, both only when non-nil (CRuby).
+    let to_str_val = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<Value> {
+        if v.is_rstring().is_some() {
+            Ok(v)
         } else {
             let s = vm.to_s(globals, v)?;
-            Value::string(s)
-        };
-        vm.invoke_method_inner(globals, write_id, self_val, &[str_val], None, None)?;
+            Ok(Value::string(s))
+        }
+    };
+    let sep = globals
+        .get_gvar(IdentId::get_id("$,"))
+        .filter(|v| !v.is_nil());
+    let rs = globals
+        .get_gvar(IdentId::get_id("$\\"))
+        .filter(|v| !v.is_nil());
+    let args = lfp.arg(0).as_array();
+    if args.is_empty() {
+        // `print` with no arguments writes `$_` (the caller's frame-local
+        // last-read line; resolved past this native frame). A nil `$_`
+        // still writes `$\`.
+        let lastline = vm.get_last_read_line();
+        if !lastline.is_nil() {
+            let sv = to_str_val(vm, globals, lastline)?;
+            vm.invoke_method_inner(globals, write_id, self_val, &[sv], None, None)?;
+        }
+    } else {
+        for (i, v) in args.iter().cloned().enumerate() {
+            if i > 0 && let Some(sep) = sep {
+                let sv = to_str_val(vm, globals, sep)?;
+                vm.invoke_method_inner(globals, write_id, self_val, &[sv], None, None)?;
+            }
+            let str_val = to_str_val(vm, globals, v)?;
+            vm.invoke_method_inner(globals, write_id, self_val, &[str_val], None, None)?;
+        }
+    }
+    if let Some(rs) = rs {
+        let sv = to_str_val(vm, globals, rs)?;
+        vm.invoke_method_inner(globals, write_id, self_val, &[sv], None, None)?;
     }
     Ok(Value::nil())
 }
@@ -987,10 +1061,10 @@ fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 
     let buf = vm.format_by_args(globals, &format_str, &args)?;
     let mut done = 0;
-    blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, || {
+    blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {
         lfp.self_val()
             .as_io_inner_mut()
-            .write(buf.as_bytes(), &mut done)
+            .write(buf.as_bytes(), &mut done, _store)
     })?;
 
     Ok(Value::nil())
@@ -1183,7 +1257,7 @@ pub(crate) fn blocking_io_region<T>(
     globals: &mut Globals,
     io: Value,
     events: i16,
-    mut f: impl FnMut() -> Result<T>,
+    mut f: impl FnMut(&Store) -> Result<T>,
 ) -> Result<T> {
     loop {
         // Entry parking (wait for readiness *before* attempting the
@@ -1228,7 +1302,7 @@ pub(crate) fn blocking_io_region<T>(
         } else {
             None
         };
-        let res = f();
+        let res = f(&globals.store);
         // Restore the fd's blocking mode *before* parking: while this
         // thread is parked, other green threads (or a spawned child) may
         // use the same fd and must see it in its original mode.
@@ -1299,7 +1373,7 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
     let self_ = lfp.self_val();
     let complete_utf8 = io_completes_utf8(globals, self_);
-    let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         lfp.self_val()
             .as_io_inner_mut()
             .getline(sep.as_deref(), limit, complete_utf8)
@@ -1553,7 +1627,7 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         lfp.self_val().as_io_inner().ensure_readable()?;
         Vec::new()
     } else {
-        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
             lfp.self_val().as_io_inner_mut().read(length)
         })?
     };
@@ -1732,7 +1806,7 @@ fn io_class_readlines(
         vm.temp_push(io_val);
         vm.temp_array_new(None);
         let result = (|| {
-            while let Some(mut buf) = blocking_io_region(vm, globals, io_val, libc::POLLIN, || {
+            while let Some(mut buf) = blocking_io_region(vm, globals, io_val, libc::POLLIN, |_store| {
                 io_val
                     .as_io_inner_mut()
                     .getline(sep.as_deref(), limit, complete_utf8)
@@ -1910,7 +1984,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         vm.temp_push(io_val);
         let mut lineno = 0i64;
         let result = (|| {
-            while let Some(mut buf) = blocking_io_region(vm, globals, io_val, libc::POLLIN, || {
+            while let Some(mut buf) = blocking_io_region(vm, globals, io_val, libc::POLLIN, |_store| {
                 io_val
                     .as_io_inner_mut()
                     .getline(sep.as_deref(), limit, complete_utf8)
@@ -2304,6 +2378,34 @@ fn io_fileno(
 }
 
 ///
+/// ### IO#fcntl
+/// - fcntl(cmd, arg = 0) -> Integer
+///
+/// Thin wrapper over fcntl(2). `arg` must be an Integer (the String
+/// forms some exotic commands take are not supported). Raises `IOError`
+/// on a closed stream and the matching `Errno::*` on syscall failure.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fcntl.html]
+#[monoruby_builtin]
+fn io_fcntl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let fd = self_.as_io_inner().fileno()?;
+    let cmd = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
+    let arg = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => v.coerce_to_int_i64(vm, globals)?,
+        _ => 0,
+    };
+    // SAFETY: fcntl(2) with an integer third argument; no memory is
+    // passed, so there are no aliasing concerns.
+    let ret = unsafe { libc::fcntl(fd, cmd, arg as libc::c_long) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fcntl"));
+    }
+    Ok(Value::integer(ret as i64))
+}
+
+///
 /// ### IO#to_io
 /// - to_io -> self
 ///
@@ -2340,7 +2442,7 @@ fn io_readlines(
     let self_ = lfp.self_val();
     let complete_utf8 = io_completes_utf8(globals, self_);
     let mut lines = Vec::new();
-    while let Some(mut buf) = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    while let Some(mut buf) = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         lfp.self_val()
             .as_io_inner_mut()
             .getline(sep.as_deref(), limit, complete_utf8)
@@ -2588,7 +2690,7 @@ fn io_eof_(
         return Ok(Value::bool(false));
     }
     // Read 1 byte; if empty, we're at EOF.
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         lfp.self_val().as_io_inner_mut().read(Some(1))
     })?;
     let io = self_.as_io_inner_mut();
@@ -2621,7 +2723,7 @@ fn io_getbyte(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         lfp.self_val().as_io_inner_mut().read(Some(1))
     })?;
     if buf.is_empty() {
@@ -2743,7 +2845,7 @@ fn io_getc(
     let self_ = lfp.self_val();
     let ext_obj = read_io_encoding(globals, self_, false);
     let ext = enc_obj_to_enum(globals, ext_obj).unwrap_or(crate::value::Encoding::Utf8);
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         read_one_char_enc(lfp.self_val().as_io_inner_mut(), ext)
     })?;
     if buf.is_empty() {
@@ -3013,8 +3115,8 @@ fn io_write_method(
         };
         total += bytes.len() as i64;
         let mut done = 0;
-        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, || {
-            lfp.self_val().as_io_inner_mut().write(&bytes, &mut done)
+        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {
+            lfp.self_val().as_io_inner_mut().write(&bytes, &mut done, _store)
         })?;
     }
     Ok(Value::integer(total))
@@ -3209,7 +3311,7 @@ fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             None => Value::string_from_vec(vec![]),
         });
     }
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         lfp.self_val().as_io_inner_mut().sysread(maxlen as usize)
     })?;
     if buf.is_empty() {
@@ -3268,7 +3370,7 @@ fn io_readpartial(
             None => Value::string_from_vec(vec![]),
         });
     }
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         lfp.self_val().as_io_inner_mut().readpartial(maxlen as usize)
     })?;
     if buf.is_empty() {
@@ -3890,7 +3992,7 @@ fn set_encoding_by_bom(
     }
     // Read up to 4 bytes — enough to disambiguate every BOM (and to
     // tell UTF-16LE from UTF-32LE, which share the FF FE prefix).
-    let head = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, || {
+    let head = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         lfp.self_val().as_io_inner_mut().read(Some(4))
     })?;
     let (consume, enc_name): (usize, &str) = match head.first() {
@@ -4573,8 +4675,8 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                     // immediately — Rust's stdout is block-buffered).
                     let mut vv = *v;
                     let mut done = 0;
-                    blocking_io_region(vm, globals, vv, libc::POLLOUT, || {
-                        vv.as_io_inner_mut().write(chunk, &mut done)
+                    blocking_io_region(vm, globals, vv, libc::POLLOUT, |_store| {
+                        vv.as_io_inner_mut().write(chunk, &mut done, _store)
                     })?;
                     vv.as_io_inner_mut().flush()
                 }
@@ -4630,7 +4732,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                         break;
                     }
                     let mut vv = *v;
-                    let chunk = blocking_io_region(vm, globals, vv, libc::POLLIN, || {
+                    let chunk = blocking_io_region(vm, globals, vv, libc::POLLIN, |_store| {
                         vv.as_io_inner_mut().readpartial(want)
                     })?;
                     if chunk.is_empty() {
@@ -7388,6 +7490,118 @@ mod tests {
             w.close
             res
             "#,
+        );
+    }
+
+
+    #[test]
+    fn io_puts_to_ary_protocol() {
+        // A non-String object is offered #to_ary first; an empty Array
+        // writes nothing (only the argument-less call writes "\n").
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            w.puts([])
+            w.puts
+            o = Object.new
+            def o.to_ary; ["x", [1, [2]]]; end
+            w.puts(o)
+            n = Object.new
+            def n.to_s; "S"; end
+            w.puts(n)
+            w.close
+            r.read
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_print_field_and_record_separators() {
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            begin
+              $, = "-"
+              $\ = "!"
+              w.print("a", "b")
+              $, = nil
+              $\ = nil
+              o = Object.new
+              def o.to_s; "OBJ"; end
+              w.print(o)
+            ensure
+              $, = nil
+              $\ = nil
+            end
+            w.close
+            r.read
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_class_write_options() {
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_iowrite_#{Process.pid}_#{rand(100000)}"
+            r = []
+            begin
+              r << IO.write(path, "hello")
+              # An offset suppresses truncation.
+              r << IO.write(path, "AB", 1)
+              r << File.read(path)
+              r << IO.binwrite(path, "zz", 3)
+              r << File.read(path)
+              r << (begin; IO.write(path, "hi", mode: "r"); rescue IOError => e; e.message; end)
+              r << IO.write(path, "hi", 2, mode: "r", open_args: ["w"])
+              r << File.read(path).bytes
+              r << (begin; IO.write(path, "hi", open_args: [{binmode: true}]); rescue IOError => e; e.message; end)
+              r << IO.write(path, "x", flags: File::CREAT | File::WRONLY | File::TRUNC)
+              r << IO.write(path, 123, mode: "a")
+              r << File.read(path)
+            ensure
+              File.unlink(path) rescue nil
+            end
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_write_closed_pipe_epipe() {
+        // SIGPIPE is ignored at startup; a write to a closed pipe
+        // surfaces Errno::EPIPE instead of killing the process.
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            r.close
+            begin
+              w.write("x")
+              :no_error
+            rescue Errno::EPIPE => e
+              e.class.to_s
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_fcntl_and_nonblock_stub() {
+        run_test_once(
+            r##"
+            require 'fcntl'
+            require 'io/nonblock'
+            res = []
+            File.open("/tmp") { |f| res << (f.fcntl(Fcntl::F_GETFD) >= 0) }
+            r, w = IO.pipe
+            r.nonblock = false
+            res << r.nonblock?
+            r.nonblock(true) { res << r.nonblock? }
+            res << r.nonblock?
+            f = File.open("/tmp"); f.close
+            res << (begin; f.fcntl(Fcntl::F_GETFL); rescue IOError => e; e.message; end)
+            res
+            "##,
         );
     }
 }

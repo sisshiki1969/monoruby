@@ -227,6 +227,10 @@ pub struct Globals {
     /// signal runs a Ruby `Proc`, is ignored, or lowers to the default
     /// exception. See doc/signal.md A7.
     pub(crate) signal_handlers: Vec<crate::codegen::signal_table::SignalDisposition>,
+    /// The `Signal.trap(:EXIT, ...)` handler, if any. EXIT is a
+    /// pseudo-signal: the handler is not a signal disposition but an
+    /// exit hook, run *before* the `at_exit` handlers (CRuby order).
+    pub(crate) exit_trap_handler: Option<Value>,
     /// `Kernel#at_exit` handler Procs, run in LIFO order at program
     /// termination. Held here as GC roots: they are reachable only from
     /// this table yet must survive until the program exits.
@@ -281,6 +285,9 @@ impl alloc::GC<RValue> for Globals {
         // roots: nothing else references them, yet they must survive until
         // they run at program termination.
         for v in &self.at_exit_handlers {
+            v.mark(alloc);
+        }
+        if let Some(v) = &self.exit_trap_handler {
             v.mark(alloc);
         }
         for (_, v) in &self.finalizers {
@@ -465,10 +472,15 @@ impl Globals {
                 for &signo in signal_table::POSIX_SIGNALS {
                     v[signo as usize] = SignalDisposition::Default;
                 }
+                // SIGPIPE is ignored at startup (writes surface
+                // Errno::EPIPE instead of killing the process, as in
+                // CRuby); trap reports the never-trapped state as nil.
+                v[libc::SIGPIPE as usize] = SignalDisposition::Ignore { from_nil: true };
                 v
             },
             invokers,
             enum_block_arity: Vec::new(),
+            exit_trap_handler: None,
             at_exit_handlers: Vec::new(),
             finalizers: Vec::new(),
             #[cfg(feature = "profile")]

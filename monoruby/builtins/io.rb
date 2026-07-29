@@ -151,3 +151,53 @@ class IO
     end
   end
 end
+
+class IO
+  # IO.write / IO.binwrite (File inherits both, as in CRuby).
+  #
+  # A given offset suppresses truncation: the file is opened
+  # write-create *without* TRUNC and seeked to the offset first.
+  # `:open_args` replaces every other option (the write mode must be
+  # given inside it — File.open's default read mode makes the write
+  # fail, matching CRuby); otherwise `:mode` (String or Integer),
+  # `:flags` (OR'd onto an Integer mode), `:perm` and the remaining
+  # options are forwarded to File.open.
+  def self.write(name, string, offset = nil, **opts)
+    __class_write(name, string, offset, false, opts)
+  end
+
+  def self.binwrite(name, string, offset = nil, **opts)
+    __class_write(name, string, offset, true, opts)
+  end
+
+  def self.__class_write(name, string, offset, binary, opts)
+    if (open_args = opts[:open_args])
+      f = File.open(name, *open_args)
+    else
+      opts = opts.dup
+      mode = opts.delete(:mode)
+      flags = opts.delete(:flags)
+      perm = opts.delete(:perm)
+      if mode.nil?
+        mode = File::WRONLY | File::CREAT
+        mode |= File::TRUNC unless offset
+        mode |= File::BINARY if binary
+        mode |= flags if flags
+      elsif flags && mode.is_a?(Integer)
+        mode |= flags
+      end
+      f = if opts.empty?
+        perm ? File.open(name, mode, perm) : File.open(name, mode)
+      else
+        perm ? File.open(name, mode, perm, **opts) : File.open(name, mode, **opts)
+      end
+    end
+    begin
+      f.seek(offset) if offset
+      f.write(string)
+    ensure
+      f.close
+    end
+  end
+  private_class_method :__class_write
+end

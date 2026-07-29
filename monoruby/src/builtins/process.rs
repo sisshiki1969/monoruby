@@ -1018,6 +1018,26 @@ pub(super) fn signal_trap(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let signo = trap_signo(vm, globals, lfp.arg(0))?;
+    if signo == 0 {
+        // The EXIT pseudo-signal: not a signal at all but an exit hook,
+        // run before the `at_exit` handlers (see run_exit_handlers).
+        use signal_table::SignalDisposition;
+        let new_disp = if let Some(cmd) = lfp.try_arg(1) {
+            command_disposition(cmd)?
+        } else if let Some(bh) = lfp.block() {
+            SignalDisposition::Handler(vm.generate_proc(globals, bh, pc)?.into())
+        } else {
+            return Err(MonorubyErr::argumenterr(
+                "tried to create Proc object without a block",
+            ));
+        };
+        let prev = globals.exit_trap_handler.take();
+        if let SignalDisposition::Handler(v) = new_disp {
+            globals.exit_trap_handler = Some(v);
+        }
+        // A never-trapped EXIT reports nil (CRuby).
+        return Ok(prev.unwrap_or_default());
+    }
     if signal_table::is_uncatchable(signo) {
         // KILL / STOP: the kernel forbids catching these.
         return Err(MonorubyErr::argumenterr("Signal already used by VM or OS"));
@@ -1228,6 +1248,23 @@ mod tests {
     #[test]
     fn signal_trap_unsupported_signal() {
         run_test_error(r#"Signal.trap("NO_SUCH_SIGNAL") { }"#);
+    }
+
+    #[test]
+    #[test]
+    fn signal_trap_exit_pseudo_signal() {
+        // EXIT is an exit hook, not a signal: trapping it succeeds, a
+        // never-trapped EXIT reports nil, re-trapping reports the
+        // previous handler, and "DEFAULT" unsets it.
+        run_test_once(
+            r#"
+            a = Signal.trap(:EXIT, proc { })
+            b = Signal.trap('EXIT') { }
+            c = Signal.trap(:EXIT, 'DEFAULT')
+            d = Signal.trap(:EXIT, 'DEFAULT')
+            [a, b.is_a?(Proc), c.is_a?(Proc), d]
+            "#,
+        );
     }
 
     #[test]

@@ -602,13 +602,13 @@ impl IoInner {
     /// marker. Because `*progress` records exactly what was flushed, the
     /// builtin's `blocking_region` retry after a `Signal.trap` handler
     /// resumes mid-buffer without duplicating output.
-    pub fn write(&mut self, data: &[u8], progress: &mut usize) -> Result<()> {
+    pub fn write(&mut self, data: &[u8], progress: &mut usize, store: &Store) -> Result<()> {
         self.ensure_writable()?;
         fn write_all(
             writer: &mut impl Write,
             data: &[u8],
             progress: &mut usize,
-            map: impl Fn(String) -> MonorubyErr,
+            store: &Store,
         ) -> Result<()> {
             while *progress < data.len() {
                 // A blocking pipe write that already transferred bytes
@@ -621,7 +621,7 @@ impl IoInner {
                     return Err(MonorubyErr::signal_interrupt());
                 }
                 match writer.write(&data[*progress..]) {
-                    Ok(0) => return Err(map("write returned 0".to_string())),
+                    Ok(0) => return Err(MonorubyErr::ioerr("write returned 0")),
                     Ok(n) => *progress += n,
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
                         if signal_pending() {
@@ -635,35 +635,28 @@ impl IoInner {
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         return Err(MonorubyErr::would_block_interrupt());
                     }
-                    Err(e) => return Err(map(e.to_string())),
+                    // Surface the OS error as the matching Errno::* (e.g.
+                    // Errno::EPIPE on a closed pipe — SIGPIPE is ignored
+                    // at startup, as in CRuby).
+                    Err(e) => return Err(MonorubyErr::errno_plain(store, &e)),
                 }
             }
             Ok(())
         }
         match self {
-            Self::Stdout => write_all(
-                &mut std::io::stdout(),
-                data,
-                progress,
-                MonorubyErr::rangeerr,
-            ),
-            Self::Stderr => write_all(
-                &mut std::io::stderr(),
-                data,
-                progress,
-                MonorubyErr::rangeerr,
-            ),
+            Self::Stdout => write_all(&mut std::io::stdout(), data, progress, store),
+            Self::Stderr => write_all(&mut std::io::stderr(), data, progress, store),
             Self::File(file) => write_all(
                 Rc::get_mut(file).unwrap().reader.get_mut(),
                 data,
                 progress,
-                MonorubyErr::rangeerr,
+                store,
             ),
             Self::Popen(popen) => {
                 let popen = Rc::get_mut(popen).unwrap();
                 // `ensure_writable` guaranteed the writer is present.
                 let writer = popen.writer.as_mut().unwrap();
-                write_all(writer, data, progress, MonorubyErr::ioerr)
+                write_all(writer, data, progress, store)
             }
             // `ensure_writable` already rejected non-writable streams.
             Self::Stdin | Self::Closed(..) => unreachable!(),
