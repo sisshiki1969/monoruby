@@ -150,6 +150,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.set_constant_by_str(IO_CLASS, "NOCTTY", Value::integer(libc::O_NOCTTY as i64));
     globals.set_constant_by_str(IO_CLASS, "NONBLOCK", Value::integer(libc::O_NONBLOCK as i64));
     globals.set_constant_by_str(IO_CLASS, "SYNC", Value::integer(libc::O_SYNC as i64));
+    globals.set_constant_by_str(IO_CLASS, "DSYNC", Value::integer(libc::O_DSYNC as i64));
+    globals.set_constant_by_str(IO_CLASS, "NOFOLLOW", Value::integer(libc::O_NOFOLLOW as i64));
+    // Linux-only bits — absent from Darwin's open(2) (and from CRuby
+    // on Darwin, which defines these constants only `#ifdef O_*`).
+    #[cfg(target_os = "linux")]
+    {
+        globals.set_constant_by_str(IO_CLASS, "RSYNC", Value::integer(libc::O_RSYNC as i64));
+        globals.set_constant_by_str(IO_CLASS, "DIRECT", Value::integer(libc::O_DIRECT as i64));
+    }
     // (IO::SEEK_SET / SEEK_CUR / SEEK_END are already defined elsewhere
     //  in startup; do not re-define here.)
     let stdin = Value::new_io_stdin();
@@ -6235,6 +6244,52 @@ mod tests {
             io.print "new data"; io.flush; io.close
             r << [File.read(e1), File.read(e2)]
             File.delete(a, b, c, d, e1, e2)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_reopen_path_modes() {
+        // Explicit mode variants of the path form: "r+"/"w+"/"a+"
+        // string modes, an integer-flags mode, the invalid-mode
+        // ArgumentError, and mode inference from an "r+" receiver.
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_test_reopenm_#{Process.pid}_#{rand(100000)}"
+            a = base + "_a"; b = base + "_b"
+            File.write(a, "aaaa"); File.write(b, "bbbb")
+            r = []
+            # "r+": read/write, no truncation, positioned at 0
+            io = File.open(a); io.reopen(b, "r+")
+            r << io.read(2); io.print "XX"; io.flush; io.close
+            r << File.read(b)
+            # "w+": truncates
+            File.write(b, "bbbb")
+            io = File.open(a); io.reopen(b, "w+")
+            r << [io.read, File.read(b).bytesize]
+            io.close
+            # "a+": appends
+            File.write(b, "bb")
+            io = File.open(a); io.reopen(b, "a+")
+            io.print "cc"; io.flush
+            r << File.read(b)
+            io.close
+            # integer flags mode (WRONLY|CREAT|TRUNC == "w")
+            File.write(b, "bbbb")
+            io = File.open(a); io.reopen(b, File::WRONLY | File::CREAT | File::TRUNC)
+            io.print "ii"; io.flush; io.close
+            r << File.read(b)
+            # invalid mode string
+            io = File.open(a)
+            r << (begin; io.reopen(b, "z"); rescue ArgumentError => e; e.class.to_s; end)
+            io.close
+            # mode inference from an "r+" receiver: no truncation
+            File.write(b, "keep")
+            io = File.open(a, "r+"); io.reopen(b)
+            r << [io.read, File.read(b)]
+            io.close
+            File.delete(a, b)
             r
             "##,
         );

@@ -5,23 +5,27 @@ module File::Constants
   FNM_DOTMATCH = 4
   FNM_CASEFOLD = 8
   FNM_EXTGLOB = 16
-  # Open(2) flags and flock(2) operations (Linux values), mirrored on
-  # File itself below via `include File::Constants` in CRuby; monoruby
-  # historically defined them directly on File, so keep both in sync.
-  RDONLY   = 0
-  WRONLY   = 1
-  RDWR     = 2
-  APPEND   = 1024
-  CREAT    = 64
-  EXCL     = 128
-  TRUNC    = 512
-  NOCTTY   = 256
-  NONBLOCK = 2048
-  DSYNC    = 4096
-  SYNC     = 1052672
-  RSYNC    = 1052672
-  DIRECT   = 16384
-  NOFOLLOW = 131072
+  # Open(2) flags and flock(2) operations, mirrored on File itself
+  # below via `include File::Constants` in CRuby; monoruby historically
+  # defined them directly on File, so keep both in sync. The values
+  # come from the libc-backed IO:: constants so they match the running
+  # platform's kernel bits — Linux and Darwin disagree on almost every
+  # one (e.g. O_APPEND is 0o2000 on Linux but 0x8 on Darwin), and
+  # comparisons against fcntl(F_GETFL) results depend on this.
+  RDONLY   = IO::RDONLY
+  WRONLY   = IO::WRONLY
+  RDWR     = IO::RDWR
+  APPEND   = IO::APPEND
+  CREAT    = IO::CREAT
+  EXCL     = IO::EXCL
+  TRUNC    = IO::TRUNC
+  NOCTTY   = IO::NOCTTY
+  NONBLOCK = IO::NONBLOCK
+  DSYNC    = IO::DSYNC
+  SYNC     = IO::SYNC
+  RSYNC    = IO::RSYNC if defined?(IO::RSYNC)
+  DIRECT   = IO::DIRECT if defined?(IO::DIRECT)
+  NOFOLLOW = IO::NOFOLLOW
   # No-op outside Windows; defined for source compatibility (CRuby).
   SHARE_DELETE = 0
   BINARY   = 0
@@ -43,20 +47,20 @@ class File
   NULL = "/dev/null"
   BINARY = 0
 
-  RDONLY   = 0
-  WRONLY   = 1
-  RDWR     = 2
-  APPEND   = 1024
-  CREAT    = 64
-  EXCL     = 128
-  TRUNC    = 512
-  NOCTTY   = 256
-  NONBLOCK = 2048
-  DSYNC    = 4096
-  SYNC     = 1052672
-  RSYNC    = 1052672
-  DIRECT   = 16384
-  NOFOLLOW = 131072
+  RDONLY   = IO::RDONLY
+  WRONLY   = IO::WRONLY
+  RDWR     = IO::RDWR
+  APPEND   = IO::APPEND
+  CREAT    = IO::CREAT
+  EXCL     = IO::EXCL
+  TRUNC    = IO::TRUNC
+  NOCTTY   = IO::NOCTTY
+  NONBLOCK = IO::NONBLOCK
+  DSYNC    = IO::DSYNC
+  SYNC     = IO::SYNC
+  RSYNC    = IO::RSYNC if defined?(IO::RSYNC)
+  DIRECT   = IO::DIRECT if defined?(IO::DIRECT)
+  NOFOLLOW = IO::NOFOLLOW
   SHARE_DELETE = 0
   LOCK_SH  = 1
   LOCK_EX  = 2
