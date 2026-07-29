@@ -63,6 +63,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "pid", io_pid, 0);
     globals.define_builtin_funcs(IO_CLASS, "fileno", &["to_i"], io_fileno, 0);
     globals.define_builtin_func_with(IO_CLASS, "fcntl", io_fcntl, 1, 2, false);
+    globals.define_builtin_func_with(IO_CLASS, "ioctl", io_ioctl, 1, 2, false);
+    globals.define_builtin_func(IO_CLASS, "initialize_copy", io_initialize_copy, 1);
     globals.define_builtin_func(IO_CLASS, "to_io", io_to_io, 0);
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
@@ -2600,6 +2602,77 @@ fn io_fcntl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fcntl"));
     }
     Ok(Value::integer(ret as i64))
+}
+
+///
+/// ### IO#ioctl
+/// - ioctl(cmd, arg = 0) -> Integer
+///
+/// Thin wrapper over ioctl(2) with an integer argument (the
+/// memory-backed String forms are not supported). Raises `IOError` on a
+/// closed stream and the matching `Errno::*` (e.g. `Errno::ENOTTY`) on
+/// syscall failure.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/ioctl.html]
+#[monoruby_builtin]
+fn io_ioctl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let fd = self_.as_io_inner().fileno()?;
+    let cmd = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let arg = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => v.coerce_to_int_i64(vm, globals)?,
+        _ => 0,
+    };
+    // SAFETY: ioctl(2) with an integer third argument; no memory is
+    // passed, so there are no aliasing concerns.
+    let ret = unsafe { libc::ioctl(fd, cmd as libc::c_ulong, arg as libc::c_long) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "ioctl"));
+    }
+    Ok(Value::integer(ret as i64))
+}
+
+///
+/// ### IO#initialize_copy (the #dup / #clone hook)
+///
+/// A duplicated IO wraps a dup(2) of the descriptor: a distinct fd
+/// sharing the open file description (offset, status flags) with the
+/// original, close-on-exec and autoclose both set (CRuby). Raises
+/// IOError when the source is closed.
+#[monoruby_builtin]
+fn io_initialize_copy(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let other = lfp.arg(0);
+    let fd = other.as_io_inner().fileno()?;
+    // SAFETY: dup(2) of a validated fd.
+    let newfd = unsafe { libc::dup(fd) };
+    if newfd == -1 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "dup"));
+    }
+    // SAFETY: setting FD_CLOEXEC on the fd we just created.
+    unsafe { libc::fcntl(newfd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    let (readable, writable) = {
+        let inner = other.as_io_inner();
+        (inner.is_readable(), inner.is_writable())
+    };
+    let path = other.as_io_inner().path();
+    let has_path = path.is_some();
+    *self_.as_io_inner_mut() = IoInner::from_raw_fd_autoclose(
+        newfd,
+        path.unwrap_or_default(),
+        has_path,
+        readable,
+        writable,
+        true,
+    );
+    Ok(self_)
 }
 
 ///
@@ -5790,6 +5863,37 @@ mod tests {
 
     #[test]
     #[test]
+    #[test]
+    fn io_dup_ioctl_and_exact_reads() {
+        // #dup wraps a dup(2)'d fd (distinct fileno, shared offset,
+        // cloexec+autoclose set, IOError after close / on closed source);
+        // sized reads consume the fd exactly, so syswrite lands at the
+        // logical position; ioctl surfaces ENOTTY on a regular file and
+        // IOError on a closed stream.
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_iodup_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "0123456789")
+            r = []
+            File.open(path) do |f|
+              g = f.dup
+              r << [g.fileno != f.fileno, g.autoclose?, g.close_on_exec?]
+              f.read(3)
+              r << g.read(3)
+              g.close
+              r << (begin; g.read(1); rescue IOError => e; e.message; end)
+            end
+            io = File.open(path); io.close
+            r << (begin; io.dup; rescue IOError => e; e.message; end)
+            File.open(path, "r+") { |f| f.read(2); f.syswrite("XY") }
+            r << File.read(path)
+            File.open(path) { |f| r << (begin; f.ioctl(0x5401); rescue SystemCallError => e; e.class.to_s; end) }
+            r << (begin; io.ioctl(1); rescue IOError => e; e.message; end)
+            r
+            "##,
+        );
+    }
+
     fn io_popen_argv_env_opts_forms() {
         // Array form [env, cmd, arg..., exec_opts], outside env hash,
         // chdir: (String and #to_path), subclass instantiation, and

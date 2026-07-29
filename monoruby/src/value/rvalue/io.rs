@@ -824,7 +824,23 @@ impl IoInner {
                 let reader = &mut *file.reader;
                 let mut buf = vec![];
                 let res = if let Some(length) = length {
-                    read_upto(reader, length, &mut buf)
+                    // A sized read takes exactly `length` bytes: drain what
+                    // the BufReader already holds, then read the remainder
+                    // from the fd directly. Letting the BufReader fill its
+                    // 8K buffer here would advance the fd far past the
+                    // logical position, which `#syswrite`, `#dup` (shared
+                    // file offset) and write-after-read positioning all
+                    // observe (CRuby reads exactly `length` too).
+                    let avail = reader.buffer().len().min(length);
+                    if avail > 0 {
+                        buf.extend_from_slice(&reader.buffer()[..avail]);
+                        reader.consume(avail);
+                    }
+                    if buf.len() < length {
+                        read_upto(reader.get_mut(), length, &mut buf)
+                    } else {
+                        Ok(())
+                    }
                 } else {
                     read_all(reader, &mut buf)
                 };
