@@ -385,7 +385,7 @@ pub(crate) fn sleep(
     // A pending interrupt allowed at blocking points fires *instead of*
     // parking (also the case where it was queued while running).
     let cur0 = SCHEDULER.with(|s| s.borrow().current.unwrap());
-    deliver_pending_now(globals, cur0, true)?;
+    deliver_pending_now(vm, globals, cur0, true)?;
     set_park_blocking(cur0, true);
     // Consume a park permit armed by a wakeup that raced this park (see
     // `ThreadInner::park_permit`): return immediately instead of
@@ -411,7 +411,7 @@ pub(crate) fn sleep(
         });
         scheduler_run(vm, globals)?;
         flush_pending_reports(vm, globals);
-        take_main_pending(globals, true)?;
+        take_main_pending(vm, globals, true)?;
     } else {
         let cur = SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -420,7 +420,7 @@ pub(crate) fn sleep(
             s.sleepers.push((deadline, cur));
             cur
         });
-        park_switch(vm, cur)?;
+        park_switch(vm, globals, cur)?;
     }
     Ok(start.elapsed())
 }
@@ -432,7 +432,7 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
     // `Thread.pass` is a delivery point for `:immediate` interrupts but
     // NOT for `:on_blocking` ones (it is not a blocking call).
     let cur0 = SCHEDULER.with(|s| s.borrow().current.unwrap());
-    deliver_pending_now(globals, cur0, false)?;
+    deliver_pending_now(vm, globals, cur0, false)?;
     set_park_blocking(cur0, false);
     if is_current_main() {
         // Dispatch the threads that are ready *now* (not the ones they
@@ -483,7 +483,7 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         });
         result?;
         flush_pending_reports(vm, globals);
-        take_main_pending(globals, false)
+        take_main_pending(vm, globals, false)
     } else {
         let cur = SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -492,7 +492,7 @@ pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
             s.ready.push_back(cur);
             cur
         });
-        park_switch(vm, cur)
+        park_switch(vm, globals, cur)
     }
 }
 
@@ -515,7 +515,7 @@ pub(crate) fn join(
     let deadline = timeout.map(|d| Instant::now() + d);
     loop {
         flush_pending_reports(vm, globals);
-        deliver_pending_now(globals, cur, true)?;
+        deliver_pending_now(vm, globals, cur, true)?;
         set_park_blocking(cur, true);
         if target.as_thread_inner().is_dead() {
             return Ok(true);
@@ -537,7 +537,7 @@ pub(crate) fn join(
                 }
             });
             scheduler_run(vm, globals)?;
-            take_main_pending(globals, true)?;
+            take_main_pending(vm, globals, true)?;
         } else {
             SCHEDULER.with(|s| {
                 let mut s = s.borrow_mut();
@@ -549,7 +549,7 @@ pub(crate) fn join(
                     s.sleepers.push((deadline, cur));
                 }
             });
-            park_switch(vm, cur)?;
+            park_switch(vm, globals, cur)?;
         }
     }
 }
@@ -626,6 +626,7 @@ fn take_pending_as_error(mut thread: Value, idx: usize) -> Option<MonorubyErr> {
 /// boundaries). Called at every park entry and at handle_interrupt
 /// entry/exit.
 pub(crate) fn deliver_pending_now(
+    vm: &mut Executor,
     globals: &mut Globals,
     thread: Value,
     at_blocking: bool,
@@ -640,9 +641,43 @@ pub(crate) fn deliver_pending_now(
             t.as_thread_inner_mut().killed = false;
             return Err(MonorubyErr::new(MonorubyErrKind::SystemExit(0), "exit"));
         }
-        return Err(err);
+        return Err(finalize_delivered_raise(vm, globals, err));
     }
     Ok(())
+}
+
+/// Target-side half of CRuby's `Thread#raise` protocol: delivery runs
+/// the queued exception object through `#exception` (no arguments)
+/// *in the receiving thread's context* — `rb_make_exception` executes
+/// once in the caller (with the message) and once here, so a user
+/// override observes both calls, and the delivered object is the
+/// second call's result. Errors carry the caller-pinned `cause:`
+/// across. Kills and message-only raises (no original object) pass
+/// through unchanged.
+fn finalize_delivered_raise(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    err: MonorubyErr,
+) -> MonorubyErr {
+    let Some(obj) = err.original else {
+        return err;
+    };
+    if obj.is_exception().is_none() {
+        return err;
+    }
+    match vm.invoke_method_inner(globals, IdentId::get_id("exception"), obj, &[], None, None) {
+        Ok(result) => match result.is_exception() {
+            Some(ex) => {
+                let mut new_err = MonorubyErr::new_from_exception(ex).with_original(result);
+                new_err.explicit_cause = err.explicit_cause;
+                new_err
+            }
+            None => MonorubyErr::typeerr("exception object expected"),
+        },
+        // A raising `#exception` override: its error is what the
+        // target sees.
+        Err(e) => e,
+    }
 }
 
 /// Whether `thread` has a queued pending interrupt (optionally filtered
@@ -705,7 +740,7 @@ pub(crate) fn interrupt(
         // false), everything else stays queued for a later delivery
         // point.
         target.as_thread_inner_mut().pending.push_back(int);
-        return deliver_pending_now(globals, target, false);
+        return deliver_pending_now(vm, globals, target, false);
     }
     if target.as_thread_inner().is_dead() {
         // CRuby: killing a dead thread is a no-op; raising into one is
@@ -748,10 +783,10 @@ fn kill_unwind_error() -> MonorubyErr {
 
 /// Deliver a pending interrupt queued for the *main* thread. Called
 /// after the scheduler returns control to a main-thread park.
-fn take_main_pending(globals: &mut Globals, at_blocking: bool) -> Result<()> {
+fn take_main_pending(vm: &mut Executor, globals: &mut Globals, at_blocking: bool) -> Result<()> {
     let main = SCHEDULER.with(|s| s.borrow().main.unwrap());
     // The handle_interrupt mask still applies at this delivery point.
-    deliver_pending_now(globals, main, at_blocking)
+    deliver_pending_now(vm, globals, main, at_blocking)
 }
 
 /// Park the current thread until `fd` reports one of `events` (or the
@@ -776,7 +811,7 @@ pub(crate) fn wait_fds(
 ) -> Result<()> {
     ensure_main(vm);
     let cur0 = SCHEDULER.with(|s| s.borrow().current.unwrap());
-    deliver_pending_now(globals, cur0, true)?;
+    deliver_pending_now(vm, globals, cur0, true)?;
     set_park_blocking(cur0, true);
     if is_current_main() {
         SCHEDULER.with(|s| {
@@ -794,7 +829,7 @@ pub(crate) fn wait_fds(
         unregister_io_waiter(SCHEDULER.with(|s| s.borrow().main.unwrap()));
         result?;
         flush_pending_reports(vm, globals);
-        take_main_pending(globals, true)
+        take_main_pending(vm, globals, true)
     } else {
         let cur = SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -808,7 +843,7 @@ pub(crate) fn wait_fds(
             }
             cur
         });
-        let result = park_switch(vm, cur);
+        let result = park_switch(vm, globals, cur);
         unregister_io_waiter(cur);
         result
     }
@@ -822,14 +857,20 @@ fn unregister_io_waiter(thread: Value) {
 
 /// Park the current green thread: record the context to resume, then
 /// switch to the scheduler. Returns when the scheduler resumes us.
-fn park_switch(vm: &mut Executor, mut cur: Value) -> Result<()> {
+fn park_switch(vm: &mut Executor, globals: &mut Globals, mut cur: Value) -> Result<()> {
     cur.as_thread_inner_mut().resume_exec = Some(std::ptr::NonNull::from(&mut *vm));
     let switch = CODEGEN.with(|c| c.borrow().switch_to_scheduler);
     match switch(vm as *mut _, Value::nil()) {
         Some(_) => Ok(()),
-        // Reserved for asynchronous interrupt injection (Thread#raise /
-        // #kill): a resume that sets an error instead of a value.
-        None => Err(vm.take_error()),
+        // Asynchronous interrupt injection (Thread#raise / #kill): a
+        // resume that sets an error instead of a value. `dispatch` set
+        // the error from machinery context, where Ruby must not run —
+        // the target-side `#exception` re-dispatch happens here, on
+        // this (the receiving) thread's own stack.
+        None => {
+            let err = vm.take_error();
+            Err(finalize_delivered_raise(vm, globals, err))
+        }
     }
 }
 
@@ -1292,7 +1333,35 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
         match &inner.exception {
             None => return,
             Some(err) if matches!(err.kind(), MonorubyErrKind::SystemExit(_)) => return,
-            Some(err) => format!("{} ({})", err.message(), err.class_name(&globals.store)),
+            Some(err) => {
+                // Regular backtrace order (CRuby `rb_error_write` with
+                // the non-highlighted, non-reversed layout): the
+                // innermost frame heads the message line, the rest
+                // follow as `\tfrom` lines.
+                let head = format!("{} ({})", err.message(), err.class_name(&globals.store));
+                let frames: Vec<String> = err
+                    .trace
+                    .iter()
+                    .map(|(source_loc, fid)| {
+                        if let Some((loc, source)) = source_loc {
+                            globals.store.location(*fid, source, *loc)
+                        } else {
+                            globals.store.internal_location(fid.unwrap())
+                        }
+                    })
+                    .collect();
+                match frames.split_first() {
+                    None => head,
+                    Some((first, rest)) => {
+                        let mut text = format!("{first}: {head}");
+                        for f in rest {
+                            text.push_str("\n\tfrom ");
+                            text.push_str(f);
+                        }
+                        text
+                    }
+                }
+            }
         }
     };
     let ivar = IdentId::get_id("@report_on_exception");
@@ -1314,18 +1383,28 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
     if !report {
         return;
     }
-    // The header mirrors Thread#inspect (`#<Thread:0xADDR[@name] run>`)
-    // without calling it — the spec matchers key on the `Thread` word and
-    // interpolate `t.inspect` taken while the thread was running.
+    // The header mirrors Thread#inspect
+    // (`#<Thread:0xADDR[@name][ file:line] run>`) without calling it —
+    // the spec matchers interpolate `t.inspect` taken while the thread
+    // was running, so every inspect component (including the spawn
+    // location) must round-trip.
     let name = globals
         .store
         .get_ivar(thread, IdentId::get_id("@name"))
         .and_then(|v| v.is_str().map(|s| format!("@{s}")))
         .unwrap_or_default();
+    let location = globals
+        .store
+        .get_ivar(thread, IdentId::get_id("@__spawn_location"))
+        .and_then(|v| v.is_str().map(|s| format!(" {s}")))
+        .unwrap_or_default();
+    // `object_id << 1`, exactly as the Ruby-side `Thread#to_s` prints
+    // the address.
     let text = format!(
-        "#<Thread:0x{:016x}{} run> terminated with exception (report_on_exception is true):\n{}\n",
-        thread.id(),
+        "#<Thread:0x{:016x}{}{} run> terminated with exception (report_on_exception is true):\n{}\n",
+        thread.id() << 1,
         name,
+        location,
         exc
     );
     SCHEDULER.with(|s| s.borrow_mut().pending_reports.push(text));

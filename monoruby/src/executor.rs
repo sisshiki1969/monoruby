@@ -1229,12 +1229,32 @@ impl Executor {
         // Re-raise of an existing exception object (`raise exc`): return
         // that object so its identity and instance variables are
         // preserved. CRuby only assigns a backtrace if the exception
-        // doesn't have one yet, so fill the trace in only when empty.
+        // doesn't have one yet, so fill the trace in only when empty —
+        // where "empty" includes an explicit `set_backtrace(nil)`,
+        // which clears the stored backtrace so the new raise
+        // re-captures one at its own location.
         if let Some(mut orig) = err.original {
+            let bt_id = IdentId::get_id("/backtrace");
+            let cleared = globals
+                .store
+                .get_ivar(orig, bt_id)
+                .is_some_and(|v| v.is_nil());
             if let Some(ex) = orig.is_exception_mut() {
-                if ex.trace.is_empty() {
+                if ex.trace.is_empty() || cleared {
                     ex.trace = err.take_trace();
                 }
+            }
+            if cleared {
+                // Replace the memoized nil (which would shadow the
+                // fresh capture in `Exception#backtrace`) with the
+                // rendered new trace.
+                let traces: Vec<String> = orig.is_exception().unwrap().trace_location(globals);
+                let fresh = if traces.is_empty() {
+                    Value::nil()
+                } else {
+                    Value::array_from_iter(traces.into_iter().map(Value::string))
+                };
+                let _ = globals.store.set_ivar(orig, bt_id, fresh);
             }
             return self.chain_cause(globals, orig, explicit_cause);
         }
@@ -1408,7 +1428,14 @@ impl Executor {
         }
         if globals.store.get_ivar(v, cause_id).is_none() {
             let active = self.errinfo;
-            if !active.is_nil() && active.id() != v.id() {
+            // No implicit chaining onto an exception that already sits
+            // in `$!`'s own cause chain — re-raising `e1` while
+            // rescuing an `e2` whose cause is `e1` must not create a
+            // cycle (CRuby leaves `e1.cause` nil).
+            if !active.is_nil()
+                && active.id() != v.id()
+                && !crate::builtins::kernel::cause_chain_contains(globals, active, v)
+            {
                 let _ = globals.store.set_ivar(v, cause_id, active);
             }
         }

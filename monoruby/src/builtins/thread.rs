@@ -45,7 +45,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(THREAD_CLASS, "wakeup", thread_wakeup, 0);
     globals.define_builtin_func(THREAD_CLASS, "__wakeup_permit", thread_wakeup_permit, 0);
     globals.define_builtin_func(THREAD_CLASS, "run", thread_run, 0);
-    globals.define_builtin_func_rest(THREAD_CLASS, "raise", thread_raise);
+    globals.define_builtin_func_with_kw(THREAD_CLASS, "raise", thread_raise, 0, 3, false, &["cause"], true);
     globals.define_builtin_func(THREAD_CLASS, "kill", thread_kill, 0);
     globals.define_builtin_func(THREAD_CLASS, "exit", thread_kill, 0);
     globals.define_builtin_func(THREAD_CLASS, "terminate", thread_kill, 0);
@@ -122,7 +122,7 @@ fn handle_interrupt(
     scheduler::push_interrupt_mask(vm, mask);
     // Entry delivery point (non-blocking): a pending interrupt the new
     // mask allows fires before the block runs.
-    let res = match scheduler::deliver_pending_now(globals, cur, false) {
+    let res = match scheduler::deliver_pending_now(vm, globals, cur, false) {
         Err(err) => Err(err),
         Ok(()) => vm.invoke_block_once(globals, bh, &[]),
     };
@@ -131,7 +131,7 @@ fn handle_interrupt(
     // mask deferred fire here — even when the block itself raised, and
     // the delivered interrupt takes precedence over the block's own
     // exception (CRuby).
-    scheduler::deliver_pending_now(globals, cur, false)?;
+    scheduler::deliver_pending_now(vm, globals, cur, false)?;
     res
 }
 
@@ -192,31 +192,18 @@ fn pending_interrupt_p(
     )))
 }
 
-/// Build the exception for a `Thread#raise` from its rest-args (CRuby's
+/// Build the exception for a `Thread#raise` (CRuby's
 /// `rb_make_exception`, shared with `Kernel#raise`): no args -> a fresh
 /// `RuntimeError` with an empty message (NOT Kernel#raise's `$!`
 /// re-raise); otherwise exception object / class / String / duck-typed
-/// `#exception`, with optional message-override, backtrace, and a
-/// trailing `cause:` keyword hash.
+/// `#exception`, with optional message-override, backtrace, and the
+/// `cause:` keyword.
 fn build_async_error(
     vm: &mut Executor,
     globals: &mut Globals,
     args: &[Value],
+    cause_kwarg: Option<Value>,
 ) -> Result<MonorubyErr> {
-    // Rest-args calling convention: a trailing `{cause: ...}` hash is
-    // the keyword argument.
-    let (args, cause_kwarg) = match args.last() {
-        Some(last) => match last.try_hash_ty() {
-            Some(h) if h.len() == 1 => {
-                match h.get(Value::symbol_from_str("cause"), vm, globals)? {
-                    Some(c) => (&args[..args.len() - 1], Some(c)),
-                    None => (args, None),
-                }
-            }
-            _ => (args, None),
-        },
-        None => (args, None),
-    };
     if args.is_empty() {
         if cause_kwarg.is_some() {
             return Err(MonorubyErr::argumenterr(
@@ -240,8 +227,44 @@ fn build_async_error(
 /// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/raise.html]
 #[monoruby_builtin]
 fn thread_raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let args = lfp.arg(0).as_array().to_vec();
-    let err = build_async_error(vm, globals, &args)?;
+    // Same keyword layout as Kernel#raise: `cause:` at slot 3,
+    // leftover keywords (kw_rest, slot 4) act as a trailing positional
+    // Hash — while a literal positional `{cause: ...}` stays a
+    // positional message argument (and TypeErrors after a String),
+    // matching CRuby's keyword separation.
+    let cause_kwarg = lfp.try_arg(3);
+    let kw_rest = lfp
+        .try_arg(4)
+        .filter(|v| v.try_hash_ty().is_some_and(|h| h.len() != 0));
+    let mut args = vec![];
+    if let Some(a0) = lfp.try_arg(0) {
+        args.push(a0);
+        if let Some(a1) = lfp.try_arg(1) {
+            args.push(a1);
+            if let Some(a2) = lfp.try_arg(2) {
+                args.push(a2);
+            }
+        }
+    }
+    if let Some(kw) = kw_rest {
+        args.push(kw);
+    }
+    let mut err = build_async_error(vm, globals, &args, cause_kwarg)?;
+    // The cause comes from the *calling* context: with no explicit
+    // `cause:`, the caller's `$!` (or its absence) is pinned here so
+    // delivery in the target never picks up the target's own `$!`
+    // (CRuby captures the cause in `rb_threadptr_raise`).
+    if cause_kwarg.is_none() && err.explicit_cause.is_none() {
+        let errinfo = vm.errinfo();
+        let cause = if errinfo.is_exception().is_some()
+            && err.original.map(|o| o.id()) != Some(errinfo.id())
+        {
+            errinfo
+        } else {
+            Value::nil()
+        };
+        err.explicit_cause = Some(cause);
+    }
     scheduler::interrupt(vm, globals, lfp.self_val(), PendingInterrupt::Raise(err))?;
     Ok(Value::nil())
 }
@@ -539,8 +562,8 @@ fn thread_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 ///
 /// ### Thread#status
 ///
-/// "run" | "sleep" | false (normal termination) | nil (terminated with
-/// exception).
+/// "run" | "sleep" | "aborting" | false (normal termination) | nil
+/// (terminated with exception).
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Thread/i/status.html]
 #[monoruby_builtin]
@@ -556,7 +579,17 @@ fn thread_status(vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             }
         }
         ThreadState::Sleeping | ThreadState::Joining | ThreadState::IoWaiting => {
+            // A killed thread parked inside its ensure clauses still
+            // reports "sleep" (CRuby: the sleep state wins over
+            // to_kill), and so does one whose kill is queued but not
+            // yet delivered.
             Value::string_from_str("sleep")
+        }
+        // Running with the kill delivered — the unrescuable unwind is
+        // executing ensure clauses — reports "aborting" (CRuby's
+        // to_kill flag).
+        ThreadState::Created | ThreadState::Runnable if inner.killed => {
+            Value::string_from_str("aborting")
         }
         ThreadState::Created | ThreadState::Runnable => {
             // The current thread reports "run"; queued-but-not-yet-run
@@ -1950,6 +1983,90 @@ mod tests {
             t.thread_variable_set(:b, false)
             [t.thread_variable?(:a), t.thread_variable?(:b), t.thread_variables, t.thread_variable_get(:a)]
             "#,
+        );
+    }
+
+    #[test]
+    fn thread_raise_async_protocol() {
+        // Async Thread#raise argument protocol: Hash messages, the
+        // caller-context cause, and the two-sided #exception dispatch
+        // (once in the caller with the message, once in the target
+        // with no arguments).
+        run_test_once(
+            r#"
+            r = []
+            de = Class.new(StandardError) { attr_reader :data; def initialize(d); @data = d; end }
+            t = Thread.new { Thread.current.report_on_exception = false; sleep }
+            Thread.pass until t.stop?
+            t.raise(de, {data: 42})
+            begin; t.join; rescue Exception => e; r << [e.class.equal?(de), e.data]; end
+            t2 = Thread.new { Thread.current.report_on_exception = false; sleep }
+            Thread.pass until t2.stop?
+            begin
+              raise "ctx"
+            rescue => ctx
+              t2.raise(RuntimeError, "async")
+            end
+            begin; t2.join; rescue => e; r << [e.message, e.cause && e.cause.message]; end
+            cls = Class.new(Exception) do
+              attr_accessor :log
+              def initialize(*a); @log = []; super; end
+              def exception(*a); @log << [Thread.current == Thread.main, a]; super; end
+            end
+            exc = cls.new
+            t3 = Thread.new { Thread.current.report_on_exception = false; begin; sleep; rescue Exception => e; e; end }
+            Thread.pass until t3.stop?
+            t3.raise exc, "both"
+            v = t3.value
+            r << [exc.log, v.class.equal?(cls), v.message, v.equal?(exc)]
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_kill_aborting_status() {
+        // A killed thread reports "aborting" from inside its ensure
+        // clauses while running, and false once dead; a queued kill on
+        // a parked thread still reports "sleep" from outside.
+        run_test_once(
+            r#"
+            r = []
+            q = []
+            t = Thread.new { begin; q << 1; sleep; ensure; q << Thread.current.status; end }
+            Thread.pass until t.stop?
+            r << t.status
+            t.kill
+            t.join
+            r << q.last << t.status
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_report_on_exception_format() {
+        // The report goes through the (replaceable) $stderr in regular
+        // backtrace order: header line mirroring Thread#inspect, then
+        // `frame: message (Class)`, then `	from frame` lines. Only
+        // structural properties are compared — frame labels differ
+        // from CRuby's in block-nesting detail.
+        run_test_once(
+            r##"
+            require 'stringio'
+            orig = $stderr
+            $stderr = StringIO.new
+            t = Thread.new { Thread.pass; raise "boom" }
+            begin; t.join; rescue; end
+            Thread.pass
+            s = $stderr.string
+            $stderr = orig
+            lines = s.lines
+            [lines[0].include?(" terminated with exception (report_on_exception is true):"),
+             lines[0].start_with?("#<Thread:0x"),
+             (lines[1] =~ /:\d+:in '/ ? true : false),
+             lines[1].include?("boom (RuntimeError)")]
+            "##,
         );
     }
 }
