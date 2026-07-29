@@ -65,6 +65,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "fcntl", io_fcntl, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "ioctl", io_ioctl, 1, 2, false);
     globals.define_builtin_func(IO_CLASS, "initialize_copy", io_initialize_copy, 1);
+    globals.define_builtin_func_with(IO_CLASS, "reopen", io_reopen, 1, 2, false);
     globals.define_builtin_func(IO_CLASS, "to_io", io_to_io, 0);
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
@@ -2673,6 +2674,249 @@ fn io_initialize_copy(
         true,
     );
     Ok(self_)
+}
+
+///
+/// ### IO#reopen
+/// - reopen(io) -> self
+/// - reopen(path, mode = <receiver's current mode>) -> self
+///
+/// Re-associates the receiver with another stream. The IO form
+/// `dup2(2)`s the other stream's fd onto the receiver's fd number
+/// (sharing the open file description, hence the position) and the
+/// receiver takes on the other IO's class/path/mode; the path form
+/// has `freopen(3)` semantics — the receiver's fd number is
+/// re-pointed at a fresh open of `path`, positioned at 0.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/reopen.html]
+#[monoruby_builtin]
+fn io_reopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let arg0 = lfp.arg(0);
+    let is_io = |v: Value| v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::IO);
+    if lfp.try_arg(1).is_none() {
+        // IO form. A real IO argument is used as-is — CRuby's
+        // rb_io_check_io short-circuits on T_FILE without calling
+        // #to_io (the reopen spec pins this down). Other objects
+        // convert via #to_io when they respond; a wrong-typed result
+        // raises TypeError. Objects with neither fall through to the
+        // path form (#to_path / #to_str coercion).
+        if is_io(arg0) {
+            return io_reopen_io(globals, lfp.self_val(), arg0);
+        }
+        if let Some(fid) = globals.check_method(arg0, IdentId::get_id("to_io")) {
+            let conv = vm.invoke_func_inner(globals, fid, arg0, &[], None, None)?;
+            if !is_io(conv) {
+                // CRuby's conversion error spells this "to IO", not
+                // the generic coercion helper's "into", and names the
+                // real class (not a singleton).
+                let class = globals.store.get_class_name(arg0.real_class(&globals.store).id());
+                let gives = globals.store.get_class_name(conv.real_class(&globals.store).id());
+                return Err(MonorubyErr::typeerr(format!(
+                    "can't convert {class} to IO ({class}#to_io gives {gives})"
+                )));
+            }
+            return io_reopen_io(globals, lfp.self_val(), conv);
+        }
+    }
+    io_reopen_path(vm, globals, lfp)
+}
+
+/// `IO#reopen(other_io)`: `dup2(2)` the other stream's fd onto the
+/// receiver's fd number and adopt the other IO's mode, path, and
+/// class.
+fn io_reopen_io(globals: &mut Globals, self_: Value, other: Value) -> Result<Value> {
+    let mut self_ = self_;
+    let mut other = other;
+    ensure_io_open(other)?;
+    ensure_io_open(self_)?;
+    if self_.id() == other.id() {
+        return Ok(self_);
+    }
+    // Logical position of the other stream (fd offset minus its
+    // buffered lookahead / pushback), captured before the fd surgery.
+    // CRuby's io_reopen seeks both streams there afterwards so the
+    // shared description continues from the *visible* position, not
+    // from wherever buffered readahead left the fd.
+    let other_pos = if other.as_io_inner().is_readable() {
+        let pb = other.as_io_inner().pushback_len() as i64;
+        other
+            .as_io_inner_mut()
+            .seek(0, 1)
+            .ok()
+            .map(|p| (p as i64 - pb).max(0))
+    } else {
+        None
+    };
+    // Flush both write sides before re-pointing the descriptor.
+    if self_.as_io_inner().is_writable() {
+        self_.as_io_inner_mut().flush()?;
+    }
+    if other.as_io_inner().is_writable() {
+        other.as_io_inner_mut().flush()?;
+    }
+    let fd1 = self_.as_io_inner().fileno()?;
+    let fd2 = other.as_io_inner().fileno()?;
+    if fd1 != fd2 {
+        // SAFETY: dup2 of two validated open fds — atomically closes
+        // the receiver's old description and re-points its fd number.
+        if unsafe { libc::dup2(fd2, fd1) } == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "dup2"));
+        }
+        if fd1 > 2 {
+            // CRuby resets close-on-exec to true on non-STDIO fds
+            // (dup2 always clears it).
+            // SAFETY: setting FD_CLOEXEC on the fd we just dup2'ed.
+            unsafe { libc::fcntl(fd1, libc::F_SETFD, libc::FD_CLOEXEC) };
+        }
+    }
+    let (readable, writable) = {
+        let o = other.as_io_inner();
+        (o.is_readable(), o.is_writable())
+    };
+    rebuild_reopened_inner(&mut self_, fd1, other.as_io_inner().path(), readable, writable);
+    if let Some(pos) = other_pos {
+        // Both fds now share one description; seeking re-syncs the
+        // kernel offset to the logical position and drops both sides'
+        // stale read buffers.
+        let _ = self_.as_io_inner_mut().seek(pos, 0);
+        let _ = other.as_io_inner_mut().seek(pos, 0);
+    }
+    // The receiver takes on the other IO's (real) class — CRuby's
+    // RBASIC_SET_CLASS in io_reopen; `@io.reopen(file).should.instance_of?(File)`.
+    let real = other.real_class(&globals.store).id();
+    if self_.class() != real {
+        self_.change_class(real);
+    }
+    Ok(self_)
+}
+
+/// `IO#reopen(path, mode)`: freopen(3) semantics. Opens `path` and
+/// re-points the receiver's fd number at it (or installs a fresh fd
+/// when the receiver is closed — allowed for the path form).
+fn io_reopen_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    let path = super::file::to_path_str(vm, globals, lfp.arg(0))?;
+    let was_open = !self_.as_io_inner().is_closed();
+    // Resolve the mode: an explicit argument wins; otherwise
+    // reconstruct it from the receiver's current state (CRuby reuses
+    // fptr->mode). F_GETFL recovers O_APPEND, which monoruby's inner
+    // doesn't store; write-only non-append receivers are treated as
+    // "w" (create + truncate), matching the common `File.open(_, "w")`
+    // origin.
+    let mode_base = if let Some(m) = lfp.try_arg(1) {
+        let mode = if let Some(n) = m.try_fixnum() {
+            super::file::mode_string_from_flags(n)
+        } else {
+            m.coerce_to_string(vm, globals)?
+        };
+        mode.split(':').next().unwrap().replace('b', "")
+    } else {
+        let (readable, writable) = {
+            let i = self_.as_io_inner();
+            (i.is_readable(), i.is_writable())
+        };
+        let append = if was_open {
+            let fd = self_.as_io_inner().fileno()?;
+            // SAFETY: F_GETFL on the receiver's open fd; reads no memory.
+            unsafe { libc::fcntl(fd, libc::F_GETFL) & libc::O_APPEND != 0 }
+        } else {
+            false
+        };
+        match (readable, writable, append) {
+            (true, false, _) | (false, false, _) => "r".to_string(),
+            (false, true, true) => "a".to_string(),
+            (false, true, false) => "w".to_string(),
+            (true, true, true) => "a+".to_string(),
+            (true, true, false) => "r+".to_string(),
+        }
+    };
+    let (readable, writable) = match mode_base.as_str() {
+        "r" => (true, false),
+        "w" | "a" | "w-" | "-w" => (false, true),
+        "r+" | "+r" | "w+" | "+w" | "a+" | "+a" => (true, true),
+        _ => {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid access mode {mode_base}"
+            )));
+        }
+    };
+    let mut opt = std::fs::OpenOptions::new();
+    match mode_base.as_str() {
+        "r" => opt.read(true),
+        "w" => opt.write(true).create(true).truncate(true),
+        "w-" => opt.write(true).create(true),
+        "-w" => opt.write(true),
+        "a" => opt.write(true).create(true).append(true),
+        "r+" | "+r" => opt.read(true).write(true),
+        "w+" | "+w" => opt.read(true).write(true).create(true).truncate(true),
+        "a+" | "+a" => opt.read(true).write(true).create(true).append(true),
+        _ => unreachable!(),
+    };
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut opt, libc::O_CLOEXEC);
+    let file = opt.open(&path).map_err(|e| {
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path)
+    })?;
+    if was_open {
+        if self_.as_io_inner().is_writable() {
+            self_.as_io_inner_mut().flush()?;
+        }
+        let fd1 = self_.as_io_inner().fileno()?;
+        let tmpfd = std::os::fd::AsRawFd::as_raw_fd(&file);
+        if fd1 != tmpfd {
+            // SAFETY: dup2 onto the receiver's own open fd number;
+            // `file` (tmpfd) is closed when it drops below.
+            if unsafe { libc::dup2(tmpfd, fd1) } == -1 {
+                let err = std::io::Error::last_os_error();
+                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "dup2"));
+            }
+        }
+        if fd1 > 2 {
+            // SAFETY: setting FD_CLOEXEC on the receiver's fd.
+            unsafe { libc::fcntl(fd1, libc::F_SETFD, libc::FD_CLOEXEC) };
+        }
+        rebuild_reopened_inner(&mut self_, fd1, Some(path), readable, writable);
+    } else {
+        // Closed receiver: adopt the fresh fd directly.
+        let fd = std::os::fd::IntoRawFd::into_raw_fd(file);
+        *self_.as_io_inner_mut() =
+            IoInner::from_raw_fd_autoclose(fd, path, true, readable, writable, true);
+    }
+    Ok(self_)
+}
+
+/// Swap the receiver's `IoInner` for a fresh wrapper of `fd` (new
+/// buffer, no pushback, new mode/path) without disturbing fd-close
+/// responsibility. Only File-backed receivers are rebuilt: the stdio
+/// singletons keep their variant (their writes go through the process
+/// fd, which dup2 already re-pointed — the redirection works without
+/// touching the wrapper), and popen wrappers keep their child
+/// bookkeeping.
+fn rebuild_reopened_inner(
+    self_: &mut Value,
+    fd: i32,
+    path: Option<String>,
+    readable: bool,
+    writable: bool,
+) {
+    let inner = self_.as_io_inner_mut();
+    if !matches!(inner, IoInner::File(_)) {
+        return;
+    }
+    let was_autoclose = inner.is_autoclose();
+    // Release the old wrapper's claim on the fd number without closing
+    // it (the number now holds the new description); the new wrapper
+    // re-registers ownership if it had it.
+    inner.set_autoclose(false);
+    let has_path = path.is_some();
+    *inner = IoInner::from_raw_fd_autoclose(
+        fd,
+        path.unwrap_or_default(),
+        has_path,
+        readable,
+        writable,
+        was_autoclose,
+    );
 }
 
 ///
@@ -5887,6 +6131,110 @@ mod tests {
             r << File.read(path)
             File.open(path) { |f| r << (begin; f.ioctl(0x5401); rescue SystemCallError => e; e.class.to_s; end) }
             r << (begin; io.ioctl(1); rescue IOError => e; e.message; end)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_reopen_with_io() {
+        // IO form: dup2 semantics — shared position, class/path
+        // adoption, EOF reset, write redirection, error cases, #to_io
+        // conversion, and the same-object no-op.
+        run_test_once(
+            r##"
+            base = "/tmp/monoruby_test_reopen_#{Process.pid}_#{rand(100000)}"
+            a = base + "_a"; b = base + "_b"
+            File.write(a, "Line 1\nLine 2\n"); File.write(b, "Other 1\nOther 2\n")
+            r = []
+            # position of the other stream is adopted
+            io = File.open(a); other = File.open(b)
+            other.gets
+            r << [io.reopen(other).equal?(io), io.gets, io.class.to_s, io.path == other.path]
+            io.close; other.close
+            # from the beginning when the other stream is unread; EOF resets
+            io = File.open(a); other = File.open(b)
+            io.read
+            r << [io.eof?, io.reopen(other).eof?, io.gets]
+            io.close; other.close
+            # write redirection
+            w1 = base + "_w1"; w2 = base + "_w2"
+            io = File.open(w1, "w"); other = File.open(w2, "w")
+            io.print "one"; io.reopen(other); io.print "two"; io.flush
+            io.close; (other.close rescue nil)
+            r << [File.read(w1), File.read(w2)]
+            # closed argument / closed receiver raise IOError
+            closed = File.open(a); closed.close
+            io = File.open(a)
+            r << (begin; io.reopen(closed); rescue IOError => e; e.message; end)
+            io.close
+            r << (begin; io.reopen(File.open(b)); rescue IOError => e; e.message; end)
+            # to_io conversion; wrong-typed result is a TypeError
+            conv = Object.new
+            other = File.open(b)
+            conv.define_singleton_method(:to_io) { other }
+            io = File.open(a)
+            r << [io.reopen(conv).class.to_s, io.gets]
+            io.close; other.close
+            bad = Object.new
+            bad.define_singleton_method(:to_io) { "nope" }
+            io = File.open(a)
+            r << (begin; io.reopen(bad); rescue TypeError => e; e.message; end)
+            # same-object reopen is a no-op
+            r << io.reopen(io).equal?(io)
+            io.close
+            File.delete(a, b, w1, w2)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_reopen_with_path() {
+        // Path form: freopen semantics — rewind to 0, path update,
+        // mode inference from the receiver (w/a create, r -> ENOENT),
+        // explicit mode flags (append) pass through, #to_path
+        // coercion, closed receivers allowed, close-on-exec reset.
+        run_test_once(
+            r##"
+            require 'fcntl'
+            base = "/tmp/monoruby_test_reopenp_#{Process.pid}_#{rand(100000)}"
+            a = base + "_a"; b = base + "_b"; c = base + "_c"; d = base + "_d"
+            File.write(a, "Line 1\nLine 2\n"); File.write(b, "Other 1\n")
+            r = []
+            io = File.open(a); io.gets
+            io.reopen(b)
+            r << [io.gets, File.basename(io.path) == File.basename(b)]
+            io.close
+            # closed receiver with explicit mode reopens fine
+            io = File.open(a); io.close
+            io.reopen(a, "r")
+            r << [io.closed?, io.gets]
+            io.close
+            # to_path coercion
+            pth = Object.new
+            pth.define_singleton_method(:to_path) { b }
+            io = File.open(a); io.reopen(pth); r << io.gets; io.close
+            # mode inference: write-mode receivers create the target
+            io = File.open(c, "w"); io.reopen(d); r << File.exist?(d); io.close
+            io = File.open(c, "a"); File.delete(d); io.reopen(d); r << File.exist?(d); io.close
+            # read-mode receiver + missing file -> ENOENT
+            io = File.open(a)
+            r << (begin; io.reopen(base + "_missing"); rescue Errno::ENOENT => e; e.class.to_s; end)
+            io.close
+            # explicit "ab" passes O_APPEND through; original data intact
+            io = File.open(a); io.reopen(c, "ab")
+            r << ((io.fcntl(Fcntl::F_GETFL) & File::APPEND) == File::APPEND)
+            io.close
+            # write flushed before switching; cloexec reset to true
+            e1 = base + "_e1"; e2 = base + "_e2"
+            io = File.open(e1, "w"); io.print "original data"
+            io.close_on_exec = false
+            io.reopen(e2)
+            r << io.close_on_exec?
+            io.print "new data"; io.flush; io.close
+            r << [File.read(e1), File.read(e2)]
+            File.delete(a, b, c, d, e1, e2)
             r
             "##,
         );
