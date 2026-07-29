@@ -3612,4 +3612,26 @@ mod tests {
             "#,
         );
     }
+
+
+    #[test]
+    fn file_open_integer_flags_no_truncate() {
+        // WRONLY|CREAT without TRUNC must not truncate an existing
+        // file; bare WRONLY opens an existing file without creating.
+        run_test_once(
+            r#"
+            path = "/tmp/monoruby_test_flags_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "hello")
+              File.open(path, File::WRONLY | File::CREAT) { |f| f.write("A") }
+              a = File.read(path)
+              File.open(path, File::WRONLY) { |f| f.write("B") }
+              b = File.read(path)
+              [a, b]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
 }

@@ -1268,6 +1268,25 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn signal_trap_exit_dispositions() {
+        // nil / IGNORE clear the EXIT hook like DEFAULT; a handler set
+        // and left in place survives a GC (the hook is a root).
+        run_test_once(
+            r#"
+            a = Signal.trap(:EXIT, proc { })
+            b = Signal.trap(:EXIT, nil)
+            c = Signal.trap(:EXIT, 'IGNORE')
+            Signal.trap(:EXIT, proc { })
+            GC.start
+            d = Signal.trap(:EXIT, 'DEFAULT').is_a?(Proc)
+            [a, b.is_a?(Proc), c, d]
+            "#,
+        );
+        run_test_error(r#"Signal.trap(:EXIT)"#);
+    }
+
+    #[test]
     fn signal_trap_reserved_signal() {
         // SIGKILL / SIGSTOP cannot be trapped.
         run_test_error("Signal.trap(:KILL) { }");

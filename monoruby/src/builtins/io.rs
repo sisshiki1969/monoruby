@@ -7604,4 +7604,62 @@ mod tests {
             "##,
         );
     }
+
+
+    #[test]
+    fn io_puts_to_ary_edge_cases() {
+        // #to_ary returning a non-Array non-nil is the conversion
+        // TypeError; nil falls back to #to_s; a self-referencing Array
+        // renders as "[...]".
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            bad = Object.new
+            def bad.to_ary; 42; end
+            a = begin; w.puts(bad); rescue TypeError => e; e.message; end
+            nilly = Object.new
+            def nilly.to_ary; nil; end
+            def nilly.to_s; "N"; end
+            w.puts(nilly)
+            circ = ["a"]; circ << circ
+            w.puts(circ)
+            w.close
+            [a, r.read]
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_fcntl_error_paths() {
+        // An invalid fcntl command surfaces the OS Errno; an explicit
+        // nil arg is treated as 0.
+        run_test_once(
+            r##"
+            require 'fcntl'
+            File.open("/tmp") do |f|
+              a = begin; f.fcntl(-1); rescue SystemCallError => e; e.class.to_s; end
+              [a, f.fcntl(Fcntl::F_GETFD, nil) >= 0]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_print_writes_nil_lastline_with_rs() {
+        // Argument-less print with a nil $_ still writes $\ (via
+        // Kernel#print delegating the explicit lastline down).
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            begin
+              $\ = "!"
+              w.print
+            ensure
+              $\ = nil
+            end
+            w.close
+            r.read
+            "##,
+        );
+    }
 }
