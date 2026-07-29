@@ -312,6 +312,22 @@ impl Encoding {
         !matches!(self, Encoding::Ascii8 | Encoding::Utf8 | Encoding::UsAscii)
     }
 
+    /// True for the byte-oriented encodings whose 8-bit content runs
+    /// through the byte↔U+00XX surrogate space
+    /// ([`RStringInner::regex_view`]) rather than direct UTF-8 reads.
+    pub fn is_byte_oriented(self) -> bool {
+        matches!(
+            self,
+            Encoding::Ascii8
+                | Encoding::Iso8859(_)
+                | Encoding::EucJp
+                | Encoding::Sjis(_)
+                | Encoding::Iso2022Jp
+                | Encoding::Other(_)
+                | Encoding::NamedByte(_)
+        )
+    }
+
     /// Canonical CRuby-facing name. Matches the constant-name suffix
     /// after `Encoding::`, except `_` is rendered as `-` for the
     /// hyphenated forms users see in `Encoding#to_s`.
@@ -773,6 +789,13 @@ impl std::fmt::Debug for RStringInner {
 }
 
 impl Eq for RStringInner {}
+
+/// Forward surrogate map for [`RStringInner::regex_view`]: every
+/// byte becomes the Unicode scalar of the same value (i.e. the
+/// Latin-1 → UTF-8 transcode). One input byte ↔ one output `char`.
+pub fn map_bytes_to_utf8(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
+}
 
 /// Byte offset of the cached `CodeRange` (`cr`) from the head of an
 /// `RValue` holding a String, for the JIT's inline `String#setbyte`.
@@ -1510,6 +1533,70 @@ impl RStringInner {
             other.encoding(),
             other.code_range(),
         )
+    }
+
+    /// True if the `&str`-based pattern/transform machinery must go
+    /// through the byte↔`U+00XX` surrogate mapping ([`Self::regex_view`])
+    /// instead of reading the bytes as UTF-8 directly: the declared
+    /// encoding is a byte-oriented one (not UTF-8/US-ASCII, not
+    /// UTF-16/32) and the content has non-ASCII bytes. ASCII-only
+    /// content needs no mapping — it is its own UTF-8 image.
+    ///
+    /// Note this is keyed on the *declared* encoding, not on whether
+    /// the bytes happen to be valid UTF-8: ISO-8859-1 `"\xC3\xA9"`
+    /// is two characters (`Ã©`), and reading it as UTF-8 (`é`) would
+    /// give regex `.`/char-offset semantics of the wrong encoding.
+    pub fn needs_byte_mapping(&self) -> bool {
+        self.ty.is_byte_oriented() && !self.is_ascii_only()
+    }
+
+    /// A guaranteed-valid-UTF-8 view of `self` for the `&str`-based
+    /// pattern/transform machinery (regex matching, `tr`, `succ`,
+    /// `split`, …).
+    ///
+    /// - UTF-8 / US-ASCII / ASCII-only content: the direct byte view
+    ///   (borrowed), erroring like [`Self::check_utf8`] on broken
+    ///   UTF-8 — matching CRuby's `ArgumentError` for regex
+    ///   operations on invalid strings.
+    /// - Byte-oriented encodings with 8-bit content: an owned
+    ///   surrogate image where every byte `b` becomes the scalar
+    ///   `U+00bb` ([`map_bytes_to_utf8`]). One original byte ↔ one
+    ///   `char` in the view, so *char* offsets/counts in the view
+    ///   equal *byte* (= character, for single-byte encodings)
+    ///   offsets in the original. Results computed in view space are
+    ///   decoded back with [`Self::from_mapped_utf8`].
+    ///
+    /// For multibyte byte-oriented encodings (EUC-JP / Shift_JIS)
+    /// this is a byte-wise approximation of CRuby's per-encoding
+    /// character walking; ASCII-pattern matching still lands on the
+    /// right bytes (previously these raised outright).
+    pub fn regex_view(&self) -> Result<std::borrow::Cow<'_, str>> {
+        if self.needs_byte_mapping() {
+            Ok(std::borrow::Cow::Owned(map_bytes_to_utf8(self.as_bytes())))
+        } else {
+            self.check_utf8().map(std::borrow::Cow::Borrowed)
+        }
+    }
+
+    /// Decode a string built in [`Self::regex_view`]'s surrogate
+    /// space back to raw bytes tagged `enc`: every scalar `≤ U+00FF`
+    /// becomes the single byte of the same value. Scalars above
+    /// `U+00FF` can only appear if a replacement smuggled in
+    /// characters the byte encoding cannot hold (the compatibility
+    /// checks normally raise first); those keep their UTF-8 bytes as
+    /// a best effort rather than panicking.
+    pub fn from_mapped_utf8(s: &str, enc: Encoding) -> Self {
+        let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(s.len());
+        for c in s.chars() {
+            let cp = c as u32;
+            if cp <= 0xFF {
+                out.push(cp as u8);
+            } else {
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            }
+        }
+        RStringInner::from(out, enc, CodeRange::Unknown)
     }
 
     pub fn check_utf8(&self) -> Result<&str> {

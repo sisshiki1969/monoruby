@@ -914,6 +914,19 @@ fn escape_unescaped_slashes(src: &str) -> String {
     out
 }
 
+/// Slice a match range out of a regex haystack view, tolerating
+/// ranges that fall inside a UTF-8 character. An `/n` (byte-class)
+/// pattern can match a partial character of the surrogate-space
+/// view; decode such a range byte-wise instead of panicking.
+fn view_slice(given: &str, range: std::ops::Range<usize>) -> std::borrow::Cow<'_, str> {
+    match given.get(range.clone()) {
+        Some(s) => std::borrow::Cow::Borrowed(s),
+        None => std::borrow::Cow::Owned(
+            String::from_utf8_lossy(&given.as_bytes()[range]).into_owned(),
+        ),
+    }
+}
+
 // Utility methods
 
 impl RegexpInner {
@@ -935,8 +948,15 @@ impl RegexpInner {
             return f(&re, vm, globals);
         }
         let s_owned;
-        let s: &str = if let Some(s) = re_val.is_str() {
-            s
+        let view;
+        let s: &str = if let Some(inner) = re_val.is_rstring_inner() {
+            // `regex_view` instead of a plain UTF-8 read: a String
+            // pattern in a byte-oriented encoding (ISO-8859-1,
+            // BINARY, …) is matched through the same byte↔U+00XX
+            // surrogate space as the haystack, so its 8-bit bytes
+            // line up with the mapped haystack characters.
+            view = inner.regex_view()?;
+            &view
         } else {
             s_owned = re_val.coerce_to_str(vm, globals)?;
             &s_owned
@@ -959,12 +979,18 @@ impl RegexpInner {
         .map(|(s, c)| (s, c.is_some()))
     }
 
+    /// `mapped_enc`: when the caller passed `given` in the
+    /// byte↔U+00XX surrogate space (`RStringInner::regex_view` of a
+    /// byte-oriented receiver), the receiver's encoding — used to
+    /// decode the matched chunk before yielding it to the block and
+    /// to forward-map the block's replacement back into that space.
     pub(crate) fn replace_one_block(
         vm: &mut Executor,
         globals: &mut Globals,
         re_val: Value,
         given: &str,
         bh: BlockHandler,
+        mapped_enc: Option<crate::value::Encoding>,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             match re.captures(given, vm)? {
@@ -973,9 +999,15 @@ impl RegexpInner {
                     let m = captures.get(0).unwrap();
                     let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
                     let mut res = RStringInner::from_str_scanned(given);
-                    let matched = Value::string_from_str(matched_str);
+                    let matched = match mapped_enc {
+                        Some(enc) => Value::string_from_inner(
+                            RStringInner::from_mapped_utf8(matched_str, enc),
+                        ),
+                        None => Value::string_from_str(matched_str),
+                    };
                     let result = vm.invoke_block_once(globals, bh, &[matched])?;
-                    let rep_inner = block_result_to_inner(vm, globals, result)?;
+                    let rep_inner =
+                        block_result_to_inner(vm, globals, result, mapped_enc.is_some())?;
                     res.bytesplice_with(start, end - start, &rep_inner, &globals.store)?;
                     Ok((res, true))
                 }
@@ -1033,7 +1065,11 @@ impl RegexpInner {
     ) -> Result<(RStringInner, bool)> {
         // `subject` is frozen and temp-rooted by the caller, so `given`
         // and the matched views stay valid across `invoke_block`.
-        let given = subject.as_rstring_inner().check_utf8()?;
+        let subject_inner = subject.as_rstring_inner();
+        let mapped = subject_inner.needs_byte_mapping();
+        let subject_enc = subject_inner.encoding();
+        let view = subject_inner.regex_view()?;
+        let given: &str = &view;
         let recv_len = recv.as_rstring_inner().len();
         let mut range = vec![];
         let data = vm.get_block_data(globals, bh)?;
@@ -1043,7 +1079,18 @@ impl RegexpInner {
             let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
             let m = cap.get(0).unwrap();
 
-            let matched = string_substring(subject, m.start(), m.end());
+            // In surrogate space the zero-copy substring view would
+            // carry mapped UTF-8 bytes at mapped offsets — decode the
+            // matched chunk back to the subject's own bytes/encoding
+            // for the block instead.
+            let matched = if mapped {
+                Value::string_from_inner(RStringInner::from_mapped_utf8(
+                    &view_slice(given, m.range()),
+                    subject_enc,
+                ))
+            } else {
+                string_substring(subject, m.start(), m.end())
+            };
             vm.save_capture_special_variables(&cap, given);
             let result = vm.invoke_block(globals, &data, &[matched])?;
             check_string_not_modified(recv, recv_len)?;
@@ -1062,7 +1109,7 @@ impl RegexpInner {
                     }
                 }
             }
-            let replace = block_result_to_inner(vm, globals, result)?;
+            let replace = block_result_to_inner(vm, globals, result, mapped)?;
 
             range.push((m.range(), replace));
         }
@@ -1083,6 +1130,7 @@ impl RegexpInner {
         re_val: Value,
         given: &str,
         hash_val: Value,
+        mapped_enc: Option<crate::value::Encoding>,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
             match re.captures(given, vm)? {
@@ -1091,8 +1139,14 @@ impl RegexpInner {
                     let m = captures.get(0).unwrap();
                     let (start, end, matched_str) = (m.start(), m.end(), m.as_str());
                     let mut res = RStringInner::from_str_scanned(given);
-                    let key = Value::string_from_str(matched_str);
-                    let rep_inner = lookup_hash_replacement(vm, globals, hash_val, key)?;
+                    let key = match mapped_enc {
+                        Some(enc) => Value::string_from_inner(
+                            RStringInner::from_mapped_utf8(matched_str, enc),
+                        ),
+                        None => Value::string_from_str(matched_str),
+                    };
+                    let rep_inner =
+                        lookup_hash_replacement(vm, globals, hash_val, key, mapped_enc.is_some())?;
                     res.bytesplice_with(start, end - start, &rep_inner, &globals.store)?;
                     Ok((res, true))
                 }
@@ -1130,7 +1184,11 @@ impl RegexpInner {
         recv: Value,
         hash_val: Value,
     ) -> Result<(RStringInner, bool)> {
-        let given = subject.as_rstring_inner().check_utf8()?;
+        let subject_inner = subject.as_rstring_inner();
+        let mapped = subject_inner.needs_byte_mapping();
+        let subject_enc = subject_inner.encoding();
+        let view = subject_inner.regex_view()?;
+        let given: &str = &view;
         let recv_len = recv.as_rstring_inner().len();
         let mut range = vec![];
 
@@ -1139,9 +1197,16 @@ impl RegexpInner {
             let cap = cap.map_err(|err| MonorubyErr::regexerr(format!("{err}")))?;
             let m = cap.get(0).unwrap();
 
-            let key = string_substring(subject, m.start(), m.end());
+            let key = if mapped {
+                Value::string_from_inner(RStringInner::from_mapped_utf8(
+                    &view_slice(given, m.range()),
+                    subject_enc,
+                ))
+            } else {
+                string_substring(subject, m.start(), m.end())
+            };
             vm.save_capture_special_variables(&cap, given);
-            let replacement = lookup_hash_replacement(vm, globals, hash_val, key)?;
+            let replacement = lookup_hash_replacement(vm, globals, hash_val, key, mapped)?;
             check_string_not_modified(recv, recv_len)?;
 
             range.push((m.range(), replacement));
@@ -1216,16 +1281,31 @@ impl RegexpInner {
         }
     }
 
-    /// `subject` is a frozen snapshot whose bytes are exactly `given`;
-    /// each match/capture is returned as a zero-copy shared (CoW)
-    /// substring view of it (`string_substring`), inheriting its
-    /// encoding. The caller is responsible for keeping `subject` alive.
+    /// `subject` is a frozen snapshot whose `regex_view` is exactly
+    /// `given`; each match/capture is returned as a zero-copy shared
+    /// (CoW) substring view of it (`string_substring`), inheriting
+    /// its encoding — or, when the subject runs through the
+    /// byte↔U+00XX surrogate space, as a decoded copy in the
+    /// subject's own encoding. The caller keeps `subject` alive.
     pub(crate) fn scan(
         &self,
         vm: &mut Executor,
         subject: Value,
         given: &str,
     ) -> Result<Vec<Value>> {
+        let subject_inner = subject.as_rstring_inner();
+        let mapped = subject_inner.needs_byte_mapping();
+        let subject_enc = subject_inner.encoding();
+        let chunk = |start: usize, end: usize| {
+            if mapped {
+                Value::string_from_inner(RStringInner::from_mapped_utf8(
+                    &view_slice(given, start..end),
+                    subject_enc,
+                ))
+            } else {
+                string_substring(subject, start, end)
+            }
+        };
         let mut ary = vec![];
         let mut last_captures: Option<Captures> = None;
         vm.clear_capture_special_variables();
@@ -1246,12 +1326,12 @@ impl RegexpInner {
             let (start, end) = (m.start(), m.end());
             match cap.len() {
                 0 => unreachable!(),
-                1 => ary.push(string_substring(subject, start, end)),
+                1 => ary.push(chunk(start, end)),
                 len => {
                     let mut vec = vec![];
                     for i in 1..len {
                         match cap.get(i) {
-                            Some(m) => vec.push(string_substring(subject, m.start(), m.end())),
+                            Some(m) => vec.push(chunk(m.start(), m.end())),
                             None => vec.push(Value::nil()),
                         }
                     }
@@ -1514,11 +1594,29 @@ fn block_result_to_inner(
     vm: &mut Executor,
     globals: &mut Globals,
     v: Value,
+    mapped: bool,
 ) -> Result<RStringInner> {
+    // When the surrounding replace runs in surrogate space (`mapped`),
+    // a String result must be forward-mapped so its 8-bit bytes splice
+    // as U+00XX characters and survive the caller's final decode.
+    if mapped {
+        if let Some(inner) = v.is_rstring_inner() {
+            return Ok(RStringInner::from_string_scanned(
+                map_bytes_to_utf8(inner.as_bytes()),
+            ));
+        }
+    }
     if let Some(s) = v.is_str() {
         return Ok(RStringInner::from_str_scanned(s));
     }
     let coerced = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
+    if mapped {
+        if let Some(inner) = coerced.is_rstring_inner() {
+            return Ok(RStringInner::from_string_scanned(
+                map_bytes_to_utf8(inner.as_bytes()),
+            ));
+        }
+    }
     if let Some(s) = coerced.is_str() {
         Ok(RStringInner::from_str_scanned(s))
     } else {
@@ -1539,18 +1637,19 @@ fn lookup_hash_replacement(
     globals: &mut Globals,
     hash: Value,
     key: Value,
+    mapped: bool,
 ) -> Result<RStringInner> {
     let v =
         vm.invoke_method_inner(globals, IdentId::_INDEX, hash, &[key], None, None)?;
     if v.is_nil() {
         Ok(RStringInner::from_str_scanned(""))
-    } else if let Some(s) = v.is_str() {
-        Ok(RStringInner::from_str_scanned(s))
+    } else if v.is_rstring_inner().is_some() || v.is_str().is_some() {
+        Ok(block_result_to_inner(vm, globals, v, mapped)?)
     } else {
         // CRuby coerces non-String hash values via `Object#to_s`.
         let coerced = vm.invoke_method_inner(globals, IdentId::TO_S, v, &[], None, None)?;
-        match coerced.is_str() {
-            Some(s) => Ok(RStringInner::from_str_scanned(s)),
+        match coerced.is_rstring_inner() {
+            Some(_) => Ok(block_result_to_inner(vm, globals, coerced, mapped)?),
             None => Ok(RStringInner::from_string_scanned(coerced.to_s(&globals.store))),
         }
     }

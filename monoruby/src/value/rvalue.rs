@@ -32,7 +32,9 @@ pub use range::{RANGE_END_OFFSET, RANGE_EXCLUDE_END_OFFSET, RANGE_START_OFFSET, 
 pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
-pub use string::{CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET};
+pub use string::{
+    map_bytes_to_utf8, CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET,
+};
 pub(crate) use string::{check_string_not_modified, string_snapshot, string_substring, STRING_SHARED_TAG};
 pub(crate) use string::{eucjp_char_width, named_byte_const_name, sjis_char_width};
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
