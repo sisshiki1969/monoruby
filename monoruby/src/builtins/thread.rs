@@ -1760,6 +1760,29 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn thread_raise_same_thread_matrix() {
+        run_test_once(
+            r##"
+            def t; yield; rescue Exception => e; [e.class.to_s, e.message[0, 50], (e.cause && e.cause.class.to_s)]; end
+            r = []
+            r << t { Thread.current.raise }
+            r << t { begin; raise "orig"; rescue; Thread.current.raise; end }
+            r << t { Thread.current.raise("msg", "extra") }[0]
+            o = Object.new
+            def o.exception(*a); StandardError.new(a.inspect); end
+            r << t { Thread.current.raise(o, "foo") }
+            b = Object.new
+            def b.exception(*a); "notex"; end
+            r << t { Thread.current.raise(b) }[0..1]
+            r << t { Thread.current.raise(RuntimeError, "m", cause: TypeError.new("c")) }
+            r << t { Thread.current.raise(cause: TypeError.new("c")) }[0..1]
+            r << (begin; Thread.current.raise(RuntimeError, "m", ["bt.rb:9"]); rescue => e; e.backtrace; end)
+            r
+            "##,
+        );
+    }
+
     fn thread_cross_thread_raise_stays_in_caller() {
         // A raise inside a Ruby-implemented Thread instance method must
         // surface in the *caller*, not be queued into the receiver thread

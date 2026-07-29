@@ -7126,6 +7126,55 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn kernel_raise_argument_matrix() {
+        // The shared rb_make_exception surface: String-with-extra-arg
+        // TypeError, custom backtraces (Array / single String / nil /
+        // invalid), message override through #exception, duck-typed
+        // #exception results, and StopIteration.
+        run_test_once(
+            r##"
+            def t; yield; rescue Exception => e; [e.class.to_s, e.message[0, 60]]; end
+            r = []
+            r << t { raise "s1", "s2" }
+            r << (begin; raise RuntimeError, "m", ["a.rb:1"]; rescue => e; e.backtrace; end)
+            r << (begin; raise RuntimeError, "m", "single.rb:2"; rescue => e; e.backtrace; end)
+            r << (begin; raise RuntimeError, "m", nil; rescue => e; e.backtrace.class.to_s; end)
+            r << t { raise RuntimeError, "m", [123] }[0]
+            e0 = RuntimeError.new("orig")
+            r << (begin; raise e0, "newmsg", ["b.rb:2"]; rescue => e; [e.message, e.backtrace, e.equal?(e0)]; end)
+            o = Object.new
+            def o.exception(*a); StandardError.new(a.inspect); end
+            r << t { raise o, "foo" }
+            b = Object.new
+            def b.exception(*a); "notex"; end
+            r << t { raise b }
+            r << t { raise 123 }
+            r << t { raise StopIteration }[0]
+            r << t { raise StopIteration, "m" }
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn kernel_raise_cause_matrix() {
+        run_test_once(
+            r##"
+            def t; yield; rescue Exception => e; [e.class.to_s, (e.cause && e.cause.class.to_s)]; end
+            r = []
+            r << t { raise "a", cause: TypeError.new("c") }
+            r << t { begin; raise "x"; rescue; raise "y", cause: nil; end }
+            r << t { raise "a", cause: 123 }[0]
+            e1 = RuntimeError.new("s")
+            r << t { raise e1, cause: e1 }
+            a = RuntimeError.new("a"); b = RuntimeError.new("b")
+            r << (begin; begin; raise a, cause: b; rescue; end; begin; raise b, cause: a; rescue => e; e.class.to_s; end; end)
+            r
+            "##,
+        );
+    }
+
     fn kernel_raise_class() {
         run_test_error("raise ArgumentError");
         run_test_error(r#"raise TypeError, "custom""#);

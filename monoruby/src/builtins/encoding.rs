@@ -4842,6 +4842,15 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn encode_binary_source_undefined_conversion() {
+        // BINARY with an 8-bit byte -> real codec: CRuby's
+        // UndefinedConversionError, direct and pivot message forms.
+        run_test_once(
+            r#"(a = (begin; "\xC3\xA9".b.encode("UTF-8"); rescue => e; [e.class.to_s, e.message]; end); b = (begin; "\xC3\xA9".b.encode("UTF-16BE"); rescue => e; [e.class.to_s, e.message]; end); [a, b])"#,
+        );
+    }
+
     fn converter_streaming_state() {
         // primitive_convert error reporting: errinfo tuples, read-again
         // buffering (putback), last_error objects with byte attributes.

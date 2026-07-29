@@ -7862,6 +7862,16 @@ mod tests {
             # File.open form consumes the BOM through the stream.
             File.binwrite(path, "\xEF\xBB\xBFxy")
             File.open(path, "rb:BOM|utf-8") { |f| r << f.read }
+            File.binwrite(path, "\xFF\xFEd\x00")
+            File.open(path, "rb:BOM|utf-16le") { |f| r << f.read.bytes }
+            File.binwrite(path, "\xFE\xFF\x00d")
+            File.open(path, "rb:BOM|utf-16be") { |f| r << f.read.bytes }
+            File.binwrite(path, "\xFF\xFE\x00\x00d\x00\x00\x00")
+            File.open(path, "rb:BOM|utf-32le") { |f| r << f.read.bytes }
+            File.binwrite(path, "\x00\x00\xFE\xFF\x00\x00\x00d")
+            File.open(path, "rb:BOM|utf-32be") { |f| r << f.read.bytes }
+            File.binwrite(path, "nobom")
+            File.open(path, "rb:BOM|utf-8") { |f| r << f.read }
             File.unlink(path)
             r
             "##,
