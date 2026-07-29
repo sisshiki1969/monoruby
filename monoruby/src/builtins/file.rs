@@ -1309,7 +1309,7 @@ fn to_path(vm: &mut Executor, globals: &mut Globals, file: Value) -> Result<std:
     Ok(path)
 }
 
-fn to_path_str(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<String> {
+pub(super) fn to_path_str(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<String> {
     Ok(val
         .coerce_to_path_rstring(vm, globals)?
         .to_str()?

@@ -7126,8 +7126,7 @@ mod tests {
     }
 
     #[test]
-    #[test]
-    fn kernel_raise_argument_matrix() {
+        fn kernel_raise_argument_matrix() {
         // The shared rb_make_exception surface: String-with-extra-arg
         // TypeError, custom backtraces (Array / single String / nil /
         // invalid), message override through #exception, duck-typed
@@ -7175,6 +7174,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn kernel_raise_class() {
         run_test_error("raise ArgumentError");
         run_test_error(r#"raise TypeError, "custom""#);
