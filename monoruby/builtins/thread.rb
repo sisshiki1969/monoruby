@@ -156,7 +156,15 @@ class Thread
   # resolves its root table, which is where a plain thread body's
   # locals live.
   def __fiber_local_table(create)
-    fk = Fiber.__current_fiber || :root
+    # The caller's fiber only keys accesses to the *current* thread's
+    # locals; another thread's locals resolve through its root table
+    # (its own current fiber — the root, for any parked plain thread —
+    # is not observable from outside).
+    fk = if equal?(Thread.current)
+      Fiber.__current_fiber || :root
+    else
+      :root
+    end
     all = @fiber_locals
     if all.nil?
       return nil unless create

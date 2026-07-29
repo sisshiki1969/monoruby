@@ -2994,7 +2994,7 @@ fn io_getbyte(
     _: BytecodePtr,
 ) -> Result<Value> {
     let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
-        lfp.self_val().as_io_inner_mut().read(Some(1))
+        lfp.self_val().as_io_inner_mut().read_buffered(Some(1))
     })?;
     if buf.is_empty() {
         Ok(Value::nil())
@@ -3008,7 +3008,7 @@ fn io_getbyte(
 /// sequence is not valid UTF-8 (matching CRuby's invalid-byte behavior in
 /// binary-mode reads, which is what monoruby uses everywhere).
 fn read_one_char(io: &mut IoInner) -> Result<Vec<u8>> {
-    let first = io.read(Some(1))?;
+    let first = io.read_buffered(Some(1))?;
     if first.is_empty() {
         return Ok(vec![]);
     }
@@ -3039,7 +3039,7 @@ fn read_one_char(io: &mut IoInner) -> Result<Vec<u8>> {
 /// push the partial character bytes back so the retried getc re-reads a
 /// whole character.
 fn read_more_char_bytes(io: &mut IoInner, acc: &[u8], total: usize) -> Result<Vec<u8>> {
-    match io.read(Some(total - acc.len())) {
+    match io.read_buffered(Some(total - acc.len())) {
         Err(err) => {
             if err.is_signal_interrupt() && !acc.is_empty() {
                 let _ = io.unget(acc);
@@ -3080,7 +3080,7 @@ fn read_one_char_enc(io: &mut IoInner, enc: crate::value::Encoding) -> Result<Ve
     if enc == crate::value::Encoding::Utf8 {
         return read_one_char(io);
     }
-    let first = io.read(Some(1))?;
+    let first = io.read_buffered(Some(1))?;
     if first.is_empty() {
         return Ok(vec![]);
     }

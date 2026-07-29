@@ -736,6 +736,19 @@ impl IoInner {
     }
 
     pub fn read(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
+        self.read_impl(length, true)
+    }
+
+    /// Like [`Self::read`], but a sized read may fill the BufReader's
+    /// page from the fd (the classic buffered behavior). The
+    /// character-oriented readers (getc/getbyte) use this — CRuby
+    /// buffers those, which the `#ungetc` + `#readpartial` interplay
+    /// observes — while `IO#read(n)` consumes the fd exactly.
+    pub fn read_buffered(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
+        self.read_impl(length, false)
+    }
+
+    fn read_impl(&mut self, length: Option<usize>, exact: bool) -> Result<Vec<u8>> {
         if self.pushback_len() > 0 {
             match length {
                 Some(0) => return Ok(vec![]),
@@ -745,15 +758,15 @@ impl IoInner {
                 Some(n) => {
                     let out = self.take_pushback(None);
                     let need = n - out.len();
-                    return self.read_more_preserving(out, Some(need));
+                    return self.read_more_preserving(out, Some(need), exact);
                 }
                 None => {
                     let out = self.take_pushback(None);
-                    return self.read_more_preserving(out, None);
+                    return self.read_more_preserving(out, None, exact);
                 }
             }
         }
-        self.read_underlying(length)
+        self.read_underlying(length, exact)
     }
 
     /// Extend already-drained pushback bytes (`out`) with an underlying
@@ -763,8 +776,13 @@ impl IoInner {
     /// bytes. (`read_underlying` has already pushed back its own partial
     /// data at that point; ungetting `out` afterwards splices it in front,
     /// preserving stream order.)
-    fn read_more_preserving(&mut self, mut out: Vec<u8>, length: Option<usize>) -> Result<Vec<u8>> {
-        match self.read_underlying(length) {
+    fn read_more_preserving(
+        &mut self,
+        mut out: Vec<u8>,
+        length: Option<usize>,
+        exact: bool,
+    ) -> Result<Vec<u8>> {
+        match self.read_underlying(length, exact) {
             Ok(chunk) => {
                 out.extend_from_slice(&chunk);
                 Ok(out)
@@ -780,7 +798,7 @@ impl IoInner {
         }
     }
 
-    fn read_underlying(&mut self, length: Option<usize>) -> Result<Vec<u8>> {
+    fn read_underlying(&mut self, length: Option<usize>, exact: bool) -> Result<Vec<u8>> {
         // On a restartable interrupt (`Interrupted`/`WouldBlock` out of the
         // read helpers), bytes already consumed from the fd are pushed back
         // so that the retried read (after a `Signal.trap` handler ran, or
@@ -824,22 +842,27 @@ impl IoInner {
                 let reader = &mut *file.reader;
                 let mut buf = vec![];
                 let res = if let Some(length) = length {
-                    // A sized read takes exactly `length` bytes: drain what
-                    // the BufReader already holds, then read the remainder
-                    // from the fd directly. Letting the BufReader fill its
-                    // 8K buffer here would advance the fd far past the
-                    // logical position, which `#syswrite`, `#dup` (shared
-                    // file offset) and write-after-read positioning all
-                    // observe (CRuby reads exactly `length` too).
-                    let avail = reader.buffer().len().min(length);
-                    if avail > 0 {
-                        buf.extend_from_slice(&reader.buffer()[..avail]);
-                        reader.consume(avail);
-                    }
-                    if buf.len() < length {
-                        read_upto(reader.get_mut(), length, &mut buf)
+                    if exact {
+                        // A sized read takes exactly `length` bytes: drain
+                        // what the BufReader already holds, then read the
+                        // remainder from the fd directly. Letting the
+                        // BufReader fill its 8K buffer here would advance
+                        // the fd far past the logical position, which
+                        // `#syswrite`, `#dup` (shared file offset) and
+                        // write-after-read positioning all observe (CRuby
+                        // reads exactly `length` too).
+                        let avail = reader.buffer().len().min(length);
+                        if avail > 0 {
+                            buf.extend_from_slice(&reader.buffer()[..avail]);
+                            reader.consume(avail);
+                        }
+                        if buf.len() < length {
+                            read_upto(reader.get_mut(), length, &mut buf)
+                        } else {
+                            Ok(())
+                        }
                     } else {
-                        Ok(())
+                        read_upto(reader, length, &mut buf)
                     }
                 } else {
                     read_all(reader, &mut buf)
