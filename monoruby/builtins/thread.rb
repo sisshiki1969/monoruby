@@ -86,11 +86,11 @@ class Thread
   def to_s
     st = status
     st = "dead" unless st
-    if (n = @name)
-      "#<Thread:#{format('0x%016x', object_id << 1)}@#{n} #{st}>"
-    else
-      "#<Thread:#{format('0x%016x', object_id << 1)} #{st}>"
-    end
+    s = +"#<Thread:#{format('0x%016x', object_id << 1)}"
+    s << "@#{@name}" if @name
+    s << " #{@__spawn_location}" if @__spawn_location
+    s << " #{st}>"
+    s
   end
   alias inspect to_s
 
@@ -150,23 +150,48 @@ class Thread
   end
   private :__thread_key
 
+  # Fiber-locals genuinely belong to the *fiber* (CRuby): reads/writes
+  # key a per-fiber table. At a thread's root context (no explicit
+  # Fiber) the table is keyed under :root; reading another thread
+  # resolves its root table, which is where a plain thread body's
+  # locals live.
+  def __fiber_local_table(create)
+    fk = Fiber.__current_fiber || :root
+    all = @fiber_locals
+    if all.nil?
+      return nil unless create
+      all = @fiber_locals = {}
+    end
+    t = all[fk]
+    if t.nil?
+      return nil unless create
+      t = all[fk] = {}
+    end
+    t
+  end
+  private :__fiber_local_table
+
   def [](key)
     k = __thread_key(key)
-    @fiber_locals && @fiber_locals[k]
+    t = __fiber_local_table(false)
+    t && t[k]
   end
 
   def []=(key, value)
     Kernel.raise FrozenError, "can't modify frozen thread locals" if frozen?
-    (@fiber_locals ||= {})[__thread_key(key)] = value
+    k = __thread_key(key)
+    __fiber_local_table(true)[k] = value
   end
 
   def key?(key)
     k = __thread_key(key)
-    !!(@fiber_locals && @fiber_locals.key?(k))
+    t = __fiber_local_table(false)
+    !!(t && t.key?(k))
   end
 
   def keys
-    @fiber_locals ? @fiber_locals.keys : []
+    t = __fiber_local_table(false)
+    t ? t.keys : []
   end
 
   def fetch(key, *default)
@@ -174,8 +199,9 @@ class Thread
       Kernel.raise ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)"
     end
     k = __thread_key(key)
-    if @fiber_locals && @fiber_locals.key?(k)
-      @fiber_locals[k]
+    t = __fiber_local_table(false)
+    if t && t.key?(k)
+      t[k]
     elsif block_given?
       warn "warning: block supersedes default value argument" unless default.empty?
       yield(key)

@@ -22,6 +22,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.store[THREAD_CLASS].set_alloc_func(thread_alloc_func);
 
     globals.define_builtin_class_func_rest(THREAD_CLASS, "new", thread_new);
+    globals.define_builtin_func_rest(THREAD_CLASS, "initialize", thread_initialize);
     globals.define_builtin_class_func_rest(THREAD_CLASS, "start", thread_start);
     // `fork` is re-pointed at `start` as a true alias in builtins/thread.rb
     // (ruby/spec checks `Thread.method(:fork) == Thread.method(:start)`).
@@ -310,7 +311,47 @@ pub(crate) extern "C" fn thread_alloc_func(class_id: ClassId, _: &mut Globals) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/new.html]
 #[monoruby_builtin]
-fn thread_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+fn thread_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodePtr) -> Result<Value> {
+    // Two-phase construction (CRuby): allocate an uninitialized shell,
+    // dispatch #initialize (a subclass override runs and must reach the
+    // native initialize below via super), then verify it did.
+    let class_id = lfp.self_val().as_class_id();
+    let obj = Value::new_thread(class_id, ThreadInner::shell());
+    let args: Vec<Value> = lfp.arg(0).as_array().to_vec();
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("initialize"),
+        obj,
+        &args,
+        lfp.block(),
+        None,
+    )?;
+    // Note: not a state check — the body may already have run to
+    // completion (Dead) during the eager first slice.
+    if obj.as_thread_inner().is_uninitialized_shell() {
+        return Err(MonorubyErr::threaderr(
+            &globals.store,
+            "uninitialized thread - check 'Thread#initialize'",
+        ));
+    }
+    Ok(obj)
+}
+
+///
+/// ### Thread#initialize
+///
+/// The queueing half of `Thread.new`: requires a block (ThreadError
+/// otherwise), refuses a live or already-initialized receiver, then
+/// installs the body and queues the green thread. Records the block's
+/// definition site for `#to_s` (CRuby shows `file:line` there).
+#[monoruby_builtin]
+fn thread_initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
     let bh = match lfp.block() {
         Some(bh) => bh,
         None => {
@@ -320,16 +361,31 @@ fn thread_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
             ));
         }
     };
+    if !self_.as_thread_inner().is_uninitialized_shell() {
+        return Err(MonorubyErr::threaderr(
+            &globals.store,
+            "already initialized thread",
+        ));
+    }
     let proc = vm.generate_proc(globals, bh, pc)?;
+    // The block's definition site, shown by Thread#to_s (CRuby).
+    if let Some(iseq) = globals.store.resolve_iseq(proc.func_id()) {
+        let info = &globals.store[iseq];
+        let path = info.sourceinfo.short_file_name().to_string();
+        let line = info.sourceinfo.get_line(&info.loc);
+        let loc = Value::string(format!("{path}:{line}"));
+        let _ = globals
+            .store
+            .set_ivar(self_, IdentId::get_id("@__spawn_location"), loc);
+    }
     let args = lfp.arg(0).as_array().to_vec();
-    let class_id = lfp.self_val().as_class_id();
-    let thread = Value::new_thread(class_id, ThreadInner::new(proc, args));
-    scheduler::spawn(vm, thread);
-    // The eager first slice must keep `thread` (and this frame's Values)
-    // rooted: `pass` is a scheduler entry (GC-safe park point), and
-    // `thread` is reachable via the scheduler registry.
+    *self_.as_thread_inner_mut() = ThreadInner::new(proc, args);
+    scheduler::spawn(vm, self_);
+    // The eager first slice must keep `self_` (and this frame's Values)
+    // rooted: `pass` is a scheduler entry (GC-safe park point), and the
+    // thread is reachable via the scheduler registry.
     scheduler::pass(vm, globals)?;
-    Ok(thread)
+    Ok(self_)
 }
 
 /// `Thread.start` / `Thread.fork`: same as `Thread.new`, but a missing
@@ -342,13 +398,33 @@ fn thread_start(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    if lfp.block().is_none() {
-        return Err(MonorubyErr::argumenterr(
-            "tried to create Proc object without a block",
-        ));
+    let bh = match lfp.block() {
+        Some(bh) => bh,
+        None => {
+            return Err(MonorubyErr::argumenterr(
+                "tried to create Proc object without a block",
+            ));
+        }
+    };
+    // Unlike Thread.new, CRuby's Thread.start does NOT call #initialize:
+    // construct and queue directly.
+    let proc = vm.generate_proc(globals, bh, pc)?;
+    let class_id = lfp.self_val().as_class_id();
+    let args = lfp.arg(0).as_array().to_vec();
+    let mut thread = Value::new_thread(class_id, ThreadInner::new(proc.clone(), args));
+    if let Some(iseq) = globals.store.resolve_iseq(proc.func_id()) {
+        let info = &globals.store[iseq];
+        let path = info.sourceinfo.short_file_name().to_string();
+        let line = info.sourceinfo.get_line(&info.loc);
+        let loc = Value::string(format!("{path}:{line}"));
+        let _ = globals
+            .store
+            .set_ivar(thread, IdentId::get_id("@__spawn_location"), loc);
     }
-    // `#[monoruby_builtin]` renames the Result-returning body to `__<name>`.
-    __thread_new(vm, globals, lfp, pc)
+    let _ = &mut thread;
+    scheduler::spawn(vm, thread);
+    scheduler::pass(vm, globals)?;
+    Ok(thread)
 }
 
 ///
@@ -1761,6 +1837,38 @@ mod tests {
 
     #[test]
     #[test]
+    #[test]
+    fn thread_new_initialize_protocol() {
+        // Thread.new dispatches #initialize (subclass overrides run and
+        // must reach super); missing super or block raise ThreadError;
+        // re-initializing a live thread raises; Thread#to_s carries the
+        // block's file:line; fiber-locals are per-fiber.
+        run_test_once(
+            r##"
+            r = []
+            arr = []
+            sub = Class.new(Thread) do
+              def initialize(a); a << :init; super() { a << :body }; end
+            end
+            st = sub.new(arr); st.join
+            r << arr << (st.class == sub)
+            noinit = Class.new(Thread) { def initialize; end }
+            r << (begin; noinit.new; rescue ThreadError; :uninitialized; end)
+            r << (begin; Thread.new; rescue ThreadError => e; e.message; end)
+            q = Thread::Queue.new
+            th = Thread.new { q.pop }
+            r << (begin; th.instance_eval { initialize {} }; rescue ThreadError; :already; end)
+            q.push(nil); th.join
+            r << !!(Thread.new {}.tap(&:join).to_s =~ /\A#<Thread:0x[0-9a-f]+ .*:\d+ (run|dead)>\z/)
+            Thread.current[:fl] = 1
+            f = Fiber.new { Thread.current[:fl] = 2; Thread.current[:fl] }
+            r << f.resume
+            r << Thread.current[:fl]
+            r
+            "##,
+        );
+    }
+
     fn thread_raise_same_thread_matrix() {
         run_test_once(
             r##"

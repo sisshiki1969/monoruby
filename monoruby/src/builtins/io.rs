@@ -2335,8 +2335,22 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             v.to_s(globals).into()
         }
     }
+    // CRuby's Array form is `[env, cmd, arg1, ..., exec_opts]`: a leading
+    // Hash inside the Array is the environment, a trailing Hash the exec
+    // options.
+    let mut array_opts: Option<Value> = None;
     let (mut command, cmd_name) = if let Some(ary) = cmd_val.try_array_ty() {
-        let parts: Vec<std::ffi::OsString> = ary.iter().map(|v| arg_os(*v, globals)).collect();
+        let mut elems: Vec<Value> = ary.iter().cloned().collect();
+        if elems.first().is_some_and(|v| v.try_hash_ty().is_some()) {
+            let h = elems.remove(0);
+            if env_hash.is_none() {
+                env_hash = Some(h);
+            }
+        }
+        if elems.len() > 1 && elems.last().is_some_and(|v| v.try_hash_ty().is_some()) {
+            array_opts = elems.pop();
+        }
+        let parts: Vec<std::ffi::OsString> = elems.iter().map(|v| arg_os(*v, globals)).collect();
         if parts.is_empty() {
             return Err(MonorubyErr::argumenterr("popen: empty command array"));
         }
@@ -2407,11 +2421,15 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         command.stdout(Stdio::inherit());
     }
 
-    // Handle err: [:child, :out] option to redirect stderr to stdout
+    // Process the exec-option hashes: the Array-trailing one and the
+    // positional/keyword one both apply.
     let mut stderr_to_stdout = false;
-    if let Some(opts) = opts_hash {
-        let err_key = Value::symbol_from_str("err");
-        if let Ok(Some(err_val)) = opts.as_hash().get(err_key, vm, globals) {
+    let mut ext_obj: Option<Value> = None;
+    let mut int_obj: Option<Value> = None;
+    for opts in [array_opts, opts_hash].into_iter().flatten() {
+        let h = opts.as_hash();
+        // err: [:child, :out] redirects the child's stderr to its stdout.
+        if let Ok(Some(err_val)) = h.get(Value::symbol_from_str("err"), vm, globals) {
             if let Some(ary) = err_val.try_array_ty() {
                 if ary.len() == 2
                     && ary[0].try_symbol_or_string() == Some(IdentId::get_id("child"))
@@ -2420,6 +2438,51 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                     stderr_to_stdout = true;
                 }
             }
+        }
+        // chdir: the child's working directory (String / #to_path / #to_str).
+        if let Some(dir) = h.get(Value::symbol_from_str("chdir"), vm, globals)?
+            && !dir.is_nil()
+        {
+            let path = super::file::to_path_str(vm, globals, dir)?;
+            command.current_dir(path);
+        }
+        // encoding options for the read end.
+        if let Some(v) = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?
+            && !v.is_nil()
+        {
+            if let Some(sv) = v.is_str() {
+                let mut parts = sv.split(':');
+                ext_obj = parts
+                    .next()
+                    .filter(|x| !x.is_empty())
+                    .and_then(|x| enc_by_name(globals, x));
+                int_obj = parts
+                    .next()
+                    .filter(|x| !x.is_empty())
+                    .and_then(|x| enc_by_name(globals, x));
+            } else {
+                ext_obj = arg_to_enc_obj(globals, v);
+            }
+        }
+        if let Some(v) = h.get(Value::symbol(IdentId::get_id("external_encoding")), vm, globals)?
+            && !v.is_nil()
+        {
+            ext_obj = arg_to_enc_obj(globals, v);
+        }
+        if let Some(v) = h.get(Value::symbol(IdentId::get_id("internal_encoding")), vm, globals)?
+            && !v.is_nil()
+        {
+            int_obj = arg_to_enc_obj(globals, v);
+        }
+    }
+    // Mode-string encoding suffix ("r:ext:int") — explicit options win.
+    {
+        let (me, mi) = mode_encoding_names(&mode);
+        if ext_obj.is_none() {
+            ext_obj = me.and_then(|e| enc_by_name(globals, e));
+        }
+        if int_obj.is_none() {
+            int_obj = mi.and_then(|i| enc_by_name(globals, i));
         }
     }
     if stderr_to_stdout {
@@ -2438,7 +2501,17 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         .spawn()
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_f_spawn", &cmd_name))?;
 
-    let io_val = Value::new_io(IoInner::popen(child));
+    // Instantiate as the receiver class (a subclass' popen yields the
+    // subclass), and install the resolved encodings on the read end.
+    let class_id = lfp.self_val().as_class_id();
+    let io_val = Value::new_io_with_class(IoInner::popen(child), class_id);
+    {
+        let de = enc_default_external_obj(globals);
+        let di = enc_default_internal_obj(globals);
+        let (slot, i) =
+            resolve_io_encodings(globals, ext_obj, int_obj, false, readable, !readable, de, di);
+        store_io_encodings(globals, io_val, slot, i);
+    }
 
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
@@ -5716,6 +5789,30 @@ mod tests {
     // macOS. CRuby comparison still runs once for output parity.
 
     #[test]
+    #[test]
+    fn io_popen_argv_env_opts_forms() {
+        // Array form [env, cmd, arg..., exec_opts], outside env hash,
+        // chdir: (String and #to_path), subclass instantiation, and
+        // encoding options on the read end.
+        run_test_once(
+            r##"
+            r = []
+            IO.popen([{"PV" => "pv"}, "sh", "-c", "echo $PV"]) { |io| r << io.read }
+            IO.popen([{"PV" => "pv2"}, "sh", "-c", "echo $PV 1>&2", {err: [:child, :out]}], "r") { |io| r << io.read }
+            IO.popen({"PV" => "pv3"}, ["sh", "-c", "echo $PV"], "r") { |io| r << io.read }
+            IO.popen(["pwd"], "r", chdir: "/tmp") { |io| r << io.read }
+            o = Object.new
+            def o.to_path; "/tmp"; end
+            IO.popen(["pwd"], chdir: o) { |io| r << io.read }
+            myio = Class.new(IO)
+            r << (myio.popen("echo sub") { |io| io.class == myio })
+            IO.popen("echo enc", external_encoding: "iso-8859-1") { |io| r << io.read.encoding.name }
+            IO.popen("echo enc2", "r:utf-8:iso-8859-1") { |io| r << [io.external_encoding.name, io.internal_encoding.name] }
+            r
+            "##,
+        );
+    }
+
     fn io_popen_read_stdout() {
         run_test_once(
             r#"

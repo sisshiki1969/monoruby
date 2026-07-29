@@ -226,6 +226,16 @@ impl ThreadInner {
         }
     }
 
+    /// Whether this is an inert, never-initialized shell (as produced by
+    /// the allocator) — `Thread#initialize` refuses anything else.
+    pub(crate) fn is_uninitialized_shell(&self) -> bool {
+        self.handle.is_none()
+            && self.proc.is_none()
+            && self.state == ThreadState::Dead
+            && self.result.is_none()
+            && self.exception.is_none()
+    }
+
     //pub(crate) fn is_main(&self) -> bool {
     //    self.handle.is_none() && self.proc.is_none() && self.state != ThreadState::Dead
     //}
