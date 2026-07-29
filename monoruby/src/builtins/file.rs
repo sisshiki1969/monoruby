@@ -834,14 +834,16 @@ fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/new.html]
 /// Translate a CRuby-style flags integer (e.g. `File::WRONLY | File::CREAT`)
-/// into the mode string monoruby's open path understands. The bits map to:
-/// access mode in the low 2 bits (RDONLY=0/WRONLY=1/RDWR=2), `O_CREAT`=0o100,
-/// `O_TRUNC`=0o1000, `O_APPEND`=0o2000. Other flags (EXCL, NONBLOCK, …) pass
-/// through silently — `open` handles their effect via mode-string semantics.
+/// into the mode string monoruby's open path understands: access mode in
+/// the low 2 bits (RDONLY=0/WRONLY=1/RDWR=2) plus the platform's
+/// `O_CREAT`/`O_TRUNC`/`O_APPEND` bits — `File::*` mirrors the libc-backed
+/// `IO::*` constants, and Linux and Darwin disagree on every one of these.
+/// Other flags (EXCL, NONBLOCK, …) pass through silently — `open` handles
+/// their effect via mode-string semantics.
 pub(super) fn mode_string_from_flags(flags: i64) -> String {
-    const O_CREAT: i64 = 0o100;
-    const O_TRUNC: i64 = 0o1000;
-    const O_APPEND: i64 = 0o2000;
+    const O_CREAT: i64 = libc::O_CREAT as i64;
+    const O_TRUNC: i64 = libc::O_TRUNC as i64;
+    const O_APPEND: i64 = libc::O_APPEND as i64;
     let access = flags & 0b11;
     let create = flags & O_CREAT != 0;
     let trunc = flags & O_TRUNC != 0;
