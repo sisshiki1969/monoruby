@@ -1029,13 +1029,28 @@ impl Executor {
                     // respond to `to_s` (e.g. a bare `BasicObject`),
                     // CRuby raises `NoMethodError`. Don't fall back
                     // to the C-level inspect.
-                    let mut s = if let Some(string) = val.is_str() {
-                        string.to_string()
+                    //
+                    // String arguments go through `regex_view` so a
+                    // byte-oriented 8-bit string contributes its
+                    // bytes as U+00XX surrogates (decoded again by
+                    // `String#%` when the result encoding is
+                    // byte-oriented) instead of being lossily
+                    // re-rendered with U+FFFD.
+                    let mut s = if let Some(inner) = val.is_rstring_inner() {
+                        match inner.regex_view() {
+                            Ok(v) => v.into_owned(),
+                            // Broken UTF-8: keep the old lossy render
+                            // instead of raising.
+                            Err(_) => val.to_s(&globals.store),
+                        }
                     } else if let Some(func_id) = globals.check_method(val, IdentId::TO_S) {
                         let result =
                             self.invoke_func_inner(globals, func_id, val, &[], None, None)?;
-                        if let Some(string) = result.is_str() {
-                            string.to_string()
+                        if let Some(inner) = result.is_rstring_inner() {
+                            match inner.regex_view() {
+                                Ok(v) => v.into_owned(),
+                                Err(_) => result.to_s(&globals.store),
+                            }
                         } else {
                             result.to_s(&globals.store)
                         }
