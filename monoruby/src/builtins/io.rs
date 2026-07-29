@@ -466,7 +466,7 @@ pub(super) fn io_init_from_fd(
     let de = enc_default_external_obj(globals);
     let di = enc_default_internal_obj(globals);
     let (slot, i) =
-        resolve_io_encodings(globals, ext_obj, int_obj, binmode, readable, de, di, true);
+        resolve_io_encodings(globals, ext_obj, int_obj, binmode, readable, writable, de, di);
     store_io_encodings(globals, obj, slot, i);
     let _ = globals
         .store
@@ -606,6 +606,23 @@ fn enc_same(globals: &Globals, a: Value, b: Value) -> bool {
     }
 }
 
+/// Normalize a user-facing encoding argument: Encoding objects, nil and
+/// Strings pass through; anything else is offered `#to_str` (the String
+/// result feeds the by-name lookup downstream).
+fn coerce_enc_arg(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Value> {
+    if v.is_nil()
+        || v.is_str().is_some()
+        || v.class() == super::encoding::encoding_class(globals)
+    {
+        return Ok(v);
+    }
+    if globals.store.check_method(v, IdentId::TO_STR).is_some() {
+        let s = v.coerce_to_str(vm, globals)?;
+        return Ok(Value::string(s));
+    }
+    Ok(v)
+}
+
 /// Argument `Value` -> Encoding object: an `Encoding` is taken as-is, a
 /// String is resolved by name; anything else (incl. `nil`) -> `None`.
 fn arg_to_enc_obj(globals: &Globals, v: Value) -> Option<Value> {
@@ -629,9 +646,9 @@ fn resolve_io_encodings(
     explicit_int: Option<Value>,
     binmode: bool,
     readable: bool,
+    writable: bool,
     de: Value,
     di: Option<Value>,
-    at_creation: bool,
 ) -> (ExtSlot, Option<Value>) {
     // `b`/binmode forces a BINARY external only when no encoding at all
     // was given (CRuby's `has_enc` check: an explicit *internal* encoding
@@ -659,7 +676,11 @@ fn resolve_io_encodings(
                 (ExtSlot::Fixed(de), i)
             }
             None => {
-                if at_creation && readable {
+                // Only a read-*only* stream inherits (and keeps
+                // tracking) Encoding.default_external; read-write and
+                // write-only streams report nil until an encoding is
+                // set explicitly (CRuby).
+                if readable && !writable {
                     (ExtSlot::Dynamic, None)
                 } else {
                     (ExtSlot::Nil, None)
@@ -693,6 +714,16 @@ fn store_io_encodings(globals: &mut Globals, io: Value, ext: ExtSlot, int: Optio
         .set_ivar(io, IdentId::get_id(ENC_INT_IVAR), int_val);
 }
 
+/// Strip a leading "BOM|" (case-insensitive) from an external-encoding
+/// name, reporting whether it was present.
+fn split_bom_prefix(name: &str) -> (&str, bool) {
+    if name.len() >= 4 && name[..4].eq_ignore_ascii_case("bom|") {
+        (&name[4..], true)
+    } else {
+        (name, false)
+    }
+}
+
 /// Split a mode string's `":ext[:int]"` suffix into encoding names.
 fn mode_encoding_names(mode: &str) -> (Option<&str>, Option<&str>) {
     let mut it = mode.split(':');
@@ -712,10 +743,19 @@ fn parse_open_encodings(
     lfp: Lfp,
     opt_range: std::ops::Range<usize>,
     mode: &str,
-) -> Result<(Option<Value>, Option<Value>, bool)> {
+) -> Result<(Option<Value>, Option<Value>, bool, bool)> {
     let base = mode.split(':').next().unwrap_or("");
     let binmode = base.contains('b');
     let (mext, mint) = mode_encoding_names(mode);
+    // A "BOM|utf-..." external requests byte-order-mark detection; the
+    // name after the prefix is the fallback when no BOM is present.
+    let (mext, bom) = match mext {
+        Some(e) => {
+            let (n, b) = split_bom_prefix(e);
+            (Some(n), b)
+        }
+        None => (None, false),
+    };
     let mut ext = mext.and_then(|s| enc_by_name(globals, s));
     let mut int = mint.and_then(|s| enc_by_name(globals, s));
 
@@ -750,7 +790,7 @@ fn parse_open_encodings(
             int = arg_to_enc_obj(globals, v);
         }
     }
-    Ok((ext, int, binmode))
+    Ok((ext, int, binmode, bom))
 }
 
 /// Pull `(mode, ext, int)` out of a single options Hash element (mode
@@ -762,6 +802,7 @@ fn read_opts_from_hash(
     mode: &mut String,
     ext: &mut Option<Value>,
     int: &mut Option<Value>,
+    bom: &mut bool,
 ) -> Result<()> {
     if let Some(m) = h.get(Value::symbol(IdentId::get_id("mode")), vm, globals)?
         && let Some(s) = m.is_str()
@@ -769,6 +810,8 @@ fn read_opts_from_hash(
         *mode = s.to_string();
         let (me, mi) = mode_encoding_names(mode);
         if let Some(e) = me {
+            let (e, b) = split_bom_prefix(e);
+            *bom = b;
             *ext = enc_by_name(globals, e);
         }
         if let Some(i) = mi {
@@ -812,12 +855,13 @@ fn class_read_opts(
     vm: &mut Executor,
     globals: &mut Globals,
     opts: Option<crate::value::Hashmap>,
-) -> Result<(String, Option<Value>, Option<Value>)> {
+) -> Result<(String, Option<Value>, Option<Value>, bool)> {
     let mut mode = "r".to_string();
     let mut ext = None;
     let mut int = None;
+    let mut bom = false;
     let Some(h) = opts else {
-        return Ok((mode, ext, int));
+        return Ok((mode, ext, int, bom));
     };
     if let Some(oa) = h.get(Value::symbol(IdentId::get_id("open_args")), vm, globals)?
         && let Some(ary) = oa.try_array_ty()
@@ -827,19 +871,21 @@ fn class_read_opts(
                 mode = s.to_string();
                 let (me, mi) = mode_encoding_names(&mode);
                 if let Some(e) = me {
+                    let (e, b) = split_bom_prefix(e);
+                    bom = b;
                     ext = enc_by_name(globals, e);
                 }
                 if let Some(i) = mi {
                     int = enc_by_name(globals, i);
                 }
             } else if let Some(hh) = v.try_hash_ty() {
-                read_opts_from_hash(vm, globals, hh, &mut mode, &mut ext, &mut int)?;
+                read_opts_from_hash(vm, globals, hh, &mut mode, &mut ext, &mut int, &mut bom)?;
             }
         }
-        return Ok((mode, ext, int));
+        return Ok((mode, ext, int, bom));
     }
-    read_opts_from_hash(vm, globals, h, &mut mode, &mut ext, &mut int)?;
-    Ok((mode, ext, int))
+    read_opts_from_hash(vm, globals, h, &mut mode, &mut ext, &mut int, &mut bom)?;
+    Ok((mode, ext, int, bom))
 }
 
 /// Resolve + store IO encodings at creation time. `opt_range` is the
@@ -853,15 +899,25 @@ pub(super) fn init_io_encodings(
     readable: bool,
     opt_range: std::ops::Range<usize>,
 ) -> Result<()> {
-    let (ext, int, binmode) = parse_open_encodings(vm, globals, lfp, opt_range, mode)?;
+    let (ext, int, binmode, bom) = parse_open_encodings(vm, globals, lfp, opt_range, mode)?;
+    // The stream's write-ability decides whether a missing external
+    // encoding tracks default_external (read-only) or stays nil.
+    let base = mode.split(':').next().unwrap_or("");
+    let writable = base.contains('w') || base.contains('a') || base.contains('+');
     let de = enc_default_external_obj(globals);
     let di = enc_default_internal_obj(globals);
-    let (slot, i) = resolve_io_encodings(globals, ext, int, binmode, readable, de, di, true);
+    let (slot, i) = resolve_io_encodings(globals, ext, int, binmode, readable, writable, de, di);
     store_io_encodings(globals, io, slot, i);
     if binmode {
         let _ = globals
             .store
             .set_ivar(io, IdentId::get_id(BINMODE_IVAR), Value::bool(true));
+    }
+    // A "BOM|utf-..." encoding: peek the stream for a byte-order mark;
+    // a detected BOM is consumed and *overrides* the external encoding,
+    // otherwise the declared one stays.
+    if bom && readable {
+        detect_and_consume_bom(vm, globals, io)?;
     }
     Ok(())
 }
@@ -869,6 +925,54 @@ pub(super) fn init_io_encodings(
 /// Allocator for `IO` and its subclasses.
 pub(crate) extern "C" fn io_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
     Value::new_io_with_class(IoInner::Closed(None), class_id)
+}
+
+
+/// Apply the IO's external-encoding conversion to a to-be-written value
+/// (CRuby's `do_writeconv`): with a fixed, non-BINARY external encoding
+/// that differs from the string's own, the string is transcoded through
+/// `String#encode` dispatch — so the conversion rules and error classes
+/// (Encoding::UndefinedConversionError for an unconvertible BINARY
+/// source, invalid-byte errors, ...) match String#encode exactly.
+/// Returns the bytes to write. `syswrite`/`write_nonblock` deliberately
+/// bypass this (they are raw fd writes).
+pub(super) fn bytes_for_write(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    io: Value,
+    v: Value,
+) -> Result<Vec<u8>> {
+    let sval = if v.is_rstring().is_some() {
+        v
+    } else {
+        Value::string(vm.to_s(globals, v)?)
+    };
+    let ext = match globals.store.get_ivar(io, IdentId::get_id(ENC_EXT_IVAR)) {
+        Some(e)
+            if !e.is_nil()
+                && e.try_symbol() != Some(IdentId::get_id(ENC_DYN_MARKER))
+                && !enc_is_binary(globals, e) =>
+        {
+            e
+        }
+        _ => return Ok(sval.is_rstring().unwrap().to_vec()),
+    };
+    let same = match (
+        sval.is_rstring().map(|r| r.encoding()),
+        enc_obj_to_enum(globals, ext),
+    ) {
+        (Some(se), Some(ee)) => se == ee,
+        _ => false,
+    };
+    if same {
+        return Ok(sval.is_rstring().unwrap().to_vec());
+    }
+    let encoded =
+        vm.invoke_method_inner(globals, IdentId::get_id("encode"), sval, &[ext], None, None)?;
+    Ok(match encoded.is_rstring() {
+        Some(r) => r.to_vec(),
+        None => encoded.to_s(&globals.store).into_bytes(),
+    })
 }
 
 ///
@@ -879,11 +983,7 @@ pub(crate) extern "C" fn io_alloc_func(class_id: ClassId, _: &mut Globals) -> Va
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/=3c=3c.html]
 #[monoruby_builtin]
 fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let bytes = if let Some(b) = lfp.arg(0).try_bytes() {
-        b.as_bytes().to_vec()
-    } else {
-        vm.to_s(globals, lfp.arg(0))?.into_bytes()
-    };
+    let bytes = bytes_for_write(vm, globals, lfp.self_val(), lfp.arg(0))?;
     let mut done = 0;
     blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {
         lfp.self_val().as_io_inner_mut().write(&bytes, &mut done, _store)
@@ -1712,7 +1812,7 @@ fn io_class_read(
         _ => 0,
     };
 
-    let (mode, ext_obj, int_obj) = class_read_opts(vm, globals, opts)?;
+    let (mode, ext_obj, int_obj, bom) = class_read_opts(vm, globals, opts)?;
     // A write/append-only mode can't be used for reading.
     reject_unreadable_mode(&filename, &mode)?;
 
@@ -1746,6 +1846,30 @@ fn io_class_read(
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_io_read", &filename))?;
 
     use crate::value::Encoding as E;
+    // A "BOM|..." mode: a leading byte-order mark is consumed and
+    // overrides the declared external encoding.
+    let mut ext_obj = ext_obj;
+    if bom {
+        let (consume, name): (usize, &str) = match buf.first() {
+            Some(0xEF) if buf.len() >= 3 && buf[1] == 0xBB && buf[2] == 0xBF => (3, "UTF-8"),
+            Some(0x00) if buf.len() >= 4 && buf[1] == 0x00 && buf[2] == 0xFE && buf[3] == 0xFF => {
+                (4, "UTF-32BE")
+            }
+            Some(0xFF) if buf.len() >= 2 && buf[1] == 0xFE => {
+                if buf.len() >= 4 && buf[2] == 0x00 && buf[3] == 0x00 {
+                    (4, "UTF-32LE")
+                } else {
+                    (2, "UTF-16LE")
+                }
+            }
+            Some(0xFE) if buf.len() >= 2 && buf[1] == 0xFF => (2, "UTF-16BE"),
+            _ => (0, ""),
+        };
+        if consume > 0 {
+            buf.drain(..consume);
+            ext_obj = enc_by_name(globals, name);
+        }
+    }
     let ext = match ext_obj {
         Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::Utf8),
         None => {
@@ -1791,7 +1915,7 @@ fn io_class_readlines(
         .coerce_to_path_rstring(vm, globals)?
         .to_str()?
         .to_string();
-    let (sep, limit, chomp, (mode, ext_obj, int_obj)) = class_getline_args(vm, globals, lfp)?;
+    let (sep, limit, chomp, (mode, ext_obj, int_obj, _bom)) = class_getline_args(vm, globals, lfp)?;
     if limit == Some(0) {
         return Err(MonorubyErr::argumenterr("invalid limit: 0 for readlines"));
     }
@@ -1862,7 +1986,7 @@ fn class_getline_args(
     Option<Vec<u8>>,
     Option<usize>,
     bool,
-    (String, Option<Value>, Option<Value>),
+    (String, Option<Value>, Option<Value>, bool),
 )> {
     let opts = lfp.try_arg(3).and_then(|v| v.try_hash_ty());
     let mut chomp = false;
@@ -1970,7 +2094,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         .to_str()?
         .to_string();
     let p = vm.get_block_data(globals, bh)?;
-    let (sep, limit, chomp, (mode, ext_obj, int_obj)) = class_getline_args(vm, globals, lfp)?;
+    let (sep, limit, chomp, (mode, ext_obj, int_obj, _bom)) = class_getline_args(vm, globals, lfp)?;
     if limit == Some(0) {
         return Err(MonorubyErr::argumenterr("invalid limit: 0 for foreach"));
     }
@@ -2150,7 +2274,7 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         let de = enc_default_external_obj(globals);
         let di = enc_default_internal_obj(globals);
         let (slot, i) =
-            resolve_io_encodings(globals, ext_obj, int_obj, false, true, de, di, true);
+            resolve_io_encodings(globals, ext_obj, int_obj, false, true, false, de, di);
         store_io_encodings(globals, read_io, slot, i);
     }
 
@@ -3107,12 +3231,7 @@ fn io_write_method(
     let args = lfp.arg(0).as_array();
     let mut total = 0i64;
     for v in args.iter().cloned() {
-        let bytes = if let Some(b) = v.try_bytes() {
-            b.to_vec()
-        } else {
-            let s = vm.to_s(globals, v)?;
-            s.into_bytes()
-        };
+        let bytes = bytes_for_write(vm, globals, lfp.self_val(), v)?;
         total += bytes.len() as i64;
         let mut done = 0;
         blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {
@@ -3902,13 +4021,22 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/set_encoding.html]
 #[monoruby_builtin]
 fn set_encoding(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    let arg0 = lfp.arg(0);
+    // Signature: set_encoding(ext, int = nil, **opts) — a third
+    // positional is only legal as the options Hash.
+    if let Some(a2) = lfp.try_arg(2)
+        && a2.try_hash_ty().is_none()
+    {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 3, expected 1..2)",
+        ));
+    }
+    let arg0 = coerce_enc_arg(vm, globals, lfp.arg(0))?;
     let (mut ext, mut int) = (None, None);
     if let Some(s) = arg0.is_str() {
         // A single string may carry both as "ext:int".
@@ -3930,12 +4058,14 @@ fn set_encoding(
         && let Some(arg1) = lfp.try_arg(1)
         && !arg1.is_nil()
     {
+        let arg1 = coerce_enc_arg(vm, globals, arg1)?;
         int = arg_to_enc_obj(globals, arg1);
     }
     let readable = self_.as_io_inner().is_readable();
+    let writable = self_.as_io_inner().is_writable();
     let de = enc_default_external_obj(globals);
     let di = enc_default_internal_obj(globals);
-    let (slot, i) = resolve_io_encodings(globals, ext, int, false, readable, de, di, false);
+    let (slot, i) = resolve_io_encodings(globals, ext, int, false, readable, writable, de, di);
     store_io_encodings(globals, self_, slot, i);
     Ok(self_)
 }
@@ -3990,10 +4120,25 @@ fn set_encoding_by_bom(
             "encoding is set to {name} already"
         )));
     }
+    match detect_and_consume_bom(vm, globals, self_)? {
+        Some(enc) => Ok(enc),
+        None => Ok(Value::nil()),
+    }
+}
+
+/// Peek the stream head for a byte-order mark. A detected BOM is
+/// consumed and installs its encoding as the external encoding
+/// (returned as `Some`); otherwise every byte is pushed back and the
+/// stored encodings stay untouched.
+fn detect_and_consume_bom(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut io: Value,
+) -> Result<Option<Value>> {
     // Read up to 4 bytes — enough to disambiguate every BOM (and to
     // tell UTF-16LE from UTF-32LE, which share the FF FE prefix).
-    let head = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
-        lfp.self_val().as_io_inner_mut().read(Some(4))
+    let head = blocking_io_region(vm, globals, io, libc::POLLIN, |_store| {
+        io.as_io_inner_mut().read(Some(4))
     })?;
     let (consume, enc_name): (usize, &str) = match head.first() {
         Some(0xEF) if head.len() >= 3 && head[1] == 0xBB && head[2] == 0xBF => (3, "UTF-8"),
@@ -4010,16 +4155,16 @@ fn set_encoding_by_bom(
         Some(0xFE) if head.len() >= 2 && head[1] == 0xFF => (2, "UTF-16BE"),
         _ => {
             // No BOM: push everything back and report nothing.
-            self_.as_io_inner_mut().unget(&head)?;
-            return Ok(Value::nil());
+            io.as_io_inner_mut().unget(&head)?;
+            return Ok(None);
         }
     };
     // Consume the BOM, push the trailing bytes back for later reads.
-    self_.as_io_inner_mut().unget(&head[consume..])?;
+    io.as_io_inner_mut().unget(&head[consume..])?;
     let enc = enc_by_name(globals, enc_name)
         .ok_or_else(|| MonorubyErr::runtimeerr(format!("encoding {enc_name} not found")))?;
-    store_io_encodings(globals, self_, ExtSlot::Fixed(enc), None);
-    Ok(enc)
+    store_io_encodings(globals, io, ExtSlot::Fixed(enc), None);
+    Ok(Some(enc))
 }
 
 /// An Encoding object -> the internal `Encoding` enum (folding the
@@ -4047,7 +4192,11 @@ fn tag_with_encs(
             enc_obj_to_enum(globals, de).unwrap_or(E::Utf8)
         }
     };
-    let intl = int_obj.and_then(|o| enc_obj_to_enum(globals, o));
+    // An unset internal encoding falls back to Encoding.default_internal
+    // (this is what makes IO.readlines & friends honor it).
+    let intl = int_obj
+        .or_else(|| enc_default_internal_obj(globals))
+        .and_then(|o| enc_obj_to_enum(globals, o));
     let (out, final_enc) = match intl {
         Some(i) if i != ext && !matches!(ext, E::Ascii8) => {
             let topts = super::encoding::TranscodeOpts::default();
@@ -7659,6 +7808,100 @@ mod tests {
             end
             w.close
             r.read
+            "##,
+        );
+    }
+
+
+    #[test]
+    fn io_encoding_plumbing() {
+        // set_encoding #to_str coercion + 3-arg rejection; read-write
+        // modes report a nil external encoding until one is set.
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_ioenc_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "abc")
+            r = []
+            File.open(path) do |f|
+              o = Object.new
+              def o.to_str; "utf-8"; end
+              i = Object.new
+              def i.to_str; "iso-8859-1"; end
+              f.set_encoding(o, i)
+              r << [f.external_encoding.name, f.internal_encoding.name]
+              r << (begin; f.set_encoding("a", "b", "c"); rescue ArgumentError => e; e.message; end)
+            end
+            File.open(path, "r+") { |f| r << [f.external_encoding, f.internal_encoding] }
+            File.open(path, "w+") { |f| r << f.external_encoding }
+            File.open(path, "a+") { |f| r << f.external_encoding }
+            File.open(path, "r+") { |f| f.set_encoding(nil, nil); r << f.external_encoding }
+            File.unlink(path)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_read_bom_modes() {
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_iobom_#{Process.pid}_#{rand(100000)}"
+            r = []
+            File.binwrite(path, "\xEF\xBB\xBFdata")
+            r << IO.read(path, mode: "rb:BOM|utf-8")
+            File.binwrite(path, "\xFF\xFEd\x00")
+            r << IO.read(path, mode: "rb:BOM|utf-16le").bytes
+            File.binwrite(path, "\xFE\xFF\x00d")
+            r << IO.read(path, mode: "rb:BOM|utf-16be").bytes
+            File.binwrite(path, "\xFF\xFE\x00\x00d\x00\x00\x00")
+            r << IO.read(path, mode: "rb:BOM|utf-32le").bytes
+            File.binwrite(path, "\x00\x00\xFE\xFF\x00\x00\x00d")
+            r << IO.read(path, mode: "rb:BOM|utf-32be").bytes
+            File.binwrite(path, "plain")
+            r << IO.read(path, mode: "rb:BOM|utf-8")
+            # File.open form consumes the BOM through the stream.
+            File.binwrite(path, "\xEF\xBB\xBFxy")
+            File.open(path, "rb:BOM|utf-8") { |f| r << f.read }
+            File.unlink(path)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_write_external_encoding_transcode() {
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_iowt_#{Process.pid}_#{rand(100000)}"
+            r = []
+            File.open(path, "w", external_encoding: Encoding::UTF_16BE) { |f| r << f.write("hi") }
+            r << File.binread(path).bytes
+            File.open(path, "w:iso-8859-1") { |f| f.write("h\u00e9") }
+            r << File.binread(path).bytes
+            File.open(path, "w", external_encoding: Encoding::UTF_16BE) do |f|
+              r << (begin; f.write("\xC3\xA9".b); rescue Encoding::UndefinedConversionError => e; e.class.to_s; end)
+            end
+            File.unlink(path)
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_readlines_default_internal() {
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_iodi_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "line\n")
+            was = Encoding.default_internal
+            begin
+              Encoding.default_internal = Encoding::ISO_8859_1
+              r = IO.readlines(path).first.encoding.name
+            ensure
+              Encoding.default_internal = was
+            end
+            File.unlink(path)
+            r
             "##,
         );
     }

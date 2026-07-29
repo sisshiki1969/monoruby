@@ -1022,6 +1022,22 @@ pub(super) fn transcode_bytes_with_opts(
                     format!("invalid byte sequence on US-ASCII"),
                 ));
             }
+            None if src_enc == E::Ascii8 => {
+                // BINARY with an 8-bit byte has no defined conversion
+                // to a real codec: CRuby reports the first offending
+                // byte as an UndefinedConversionError, spelling out the
+                // UTF-8 pivot for non-UTF-8 destinations.
+                let bad = src_bytes.iter().copied().find(|b| *b >= 0x80).unwrap_or(0);
+                let msg = if dst_enc == E::Utf8 {
+                    format!("\"\\x{bad:02X}\" from ASCII-8BIT to UTF-8")
+                } else {
+                    format!(
+                        "\"\\x{bad:02X}\" to UTF-8 in conversion from ASCII-8BIT to UTF-8 to {}",
+                        dst_enc.name()
+                    )
+                };
+                return Err(MonorubyErr::undefined_conversion_error(store, msg));
+            }
             None => {
                 return Err(MonorubyErr::converter_not_found_error(
                     store,

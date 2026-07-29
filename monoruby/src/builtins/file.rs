@@ -1105,12 +1105,9 @@ fn write(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let data = lfp.arg(0).as_array();
     let mut count = 0i64;
     for s in data.iter() {
-        let bytes = if let Some(bytes) = s.is_rstring_inner() {
-            bytes.to_vec()
-        } else {
-            let s_str = vm.invoke_tos(globals, *s)?;
-            s_str.expect_bytes(&globals.store)?.to_vec()
-        };
+        // External-encoding conversion (CRuby's do_writeconv) — shared
+        // with IO#write.
+        let bytes = super::io::bytes_for_write(vm, globals, lfp.self_val(), *s)?;
         count += bytes.len() as i64;
         let mut done = 0;
         super::io::blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {
