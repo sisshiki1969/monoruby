@@ -1753,7 +1753,10 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         let gvar_id = IdentId::get_id("$,");
         if let Some(v) = globals.get_gvar(gvar_id) {
             if !v.is_nil() {
-                vm.ruby_warn(globals, "warning: $, is set to non-nil value")?;
+                // `:deprecated`-category (silent unless
+                // `Warning[:deprecated]`), matching CRuby — see the
+                // `$;` warning in `String#split`.
+                vm.warn_deprecated(globals, "warning: $, is set to non-nil value")?;
             }
         }
     }

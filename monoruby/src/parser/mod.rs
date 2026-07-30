@@ -69,6 +69,33 @@ pub(crate) fn take_cli_source_encoding(path: &std::path::Path) -> Option<String>
     }
 }
 
+/// Set for the main script when its source came from `-e` (prism's
+/// `PM_OPTIONS_COMMAND_LINE_E`). Like the loop wrap and source encoding
+/// above, it is armed for a single path (the `-e` script, which parses
+/// as `"-e"`) and consumed on first match. CRuby suppresses the
+/// "integer literal in flip-flop" and "regex literal in condition"
+/// parse warnings for `-e` scripts — those awk/sed-style conditions are
+/// idiomatic on the command line — but still emits them for files,
+/// `require`s, and `eval`s, so the flag must not leak past the main
+/// script.
+static CLI_E_SCRIPT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Arm the `-e`-script marker for the main script at `path`.
+pub fn set_cli_e_script(path: PathBuf) {
+    *CLI_E_SCRIPT.lock().unwrap() = Some(path);
+}
+
+/// Consume the `-e`-script marker if `path` is the main script.
+pub(crate) fn take_cli_e_script(path: &std::path::Path) -> bool {
+    let mut guard = CLI_E_SCRIPT.lock().unwrap();
+    if matches!(&*guard, Some(p) if p == path) {
+        *guard = None;
+        true
+    } else {
+        false
+    }
+}
+
 /// Process-wide default for the `frozen_string_literal` pragma, set by
 /// the `--enable/--disable-frozen-string-literal` command-line flags.
 /// A per-file magic comment still wins. -1 = unset, 0 = false, 1 = true.

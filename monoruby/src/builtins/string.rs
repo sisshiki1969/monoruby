@@ -2055,10 +2055,13 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         Some(v) if !v.is_nil() => resolve(vm, globals, v)?,
         _ => match globals.get_gvar(IdentId::get_id("$;")) {
             Some(fs) if !fs.is_nil() => {
-                // CRuby emits this as a `:deprecated` category warning
-                // that fires regardless of `$VERBOSE` (ruby/spec relies
-                // on it under `$VERBOSE = false`).
-                crate::value::emit_verbose_warning(vm, globals, "$; is set to non-nil value")?;
+                // CRuby emits this as a `:deprecated`-category warning:
+                // silent unless `Warning[:deprecated]` is enabled (mspec
+                // turns it on, so `split_spec`'s `should complain` still
+                // catches it; a fresh command-line subprocess like
+                // `-naF:` leaves it off, so autosplit stays quiet). Not
+                // gated on `$VERBOSE`.
+                vm.warn_deprecated(globals, "warning: $; is set to non-nil value")?;
                 resolve(vm, globals, fs)?
             }
             _ => SepKind::Awk,
