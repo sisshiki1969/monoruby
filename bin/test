@@ -151,7 +151,7 @@ fi
 if [ -d "../spec" ] && [ -d "../mspec" ]; then
   echo "Running ruby/spec for coverage..."
   cd ../spec
-  for cat in core/basicobject core/true core/false core/nil core/integer core/float core/comparable core/math core/builtin_constants core/class core/numeric core/rational core/struct core/symbol core/range core/set core/systemexit core/method core/unboundmethod command_line; do
+  for cat in core/basicobject core/true core/false core/nil core/integer core/float core/comparable core/math core/builtin_constants core/class core/numeric core/rational core/range core/struct core/symbol core/range core/set core/systemexit core/method core/unboundmethod core/exception core/mutex core/signal command_line; do
     phase "ruby/spec $cat"
     echo "=== $cat ==="
     ../mspec/bin/mspec $cat -t "$MONORUBY"
