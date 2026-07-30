@@ -1,0 +1,2 @@
+fails:Predefined global $_ is Thread-local
+fails:$LOAD_PATH.resolve_feature_path returns what will be loaded without actual loading, .so file

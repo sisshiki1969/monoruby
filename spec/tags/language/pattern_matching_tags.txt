@@ -1,0 +1,3 @@
+fails:Pattern matching refinements are used for #deconstruct
+fails:Pattern matching refinements are used for #deconstruct_keys
+fails:Pattern matching refinements are used for #=== in constant pattern
