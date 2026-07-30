@@ -3098,13 +3098,12 @@ fn kernel_array(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
 #[monoruby_builtin]
 fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // NOTE: `require` is intentionally left on `coerce_to_string`.
-    // It is intercepted by CRuby's rubygems `kernel_require.rb`
-    // shim, and routing the arg through `#to_path` here perturbs
-    // `$LOADED_FEATURES` bookkeeping in that shim. `require_relative`
-    // and `load` use the direct builtin path and do get the
-    // CRuby-accurate `#to_path`/`#to_str` coercion.
-    let feature = lfp.arg(0).coerce_to_string(vm, globals)?;
+    // The rubygems `kernel_require.rb` shim normally pre-converts the
+    // argument with `File.path`, so a String arrives here and the
+    // protocol below is a no-op — but with the shim absent (`--no-gems`
+    // / the test harness) the builtin itself must run the
+    // `#to_path`/`#to_str` chain.
+    let feature = path_arg_to_string(vm, globals, lfp.arg(0))?;
     let file_name = std::path::PathBuf::from(feature);
     let b = vm.require(globals, &file_name, false)?;
     Ok(Value::bool(b))
@@ -5908,6 +5907,63 @@ mod tests {
               res << e.path.include?("..")
               res << e.path.end_with?("/nope.rb")
             end
+            res << $mark
+            Dir.glob(File.join(dir, "*")) { |f| File.delete(f) rescue nil }
+            begin; Dir.rmdir(dir); rescue; end
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn require_path_protocol_edges() {
+        // The #to_path → #to_str chain (a non-String #to_path result is
+        // itself converted), tilde-expanded load, the circular-require
+        // verbose warning, and Kernel#autoload?'s inherit argument.
+        run_test_once(
+            r#"
+            dir = File.join(ENV["TMPDIR"] || "/tmp", "mrb_req_proto_#{Process.pid}")
+            Dir.mkdir(dir) unless File.exist?(dir)
+            $mark = []
+            path = File.join(dir, "proto_feat.rb")
+            File.write(path, "$mark << :proto\n")
+            circ = File.join(dir, "circ_feat.rb")
+            File.write(circ, "$mark << :circ\nrequire #{circ.inspect}\n")
+            res = []
+            # to_path returns a non-String that responds to to_str.
+            inner = Object.new
+            inner.define_singleton_method(:to_str) { path }
+            name = Object.new
+            name.define_singleton_method(:to_path) { inner }
+            res << require(name)
+            res << (File.path(name) == path)
+            # A chain whose to_str result is not a String raises.
+            bad_inner = Object.new
+            bad_inner.define_singleton_method(:to_str) { :nope }
+            bad = Object.new
+            bad.define_singleton_method(:to_path) { bad_inner }
+            res << (begin; File.path(bad); rescue TypeError; :te; end)
+            # load with a tilde path.
+            old_home = ENV["HOME"]
+            begin
+              ENV["HOME"] = dir
+              res << load("~/proto_feat.rb")
+            ensure
+              ENV["HOME"] = old_home
+            end
+            # Same-thread circular require: loads once, returns true,
+            # warns in verbose mode (stderr, invisible to the value
+            # comparison).
+            old_verbose = $VERBOSE
+            begin
+              $VERBOSE = true
+              res << require(circ)
+            ensure
+              $VERBOSE = old_verbose
+            end
+            # Kernel#autoload? accepts the inherit argument.
+            autoload :ProtoEdge, "proto_edge.rb"
+            res << autoload?(:ProtoEdge, false)
             res << $mark
             Dir.glob(File.join(dir, "*")) { |f| File.delete(f) rescue nil }
             begin; Dir.rmdir(dir); rescue; end
