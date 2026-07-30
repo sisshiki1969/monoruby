@@ -73,7 +73,21 @@ impl Executor {
         #[cfg(feature = "dump-require")]
         eprintln!("{} > Autoload:{:?}", "  ".repeat(_level), name);
 
-        let res = self.require(globals, &feature, false);
+        // CRuby fires the autoload by *dispatching* `require` on the
+        // top-level main object (`rb_funcall(rb_vm_top_self(), ...)`),
+        // so a redefined/mocked `main.require` intercepts the load.
+        let res = {
+            let main = globals.main_object;
+            let feature_val = Value::string_from_str(&feature.to_string_lossy());
+            self.invoke_method_inner(
+                globals,
+                IdentId::get_id("require"),
+                main,
+                &[feature_val],
+                None,
+                None,
+            )
+        };
 
         #[cfg(feature = "dump-require")]
         eprintln!("{} < Autoload:{:?}", "  ".repeat(_level), name);

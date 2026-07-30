@@ -16,6 +16,23 @@ fn coerce_to_rstring_inner(
             if let Some(s) = result.is_rstring() {
                 return Ok(s);
             }
+            // CRuby's `rb_get_path` chains: a non-String `#to_path`
+            // result is itself converted with `#to_str`.
+            if method == IdentId::TO_PATH
+                && let Some(fid2) = globals.check_method(result, IdentId::TO_STR)
+            {
+                let result2 = vm.invoke_func_inner(globals, fid2, result, &[], None, None)?;
+                if let Some(s) = result2.is_rstring() {
+                    return Ok(s);
+                }
+                return Err(MonorubyErr::cant_convert_error(
+                    globals,
+                    result,
+                    result2,
+                    "String",
+                    IdentId::TO_STR,
+                ));
+            }
             return Err(MonorubyErr::cant_convert_error(
                 globals, recv, result, "String", method,
             ));

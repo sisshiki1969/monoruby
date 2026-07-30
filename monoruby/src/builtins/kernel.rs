@@ -144,6 +144,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func(kernel_class, "require_relative", require_relative, 1);
     globals.define_builtin_module_func_with(kernel_class, "load", load_, 1, 2, false);
     globals.define_builtin_module_func(kernel_class, "autoload", autoload, 2);
+    globals.define_builtin_module_func_with(kernel_class, "autoload?", autoload_query, 1, 2, false);
     globals.define_builtin_module_func_with_effect(
         kernel_class,
         "eval",
@@ -3097,13 +3098,12 @@ fn kernel_array(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/require.html]
 #[monoruby_builtin]
 fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // NOTE: `require` is intentionally left on `coerce_to_string`.
-    // It is intercepted by CRuby's rubygems `kernel_require.rb`
-    // shim, and routing the arg through `#to_path` here perturbs
-    // `$LOADED_FEATURES` bookkeeping in that shim. `require_relative`
-    // and `load` use the direct builtin path and do get the
-    // CRuby-accurate `#to_path`/`#to_str` coercion.
-    let feature = lfp.arg(0).coerce_to_string(vm, globals)?;
+    // The rubygems `kernel_require.rb` shim normally pre-converts the
+    // argument with `File.path`, so a String arrives here and the
+    // protocol below is a no-op — but with the shim absent (`--no-gems`
+    // / the test harness) the builtin itself must run the
+    // `#to_path`/`#to_str` chain.
+    let feature = path_arg_to_string(vm, globals, lfp.arg(0))?;
     let file_name = std::path::PathBuf::from(feature);
     let b = vm.require(globals, &file_name, false)?;
     Ok(Value::bool(b))
@@ -3155,7 +3155,9 @@ fn require_relative(
     file_name.pop();
     let feature = std::path::PathBuf::from(path_arg_to_string(vm, globals, lfp.arg(0))?);
     file_name.extend(&feature);
-    file_name.set_extension("rb");
+    // No extension munging here: the shared resolution appends `.rb`
+    // itself, and `require_relative "x.ext"` must mean `x.ext.rb`
+    // (set_extension would *replace* the foreign extension).
     let b = vm.require(globals, &file_name, true)?;
     Ok(Value::bool(b))
 }
@@ -3179,15 +3181,81 @@ fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// - autoload(const_name, feature) -> nil
 ///
+/// Registers on the caller's cbase — the innermost runtime class
+/// context (class body, class_eval, instance_eval) when one is active,
+/// otherwise the calling method's lexical class: a method written in a
+/// module registers on that module, one written in a `Class.new` block
+/// on the anonymous class, and the top level on Object.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/autoload.html]
 #[monoruby_builtin]
-fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let const_name = lfp.arg(0).expect_symbol_or_string(globals)?;
-    let feature = lfp.arg(1).coerce_to_string(vm, globals)?;
-    globals
-        .store
-        .set_constant_autoload(vm.context_class_id(), const_name, feature);
-    Ok(Value::nil())
+fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let cbase = kernel_cbase(vm, globals);
+    let target = globals.store.get_module(cbase).as_val();
+    super::module::autoload_on(vm, globals, target, lfp.arg(0), lfp.arg(1), pc)
+}
+
+/// ### Kernel.#autoload?
+///
+/// - autoload?(const_name, inherit = true) -> String | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/autoload=3f.html]
+#[monoruby_builtin]
+fn autoload_query(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let cbase = kernel_cbase(vm, globals);
+    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
+    let module = globals.store.get_module(cbase);
+    super::module::autoload_query_on(globals, module, name, inherit)
+}
+
+/// The caller's cbase for `Kernel#autoload` / `#autoload?`, mirroring
+/// `Executor::plain_def_definee`'s discrimination: a call from inside
+/// a *method* body uses the cref captured when that method's `def`
+/// executed (`nested_definee` — a method defined in a `Class.new`
+/// block reports the anonymous class, one written in a module reports
+/// that module), NOT the runtime cref, which may be a caller's
+/// `instance_eval` context leaking in through the shared stack (mspec
+/// runs every example under `instance_exec`). Any other caller (top
+/// level, class body, eval/instance_eval block) uses the runtime class
+/// context. Blocks resolve through their enclosing method
+/// (`outermost`).
+fn kernel_cbase(vm: &Executor, globals: &Globals) -> ClassId {
+    if let Some(caller) = vm.cfp().prev() {
+        let caller_lfp = caller.lfp();
+        let outer_lfp = caller_lfp.outermost().0;
+        let fid = outer_lfp.func_id();
+        let info = &globals.store[fid];
+        if (info.is_method() || info.meta().is_proc_method())
+            && let Some(iseq) = info.is_iseq()
+        {
+            let info = &globals.store[iseq];
+            if let Some(c) = info.nested_definee {
+                return c;
+            }
+            return info.lexical_context.last().copied().unwrap_or(OBJECT_CLASS);
+        }
+        // Block or top-level caller. A block invoked through the
+        // eval family has its `self` rebound away from its write
+        // site's — only then does the runtime cref apply; a plain
+        // `Proc#call` keeps the write-site cref (a lambda defined at
+        // the top level registers on Object no matter who calls it).
+        if caller_lfp.self_val().id() == outer_lfp.self_val().id()
+            && let Some(iseq) = info.is_iseq()
+        {
+            return globals.store[iseq]
+                .lexical_context
+                .last()
+                .copied()
+                .unwrap_or(OBJECT_CLASS);
+        }
+    }
+    vm.context_class_id()
 }
 
 ///
@@ -5783,6 +5851,163 @@ mod tests {
               e
             end
             [wrapped.message, wrapped.cause&.message, custom.backtrace]
+            "#,
+        );
+    }
+
+    #[test]
+    fn require_resolution_rules() {
+        // The `.rb`-appending candidate rule, tilde expansion, verbatim
+        // and suffix $LOADED_FEATURES matching, #to_path load-path
+        // entries, and LoadError path normalization — all differential
+        // against CRuby.
+        run_test_once(
+            r#"
+            dir = File.join(ENV["TMPDIR"] || "/tmp", "mrb_req_rules_#{Process.pid}")
+            Dir.mkdir(dir) unless File.exist?(dir)
+            $mark = []
+            File.write(File.join(dir, "feat"), "$mark << :bare\n")
+            File.write(File.join(dir, "feat.rb"), "$mark << :rb\n")
+            File.write(File.join(dir, "feat.ext"), "$mark << :ext\n")
+            File.write(File.join(dir, "feat.ext.rb"), "$mark << :extrb\n")
+            File.write(File.join(dir, "tilde_feat.rb"), "$mark << :tilde\n")
+            File.write(File.join(dir, "lp_feat.rb"), "$mark << :lp\n")
+            res = []
+            # `require "x"` / `require "x.ext"` load x.rb / x.ext.rb,
+            # never the bare or foreign-extensioned file.
+            res << require(File.join(dir, "feat"))
+            res << require(File.join(dir, "feat.ext"))
+            res << $mark
+            res << $LOADED_FEATURES.last(2).map { |f| File.basename(f) }
+            # Tilde expansion resolves against $HOME.
+            old_home = ENV["HOME"]
+            begin
+              ENV["HOME"] = dir
+              res << require("~/tilde_feat.rb")
+            ensure
+              ENV["HOME"] = old_home
+            end
+            # Verbatim stored relative entries and extensionless
+            # entries short-circuit to false.
+            $LOADED_FEATURES << "./phantom_xyz.rb"
+            res << require("./phantom_xyz.rb")
+            $LOADED_FEATURES << "phantom_bare"
+            res << require("phantom_bare")
+            # A #to_path object works as a $LOAD_PATH entry.
+            lp = Object.new
+            lp.define_singleton_method(:to_path) { dir }
+            $LOAD_PATH.unshift(lp)
+            res << require("lp_feat")
+            $LOAD_PATH.delete(lp)
+            # A missing require_relative reports the lexically-collapsed
+            # path.
+            begin
+              require_relative(File.join(dir, "sub", "..", "nope.rb"))
+            rescue LoadError => e
+              res << e.path.include?("..")
+              res << e.path.end_with?("/nope.rb")
+            end
+            res << $mark
+            Dir.glob(File.join(dir, "*")) { |f| File.delete(f) rescue nil }
+            begin; Dir.rmdir(dir); rescue; end
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn require_path_protocol_edges() {
+        // The #to_path → #to_str chain (a non-String #to_path result is
+        // itself converted), tilde-expanded load, the circular-require
+        // verbose warning, and Kernel#autoload?'s inherit argument.
+        run_test_once(
+            r#"
+            dir = File.join(ENV["TMPDIR"] || "/tmp", "mrb_req_proto_#{Process.pid}")
+            Dir.mkdir(dir) unless File.exist?(dir)
+            $mark = []
+            path = File.join(dir, "proto_feat.rb")
+            File.write(path, "$mark << :proto\n")
+            circ = File.join(dir, "circ_feat.rb")
+            File.write(circ, "$mark << :circ\nrequire #{circ.inspect}\n")
+            res = []
+            # to_path returns a non-String that responds to to_str.
+            inner = Object.new
+            inner.define_singleton_method(:to_str) { path }
+            name = Object.new
+            name.define_singleton_method(:to_path) { inner }
+            res << require(name)
+            res << (File.path(name) == path)
+            # A chain whose to_str result is not a String raises.
+            bad_inner = Object.new
+            bad_inner.define_singleton_method(:to_str) { :nope }
+            bad = Object.new
+            bad.define_singleton_method(:to_path) { bad_inner }
+            res << (begin; File.path(bad); rescue TypeError; :te; end)
+            # load with a tilde path.
+            old_home = ENV["HOME"]
+            begin
+              ENV["HOME"] = dir
+              res << load("~/proto_feat.rb")
+            ensure
+              ENV["HOME"] = old_home
+            end
+            # Same-thread circular require: loads once, returns true,
+            # warns in verbose mode (stderr, invisible to the value
+            # comparison).
+            old_verbose = $VERBOSE
+            begin
+              $VERBOSE = true
+              res << require(circ)
+            ensure
+              $VERBOSE = old_verbose
+            end
+            # Kernel#autoload? accepts the inherit argument.
+            autoload :ProtoEdge, "proto_edge.rb"
+            res << autoload?(:ProtoEdge, false)
+            res << $mark
+            Dir.glob(File.join(dir, "*")) { |f| File.delete(f) rescue nil }
+            begin; Dir.rmdir(dir); rescue; end
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_autoload_cbase() {
+        // Kernel#autoload registers on the caller's cbase: the method's
+        // captured cref (anonymous class for a Class.new-defined
+        // method, the module for a module-defined method), Object for
+        // the top level and for a lambda defined there.
+        run_test_once(
+            r#"
+            cls = Class.new do
+              def go
+                autoload :Zxq, "bogus"
+                autoload? :Zxq
+              end
+            end
+            module MbCbaseSpec
+              def setup_auto(path)
+                autoload :Yxq, path
+              end
+            end
+            class MbCbaseIncluder
+              include MbCbaseSpec
+            end
+            MbCbaseIncluder.new.setup_auto("/tmp/yxq_#{Process.pid}.rb")
+            top_lambda = -> { autoload :Wxq, "wxq.rb"; autoload?(:Wxq) }
+            autoload :Vxq, "vxq.rb"
+            def chk_auto(c); autoload?(c); end
+            [
+              cls.new.go,
+              cls.autoload?(:Zxq),
+              MbCbaseSpec.autoload?(:Yxq).nil?,
+              MbCbaseIncluder.autoload?(:Yxq).nil?,
+              top_lambda.call,
+              Object.autoload?(:Wxq),
+              chk_auto(:Vxq),
+              Kernel.private_instance_methods(false).include?(:autoload?),
+            ]
             "#,
         );
     }

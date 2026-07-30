@@ -15,113 +15,242 @@ pub(crate) enum RequireLoad {
     AlreadyLoaded(std::path::PathBuf),
 }
 
+/// The candidate feature paths `require` may load for *path*, in
+/// CRuby's priority order. `require` never loads a file under its bare
+/// name unless it already ends in `.rb` or `.so`: both `require "x"`
+/// and `require "x.ext"` mean `x(.ext).rb` first, then the native
+/// variant (which monoruby serves from its stub tree).
+fn require_candidates(path: &std::path::Path) -> Vec<PathBuf> {
+    match path.extension().map(|e| e.as_bytes()) {
+        Some(b"rb") | Some(b"so") => vec![path.to_path_buf()],
+        _ => {
+            let s = path.as_os_str().to_string_lossy();
+            vec![PathBuf::from(format!("{s}.rb")), PathBuf::from(format!("{s}.so"))]
+        }
+    }
+}
+
+/// The canonical (symlink-resolved) form of a `$LOAD_PATH` directory,
+/// falling back to its lexically-normalized absolute form when the
+/// directory doesn't exist.
+fn canonical_dir_of(dir: &str) -> PathBuf {
+    canonical_dir_of_path(std::path::Path::new(dir))
+}
+
+fn canonical_dir_of_path(dir: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(dir).unwrap_or_else(|_| {
+        lexically_normalize(&std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf()))
+    })
+}
+
+/// Expand a leading `~` to `$HOME` (CRuby's `require`/`load` shell
+/// expansion). Paths without the tilde come back unchanged.
+fn expand_tilde(path: &std::path::Path) -> PathBuf {
+    let s = path.as_os_str().as_bytes();
+    if s == b"~" || s.starts_with(b"~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            let mut out = PathBuf::from(home);
+            if s.len() > 2 {
+                out.push(std::ffi::OsStr::from_bytes(&s[2..]));
+            }
+            return out;
+        }
+    }
+    path.to_path_buf()
+}
+
+/// Whether the request already names a loadable form (`.rb` / `.so`) —
+/// such an as-given name matches `$LOADED_FEATURES` entries verbatim
+/// (including manually stored relative forms like `"./x.rb"`), whereas
+/// an extensionless request only falls back to its verbatim entry when
+/// resolution fails.
+fn has_loadable_ext(path: &std::path::Path) -> bool {
+    matches!(path.extension().map(|e| e.as_bytes()), Some(b"rb") | Some(b"so"))
+}
+
 impl Globals {
     ///
     /// Load external library.
     ///
     pub(crate) fn require_lib(
         &mut self,
+        vm: &mut Executor,
         file_name: &std::path::Path,
         is_relative: bool,
     ) -> Result<RequireLoad> {
+        let file_name = &expand_tilde(file_name);
         let path_str = file_name.to_string_lossy();
 
-        // Absolute path: try to load directly.
+        // Absolute path: try to load directly. Candidate-major order:
+        // the `.rb` verdict (loaded or loadable) is reached before the
+        // native variant is even considered, so a stored `x.so` entry
+        // doesn't block loading `x.rb` for an extensionless request.
         if path_str.starts_with('/') {
-            // Check if already loaded (with .rb or .so extension variants).
-            let mut file = PathBuf::from(file_name);
-            if file.extension().is_none() {
-                file.set_extension("rb");
-                if self.is_feature_loaded(&file) {
-                    return Ok(RequireLoad::AlreadyLoaded(file));
+            for cand in require_candidates(file_name) {
+                let canon = lexically_normalize(&cand);
+                if self.is_feature_loaded(&cand) || self.is_feature_loaded(&canon) {
+                    return Ok(RequireLoad::AlreadyLoaded(canon));
                 }
-                file.set_extension("so");
-                if self.is_feature_loaded(&file) {
-                    return Ok(RequireLoad::AlreadyLoaded(file));
-                }
-            } else if self.is_feature_loaded(&file) {
-                return Ok(RequireLoad::AlreadyLoaded(file));
-            }
-            // Try the file with its given extension first.
-            if file_name.is_file() {
-                return self.require_lib_file(file_name.into());
-            }
-            // Try appending .rb extension if none given.
-            if file_name.extension().is_none() {
-                let mut with_rb = PathBuf::from(file_name);
-                with_rb.set_extension("rb");
-                if with_rb.is_file() {
-                    return self.require_lib_file(with_rb);
-                }
-                let mut with_so = PathBuf::from(file_name);
-                with_so.set_extension("so");
-                if with_so.is_file() {
-                    return self.require_lib_file(with_so);
+                if canon.is_file() {
+                    return self.require_lib_file(canon);
                 }
             }
-            return Err(MonorubyErr::cant_load(None, file_name));
+            // The reported missing path is the lexically-normalized
+            // request: `require_relative "../x"` joins its caller's dir
+            // and CRuby reports (and stores in `LoadError#path`) the
+            // collapsed form.
+            return Err(MonorubyErr::cant_load(
+                None,
+                &lexically_normalize(file_name),
+            ));
         }
 
         // Relative path (starts with ./ or ../): resolve from CWD.
         if is_relative || path_str.starts_with("./") || path_str.starts_with("../") {
+            if has_loadable_ext(file_name) && self.is_feature_loaded(file_name) {
+                return Ok(RequireLoad::AlreadyLoaded(file_name.into()));
+            }
+            // Lexically collapse `..` segments (CRuby expand_path
+            // semantics): `bar/../x.rb` must resolve even when `bar`
+            // doesn't exist on disk.
             let resolved = if let Ok(cwd) = std::env::current_dir() {
-                cwd.join(file_name)
+                lexically_normalize(&cwd.join(file_name))
             } else {
                 file_name.into()
             };
-            if resolved.is_file() {
-                return self.require_lib_file(resolved);
+            for cand in require_candidates(&resolved) {
+                if cand.is_file() {
+                    return self.require_lib_file(cand);
+                }
             }
-            // Try with .rb and .so extensions.
-            if resolved.extension().is_none() {
-                let mut with_rb = resolved.clone();
-                with_rb.set_extension("rb");
-                if with_rb.is_file() {
-                    return self.require_lib_file(with_rb);
-                }
-                let mut with_so = resolved.clone();
-                with_so.set_extension("so");
-                if with_so.is_file() {
-                    return self.require_lib_file(with_so);
-                }
+            // An extensionless verbatim entry converts the miss to
+            // "already loaded" (require returns false).
+            if self.is_feature_loaded(file_name) {
+                return Ok(RequireLoad::AlreadyLoaded(file_name.into()));
             }
             return Err(MonorubyErr::cant_load(None, file_name));
         }
 
         // Bare path: check $LOADED_FEATURES, then search $LOAD_PATH.
         if !is_relative {
-            let mut file = PathBuf::from(file_name);
-            file.set_extension("rb");
-            if self.is_feature_loaded(&file) {
-                return Ok(RequireLoad::AlreadyLoaded(file));
+            // A verbatim stored entry under a loadable name — including
+            // non-canonical spellings like `"code/../code/x.rb"`.
+            if has_loadable_ext(file_name) && self.is_feature_loaded(file_name) {
+                return Ok(RequireLoad::AlreadyLoaded(file_name.into()));
             }
-            file.set_extension("so");
-            if self.is_feature_loaded(&file) {
-                return Ok(RequireLoad::AlreadyLoaded(file));
+            let entries = self.load_path_entries(vm);
+            // For feature matching, `$LOAD_PATH` directories compare in
+            // their canonical (symlink-resolved) form.
+            let canon_dirs: Vec<PathBuf> = entries.iter().map(|d| canonical_dir_of(d)).collect();
+            let bundler_priority = path_str == "bundler" || path_str.starts_with("bundler/");
+            for cand in require_candidates(file_name) {
+                if self.is_feature_loaded(&cand) {
+                    return Ok(RequireLoad::AlreadyLoaded(cand));
+                }
+                // CRuby's feature index: an entry ending in
+                // `/{candidate}` whose directory prefix is on the
+                // (canonicalized) load path counts as loaded — the
+                // `.rb` verdict is reached before the native pass, so
+                // a `.rb` loaded through any load-path dir blocks
+                // re-loading through another.
+                if let Some(hit) = self.feature_suffix_loaded(&cand, &canon_dirs) {
+                    return Ok(RequireLoad::AlreadyLoaded(hit));
+                }
+                if let Some(found) = self.search_candidate(&cand, &entries, bundler_priority) {
+                    return self.require_lib_file(found);
+                }
             }
-
-            if let Some(file) = self.search_lib(file_name) {
-                return self.require_lib_file(file);
+            // Resolution failed: an extensionless verbatim entry means
+            // "already loaded" (require returns false, not LoadError).
+            if self.is_feature_loaded(file_name) {
+                return Ok(RequireLoad::AlreadyLoaded(file_name.into()));
             }
         }
         Err(MonorubyErr::cant_load(None, file_name))
     }
 
-    pub(crate) fn search_lib(&mut self, file_name: &std::path::Path) -> Option<PathBuf> {
-        // Probe a single directory for `file_name`, applying the usual
-        // extension rules: an explicit extension must match exactly;
-        // otherwise try `.rb` then `.so`.
-        fn probe(dir: &std::path::Path, file_name: &std::path::Path) -> Option<PathBuf> {
-            let mut lib = dir.join(file_name);
-            if lib.extension().is_some() {
-                return lib.exists().then_some(lib);
+    /// `$LOAD_PATH` as strings: String entries verbatim, non-String
+    /// entries through the `#to_path` / `#to_str` protocol (CRuby's
+    /// `rb_get_path` per entry); unconvertible entries are skipped.
+    pub(crate) fn load_path_entries(&mut self, vm: &mut Executor) -> Vec<String> {
+        let raw: Vec<Value> = self.load_path.as_array().iter().copied().collect();
+        raw.into_iter()
+            .filter_map(|v| {
+                if let Some(s) = v.is_str() {
+                    return Some(s.to_string());
+                }
+                let pathed = if let Some(fid) = self.check_method(v, IdentId::get_id("to_path")) {
+                    vm.invoke_func_inner(self, fid, v, &[], None, None).ok()?
+                } else {
+                    v
+                };
+                if let Some(s) = pathed.is_str() {
+                    return Some(s.to_string());
+                }
+                let fid = self.check_method(pathed, IdentId::get_id("to_str"))?;
+                let s = vm.invoke_func_inner(self, fid, pathed, &[], None, None).ok()?;
+                Some(s.is_str()?.to_string())
+            })
+            .collect()
+    }
+
+    /// A `$LOADED_FEATURES` entry that ends in `/{cand}` and whose
+    /// directory prefix is one of the (canonicalized) load-path dirs.
+    fn feature_suffix_loaded(
+        &self,
+        cand: &std::path::Path,
+        canon_dirs: &[PathBuf],
+    ) -> Option<PathBuf> {
+        let suffix = format!("/{}", cand.display());
+        for v in self.loaded_features.as_array().iter() {
+            let Some(e) = v.is_str() else { continue };
+            if e.len() > suffix.len() && e.ends_with(&suffix) {
+                let prefix = &e[..e.len() - suffix.len()];
+                if canon_dirs
+                    .iter()
+                    .any(|d| d.as_os_str().as_bytes() == prefix.as_bytes())
+                {
+                    return Some(PathBuf::from(e));
+                }
             }
-            lib.set_extension("rb");
-            if lib.exists() {
-                return Some(lib);
+        }
+        None
+    }
+
+    pub(crate) fn search_lib(
+        &mut self,
+        vm: &mut Executor,
+        file_name: &std::path::Path,
+    ) -> Option<PathBuf> {
+        let entries = self.load_path_entries(vm);
+        let s = file_name.to_string_lossy();
+        let bundler_priority = s == "bundler" || s.starts_with("bundler/");
+        for cand in require_candidates(file_name) {
+            if let Some(p) = self.search_candidate(&cand, &entries, bundler_priority) {
+                return Some(p);
             }
-            lib.set_extension("so");
-            lib.exists().then_some(lib)
+        }
+        None
+    }
+
+    /// Search one concrete candidate (`x.rb` / `x.so` form) through the
+    /// stub pin, the host-bundler override, and `$LOAD_PATH`. The
+    /// returned path joins the *canonicalized* directory with the
+    /// candidate as given: CRuby resolves symlinks in the `$LOAD_PATH`
+    /// entry but never in the feature name, and that composite is what
+    /// lands in `$LOADED_FEATURES`.
+    fn search_candidate(
+        &mut self,
+        cand: &std::path::Path,
+        entries: &[String],
+        bundler_priority: bool,
+    ) -> Option<PathBuf> {
+        fn probe(dir: &std::path::Path, cand: &std::path::Path) -> Option<PathBuf> {
+            if dir.join(cand).exists() {
+                Some(canonical_dir_of_path(dir).join(cand))
+            } else {
+                None
+            }
         }
 
         // Pin monoruby's own C-extension replacement stubs ahead of
@@ -148,7 +277,7 @@ impl Globals {
         // is merely first), letting host activation shadow it consistently.
         let stub_root = install_root().join("stub");
         for dir in [stub_root.clone(), stub_root.join(ruby_platform())] {
-            if let Some(p) = probe(&dir, file_name) {
+            if let Some(p) = probe(&dir, cand) {
                 return Some(p);
             }
         }
@@ -168,32 +297,21 @@ impl Globals {
         // precedence here so the outcome no longer depends on activation
         // order. When the host has no bundler the normal loop below still
         // falls back to the vendored copy.
-        let is_bundler = {
-            let s = file_name.to_string_lossy();
-            s == "bundler" || s.starts_with("bundler/")
-        };
-        if is_bundler {
+        if bundler_priority {
             let vendored_lib = install_root().join("lib");
-            for lib in self.load_path.as_array().iter() {
-                let Some(lib) = lib.is_str() else {
-                    continue;
-                };
+            for lib in entries {
                 let path = std::path::Path::new(lib);
                 if path.starts_with(&vendored_lib) {
                     continue;
                 }
-                if let Some(p) = probe(path, file_name) {
+                if let Some(p) = probe(path, cand) {
                     return Some(p);
                 }
             }
         }
 
-        for lib in self.load_path.as_array().iter() {
-            let lib = match lib.is_str() {
-                Some(s) => s,
-                None => continue,
-            };
-            if let Some(p) = probe(std::path::Path::new(lib), file_name) {
+        for lib in entries {
+            if let Some(p) = probe(std::path::Path::new(lib), cand) {
                 return Some(p);
             }
         }
@@ -268,8 +386,10 @@ impl Globals {
     ///
     pub(crate) fn find_for_load(
         &mut self,
+        vm: &mut Executor,
         file_name: &std::path::Path,
     ) -> Result<(Vec<u8>, std::path::PathBuf)> {
+        let file_name = &expand_tilde(file_name);
         let path_str = file_name.to_string_lossy();
 
         // Absolute path: load directly. `__FILE__` (and
@@ -292,12 +412,9 @@ impl Globals {
             return Ok((body, resolved));
         }
 
-        // Bare filename: search $LOAD_PATH.
-        for lib in self.load_path.as_array().iter() {
-            let lib = match lib.is_str() {
-                Some(s) => s,
-                None => continue,
-            };
+        // Bare filename: search $LOAD_PATH (entries go through the
+        // #to_path / #to_str protocol).
+        for lib in self.load_path_entries(vm) {
             let lib = std::path::PathBuf::from(lib).join(file_name);
             if let Ok(res) = load_file(&lib) {
                 return Ok(res);
