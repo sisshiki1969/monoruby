@@ -2,7 +2,7 @@ use super::*;
 use paste::paste;
 
 mod complex;
-mod float;
+pub(crate) mod float;
 mod integer;
 pub(super) mod rational;
 
@@ -153,10 +153,11 @@ unop!(neg, bitnot);
 #[monoruby_builtin]
 fn angle(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let is_negative = match super::op::cmp_lt_values(vm, globals, self_val, Value::integer(0), false) {
-        Some(v) => v == Value::bool(true),
-        None => return Err(vm.take_error()),
-    };
+    let is_negative =
+        match super::op::cmp_lt_values(vm, globals, self_val, Value::integer(0), false) {
+            Some(v) => v == Value::bool(true),
+            None => return Err(vm.take_error()),
+        };
     if is_negative {
         Ok(Value::float(std::f64::consts::PI))
     } else {

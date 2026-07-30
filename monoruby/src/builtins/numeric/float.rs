@@ -162,7 +162,7 @@ fn float_rationalize(
         };
         // eps = 1 / 2^(MANTISSA_DIGITS - exp + 1)
         let shift = (f64::MANTISSA_DIGITS as i32 - exp + 1) as u32;
-        let eps = RationalInner::new_bigint(BigInt::from(1), BigInt::from(1u64) << shift);
+        let eps = RationalInner::new(1, BigInt::from(1u64) << shift);
         Ok(Value::rational_from_inner(RationalInner::find_simplest(
             &exact, &eps,
         )))
@@ -760,7 +760,7 @@ pub(super) fn parse_half_mode(v: Value) -> Result<Option<RoundHalf>> {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum RoundHalf {
+pub enum RoundHalf {
     Up,
     Down,
     Even,

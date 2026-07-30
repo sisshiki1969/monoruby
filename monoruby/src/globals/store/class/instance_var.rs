@@ -33,7 +33,7 @@ impl Store {
 
     pub(crate) fn get_ivars(&self, mut val: Value) -> Vec<(IdentId, Value)> {
         let class_id = val.class();
-        let rval = match val.try_rvalue_mut() {
+        let rval = match val.try_rvalue() {
             Some(rval) => rval,
             None => return vec![],
         };

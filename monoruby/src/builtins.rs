@@ -8,10 +8,10 @@ mod class;
 mod digest;
 mod dir;
 pub(crate) mod encoding;
-pub(crate) mod errno;
 #[cfg(test)]
 mod encoding_tests;
 pub(crate) mod enumerator;
+pub(crate) mod errno;
 mod exception;
 mod false_class;
 mod ffi;
@@ -32,7 +32,7 @@ mod math;
 mod method;
 mod module;
 mod nil_class;
-mod numeric;
+pub(crate) mod numeric;
 mod object;
 pub(crate) mod proc;
 mod process;
@@ -51,11 +51,11 @@ mod true_class;
 #[cfg(target_arch = "x86_64")]
 use crate::codegen::jitgen::AbstractState;
 use codegen::jitgen::asmir::*;
+pub(crate) use kernel::object_send;
+pub(crate) use kernel::{parse_kernel_float, parse_kernel_integer, send};
 pub use monoasm::*;
 use monoruby_attr::monoruby_builtin;
 use num::ToPrimitive;
-pub(crate) use kernel::object_send;
-pub(crate) use kernel::{parse_kernel_float, parse_kernel_integer, send};
 pub(crate) use process::signal_name_to_number;
 pub use time::TimeInner;
 

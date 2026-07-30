@@ -48,11 +48,7 @@ pub(crate) fn try_coerce_and_apply(
 /// Is `rhs` a real number for the purpose of `Complex#+/-/*`? Mirrors CRuby's
 /// `k_numeric_p(rhs) && f_real_p(rhs)`: built-in Integer/Float/Rational, or a
 /// Numeric subclass whose `real?` returns true. Errors from `real?` propagate.
-fn rhs_is_real_numeric(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    rhs: Value,
-) -> Result<bool> {
+fn rhs_is_real_numeric(vm: &mut Executor, globals: &mut Globals, rhs: Value) -> Result<bool> {
     match rhs.unpack() {
         RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => return Ok(true),
         _ => {}
@@ -303,7 +299,15 @@ pub(crate) extern "C" fn div_values(
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
             try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Integer")
         }
-        _ => vm.invoke_method(globals, IdentId::_DIV, is_func_call, lhs, &[rhs], None, None),
+        _ => vm.invoke_method(
+            globals,
+            IdentId::_DIV,
+            is_func_call,
+            lhs,
+            &[rhs],
+            None,
+            None,
+        ),
     }
 }
 
@@ -359,7 +363,15 @@ pub(crate) extern "C" fn rem_values(
             return try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Complex");
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_REM, is_func_call, lhs, &[rhs], None, None);
+            return vm.invoke_method(
+                globals,
+                IdentId::_REM,
+                is_func_call,
+                lhs,
+                &[rhs],
+                None,
+                None,
+            );
         }
     };
     Some(v)
@@ -409,7 +421,7 @@ pub(crate) extern "C" fn pow_ii(lhs: i64, rhs: i64, vm: &mut Executor) -> Option
             // a ** -n = Rational(1, a**n) for |a| > 1
             let neg_rhs = (-rhs) as u32;
             let denom = BigInt::from(lhs).pow(neg_rhs);
-            return Some(Value::rational_from_bigint(BigInt::from(1), denom));
+            return Some(Value::rational(1, denom));
         }
         let rhs = rhs as u32;
         match lhs.checked_pow(rhs) {
@@ -492,7 +504,7 @@ pub(crate) extern "C" fn pow_values(
                 } else {
                     let neg_rhs = (-rhs) as u32;
                     let denom = lhs.pow(neg_rhs);
-                    Value::rational_from_bigint(BigInt::from(1), denom)
+                    Value::rational(1, denom)
                 }
             } else {
                 let base_bits = lhs.bits();
@@ -543,7 +555,15 @@ pub(crate) extern "C" fn pow_values(
             return try_coerce_and_apply(vm, globals, IdentId::_POW, lhs, rhs, "Float");
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_POW, is_func_call, lhs, &[rhs], None, None);
+            return vm.invoke_method(
+                globals,
+                IdentId::_POW,
+                is_func_call,
+                lhs,
+                &[rhs],
+                None,
+                None,
+            );
         }
     };
     Some(v)
@@ -647,7 +667,15 @@ pub(crate) extern "C" fn shr_values(
             }
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_SHR, is_func_call, lhs, &[rhs], None, None);
+            return vm.invoke_method(
+                globals,
+                IdentId::_SHR,
+                is_func_call,
+                lhs,
+                &[rhs],
+                None,
+                None,
+            );
         }
     };
     Some(v)
@@ -715,7 +743,15 @@ pub(crate) extern "C" fn shl_values(
             }
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_SHL, is_func_call, lhs, &[rhs], None, None);
+            return vm.invoke_method(
+                globals,
+                IdentId::_SHL,
+                is_func_call,
+                lhs,
+                &[rhs],
+                None,
+                None,
+            );
         }
     };
     Some(v)
