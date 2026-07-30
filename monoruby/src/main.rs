@@ -905,6 +905,12 @@ fn main() {
         );
     }
 
+    // `-e`: mark the main script so the parser suppresses the flip-flop /
+    // condition-literal warnings for it (prism's `COMMAND_LINE_E` gate).
+    if !opts.exec.is_empty() {
+        parser::set_cli_e_script(path.clone());
+    }
+
     // Ruby prelude synthesized from the remaining switches; runs inside
     // the interpreter before `-r` requires and the script itself.
     let mut prelude = String::new();

@@ -309,6 +309,11 @@ fn try_prism_inner(
     let cli_loop_wrap = super::take_cli_loop_wrap(&path);
     // `-K`: default source encoding for the main script.
     let cli_source_encoding = super::take_cli_source_encoding(&path);
+    // `-e`: prism's `PM_OPTIONS_COMMAND_LINE_E` suppresses the flip-flop /
+    // condition-literal parse warnings for command-line scripts. The
+    // vendored ruby-prism wrapper doesn't expose the `command_line`
+    // option, so we replicate the gate here when forwarding warnings.
+    let cli_e_script = super::take_cli_e_script(&path);
 
     let result = match options.as_ref() {
         Some(opts) => prism::parse_with_options(code, opts),
@@ -381,6 +386,15 @@ fn try_prism_inner(
         .warnings()
         .filter_map(|w| {
             let msg = w.message();
+            // `-e` scripts suppress the flip-flop / condition-literal
+            // warnings, exactly like CRuby's prism `COMMAND_LINE_E` gate
+            // (these are the idiomatic awk/sed `-ne`/`-pe` conditions).
+            if cli_e_script
+                && (msg == "integer literal in flip-flop"
+                    || msg == "regex literal in condition")
+            {
+                return None;
+            }
             let verbose_only = if msg == "END in method; use at_exit"
                 || msg == "integer literal in flip-flop"
                 || msg == "regex literal in condition"

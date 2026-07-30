@@ -690,6 +690,34 @@ impl Executor {
         Ok(())
     }
 
+    /// Emit a `:deprecated`-category warning. `msg` is printed verbatim
+    /// (include any `warning: ` prefix). Routed through
+    /// `Kernel#__warn_deprecated` so CRuby's gating applies: silent
+    /// unless `Warning[:deprecated]` is enabled — mspec turns it on, so
+    /// `should complain` still sees it, while a fresh command-line
+    /// subprocess (e.g. `-naF:` autosplit) leaves it off and stays quiet.
+    /// Silent during bootstrap, before the helper is defined.
+    pub(crate) fn warn_deprecated(&mut self, globals: &mut Globals, msg: &str) -> Result<()> {
+        let main = globals.main_object;
+        if globals
+            .store
+            .check_method(main, IdentId::get_id("__warn_deprecated"))
+            .is_none()
+        {
+            return Ok(());
+        }
+        let msg_val = Value::string(msg.to_string());
+        self.invoke_method_inner(
+            globals,
+            IdentId::get_id("__warn_deprecated"),
+            main,
+            &[msg_val],
+            None,
+            None,
+        )?;
+        Ok(())
+    }
+
     ///
     /// The `"file:line"` of the nearest Ruby (iseq) caller of the current
     /// native builtin frame.
