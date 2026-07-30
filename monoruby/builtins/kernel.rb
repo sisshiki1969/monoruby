@@ -295,6 +295,14 @@ module Kernel
   end
 end
 
+# Fired by the runtime for `trace_var` String commands. `eval` reads
+# its caller's bytecode context, so it must be entered from a real Ruby
+# frame — the raw gvar-store runtime helper has no call-site pc to hang
+# the eval on.
+def __gvar_trace_eval(cmd)
+  eval(cmd)
+end
+
 # `caller` shares `caller_locations`' argument handling (Array#[] edge
 # semantics, Range forms, ArgumentError on negatives, #to_int coercion)
 # by going through the same `Thread::Backtrace.__slice` helper over the

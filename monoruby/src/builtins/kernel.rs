@@ -5824,6 +5824,67 @@ mod tests {
     }
 
     #[test]
+    fn rand_generic_endpoints() {
+        // Custom numeric-ish endpoints round-trip through their own
+        // #-/#+ (Integer-span via #to_int, Float-span directly), and
+        // Time ranges yield Times.
+        run_test_once(
+            r#"
+            cri = Struct.new(:value) do
+              def to_int; value; end
+              def <=>(o); to_int <=> o.to_int; end
+              def -(o); self.class.new(to_int - o.to_int); end
+              def +(o); self.class.new(to_int + o.to_int); end
+            end
+            crf = Struct.new(:value) do
+              def to_f; value; end
+              def <=>(o); to_f <=> o.to_f; end
+              def -(o); to_f - o.to_f; end
+              def +(o); self.class.new(to_f + o.to_f); end
+            end
+            i = rand(cri.new(1)..cri.new(42))
+            f = rand(crf.new(1.0)..crf.new(42.0))
+            t = Time.now
+            [
+              i.instance_of?(cri),
+              (1..42).include?(i.value),
+              f.instance_of?(crf),
+              f.value >= 1.0 && f.value <= 42.0,
+              rand(t..t).instance_of?(Time),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn rational_string_forms() {
+        run_test(
+            r#"
+            bad_to_int = Object.new
+            def bad_to_int.to_int; raise NoMethodError; end
+            [
+              Rational(".52"), Rational("10e2"), Rational("1.5e-2"), Rational("3."),
+              Rational("1_000_0"), Rational("+2/4"), Rational("  -19.1/3  "),
+              (begin; Rational("1/-2"); rescue ArgumentError => e; e.message; end),
+              (begin; Rational("1/0"); rescue ZeroDivisionError; :zde; end),
+              (begin; Rational("1_"); rescue ArgumentError; :ae; end),
+              (begin; Rational("1/x"); rescue ArgumentError; :ae2; end),
+              ".52".to_r, "1_x".to_r, "1/x".to_r, "-19.1/3".to_r, "abc".to_r,
+              "1e-2".to_r, "9.5e".to_r, "3.".to_r, "21/06".to_r, "".to_r,
+              Rational(:sym, exception: false),
+              Rational("abc", exception: false),
+              (begin; Rational(bad_to_int); rescue TypeError; :tie; end),
+              Rational(bad_to_int, exception: false),
+              # Complex results decomposed — the differential harness
+              # can't parse Complex literals from CRuby's output.
+              (c = Rational(1, Complex(1, 2)); [c.class.to_s, c.real, c.imaginary]),
+              Rational(Complex(2, 0), Complex(4, 0)),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
     fn kernel_conversion_and_misc_edges() {
         run_test(
             r#"
@@ -5973,7 +6034,7 @@ mod tests {
     fn sprintf_malformed_format() {
         run_test(
             r#"
-            fmts = ["%\n", " % ", "%.\n3f", "hello %1$"]
+            fmts = ["%\n", " % ", "%.\n3f", "%.3\nf", "%\0", "hello %1$", "%v", "% \n"]
             fmts.map do |f|
               begin
                 sprintf(f, "foo")

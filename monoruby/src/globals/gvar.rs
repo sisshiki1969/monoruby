@@ -235,15 +235,18 @@ impl GvarTable {
         }
         // `Kernel#trace_var` hooks fire after the store, newest first
         // (CRuby prepends each registration): a Proc command is called
-        // with the assigned value, a String command is eval'ed.
+        // with the assigned value, a String command is eval'ed — via
+        // the `__gvar_trace_eval` Ruby shim, NOT the eval builtin
+        // directly: `eval` reads its caller's bytecode pc, which this
+        // runtime helper doesn't have.
         if let Some(cmds) = globals.gvar_traces.get(&name) {
             let cmds = cmds.clone();
             let call = IdentId::get_id("call");
-            let eval = IdentId::get_id("eval");
+            let eval_shim = IdentId::get_id("__gvar_trace_eval");
             for cmd in cmds.into_iter().rev() {
                 if cmd.is_str().is_some() {
                     let main = globals.main_object;
-                    vm.invoke_method_inner(globals, eval, main, &[cmd], None, None)?;
+                    vm.invoke_method_inner(globals, eval_shim, main, &[cmd], None, None)?;
                 } else {
                     vm.invoke_method_inner(globals, call, cmd, &[val], None, None)?;
                 }
