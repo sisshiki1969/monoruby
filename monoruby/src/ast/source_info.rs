@@ -37,6 +37,12 @@ impl Line {
 pub struct SourceInfo {
     /// directory path of the source code.
     pub path: PathBuf,
+    /// Load-time canonical (absolute, symlink-resolved) path of the
+    /// source file; `None` for eval'd code and other non-file sources.
+    /// Captured when the file is parsed, so
+    /// `Thread::Backtrace::Location#absolute_path` stays correct after
+    /// a later `Dir.chdir` or even removal of the file.
+    pub absolute_path: Option<PathBuf>,
     /// source code text.
     pub code: String,
     /// line number offset for eval (0-based: e.g. lineno=1 means offset=0, lineno=42 means offset=41).
@@ -72,11 +78,18 @@ impl SourceInfo {
         }
         SourceInfo {
             path: path.into(),
+            absolute_path: None,
             code,
             line_offset: 0,
             source_encoding: None,
             frozen_string_literal: None,
         }
+    }
+
+    /// Set the load-time canonical path (see `absolute_path`).
+    pub fn with_absolute_path(mut self, absolute_path: Option<PathBuf>) -> Self {
+        self.absolute_path = absolute_path;
+        self
     }
 
     pub fn new_eval(
@@ -90,6 +103,7 @@ impl SourceInfo {
         }
         SourceInfo {
             path: path.into(),
+            absolute_path: None,
             code,
             line_offset,
             source_encoding: None,

@@ -399,7 +399,11 @@ fn source_location(
 fn iseq_source_location(store: &Store, func_id: FuncId) -> Option<Value> {
     let iseq = store.resolve_iseq(func_id)?;
     let info = &store[iseq];
-    let path = info.sourceinfo.file_name().to_string();
+    // The bootstrap `builtins/` tree renders as `<internal:NAME>` —
+    // truthy, like CRuby's `Kernel.instance_method(:tap).source_location`
+    // (`["<internal:kernel>", …]`); other internal-library paths stay
+    // nil rather than leaking an absolute install path.
+    let path = crate::globals::display_path(&info.sourceinfo).to_string();
     if path.contains("/.monoruby/") {
         return None;
     }

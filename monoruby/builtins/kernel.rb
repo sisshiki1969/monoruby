@@ -5,6 +5,13 @@
 # file can load before those classes are defined.
 
 module Kernel
+  # `Kernel#tap` — defined on Kernel (not Object) so the frame label in
+  # `caller_locations` reads `Kernel#tap`, as CRuby's does.
+  def tap
+    yield self
+    self
+  end
+
   private
 
   # Internal helper: coerce value to Integer via to_int.
@@ -80,9 +87,15 @@ module Kernel
     unless uplevel.nil?
       uplevel = __to_int(uplevel)
       raise ArgumentError, "negative level (#{uplevel})" if uplevel < 0
-      loc = caller_locations(uplevel + 1, 1)
-      if loc && (loc = loc.first)
-        str << "#{loc.path}:#{loc.lineno}: warning: "
+      # Frames from core-library methods written in Ruby (`<internal:...>`
+      # paths) are skipped when counting uplevel, as CRuby does since
+      # Bug #20968 — a warning attributed to an internal frame is useless.
+      locs = caller_locations(1)
+      if locs
+        locs = locs.reject { |l| l.path&.start_with?("<internal:") }
+        if (loc = locs[uplevel])
+          str << "#{loc.path}:#{loc.lineno}: warning: "
+        end
       end
     end
     messages.each do |m|
@@ -262,16 +275,16 @@ module Kernel
   end
 end
 
-# `caller_locations` returns the same `Thread::Backtrace::Location`
-# objects as `Exception#backtrace_locations` (defined in startup.rb),
-# each parsed lazily from its `caller` frame string.
+# `caller_locations` builds `Thread::Backtrace::Location`s from the
+# structured native frames (`Kernel.__caller_frames`), which carry the
+# load-time canonical path alongside the display path/label — string
+# parsing can't recover `absolute_path` after a chdir or file removal.
 def caller_locations(start = 1, length = nil)
-  frames = caller(start + 1)
-  return nil if frames.nil?
-  frames = frames[0, length] if length
-  frames.map do |frame|
-    Thread::Backtrace::Location.new(frame)
-  end
+  frames = Kernel.__caller_frames(1)
+  locs = frames.map { |f| Thread::Backtrace::Location.new(f) }
+  # `Thread::Backtrace.__slice` implements the shared (start), (start,
+  # length) and (range) argument forms with Array#[] edge semantics.
+  Thread::Backtrace.__slice(locs, length.nil? ? [start] : [start, length])
 end
 
 module Kernel

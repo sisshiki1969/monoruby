@@ -1176,7 +1176,15 @@ impl Globals {
 
     pub(crate) fn current_source_path(&self, executor: &Executor) -> &std::path::Path {
         let source_func_id = executor.cfp().get_source_pos();
-        &self.store.iseq(source_func_id).sourceinfo.path
+        let sourceinfo = &self.store.iseq(source_func_id).sourceinfo;
+        // Prefer the load-time canonical path: `require_relative` (and
+        // `__dir__`) must keep resolving against the file's real
+        // directory even after a `Dir.chdir` invalidates a relative
+        // main-script path.
+        match &sourceinfo.absolute_path {
+            Some(p) => p,
+            None => &sourceinfo.path,
+        }
     }
 
     /// ## ABI of JIT-compiled code.

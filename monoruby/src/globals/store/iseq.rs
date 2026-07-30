@@ -233,6 +233,10 @@ pub struct ISeqInfo {
     /// plain class/module body, where `return` is invalid.
     ///
     pub(crate) singleton_classdef: bool,
+    /// `true` when this iseq is a `module` body (vs a `class` body) —
+    /// only meaningful when the owning `FuncInfo` is a ClassDef.
+    /// Backtrace labels render `<module:M>` vs `<class:C>` on it.
+    pub(crate) module_classdef: bool,
     ///
     /// `true` when this iseq's *lexical* chain passes through a
     /// singleton-class body (`class << obj`) — the iseq itself, or a
@@ -337,6 +341,7 @@ impl ISeqInfo {
             uses_block: false,
             nested_definee: None,
             singleton_classdef: false,
+            module_classdef: false,
             in_singleton_lexical: false,
             forwarding_no_escape: false,
             lazy_forwarding_rest: None,

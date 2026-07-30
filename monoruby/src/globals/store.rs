@@ -397,6 +397,15 @@ impl Store {
     /// if the function is a block, the description is "block in *method_name*".
     ///
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {
+        self.func_description_for(func_id, None)
+    }
+
+    /// Like [`Self::func_description`], but with the executing frame's
+    /// `self` as a hint: a method owned by several classes (e.g. the
+    /// instance and singleton copies `module_function` creates) is
+    /// labeled by the owner that actually dispatched — `Q.f` when
+    /// called on the module, `Q#f` from an instance (CRuby).
+    pub(crate) fn func_description_for(&self, func_id: FuncId, frame_self: Option<Value>) -> String {
         let info = &self[func_id];
         let name = if let Some(iseq_id) = info.is_iseq() {
             let iseq = &self[iseq_id];
@@ -409,13 +418,62 @@ impl Store {
                 if info.name() == Some(IdentId::_MAIN) {
                     return "<main>".to_string();
                 }
-                return format!("block in {}", self.func_description(self[mother].func_id()));
+                // An eval body is a transparent frame: CRuby labels it
+                // exactly like the frame the eval was written in.
+                if iseq.is_eval
+                    && let Some(outer) = iseq.outer
+                {
+                    return self.func_description_for(self[outer].func_id(), frame_self);
+                }
+                // Block nesting depth: hops up the lexical chain to the
+                // first non-block scope — or the `_MAIN`-stamped main
+                // script body, which counts as the base — skipping
+                // transparent eval frames.
+                let mut depth = 1usize;
+                let mut base = iseq.outer;
+                while let Some(o) = base {
+                    let outer_iseq = &self[o];
+                    if outer_iseq.outer.is_none()
+                        || self[outer_iseq.func_id()].name() == Some(IdentId::_MAIN)
+                    {
+                        break;
+                    }
+                    if !outer_iseq.is_eval {
+                        depth += 1;
+                    }
+                    base = outer_iseq.outer;
+                }
+                let base_desc = match base {
+                    Some(o) => self.func_description_for(self[o].func_id(), frame_self),
+                    None => self.func_description_for(self[mother].func_id(), frame_self),
+                };
+                return if depth == 1 {
+                    format!("block in {base_desc}")
+                } else {
+                    format!("block ({depth} levels) in {base_desc}")
+                };
+            } else if info.is_classdef() {
+                // Class/module body frames: CRuby renders `<class:A>` /
+                // `<module:M>` / `singleton class` (for `class << obj`).
+                return if iseq.singleton_classdef {
+                    "singleton class".to_string()
+                } else {
+                    let kind = if iseq.module_classdef {
+                        "module"
+                    } else {
+                        "class"
+                    };
+                    format!("<{kind}:{}>", iseq.name())
+                };
             } else {
                 // The toplevel frame's internal name is `/main`
-                // (`IdentId::_MAIN`); CRuby displays it as `<main>`.
+                // (`IdentId::_MAIN`). The main script renders through the
+                // `_MAIN`-stamped block above; a non-block `/main` is a
+                // required/loaded file's toplevel — CRuby's
+                // `<top (required)>`.
                 let name = iseq.name();
                 if name == "/main" {
-                    "<main>".to_string()
+                    "<top (required)>".to_string()
                 } else {
                     name
                 }
@@ -438,7 +496,23 @@ impl Store {
                 this.qualified_name(id)
             }
         };
-        match info.owner_class().get(0) {
+        // With a frame-self hint and several owners, prefer the owner
+        // whose singleton class is attached to that self (the entry
+        // `module_function` dispatched), falling back to the first.
+        let owner = match frame_self {
+            Some(sv) if info.owner_class().len() > 1 => info
+                .owner_class()
+                .iter()
+                .find(|o| {
+                    self[**o]
+                        .get_module()
+                        .is_singleton()
+                        .is_some_and(|obj| obj.id() == sv.id())
+                })
+                .or_else(|| info.owner_class().first()),
+            _ => info.owner_class().first(),
+        };
+        match owner {
             Some(owner) => {
                 if let Some(obj) = self[*owner].get_module().is_singleton() {
                     if let Some(class) = obj.is_class_or_module() {
@@ -463,12 +537,12 @@ impl Store {
         if let Some(func_id) = func_id {
             format!(
                 "{}:{}:in '{}'",
-                source.file_name(),
+                display_path(&source),
                 source.get_line(&loc),
                 self.func_description(func_id)
             )
         } else {
-            format!("{}:{}", source.file_name(), source.get_line(&loc))
+            format!("{}:{}", display_path(&source), source.get_line(&loc))
         }
     }
 
@@ -499,7 +573,34 @@ impl Store {
     pub fn internal_location(&self, func_id: FuncId) -> String {
         format!("<internal>:in '{}'", self.func_description(func_id))
     }
+}
 
+/// CRuby-style display path for backtrace strings: sources shipped in
+/// the interpreter's own `builtins/` bootstrap tree render as
+/// `<internal:NAME>` (CRuby's prelude-style frames — `Kernel#tap`
+/// reports `<internal:kernel>`, not an installation path); everything
+/// else renders as loaded. `Location#absolute_path` is nil for the
+/// internal form.
+pub(crate) fn display_path(source: &SourceInfoRef) -> std::borrow::Cow<'_, str> {
+    thread_local! {
+        static BUILTINS_DIR: std::path::PathBuf =
+            crate::globals::install_root().join("builtins");
+    }
+    let internal = BUILTINS_DIR.with(|dir| {
+        source.path.strip_prefix(dir).ok().map(|rest| {
+            format!(
+                "<internal:{}>",
+                rest.file_stem().unwrap_or_default().to_string_lossy()
+            )
+        })
+    });
+    match internal {
+        Some(s) => std::borrow::Cow::Owned(s),
+        None => source.file_name(),
+    }
+}
+
+impl Store {
     fn new_iseq(&mut self, info: ISeqInfo) -> ISeqId {
         let id = self.iseqs.len();
         self.iseqs.push(info);
@@ -537,6 +638,7 @@ impl Store {
         loc: Loc,
         sourceinfo: SourceInfoRef,
         is_singleton: bool,
+        is_module: bool,
     ) -> Result<FuncId> {
         let func_id = self.functions.next_func_id();
         self.functions.add_compile_info(compile_info);
@@ -549,6 +651,7 @@ impl Store {
             sourceinfo,
         );
         info.singleton_classdef = is_singleton;
+        info.module_classdef = is_module;
         // The body itself resolves constants through a per-execution
         // singleton class, so it needs the self-keyed constant cache
         // just like defs nested inside it (bytecodegen additionally

@@ -262,9 +262,13 @@ impl Globals {
     ) -> Result<(Vec<u8>, std::path::PathBuf)> {
         let path_str = file_name.to_string_lossy();
 
-        // Absolute path: load directly.
+        // Absolute path: load directly. `__FILE__` (and
+        // `Location#path`) keep the path *as given* — symlinks are NOT
+        // resolved (CRuby); the canonical form is captured separately
+        // at parse time for `Location#absolute_path`.
         if path_str.starts_with('/') {
-            return load_file(file_name);
+            let (body, _) = load_file(file_name)?;
+            return Ok((body, file_name.to_path_buf()));
         }
 
         // Relative to CWD (starts with ./ or ../): resolve against CWD first.
@@ -274,7 +278,8 @@ impl Globals {
             } else {
                 file_name.into()
             };
-            return load_file(&resolved);
+            let (body, _) = load_file(&resolved)?;
+            return Ok((body, resolved));
         }
 
         // Bare filename: search $LOAD_PATH.

@@ -394,7 +394,7 @@ fn thread_initialize(
     // The block's definition site, shown by Thread#to_s (CRuby).
     if let Some(iseq) = globals.store.resolve_iseq(proc.func_id()) {
         let info = &globals.store[iseq];
-        let path = info.sourceinfo.short_file_name().to_string();
+        let path = crate::globals::display_path(&info.sourceinfo).to_string();
         let line = info.sourceinfo.get_line(&info.loc);
         let loc = Value::string(format!("{path}:{line}"));
         let _ = globals
@@ -437,7 +437,7 @@ fn thread_start(
     let mut thread = Value::new_thread(class_id, ThreadInner::new(proc.clone(), args));
     if let Some(iseq) = globals.store.resolve_iseq(proc.func_id()) {
         let info = &globals.store[iseq];
-        let path = info.sourceinfo.short_file_name().to_string();
+        let path = crate::globals::display_path(&info.sourceinfo).to_string();
         let line = info.sourceinfo.get_line(&info.loc);
         let loc = Value::string(format!("{path}:{line}"));
         let _ = globals
@@ -2067,6 +2067,65 @@ mod tests {
              (lines[1] =~ /:\d+:in '/ ? true : false),
              lines[1].include?("boom (RuntimeError)")]
             "##,
+        );
+    }
+
+    #[test]
+    fn thread_backtrace_locations_first_frame() {
+        // The receiver's own #backtrace_locations call is the first
+        // location, rendered at its call site; [1..] matches
+        // caller_locations(0..). each_caller_location yields exactly
+        // caller_locations, supports break, and validates its
+        // arguments.
+        run_test_once(
+            r#"
+            r = []
+            def tbl_probe
+              locs = Thread.current.backtrace_locations(0..1)
+              [locs[0].label, locs[0].lineno, locs[1].label]
+            end
+            first, line, second = tbl_probe
+            r << first << second
+            def tbl_cmp
+              a = Thread.current.backtrace_locations(1..-1).map(&:to_s)
+              b = caller_locations(0..-1).map(&:to_s)
+              a == b
+            end
+            r << tbl_cmp
+            def tbl_each
+              ar = []
+              Thread.each_caller_location { |l| ar << l }
+              [ar.map(&:to_s) == caller_locations.map(&:to_s), ar[0].class.to_s]
+            end
+            r << tbl_each
+            broke = []
+            i = 0
+            res = Thread.each_caller_location { |l| broke << l; i += 1; break :stopped if i == 1 }
+            r << (res == :stopped || res.nil?)
+            def tbl_no_block
+              Thread.each_caller_location
+            rescue LocalJumpError => e
+              e.message
+            end
+            r << tbl_no_block
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_to_s_location_and_encoding() {
+        run_test_once(
+            r#"
+            t = Thread.new { "x" }
+            t.join
+            s = t.to_s
+            r = [s.encoding.to_s, (s =~ /^#<Thread:0x\h+ .+:\d+ \w+>$/ ? true : false)]
+            t2 = Thread.new { "x" }.join
+            t2.name = "平仮名"
+            r << t2.to_s.include?("@平仮名") << t2.to_s.encoding.to_s
+            r
+            "#,
         );
     }
 }
