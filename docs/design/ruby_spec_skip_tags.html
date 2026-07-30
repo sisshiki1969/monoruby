@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fa231d60.js";
+            window.path_to_searchindex_js = "../searchindex-81f8c76a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -181,6 +181,24 @@
 <p>monoruby が ruby/spec スイートのハングをどう回避しているか、そして粗い
 ファイル単位スキップリストを「本当に救えない5ファイル」まで絞り込んだ監査の
 記録。<code>#899</code> 以降の単一スレッド化ランタイムを前提とする（最新反映時点）。</p>
+<blockquote>
+<p><strong>更新（2026-07-31）: 陳腐化タグの剪定。</strong> 本ドキュメント以降、グリーン
+スレッド／プリエンプション（#962）と library ハング修正（#988）により、
+かつてハングしていた example の多くが完走・pass するようになった。再検証の
+結果、<code>fails:</code> タグは<em>pass する example を集計から除外し pass 率を過小評価</em>
+するため、以下の陳腐化タグを削除した:</p>
+<ul>
+<li><code>core/kernel/require_tags.txt</code>（<code>(concurrently)</code> 3件 → pass）</li>
+<li><code>library/expect/expect_tags.txt</code>（<code>IO#expect</code> 4件 → pass、6例全完走）</li>
+<li><code>library/socket/socket/{tcp,udp}_server_loop_tags.txt</code>（各1件 → pass）</li>
+</ul>
+<p>各ファイルを「タグ無し・<code>mspec run --excl-tag fails</code>」で4回反復＋バッチ／
+カテゴリ実行し、ハング／フレークが無いことを確認済み。<strong>残すのは
+<code>core/process/kill_tags.txt</code> のみ</strong>（プロセスグループ宛て負シグナルの3件は
+現在もハングし、除外するとファイルが完走することを確認）。空で未参照だった
+<code>spec/skip.txt</code> も削除。なお自動タガー（下記モニタ）は<em>追加専用</em>なので、
+万一 Linux CI で再ハングすれば次回モニタ実行が自動で再タグ付けする。</p>
+</blockquote>
 <blockquote>
 <p><strong>更新（重要・経緯）: tags が fast-path で効かなかった原因はタグの <em>置き場所</em>
 のずれで、CI 側の1行修正で解消。tags を復活し <code>skip.txt</code> は5ファイルへ戻した。</strong></p>
