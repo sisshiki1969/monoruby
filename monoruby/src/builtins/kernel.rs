@@ -96,6 +96,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_rest(kernel_class, "format", format);
     globals.define_builtin_module_func_rest(kernel_class, "sprintf", format);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
+    globals.define_builtin_module_func(kernel_class, "global_variables", global_variables, 0);
     globals.define_builtin_module_func_with(kernel_class, "trace_var", trace_var, 1, 2, false);
     globals.define_builtin_module_func_with(kernel_class, "untrace_var", untrace_var, 1, 2, false);
     globals.define_builtin_module_func_with_kw(
@@ -981,7 +982,7 @@ fn fix_system_exit_status(globals: &mut Globals, err: &mut MonorubyErr, ex: Valu
             .get_ivar(ex, IdentId::get_id("/status"))
             .and_then(|v| v.try_fixnum())
             .unwrap_or(0);
-        err.kind = MonorubyErrKind::SystemExit(status as u8);
+        err.kind = MonorubyErrKind::SystemExit(status);
     }
 }
 
@@ -1828,6 +1829,25 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 }
 
 ///
+/// ### Kernel.#global_variables
+///
+/// - global_variables -> [Symbol]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/global_variables.html]
+#[monoruby_builtin]
+fn global_variables(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let names = globals.gvars.names();
+    Ok(Value::array_from_iter(
+        names.into_iter().map(Value::symbol),
+    ))
+}
+
+///
 /// ### Kernel.#trace_var
 ///
 /// - trace_var(varname, hook) -> nil
@@ -2323,7 +2343,9 @@ fn kernel_float_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Res
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::float(num as f64)),
         RV::BigInt(num) => return Ok(Value::float(num.to_f64().unwrap())),
-        RV::Float(num) => return Ok(Value::float(num)),
+        // Return the argument itself: `Float(nan).equal?(nan)` holds in
+        // CRuby (identity is preserved for Float inputs).
+        RV::Float(_) => return Ok(arg0),
         RV::String(b) => {
             let s = b.to_str()?;
             return parse_kernel_float(&s);
@@ -2331,11 +2353,12 @@ fn kernel_float_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Res
         _ => {}
     };
     // Try to_f coercion. CRuby requires `#to_f` to return a Float; an
-    // Integer (or anything else) is a TypeError.
+    // Integer (or anything else) is a TypeError. The result object is
+    // returned as-is (identity preserved).
     if let Some(func_id) = globals.check_method(arg0, IdentId::TO_F) {
         let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
         match result.unpack() {
-            RV::Float(f) => return Ok(Value::float(f)),
+            RV::Float(_) => return Ok(result),
             _ => {
                 return Err(MonorubyErr::cant_convert_error_f(globals, arg0, result));
             }
@@ -2853,11 +2876,19 @@ fn kernel_array(
         if result.is_array_ty() {
             return Ok(result);
         }
-        return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
-    } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_A) {
+        // A nil #to_ary falls through to the #to_a protocol (CRuby).
+        if !result.is_nil() {
+            return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
+        }
+    }
+    if let Some(func_id) = globals.check_method(arg, IdentId::TO_A) {
         let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
         if result.is_array_ty() {
             return Ok(result);
+        }
+        // A nil #to_a wraps the argument itself (CRuby).
+        if result.is_nil() {
+            return Ok(Value::array1(arg));
         }
         return Err(MonorubyErr::typeerr(format!(
             "can't convert {} into Array ({}#to_a gives {})",
@@ -3441,6 +3472,27 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// - sleep -> Integer
 /// - sleep(sec) -> Integer
+/// Coerce a `sleep` duration: numerics via `#to_f` semantics, any
+/// other object through `#divmod(1)` (CRuby `rb_time_interval` — the
+/// quotient plus remainder is the interval in seconds).
+fn sleep_duration(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64> {
+    let numeric = v.try_fixnum().is_some()
+        || v.is_float()
+        || v.try_rational().is_some()
+        || matches!(v.unpack(), RV::BigInt(_));
+    if !numeric && let Some(fid) = globals.check_method(v, IdentId::get_id("divmod")) {
+        let res = vm.invoke_func_inner(globals, fid, v, &[Value::integer(1)], None, None)?;
+        if let Some(arr) = res.try_array_ty()
+            && arr.len() == 2
+        {
+            let q = arr[0].coerce_to_f64(vm, globals)?;
+            let r = arr[1].coerce_to_f64(vm, globals)?;
+            return Ok(q + r);
+        }
+    }
+    v.coerce_to_f64(vm, globals)
+}
+
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/sleep.html]
 #[monoruby_builtin]
@@ -3452,7 +3504,7 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if crate::scheduler::has_other_live_threads() {
         let dur = match lfp.try_arg(0) {
             Some(sec) => {
-                let sec = sec.coerce_to_f64(vm, globals)?;
+                let sec = sleep_duration(vm, globals, sec)?;
                 if sec.is_nan() || sec < 0.0 {
                     return Err(MonorubyErr::argumenterr(
                         "time interval must not be negative or NaN",
@@ -3466,7 +3518,7 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         return Ok(Value::integer(elapsed.as_secs() as i64));
     }
     if let Some(sec) = lfp.try_arg(0) {
-        let sec = sec.coerce_to_f64(vm, globals)?;
+        let sec = sleep_duration(vm, globals, sec)?;
         if sec.is_nan() || sec < 0.0 {
             return Err(MonorubyErr::argumenterr(
                 "time interval must not be negative or NaN",
@@ -3593,7 +3645,7 @@ pub(super) fn exit(
         0
     };
     Err(MonorubyErr::new(
-        MonorubyErrKind::SystemExit(status as u8),
+        MonorubyErrKind::SystemExit(status),
         "exit",
     ))
 }
@@ -4628,14 +4680,15 @@ fn initialize_copy(
     if orig.id() == self_val.id() {
         return Ok(self_val);
     }
+    if self_val.is_frozen() {
+        return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
+    }
     if self_val.real_class(globals).id() != orig.real_class(globals).id()
         || self_val.ty() != orig.ty()
     {
-        return Err(MonorubyErr::typeerr(format!(
-            "initialize_copy should take same class object self:{} original:{}",
-            self_val.class().get_name(globals),
-            orig.class().get_name(globals)
-        )));
+        return Err(MonorubyErr::typeerr(
+            "initialize_copy should take same class object",
+        ));
     }
     Ok(self_val)
 }
@@ -5581,6 +5634,44 @@ mod tests {
             t2.join
             begin; File.delete(path); rescue; end
             [r1, r2, $conc_order]
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_conversion_and_misc_edges() {
+        run_test(
+            r#"
+            nan = 0.0 / 0.0
+            inf = 1.0 / 0.0
+            to_ary_nil = Object.new
+            def to_ary_nil.to_ary; nil; end
+            def to_ary_nil.to_a; [1, 2]; end
+            to_a_nil = Object.new
+            def to_a_nil.to_a; nil; end
+            no_to_s = Object.new
+            def no_to_s.respond_to?(name, priv = false); false; end
+            frozen = Object.new.freeze
+            divmod_obj = Object.new
+            def divmod_obj.divmod(*); [0, 0.001]; end
+            [
+              Float(nan).equal?(nan),
+              Float(inf).equal?(inf),
+              (begin; exit(-65536); rescue SystemExit => e; e.status; end),
+              (begin; exit(-2.2); rescue SystemExit => e; e.status; end),
+              Array(to_ary_nil),
+              Array(to_a_nil) == [to_a_nil],
+              (begin; String(BasicObject.new); rescue TypeError; :ts_err; end),
+              (begin; String(no_to_s); rescue TypeError; :rtp_err; end),
+              (begin; frozen.send(:initialize_copy, Object.new); rescue FrozenError; :frozen_err; end),
+              global_variables.include?(:$stdout),
+              Kernel.instance_method(:fail) == Kernel.instance_method(:raise),
+              Kernel.method(:fail) == Kernel.method(:raise),
+              sleep(divmod_obj) >= 0,
+              Kernel.private_instance_methods(false).include?(:syscall),
+              Kernel.public_methods(false).include?(:select),
+              Kernel.private_instance_methods(false).include?(:readline),
+            ]
             "#,
         );
     }

@@ -821,7 +821,7 @@ impl Globals {
                     err.show_error_message_and_all_loc(&self.store);
                 }
                 Err(MonorubyErr::new(
-                    MonorubyErrKind::SystemExit(status as u8),
+                    MonorubyErrKind::SystemExit(status as i64),
                     "exit",
                 ))
             }

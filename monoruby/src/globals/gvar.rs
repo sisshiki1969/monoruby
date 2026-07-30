@@ -252,6 +252,12 @@ impl GvarTable {
         Ok(())
     }
 
+    /// Every registered global-variable name (Simple, Alias, or
+    /// Hooked), for `Kernel#global_variables`.
+    pub(crate) fn names(&self) -> Vec<IdentId> {
+        self.index.keys().copied().collect()
+    }
+
     /// Returns `true` if `name` has any entry — Simple, Alias, or Hooked.
     /// Used by the gvar unit tests as a cheap "is the name registered"
     /// probe; runtime `defined?` evaluation goes through
