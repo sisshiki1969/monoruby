@@ -871,11 +871,12 @@ impl<'a> BytecodeGen<'a> {
         compile_info: CompileInfo,
         loc: Loc,
         is_singleton: bool,
+        is_module: bool,
     ) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
         let fid = self
             .store
-            .new_classdef(name, compile_info, loc, sourceinfo, is_singleton)?;
+            .new_classdef(name, compile_info, loc, sourceinfo, is_singleton, is_module)?;
         self.propagate_singleton_lexical(fid);
         Ok(fid)
     }

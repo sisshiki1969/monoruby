@@ -14,7 +14,9 @@ class Thread
 
   def self.each_caller_location(&block)
     Kernel.raise LocalJumpError, "no block given" unless block
-    locs = caller_locations(1)
+    # Skip this method's own frame so the yielded locations match
+    # `caller_locations` as seen by our caller.
+    locs = caller_locations(2)
     locs.each(&block) if locs
     nil
   end
@@ -90,7 +92,9 @@ class Thread
     s << "@#{@name}" if @name
     s << " #{@__spawn_location}" if @__spawn_location
     s << " #{st}>"
-    s
+    # CRuby renders the description in BINARY, except that a non-ASCII
+    # name's encoding carries through.
+    s.force_encoding(@name && !@name.ascii_only? ? @name.encoding : Encoding::BINARY)
   end
   alias inspect to_s
 
@@ -277,6 +281,23 @@ class Thread
   end
 
   def backtrace_locations(*args)
+    if equal?(Thread.current)
+      # Structured frames for the live stack. CRuby's C-implemented
+      # #backtrace_locations reports itself as the first location,
+      # rendered at its call site — synthesize that frame, then the
+      # caller's stack.
+      frames = Kernel.__caller_frames(1)
+      site = frames[0]
+      locs = []
+      if site
+        locs << Thread::Backtrace::Location.new(
+          ["#{site[1]}:#{site[3]}:in 'Thread#backtrace_locations'",
+           site[1], site[2], site[3], "Thread#backtrace_locations"]
+        )
+      end
+      frames.each { |f| locs << Thread::Backtrace::Location.new(f) }
+      return Thread::Backtrace.__slice(locs, args)
+    end
     bt = __backtrace
     return nil if bt.nil?
     sliced = Thread::Backtrace.__slice(bt, args)
@@ -785,12 +806,29 @@ class Thread
     end
 
     class Location
+      # Structured form (from `Kernel.__caller_frames`):
+      # `[to_s, path, absolute_path, lineno, label]` — carries the
+      # load-time canonical absolute path. String form (from raw
+      # backtrace frame strings, e.g. `Thread#backtrace_locations` /
+      # `Exception#backtrace_locations`): parsed lazily, with
+      # `absolute_path` reconstructed best-effort via expand_path.
       def initialize(frame)
+        if frame.is_a?(Array)
+          @frame, @path, @absolute_path, @lineno, @label = frame
+          @absolute_known = true
+          return
+        end
+        @absolute_known = false
         @frame = frame.to_s
         if @frame =~ /\A(.+):(\d+):in ['`](.+)'\z/
           @path = $1
           @lineno = $2.to_i
           @label = $3
+        elsif @frame =~ /\A(<.+>):in ['`](.+)'\z/
+          # Native frame without a resolvable call site.
+          @path = $1
+          @lineno = 0
+          @label = $2
         else
           @path = @frame
           @lineno = 0
@@ -803,12 +841,18 @@ class Thread
       def base_label
         l = @label
         l = $1 while l =~ /\Ablock (?:\(\d+ levels\) )?in (.+)\z/
+        # The owner qualifier is stripped too: the base label of
+        # "block in M::C.foo" is the bare "foo" (CRuby). Special
+        # frames (<main>, <top (required)>, <module:A>, singleton
+        # class) carry no qualifier and pass through.
+        l = $2 if !l.start_with?("<") && l =~ /\A(.+)[#.]([^#.]+)\z/
         l
       end
 
       # CRuby returns nil for frames without a real file (eval'd code,
       # internal frames).
       def absolute_path
+        return @absolute_path if @absolute_known
         return nil if @path.start_with?("(") || @path.start_with?("<")
         File.expand_path(@path)
       end

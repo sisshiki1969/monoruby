@@ -339,12 +339,22 @@ fn try_prism_inner(
     // stored lossily; the parse and the lowerer above work on the raw
     // bytes. For valid-UTF-8 sources (the overwhelming case) the lossy
     // conversion is the identity.
+    // Load-time canonical path for file parses (plain `parse_program`
+    // and the TOPLEVEL_BINDING-hosted main script). Eval'd sources —
+    // whatever filename they claim — get `None`:
+    // `Location#absolute_path` is nil for them in CRuby.
+    let absolute_path = if options.is_none() || main_script {
+        std::fs::canonicalize(&path).ok()
+    } else {
+        None
+    };
     let source_info: SourceInfoRef = std::rc::Rc::new(
         crate::ast::SourceInfo::new_eval(
             path,
             String::from_utf8_lossy(code).into_owned(),
             line_offset,
         )
+        .with_absolute_path(absolute_path)
         .with_source_encoding(source_encoding)
         .with_frozen_string_literal(frozen_string_literal),
     );

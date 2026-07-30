@@ -208,6 +208,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         1,
     );
     globals.define_builtin_func(kernel_class, "__backtrace_limit", backtrace_limit, 0);
+    globals.define_builtin_func(kernel_class, "__caller_frames", caller_frames, 1);
     globals.define_builtin_module_func_with(kernel_class, "chomp", chomp, 0, 1, false);
     globals.define_builtin_module_func(kernel_class, "chop", chop, 0);
     globals.define_builtin_func(
@@ -1303,8 +1304,143 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             }
         }
     };
-    let v = collect_backtrace(globals, cfp, level, length, 16, false);
+    // Native (C-level) frames are included, rendered at their call
+    // site — CRuby's `caller` counts and shows C frames the same way
+    // (`instance_exec { caller(1) }` reports the instance_exec frame).
+    // CRuby walks the whole stack, so the cap is only a runaway guard —
+    // a visible truncation breaks `caller(2..) == caller(0)[2..-1]`.
+    let v = collect_backtrace(globals, cfp, level, length, 65536, true);
     Ok(Value::array_from_vec(v))
+}
+
+///
+/// ### Kernel.__caller_frames (monoruby intrinsic)
+///
+/// Structured caller frames for `caller_locations` /
+/// `Thread.each_caller_location`: one
+/// `[to_s, path, absolute_path, lineno, label]` array per frame,
+/// walking outward from the caller and skipping `level` frames (the
+/// same argument convention as `caller(level)`). Unlike the string
+/// form, `absolute_path` carries the load-time canonical path (nil
+/// for eval'd sources and `<internal:...>` frames), so
+/// `Location#absolute_path` survives chdir and file removal.
+#[monoruby_builtin]
+fn caller_frames(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let level = lfp.arg(0).coerce_to_int_i64(vm, globals)?.max(0) as usize + 1;
+    let mut cfp = vm.cfp();
+    let mut v = Vec::new();
+    let mut inner_cfp: Option<crate::executor::Cfp> = None;
+    // The frame walk mirrors `collect_backtrace` (including the
+    // transparent-trampoline skip); see there for the pc-slot
+    // mechanics.
+    let mut visible = 0usize;
+    // Like `caller`, the whole stack is walked (CRuby doesn't
+    // truncate); the bound is only a runaway guard.
+    for _ in 0..65536usize {
+        let prev_cfp = cfp.prev();
+        let transparent = is_transparent_native_frame(globals, cfp.lfp().func_id());
+        if !transparent && { let i = visible; visible += 1; i } >= level {
+            let func_id = cfp.lfp().func_id();
+            let label = globals
+                .store
+                .func_description_for(func_id, Some(cfp.lfp().self_val()));
+            // (source of the file/line, resolved line loc) for this frame:
+            // its own iseq for Ruby frames, the caller's iseq at the
+            // call site for native frames.
+            let resolved = if let Some(iseq) = globals.store[func_id].is_iseq() {
+                let info = &globals.store[iseq];
+                let line = inner_cfp
+                    .and_then(|inner| {
+                        let slot = inner.caller_pc_slot();
+                        if slot == 0 || slot % 8 != 0 {
+                            return None;
+                        }
+                        // SAFETY: validated against the bytecode span.
+                        let pc = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _)? };
+                        if !info.contains_pc(pc) {
+                            return None;
+                        }
+                        let idx = info.get_pc_index(Some(pc)).to_usize();
+                        Some(info.sourceinfo.get_line(&info.sourcemap[idx]))
+                    })
+                    .unwrap_or_else(|| info.sourceinfo.get_line(&info.loc));
+                Some((info.sourceinfo.clone(), line))
+            } else {
+                prev_cfp.and_then(|outer| {
+                    let outer_fid = outer.lfp().func_id();
+                    let iseq = globals.store[outer_fid].is_iseq()?;
+                    let info = &globals.store[iseq];
+                    let slot = cfp.caller_pc_slot();
+                    if slot == 0 || slot % 8 != 0 {
+                        return None;
+                    }
+                    // SAFETY: validated against the bytecode span.
+                    let pc = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _)? };
+                    if !info.contains_pc(pc) {
+                        return None;
+                    }
+                    let idx = info.get_pc_index(Some(pc)).to_usize();
+                    Some((info.sourceinfo.clone(), info.sourceinfo.get_line(&info.sourcemap[idx])))
+                })
+            };
+            let frame = match resolved {
+                Some((source, line)) => {
+                    let path = crate::globals::display_path(&source).into_owned();
+                    let absolute = if path.starts_with('<') {
+                        Value::nil()
+                    } else {
+                        match &source.absolute_path {
+                            Some(p) => Value::string(p.to_string_lossy().into_owned()),
+                            None => Value::nil(),
+                        }
+                    };
+                    vec![
+                        Value::string(format!("{path}:{line}:in '{label}'")),
+                        Value::string(path),
+                        absolute,
+                        Value::integer(line as i64),
+                        Value::string(label),
+                    ]
+                }
+                None => vec![
+                    Value::string(format!("<internal>:in '{label}'")),
+                    Value::string_from_str("<internal>"),
+                    Value::nil(),
+                    Value::integer(0),
+                    Value::string(label),
+                ],
+            };
+            v.push(Value::array_from_vec(frame));
+        }
+        if let Some(prev_cfp) = prev_cfp {
+            inner_cfp = Some(cfp);
+            cfp = prev_cfp;
+        } else {
+            break;
+        }
+    }
+    Ok(Value::array_from_vec(v))
+}
+
+/// Whether a native frame is a pure invocation trampoline that CRuby
+/// leaves off the stack trace entirely: `Proc#call` (and aliases) and
+/// `Method#call` push the target's own frame and are themselves
+/// invisible — unlike `instance_exec` / `Integer#times`-style cfuncs,
+/// which do appear.
+fn is_transparent_native_frame(globals: &Globals, func_id: FuncId) -> bool {
+    let info = &globals.store[func_id];
+    if info.is_iseq().is_some() {
+        return false;
+    }
+    let Some(name) = info.name() else {
+        return false;
+    };
+    let Some(owner) = info.owner_class().first().copied() else {
+        return false;
+    };
+    let name = name.get_name();
+    (owner == PROC_CLASS && matches!(name.as_str(), "call" | "===" | "yield" | "[]" | "()"))
+        || (owner == METHOD_CLASS && matches!(name.as_str(), "call" | "===" | "[]"))
 }
 
 /// Walk a frame chain from `cfp` outward, rendering CRuby-style
@@ -1328,9 +1464,17 @@ pub(super) fn collect_backtrace(
     // The frame iterated in the previous step (this frame's callee),
     // whose cont-frame slot holds this frame's suspended pc.
     let mut inner_cfp: Option<crate::executor::Cfp> = None;
-    for i in 0..max_frames {
+    // `visible` counts the frames CRuby would count: transparent
+    // invocation trampolines (`Proc#call`, …) are neither displayed
+    // nor counted toward `level`.
+    let mut visible = 0usize;
+    for _ in 0..max_frames * 4 {
         let prev_cfp = cfp.prev();
-        if i >= level {
+        let transparent = is_transparent_native_frame(globals, cfp.lfp().func_id());
+        if visible >= max_frames + level {
+            break;
+        }
+        if !transparent && { let i = visible; visible += 1; i } >= level {
             // Stop once `length` frames have been collected.
             if let Some(len) = length
                 && v.len() >= len
@@ -1338,6 +1482,7 @@ pub(super) fn collect_backtrace(
                 break;
             }
             let func_id = cfp.lfp().func_id();
+            let frame_self = cfp.lfp().self_val();
             if let Some(iseq) = globals.store[func_id].is_iseq() {
                 let info = &globals.store[iseq];
                 // The frame's *current* line: the pc it saved into its
@@ -1372,12 +1517,12 @@ pub(super) fn collect_backtrace(
                         // (absolute for absolute requires) — match it.
                         Some(format!(
                             "{}:{}",
-                            info.sourceinfo.file_name(),
+                            crate::globals::display_path(&info.sourceinfo),
                             info.sourceinfo.get_line(&loc)
                         ))
                     })
                     .unwrap_or_else(|| info.get_location());
-                let desc = globals.store.func_description(func_id);
+                let desc = globals.store.func_description_for(func_id, Some(frame_self));
                 // CRuby 3.4+ delimits the label with single quotes
                 // ("…:in '<main>'") instead of the legacy backticks;
                 // monoruby targets Ruby 4.0 so we follow suit. Keeps
@@ -1387,9 +1532,39 @@ pub(super) fn collect_backtrace(
                     format!("{loc}:in '{desc}'").into_bytes(),
                 ));
             } else if include_native {
-                let desc = globals.store.func_description(func_id);
+                let desc = globals.store.func_description_for(func_id, Some(frame_self));
+                // CRuby renders a C frame at its *call site*: the
+                // caller's file and the line of the pc the caller
+                // saved into this frame's cont-slot when it made the
+                // call. Fall back to `<internal>` when the outer frame
+                // isn't a resolvable iseq (invoker boundary).
+                let loc = prev_cfp.and_then(|outer| {
+                    let outer_fid = outer.lfp().func_id();
+                    let iseq = globals.store[outer_fid].is_iseq()?;
+                    let info = &globals.store[iseq];
+                    let slot = cfp.caller_pc_slot();
+                    if slot == 0 || slot % 8 != 0 {
+                        return None;
+                    }
+                    // SAFETY: validated against the bytecode span below.
+                    let pc = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _)? };
+                    if !info.contains_pc(pc) {
+                        return None;
+                    }
+                    let idx = info.get_pc_index(Some(pc)).to_usize();
+                    let loc = info.sourcemap[idx];
+                    Some(format!(
+                        "{}:{}",
+                        crate::globals::display_path(&info.sourceinfo),
+                        info.sourceinfo.get_line(&loc)
+                    ))
+                });
                 v.push(Value::string_from_vec(
-                    format!("<internal>:in '{desc}'").into_bytes(),
+                    match loc {
+                        Some(l) => format!("{l}:in '{desc}'"),
+                        None => format!("<internal>:in '{desc}'"),
+                    }
+                    .into_bytes(),
                 ));
             }
         }
@@ -7529,5 +7704,96 @@ mod tests {
             end
             out"#,
         ]);
+    }
+
+    #[test]
+    fn backtrace_location_labels() {
+        run_tests(&[
+            // Block nesting depth in singleton and instance methods.
+            r#"module BTL1
+                 def self.m; 1.times { 1.times { return caller_locations(0)[0..0].map(&:label) } }; end
+                 def inst; 1.times { 1.times { 1.times { return caller_locations(0)[0..0].map(&:label) } } }; end
+               end
+               [BTL1.m, Object.new.extend(BTL1).inst]"#,
+            // Class / module / singleton-class body labels (and their
+            // base_label passthrough).
+            r#"module BTL2; L = caller_locations(0)[0]; end
+               class BTL3; L = caller_locations(0)[0]; end
+               class BTL4; class << self; L = caller_locations(0)[0]; end; end
+               [BTL2::L.label, BTL2::L.base_label, BTL3::L.label, BTL4.singleton_class::L.label]"#,
+            // base_label strips both the block prefix and the owner
+            // qualifier.
+            r#"module BTL5; def self.b; 1.times { return caller_locations(0) }; end; end
+               l = BTL5.b[0]; [l.label, l.base_label]"#,
+            // Proc#call frames are invisible; the enclosing method shows.
+            r#"btl_l = -> { caller_locations(1, 1).map(&:label) }
+               def btl_m(l) = l.call
+               btl_m(btl_l)"#,
+            // module_function: the label follows the dispatching owner.
+            r#"module BTL6
+                 module_function def f = caller_locations(0)[0].label
+               end
+               BTL6.f"#,
+            // eval frames are transparent (label matches the caller).
+            r#"this = caller_locations(0)[0].label
+               [eval("caller_locations(0)[0].label") == this, binding.eval("caller_locations(0)[0].label") == this]"#,
+        ]);
+    }
+
+    #[test]
+    fn backtrace_location_paths() {
+        run_tests(&[
+            // eval with a claimed filename: path is the claim,
+            // absolute_path is nil.
+            r#"l = eval("caller_locations(0)[0]", nil, "foo.rb"); [l.path, l.absolute_path]"#,
+            // caller_locations accepts Range arguments (Array#[] edge
+            // semantics: exactly-consumed start yields [], beyond nil).
+            r#"def btlp_deep; caller_locations(0..0).size; end
+               [btlp_deep, caller_locations(10_000, 5), caller_locations(10_000..10_002)]"#,
+        ]);
+    }
+
+    #[test]
+    fn backtrace_location_files() {
+        // File-backed behaviors: `<top (required)>` labels, path kept
+        // as given (symlinks unresolved) with a canonical
+        // absolute_path that survives chdir/removal, and
+        // require_relative resolving from the real directory after a
+        // chdir.
+        run_test_once(
+            r##"
+            require 'tmpdir'
+            dir = Dir.mktmpdir
+            r = []
+            begin
+              real = File.join(dir, "btl_real.rb")
+              File.write(real, "BTL_TOP = caller_locations(0)[0]
+BTL_BLK = 1.times { break caller_locations(0)[0].label }
+")
+              link = File.join(dir, "btl_link.rb")
+              File.symlink(real, link)
+              load link
+              r << BTL_TOP.label << BTL_BLK
+              r << (BTL_TOP.path == link) << (BTL_TOP.absolute_path == File.realpath(real))
+              File.delete(link)
+              r << (BTL_TOP.absolute_path == File.realpath(real))
+              sub = File.join(dir, "sub"); Dir.mkdir(sub)
+              File.write(File.join(sub, "btl_sib.rb"), "BTL_SIB = 1
+")
+              File.write(File.join(sub, "btl_chdir.rb"), "Dir.chdir('/')
+require_relative 'btl_sib'
+BTL_ABS = caller_locations(0)[0].absolute_path
+")
+              cwd = Dir.pwd
+              load File.join(sub, "btl_chdir.rb")
+              Dir.chdir(cwd)
+              r << BTL_SIB << (BTL_ABS == File.realpath(File.join(sub, "btl_chdir.rb")))
+            ensure
+              require 'fileutils'
+              FileUtils.remove_entry(dir)
+            end
+            r
+            "##,
+        );
     }
 }

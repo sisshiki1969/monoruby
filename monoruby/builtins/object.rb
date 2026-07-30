@@ -6,11 +6,6 @@ class Object
   # arguments and also defeat the JIT's forwarding specialization for
   # argument-less `Class#new`.
 
-  def tap
-    yield self
-    self
-  end
-
   def itself
     self
   end

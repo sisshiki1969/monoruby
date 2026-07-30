@@ -2186,7 +2186,7 @@ impl<'a> BytecodeGen<'a> {
             None
         };
         let compile_info = Store::handle_args(info, vec![])?;
-        let func_id = self.add_classdef(Some(name), compile_info, loc, false)?;
+        let func_id = self.add_classdef(Some(name), compile_info, loc, false, is_module)?;
         let superclass = match superclass {
             Some(box superclass) => Some(self.push_expr(superclass)?.into()),
             None => None,
@@ -2231,7 +2231,7 @@ impl<'a> BytecodeGen<'a> {
         loc: Loc,
     ) -> Result<()> {
         let compile_info = Store::handle_args(info, vec![])?;
-        let func_id = self.add_classdef(None, compile_info, loc, true)?;
+        let func_id = self.add_classdef(None, compile_info, loc, true, false)?;
         let old = self.temp;
         let base = self.gen_expr_reg(base)?;
         self.temp = old;
