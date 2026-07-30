@@ -5154,7 +5154,107 @@ mod tests {
             rescue => e3
               res << e3.backtrace.any? { |f| f.include?("Kernel#raise") }
             end
+            begin
+              [3, 1].sort { |a, b| raise "s" }
+            rescue => e4
+              res << e4.backtrace.any? { |f| f.include?("Array#sort") }
+            end
             res
+            "#,
+        );
+    }
+
+    #[test]
+    fn exit_kills_threads_with_current_fiber_ensure() {
+        // At interpreter exit the remaining threads are killed: the
+        // ensure of each thread's *current* fiber chain runs (to
+        // stderr, invisible to the differential comparison), suspended
+        // fibers are never resumed, and the process still finishes
+        // normally.
+        run_test_once(
+            r#"
+            r = false
+            t = Thread.new do
+              f = Fiber.new do
+                begin
+                  Fiber.yield
+                ensure
+                  STDERR.puts "suspended fiber ensure"
+                end
+              end
+              f.resume
+              begin
+                r = true
+                sleep
+              ensure
+                STDERR.puts "current fiber ensure"
+              end
+            end
+            Thread.pass until r && t.stop?
+            :done
+            "#,
+        );
+    }
+
+    #[test]
+    fn top_level_report_cause_chain_and_custom_backtrace() {
+        // Uncaught exceptions at top level are materialized (running
+        // the implicit `$!` cause chaining) and reported with the
+        // whole #cause chain, each entry with its own backtrace.
+        run_test_error(
+            r#"
+            def raise_cause
+              raise "the cause"
+            end
+            def raise_wrapped
+              raise "wrapped"
+            end
+            begin
+              raise_cause
+            rescue
+              raise_wrapped
+            end
+            "#,
+        );
+        // A stored string backtrace becomes the report's header and
+        // `\tfrom` lines.
+        run_test_error(
+            r#"raise RuntimeError, "foo", ["/dir/foo.rb:10:in 'f'", "/dir/bar.rb:20:in 'g'"]"#,
+        );
+        // A cause carrying its own stored string backtrace.
+        run_test_error(
+            r#"
+            c = RuntimeError.new("the cause")
+            c.set_backtrace(["/dir/cause.rb:1:in 'c'"])
+            raise "wrapped", cause: c
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_report_prints_cause_and_custom_backtrace() {
+        // The uncaught-exception report (exercised here through
+        // report_on_exception) prints the #cause chain and honours a
+        // stored string backtrace. Output goes to stderr; the
+        // differential comparison only sees the :ok result.
+        run_test_once(
+            r#"
+            chained = begin
+              begin
+                raise "the cause"
+              rescue
+                raise "wrapped"
+              end
+            rescue => e
+              e
+            end
+            custom = RuntimeError.new("custom")
+            custom.set_backtrace(["/dir/foo.rb:10:in 'f'", "/dir/bar.rb:20:in 'g'"])
+            t1 = Thread.new { raise chained }
+            Thread.pass while t1.alive?
+            t2 = Thread.new { raise custom }
+            Thread.pass while t2.alive?
+            :ok
             "#,
         );
     }
