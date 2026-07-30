@@ -39,7 +39,14 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func_with(RATIONAL_CLASS, "ceil", rat_ceil, 0, 1, false);
     globals.define_builtin_func_with(RATIONAL_CLASS, "truncate", rat_truncate, 0, 1, false);
     globals.define_builtin_func_with_kw(
-        RATIONAL_CLASS, "round", rat_round, 0, 1, false, &["half"], false,
+        RATIONAL_CLASS,
+        "round",
+        rat_round,
+        0,
+        1,
+        false,
+        &["half"],
+        false,
     );
     globals.define_builtin_class_func(RATIONAL_CLASS, "__allocate", allocate, 2);
     globals.store[RATIONAL_CLASS].clear_alloc_func();
@@ -60,7 +67,7 @@ fn allocate(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
         RV::BigInt(b) => b.clone(),
         _ => return Err(MonorubyErr::typeerr("not an integer")),
     };
-    Ok(Value::rational_from_bigint(num, den))
+    Ok(Value::rational(num, den))
 }
 
 /// Helper: extract RationalInner from self
@@ -76,7 +83,7 @@ fn val_to_rat(_: &mut Executor, globals: &mut Globals, v: Value) -> Result<Ratio
     }
     match v.unpack() {
         RV::Fixnum(i) => Ok(RationalInner::new(i, 1)),
-        RV::BigInt(b) => Ok(RationalInner::new_bigint(b.clone(), BigInt::from(1))),
+        RV::BigInt(b) => Ok(RationalInner::new(b.clone(), 1)),
         _ => Err(MonorubyErr::cant_convert_into_float(globals, v)),
     }
 }
@@ -172,7 +179,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             }))
         }
         RV::BigInt(b) => {
-            let other = RationalInner::new_bigint(b.clone(), BigInt::from(1));
+            let other = RationalInner::new(b.clone(), 1);
             Ok(Value::integer(match lhs.cmp(&other) {
                 std::cmp::Ordering::Less => -1,
                 std::cmp::Ordering::Equal => 0,
@@ -190,12 +197,20 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         _ => {
             // Try coerce protocol
             let coerce_id = IdentId::get_id("coerce");
-            match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lfp.self_val()], None, None) {
+            match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lfp.self_val()], None, None)
+            {
                 Ok(Some(result)) => {
                     if let Some(ary) = result.try_array_ty() {
                         if ary.len() == 2 {
                             let cmp_id = IdentId::_CMP;
-                            return vm.invoke_method_inner(globals, cmp_id, ary[0], &[ary[1]], None, None);
+                            return vm.invoke_method_inner(
+                                globals,
+                                cmp_id,
+                                ary[0],
+                                &[ary[1]],
+                                None,
+                                None,
+                            );
                         }
                     }
                     Ok(Value::nil())
@@ -312,9 +327,7 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             let r = val_to_rat(vm, globals, rhs)?;
             Ok(Value::rational_from_inner(lhs.div(&r)?))
         }
-        RV::Float(f) => {
-            Ok(Value::float(lhs.to_f() / f))
-        }
+        RV::Float(f) => Ok(Value::float(lhs.to_f() / f)),
         _ => {
             let coerce_id = IdentId::get_id("coerce");
             let result =
@@ -347,7 +360,10 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 // Negative base with fractional exponent: return Complex
                 let abs_result = (-base).powf(f);
                 let theta = f * std::f64::consts::PI;
-                Ok(Value::complex(abs_result * theta.cos(), abs_result * theta.sin()))
+                Ok(Value::complex(
+                    abs_result * theta.cos(),
+                    abs_result * theta.sin(),
+                ))
             } else {
                 Ok(Value::float(result))
             }
@@ -366,7 +382,10 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 if result.is_nan() && base < 0.0 {
                     let abs_result = (-base).powf(exp);
                     let theta = exp * std::f64::consts::PI;
-                    return Ok(Value::complex(abs_result * theta.cos(), abs_result * theta.sin()));
+                    return Ok(Value::complex(
+                        abs_result * theta.cos(),
+                        abs_result * theta.sin(),
+                    ));
                 }
                 return Ok(Value::float(result));
             }
@@ -378,7 +397,8 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                     rhs.get_real_class_name(&globals.store),
                 )));
             }
-            let result = vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
+            let result =
+                vm.invoke_method_inner(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?;
             if let Some(ary) = result.try_array_ty() {
                 if ary.len() == 2 {
                     let pow_id = IdentId::_POW;
@@ -402,25 +422,25 @@ fn pow_by_integer(lhs: &RationalInner, exp: &BigInt) -> Result<Value> {
     use num::Zero;
     use num::bigint::Sign;
     if exp.is_zero() {
-        return Ok(Value::rational_from_bigint(BigInt::from(1), BigInt::from(1)));
+        return Ok(Value::rational(1, 1));
     }
     if lhs.is_zero() {
         if exp.sign() == Sign::Minus {
             return Err(MonorubyErr::divide_by_zero());
         }
-        return Ok(Value::rational_from_bigint(BigInt::from(0), BigInt::from(1)));
+        return Ok(Value::rational(0, 1));
     }
     // |lhs| == 1 shortcut: Rational(1) stays 1; Rational(-1) alternates.
     let is_one = lhs.num() == &BigInt::from(1) && lhs.den() == &BigInt::from(1);
     let is_neg_one = lhs.num() == &BigInt::from(-1) && lhs.den() == &BigInt::from(1);
     if is_one {
-        return Ok(Value::rational_from_bigint(BigInt::from(1), BigInt::from(1)));
+        return Ok(Value::rational(1, 1));
     }
     if is_neg_one {
         // (-1)^exp is 1 if exp even, -1 if odd.
         let is_even = (exp % 2u32).is_zero();
         let result = if is_even { 1 } else { -1 };
-        return Ok(Value::rational_from_bigint(BigInt::from(result), BigInt::from(1)));
+        return Ok(Value::rational(result, 1));
     }
     // Exponent must fit in i64 for finite computation.
     let exp_i64 = match exp.to_i64() {
@@ -433,12 +453,12 @@ fn pow_by_integer(lhs: &RationalInner, exp: &BigInt) -> Result<Value> {
         let e = exp_i64 as u32;
         let n = lhs.num().pow(e);
         let d = lhs.den().pow(e);
-        Ok(Value::rational_from_bigint(n, d))
+        Ok(Value::rational(n, d))
     } else {
         let e = (-exp_i64) as u32;
         let n = lhs.den().pow(e);
         let d = lhs.num().pow(e);
-        Ok(Value::rational_from_bigint(n, d))
+        Ok(Value::rational(n, d))
     }
 }
 
@@ -491,12 +511,7 @@ fn rat_ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Rational/i/truncate.html]
 #[monoruby_builtin]
-fn rat_truncate(
-    _: &mut Executor,
-    _: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn rat_truncate(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let r = self_rat(lfp);
     // Rational#truncate is strict: it does not invoke to_int.
     let ndigits = match lfp.try_arg(0) {
@@ -504,11 +519,12 @@ fn rat_truncate(
             RV::Fixnum(i) => i,
             RV::BigInt(b) => {
                 use num::ToPrimitive;
-                b.to_i64().unwrap_or(if b.sign() == num::bigint::Sign::Minus {
-                    i64::MIN
-                } else {
-                    i64::MAX
-                })
+                b.to_i64()
+                    .unwrap_or(if b.sign() == num::bigint::Sign::Minus {
+                        i64::MIN
+                    } else {
+                        i64::MAX
+                    })
             }
             _ => return Err(MonorubyErr::typeerr("not an integer")),
         },

@@ -145,7 +145,7 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Bignum(bigint) => self.emit_bigint(dst, bigint),
             NodeKind::Float(f) => self.emit_float(dst, f),
             NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
-            NodeKind::Rational(n, d) => self.emit_rational(dst, &n, &d),
+            NodeKind::Rational(n, d) => self.emit_rational(dst, n, d),
             NodeKind::RImaginary(n, d) => self.emit_rimaginary(dst, &n, &d),
             NodeKind::String(s) => self.emit_string(dst, s, loc),
             NodeKind::Bytes(b) => self.emit_bytes(dst, b, loc),
@@ -198,7 +198,7 @@ impl<'a> BytecodeGen<'a> {
                         NodeKind::Integer(i) => self.emit_integer(dst, -i),
                         NodeKind::Imaginary(r) => self.emit_imaginary(dst, -Real::from(r)),
                         NodeKind::Float(f) => self.emit_float(dst, -f),
-                        NodeKind::Rational(n, d) => self.emit_rational(dst, &-n, &d),
+                        NodeKind::Rational(n, d) => self.emit_rational(dst, -n, d),
                         _ => self.emit_unary_op(UnOpK::Neg, dst, rhs, loc)?,
                     };
                 }
@@ -207,7 +207,7 @@ impl<'a> BytecodeGen<'a> {
                         NodeKind::Integer(i) => self.emit_integer(dst, i),
                         NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
                         NodeKind::Float(f) => self.emit_float(dst, f),
-                        NodeKind::Rational(n, d) => self.emit_rational(dst, &n, &d),
+                        NodeKind::Rational(n, d) => self.emit_rational(dst, n, d),
                         _ => self.emit_unary_op(UnOpK::Pos, dst, rhs, loc)?,
                     };
                 }
@@ -354,7 +354,15 @@ impl<'a> BytecodeGen<'a> {
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
-                self.gen_method_call(method, None, arglist, safe_nav, false, UseMode2::Store(dst), loc)?;
+                self.gen_method_call(
+                    method,
+                    None,
+                    arglist,
+                    safe_nav,
+                    false,
+                    UseMode2::Store(dst),
+                    loc,
+                )?;
             }
             NodeKind::Ident(method) => {
                 // A bare-identifier vcall (`a = foo`). Store straight into `dst`
@@ -556,9 +564,10 @@ impl<'a> BytecodeGen<'a> {
                 // reused for both the getter and the setter. Every other target
                 // (const / ivar / cvar / gvar / dynamic var) is side-effect-free
                 // to re-read, so the simpler re-evaluating path stays correct.
-                if matches!(&lhs.kind,
-                    NodeKind::MethodCall { .. } | NodeKind::Index { .. })
-                {
+                if matches!(
+                    &lhs.kind,
+                    NodeKind::MethodCall { .. } | NodeKind::Index { .. }
+                ) {
                     return self.gen_op_assign_with_receiver(op, lhs, rhs, use_mode, loc);
                 }
                 // A scoped constant `Scope::CONST op= rhs` has a scope
@@ -567,7 +576,13 @@ impl<'a> BytecodeGen<'a> {
                 // once and reused for both the read and the store. A bare
                 // constant (`CONST op= rhs`, no parent) is side-effect-free
                 // to re-read, so it stays on the simpler path below.
-                if matches!(&lhs.kind, NodeKind::Const { parent: Some(_), .. }) {
+                if matches!(
+                    &lhs.kind,
+                    NodeKind::Const {
+                        parent: Some(_),
+                        ..
+                    }
+                ) {
                     return self.gen_scoped_const_op_assign(op, lhs, rhs, use_mode, loc);
                 }
                 match op {
@@ -576,10 +591,8 @@ impl<'a> BytecodeGen<'a> {
                         // the store only fires when needed. Re-reading a
                         // side-effect-free target is fine, so lower to the
                         // ordinary short-circuit binop over an inline assign.
-                        let assign = Node::new(
-                            NodeKind::MulAssign(vec![lhs.clone()], vec![rhs]),
-                            loc,
-                        );
+                        let assign =
+                            Node::new(NodeKind::MulAssign(vec![lhs.clone()], vec![rhs]), loc);
                         return self.gen_binop(op, lhs, assign, use_mode, loc);
                     }
                     _ => {}

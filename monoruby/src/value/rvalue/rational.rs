@@ -20,16 +20,9 @@ impl GC<RValue> for RationalInner {
 }
 
 impl RationalInner {
-    pub fn new(num: i64, den: i64) -> Self {
-        let mut n = BigInt::from(num);
-        let mut d = BigInt::from(den);
-        Self::normalize(&mut n, &mut d);
-        Self { num: n, den: d }
-    }
-
-    pub fn new_bigint(num: BigInt, den: BigInt) -> Self {
-        let mut n = num;
-        let mut d = den;
+    pub fn new(num: impl Into<BigInt>, den: impl Into<BigInt>) -> Self {
+        let mut n = num.into();
+        let mut d = den.into();
         Self::normalize(&mut n, &mut d);
         Self { num: n, den: d }
     }
@@ -135,19 +128,19 @@ impl RationalInner {
     pub fn add(&self, other: &Self) -> Self {
         let n = &self.num * &other.den + &other.num * &self.den;
         let d = &self.den * &other.den;
-        Self::new_bigint(n, d)
+        Self::new(n, d)
     }
 
     pub fn sub(&self, other: &Self) -> Self {
         let n = &self.num * &other.den - &other.num * &self.den;
         let d = &self.den * &other.den;
-        Self::new_bigint(n, d)
+        Self::new(n, d)
     }
 
     pub fn mul(&self, other: &Self) -> Self {
         let n = &self.num * &other.num;
         let d = &self.den * &other.den;
-        Self::new_bigint(n, d)
+        Self::new(n, d)
     }
 
     pub fn div(&self, other: &Self) -> Result<Self> {
@@ -156,7 +149,7 @@ impl RationalInner {
         }
         let n = &self.num * &other.den;
         let d = &self.den * &other.num;
-        Ok(Self::new_bigint(n, d))
+        Ok(Self::new(n, d))
     }
 
     pub fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -210,7 +203,7 @@ impl RationalInner {
             let scaled_num = &self.num * &d;
             let scaled_den = &self.den;
             let floored = num::integer::Integer::div_floor(&scaled_num, scaled_den);
-            RationalFloorResult::Rational(Self::new_bigint(floored, d))
+            RationalFloorResult::Rational(Self::new(floored, d))
         } else {
             let d = BigInt::from(10u32).pow((-ndigits) as u32);
             let i = &self.num / &self.den;
@@ -234,7 +227,7 @@ impl RationalInner {
             let scaled_den = &self.den;
             let neg_scaled = -&scaled_num;
             let ceiled = -num::integer::Integer::div_floor(&neg_scaled, scaled_den);
-            RationalFloorResult::Rational(Self::new_bigint(ceiled, d))
+            RationalFloorResult::Rational(Self::new(ceiled, d))
         } else {
             let d = BigInt::from(10u32).pow((-ndigits) as u32);
             let i = &self.num / &self.den;
@@ -256,7 +249,7 @@ impl RationalInner {
             let d = BigInt::from(10u32).pow(ndigits as u32);
             let scaled_num = &self.num * &d;
             let truncated = &scaled_num / &self.den;
-            RationalFloorResult::Rational(Self::new_bigint(truncated, d))
+            RationalFloorResult::Rational(Self::new(truncated, d))
         } else {
             let d = BigInt::from(10u32).pow((-ndigits) as u32);
             let i = &self.num / &self.den;
@@ -276,17 +269,9 @@ impl RationalInner {
             let abs_doubled = doubled.abs();
             let abs_den = self.den.abs();
             let result = if abs_doubled > abs_den {
-                if self.num >= BigInt::ZERO {
-                    q + 1
-                } else {
-                    q
-                }
+                if self.num >= BigInt::ZERO { q + 1 } else { q }
             } else if abs_doubled < abs_den {
-                if self.num >= BigInt::ZERO {
-                    q
-                } else {
-                    q
-                }
+                if self.num >= BigInt::ZERO { q } else { q }
             } else {
                 // Exactly half
                 match half {
@@ -316,9 +301,9 @@ impl RationalInner {
                 return RationalFloorResult::Rational(self.clone());
             }
             let d = BigInt::from(10u32).pow(ndigits as u32);
-            let scaled = Self::new_bigint(&self.num * &d, self.den.clone());
+            let scaled = Self::new(&self.num * &d, self.den.clone());
             if let RationalFloorResult::Integer(rounded) = scaled.rational_round(0, half) {
-                RationalFloorResult::Rational(Self::new_bigint(rounded, d))
+                RationalFloorResult::Rational(Self::new(rounded, d))
             } else {
                 unreachable!()
             }
@@ -386,7 +371,7 @@ impl RationalInner {
         if negative {
             num = -num;
         }
-        Self::new_bigint(num, den)
+        Self::new(num, den)
     }
 
     /// Stern-Brocot search: find the simplest rational within [value - eps, value + eps].
@@ -396,7 +381,7 @@ impl RationalInner {
         let eps_abs = eps.abs();
         // Handle negative: negate, search, negate back
         if value.is_negative() {
-            let pos = Self::new_bigint(-value.num.clone(), value.den.clone());
+            let pos = Self::new(-&value.num, value.den.clone());
             let result = Self::find_simplest(&pos, &eps_abs);
             return result.neg();
         }
@@ -419,12 +404,12 @@ impl RationalInner {
         loop {
             let pm = &p0 + &p1;
             let qm = &q0 + &q1;
-            let med = Self::new_bigint(pm.clone(), qm.clone());
+            let med = Self::new(pm.clone(), qm.clone());
             match med.cmp(&lo) {
                 std::cmp::Ordering::Less => {
                     // med < lo: advance left bound
                     // k = ceil((lo * qm - pm) / (p1 - lo * q1))
-                    let numer = Self::new_bigint(
+                    let numer = Self::new(
                         &lo.num * &qm * &lo.den.clone() - &pm * &lo.den * &lo.den,
                         lo.den.clone() * &lo.den,
                     );
@@ -447,7 +432,7 @@ impl RationalInner {
                 }
                 _ => {
                     // lo <= med <= hi: found it
-                    return Self::new_bigint(pm, qm);
+                    return Self::new(pm, qm);
                 }
             }
         }
@@ -469,13 +454,8 @@ fn div_ceil_bigint(a: &BigInt, b: &BigInt) -> BigInt {
         return BigInt::from(1);
     }
     let (q, r) = a.div_rem(b);
-    if r.is_zero() || (r.is_negative() && b.is_negative()) || (r.is_positive() && b.is_positive())
-    {
-        if r.is_zero() {
-            q
-        } else {
-            q + 1
-        }
+    if r.is_zero() || (r.is_negative() && b.is_negative()) || (r.is_positive() && b.is_positive()) {
+        if r.is_zero() { q } else { q + 1 }
     } else {
         q
     }

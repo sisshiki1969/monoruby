@@ -422,14 +422,7 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
                         // Integer results are hashed by value so two arrays
                         // produced through different dispatch paths but
                         // landing on the same integer hash to the same digest.
-                        let h = e.invoke_method_inner(
-                            g,
-                            IdentId::HASH,
-                            *self,
-                            &[],
-                            None,
-                            None,
-                        )?;
+                        let h = e.invoke_method_inner(g, IdentId::HASH, *self, &[], None, None)?;
                         match h.unpack() {
                             RV::Fixnum(i) => i.hash(state),
                             RV::BigInt(b) => b.hash(state),
@@ -1004,12 +997,8 @@ impl Value {
         RValue::new_complex_from(complex).pack()
     }
 
-    pub fn rational(num: i64, den: i64) -> Self {
-        RValue::new_rational(RationalInner::new(num, den)).pack()
-    }
-
-    pub fn rational_from_bigint(n: BigInt, d: BigInt) -> Self {
-        RValue::new_rational(RationalInner::new_bigint(n, d)).pack()
+    pub fn rational(n: impl Into<BigInt>, d: impl Into<BigInt>) -> Self {
+        RValue::new_rational(RationalInner::new(n, d)).pack()
     }
 
     pub fn rational_from_inner(inner: RationalInner) -> Self {
@@ -1886,10 +1875,7 @@ pub(crate) fn inspect_symbol(id: IdentId) -> String {
 pub(crate) fn escape_unicode_noncompat_component(inner: &RStringInner) -> Option<String> {
     use crate::value::Encoding as E;
     let enc = inner.encoding();
-    if !matches!(
-        enc,
-        E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
-    ) {
+    if !matches!(enc, E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be) {
         return None;
     }
     let (decoded, _) = crate::builtins::encoding::decode_utf16_32(inner.as_bytes(), enc);
@@ -2474,7 +2460,11 @@ impl Value {
     /// the chilled + frozen preconditions with acquisition. The wrapper is
     /// owned (not a borrow), so it can be mutated across several branches.
     ///
-    pub(crate) fn as_string_mut(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<RString> {
+    pub(crate) fn as_string_mut(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<RString> {
         self.ensure_string_mutable(vm, globals)?;
         Ok(RString::new_unchecked(*self))
     }
@@ -3024,7 +3014,7 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
-            NodeKind::Rational(n, d) => Value::rational_from_bigint(n.clone(), d.clone()),
+            NodeKind::Rational(n, d) => Value::rational(n.clone(), d.clone()),
             NodeKind::RImaginary(n, d) => {
                 let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
                 Value::complex(0, f)
@@ -3191,7 +3181,7 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
-            NodeKind::Rational(n, d) => Value::rational_from_bigint(n.clone(), d.clone()),
+            NodeKind::Rational(n, d) => Value::rational(n.clone(), d.clone()),
             NodeKind::RImaginary(n, d) => {
                 let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
                 Value::complex(0, f)

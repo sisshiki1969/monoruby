@@ -16,10 +16,7 @@ pub(crate) use super::bytecode::BcIndex;
 use inst::*;
 
 pub fn bytecode_compile_script(globals: &mut Globals, mut result: ParseResult) -> Result<FuncId> {
-    globals
-        .store
-        .compile_warnings
-        .append(&mut result.warnings);
+    globals.store.compile_warnings.append(&mut result.warnings);
     let main_fid = globals.store.new_main(result)?;
     bytecode_compile(globals, main_fid, None)?;
     Ok(main_fid)
@@ -32,10 +29,7 @@ pub fn bytecode_compile_eval(
     loc: Loc,
     binding: Option<LvarCollector>,
 ) -> Result<FuncId> {
-    globals
-        .store
-        .compile_warnings
-        .append(&mut result.warnings);
+    globals.store.compile_warnings.append(&mut result.warnings);
     let main_fid = globals.store.new_eval(outer, result, loc)?;
     bytecode_compile(globals, main_fid, binding)?;
     Ok(main_fid)
@@ -771,9 +765,7 @@ impl<'a> BytecodeGen<'a> {
         }
 
         let ast = info.ast;
-        if !prologue_has_side_effects
-            && let Some(hint) = self.hint(&ast)
-        {
+        if !prologue_has_side_effects && let Some(hint) = self.hint(&ast) {
             self.store[self.iseq_id].hint = hint;
         }
         self.apply_label(self.redo_label);
@@ -874,9 +866,14 @@ impl<'a> BytecodeGen<'a> {
         is_module: bool,
     ) -> Result<FuncId> {
         let sourceinfo = self.sourceinfo.clone();
-        let fid = self
-            .store
-            .new_classdef(name, compile_info, loc, sourceinfo, is_singleton, is_module)?;
+        let fid = self.store.new_classdef(
+            name,
+            compile_info,
+            loc,
+            sourceinfo,
+            is_singleton,
+            is_module,
+        )?;
         self.propagate_singleton_lexical(fid);
         Ok(fid)
     }
@@ -1319,8 +1316,8 @@ impl<'a> BytecodeGen<'a> {
         self.emit_literal(dst, Value::complex(0, r));
     }
 
-    fn emit_rational(&mut self, dst: BcReg, n: &BigInt, d: &BigInt) {
-        let val = Value::rational_from_bigint(n.clone(), d.clone());
+    fn emit_rational(&mut self, dst: BcReg, n: BigInt, d: BigInt) {
+        let val = Value::rational(n, d);
         self.emit_literal(dst, val);
     }
 
@@ -1340,12 +1337,12 @@ impl<'a> BytecodeGen<'a> {
     /// the right tag at bytecode-emission time.
     pub(crate) fn source_encoding(&self) -> crate::value::Encoding {
         match self.sourceinfo.source_encoding.as_deref() {
-            Some(name) => crate::value::Encoding::try_from_str(name)
-                .unwrap_or(crate::value::Encoding::Utf8),
+            Some(name) => {
+                crate::value::Encoding::try_from_str(name).unwrap_or(crate::value::Encoding::Utf8)
+            }
             None => crate::value::Encoding::Utf8,
         }
     }
-
 
     /// Whether this file declared `# frozen_string_literal: true`, in which
     /// case every string literal is emitted as a shared, frozen, interned
@@ -1450,8 +1447,8 @@ impl<'a> BytecodeGen<'a> {
     /// (`"UTF-8"` / `"ASCII-8BIT"`); falls back to UTF-8 if monoruby
     /// doesn't recognise the alias (shouldn't happen for these two).
     fn emit_encoded_string(&mut self, dst: BcReg, b: Vec<u8>, enc_name: &'static str, loc: Loc) {
-        let enc = crate::value::Encoding::try_from_str(enc_name)
-            .unwrap_or(crate::value::Encoding::Utf8);
+        let enc =
+            crate::value::Encoding::try_from_str(enc_name).unwrap_or(crate::value::Encoding::Utf8);
         if self.frozen_string_literal() {
             self.emit_frozen_interned(dst, &b, enc, loc);
             return;
@@ -1996,7 +1993,6 @@ impl<'a> BytecodeGen<'a> {
     fn escape_from_eval(&self, msg: &str, loc: Loc) -> MonorubyErr {
         MonorubyErr::escape_from_eval(msg, loc, self.sourceinfo.clone(), self.func_id)
     }
-
 }
 
 enum RecvKind {

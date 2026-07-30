@@ -171,7 +171,12 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     // Registry primitives backing `ObjectSpace.define_finalizer` /
     // `undefine_finalizer` (the public methods live in startup.rb, which
     // handles argument validation and the return value).
-    globals.define_private_builtin_func(kernel_class, "__register_finalizer", register_finalizer, 2);
+    globals.define_private_builtin_func(
+        kernel_class,
+        "__register_finalizer",
+        register_finalizer,
+        2,
+    );
     globals.define_private_builtin_func(
         kernel_class,
         "__unregister_finalizer",
@@ -233,7 +238,16 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "hash", hash, 0);
     globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
     globals.define_builtin_func(kernel_class, "dup", dup, 0);
-    globals.define_builtin_func_with_kw(kernel_class, "clone", clone_val, 0, 0, false, &["freeze"], false);
+    globals.define_builtin_func_with_kw(
+        kernel_class,
+        "clone",
+        clone_val,
+        0,
+        0,
+        false,
+        &["freeze"],
+        false,
+    );
     let init_copy_fid =
         globals.define_private_builtin_func(kernel_class, "initialize_copy", initialize_copy, 1);
     let init_clone_fid =
@@ -455,7 +469,9 @@ fn kernel_not_match(
     // BOOL_CLASS is the IC pseudo-class for bool receivers; it has no
     // method table of its own to resolve `=~` against.
     if recv_class == BOOL_CLASS
-        || store.match_method(recv_class, ctx.class_version()).is_none()
+        || store
+            .match_method(recv_class, ctx.class_version())
+            .is_none()
     {
         return false;
     }
@@ -881,7 +897,12 @@ fn binding(vm: &mut Executor, globals: &mut Globals, _: Lfp, pc: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/local_variables.html]
 #[monoruby_builtin]
-fn local_variables(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+fn local_variables(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     // Report the caller's local variables (the frame that invoked us).
     let caller_cfp = vm.cfp().prev().unwrap();
     let fid = caller_cfp.lfp().func_id();
@@ -1056,14 +1077,9 @@ pub(crate) fn make_exception_error(
         // A message override makes CRuby return a *new* exception via
         // `exc.exception(msg)`, so identity is not preserved.
         let obj = match msg_arg {
-            Some(m) => vm.invoke_method_inner(
-                globals,
-                IdentId::get_id("exception"),
-                a0,
-                &[m],
-                None,
-                None,
-            )?,
+            Some(m) => {
+                vm.invoke_method_inner(globals, IdentId::get_id("exception"), a0, &[m], None, None)?
+            }
             None => a0,
         };
         apply_backtrace(vm, globals, obj, bt_arg)?;
@@ -1152,9 +1168,7 @@ fn apply_cause(
         Some(raised) if !cause.is_nil() && cause.id() == raised.id() => Value::nil(),
         // Setting a cause whose chain already reaches the raised exception
         // would create a cycle.
-        Some(raised)
-            if !cause.is_nil() && cause_chain_contains(globals, cause, raised) =>
-        {
+        Some(raised) if !cause.is_nil() && cause_chain_contains(globals, cause, raised) => {
             return Err(MonorubyErr::argumenterr("circular causes"));
         }
         _ => cause,
@@ -1253,10 +1267,9 @@ fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 }
             }
         }
-        Ok(Value::string_from_inner(RStringInner::from_encoding_scanned(
-            result.as_bytes(),
-            result_inner.encoding(),
-        )))
+        Ok(Value::string_from_inner(
+            RStringInner::from_encoding_scanned(result.as_bytes(), result_inner.encoding()),
+        ))
     } else {
         Ok(Value::string(result))
     }
@@ -1325,7 +1338,12 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// for eval'd sources and `<internal:...>` frames), so
 /// `Location#absolute_path` survives chdir and file removal.
 #[monoruby_builtin]
-fn caller_frames(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn caller_frames(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let level = lfp.arg(0).coerce_to_int_i64(vm, globals)?.max(0) as usize + 1;
     let mut cfp = vm.cfp();
     let mut v = Vec::new();
@@ -1339,7 +1357,12 @@ fn caller_frames(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
     for _ in 0..65536usize {
         let prev_cfp = cfp.prev();
         let transparent = is_transparent_native_frame(globals, cfp.lfp().func_id());
-        if !transparent && { let i = visible; visible += 1; i } >= level {
+        if !transparent && {
+            let i = visible;
+            visible += 1;
+            i
+        } >= level
+        {
             let func_id = cfp.lfp().func_id();
             let label = globals
                 .store
@@ -1380,7 +1403,10 @@ fn caller_frames(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
                         return None;
                     }
                     let idx = info.get_pc_index(Some(pc)).to_usize();
-                    Some((info.sourceinfo.clone(), info.sourceinfo.get_line(&info.sourcemap[idx])))
+                    Some((
+                        info.sourceinfo.clone(),
+                        info.sourceinfo.get_line(&info.sourcemap[idx]),
+                    ))
                 })
             };
             let frame = match resolved {
@@ -1548,7 +1574,12 @@ pub(super) fn collect_backtrace(
         if visible >= max_frames + level {
             break;
         }
-        if !transparent && { let i = visible; visible += 1; i } >= level {
+        if !transparent && {
+            let i = visible;
+            visible += 1;
+            i
+        } >= level
+        {
             // Stop once `length` frames have been collected.
             if let Some(len) = length
                 && v.len() >= len
@@ -1596,7 +1627,9 @@ pub(super) fn collect_backtrace(
                         ))
                     })
                     .unwrap_or_else(|| info.get_location());
-                let desc = globals.store.func_description_for(func_id, Some(frame_self));
+                let desc = globals
+                    .store
+                    .func_description_for(func_id, Some(frame_self));
                 // CRuby 3.4+ delimits the label with single quotes
                 // ("…:in '<main>'") instead of the legacy backticks;
                 // monoruby targets Ruby 4.0 so we follow suit. Keeps
@@ -1606,7 +1639,9 @@ pub(super) fn collect_backtrace(
                     format!("{loc}:in '{desc}'").into_bytes(),
                 ));
             } else if include_native {
-                let desc = globals.store.func_description_for(func_id, Some(frame_self));
+                let desc = globals
+                    .store
+                    .func_description_for(func_id, Some(frame_self));
                 // CRuby renders a C frame at its *call site*: the
                 // caller's file and the line of the pc the caller
                 // saved into this frame's cont-slot when it made the
@@ -1775,11 +1810,7 @@ fn float_domain_error(globals: &Globals, msg: &str) -> MonorubyErr {
     }
 }
 
-fn kernel_integer_inner(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-) -> Result<Value> {
+fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     // nil -> TypeError ("can't convert nil into Integer"), always; under
     // `exception: false` the outer wrapper turns this into nil.
@@ -2150,11 +2181,7 @@ fn kernel_float(
     }
 }
 
-fn kernel_float_inner(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-) -> Result<Value> {
+fn kernel_float_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let arg0 = lfp.arg(0);
     if arg0.is_nil() {
         return Err(MonorubyErr::typeerr("can't convert nil into Float"));
@@ -2257,8 +2284,7 @@ fn kernel_complex(
             // Single non-Numeric argument: try #to_c coercion.
             let to_c_id = IdentId::get_id("to_c");
             if let Some(func_id) = globals.check_method(arg0, to_c_id) {
-                let result =
-                    vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+                let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
                 if result.try_complex().is_some() {
                     return Ok(result);
                 }
@@ -2279,11 +2305,7 @@ fn kernel_complex(
 /// Convert `v` into a `Real` suitable for a Complex component, returning
 /// `Ok(None)` when `v` is not a numeric (so the caller can decide between
 /// `#to_c` coercion and a `TypeError`).
-fn real_for_complex(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    v: Value,
-) -> Result<Option<Real>> {
+fn real_for_complex(_vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Option<Real>> {
     match v.unpack() {
         RV::Fixnum(i) => Ok(Some(Real::from(i))),
         RV::BigInt(b) => Ok(Some(Real::from(b.clone()))),
@@ -2364,8 +2386,7 @@ fn parse_complex_literal(s: &str) -> Option<(Value, Value)> {
         if c == b'_' {
             // `_` must be surrounded by digits.
             let prev_digit = idx > 0 && bytes[idx - 1].is_ascii_digit();
-            let next_digit =
-                idx + 1 < bytes.len() && bytes[idx + 1].is_ascii_digit();
+            let next_digit = idx + 1 < bytes.len() && bytes[idx + 1].is_ascii_digit();
             if !prev_digit || !next_digit {
                 return None;
             }
@@ -2533,11 +2554,7 @@ fn kernel_rational(
     }
 }
 
-fn kernel_rational_inner(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-) -> Result<Value> {
+fn kernel_rational_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let a = lfp.arg(0);
     if let Some(b) = lfp.try_arg(1) {
         // Two-argument form: Rational(a, b)
@@ -2551,10 +2568,7 @@ fn kernel_rational_inner(
         }
         match a.unpack() {
             RV::Fixnum(i) => Ok(Value::rational_from_inner(RationalInner::new(i, 1))),
-            RV::BigInt(b) => Ok(Value::rational_from_inner(RationalInner::new_bigint(
-                b.clone(),
-                num::BigInt::from(1),
-            ))),
+            RV::BigInt(b) => Ok(Value::rational_from_inner(RationalInner::new(b.clone(), 1))),
             RV::Float(f) => {
                 if f.is_nan() {
                     return Err(MonorubyErr::rangeerr("can't convert NaN into Rational"));
@@ -2591,7 +2605,7 @@ fn val_to_rational(globals: &mut Globals, v: Value) -> Result<RationalInner> {
     }
     match v.unpack() {
         RV::Fixnum(i) => Ok(RationalInner::new(i, 1)),
-        RV::BigInt(b) => Ok(RationalInner::new_bigint(b.clone(), num::BigInt::from(1))),
+        RV::BigInt(b) => Ok(RationalInner::new(b.clone(), 1)),
         RV::Float(f) => {
             if f.is_nan() || f.is_infinite() {
                 return Err(MonorubyErr::rangeerr("can't convert Float into Rational"));
@@ -2671,11 +2685,7 @@ fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// `#to_path` (if present) and then `#to_str` (if the `#to_path`
 /// result is not already a String). A bare `#to_str` object is also
 /// accepted. Anything else is a TypeError.
-fn path_arg_to_string(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    arg: Value,
-) -> Result<String> {
+fn path_arg_to_string(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<String> {
     if let Some(s) = arg.is_str() {
         return Ok(s.to_string());
     }
@@ -2913,7 +2923,12 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exec.html]
 #[monoruby_builtin]
-pub(super) fn exec(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn exec(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     use std::ffi::CString;
     let args = lfp.arg(0).as_array();
     // Filter out trailing Hash arguments (keyword args like close_others:)
@@ -2935,18 +2950,17 @@ pub(super) fn exec(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
         // CRuby raises `ArgumentError: string contains null byte` —
         // mirror that. Same below for the multi-arg execvp form.
         let mut all_args = vec![
-            CString::new(program.clone()).map_err(|_| {
-                MonorubyErr::argumenterr("string contains null byte")
-            })?,
+            CString::new(program.clone())
+                .map_err(|_| MonorubyErr::argumenterr("string contains null byte"))?,
         ];
         for a in &shell_args {
-            all_args.push(CString::new(a.as_str()).map_err(|_| {
-                MonorubyErr::argumenterr("string contains null byte")
-            })?);
+            all_args.push(
+                CString::new(a.as_str())
+                    .map_err(|_| MonorubyErr::argumenterr("string contains null byte"))?,
+            );
         }
-        let c_program = CString::new(program).map_err(|_| {
-            MonorubyErr::argumenterr("string contains null byte")
-        })?;
+        let c_program = CString::new(program)
+            .map_err(|_| MonorubyErr::argumenterr("string contains null byte"))?;
         // SAFETY: execvp replaces the process. Only fails if the program is not found.
         unsafe {
             libc::execvp(
@@ -2967,15 +2981,13 @@ pub(super) fn exec(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
         // Multiple args: first is program, rest are argv. NUL bytes
         // in any of them ⇒ `ArgumentError: string contains null byte`
         // (CRuby behaviour) instead of the prior abort.
-        let c_program = CString::new(str_args[0].as_str()).map_err(|_| {
-            MonorubyErr::argumenterr("string contains null byte")
-        })?;
+        let c_program = CString::new(str_args[0].as_str())
+            .map_err(|_| MonorubyErr::argumenterr("string contains null byte"))?;
         let c_args: Vec<CString> = str_args
             .iter()
             .map(|s| {
-                CString::new(s.as_str()).map_err(|_| {
-                    MonorubyErr::argumenterr("string contains null byte")
-                })
+                CString::new(s.as_str())
+                    .map_err(|_| MonorubyErr::argumenterr("string contains null byte"))
             })
             .collect::<Result<Vec<_>>>()?;
         // SAFETY: execvp replaces the process. Only fails if the program is not found.
@@ -3026,8 +3038,7 @@ fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     // see a signal death (CRuby semantics; see the same
                     // logic in main.rs handle_error). Interrupt reports,
                     // plain SignalException dies silently.
-                    if let Some((signo, is_interrupt)) =
-                        err.signal_exception_signo(&globals.store)
+                    if let Some((signo, is_interrupt)) = err.signal_exception_signo(&globals.store)
                     {
                         if is_interrupt {
                             err.show_error_message_and_all_loc(&globals.store);
@@ -3059,7 +3070,12 @@ fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/spawn.html]
 #[monoruby_builtin]
-pub(super) fn spawn(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn spawn(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     use std::ffi::CString;
     let null_byte = || MonorubyErr::argumenterr("string contains null byte");
 
@@ -3311,7 +3327,12 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/abort.html]
 #[monoruby_builtin]
-pub(super) fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn abort(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let msg = if let Some(arg0) = lfp.try_arg(0) {
         let s = arg0.coerce_to_str(vm, globals)?;
         // Write to the Ruby `$stderr` (which may be reassigned /
@@ -3344,7 +3365,12 @@ pub(super) fn abort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exit.html]
 #[monoruby_builtin]
-pub(super) fn exit(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn exit(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let status = if let Some(arg0) = lfp.try_arg(0) {
         match arg0.unpack() {
             RV::Bool(true) => 0,
@@ -3528,12 +3554,7 @@ fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// - throw(tag, value = nil) -> void
 ///
 #[monoruby_builtin]
-fn throw_(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn throw_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let tag = lfp.arg(0);
     let value = lfp.try_arg(1).unwrap_or(Value::nil());
     // No active `catch` for this tag: raise a rescuable
@@ -4089,10 +4110,7 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     // validation would always pass. This is the hot path for
     // `String#dup`, `Object#dup`, … (CRuby skips it the same way).
     let version = Globals::class_version();
-    if globals
-        .store
-        .uses_default_copy_hooks(copy.class(), version)
-    {
+    if globals.store.uses_default_copy_hooks(copy.class(), version) {
         return Ok(copy);
     }
     // Run the `initialize_dup` hook (default validates; a subclass may
@@ -4131,12 +4149,7 @@ fn copy_finalizers(globals: &mut Globals, from: u64, to: u64) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/clone.html]
 #[monoruby_builtin]
-fn clone_val(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn clone_val(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     // `freeze:` keyword (slot 0): `None` = not passed, `Some(v)` = passed
     // (including `Some(nil)`). Only nil / true / false are accepted.
@@ -4184,7 +4197,14 @@ fn clone_val(
         } else {
             None
         };
-        vm.invoke_method_inner(globals, IdentId::INITIALIZE_CLONE, copy, &[self_val], None, kw)?;
+        vm.invoke_method_inner(
+            globals,
+            IdentId::INITIALIZE_CLONE,
+            copy,
+            &[self_val],
+            None,
+            kw,
+        )?;
         vm.temp_clear(temp);
     }
     // Packed immediates (Integer/Symbol/true/…) are always frozen and have no
@@ -4247,7 +4267,10 @@ fn register_finalizer(
         false
     };
     if references_self {
-        vm.ruby_warn(globals, "warning: finalizer references object to be finalized")?;
+        vm.ruby_warn(
+            globals,
+            "warning: finalizer references object to be finalized",
+        )?;
     }
     // A finalizer `==` to one already registered for this object is
     // recorded only once; the originally-registered callable is returned.
@@ -4580,10 +4603,7 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // every other kind (immediates, internally `/name`-tagged objects,
     // and types with their own `inspect`) keeps the default rendering.
     if self_val.ty() != Some(ObjTy::OBJECT)
-        || globals
-            .store
-            .get_ivar(self_val, IdentId::_NAME)
-            .is_some()
+        || globals.store.get_ivar(self_val, IdentId::_NAME).is_some()
     {
         let s = self_val.inspect(&globals.store);
         return Ok(Value::string(s));
@@ -4717,9 +4737,7 @@ fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         Err(err) => {
             // CRuby: if `receiver.respond_to_missing?(name, true)` is truthy,
             // return a Method that proxies to `method_missing`.
-            if let Some(rtm_fid) =
-                globals.check_method(receiver, IdentId::RESPOND_TO_MISSING_)
-            {
+            if let Some(rtm_fid) = globals.check_method(receiver, IdentId::RESPOND_TO_MISSING_) {
                 let responds = vm.invoke_func_inner(
                     globals,
                     rtm_fid,
@@ -4729,8 +4747,7 @@ fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                     None,
                 )?;
                 if responds.as_bool()
-                    && let Some(mm_fid) =
-                        globals.check_method(receiver, IdentId::METHOD_MISSING)
+                    && let Some(mm_fid) = globals.check_method(receiver, IdentId::METHOD_MISSING)
                 {
                     return Ok(Value::new_method_missing_proxy(
                         receiver,
@@ -5012,12 +5029,7 @@ fn ivar_name_id(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 #[monoruby_builtin]
-fn iv_defined(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
+fn iv_defined(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
     let b = globals.store.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
@@ -5516,7 +5528,9 @@ mod tests {
 
     #[test]
     fn kernel_putc() {
-        run_test(r##"putc(65); putc("Hi"); o=Object.new; def o.to_int; 66; end; putc(o); putc(67)"##);
+        run_test(
+            r##"putc(65); putc("Hi"); o=Object.new; def o.to_int; 66; end; putc(o); putc(67)"##,
+        );
         run_test_error(r##"putc(nil)"##);
         run_test_error(r##"putc(true)"##);
         run_test_error(r##"putc(false)"##);
@@ -6525,9 +6539,7 @@ mod tests {
         run_test_error(r#"Float("2_e100")"#);
         run_test_error(r#"Float("20e100_")"#);
         // #to_f must return a Float, not an Integer.
-        run_test_error(
-            r#"o = Object.new; def o.to_f; 123; end; Float(o)"#,
-        );
+        run_test_error(r#"o = Object.new; def o.to_f; 123; end; Float(o)"#);
     }
 
     #[test]
@@ -7591,7 +7603,7 @@ mod tests {
     }
 
     #[test]
-        fn kernel_raise_argument_matrix() {
+    fn kernel_raise_argument_matrix() {
         // The shared rb_make_exception surface: String-with-extra-arg
         // TypeError, custom backtraces (Array / single String / nil /
         // invalid), message override through #exception, duck-typed
