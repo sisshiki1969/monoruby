@@ -3566,10 +3566,15 @@ fn throw_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             .store
             .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("UncaughtThrowError"))
         {
-            let mut err = MonorubyErr::new(MonorubyErrKind::Other(klass.as_class_id()), msg);
-            // Surfaced as `UncaughtThrowError#tag`.
-            err.payload = Some((tag, "tag"));
-            return Err(err);
+            let class_id = klass.as_class_id();
+            // Build the exception object eagerly so it can carry both the
+            // tag and the thrown value (a single `payload` slot can't hold
+            // two). Surfaced as `UncaughtThrowError#tag` / `#value`; the
+            // `original` object keeps its ivars through `take_ex_obj`.
+            let exc = Value::new_exception_from(msg.clone(), class_id);
+            globals.store.set_ivar(exc, IdentId::get_id("/tag"), tag)?;
+            globals.store.set_ivar(exc, IdentId::get_id("/value"), value)?;
+            return Err(MonorubyErr::new(MonorubyErrKind::Other(class_id), msg).with_original(exc));
         }
         return Err(MonorubyErr::argumenterr(msg));
     }
@@ -5608,6 +5613,31 @@ mod tests {
           throw :nope
         rescue UncaughtThrowError => e
           [e.is_a?(ArgumentError), e.message]
+        end
+        "##,
+            // `#tag` / `#value` carry the throw arguments (value is nil
+            // when omitted).
+            r##"
+        begin
+          throw :nope, [1, 2]
+        rescue UncaughtThrowError => e
+          [e.tag, e.value]
+        end
+        "##,
+            r##"
+        begin
+          throw :nope
+        rescue UncaughtThrowError => e
+          e.value
+        end
+        "##,
+            // The tag object's identity is preserved.
+            r##"
+        o = Object.new
+        begin
+          throw o, 9
+        rescue UncaughtThrowError => e
+          [e.tag.equal?(o), e.value]
         end
         "##,
         ]);
