@@ -96,6 +96,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_module_func_rest(kernel_class, "format", format);
     globals.define_builtin_module_func_rest(kernel_class, "sprintf", format);
     globals.define_builtin_module_func_with(kernel_class, "rand", rand, 0, 1, false);
+    globals.define_builtin_module_func_with(kernel_class, "trace_var", trace_var, 1, 2, false);
+    globals.define_builtin_module_func_with(kernel_class, "untrace_var", untrace_var, 1, 2, false);
     globals.define_builtin_module_func_with_kw(
         kernel_class,
         "Integer",
@@ -316,6 +318,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         true,
     );
     globals.define_builtin_func(kernel_class, "method", method, 1);
+    globals.define_builtin_func(kernel_class, "public_method", public_method, 1);
     globals.define_builtin_func(kernel_class, "singleton_method", singleton_method, 1);
     globals.define_builtin_func_with(
         kernel_class,
@@ -1744,30 +1747,161 @@ fn instance_ty(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/rand.html]
 #[monoruby_builtin]
 fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let i = if let Some(arg0) = lfp.try_arg(0) {
-        if let Some(range) = arg0.is_range() {
-            let start = range.start();
-            let end = range.end();
-            let start = start.coerce_to_int_i64(vm, globals)?;
-            let end = end.coerce_to_int_i64(vm, globals)?;
-            if start > end {
+    // Drawn from the seeded global PRNG, so `srand(n)` makes the
+    // sequence repeatable (CRuby: Kernel#rand shares Random::DEFAULT).
+    let Some(arg0) = lfp.try_arg(0) else {
+        return Ok(Value::float(globals.random_gen()));
+    };
+    if let Some(range) = arg0.is_range() {
+        let start = range.start();
+        let end = range.end();
+        let excl = range.exclude_end();
+        // Both endpoints Integer: an Integer in the range (nil when empty).
+        if let (Some(s), Some(e)) = (start.try_fixnum(), end.try_fixnum()) {
+            let span = e - s + if excl { 0 } else { 1 };
+            if span <= 0 {
                 return Ok(Value::nil());
             }
-            return Ok(Value::integer(
-                (rand::random::<f64>() * (end - start) as f64 + start as f64) as i64,
-            ));
+            let f: f64 = globals.random_gen();
+            return Ok(Value::integer(s + (f * span as f64) as i64));
         }
-        arg0.coerce_to_int_i64(vm, globals)?
-    } else {
-        0i64
-    };
-    if !i.is_zero() {
-        Ok(Value::integer(
-            (rand::random::<f64>() * (i.abs() as f64)) as i64,
-        ))
-    } else {
-        Ok(Value::float(rand::random()))
+        // Any Float endpoint makes the result a Float in [s, e).
+        let to_f = |v: Value| v.try_float().or_else(|| v.try_fixnum().map(|i| i as f64));
+        if let (Some(s), Some(e)) = (to_f(start), to_f(end)) {
+            if e < s || (excl && e <= s) {
+                return Ok(Value::nil());
+            }
+            if e == s {
+                return Ok(Value::float(s));
+            }
+            let f: f64 = globals.random_gen();
+            return Ok(Value::float(s + f * (e - s)));
+        }
+        // Generic endpoints (Time, custom numeric-ish objects): the
+        // span comes from `end - start`; a Float span picks a real
+        // offset, an Integer-ish span (`#to_int`) an integral one, and
+        // the result is `start + offset` so the endpoint type
+        // round-trips through its own `#+`.
+        let minus = IdentId::get_id("-");
+        let plus = IdentId::get_id("+");
+        let span_val = vm.invoke_method_inner(globals, minus, end, &[start], None, None)?;
+        if let Some(span) = span_val.try_float() {
+            if span < 0.0 {
+                return Ok(Value::nil());
+            }
+            let f: f64 = if span == 0.0 {
+                0.0
+            } else {
+                let f: f64 = globals.random_gen();
+                f * span
+            };
+            return vm.invoke_method_inner(globals, plus, start, &[Value::float(f)], None, None);
+        }
+        let span_int = if let Some(i) = span_val.try_fixnum() {
+            i
+        } else {
+            let coerced = vm.invoke_method_inner(
+                globals,
+                IdentId::get_id("to_int"),
+                span_val,
+                &[],
+                None,
+                None,
+            )?;
+            coerced.coerce_to_int_i64(vm, globals)?
+        };
+        let span = span_int + if excl { 0 } else { 1 };
+        if span <= 0 {
+            return Ok(Value::nil());
+        }
+        let f: f64 = globals.random_gen();
+        let r = (f * span as f64) as i64;
+        return vm.invoke_method_inner(globals, plus, start, &[Value::integer(r)], None, None);
     }
+    let i = arg0.coerce_to_int_i64(vm, globals)?;
+    if !i.is_zero() {
+        let f: f64 = globals.random_gen();
+        Ok(Value::integer((f * (i.abs() as f64)) as i64))
+    } else {
+        Ok(Value::float(globals.random_gen()))
+    }
+}
+
+///
+/// ### Kernel.#trace_var
+///
+/// - trace_var(varname, hook) -> nil
+/// - trace_var(varname) { |new_val| ... } -> nil
+///
+/// Registers a hook (Proc or String command) fired after each
+/// assignment to the named global variable.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/trace_var.html]
+#[monoruby_builtin]
+fn trace_var(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let name = gvar_trace_name(globals, lfp.arg(0))?;
+    let cmd: Value = if let Some(bh) = lfp.block() {
+        vm.generate_proc(globals, bh, pc)?.into()
+    } else {
+        match lfp.try_arg(1) {
+            Some(v) if !v.is_nil() => v,
+            _ => {
+                return Err(MonorubyErr::argumenterr(
+                    "tried to create Proc object without a block",
+                ));
+            }
+        }
+    };
+    globals.gvar_traces.entry(name).or_default().push(cmd);
+    Ok(Value::nil())
+}
+
+///
+/// ### Kernel.#untrace_var
+///
+/// - untrace_var(varname, hook = nil) -> Array | nil
+///
+/// Removes the named global variable's trace hooks: all of them
+/// (returning the removed commands) when `hook` is nil, otherwise just
+/// the given one.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/untrace_var.html]
+#[monoruby_builtin]
+fn untrace_var(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let name = gvar_trace_name(globals, lfp.arg(0))?;
+    match lfp.try_arg(1).filter(|v| !v.is_nil()) {
+        None => {
+            let removed = globals.gvar_traces.remove(&name).unwrap_or_default();
+            Ok(Value::array_from_vec(removed))
+        }
+        Some(cmd) => {
+            if let Some(cmds) = globals.gvar_traces.get_mut(&name)
+                && let Some(pos) = cmds.iter().position(|c| c.id() == cmd.id())
+            {
+                cmds.remove(pos);
+                return Ok(Value::array_from_vec(vec![cmd]));
+            }
+            Ok(Value::nil())
+        }
+    }
+}
+
+/// Coerce a `trace_var`/`untrace_var` variable name (Symbol or String)
+/// and require the `$` prefix.
+fn gvar_trace_name(globals: &mut Globals, v: Value) -> Result<IdentId> {
+    let name = v.expect_symbol_or_string(globals)?;
+    let s = name.get_name();
+    if !s.starts_with('$') {
+        return Err(MonorubyErr::nameerr(format!(
+            "'{s}' is not allowed as a global variable name"
+        )));
+    }
+    Ok(name)
 }
 
 ///
@@ -2558,50 +2692,115 @@ fn kernel_rational_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> 
     let a = lfp.arg(0);
     if let Some(b) = lfp.try_arg(1) {
         // Two-argument form: Rational(a, b)
-        let ar = val_to_rational(globals, a)?;
-        let br = val_to_rational(globals, b)?;
+        if a.is_nil() || b.is_nil() {
+            return Err(rational_type_error(
+                globals,
+                if a.is_nil() { a } else { b },
+            ));
+        }
+        // A Complex with non-zero imaginary part in either slot falls
+        // back to real division (CRuby nurat_convert), producing the
+        // Complex quotient; an exactly-real Complex contributes its
+        // real part.
+        if (a.try_complex().is_some() && complex_exact_real(a).is_none())
+            || (b.try_complex().is_some() && complex_exact_real(b).is_none())
+        {
+            return vm.invoke_method_inner(globals, IdentId::get_id("/"), a, &[b], None, None);
+        }
+        let a = complex_exact_real(a).unwrap_or(a);
+        let b = complex_exact_real(b).unwrap_or(b);
+        let ar = val_to_rational(vm, globals, a)?;
+        let br = val_to_rational(vm, globals, b)?;
         Ok(Value::rational_from_inner(ar.div(&br)?))
     } else {
-        // One-argument form: Rational(a)
-        if let Some(r) = a.try_rational() {
-            return Ok(Value::rational_from_inner(r.clone()));
+        rational_from_value(vm, globals, a)
+    }
+}
+
+/// One-argument `Kernel#Rational` conversion.
+fn rational_from_value(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Value> {
+    if let Some(r) = v.try_rational() {
+        return Ok(Value::rational_from_inner(r.clone()));
+    }
+    if v.is_nil() {
+        return Err(rational_type_error(globals, v));
+    }
+    if let Some(c) = v.try_complex() {
+        return match complex_exact_real(v) {
+            Some(re) => rational_from_value(vm, globals, re),
+            None => Err(MonorubyErr::rangeerr(format!(
+                "can't convert {} into Rational",
+                c.to_s_str(&globals.store)
+            ))),
+        };
+    }
+    match v.unpack() {
+        RV::Fixnum(i) => Ok(Value::rational_from_inner(RationalInner::new(i, 1))),
+        RV::BigInt(b) => Ok(Value::rational_from_inner(RationalInner::new(b.clone(), 1))),
+        RV::Float(f) => {
+            if f.is_nan() {
+                return Err(MonorubyErr::rangeerr("can't convert NaN into Rational"));
+            }
+            if f.is_infinite() {
+                return Err(MonorubyErr::rangeerr(
+                    "can't convert Infinity into Rational",
+                ));
+            }
+            Ok(Value::rational_from_inner(RationalInner::from_f64(f)))
         }
-        match a.unpack() {
-            RV::Fixnum(i) => Ok(Value::rational_from_inner(RationalInner::new(i, 1))),
-            RV::BigInt(b) => Ok(Value::rational_from_inner(RationalInner::new(b.clone(), 1))),
-            RV::Float(f) => {
-                if f.is_nan() {
-                    return Err(MonorubyErr::rangeerr("can't convert NaN into Rational"));
+        _ => {
+            // CRuby nurat_convert: try #to_r, then #to_int.
+            if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_r")) {
+                let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
+                if result.try_rational().is_some() {
+                    return Ok(result);
                 }
-                if f.is_infinite() {
-                    return Err(MonorubyErr::rangeerr(
-                        "can't convert Infinity into Rational",
-                    ));
-                }
-                Ok(Value::rational_from_inner(RationalInner::from_f64(f)))
             }
-            _ => {
-                // Try to_r coercion
-                let to_r_id = IdentId::get_id("to_r");
-                if let Some(func_id) = globals.check_method(a, to_r_id) {
-                    let result = vm.invoke_func_inner(globals, func_id, a, &[], None, None)?;
-                    if result.try_rational().is_some() {
-                        return Ok(result);
-                    }
+            if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_int")) {
+                let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
+                if let Some(i) = result.try_fixnum() {
+                    return Ok(Value::rational_from_inner(RationalInner::new(i, 1)));
                 }
-                Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} into Rational",
-                    a.get_real_class_name(&globals.store)
-                )))
             }
+            Err(rational_type_error(globals, v))
         }
     }
 }
 
+/// The `can't convert ... into Rational` TypeError: nil/true/false are
+/// echoed literally (CRuby's conversion-error convention), everything
+/// else by class name.
+fn rational_type_error(globals: &Globals, v: Value) -> MonorubyErr {
+    let name = if v.is_nil() {
+        "nil".to_string()
+    } else if v == Value::bool(true) {
+        "true".to_string()
+    } else if v == Value::bool(false) {
+        "false".to_string()
+    } else {
+        v.get_real_class_name(&globals.store)
+    };
+    MonorubyErr::typeerr(format!("can't convert {name} into Rational"))
+}
+
+/// `Some(real_part)` when *v* is a Complex whose imaginary part is
+/// exactly zero.
+fn complex_exact_real(v: Value) -> Option<Value> {
+    let c = v.try_complex()?;
+    if c.im().is_zero() {
+        Some(c.re().get())
+    } else {
+        None
+    }
+}
+
 /// Convert a Value to RationalInner for Kernel#Rational two-arg form.
-fn val_to_rational(globals: &mut Globals, v: Value) -> Result<RationalInner> {
+fn val_to_rational(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<RationalInner> {
     if let Some(r) = v.try_rational() {
         return Ok(r.clone());
+    }
+    if v.is_nil() {
+        return Err(rational_type_error(globals, v));
     }
     match v.unpack() {
         RV::Fixnum(i) => Ok(RationalInner::new(i, 1)),
@@ -2612,10 +2811,23 @@ fn val_to_rational(globals: &mut Globals, v: Value) -> Result<RationalInner> {
             }
             Ok(RationalInner::from_f64(f))
         }
-        _ => Err(MonorubyErr::typeerr(format!(
-            "can't convert {} into Rational",
-            v.get_real_class_name(&globals.store)
-        ))),
+        _ => {
+            // CRuby nurat_convert: try #to_r, then #to_int — this is
+            // what lets Strings scale (`Rational("1/2", "2/3")`).
+            if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_r")) {
+                let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
+                if let Some(r) = result.try_rational() {
+                    return Ok(r.clone());
+                }
+            }
+            if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_int")) {
+                let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
+                if let Some(i) = result.try_fixnum() {
+                    return Ok(RationalInner::new(i, 1));
+                }
+            }
+            Err(rational_type_error(globals, v))
+        }
     }
 }
 
@@ -4726,8 +4938,40 @@ fn instance_of(
 fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    method_object_impl(vm, globals, receiver, method_name, false)
+}
+
+///
+/// ### Kernel#public_method
+///
+/// - public_method(name) -> Method
+///
+/// Like `Kernel#method`, restricted to public methods: a private or
+/// protected method raises NameError, and the `respond_to_missing?`
+/// fallback is consulted with `include_private = false`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Object/i/public_method.html]
+#[monoruby_builtin]
+fn public_method(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let receiver = lfp.self_val();
+    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    method_object_impl(vm, globals, receiver, method_name, true)
+}
+
+fn method_object_impl(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    method_name: IdentId,
+    public_only: bool,
+) -> Result<Value> {
     match globals.find_method_for_object(receiver, method_name) {
-        Ok((func_id, _, owner)) => {
+        Ok((func_id, visi, owner)) if !public_only || visi == Visibility::Public => {
             let original_name = globals
                 .store
                 .original_name_by_class_id(receiver.class(), method_name);
@@ -4739,15 +4983,15 @@ fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 original_name,
             ))
         }
-        Err(err) => {
-            // CRuby: if `receiver.respond_to_missing?(name, true)` is truthy,
-            // return a Method that proxies to `method_missing`.
+        found => {
+            // CRuby: if `receiver.respond_to_missing?(name, include_private)`
+            // is truthy, return a Method that proxies to `method_missing`.
             if let Some(rtm_fid) = globals.check_method(receiver, IdentId::RESPOND_TO_MISSING_) {
                 let responds = vm.invoke_func_inner(
                     globals,
                     rtm_fid,
                     receiver,
-                    &[Value::symbol(method_name), Value::bool(true)],
+                    &[Value::symbol(method_name), Value::bool(!public_only)],
                     None,
                     None,
                 )?;
@@ -4762,7 +5006,15 @@ fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                     ));
                 }
             }
-            Err(err)
+            match found {
+                // A non-public method under `public_method`.
+                Ok(_) => Err(MonorubyErr::method_not_found(
+                    &globals.store,
+                    method_name,
+                    receiver,
+                )),
+                Err(err) => Err(err),
+            }
         }
     }
 }
@@ -5329,6 +5581,130 @@ mod tests {
             t2.join
             begin; File.delete(path); rescue; end
             [r1, r2, $conc_order]
+            "#,
+        );
+    }
+
+    #[test]
+    fn caller_argument_edges() {
+        // Array#[] edge semantics, Range forms, ArgumentError on
+        // negatives, and #to_int coercion — shared with caller_locations
+        // via Thread::Backtrace.__slice.
+        run_test(
+            r#"
+            def lvl2
+              [
+                caller(1, nil).size,
+                caller(100),
+                (begin; caller(-1); rescue ArgumentError => e; e.message; end),
+                (begin; caller(1, -1); rescue ArgumentError => e; e.message; end),
+                caller(1..-1) == caller(1),
+                caller(1..) == caller(1),
+              ]
+            end
+            def lvl1; lvl2; end
+            lvl1
+            "#,
+        );
+    }
+
+    #[test]
+    fn trace_var_untrace_var() {
+        run_test_once(
+            r#"
+            res = []
+            trace_var(:$tv_spec) { |v| res << [:block, v] }
+            $tv_spec = 1
+            p1 = proc { |v| res << [:proc, v] }
+            trace_var(:$tv_spec, p1)
+            $tv_spec = 2
+            res << (untrace_var(:$tv_spec, p1) == [p1])
+            $tv_spec = 3
+            res << untrace_var(:$tv_spec).size
+            $tv_spec = 4
+            trace_var(:$tv_spec2, "$tv_spec_extra = :fired")
+            $tv_spec2 = 1
+            res << $tv_spec_extra
+            res << (begin; trace_var(:$tv_spec3); rescue ArgumentError; :argerr; end)
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn rand_range_forms() {
+        // Float endpoints yield Floats, empty ranges nil, degenerate
+        // ranges their endpoint; seeded sequences repeat.
+        run_test_once(
+            r#"
+            srand(42)
+            a = rand
+            srand(42)
+            [
+              rand == a,
+              rand(3.5..6.5).is_a?(Float),
+              rand(4..6.5).is_a?(Float),
+              rand(3.5...6).is_a?(Float),
+              rand(4..6).is_a?(Integer),
+              rand(1.0..1.0),
+              rand(42..42),
+              rand(1..0),
+              rand(1.0...1.0),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_rational_conversions() {
+        run_test(
+            r#"
+            [
+              (begin; Rational(nil); rescue TypeError => e; e.message; end),
+              (begin; Rational(1, nil); rescue TypeError => e; e.message; end),
+              Rational(nil, exception: false),
+              Rational("1/2", "2/3").to_s,
+              Rational(Complex(3, 0), 2).to_s,
+              (begin; Rational(Complex(1, 2)); rescue RangeError => e; e.message; end),
+              (o = Object.new; def o.to_int; 7; end; Rational(o).to_s),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn public_method_visibility() {
+        run_test(
+            r#"
+            class PubMethSpec
+              def pub; :pub; end
+              private def priv; :priv; end
+              protected def prot; :prot; end
+            end
+            o = PubMethSpec.new
+            [
+              o.public_method(:pub).call,
+              o.public_method(:pub).class.to_s,
+              (begin; o.public_method(:priv); rescue NameError; :priv_err; end),
+              (begin; o.public_method(:prot); rescue NameError; :prot_err; end),
+              (begin; o.public_method(:nope); rescue NameError; :missing_err; end),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn sprintf_malformed_format() {
+        run_test(
+            r#"
+            fmts = ["%\n", " % ", "%.\n3f", "hello %1$"]
+            fmts.map do |f|
+              begin
+                sprintf(f, "foo")
+              rescue ArgumentError => e
+                e.message[/malformed format string/] || e.message
+              end
+            end
             "#,
         );
     }

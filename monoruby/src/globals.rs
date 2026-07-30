@@ -212,6 +212,9 @@ pub struct Globals {
     /// load lock); the id is only compared / liveness-checked, never
     /// dereferenced, so the map needs no GC marking.
     pub(crate) loading_features: std::collections::HashMap<std::path::PathBuf, u64>,
+    /// `Kernel#trace_var` hooks: per global-variable name, the commands
+    /// (Procs or Strings) fired after each Ruby-level assignment.
+    pub(crate) gvar_traces: std::collections::HashMap<IdentId, Vec<Value>>,
     /// cache for Symbol#name (frozen strings keyed by IdentId).
     pub(crate) symbol_names: HashMap<IdentId, Value>,
     /// Dedup table for the Ruby-3.4 "block may be ignored" warning.
@@ -281,6 +284,10 @@ impl alloc::GC<RValue> for Globals {
         self.loaded_features.mark(alloc);
         self.store.mark(alloc);
         self.gvars.mark_values(|v| v.mark(alloc));
+        self.gvar_traces
+            .values()
+            .flatten()
+            .for_each(|v| v.mark(alloc));
         self.symbol_names.values().for_each(|v| v.mark(alloc));
         // Trap handler Procs are GC roots: they are reachable only from
         // this table, yet may be invoked at any future poll point.
@@ -469,6 +476,7 @@ impl Globals {
             random: Box::new(Prng::new()),
             loaded_features,
             loading_features: std::collections::HashMap::default(),
+            gvar_traces: std::collections::HashMap::default(),
             symbol_names: HashMap::default(),
             unused_block_warned: std::collections::HashSet::default(),
             // signo runs 1..=32; index by signo directly (slot 0 unused).

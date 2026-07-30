@@ -222,16 +222,34 @@ impl GvarTable {
         match &mut globals.gvars.entries[id.index()] {
             GvarEntry::Simple(slot) => {
                 *slot = val;
-                Ok(())
             }
             GvarEntry::Alias(_) => unreachable!("resolve() follows aliases"),
             GvarEntry::Hooked { setter, .. } => match *setter {
-                Some(setter) => setter(vm, globals, name, val),
-                None => Err(MonorubyErr::nameerr(format!(
-                    "{name} is a read-only variable"
-                ))),
+                Some(setter) => setter(vm, globals, name, val)?,
+                None => {
+                    return Err(MonorubyErr::nameerr(format!(
+                        "{name} is a read-only variable"
+                    )));
+                }
             },
         }
+        // `Kernel#trace_var` hooks fire after the store, newest first
+        // (CRuby prepends each registration): a Proc command is called
+        // with the assigned value, a String command is eval'ed.
+        if let Some(cmds) = globals.gvar_traces.get(&name) {
+            let cmds = cmds.clone();
+            let call = IdentId::get_id("call");
+            let eval = IdentId::get_id("eval");
+            for cmd in cmds.into_iter().rev() {
+                if cmd.is_str().is_some() {
+                    let main = globals.main_object;
+                    vm.invoke_method_inner(globals, eval, main, &[cmd], None, None)?;
+                } else {
+                    vm.invoke_method_inner(globals, call, cmd, &[val], None, None)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Returns `true` if `name` has any entry — Simple, Alias, or Hooked.

@@ -275,6 +275,20 @@ module Kernel
   end
 end
 
+# `caller` shares `caller_locations`' argument handling (Array#[] edge
+# semantics, Range forms, ArgumentError on negatives, #to_int coercion)
+# by going through the same `Thread::Backtrace.__slice` helper over the
+# structured frames' pre-rendered strings. Defined as a module function
+# so `Kernel.caller` gets the same semantics.
+module Kernel
+  def caller(start = 1, length = nil)
+    frames = Kernel.__caller_frames(1)
+    strs = frames.map { |f| f[0] }
+    Thread::Backtrace.__slice(strs, length.nil? ? [start] : [start, length])
+  end
+  module_function :caller
+end
+
 # `caller_locations` builds `Thread::Backtrace::Location`s from the
 # structured native frames (`Kernel.__caller_frames`), which carry the
 # load-time canonical path alongside the display path/label — string

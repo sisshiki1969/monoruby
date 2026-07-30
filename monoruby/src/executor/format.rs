@@ -690,7 +690,7 @@ impl Executor {
 
             if i >= flen {
                 return Err(MonorubyErr::argumenterr(
-                    "Invalid termination of format string",
+                    "malformed format string",
                 ));
             }
             let mut ch = fchars[i];
@@ -713,7 +713,7 @@ impl Executor {
                 i += 1;
                 if i >= flen {
                     return Err(MonorubyErr::argumenterr(
-                        "Invalid termination of format string",
+                        "malformed format string",
                     ));
                 }
                 ch = fchars[i];
@@ -731,7 +731,7 @@ impl Executor {
                         named_val = Some(v);
                         if i >= flen {
                             return Err(MonorubyErr::argumenterr(
-                                "Invalid termination of format string",
+                                "malformed format string",
                             ));
                         }
                         ch = fchars[i];
@@ -750,7 +750,7 @@ impl Executor {
                     positional_arg = Some(arguments[num - 1]);
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
-                            "Invalid termination of format string",
+                            "malformed format string",
                         ));
                     }
                     ch = fchars[i];
@@ -803,7 +803,7 @@ impl Executor {
                 }
                 if i >= flen {
                     return Err(MonorubyErr::argumenterr(
-                        "Invalid termination of format string",
+                        "malformed format string",
                     ));
                 }
                 ch = fchars[i];
@@ -816,7 +816,7 @@ impl Executor {
                     i += 1;
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
-                            "Invalid termination of format string",
+                            "malformed format string",
                         ));
                     }
                     ch = fchars[i];
@@ -836,7 +836,7 @@ impl Executor {
                     named_val = Some(v);
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
-                            "Invalid termination of format string",
+                            "malformed format string",
                         ));
                     }
                     ch = fchars[i];
@@ -850,7 +850,7 @@ impl Executor {
                 i += 1;
                 if i >= flen {
                     return Err(MonorubyErr::argumenterr(
-                        "Invalid termination of format string",
+                        "malformed format string",
                     ));
                 }
                 ch = fchars[i];
@@ -886,7 +886,7 @@ impl Executor {
                     }
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
-                            "Invalid termination of format string",
+                            "malformed format string",
                         ));
                     }
                     ch = fchars[i];
@@ -900,7 +900,7 @@ impl Executor {
                         i += 1;
                         if i >= flen {
                             return Err(MonorubyErr::argumenterr(
-                                "Invalid termination of format string",
+                                "malformed format string",
                             ));
                         }
                         ch = fchars[i];
@@ -919,7 +919,7 @@ impl Executor {
                     positional_arg = Some(arguments[num - 1]);
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
-                            "Invalid termination of format string",
+                            "malformed format string",
                         ));
                     }
                     ch = fchars[i];
@@ -939,7 +939,7 @@ impl Executor {
                     named_val = Some(v);
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
-                            "Invalid termination of format string",
+                            "malformed format string",
                         ));
                     }
                     ch = fchars[i];
@@ -998,6 +998,36 @@ impl Executor {
                 return Err(MonorubyErr::argumenterr(
                     "numbered/unnumbered reference is mixed with named",
                 ));
+            }
+            // CRuby validates the conversion character *before* demanding
+            // an argument for it: `sprintf("%\n")` is malformed even with
+            // no arguments left. Unprintable characters get the bare
+            // message, printable ones are echoed (`… - %v`).
+            if !matches!(
+                ch,
+                'c' | 's'
+                    | 'p'
+                    | 'd'
+                    | 'i'
+                    | 'u'
+                    | 'b'
+                    | 'B'
+                    | 'o'
+                    | 'x'
+                    | 'X'
+                    | 'f'
+                    | 'e'
+                    | 'E'
+                    | 'g'
+                    | 'G'
+                    | 'a'
+                    | 'A'
+            ) {
+                return Err(MonorubyErr::argumenterr(if ch.is_ascii_graphic() {
+                    format!("malformed format string - %{ch}")
+                } else {
+                    "malformed format string".to_string()
+                }));
             }
             // Determine val: positional, named, or sequential
             let val = if let Some(v) = positional_arg {
