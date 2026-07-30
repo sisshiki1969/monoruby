@@ -674,9 +674,22 @@ fn attr_writer(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/autoload.html]
 #[monoruby_builtin]
 fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let const_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    autoload_on(vm, globals, lfp.self_val(), lfp.arg(0), lfp.arg(1), pc)
+}
+
+/// Shared body of `Module#autoload` and `Kernel#autoload` (the latter
+/// passes its caller's cbase as *target*).
+pub(super) fn autoload_on(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    target: Value,
+    name_arg: Value,
+    feature_arg: Value,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let const_name = name_arg.expect_symbol_or_string(globals)?;
     validate_constant_name(const_name)?;
-    let feature = lfp.arg(1).coerce_to_path_rstring(vm, globals)?;
+    let feature = feature_arg.coerce_to_path_rstring(vm, globals)?;
     let feature = feature.to_str()?.to_string();
     if feature.is_empty() {
         return Err(MonorubyErr::argumenterr("empty file name"));
@@ -684,8 +697,8 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     // CRuby raises a `FrozenError` *before* recording any autoload state so
     // that `frozen_module.autoload :Foo, ...` neither installs the entry
     // nor stores the constant name.
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let class_id = lfp.self_val().as_class_id();
+    target.ensure_not_frozen(&globals.store)?;
+    let class_id = target.as_class_id();
     // CRuby treats `autoload :Foo, path` as a no-op when `path` resolves
     // to a file that is already loaded (`$LOADED_FEATURES`) or is the
     // current `require`'s in-flight file. Mirrors `rb_autoload_str`'s
@@ -745,7 +758,18 @@ fn autoload_query(
 ) -> Result<Value> {
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
-    let mut module = lfp.self_val().as_class();
+    autoload_query_on(globals, lfp.self_val().as_class(), name, inherit)
+}
+
+/// Shared body of `Module#autoload?` and `Kernel#autoload?` (the
+/// latter passes its caller's cbase).
+pub(super) fn autoload_query_on(
+    globals: &Globals,
+    module: Module,
+    name: IdentId,
+    inherit: bool,
+) -> Result<Value> {
+    let mut module = module;
     loop {
         if let Some(state) = globals.store.get_constant(module.id(), name) {
             match &state.kind {

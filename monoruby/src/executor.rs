@@ -700,7 +700,7 @@ impl Executor {
         is_relative: bool,
     ) -> Result<bool> {
         let (file_body, canonicalized_path) = loop {
-            match globals.require_lib(file_name, is_relative)? {
+            match globals.require_lib(self, file_name, is_relative)? {
                 crate::globals::RequireLoad::Load(body, path) => break (body, path),
                 crate::globals::RequireLoad::AlreadyLoaded(path) => {
                     // The feature is registered — but its body may still
@@ -730,9 +730,30 @@ impl Executor {
                             globals.remove_loaded_feature(&path);
                             continue;
                         }
-                        // No loader, or a circular require on the
-                        // loading thread itself: already loaded.
-                        _ => return Ok(false),
+                        // A circular require on the loading thread
+                        // itself returns false; CRuby additionally
+                        // warns in verbose mode.
+                        Some(_) => {
+                            let verbose =
+                                GvarTable::get(self, globals, IdentId::get_id("$VERBOSE"));
+                            if verbose.as_bool() {
+                                let msg = format!(
+                                    "loading in progress, circular require considered harmful - {}",
+                                    path.display()
+                                );
+                                let _ = self.invoke_method_inner(
+                                    globals,
+                                    IdentId::get_id("warn"),
+                                    globals.main_object,
+                                    &[Value::string(msg)],
+                                    None,
+                                    None,
+                                );
+                            }
+                            return Ok(false);
+                        }
+                        // No loader: already loaded.
+                        None => return Ok(false),
                     }
                 }
             }
@@ -893,7 +914,7 @@ impl Executor {
             None
         };
 
-        let (file_body, path) = globals.find_for_load(file_name)?;
+        let (file_body, path) = globals.find_for_load(self, file_name)?;
         self.load_impl(globals, file_body, &path, wrap)?;
         Ok(())
     }

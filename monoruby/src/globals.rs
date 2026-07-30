@@ -595,7 +595,14 @@ impl Globals {
                 .into_iter()
                 .map(|p| p.to_string_lossy().into_owned()),
         );
-        let list: Vec<_> = path_list.split('\n').map(|s| s.to_string()).collect();
+        // Skip blank lines (the cache file ends with a newline): an
+        // empty `$LOAD_PATH` entry would make bare `require`s resolve
+        // against the CWD, which CRuby forbids for security.
+        let list: Vec<_> = path_list
+            .split('\n')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect();
         globals.extend_load_path(list.iter().cloned());
 
         // set constants

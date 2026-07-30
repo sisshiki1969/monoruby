@@ -1133,7 +1133,7 @@ fn resolve_feature_path(
     _: BytecodePtr,
 ) -> Result<Value> {
     let file_name = to_path(vm, globals, lfp.arg(0))?;
-    match globals.search_lib(&file_name) {
+    match globals.search_lib(vm, &file_name) {
         Some(path) => {
             let ext = match path.extension().and_then(|s| s.to_str()) {
                 Some(ext) => Value::symbol_from_str(ext),
