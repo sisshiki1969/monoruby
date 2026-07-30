@@ -72,6 +72,7 @@ pub(super) fn init(globals: &mut Globals) {
         globals.define_builtin_exception_class("ArgumentError", ARGUMENTS_ERROR_CLASS, standarderr);
     let uncaught_throw = globals.define_class("UncaughtThrowError", argerr, OBJECT_CLASS);
     globals.define_builtin_func(uncaught_throw.id(), "tag", uncaught_throw_tag, 0);
+    globals.define_builtin_func(uncaught_throw.id(), "value", uncaught_throw_value, 0);
     globals.define_class("EncodingError", standarderr, OBJECT_CLASS);
     globals.define_builtin_exception_class("FiberError", FIBER_ERROR_CLASS, standarderr);
     let ioerr = globals.define_builtin_exception_class("IOError", IO_ERROR_CLASS, standarderr);
@@ -184,6 +185,21 @@ fn uncaught_throw_tag(
     Ok(globals
         .store
         .get_ivar(lfp.self_val(), IdentId::get_id("/tag"))
+        .unwrap_or_default())
+}
+
+/// `UncaughtThrowError#value` — the second argument passed to the
+/// uncaught `throw` (nil when omitted).
+#[monoruby_builtin]
+fn uncaught_throw_value(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("/value"))
         .unwrap_or_default())
 }
 
