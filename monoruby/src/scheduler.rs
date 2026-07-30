@@ -281,6 +281,18 @@ pub(crate) fn thread_list(vm: &mut Executor) -> Vec<Value> {
     SCHEDULER.with(|s| s.borrow().threads.clone())
 }
 
+/// Whether a live (not dead) thread with the given object id exists.
+/// Used by the `require` load lock to detect a stale loading marker
+/// left by a thread that died without unwinding.
+pub(crate) fn thread_alive_by_id(id: u64) -> bool {
+    SCHEDULER.with(|s| {
+        s.borrow()
+            .threads
+            .iter()
+            .any(|t| t.id() == id && !t.as_thread_inner().is_dead())
+    })
+}
+
 /// Whether any *other* live thread exists (i.e. whether blocking
 /// operations must go through the scheduler instead of really blocking).
 pub(crate) fn has_other_live_threads() -> bool {
@@ -423,6 +435,61 @@ pub(crate) fn sleep(
         park_switch(vm, globals, cur)?;
     }
     Ok(start.elapsed())
+}
+
+/// Terminate every live thread except main at process exit, the way
+/// CRuby's `rb_thread_terminate_all` does after the `at_exit` handlers:
+/// each thread is killed — an unrescuable unwind that runs the ensure
+/// clauses of its *current* fiber chain only; suspended fibers are
+/// never resumed — and the scheduler runs until they have all unwound.
+/// `handle_interrupt` masks are bypassed: the process is ending, so
+/// there is no later delivery point to defer to.
+pub(crate) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
+    ensure_main(vm);
+    if !is_current_main() {
+        return;
+    }
+    let targets: Vec<Value> = SCHEDULER.with(|s| {
+        let s = s.borrow();
+        s.threads
+            .iter()
+            .copied()
+            .filter(|t| Some(*t) != s.main && !t.as_thread_inner().is_dead())
+            .collect()
+    });
+    if targets.is_empty() {
+        return;
+    }
+    for mut t in targets.iter().copied() {
+        t.as_thread_inner_mut()
+            .pending
+            .push_back(PendingInterrupt::Kill);
+    }
+    SCHEDULER.with(|s| {
+        let mut s = s.borrow_mut();
+        for mut t in targets.iter().copied() {
+            let inner = t.as_thread_inner_mut();
+            if matches!(
+                inner.state(),
+                ThreadState::Sleeping | ThreadState::Joining | ThreadState::IoWaiting
+            ) {
+                inner.state = ThreadState::Runnable;
+                s.ready.push_back(t);
+            }
+        }
+    });
+    // Bounded: a thread that refuses to die (spinning in its ensure,
+    // never reaching a delivery point) must not wedge the process exit.
+    for _ in 0..10_000 {
+        if targets.iter().all(|t| t.as_thread_inner().is_dead()) {
+            break;
+        }
+        // An error delivered to the main thread here has nowhere to go —
+        // the script is already over.
+        if pass(vm, globals).is_err() {
+            let _ = vm.take_error();
+        }
+    }
 }
 
 /// `Thread.pass`: give every currently runnable thread a chance to run.

@@ -30,13 +30,13 @@ pub fn monoruby_builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     if let MonorubyErrKind::MethodReturn(val, target_lfp) = err.kind() && lfp == *target_lfp {
                         return Some(*val);
                     }
-                    // Only add builtin trace for errors propagating through
-                    // this function (trace already has entries), not for errors
-                    // originating here like Kernel#raise (trace is empty).
-                    if !err.trace().is_empty() {
-                        let fid = lfp.func_id();
-                        err.push_internal_trace(fid);
-                    }
+                    // Attach this builtin's frame to the backtrace, rendered
+                    // at its call site the way CRuby records C frames — for
+                    // errors originating here (`Array#fetch` raising
+                    // IndexError) and errors propagating through (a block
+                    // this builtin invoked raised). The helper hides the
+                    // raise machinery and invocation trampolines.
+                    crate::builtins::kernel::push_builtin_trace(vm, globals, &mut err, lfp.func_id());
                     vm.set_error(err);
                     None
                 }

@@ -699,9 +699,49 @@ impl Executor {
         file_name: &std::path::Path,
         is_relative: bool,
     ) -> Result<bool> {
-        if let Some((file_body, canonicalized_path)) =
-            globals.require_lib(file_name, is_relative)?
+        let (file_body, canonicalized_path) = loop {
+            match globals.require_lib(file_name, is_relative)? {
+                crate::globals::RequireLoad::Load(body, path) => break (body, path),
+                crate::globals::RequireLoad::AlreadyLoaded(path) => {
+                    // The feature is registered — but its body may still
+                    // be running on another thread (features register
+                    // before executing). CRuby's per-feature load lock:
+                    // block until the first loader finishes, then
+                    // return false; if it failed, retry the load
+                    // ourselves. Parked here, this thread reports
+                    // `stop?` with a backtrace inside `Kernel#require`,
+                    // which the concurrent-require specs poll for.
+                    match globals.loading_features.get(&path) {
+                        Some(&loader)
+                            if loader != crate::scheduler::current_thread(self).id() =>
+                        {
+                            if crate::scheduler::thread_alive_by_id(loader) {
+                                crate::scheduler::sleep(
+                                    self,
+                                    globals,
+                                    Some(std::time::Duration::from_millis(1)),
+                                )?;
+                                continue;
+                            }
+                            // Stale marker: the loader died without
+                            // unwinding (bug path). Clear it and retry
+                            // the load ourselves.
+                            globals.loading_features.remove(&path);
+                            globals.remove_loaded_feature(&path);
+                            continue;
+                        }
+                        // No loader, or a circular require on the
+                        // loading thread itself: already loaded.
+                        _ => return Ok(false),
+                    }
+                }
+            }
+        };
         {
+            let loader = crate::scheduler::current_thread(self).id();
+            globals
+                .loading_features
+                .insert(canonicalized_path.clone(), loader);
             // Find every autoload-registered constant whose `feature`
             // resolves to the file we're about to execute. CRuby's
             // direct-require-of-an-autoload-target case flips those
@@ -720,6 +760,10 @@ impl Executor {
                     .set_autoload_state(*class_id, *name, AutoloadState::Loading);
             }
             let res = self.load_impl(globals, file_body, &canonicalized_path, None);
+            // The lock only needs to cover the body: waiters woken from
+            // here on see either the registered feature (success) or a
+            // retriable miss (failure removed it just below).
+            globals.loading_features.remove(&canonicalized_path);
             match res {
                 Ok(()) => {
                     // require body finished. Any `matching` slot still
@@ -829,8 +873,6 @@ impl Executor {
                 );
             }
             Ok(true)
-        } else {
-            Ok(false)
         }
     }
 
