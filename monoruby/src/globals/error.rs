@@ -12,6 +12,58 @@ pub(crate) const WOULD_BLOCK_INTERRUPT_MSG: &str = "__monoruby_would_block_inter
 
 use super::*;
 
+/// The string backtrace stored on an exception object (`/backtrace`
+/// ivar: installed by `#set_backtrace` / the third `raise` argument, or
+/// memoized by `Exception#backtrace`). `None` when absent, cleared, or
+/// not an array of strings.
+fn backtrace_strings(store: &Store, obj: Value) -> Option<Vec<String>> {
+    let bt = store.get_ivar(obj, IdentId::get_id("/backtrace"))?;
+    let arr = bt.try_array_ty()?;
+    let v: Vec<String> = arr
+        .iter()
+        .filter_map(|e| e.is_str().map(|s| s.to_string()))
+        .collect();
+    if v.is_empty() { None } else { Some(v) }
+}
+
+/// Print a report from pre-rendered backtrace strings: the first entry
+/// is the header location, the rest `\tfrom` lines (honouring
+/// `--backtrace-limit=N`).
+fn show_string_backtrace(bt: &[String], error_message: &str) {
+    eprintln!("{}: {error_message}", bt[0]);
+    let rest = &bt[1..];
+    let limit = crate::globals::backtrace_limit().unwrap_or(usize::MAX);
+    for (i, line) in rest.iter().enumerate() {
+        if i >= limit {
+            eprintln!("\t ... {} levels...", rest.len() - i);
+            break;
+        }
+        eprintln!("\tfrom {line}");
+    }
+}
+
+/// Print `trace`'s caller frames (everything after the header entry) as
+/// `\tfrom <location>` lines, honouring `--backtrace-limit=N`: after N
+/// frames the rest collapse into `\t ... K levels...`.
+fn show_trace_rest(store: &Store, trace: &[(Option<(Loc, SourceInfoRef)>, Option<FuncId>)]) {
+    if trace.len() <= 1 {
+        return;
+    }
+    let rest = &trace[1..];
+    let limit = crate::globals::backtrace_limit().unwrap_or(usize::MAX);
+    for (i, (source_loc, func_id)) in rest.iter().enumerate() {
+        if i >= limit {
+            eprintln!("\t ... {} levels...", rest.len() - i);
+            break;
+        }
+        if let Some((loc, source)) = source_loc {
+            eprintln!("\tfrom {}", store.location(*func_id, source, *loc));
+        } else {
+            eprintln!("\tfrom {}", store.internal_location(func_id.unwrap()))
+        }
+    }
+}
+
 ///
 /// Exception information which is stored in *Executor*.
 ///
@@ -175,28 +227,61 @@ impl MonorubyErr {
     }
 
     pub fn show_error_message_and_all_loc(&self, store: &Store) {
-        self.show_error_message_and_loc(store);
-        if self.trace.len() > 1 {
-            // CRuby prints each caller frame as `\tfrom <location>`,
-            // honouring `--backtrace-limit=N`: after N frames the rest
-            // collapse into `\t ... K levels...`.
-            let rest = &self.trace[1..];
-            let limit = crate::globals::backtrace_limit().unwrap_or(usize::MAX);
-            for (i, (source_loc, func_id)) in rest.iter().enumerate() {
-                if i >= limit {
-                    eprintln!("\t ... {} levels...", rest.len() - i);
-                    break;
-                }
-                if let Some((loc, source)) = source_loc {
-                    eprintln!("\tfrom {}", store.location(func_id.clone(), source, *loc));
-                } else {
-                    eprintln!("\tfrom {}", store.internal_location(func_id.unwrap()))
-                }
-            }
+        // A string backtrace installed via `raise ..., bt` /
+        // `#set_backtrace` replaces the runtime capture in CRuby's
+        // report: its first entry becomes the header location.
+        if let Some(obj) = self.original
+            && let Some(bt) = backtrace_strings(store, obj)
+        {
+            show_string_backtrace(&bt, &self.get_error_message(store));
+        } else {
+            self.show_error_message_and_loc(store);
+            show_trace_rest(store, &self.trace);
+        }
+        // CRuby follows the report with the exception's whole `#cause`
+        // chain, each entry with its own backtrace. The chain only
+        // exists on a materialized exception object (`original` — set
+        // for every uncaught exception at top level).
+        if let Some(obj) = self.original {
+            self.show_cause_chain(store, obj);
         }
     }
 
-    pub fn show_error_message_and_loc(&self, store: &Store) -> bool {
+    /// Print the `#cause` chain hanging off `obj` (already-printed
+    /// exception), one `header + from-lines` block per cause.
+    fn show_cause_chain(&self, store: &Store, obj: Value) {
+        let cause_id = IdentId::get_id("/cause");
+        let mut seen = vec![obj.id()];
+        let mut cur = obj;
+        while let Some(cause) = store.get_ivar(cur, cause_id) {
+            if cause.is_nil() || seen.contains(&cause.id()) {
+                break;
+            }
+            seen.push(cause.id());
+            let Some(inner) = cause.is_exception() else {
+                break;
+            };
+            let msg = format!("{} ({})", inner.message(), cause.get_real_class_name(store));
+            if let Some(bt) = backtrace_strings(store, cause) {
+                show_string_backtrace(&bt, &msg);
+            } else {
+                let trace = inner.trace();
+                match trace.first() {
+                    Some((Some((loc, source)), func_id)) => {
+                        eprintln!("{}: {msg}", store.location(*func_id, source, *loc));
+                    }
+                    Some((None, Some(fid))) => {
+                        eprintln!("{}: {msg}", store.internal_location(*fid));
+                    }
+                    _ => eprintln!("{msg}"),
+                }
+                show_trace_rest(store, trace);
+            }
+            cur = cause;
+        }
+    }
+
+    fn show_error_message_and_loc(&self, store: &Store) -> bool {
         let mut loc_flag = false;
         if let Some((source_loc, func_id)) = self.trace.first() {
             let error_message = self.get_error_message(store);

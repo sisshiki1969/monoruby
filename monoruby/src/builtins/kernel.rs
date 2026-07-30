@@ -1443,6 +1443,80 @@ fn is_transparent_native_frame(globals: &Globals, func_id: FuncId) -> bool {
         || (owner == METHOD_CLASS && matches!(name.as_str(), "call" | "===" | "[]"))
 }
 
+/// The call site of the native frame `cfp`: the file/line of the pc its
+/// Ruby caller saved into `cfp`'s cont-frame slot when it made the call
+/// (see `collect_backtrace` for the slot mechanics). `None` when the
+/// caller isn't a resolvable iseq (invoker boundary, nested native
+/// dispatch).
+pub(crate) fn native_call_site(
+    globals: &Globals,
+    cfp: crate::executor::Cfp,
+) -> Option<(crate::ast::Loc, crate::ast::SourceInfoRef)> {
+    let prev = cfp.prev()?;
+    let iseq = globals.store[prev.lfp().func_id()].is_iseq()?;
+    let info = &globals.store[iseq];
+    let slot = cfp.caller_pc_slot();
+    if slot == 0 || slot % 8 != 0 {
+        return None;
+    }
+    // SAFETY: validated against the bytecode span below.
+    let pc = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _)? };
+    if !info.contains_pc(pc) {
+        return None;
+    }
+    let idx = info.get_pc_index(Some(pc)).to_usize();
+    Some((info.sourcemap[idx], info.sourceinfo.clone()))
+}
+
+/// Whether a native frame is the raise machinery itself. CRuby's
+/// backtraces never show `Kernel#raise` / `Kernel#fail` — the raised
+/// exception is attributed to the Ruby frame that called them.
+fn is_raise_like(globals: &Globals, func_id: FuncId) -> bool {
+    let info = &globals.store[func_id];
+    info.is_iseq().is_none()
+        && info.name().is_some_and(|n| {
+            let n = n.get_name();
+            n == "raise" || n == "fail"
+        })
+}
+
+/// Attach the native frame `fid` to `err`'s backtrace as the error
+/// leaves a builtin, the way CRuby records C frames: rendered at the
+/// *call site* (`-e:1:in 'Array#fetch'`), both for errors originating
+/// inside the builtin and for errors propagating through it (a block it
+/// invoked raised). Invocation trampolines (`Proc#call`, `Method#call`)
+/// and the raise machinery (`Kernel#raise`) stay invisible, and the
+/// internal scheduler markers are never decorated (they are consumed
+/// before they surface).
+pub(crate) fn push_builtin_trace(
+    vm: &Executor,
+    globals: &Globals,
+    err: &mut MonorubyErr,
+    fid: FuncId,
+) {
+    if err.is_signal_interrupt() || err.is_would_block_interrupt() {
+        return;
+    }
+    if is_transparent_native_frame(globals, fid) {
+        return;
+    }
+    // Never for a fresh raise, and never for a re-raise (`raise e`)
+    // either — CRuby's backtraces never contain the raise machinery.
+    if is_raise_like(globals, fid) {
+        return;
+    }
+    let originating = err.trace().is_empty();
+    match native_call_site(globals, vm.cfp()) {
+        Some((loc, source)) => err.push_trace(loc, source, fid),
+        // With no resolvable call site an originating error keeps the
+        // Ruby caller as its innermost frame (a bare `<internal>` header
+        // would be worse); a propagating error keeps the established
+        // `<internal>` entry.
+        None if !originating => err.push_internal_trace(fid),
+        None => {}
+    }
+}
+
 /// Walk a frame chain from `cfp` outward, rendering CRuby-style
 /// backtrace strings (`file:line:in 'label'`). `level` frames are
 /// skipped first, at most `length` (when given) are collected, and the
@@ -5053,6 +5127,97 @@ mod tests {
         // private default respond_to_missing?.
         run_test_once(
             r##"(a=Kernel.instance_method(:format)==Kernel.instance_method(:sprintf); b=Kernel.method(:format)==Kernel.method(:sprintf); c=Kernel.private_method_defined?(:respond_to_missing?); e2=format("%03d", 7); [a,b,c,e2])"##,
+        );
+    }
+
+    #[test]
+    fn native_frame_in_backtrace() {
+        // An exception raised inside a builtin carries the C frame,
+        // rendered at its call site, as the innermost backtrace entry
+        // (CRuby: `-e:1:in 'Array#fetch'`); the raise machinery itself
+        // never appears — neither for a fresh raise nor a re-raise.
+        run_test(
+            r#"
+            res = []
+            begin
+              [1].fetch(5)
+            rescue => e
+              res << e.backtrace.first.include?("in 'Array#fetch'")
+              res << e.backtrace.any? { |f| f.include?("Kernel#raise") }
+            end
+            begin
+              begin
+                raise ArgumentError, "x"
+              rescue => e2
+                raise e2
+              end
+            rescue => e3
+              res << e3.backtrace.any? { |f| f.include?("Kernel#raise") }
+            end
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn top_level_cause_and_custom_backtrace() {
+        // The implicit `$!` cause chain and an explicitly stored string
+        // backtrace, observed through the exception object (the same
+        // data the top-level report prints).
+        run_test(
+            r#"
+            wrapped = begin
+              begin
+                raise "the cause"
+              rescue
+                raise "wrapped"
+              end
+            rescue => e
+              e
+            end
+            custom = begin
+              raise RuntimeError, "foo", ["/dir/foo.rb:10:in `raising'", "/dir/bar.rb:20:in `caller'"]
+            rescue => e
+              e
+            end
+            [wrapped.message, wrapped.cause&.message, custom.backtrace]
+            "#,
+        );
+    }
+
+    #[test]
+    fn concurrent_require_blocks_second_thread() {
+        // CRuby's per-feature load lock: a second thread requiring a
+        // feature whose body is still executing on another thread
+        // blocks until that load finishes, then returns false.
+        run_test_once(
+            r#"
+            dir = ENV["TMPDIR"] || "/tmp"
+            path = File.join(dir, "mrb_conc_req_#{Process.pid}.rb")
+            File.write(path, <<~RUBY)
+              $conc_order << :body_pre
+              Thread.pass until $conc_t2_started
+              50.times { Thread.pass }
+              $conc_order << :body_post
+            RUBY
+            $conc_order = []
+            $conc_t2_started = false
+            r1 = r2 = t2 = nil
+            t1 = Thread.new do
+              Thread.pass until t2
+              r1 = require(path)
+            end
+            t2 = Thread.new do
+              Thread.pass until $conc_order.include?(:body_pre)
+              $conc_t2_started = true
+              r2 = require(path)
+              $conc_order << :t2_done
+            end
+            t1.join
+            t2.join
+            begin; File.delete(path); rescue; end
+            [r1, r2, $conc_order]
+            "#,
         );
     }
 

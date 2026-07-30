@@ -2,6 +2,19 @@ use std::os::unix::ffi::OsStrExt;
 
 use super::*;
 
+/// What `Globals::require_lib` resolved a `require` argument to.
+pub(crate) enum RequireLoad {
+    /// Not yet loaded: execute this body, registered in
+    /// `$LOADED_FEATURES` under the given canonical path.
+    Load(Vec<u8>, std::path::PathBuf),
+    /// Already present in `$LOADED_FEATURES` under this path — which
+    /// includes a load still *in progress* on another thread (features
+    /// register before their body runs); `Executor::require` uses the
+    /// path to consult the loading registry and block until the first
+    /// loader finishes (CRuby's per-feature load lock).
+    AlreadyLoaded(std::path::PathBuf),
+}
+
 impl Globals {
     ///
     /// Load external library.
@@ -10,7 +23,7 @@ impl Globals {
         &mut self,
         file_name: &std::path::Path,
         is_relative: bool,
-    ) -> Result<Option<(Vec<u8>, std::path::PathBuf)>> {
+    ) -> Result<RequireLoad> {
         let path_str = file_name.to_string_lossy();
 
         // Absolute path: try to load directly.
@@ -20,14 +33,14 @@ impl Globals {
             if file.extension().is_none() {
                 file.set_extension("rb");
                 if self.is_feature_loaded(&file) {
-                    return Ok(None);
+                    return Ok(RequireLoad::AlreadyLoaded(file));
                 }
                 file.set_extension("so");
                 if self.is_feature_loaded(&file) {
-                    return Ok(None);
+                    return Ok(RequireLoad::AlreadyLoaded(file));
                 }
             } else if self.is_feature_loaded(&file) {
-                return Ok(None);
+                return Ok(RequireLoad::AlreadyLoaded(file));
             }
             // Try the file with its given extension first.
             if file_name.is_file() {
@@ -80,11 +93,11 @@ impl Globals {
             let mut file = PathBuf::from(file_name);
             file.set_extension("rb");
             if self.is_feature_loaded(&file) {
-                return Ok(None);
+                return Ok(RequireLoad::AlreadyLoaded(file));
             }
             file.set_extension("so");
             if self.is_feature_loaded(&file) {
-                return Ok(None);
+                return Ok(RequireLoad::AlreadyLoaded(file));
             }
 
             if let Some(file) = self.search_lib(file_name) {
@@ -195,10 +208,7 @@ impl Globals {
     ///
     /// When an error occured in loading, returns Err.
     ///
-    fn require_lib_file(
-        &mut self,
-        path: std::path::PathBuf,
-    ) -> Result<Option<(Vec<u8>, std::path::PathBuf)>> {
+    fn require_lib_file(&mut self, path: std::path::PathBuf) -> Result<RequireLoad> {
         // CRuby stores the path as passed to `require`, not its
         // symlink-resolved form. `Path::canonicalize` resolves every
         // symlink (e.g. on macOS where `/tmp` is a symlink to
@@ -214,7 +224,7 @@ impl Globals {
             &std::path::absolute(&path).unwrap_or_else(|_| path.clone()),
         );
         if self.is_feature_loaded(&canonicalized_path) {
-            return Ok(None);
+            return Ok(RequireLoad::AlreadyLoaded(canonicalized_path));
         }
         let (file_body, _resolved) = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
             let monoruby_lib = install_root().join("lib");
@@ -242,7 +252,7 @@ impl Globals {
         // match the entry we added or the cleanup silently misses (on
         // macOS `/var/folders/..`→`/private/var/folders/..` symlinks the
         // two diverge, leaving a failed require un-retriable).
-        Ok(Some((file_body, canonicalized_path)))
+        Ok(RequireLoad::Load(file_body, canonicalized_path))
     }
 
     ///

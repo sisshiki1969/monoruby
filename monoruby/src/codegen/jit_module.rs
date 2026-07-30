@@ -279,7 +279,11 @@ pub(super) extern "C" fn handle_error(
             {
                 return ErrorReturn::return_err();
             }
-            vm.push_internal_error_location(meta.func_id());
+            // Render this native frame at its call site (CRuby's C-frame
+            // form); invocation trampolines stay invisible.
+            let mut err = vm.take_error();
+            crate::builtins::kernel::push_builtin_trace(vm, globals, &mut err, meta.func_id());
+            vm.set_error(err);
         }
         _ => unreachable!(),
     }

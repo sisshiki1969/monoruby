@@ -20,6 +20,7 @@ pub use error::*;
 pub use gvar::*;
 use prng::*;
 pub use require::{load_file, read_source_file};
+pub(crate) use require::RequireLoad;
 pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
@@ -204,6 +205,13 @@ pub struct Globals {
     /// dedup tracking. Membership checks scan the array linearly,
     /// which is fine because `require` is not on a hot path.
     pub(crate) loaded_features: Value,
+    /// Features whose `require` body is currently executing, keyed by
+    /// the canonical path registered in `$LOADED_FEATURES`, with the
+    /// loading green thread's object id. A second thread requiring the
+    /// same feature blocks until the entry clears (CRuby's per-feature
+    /// load lock); the id is only compared / liveness-checked, never
+    /// dereferenced, so the map needs no GC marking.
+    pub(crate) loading_features: std::collections::HashMap<std::path::PathBuf, u64>,
     /// cache for Symbol#name (frozen strings keyed by IdentId).
     pub(crate) symbol_names: HashMap<IdentId, Value>,
     /// Dedup table for the Ruby-3.4 "block may be ignored" warning.
@@ -460,6 +468,7 @@ impl Globals {
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_features,
+            loading_features: std::collections::HashMap::default(),
             symbol_names: HashMap::default(),
             unused_block_warned: std::collections::HashSet::default(),
             // signo runs 1..=32; index by signo directly (slot 0 unused).
@@ -742,6 +751,11 @@ impl Globals {
         // `Kernel#exit!` / `Process.exit!` bypass this by calling
         // `std::process::exit` directly and never returning here.
         let handler_status = executor.run_exit_handlers(self);
+        // CRuby kills the remaining threads *after* the `at_exit`
+        // handlers and *before* the uncaught-exception report: each
+        // runs the ensure clauses of its current fiber chain (never of
+        // suspended fibers) on the way out.
+        crate::scheduler::terminate_all(&mut executor, self);
         let _ = self.flush_stdout();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();
@@ -760,6 +774,32 @@ impl Globals {
                 eprintln!("active pages:            {}", alloc.pages_len());
             });
         }
+        // Materialize an uncaught exception into its Ruby object while
+        // the executor is still alive: this runs the implicit `$!`
+        // cause chaining and hangs the object off the returned error
+        // (`original`), so the top-level report can show a custom
+        // string backtrace and walk the `#cause` chain. Control-flow
+        // pseudo-errors and `SystemExit` keep their dedicated handling
+        // in `main::handle_error`. Nothing Ruby-level runs after this
+        // point, so the object can't be collected out from under the
+        // report.
+        let res = match res {
+            Err(err)
+                if !matches!(
+                    err.kind(),
+                    MonorubyErrKind::SystemExit(_)
+                        | MonorubyErrKind::MethodReturn(..)
+                        | MonorubyErrKind::BlockBreak(..)
+                ) =>
+            {
+                executor.set_error(err);
+                let obj = executor.take_ex_obj(self);
+                let err = MonorubyErr::new_from_exception(obj.is_exception().unwrap())
+                    .with_original(obj);
+                Err(err)
+            }
+            other => other,
+        };
         // An exit status chosen by the handlers themselves (a
         // `SystemExit` raised in one, or status 1 after an uncaught
         // handler exception) overrides the script's own. The script's
