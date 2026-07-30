@@ -298,7 +298,7 @@ fn physical_slot(reg: FPReg) -> PhysSlot {
 /// later installs a non-formula assignment, leaving ③ untouched.
 ///
 mod phys_alloc {
-    use super::{PhysSlot, PHYS_FPR_POOL};
+    use super::{PHYS_FPR_POOL, PhysSlot};
 
     ///
     /// The placement rule: virtual fpr `i` → its frame-independent physical slot.
@@ -748,100 +748,100 @@ pub(crate) struct VmHandlers {
     pub singleton_method_def: CodePtr, // 1
     pub method_def: CodePtr,           // 2
     pub br_inst: CodePtr,              // 3
-    pub condbr: CodePtr,              // 4, 12
-    pub condnotbr: CodePtr,          // 5, 13
-    pub immediate: CodePtr,           // 6
-    pub literal: CodePtr,             // 7
-    pub load_const: CodePtr,          // 10
-    pub store_const: CodePtr,         // 11
-    pub loop_start: CodePtr,          // 14
-    pub loop_end: CodePtr,            // 15
-    pub load_ivar: CodePtr,           // 16
-    pub store_ivar: CodePtr,          // 17
-    pub check_const: CodePtr,         // 18
-    pub check_kw_rest: CodePtr,       // 19
-    pub check_local: CodePtr,         // 20
-    pub block_arg_proxy: CodePtr,     // 21
-    pub singleton_class_def: CodePtr, // 22
-    pub block_arg: CodePtr,           // 23
-    pub check_cvar: CodePtr,          // 24
-    pub load_gvar: CodePtr,           // 25
-    pub store_gvar: CodePtr,          // 26
-    pub load_cvar: CodePtr,           // 27
-    pub alias_gvar: CodePtr,          // 28
-    pub store_cvar: CodePtr,          // 29
-    pub send_simple: CodePtr,         // 30, 32
-    pub send: CodePtr,                // 31, 33
-    pub yield_: CodePtr,              // 34
-    pub yield2: CodePtr,             // 35
-    pub optcase: CodePtr,             // 36
-    pub nilbr: CodePtr,               // 37
-    pub lambda: CodePtr,              // 38
-    pub array: CodePtr,               // 39
-    pub array_teq: CodePtr,           // 40
-    pub array_concat: CodePtr,        // 41
-    pub hash_insert: CodePtr,         // 42
-    pub array_any: CodePtr,           // 43
-    pub rescue_array_teq: CodePtr,    // 44
-    pub defined_yield: CodePtr,       // 64
-    pub defined_const: CodePtr,       // 65
-    pub defined_method: CodePtr,      // 66
-    pub defined_gvar: CodePtr,        // 67
-    pub defined_ivar: CodePtr,        // 68
-    pub defined_super: CodePtr,       // 69
-    pub class_def: CodePtr,           // 70
-    pub module_def: CodePtr,          // 71
-    pub ret: CodePtr,                 // 80
-    pub method_ret: CodePtr,          // 81
-    pub block_break: CodePtr,         // 82
-    pub raise_err: CodePtr,           // 83
-    pub retry: CodePtr,               // 84
-    pub ensure_end: CodePtr,          // 85
-    pub concat_regexp: CodePtr,       // 86
-    pub redo: CodePtr,                // 87
-    pub defined_cvar: CodePtr,        // 88
-    pub pos: CodePtr,                 // 121
-    pub neg: CodePtr,                 // 122
-    pub bitnot: CodePtr,              // 123
-    pub not: CodePtr,                 // 124
-    pub index: CodePtr,               // 132
-    pub index_assign: CodePtr,        // 133
-    pub eq: CodePtr,                  // 140, 150
-    pub ne: CodePtr,                  // 141, 151
-    pub lt: CodePtr,                  // 142, 152
-    pub le: CodePtr,                  // 143, 153
-    pub gt: CodePtr,                  // 144, 154
-    pub ge: CodePtr,                  // 145, 155
-    pub teq: CodePtr,                 // 146
+    pub condbr: CodePtr,               // 4, 12
+    pub condnotbr: CodePtr,            // 5, 13
+    pub immediate: CodePtr,            // 6
+    pub literal: CodePtr,              // 7
+    pub load_const: CodePtr,           // 10
+    pub store_const: CodePtr,          // 11
+    pub loop_start: CodePtr,           // 14
+    pub loop_end: CodePtr,             // 15
+    pub load_ivar: CodePtr,            // 16
+    pub store_ivar: CodePtr,           // 17
+    pub check_const: CodePtr,          // 18
+    pub check_kw_rest: CodePtr,        // 19
+    pub check_local: CodePtr,          // 20
+    pub block_arg_proxy: CodePtr,      // 21
+    pub singleton_class_def: CodePtr,  // 22
+    pub block_arg: CodePtr,            // 23
+    pub check_cvar: CodePtr,           // 24
+    pub load_gvar: CodePtr,            // 25
+    pub store_gvar: CodePtr,           // 26
+    pub load_cvar: CodePtr,            // 27
+    pub alias_gvar: CodePtr,           // 28
+    pub store_cvar: CodePtr,           // 29
+    pub send_simple: CodePtr,          // 30, 32
+    pub send: CodePtr,                 // 31, 33
+    pub yield_: CodePtr,               // 34
+    pub yield2: CodePtr,               // 35
+    pub optcase: CodePtr,              // 36
+    pub nilbr: CodePtr,                // 37
+    pub lambda: CodePtr,               // 38
+    pub array: CodePtr,                // 39
+    pub array_teq: CodePtr,            // 40
+    pub array_concat: CodePtr,         // 41
+    pub hash_insert: CodePtr,          // 42
+    pub array_any: CodePtr,            // 43
+    pub rescue_array_teq: CodePtr,     // 44
+    pub defined_yield: CodePtr,        // 64
+    pub defined_const: CodePtr,        // 65
+    pub defined_method: CodePtr,       // 66
+    pub defined_gvar: CodePtr,         // 67
+    pub defined_ivar: CodePtr,         // 68
+    pub defined_super: CodePtr,        // 69
+    pub class_def: CodePtr,            // 70
+    pub module_def: CodePtr,           // 71
+    pub ret: CodePtr,                  // 80
+    pub method_ret: CodePtr,           // 81
+    pub block_break: CodePtr,          // 82
+    pub raise_err: CodePtr,            // 83
+    pub retry: CodePtr,                // 84
+    pub ensure_end: CodePtr,           // 85
+    pub concat_regexp: CodePtr,        // 86
+    pub redo: CodePtr,                 // 87
+    pub defined_cvar: CodePtr,         // 88
+    pub pos: CodePtr,                  // 121
+    pub neg: CodePtr,                  // 122
+    pub bitnot: CodePtr,               // 123
+    pub not: CodePtr,                  // 124
+    pub index: CodePtr,                // 132
+    pub index_assign: CodePtr,         // 133
+    pub eq: CodePtr,                   // 140, 150
+    pub ne: CodePtr,                   // 141, 151
+    pub lt: CodePtr,                   // 142, 152
+    pub le: CodePtr,                   // 143, 153
+    pub gt: CodePtr,                   // 144, 154
+    pub ge: CodePtr,                   // 145, 155
+    pub teq: CodePtr,                  // 146
     /// TEq with case/when's funcall semantics (opcode 156 only —
     /// the optimizable TEq that case/when emits).
     pub teq_case: CodePtr,
     /// TEq for rescue-clause matching (opcode 157): validates that
     /// the clause is a Class/Module, then dispatches like `teq_case`.
     pub teq_rescue: CodePtr,
-    pub load_dvar: CodePtr,           // 148
-    pub store_dvar: CodePtr,          // 149
-    pub add: CodePtr,                 // 160
-    pub sub: CodePtr,                 // 161
-    pub mul: CodePtr,                 // 162
-    pub div: CodePtr,                 // 163
-    pub bitor: CodePtr,               // 164
-    pub bitand: CodePtr,              // 165
-    pub bitxor: CodePtr,              // 166
-    pub rem: CodePtr,                 // 167
-    pub pow: CodePtr,                 // 168
-    pub shl: CodePtr,                 // 169
-    pub shr: CodePtr,                 // 170
-    pub init: CodePtr,                // 172
-    pub expand_array: CodePtr,        // 173
-    pub undef_method: CodePtr,        // 174
-    pub alias_method: CodePtr,        // 175
-    pub hash: CodePtr,                // 176
-    pub to_a: CodePtr,                // 177
-    pub mov: CodePtr,                 // 178
-    pub range_incl: CodePtr,          // 179
-    pub range_excl: CodePtr,          // 180
-    pub concat: CodePtr,              // 181
+    pub load_dvar: CodePtr,    // 148
+    pub store_dvar: CodePtr,   // 149
+    pub add: CodePtr,          // 160
+    pub sub: CodePtr,          // 161
+    pub mul: CodePtr,          // 162
+    pub div: CodePtr,          // 163
+    pub bitor: CodePtr,        // 164
+    pub bitand: CodePtr,       // 165
+    pub bitxor: CodePtr,       // 166
+    pub rem: CodePtr,          // 167
+    pub pow: CodePtr,          // 168
+    pub shl: CodePtr,          // 169
+    pub shr: CodePtr,          // 170
+    pub init: CodePtr,         // 172
+    pub expand_array: CodePtr, // 173
+    pub undef_method: CodePtr, // 174
+    pub alias_method: CodePtr, // 175
+    pub hash: CodePtr,         // 176
+    pub to_a: CodePtr,         // 177
+    pub mov: CodePtr,          // 178
+    pub range_incl: CodePtr,   // 179
+    pub range_excl: CodePtr,   // 180
+    pub concat: CodePtr,       // 181
 }
 
 impl Drop for Codegen {
@@ -1136,8 +1136,7 @@ impl Codegen {
     }
 
     pub(crate) fn signal_handler_for(&mut self, signo: i32) -> CodePtr {
-        self.jit
-            .signal_handler_for(self.alloc_flag.clone(), signo)
+        self.jit.signal_handler_for(self.alloc_flag.clone(), signo)
     }
 
     /// `sigaction(2)` `signo` to `handler` with `flags`. Returns true on
@@ -1448,7 +1447,7 @@ extern "C" fn get_instance_var_with_cache(
     cache: &mut InstanceVarCache,
 ) -> Value {
     let class_id = base.class();
-    let rval = match base.try_rvalue_mut() {
+    let rval = match base.try_rvalue() {
         Some(rval) => rval,
         None => return Value::nil(),
     };
@@ -1469,17 +1468,13 @@ extern "C" fn set_instance_var_with_cache(
     cache: &mut InstanceVarCache,
 ) -> Option<Value> {
     let class_id = base.class();
-    let rval = match base.try_rvalue_mut() {
-        Some(rval) => rval,
-        None => {
-            vm.err_cant_modify_frozen(&globals.store, base);
+    let rval = match base.try_rvalue_mut_or_frozen(&globals.store) {
+        Ok(rval) => rval,
+        Err(err) => {
+            vm.set_error(err);
             return None;
         }
     };
-    if rval.is_frozen() {
-        vm.err_cant_modify_frozen(&globals.store, base);
-        return None;
-    }
     if class_id == cache.class_id {
         rval.set_ivar_by_ivarid(cache.ivar_id, val);
         // Return the assigned value: an `attr_writer`-generated `name=`

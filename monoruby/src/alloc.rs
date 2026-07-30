@@ -139,8 +139,7 @@ mod malloc_limit_tests {
 /// Set for the duration of the hard-limit crash report, so the report's
 /// own allocations (eprintln formatting, backtrace capture) bypass the
 /// cap instead of re-tripping it and aborting mid-report.
-static MALLOC_ABORTING: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static MALLOC_ABORTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cold]
 #[coverage(off)] // crash handler: aborts the process, uncoverable in-test
@@ -191,17 +190,17 @@ pub(crate) fn request_gc(force_major: bool) {
     if force_major {
         GC_FORCE_MAJOR.store(true, Ordering::Relaxed);
     }
-    let addr = MALLOC_GC_FLAG_ADDR.load(Ordering::Relaxed);
-    if addr == 0 {
-        return;
-    }
-    nudge_flag(addr);
+    nudge_flag();
 }
 
 /// Lift the poll flag into its `>= 8` trigger band without disturbing the
 /// preempt bit or a value already in the band. Atomic because the preempt
 /// timer ORs its bit into the same word from another OS thread.
-fn nudge_flag(addr: usize) {
+fn nudge_flag() {
+    let addr = MALLOC_GC_FLAG_ADDR.load(Ordering::Relaxed);
+    if addr == 0 {
+        return;
+    }
     // SAFETY: `addr` is the registered JIT alloc-flag location, valid for
     // the VM thread's lifetime.
     let flag = unsafe { &*(addr as *const std::sync::atomic::AtomicU32) };
@@ -233,11 +232,6 @@ fn request_gc_if_malloc_over(total: usize) {
     if !GC_ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    let addr = MALLOC_GC_FLAG_ADDR.load(Ordering::Relaxed);
-    if addr == 0 {
-        // VM not initialised yet (e.g. early runtime / lazy statics).
-        return;
-    }
     // The VM/JIT GC poll fires when this `u32` is `>= 8`: the GC-arena path
     // bumps it `+= 1` per nearly-full page (so ~8 pages of `RValue`s trips
     // it), and the signal handler adds 10. To actually request a GC we must
@@ -249,7 +243,7 @@ fn request_gc_if_malloc_over(total: usize) {
     // while we sit over threshold. Racing the async signal handler is
     // harmless: a signal's delivery rides the separate `pending_signals`
     // bitmap, so the poll still fires and `execute_gc` still drains it.
-    nudge_flag(addr);
+    nudge_flag();
 }
 
 /// Register the VM allocation-flag address with the malloc-trigger path.
@@ -1088,8 +1082,7 @@ impl<T: GCBox> Allocator<T> {
         // trigger relative to this baseline: major again once the old gen
         // has grown by `OLD_GROWTH_FACTOR` (floored).
         if kind == GcKind::Major {
-            self.old_major_threshold =
-                (self.old_count * OLD_GROWTH_FACTOR).max(OLD_OBJECT_FLOOR);
+            self.old_major_threshold = (self.old_count * OLD_GROWTH_FACTOR).max(OLD_OBJECT_FLOOR);
         }
         // The incrementally maintained `old_count` must equal the actual
         // number of old cells (popcount of `old_bits`).
@@ -1158,7 +1151,11 @@ impl<T: GCBox> Allocator<T> {
             eprintln!(
                 "[GC-TRACK] mark hit at GC #{} ({}):\n{}",
                 self.total_gc_counter,
-                if self.current_kind == 0 { "Minor" } else { "Major" },
+                if self.current_kind == 0 {
+                    "Minor"
+                } else {
+                    "Major"
+                },
                 std::backtrace::Backtrace::force_capture()
             );
         }
@@ -1259,16 +1256,13 @@ impl<T: GCBox> Allocator<T> {
                 // SAFETY: forensics-only raw read of an initialized heap
                 // cell (free-list cells are initialized too — their header
                 // holds the next-pointer).
-                let hit = (0..words)
-                    .any(|w| unsafe { (cell as *const usize).add(w).read() } == addr);
+                let hit =
+                    (0..words).any(|w| unsafe { (cell as *const usize).add(w).read() } == addr);
                 if hit {
                     let bit = 1u64 << (index % 64);
                     let marked = page.mark_bits[index / 64] & bit != 0;
                     let old = page.old_bits[index / 64] & bit != 0;
-                    let remembered = self
-                        .remembered
-                        .iter()
-                        .any(|r| r.as_ptr() as usize == cell);
+                    let remembered = self.remembered.iter().any(|r| r.as_ptr() as usize == cell);
                     out.push((cell, marked, old, remembered));
                 }
             }
@@ -1276,10 +1270,7 @@ impl<T: GCBox> Allocator<T> {
         for page in &self.pages {
             scan_page(unsafe { page.as_ref() }, DATA_LEN);
         }
-        scan_page(
-            unsafe { self.current_page.as_ref() },
-            self.used_in_current,
-        );
+        scan_page(unsafe { self.current_page.as_ref() }, self.used_in_current);
         out
     }
 }

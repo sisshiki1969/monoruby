@@ -279,7 +279,7 @@ fn no_method_error_with_args(globals: &mut Globals, err: MonorubyErr, call_args:
     if let Some(receiver) = receiver {
         let _ = globals
             .store
-            .set_ivar(exc, IdentId::get_id("/receiver"), Value::from_u64(receiver));
+            .set_ivar(exc, IdentId::get_id("/receiver"), receiver);
     }
     let _ = globals
         .store

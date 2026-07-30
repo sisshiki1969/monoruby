@@ -14,15 +14,14 @@ pub use arithmetic_sequence::{
 };
 pub use array::*;
 pub use binding::*;
-pub use io_buffer::*;
 pub use complex::ComplexInner;
 pub use enumerator::*;
 pub use exception::ExceptionInner;
 pub use fiber::*;
-pub use thread::*;
 pub use hash::*;
-pub use io::{fd_is_owned, IoInner, NonblockRead, NonblockWrite};
 pub(crate) use io::NonblockGuard;
+pub use io::{IoInner, NonblockRead, NonblockWrite, fd_is_owned};
+pub use io_buffer::*;
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
 pub use method::*;
@@ -33,23 +32,25 @@ pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
 pub use string::{
-    map_bytes_to_utf8, CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET,
+    CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET, map_bytes_to_utf8,
 };
-pub(crate) use string::{check_string_not_modified, string_snapshot, string_substring, STRING_SHARED_TAG};
+pub(crate) use string::{
+    STRING_SHARED_TAG, check_string_not_modified, string_snapshot, string_substring,
+};
 pub(crate) use string::{eucjp_char_width, named_byte_const_name, sjis_char_width};
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
+pub use thread::*;
 
 mod arithmetic_sequence;
-mod io_buffer;
 mod array;
 mod binding;
 mod complex;
 mod enumerator;
 mod exception;
 mod fiber;
-mod thread;
 mod hash;
 mod io;
+mod io_buffer;
 mod ivar_table;
 mod match_data;
 mod method;
@@ -60,6 +61,7 @@ mod rational;
 mod regexp;
 mod string;
 mod struct_inner;
+mod thread;
 
 pub const OBJECT_INLINE_IVAR: usize = 6;
 /// Header flag bit 7: marks a chilled string as literal-born (see
@@ -91,8 +93,7 @@ pub const RVALUE_OFFSET_HEAP_LEN: usize = RVALUE_OFFSET_KIND + smallvec::OFFSET_
 /// `OBJECT_INLINE_IVAR` slots stay inside the cell: a layout change that
 /// grew `kind`'s prefix would silently write past the object, so pin it
 /// here rather than in one backend.
-const _: () =
-    assert!(RVALUE_OFFSET_KIND + OBJECT_INLINE_IVAR * 8 <= std::mem::size_of::<RValue>());
+const _: () = assert!(RVALUE_OFFSET_KIND + OBJECT_INLINE_IVAR * 8 <= std::mem::size_of::<RValue>());
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ObjTy(std::num::NonZeroU8);

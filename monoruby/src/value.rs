@@ -2163,6 +2163,24 @@ impl Value {
     }
 
     ///
+    /// Get a mutable reference to RValue from `self`, or a FrozenError if
+    /// `self` is frozen.
+    ///
+    /// Immediates and heap Numerics (Bignum, out-of-range Float, Complex,
+    /// Rational) count as frozen — see `Value::is_frozen`. The returned
+    /// reference borrows `self`, not `store`, so callers may re-borrow the
+    /// store mutably while holding the RValue.
+    ///
+    pub(crate) fn try_rvalue_mut_or_frozen(&mut self, store: &Store) -> Result<&mut RValue> {
+        if self.is_frozen() {
+            return Err(MonorubyErr::cant_modify_frozen(store, *self));
+        }
+        // `is_frozen()` is true for every packed value, so `self` is a heap
+        // RValue here and `try_rvalue_mut()` always yields `Some`.
+        Ok(self.try_rvalue_mut().unwrap())
+    }
+
+    ///
     /// Get a reference to RValue from `self`.
     ///
     /// ### Panics

@@ -1332,7 +1332,7 @@ impl Executor {
                 if let Some(receiver) = receiver {
                     globals
                         .store
-                        .set_ivar(v, IdentId::get_id("/receiver"), Value::from_u64(receiver))
+                        .set_ivar(v, IdentId::get_id("/receiver"), receiver)
                         .unwrap();
                 }
                 v
@@ -1350,7 +1350,7 @@ impl Executor {
                 if let Some(receiver) = receiver {
                     globals
                         .store
-                        .set_ivar(v, IdentId::get_id("/receiver"), Value::from_u64(receiver))
+                        .set_ivar(v, IdentId::get_id("/receiver"), receiver)
                         .unwrap();
                 }
                 v
@@ -1361,7 +1361,7 @@ impl Executor {
                 if let Some((val, reason)) = payload {
                     globals
                         .store
-                        .set_ivar(v, IdentId::get_id("/exit_value"), Value::from_u64(val))
+                        .set_ivar(v, IdentId::get_id("/exit_value"), val)
                         .unwrap();
                     globals
                         .store
@@ -1380,7 +1380,7 @@ impl Executor {
                 if let Some((val, _)) = payload {
                     globals
                         .store
-                        .set_ivar(v, IdentId::get_id("/result"), Value::from_u64(val))
+                        .set_ivar(v, IdentId::get_id("/result"), val)
                         .unwrap();
                 }
                 v
@@ -1408,7 +1408,7 @@ impl Executor {
                 let v = Value::new_exception(err);
                 globals
                     .store
-                    .set_ivar(v, IdentId::get_id("/receiver"), Value::from_u64(receiver))
+                    .set_ivar(v, IdentId::get_id("/receiver"), receiver)
                     .unwrap();
                 v
             }
@@ -1417,11 +1417,11 @@ impl Executor {
                 let v = Value::new_exception(err);
                 globals
                     .store
-                    .set_ivar(v, IdentId::get_id("/receiver"), Value::from_u64(receiver))
+                    .set_ivar(v, IdentId::get_id("/receiver"), receiver)
                     .unwrap();
                 globals
                     .store
-                    .set_ivar(v, IdentId::get_id("/key"), Value::from_u64(key))
+                    .set_ivar(v, IdentId::get_id("/key"), key)
                     .unwrap();
                 v
             }
@@ -1433,11 +1433,7 @@ impl Executor {
                 if let Some((val, name)) = payload {
                     globals
                         .store
-                        .set_ivar(
-                            v,
-                            IdentId::get_id(&format!("/{name}")),
-                            Value::from_u64(val),
-                        )
+                        .set_ivar(v, IdentId::get_id(&format!("/{name}")), val)
                         .unwrap();
                 }
                 v
@@ -1486,13 +1482,6 @@ impl Executor {
 
     pub(crate) fn err_divide_by_zero(&mut self) {
         self.set_error(MonorubyErr::divide_by_zero());
-    }
-
-    ///
-    /// Set FrozenError with message "can't modify frozen Integer: 5".
-    ///
-    pub(crate) fn err_cant_modify_frozen(&mut self, store: &Store, val: Value) {
-        self.set_error(MonorubyErr::cant_modify_frozen(store, val));
     }
 
     pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef, fid: FuncId) {

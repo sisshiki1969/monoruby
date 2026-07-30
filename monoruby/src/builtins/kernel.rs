@@ -3568,7 +3568,7 @@ fn throw_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         {
             let mut err = MonorubyErr::new(MonorubyErrKind::Other(klass.as_class_id()), msg);
             // Surfaced as `UncaughtThrowError#tag`.
-            err.payload = Some((tag.id(), "tag"));
+            err.payload = Some((tag, "tag"));
             return Err(err);
         }
         return Err(MonorubyErr::argumenterr(msg));
@@ -5090,12 +5090,7 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
-    match globals.store.remove_ivar(lfp.self_val(), id) {
-        Some(val) => Ok(val),
-        None => Err(MonorubyErr::nameerr(format!(
-            "instance variable {id} not defined"
-        ))),
-    }
+    globals.store.remove_ivar(lfp.self_val(), id)
 }
 
 #[cfg(test)]
@@ -6214,6 +6209,21 @@ mod tests {
             r#"
             obj = Object.new
             obj.remove_instance_variable(:@nonexistent)
+            "#,
+        );
+        // A frozen receiver raises FrozenError before the ivar-existence check,
+        // whether or not the ivar is defined (matches CRuby).
+        run_test2(
+            r#"
+            class Foo
+              def initialize
+                @a = 1
+              end
+            end
+            f = Foo.new.freeze
+            defined = (begin; f.remove_instance_variable(:@a); rescue => e; [e.class, f.instance_variable_defined?(:@a)]; end)
+            missing = (begin; f.remove_instance_variable(:@z); rescue => e; e.class; end)
+            [defined, missing]
             "#,
         );
     }
