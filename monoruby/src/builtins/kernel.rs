@@ -2771,23 +2771,200 @@ fn rational_from_value(vm: &mut Executor, globals: &mut Globals, v: Value) -> Re
             }
             Ok(Value::rational_from_inner(RationalInner::from_f64(f)))
         }
+        // Strings go through the strict parser (`Rational("abc")` is an
+        // ArgumentError, not `String#to_r`'s permissive 0).
+        RV::String(b) => Ok(Value::rational_from_inner(rational_from_str(&b.to_str()?)?)),
         _ => {
-            // CRuby nurat_convert: try #to_r, then #to_int.
+            // CRuby nurat_convert: #to_r when present — a non-Rational
+            // result is an immediate TypeError, never a fallthrough —
+            // and #to_int only for objects with no #to_r at all. An
+            // exception raised inside #to_int surfaces as the TypeError.
             if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_r")) {
                 let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
                 if result.try_rational().is_some() {
                     return Ok(result);
                 }
+                return Err(bad_to_r_error(globals, v, result));
             }
             if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_int")) {
-                let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
-                if let Some(i) = result.try_fixnum() {
+                if let Ok(result) = vm.invoke_func_inner(globals, func_id, v, &[], None, None)
+                    && let Some(i) = result.try_fixnum()
+                {
                     return Ok(Value::rational_from_inner(RationalInner::new(i, 1)));
                 }
+                return Err(rational_type_error(globals, v));
             }
             Err(rational_type_error(globals, v))
         }
     }
+}
+
+/// CRuby's rational-literal parser, shared by `Rational(String)`
+/// (strict) and `String#to_r` (permissive): optional whitespace,
+/// `[+-]? (digits[_digits]* (.digits?)? | .digits) ([eE][+-]?digits)?`,
+/// optionally `/` and an unsigned number of the same form. In strict
+/// mode any trailing garbage rejects the whole string (the caller
+/// raises ArgumentError); in permissive mode the longest valid prefix
+/// wins, backtracking over a half-consumed `/`, `.` or exponent
+/// (`"1/x".to_r == 1r`). Returns the unnormalized pair; a zero
+/// denominator (`"1/0"`) is the caller's ZeroDivisionError, and `None`
+/// means no number at all (permissive callers use 0).
+pub(crate) fn parse_rational_str(s: &str, strict: bool) -> Option<(num::BigInt, num::BigInt)> {
+    use num::BigInt;
+    struct P<'a> {
+        b: &'a [u8],
+        i: usize,
+    }
+    impl P<'_> {
+        fn peek(&self) -> Option<u8> {
+            self.b.get(self.i).copied()
+        }
+        fn peek2(&self) -> Option<u8> {
+            self.b.get(self.i + 1).copied()
+        }
+    }
+
+    fn digits(p: &mut P) -> Option<String> {
+        let mut out = String::new();
+        loop {
+            match p.peek() {
+                Some(c) if c.is_ascii_digit() => {
+                    out.push(c as char);
+                    p.i += 1;
+                }
+                // `_` only between digits (lookahead keeps `"1_x"`
+                // parseable as `1` + garbage).
+                Some(b'_')
+                    if !out.is_empty() && p.peek2().is_some_and(|c| c.is_ascii_digit()) =>
+                {
+                    p.i += 1;
+                }
+                _ => break,
+            }
+        }
+        if out.is_empty() { None } else { Some(out) }
+    }
+
+    fn number(p: &mut P, allow_sign: bool) -> Option<(BigInt, BigInt)> {
+        let start = p.i;
+        let neg = match p.peek() {
+            Some(b'+') if allow_sign => {
+                p.i += 1;
+                false
+            }
+            Some(b'-') if allow_sign => {
+                p.i += 1;
+                true
+            }
+            _ => false,
+        };
+        let int_part = digits(p);
+        let mut num: BigInt = match &int_part {
+            Some(d) => d.parse().ok()?,
+            None => BigInt::from(0),
+        };
+        let mut den = BigInt::from(1);
+        let mut have = int_part.is_some();
+        if p.peek() == Some(b'.') {
+            let dot = p.i;
+            p.i += 1;
+            match digits(p) {
+                Some(frac) => {
+                    let scale = BigInt::from(10).pow(frac.len() as u32);
+                    num = num * &scale + frac.parse::<BigInt>().ok()?;
+                    den *= scale;
+                    have = true;
+                }
+                // A trailing dot after digits (`"3."`) is allowed; a
+                // lone dot is not a number.
+                None if int_part.is_some() => {}
+                None => p.i = dot,
+            }
+        }
+        if !have {
+            p.i = start;
+            return None;
+        }
+        if matches!(p.peek(), Some(b'e') | Some(b'E')) {
+            let epos = p.i;
+            p.i += 1;
+            let eneg = match p.peek() {
+                Some(b'+') => {
+                    p.i += 1;
+                    false
+                }
+                Some(b'-') => {
+                    p.i += 1;
+                    true
+                }
+                _ => false,
+            };
+            match digits(&mut *p).and_then(|d| d.parse::<u32>().ok()) {
+                Some(e) => {
+                    let pw = BigInt::from(10).pow(e);
+                    if eneg {
+                        den *= pw;
+                    } else {
+                        num *= pw;
+                    }
+                }
+                // `"1e"` / `"1ex"`: the exponent is garbage.
+                None => p.i = epos,
+            }
+        }
+        if neg {
+            num = -num;
+        }
+        Some((num, den))
+    }
+
+    let s = s.trim();
+    let mut p = P { b: s.as_bytes(), i: 0 };
+    let (mut num, mut den) = number(&mut p, true)?;
+    if p.peek() == Some(b'/') {
+        let slash = p.i;
+        p.i += 1;
+        match number(&mut p, false) {
+            Some((dn, dd)) => {
+                num *= dd;
+                den *= dn;
+            }
+            // `"1/x"`: the slash itself is garbage.
+            None => p.i = slash,
+        }
+    }
+    if strict && p.i != p.b.len() {
+        return None;
+    }
+    Some((num, den))
+}
+
+/// Convert a strictly-parsed `Rational(String)` into a Value, raising
+/// CRuby's ArgumentError for garbage and ZeroDivisionError for a zero
+/// denominator.
+fn rational_from_str(s: &str) -> Result<RationalInner> {
+    use num::Zero;
+    match parse_rational_str(s, true) {
+        Some((num, den)) => {
+            if den.is_zero() {
+                return Err(MonorubyErr::divide_by_zero());
+            }
+            Ok(RationalInner::new(num, den))
+        }
+        None => Err(MonorubyErr::argumenterr(format!(
+            "invalid value for convert(): {s:?}"
+        ))),
+    }
+}
+
+/// The TypeError for a `#to_r` that returned a non-Rational
+/// (`can't convert X into Rational (X#to_r gives Y)`).
+fn bad_to_r_error(globals: &Globals, v: Value, result: Value) -> MonorubyErr {
+    let class = v.get_real_class_name(&globals.store);
+    MonorubyErr::typeerr(format!(
+        "can't convert {class} to Rational ({class}#to_r gives {})",
+        result.get_real_class_name(&globals.store)
+    ))
 }
 
 /// The `can't convert ... into Rational` TypeError: nil/true/false are
@@ -2834,20 +3011,28 @@ fn val_to_rational(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result
             }
             Ok(RationalInner::from_f64(f))
         }
+        // Strings go through the strict parser (`Rational("abc", 2)` is
+        // an ArgumentError, not `String#to_r`'s permissive 0).
+        RV::String(b) => rational_from_str(&b.to_str()?),
         _ => {
-            // CRuby nurat_convert: try #to_r, then #to_int — this is
-            // what lets Strings scale (`Rational("1/2", "2/3")`).
+            // CRuby nurat_convert: #to_r when present — a non-Rational
+            // result is an immediate TypeError, never a fallthrough —
+            // and #to_int only for objects with no #to_r at all. An
+            // exception raised inside #to_int surfaces as the TypeError.
             if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_r")) {
                 let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
                 if let Some(r) = result.try_rational() {
                     return Ok(r.clone());
                 }
+                return Err(bad_to_r_error(globals, v, result));
             }
             if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_int")) {
-                let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
-                if let Some(i) = result.try_fixnum() {
+                if let Ok(result) = vm.invoke_func_inner(globals, func_id, v, &[], None, None)
+                    && let Some(i) = result.try_fixnum()
+                {
                     return Ok(RationalInner::new(i, 1));
                 }
+                return Err(rational_type_error(globals, v));
             }
             Err(rational_type_error(globals, v))
         }

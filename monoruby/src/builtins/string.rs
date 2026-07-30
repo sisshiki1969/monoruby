@@ -5063,24 +5063,21 @@ fn parse_real(s: f64) -> Real {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/to_r.html]
 #[monoruby_builtin]
-fn to_r(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn to_r(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use num::Zero;
     let self_ = lfp.self_val();
     let s = self_.expect_str(globals)?;
-    let (num, den) = parse_rational(s);
-    // Call Kernel#Rational to create the Rational object
-    let rational_id = IdentId::get_id("Rational");
-    let main_obj = globals.main_object;
-    let func_id = globals
-        .check_method(main_obj, rational_id)
-        .ok_or_else(|| MonorubyErr::runtimeerr("Rational method not found"))?;
-    vm.invoke_func_inner(
-        globals,
-        func_id,
-        main_obj,
-        &[Value::integer(num), Value::integer(den)],
-        None,
-        None,
-    )
+    // The shared rational-literal parser in permissive mode: the
+    // longest valid prefix wins, garbage-only strings yield 0.
+    match crate::builtins::kernel::parse_rational_str(s, false) {
+        Some((num, den)) => {
+            if den.is_zero() {
+                return Err(MonorubyErr::divide_by_zero());
+            }
+            Ok(Value::rational_from_inner(RationalInner::new(num, den)))
+        }
+        None => Ok(Value::rational_from_inner(RationalInner::new(0, 1))),
+    }
 }
 
 /// Parse a string as a complex number, returning (real, imaginary) as f64.
@@ -5151,86 +5148,6 @@ fn parse_f64_simple(s: &str) -> f64 {
         return 0.0;
     }
     s.parse::<f64>().unwrap_or(0.0)
-}
-
-/// Parse a string as a rational number, returning (numerator, denominator).
-fn parse_rational(s: &str) -> (i64, i64) {
-    let s = s.trim();
-    if s.is_empty() {
-        return (0, 1);
-    }
-
-    // Try "a/b" format
-    if let Some(pos) = s.find('/') {
-        let num_str = &s[..pos];
-        let den_str = &s[pos + 1..];
-        let num = parse_rational_int(num_str);
-        let den = parse_rational_int(den_str);
-        if den == 0 {
-            return (0, 1);
-        }
-        return (num, den);
-    }
-
-    // Try decimal format "0.5" -> 1/2
-    if let Some(pos) = s.find('.') {
-        let int_part = &s[..pos];
-        let frac_part = &s[pos + 1..];
-        // Count decimal digits (stop at first non-digit)
-        let frac_digits: String = frac_part
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
-        let dec_places = frac_digits.len();
-        if dec_places == 0 {
-            let num = parse_rational_int(int_part);
-            return (num, 1);
-        }
-        let int_val = parse_rational_int(int_part);
-        let frac_val: i64 = frac_digits.parse().unwrap_or(0);
-        let den = 10i64.pow(dec_places as u32);
-        let negative = s.starts_with('-');
-        let num = if negative {
-            int_val * den - frac_val
-        } else {
-            int_val * den + frac_val
-        };
-        // Simplify
-        let g = gcd_u64(num.unsigned_abs(), den as u64) as i64;
-        return (num / g, den / g);
-    }
-
-    // Plain integer
-    let num = parse_rational_int(s);
-    (num, 1)
-}
-
-fn parse_rational_int(s: &str) -> i64 {
-    let s = s.trim();
-    if s.is_empty() {
-        return 0;
-    }
-    // Parse leading integer, stop at first non-digit (after optional sign)
-    let mut chars = s.chars().peekable();
-    let negative = if chars.peek() == Some(&'-') {
-        chars.next();
-        true
-    } else if chars.peek() == Some(&'+') {
-        chars.next();
-        false
-    } else {
-        false
-    };
-    let digits: String = chars.take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return 0;
-    }
-    let val: i64 = digits.parse().unwrap_or(0);
-    if negative { -val } else { val }
-}
-
-fn gcd_u64(a: u64, b: u64) -> u64 {
-    if b == 0 { a } else { gcd_u64(b, a % b) }
 }
 
 ///
