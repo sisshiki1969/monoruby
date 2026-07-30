@@ -192,15 +192,35 @@ module Kernel
   end
 
   def String(arg)
-    return arg if arg.is_a?(::String)
-    if arg.respond_to?(:to_str)
+    # A BasicObject lacks #is_a?/#respond_to? entirely; every probe on
+    # `arg` is guarded so such objects fall through to the TypeError.
+    return arg if (arg.is_a?(::String) rescue false)
+    if (arg.respond_to?(:to_str) rescue false)
       result = arg.to_str
       return result if result.is_a?(::String)
       raise TypeError, "can't convert #{arg.class} to String (#{arg.class}#to_str gives #{result.class})"
     end
-    result = arg.to_s
+    # CRuby's conversion honours a #respond_to? override and reports
+    # TypeError (not NoMethodError) when #to_s is missing entirely
+    # (e.g. on a BasicObject, where even #respond_to? is absent).
+    klass = begin
+      arg.class
+    rescue ::NoMethodError
+      ::Object
+    end
+    responds = begin
+      arg.respond_to?(:to_s)
+    rescue ::NoMethodError
+      false
+    end
+    raise TypeError, "can't convert #{klass} into String" unless responds
+    result = begin
+      arg.to_s
+    rescue ::NoMethodError
+      raise TypeError, "can't convert #{klass} into String"
+    end
     unless result.is_a?(::String)
-      raise TypeError, "can't convert #{arg.class} to String (#{arg.class}#to_s gives #{result.class})"
+      raise TypeError, "can't convert #{klass} to String (#{klass}#to_s gives #{result.class})"
     end
     result
   end
@@ -275,6 +295,28 @@ module Kernel
   end
 end
 
+# Fired by the runtime for `trace_var` String commands. `eval` reads
+# its caller's bytecode context, so it must be entered from a real Ruby
+# frame — the raw gvar-store runtime helper has no call-site pc to hang
+# the eval on.
+def __gvar_trace_eval(cmd)
+  eval(cmd)
+end
+
+# `caller` shares `caller_locations`' argument handling (Array#[] edge
+# semantics, Range forms, ArgumentError on negatives, #to_int coercion)
+# by going through the same `Thread::Backtrace.__slice` helper over the
+# structured frames' pre-rendered strings. Defined as a module function
+# so `Kernel.caller` gets the same semantics.
+module Kernel
+  def caller(start = 1, length = nil)
+    frames = Kernel.__caller_frames(1)
+    strs = frames.map { |f| f[0] }
+    Thread::Backtrace.__slice(strs, length.nil? ? [start] : [start, length])
+  end
+  module_function :caller
+end
+
 # `caller_locations` builds `Thread::Backtrace::Location`s from the
 # structured native frames (`Kernel.__caller_frames`), which carry the
 # load-time canonical path alongside the display path/label — string
@@ -285,6 +327,42 @@ def caller_locations(start = 1, length = nil)
   # `Thread::Backtrace.__slice` implements the shared (start), (start,
   # length) and (range) argument forms with Array#[] edge semantics.
   Thread::Backtrace.__slice(locs, length.nil? ? [start] : [start, length])
+end
+
+module Kernel
+  module_function
+
+  # `Kernel#select` is `IO.select` (CRuby defines it on Kernel too).
+  def select(*args)
+    IO.select(*args)
+  end
+
+  # CRuby defines Kernel#syscall on platforms that support it and makes
+  # it raise NotImplementedError elsewhere; monoruby never implements
+  # raw syscalls, but the method must exist (and be a private instance
+  # method / public module function).
+  def syscall(*)
+    raise ::NotImplementedError, "syscall() function is unimplemented on this machine"
+  end
+
+  # Console-input conveniences over ARGF (like Kernel#gets).
+  def readline(*args)
+    ARGF.readline(*args)
+  end
+
+  def readlines(*args)
+    ARGF.readlines(*args)
+  end
+end
+
+module Kernel
+  # `fail` is a true alias of `raise`: ruby/spec compares the
+  # UnboundMethod/Method objects for equality.
+  alias fail raise
+  private :fail
+  class << self
+    alias fail raise
+  end
 end
 
 module Kernel

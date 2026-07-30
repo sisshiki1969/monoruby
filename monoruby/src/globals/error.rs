@@ -1315,7 +1315,7 @@ pub enum MonorubyErrKind {
     Key(Option<(Value, Value)>),
     Fiber,
     StopIteration,
-    SystemExit(u8),
+    SystemExit(i64),
     Other(ClassId),
     MethodReturn(Value, Lfp),
     /// `break` escaping a block: carries the break value, the block's
