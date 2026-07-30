@@ -21,8 +21,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         inline_gen2!(integer_succ),
         0,
     );
-    //globals.define_builtin_func(INTEGER_CLASS, "times", times, 0);
-    //globals.define_builtin_func_with(INTEGER_CLASS, "step", step, 1, 2, false);
     globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
     globals.define_builtin_func(INTEGER_CLASS, "downto", downto, 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, inline_gen2!(integer_tof), 0);
@@ -84,25 +82,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     );
 }
 
-/*///
-/// ### Integer#times
-///
-/// - times {|n| ... } -> self
-/// - [TODO] times -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/times.html]
-#[monoruby_builtin]
-fn times(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let bh = lfp.expect_block()?;
-    match lfp.self_val().unpack() {
-        RV::Fixnum(i) => vm.invoke_block_iter1(globals, bh, (0..i).map(Value::integer))?,
-        RV::BigInt(_) => unimplemented!(),
-        _ => unreachable!(),
-    };
-
-    Ok(lfp.self_val())
-}*/
-
 struct PosStep {
     cur: i64,
     limit: i64,
@@ -140,45 +119,6 @@ impl Iterator for NegStep {
         }
     }
 }
-
-/*///
-/// ### Integer#step
-///
-/// - step(limit, step = 1) {|n| ... } -> self
-/// - step(limit, step = 1) -> Enumerator
-/// - [NOT SUPPORTED] step(limit, step = 1) -> Enumerator::ArithmeticSequence
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/step.html]
-#[monoruby_builtin]
-fn step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let bh = match lfp.block() {
-        None => {
-            let id = IdentId::get_id("step");
-            return vm.generate_enumerator(id, lfp.self_val(), lfp.iter().collect());
-        }
-        Some(block) => block,
-    };
-    let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = lfp.arg(0).coerce_to_int(vm, globals)?;
-    let step = if let Some(arg1) = lfp.try_arg(1) {
-        let step = arg1.coerce_to_int(vm, globals)?;
-        if step == 0 {
-            return Err(MonorubyErr::argumenterr("Step can not be 0."));
-        }
-        step
-    } else {
-        1
-    };
-
-    if step > 0 {
-        let iter = PosStep { cur, step, limit };
-        vm.invoke_block_iter1(globals, bh, iter)?;
-    } else {
-        let iter = NegStep { cur, step, limit };
-        vm.invoke_block_iter1(globals, bh, iter)?;
-    }
-    Ok(lfp.self_val())
-}*/
 
 ///
 /// ### Integer#upto
@@ -825,7 +765,8 @@ cmpop!(ge, gt, le, lt);
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3e=3e.html]
 #[monoruby_builtin]
 fn shr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0), false).ok_or_else(|| vm.take_error())
+    super::op::shr_values(vm, globals, lfp.self_val(), lfp.arg(0), false)
+        .ok_or_else(|| vm.take_error())
 }
 
 /// Constant-fold `lhs >> rhs` for two i63 fixnums.
@@ -968,7 +909,8 @@ fn shl_overflow_zero(r#gen: &mut Codegen, deopt: &DestLabel) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=3c=3c.html]
 #[monoruby_builtin]
 fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0), false).ok_or_else(|| vm.take_error())
+    super::op::shl_values(vm, globals, lfp.self_val(), lfp.arg(0), false)
+        .ok_or_else(|| vm.take_error())
 }
 
 fn integer_shl(
@@ -1042,7 +984,8 @@ fn integer_shl(
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=25.html]
 #[monoruby_builtin]
 fn int_rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0), false).ok_or_else(|| vm.take_error())
+    super::op::rem_values(vm, globals, lfp.self_val(), lfp.arg(0), false)
+        .ok_or_else(|| vm.take_error())
 }
 
 fn integer_rem(
@@ -1153,7 +1096,8 @@ fn integer_rem_float_rhs(
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/=2a=2a.html]
 #[monoruby_builtin]
 fn int_pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    super::op::pow_values(vm, globals, lfp.self_val(), lfp.arg(0), false).ok_or_else(|| vm.take_error())
+    super::op::pow_values(vm, globals, lfp.self_val(), lfp.arg(0), false)
+        .ok_or_else(|| vm.take_error())
 }
 
 fn integer_pow(
@@ -1234,9 +1178,7 @@ fn integer_pow_float_rhs(
     let lhs_fpr = state.load_fpr_fixnum(ir, recv);
     let rhs_fpr = state.load_fpr(ir, args);
     let using_fpr = state.get_using_fpr(ir);
-    ir.inline(move |r#gen, _, _, base| {
-        r#gen.gen_int_pow_if(lhs_fpr, rhs_fpr, using_fpr, base)
-    });
+    ir.inline(move |r#gen, _, _, base| r#gen.gen_int_pow_if(lhs_fpr, rhs_fpr, using_fpr, base));
     state.def_reg2acc(ir, GP::Rax, dst);
     true
 }
@@ -1793,7 +1735,7 @@ fn int_round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         quot.clone()
     } else {
         // Exactly halfway
-        use super::float::RoundHalf;
+        use crate::value::RoundHalf;
         match half {
             Some(RoundHalf::Down) => quot.clone(),
             Some(RoundHalf::Even) => {
@@ -1971,7 +1913,7 @@ mod tests {
     #[test]
     fn integer_tof_jit_inline_aliased_dst() {
         run_test(
-r##"
+            r##"
         class V
           attr_reader :x
           def initialize(x); @x = x; end
@@ -1986,7 +1928,7 @@ r##"
         # Warm the JIT, then check.
         3000.times { chained(v); literal }
         [chained(v), literal]
-        "##
+        "##,
         );
     }
 
@@ -2363,10 +2305,7 @@ r##"
 
     #[test]
     fn integer_to_r() {
-        run_tests(&[
-            "3.respond_to?(:to_r)",
-            "3.respond_to?(:rationalize)",
-        ]);
+        run_tests(&["3.respond_to?(:to_r)", "3.respond_to?(:rationalize)"]);
     }
 
     #[test]
@@ -2402,11 +2341,7 @@ r##"
 
     #[test]
     fn pow_bignum_exponent() {
-        run_tests(&[
-            "1 ** (2**100)",
-            "(-1) ** (2**100)",
-            "(-1) ** (2**100 + 1)",
-        ]);
+        run_tests(&["1 ** (2**100)", "(-1) ** (2**100)", "(-1) ** (2**100 + 1)"]);
         run_test_error("2 ** (2**100)");
     }
 
@@ -2429,10 +2364,7 @@ r##"
 
     #[test]
     fn fdiv_fixnum() {
-        run_tests(&[
-            "100.fdiv(3)",
-            "10.fdiv(2)",
-        ]);
+        run_tests(&["100.fdiv(3)", "10.fdiv(2)"]);
     }
 
     #[test]
@@ -2442,10 +2374,7 @@ r##"
 
     #[test]
     fn div_coerce() {
-        run_tests(&[
-            "10 / 3.0",
-            "10 / 2.5",
-        ]);
+        run_tests(&["10 / 3.0", "10 / 2.5"]);
     }
 
     #[test]
@@ -2465,11 +2394,7 @@ r##"
 
     #[test]
     fn integer_dup() {
-        run_tests(&[
-            "42.dup",
-            "42.dup.equal?(42)",
-            "a = 2**100; a.dup.equal?(a)",
-        ]);
+        run_tests(&["42.dup", "42.dup.equal?(42)", "a = 2**100; a.dup.equal?(a)"]);
     }
 
     #[test]
@@ -2502,10 +2427,7 @@ r##"
 
     #[test]
     fn integer_round_float_ndigits() {
-        run_tests(&[
-            "42.round(1.5)",
-            "42.round(-1.5)",
-        ]);
+        run_tests(&["42.round(1.5)", "42.round(-1.5)"]);
     }
 
     #[test]
@@ -2540,10 +2462,7 @@ r##"
 
     #[test]
     fn integer_index_negative() {
-        run_tests(&[
-            "0b11010[-2, 3]",
-            "0b11010[1, 3]",
-        ]);
+        run_tests(&["0b11010[-2, 3]", "0b11010[1, 3]"]);
     }
 
     #[test]
@@ -2585,12 +2504,7 @@ r##"
 
     #[test]
     fn integer() {
-        run_tests(&[
-            "(-(2**64)).abs",
-            "(2**64).abs",
-            "(-42).abs",
-            "-(2**62)",
-        ]);
+        run_tests(&["(-(2**64)).abs", "(2**64).abs", "(-42).abs", "-(2**62)"]);
     }
 
     #[test]
@@ -2608,11 +2522,7 @@ r##"
 
     #[test]
     fn integer_ceildiv() {
-        run_tests(&[
-            "7.ceildiv(3)",
-            "(-7).ceildiv(3)",
-            "7.ceildiv(-3)",
-        ]);
+        run_tests(&["7.ceildiv(3)", "(-7).ceildiv(3)", "7.ceildiv(-3)"]);
         run_test_error("7.ceildiv(0)");
     }
 
@@ -2682,19 +2592,12 @@ r##"
 
     #[test]
     fn fdiv_large_bigint() {
-        run_tests(&[
-            "(10**200).fdiv(10**199)",
-            "(10**200).fdiv(3 * 10**199)",
-        ]);
+        run_tests(&["(10**200).fdiv(10**199)", "(10**200).fdiv(3 * 10**199)"]);
     }
 
     #[test]
     fn integer_sqrt_newton() {
-        run_tests(&[
-            "Integer.sqrt(0)",
-            "Integer.sqrt(1)",
-            "Integer.sqrt(100)",
-        ]);
+        run_tests(&["Integer.sqrt(0)", "Integer.sqrt(1)", "Integer.sqrt(100)"]);
         run_test_error("Integer.sqrt(-1)");
         run_test_error(r#"Integer.sqrt("foo")"#);
     }
@@ -3320,5 +3223,4 @@ r##"
             "#,
         );
     }
-
 }

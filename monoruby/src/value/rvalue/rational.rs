@@ -259,7 +259,11 @@ impl RationalInner {
 
     /// Rational#round(ndigits, half:)
     /// half: None => :up (default), Some("up"), Some("down"), Some("even")
-    pub fn rational_round(&self, ndigits: i64, half: Option<&str>) -> RationalFloorResult {
+    pub fn rational_round(
+        &self,
+        ndigits: i64,
+        half: Option<crate::value::RoundHalf>,
+    ) -> RationalFloorResult {
         if ndigits == 0 {
             if self.den.is_one() {
                 return RationalFloorResult::Integer(self.num.clone());
@@ -275,8 +279,8 @@ impl RationalInner {
             } else {
                 // Exactly half
                 match half {
-                    Some("down") => q,
-                    Some("even") => {
+                    Some(crate::value::RoundHalf::Down) => q,
+                    Some(crate::value::RoundHalf::Even) => {
                         if (&q % 2u32).is_zero() {
                             q
                         } else if self.num >= BigInt::ZERO {
@@ -324,8 +328,8 @@ impl RationalInner {
                 q * &d
             } else {
                 match half {
-                    Some("down") => q * &d,
-                    Some("even") => {
+                    Some(crate::value::RoundHalf::Down) => q * &d,
+                    Some(crate::value::RoundHalf::Even) => {
                         if (&q % 2u32).is_zero() {
                             q * &d
                         } else if i >= BigInt::ZERO {
@@ -408,15 +412,7 @@ impl RationalInner {
             match med.cmp(&lo) {
                 std::cmp::Ordering::Less => {
                     // med < lo: advance left bound
-                    // k = ceil((lo * qm - pm) / (p1 - lo * q1))
-                    let numer = Self::new(
-                        &lo.num * &qm * &lo.den.clone() - &pm * &lo.den * &lo.den,
-                        lo.den.clone() * &lo.den,
-                    );
-                    let _ = numer; // discard; use direct BigInt math
-                    // lo.num/lo.den * qm - pm = (lo.num * qm - pm * lo.den) / lo.den
                     let top = &lo.num * &qm - &pm * &lo.den;
-                    // p1 - lo.num/lo.den * q1 = (p1 * lo.den - lo.num * q1) / lo.den
                     let bot = &p1 * &lo.den - &lo.num * &q1;
                     let k = div_ceil_bigint(&top, &bot);
                     p0 = &p0 + &k * &p1;

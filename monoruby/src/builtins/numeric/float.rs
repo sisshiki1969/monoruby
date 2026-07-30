@@ -759,13 +759,6 @@ pub(super) fn parse_half_mode(v: Value) -> Result<Option<RoundHalf>> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum RoundHalf {
-    Up,
-    Down,
-    Even,
-}
-
 /// Round a float value with half-way rounding mode.
 /// Carefully detects the exact halfway case to avoid floating-point errors.
 fn round_half(f: f64, half: Option<RoundHalf>) -> f64 {

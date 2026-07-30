@@ -146,6 +146,13 @@ pub(crate) enum IntegerBase {
     BigInt(num::BigInt),
 }
 
+#[derive(Clone, Copy)]
+pub enum RoundHalf {
+    Up,
+    Down,
+    Even,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Value(std::num::NonZeroU64);

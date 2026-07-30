@@ -548,12 +548,7 @@ fn rat_round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     } else {
         None
     };
-    let half_str = half.map(|h| match h {
-        super::float::RoundHalf::Up => "up",
-        super::float::RoundHalf::Down => "down",
-        super::float::RoundHalf::Even => "even",
-    });
-    Ok(floor_result_to_value(r.rational_round(ndigits, half_str)))
+    Ok(floor_result_to_value(r.rational_round(ndigits, half)))
 }
 
 #[monoruby_builtin]
