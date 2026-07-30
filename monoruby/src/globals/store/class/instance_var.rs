@@ -33,7 +33,7 @@ impl Store {
 
     pub(crate) fn get_ivars(&self, mut val: Value) -> Vec<(IdentId, Value)> {
         let class_id = val.class();
-        let rval = match val.try_rvalue_mut() {
+        let rval = match val.try_rvalue() {
             Some(rval) => rval,
             None => return vec![],
         };
@@ -53,15 +53,7 @@ impl Store {
     ///
     pub(crate) fn set_ivar(&mut self, mut base: Value, name: IdentId, val: Value) -> Result<()> {
         let class_id = base.class();
-        let rval = match base.try_rvalue_mut() {
-            Some(rval) => rval,
-            None => {
-                return Err(MonorubyErr::cant_modify_frozen(self, base));
-            }
-        };
-        if rval.is_frozen() {
-            return Err(MonorubyErr::cant_modify_frozen(self, base));
-        }
+        let rval = base.try_rvalue_mut_or_frozen(self)?;
         let id = self.get_ivar_id(class_id, name);
         rval.set_ivar_by_ivarid(id, val);
         Ok(())
@@ -70,11 +62,18 @@ impl Store {
     ///
     /// Remove the instance variable with *name* from *base*, returning its value.
     ///
-    pub(crate) fn remove_ivar(&mut self, mut base: Value, name: IdentId) -> Option<Value> {
+    pub(crate) fn remove_ivar(&mut self, mut base: Value, name: IdentId) -> Result<Value> {
         let class_id = base.class();
-        let rval = base.try_rvalue_mut()?;
-        let id = self.classes[class_id].get_ivarid(name)?;
-        rval.remove_ivar_by_ivarid(id)
+        let rval = base.try_rvalue_mut_or_frozen(self)?;
+        if let Some(id) = self.classes[class_id].get_ivarid(name)
+            && let Some(val) = rval.remove_ivar_by_ivarid(id)
+        {
+            return Ok(val);
+        }
+
+        Err(MonorubyErr::nameerr(format!(
+            "instance variable {name} not defined"
+        )))
     }
 
     pub(crate) fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {

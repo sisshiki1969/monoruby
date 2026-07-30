@@ -83,10 +83,10 @@ pub struct MonorubyErr {
     pub explicit_cause: Option<Value>,
     /// Kind-specific extra data, surfaced as hidden ivars when the
     /// exception object is materialized (`take_ex_obj`): for
-    /// `LocalJumpError` the packed jump value + reason (`"return"`, …)
-    /// → `#exit_value` / `#reason`; for `StopIteration` the packed
+    /// `LocalJumpError` the jump value + reason (`"return"`, …)
+    /// → `#exit_value` / `#reason`; for `StopIteration` the
     /// iterator return value + `"result"` → `#result`.
-    pub(crate) payload: Option<(u64, &'static str)>,
+    pub(crate) payload: Option<(Value, &'static str)>,
 }
 
 impl MonorubyErr {
@@ -159,24 +159,25 @@ impl MonorubyErr {
             cause.mark(alloc);
         }
         if let Some((val, _)) = &self.payload {
-            Value::from_u64(*val).mark(alloc);
+            val.mark(alloc);
         }
         match &self.kind {
-            // Packed `Value::id()` of the receiver that triggered the
-            // NoMethodError (set by `MonorubyErr::no_method_for_*`).
+            // The receiver that triggered the NoMethodError (set by
+            // `MonorubyErr::no_method_for_*`).
             MonorubyErrKind::NotMethod {
-                receiver: Some(id), ..
+                receiver: Some(recv),
+                ..
             } => {
-                Value::from_u64(*id).mark(alloc);
+                recv.mark(alloc);
             }
-            // Receiver / key Values (packed) for KeyError.
+            // Receiver / key Values for KeyError.
             MonorubyErrKind::Key(Some((recv, key))) => {
-                Value::from_u64(*recv).mark(alloc);
-                Value::from_u64(*key).mark(alloc);
+                recv.mark(alloc);
+                key.mark(alloc);
             }
-            // Packed receiver Value for NameError / FrozenError.
-            MonorubyErrKind::Name(_, Some(id)) | MonorubyErrKind::Frozen(Some(id)) => {
-                Value::from_u64(*id).mark(alloc);
+            // Receiver Value for NameError / FrozenError.
+            MonorubyErrKind::Name(_, Some(recv)) | MonorubyErrKind::Frozen(Some(recv)) => {
+                recv.mark(alloc);
             }
             // Non-local return: carries the return value and the
             // captured frame pointer it must return to.
@@ -612,7 +613,7 @@ impl MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod {
                 name: Some(name),
-                receiver: Some(obj.id()),
+                receiver: Some(obj),
             },
             format!(
                 "undefined method '{name}' for {}",
@@ -630,7 +631,7 @@ impl MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod {
                 name: Some(name),
-                receiver: Some(obj.id()),
+                receiver: Some(obj),
             },
             format!(
                 "super: no superclass method '{name}' for {}",
@@ -660,7 +661,7 @@ impl MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod {
                 name: Some(name),
-                receiver: Some(obj.id()),
+                receiver: Some(obj),
             },
             format!(
                 "private method '{name}' called for {}",
@@ -673,7 +674,7 @@ impl MonorubyErr {
         MonorubyErr::new(
             MonorubyErrKind::NotMethod {
                 name: Some(name),
-                receiver: Some(obj.id()),
+                receiver: Some(obj),
             },
             format!(
                 "protected method '{name}' called for {}",
@@ -751,7 +752,7 @@ impl MonorubyErr {
         receiver: Value,
     ) -> MonorubyErr {
         Self::new(
-            MonorubyErrKind::Name(Some(name), Some(receiver.id())),
+            MonorubyErrKind::Name(Some(name), Some(receiver)),
             msg,
         )
     }
@@ -1016,7 +1017,7 @@ impl MonorubyErr {
     }
 
     pub(crate) fn keyerr_with(msg: String, receiver: Value, key: Value) -> MonorubyErr {
-        MonorubyErr::new(MonorubyErrKind::Key(Some((receiver.id(), key.id()))), msg)
+        MonorubyErr::new(MonorubyErrKind::Key(Some((receiver, key))), msg)
     }
 
     pub(crate) fn stopiterationerr(msg: String) -> MonorubyErr {
@@ -1027,7 +1028,7 @@ impl MonorubyErr {
     /// (`StopIteration#result`).
     pub(crate) fn stopiterationerr_with_result(msg: String, result: Value) -> MonorubyErr {
         let mut err = MonorubyErr::new(MonorubyErrKind::StopIteration, msg);
-        err.payload = Some((result.id(), "result"));
+        err.payload = Some((result, "result"));
         err
     }
 
@@ -1050,7 +1051,7 @@ impl MonorubyErr {
             None => String::new(),
         };
         MonorubyErr::new(
-            MonorubyErrKind::Frozen(Some(val.id())),
+            MonorubyErrKind::Frozen(Some(val)),
             format!(
                 "can't modify frozen {}: {}{}",
                 val.get_real_class_name(store),
@@ -1274,7 +1275,7 @@ impl MonorubyErr {
 
     pub(crate) fn localjumperr_with_val(msg: impl ToString, val: Value) -> MonorubyErr {
         let mut err = MonorubyErr::new(MonorubyErrKind::LocalJump, msg);
-        err.payload = Some((val.id(), "return"));
+        err.payload = Some((val, "return"));
         err
     }
 }
@@ -1283,12 +1284,12 @@ impl MonorubyErr {
 pub enum MonorubyErrKind {
     Exception,
     /// `NoMethodError`. `name` is the missing method name (surfaced as
-    /// `NoMethodError#name`); `receiver` is the packed `Value::id()` of the
-    /// receiver (surfaced as `#receiver`). Either may be absent for errors
-    /// built without that context.
+    /// `NoMethodError#name`); `receiver` is the receiver `Value` (surfaced
+    /// as `#receiver`). Either may be absent for errors built without that
+    /// context.
     NotMethod {
         name: Option<IdentId>,
-        receiver: Option<u64>,
+        receiver: Option<Value>,
     },
     Arguments,
     Syntax,
@@ -1296,22 +1297,22 @@ pub enum MonorubyErrKind {
     /// `NameError` with an optional `name` symbol that the
     /// `NameError#name` Ruby method exposes (e.g. the missing constant
     /// or method name passed to `Module#instance_method`) and an optional
-    /// packed `Value::id()` of the receiver surfaced by `NameError#receiver`.
-    Name(Option<IdentId>, Option<u64>),
+    /// receiver `Value` surfaced by `NameError#receiver`.
+    Name(Option<IdentId>, Option<Value>),
     DivideByZero,
     LocalJump,
     Range,
     Type,
     Index,
-    /// `FrozenError` with an optional packed `Value::id()` of the frozen
-    /// receiver, surfaced by `FrozenError#receiver`.
-    Frozen(Option<u64>),
+    /// `FrozenError` with an optional frozen receiver `Value`, surfaced by
+    /// `FrozenError#receiver`.
+    Frozen(Option<Value>),
     Load(PathBuf),
     Regex,
     Runtime,
     IO,
-    /// `KeyError` with optional `(receiver, key)` as packed `Value` u64s.
-    Key(Option<(u64, u64)>),
+    /// `KeyError` with optional `(receiver, key)` `Value`s.
+    Key(Option<(Value, Value)>),
     Fiber,
     StopIteration,
     SystemExit(u8),
