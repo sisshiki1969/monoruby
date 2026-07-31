@@ -1398,8 +1398,15 @@ impl Value {
         RValue::new_unbound_method_missing_proxy(mm_func_id, target, owner).pack()
     }
 
-    pub(crate) fn new_fiber(proc: Proc) -> Self {
-        RValue::new_fiber(proc).pack()
+    pub(crate) fn new_fiber(inner: crate::value::rvalue::FiberInner) -> Self {
+        RValue::new_fiber(inner).pack()
+    }
+
+    pub(crate) fn new_fiber_with_class(
+        inner: crate::value::rvalue::FiberInner,
+        class_id: ClassId,
+    ) -> Self {
+        RValue::new_fiber_with_class(inner, class_id).pack()
     }
 
     pub(crate) fn new_thread(class_id: ClassId, inner: crate::value::rvalue::ThreadInner) -> Self {

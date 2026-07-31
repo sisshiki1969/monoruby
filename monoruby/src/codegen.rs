@@ -703,7 +703,13 @@ pub struct Codegen {
     ///
     pub(crate) fiber_invoker: FiberInvoker,
     pub(crate) fiber_invoker_with_self: FiberInvoker,
+    /// `Fiber#transfer` activation of a created fiber: no `parent_fiber`
+    /// (prev) link is established.
+    pub(crate) fiber_invoker_transfer: FiberInvoker,
     pub(crate) resume_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
+    /// `Fiber#transfer` switch to a suspended fiber: like `resume_fiber`
+    /// without the `parent_fiber` write.
+    pub(crate) transfer_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
     pub(crate) thread_invoker: ThreadInvoker,
     pub(crate) switch_to_scheduler: extern "C" fn(*mut Executor, Value) -> Option<Value>,
@@ -996,7 +1002,9 @@ impl Codegen {
         let binding_invoker = jit.binding_invoker();
         let fiber_invoker = jit.fiber_invoker();
         let fiber_invoker_with_self = jit.fiber_invoker_with_self();
+        let fiber_invoker_transfer = jit.fiber_invoker_transfer();
         let resume_fiber = jit.resume_fiber();
+        let transfer_fiber = jit.transfer_fiber();
         let yield_fiber = jit.yield_fiber();
         let thread_invoker = jit.thread_invoker();
         let switch_to_scheduler = jit.switch_to_scheduler();
@@ -1030,7 +1038,9 @@ impl Codegen {
             binding_invoker,
             fiber_invoker,
             fiber_invoker_with_self,
+            fiber_invoker_transfer,
             resume_fiber,
+            transfer_fiber,
             yield_fiber,
             thread_invoker,
             switch_to_scheduler,

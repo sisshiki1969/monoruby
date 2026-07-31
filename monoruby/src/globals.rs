@@ -175,6 +175,8 @@ pub(crate) struct Invokers {
     pub block_with_self: BlockInvoker,
     pub fiber: FiberInvoker,
     pub fiber_with_self: FiberInvoker,
+    /// `Fiber#transfer` first activation (no `parent_fiber` link).
+    pub fiber_transfer: FiberInvoker,
     pub binding: BindingInvoker,
 }
 
@@ -215,6 +217,14 @@ pub struct Globals {
     /// `Kernel#trace_var` hooks: per global-variable name, the commands
     /// (Procs or Strings) fired after each Ruby-level assignment.
     pub(crate) gvar_traces: std::collections::HashMap<IdentId, Vec<Value>>,
+    /// The fiber scheduler installed by `Fiber.set_scheduler` (monoruby
+    /// keeps one per process — fibers are M:1 on the main native thread).
+    pub(crate) fiber_scheduler: Option<Value>,
+    /// Every root Fiber object ever materialized (`Fiber.current` at a
+    /// thread's root context). A GC triggered while an ordinary fiber runs
+    /// marks only the *running* executor, so a root Fiber cached on a
+    /// suspended root executor would otherwise be unreachable and swept.
+    pub(crate) root_fiber_objs: Vec<Value>,
     /// cache for Symbol#name (frozen strings keyed by IdentId).
     pub(crate) symbol_names: HashMap<IdentId, Value>,
     /// Dedup table for the Ruby-3.4 "block may be ignored" warning.
@@ -288,6 +298,12 @@ impl alloc::GC<RValue> for Globals {
             .values()
             .flatten()
             .for_each(|v| v.mark(alloc));
+        if let Some(v) = &self.fiber_scheduler {
+            v.mark(alloc);
+        }
+        for v in &self.root_fiber_objs {
+            v.mark(alloc);
+        }
         self.symbol_names.values().for_each(|v| v.mark(alloc));
         // Trap handler Procs are GC roots: they are reachable only from
         // this table, yet may be invoked at any future poll point.
@@ -461,6 +477,7 @@ impl Globals {
                 block_with_self: codegen.block_invoker_with_self,
                 fiber: codegen.fiber_invoker,
                 fiber_with_self: codegen.fiber_invoker_with_self,
+                fiber_transfer: codegen.fiber_invoker_transfer,
                 binding: codegen.binding_invoker,
             }
         });
@@ -477,6 +494,8 @@ impl Globals {
             loaded_features,
             loading_features: std::collections::HashMap::default(),
             gvar_traces: std::collections::HashMap::default(),
+            fiber_scheduler: None,
+            root_fiber_objs: vec![],
             symbol_names: HashMap::default(),
             unused_block_warned: std::collections::HashSet::default(),
             // signo runs 1..=32; index by signo directly (slot 0 unused).

@@ -181,6 +181,15 @@ impl ThreadInner {
         }
     }
 
+    /// Hand the spawning fiber's storage snapshot to this thread's root
+    /// executor, so its root Fiber object starts with it (CRuby:
+    /// `Thread.new` inherits the current fiber's storage).
+    pub(crate) fn seed_fiber_storage(&mut self, storage: Value) {
+        if let Some(handle) = &mut self.handle {
+            handle.set_inherited_storage(storage);
+        }
+    }
+
     /// The control block representing the main thread. Its `Executor` is
     /// the embedder's; the scheduler marks it through `main_exec`.
     pub(crate) fn main() -> Self {

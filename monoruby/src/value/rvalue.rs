@@ -445,9 +445,9 @@ impl ObjKind {
         }
     }
 
-    fn fiber(proc: Proc) -> Self {
+    fn fiber(inner: FiberInner) -> Self {
         Self {
-            fiber: ManuallyDrop::new(FiberInner::new(proc)),
+            fiber: ManuallyDrop::new(inner),
         }
     }
 
@@ -769,7 +769,7 @@ impl RValue {
         format!(
             "#<Fiber:0x{:016x} {} ({state})>",
             self.id(),
-            match store[func_id].is_iseq() {
+            match func_id.and_then(|fid| store[fid].is_iseq()) {
                 Some(iseq) => store[iseq].get_location(),
                 None => "<internal>".to_string(),
             }
@@ -2050,10 +2050,14 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_fiber(proc: Proc) -> Self {
+    pub(super) fn new_fiber(inner: FiberInner) -> Self {
+        Self::new_fiber_with_class(inner, FIBER_CLASS)
+    }
+
+    pub(super) fn new_fiber_with_class(inner: FiberInner, class_id: ClassId) -> Self {
         RValue {
-            header: Header::new(FIBER_CLASS, ObjTy::FIBER),
-            kind: ObjKind::fiber(proc),
+            header: Header::new(class_id, ObjTy::FIBER),
+            kind: ObjKind::fiber(inner),
             var_table: None,
         }
     }

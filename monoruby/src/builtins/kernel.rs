@@ -3751,6 +3751,22 @@ fn sleep_duration(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<
 #[monoruby_builtin]
 fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let now = std::time::Instant::now();
+    // In a non-blocking fiber with a fiber scheduler installed, delegate to
+    // the scheduler's `kernel_sleep` hook (CRuby's fiber-scheduler
+    // protocol); the hook decides how (and whether) to wait.
+    if !vm.is_fiber_blocking()
+        && let Some(scheduler) = globals.fiber_scheduler
+    {
+        let args: Vec<Value> = lfp.try_arg(0).into_iter().collect();
+        return vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("kernel_sleep"),
+            scheduler,
+            &args,
+            None,
+            None,
+        );
+    }
     // With other live green threads, sleeping must yield to the
     // scheduler so they run during the wait (and a no-duration sleep
     // parks until Thread#wakeup instead of returning immediately).

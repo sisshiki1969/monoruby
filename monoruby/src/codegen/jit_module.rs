@@ -154,7 +154,9 @@ pub(super) extern "C" fn handle_error(
                     ErrorReturn::return_err()
                 };
             }
-            if let MonorubyErrKind::Throw(..) = vm.exception().unwrap().kind() {
+            if let MonorubyErrKind::Throw(..) | MonorubyErrKind::FiberKill =
+                vm.exception().unwrap().kind()
+            {
                 return if let Some((_, Some(ensure), _)) = info.get_exception_dest(pc) {
                     vm.defer_unwind(lfp);
                     ErrorReturn::goto(bc_base + ensure)
@@ -274,7 +276,9 @@ pub(super) extern "C" fn handle_error(
                     ErrorReturn::return_err()
                 };
             }
-            if let MonorubyErrKind::Throw(..) | MonorubyErrKind::BlockBreak(..) =
+            if let MonorubyErrKind::Throw(..)
+            | MonorubyErrKind::FiberKill
+            | MonorubyErrKind::BlockBreak(..) =
                 vm.exception().unwrap().kind()
             {
                 return ErrorReturn::return_err();

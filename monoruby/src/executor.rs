@@ -214,9 +214,44 @@ pub struct Executor {
     deferred_unwind: Vec<(Lfp, MonorubyErr)>,
     /// The `Fiber` object whose body is currently executing on this
     /// `Executor`, or `None` for a thread's root context (which falls back
-    /// to the shared main-fiber object). Exposed as `Fiber.current` so that
-    /// mutex ownership can be tracked per-Fiber, as in CRuby.
+    /// to the per-thread root Fiber object). Exposed as `Fiber.current` so
+    /// that mutex ownership can be tracked per-Fiber, as in CRuby.
     current_fiber: Option<Value>,
+    /// CRuby's `fiber->resuming_fiber`: the fiber this executor is currently
+    /// waiting on inside a `Fiber#resume` call. Forms the "resuming chain"
+    /// walked from the thread root to find where a terminating *transferred*
+    /// fiber returns control.
+    resuming_fiber: Option<std::ptr::NonNull<Executor>>,
+    /// Where control goes when this fiber's body terminates (read by
+    /// `fiber_on_terminate` from the invoker glue). Recomputed eagerly at
+    /// every switch-in: the resumer for a resume, CRuby's
+    /// `return_fiber(terminate=true)` for a transfer. Distinct from
+    /// `parent_fiber` (CRuby's `prev`), which stays `None` for transferred
+    /// fibers so `Fiber.yield` inside them correctly raises FiberError.
+    return_to: Option<std::ptr::NonNull<Executor>>,
+    /// This fiber is suspended in `Fiber.yield` (CRuby's `yielding` flag).
+    /// A yielding fiber can be resumed but not transferred to.
+    yielding: bool,
+    /// This fiber has been the target of `Fiber#transfer` at least once;
+    /// such a fiber can never be `#resume`d again (CRuby).
+    transferred: bool,
+    /// The `blocking:` flag of this fiber (`Fiber#blocking?`). Root
+    /// executors (threads) are blocking; `Fiber.new` defaults to
+    /// non-blocking, matching CRuby 3.x.
+    fiber_blocking: bool,
+    /// This fiber is being killed (`Fiber#kill`): the receiver of its
+    /// termination swallows the kill unwind instead of propagating it.
+    killed: bool,
+    /// The root executor of the thread this fiber belongs to (`None` for a
+    /// root executor itself). Start of the resuming-chain walk.
+    thread_root: Option<std::ptr::NonNull<Executor>>,
+    /// Lazily created `Fiber` object representing this *root* executor
+    /// (`Fiber.current` at a thread's root context).
+    root_fiber_obj: Option<Value>,
+    /// Fiber-storage snapshot inherited from the spawning fiber
+    /// (`Thread.new` semantics); consumed when the root Fiber object is
+    /// first materialized.
+    inherited_storage: Option<Value>,
 }
 
 impl std::default::Default for Executor {
@@ -240,6 +275,15 @@ impl std::default::Default for Executor {
             errinfo: Value::nil(),
             deferred_unwind: vec![],
             current_fiber: None,
+            resuming_fiber: None,
+            return_to: None,
+            yielding: false,
+            transferred: false,
+            fiber_blocking: true,
+            killed: false,
+            thread_root: None,
+            root_fiber_obj: None,
+            inherited_storage: None,
         }
     }
 }
@@ -277,6 +321,14 @@ impl alloc::GC<RValue> for Executor {
         // The `Fiber` object this executor is running as (`Fiber.current`).
         if let Some(f) = self.current_fiber {
             f.mark(alloc);
+        }
+        // The lazily created root Fiber object and the fiber-storage
+        // snapshot a spawning fiber handed to this thread.
+        if let Some(f) = self.root_fiber_obj {
+            f.mark(alloc);
+        }
+        if let Some(s) = self.inherited_storage {
+            s.mark(alloc);
         }
         // Transient per-match stashes: live across the MatchData
         // allocation in `save_capture_special_variables`, which can
@@ -1609,20 +1661,150 @@ impl Executor {
         self.rsp_save = Some(std::ptr::NonNull::new(rsp).unwrap());
     }
 
+    /// Mark this fiber's executor dead without ever running (or after
+    /// unwinding) its body — `Fiber#kill` on a created fiber.
+    pub(crate) fn set_terminated(&mut self) {
+        self.rsp_save = std::ptr::NonNull::new(-1i64 as *mut u8);
+    }
+
+    pub(crate) fn resuming_fiber(&self) -> Option<std::ptr::NonNull<Executor>> {
+        self.resuming_fiber
+    }
+
+    pub(crate) fn set_resuming_fiber(&mut self, f: Option<std::ptr::NonNull<Executor>>) {
+        self.resuming_fiber = f;
+    }
+
+    pub(crate) fn set_return_to(&mut self, f: std::ptr::NonNull<Executor>) {
+        self.return_to = Some(f);
+    }
+
+    pub(crate) fn set_parent_fiber(&mut self, f: Option<std::ptr::NonNull<Executor>>) {
+        self.parent_fiber = f;
+    }
+
+    pub(crate) fn is_yielding(&self) -> bool {
+        self.yielding
+    }
+
+    pub(crate) fn set_yielding(&mut self, b: bool) {
+        self.yielding = b;
+    }
+
+    pub(crate) fn is_transferred(&self) -> bool {
+        self.transferred
+    }
+
+    pub(crate) fn set_transferred(&mut self) {
+        self.transferred = true;
+    }
+
+    pub(crate) fn is_fiber_blocking(&self) -> bool {
+        self.fiber_blocking
+    }
+
+    pub(crate) fn set_fiber_blocking(&mut self, b: bool) {
+        self.fiber_blocking = b;
+    }
+
+    pub(crate) fn is_killed(&self) -> bool {
+        self.killed
+    }
+
+    pub(crate) fn set_killed(&mut self) {
+        self.killed = true;
+    }
+
+    pub(crate) fn set_thread_root(&mut self, root: std::ptr::NonNull<Executor>) {
+        self.thread_root = Some(root);
+    }
+
+    /// The root executor of the thread this executor runs on: itself for a
+    /// root context, the recorded root for a fiber executor.
+    pub(crate) fn thread_root_or_self(&self) -> std::ptr::NonNull<Executor> {
+        self.thread_root
+            .unwrap_or_else(|| std::ptr::NonNull::from(self))
+    }
+
+    pub(crate) fn thread_root(&self) -> Option<std::ptr::NonNull<Executor>> {
+        self.thread_root
+    }
+
+    pub(crate) fn root_fiber_obj(&self) -> Option<Value> {
+        self.root_fiber_obj
+    }
+
+    pub(crate) fn set_root_fiber_obj(&mut self, obj: Value) {
+        self.root_fiber_obj = Some(obj);
+    }
+
+    pub(crate) fn inherited_storage(&self) -> Option<Value> {
+        self.inherited_storage
+    }
+
+    pub(crate) fn set_inherited_storage(&mut self, storage: Value) {
+        self.inherited_storage = Some(storage);
+    }
+
+    pub(crate) fn has_error(&self) -> bool {
+        self.exception.is_some()
+    }
+
     pub(crate) fn yield_fiber(&mut self, val: Value) -> Result<Value> {
         if self.parent_fiber.is_none() {
             return Err(MonorubyErr::fibererr(
-                "can't yield from main fiber".to_string(),
+                "attempt to yield on a not resumed fiber".to_string(),
             ));
         }
         let invoker = CODEGEN.with(|codegen| codegen.borrow().yield_fiber);
         match invoker(self as _, val) {
             Some(res) => Ok(res),
-            // SAFETY: parent_fiber is guaranteed to be a valid pointer to an Executor
-            // when it is set. This pointer remains valid for the lifetime of this fiber.
-            None => Err(unsafe { self.parent_fiber.unwrap().as_mut().take_error() }),
+            // A null resume value is the exception-injection protocol
+            // (`Fiber#raise` / `Fiber#kill` into a yielding fiber): the
+            // injector stored the error in *this* fiber's executor before
+            // switching in, exactly where the JIT-inlined yield's error
+            // exit also reads it.
+            None => {
+                if self.has_error() {
+                    Err(self.take_error())
+                } else {
+                    // SAFETY: parent_fiber is a valid Executor pointer while
+                    // this fiber is suspended under its resumer.
+                    Err(unsafe { self.parent_fiber.unwrap().as_mut().take_error() })
+                }
+            }
         }
     }
+}
+
+///
+/// Termination hook for the fiber invokers (both architectures): called on
+/// the dying fiber's stack right after its body returned (or an activation
+/// error left `rax`/`x0` = 0), *before* the glue switches stacks back.
+///
+/// - Marks the fiber terminated.
+/// - Relays a pending error (raise unwind, kill unwind, activation error)
+///   from the dying fiber's executor into the return target's executor, so
+///   the pending `resume`/`transfer` call on that side can pick it up from
+///   its *own* executor — the receiver of a transferred fiber's death is
+///   not necessarily the fiber that activated it.
+/// - Returns the executor whose saved context the glue must restore: the
+///   eagerly maintained `return_to` (falling back to `parent_fiber` for
+///   robustness).
+///
+pub(crate) extern "C" fn fiber_on_terminate(child: &mut Executor) -> *mut Executor {
+    child.set_terminated();
+    let mut target = child
+        .return_to
+        .or(child.parent_fiber)
+        .expect("terminating fiber has no return target");
+    if let Some(err) = std::mem::take(&mut child.exception) {
+        // SAFETY: the return target is suspended (its context saved), so its
+        // executor is valid and quiescent; its error slot is empty because a
+        // suspended fiber cannot hold an in-flight exception.
+        unsafe { target.as_mut().set_error(err) };
+    }
+    target.as_ptr()
 }
 
 // Handling constants.
@@ -3814,6 +3996,20 @@ impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.globals.mark(alloc);
         self.executor.mark(alloc);
+        // A GC triggered while a *fiber* runs must also reach the values
+        // held only by its thread's suspended root executor — the root's
+        // stack frames, in-flight regex stashes, `$!`, … are otherwise
+        // unreachable while the fiber is on top. Fiber executors record
+        // their thread root at creation; each suspended intermediate
+        // fiber is then covered transitively (its Fiber object lives in
+        // its resumer's now-marked frames, and marking a Fiber object
+        // marks its executor).
+        if let Some(root) = self.executor.thread_root() {
+            // SAFETY: a fiber can only trigger GC while running, and it can
+            // only run on the (live) thread it was created on, whose root
+            // executor outlives it for the duration.
+            unsafe { root.as_ref().mark(alloc) };
+        }
         // Green threads: every live thread's stack frames (and the main
         // thread's, while a green thread is the one triggering GC) are
         // reachable only through the scheduler registry.

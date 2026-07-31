@@ -130,7 +130,20 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(in crate::codegen) fn fiber_invoker(&mut self) -> FiberInvoker {
+    /// First activation of a fiber.
+    ///
+    /// `write_parent` distinguishes the resume-style activation (the caller
+    /// becomes CRuby's `prev`, so `Fiber.yield` returns to it) from a
+    /// `Fiber#transfer` activation, which must leave `parent_fiber` unset so
+    /// a yield inside the transferred fiber raises FiberError.
+    ///
+    /// On body termination (and on an activation error, whose unwind used to
+    /// pop garbage from the child stack), `fiber_on_terminate` marks the
+    /// child dead, relays a pending error to the return target's executor,
+    /// and yields the executor whose saved context is restored — the eagerly
+    /// maintained `return_to`, which for a transferred fiber is *not* the
+    /// activator.
+    fn fiber_invoker_inner(&mut self, with_self: bool, write_parent: bool) -> FiberInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -139,7 +152,7 @@ impl JitModule {
         // rdi: &mut Executor
         // rsi: &mut Globals
         // rdx: &BlockkData
-        // rcx:
+        // rcx: Value (self) or unused
         // r8:  *args: *const Value
         // r9:  len: usize
         // [rsp + 8]: *mut Executor
@@ -151,19 +164,29 @@ impl JitModule {
         monoasm! { &mut self.jit,
             movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
             movq rsp, [rax + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
-            movq [rax + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
+        }
+        if write_parent {
+            monoasm! { &mut self.jit,
+                movq [rax + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
+            }
+        }
+        monoasm! { &mut self.jit,
             movq rbx, rax;
             movq r12, rsi;
             xorq r10, r10;
         }
-        self.invoker_frame_setup(true, false);
+        self.invoker_frame_setup(true, with_self);
         self.invoker_args_setup(&error_exit, true);
         self.call_invoker();
         monoasm! { &mut self.jit,
-            movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
-            movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
-            movq rsp, [rbx + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
         error_exit:
+            // rax: body result, or 0 when an error is pending on the child.
+            movq r15, rax; // r15 is restored from the target's stack below
+            movq rdi, rbx;
+            movq rax, (crate::executor::fiber_on_terminate as *const () as u64);
+            call rax;      // rax <- return-target executor
+            movq rsp, [rax + (EXECUTOR_RSP_SAVE)];
+            movq rax, r15;
         }
         self.pop_callee_save();
         monoasm! { &mut self.jit,
@@ -171,55 +194,28 @@ impl JitModule {
         };
 
         #[cfg(feature = "perf")]
-        self.perf_info(pair, "fiber-invoker");
+        self.perf_info(
+            pair,
+            match (with_self, write_parent) {
+                (true, _) => "fiber-invoker-with-self",
+                (false, true) => "fiber-invoker",
+                (false, false) => "fiber-invoker-transfer",
+            },
+        );
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
+    pub(in crate::codegen) fn fiber_invoker(&mut self) -> FiberInvoker {
+        self.fiber_invoker_inner(false, true)
+    }
+
     pub(in crate::codegen) fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
-        let codeptr = self.jit.get_current_address();
+        self.fiber_invoker_inner(true, true)
+    }
 
-        #[cfg(feature = "perf")]
-        let pair = self.get_address_pair();
-
-        // rdi: &mut Executor
-        // rsi: &mut Globals
-        // rdx: &BlockkData
-        // rcx: Value
-        // r8:  *args: *const Value
-        // r9:  len: usize
-        // [rsp + 8]: *mut Executor
-        let error_exit = self.jit.label();
-        monoasm! { &mut self.jit,
-            movq rax, [rsp + 8];
-        };
-        self.push_callee_save();
-        monoasm! { &mut self.jit,
-            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
-            movq rsp, [rax + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
-            movq [rax + (EXECUTOR_PARENT_FIBER)], rdi; // [child_vm.parent_fiber] <- vm
-            movq rbx, rax;
-            movq r12, rsi;
-            xorq r10, r10;
-        }
-        self.invoker_frame_setup(true, true);
-        self.invoker_args_setup(&error_exit, true);
-        self.call_invoker();
-        monoasm! { &mut self.jit,
-            movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // [vm.rsp_save] <- -1 (terminated)
-            movq rbx, [rbx + (EXECUTOR_PARENT_FIBER)]; // rbx <- [vm.parent_fiber]
-            movq rsp, [rbx + (EXECUTOR_RSP_SAVE)]; // rsp <- [parent.rsp_save]
-        error_exit:
-        }
-        self.pop_callee_save();
-        monoasm! { &mut self.jit,
-            ret;
-        };
-
-        #[cfg(feature = "perf")]
-        self.perf_info(pair, "fiber-invoker-with-self");
-
-        unsafe { std::mem::transmute(codeptr.as_ptr()) }
+    pub(in crate::codegen) fn fiber_invoker_transfer(&mut self) -> FiberInvoker {
+        self.fiber_invoker_inner(false, false)
     }
 
     ///
@@ -366,6 +362,36 @@ impl JitModule {
 
         #[cfg(feature = "perf")]
         self.perf_info(pair, "resume-fiber");
+
+        unsafe { std::mem::transmute(codeptr.as_ptr()) }
+    }
+
+    /// `Fiber#transfer` switch primitive: like `resume_fiber` but does NOT
+    /// establish the child's `parent_fiber` (CRuby `prev`) link — a
+    /// transferred fiber must not `Fiber.yield` back to its transferrer.
+    /// All link bookkeeping (including the eager termination target) is done
+    /// on the Rust side before this is called.
+    pub(in crate::codegen) fn transfer_fiber(
+        &mut self,
+    ) -> extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value> {
+        let codeptr = self.jit.get_current_address();
+
+        #[cfg(feature = "perf")]
+        let pair = self.get_address_pair();
+
+        self.push_callee_save();
+        monoasm! { &mut self.jit,
+            movq [rdi + (EXECUTOR_RSP_SAVE)], rsp; // [vm.rsp_save] <- rsp
+            movq rsp, [rsi + (EXECUTOR_RSP_SAVE)]; // rsp <- [child_vm.rsp_save]
+        }
+        self.pop_callee_save();
+        monoasm! { &mut self.jit,
+            movq rax, rdx;
+            ret;
+        };
+
+        #[cfg(feature = "perf")]
+        self.perf_info(pair, "transfer-fiber");
 
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
