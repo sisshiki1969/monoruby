@@ -1,1 +1,0 @@
-fails:Regexp with character classes matches Unicode join control characters with [[:word:]]
