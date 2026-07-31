@@ -3758,14 +3758,17 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         && let Some(scheduler) = globals.fiber_scheduler
     {
         let args: Vec<Value> = lfp.try_arg(0).into_iter().collect();
-        return vm.invoke_method_inner(
+        vm.invoke_method_inner(
             globals,
             IdentId::get_id("kernel_sleep"),
             scheduler,
             &args,
             None,
             None,
-        );
+        )?;
+        // Like CRuby, `sleep` reports the elapsed wall time regardless of
+        // what the hook returned.
+        return Ok(Value::integer(now.elapsed().as_secs() as i64));
     }
     // With other live green threads, sleeping must yield to the
     // scheduler so they run during the wait (and a no-duration sleep

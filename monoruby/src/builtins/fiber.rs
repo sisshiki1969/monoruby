@@ -391,7 +391,9 @@ fn kill(vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         ));
     }
     if fiber.is_terminated() {
-        return Ok(Value::nil());
+        return Err(MonorubyErr::fibererr(
+            "attempt to resume a terminated fiber".to_string(),
+        ));
     }
     if fiber.executor_ptr() == (vm as *mut Executor) {
         // Kill myself: unwind in place; the pending resume/transfer on the
@@ -1188,6 +1190,123 @@ mod tests {
             Fiber.set_scheduler(nil)
             res << Fiber.scheduler
             res
+            "##,
+        );
+    }
+
+    /// Explicit Fiber API calls from a foreign thread are rejected, and the
+    /// fiber stays usable from its owning thread afterwards.
+    #[test]
+    fn fiber_cross_thread_calls() {
+        run_test(
+            r##"
+            res = []
+            f1 = Fiber.new { :r }
+            f2 = Fiber.new { :t }
+            f3 = Fiber.new { Fiber.yield }
+            f3.resume
+            f4 = Fiber.new { Fiber.yield }
+            f4.resume
+            Thread.new do
+              [-> { f1.resume }, -> { f2.transfer }, -> { f3.raise "x" }, -> { f4.kill }].each do |op|
+                begin
+                  op.call
+                  res << :no_raise
+                rescue FiberError => e
+                  res << e.message
+                end
+              end
+            end.join
+            res << f1.resume
+            res
+            "##,
+        );
+    }
+
+    /// Raise into a fiber suspended in `Fiber#transfer` (transfer-style
+    /// injection), and the unborn / dead / no-op-kill edges.
+    #[test]
+    fn fiber_raise_kill_edges() {
+        run_test(
+            r##"
+            root = Fiber.current
+            fiber = Fiber.new { root.transfer; :not_reached }
+            fiber.transfer
+            begin
+              fiber.raise "msg"
+            rescue => e
+              [e.class.to_s, e.message, fiber.alive?]
+            end
+            "##,
+        );
+        // Raising on a dead fiber.
+        run_test_error(
+            r##"
+            f = Fiber.new { }
+            f.resume
+            f.raise "boom"
+            "##,
+        );
+        // Killing a dead fiber raises (CRuby).
+        run_test_error(
+            r##"
+            f = Fiber.new { }
+            f.resume
+            f.kill
+            "##,
+        );
+        // Killing a thread's root fiber is refused (intentional divergence:
+        // CRuby terminates the thread; monoruby raises FiberError).
+        let v = run_test_no_result_check(
+            r##"
+            begin
+              Fiber.current.kill
+              :no_raise
+            rescue FiberError
+              :fiber_error
+            end
+            "##,
+        );
+        assert!(format!("{v:?}").contains("fiber_error"));
+    }
+
+    /// `Kernel#sleep` inside a non-blocking fiber delegates to the
+    /// installed scheduler's `kernel_sleep` hook; `Fiber.current_scheduler`
+    /// is visible from the non-blocking fiber.
+    #[test]
+    fn fiber_scheduler_kernel_sleep() {
+        run_test_once(
+            r##"
+            log = []
+            sched = Object.new
+            [:block, :unblock, :io_wait].each { |m| sched.define_singleton_method(m) {} }
+            sched.define_singleton_method(:kernel_sleep) { |*a| log << a; :slept }
+            Fiber.set_scheduler(sched)
+            r = Fiber.new { [Fiber.current_scheduler.equal?(sched), sleep(5)] }.resume
+            Fiber.set_scheduler(nil)
+            [r, log]
+            "##,
+        );
+    }
+
+    /// `#to_str`-convertible storage keys (Ruby 3.4) and `Thread.start`
+    /// inheriting the spawning fiber's storage.
+    #[test]
+    fn fiber_storage_edges() {
+        run_test(
+            r##"
+            key = Object.new
+            def key.to_str = "kk"
+            Fiber[key] = 5
+            Fiber[:kk]
+            "##,
+        );
+        run_test(
+            r##"
+            fiber = Fiber.new(storage: {life: 42}) do
+              Thread.start { Fiber.current.storage }.value
+            end
+            fiber.resume
             "##,
         );
     }
