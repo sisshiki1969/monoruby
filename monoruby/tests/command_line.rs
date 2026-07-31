@@ -122,10 +122,18 @@ fn dash_zero_record_separator() {
 
 #[test]
 fn kernel_chomp_and_chop() {
-    let out = run(monoruby().args(["-e", "$_ = \"ab\\n\"; chomp; print $_, \"|\"; $_ = \"xyz\"; chop; puts $_"]));
+    // chomp/chop are only defined under -n / -p.
+    let out = run_with_stdin(
+        monoruby().args(["-n", "-e", "chomp; print $_, \"|\"; $_ = \"xyz\"; chop; puts $_"]),
+        "ab\n",
+    );
     assert_eq!(String::from_utf8_lossy(&out.stdout), "ab|xy\n");
-    // chomp with nil $_ is a TypeError.
+    // Without a loop switch they don't exist at all.
     let out = run(monoruby().args(["-e", "chomp"]));
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("NameError"));
+    // chomp with nil $_ (BEGIN runs before the first gets) is a TypeError.
+    let out = run_with_stdin(monoruby().args(["-n", "-e", "BEGIN { chomp }"]), "");
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("TypeError"));
 }
