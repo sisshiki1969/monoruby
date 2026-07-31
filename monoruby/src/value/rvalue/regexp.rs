@@ -749,6 +749,103 @@ impl RegexpInner {
         self.regex.captures_iter(given)
     }
 
+    /// The `OnigmoEncoding` for a subject of Ruby encoding `enc`, or
+    /// `None` when Onigmo has no native codec (fall back to the
+    /// UTF-8-view path).
+    pub fn onigmo_encoding_for(enc: crate::value::Encoding) -> Option<OnigmoEncoding> {
+        use crate::value::Encoding as E;
+        Some(match enc {
+            E::EucJp => OnigmoEncoding::EUC_JP,
+            // Ruby treats Shift_JIS / Windows-31J as one codec family;
+            // Windows_31J is the superset CRuby actually pins for /s.
+            E::Sjis(_) => OnigmoEncoding::Windows_31J,
+            E::Iso8859(n) => match n {
+                1 => OnigmoEncoding::ISO_8859_1,
+                2 => OnigmoEncoding::ISO_8859_2,
+                3 => OnigmoEncoding::ISO_8859_3,
+                4 => OnigmoEncoding::ISO_8859_4,
+                5 => OnigmoEncoding::ISO_8859_5,
+                6 => OnigmoEncoding::ISO_8859_6,
+                7 => OnigmoEncoding::ISO_8859_7,
+                8 => OnigmoEncoding::ISO_8859_8,
+                9 => OnigmoEncoding::ISO_8859_9,
+                10 => OnigmoEncoding::ISO_8859_10,
+                11 => OnigmoEncoding::ISO_8859_11,
+                13 => OnigmoEncoding::ISO_8859_13,
+                14 => OnigmoEncoding::ISO_8859_14,
+                15 => OnigmoEncoding::ISO_8859_15,
+                16 => OnigmoEncoding::ISO_8859_16,
+                _ => return None,
+            },
+            // Single-byte NamedByte encodings with an Onigmo codec.
+            // Multi-byte ones (Big5, GB18030, EUC-KR/TW, ...) are left
+            // out: monoruby's char iteration treats NamedByte subjects
+            // as one char per byte, which would disagree with Onigmo's
+            // multi-byte char boundaries in MatchData offsets.
+            E::NamedByte(_) => match enc.name() {
+                "KOI8-R" => OnigmoEncoding::KOI8_R,
+                "KOI8-U" => OnigmoEncoding::KOI8_U,
+                "Windows-1250" => OnigmoEncoding::Windows_1250,
+                "Windows-1251" => OnigmoEncoding::Windows_1251,
+                "Windows-1252" => OnigmoEncoding::Windows_1252,
+                "Windows-1253" => OnigmoEncoding::Windows_1253,
+                "Windows-1254" => OnigmoEncoding::Windows_1254,
+                "Windows-1257" => OnigmoEncoding::Windows_1257,
+                _ => return None,
+            },
+            _ => None?,
+        })
+    }
+
+    /// Compile (with caching) the *source bytes* of this regex under
+    /// `enc` for a native-encoding byte match. The regular
+    /// [`REGEX_CACHE`] is keyed on the UTF-8-view pattern; native
+    /// compiles use the raw source bytes, so they get their own cache.
+    fn native_regex(&self, enc: OnigmoEncoding) -> Result<Arc<Regex>> {
+        static NATIVE_CACHE: LazyLock<RwLock<HashMap<(Vec<u8>, u32, OnigmoEncoding), Arc<Regex>>>> =
+            LazyLock::new(|| RwLock::new(HashMap::default()));
+        let option = self.regex.option();
+        let key = (self.source.to_vec(), option, enc);
+        if let Some(re) = NATIVE_CACHE.read().unwrap().get(&key) {
+            return Ok(re.clone());
+        }
+        match Regex::new_bytes_with_encoding(&self.source, option, enc) {
+            Ok(re) => {
+                let re = Arc::new(re);
+                NATIVE_CACHE.write().unwrap().insert(key, re.clone());
+                Ok(re)
+            }
+            Err(err) => Err(MonorubyErr::regexerr(err.to_string())),
+        }
+    }
+
+    /// Byte-oriented match against a non-UTF-8 subject. `given` must
+    /// be `given_value`'s raw bytes (the coordinate system for the
+    /// resulting MatchData), and `enc` the Onigmo codec matching the
+    /// subject's Ruby encoding. Saves `$~` exactly like
+    /// [`captures_from_pos`](Self::captures_from_pos).
+    pub fn captures_bytes_from_pos<'a>(
+        &self,
+        given: &'a [u8],
+        given_value: Value,
+        enc: OnigmoEncoding,
+        pos: usize,
+        vm: &mut Executor,
+    ) -> Result<Option<onigmo_regex::CapturesBytes<'a>>> {
+        let native = self.native_regex(enc)?;
+        match native.captures_bytes_from_pos(given, pos) {
+            Ok(res) => {
+                if let Some(captures) = &res {
+                    vm.save_capture_special_variables_bytes(captures, given_value);
+                } else {
+                    vm.clear_capture_special_variables();
+                }
+                Ok(res)
+            }
+            Err(err) => Err(MonorubyErr::regexerr(format!("Capture failed. {:?}", err))),
+        }
+    }
+
     /// Find the leftmost-first match for `given`.
     /// Returns `Match`s.
     pub fn find_one<'a>(

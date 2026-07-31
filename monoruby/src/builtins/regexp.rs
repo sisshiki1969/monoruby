@@ -1130,6 +1130,47 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     check_subject_match_encoding(&globals.store, &regex, arg0)?;
     warn_binary_regexp_match(vm, globals, &regex, arg0);
+    // Subject declared in a non-UTF-8 encoding Onigmo has a native
+    // codec for: compile the source under that codec and match the
+    // raw bytes, so char boundaries follow the subject's *declared*
+    // encoding (e.g. `/./s` on Windows-31J "\xC3\xA9" matches one
+    // byte, even though those bytes happen to be valid UTF-8 too).
+    // Pure 7-bit content decodes identically either way; keep it on
+    // the fast zero-copy UTF-8 path.
+    if let Some(rs) = arg0.is_rstring()
+        && rs.code_range() != CodeRange::SevenBit
+        && let Some(native_enc) = RegexpInner::onigmo_encoding_for(rs.encoding())
+    {
+        let byte_pos = if let Some(pos) = lfp.try_arg(1) {
+            match conv_index(pos.coerce_to_int_i64(vm, globals)?, rs.char_length()) {
+                // Convert char index -> byte offset by walking char
+                // boundaries under the native encoding.
+                Some(cp) => rs.iter_char_bytes().take(cp).map(|c| c.len()).sum(),
+                None => return Ok(Value::nil()),
+            }
+        } else {
+            0
+        };
+        vm.set_match_regex(self_);
+        let bytes = arg0.as_rstring_inner().as_bytes();
+        let md = if let Some(captures) =
+            regex.captures_bytes_from_pos(bytes, arg0, native_enc, byte_pos, vm)?
+        {
+            Value::new_matchdata_bytes(&captures, arg0, regex)
+        } else {
+            Value::nil()
+        };
+        if !md.is_nil() {
+            vm.set_backref(md);
+        }
+        if let Some(bh) = lfp.block() {
+            if md.is_nil() {
+                return Ok(Value::nil());
+            }
+            return vm.invoke_block_once(globals, bh, &[md]);
+        }
+        return Ok(md);
+    }
     // Borrow the subject's bytes directly (and stash the Value for
     // the zero-copy MatchData snapshot) when it is a UTF-8 String;
     // Symbols and non-UTF-8 subjects fall back to the owned
@@ -2455,5 +2496,93 @@ mod tests {
         );
         // A modifier combined with `i`, and with a leading empty fragment.
         run_test(r#"x = "Z"; (/#{x}/i =~ "qzq")"#);
+    }
+
+    #[test]
+    fn regexp_match_native_encoding() {
+        // Windows-31J subject: "\xC3\xA9" is TWO single-byte chars in
+        // Windows-31J (0xC3 is not a lead byte) even though the same
+        // bytes are one char ("é") as UTF-8. `/./s` must match one
+        // byte, and the capture must carry the subject's encoding —
+        // exercises the native-encoding byte-match path
+        // (`captures_bytes_from_pos` / `from_captures_bytes`).
+        run_test(
+            r#"m = /./s.match("\303\251".dup.force_encoding(Encoding::Windows_31J))
+               [m[0].bytes, m[0].encoding.to_s, m.pre_match.bytes, m.post_match.bytes]"#,
+        );
+        // Interpolated form (spec: "with interpolation" / "and /o").
+        run_test(
+            r#"m = /#{/./}/s.match("\303\251".dup.force_encoding(Encoding::Windows_31J))
+               m.to_a.map(&:bytes)"#,
+        );
+        // EUC-JP: 0xA4A2 ("あ") is one 2-byte char; `/./e` matches both bytes.
+        run_test(
+            r#"m = /./e.match("\244\242".dup.force_encoding(Encoding::EUC_JP))
+               [m[0].bytes, m[0].encoding.to_s]"#,
+        );
+        // ISO-8859-1: every byte is one char.
+        run_test(
+            r#"s = "\351x".dup.force_encoding(Encoding::ISO_8859_1)
+               m = Regexp.new(".".dup.force_encoding(Encoding::ISO_8859_1)).match(s)
+               [m[0].bytes, m[0].encoding.to_s, m.post_match.bytes]"#,
+        );
+        // Capture groups + named backrefs still work on the native path.
+        run_test(
+            r#"s = "\303\251\303".dup.force_encoding(Encoding::Windows_31J)
+               m = /(.)(.)/s.match(s)
+               [m[1].bytes, m[2].bytes, m.to_a.size, $~[0].bytes, $1.bytes]"#,
+        );
+        // `pos` argument: char offset converts to byte offset under the
+        // subject's encoding.
+        run_test(
+            r#"s = "\303\251\303".dup.force_encoding(Encoding::Windows_31J)
+               m = /./s.match(s, 2)
+               [m[0].bytes, m.begin(0)]"#,
+        );
+        // No match on the native path clears $~ and returns nil.
+        run_test(
+            r#"s = "\303".dup.force_encoding(Encoding::Windows_31J)
+               [/z/s.match(s), $~]"#,
+        );
+        // Pure 7-bit subject stays equivalent regardless of path.
+        run_test(
+            r#"m = /b./s.match("abc".dup.force_encoding(Encoding::Windows_31J))
+               [m[0], m[0].encoding.to_s]"#,
+        );
+        // MatchData#string snapshot preserves the original bytes/encoding.
+        run_test(
+            r#"s = "\303\251".dup.force_encoding(Encoding::Windows_31J)
+               m = /./s.match(s)
+               [m.string.bytes, m.string.encoding.to_s, m.string.frozen?]"#,
+        );
+    }
+
+    #[test]
+    fn regexp_match_iso8859_variants() {
+        // Every ISO-8859-N Onigmo codec: single high byte is one char,
+        // so `/./` (compiled in the subject's encoding) matches exactly
+        // that byte. Exercises each arm of onigmo_encoding_for.
+        run_test(
+            r#"%w[ISO-8859-1 ISO-8859-2 ISO-8859-3 ISO-8859-4 ISO-8859-5
+                 ISO-8859-6 ISO-8859-7 ISO-8859-8 ISO-8859-9 ISO-8859-10
+                 ISO-8859-11 ISO-8859-13 ISO-8859-14 ISO-8859-15 ISO-8859-16]
+                .map do |name|
+                  enc = Encoding.find(name)
+                  s = "\341z".dup.force_encoding(enc)
+                  m = Regexp.new(".".dup.force_encoding(enc)).match(s)
+                  [name, m[0].bytes, m[0].encoding == enc]
+                end"#,
+        );
+        // Single-byte NamedByte encodings mapped to native Onigmo
+        // codecs (KOI8 / Windows-125x family).
+        run_test(
+            r#"%w[KOI8-R KOI8-U Windows-1250 Windows-1251 Windows-1252
+                 Windows-1253 Windows-1254 Windows-1257].map do |name|
+                  enc = Encoding.find(name)
+                  s = "\341z".dup.force_encoding(enc)
+                  m = Regexp.new(".".dup.force_encoding(enc)).match(s)
+                  [name, m[0].bytes, m[0].encoding == enc]
+                end"#,
+        );
     }
 }

@@ -346,8 +346,8 @@ fn offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let idx = resolve_capture_index(vm, globals, &m, lfp.arg(0))?;
     match m.pos(idx) {
         Some((start, end)) => {
-            let s = m.string()[..start].chars().count() as i64;
-            let e = m.string()[..end].chars().count() as i64;
+            let s = m.char_count_upto(start) as i64;
+            let e = m.char_count_upto(end) as i64;
             Ok(Value::array_from_vec(vec![Value::integer(s), Value::integer(e)]))
         }
         None => Ok(Value::array_from_vec(vec![Value::nil(), Value::nil()])),
@@ -787,7 +787,7 @@ fn match_begin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     let idx = resolve_capture_index(vm, globals, &m, lfp.arg(0))?;
     match m.pos(idx) {
         Some((start, _)) => {
-            let char_offset = m.string()[..start].chars().count();
+            let char_offset = m.char_count_upto(start);
             Ok(Value::integer(char_offset as i64))
         }
         None => Ok(Value::nil()),
@@ -809,7 +809,7 @@ fn match_end(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let idx = resolve_capture_index(vm, globals, &m, lfp.arg(0))?;
     match m.pos(idx) {
         Some((_, end_pos)) => {
-            let char_offset = m.string()[..end_pos].chars().count();
+            let char_offset = m.char_count_upto(end_pos);
             Ok(Value::integer(char_offset as i64))
         }
         None => Ok(Value::nil()),
