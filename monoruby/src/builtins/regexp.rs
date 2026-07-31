@@ -133,6 +133,7 @@ fn regexp_initialize(
         vm.temp_push(a1);
     }
     let inner = build_regexp_inner(vm, globals, lfp)?;
+    vm.flush_compile_warnings(globals);
     *self_.as_regexp_inner_mut() = inner;
     vm.temp_clear(temp);
     Ok(Value::nil())
@@ -149,7 +150,11 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let class_id = lfp.self_val().as_class_id();
     if class_id == REGEXP_CLASS {
         // Fast path for the base class: build directly.
-        return Ok(Value::regexp(build_regexp_inner(vm, globals, lfp)?));
+        let inner = build_regexp_inner(vm, globals, lfp)?;
+        // Surface Onigmo compile-time diagnostics right away, like
+        // CRuby's rb_warn during Regexp.new.
+        vm.flush_compile_warnings(globals);
+        return Ok(Value::regexp(inner));
     }
     // A subclass: allocate an instance of it, then initialize. Root the
     // fresh instance across the construction below, which allocates (and
@@ -2496,6 +2501,24 @@ mod tests {
         );
         // A modifier combined with `i`, and with a leading empty fragment.
         run_test(r#"x = "Z"; (/#{x}/i =~ "qzq")"#);
+    }
+
+    #[test]
+    fn regexp_nested_quantifier_not_reduced() {
+        // Bug #17341 semantics (ported into our Onigmo fork): a+?*
+        // behaves as (a+?)*; the match consumes all input.
+        run_test(r#"eval("/a+?*/").match("aa")[0]"#);
+        run_test(r#"eval("/a+?*/").match("")[0]"#);
+        run_test(r#"eval("/a+?+/").match("aa")[0]"#);
+        // The reduction-with-warning case still matches like CRuby.
+        run_test(r#"eval("/foo(A{0,1}+)Abar/").match("fooAAAbar").to_a"#);
+    }
+
+    #[test]
+    fn regexp_word_class_join_control() {
+        // CRuby >= 3.4: [[:word:]] / \p{Word} include Join_Control
+        // (U+200C/200D) per UTS #18; \w stays ASCII-only.
+        run_test(r#"["‌" =~ /[[:word:]]/, "‍" =~ /[[:word:]]/, "‌" =~ /\w/]"#);
     }
 
     #[test]

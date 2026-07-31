@@ -685,10 +685,17 @@ impl Executor {
     /// after compilation and before the compiled code runs.
     ///
     pub(crate) fn flush_compile_warnings(&mut self, globals: &mut Globals) {
-        if globals.store.compile_warnings.is_empty() {
+        // Onigmo compile-time diagnostics ("nested repeat operator ...
+        // was replaced with ...") are queued on a thread-local by
+        // `RegexpInner` (regexps also compile during bytecodegen,
+        // where no `Executor` is in reach) and join the same flush.
+        // They are plain rb_warn-level warnings (not verbose-only).
+        let regexp_warnings = crate::value::rvalue::RegexpInner::drain_pending_warnings();
+        if globals.store.compile_warnings.is_empty() && regexp_warnings.is_empty() {
             return;
         }
-        let msgs = std::mem::take(&mut globals.store.compile_warnings);
+        let mut msgs = std::mem::take(&mut globals.store.compile_warnings);
+        msgs.extend(regexp_warnings.into_iter().map(|m| (m, false)));
         // Verbose-level warnings (CRuby's `rb_warning`) print only when
         // `$VERBOSE` is exactly `true` at flush time.
         let verbose = globals

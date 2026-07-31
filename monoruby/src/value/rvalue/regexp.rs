@@ -5,6 +5,31 @@ use std::sync::{LazyLock, RwLock};
 
 static REGEX_CACHE: LazyLock<RwLock<RegexCache>> = LazyLock::new(|| RwLock::new(RegexCache::new()));
 
+thread_local! {
+    /// Compile-time diagnostics Onigmo reported for regexps built
+    /// since the last [`RegexpInner::drain_pending_warnings`] call.
+    /// Compilation can happen with no `Executor` in reach (bytecodegen
+    /// compiles literals), so constructors queue here and the callers
+    /// that do own a vm (`Regexp.new`, the `eval` family) drain and
+    /// emit through the Ruby warning mechanism.
+    static PENDING_REGEXP_WARNINGS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn queue_regexp_warnings(regex: &Regex) {
+    if regex.warnings().is_empty() {
+        return;
+    }
+    PENDING_REGEXP_WARNINGS.with(|w| {
+        let mut w = w.borrow_mut();
+        for msg in regex.warnings() {
+            // Onigmo's onig_syntax_warn already appends the offending
+            // pattern (`...: /<source>/`), so the message is complete.
+            w.push(format!("warning: {msg}"));
+        }
+    });
+}
+
 #[derive(Debug, Default)]
 struct RegexCache(HashMap<(String, u32, OnigmoEncoding), Arc<Regex>>);
 
@@ -571,6 +596,13 @@ fn utf8_char_len(b: u8) -> usize {
 impl RegexpInner {
 
     /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
+    /// Take (and clear) the compile-time diagnostics queued by regexp
+    /// constructions on this thread. Callers with an `Executor` should
+    /// forward each entry to `ruby_warn`.
+    pub fn drain_pending_warnings() -> Vec<String> {
+        PENDING_REGEXP_WARNINGS.with(|w| std::mem::take(&mut *w.borrow_mut()))
+    }
+
     pub fn from_escaped(text: &str) -> Result<Self> {
         RegexpInner::with_option_and_encoding(Self::escape(text), 0, OnigmoEncoding::UTF8)
     }
@@ -669,17 +701,24 @@ impl RegexpInner {
             .0
             .entry((reg_str.clone(), onigmo_option, encoding))
         {
-            std::collections::hash_map::Entry::Occupied(entry) => Ok(RegexpInner {
-                regex: entry.get().clone(),
-                source,
-                encoding,
-                declared_encoding,
-                fixed_encoding,
-                initialized: true,
-            }),
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                // The cached Regex still carries its compile-time
+                // diagnostics; CRuby re-warns on every compile of the
+                // same pattern, so re-queue on cache hits too.
+                queue_regexp_warnings(entry.get());
+                Ok(RegexpInner {
+                    regex: entry.get().clone(),
+                    source,
+                    encoding,
+                    declared_encoding,
+                    fixed_encoding,
+                    initialized: true,
+                })
+            }
             std::collections::hash_map::Entry::Vacant(entry) => {
                 match Regex::new_with_option_and_encoding(&reg_str, onigmo_option, encoding) {
                     Ok(regexp) => {
+                        queue_regexp_warnings(&regexp);
                         let regex = Arc::new(regexp);
                         entry.insert(regex.clone());
                         Ok(RegexpInner {
