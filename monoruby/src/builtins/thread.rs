@@ -198,7 +198,7 @@ fn pending_interrupt_p(
 /// re-raise); otherwise exception object / class / String / duck-typed
 /// `#exception`, with optional message-override, backtrace, and the
 /// `cause:` keyword.
-fn build_async_error(
+pub(super) fn build_async_error(
     vm: &mut Executor,
     globals: &mut Globals,
     args: &[Value],
@@ -403,6 +403,9 @@ fn thread_initialize(
     }
     let args = lfp.arg(0).as_array().to_vec();
     *self_.as_thread_inner_mut() = ThreadInner::new(proc, args);
+    if let Some(storage) = super::fiber::current_fiber_storage(vm, globals)? {
+        self_.as_thread_inner_mut().seed_fiber_storage(storage);
+    }
     scheduler::spawn(vm, self_);
     // The eager first slice must keep `self_` (and this frame's Values)
     // rooted: `pass` is a scheduler entry (GC-safe park point), and the
@@ -435,6 +438,9 @@ fn thread_start(
     let class_id = lfp.self_val().as_class_id();
     let args = lfp.arg(0).as_array().to_vec();
     let mut thread = Value::new_thread(class_id, ThreadInner::new(proc.clone(), args));
+    if let Some(storage) = super::fiber::current_fiber_storage(vm, globals)? {
+        thread.as_thread_inner_mut().seed_fiber_storage(storage);
+    }
     if let Some(iseq) = globals.store.resolve_iseq(proc.func_id()) {
         let info = &globals.store[iseq];
         let path = crate::globals::display_path(&info.sourceinfo).to_string();

@@ -342,6 +342,7 @@ impl MonorubyErr {
             MonorubyErrKind::MethodReturn(..) => "MethodReturn",
             MonorubyErrKind::BlockBreak(..) => "BlockBreak",
             MonorubyErrKind::Throw(..) => "UncaughtThrowError",
+            MonorubyErrKind::FiberKill => "FiberKill",
             MonorubyErrKind::Retry => "Retry",
             MonorubyErrKind::Redo => "Redo",
             MonorubyErrKind::Fatal => "FatalError",
@@ -358,6 +359,7 @@ impl MonorubyErr {
             MonorubyErrKind::MethodReturn(..)
             | MonorubyErrKind::BlockBreak(..)
             | MonorubyErrKind::Throw(..)
+            | MonorubyErrKind::FiberKill
             | MonorubyErrKind::Retry
             | MonorubyErrKind::Redo => false,
             _ => {
@@ -400,6 +402,7 @@ impl MonorubyErr {
             MonorubyErrKind::MethodReturn(..)
             | MonorubyErrKind::BlockBreak(..)
             | MonorubyErrKind::Throw(..)
+            | MonorubyErrKind::FiberKill
             | MonorubyErrKind::Retry
             | MonorubyErrKind::Redo => {
                 unreachable!()
@@ -1331,6 +1334,11 @@ pub enum MonorubyErrKind {
     /// Kernel#throw — carries (tag, value). Not catchable by `rescue`;
     /// only `Kernel#catch` with a matching tag intercepts it.
     Throw(Value, Value),
+    /// `Fiber#kill` unwind: runs `ensure` clauses but is skipped by every
+    /// `rescue` (like `Throw`), and is swallowed at the fiber boundary by
+    /// whichever pending `resume`/`transfer` call receives the killed
+    /// fiber's termination.
+    FiberKill,
     /// FatalError — raised when a Rust `panic!` is caught at an `extern "C"`
     /// boundary. Deliberately NOT catchable from Ruby `rescue` (even
     /// `rescue Exception`); propagates up to the top level.

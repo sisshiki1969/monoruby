@@ -338,7 +338,18 @@ impl JitModule {
     /// x2 &ProcData, x3 self, x4 args, x5 len, x6 child_vm (&mut Executor).
     /// Switch onto the fiber's pre-allocated stack, run its block body, then
     /// switch back to the parent on completion. (Mirrors x86 fiber_invoker.)
-    pub(in crate::codegen) fn a64_fiber_invoker(&mut self, with_self: bool) -> FiberInvoker {
+    /// `write_parent` distinguishes the resume-style activation (caller
+    /// becomes CRuby's `prev`) from a `Fiber#transfer` activation, which
+    /// leaves `parent_fiber` unset so a yield inside raises FiberError. On
+    /// body termination `fiber_on_terminate` (Rust) marks the child dead,
+    /// relays a pending error to the return target's executor, and yields
+    /// the executor whose saved context to restore (the eagerly maintained
+    /// `return_to`). Mirrors the x86 fiber_invoker_inner.
+    pub(in crate::codegen) fn a64_fiber_invoker(
+        &mut self,
+        with_self: bool,
+        write_parent: bool,
+    ) -> FiberInvoker {
         let codeptr = self.jit.get_current_address();
         // switch in: save parent regs + SP, jump to the fiber's stack.
         self.a64_push_callee_save();
@@ -347,7 +358,13 @@ impl JitModule {
             str x10, [x0, #(EXECUTOR_RSP_SAVE as u32)];  // parent.rsp_save = SP
             ldr x10, [x6, #(EXECUTOR_RSP_SAVE as u32)];
             mov sp, x10;  // SP = child.rsp_save (fresh stack top)
-            str x0, [x6, #(EXECUTOR_PARENT_FIBER as u32)];  // child.parent_fiber = parent
+        );
+        if write_parent {
+            monoasm_arm64!(&mut self.jit,
+                str x0, [x6, #(EXECUTOR_PARENT_FIBER as u32)];  // child.parent_fiber = parent
+            );
+        }
+        monoasm_arm64!(&mut self.jit,
             mov x(EXEC.0), x6;  // EXEC = child_vm
             mov x(GLOBALS.0), x1;
         );
@@ -356,13 +373,18 @@ impl JitModule {
             mov x7, (0);  // fibers carry no keyword args
         );
         self.a64_invoker_args_and_call(true);
-        // body completed: mark this fiber terminated, switch back to parent.
+        // Body completed (x0 = result) or an activation error left x0 = 0:
+        // let fiber_on_terminate mark this fiber dead, relay a pending
+        // error, and name the return-target executor, then switch to it.
         monoasm_arm64!(&mut self.jit,
-            mov x10, (u64::MAX);  // -1 = terminated
-            str x10, [x(EXEC.0), #(EXECUTOR_RSP_SAVE as u32)];
-            ldr x(EXEC.0), [x(EXEC.0), #(EXECUTOR_PARENT_FIBER as u32)];
-            ldr x10, [x(EXEC.0), #(EXECUTOR_RSP_SAVE as u32)];
+            mov x21, x0;  // stash result across the call (restored from the
+                          // target's stack by a64_pop_callee_save below)
+            mov x0, x(EXEC.0);
+            mov x9, (crate::executor::fiber_on_terminate as *const () as u64);
+            blr x9;       // x0 = return-target executor
+            ldr x10, [x0, #(EXECUTOR_RSP_SAVE as u32)];
             mov sp, x10;
+            mov x0, x21;
         );
         self.a64_pop_callee_save();
         monoasm_arm64!(&mut self.jit,
@@ -400,10 +422,13 @@ impl JitModule {
         unsafe { std::mem::transmute_copy::<*mut u8, BindingInvoker>(&codeptr.as_ptr()) }
     }
     pub(in crate::codegen) fn fiber_invoker(&mut self) -> FiberInvoker {
-        self.a64_fiber_invoker(false)
+        self.a64_fiber_invoker(false, true)
     }
     pub(in crate::codegen) fn fiber_invoker_with_self(&mut self) -> FiberInvoker {
-        self.a64_fiber_invoker(true)
+        self.a64_fiber_invoker(true, true)
+    }
+    pub(in crate::codegen) fn fiber_invoker_transfer(&mut self) -> FiberInvoker {
+        self.a64_fiber_invoker(false, false)
     }
 
     /// First activation of a green thread. In: x0 thread_vm, x1 globals,
@@ -519,6 +544,29 @@ impl JitModule {
             mov x0, x2;  // resume value
             ret;
         // SAFETY: codeptr matches the resume_fiber ABI.
+        );
+        unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
+    }
+
+    /// `Fiber#transfer` switch primitive: like `resume_fiber` but does NOT
+    /// establish the child's `parent_fiber` (CRuby `prev`) link. All link
+    /// bookkeeping happens on the Rust side. x86 transfer_fiber.
+    pub(in crate::codegen) fn transfer_fiber(
+        &mut self,
+    ) -> extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value> {
+        let codeptr = self.jit.get_current_address();
+        self.a64_push_callee_save();
+        monoasm_arm64!(&mut self.jit,
+            mov x10, sp;
+            str x10, [x0, #(EXECUTOR_RSP_SAVE as u32)];  // vm.rsp_save = SP
+            ldr x10, [x1, #(EXECUTOR_RSP_SAVE as u32)];
+            mov sp, x10;  // SP = child.rsp_save
+        );
+        self.a64_pop_callee_save();
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x2;  // transfer value
+            ret;
+        // SAFETY: codeptr matches the transfer_fiber ABI.
         );
         unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
     }

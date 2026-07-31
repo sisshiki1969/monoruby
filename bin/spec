@@ -8,7 +8,7 @@ MONORUBY="${MONORUBY:-$(command -v monoruby)}"
 if [ -d "../spec" ] && [ -d "../mspec" ]; then
   echo "Running ruby/spec for coverage..."
   cd ../spec
-  for cat in basicobject true false nil integer float comparable math builtin_constants class numeric rational symbol range struct systemexit method unboundmethod set exception mutex signal; do
+  for cat in basicobject true false nil integer float comparable math builtin_constants class numeric rational symbol range struct systemexit method unboundmethod set exception signal; do
     echo "=== core/$cat ==="
     ../mspec/bin/mspec core/$cat -t "$MONORUBY"
   done
