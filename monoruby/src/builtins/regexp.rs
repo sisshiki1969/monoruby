@@ -2497,4 +2497,63 @@ mod tests {
         // A modifier combined with `i`, and with a leading empty fragment.
         run_test(r#"x = "Z"; (/#{x}/i =~ "qzq")"#);
     }
+
+    #[test]
+    fn regexp_match_native_encoding() {
+        // Windows-31J subject: "\xC3\xA9" is TWO single-byte chars in
+        // Windows-31J (0xC3 is not a lead byte) even though the same
+        // bytes are one char ("é") as UTF-8. `/./s` must match one
+        // byte, and the capture must carry the subject's encoding —
+        // exercises the native-encoding byte-match path
+        // (`captures_bytes_from_pos` / `from_captures_bytes`).
+        run_test(
+            r#"m = /./s.match("\303\251".dup.force_encoding(Encoding::Windows_31J))
+               [m[0].bytes, m[0].encoding.to_s, m.pre_match.bytes, m.post_match.bytes]"#,
+        );
+        // Interpolated form (spec: "with interpolation" / "and /o").
+        run_test(
+            r#"m = /#{/./}/s.match("\303\251".dup.force_encoding(Encoding::Windows_31J))
+               m.to_a.map(&:bytes)"#,
+        );
+        // EUC-JP: 0xA4A2 ("あ") is one 2-byte char; `/./e` matches both bytes.
+        run_test(
+            r#"m = /./e.match("\244\242".dup.force_encoding(Encoding::EUC_JP))
+               [m[0].bytes, m[0].encoding.to_s]"#,
+        );
+        // ISO-8859-1: every byte is one char.
+        run_test(
+            r#"s = "\351x".dup.force_encoding(Encoding::ISO_8859_1)
+               m = Regexp.new(".".dup.force_encoding(Encoding::ISO_8859_1)).match(s)
+               [m[0].bytes, m[0].encoding.to_s, m.post_match.bytes]"#,
+        );
+        // Capture groups + named backrefs still work on the native path.
+        run_test(
+            r#"s = "\303\251\303".dup.force_encoding(Encoding::Windows_31J)
+               m = /(.)(.)/s.match(s)
+               [m[1].bytes, m[2].bytes, m.to_a.size, $~[0].bytes, $1.bytes]"#,
+        );
+        // `pos` argument: char offset converts to byte offset under the
+        // subject's encoding.
+        run_test(
+            r#"s = "\303\251\303".dup.force_encoding(Encoding::Windows_31J)
+               m = /./s.match(s, 2)
+               [m[0].bytes, m.begin(0)]"#,
+        );
+        // No match on the native path clears $~ and returns nil.
+        run_test(
+            r#"s = "\303".dup.force_encoding(Encoding::Windows_31J)
+               [/z/s.match(s), $~]"#,
+        );
+        // Pure 7-bit subject stays equivalent regardless of path.
+        run_test(
+            r#"m = /b./s.match("abc".dup.force_encoding(Encoding::Windows_31J))
+               [m[0], m[0].encoding.to_s]"#,
+        );
+        // MatchData#string snapshot preserves the original bytes/encoding.
+        run_test(
+            r#"s = "\303\251".dup.force_encoding(Encoding::Windows_31J)
+               m = /./s.match(s)
+               [m.string.bytes, m.string.encoding.to_s, m.string.frozen?]"#,
+        );
+    }
 }

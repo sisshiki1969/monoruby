@@ -178,6 +178,25 @@ impl MatchDataInner {
         decode_span(self.matches[pos])
     }
 
+    /// Number of characters in the haystack before byte offset
+    /// `byte_off`, counted under the haystack's *declared encoding*
+    /// (`MatchData#begin` / `#end` / `#offset` semantics). Walks the
+    /// encoding-aware char iterator, so Windows-31J / EUC-JP subjects
+    /// stored by the byte-match path count correctly.
+    pub fn char_count_upto(&self, byte_off: usize) -> usize {
+        let rs = self.heystack.as_rstring_inner();
+        let mut n = 0;
+        let mut consumed = 0;
+        for c in rs.iter_char_bytes() {
+            if consumed >= byte_off {
+                break;
+            }
+            consumed += c.len();
+            n += 1;
+        }
+        n
+    }
+
     /// Matched bytes for capture `pos`. Slices the haystack on
     /// **byte** boundaries (always safe) — required for binary
     /// (`/n`) regexps whose onigmo byte offsets land mid-UTF-8 of
