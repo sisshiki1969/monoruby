@@ -65,6 +65,7 @@ mod watchdog;
 
 pub(crate) use crate::codegen::runtime::ProcData;
 pub(crate) use bytecode::*;
+pub use builtins::kernel::define_loop_mode_builtins;
 pub use bytecodegen::bytecode_compile_script;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use codegen::jitgen::JitContext;

@@ -257,6 +257,13 @@ impl ThreadInner {
         self.state == ThreadState::Dead
     }
 
+    /// Mark this thread dead without unwinding it — used in a fork child,
+    /// where the parent's other threads do not exist.
+    pub(crate) fn mark_dead_for_fork(&mut self) {
+        self.state = ThreadState::Dead;
+        self.killed = true;
+    }
+
     pub(crate) fn proc(&self) -> Option<&Proc> {
         self.proc.as_ref()
     }

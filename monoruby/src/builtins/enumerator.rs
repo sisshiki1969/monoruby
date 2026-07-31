@@ -167,7 +167,13 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 return Ok(v);
             }
             let a = v.as_array();
-            res = vm.invoke_block(globals, block_data, &[a.peel()])?;
+            // A zero-arg yield must invoke the block with no arguments —
+            // `peel()` on an empty args array would fabricate a nil.
+            res = if a.len() == 0 {
+                vm.invoke_block(globals, block_data, &[])?
+            } else {
+                vm.invoke_block(globals, block_data, &[a.peel()])?
+            };
         }
     }
     let self_val: Enumerator = match Enumerator::try_new(lfp.self_val()) {

@@ -11,6 +11,18 @@ use std::{io::Write, mem::transmute};
 // Kernel module
 //
 
+/// Define the `-n` / `-p` loop companions (`Kernel#chomp` / `#chop`),
+/// which exist only when the CLI armed the implicit `while gets` wrap.
+pub fn define_loop_mode_builtins(globals: &mut Globals) {
+    let kernel_class = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Kernel"))
+        .unwrap()
+        .as_class_id();
+    globals.define_builtin_module_func_with(kernel_class, "chomp", chomp, 0, 1, false);
+    globals.define_builtin_module_func(kernel_class, "chop", chop, 0);
+}
+
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
@@ -154,7 +166,16 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         false,
         Effect::EVAL,
     );
-    globals.define_builtin_module_func_with(kernel_class, "system", system, 1, 1, true);
+    globals.define_builtin_module_func_with_kw(
+        kernel_class,
+        "system",
+        system,
+        1,
+        1,
+        true,
+        &["exception"],
+        false,
+    );
     globals.define_builtin_module_func_rest(kernel_class, "exec", exec);
     globals.define_builtin_module_func_rest(kernel_class, "spawn", spawn);
     globals.define_builtin_module_func(kernel_class, "`", command, 1);
@@ -218,8 +239,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_func(kernel_class, "__backtrace_limit", backtrace_limit, 0);
     globals.define_builtin_func(kernel_class, "__caller_frames", caller_frames, 1);
-    globals.define_builtin_module_func_with(kernel_class, "chomp", chomp, 0, 1, false);
-    globals.define_builtin_module_func(kernel_class, "chop", chop, 0);
+    // `chomp` / `chop` are only defined under `-n` / `-p`
+    // (`define_loop_mode_builtins`, called from the CLI driver).
     globals.define_builtin_func(
         kernel_class,
         "__enum_yield",
@@ -255,7 +276,16 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     let init_copy_fid =
         globals.define_private_builtin_func(kernel_class, "initialize_copy", initialize_copy, 1);
     let init_clone_fid =
-        globals.define_private_builtin_func(kernel_class, "initialize_clone", initialize_clone, 1);
+        globals.define_private_builtin_func_with_kw(
+            kernel_class,
+            "initialize_clone",
+            initialize_clone,
+            1,
+            1,
+            false,
+            &["freeze"],
+            false,
+        );
     let init_dup_fid =
         globals.define_private_builtin_func(kernel_class, "initialize_dup", initialize_clone, 1);
     globals
@@ -658,6 +688,30 @@ fn read_record(
 
 #[monoruby_builtin]
 fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // CRuby's `Kernel#gets` is `ARGF.gets` — dispatched, so a singleton
+    // stub on the ARGF object intercepts it (`$_` is still set here: the
+    // stub runs in its own frame and could not reach the caller's
+    // frame-local `$_`). Without an override, use the raw record reader
+    // directly, which also maintains `$.`.
+    if let Some(argf) = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("ARGF"))
+    {
+        let gets_id = IdentId::get_id("gets");
+        if let Ok((fid, _, owner)) = globals.find_method_for_object(argf, gets_id)
+            && owner != argf.real_class(&globals.store).id()
+        {
+            let res = vm.invoke_func_inner(globals, fid, argf, &[], None, None)?;
+            vm.set_last_read_line(res);
+            return Ok(res);
+        }
+    }
+    argf_gets_raw(vm, globals)
+}
+
+/// The raw ARGV/stdin record reader backing `Kernel#gets`: honours `$/`,
+/// advances `$.`, and sets `$_`.
+fn argf_gets_raw(vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
     // Honour the input record separator `$/` (set by the `-0`
     // command-line switch or by assignment): nil slurps the whole
     // input, "" is paragraph mode, any other string reads up to and
@@ -871,6 +925,16 @@ fn proc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
 #[monoruby_builtin]
 fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     if let Some(bh) = lfp.block() {
+        // A non-literal block (`lambda(&pr)`): CRuby refuses to promote
+        // an ordinary proc, and passes an existing lambda through.
+        if let Some(p) = bh.try_proc() {
+            if globals.store[p.func_id()].meta().is_block_style() {
+                return Err(MonorubyErr::argumenterr(
+                    "the lambda method requires a literal block",
+                ));
+            }
+            return Ok(p.into());
+        }
         let func_id = bh.func_id();
         globals.store[func_id].set_method_style();
         let p = vm.generate_proc(globals, bh, pc)?;
@@ -941,10 +1005,23 @@ fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
             // for an empty `loop {}` body.
             Ok(_) => {}
             Err(err) => {
-                // `loop` swallows StopIteration and any user subclass of it, and
-                // re-raises everything else (including control-flow signals).
+                // `loop` swallows StopIteration and any user subclass of it
+                // — evaluating to the iterator's return value
+                // (`StopIteration#result`) — and re-raises everything else
+                // (including control-flow signals).
                 return if err.is_stop_iteration(&globals.store) {
-                    Ok(Value::nil())
+                    let result = err
+                        .payload
+                        .as_ref()
+                        .filter(|(_, key)| *key == "result")
+                        .map(|(v, _)| *v)
+                        .or_else(|| {
+                            err.original.and_then(|obj| {
+                                globals.store.get_ivar(obj, IdentId::get_id("/result"))
+                            })
+                        })
+                        .unwrap_or_default();
+                    Ok(result)
                 } else {
                     Err(err)
                 };
@@ -1984,6 +2061,17 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
     } else {
         None
     };
+    if base.is_some() && !matches!(arg0.unpack(), RV::String(_)) {
+        // With an explicit base only Strings (and #to_str convertibles,
+        // handled below) are acceptable.
+        if let Some(func_id) = globals.check_method(arg0, IdentId::TO_STR) {
+            let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+            if let Some(s) = result.is_str() {
+                return parse_kernel_integer(s, base.unwrap_or(0));
+            }
+        }
+        return Err(MonorubyErr::argumenterr("base specified for non string value"));
+    }
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::integer(num)),
         RV::BigInt(num) => return Ok(Value::bigint(num.clone())),
@@ -1997,7 +2085,13 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
                     if num < 0.0 { "-Infinity" } else { "Infinity" },
                 ));
             }
-            return Ok(Value::integer(num.trunc() as i64));
+            let t = num.trunc();
+            if t >= i64::MIN as f64 && t <= i64::MAX as f64 {
+                return Ok(Value::integer(t as i64));
+            }
+            // Out of Fixnum range: exact conversion through BigInt.
+            use num::bigint::ToBigInt;
+            return Ok(Value::bigint(t.to_bigint().unwrap()));
         }
         RV::String(b) => {
             let s = b.check_utf8()?;
@@ -2013,6 +2107,14 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
             RV::Fixnum(i) => return Ok(Value::integer(i)),
             RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
             _ => {}
+        }
+    }
+    // Then #to_str (an object convertible to a String parses like one) —
+    // preferred over #to_i (CRuby).
+    if let Some(func_id) = globals.check_method(arg0, IdentId::TO_STR) {
+        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+        if let Some(s) = result.is_str() {
+            return parse_kernel_integer(s, 0);
         }
     }
     // Try to_i coercion as a fallback
@@ -2420,6 +2522,30 @@ fn kernel_complex(
     // first argument paired with a *Numeric* second argument always raises
     // (`Complex(:sym, 0, exception: false)` -> TypeError "not a real").
     if let Some(i) = arg1 {
+        // A non-real numeric component (a Complex, or a Numeric whose
+        // `real?` is false) composes arithmetically through dispatch:
+        // `n1 + n2 * Complex(0, 1)` (CRuby).
+        let re_realness = numeric_is_real(vm, globals, arg0)?;
+        let im_realness = numeric_is_real(vm, globals, i)?;
+        if re_realness == Some(false) || im_realness == Some(false) {
+            let unit = Value::complex(Real::from(0i64), Real::from(1i64));
+            let prod = vm.invoke_method_inner(
+                globals,
+                IdentId::get_id("*"),
+                i,
+                &[unit],
+                None,
+                None,
+            )?;
+            return vm.invoke_method_inner(
+                globals,
+                IdentId::get_id("+"),
+                arg0,
+                &[prod],
+                None,
+                None,
+            );
+        }
         let im = match real_for_complex(vm, globals, i)? {
             Some(i) => i,
             None => {
@@ -2431,11 +2557,27 @@ fn kernel_complex(
         };
         let re = match real_for_complex(vm, globals, arg0)? {
             Some(r) => r,
-            None => return Err(MonorubyErr::typeerr("not a real")),
+            None => {
+                // A non-numeric *String* component is swallowable with
+                // `exception: false`; a non-String non-numeric first
+                // argument always raises (CRuby).
+                if !exception && matches!(arg0.unpack(), RV::String(_)) {
+                    return Ok(Value::nil());
+                }
+                return Err(MonorubyErr::typeerr("not a real"));
+            }
         };
         return Ok(Value::complex(re, im));
     }
 
+    // A single Complex — or a Numeric that says it is not real — passes
+    // through unchanged (CRuby).
+    if arg0.try_complex().is_some() {
+        return Ok(arg0);
+    }
+    if numeric_is_real(vm, globals, arg0)? == Some(false) {
+        return Ok(arg0);
+    }
     let r = match real_for_complex(vm, globals, arg0)? {
         Some(r) => r,
         None => {
@@ -2458,6 +2600,38 @@ fn kernel_complex(
         }
     };
     Ok(Value::complex(r, Real::zero()))
+}
+
+/// Whether `v` is a real number: `Some(true)` for the standard reals,
+/// `Some(false)` for a Complex or a Numeric whose dispatched `#real?` is
+/// falsy, `None` when `v` is not numeric at all (so no `#real?` is sent to
+/// arbitrary objects).
+fn numeric_is_real(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Option<bool>> {
+    match v.unpack() {
+        RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => Ok(Some(true)),
+        _ if v.try_rational().is_some() => Ok(Some(true)),
+        _ if v.try_complex().is_some() => Ok(Some(false)),
+        _ => {
+            let numeric_id = IdentId::get_id("Numeric");
+            if let Some(numeric) = globals
+                .store
+                .get_constant_noautoload(OBJECT_CLASS, numeric_id)
+                .map(|c| c.as_class_id())
+                && v.is_kind_of(&globals.store, numeric)
+            {
+                let res = vm.invoke_method_inner(
+                    globals,
+                    IdentId::get_id("real?"),
+                    v,
+                    &[],
+                    None,
+                    None,
+                )?;
+                return Ok(Some(res.as_bool()));
+            }
+            Ok(None)
+        }
+    }
 }
 
 /// Convert `v` into a `Real` suitable for a Complex component, returning
@@ -3321,7 +3495,10 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         // the surrounding class/module body. Mirrors CRuby's
         // `rb_vm_cref_dup_without_refinements`.
         let pushed = vm.push_eval_cref();
-        let res = vm.invoke_block(globals, &proc, &[]);
+        // `self` inside the eval is the *receiver* of the eval call — for
+        // the ordinary private spelling that is the caller's self, but
+        // `Kernel.eval("self")` evaluates with self == Kernel (CRuby).
+        let res = vm.invoke_block_with_self(globals, &proc, lfp.self_val(), &[]);
         vm.pop_eval_cref(pushed);
         res
     }
@@ -3374,15 +3551,36 @@ pub(super) fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::process::Command;
     let arg0 = lfp.arg(0);
-    let (program, mut args) = prepare_command_arg(&arg0.coerce_to_str(vm, globals)?);
+    // `exception: true` turns the nil/false results into raises (CRuby).
+    let exception = lfp.try_arg(2).is_some_and(|v| v.as_bool());
+    let cmd_str = arg0.coerce_to_str(vm, globals)?;
+    let (program, mut args) = prepare_command_arg(&cmd_str);
     if let Some(arg1) = lfp.try_arg(1) {
         for v in arg1.as_array().iter() {
             args.push(v.coerce_to_string(vm, globals)?);
         }
     }
-    let mut child = match Command::new(program).args(&args).spawn() {
+    let mut child = match Command::new(&program).args(&args).spawn() {
         Ok(child) => child,
-        Err(_) => return Ok(Value::nil()),
+        // ENOEXEC (an executable file without a shebang that isn't a
+        // binary): retry through `sh`, like execvp-era shells and CRuby.
+        Err(err) if err.raw_os_error() == Some(libc::ENOEXEC) => {
+            match Command::new("/bin/sh").arg(&program).args(&args).spawn() {
+                Ok(child) => child,
+                Err(_) => return Ok(Value::nil()),
+            }
+        }
+        Err(err) => {
+            if exception {
+                // e.g. Errno::ENOENT: "No such file or directory - cmd"
+                return Err(MonorubyErr::from_io_err(
+                    &globals.store,
+                    &err,
+                    format!("{} - {}", errno_description(&err), cmd_str),
+                ));
+            }
+            return Ok(Value::nil());
+        }
     };
     let pid = child.id();
     let status = match child.wait() {
@@ -3408,6 +3606,17 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 crate::scheduler::set_last_status(vm, status_obj);
             }
         }
+    }
+    if exception && !status.success() {
+        use std::os::unix::process::ExitStatusExt;
+        let detail = match (status.code(), status.signal()) {
+            (Some(code), _) => format!("exit {code}"),
+            (None, Some(sig)) => format!("signal {sig}"),
+            _ => "unknown status".to_string(),
+        };
+        return Err(MonorubyErr::runtimeerr(format!(
+            "Command failed with {detail}: {cmd_str}"
+        )));
     }
     Ok(Value::bool(status.success()))
 }
@@ -3520,7 +3729,10 @@ fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Err(MonorubyErr::runtimeerr("fork failed"));
     }
     if pid == 0 {
-        // Child process
+        // Child process: only the forking thread exists here — the other
+        // green threads' state belongs to the parent (CRuby marks them
+        // dead).
+        crate::scheduler::fork_child_reset_threads(vm);
         if let Some(bh) = lfp.block() {
             let data = vm.get_block_data(globals, bh)?;
             match vm.invoke_block(globals, &data, &[]) {
@@ -3685,13 +3897,41 @@ pub(super) fn spawn(
 fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::process::ExitStatusExt;
     let arg0 = lfp.arg(0);
-    let (program, args) = prepare_command_arg(&arg0.coerce_to_string(vm, globals)?);
-    let child = std::process::Command::new(program)
-        .args(&args)
+    let rs = arg0.coerce_to_rstring(vm, globals)?;
+    let bytes = rs.as_bytes().to_vec();
+    // A command with invalid UTF-8 bytes still runs: hand the raw bytes to
+    // the shell (CRuby passes the byte string through unmodified).
+    let mut builder = match std::str::from_utf8(&bytes) {
+        Ok(s) => {
+            let (program, args) = prepare_command_arg(s);
+            let mut c = std::process::Command::new(program);
+            c.args(&args);
+            c
+        }
+        Err(_) => {
+            use std::os::unix::ffi::OsStrExt;
+            let mut c = std::process::Command::new("sh");
+            c.arg("-c").arg(std::ffi::OsStr::from_bytes(&bytes));
+            c
+        }
+    };
+    let child = builder
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|err| MonorubyErr::runtimeerr(format!("{}", err)))?;
+        .map_err(|err| {
+            // e.g. Errno::ENOENT for a nonexistent command (the direct-exec
+            // path; the shell path reports through the exit status instead).
+            MonorubyErr::from_io_err(
+                &globals.store,
+                &err,
+                format!(
+                    "{} - {}",
+                    errno_description(&err),
+                    String::from_utf8_lossy(&bytes)
+                ),
+            )
+        })?;
     let pid = child.id();
     match child.wait_with_output() {
         Ok(output) => {
@@ -3714,7 +3954,14 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                     crate::scheduler::set_last_status(vm, status_obj);
                 }
             }
-            Ok(Value::string_from_vec(output.stdout))
+            // The captured output is tagged with the default external
+            // encoding (CRuby).
+            let mut s = Value::string_from_vec(output.stdout);
+            let ext_obj = super::io::enc_default_external_obj(globals);
+            if let Some(enc) = super::io::enc_obj_to_enum(globals, ext_obj) {
+                s.as_rstring_inner_mut().set_encoding(enc);
+            }
+            Ok(s)
         }
         Err(err) => Err(MonorubyErr::runtimeerr(format!("{}", err))),
     }
@@ -4516,6 +4763,16 @@ fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
     let self_val = lfp.self_val();
+    // Reject non-Modules up front (CRuby checks the whole argument list
+    // before extending anything).
+    for v in args.iter() {
+        if v.is_module().is_none() {
+            return Err(MonorubyErr::typeerr(format!(
+                "wrong argument type {} (expected Module)",
+                v.get_real_class_name(&globals.store)
+            )));
+        }
+    }
     for v in args.iter().cloned().rev() {
         vm.invoke_method_inner(globals, IdentId::EXTEND_OBJECT, v, &[self_val], None, None)?;
         vm.invoke_method_inner(globals, IdentId::EXTENDED, v, &[self_val], None, None)?;
@@ -5262,7 +5519,10 @@ fn instance_of(
 #[monoruby_builtin]
 fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let receiver = lfp.self_val();
-    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    // The name accepts Symbols, Strings, and #to_str convertibles; an
+    // error raised by the conversion (e.g. a NoMethodError from #to_str)
+    // propagates as-is.
+    let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
     method_object_impl(vm, globals, receiver, method_name, false)
 }
 
@@ -5284,7 +5544,7 @@ fn public_method(
     _: BytecodePtr,
 ) -> Result<Value> {
     let receiver = lfp.self_val();
-    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
     method_object_impl(vm, globals, receiver, method_name, true)
 }
 
@@ -5398,6 +5658,13 @@ fn singleton_class(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // A frozen String can never be given a singleton class (CRuby,
+    // observable with deduplicated `"..."` literals under
+    // frozen-string-literal).
+    let recv = lfp.self_val();
+    if recv.is_rstring().is_some() && recv.is_frozen() {
+        return Err(MonorubyErr::typeerr("can't define singleton"));
+    }
     let s = lfp.self_val().get_singleton(&mut globals.store)?;
     // MRI's `rb_singleton_class`: for a Class receiver, the exposed
     // eigenclass is made to belong to its *own* eigenclass — building
@@ -8425,6 +8692,166 @@ mod tests {
         ]);
         run_test_error(r#"Hash(1)"#);
         run_test_error(r#"Hash("str")"#);
+    }
+
+    #[test]
+    fn kernel_easy_edges_2026_07() {
+        // Object#===: identity wins even when == / equal? lie.
+        run_test(
+            r##"
+            k = Class.new { def ==(o); false; end; def equal?(o); false; end }
+            a = k.new
+            [a === a, a === k.new]
+            "##,
+        );
+        // Kernel#extend rejects non-Modules (and classes).
+        run_test_error("Object.new.extend(String)");
+        run_test_error("Object.new.extend(42)");
+        // lambda(&proc) is refused; lambda(&lambda) passes through.
+        run_test_error("lambda(&proc {})");
+        run_test("l = lambda { 5 }; lambda(&l).call");
+        // Frozen String has no singleton class.
+        run_test_error(r##""frozen-str".freeze.singleton_class"##);
+        run_test(r##""mutable-str".dup.singleton_class.class.to_s"##);
+        // Kernel#method with a #to_str name; conversion errors propagate.
+        run_test(
+            r##"
+            key = Object.new
+            def key.to_str = "upcase"
+            "abc".method(key).call
+            "##,
+        );
+        run_test_error("[].method(Object.new)");
+        // initialize_clone accepts freeze: (returns the receiver).
+        run_test(
+            r##"
+            a = "a"
+            a.send(:initialize_clone, "b", freeze: true).equal?(a)
+            "##,
+        );
+        // respond_to_missing? is a Kernel instance method.
+        run_test("Object.instance_method(:respond_to_missing?).owner.to_s");
+        // chop/chomp exist only under -n; caller_locations/set_trace_func
+        // have module-function shape.
+        run_test(
+            r##"
+            [Kernel.private_instance_methods(false).include?(:chop),
+             Kernel.private_instance_methods(false).include?(:chomp),
+             Kernel.private_instance_methods(false).include?(:caller_locations),
+             Kernel.private_instance_methods(false).include?(:set_trace_func),
+             Kernel.respond_to?(:caller_locations),
+             Kernel.respond_to?(:set_trace_func)]
+            "##,
+        );
+    }
+
+    #[test]
+    fn kernel_integer_srand_edges() {
+        // Integer(): #to_str wins over #to_i; base demands string-likes;
+        // huge Floats convert exactly.
+        run_test(
+            r##"
+            o = Object.new
+            def o.to_str = "42"
+            def o.to_i = 7
+            Integer(o)
+            "##,
+        );
+        run_test_error("Integer(98, 15)");
+        run_test("Integer(2.0 ** 100)");
+        // srand echoes the previous seed exactly (Bignum included) and
+        // coerces via #to_int.
+        run_test(
+            r##"
+            srand(2 ** 79 + 3)
+            prev = srand(1)
+            o = Object.new
+            def o.to_int = 5
+            srand(o)
+            [prev, srand]
+            "##,
+        );
+        // system(exception: true): Errno::ENOENT for a missing command,
+        // RuntimeError for a failing one.
+        run_test_error(r##"system("monoruby_no_such_cmd_xyz", exception: true)"##);
+        run_test_error(r##"system("false", exception: true)"##);
+        // Backtick: nonexistent command raises Errno::ENOENT.
+        run_test_error("`monoruby_no_such_cmd_xyz`");
+    }
+
+    #[test]
+    fn kernel_complex_protocol_edges() {
+        run_test_with_prelude(
+            r#"
+            n1 = UnrealNum.new(1)
+            n2 = UnrealNum.new(2)
+            c = Complex(n1, n2)
+            single = Complex(UnrealNum.new(9))
+            [c.class.to_s, c.real, c.imaginary, single.value]
+        "#,
+            r#"
+            class UnrealNum < Numeric
+                attr_reader :value
+                def initialize(v) = @value = v
+                def real? = false
+                def *(o) = UnrealNum.new(@value * 10)
+                def +(o) = (o.is_a?(UnrealNum) ? @value + o.value : @value)
+                def coerce(o) = [UnrealNum.new(o), self]
+            end
+        "#,
+        );
+        run_test("c = Complex(1, 2); Complex(c).equal?(c)");
+        run_test(r##"[Complex("a", "b", exception: false), Complex("a", 0, exception: false)]"##);
+    }
+
+    #[test]
+    fn kernel_loop_open_eval_edges() {
+        // loop: enumerator form yields no args; StopIteration#result is
+        // loop's value.
+        run_test(
+            r##"
+            e = loop
+            cnt = 0
+            got = nil
+            e.each { |*args| got = args; cnt += 1; break if cnt >= 3 }
+            enum = Enumerator.new { |y| y << 1; y << 2; :stopped }
+            res = loop { enum.next }
+            [e.class.to_s, got, cnt, res]
+            "##,
+        );
+        // open: positional-arity check and the #to_open protocol.
+        run_test_error(r##"open("/dev/null", "r", 0o666, {flags: 0})"##);
+        run_test(
+            r##"
+            obj = Object.new
+            def obj.to_open(*a, **kw) = [a, kw]
+            got = nil
+            r = open(obj, 1, 2, x: "y") { |v| got = v; :blk }
+            [r, got]
+            "##,
+        );
+        // Kernel.eval evaluates with the receiver as self.
+        run_test(r##"Kernel.eval("self").to_s"##);
+        // eval SyntaxError messages embed file:line.
+        run_test_once(
+            r##"
+            begin
+              eval("if true", nil, "speccing.rb", 88)
+            rescue SyntaxError => e
+              e.message =~ /speccing\.rb:88:/ ? true : false
+            end
+            "##,
+        );
+        // singleton_methods stops at the first ordinary class (a module
+        // prepended to Module must not leak in).
+        run_test_once(
+            r##"
+            mod_p = Module.new { def mspec_test_prepended_probe; end }
+            ::Module.prepend(mod_p)
+            m = Module.new { extend self }
+            m.singleton_methods
+            "##,
+        );
     }
 
     #[test]

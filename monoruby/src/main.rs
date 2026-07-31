@@ -895,6 +895,8 @@ fn main() {
     // main script's parse (consumed by path match, so `require`d files
     // are unaffected).
     if opts.loop_mode != LoopMode::None {
+        // `Kernel#chomp` / `#chop` exist only under `-n` / `-p` (CRuby).
+        monoruby::define_loop_mode_builtins(&mut globals);
         parser::set_cli_loop_wrap(
             path.clone(),
             parser::CliLoopWrap {

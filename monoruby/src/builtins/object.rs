@@ -347,12 +347,17 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     Ok(Value::bool(!res))
 }
 
-/// Default `Object#===` — delegates to `==` so that subclasses which
+/// Default `Object#===` — identical objects compare true without consulting
+/// `==` (CRuby's `rb_equal` fast path, observable when `==`/`equal?` are
+/// overridden to lie), otherwise delegates to `==` so that subclasses which
 /// override `==` get consistent `case` behaviour.
 #[monoruby_builtin]
 fn case_eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
+    if self_val.id() == other.id() {
+        return Ok(Value::bool(true));
+    }
     vm.invoke_method_inner(globals, IdentId::_EQ, self_val, &[other], None, None)
 }
 

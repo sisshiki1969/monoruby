@@ -281,6 +281,22 @@ pub(crate) fn thread_list(vm: &mut Executor) -> Vec<Value> {
     SCHEDULER.with(|s| s.borrow().threads.clone())
 }
 
+/// After `fork`, only the forking thread survives in the child: mark
+/// every other registered thread dead (CRuby's fork semantics — their
+/// native contexts belong to the parent).
+pub(crate) fn fork_child_reset_threads(vm: &mut Executor) {
+    let cur = SCHEDULER.with(|s| s.borrow().current);
+    let _ = vm;
+    SCHEDULER.with(|s| {
+        let threads = s.borrow().threads.clone();
+        for mut t in threads {
+            if Some(t) != cur {
+                t.as_thread_inner_mut().mark_dead_for_fork();
+            }
+        }
+    });
+}
+
 /// Whether a live (not dead) thread with the given object id exists.
 /// Used by the `require` load lock to detect a stale loading marker
 /// left by a thread that died without unwinding.

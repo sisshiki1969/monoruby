@@ -366,8 +366,15 @@ fn try_prism_inner(
 
     if let Some(diag) = result.errors().next() {
         let loc = location_to_loc(&diag.location());
+        // CRuby embeds the location in the SyntaxError *message* itself
+        // ("file:line: syntax error, ..."), and callers regex on it.
+        let line = source_info.get_line(&loc);
+        let file = crate::globals::display_path(&source_info);
         return Err(MonorubyErr::parse(crate::ast::ParseErr {
-            kind: crate::ast::ParseErrKind::SyntaxError(format!("prism: {}", diag.message())),
+            kind: crate::ast::ParseErrKind::SyntaxError(format!(
+                "{file}:{line}: prism: {}",
+                diag.message()
+            )),
             loc,
             source_info,
         }));
