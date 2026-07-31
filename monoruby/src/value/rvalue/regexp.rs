@@ -777,6 +777,22 @@ impl RegexpInner {
                 16 => OnigmoEncoding::ISO_8859_16,
                 _ => return None,
             },
+            // Single-byte NamedByte encodings with an Onigmo codec.
+            // Multi-byte ones (Big5, GB18030, EUC-KR/TW, ...) are left
+            // out: monoruby's char iteration treats NamedByte subjects
+            // as one char per byte, which would disagree with Onigmo's
+            // multi-byte char boundaries in MatchData offsets.
+            E::NamedByte(_) => match enc.name() {
+                "KOI8-R" => OnigmoEncoding::KOI8_R,
+                "KOI8-U" => OnigmoEncoding::KOI8_U,
+                "Windows-1250" => OnigmoEncoding::Windows_1250,
+                "Windows-1251" => OnigmoEncoding::Windows_1251,
+                "Windows-1252" => OnigmoEncoding::Windows_1252,
+                "Windows-1253" => OnigmoEncoding::Windows_1253,
+                "Windows-1254" => OnigmoEncoding::Windows_1254,
+                "Windows-1257" => OnigmoEncoding::Windows_1257,
+                _ => return None,
+            },
             _ => None?,
         })
     }

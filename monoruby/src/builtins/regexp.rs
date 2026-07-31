@@ -2556,4 +2556,33 @@ mod tests {
                [m.string.bytes, m.string.encoding.to_s, m.string.frozen?]"#,
         );
     }
+
+    #[test]
+    fn regexp_match_iso8859_variants() {
+        // Every ISO-8859-N Onigmo codec: single high byte is one char,
+        // so `/./` (compiled in the subject's encoding) matches exactly
+        // that byte. Exercises each arm of onigmo_encoding_for.
+        run_test(
+            r#"%w[ISO-8859-1 ISO-8859-2 ISO-8859-3 ISO-8859-4 ISO-8859-5
+                 ISO-8859-6 ISO-8859-7 ISO-8859-8 ISO-8859-9 ISO-8859-10
+                 ISO-8859-11 ISO-8859-13 ISO-8859-14 ISO-8859-15 ISO-8859-16]
+                .map do |name|
+                  enc = Encoding.find(name)
+                  s = "\341z".dup.force_encoding(enc)
+                  m = Regexp.new(".".dup.force_encoding(enc)).match(s)
+                  [name, m[0].bytes, m[0].encoding == enc]
+                end"#,
+        );
+        // Single-byte NamedByte encodings mapped to native Onigmo
+        // codecs (KOI8 / Windows-125x family).
+        run_test(
+            r#"%w[KOI8-R KOI8-U Windows-1250 Windows-1251 Windows-1252
+                 Windows-1253 Windows-1254 Windows-1257].map do |name|
+                  enc = Encoding.find(name)
+                  s = "\341z".dup.force_encoding(enc)
+                  m = Regexp.new(".".dup.force_encoding(enc)).match(s)
+                  [name, m[0].bytes, m[0].encoding == enc]
+                end"#,
+        );
+    }
 }
