@@ -1,5 +1,6 @@
 use super::*;
 use smallvec::SmallVec;
+use std::borrow::Cow;
 
 /// Byte span of one capture group, `(start, end)`.
 ///
@@ -105,6 +106,29 @@ impl MatchDataInner {
         Self::from_captures_snap(captures, heystack, None)
     }
 
+    /// Build from a byte-oriented match (`Regex::captures_bytes`)
+    /// against a non-UTF-8 subject. `heystack` must be the exact
+    /// String Value the match ran over — its raw bytes are the
+    /// coordinate system of the byte offsets in `captures`. The
+    /// snapshot is a CoW substring of the whole subject, so the
+    /// stored bytes and encoding are the subject's own (no lossy
+    /// UTF-8 round-trip).
+    pub fn from_captures_bytes(captures: &onigmo_regex::CapturesBytes, heystack: Value) -> Self {
+        let len = heystack.as_rstring_inner().as_bytes().len();
+        assert!(
+            len < u32::MAX as usize,
+            "match subject longer than 4GiB is not supported"
+        );
+        let matches = (0..captures.len())
+            .map(|i| encode_span(captures.pos(i)))
+            .collect();
+        MatchDataInner {
+            regex: None,
+            heystack: string_substring(heystack, 0, len),
+            matches,
+        }
+    }
+
     /// Builder helper: attach a `Regexp` to a freshly-constructed
     /// `MatchDataInner`. Used when reconstructing a `MatchData`
     /// from `Executor`'s special-variable stash so named-capture
@@ -132,11 +156,13 @@ impl MatchDataInner {
         self.heystack.as_rstring_inner().as_bytes()
     }
 
-    pub fn string(&self) -> &str {
-        // SAFETY: every constructor receives the haystack as `&str`
-        // and the snapshot preserves those exact bytes (shared view or
-        // copy), so the content is valid UTF-8.
-        unsafe { std::str::from_utf8_unchecked(self.heystack_bytes()) }
+    pub fn string(&self) -> Cow<'_, str> {
+        // &str-based constructors always store valid UTF-8 (borrowed
+        // fast path); `from_captures_bytes` may store non-UTF-8
+        // subject bytes, for which char-count consumers get a lossy
+        // view. Byte-precise consumers should use `at()` /
+        // `string_value()` instead.
+        String::from_utf8_lossy(self.heystack_bytes())
     }
 
     /// The stored haystack snapshot as a String `Value`.

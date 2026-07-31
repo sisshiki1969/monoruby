@@ -1451,6 +1451,20 @@ impl Value {
         .pack()
     }
 
+    /// `new_matchdata_snap` for byte-oriented matches on non-UTF-8
+    /// subjects (`Regex::captures_bytes`). `heystack` is the subject
+    /// String Value whose raw bytes the capture offsets index.
+    pub(crate) fn new_matchdata_bytes(
+        captures: &onigmo_regex::CapturesBytes,
+        heystack: Value,
+        regex: Regexp,
+    ) -> Self {
+        RValue::new_match_data_from_inner(
+            MatchDataInner::from_captures_bytes(captures, heystack).with_regex(regex),
+        )
+        .pack()
+    }
+
     pub(crate) fn unpack(&self) -> RV<'_> {
         if let Some(i) = self.try_fixnum() {
             RV::Fixnum(i)

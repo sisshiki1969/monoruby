@@ -1,3 +1,0 @@
-fails:Regexps with encoding modifiers supports /s (Windows_31J encoding)
-fails:Regexps with encoding modifiers supports /s (Windows_31J encoding) with interpolation
-fails:Regexps with encoding modifiers supports /s (Windows_31J encoding) with interpolation and /o

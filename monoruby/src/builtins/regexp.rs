@@ -1130,6 +1130,47 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     check_subject_match_encoding(&globals.store, &regex, arg0)?;
     warn_binary_regexp_match(vm, globals, &regex, arg0);
+    // Subject declared in a non-UTF-8 encoding Onigmo has a native
+    // codec for: compile the source under that codec and match the
+    // raw bytes, so char boundaries follow the subject's *declared*
+    // encoding (e.g. `/./s` on Windows-31J "\xC3\xA9" matches one
+    // byte, even though those bytes happen to be valid UTF-8 too).
+    // Pure 7-bit content decodes identically either way; keep it on
+    // the fast zero-copy UTF-8 path.
+    if let Some(rs) = arg0.is_rstring()
+        && rs.code_range() != CodeRange::SevenBit
+        && let Some(native_enc) = RegexpInner::onigmo_encoding_for(rs.encoding())
+    {
+        let byte_pos = if let Some(pos) = lfp.try_arg(1) {
+            match conv_index(pos.coerce_to_int_i64(vm, globals)?, rs.char_length()) {
+                // Convert char index -> byte offset by walking char
+                // boundaries under the native encoding.
+                Some(cp) => rs.iter_char_bytes().take(cp).map(|c| c.len()).sum(),
+                None => return Ok(Value::nil()),
+            }
+        } else {
+            0
+        };
+        vm.set_match_regex(self_);
+        let bytes = arg0.as_rstring_inner().as_bytes();
+        let md = if let Some(captures) =
+            regex.captures_bytes_from_pos(bytes, arg0, native_enc, byte_pos, vm)?
+        {
+            Value::new_matchdata_bytes(&captures, arg0, regex)
+        } else {
+            Value::nil()
+        };
+        if !md.is_nil() {
+            vm.set_backref(md);
+        }
+        if let Some(bh) = lfp.block() {
+            if md.is_nil() {
+                return Ok(Value::nil());
+            }
+            return vm.invoke_block_once(globals, bh, &[md]);
+        }
+        return Ok(md);
+    }
     // Borrow the subject's bytes directly (and stash the Value for
     // the zero-copy MatchData snapshot) when it is a UTF-8 String;
     // Symbols and non-UTF-8 subjects fall back to the owned
