@@ -776,14 +776,36 @@ impl RValue {
         )
     }
 
-    fn enumerator_debug(&self, store: &Store) -> String {
+    /// `#<Enumerator: <recv>:<meth>(<args>)>` — the class name is the
+    /// receiver's own, so `Enumerator::Product` / a user subclass shows
+    /// up as itself, and an `allocate`d-but-not-`initialize`d enumerator
+    /// reads `#<Enumerator: uninitialized>` (CRuby's `inspect_enumerator`).
+    fn enumerator_inspect(&self, store: &Store, debug: bool) -> String {
+        let name = self.real_class(store).id().get_name(store);
         let e = unsafe { self.as_enumerator() };
-        format!("#<Enumerator: {}:{}>", e.obj.debug(store), e.method)
+        if !e.is_initialized() {
+            return format!("#<{name}: uninitialized>");
+        }
+        let obj = if debug {
+            e.obj.debug(store)
+        } else {
+            e.obj.to_s(store)
+        };
+        let args = if e.args.is_empty() {
+            String::new()
+        } else {
+            let list: Vec<String> = e.args.iter().map(|v| v.debug(store)).collect();
+            format!("({})", list.join(", "))
+        };
+        format!("#<{name}: {obj}:{}{args}>", e.method)
+    }
+
+    fn enumerator_debug(&self, store: &Store) -> String {
+        self.enumerator_inspect(store, true)
     }
 
     fn enumerator_tos(&self, store: &Store) -> String {
-        let e = unsafe { self.as_enumerator() };
-        format!("#<Enumerator: {}:{}>", e.obj.to_s(store), e.method)
+        self.enumerator_inspect(store, false)
     }
 
     fn proc_tos(&self) -> String {
@@ -2062,7 +2084,12 @@ impl RValue {
         }
     }
 
+    /// `class_id` is the *receiver* class of `Enumerator.new`, so a Ruby
+    /// subclass (`Enumerator::Lazy`) gets an ENUMERATOR-typed RValue of its
+    /// own class rather than a plain `Enumerator`. Every inherited native
+    /// method (`#each`, `#next`, `#size`, …) therefore keeps working on it.
     pub(super) fn new_enumerator(
+        class_id: ClassId,
         obj: Value,
         method: IdentId,
         proc: Proc,
@@ -2071,8 +2098,21 @@ impl RValue {
         size: Option<Value>,
     ) -> Self {
         RValue {
-            header: Header::new(ENUMERATOR_CLASS, ObjTy::ENUMERATOR),
+            header: Header::new(class_id, ObjTy::ENUMERATOR),
             kind: ObjKind::enumerator(obj, method, proc, args, kw_args, size),
+            var_table: None,
+        }
+    }
+
+    /// The RValue `Enumerator.allocate` (and any subclass's) produces:
+    /// ENUMERATOR-typed but not yet given a source. See
+    /// [`EnumeratorInner::proc`].
+    pub(super) fn new_uninit_enumerator(class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::ENUMERATOR),
+            kind: ObjKind {
+                enumerator: ManuallyDrop::new(Box::new(EnumeratorInner::new_uninit())),
+            },
             var_table: None,
         }
     }

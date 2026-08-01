@@ -198,13 +198,15 @@ pub struct Executor {
     /// Used wherever a *native* block has to reach the Ruby block its
     /// enclosing enumerator method was given, because the enumerator
     /// method runs the source directly rather than through a fiber:
-    /// `Generator#each` keys on the `Yielder` it hands the body, and
-    /// `#with_index` / `#with_object` key on their state Array. Both
-    /// resolve innermost-first, so nesting
+    /// `Generator#each` keys on the `Yielder` it hands the body.
+    /// Resolution is innermost-first, so nesting
     /// (`Enumerator.new { |y| other.each { |v| y << v } }`) finds the
     /// right block instead of whatever ran most recently. Keying on an
     /// object rather than an ivar keeps `#inspect` free of
     /// monoruby-only internals (CRuby holds these in C structs).
+    /// (`#with_index` / `#with_object` used to key here too; their block
+    /// now rides in the adapter's own state Array, so it survives an
+    /// adapter that outlives the call — see `enum_adapter_call`.)
     adapter_blocks: Vec<(Value, ProcData)>,
     /// Stack of `break` barriers: the CFP at each synchronous
     /// thread-body invocation (`Thread#__invoke_body`). A `break`
@@ -3571,7 +3573,7 @@ impl Executor {
         args: Vec<Value>,
         pc: BytecodePtr,
     ) -> Result<Value> {
-        self.generate_enumerator_inner(method, obj, args, None, pc, None)
+        self.generate_enumerator_inner(ENUMERATOR_CLASS, method, obj, args, None, pc, None)
     }
 
     pub(crate) fn generate_enumerator_with_size(
@@ -3582,7 +3584,7 @@ impl Executor {
         pc: BytecodePtr,
         size: Option<Value>,
     ) -> Result<Value> {
-        self.generate_enumerator_inner(method, obj, args, None, pc, size)
+        self.generate_enumerator_inner(ENUMERATOR_CLASS, method, obj, args, None, pc, size)
     }
 
     /// Like [`Self::generate_enumerator`], but also captures the keyword
@@ -3597,11 +3599,29 @@ impl Executor {
         kw_args: Option<Hashmap>,
         pc: BytecodePtr,
     ) -> Result<Value> {
-        self.generate_enumerator_inner(method, obj, args, kw_args, pc, None)
+        self.generate_enumerator_inner(ENUMERATOR_CLASS, method, obj, args, kw_args, pc, None)
+    }
+
+    /// Like [`Self::generate_enumerator_with_size`], but builds the
+    /// Enumerator as an instance of `class_id` instead of `Enumerator`.
+    /// Used by `Enumerator.new` so that a Ruby subclass — notably
+    /// `Enumerator::Lazy` — is ENUMERATOR-backed and keeps every
+    /// inherited native method (`#each`, `#next`, `#size`, …) working.
+    pub(crate) fn generate_enumerator_with_class(
+        &mut self,
+        class_id: ClassId,
+        method: IdentId,
+        obj: Value,
+        args: Vec<Value>,
+        pc: BytecodePtr,
+        size: Option<Value>,
+    ) -> Result<Value> {
+        self.generate_enumerator_inner(class_id, method, obj, args, None, pc, size)
     }
 
     fn generate_enumerator_inner(
         &mut self,
+        class_id: ClassId,
         method: IdentId,
         obj: Value,
         args: Vec<Value>,
@@ -3611,7 +3631,7 @@ impl Executor {
     ) -> Result<Value> {
         let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
         let proc = Proc::from_outer(outer_lfp, ENUM_YIELDER_FUNCID, pc);
-        let e = Value::new_enumerator(obj, method, proc, args, kw_args, size);
+        let e = Value::new_enumerator(class_id, obj, method, proc, args, kw_args, size);
         Ok(e)
     }
 }

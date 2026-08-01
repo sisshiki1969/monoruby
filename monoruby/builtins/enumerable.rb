@@ -412,97 +412,99 @@ module Enumerable
 
   def chunk(&blk)
     return to_enum(:chunk) unless blk
-    # Compute eagerly (calling the user block in the normal frame), then
-    # replay through an Enumerator. We cannot call a captured block from
-    # inside an Enumerator.new generator (it runs in a fiber and hangs),
-    # so the generator only replays the pre-built result array. This also
-    # gives the enumerator a nil size, as CRuby's chunk does.
-    result = []
-    current_key = nil
-    current_ary = nil
-    first = true
-    __gather_each do |x|
-      key = blk.call(x)
-      if key.is_a?(Symbol) && key.to_s.start_with?("_")
-        unless key == :_separator || key == :_alone
-          raise RuntimeError, "symbol key starting with an underscore is reserved"
+    # Streams: the Enumerator body walks the source on the caller's
+    # stack (no fiber since #1041), so an infinite source works and only
+    # as much of it as the consumer asks for is evaluated. A chunk is
+    # emitted as soon as the key changes.
+    src = self
+    Enumerator.new do |y|
+      current_key = nil
+      current_ary = nil
+      first = true
+      src.__send__(:__gather_each) do |x|
+        key = blk.call(x)
+        if key.is_a?(Symbol) && key.to_s.start_with?("_")
+          unless key == :_separator || key == :_alone
+            raise RuntimeError, "symbol key starting with an underscore is reserved"
+          end
         end
-      end
-      if key.nil? || key == :_separator
-        unless first
-          result << [current_key, current_ary]
+        if key.nil? || key == :_separator
+          unless first
+            y << [current_key, current_ary]
+            first = true
+            current_key = nil
+            current_ary = nil
+          end
+        elsif key == :_alone
+          y << [current_key, current_ary] unless first
+          y << [:_alone, [x]]
           first = true
           current_key = nil
           current_ary = nil
+        elsif first
+          current_key = key
+          current_ary = [x]
+          first = false
+        elsif key == current_key
+          current_ary << x
+        else
+          y << [current_key, current_ary]
+          current_key = key
+          current_ary = [x]
         end
-      elsif key == :_alone
-        result << [current_key, current_ary] unless first
-        result << [:_alone, [x]]
-        first = true
-        current_key = nil
-        current_ary = nil
-      elsif first
-        current_key = key
-        current_ary = [x]
-        first = false
-      elsif key == current_key
-        current_ary << x
-      else
-        result << [current_key, current_ary]
-        current_key = key
-        current_ary = [x]
       end
+      y << [current_key, current_ary] unless first
     end
-    result << [current_key, current_ary] unless first
-    Enumerator.new { |y| result.each { |item| y << item } }
   end
 
   def chunk_while(&block)
     raise ArgumentError, "tried to create Proc object without a block" unless block
-    result = []
-    current = nil
-    prev = nil
-    first = true
-    __gather_each do |x|
-      if first
-        current = [x]
-        prev = x
-        first = false
-      elsif block.call(prev, x)
-        current << x
-        prev = x
-      else
-        result << current
-        current = [x]
-        prev = x
+    src = self
+    Enumerator.new do |y|
+      current = nil
+      prev = nil
+      first = true
+      src.__send__(:__gather_each) do |x|
+        if first
+          current = [x]
+          prev = x
+          first = false
+        elsif block.call(prev, x)
+          current << x
+          prev = x
+        else
+          y << current
+          current = [x]
+          prev = x
+        end
       end
+      y << current unless first
     end
-    result << current unless first
-    result.each
   end
 
   def slice_when(&block)
     raise ArgumentError, "tried to create Proc object without a block" unless block
-    result = []
-    current = nil
-    prev = nil
-    first = true
-    __gather_each do |x|
-      if first
-        current = [x]
-        prev = x
-        first = false
-      elsif block.call(prev, x)
-        result << current
-        current = [x]
-        prev = x
-      else
-        current << x
-        prev = x
+    src = self
+    Enumerator.new do |y|
+      current = nil
+      prev = nil
+      first = true
+      src.__send__(:__gather_each) do |x|
+        if first
+          current = [x]
+          prev = x
+          first = false
+        elsif block.call(prev, x)
+          y << current
+          current = [x]
+          prev = x
+        else
+          current << x
+          prev = x
+        end
       end
+      y << current unless first
     end
-    result << current unless first
-    result.each
   end
 
   def zip(*others)
@@ -864,8 +866,14 @@ module Enumerable
     res
   end
 
+  # The head of a lazy chain: forwards every source yield untouched, and
+  # carries the source's `size` (resolved on demand, so an expensive or
+  # nil `size` is never computed here).
   def lazy
-    Enumerator::Lazy.new(self)
+    src = self
+    Enumerator::Lazy.new(self, -> { src.respond_to?(:size) ? src.size : nil }) do |y, *vals|
+      y.yield(*vals)
+    end
   end
 
   ##
@@ -1041,57 +1049,58 @@ module Enumerable
   # `pattern === x` is truthy. With a block, the boundary fires before
   # any element for which `yield(x)` is truthy. The two argument
   # forms are mutually exclusive (matches CRuby's ArgumentError).
-  def slice_before(*args)
-    if block_given?
+  def slice_before(*args, &blk)
+    if blk
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)" unless args.empty?
       pattern = nil
     else
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size != 1
       pattern = args[0]
     end
-    res = []
-    current = nil
-    __gather_each do |x|
-      hit = pattern.nil? ? yield(x) : (pattern === x)
-      if hit
-        res << current if current
-        current = [x]
-      else
-        current ||= []
-        current << x
+    src = self
+    # Streams (see `chunk`): the chunk is emitted as soon as the next
+    # boundary is hit, so infinite sources and `.lazy` chains work.
+    # `size` is nil, which `Enumerator.new` gives us for free.
+    Enumerator.new do |y|
+      current = nil
+      src.__send__(:__gather_each) do |x|
+        hit = pattern.nil? ? blk.call(x) : (pattern === x)
+        if hit
+          y << current if current
+          current = [x]
+        else
+          current ||= []
+          current << x
+        end
       end
+      y << current if current
     end
-    res << current if current
-    # `slice_before` always returns an Enumerator whose `size` is nil
-    # (the chunk count is not derivable from the source size). `res.each`
-    # would report `res.size`, so wrap the chunks in an `Enumerator.new`,
-    # which reports a nil size.
-    ::Enumerator.new { |y| res.each { |chunk| y << chunk } }
   end
 
   # Mirror of `slice_before`: the boundary fires *after* an element
   # that matches. The first emitted chunk therefore always contains
   # the first element (no leading empty Array).
-  def slice_after(*args)
-    if block_given?
+  def slice_after(*args, &blk)
+    if blk
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)" unless args.empty?
       pattern = nil
     else
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size != 1
       pattern = args[0]
     end
-    res = []
-    current = []
-    __gather_each do |x|
-      current << x
-      hit = pattern.nil? ? yield(x) : (pattern === x)
-      if hit
-        res << current
-        current = []
+    src = self
+    Enumerator.new do |y|
+      current = []
+      src.__send__(:__gather_each) do |x|
+        current << x
+        hit = pattern.nil? ? blk.call(x) : (pattern === x)
+        if hit
+          y << current
+          current = []
+        end
       end
+      y << current unless current.empty?
     end
-    res << current unless current.empty?
-    res.each
   end
 
   # Concatenates `self` with each enumerable in `enums`. Returns an
@@ -1105,17 +1114,33 @@ end
 
 class Enumerator
   # Enumerator::Chain walks `self` and the provided enumerables in
-  # sequence. Returned by `Enumerable#chain`.
-  class Chain
+  # sequence. Returned by `Enumerable#chain` and `Enumerator#+`.
+  #
+  # Subclasses Enumerator (as in CRuby) and points the inherited payload
+  # at its own `#__chain_each`, so `#next` / `#peek` / `#+` all work
+  # without further plumbing.
+  class Chain < Enumerator
     include Enumerable
 
     def initialize(*enums)
       @enums = enums
+      # How far `#each` got, so `#rewind` only rewinds what was actually
+      # iterated (CRuby's `enum_chain_rewind` walks `pos` downwards).
+      @pos = -1
+      __enum_init_method__(self, :__chain_each, [], -> { size })
+      self
+    end
+    private :initialize
+
+    private def __chain_each(&block)
+      each(&block)
     end
 
     def each(&block)
       return to_enum(:each) { size } unless block
-      @enums.each do |e|
+      @pos = -1
+      @enums.each_with_index do |e, i|
+        @pos = i
         e.each { |*x| block.call(*x) }
       end
       self
@@ -1131,46 +1156,26 @@ class Enumerator
       total
     end
 
+    # Rewinds — in reverse order — only the sources `#each` reached, and
+    # only those that respond to `rewind`.
     def rewind
+      i = @pos
+      while i >= 0
+        e = @enums[i]
+        e.rewind if e.respond_to?(:rewind)
+        i -= 1
+      end
+      @pos = -1
       self
     end
 
     def inspect
+      return "#<Enumerator::Chain: uninitialized>" if @enums.nil?
       "#<Enumerator::Chain: #{@enums.inspect}>"
     end
+    alias to_s inspect
   end
 
-  # Enumerator::Lazy is a minimal placeholder class.
-  # Full lazy evaluation is blocked by a known block variable capture
-  # limitation (see Issue #228). The class exists so that calling
-  # .lazy on an Enumerable does not raise NoMethodError.
-  #
-  # Methods that would iterate (each, to_a, force, first) are intentionally
-  # omitted to prevent stack overflows on infinite sequences.
-  class Lazy
-    def initialize(obj = nil, size = nil, &block)
-      @obj = obj
-    end
-
-    def lazy
-      self
-    end
-
-    def inspect
-      if @obj
-        "#<Enumerator::Lazy: \#{@obj.inspect}>"
-      else
-        "#<Enumerator::Lazy: ...>"
-      end
-    end
-
-    def is_a?(klass)
-      return true if klass == Enumerator::Lazy
-      return true if klass == Enumerator
-      super
-    end
-    alias kind_of? is_a?
-  end
 end
 
 # (Enumerator::ArithmeticSequence lives in `arithmetic_sequence.rb`,

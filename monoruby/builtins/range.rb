@@ -377,8 +377,18 @@ class Range
     to_a.last(n).reverse
   end
 
-  def lazy
-    Enumerator::Lazy.new(self)
+  # `first(n)` fallback for ranges the native fast path cannot index
+  # (endless, `Float::INFINITY`-ended, String, …): walk `#each` and break
+  # after `n` elements, so an infinite range terminates. Called from
+  # `Range#first` in Rust; not part of the public API.
+  private def __range_first_by_each(n)
+    res = []
+    return res if n == 0
+    each do |x|
+      res << x
+      break if res.size >= n
+    end
+    res
   end
 
   def overlap?(other)
@@ -439,6 +449,7 @@ class Range
       # to slice from index 0.
       s = step_arg.nil? ? 1 : step_arg
       return Enumerator::ArithmeticSequence.__build(b, e, s, excl)
+        .__set_origin(self, :step, step_arg.nil? ? [] : [step_arg])
     end
 
     if numeric_range
@@ -452,6 +463,7 @@ class Range
         # index.
         s = step_arg.nil? ? 1 : step_arg
         return Enumerator::ArithmeticSequence.__build(b, e, s, excl)
+          .__set_origin(self, :step, step_arg.nil? ? [] : [step_arg])
       end
       step_val = __range_step_coerce(step_arg, b)
       __range_step_numeric(step_val, &block)
@@ -473,14 +485,9 @@ class Range
   # delegate and patch `inspect` per-instance.
   def %(step_arg)
     aseq = step(step_arg)
+    # Same sequence as `#step`, but `#inspect` reports the `%` spelling.
     if aseq.is_a?(Enumerator::ArithmeticSequence)
-      aseq.define_singleton_method(:inspect) do
-        lo = self.begin.nil? ? "" : self.begin.inspect
-        hi = self.end.nil?   ? "" : self.end.inspect
-        sep = self.exclude_end? ? "..." : ".."
-        st = self.step.nil? ? "" : self.step.inspect
-        "((#{lo}#{sep}#{hi}).%(#{st}))"
-      end
+      aseq.__set_origin(self, :%, [step_arg])
     end
     aseq
   end

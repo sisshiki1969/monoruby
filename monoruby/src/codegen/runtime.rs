@@ -460,6 +460,24 @@ pub(super) extern "C" fn block_arg(
     if let Some(proc) = bh.try_proc() {
         return Some(proc.into());
     }
+    // Non-proxy handler (`&:sym`, or an arbitrary object coerced through
+    // `#to_proc`): materializing it needs nothing from the owner frame,
+    // and that frame may well be gone — `def f(&b); ->{ b.call }; end`
+    // read from the returned lambda is exactly this shape. Convert here
+    // and cache the Proc back into the frame so repeated reads keep
+    // returning the same object.
+    if bh.try_proxy().is_none() {
+        return match vm.generate_proc_inner(globals, vm.cfp(), bh, pc) {
+            Ok(proc) => {
+                lfp.set_block(Some(BlockHandler::new(proc.into())));
+                Some(proc.into())
+            }
+            Err(err) => {
+                vm.set_error(err);
+                None
+            }
+        };
+    }
     // Proxy handler: its (fid, depth) is relative to the frame that owns
     // it, so locate that frame's Cfp on the current chain (crossing into
     // parent fibers). A proxy owner is always on the current chain — an

@@ -453,17 +453,18 @@ pub(crate) const PROC_CURRY_BODY_FUNCID: FuncId = FuncId::new(5);
 ///
 /// Mirrors CRuby's `enumerator_with_index_i`: it is the block handed to
 /// the *source* method, so the source runs on the caller's stack with
-/// no fiber. `outer_lfp`'s self is a one-element Array holding the
-/// running index; the consumer block is parked on the executor keyed by
-/// that same Array (see `Executor::adapter_block`). Each call packs the
-/// source yield (`rb_enum_values_pack`) and yields `(packed, index)`.
+/// no fiber. `outer_lfp`'s self is a two-slot Array holding the running
+/// index and the consumer block, so the adapter carries everything it
+/// needs and keeps working if it outlives the `#with_index` call that
+/// built it. Each call packs the source yield (`rb_enum_values_pack`)
+/// and yields `(packed, index)`.
 ///
 pub(crate) const WITH_INDEX_ADAPTER_FUNCID: FuncId = FuncId::new(6);
 
 ///
 /// Block body for `Enumerator#with_object`; as
-/// [`WITH_INDEX_ADAPTER_FUNCID`] but the state Array holds the memo,
-/// which is passed unchanged to every call.
+/// [`WITH_INDEX_ADAPTER_FUNCID`] but slot 0 of the state Array holds the
+/// memo, which is passed unchanged to every call.
 ///
 pub(crate) const WITH_OBJECT_ADAPTER_FUNCID: FuncId = FuncId::new(7);
 
@@ -472,6 +473,15 @@ pub(crate) const WITH_OBJECT_ADAPTER_FUNCID: FuncId = FuncId::new(7);
 fn pack_source_yield(lfp: Lfp) -> Value {
     let args: Array = lfp.arg(0).as_array();
     args.peel()
+}
+
+/// The user block parked in slot 1 of an adapter's state Array (see
+/// `enum_adapter_call`).
+fn adapter_block(state: &Array) -> Result<ProcData> {
+    let proc = state[1]
+        .is_proc()
+        .ok_or_else(|| MonorubyErr::runtimeerr("enumerator adapter lost its block"))?;
+    Ok(ProcData::from_proc(&proc))
 }
 
 #[monoruby_builtin]
@@ -483,10 +493,8 @@ pub(crate) fn with_index_adapter(
 ) -> Result<Value> {
     let state = lfp.self_val();
     let packed = pack_source_yield(lfp);
-    let data = vm
-        .adapter_block(state)
-        .ok_or_else(|| MonorubyErr::runtimeerr("with_index adapter lost its block"))?;
     let mut arr = state.as_array();
+    let data = adapter_block(&arr)?;
     let idx = arr[0];
     arr[0] = match idx.unpack() {
         RV::Fixnum(i) => Value::integer(i + 1),
@@ -505,10 +513,9 @@ pub(crate) fn with_object_adapter(
 ) -> Result<Value> {
     let state = lfp.self_val();
     let packed = pack_source_yield(lfp);
-    let data = vm
-        .adapter_block(state)
-        .ok_or_else(|| MonorubyErr::runtimeerr("with_object adapter lost its block"))?;
-    let memo = state.as_array()[0];
+    let arr = state.as_array();
+    let data = adapter_block(&arr)?;
+    let memo = arr[0];
     vm.invoke_block(globals, &data, &[packed, memo])
 }
 
