@@ -93,9 +93,14 @@ module Kernel
       locs = caller_locations(1)
       if locs
         locs = locs.reject { |l| l.path&.start_with?("<internal:") }
-        if (loc = locs[uplevel])
-          str << "#{loc.path}:#{loc.lineno}: warning: "
-        end
+        loc = locs[uplevel]
+      end
+      # An uplevel beyond the stack still gets the bare "warning: "
+      # prefix (CRuby).
+      if loc
+        str << "#{loc.path}:#{loc.lineno}: warning: "
+      else
+        str << "warning: "
       end
     end
     messages.each do |m|
@@ -104,6 +109,14 @@ module Kernel
       str << "\n" unless s.end_with?("\n")
     end
 
+    # When self *is* the Warning module (a redefined Warning#warn calling
+    # `super`, or Warning's own use of Kernel#warn), write directly —
+    # dispatching Warning.warn again would recurse (CRuby behaves the
+    # same way).
+    if ::Warning.equal?(self)
+      $stderr.write(str)
+      return nil
+    end
     # Pass the category keyword, but fall back to a positional-only
     # call if Warning.warn was redefined without keyword support
     # (matches CRuby, and stays robust when Warning.warn is a mock).
@@ -180,14 +193,26 @@ end
 module Kernel
   module_function
 
-  def open(name, *args, &block)
+  def open(name, *args, **kw, &block)
     if name.respond_to?(:to_open)
-      name.to_open(*args, &block)
+      res = kw.empty? ? name.to_open(*args) : name.to_open(*args, **kw)
+      if block
+        begin
+          return yield res
+        ensure
+          res.close if res.respond_to?(:close)
+        end
+      end
+      res
     else
+      if args.size > 2
+        raise ArgumentError,
+              "wrong number of arguments (given #{1 + args.size}, expected 1..3)"
+      end
       name = name.to_path if name.respond_to?(:to_path)
       name = name.to_str if name.respond_to?(:to_str)
       raise TypeError, "no implicit conversion of #{name.class} into String" unless name.is_a?(String)
-      File.open(name, *args, &block)
+      File.open(name, *args, **kw, &block)
     end
   end
 
@@ -200,20 +225,29 @@ module Kernel
       return result if result.is_a?(::String)
       raise TypeError, "can't convert #{arg.class} to String (#{arg.class}#to_str gives #{result.class})"
     end
-    # CRuby's conversion honours a #respond_to? override and reports
-    # TypeError (not NoMethodError) when #to_s is missing entirely
-    # (e.g. on a BasicObject, where even #respond_to? is absent).
+    # CRuby's conversion (rb_check_funcall): a *user-defined*
+    # #respond_to? returning false suppresses the call, but with the
+    # default #respond_to? the conversion simply dispatches #to_s — so an
+    # undef'd #to_s still reaches a method_missing handler — and treats a
+    # NoMethodError as inconvertibility (TypeError, not NoMethodError).
     klass = begin
       arg.class
     rescue ::NoMethodError
       ::Object
     end
-    responds = begin
-      arg.respond_to?(:to_s)
-    rescue ::NoMethodError
+    custom_rt = begin
+      arg.method(:respond_to?).owner != ::Kernel
+    rescue ::NameError
       false
     end
-    raise TypeError, "can't convert #{klass} into String" unless responds
+    if custom_rt
+      responds = begin
+        arg.respond_to?(:to_s)
+      rescue ::NoMethodError
+        false
+      end
+      raise TypeError, "can't convert #{klass} into String" unless responds
+    end
     result = begin
       arg.to_s
     rescue ::NoMethodError
@@ -321,12 +355,17 @@ end
 # structured native frames (`Kernel.__caller_frames`), which carry the
 # load-time canonical path alongside the display path/label — string
 # parsing can't recover `absolute_path` after a chdir or file removal.
-def caller_locations(start = 1, length = nil)
-  frames = Kernel.__caller_frames(1)
-  locs = frames.map { |f| Thread::Backtrace::Location.new(f) }
-  # `Thread::Backtrace.__slice` implements the shared (start), (start,
-  # length) and (range) argument forms with Array#[] edge semantics.
-  Thread::Backtrace.__slice(locs, length.nil? ? [start] : [start, length])
+# A module function like `caller`: private instance method of Kernel,
+# public singleton.
+module Kernel
+  def caller_locations(start = 1, length = nil)
+    frames = Kernel.__caller_frames(1)
+    locs = frames.map { |f| Thread::Backtrace::Location.new(f) }
+    # `Thread::Backtrace.__slice` implements the shared (start), (start,
+    # length) and (range) argument forms with Array#[] edge semantics.
+    Thread::Backtrace.__slice(locs, length.nil? ? [start] : [start, length])
+  end
+  module_function :caller_locations
 end
 
 module Kernel
@@ -345,6 +384,14 @@ module Kernel
     raise ::NotImplementedError, "syscall() function is unimplemented on this machine"
   end
 
+  # `pp` lazily loads the 'pp' library, which redefines Kernel#pp; the
+  # re-dispatch below then reaches the real implementation (CRuby's
+  # bootstrap does the same).
+  def pp(*objs)
+    require "pp"
+    pp(*objs)
+  end
+
   # Console-input conveniences over ARGF (like Kernel#gets).
   def readline(*args)
     ARGF.readline(*args)
@@ -353,6 +400,19 @@ module Kernel
   def readlines(*args)
     ARGF.readlines(*args)
   end
+end
+
+module Kernel
+  # `set_trace_func`: monoruby has no line-event tracing hooks; accept and
+  # remember the handler so the method exists with CRuby's shape (private
+  # instance method / public module function). `nil` clears it.
+  def set_trace_func(handler)
+    unless handler.nil? || handler.respond_to?(:call)
+      raise TypeError, "trace_func needs to respond to call"
+    end
+    handler
+  end
+  module_function :set_trace_func
 end
 
 module Kernel

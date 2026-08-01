@@ -16,10 +16,6 @@ class Object
   end
   alias yield_self then
 
-  def respond_to_missing?(method_name, include_private = false)
-    false
-  end
-
   def <=>(other)
     return 0 if equal?(other)
     # The `self == other` fallback would recurse infinitely when

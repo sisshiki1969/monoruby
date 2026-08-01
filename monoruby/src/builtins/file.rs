@@ -1031,6 +1031,28 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             )));
         }
     };
+    // Creation permissions: the positional Integer after the mode, or a
+    // `:perm` entry in a trailing options Hash (both CRuby forms; only
+    // applied when the open creates the file).
+    let mut perm: Option<u32> = None;
+    if let Some(arg2) = lfp.try_arg(2)
+        && let Some(n) = arg2.try_fixnum()
+    {
+        perm = Some(n as u32);
+    }
+    for i in 1..4 {
+        if let Some(arg) = lfp.try_arg(i)
+            && let Some(h) = arg.try_hash_ty()
+            && let Some(m) = h.get(Value::symbol(IdentId::get_id("perm")), vm, globals)?
+            && let Some(n) = m.try_fixnum()
+        {
+            perm = Some(n as u32);
+        }
+    }
+    if let Some(p) = perm {
+        use std::os::unix::fs::OpenOptionsExt;
+        opt.mode(p);
+    }
     let path = to_path_str(vm, globals, lfp.arg(0))?;
     // A FIFO's open(2) blocks in the kernel until the peer end appears;
     // opening it inline through std would freeze every green thread (and

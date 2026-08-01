@@ -389,36 +389,59 @@ fn inst_eq(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/s/srand.html]
 #[monoruby_builtin]
 fn random_srand(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let old_seed = globals.random_seed();
-    let new_seed = if lfp.try_arg(0).is_none() {
-        None
-    } else {
-        match lfp.arg(0).unpack() {
-            RV::Fixnum(i) => Some(i),
-            RV::BigInt(b) => Some(b.to_i64().unwrap_or_else(|| {
-                // Truncate BigInt to i64 by taking its low 64 bits.
-                use num::bigint::Sign;
-                let (sign, digits) = b.to_u64_digits();
-                let low = digits.first().copied().unwrap_or(0) as i64;
-                if sign == Sign::Minus { low.wrapping_neg() } else { low }
-            })),
-            RV::Float(f) => Some(f.trunc() as i64),
-            _ => {
+    // The previous seed is echoed back *exactly* as given (a Bignum seed
+    // returns that Bignum), so the reported value is kept as a Value.
+    let old_seed = globals.random_seed_value();
+    let arg = match lfp.try_arg(0) {
+        None => {
+            globals.random_init(None);
+            return Ok(old_seed);
+        }
+        Some(v) => {
+            // Coerce non-Integers through #to_int (CRuby).
+            if v.try_fixnum().is_some() || matches!(v.unpack(), RV::BigInt(_)) {
+                v
+            } else if let Some(fid) = globals.check_method(v, IdentId::TO_INT) {
+                let res = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+                if res.try_fixnum().is_none() && !matches!(res.unpack(), RV::BigInt(_)) {
+                    return Err(MonorubyErr::no_implicit_conversion(
+                        &globals.store,
+                        v,
+                        INTEGER_CLASS,
+                    ));
+                }
+                res
+            } else {
                 return Err(MonorubyErr::no_implicit_conversion(
                     &globals.store,
-                    lfp.arg(0),
+                    v,
                     INTEGER_CLASS,
                 ));
             }
         }
     };
-    globals.random_init(new_seed);
-    Ok(Value::integer(old_seed as i64))
+    // Feed the Mersenne Twister the low bits; report the exact Integer.
+    let mt_seed = match arg.unpack() {
+        RV::Fixnum(i) => i,
+        RV::BigInt(b) => {
+            use num::bigint::Sign;
+            let (sign, digits) = b.to_u64_digits();
+            let low = digits.first().copied().unwrap_or(0) as i64;
+            if sign == Sign::Minus {
+                low.wrapping_neg()
+            } else {
+                low
+            }
+        }
+        _ => unreachable!(),
+    };
+    globals.random_init_with(mt_seed, arg);
+    Ok(old_seed)
 }
 
 ///

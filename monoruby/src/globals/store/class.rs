@@ -1342,6 +1342,14 @@ impl ClassInfoTable {
         let mut module = self.get_module(class_id);
         let mut exclude = HashSet::default();
         loop {
+            // Collecting singleton methods stops at the first ordinary
+            // class on the chain (`Object` for plain objects, `Class` /
+            // `Module` for class/module receivers): everything past it is
+            // instance-method territory — including modules prepended to
+            // `Module` itself, which must not surface here.
+            if only_singleton && module.is_singleton().is_none() && !module.is_iclass() {
+                break;
+            }
             if !only_singleton || module.is_singleton().is_some() || module.is_iclass() {
                 for (name, entry) in &self[module.id()].methods {
                     // Closer ancestor wins: skip names already resolved

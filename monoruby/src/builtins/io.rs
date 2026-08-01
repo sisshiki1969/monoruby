@@ -573,7 +573,7 @@ fn enc_by_name(globals: &Globals, name: &str) -> Option<Value> {
 }
 
 /// `Encoding.default_external` object (UTF-8 if unset).
-fn enc_default_external_obj(globals: &mut Globals) -> Value {
+pub(super) fn enc_default_external_obj(globals: &mut Globals) -> Value {
     if let Some(v) = globals.get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
         && !v.is_nil()
     {

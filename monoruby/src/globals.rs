@@ -220,6 +220,8 @@ pub struct Globals {
     /// The fiber scheduler installed by `Fiber.set_scheduler` (monoruby
     /// keeps one per process — fibers are M:1 on the main native thread).
     pub(crate) fiber_scheduler: Option<Value>,
+    /// The exact Integer the next `srand` reports as the previous seed.
+    pub(crate) random_seed_obj: Value,
     /// Every root Fiber object ever materialized (`Fiber.current` at a
     /// thread's root context). A GC triggered while an ordinary fiber runs
     /// marks only the *running* executor, so a root Fiber cached on a
@@ -304,6 +306,7 @@ impl alloc::GC<RValue> for Globals {
         for v in &self.root_fiber_objs {
             v.mark(alloc);
         }
+        self.random_seed_obj.mark(alloc);
         self.symbol_names.values().for_each(|v| v.mark(alloc));
         // Trap handler Procs are GC roots: they are reachable only from
         // this table, yet may be invoked at any future poll point.
@@ -495,6 +498,7 @@ impl Globals {
             loading_features: std::collections::HashMap::default(),
             gvar_traces: std::collections::HashMap::default(),
             fiber_scheduler: None,
+            random_seed_obj: Value::integer(0),
             root_fiber_objs: vec![],
             symbol_names: HashMap::default(),
             unused_block_warned: std::collections::HashSet::default(),
@@ -574,7 +578,7 @@ impl Globals {
                 crate::builtins::proc::proc_curry_body
             )
         );
-        globals.random.init_with_seed(None);
+        globals.random_init(None);
         gvar::init_builtin_gvars(&mut globals);
         crate::builtins::init_builtins(&mut globals);
         globals
@@ -784,7 +788,22 @@ impl Globals {
         // exception — CRuby runs both on any normal-ish termination.
         // `Kernel#exit!` / `Process.exit!` bypass this by calling
         // `std::process::exit` directly and never returning here.
+        //
+        // The script's uncaught exception is visible to the handlers as
+        // `$!` (CRuby: at_exit blocks inspect the dying exception). The
+        // unwind-time `$!` is restored afterwards — the top-level report
+        // re-materializes the exception and derives its implicit cause
+        // from it, so the handler-time materialization must not replace it.
+        let unwind_errinfo = executor.errinfo();
+        if let Err(err) = &res
+            && !matches!(err.kind(), MonorubyErrKind::SystemExit(_))
+        {
+            executor.set_error(err.clone());
+            let err_val = executor.take_ex_obj(self);
+            executor.set_errinfo(err_val);
+        }
         let handler_status = executor.run_exit_handlers(self);
+        executor.set_errinfo(unwind_errinfo);
         // CRuby kills the remaining threads *after* the `at_exit`
         // handlers and *before* the uncaught-exception report: each
         // runs the ensure clauses of its current fiber chain (never of
@@ -1366,12 +1385,27 @@ impl Globals {
 
 // Random generator
 impl Globals {
+    /// The exact Integer `srand` reports as the previous seed: the last
+    /// explicitly given seed Value, or the system-initialized one.
+    pub(crate) fn random_seed_value(&self) -> Value {
+        self.random_seed_obj
+    }
+
+    /// Re-seed the global PRNG with an explicit seed: `mt_seed` feeds the
+    /// Mersenne Twister (low bits), `exact` is what the next `srand`
+    /// reports back.
+    pub(crate) fn random_init_with(&mut self, mt_seed: i64, exact: Value) {
+        self.random.init_with_seed(Some(mt_seed));
+        self.random_seed_obj = exact;
+    }
+
     pub(crate) fn random_seed(&self) -> i32 {
         self.random.seed
     }
 
     pub(crate) fn random_init(&mut self, seed: Option<i64>) {
-        self.random.init_with_seed(seed)
+        let used = self.random.init_with_seed(seed);
+        self.random_seed_obj = Value::integer(used);
     }
 
     pub(crate) fn random_gen<T>(&mut self) -> T
