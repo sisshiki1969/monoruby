@@ -1456,13 +1456,15 @@ fn array_slice_assign(
 /// The out-of-line half of `array_slice_assign`: `ary[start, len] = val` with
 /// the full builtin semantics. Mirrors the 3-argument branch of
 /// [`index_assign`]; the receiver's class and unfrozen-ness are already
-/// guarded by the JIT, but everything else (index normalization, the negative
-/// length error, `#to_ary`) still has to happen here.
+/// guarded by the JIT, and `len` comes from the literal `array_slice_assign`
+/// bounded to `0..=MAX_INLINE_SLICE` (so the builtin's negative-length error
+/// cannot arise here), but everything else — index normalization, `#to_ary` —
+/// still has to happen.
 ///
 extern "C" fn set_array_slice(
     base: Value,
     start: i64,
-    len: i64,
+    len: usize,
     val: Value,
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1470,15 +1472,12 @@ extern "C" fn set_array_slice(
     fn inner(
         base: Value,
         mut start: i64,
-        len: i64,
+        len: usize,
         val: Value,
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<Value> {
         let mut ary = base.as_array();
-        if len < 0 {
-            return Err(MonorubyErr::indexerr(format!("negative length ({})", len)));
-        }
         if start < 0 {
             start += ary.len() as i64;
             if start < 0 {
@@ -1492,7 +1491,7 @@ extern "C" fn set_array_slice(
         } else {
             val
         };
-        ary.set_index2(start as usize, len as usize, val)
+        ary.set_index2(start as usize, len, val)
     }
     inner(base, start, len, val, vm, globals)
         .map_err(|err| vm.set_error(err))
@@ -6177,6 +6176,171 @@ mod tests {
         [a.slice!(2), a]
         "##,
         ]);
+    }
+
+    /// `Array#<<` is JIT-inlined by `array_shl` / `emit_array_shl`: an append
+    /// with spare capacity becomes a two-load / one-store sequence, in both
+    /// the inline (`SmallVec`) and spilled residencies, and only a full buffer
+    /// calls `ary_shl` to reallocate. A splat call site is not `simple` and
+    /// keeps the generic path; a frozen receiver must deopt so the interpreter
+    /// can raise (the inline store bypasses `Array::push`'s caller, which is
+    /// where the check lives).
+    #[test]
+    fn shl_jit_inline() {
+        run_test(
+            r##"
+        def app(a, v) = a << v
+        def app_blk(a, v, &b) = a.<<(v, &b)
+        50.times { app([], 1); app_blk([], 1) }
+        res = []
+        # Grows out of the inline buffer, spills, then reallocates repeatedly.
+        a = []
+        20.times { |i| app(a, i) }
+        res << a
+        # Already spilled, with spare capacity: `<<` returns the receiver.
+        b = [0, 1, 2, 3, 4, 5]
+        res << (app(b, 6).object_id == b.object_id)
+        res << b
+        # Heap children go through the write barrier.
+        c = []
+        6.times { |i| app(c, [i, "s#{i}"]) }
+        res << c
+        res << app_blk([0, 1], 2)
+        begin
+          app([1, 2].freeze, 3)
+        rescue => e
+          res << e.class
+        end
+        res
+        "##,
+        );
+    }
+
+    /// `Array#rotate!` is JIT-inlined by `array_rotate_`: the call site drops
+    /// generic dispatch and `coerce_to_int_i64`, and `ary_rotate_` /
+    /// `wrap_rotate_count` skip the `%` when the count is already in range.
+    /// Covers both arities, all four `wrap_rotate_count` branches, the empty
+    /// receiver, and the shapes that stay generic (a splat call site, a
+    /// non-Integer count) plus the frozen deopt.
+    #[test]
+    fn rotate_jit_inline() {
+        run_test(
+            r##"
+        class Cnt; def to_int = 2; end
+        def rot0(a) = a.rotate!
+        def rot(a, n) = a.rotate!(n)
+        def rot_splat(a, args) = a.rotate!(*args)
+        def rot_obj(a, n) = a.rotate!(n)
+        50.times do
+          rot0([1, 2, 3]); rot([1, 2, 3], 2); rot([1, 2, 3], -2); rot([1, 2, 3], 0)
+          rot_splat([1, 2, 3], [2]); rot_obj([1, 2, 3], Cnt.new)
+        end
+        res = []
+        res << rot([0, 1, 2, 3, 4, 5, 6, 7], 3)     # 0 < cnt < len
+        res << rot([0, 1, 2, 3], 4)                 # cnt == len
+        res << rot([0, 1, 2, 3], 10)                # cnt > len
+        res << rot([0, 1, 2, 3, 4, 5, 6, 7], -3)    # -len < cnt < 0
+        res << rot([0, 1, 2, 3], -10)               # cnt < -len
+        res << rot([0, 1, 2, 3], -4611686018427387904)
+        res << rot([0, 1, 2, 3], 0)
+        res << rot([], 5)                           # empty receiver
+        res << rot0([1, 2, 3, 4])
+        res << rot0([])
+        res << rot_splat([0, 1, 2, 3], [2])
+        res << rot_obj([0, 1, 2, 3], Cnt.new)
+        a = [1, 2, 3]
+        res << (rot(a, 1).object_id == a.object_id)
+        begin
+          rot([1, 2].freeze, 1)
+        rescue => e
+          res << e.class
+        end
+        res
+        "##,
+        );
+    }
+
+    /// The slice form `ary[start, len] = other` is JIT-inlined by
+    /// `array_slice_assign` when `len` is a literal in `0..=8`: an in-bounds
+    /// replacement by an equally long `Array` is a plain copy. Covers the
+    /// inline copy in all four buffer combinations (inline/spilled × source,
+    /// receiver), and every run-time condition that has to fall back to
+    /// `set_array_slice` — a negative start (in and out of range), a
+    /// non-`Array` right-hand side, one that answers `#to_ary`, a length
+    /// mismatch, a run that reaches past the end, and self-assignment —
+    /// plus the compile-time refusals (a start proven non-Integer, a
+    /// non-literal or out-of-range length, a splat call site).
+    #[test]
+    fn index_assign_slice_jit_inline() {
+        run_test(
+            r##"
+        class ToAry; def to_ary = [:x, :y, :z, :w]; end
+        def sl0(a, i, v) = a[i, 0] = v
+        def sl1(a, i, v) = a[i, 1] = v
+        def sl4(a, i, v) = a[i, 4] = v
+        def sl6(a, i, v) = a[i, 6] = v
+        def sl_var(a, i, n, v) = a[i, n] = v      # `len` is not a literal
+        def sl_wide(a, i, v) = a[i, 20] = v       # `len` > the unroll bound
+        def sl_float(a, v) = a[1.5, 2] = v        # start proven non-Integer
+        def sl_splat(a, args) = a.[]=(*args)      # not a `simple` call site
+        def sl_arity(a, v) = a[1, 2, 3] = v       # neither the 2- nor 3-arg form
+        def sl_range(a, r, v) = a[r] = v          # 2-arg form, index not an Integer
+        50.times do
+          sl_range([1, 2, 3], 0..1, [0])
+          sl0([1], 0, []); sl1([1], 0, [0]); sl4([1, 2, 3, 4], 0, [0, 0, 0, 0])
+          sl6([1, 2, 3, 4, 5, 6], 0, [0, 0, 0, 0, 0, 0])
+          sl_var([1, 2], 0, 1, [0]); sl_wide([1, 2], 0, [0])
+          sl_float([1, 2, 3], [0]); sl_splat([1, 2, 3], [0, 1, [0]])
+          begin; sl_arity([1, 2], 0); rescue ArgumentError; end
+        end
+        res = []
+        # --- the inline copy ---
+        res << (a = [0, 1, 2]; sl1(a, 1, [:a]); a)                     # inline/inline
+        res << (a = [*0..9]; sl4(a, 2, [:a, :b, :c, :d]); a)           # spilled/inline
+        res << (a = [*0..9]; sl6(a, 1, [*:a..:f]); a)                  # spilled/spilled
+        res << (a = [0, 1, 2]; sl0(a, 1, []); a)                       # zero-length
+        res << (a = [*0..9]; sl4(a, 6, [:a, :b, :c, :d]); a)           # ends exactly at len
+        # --- run-time fall-backs into `set_array_slice` ---
+        res << (a = [*0..9]; sl4(a, -5, [:a, :b, :c, :d]); a)          # negative start
+        res << (a = [*0..9]; sl4(a, 0, [:a, :b]); a)                   # shorter -> shrinks
+        res << (a = [*0..9]; sl4(a, 0, [*:a..:f]); a)                  # longer -> grows
+        res << (a = [*0..9]; sl4(a, 8, [:a, :b, :c, :d]); a)           # runs past the end
+        res << (a = [*0..9]; sl4(a, 20, [:a, :b, :c, :d]); a)          # start past the end
+        res << (a = [*0..9]; sl4(a, 2, 42); a)                         # not an Array
+        res << (a = [*0..9]; sl4(a, 2, ToAry.new); a)                  # answers #to_ary
+        res << (a = [*0..9]; sl4(a, 2, nil); a)
+        res << (a = [*0..7]; sl4(a, 2, a); a)                          # self-assignment
+        res << (a = [0, 1, 2]; sl4(a, 0, [:a, :b, :c, :d]); a)         # inline receiver grows
+        begin
+          sl4([*0..9], -100, [:a, :b, :c, :d])
+        rescue => e
+          res << e.class
+        end
+        begin
+          sl4([*0..9].freeze, 0, [:a, :b, :c, :d])
+        rescue => e
+          res << e.class
+        end
+        # --- shapes that never reach the inline path ---
+        res << (a = [*0..9]; sl_var(a, 1, 3, [:a, :b, :c]); a)
+        res << (a = [*0..9]; sl_wide(a, 1, [:a]); a)
+        res << (a = [*0..9]; sl_float(a, [:a, :b]); a)
+        res << (a = [*0..9]; sl_splat(a, [1, 2, [:a, :b]]); a)
+        res << (a = [*0..9]; sl_range(a, 2..5, [:a, :b]); a)
+        begin
+          sl_arity([*0..9], 0)
+        rescue => e
+          res << e.class
+        end
+        begin
+          a = [*0..9]
+          a[1, -1] = [:a]
+        rescue => e
+          res << e.class
+        end
+        res
+        "##,
+        );
     }
 
     #[test]
