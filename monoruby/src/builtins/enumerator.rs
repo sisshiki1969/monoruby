@@ -6,13 +6,40 @@ use super::*;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Enumerator", ENUMERATOR_CLASS, ObjTy::ENUMERATOR);
-    globals.define_builtin_class_func_with_effect(
+    globals.store[ENUMERATOR_CLASS].set_alloc_func(enumerator_alloc_func);
+    // `Enumerator.new` allocates + dispatches `#initialize`, like
+    // `Hash.new` — so a Ruby subclass (`Enumerator::Lazy`) can override
+    // `#initialize` with a different arity and still be built by the
+    // inherited `new`. Positional args are forwarded verbatim; the
+    // 0..1 arity check lives in `Enumerator#initialize`.
+    globals.define_builtin_class_func_rest(ENUMERATOR_CLASS, "new", enumerator_new);
+    globals.define_private_builtin_func_with(
         ENUMERATOR_CLASS,
-        "new",
-        enumerator_new,
+        "initialize",
+        enumerator_initialize,
         0,
         1,
-        Effect::CAPTURE,
+        false,
+    );
+    // Same function under a stable private name: `Enumerator::Lazy`'s own
+    // constructors need the *Enumerator* initializer even though they
+    // override `#initialize`, and Ruby has no way to spell
+    // `super` outside the overriding method itself.
+    globals.define_private_builtin_func_with(
+        ENUMERATOR_CLASS,
+        "__enumerator_init__",
+        enumerator_initialize,
+        0,
+        1,
+        false,
+    );
+    globals.define_private_builtin_func_with(
+        ENUMERATOR_CLASS,
+        "__enum_init_method__",
+        enum_init_method,
+        3,
+        4,
+        false,
     );
     globals.define_builtin_func_with(ENUMERATOR_CLASS, "with_index", with_index, 0, 1, false);
     globals.define_builtin_func(ENUMERATOR_CLASS, "with_object", with_object, 1);
@@ -22,6 +49,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek_values", peek_values, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "feed", feed, 1);
     globals.define_builtin_funcs(ENUMERATOR_CLASS, "size", &["length"], enumerator_size, 0);
 
     // `Enumerator::Yielder` inherits from `Object` (as in CRuby), NOT `Array`.
@@ -83,13 +111,30 @@ fn enumerator_size(
         return Ok(Value::nil());
     }
     let inner = e.as_enumerator_inner();
+    if !inner.is_initialized() {
+        return Err(MonorubyErr::argumenterr("uninitialized enumerator"));
+    }
     let Some(stored) = inner.size() else {
         return Ok(Value::nil());
     };
     if let Some(proc) = stored.is_proc() {
         return vm.invoke_proc(globals, &proc, &[]);
     }
+    // CRuby calls `size` when it merely *responds to* `call`, not only
+    // for a Proc (`enumerator_size`: `rb_respond_to(size, id_call)`).
+    if let Some(res) =
+        vm.invoke_method_if_exists(globals, IdentId::get_id("call"), stored, &[], None, None)?
+    {
+        return Ok(res);
+    }
     Ok(stored)
+}
+
+/// Allocator for `Enumerator` and its subclasses. Produces the
+/// uninitialized ENUMERATOR-typed RValue CRuby's `Enumerator.allocate`
+/// returns; `#initialize` gives it a source.
+pub(crate) extern "C" fn enumerator_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
+    Value::new_uninit_enumerator(class_id)
 }
 
 ///
@@ -98,21 +143,67 @@ fn enumerator_size(
 /// - new(size=nil) {|y| ... } -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/s/new.html]
+///
+/// Allocates through the receiver class's allocator and dispatches
+/// `#initialize`, so `Enumerator::Lazy.new(obj, size) { … }` runs
+/// `Lazy#initialize` and yields a Lazy.
 #[monoruby_builtin]
-fn enumerator_new(
+fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class = lfp.self_val().as_class_id();
+    let obj = super::class::call_alloc_func(globals, class)?;
+    vm.temp_push(obj);
+    let res = vm.invoke_method_inner(
+        globals,
+        IdentId::INITIALIZE,
+        obj,
+        &lfp.arg(0).as_array(),
+        lfp.block(),
+        None,
+    );
+    vm.temp_pop();
+    res?;
+    Ok(obj)
+}
+
+///
+/// ### Enumerator#initialize
+///
+/// - initialize(size = nil) {|y| ... } -> self
+///
+/// Private hook called by `Enumerator.new`. The block becomes the
+/// generator body; `size` is stored verbatim (nil / Integer / Float /
+/// `Float::INFINITY` / Proc) and resolved lazily by `#size`.
+#[monoruby_builtin]
+fn enumerator_initialize(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let bh = lfp.expect_block()?;
+    let mut self_val = lfp.self_val();
+    if self_val.ty() != Some(ObjTy::ENUMERATOR) {
+        return Err(MonorubyErr::typeerr("not an Enumerator"));
+    }
+    if self_val.is_frozen() {
+        return Err(MonorubyErr::frozenerr(format!(
+            "can't modify frozen {}",
+            self_val.get_real_class_name(&globals.store)
+        )));
+    }
+    let Some(bh) = lfp.block() else {
+        return Err(MonorubyErr::argumenterr(
+            "wrong number of arguments (given 0, expected 1+)",
+        ));
+    };
     let proc = vm.generate_proc(globals, bh, pc)?;
     let obj = Value::new_generator(proc);
-    // Optional size argument: nil (default) / Integer / Float /
-    // Float::INFINITY / Proc. Stored verbatim; Enumerator#size resolves
-    // Proc values lazily.
     let size = lfp.try_arg(0).filter(|v| !v.is_nil());
-    vm.generate_enumerator_with_size(IdentId::EACH, obj, vec![], pc, size)
+    let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
+    let yielder = Proc::from_outer(outer_lfp, ENUM_YIELDER_FUNCID, pc);
+    self_val
+        .as_enumerator_inner_mut()
+        .initialize(obj, IdentId::EACH, yielder, vec![], None, size);
+    Ok(self_val)
 }
 
 ///
@@ -123,7 +214,7 @@ fn enumerator_new(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next.html]
 #[monoruby_builtin]
 fn next(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut e = Enumerator::new(lfp.self_val());
+    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
     e.next(vm, globals)
 }
 
@@ -140,7 +231,7 @@ fn next_values(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut e = Enumerator::new(lfp.self_val());
+    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
     Ok(e.next_values(vm, globals)?.into())
 }
 
@@ -152,15 +243,24 @@ fn next_values(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/each.html]
 #[monoruby_builtin]
-fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val: Enumerator = match Enumerator::try_new(lfp.self_val()) {
-        Some(e) => e,
-        None => {
-            return Err(MonorubyErr::typeerr("not an Enumerator"));
-        }
-    };
+fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    let self_val = Enumerator::expect_initialized(lfp.self_val())?;
+    let extra: Array = lfp.arg(0).as_array();
     let Some(bh) = lfp.block() else {
-        return Ok(self_val.into());
+        if extra.len() == 0 {
+            return Ok(self_val.into());
+        }
+        // `e.each(*args)` without a block hands back a *new* enumerator
+        // carrying the extra arguments (CRuby's `enumerator_each`).
+        let args: Vec<Value> = self_val.args.iter().chain(extra.iter()).copied().collect();
+        return vm.generate_enumerator_with_class(
+            lfp.self_val().real_class(&globals.store).id(),
+            self_val.method,
+            self_val.obj,
+            args,
+            pc,
+            self_val.size(),
+        );
     };
 
     // Internal iteration: re-invoke the source method with the caller's
@@ -180,17 +280,68 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         .func_id()
         .map(|fid| globals[fid].arity())
         .unwrap_or(-1);
+    // `e.each(*args)` appends `args` to the ones captured at construction
+    // (CRuby's `enumerator_block_call`: `argc ? ... : e->args`).
+    let args: Vec<Value> = if extra.len() == 0 {
+        self_val.args.to_vec()
+    } else {
+        self_val
+            .args
+            .iter()
+            .chain(extra.iter())
+            .copied()
+            .collect()
+    };
     globals.push_enum_block_arity(blk_arity);
     let res = vm.invoke_method_inner(
         globals,
         self_val.method,
         self_val.obj,
-        &self_val.args,
+        &args,
         Some(bh),
         self_val.kw_args,
     );
     globals.pop_enum_block_arity();
     res
+}
+
+///
+/// ### Enumerator#__enum_init_method__
+///
+/// - __enum_init_method__(obj, meth, args, size) -> self
+///
+/// The "wrap a method call" form of `enumerator_init` (what `to_enum`
+/// builds), exposed privately so `Enumerator::Lazy#to_enum` can produce a
+/// Lazy that re-dispatches `obj.meth(*args, &block)` on every `#each` —
+/// exactly CRuby's `lazy_to_enum_i`. `size` is stored verbatim (nil /
+/// Integer / Float / Proc) and resolved lazily by `#size`.
+#[monoruby_builtin]
+fn enum_init_method(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let mut self_val = lfp.self_val();
+    if self_val.ty() != Some(ObjTy::ENUMERATOR) {
+        return Err(MonorubyErr::typeerr("not an Enumerator"));
+    }
+    if self_val.is_frozen() {
+        return Err(MonorubyErr::frozenerr(format!(
+            "can't modify frozen {}",
+            self_val.get_real_class_name(&globals.store)
+        )));
+    }
+    let obj = lfp.arg(0);
+    let method = lfp.arg(1).expect_symbol_or_string(globals)?;
+    let args: Vec<Value> = lfp.arg(2).as_array().iter().copied().collect();
+    let size = lfp.try_arg(3).filter(|v| !v.is_nil());
+    let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
+    let yielder = Proc::from_outer(outer_lfp, ENUM_YIELDER_FUNCID, pc);
+    self_val
+        .as_enumerator_inner_mut()
+        .initialize(obj, method, yielder, args, None, size);
+    Ok(self_val)
 }
 
 ///
@@ -218,7 +369,7 @@ fn with_index(
             _ => Value::integer(v.coerce_to_int_i64(vm, globals)?),
         },
     };
-    let self_val = Enumerator::new(lfp.self_val());
+    let self_val = Enumerator::expect_initialized(lfp.self_val())?;
     let Some(bh) = lfp.block() else {
         // The offset is part of the enumerator's replayed arguments —
         // `e.with_index(5).to_a` must start at 5.
@@ -248,7 +399,7 @@ fn with_object(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let memo = lfp.arg(0);
-    let self_val = Enumerator::new(lfp.self_val());
+    let self_val = Enumerator::expect_initialized(lfp.self_val())?;
     let Some(bh) = lfp.block() else {
         return vm.generate_enumerator_with_size(
             IdentId::get_id("with_object"),
@@ -282,13 +433,18 @@ fn enum_adapter_call(
     adapter_fid: FuncId,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let data = vm.get_block_data(globals, bh)?;
-    let state = Value::array1(state);
+    // The adapter's state rides on the proc's `outer_lfp` self as a
+    // two-slot Array: `[running index / memo, user block]`. Parking the
+    // block *in the state* rather than on an executor-side stack keeps
+    // the adapter self-contained, so it still works when it outlives
+    // this call — `enum.chunk.with_index { … }` hands the adapter to a
+    // method that only stores it and iterates later.
+    let block: Value = vm.generate_proc(globals, bh, pc)?.into();
+    let state = Value::array2(state, block);
     vm.temp_push(state);
     let outer = Lfp::dummy_heap_frame_with_self(state);
     let adapter: Value = Proc::from_outer(outer, adapter_fid, pc).into();
     vm.temp_push(adapter);
-    vm.push_adapter_block(state, data);
     let res = vm.invoke_method_inner(
         globals,
         self_val.method,
@@ -297,7 +453,6 @@ fn enum_adapter_call(
         Some(BlockHandler::new(adapter)),
         self_val.kw_args,
     );
-    vm.pop_adapter_block();
     vm.temp_pop();
     vm.temp_pop();
     res
@@ -311,7 +466,7 @@ fn enum_adapter_call(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/peek.html]
 #[monoruby_builtin]
 fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut e = Enumerator::new(lfp.self_val());
+    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
     e.peek(vm, globals)
 }
 
@@ -332,7 +487,7 @@ fn peek_values(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut e = Enumerator::new(lfp.self_val());
+    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
     Ok(e.peek_values(vm, globals)?.into())
 }
 
@@ -343,10 +498,32 @@ fn peek_values(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/rewind.html]
 #[monoruby_builtin]
-fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut e = Enumerator::new(lfp.self_val());
-    e.rewind();
+fn rewind(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
+    // CRuby's `enumerator_rewind` first asks the source to rewind, if it
+    // knows how (`rb_check_funcall(e->obj, id_rewind, 0, 0)`), then drops
+    // the external-iteration state.
+    let obj = e.obj;
+    vm.invoke_method_if_exists(globals, IdentId::get_id("rewind"), obj, &[], None, None)?;
+    e.rewind_external();
     Ok(e.into())
+}
+
+///
+/// ### Enumerator#feed
+///
+/// - feed(obj) -> nil
+///
+/// Sets the value the producer's pending `yield` returns when the
+/// enumerator is next advanced. Raises TypeError if a value is already
+/// parked (i.e. `#feed` called twice without the producer consuming it).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/feed.html]
+#[monoruby_builtin]
+fn feed(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
+    e.set_feed(lfp.arg(0))?;
+    Ok(Value::nil())
 }
 
 ///
@@ -455,7 +632,12 @@ fn generator_each(
     vm.temp_push(yielder);
     vm.push_adapter_block(yielder, data);
     let body = ProcData::from_proc(&self_val.body());
-    let res = vm.invoke_block(globals, &body, &[yielder]);
+    // `g.each(*args)` calls the body as `body.(yielder, *args)` (CRuby's
+    // `generator_each`). `Enumerator::Lazy`'s head stage relies on this to
+    // pass `#force`'s arguments through to the source's `each`.
+    let mut block_args = vec![yielder];
+    block_args.extend(lfp.arg(0).as_array().iter().copied());
+    let res = vm.invoke_block(globals, &body, &block_args);
     vm.temp_pop();
     vm.pop_adapter_block();
     res

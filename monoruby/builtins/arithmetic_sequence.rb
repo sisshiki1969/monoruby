@@ -30,22 +30,59 @@ class Enumerator
     end
     alias kind_of? is_a?
 
-    # CRuby format: `((begin..end).step(step))` — or `%(step)` when
-    # the sequence was produced via `Range#%`. `Range#%` overrides
-    # `inspect` separately to hit the second form; this default is
-    # the `step` form.
+    # Records how the sequence was produced, which is all `#inspect`
+    # reports: `1.step(10)` prints `(1.step(10))` while `(1..10).step`
+    # prints `((1..10).step)` even though both describe 1, 2, … 10.
+    # CRuby keeps the same three fields (`receiver`, `meth`, `arguments`)
+    # on the object. Called by `Numeric#step` / `Range#step` / `Range#%`.
+    def __set_origin(receiver, meth, args)
+      @__receiver = receiver
+      @__meth = meth
+      @__args = args
+      self
+    end
+
+    # CRuby's `arith_seq_inspect`: `(<receiver>.<meth>(<args>))`, with the
+    # receiver parenthesised when it is a Range.
     def inspect
-      b = self.begin
-      e = self.end
-      s = self.step
-      excl = self.exclude_end?
-      lo = b.nil? ? "" : b.inspect
-      hi = e.nil? ? "" : e.inspect
-      sep = excl ? "..." : ".."
-      step_part = s.nil? ? "" : s.inspect
-      "((#{lo}#{sep}#{hi}).step(#{step_part}))"
+      recv = @__receiver
+      if recv.nil?
+        # No recorded origin (an ArithmeticSequence built by some other
+        # route): fall back to the canonical Range-step spelling.
+        b = self.begin
+        e = self.end
+        s = self.step
+        lo = b.nil? ? "" : b.inspect
+        hi = e.nil? ? "" : e.inspect
+        sep = exclude_end? ? "..." : ".."
+        step_part = s.nil? ? "" : s.inspect
+        return "((#{lo}#{sep}#{hi}).step(#{step_part}))"
+      end
+      body = recv.is_a?(Range) ? "(#{recv.inspect})" : recv.inspect
+      out = "(#{body}.#{@__meth}"
+      args = @__args
+      if args && !args.empty?
+        out = out + "(#{args.map { |a| a.inspect }.join(', ')})"
+      end
+      out + ")"
     end
     alias to_s inspect
+
+    # Two sequences are equal when they describe the same progression —
+    # how each was spelled (`1.step(10)` vs `(1..10).step`) is irrelevant.
+    def ==(other)
+      return true if equal?(other)
+      return false unless other.is_a?(Enumerator::ArithmeticSequence)
+      self.begin == other.begin &&
+        self.end == other.end &&
+        self.step == other.step &&
+        exclude_end? == other.exclude_end?
+    end
+    alias eql? ==
+
+    def hash
+      [Enumerator::ArithmeticSequence, self.begin, self.end, self.step, exclude_end?].hash
+    end
 
     # `to_a` over the same closed-form `b + i * s` formula that `last`
     # and `first(n)` use. Stays in Ruby because `Array.new(n) { ... }`

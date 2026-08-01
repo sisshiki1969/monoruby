@@ -4977,9 +4977,15 @@ impl<'pr> Lowerer<'pr> {
 
         // Binary operators come back from Prism as a `CallNode` with a
         // one-element arg list and the operator as the method name.
+        // An explicit `recv.<<(*args)` call also arrives as a one-element
+        // arg list, but that element is a `Splat` whose arity is only
+        // known at runtime — it is not a binary operand. Leave those on
+        // the generic call path (bytecodegen has no value-producing
+        // lowering for a bare `Splat`, and would reject it).
         if block.is_none()
             && let Some(recv) = receiver_opt.as_ref()
             && args.len() == 1
+            && !matches!(args[0].kind, NodeKind::Splat(_))
             && let Some(op) = binop_from_name(&method)
         {
             let lhs = self.lower_node(recv)?;

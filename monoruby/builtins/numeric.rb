@@ -188,6 +188,9 @@ class Numeric
   end
 
   def step(limit = nil, step = nil, by: nil, to: nil)
+    # The positional spelling as written, kept for
+    # `ArithmeticSequence#inspect` (`1.step(10, 3)` prints itself back).
+    given_args = step.nil? ? (limit.nil? ? [] : [limit]) : [limit, step]
     if !to.nil? && !limit.nil?
       raise ArgumentError, "wrong number of arguments (given 2, expected 0..1)"
     end
@@ -205,7 +208,9 @@ class Numeric
       # contract: CRuby raises ArgumentError lazily on iteration
       # / `.size`, but the *kind* is still Enumerator until then.
       if step.is_a?(Numeric)
-        return Enumerator::ArithmeticSequence.__build(self, limit, step, false)
+        return Enumerator::ArithmeticSequence
+          .__build(self, limit, step, false)
+          .__set_origin(self, :step, given_args)
       else
         return to_enum(:step, limit, step) { __step_size(limit, step) }
       end

@@ -1418,6 +1418,7 @@ impl Value {
     }
 
     pub(crate) fn new_enumerator(
+        class_id: ClassId,
         obj: Value,
         method: IdentId,
         proc: Proc,
@@ -1425,7 +1426,11 @@ impl Value {
         kw_args: Option<Hashmap>,
         size: Option<Value>,
     ) -> Self {
-        RValue::new_enumerator(obj, method, proc, args, kw_args, size).pack()
+        RValue::new_enumerator(class_id, obj, method, proc, args, kw_args, size).pack()
+    }
+
+    pub(crate) fn new_uninit_enumerator(class_id: ClassId) -> Self {
+        RValue::new_uninit_enumerator(class_id).pack()
     }
 
     pub(crate) fn new_generator(proc: Proc) -> Self {

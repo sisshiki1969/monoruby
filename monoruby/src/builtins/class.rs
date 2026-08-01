@@ -368,10 +368,13 @@ pub(crate) fn call_alloc_func(globals: &mut Globals, class_id: ClassId) -> Resul
     }
     match globals.store[class_id].alloc_func() {
         Some(f) => Ok(f(class_id, globals)),
-        None => Err(MonorubyErr::typeerr(format!(
-            "allocator undefined for {}",
-            class_id.get_name(globals)
-        ))),
+        // Fully-qualified name (`Enumerator::ArithmeticSequence`), the
+        // same string `Module#name` reports — `ClassId::get_name` gives
+        // only the leaf.
+        None => {
+            let name = globals.store.get_class_name(class_id);
+            Err(MonorubyErr::typeerr(format!("allocator undefined for {name}")))
+        }
     }
 }
 

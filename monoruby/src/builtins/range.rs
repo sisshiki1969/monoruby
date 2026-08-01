@@ -176,10 +176,21 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let n = n as usize;
         if let Some((start, end)) = range.try_fixnum() {
             let vec: Vec<Value> = (start..end).take(n).map(Value::integer).collect();
-            Ok(Value::array_from_vec(vec))
-        } else {
-            Err(MonorubyErr::runtimeerr("not supported"))
+            return Ok(Value::array_from_vec(vec));
         }
+        // Anything the Integer..Integer fast path cannot index — an
+        // endless or `Float::INFINITY`-ended range, a String range —
+        // walks `#each` and stops after `n`, exactly as CRuby's
+        // `range_first` does. `__range_first_by_each` lives in
+        // `builtins/range.rb`.
+        vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("__range_first_by_each"),
+            self_,
+            &[Value::integer(n as i64)],
+            None,
+            None,
+        )
     } else {
         Ok(range.start())
     }
