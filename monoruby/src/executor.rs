@@ -192,17 +192,20 @@ pub struct Executor {
     /// Consumer blocks of the `Enumerator::Generator#each` calls
     /// currently on this context's stack.
     ///
-    /// `Generator#each` runs the generator body *directly* (CRuby does
-    /// the same: only external iteration needs a fiber), handing it a
-    /// fresh `Yielder`. `Yielder#<<` must then reach the block that
-    /// `#each` was given. The block is resolved once, up front, and
-    /// parked here keyed by the yielder object it belongs to, so
-    /// nesting (`Enumerator.new { |y| other.each { |v| y << v } }`)
-    /// resolves to the right one instead of whatever ran most recently.
-    /// Keying on the yielder rather than an ivar keeps the object's
-    /// `#inspect` free of monoruby-only internals (CRuby holds the
-    /// proc in a C struct).
-    enum_yielder_blocks: Vec<(Value, ProcData)>,
+    /// Consumer blocks of the enumerator calls currently on this
+    /// context's stack, keyed by the object that stands for the call.
+    ///
+    /// Used wherever a *native* block has to reach the Ruby block its
+    /// enclosing enumerator method was given, because the enumerator
+    /// method runs the source directly rather than through a fiber:
+    /// `Generator#each` keys on the `Yielder` it hands the body, and
+    /// `#with_index` / `#with_object` key on their state Array. Both
+    /// resolve innermost-first, so nesting
+    /// (`Enumerator.new { |y| other.each { |v| y << v } }`) finds the
+    /// right block instead of whatever ran most recently. Keying on an
+    /// object rather than an ivar keeps `#inspect` free of
+    /// monoruby-only internals (CRuby holds these in C structs).
+    adapter_blocks: Vec<(Value, ProcData)>,
     /// Stack of `break` barriers: the CFP at each synchronous
     /// thread-body invocation (`Thread#__invoke_body`). A `break`
     /// escaping a block must not resolve its defining frame *across*
@@ -308,7 +311,7 @@ impl std::default::Default for Executor {
             sp_match_haystack: None,
             root_lep: None,
             root_svar: None,
-            enum_yielder_blocks: Vec::new(),
+            adapter_blocks: Vec::new(),
             break_barriers: Vec::new(),
             temp_stack: vec![],
             method_missing_style: MethodMissingStyle::Plain,
@@ -392,8 +395,8 @@ impl alloc::GC<RValue> for Executor {
         // Generator consumer blocks close over their defining frame,
         // which must survive for as long as the generator body can
         // call back into it.
-        for (yielder, data) in &self.enum_yielder_blocks {
-            yielder.mark(alloc);
+        for (key, data) in &self.adapter_blocks {
+            key.mark(alloc);
             if let Some(outer) = data.outer() {
                 outer.mark(alloc);
             }
@@ -3695,24 +3698,23 @@ impl Executor {
         self.root_svar = None;
     }
 
-    /// Park the consumer block of a `Generator#each` call, bound to the
-    /// `Yielder` handed to that call. See
-    /// [`enum_yielder_blocks`](Self::enum_yielder_blocks).
-    pub(crate) fn push_enum_yielder_block(&mut self, yielder: Value, data: ProcData) {
-        self.enum_yielder_blocks.push((yielder, data));
+    /// Park a consumer block, bound to the object that stands for the
+    /// enumerator call. See [`adapter_blocks`](Self::adapter_blocks).
+    pub(crate) fn push_adapter_block(&mut self, key: Value, data: ProcData) {
+        self.adapter_blocks.push((key, data));
     }
 
-    pub(crate) fn pop_enum_yielder_block(&mut self) {
-        self.enum_yielder_blocks.pop();
+    pub(crate) fn pop_adapter_block(&mut self) {
+        self.adapter_blocks.pop();
     }
 
-    /// The consumer block `yielder` must call. Innermost first, so a
-    /// generator nested inside another finds its own.
-    pub(crate) fn enum_yielder_block(&self, yielder: Value) -> Option<ProcData> {
-        self.enum_yielder_blocks
+    /// The consumer block bound to `key`. Innermost first, so a nested
+    /// enumerator call finds its own.
+    pub(crate) fn adapter_block(&self, key: Value) -> Option<ProcData> {
+        self.adapter_blocks
             .iter()
             .rev()
-            .find(|(y, _)| y.id() == yielder.id())
+            .find(|(k, _)| k.id() == key.id())
             .map(|(_, data)| data.clone())
     }
 

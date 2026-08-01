@@ -578,6 +578,22 @@ impl Globals {
                 crate::builtins::proc::proc_curry_body
             )
         );
+        assert_eq!(
+            WITH_INDEX_ADAPTER_FUNCID,
+            globals.define_builtin_func_rest(
+                OBJECT_CLASS,
+                "",
+                with_index_adapter
+            )
+        );
+        assert_eq!(
+            WITH_OBJECT_ADAPTER_FUNCID,
+            globals.define_builtin_func_rest(
+                OBJECT_CLASS,
+                "",
+                with_object_adapter
+            )
+        );
         globals.random_init(None);
         gvar::init_builtin_gvars(&mut globals);
         crate::builtins::init_builtins(&mut globals);
