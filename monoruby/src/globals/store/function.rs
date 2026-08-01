@@ -120,6 +120,9 @@ pub struct Meta {
     reg_num: u16,
     mode: u8,
     /// bit 7:  0:on_stack 1:on_heap
+    /// bit 6:  1:svar-transparent frame (a core builtin written in
+    ///         Ruby; it stands in for a CRuby C function, which owns
+    ///         no `$~` / `$_` scope — see `Executor::current_mfp`)
     /// bit 5:  1:proc-method frame (ISeq body wrapped as a method via
     ///         `Module#define_method`; a set `MethodReturn` must be
     ///         absorbed at this frame so `return` has lambda-like
@@ -246,6 +249,22 @@ impl Meta {
 
     pub fn is_native(&self) -> bool {
         (self.kind & 0b10) != 0
+    }
+
+    /// Mark this frame as owning no `$~` / `$_` scope. Set for the
+    /// core builtins monoruby implements in Ruby (`builtins/*.rb`):
+    /// CRuby implements the same methods in C, and a C frame is
+    /// skipped by `vm_svar_lep`, so a match performed under one of
+    /// them lands in the *caller's* container. Without this, a
+    /// `$~` set inside e.g. `Enumerable#map`'s `each` call would be
+    /// invisible to the user block map yields to.
+    fn set_svar_transparent(&mut self) {
+        self.kind |= 0b0100_0000
+    }
+
+    /// See [`Self::set_svar_transparent`].
+    pub(crate) fn is_svar_transparent(&self) -> bool {
+        (self.kind & 0b0100_0000) != 0
     }
 
     pub fn on_stack(&self) -> bool {
@@ -1213,6 +1232,12 @@ impl FuncInfo {
     /// boundary even when the JIT inlines the call.
     pub(crate) fn set_proc_method(&mut self) {
         self.data.meta.set_proc_method();
+    }
+
+    /// Mark this function's frames as owning no `$~` / `$_` scope.
+    /// See [`Meta::set_svar_transparent`].
+    pub(crate) fn set_svar_transparent(&mut self) {
+        self.data.meta.set_svar_transparent();
     }
 
     ///

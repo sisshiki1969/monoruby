@@ -1,6 +1,263 @@
 use super::*;
 use crate::value::IntegerBase;
+use crate::value::rvalue::{
+    Encoding, RStringInner, eucjp_char_width, map_bytes_to_utf8, sjis_char_width,
+};
 use num::Signed;
+
+///
+/// How a `sprintf` run treats text: the encoding the result String is
+/// tagged with, and whether the run happens in the byte↔U+00XX
+/// surrogate space (see [`RStringInner::regex_view`]).
+///
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FormatCtx {
+    /// Negotiated encoding of the result String.
+    enc: Encoding,
+    /// Every String taking part is viewed as one `char` per byte
+    /// ([`map_bytes_to_utf8`]) and the finished text is decoded back
+    /// with [`RStringInner::from_mapped_utf8`]. Needed whenever raw
+    /// bytes must survive the `&str`-space formatter: a byte-oriented
+    /// result encoding, or a participant whose bytes are not valid
+    /// UTF-8 (CRuby formats `"%s" % "\x80"` into a result that simply
+    /// reports `valid_encoding? == false`, it does not substitute
+    /// U+FFFD).
+    byte_space: bool,
+}
+
+impl FormatCtx {
+    /// A `&str`-space view of `s` for this run.
+    fn view<'a>(&self, s: &'a RStringInner) -> Result<std::borrow::Cow<'a, str>> {
+        if self.byte_space {
+            Ok(std::borrow::Cow::Owned(map_bytes_to_utf8(s.as_bytes())))
+        } else {
+            s.regex_view()
+        }
+    }
+
+    /// [`Self::view`] as an owned `String` (the format string itself,
+    /// which the formatter iterates by `char`).
+    pub(crate) fn view_owned(&self, s: &RStringInner) -> Result<String> {
+        self.view(s).map(|v| v.into_owned())
+    }
+
+    /// Turn finished format text back into a String value, undoing the
+    /// surrogate view when the run used one.
+    pub(crate) fn finish(&self, s: &str) -> Value {
+        let inner = if self.byte_space && !s.is_ascii() {
+            RStringInner::from_mapped_utf8(s, self.enc)
+        } else {
+            RStringInner::from_encoding_scanned(s.as_bytes(), self.enc)
+        };
+        Value::string_from_inner(inner)
+    }
+}
+
+///
+/// Negotiate the result encoding for `fmt % arguments`: start from the
+/// format String's encoding and fold in each String argument's via
+/// `compatible_encoding`, raising `Encoding::CompatibilityError` on an
+/// incompatible pair (CRuby semantics). Also decides whether the run
+/// needs byte space, for which the values of a trailing named-reference
+/// Hash count too — they reach the output just like positional ones.
+///
+pub(crate) fn negotiate_format(
+    store: &Store,
+    fmt: &RStringInner,
+    arguments: &[Value],
+) -> Result<FormatCtx> {
+    // A format String that cannot hold ASCII cannot hold the directives
+    // either; CRuby rejects it before reading a single specifier.
+    if !fmt.encoding().is_ascii_compatible() {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            store,
+            format!("ASCII incompatible encoding: {}", fmt.encoding().name()),
+        ));
+    }
+    let mut result_inner = fmt.clone();
+    let mut broken = !fmt.is_valid_encoding();
+    for v in arguments {
+        let Some(inner) = v.is_rstring_inner() else {
+            continue;
+        };
+        if !inner.is_valid_encoding() {
+            broken = true;
+        }
+        match result_inner.compatible_encoding(&inner) {
+            Some(combined) => {
+                if combined != result_inner.encoding() {
+                    result_inner.set_encoding(combined);
+                }
+            }
+            None => {
+                return Err(MonorubyErr::incompatible_encoding(
+                    store,
+                    result_inner.encoding(),
+                    inner.encoding(),
+                ));
+            }
+        }
+    }
+    // `%{name}` / `%<name>spec` read their values from a trailing Hash.
+    // They only inform the byte-space decision here: folding them into
+    // the encoding negotiation as well would be closer to CRuby, but
+    // would also start raising `CompatibilityError` for pairs monoruby
+    // has always accepted.
+    if let Some(hash) = arguments.last().and_then(|v| v.try_hash_ty()) {
+        for (_, v) in hash.iter() {
+            if let Some(inner) = v.is_rstring_inner()
+                && !inner.is_valid_encoding()
+            {
+                broken = true;
+            }
+        }
+    }
+    let enc = result_inner.encoding();
+    Ok(FormatCtx {
+        enc,
+        // US-ASCII joins the byte-oriented encodings because `%c` can
+        // put a high byte into a US-ASCII result (onigmo's `%c` code
+        // space for it is the full byte range). Everything else that
+        // stays US-ASCII is 7-bit, for which the surrogate view is the
+        // identity, so this costs nothing.
+        byte_space: enc.is_byte_oriented() || enc == Encoding::UsAscii || broken,
+    })
+}
+
+///
+/// CRuby's `rb_enc_uint_chr`: the raw bytes of the character `code`
+/// denotes in `enc`. Unicode encodings read `code` as a Unicode scalar;
+/// every other encoding reads it as the big-endian byte image of the
+/// character itself, so `9415601` (`0x8FABB1`) is the EUC-JP three-byte
+/// sequence for `é`.
+///
+/// The two error kinds follow CRuby: a value that simply overflows a
+/// single-byte encoding's code space is a `RangeError`, everything else
+/// that is not a character in `enc` — a negative value, a Unicode scalar
+/// past `U+10FFFF`, an ill-formed EUC-JP / Shift_JIS byte image — is an
+/// `ArgumentError: invalid character`.
+///
+fn encode_codepoint(code: i64, enc: Encoding) -> Result<Vec<u8>> {
+    fn be_bytes(code: u32) -> Vec<u8> {
+        if code <= 0xFF {
+            vec![code as u8]
+        } else if code <= 0xFFFF {
+            vec![(code >> 8) as u8, code as u8]
+        } else {
+            vec![(code >> 16) as u8, (code >> 8) as u8, code as u8]
+        }
+    }
+    /// Onigmo's EUC-JP `code_to_mbclen` plus its trailing-byte check:
+    /// ASCII stands alone, and every byte of a multibyte image (SS2
+    /// `8E xx`, JIS X 0208 `hi lo`, SS3 `8F hi lo`) must have its high
+    /// bit set. Wider than the *decoder*'s notion of a valid character
+    /// — `8E FF` has no JIS X 0201 meaning but `%c` still emits it.
+    fn valid_euc_jp(b: &[u8]) -> bool {
+        match b {
+            [c] => *c <= 0x7F,
+            [rest @ ..] => rest.iter().all(|c| *c >= 0x80),
+        }
+    }
+    /// Onigmo's Shift_JIS `code_to_mbclen`: a lone byte must not be a
+    /// double-byte lead, and a two-byte image is judged by its trail
+    /// byte alone (the lead goes unchecked, so `01 40` is accepted).
+    fn valid_sjis(b: &[u8]) -> bool {
+        match b {
+            [c] => !matches!(c, 0x81..=0x9F | 0xE0..=0xFC),
+            [_, lo] => matches!(lo, 0x40..=0x7E | 0x80..=0xFC),
+            _ => false,
+        }
+    }
+    let invalid = || MonorubyErr::argumenterr("invalid character");
+    let Ok(code) = u32::try_from(code) else {
+        return Err(invalid());
+    };
+    match enc {
+        // CRuby also emits the CESU-style three-byte form for a lone
+        // surrogate (`%c` % 0xD800), producing a broken String; we
+        // reject those instead.
+        Encoding::Utf8 => {
+            let c = char::from_u32(code).ok_or_else(invalid)?;
+            let mut buf = [0u8; 4];
+            Ok(c.encode_utf8(&mut buf).as_bytes().to_vec())
+        }
+        Encoding::EucJp => {
+            let bytes = be_bytes(code);
+            if code > 0xFF_FFFF || !valid_euc_jp(&bytes) {
+                return Err(invalid());
+            }
+            Ok(bytes)
+        }
+        Encoding::Sjis(_) => {
+            let bytes = be_bytes(code);
+            if code > 0xFFFF || !valid_sjis(&bytes) {
+                return Err(invalid());
+            }
+            Ok(bytes)
+        }
+        // Single-byte encodings — including US-ASCII, whose `%c` code
+        // space onigmo takes as the full byte range: the character *is*
+        // the byte, and anything wider overflows it.
+        Encoding::Ascii8
+        | Encoding::UsAscii
+        | Encoding::Iso8859(_)
+        | Encoding::NamedByte(_) => {
+            if code > 0xFF {
+                return Err(MonorubyErr::rangeerr(format!("{code} out of char range")));
+            }
+            Ok(vec![code as u8])
+        }
+        // ASCII-incompatible encodings never reach here: `sprintf` on
+        // such a format String raises before any specifier is read.
+        _ => Err(invalid()),
+    }
+}
+
+///
+/// `%c`: one character in the result encoding. An Integer goes through
+/// [`encode_codepoint`]; anything else contributes its first character
+/// (a String directly, other objects via `to_int` / `to_str`).
+///
+fn format_char(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+    ctx: FormatCtx,
+) -> Result<String> {
+    if let RV::Fixnum(i) = val.unpack() {
+        let bytes = encode_codepoint(i, ctx.enc)?;
+        return Ok(if ctx.byte_space {
+            map_bytes_to_utf8(&bytes)
+        } else {
+            // Outside byte space `enc` is UTF-8 or US-ASCII, so the
+            // bytes `encode_codepoint` produced are valid UTF-8.
+            String::from_utf8_lossy(&bytes).into_owned()
+        });
+    }
+    if let Some(inner) = val.is_rstring_inner() {
+        // Take the argument's leading character *in its own encoding*,
+        // so a byte-oriented or broken String contributes whole bytes
+        // instead of raising on the UTF-8 check.
+        let view = ctx.view(&inner)?;
+        if ctx.byte_space {
+            let width = match inner.encoding() {
+                Encoding::EucJp => eucjp_char_width(inner.as_bytes()),
+                Encoding::Sjis(_) => sjis_char_width(inner.as_bytes()),
+                _ => None,
+            }
+            .unwrap_or(1);
+            return Ok(view.chars().take(width).collect());
+        }
+        return Ok(match view.chars().next() {
+            Some(c) => c.to_string(),
+            None => String::new(),
+        });
+    }
+    Ok(match val.coerce_to_char(vm, globals)? {
+        Some(c) => c.to_string(),
+        None => String::new(),
+    })
+}
 
 /// Apply integer precision: pad digits with leading zeros to at
 /// least `prec` digits. Special-case: precision 0 with value 0
@@ -548,6 +805,7 @@ impl Executor {
         globals: &mut Globals,
         self_str: &str,
         arguments: &[Value],
+        ctx: FormatCtx,
     ) -> Result<String> {
         let mut arg_no = 0;
         // Track whether the format string has used a numbered (`N$`)
@@ -975,7 +1233,18 @@ impl Executor {
                 let key_val = Value::symbol_from_str(&key);
                 let val =
                     hash_lookup_or_keyerror(self, globals, &hash, key_val, key.as_str(), '{')?;
-                let mut s = val.coerce_to_s(self, globals)?;
+                // A String value goes through the run's view so its raw
+                // bytes survive (`%{k}` with a binary or broken value),
+                // exactly like `%s` below.
+                let mut s = match val.is_rstring_inner() {
+                    Some(inner) => match ctx.view(&inner) {
+                        Ok(v) => v.into_owned(),
+                        // Broken bytes outside byte space: keep the old
+                        // lossy render rather than raising.
+                        Err(_) => val.coerce_to_s(self, globals)?,
+                    },
+                    None => val.coerce_to_s(self, globals)?,
+                };
                 if let Some(prec) = precision {
                     if s.chars().count() > prec {
                         s = s.chars().take(prec).collect();
@@ -1047,10 +1316,7 @@ impl Executor {
             // Specifier
             let format = match ch {
                 'c' => {
-                    let s = match val.coerce_to_char(self, globals)? {
-                        Some(c) => format!("{}", c),
-                        None => String::new(),
-                    };
+                    let s = format_char(self, globals, val, ctx)?;
                     apply_width(&s, width, minus_flag, ' ')
                 }
                 's' => {
@@ -1060,14 +1326,13 @@ impl Executor {
                     // CRuby raises `NoMethodError`. Don't fall back
                     // to the C-level inspect.
                     //
-                    // String arguments go through `regex_view` so a
-                    // byte-oriented 8-bit string contributes its
-                    // bytes as U+00XX surrogates (decoded again by
-                    // `String#%` when the result encoding is
-                    // byte-oriented) instead of being lossily
+                    // String arguments go through the run's view so a
+                    // byte-oriented or broken 8-bit string contributes
+                    // its bytes as U+00XX surrogates (decoded again by
+                    // `FormatCtx::finish`) instead of being lossily
                     // re-rendered with U+FFFD.
                     let mut s = if let Some(inner) = val.is_rstring_inner() {
-                        match inner.regex_view() {
+                        match ctx.view(&inner) {
                             Ok(v) => v.into_owned(),
                             // Broken UTF-8: keep the old lossy render
                             // instead of raising.
@@ -1077,7 +1342,7 @@ impl Executor {
                         let result =
                             self.invoke_func_inner(globals, func_id, val, &[], None, None)?;
                         if let Some(inner) = result.is_rstring_inner() {
-                            match inner.regex_view() {
+                            match ctx.view(&inner) {
                                 Ok(v) => v.into_owned(),
                                 Err(_) => result.to_s(&globals.store),
                             }

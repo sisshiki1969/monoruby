@@ -101,10 +101,18 @@ class IO
   # to_enum round-trip (a `chomp:` keyword would come back as a
   # positional Hash and be misparsed as a separator/limit).
   def __each_line(args, chomp)
-    # #gets implements the full (sep, limit, chomp:) semantics natively.
+    # CRuby's `each_line` reads through the internal `rb_io_getline`,
+    # which — unlike `IO#gets` — leaves `$_` alone. We drive `#gets`
+    # (it implements the full (sep, limit, chomp:) semantics natively),
+    # so put `$_` back after every read, while still letting the block
+    # assign it if it wants to.
+    saved = $_
     while (line = gets(*args, chomp: chomp))
+      $_ = saved
       yield line
+      saved = $_
     end
+    $_ = saved
     self
   end
   private :__each_line

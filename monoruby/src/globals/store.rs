@@ -575,6 +575,18 @@ impl Store {
     }
 }
 
+thread_local! {
+    static BUILTINS_DIR: std::path::PathBuf = crate::globals::install_root().join("builtins");
+}
+
+/// True for sources shipped in the interpreter's own `builtins/`
+/// bootstrap tree — the core methods monoruby implements in Ruby but
+/// CRuby implements in C. Their frames are `$~` / `$_`-transparent
+/// (see `Meta::set_svar_transparent`).
+fn is_internal_source(source: &SourceInfoRef) -> bool {
+    BUILTINS_DIR.with(|dir| source.path.starts_with(dir))
+}
+
 /// CRuby-style display path for backtrace strings: sources shipped in
 /// the interpreter's own `builtins/` bootstrap tree render as
 /// `<internal:NAME>` (CRuby's prelude-style frames — `Kernel#tap`
@@ -582,10 +594,6 @@ impl Store {
 /// else renders as loaded. `Location#absolute_path` is nil for the
 /// internal form.
 pub(crate) fn display_path(source: &SourceInfoRef) -> std::borrow::Cow<'_, str> {
-    thread_local! {
-        static BUILTINS_DIR: std::path::PathBuf =
-            crate::globals::install_root().join("builtins");
-    }
     let internal = BUILTINS_DIR.with(|dir| {
         source.path.strip_prefix(dir).ok().map(|rest| {
             format!(
@@ -642,6 +650,7 @@ impl Store {
     ) -> Result<FuncId> {
         let func_id = self.functions.next_func_id();
         self.functions.add_compile_info(compile_info);
+        let internal = is_internal_source(&sourceinfo);
         let mut info = ISeqInfo::new_method(
             func_id,
             self.next_iseq_id(),
@@ -658,7 +667,10 @@ impl Store {
         // propagates the flag onto those).
         info.in_singleton_lexical = is_singleton;
         let iseq = self.new_iseq(info);
-        let info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
+        let mut info = FuncInfo::new_classdef_iseq(name, func_id, iseq);
+        if internal {
+            info.set_svar_transparent();
+        }
         self.functions.info.push(info);
         Ok(func_id)
     }
@@ -674,6 +686,7 @@ impl Store {
         let func_id = self.functions.next_func_id();
         let params_info = compile_info.params.clone();
         self.functions.add_compile_info(compile_info);
+        let internal = is_internal_source(&sourceinfo);
         let info = ISeqInfo::new_method(
             func_id,
             self.next_iseq_id(),
@@ -683,7 +696,10 @@ impl Store {
             sourceinfo,
         );
         let iseq = self.new_iseq(info);
-        let info = FuncInfo::new_method_iseq(name, func_id, iseq, params_info, top_level);
+        let mut info = FuncInfo::new_method_iseq(name, func_id, iseq, params_info, top_level);
+        if internal {
+            info.set_svar_transparent();
+        }
         self.functions.info.push(info);
         Ok(func_id)
     }
@@ -701,10 +717,14 @@ impl Store {
         let func_id = self.functions.next_func_id();
         let params_info = compile_info.params.clone();
         self.functions.add_compile_info(compile_info);
+        let internal = is_internal_source(&sourceinfo);
         let info =
             ISeqInfo::new_block(func_id, mother, outer, params_info.clone(), loc, sourceinfo);
         let iseq = self.new_iseq(info);
-        let info = FuncInfo::new_block_iseq(func_id, iseq, params_info, is_block_style);
+        let mut info = FuncInfo::new_block_iseq(func_id, iseq, params_info, is_block_style);
+        if internal {
+            info.set_svar_transparent();
+        }
         self.functions.info.push(info);
         Ok(func_id)
     }
