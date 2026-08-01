@@ -189,6 +189,20 @@ pub struct Executor {
     ///
     /// [`root_lep`]: Self::root_lep
     root_svar: Option<Value>,
+    /// Consumer blocks of the `Enumerator::Generator#each` calls
+    /// currently on this context's stack.
+    ///
+    /// `Generator#each` runs the generator body *directly* (CRuby does
+    /// the same: only external iteration needs a fiber), handing it a
+    /// fresh `Yielder`. `Yielder#<<` must then reach the block that
+    /// `#each` was given. The block is resolved once, up front, and
+    /// parked here keyed by the yielder object it belongs to, so
+    /// nesting (`Enumerator.new { |y| other.each { |v| y << v } }`)
+    /// resolves to the right one instead of whatever ran most recently.
+    /// Keying on the yielder rather than an ivar keeps the object's
+    /// `#inspect` free of monoruby-only internals (CRuby holds the
+    /// proc in a C struct).
+    enum_yielder_blocks: Vec<(Value, ProcData)>,
     /// Stack of `break` barriers: the CFP at each synchronous
     /// thread-body invocation (`Thread#__invoke_body`). A `break`
     /// escaping a block must not resolve its defining frame *across*
@@ -294,6 +308,7 @@ impl std::default::Default for Executor {
             sp_match_haystack: None,
             root_lep: None,
             root_svar: None,
+            enum_yielder_blocks: Vec::new(),
             break_barriers: Vec::new(),
             temp_stack: vec![],
             method_missing_style: MethodMissingStyle::Plain,
@@ -373,6 +388,15 @@ impl alloc::GC<RValue> for Executor {
         // special variables would be collected while it is parked.
         if let Some(v) = self.root_svar {
             v.mark(alloc);
+        }
+        // Generator consumer blocks close over their defining frame,
+        // which must survive for as long as the generator body can
+        // call back into it.
+        for (yielder, data) in &self.enum_yielder_blocks {
+            yielder.mark(alloc);
+            if let Some(outer) = data.outer() {
+                outer.mark(alloc);
+            }
         }
         // Deferred `MethodReturn` / `Throw` carry packed Values (return
         // value, throw tag/value) and an `Lfp`; keep them alive across
@@ -3597,6 +3621,27 @@ impl Executor {
     pub(crate) fn enter_root_svar_scope(&mut self, lep: Option<Lfp>) {
         self.root_lep = lep.map(|o| o.mfp());
         self.root_svar = None;
+    }
+
+    /// Park the consumer block of a `Generator#each` call, bound to the
+    /// `Yielder` handed to that call. See
+    /// [`enum_yielder_blocks`](Self::enum_yielder_blocks).
+    pub(crate) fn push_enum_yielder_block(&mut self, yielder: Value, data: ProcData) {
+        self.enum_yielder_blocks.push((yielder, data));
+    }
+
+    pub(crate) fn pop_enum_yielder_block(&mut self) {
+        self.enum_yielder_blocks.pop();
+    }
+
+    /// The consumer block `yielder` must call. Innermost first, so a
+    /// generator nested inside another finds its own.
+    pub(crate) fn enum_yielder_block(&self, yielder: Value) -> Option<ProcData> {
+        self.enum_yielder_blocks
+            .iter()
+            .rev()
+            .find(|(y, _)| y.id() == yielder.id())
+            .map(|(_, data)| data.clone())
     }
 
     /// Read the MatchData `Value` (`$~`) from the current MFP's svar

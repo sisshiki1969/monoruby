@@ -17,9 +17,19 @@ class Struct
   end
 
   # Yield [name, value] for each member.
-  def each_pair
+  def each_pair(&blk)
     return to_enum(:each_pair) { size } unless block_given?
-    members.each { |m| yield m, send(m) }
+    # CRuby yields `key, value` as two values only when the block can
+    # actually take two (`rb_block_pair_yield_optimizable`, i.e. min
+    # arity > 1); otherwise it yields a single `[key, value]` pair. That
+    # is what makes `s.each_pair { |k, v| }` and
+    # `s.each_pair.map { |pair| pair }` both behave correctly — the
+    # latter reaches here through Enumerable's internal `|*vs|` block.
+    if blk.arity > 1
+      members.each { |m| yield m, send(m) }
+    else
+      members.each { |m| yield [m, send(m)] }
+    end
     self
   end
 
