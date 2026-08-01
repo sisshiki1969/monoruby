@@ -847,40 +847,15 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else {
         vec![arg]
     };
-    // Negotiate the result encoding before formatting: start from
-    // the format string's encoding and fold each String/Symbol
-    // argument's encoding via `compatible_encoding`. Incompatible
-    // pairs raise `Encoding::CompatibilityError` (CRuby semantics).
-    let mut result_inner = self_.as_rstring_inner().clone();
-    for v in &arguments {
-        if let Some(arg_inner) = v.is_rstring_inner() {
-            if let Some(combined) = result_inner.compatible_encoding(&arg_inner) {
-                if combined != result_inner.encoding() {
-                    result_inner.set_encoding(combined);
-                }
-            } else {
-                return Err(MonorubyErr::incompatible_encoding(
-                    &globals.store,
-                    result_inner.encoding(),
-                    arg_inner.encoding(),
-                ));
-            }
-        }
-    }
-    let result_enc = result_inner.encoding();
-    // The formatter runs in `&str` space; a byte-oriented format
-    // string goes through the byte↔U+00XX surrogate view, and `%s`
-    // arguments do the same inside `format_by_args`, so the output
-    // is decoded back to raw bytes when the negotiated result
-    // encoding is byte-oriented.
-    let fmt_view = self_.as_rstring_inner().regex_view()?.into_owned();
-    let format_str = vm.format_by_args(globals, &fmt_view, &arguments)?;
-    let out = if result_enc.is_byte_oriented() && !format_str.is_ascii() {
-        RStringInner::from_mapped_utf8(&format_str, result_enc)
-    } else {
-        RStringInner::from_encoding_scanned(format_str.as_bytes(), result_enc)
-    };
-    Ok(Value::string_from_inner(out))
+    // The formatter runs in `&str` space; `FormatCtx` carries the
+    // negotiated result encoding and, when raw bytes must survive the
+    // round trip, puts the whole run into the byte↔U+00XX surrogate
+    // view that `FormatCtx::finish` decodes again.
+    let fmt_inner = self_.as_rstring_inner();
+    let ctx = crate::executor::format::negotiate_format(&globals.store, fmt_inner, &arguments)?;
+    let fmt_view = ctx.view_owned(fmt_inner)?;
+    let format_str = vm.format_by_args(globals, &fmt_view, &arguments, ctx)?;
+    Ok(ctx.finish(&format_str))
 }
 
 ///

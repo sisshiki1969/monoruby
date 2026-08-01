@@ -220,10 +220,9 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     globals.define_builtin_module_func(kernel_class, "__dir__", dir_, 0);
     globals.define_builtin_module_func(kernel_class, "__method__", method_, 0);
-    // `__callee__` differs from `__method__` only for aliased methods
-    // (it reports the called alias). monoruby does not track the
-    // call-site alias, so it shares `__method__`'s resolution.
-    globals.define_builtin_module_func(kernel_class, "__callee__", method_, 0);
+    // `__callee__` differs from `__method__` only for aliased methods:
+    // it reports the alias actually dispatched at the call site.
+    globals.define_builtin_module_func(kernel_class, "__callee__", callee_, 0);
     globals.define_builtin_module_func_with(kernel_class, "catch", catch_, 0, 1, false);
     globals.define_builtin_module_func_with(kernel_class, "throw", throw_, 1, 2, false);
     globals.define_builtin_func(kernel_class, "__assert", assert, 2);
@@ -1323,37 +1322,25 @@ fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
     }
     let fmt_val = args[0];
-    let fmt = fmt_val.coerce_to_str(vm, globals)?;
     let arguments = &args[1..];
-    let result = vm.format_by_args(globals, &fmt, arguments)?;
-    // Negotiate the result encoding across the format String and every String
-    // argument (matching String#%): the compatible union wins (so the format's
-    // encoding is preserved, or widened to an argument's), and two
-    // ASCII-incompatible non-ASCII encodings raise Encoding::CompatibilityError.
+    // Negotiate the result encoding across the format String and every
+    // String argument (matching String#%): the compatible union wins (so
+    // the format's encoding is preserved, or widened to an argument's),
+    // and two ASCII-incompatible non-ASCII encodings raise
+    // Encoding::CompatibilityError.
     if let Some(fmt_inner) = fmt_val.is_rstring_inner() {
-        let mut result_inner = fmt_inner.clone();
-        for v in arguments {
-            if let Some(arg_inner) = v.is_rstring_inner() {
-                match result_inner.compatible_encoding(arg_inner) {
-                    Some(combined) if combined != result_inner.encoding() => {
-                        result_inner.set_encoding(combined);
-                    }
-                    Some(_) => {}
-                    None => {
-                        return Err(MonorubyErr::incompatible_encoding(
-                            &globals.store,
-                            result_inner.encoding(),
-                            arg_inner.encoding(),
-                        ));
-                    }
-                }
-            }
-        }
-        Ok(Value::string_from_inner(
-            RStringInner::from_encoding_scanned(result.as_bytes(), result_inner.encoding()),
-        ))
+        let ctx = crate::executor::format::negotiate_format(&globals.store, fmt_inner, arguments)?;
+        let fmt = ctx.view_owned(fmt_inner)?;
+        let result = vm.format_by_args(globals, &fmt, arguments, ctx)?;
+        Ok(ctx.finish(&result))
     } else {
-        Ok(Value::string(result))
+        // A non-String format (an object with `to_str`) has no encoding
+        // of its own; format its conversion as plain UTF-8.
+        let fmt = fmt_val.coerce_to_str(vm, globals)?;
+        let inner = RStringInner::from_encoding_scanned(fmt.as_bytes(), Encoding::Utf8);
+        let ctx = crate::executor::format::negotiate_format(&globals.store, &inner, arguments)?;
+        let result = vm.format_by_args(globals, &fmt, arguments, ctx)?;
+        Ok(ctx.finish(&result))
     }
 }
 
@@ -4271,16 +4258,12 @@ fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
 }
 
 ///
-/// Kernel.#__method__
+/// The innermost non-native caller frame — the Ruby frame that invoked
+/// `__method__` / `__callee__`. Builtin frames (`send` / `__send__` /
+/// `public_send`, `eval`, …) are skipped so `send("__method__")`
+/// reports the Ruby method that called `send`, not `send` itself.
 ///
-/// - __method__ -> Symbol | nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__method__.html]
-#[monoruby_builtin]
-fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // Skip native (builtin) caller frames such as `send`/`__send__`/
-    // `public_send` so that `send("__method__")` reports the Ruby method that
-    // invoked `send`, not `send` itself.
+fn calling_ruby_frame(vm: &Executor) -> Option<Cfp> {
     let mut cfp = vm.cfp().prev();
     while let Some(f) = cfp {
         if !f.lfp().meta().is_native() {
@@ -4288,25 +4271,129 @@ fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) 
         }
         cfp = f.prev();
     }
-    let Some(caller) = cfp else {
-        return Ok(Value::nil());
-    };
+    cfp
+}
+
+///
+/// Resolve the method (or `define_method` body) that lexically encloses
+/// `caller`, returning `(the frame that owns the method body, its name)`.
+/// `None` when the frame is not inside a method at all — `__method__`
+/// and `__callee__` both report `nil` there.
+///
+fn enclosing_method(store: &Store, caller: Cfp) -> Option<(Lfp, IdentId)> {
     let outer = caller.outermost_lfp();
     let fid = outer.func_id();
-    // `__method__` yields nil outside of a method body. A `define_method`
-    // body is a Proc-typed function (not `FuncType::Method`) but runs in a
-    // frame tagged `proc_method` and carries the installed method name, so
-    // accept those too.
-    if !globals.store[fid].is_method() && !outer.meta().is_proc_method() {
-        return Ok(Value::nil());
+    // A `define_method` body is a Proc-typed function (not
+    // `FuncType::Method`) but runs in a frame tagged `proc_method` and
+    // carries the installed method name, so accept those too.
+    if !store[fid].is_method() && !outer.meta().is_proc_method() {
+        return None;
     }
-    globals.store[fid]
-        .name()
-        // The main script's body carries the internal `/main` label (and,
-        // running inside TOPLEVEL_BINDING, a proc_method-tagged frame) —
-        // but the top level is not a method: report nil, as CRuby does.
-        .filter(|sym| *sym != IdentId::_MAIN)
-        .map_or(Ok(Value::nil()), |sym| Ok(Value::symbol(sym)))
+    // The main script's body carries the internal `/main` label (and,
+    // running inside TOPLEVEL_BINDING, a proc_method-tagged frame) —
+    // but the top level is not a method: report nil, as CRuby does.
+    let name = store[fid].name().filter(|sym| *sym != IdentId::_MAIN)?;
+    Some((outer, name))
+}
+
+///
+/// Kernel.#__method__
+///
+/// - __method__ -> Symbol | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__method__.html]
+#[monoruby_builtin]
+fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let Some(caller) = calling_ruby_frame(vm) else {
+        return Ok(Value::nil());
+    };
+    match enclosing_method(&globals.store, caller) {
+        Some((_, name)) => Ok(Value::symbol(name)),
+        None => Ok(Value::nil()),
+    }
+}
+
+///
+/// The name the frame owning `method_lfp` was *called* by. Differs from
+/// the definition name only for an aliased method, which is exactly what
+/// `__callee__` must report.
+///
+/// The name is recovered from the call site rather than the frame: the
+/// caller saved its own pc into this frame's cont-frame slot, so the
+/// call site there names the alias that was dispatched. The VM saves
+/// the pc one word past the call instruction (at the inline-cache
+/// word), the JIT saves the instruction itself; both are covered by
+/// looking each candidate index up in the caller ISeq's `callsite_map`.
+///
+fn called_name(
+    store: &Store,
+    method_cfp: Cfp,
+    self_val: Value,
+    def_name: IdentId,
+) -> Option<IdentId> {
+    let caller = method_cfp.prev()?;
+    let iseq_id = store[caller.lfp().func_id()].is_iseq()?;
+    let info = &store[iseq_id];
+    let slot = method_cfp.caller_pc_slot();
+    if slot == 0 || slot as usize % std::mem::align_of::<Bytecode>() != 0 {
+        return None;
+    }
+    // A `MethodCall` occupies two words (the instruction and its
+    // inline cache), so exactly one of the two candidates can be a
+    // call-instruction index and `callsite_map` — which only holds
+    // real ones — tells them apart without decoding anything.
+    let size = std::mem::size_of::<Bytecode>();
+    let callid = [size, 0].into_iter().find_map(|back| {
+        let addr = (slot as usize).checked_sub(back)?;
+        // SAFETY: the pointer is never dereferenced — `contains_pc`
+        // only range-checks it against this ISeq's bytecode buffer so
+        // the derived index is meaningful.
+        let pc = unsafe { BytecodePtr::from_raw(addr as *mut Bytecode) }?;
+        if !info.contains_pc(pc) {
+            return None;
+        }
+        store.get_callsite_id(iseq_id, info.get_pc_index(Some(pc)))
+    })?;
+    // `super` has no name, and a dispatch that went through
+    // `method_missing` / `Method#call` / `send` / … names the
+    // trampoline rather than the frame we are standing in. Only trust
+    // the call-site name when the receiver really resolves it to an
+    // alias of this frame's method — `original_name` is the definition
+    // name every alias of it shares.
+    let name = store[callid].name?;
+    match store.check_method_for_class(self_val.class(), name) {
+        Some(entry) if entry.original_name() == def_name => Some(name),
+        _ => None,
+    }
+}
+
+///
+/// Kernel.#__callee__
+///
+/// - __callee__ -> Symbol | nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__callee__.html]
+#[monoruby_builtin]
+fn callee_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let Some(caller) = calling_ruby_frame(vm) else {
+        return Ok(Value::nil());
+    };
+    let Some((outer, name)) = enclosing_method(&globals.store, caller) else {
+        return Ok(Value::nil());
+    };
+    // Walk out to the control frame that owns the method body — for a
+    // block, `caller` is the block's frame, several frames below.
+    let mut cfp = Some(caller);
+    while let Some(f) = cfp {
+        if f.lfp() == outer {
+            if let Some(called) = called_name(&globals.store, f, outer.self_val(), name) {
+                return Ok(Value::symbol(called));
+            }
+            break;
+        }
+        cfp = f.prev();
+    }
+    Ok(Value::symbol(name))
 }
 
 ///
@@ -6003,6 +6090,94 @@ mod tests {
         // in a normal method; nil outside any method.
         run_test_once(
             r##"(class MC; define_method(:dm){ [__method__, __callee__] }; def from_send; send "__method__"; end; def normal; __method__; end; end; o=MC.new; [o.dm, o.from_send, o.normal, (__method__)])"##,
+        );
+    }
+
+    #[test]
+    fn callee_reports_the_alias() {
+        // `__callee__` names the alias the call site dispatched, while
+        // `__method__` stays on the definition name — including from a
+        // block, from a `define_method` body, and through an alias of one.
+        run_test_once(
+            r##"
+            class CA
+              def f; [__method__, __callee__]; end
+              alias_method :g, :f
+              alias h f
+              def blk; (1..2).map { [__method__, __callee__] }; end
+              alias blk2 blk
+              define_method(:dm) { [__method__, __callee__] }
+              alias dm2 dm
+              def plain; helper; end
+              private def helper; [__method__, __callee__]; end
+            end
+            o = CA.new
+            [o.f, o.g, o.h, o.blk, o.blk2, o.dm, o.dm2, o.plain, [__method__, __callee__]]
+            "##,
+        );
+        // `method_missing` keeps its own name: the call site named a
+        // method that does not resolve to this frame's body.
+        run_test_once(
+            r##"
+            class CM
+              def method_missing(name, *) = [__method__, __callee__]
+              def respond_to_missing?(*) = true
+            end
+            CM.new.no_such_method
+            "##,
+        );
+    }
+
+    #[test]
+    fn regexp_match_crosses_ruby_level_builtins() {
+        // A `$~` set by a native method under a core builtin that
+        // monoruby happens to implement in Ruby (`Enumerable#map`,
+        // `#each_with_index`, …) must still be visible to the user
+        // block — CRuby implements those in C, and a C frame owns no
+        // `$~` scope.
+        run_test(
+            r##"
+            a = "wawa".to_enum(:scan, /./).map { $& }
+            b = []
+            "wawa".to_enum(:scan, /./).each { b << $& }
+            c = ["abc", "xyz"].grep(/b/)
+            d = $&
+            [a, b, c, d]
+            "##,
+        );
+    }
+
+    #[test]
+    fn sprintf_char_uses_the_format_encoding() {
+        // `%c` is CRuby's `rb_enc_uint_chr`: a Unicode scalar for a
+        // Unicode format string, the raw byte image of the character
+        // for every other encoding (9415601 == 0x8FABB1 is EUC-JP `é`).
+        run_test_once(
+            r##"
+            euc = "%c".dup.force_encoding("euc-jp")
+            r1 = sprintf(euc, 9415601)
+            r2 = euc % 9415601
+            r3 = sprintf("%c", 1286)
+            r4 = sprintf("%c", "ش")
+            e = begin; sprintf("%c".encode("ASCII"), 1286); rescue => ex; [ex.class, ex.message]; end
+            [r1.encoding.name, r1.bytes, r2.encoding.name, r2.bytes, r3.bytes, r4.bytes, e]
+            "##,
+        );
+    }
+
+    #[test]
+    fn sprintf_keeps_invalid_bytes() {
+        // CRuby does not substitute U+FFFD: the argument's bytes reach
+        // the result verbatim, which simply reports
+        // `valid_encoding? == false`.
+        run_test_once(
+            r##"
+            a = sprintf("good day %{invalid}", invalid: "\x80")
+            b = sprintf("good day %s", "\x80")
+            c = "good day %s" % "\x80"
+            [a.bytes, a.encoding.name, a.valid_encoding?,
+             b.bytes, b.valid_encoding?, c.bytes, c.valid_encoding?]
+            "##,
         );
     }
 

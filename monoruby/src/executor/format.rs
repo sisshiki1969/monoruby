@@ -1,6 +1,252 @@
 use super::*;
 use crate::value::IntegerBase;
+use crate::value::rvalue::{Encoding, RStringInner, map_bytes_to_utf8};
 use num::Signed;
+
+///
+/// How a `sprintf` run treats text: the encoding the result String is
+/// tagged with, and whether the run happens in the byte↔U+00XX
+/// surrogate space (see [`RStringInner::regex_view`]).
+///
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FormatCtx {
+    /// Negotiated encoding of the result String.
+    enc: Encoding,
+    /// Every String taking part is viewed as one `char` per byte
+    /// ([`map_bytes_to_utf8`]) and the finished text is decoded back
+    /// with [`RStringInner::from_mapped_utf8`]. Needed whenever raw
+    /// bytes must survive the `&str`-space formatter: a byte-oriented
+    /// result encoding, or a participant whose bytes are not valid
+    /// UTF-8 (CRuby formats `"%s" % "\x80"` into a result that simply
+    /// reports `valid_encoding? == false`, it does not substitute
+    /// U+FFFD).
+    byte_space: bool,
+}
+
+impl FormatCtx {
+    /// A `&str`-space view of `s` for this run.
+    fn view<'a>(&self, s: &'a RStringInner) -> Result<std::borrow::Cow<'a, str>> {
+        if self.byte_space {
+            Ok(std::borrow::Cow::Owned(map_bytes_to_utf8(s.as_bytes())))
+        } else {
+            s.regex_view()
+        }
+    }
+
+    /// [`Self::view`] as an owned `String` (the format string itself,
+    /// which the formatter iterates by `char`).
+    pub(crate) fn view_owned(&self, s: &RStringInner) -> Result<String> {
+        self.view(s).map(|v| v.into_owned())
+    }
+
+    /// Turn finished format text back into a String value, undoing the
+    /// surrogate view when the run used one.
+    pub(crate) fn finish(&self, s: &str) -> Value {
+        let inner = if self.byte_space && !s.is_ascii() {
+            RStringInner::from_mapped_utf8(s, self.enc)
+        } else {
+            RStringInner::from_encoding_scanned(s.as_bytes(), self.enc)
+        };
+        Value::string_from_inner(inner)
+    }
+}
+
+///
+/// Negotiate the result encoding for `fmt % arguments`: start from the
+/// format String's encoding and fold in each String argument's via
+/// `compatible_encoding`, raising `Encoding::CompatibilityError` on an
+/// incompatible pair (CRuby semantics). Also decides whether the run
+/// needs byte space, for which the values of a trailing named-reference
+/// Hash count too — they reach the output just like positional ones.
+///
+pub(crate) fn negotiate_format(
+    store: &Store,
+    fmt: &RStringInner,
+    arguments: &[Value],
+) -> Result<FormatCtx> {
+    let mut result_inner = fmt.clone();
+    let mut broken = !fmt.is_valid_encoding();
+    for v in arguments {
+        let Some(inner) = v.is_rstring_inner() else {
+            continue;
+        };
+        if !inner.is_valid_encoding() {
+            broken = true;
+        }
+        match result_inner.compatible_encoding(&inner) {
+            Some(combined) => {
+                if combined != result_inner.encoding() {
+                    result_inner.set_encoding(combined);
+                }
+            }
+            None => {
+                return Err(MonorubyErr::incompatible_encoding(
+                    store,
+                    result_inner.encoding(),
+                    inner.encoding(),
+                ));
+            }
+        }
+    }
+    // `%{name}` / `%<name>spec` read their values from a trailing Hash.
+    // They only inform the byte-space decision here: folding them into
+    // the encoding negotiation as well would be closer to CRuby, but
+    // would also start raising `CompatibilityError` for pairs monoruby
+    // has always accepted.
+    if let Some(hash) = arguments.last().and_then(|v| v.try_hash_ty()) {
+        for (_, v) in hash.iter() {
+            if let Some(inner) = v.is_rstring_inner()
+                && !inner.is_valid_encoding()
+            {
+                broken = true;
+            }
+        }
+    }
+    let enc = result_inner.encoding();
+    Ok(FormatCtx {
+        enc,
+        // `!is_ascii_compatible` catches the UTF-16 / UTF-32 family,
+        // whose bytes are no more `&str`-shaped than a byte-oriented
+        // encoding's.
+        byte_space: enc.is_byte_oriented() || !enc.is_ascii_compatible() || broken,
+    })
+}
+
+///
+/// CRuby's `rb_enc_uint_chr`: the raw bytes of the character `code`
+/// denotes in `enc`. Unicode encodings read `code` as a Unicode scalar;
+/// every other encoding reads it as the big-endian byte image of the
+/// character itself, so `9415601` (`0x8FABB1`) is the EUC-JP three-byte
+/// sequence for `é`. `None` when `enc` cannot represent it — the caller
+/// raises `RangeError`.
+///
+fn encode_codepoint(code: u32, enc: Encoding) -> Option<Vec<u8>> {
+    fn be_bytes(code: u32) -> Vec<u8> {
+        if code <= 0xFF {
+            vec![code as u8]
+        } else if code <= 0xFFFF {
+            vec![(code >> 8) as u8, code as u8]
+        } else if code <= 0xFF_FFFF {
+            vec![(code >> 16) as u8, (code >> 8) as u8, code as u8]
+        } else {
+            vec![
+                (code >> 24) as u8,
+                (code >> 16) as u8,
+                (code >> 8) as u8,
+                code as u8,
+            ]
+        }
+    }
+    /// A single EUC-JP character: ASCII, half-width katakana (`8E xx`),
+    /// JIS X 0208 (two bytes in `A1..FE`) or JIS X 0212 (`8F` + two).
+    fn valid_euc_jp(b: &[u8]) -> bool {
+        match b {
+            [c] => *c <= 0x7F,
+            [0x8E, c] => (0xA1..=0xDF).contains(c),
+            [hi, lo] => (0xA1..=0xFE).contains(hi) && (0xA1..=0xFE).contains(lo),
+            [0x8F, hi, lo] => (0xA1..=0xFE).contains(hi) && (0xA1..=0xFE).contains(lo),
+            _ => false,
+        }
+    }
+    fn valid_sjis(b: &[u8]) -> bool {
+        match b {
+            [c] => *c <= 0x7F || (0xA1..=0xDF).contains(c),
+            [hi, lo] => {
+                ((0x81..=0x9F).contains(hi) || (0xE0..=0xFC).contains(hi))
+                    && ((0x40..=0x7E).contains(lo) || (0x80..=0xFC).contains(lo))
+            }
+            _ => false,
+        }
+    }
+    match enc {
+        Encoding::Utf8 => {
+            let c = char::from_u32(code)?;
+            let mut buf = [0u8; 4];
+            Some(c.encode_utf8(&mut buf).as_bytes().to_vec())
+        }
+        Encoding::Utf16Le | Encoding::Utf16Be => {
+            let c = char::from_u32(code)?;
+            let mut buf = [0u16; 2];
+            let units = c.encode_utf16(&mut buf);
+            Some(
+                units
+                    .iter()
+                    .flat_map(|u| {
+                        if enc == Encoding::Utf16Le {
+                            u.to_le_bytes()
+                        } else {
+                            u.to_be_bytes()
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        Encoding::Utf32Le | Encoding::Utf32Be => {
+            let c = char::from_u32(code)?;
+            let u = c as u32;
+            Some(if enc == Encoding::Utf32Le {
+                u.to_le_bytes().to_vec()
+            } else {
+                u.to_be_bytes().to_vec()
+            })
+        }
+        Encoding::UsAscii => (code <= 0x7F).then(|| vec![code as u8]),
+        Encoding::EucJp => {
+            let bytes = be_bytes(code);
+            valid_euc_jp(&bytes).then_some(bytes)
+        }
+        Encoding::Sjis(_) => {
+            let bytes = be_bytes(code);
+            valid_sjis(&bytes).then_some(bytes)
+        }
+        // Single-byte / uncodec'd encodings: the character *is* the byte.
+        Encoding::Ascii8
+        | Encoding::Iso8859(_)
+        | Encoding::Iso2022Jp
+        | Encoding::Other(_)
+        | Encoding::NamedByte(_) => (code <= 0xFF).then(|| vec![code as u8]),
+    }
+}
+
+///
+/// `%c`: one character in the result encoding. An Integer goes through
+/// [`encode_codepoint`]; anything else contributes its first character
+/// (a String directly, other objects via `to_int` / `to_str`).
+///
+fn format_char(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+    ctx: FormatCtx,
+) -> Result<String> {
+    if let RV::Fixnum(i) = val.unpack() {
+        let bytes = u32::try_from(i)
+            .ok()
+            .and_then(|code| encode_codepoint(code, ctx.enc))
+            .ok_or_else(|| MonorubyErr::rangeerr(format!("{i} out of char range")))?;
+        return Ok(if ctx.byte_space {
+            map_bytes_to_utf8(&bytes)
+        } else {
+            // Outside byte space `enc` is UTF-8 or US-ASCII, so the
+            // bytes `encode_codepoint` produced are valid UTF-8.
+            String::from_utf8_lossy(&bytes).into_owned()
+        });
+    }
+    if let Some(inner) = val.is_rstring_inner() {
+        // Take the first character of the argument's own view, so a
+        // byte-oriented or broken String contributes its leading byte
+        // instead of raising on the UTF-8 check.
+        let view = ctx.view(&inner)?;
+        return Ok(match view.chars().next() {
+            Some(c) => c.to_string(),
+            None => String::new(),
+        });
+    }
+    Ok(match val.coerce_to_char(vm, globals)? {
+        Some(c) => c.to_string(),
+        None => String::new(),
+    })
+}
 
 /// Apply integer precision: pad digits with leading zeros to at
 /// least `prec` digits. Special-case: precision 0 with value 0
@@ -548,6 +794,7 @@ impl Executor {
         globals: &mut Globals,
         self_str: &str,
         arguments: &[Value],
+        ctx: FormatCtx,
     ) -> Result<String> {
         let mut arg_no = 0;
         // Track whether the format string has used a numbered (`N$`)
@@ -975,7 +1222,18 @@ impl Executor {
                 let key_val = Value::symbol_from_str(&key);
                 let val =
                     hash_lookup_or_keyerror(self, globals, &hash, key_val, key.as_str(), '{')?;
-                let mut s = val.coerce_to_s(self, globals)?;
+                // A String value goes through the run's view so its raw
+                // bytes survive (`%{k}` with a binary or broken value),
+                // exactly like `%s` below.
+                let mut s = match val.is_rstring_inner() {
+                    Some(inner) => match ctx.view(&inner) {
+                        Ok(v) => v.into_owned(),
+                        // Broken bytes outside byte space: keep the old
+                        // lossy render rather than raising.
+                        Err(_) => val.coerce_to_s(self, globals)?,
+                    },
+                    None => val.coerce_to_s(self, globals)?,
+                };
                 if let Some(prec) = precision {
                     if s.chars().count() > prec {
                         s = s.chars().take(prec).collect();
@@ -1047,10 +1305,7 @@ impl Executor {
             // Specifier
             let format = match ch {
                 'c' => {
-                    let s = match val.coerce_to_char(self, globals)? {
-                        Some(c) => format!("{}", c),
-                        None => String::new(),
-                    };
+                    let s = format_char(self, globals, val, ctx)?;
                     apply_width(&s, width, minus_flag, ' ')
                 }
                 's' => {
@@ -1060,14 +1315,13 @@ impl Executor {
                     // CRuby raises `NoMethodError`. Don't fall back
                     // to the C-level inspect.
                     //
-                    // String arguments go through `regex_view` so a
-                    // byte-oriented 8-bit string contributes its
-                    // bytes as U+00XX surrogates (decoded again by
-                    // `String#%` when the result encoding is
-                    // byte-oriented) instead of being lossily
+                    // String arguments go through the run's view so a
+                    // byte-oriented or broken 8-bit string contributes
+                    // its bytes as U+00XX surrogates (decoded again by
+                    // `FormatCtx::finish`) instead of being lossily
                     // re-rendered with U+FFFD.
                     let mut s = if let Some(inner) = val.is_rstring_inner() {
-                        match inner.regex_view() {
+                        match ctx.view(&inner) {
                             Ok(v) => v.into_owned(),
                             // Broken UTF-8: keep the old lossy render
                             // instead of raising.
@@ -1077,7 +1331,7 @@ impl Executor {
                         let result =
                             self.invoke_func_inner(globals, func_id, val, &[], None, None)?;
                         if let Some(inner) = result.is_rstring_inner() {
-                            match inner.regex_view() {
+                            match ctx.view(&inner) {
                                 Ok(v) => v.into_owned(),
                                 Err(_) => result.to_s(&globals.store),
                             }

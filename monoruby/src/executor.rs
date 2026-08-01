@@ -3625,9 +3625,19 @@ impl Executor {
     /// that frame's lexical `outer` chain to the method frame (so a
     /// match performed inside a block updates the enclosing method's
     /// `$~`). Returns `None` outside Ruby execution (no CFP set).
+    ///
+    /// Core builtins monoruby writes in Ruby (`builtins/*.rb`) are
+    /// skipped for the same reason: CRuby implements those same
+    /// methods in C, so `"wawa".to_enum(:scan, /./).map { $& }` must
+    /// see the match `scan` performed even though monoruby's
+    /// `Enumerable#map` is a Ruby frame standing between the two.
     fn current_mfp(&self) -> Option<Lfp> {
         let mut cfp = self.cfp?;
-        while cfp.lfp().meta().is_native() {
+        while {
+            let lfp = cfp.lfp();
+            let meta = lfp.meta();
+            meta.is_native() || meta.is_svar_transparent()
+        } {
             cfp = cfp.prev()?;
         }
         Some(cfp.lfp().mfp())

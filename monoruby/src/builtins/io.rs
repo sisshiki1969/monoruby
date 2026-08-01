@@ -1168,15 +1168,25 @@ fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/printf.html]
 #[monoruby_builtin]
 fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let format_str = lfp.arg(0).coerce_to_string(vm, globals)?;
     let args = lfp.arg(1).as_array();
-
-    let buf = vm.format_by_args(globals, &format_str, &args)?;
+    // Format through the shared encoding negotiation so a binary or
+    // broken argument reaches the fd as its own bytes.
+    let fmt_inner = match lfp.arg(0).is_rstring_inner() {
+        Some(inner) => inner.clone(),
+        None => {
+            let s = lfp.arg(0).coerce_to_string(vm, globals)?;
+            RStringInner::from_encoding_scanned(s.as_bytes(), Encoding::Utf8)
+        }
+    };
+    let ctx = crate::executor::format::negotiate_format(&globals.store, &fmt_inner, &args)?;
+    let format_str = ctx.view_owned(&fmt_inner)?;
+    let out = vm.format_by_args(globals, &format_str, &args, ctx)?;
+    let buf = ctx.finish(&out).as_rstring_inner().as_bytes().to_vec();
     let mut done = 0;
     blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {
         lfp.self_val()
             .as_io_inner_mut()
-            .write(buf.as_bytes(), &mut done, _store)
+            .write(&buf, &mut done, _store)
     })?;
 
     Ok(Value::nil())
