@@ -1,6 +1,8 @@
 use super::*;
 use crate::value::IntegerBase;
-use crate::value::rvalue::{Encoding, RStringInner, map_bytes_to_utf8};
+use crate::value::rvalue::{
+    Encoding, RStringInner, eucjp_char_width, map_bytes_to_utf8, sjis_char_width,
+};
 use num::Signed;
 
 ///
@@ -64,6 +66,14 @@ pub(crate) fn negotiate_format(
     fmt: &RStringInner,
     arguments: &[Value],
 ) -> Result<FormatCtx> {
+    // A format String that cannot hold ASCII cannot hold the directives
+    // either; CRuby rejects it before reading a single specifier.
+    if !fmt.encoding().is_ascii_compatible() {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            store,
+            format!("ASCII incompatible encoding: {}", fmt.encoding().name()),
+        ));
+    }
     let mut result_inner = fmt.clone();
     let mut broken = !fmt.is_valid_encoding();
     for v in arguments {
@@ -105,10 +115,12 @@ pub(crate) fn negotiate_format(
     let enc = result_inner.encoding();
     Ok(FormatCtx {
         enc,
-        // `!is_ascii_compatible` catches the UTF-16 / UTF-32 family,
-        // whose bytes are no more `&str`-shaped than a byte-oriented
-        // encoding's.
-        byte_space: enc.is_byte_oriented() || !enc.is_ascii_compatible() || broken,
+        // US-ASCII joins the byte-oriented encodings because `%c` can
+        // put a high byte into a US-ASCII result (onigmo's `%c` code
+        // space for it is the full byte range). Everything else that
+        // stays US-ASCII is 7-bit, for which the surrogate view is the
+        // identity, so this costs nothing.
+        byte_space: enc.is_byte_oriented() || enc == Encoding::UsAscii || broken,
     })
 }
 
@@ -117,94 +129,87 @@ pub(crate) fn negotiate_format(
 /// denotes in `enc`. Unicode encodings read `code` as a Unicode scalar;
 /// every other encoding reads it as the big-endian byte image of the
 /// character itself, so `9415601` (`0x8FABB1`) is the EUC-JP three-byte
-/// sequence for `é`. `None` when `enc` cannot represent it — the caller
-/// raises `RangeError`.
+/// sequence for `é`.
 ///
-fn encode_codepoint(code: u32, enc: Encoding) -> Option<Vec<u8>> {
+/// The two error kinds follow CRuby: a value that simply overflows a
+/// single-byte encoding's code space is a `RangeError`, everything else
+/// that is not a character in `enc` — a negative value, a Unicode scalar
+/// past `U+10FFFF`, an ill-formed EUC-JP / Shift_JIS byte image — is an
+/// `ArgumentError: invalid character`.
+///
+fn encode_codepoint(code: i64, enc: Encoding) -> Result<Vec<u8>> {
     fn be_bytes(code: u32) -> Vec<u8> {
         if code <= 0xFF {
             vec![code as u8]
         } else if code <= 0xFFFF {
             vec![(code >> 8) as u8, code as u8]
-        } else if code <= 0xFF_FFFF {
-            vec![(code >> 16) as u8, (code >> 8) as u8, code as u8]
         } else {
-            vec![
-                (code >> 24) as u8,
-                (code >> 16) as u8,
-                (code >> 8) as u8,
-                code as u8,
-            ]
+            vec![(code >> 16) as u8, (code >> 8) as u8, code as u8]
         }
     }
-    /// A single EUC-JP character: ASCII, half-width katakana (`8E xx`),
-    /// JIS X 0208 (two bytes in `A1..FE`) or JIS X 0212 (`8F` + two).
+    /// Onigmo's EUC-JP `code_to_mbclen` plus its trailing-byte check:
+    /// ASCII stands alone, and every byte of a multibyte image (SS2
+    /// `8E xx`, JIS X 0208 `hi lo`, SS3 `8F hi lo`) must have its high
+    /// bit set. Wider than the *decoder*'s notion of a valid character
+    /// — `8E FF` has no JIS X 0201 meaning but `%c` still emits it.
     fn valid_euc_jp(b: &[u8]) -> bool {
         match b {
             [c] => *c <= 0x7F,
-            [0x8E, c] => (0xA1..=0xDF).contains(c),
-            [hi, lo] => (0xA1..=0xFE).contains(hi) && (0xA1..=0xFE).contains(lo),
-            [0x8F, hi, lo] => (0xA1..=0xFE).contains(hi) && (0xA1..=0xFE).contains(lo),
-            _ => false,
+            [rest @ ..] => rest.iter().all(|c| *c >= 0x80),
         }
     }
+    /// Onigmo's Shift_JIS `code_to_mbclen`: a lone byte must not be a
+    /// double-byte lead, and a two-byte image is judged by its trail
+    /// byte alone (the lead goes unchecked, so `01 40` is accepted).
     fn valid_sjis(b: &[u8]) -> bool {
         match b {
-            [c] => *c <= 0x7F || (0xA1..=0xDF).contains(c),
-            [hi, lo] => {
-                ((0x81..=0x9F).contains(hi) || (0xE0..=0xFC).contains(hi))
-                    && ((0x40..=0x7E).contains(lo) || (0x80..=0xFC).contains(lo))
-            }
+            [c] => !matches!(c, 0x81..=0x9F | 0xE0..=0xFC),
+            [_, lo] => matches!(lo, 0x40..=0x7E | 0x80..=0xFC),
             _ => false,
         }
     }
+    let invalid = || MonorubyErr::argumenterr("invalid character");
+    let Ok(code) = u32::try_from(code) else {
+        return Err(invalid());
+    };
     match enc {
+        // CRuby also emits the CESU-style three-byte form for a lone
+        // surrogate (`%c` % 0xD800), producing a broken String; we
+        // reject those instead.
         Encoding::Utf8 => {
-            let c = char::from_u32(code)?;
+            let c = char::from_u32(code).ok_or_else(invalid)?;
             let mut buf = [0u8; 4];
-            Some(c.encode_utf8(&mut buf).as_bytes().to_vec())
+            Ok(c.encode_utf8(&mut buf).as_bytes().to_vec())
         }
-        Encoding::Utf16Le | Encoding::Utf16Be => {
-            let c = char::from_u32(code)?;
-            let mut buf = [0u16; 2];
-            let units = c.encode_utf16(&mut buf);
-            Some(
-                units
-                    .iter()
-                    .flat_map(|u| {
-                        if enc == Encoding::Utf16Le {
-                            u.to_le_bytes()
-                        } else {
-                            u.to_be_bytes()
-                        }
-                    })
-                    .collect(),
-            )
-        }
-        Encoding::Utf32Le | Encoding::Utf32Be => {
-            let c = char::from_u32(code)?;
-            let u = c as u32;
-            Some(if enc == Encoding::Utf32Le {
-                u.to_le_bytes().to_vec()
-            } else {
-                u.to_be_bytes().to_vec()
-            })
-        }
-        Encoding::UsAscii => (code <= 0x7F).then(|| vec![code as u8]),
         Encoding::EucJp => {
             let bytes = be_bytes(code);
-            valid_euc_jp(&bytes).then_some(bytes)
+            if code > 0xFF_FFFF || !valid_euc_jp(&bytes) {
+                return Err(invalid());
+            }
+            Ok(bytes)
         }
         Encoding::Sjis(_) => {
             let bytes = be_bytes(code);
-            valid_sjis(&bytes).then_some(bytes)
+            if code > 0xFFFF || !valid_sjis(&bytes) {
+                return Err(invalid());
+            }
+            Ok(bytes)
         }
-        // Single-byte / uncodec'd encodings: the character *is* the byte.
+        // Single-byte encodings — including US-ASCII, whose `%c` code
+        // space onigmo takes as the full byte range: the character *is*
+        // the byte, and anything wider overflows it.
         Encoding::Ascii8
+        | Encoding::UsAscii
         | Encoding::Iso8859(_)
-        | Encoding::Iso2022Jp
-        | Encoding::Other(_)
-        | Encoding::NamedByte(_) => (code <= 0xFF).then(|| vec![code as u8]),
+        | Encoding::NamedByte(_) => {
+            if code > 0xFF {
+                return Err(MonorubyErr::rangeerr(format!("{code} out of char range")));
+            }
+            Ok(vec![code as u8])
+        }
+        // ASCII-incompatible encodings never reach here: `sprintf` on
+        // such a format String raises before any specifier is read.
+        _ => Err(invalid()),
     }
 }
 
@@ -220,10 +225,7 @@ fn format_char(
     ctx: FormatCtx,
 ) -> Result<String> {
     if let RV::Fixnum(i) = val.unpack() {
-        let bytes = u32::try_from(i)
-            .ok()
-            .and_then(|code| encode_codepoint(code, ctx.enc))
-            .ok_or_else(|| MonorubyErr::rangeerr(format!("{i} out of char range")))?;
+        let bytes = encode_codepoint(i, ctx.enc)?;
         return Ok(if ctx.byte_space {
             map_bytes_to_utf8(&bytes)
         } else {
@@ -233,10 +235,19 @@ fn format_char(
         });
     }
     if let Some(inner) = val.is_rstring_inner() {
-        // Take the first character of the argument's own view, so a
-        // byte-oriented or broken String contributes its leading byte
+        // Take the argument's leading character *in its own encoding*,
+        // so a byte-oriented or broken String contributes whole bytes
         // instead of raising on the UTF-8 check.
         let view = ctx.view(&inner)?;
+        if ctx.byte_space {
+            let width = match inner.encoding() {
+                Encoding::EucJp => eucjp_char_width(inner.as_bytes()),
+                Encoding::Sjis(_) => sjis_char_width(inner.as_bytes()),
+                _ => None,
+            }
+            .unwrap_or(1);
+            return Ok(view.chars().take(width).collect());
+        }
         return Ok(match view.chars().next() {
             Some(c) => c.to_string(),
             None => String::new(),

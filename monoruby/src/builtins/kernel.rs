@@ -4320,10 +4320,13 @@ fn method_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) 
 ///
 /// The name is recovered from the call site rather than the frame: the
 /// caller saved its own pc into this frame's cont-frame slot, so the
-/// call site there names the alias that was dispatched. The VM saves
-/// the pc one word past the call instruction (at the inline-cache
-/// word), the JIT saves the instruction itself; both are covered by
-/// looking each candidate index up in the caller ISeq's `callsite_map`.
+/// call site there names the alias that was dispatched.
+///
+/// A by-name dispatcher (`send` / `Method#call`) is deliberately *not*
+/// followed: it names its target at run time, and under the JIT — which
+/// inlines `send` without a cont-frame pc — that name is not reachable
+/// from here at all. Reporting it only in the interpreter would make
+/// `__callee__` depend on whether the caller happens to be compiled.
 ///
 fn called_name(
     store: &Store,
@@ -4333,17 +4336,35 @@ fn called_name(
 ) -> Option<IdentId> {
     let caller = method_cfp.prev()?;
     let iseq_id = store[caller.lfp().func_id()].is_iseq()?;
+    let name = store[call_site_id(store, iseq_id, method_cfp)?].name?;
+    // `super` has no name, and a dispatch that went through
+    // `method_missing` / `send` / `Method#call` / … names the
+    // trampoline rather than the frame we are standing in. Only trust
+    // the call-site name when the receiver really resolves it to an
+    // alias of this frame's method — `original_name` is the definition
+    // name every alias of it shares.
+    match store.check_method_for_class(self_val.class(), name) {
+        Some(entry) if entry.original_name() == def_name => Some(name),
+        _ => None,
+    }
+}
+
+///
+/// The call site in `iseq_id` that entered `method_cfp`. The VM saves
+/// the pc one word past the call instruction (at the inline-cache
+/// word), the JIT saves the instruction itself; a `MethodCall` occupies
+/// both words, so exactly one of the two candidates can be a
+/// call-instruction index and the ISeq's `callsite_map` — which only
+/// holds real ones — tells them apart without decoding anything.
+///
+fn call_site_id(store: &Store, iseq_id: ISeqId, method_cfp: Cfp) -> Option<CallSiteId> {
     let info = &store[iseq_id];
     let slot = method_cfp.caller_pc_slot();
     if slot == 0 || slot as usize % std::mem::align_of::<Bytecode>() != 0 {
         return None;
     }
-    // A `MethodCall` occupies two words (the instruction and its
-    // inline cache), so exactly one of the two candidates can be a
-    // call-instruction index and `callsite_map` — which only holds
-    // real ones — tells them apart without decoding anything.
     let size = std::mem::size_of::<Bytecode>();
-    let callid = [size, 0].into_iter().find_map(|back| {
+    [size, 0].into_iter().find_map(|back| {
         let addr = (slot as usize).checked_sub(back)?;
         // SAFETY: the pointer is never dereferenced — `contains_pc`
         // only range-checks it against this ISeq's bytecode buffer so
@@ -4353,18 +4374,7 @@ fn called_name(
             return None;
         }
         store.get_callsite_id(iseq_id, info.get_pc_index(Some(pc)))
-    })?;
-    // `super` has no name, and a dispatch that went through
-    // `method_missing` / `Method#call` / `send` / … names the
-    // trampoline rather than the frame we are standing in. Only trust
-    // the call-site name when the receiver really resolves it to an
-    // alias of this frame's method — `original_name` is the definition
-    // name every alias of it shares.
-    let name = store[callid].name?;
-    match store.check_method_for_class(self_val.class(), name) {
-        Some(entry) if entry.original_name() == def_name => Some(name),
-        _ => None,
-    }
+    })
 }
 
 ///
@@ -6111,8 +6121,16 @@ mod tests {
               def plain; helper; end
               private def helper; [__method__, __callee__]; end
             end
+            # Dispatched from a native frame (`send`) or from `super`,
+            # the call site names something other than this frame's
+            # method, so the definition name stands.
+            class CB < CA
+              def f; super; end
+              alias sup f
+            end
             o = CA.new
-            [o.f, o.g, o.h, o.blk, o.blk2, o.dm, o.dm2, o.plain, [__method__, __callee__]]
+            [o.f, o.g, o.h, o.blk, o.blk2, o.dm, o.dm2, o.plain,
+             CB.new.sup, [__method__, __callee__]]
             "##,
         );
         // `method_missing` keeps its own name: the call site named a
@@ -6177,6 +6195,83 @@ mod tests {
             c = "good day %s" % "\x80"
             [a.bytes, a.encoding.name, a.valid_encoding?,
              b.bytes, b.valid_encoding?, c.bytes, c.valid_encoding?]
+            "##,
+        );
+    }
+
+    #[test]
+    fn sprintf_char_across_encodings() {
+        // Every non-Unicode `%c` reads its Integer as the character's
+        // own byte image; the two error kinds follow CRuby (a
+        // single-byte encoding's code space overflows with RangeError,
+        // an ill-formed byte image is an `ArgumentError`).
+        run_test_once(
+            r##"
+            def c(enc, v)
+              begin
+                ("%c".dup.force_encoding(enc) % v).bytes
+              rescue => e
+                [e.class, e.message]
+              end
+            end
+            [
+              # single-byte encodings: the character *is* the byte
+              c("ASCII-8BIT", 0xFF), c("ISO-8859-1", 0xE9), c("Windows-1252", 0x80),
+              c("US-ASCII", 0x41), c("US-ASCII", 0x80),
+              c("ASCII-8BIT", 0x100), c("ISO-8859-1", 0x100), c("US-ASCII", 1286),
+              # Shift_JIS: bare byte, half-width kana, two-byte char
+              c("Shift_JIS", 0x41), c("Shift_JIS", 0xB1), c("Shift_JIS", 0x82A0),
+              c("Shift_JIS", 0xE0), c("Shift_JIS", 0x1234), c("Shift_JIS", 0x10000),
+              # EUC-JP: ASCII, SS2 kana, JIS X 0208, SS3 (JIS X 0212)
+              c("EUC-JP", 0x41), c("EUC-JP", 0x8EB1), c("EUC-JP", 0xA4A2),
+              c("EUC-JP", 0x8FA1A1), c("EUC-JP", 0x80), c("EUC-JP", 0x12345678),
+              # negative is never a character, in any encoding
+              c("UTF-8", -1), c("ASCII-8BIT", -1), c("UTF-8", 0x110000),
+              # a String argument gives its whole leading character
+              ("%c".dup.force_encoding("Shift_JIS") % "\x82\xA0".dup.force_encoding("Shift_JIS")).bytes,
+              ("%c".dup.force_encoding("EUC-JP") % "\xA4\xA2".dup.force_encoding("EUC-JP")).bytes,
+              # non-Integer, non-String goes through #to_int
+              sprintf("%c", 65.9), sprintf("%c", ""),
+            ]
+            "##,
+        );
+    }
+
+    #[test]
+    fn sprintf_rejects_ascii_incompatible_format() {
+        // The directives themselves cannot be spelled in an
+        // ASCII-incompatible encoding, so CRuby rejects the format
+        // String before reading any specifier.
+        run_test_once(
+            r##"
+            ["UTF-16BE", "UTF-16LE", "UTF-32BE", "ISO-2022-JP", "UTF-7"].map do |enc|
+              begin
+                "%s".dup.force_encoding(enc) % "x"
+              rescue => e
+                e.class.to_s
+              end
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn format_and_printf_accept_a_to_str_format() {
+        // A format object that is not a String is converted with
+        // #to_str and formatted as plain UTF-8 — for `Kernel#format`
+        // and for `IO#printf`, which writes the negotiated bytes.
+        run_test_once(
+            r##"
+            class Fmt
+              def to_str = "to_str: %i/%c"
+            end
+            path = "/tmp/monoruby_printf_to_str_#{Process.pid}"
+            begin
+              File.open(path, "w") { |f| f.printf(Fmt.new, 42, 0x41) }
+              [format(Fmt.new, 42, 0x41), File.binread(path)]
+            ensure
+              File.unlink(path) if File.exist?(path)
+            end
             "##,
         );
     }
