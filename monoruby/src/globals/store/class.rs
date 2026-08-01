@@ -1664,6 +1664,63 @@ impl ClassInfoTable {
         class_obj.as_class()
     }
 
+    /// `Kernel#clone`'s singleton-class copy (CRuby's
+    /// `rb_singleton_class_clone_and_attach`): when *original* has a
+    /// singleton class, give *copy* its own fresh singleton class with the
+    /// same method/constant/class-variable tables and the same `extend`-ed
+    /// modules. Without this the two objects share one singleton class, and
+    /// `def copy.x` / `copy.extend(m)` after the clone bleed into the
+    /// original (and vice versa).
+    ///
+    /// The caller must keep *copy* rooted: minting the singleton class and
+    /// its iclasses allocates.
+    pub(crate) fn clone_singleton_class(&mut self, original: Value, mut copy: Value) -> Result<()> {
+        let org_sc = self[original.class()].get_module();
+        if org_sc.is_singleton().is_none() {
+            return Ok(());
+        }
+        // `clone_value` copied the class field verbatim, so the copy still
+        // points at the *original's* singleton. Re-attach it to the real
+        // class first so `get_singleton` mints a fresh one.
+        let real = org_sc.get_real_class();
+        copy.change_class(real.id());
+        let mut new_sc = self.get_singleton(copy)?;
+        let org_info = &self[org_sc.id()];
+        let mut methods = org_info.methods.clone();
+        // Entries stamp their defining class as `owner` (surfaced by
+        // `Method#owner`); on the copied table that must be the *new*
+        // singleton, as it is in CRuby.
+        for entry in methods.values_mut() {
+            if entry.owner == org_sc.id() {
+                entry.owner = new_sc.id();
+            }
+        }
+        let constants = org_info.constants.clone();
+        let constant_locations = org_info.constant_locations.clone();
+        let class_variables = org_info.class_variables.clone();
+        let new_info = &mut self[new_sc.id()];
+        new_info.methods = methods;
+        new_info.constants = constants;
+        new_info.constant_locations = constant_locations;
+        new_info.class_variables = class_variables;
+        // Replicate `extend`-ed modules (iclasses on the original
+        // singleton's superclass chain) in the same order; `include_module`
+        // prepends, so walk nearest-to-furthest and re-include in reverse.
+        let mut included: Vec<ClassId> = vec![];
+        let mut cur = org_sc.superclass();
+        while let Some(sc) = cur
+            && sc.is_iclass()
+        {
+            included.push(sc.id());
+            cur = sc.superclass();
+        }
+        for mod_id in included.into_iter().rev() {
+            let module = self.get_module(mod_id);
+            let _ = new_sc.include_module(module);
+        }
+        Ok(())
+    }
+
     pub(crate) fn define_struct_class(
         &mut self,
         name: Option<IdentId>,

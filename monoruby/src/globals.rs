@@ -585,6 +585,22 @@ impl Globals {
             .store
             .set_ivar(main_object, IdentId::_NAME, Value::string_from_str("main"))
             .unwrap();
+        // CRuby defines main's `to_s`/`inspect` as *singleton* methods
+        // (`method(:to_s).owner == main.singleton_class`), and copies of
+        // main (`clone`, `Kernel#load` with `wrap`) keep them through the
+        // copied singleton class.
+        globals.define_builtin_singleton_func(
+            main_object,
+            "to_s",
+            crate::builtins::kernel::main_to_s,
+            0,
+        );
+        globals.define_builtin_singleton_func(
+            main_object,
+            "inspect",
+            crate::builtins::kernel::main_to_s,
+            0,
+        );
 
         // Load library path. Resolution chain mirrors the GEM_PATH
         // chain above; the runtime probe that may have just populated
