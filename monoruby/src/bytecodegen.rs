@@ -1755,11 +1755,19 @@ impl<'a> BytecodeGen<'a> {
                     self.push(); // register for src.
                     LvalueKind::Index { base, index }
                 } else {
+                    // Everything else — two or more indices, *and* the empty
+                    // index list `a[] = v` — lowers to an ordinary `[]=` call
+                    // of `num` indices followed by the assigned value. `num`
+                    // counts only the indices, so `a[] = v` is a one-argument
+                    // `[]=` (which `Array`/`Hash` reject at run time with
+                    // ArgumentError, and a user-defined `def []=(*a)` accepts).
                     let base = self.eval_index_base(base)?;
-                    let index1 = self.push_expr(index[0].clone())?;
+                    // Take the argument base *before* pushing, so it is right
+                    // even when there are no index expressions to push.
+                    let index1 = self.sp();
                     let num = index.len();
-                    for i in 1..index.len() {
-                        self.push_expr(index[i].clone())?;
+                    for i in index {
+                        self.push_expr(i.clone())?;
                     }
                     self.push(); // register for src.
                     LvalueKind::Index2 { base, index1, num }
@@ -2110,5 +2118,58 @@ mod tests {
         run_test_error(r#"->(a = a + 1) { a }.call"#);
         run_test(r#"def m(a = a); a; end; m"#);
         run_test(r#"def f(x, y = x, z = y + 1); [x, y, z]; end; f(3)"#);
+    }
+
+    /// Issue #1047: the empty index list `a[] = v` shares the l-value arm
+    /// written for two-or-more indices, which indexed `index[0]`
+    /// unconditionally and panicked in bytecodegen — taking the whole file
+    /// down before it ran, even for an `a[] = v` under `if false`.
+    ///
+    /// `a[] = v` is a one-argument `[]=` call: `Array` / `Hash` reject it at
+    /// run time, a `def []=(*a)` accepts it.
+    #[test]
+    fn empty_index_assign() {
+        run_test_error(r#"a = [1, 2]; a[] = 9"#);
+        run_test_error(r#"h = {}; h[] = 9"#);
+        run_test_error(r#"a = [1, 2]; a[] += 1"#);
+        // Compiles even when never executed.
+        run_test(r#"res = :ok; if false; a = [1, 2]; a[] = 9; end; res"#);
+        run_test_with_prelude(
+            r#"c = C.new; c[] = 9; c.log"#,
+            r#"class C
+                 def initialize; @log = []; end
+                 def []=(*a); @log << a; end
+                 def [](*a); @log << [:get, a]; @log.size; end
+                 attr_reader :log
+               end"#,
+        );
+        // `[]` getter + `[]=` setter, and the index list still being empty
+        // after the op-assign rewrite.
+        run_test_with_prelude(
+            r#"c = C.new; c[] += 1; c.log"#,
+            r#"class C
+                 def initialize; @log = []; end
+                 def []=(*a); @log << a; end
+                 def [](*a); @log << [:get, a]; @log.size; end
+                 attr_reader :log
+               end"#,
+        );
+        // Multiple assignment, and a mix with a non-empty index.
+        run_test_with_prelude(
+            r#"c = C.new; c[], c[1] = :x, :y; c.log"#,
+            r#"class C
+                 def initialize; @log = []; end
+                 def []=(*a); @log << a; end
+                 attr_reader :log
+               end"#,
+        );
+        // A private `#[]=` reached through a literal `self` base.
+        run_test_with_prelude(
+            r#"E.new.go"#,
+            r#"class E
+                 def []=(*a); @v = a; end
+                 def go; self[] = 42; @v; end
+               end"#,
+        );
     }
 }
