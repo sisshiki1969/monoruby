@@ -429,6 +429,70 @@ pub(crate) const METHOD_TO_PROC_BODY_FUNCID: FuncId = FuncId::new(4);
 ///
 pub(crate) const PROC_CURRY_BODY_FUNCID: FuncId = FuncId::new(5);
 
+///
+/// Block body for `Enumerator#with_index`.
+///
+/// Mirrors CRuby's `enumerator_with_index_i`: it is the block handed to
+/// the *source* method, so the source runs on the caller's stack with
+/// no fiber. `outer_lfp`'s self is a one-element Array holding the
+/// running index; the consumer block is parked on the executor keyed by
+/// that same Array (see `Executor::adapter_block`). Each call packs the
+/// source yield (`rb_enum_values_pack`) and yields `(packed, index)`.
+///
+pub(crate) const WITH_INDEX_ADAPTER_FUNCID: FuncId = FuncId::new(6);
+
+///
+/// Block body for `Enumerator#with_object`; as
+/// [`WITH_INDEX_ADAPTER_FUNCID`] but the state Array holds the memo,
+/// which is passed unchanged to every call.
+///
+pub(crate) const WITH_OBJECT_ADAPTER_FUNCID: FuncId = FuncId::new(7);
+
+/// Pack a source yield the way CRuby's `rb_enum_values_pack` does:
+/// nothing -> nil, one value -> itself, several -> an Array.
+fn pack_source_yield(lfp: Lfp) -> Value {
+    let args: Array = lfp.arg(0).as_array();
+    args.peel()
+}
+
+#[monoruby_builtin]
+pub(crate) fn with_index_adapter(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let state = lfp.self_val();
+    let packed = pack_source_yield(lfp);
+    let data = vm
+        .adapter_block(state)
+        .ok_or_else(|| MonorubyErr::runtimeerr("with_index adapter lost its block"))?;
+    let mut arr = state.as_array();
+    let idx = arr[0];
+    arr[0] = match idx.unpack() {
+        RV::Fixnum(i) => Value::integer(i + 1),
+        RV::BigInt(i) => Value::bigint(i + 1),
+        _ => return Err(MonorubyErr::runtimeerr("with_index counter is not an Integer")),
+    };
+    vm.invoke_block(globals, &data, &[packed, idx])
+}
+
+#[monoruby_builtin]
+pub(crate) fn with_object_adapter(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let state = lfp.self_val();
+    let packed = pack_source_yield(lfp);
+    let data = vm
+        .adapter_block(state)
+        .ok_or_else(|| MonorubyErr::runtimeerr("with_object adapter lost its block"))?;
+    let memo = state.as_array()[0];
+    vm.invoke_block(globals, &data, &[packed, memo])
+}
+
 #[monoruby_builtin]
 pub(crate) fn enum_yielder(
     vm: &mut Executor,

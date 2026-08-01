@@ -14,11 +14,11 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         Effect::CAPTURE,
     );
+    globals.define_builtin_func_with(ENUMERATOR_CLASS, "with_index", with_index, 0, 1, false);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "with_object", with_object, 1);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values, 0);
     globals.define_builtin_func_rest(ENUMERATOR_CLASS, "each", each);
-    globals.define_builtin_func_with(ENUMERATOR_CLASS, "with_index", with_index, 0, 1, false);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "with_object", with_object, 1);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek", peek, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek_values", peek_values, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
@@ -197,7 +197,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// ### Enumerator#with_index
 ///
 /// - with_index(offset = 0) {|(*args), idx| ... } -> object
-/// - with_index(offset = 0) -> Enumeratorf
+/// - with_index(offset = 0) -> Enumerator
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/with_index.html]
 #[monoruby_builtin]
@@ -207,52 +207,30 @@ fn with_index(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    fn with_index_inner(
-        vm: &mut Executor,
-        globals: &mut Globals,
-        mut internal: Fiber,
-        block_data: &ProcData,
-        mut count: Value,
-        self_val: Enumerator,
-    ) -> Result<Value> {
-        let mut res = Value::nil();
-        loop {
-            let v = internal.enum_yield_values(vm, globals, self_val, res)?;
-            if internal.is_terminated() {
-                return Ok(v);
-            }
-            let a = v.as_array();
-            res = vm.invoke_block(globals, block_data, &[a.peel(), count])?;
-            match count.unpack() {
-                RV::Fixnum(i) => count = Value::integer(i + 1),
-                RV::BigInt(i) => count = Value::bigint(i + 1),
-                _ => unreachable!(),
-            }
-        }
-    }
-    let count = if lfp.try_arg(0).is_none() {
-        Value::integer(0)
-    } else {
-        match lfp.arg(0).unpack() {
-            RV::Fixnum(_) | RV::BigInt(_) => lfp.arg(0),
+    let offset = match lfp.try_arg(0) {
+        // CRuby: `NIL_P(memo) ? 0 : rb_to_int(memo)` — an explicit nil
+        // means 0, a Float truncates, anything else goes through #to_int.
+        None => Value::integer(0),
+        Some(v) if v.is_nil() => Value::integer(0),
+        Some(v) => match v.unpack() {
+            RV::Fixnum(_) | RV::BigInt(_) => v,
             RV::Float(f) => Value::integer(f as i64),
-            _ => Value::integer(lfp.arg(0).coerce_to_int_i64(vm, globals)?),
-        }
+            _ => Value::integer(v.coerce_to_int_i64(vm, globals)?),
+        },
     };
     let self_val = Enumerator::new(lfp.self_val());
-
-    let id = IdentId::get_id("with_index");
-    let data = if let Some(bh) = lfp.block() {
-        vm.get_block_data(globals, bh)?
-    } else {
-        return vm.generate_enumerator(id, lfp.self_val(), vec![], pc);
+    let Some(bh) = lfp.block() else {
+        // The offset is part of the enumerator's replayed arguments —
+        // `e.with_index(5).to_a` must start at 5.
+        return vm.generate_enumerator_with_size(
+            IdentId::get_id("with_index"),
+            lfp.self_val(),
+            vec![offset],
+            pc,
+            self_val.size(),
+        );
     };
-
-    let internal = Fiber::from(self_val.proc);
-    vm.temp_push(internal.into());
-    let res = with_index_inner(vm, globals, internal, &data, count, self_val);
-    vm.temp_pop();
-    res
+    enum_adapter_call(vm, globals, self_val, bh, offset, WITH_INDEX_ADAPTER_FUNCID, pc)
 }
 
 ///
@@ -260,11 +238,6 @@ fn with_index(
 ///
 /// - with_object(memo) {|(*args), memo| ... } -> memo
 /// - with_object(memo) -> Enumerator
-///
-/// Yields each element from the underlying enumeration together with
-/// the same `memo` object. With a block, returns `memo` after all
-/// elements have been yielded. Without a block, returns a fresh
-/// Enumerator that yields `[element, memo]` pairs.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/with_object.html]
 #[monoruby_builtin]
@@ -274,37 +247,58 @@ fn with_object(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    fn with_object_inner(
-        vm: &mut Executor,
-        globals: &mut Globals,
-        mut internal: Fiber,
-        block_data: &ProcData,
-        memo: Value,
-        self_val: Enumerator,
-    ) -> Result<Value> {
-        let mut res = Value::nil();
-        loop {
-            let v = internal.enum_yield_values(vm, globals, self_val, res)?;
-            if internal.is_terminated() {
-                // CRuby returns the memo (not the underlying each's
-                // return value) when iteration completes.
-                return Ok(memo);
-            }
-            let a = v.as_array();
-            res = vm.invoke_block(globals, block_data, &[a.peel(), memo])?;
-        }
-    }
     let memo = lfp.arg(0);
     let self_val = Enumerator::new(lfp.self_val());
-    let id = IdentId::get_id("with_object");
-    let data = if let Some(bh) = lfp.block() {
-        vm.get_block_data(globals, bh)?
-    } else {
-        return vm.generate_enumerator(id, lfp.self_val(), vec![memo], pc);
+    let Some(bh) = lfp.block() else {
+        return vm.generate_enumerator_with_size(
+            IdentId::get_id("with_object"),
+            lfp.self_val(),
+            vec![memo],
+            pc,
+            self_val.size(),
+        );
     };
-    let internal = Fiber::from(self_val.proc);
-    vm.temp_push(internal.into());
-    let res = with_object_inner(vm, globals, internal, &data, memo, self_val);
+    enum_adapter_call(vm, globals, self_val, bh, memo, WITH_OBJECT_ADAPTER_FUNCID, pc)?;
+    // CRuby returns the memo, not the source's return value.
+    Ok(memo)
+}
+
+/// Run the enumerator's source with a *native* adapter block
+/// (`adapter_fid`) that carries `state` and forwards to the user's
+/// block — CRuby's `enumerator_block_call(obj, enumerator_with_index_i,
+/// memo)` shape. No fiber: only external iteration needs to suspend the
+/// producer.
+///
+/// `state` rides on the adapter proc's `outer_lfp` self as a
+/// single-element Array (mutable, so `#with_index` can bump its
+/// counter); that same Array keys the user block parked on the
+/// executor, which keeps nesting correct.
+fn enum_adapter_call(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Enumerator,
+    bh: BlockHandler,
+    state: Value,
+    adapter_fid: FuncId,
+    pc: BytecodePtr,
+) -> Result<Value> {
+    let data = vm.get_block_data(globals, bh)?;
+    let state = Value::array1(state);
+    vm.temp_push(state);
+    let outer = Lfp::dummy_heap_frame_with_self(state);
+    let adapter: Value = Proc::from_outer(outer, adapter_fid, pc).into();
+    vm.temp_push(adapter);
+    vm.push_adapter_block(state, data);
+    let res = vm.invoke_method_inner(
+        globals,
+        self_val.method,
+        self_val.obj,
+        &self_val.args,
+        Some(BlockHandler::new(adapter)),
+        self_val.kw_args,
+    );
+    vm.pop_adapter_block();
+    vm.temp_pop();
     vm.temp_pop();
     res
 }
@@ -411,7 +405,7 @@ fn yielder_call(
     args: &[Value],
 ) -> Result<Value> {
     let data = vm
-        .enum_yielder_block(yielder)
+        .adapter_block(yielder)
         .ok_or_else(|| MonorubyErr::runtimeerr("yielder used outside its Generator#each"))?;
     vm.invoke_block(globals, &data, args)
 }
@@ -459,11 +453,11 @@ fn generator_each(
     let data = vm.get_block_data(globals, lfp.expect_block()?)?;
     let yielder = Value::yielder_object();
     vm.temp_push(yielder);
-    vm.push_enum_yielder_block(yielder, data);
+    vm.push_adapter_block(yielder, data);
     let body = ProcData::from_proc(&self_val.body());
     let res = vm.invoke_block(globals, &body, &[yielder]);
     vm.temp_pop();
-    vm.pop_enum_yielder_block();
+    vm.pop_adapter_block();
     res
 }
 
@@ -482,6 +476,67 @@ mod tests {
             end
             [a.next, a.peek, a.peek, a.next, a.peek, a.next]
             "##,
+        );
+    }
+
+    #[test]
+    fn with_index_and_with_object_run_without_a_fiber() {
+        // Return values: `#with_index` gives back the source's, whereas
+        // `#with_object` gives back the memo.
+        run_test(r#"[1, 2].each.with_index { |v, i| }"#);
+        run_test(r#"[1, 2].each.with_object(:m) { |v, m| }"#);
+        run_test(r#"[1, 2, 3].each.with_object([]) { |v, m| m << v * 2 }"#);
+        // Offset handling: default, explicit, nil (== 0), Float
+        // (truncated), and a #to_int-able object.
+        run_test(r#"r = []; [1, 2].each.with_index { |v, i| r << [v, i] }; r"#);
+        run_test(r#"r = []; [1, 2].each.with_index(5) { |v, i| r << [v, i] }; r"#);
+        run_test(r#"r = []; [1, 2].each.with_index(nil) { |v, i| r << [v, i] }; r"#);
+        run_test(r#"r = []; [1, 2].each.with_index(2.9) { |v, i| r << [v, i] }; r"#);
+        run_test(
+            r#"o = Object.new
+               def o.to_int; 3; end
+               r = []; [1, 2].each.with_index(o) { |v, i| r << [v, i] }; r"#,
+        );
+        // The blockless form keeps the offset / memo and the source size.
+        run_test(r#"[1, 2].each.with_index(5).to_a"#);
+        run_test(r#"[1, 2].each.with_object(:m).to_a"#);
+        run_test(r#"[[1, 2].each.with_index.size, [1, 2].each.with_object(:m).size]"#);
+        // Source yields are packed the way rb_enum_values_pack does.
+        run_test(
+            r#"[Enumerator.new { |y| y.yield },
+                Enumerator.new { |y| y.yield :v },
+                Enumerator.new { |y| y.yield 1, 2 }].map { |e|
+                  r = []; e.with_index { |v, i| r << [v, i] }; r
+                }"#,
+        );
+        run_test(r#"r = []; ({a: 1, b: 2}).each.with_index { |v, i| r << [v, i] }; r"#);
+        // `break` leaves the enumerator method with the block's value.
+        run_test(r#"[1, 2, 3].each.with_index { |v, i| break [v, i] if i == 1 }"#);
+        run_test(r#"[1, 2, 3].each.with_object(:m) { |v, m| break v if v == 2 }"#);
+        // Running the source on the caller's stack (no fiber) means its
+        // `ensure` fires and its frames are on the backtrace.
+        run_test(
+            r#"
+            log = []
+            begin
+              Enumerator.new { |y| begin; y << 1; ensure; log << :ensured; end }
+                        .with_index { |v, i| raise "boom" }
+            rescue => e
+              log << e.message
+            end
+            log
+            "#,
+        );
+        run_test(
+            r#"r = []; Enumerator.new { |y| y << caller.empty? }.with_index { |v, i| r << v }; r"#,
+        );
+        // Nested enumerator calls keep their own state.
+        run_test(
+            r#"out = []
+               [10, 20].each.with_index do |a, i|
+                 [1, 2].each.with_index(100) { |b, j| out << [a, i, b, j] }
+               end
+               out"#,
         );
     }
 
