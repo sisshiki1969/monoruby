@@ -3345,7 +3345,18 @@ fn require_relative(
 #[monoruby_builtin]
 fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let file_name = std::path::PathBuf::from(path_arg_to_string(vm, globals, lfp.arg(0))?);
-    let wrap = lfp.try_arg(1).map(|v| v.as_bool()).unwrap_or(false);
+    // `wrap` is either the module to load the file into, or — for any
+    // other truthy value — a fresh anonymous module (CRuby: a T_MODULE
+    // is used as-is, everything else truthy means `Module.new`; note a
+    // Class is *not* a T_MODULE and gets the anonymous module too).
+    let wrap_val = lfp.try_arg(1).unwrap_or_default();
+    let wrap = if let Some(module) = wrap_val.is_module() {
+        Some(module)
+    } else if wrap_val.as_bool() {
+        Some(globals.store.define_unnamed_module())
+    } else {
+        None
+    };
     vm.load(globals, &file_name, wrap)?;
     Ok(Value::bool(true))
 }
@@ -4978,6 +4989,16 @@ fn clone_val(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     // afterwards), so a hook may still initialise a to-be-frozen copy.
     copy.clear_frozen();
 
+    // Clone the receiver's singleton class too (CRuby's
+    // `rb_singleton_class_clone`): singleton methods and `extend`-ed
+    // modules carry over onto a *fresh* singleton class, so later
+    // `def copy.x` / `copy.extend(m)` don't bleed into the original.
+    // Root `copy` across the call — minting the singleton allocates.
+    let temp = vm.temp_len();
+    vm.temp_push(copy);
+    globals.store.clone_singleton_class(self_val, copy)?;
+    vm.temp_clear(temp);
+
     // Skip the no-op copy-hook dispatch when the class uses the default hooks
     // (see `dup` / `uses_default_copy_hooks`).
     let version = Globals::class_version();
@@ -5244,6 +5265,23 @@ fn initialize_clone(
         None,
         None,
     )
+}
+
+/// `main.to_s` / `main.inspect` — the top-level self prints as
+/// `"main"` via a *singleton* method (CRuby defines it with
+/// `rb_define_singleton_method(rb_vm_top_self(), ...)`), so
+/// `main.method(:to_s).owner == main.singleton_class` — and a copy of
+/// main (`Kernel#load` with `wrap`, `clone`) keeps it through its
+/// copied singleton class.
+#[monoruby_builtin]
+pub(crate) fn main_to_s(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let _ = lfp;
+    Ok(Value::string_from_str("main"))
 }
 
 ///
@@ -8850,6 +8888,133 @@ mod tests {
             ::Module.prepend(mod_p)
             m = Module.new { extend self }
             m.singleton_methods
+            "##,
+        );
+    }
+
+    #[test]
+    fn kernel_load_wrap() {
+        // load(path, true): the file runs inside a fresh anonymous
+        // module — constants and top-level defs land there, self is a
+        // copy of main extended with it — and nothing leaks to Object
+        // or to the calling main.
+        run_test(
+            r##"
+            $probe = []
+            path = "/tmp/mrb_load_wrap_t1_#{Process.pid}.rb"
+            File.write(path, <<~'RUBY')
+              class LoadWrapSpecClass
+                $probe << String
+              end
+              LOAD_WRAP_TEST_CONST = 7
+              def load_wrap_test_meth = :meth
+              $probe << method(:load_wrap_test_meth).owner
+              $probe << self
+              $probe << load_wrap_test_meth
+            RUBY
+            r = load path, true
+            wrap_mod = $probe[1]
+            top = $probe[2]
+            res = [
+              r,
+              $probe[0] == String,
+              wrap_mod.instance_of?(Module), wrap_mod.name,
+              Object.const_defined?(:LOAD_WRAP_TEST_CONST),
+              Object.const_defined?(:LoadWrapSpecClass),
+              wrap_mod.const_defined?(:LOAD_WRAP_TEST_CONST),
+              top.to_s, top.equal?(self), top.instance_of?(Object),
+              top.method(:to_s).owner == top.singleton_class,
+              top.singleton_class.ancestors[1] == wrap_mod,
+              $probe[3],
+              (begin; send(:load_wrap_test_meth); :polluted; rescue NameError; :clean; end),
+            ]
+            File.delete(path)
+            res
+            "##,
+        );
+        // load(path, mod): the supplied module is the wrap scope; defs
+        // become private instance methods on it. A truthy non-Module
+        // (String, or a Class — not a T_MODULE) wraps in a fresh
+        // anonymous module instead.
+        run_test(
+            r##"
+            $probe = []
+            path = "/tmp/mrb_load_wrap_t2_#{Process.pid}.rb"
+            File.write(path, <<~'RUBY')
+              LOAD_WRAP_TEST_CONST = 7
+              def load_wrap_test_meth = :meth
+              $probe << method(:load_wrap_test_meth).owner
+            RUBY
+            mod = Module.new
+            load path, mod
+            res = [
+              $probe[0] == mod,
+              mod.const_defined?(:LOAD_WRAP_TEST_CONST),
+              mod::LOAD_WRAP_TEST_CONST,
+              mod.private_instance_methods.include?(:load_wrap_test_meth),
+              Object.new.extend(mod).send(:load_wrap_test_meth),
+            ]
+            $probe = []
+            load path, "truthy"
+            res << ($probe[0].instance_of?(Module) && $probe[0].name.nil?)
+            $probe = []
+            load path, Comparable
+            res << ($probe[0] == Comparable)
+            $probe = []
+            load path, Object
+            res << ($probe[0].instance_of?(Module) && $probe[0] != Object)
+            File.delete(path)
+            res
+            "##,
+        );
+    }
+
+    #[test]
+    fn kernel_clone_singleton_class() {
+        // clone gives the copy its *own* singleton class carrying the
+        // original's singleton methods and extended modules — later
+        // singleton defs / extends on either side don't bleed across.
+        run_test(
+            r##"
+            o = Object.new
+            def o.foo = 1
+            m = Module.new { def bar = 2 }
+            o.extend(m)
+            c = o.clone
+            def c.baz = 3
+            n = Module.new { def qux = 4 }
+            c.extend(n)
+            [
+              c.foo, c.bar, c.baz, c.qux,
+              o.respond_to?(:baz), o.respond_to?(:qux),
+              c.method(:foo).owner == c.singleton_class,
+              o.singleton_class.equal?(c.singleton_class),
+              c.singleton_class.ancestors.include?(m),
+              o.singleton_class.ancestors.include?(n),
+            ]
+            "##,
+        );
+        // dup, by contrast, drops the singleton class entirely.
+        run_test(
+            r##"
+            o = Object.new
+            def o.foo = 1
+            d = o.dup
+            [d.respond_to?(:foo), d.class == Object]
+            "##,
+        );
+        // main's to_s/inspect are singleton methods (owner is the
+        // singleton class), and survive cloning main.
+        run_test(
+            r##"
+            c = self.clone
+            [
+              to_s, inspect,
+              method(:to_s).owner == singleton_class,
+              method(:inspect).owner == singleton_class,
+              c.to_s, c.method(:to_s).owner == c.singleton_class,
+              c.equal?(self),
+            ]
             "##,
         );
     }

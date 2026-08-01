@@ -720,6 +720,51 @@ impl Executor {
         }
     }
 
+    ///
+    /// Execute a script like [`Self::exec_script`], but inside *wrap*
+    /// when one is given (`Kernel#load(path, wrap)`): the file's
+    /// lexical scope is the wrap module — so unqualified constants
+    /// created at its top level land there, not on `Object` — and
+    /// `self` is a fresh copy of *main* (singleton class included)
+    /// extended with the module, mirroring CRuby's
+    /// `rb_obj_clone(top_self)` + `rb_extend_object`.
+    ///
+    fn exec_script_with_wrap(
+        &mut self,
+        globals: &mut Globals,
+        code: impl Into<Vec<u8>>,
+        path: &std::path::Path,
+        wrap: Option<Module>,
+    ) -> Result<Value> {
+        let Some(wrap) = wrap else {
+            return self.exec_script(globals, code, path);
+        };
+        let res = crate::parser::parse_program(code, path)?;
+        let fid = bytecodegen::bytecode_compile_script(globals, res)?;
+        self.flush_compile_warnings(globals);
+        if let Some(iseq) = globals.store.iseq_mut(fid) {
+            iseq.lexical_context = vec![wrap.id()];
+        }
+        let main_object = globals.main_object;
+        let top_self = self.invoke_method_inner(
+            globals,
+            IdentId::get_id("clone"),
+            main_object,
+            &[],
+            None,
+            None,
+        )?;
+        self.invoke_method_inner(
+            globals,
+            IdentId::get_id("extend"),
+            top_self,
+            &[wrap.as_val()],
+            None,
+            None,
+        )?;
+        self.eval_toplevel_with_self(globals, fid, top_self)
+    }
+
     fn exec_script_inner(
         &mut self,
         globals: &mut Globals,
@@ -781,15 +826,29 @@ impl Executor {
     /// *main* object is set to *self*.
     ///
     pub fn eval_toplevel(&mut self, globals: &mut Globals, func_id: FuncId) -> Result<Value> {
+        let main_object = globals.main_object;
+        self.eval_toplevel_with_self(globals, func_id, main_object)
+    }
+
+    ///
+    /// Execute a top level method with an explicit `self` — used by
+    /// `Kernel#load(path, wrap)`, where `self` is a copy of *main*
+    /// extended with the wrap module rather than *main* itself.
+    ///
+    fn eval_toplevel_with_self(
+        &mut self,
+        globals: &mut Globals,
+        func_id: FuncId,
+        self_val: Value,
+    ) -> Result<Value> {
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
 
-        let main_object = globals.main_object;
         let res = (globals.invokers.method)(
             self,
             globals,
             func_id,
-            main_object,
+            self_val,
             ([]).as_ptr(),
             0,
             None,
@@ -1018,20 +1077,16 @@ impl Executor {
     ///
     /// Kernel#load — always (re-)executes the file, never checks loaded_features.
     ///
-    /// When `r#priv` is true the file should run inside an anonymous module;
+    /// With a wrap module the file runs inside it: constants and
+    /// top-level `def`s land in the module instead of `Object`, and
+    /// `self` is a copy of *main* extended with the module.
     ///
     pub fn load(
         &mut self,
         globals: &mut Globals,
         file_name: &std::path::Path,
-        r#priv: bool,
+        wrap: Option<Module>,
     ) -> Result<()> {
-        let wrap = if r#priv {
-            Some(globals.define_toplevel_module(""))
-        } else {
-            None
-        };
-
         let (file_body, path) = globals.find_for_load(self, file_name)?;
         self.load_impl(globals, file_body, &path, wrap)?;
         Ok(())
@@ -1051,10 +1106,15 @@ impl Executor {
 
         self.enter_class_context();
         if let Some(wrap) = wrap {
-            self.push_class_context(wrap.id());
+            // Wrapped load: the runtime cref makes the wrap module the
+            // definee for top-level `def`s, with *private* default
+            // visibility (matching top-level defs on Object — CRuby's
+            // load-wrap defs become private instance methods of the
+            // module).
+            self.push_wrap_class_context(wrap.id());
         }
         self.loading_paths.push(path.to_path_buf());
-        let res = self.exec_script(globals, file_body, path);
+        let res = self.exec_script_with_wrap(globals, file_body, path, wrap);
         self.loading_paths.pop();
         self.exit_class_context();
 
@@ -1088,6 +1148,18 @@ impl Executor {
             .last_mut()
             .unwrap()
             .push(Cref::new(class_id, false, Visibility::Public));
+    }
+
+    /// Like [`Self::push_class_context`], but with *private* default
+    /// visibility: the cref for a wrapped load (`Kernel#load(path,
+    /// wrap)`), whose top-level `def`s become private instance methods
+    /// of the wrap module — the same default a top-level `def` gets on
+    /// `Object`.
+    pub(crate) fn push_wrap_class_context(&mut self, class_id: ClassId) {
+        self.lexical_class
+            .last_mut()
+            .unwrap()
+            .push(Cref::new(class_id, false, Visibility::Private));
     }
 
     /// Runtime-only push used by `class_eval` / `module_eval` /
