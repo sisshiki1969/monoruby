@@ -121,6 +121,24 @@ impl Codegen {
         }
     }
 
+    /// Inlined `Integer#[nth]` (single-bit extraction) for a constant,
+    /// non-negative `nth`. Operand `2n+1` in Rdi (x4), result `2*bit+1`.
+    /// aarch64 twin of x86 `gen_bit_index_imm`: bit `nth` of `n` is bit
+    /// `nth + 1` of the tagged operand, so an arithmetic shift by `nth`
+    /// lands it in bit 1 — where the fixnum tag wants it. `nth >= 63`
+    /// clamps to 63 (sign replication), the correct answer for the bits
+    /// past the top of a 63-bit fixnum.
+    pub(crate) fn gen_bit_index_imm(&mut self, nth: u8) {
+        let rdi = GP::Rdi.a64().0; // x4
+        monoasm_arm64!(&mut self.jit,
+            asr x(rdi), x(rdi), #(nth.min(63) as u32);
+            mov x9, #(2);
+            and x(rdi), x(rdi), x9;
+            mov x9, #(1);
+            orr x(rdi), x(rdi), x9;
+        );
+    }
+
     /// Inlined `Integer#<<` by a constant shift amount, with a fixnum-overflow
     /// guard that deopts. Operand `2n+1` in Rdi (x4). aarch64 twin of x86
     /// `gen_shl_rhs_imm`. x86 uses `lzcnt` for the overflow test; monoasm has

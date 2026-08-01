@@ -128,7 +128,15 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "reverse", reverse, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reverse!", reverse_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "transpose", transpose, 0);
-    globals.define_builtin_func_with(ARRAY_CLASS, "rotate!", rotate_, 0, 1, false);
+    globals.define_builtin_inline_func_with(
+        ARRAY_CLASS,
+        "rotate!",
+        rotate_,
+        inline_gen2!(array_rotate_),
+        0,
+        1,
+        false,
+    );
     globals.define_builtin_func_with(ARRAY_CLASS, "rotate", rotate, 0, 1, false);
     globals.define_builtin_func_rest(ARRAY_CLASS, "product", product);
 
@@ -930,10 +938,72 @@ fn array_shl(
         dst, args, recv, ..
     } = *callsite;
     state.load(ir, recv, GP::Rdi);
+    // `emit_array_shl`'s inline store bypasses `Array::push`, which never
+    // checked frozen-ness itself — a frozen receiver has to leave JIT code
+    // so the interpreter can raise `FrozenError`.
+    let deopt = ir.new_deopt(state);
+    ir.guard_frozen(deopt);
     state.load(ir, args, GP::Rsi);
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| r#gen.emit_array_shl(ary_shl as *const () as u64));
+    ir.fpr_restore(using_fpr);
+    state.def_reg2acc_class(ir, GP::Rax, dst, recv_class);
+    true
+}
+
+///
+/// `Array#rotate!` with the count already narrowed to an `i64` — the body
+/// `rotate_` runs once its argument handling is done. Called directly from
+/// JIT code, which has proven the receiver is an unfrozen `Array` and the
+/// count a Fixnum, so none of `rotate_`'s coercion / frozen / arity work is
+/// needed.
+///
+extern "C" fn ary_rotate_(mut ary: Array, count: i64) -> Value {
+    let ary_len = ary.len() as i64;
+    if ary_len != 0 {
+        if count > 0 {
+            ary.rotate_left(wrap_rotate_count(count, ary_len));
+        } else {
+            ary.rotate_right(wrap_rotate_count(count, ary_len));
+        }
+    }
+    ary.into()
+}
+
+fn array_rotate_(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: ClassId,
+    arg_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num > 1 {
+        return false;
+    }
+    // `arg_class` is only fed for 1-positional-argument sites, which is
+    // exactly the form we narrow; the 0-argument form rotates by 1.
+    let has_arg = callsite.pos_num == 1;
+    if has_arg && arg_class != Some(INTEGER_CLASS) {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+    state.load(ir, recv, GP::Rdi);
+    let deopt = ir.new_deopt(state);
+    ir.guard_frozen(deopt);
+    if has_arg {
+        state.load_fixnum(ir, args, GP::Rsi);
+    }
+    let using_fpr = state.get_using_fpr(ir);
+    ir.fpr_save(using_fpr);
+    ir.inline(move |r#gen, _, _, _| {
+        r#gen.emit_array_rotate_(ary_rotate_ as *const () as u64, has_arg)
+    });
     ir.fpr_restore(using_fpr);
     state.def_reg2acc_class(ir, GP::Rax, dst, recv_class);
     true
@@ -1294,15 +1364,139 @@ fn array_index_assign(
     idx_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
-    if !callsite.is_simple() || callsite.pos_num != 2 || idx_class != Some(INTEGER_CLASS) {
+    if !callsite.is_simple() {
         return false;
     }
+    match callsite.pos_num {
+        2 => {
+            if idx_class != Some(INTEGER_CLASS) {
+                return false;
+            }
+            let CallSiteInfo {
+                recv, args, dst, ..
+            } = *callsite;
+            assert!(dst.is_none());
+            state.array_integer_index_assign(ir, store, args + 1usize, recv, args);
+            true
+        }
+        3 => array_slice_assign(state, ir, store, callid),
+        _ => false,
+    }
+}
+
+///
+/// JIT-inline the *slice* form `ary[start, len] = other`.
+///
+/// The generic `index_assign` path costs two `coerce_to_int_i64`s, a
+/// `#to_ary` probe and `ArrayInner::set_index2`'s full resize/`copy_within`
+/// dance. But the overwhelmingly common shape — the one emulator inner loops
+/// write, e.g. `@bg_pixels[@scroll_xfine, 8] = @bg_pattern_lut[…]` — replaces
+/// a run with an equally long one *inside* the array, which is a plain copy:
+/// nothing moves, nothing resizes, no element is dropped or added.
+///
+/// So the inline path takes `len` from a compile-time literal and checks the
+/// rest at run time (`other` is an `Array`, `other.len() == len`,
+/// `0 <= start` and `start + len <= self.len()`), copying `len` values when
+/// they all hold. Anything else — a growing/shrinking splice, a negative
+/// index, a non-Array right-hand side — falls into `set_array_slice`, which
+/// reproduces the builtin exactly.
+///
+fn array_slice_assign(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    store: &Store,
+    callid: CallSiteId,
+) -> bool {
+    /// Beyond this the unrolled copy stops paying for the call it replaces.
+    const MAX_INLINE_SLICE: i64 = 8;
+    let callsite = &store[callid];
     let CallSiteInfo {
         recv, args, dst, ..
     } = *callsite;
     assert!(dst.is_none());
-    state.array_integer_index_assign(ir, store, args + 1usize, recv, args);
+    let start = args;
+    let count = args + 1usize;
+    let src = args + 2usize;
+    // `idx_class` is only fed for 1-positional-argument sites, so gate on the
+    // abstract state directly. The weak predicate is deliberate: the common
+    // `ary[ivar, 8] = …` reads its start straight out of an instance variable,
+    // which the state has not narrowed to Fixnum, and `load_fixnum`'s own
+    // guard covers it. Only a slot *proven* to hold something else (a Float,
+    // a Range) is refused, since that guard would deopt every time.
+    if !state.may_be_fixnum(start) {
+        return false;
+    }
+    // `len` must be a literal: it is what the copy is unrolled by.
+    let Some(len) = state.is_fixnum_literal(count) else {
+        return false;
+    };
+    let len = len.get();
+    if !(0..=MAX_INLINE_SLICE).contains(&len) {
+        return false;
+    }
+    let len = len as usize;
+
+    state.load(ir, recv, GP::Rdi);
+    let deopt = ir.new_deopt(state);
+    ir.guard_frozen(deopt);
+    state.load_fixnum(ir, start, GP::Rsi);
+    state.load(ir, src, GP::Rdx);
+    let using_fpr = state.get_using_fpr(ir);
+    let error = ir.new_error(state);
+    ir.fpr_save(using_fpr);
+    ir.inline(move |r#gen, _, _, _| {
+        r#gen.emit_array_slice_assign(set_array_slice as *const () as u64, len)
+    });
+    ir.fpr_restore(using_fpr);
+    ir.handle_error(error);
     true
+}
+
+///
+/// The out-of-line half of `array_slice_assign`: `ary[start, len] = val` with
+/// the full builtin semantics. Mirrors the 3-argument branch of
+/// [`index_assign`]; the receiver's class and unfrozen-ness are already
+/// guarded by the JIT, but everything else (index normalization, the negative
+/// length error, `#to_ary`) still has to happen here.
+///
+extern "C" fn set_array_slice(
+    base: Value,
+    start: i64,
+    len: i64,
+    val: Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Option<Value> {
+    fn inner(
+        base: Value,
+        mut start: i64,
+        len: i64,
+        val: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Value> {
+        let mut ary = base.as_array();
+        if len < 0 {
+            return Err(MonorubyErr::indexerr(format!("negative length ({})", len)));
+        }
+        if start < 0 {
+            start += ary.len() as i64;
+            if start < 0 {
+                return Err(MonorubyErr::index_too_small(start - ary.len() as i64, 0));
+            }
+        }
+        let val = if val.try_array_ty().is_some() {
+            val
+        } else if let Some(fid) = globals.check_method(val, IdentId::TO_ARY) {
+            vm.invoke_func_inner(globals, fid, val, &[], None, None)?
+        } else {
+            val
+        };
+        ary.set_index2(start as usize, len as usize, val)
+    }
+    inner(base, start, len, val, vm, globals)
+        .map_err(|err| vm.set_error(err))
+        .ok()
 }
 
 ///
@@ -3400,13 +3594,36 @@ fn rotate_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let ary_len = ary.len() as i64;
     if ary_len == 0 {
     } else if i > 0 {
-        let i = i % ary_len;
-        ary.rotate_left(i as usize);
+        ary.rotate_left(wrap_rotate_count(i, ary_len));
     } else {
-        let i = (-i) % ary_len;
-        ary.rotate_right(i as usize);
+        // `-i` can overflow for `i == i64::MIN`; wrap first, then negate the
+        // (in-range) remainder.
+        ary.rotate_right(wrap_rotate_count(i, ary_len));
     };
     Ok(lfp.self_val())
+}
+
+///
+/// `|cnt| % ary_len` for a rotation count, skipping the division when `cnt`
+/// is already in range.
+///
+/// A hardware `div` costs tens of cycles and dominated `Array#rotate!` in
+/// profiles, yet the overwhelmingly common rotation is by less than the
+/// array's own length (`ary.rotate!(8)` on a 16-element array), where the
+/// remainder is `|cnt|` itself.
+///
+fn wrap_rotate_count(cnt: i64, ary_len: i64) -> usize {
+    debug_assert!(ary_len > 0);
+    if cnt >= 0 {
+        if cnt < ary_len { cnt } else { cnt % ary_len }
+    } else {
+        // `cnt % ary_len` is `-(|cnt| % ary_len)` in Rust (truncating), so
+        // negating the remainder gives `|cnt| % ary_len` without ever
+        // evaluating `-cnt` (which overflows at `i64::MIN`).
+        if cnt > -ary_len { -cnt } else { -(cnt % ary_len) }
+    }
+    .try_into()
+    .expect("wrapped rotation count is in 0..ary_len")
 }
 
 ///
@@ -3426,11 +3643,9 @@ fn rotate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let ary_len = ary.len() as i64;
     if ary_len == 0 {
     } else if i > 0 {
-        let i = i % ary_len;
-        ary.rotate_left(i as usize);
+        ary.rotate_left(wrap_rotate_count(i, ary_len));
     } else {
-        let i = (-i) % ary_len;
-        ary.rotate_right(i as usize);
+        ary.rotate_right(wrap_rotate_count(i, ary_len));
     };
     Ok(ary.into())
 }

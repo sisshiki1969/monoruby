@@ -1064,6 +1064,21 @@ impl SlotState {
         b
     }
 
+    ///
+    /// True when *slot* is not *proven* to hold a non-Integer — i.e. a Fixnum
+    /// guard on it may plausibly succeed.
+    ///
+    /// The stricter [`Self::is_fixnum`] is the right gate for folds that must
+    /// be free; this one is for inline paths that emit a guard anyway and only
+    /// want to avoid the pathological case of guarding a slot the abstract
+    /// state already knows is (say) a Float or a Range, where the guard would
+    /// deopt on every execution. A slot the state simply hasn't narrowed
+    /// (`Guarded::Value` — e.g. a value just read out of an ivar) passes.
+    ///
+    pub fn may_be_fixnum(&self, slot: SlotId) -> bool {
+        !matches!(self.guarded(slot).class(), Some(class) if class != INTEGER_CLASS)
+    }
+
     pub fn is_float(&self, slot: SlotId) -> bool {
         let b = self.guarded(slot) == Guarded::Float;
         match self.mode(slot) {

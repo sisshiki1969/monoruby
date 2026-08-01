@@ -283,11 +283,203 @@ impl Codegen {
         );
     }
 
-    /// Inlined `Array#<<`: `ary_shl(recv, arg)`. recv (Rdi/x4) -> arg0,
-    /// arg (Rsi/x3) -> arg1. Result Value in Rax (x0).
+    /// `Array#[]=` slice form, `recv[start, len] = val`. aarch64 twin of x86
+    /// `emit_array_slice_assign`; see there for which shape is inlined and
+    /// why. Cold blocks stay on this page (aarch64 b/b.cond cannot reach
+    /// monoasm's second page).
+    ///
+    /// ### in
+    /// - Rdi (x4): receiver: Array (class- and frozen-guarded)
+    /// - Rsi (x3): start: Fixnum (tagged)
+    /// - Rdx (x2): val: Value
+    ///
+    /// ### out
+    /// - Rax (x0): non-null on success (the caller's `handle_error` checks it)
+    ///
+    pub(crate) fn emit_array_slice_assign(&mut self, f: u64, len: usize) {
+        let rdi = GP::Rdi.a64().0; // x4  receiver
+        let rsi = GP::Rsi.a64().0; // x3  start
+        let rdx = GP::Rdx.a64().0; // x2  val
+        let slow = self.jit.label();
+        let src_heap = self.jit.label();
+        let src_ready = self.jit.label();
+        let dst_heap = self.jit.label();
+        let dst_ready = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            asr x(rsi), x(rsi), #(1u32);       // untag start
+            tbnz x(rsi), #(63), slow;          // negative: let the callee wrap it
+            // A self-assignment would copy a buffer over itself; hand it to
+            // the callee, which snapshots the source first.
+            cmp x(rdi), x(rdx);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &slow);
+        monoasm_arm64!(&mut self.jit,
+            // `val` must be an Array...
+            mov x9, (0b111);
+            and x9, x(rdx), x9;
+            cbnz x9, slow;
+            ldrb w9, [x(rdx), #(RVALUE_OFFSET_TY as u32)];
+            cmp x9, #(ObjTy::ARRAY.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &slow);
+        monoasm_arm64!(&mut self.jit,
+            // ...of exactly `len` elements. x11 <- its data.
+            ldr x9, [x(rdx), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            cmp x9, #(ARRAY_INLINE_CAPA as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &src_heap);
+        monoasm_arm64!(&mut self.jit,
+            cmp x9, #(len as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &slow);
+        monoasm_arm64!(&mut self.jit,
+            add x11, x(rdx), #(RVALUE_OFFSET_INLINE as u32);
+        );
+        self.jit.bind_label(src_ready.clone());
+        monoasm_arm64!(&mut self.jit,
+            // x9 <- the receiver's length, x12 <- its data.
+            ldr x9, [x(rdi), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            cmp x9, #(ARRAY_INLINE_CAPA as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &dst_heap);
+        monoasm_arm64!(&mut self.jit,
+            add x12, x(rdi), #(RVALUE_OFFSET_INLINE as u32);
+        );
+        self.jit.bind_label(dst_ready.clone());
+        monoasm_arm64!(&mut self.jit,
+            // The replaced run must lie inside the receiver.
+            add x10, x(rsi), #(len as u32);
+            cmp x10, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &slow);
+        monoasm_arm64!(&mut self.jit,
+            add x12, x12, x(rsi), lsl #3;      // &recv[start]
+        );
+        for i in 0..len {
+            let disp = (i * 8) as u32;
+            monoasm_arm64!(&mut self.jit,
+                ldr x9, [x11, #(disp)];
+                str x9, [x12, #(disp)];
+            );
+        }
+        // Several children stored at once: remember the receiver wholesale.
+        self.emit_write_barrier_bulk(GP::Rdi);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdx);                    // `[]=` evaluates to the value
+            b exit;
+        );
+        self.jit.bind_label(src_heap);
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x(rdx), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x10, #(len as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &slow);
+        monoasm_arm64!(&mut self.jit,
+            ldr x11, [x(rdx), #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            b src_ready;
+        );
+        self.jit.bind_label(dst_heap);
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x(rdi), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            ldr x12, [x(rdi), #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            b dst_ready;
+        );
+        self.jit.bind_label(slow);
+        // set_array_slice(base, start, len, val, vm, globals). Source regs at
+        // entry: base=x4, start=x3, val=x2. Reorder into the C ABI args
+        // without clobbering a still-needed source.
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdi);       // base  -> arg0  (x4 free after this)
+            mov x1, x(rsi);       // start -> arg1  (x3 free after this)
+            mov x3, x(rdx);       // val   -> arg3  (x2 free after this)
+            mov x2, (len as u64); // len   -> arg2
+            mov x4, x19;          // vm      -> arg4
+            mov x5, x20;          // globals -> arg5
+            mov x9, (f);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.jit.bind_label(exit);
+    }
+
+    /// `Array#rotate!`: `ary_rotate_(recv, count)`. recv (Rdi/x4) -> arg0;
+    /// the count arrives tagged in Rsi (x3) — or is the implicit `1` — and
+    /// the callee takes a plain `i64`. Result Value in Rax (x0).
+    pub(crate) fn emit_array_rotate_(&mut self, f: u64, has_arg: bool) {
+        let rdi = GP::Rdi.a64().0; // x4
+        let rsi = GP::Rsi.a64().0; // x3
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdi);       // recv -> arg0
+        );
+        if has_arg {
+            monoasm_arm64!(&mut self.jit, asr x1, x(rsi), #(1u32););
+        } else {
+            monoasm_arm64!(&mut self.jit, mov x1, #(1););
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (f);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+    }
+
+    /// `Array#<<` — append, with the no-grow case emitted inline. aarch64
+    /// twin of x86 `emit_array_shl`; see there for why the receiver's
+    /// `SmallVec` residency decides which pair of fields holds the length.
+    /// Cold blocks are laid out inline rather than on page 1 (aarch64
+    /// b/b.cond cannot reach it — see `array_index`).
+    ///
+    /// ### in
+    /// - Rdi (x4): receiver: Array
+    /// - Rsi (x3): value: Value
+    ///
+    /// ### out
+    /// - Rax (x0): receiver: Array (`<<` returns self)
+    ///
     pub(crate) fn emit_array_shl(&mut self, f: u64) {
         let rdi = GP::Rdi.a64().0; // x4
         let rsi = GP::Rsi.a64().0; // x3
+        let heap = self.jit.label();
+        let grow = self.jit.label();
+        let stored = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x(rdi), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            cmp x0, #(ARRAY_INLINE_CAPA as u32);
+            b.gt heap;
+            // Inline buffer: x0 is the length, ARRAY_INLINE_CAPA the capacity.
+            b.eq grow;
+            add x9, x(rdi), x0, lsl #3;
+            str x(rsi), [x9, #(RVALUE_OFFSET_INLINE as u32)];
+            add x0, x0, #(1);
+            str x0, [x(rdi), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            b stored;
+        );
+        self.jit.bind_label(heap);
+        monoasm_arm64!(&mut self.jit,
+            // Spilled buffer: x0 is the capacity, the length lives beside
+            // the pointer.
+            ldr x10, [x(rdi), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x10, x0;
+            b.ge grow;
+            ldr x11, [x(rdi), #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            add x9, x11, x10, lsl #3;
+            str x(rsi), [x9];
+            add x10, x10, #(1);
+            str x10, [x(rdi), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+        );
+        self.jit.bind_label(stored);
+        // Write barrier: x4 (Rdi) = the array (parent), x3 (Rsi) = appended value.
+        self.emit_write_barrier(GP::Rdi, GP::Rsi);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rdi);
+            b exit;
+        );
+        self.jit.bind_label(grow);
+        // Buffer full: let `ary_shl` reallocate (and run its own barrier).
         monoasm_arm64!(&mut self.jit,
             mov x0, x(rdi);       // recv -> arg0
             mov x1, x(rsi);       // arg  -> arg1
@@ -296,6 +488,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.jit.bind_label(exit);
     }
 
     /// `Integer#succ` / `#next`: fixnum in Rdi (x4); tagged `+1` is `+2` on the

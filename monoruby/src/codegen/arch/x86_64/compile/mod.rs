@@ -2012,6 +2012,9 @@ impl Codegen {
         } else {
             0
         };
+        // The fast path (when emitted) falls through to the runtime call
+        // below on `slow`, and jumps past it on success.
+        let fast = self.expand_array_fast_path(dst, len, rest_pos);
         self.fpr_save(using_fpr);
         // `src` is already in rdx (loaded by the caller). Args:
         // rdi = &mut Executor, rsi = &mut Globals, rdx = src, rcx = &dst,
@@ -2026,7 +2029,87 @@ impl Codegen {
             call rax;
         );
         self.fpr_restore(using_fpr);
+        if let Some(exit) = fast {
+            self.jit.bind_label(exit);
+        }
         true
+    }
+
+    ///
+    /// The no-`#to_ary`, no-rest fast path of `AsmInst::ExpandArray`: when
+    /// `src` (rdx) is already an `Array` holding at least `len` elements,
+    /// destructuring is just `len` moves onto the destination slots — no
+    /// `respond_to?`/`#to_ary` dispatch, no nil padding, nothing that can
+    /// raise. Everything else jumps to `slow` (the full `runtime::expand_array`
+    /// call, which re-derives its own view of `src`).
+    ///
+    /// Returns the `exit` label the caller must bind after the runtime call
+    /// (which doubles as the fall-through `slow` target), or `None` when no
+    /// fast path was emitted and the runtime call stands alone as before.
+    ///
+    /// A `rest_pos` site (`a, *b = …`) allocates the rest `Array`, so it stays
+    /// on the runtime path, as do wide destructurings whose unrolled copy
+    /// would outweigh the call it replaces.
+    ///
+    fn expand_array_fast_path(
+        &mut self,
+        dst: SlotId,
+        len: usize,
+        rest_pos: Option<usize>,
+    ) -> Option<DestLabel> {
+        const MAX_INLINE_EXPAND: usize = 8;
+        if rest_pos.is_some() || len == 0 || len > MAX_INLINE_EXPAND {
+            return None;
+        }
+        let heap = self.jit.label();
+        let copy = self.jit.label();
+        let slow = self.jit.label();
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            testq rdx, 0b111;                                   // immediate?
+            jnz  slow;
+            cmpw [rdx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            jne  slow;
+            movq rax, [rdx + (RVALUE_OFFSET_ARY_CAPA)];
+            cmpq rax, (ARRAY_INLINE_CAPA);
+            jgt  heap;
+            // Inline buffer: rax is the length, the elements follow in place.
+            cmpq rax, (len);
+            jlt  slow;
+            lea  rcx, [rdx + (RVALUE_OFFSET_INLINE)];
+        copy:
+        }
+        // `dst` descends: slot `dst.0 + i` sits `i * 8` below `&dst`.
+        for i in 0..len {
+            let src_disp = (i * 8) as i32;
+            let dst_disp = rbp_local(dst) + (i * 8) as i32;
+            monoasm! { &mut self.jit,
+                movq rax, [rcx + (src_disp)];
+                movq [rbp - (dst_disp)], rax;
+            }
+        }
+        monoasm! { &mut self.jit,
+            // Non-null rax: `expand_array` signals errors with a null return,
+            // and the caller's `handle_error` checks it.
+            movq rax, 1;
+            jmp  exit;
+        }
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        heap:
+            // Spilled buffer: rax is the capacity, the length lives beside
+            // the pointer.
+            movq rcx, [rdx + (RVALUE_OFFSET_HEAP_LEN)];
+            cmpq rcx, (len);
+            jlt  slow;
+            movq rcx, [rdx + (RVALUE_OFFSET_HEAP_PTR)];
+            jmp  copy;
+        }
+        self.jit.select_page(0);
+        // The runtime call the caller emits next *is* the slow path.
+        self.jit.bind_label(slow);
+        Some(exit)
     }
 
     // ---- method definition (the former per-arch arms, verbatim) ----

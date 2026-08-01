@@ -692,6 +692,24 @@ impl Codegen {
     }
 
     ///
+    /// Inlined `Integer#[nth]` (single-bit extraction) for a constant,
+    /// non-negative `nth`. Operand `2n+1` in rdi, result `2*bit+1` in rdi.
+    ///
+    /// Bit `nth` of `n` sits at bit `nth + 1` of the tagged `2n+1`, so an
+    /// arithmetic shift by `nth` lands it in bit 1 — exactly where the
+    /// fixnum tagging wants it. `nth >= 63` is clamped to 63, which
+    /// replicates the sign bit and gives the correct answer for the
+    /// out-of-range bits of a 63-bit fixnum.
+    ///
+    pub(crate) fn gen_bit_index_imm(&mut self, nth: u8) {
+        monoasm! { &mut self.jit,
+            sarq rdi, (nth.min(63));
+            andq rdi, 2;
+            orq  rdi, 1;
+        }
+    }
+
+    ///
     /// gen code for shift-left of integer.
     ///
     /// ### in
