@@ -385,6 +385,12 @@ impl ProcData {
         self.func_id
     }
 
+    /// The frame this proc closes over — its LEP once resolved with
+    /// `Lfp::mfp`. `None` for procs with no captured environment.
+    pub(crate) fn outer(&self) -> Option<Lfp> {
+        self.outer
+    }
+
     pub(crate) fn from_proc(proc: &ProcInner) -> Self {
         Self {
             outer: proc.outer_lfp(),

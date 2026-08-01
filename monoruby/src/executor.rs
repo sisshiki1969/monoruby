@@ -162,6 +162,33 @@ pub struct Executor {
     /// actually borrows from this Value's buffer, so a stale stash can
     /// never mis-attribute a haystack — it only falls back to copying.
     sp_match_haystack: Option<Value>,
+    /// The LEP this execution context treats as *its own* svar scope
+    /// (CRuby's `ec->root_lep`).
+    ///
+    /// A green thread / fiber body runs a block whose LEP belongs to
+    /// the frame that *created* it — resolving `$~` / `$_` through
+    /// that LEP would share the spawner's container and leak matches
+    /// in both directions. CRuby sidesteps this by recording the
+    /// started proc's LEP here and, whenever an svar lookup lands on
+    /// exactly that LEP, using the context-owned [`root_svar`] instead
+    /// of the frame slot. Inner method frames are unaffected: they own
+    /// their own LEP, so they keep resolving frame-locally.
+    ///
+    /// `None` for the main thread (everything resolves frame-locally,
+    /// which is already correct as no other context shares its
+    /// frames) and for fibers that must stay *shared* with their
+    /// creator — see `FiberInner::svar_isolated` for why the
+    /// enumerator internals rely on that.
+    ///
+    /// [`root_svar`]: Self::root_svar
+    root_lep: Option<Lfp>,
+    /// The svar container (`[$~, $_]` Array) owned by this execution
+    /// context, used in place of the frame slot when a lookup resolves
+    /// to [`root_lep`]. Lazily created on first write, exactly like
+    /// the per-frame containers.
+    ///
+    /// [`root_lep`]: Self::root_lep
+    root_svar: Option<Value>,
     /// Stack of `break` barriers: the CFP at each synchronous
     /// thread-body invocation (`Thread#__invoke_body`). A `break`
     /// escaping a block must not resolve its defining frame *across*
@@ -265,6 +292,8 @@ impl std::default::Default for Executor {
             toplevel_visibility: Visibility::Private,
             sp_match_regex: None,
             sp_match_haystack: None,
+            root_lep: None,
+            root_svar: None,
             break_barriers: Vec::new(),
             temp_stack: vec![],
             method_missing_style: MethodMissingStyle::Plain,
@@ -337,6 +366,12 @@ impl alloc::GC<RValue> for Executor {
             v.mark(alloc);
         }
         if let Some(v) = self.sp_match_haystack {
+            v.mark(alloc);
+        }
+        // The context-owned `$~`/`$_` container (see `root_lep`): held
+        // only here, so it needs marking or a thread's / fiber's
+        // special variables would be collected while it is parked.
+        if let Some(v) = self.root_svar {
             v.mark(alloc);
         }
         // Deferred `MethodReturn` / `Throw` carry packed Values (return
@@ -3502,27 +3537,66 @@ impl Executor {
         Some(cfp.lfp().mfp())
     }
 
-    /// Read the svar container Array on the current MFP, if one has
-    /// been allocated. The slot starts as the zero sentinel (`None`)
-    /// and is lazily filled with a 2-element Array `[$~, $_]` the
-    /// first time either special variable is written.
-    fn svar_container(&self) -> Option<Value> {
-        self.current_mfp()?.svar()
+    /// Whether an svar lookup resolving to `mfp` must use this
+    /// context's own container instead of the frame slot — i.e. `mfp`
+    /// is the LEP the thread / fiber was started on. See
+    /// [`root_lep`](Self::root_lep).
+    fn is_root_svar_scope(&self, mfp: Lfp) -> bool {
+        self.root_lep == Some(mfp)
     }
 
-    /// Get the svar container on the current MFP, allocating a fresh
-    /// `[nil, nil]` Array (and storing it in `LFP_SVAR`) if absent.
-    /// Returns `None` only outside Ruby execution (no MFP).
+    /// Read the svar container for `mfp`: this context's own container
+    /// when `mfp` is the root LEP, otherwise the frame's `LFP_SVAR`
+    /// slot. `None` when nothing has been allocated yet — the slot
+    /// starts as the zero sentinel and is lazily filled with a
+    /// 2-element Array `[$~, $_]` on the first write.
+    fn svar_container_of(&self, mfp: Lfp) -> Option<Value> {
+        if self.is_root_svar_scope(mfp) {
+            self.root_svar
+        } else {
+            mfp.svar()
+        }
+    }
+
+    /// [`svar_container_of`](Self::svar_container_of), allocating a
+    /// fresh `[nil, nil]` container into the right home if absent.
+    fn svar_container_of_create(&mut self, mfp: Lfp) -> Value {
+        if let Some(v) = self.svar_container_of(mfp) {
+            return v;
+        }
+        let arr = Value::array2(Value::nil(), Value::nil());
+        if self.is_root_svar_scope(mfp) {
+            self.root_svar = Some(arr);
+        } else {
+            mfp.set_svar_slot_value(arr);
+        }
+        arr
+    }
+
+    /// Read the svar container Array for the current MFP, if one has
+    /// been allocated.
+    fn svar_container(&self) -> Option<Value> {
+        self.svar_container_of(self.current_mfp()?)
+    }
+
+    /// Get the svar container for the current MFP, allocating one if
+    /// absent. Returns `None` only outside Ruby execution (no MFP).
     fn svar_container_create(&mut self) -> Option<Value> {
         let mfp = self.current_mfp()?;
-        match mfp.svar() {
-            Some(v) => Some(v),
-            None => {
-                let arr = Value::array2(Value::nil(), Value::nil());
-                mfp.set_svar_slot_value(arr);
-                Some(arr)
-            }
-        }
+        Some(self.svar_container_of_create(mfp))
+    }
+
+    /// Enter a new *root* svar scope: the body about to run on this
+    /// (thread / fiber) context owns its `$~` / `$_` rather than
+    /// sharing the container of the frame that created the block.
+    ///
+    /// `lep` is the started proc's outer frame; passing `None` (or an
+    /// outer-less proc) leaves the context resolving frame-locally,
+    /// which is what the enumerator-internal fibers need in order to
+    /// keep sharing with their creator, as they do in CRuby.
+    pub(crate) fn enter_root_svar_scope(&mut self, lep: Option<Lfp>) {
+        self.root_lep = lep.map(|o| o.mfp());
+        self.root_svar = None;
     }
 
     /// Read the MatchData `Value` (`$~`) from the current MFP's svar
@@ -3685,14 +3759,7 @@ impl Executor {
             cfp = prev;
         }
         let mfp = cfp.lfp().mfp();
-        let c = match mfp.svar() {
-            Some(v) => v,
-            None => {
-                let arr = Value::array2(Value::nil(), Value::nil());
-                mfp.set_svar_slot_value(arr);
-                arr
-            }
-        };
+        let c = self.svar_container_of_create(mfp);
         c.as_array()[SVAR_LASTLINE] = val;
     }
 

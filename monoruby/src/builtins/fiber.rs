@@ -717,6 +717,47 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn fiber_svar_scope() {
+        // A `Fiber.new` body owns its `$~` / `$1`, like a thread body:
+        // nothing leaks in on entry, nothing leaks back on yield.
+        run_test(
+            r#"
+            "foo" =~ /(o+)/
+            r = []
+            f = Fiber.new do
+              r << ["initial", $1]
+              "zzz" =~ /(z+)/
+              r << ["after-match", $1]
+              Fiber.yield
+            end
+            f.resume
+            r << ["creator-after-resume", $1]
+            r
+            "#,
+        );
+        // Enumerator external iteration must NOT isolate: CRuby drives
+        // it with a C-function fiber (root_lep = NULL), so a match
+        // inside the block *is* visible to the caller after `next`.
+        run_test(
+            r#"
+            "foo" =~ /(o+)/
+            e = Enumerator.new { |y| "bb" =~ /(b+)/; y << 1; "cc" =~ /(c+)/; y << 2 }
+            a = (e.next; $1)
+            b = (e.next; $1)
+            [a, b]
+            "#,
+        );
+        // ... and neither does the plain block form (no fiber at all).
+        run_test(
+            r#"
+            "foo" =~ /(o+)/
+            Enumerator.new { |y| "dd" =~ /(d+)/; y << 1 }.each { }
+            $1
+            "#,
+        );
+    }
+
+    #[test]
     fn fiber_yield_multi_arg() {
         // `Fiber.yield(a, b, ...)` with >=2 args exercises the inlined
         // `emit_fiber_yield_value_array` (builds the yielded array from the

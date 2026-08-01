@@ -744,6 +744,50 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn thread_svar_scope_is_per_thread() {
+        // A thread body owns its `$~` / `$1` / `$_`: the spawner's
+        // values don't leak in, and the body's don't leak back out
+        // (CRuby gives the new context its own root svar container).
+        run_test(
+            r#"
+            "foo" =~ /(o+)/
+            r = []
+            t = Thread.new do
+              r << ["initial", $~.to_a, $1]
+              "bar" =~ /(a)/
+              r << ["after-match", $~.to_a, $1]
+              [1].each { "zzz" =~ /(z+)/ }
+              r << ["after-nested-block", $1]
+              r << ["in-method", (def __h; "q" =~ /(q)/; $1; end; __h)]
+              r << ["after-method-call", $1]
+            end
+            t.join
+            r << ["spawner-after-join", $~.to_a, $1]
+            r
+            "#,
+        );
+        // `$_` is scoped the same way (same container, index 1).
+        run_test(
+            r#"
+            $_ = "main"
+            t = Thread.new { $_ = "child"; $_ }
+            v = t.value
+            [v, $_]
+            "#,
+        );
+        // Two threads started from the *same* proc still get separate
+        // containers.
+        run_test(
+            r#"
+            body = proc { "x#{Thread.current[:n]}" =~ /(x\d)/; $1 }
+            a = Thread.new { Thread.current[:n] = 1; body.call }
+            b = Thread.new { Thread.current[:n] = 2; body.call }
+            [a.value, b.value].sort
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_new_join_value() {
         run_test(r#"Thread.new { 42 }.value"#);
         run_test(
