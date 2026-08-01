@@ -153,55 +153,43 @@ fn next_values(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/each.html]
 #[monoruby_builtin]
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    fn each_inner(
-        vm: &mut Executor,
-        globals: &mut Globals,
-        mut internal: Fiber,
-        block_data: &ProcData,
-        self_val: Enumerator,
-    ) -> Result<Value> {
-        let mut res = Value::nil();
-        loop {
-            let v = internal.enum_yield_values(vm, globals, self_val, res)?;
-            if internal.is_terminated() {
-                return Ok(v);
-            }
-            let a = v.as_array();
-            // A zero-arg yield must invoke the block with no arguments —
-            // `peel()` on an empty args array would fabricate a nil.
-            res = if a.len() == 0 {
-                vm.invoke_block(globals, block_data, &[])?
-            } else {
-                vm.invoke_block(globals, block_data, &[a.peel()])?
-            };
-        }
-    }
     let self_val: Enumerator = match Enumerator::try_new(lfp.self_val()) {
         Some(e) => e,
         None => {
             return Err(MonorubyErr::typeerr("not an Enumerator"));
         }
     };
-    let data = if let Some(bh) = lfp.block() {
-        vm.get_block_data(globals, bh)?
-    } else {
+    let Some(bh) = lfp.block() else {
         return Ok(self_val.into());
     };
+
+    // Internal iteration: re-invoke the source method with the caller's
+    // own block, exactly as CRuby's `enumerator_block_call` does
+    // (`rb_block_call_kw(e->obj, e->meth, ...)`). Only external
+    // iteration (`#next` / `#peek`) needs to suspend the producer, and
+    // that is the one place a fiber is created — see `Enumerator::next`.
+    // Driving one here too would run the source on a separate stack,
+    // detaching it from the caller's backtrace and `ensure` unwinding.
 
     // Record the user block's arity so a predicate-consuming method
     // driven through its no-block enumerator (e.g. `Set#divide`, which
     // only receives the internal yielder proc as its block) can pick
     // the right mode from the real arity.
-    let blk_arity = data
+    let blk_arity = vm
+        .get_block_data(globals, bh)?
         .func_id()
         .map(|fid| globals[fid].arity())
         .unwrap_or(-1);
-    let internal = Fiber::from(self_val.proc);
-    vm.temp_push(internal.into());
     globals.push_enum_block_arity(blk_arity);
-    let res = each_inner(vm, globals, internal, &data, self_val);
+    let res = vm.invoke_method_inner(
+        globals,
+        self_val.method,
+        self_val.obj,
+        &self_val.args,
+        Some(bh),
+        self_val.kw_args,
+    );
     globals.pop_enum_block_arity();
-    vm.temp_pop();
     res
 }
 
@@ -376,11 +364,16 @@ fn rewind(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 #[monoruby_builtin]
 fn yielder_push(
     vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    vm.yield_fiber(Value::array1(lfp.arg(0)))
+    // `<<` takes exactly one value, so it always yields exactly one.
+    let self_val = lfp.self_val();
+    yielder_call(vm, globals, self_val, &[lfp.arg(0)])?;
+    // CRuby's `yielder_yield_push` returns the yielder so `y << 1 << 2`
+    // chains; the consumer block's value is only surfaced by `#yield`.
+    Ok(self_val)
 }
 
 ///
@@ -392,11 +385,35 @@ fn yielder_push(
 #[monoruby_builtin]
 fn yielder_yield(
     vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    vm.yield_fiber(lfp.arg(0))
+    // `yield` is rest-args and forwards them verbatim: `Enumerator#each`
+    // reproduces the source yield exactly, it does not pack.
+    //   `y.yield`      -> block called with no args
+    //   `y.yield 1, 2` -> block called with two args
+    // Packing into a single value (`rb_enum_values_pack`) is the job of
+    // the `Enumerable` methods that consume the yield, not of the
+    // yielder — see monoruby/builtins/enumerable.rb.
+    let args: Array = lfp.arg(0).as_array();
+    let args: Vec<Value> = args.iter().copied().collect();
+    yielder_call(vm, globals, lfp.self_val(), &args)
+}
+
+/// Hand `args` to the block of the `Generator#each` call this yielder
+/// belongs to. The index parked in the yielder's ivar selects the
+/// right block when generators are nested.
+fn yielder_call(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    yielder: Value,
+    args: &[Value],
+) -> Result<Value> {
+    let data = vm
+        .enum_yielder_block(yielder)
+        .ok_or_else(|| MonorubyErr::runtimeerr("yielder used outside its Generator#each"))?;
+    vm.invoke_block(globals, &data, args)
 }
 
 ///
@@ -429,31 +446,27 @@ fn generator_each(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    fn each_inner(
-        vm: &mut Executor,
-        globals: &mut Globals,
-        mut internal: Fiber,
-        block_data: &ProcData,
-    ) -> Result<Value> {
-        let yielder = Value::yielder_object();
-        loop {
-            let v = internal.generator_yield_values(vm, globals, yielder)?;
-            if internal.is_terminated() {
-                return Ok(v);
-            }
-            let a: Array = v.as_array();
-            vm.invoke_block(globals, block_data, &[a.peel()])?;
-        }
-    }
     let self_val = Generator::new(lfp.self_val());
+    // Run the generator body *directly* on the caller's stack, handing
+    // it a Yielder bound to this call's block — the same shape as
+    // CRuby's `generator_each` (`rb_proc_call` + `yielder_new`).
+    // Suspending the body is only needed for external iteration
+    // (`#next` / `#peek`), and that fiber is created by the enumerator,
+    // one level up; driving one here as well would nest a second fiber
+    // under every `#each`, cut the generator body off from the caller's
+    // backtrace and `ensure` handling, and cost two extra context
+    // switches per element.
     let data = vm.get_block_data(globals, lfp.expect_block()?)?;
-    let internal = self_val.create_internal();
-    vm.temp_push(internal.into());
-    let res = each_inner(vm, globals, internal, &data);
+    let yielder = Value::yielder_object();
+    vm.temp_push(yielder);
+    vm.push_enum_yielder_block(yielder, data);
+    let body = ProcData::from_proc(&self_val.body());
+    let res = vm.invoke_block(globals, &body, &[yielder]);
     vm.temp_pop();
-
+    vm.pop_enum_yielder_block();
     res
 }
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -469,6 +482,87 @@ mod tests {
             end
             [a.next, a.peek, a.peek, a.next, a.peek, a.next]
             "##,
+        );
+    }
+
+    #[test]
+    fn generator_each_runs_on_the_callers_stack() {
+        // `#each` must not push the generator body onto a fiber: it has
+        // to see the caller's frames and unwind through them.
+        // `ensure` in the body runs when the consumer block raises.
+        run_test(
+            r#"
+            log = []
+            begin
+              Enumerator.new { |y| begin; y << 1; ensure; log << :ensured; end }
+                        .each { |v| raise "boom" }
+            rescue => e
+              log << e.message
+            end
+            log
+            "#,
+        );
+        // The body is part of the caller's backtrace.
+        run_test(r#"Enumerator.new { |y| y << caller.empty? }.first"#);
+        // A body that yields the current fiber sees the caller's, so
+        // `Fiber.yield` is an error exactly as in CRuby (it used to hit
+        // the enumerator's private fiber and abort the process).
+        run_test(
+            r#"
+            begin
+              Enumerator.new { |y| Fiber.yield; y << 1 }.each { }
+            rescue FiberError => e
+              e.class.to_s
+            end
+            "#,
+        );
+        // `break` / exception propagation out of the consumer block.
+        run_test(r#"Enumerator.new { |y| y << 1; y << 2 }.each { |v| break v * 10 }"#);
+        run_test(
+            r#"(Enumerator.new { |y| raise "gen" }.each { }) rescue $!.message"#,
+        );
+    }
+
+    #[test]
+    fn generator_value_packing_and_yielder_returns() {
+        // `Enumerator#each` reproduces the source yield verbatim; the
+        // packing into one value is Enumerable's job.
+        run_test(r#"r = []; Enumerator.new { |y| y.yield }.each { |*a| r << a }; r"#);
+        run_test(r#"r = []; Enumerator.new { |y| y.yield :v }.each { |*a| r << a }; r"#);
+        run_test(r#"r = []; Enumerator.new { |y| y.yield 1, 2 }.each { |*a| r << a }; r"#);
+        run_test(r#"Enumerator.new { |y| y.yield }.each { |a| a }.nil?"#);
+        // rb_enum_values_pack, as seen through Enumerable consumers.
+        run_test(
+            r#"[Enumerator.new { |y| y.yield },
+                Enumerator.new { |y| y.yield :v },
+                Enumerator.new { |y| y.yield 1, 2 }].map { |e|
+                  a = nil; e.reject { false }.each { |*x| a = x }; a
+                }"#,
+        );
+        run_test(
+            r#"[Enumerator.new { |y| y.yield },
+                Enumerator.new { |y| y.yield 1, 2 }].map { |e| e.take_while { true } }"#,
+        );
+        // `#yield` returns the consumer block's value; `<<` returns the
+        // yielder so it chains.
+        run_test(r#"r = []; Enumerator.new { |y| r << y.yield(1) }.each { |v| :from_block }; r"#);
+        run_test(r#"Enumerator.new { |y| y << 1 << 2 }.to_a"#);
+        // Nested generators resolve to their own yielder.
+        run_test(
+            r#"Enumerator.new { |y|
+                 Enumerator.new { |z| z << [:inner, 9] }.each { |v| y << v }
+                 y << :outer
+               }.to_a"#,
+        );
+        // Struct#each_pair picks its yield shape from the block arity,
+        // which is what makes the enumerator form pack correctly.
+        run_test(
+            r#"S = Struct.new(:a, :b)
+               s = S.new(1, 2)
+               r = []
+               s.each_pair { |k, v| r << [k, v] }
+               s.each_pair { |x| r << x }
+               [r, s.each_pair.map { |v| v }, s.each_pair.to_a]"#,
         );
     }
 

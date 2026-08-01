@@ -120,7 +120,7 @@ module Enumerable
     return to_enum(:each_with_index, *args) { respond_to?(:size) ? size : nil } unless block_given?
     i = 0
     each(*args) do |*xs|
-      yield(xs.size == 1 ? xs[0] : xs, i)
+      yield(xs.empty? ? nil : xs.size == 1 ? xs[0] : xs, i)
       i += 1
     end
     self
@@ -215,7 +215,7 @@ module Enumerable
     res = []
     each do |*xs|
       break unless yield(*xs)
-      res << (xs.size == 1 ? xs[0] : xs)
+      res << (xs.empty? ? nil : xs.size == 1 ? xs[0] : xs)
     end
     res
   end
@@ -670,7 +670,10 @@ module Enumerable
   def to_a(*args)
     res = []
     self.each(*args) do |*ys|
-      res << (ys.size == 1 ? ys[0] : ys)
+      res << (ys.empty? ? nil : ys.size == 1 ? ys[0] : ys)
+      # CRuby's internal `collect_all` returns nil; a Generator source
+      # observes this as the value of `y.yield`.
+      nil
     end
     res
   end
@@ -684,7 +687,7 @@ module Enumerable
   def to_h(*args, &blk)
     h = {}
     self.each(*args) do |*xs|
-      x = xs.size == 1 ? xs[0] : xs
+      x = xs.empty? ? nil : xs.size == 1 ? xs[0] : xs
       pair = blk ? blk.call(*xs) : x
       unless pair.is_a?(Array)
         pair = pair.to_ary if pair.respond_to?(:to_ary)
@@ -926,7 +929,7 @@ module Enumerable
   def each_entry(*args)
     return to_enum(:each_entry, *args) { respond_to?(:size) ? size : nil } unless block_given?
     self.each(*args) do |*x|
-      yield(x.size == 1 ? x[0] : x)
+      yield(x.empty? ? nil : x.size == 1 ? x[0] : x)
     end
     self
   end
@@ -949,7 +952,7 @@ module Enumerable
       return to_enum(:cycle) { sz = respond_to?(:size) ? size : nil; sz.nil? ? nil : (sz == 0 ? 0 : Float::INFINITY) } unless block_given?
       cache = []
       each do |*xs|
-        x = xs.size == 1 ? xs[0] : xs
+        x = xs.empty? ? nil : xs.size == 1 ? xs[0] : xs
         cache << x
         yield x
       end
@@ -971,7 +974,7 @@ module Enumerable
       cache = []
       # First pass collects and yields simultaneously so `break` stops early.
       each do |*xs|
-        x = xs.size == 1 ? xs[0] : xs
+        x = xs.empty? ? nil : xs.size == 1 ? xs[0] : xs
         cache << x
         yield x
       end

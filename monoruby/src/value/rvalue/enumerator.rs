@@ -170,6 +170,11 @@ impl Generator {
         assert_eq!(val.ty(), Some(ObjTy::GENERATOR));
         Self(val)
     }
+
+    /// The generator body (the block `Enumerator.new` was given).
+    pub(crate) fn body(&self) -> Proc {
+        self.proc
+    }
 }
 
 #[derive(Debug)]
