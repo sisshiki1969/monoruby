@@ -1229,7 +1229,14 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
             let proc_data = ProcData::from_proc(inner.proc().unwrap());
             let args = inner.args();
             let (ptr, len) = (args.as_ptr(), args.len());
-            Entry::Invoke(proc_data, ptr, len, inner.handle() as *mut Executor)
+            // The body block's LEP belongs to the frame that spawned
+            // this thread; without claiming it as *this* context's
+            // root svar scope, `$~` / `$_` would be shared with the
+            // spawner in both directions (CRuby: `ec->root_lep`).
+            let root_lep = proc_data.outer();
+            let handle = inner.handle();
+            handle.enter_root_svar_scope(root_lep);
+            Entry::Invoke(proc_data, ptr, len, handle as *mut Executor)
         } else {
             inner.state = ThreadState::Runnable;
             let exec = inner.resume_exec.take().unwrap().as_ptr();

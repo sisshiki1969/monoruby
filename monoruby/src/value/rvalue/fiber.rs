@@ -9,8 +9,13 @@ impl Fiber {
         Self(val)
     }
 
+    /// A fiber driving enumerator external iteration. It deliberately
+    /// keeps sharing its creator's `$~` / `$_` — see
+    /// `FiberInner::svar_isolated`.
     pub(crate) fn from(proc: Proc) -> Self {
-        Fiber(Value::new_fiber(FiberInner::new(proc, 0, None)))
+        Fiber(Value::new_fiber(FiberInner::with_svar_isolation(
+            proc, 0, None, false,
+        )))
     }
 }
 
@@ -34,6 +39,19 @@ pub struct FiberInner {
     /// enumerator-internal fibers). Explicit Fiber API calls from another
     /// thread raise FiberError.
     owner_thread: u64,
+    /// Whether the body gets its own `$~` / `$_` scope instead of
+    /// sharing the container of the frame that created the block.
+    ///
+    /// `true` for `Fiber.new` (CRuby starts such a fiber with
+    /// `ec->root_lep` set to the proc's LEP, so matches inside it stay
+    /// inside). `false` for the enumerator-internal fibers: CRuby
+    /// drives external iteration with a *C-function* fiber, whose
+    /// `rb_vm_proc_local_ep` is NULL, so its svar lookups fall back to
+    /// the frame slot and a match inside an `Enumerator.new { ... }`
+    /// block *is* observable by the caller after `next`. monoruby
+    /// wraps the user's Ruby proc directly, so it has to opt out here
+    /// to keep that behaviour.
+    svar_isolated: bool,
 }
 
 const FIBER_STACK_SIZE: usize = 1024 * 256;
@@ -72,6 +90,17 @@ impl FiberInner {
         owner_thread: u64,
         thread_root: Option<std::ptr::NonNull<Executor>>,
     ) -> Self {
+        Self::with_svar_isolation(proc, owner_thread, thread_root, true)
+    }
+
+    /// [`new`](Self::new) with an explicit choice of svar scoping; see
+    /// [`svar_isolated`](Self::svar_isolated).
+    pub(crate) fn with_svar_isolation(
+        proc: Proc,
+        owner_thread: u64,
+        thread_root: Option<std::ptr::NonNull<Executor>>,
+        svar_isolated: bool,
+    ) -> Self {
         let mut vm = Executor::default();
         if let Some(root) = thread_root {
             vm.set_thread_root(root);
@@ -82,6 +111,7 @@ impl FiberInner {
             proc: Some(proc),
             stack: None,
             owner_thread,
+            svar_isolated,
         }
     }
 
@@ -92,6 +122,9 @@ impl FiberInner {
             proc: None,
             stack: None,
             owner_thread,
+            // A root fiber *is* its thread's root context; the thread
+            // entry already established the scope.
+            svar_isolated: false,
         }
     }
 
@@ -463,12 +496,17 @@ impl Fiber {
         resume_style: bool,
     ) -> Option<Value> {
         let proc = ProcData::from_proc(self.proc.as_ref().unwrap());
+        // A `Fiber.new` body owns its special variables (CRuby sets
+        // `ec->root_lep` to the proc's LEP when the fiber starts);
+        // enumerator-internal fibers opt out and stay shared.
+        let root_lep = if self.svar_isolated { proc.outer() } else { None };
         let invoker = match (self_val.is_some(), resume_style) {
             (true, _) => globals.invokers.fiber_with_self,
             (false, true) => globals.invokers.fiber,
             (false, false) => globals.invokers.fiber_transfer,
         };
         let handle = self.executor_mut();
+        handle.enter_root_svar_scope(root_lep);
         invoker(
             vm,
             globals,
