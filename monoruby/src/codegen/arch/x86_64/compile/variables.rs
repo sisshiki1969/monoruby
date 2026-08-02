@@ -222,6 +222,32 @@ impl Codegen {
         skip:
         }
     }
+
+    ///
+    /// The bulk variant of [`Self::emit_write_barrier_rdi`], for an inline
+    /// store that wrote *several* children (an array slice copy). Checking
+    /// each one is not worth it, so an armed parent is remembered regardless
+    /// of what was stored — the same safe over-approximation
+    /// `RValue::write_barrier_bulk` makes. Parent in rdi.
+    ///
+    pub(super) fn emit_write_barrier_bulk_rdi(&mut self) {
+        let skip = self.jit.label();
+        monoasm! { &mut self.jit,
+            testb [rdi + (RVALUE_OFFSET_FLAG as i32)], 0x40;
+            jz   skip;
+        }
+        self.save_registers();
+        monoasm! { &mut self.jit,
+            movq [rsp + 176], rax;          // save rax (save_registers skips it)
+            movq rax, (jit_write_barrier);
+            call rax;
+            movq rax, [rsp + 176];
+        }
+        self.restore_registers();
+        monoasm! { &mut self.jit,
+        skip:
+        }
+    }
 }
 
 impl Codegen {

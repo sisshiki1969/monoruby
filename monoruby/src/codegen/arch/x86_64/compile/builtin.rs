@@ -131,8 +131,173 @@ impl Codegen {
         }
     }
 
-    /// `Array#<<`: `ary_shl(recv, arg)`. recv in rdi, arg in rsi → rax.
+    /// `Array#<<` — append, with the no-grow case emitted inline.
+    ///
+    /// The receiver's class *and* its unfrozen-ness are already guarded by
+    /// the caller, so the only thing separating an append from a store is
+    /// spare capacity. `ArrayInner` is a `SmallVec<[Value; 5]>`, whose
+    /// `capacity` field doubles as the length while the buffer is still
+    /// inline (`capacity <= ARRAY_INLINE_CAPA` ⇔ not spilled), so both
+    /// residencies get a two-load / one-store fast path. Only a full
+    /// buffer — one append in `capacity` of them, amortized — falls
+    /// through to `ary_shl` to reallocate.
+    ///
+    /// ### in
+    /// - rdi: receiver: Array
+    /// - rsi: value: Value
+    ///
+    /// ### out
+    /// - rax: receiver: Array (`<<` returns self)
+    ///
     pub(crate) fn emit_array_shl(&mut self, f: u64) {
+        let heap = self.jit.label();
+        let grow = self.jit.label();
+        let stored = self.jit.label();
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+            cmpq rax, (ARRAY_INLINE_CAPA);
+            jgt  heap;
+            // Inline buffer: rax is the length, ARRAY_INLINE_CAPA the capacity.
+            // The `cmpq` above already set the flags for the full-buffer test.
+            jeq  grow;
+            movq [rdi + rax * 8 + (RVALUE_OFFSET_INLINE)], rsi;
+            addq [rdi + (RVALUE_OFFSET_ARY_CAPA)], 1;
+        stored:
+        }
+        // Write barrier: rdi = the array (parent), rsi = the appended value.
+        self.emit_write_barrier_rdi(GP::Rsi);
+        monoasm! { &mut self.jit,
+            movq rax, rdi;
+        exit:
+        }
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        heap:
+            // Spilled buffer: rax is the capacity, the length lives beside
+            // the pointer.
+            movq rcx, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            cmpq rcx, rax;
+            jge  grow;
+            movq rdx, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+            movq [rdx + rcx * 8], rsi;
+            addq [rdi + (RVALUE_OFFSET_HEAP_LEN)], 1;
+            jmp  stored;
+        grow:
+            // Buffer full: let `ary_shl` reallocate (and run its own barrier).
+            movq rax, (f);
+            call rax;
+            jmp  exit;
+        }
+        self.jit.select_page(0);
+    }
+
+    /// `Array#[]=` slice form, `recv[start, len] = val`, with the
+    /// same-length in-bounds replacement emitted inline.
+    ///
+    /// See `array_slice_assign` for why that shape is worth singling out: it
+    /// neither grows nor shrinks the receiver, so it is a straight copy of
+    /// `len` values. Everything else calls `f` (`set_array_slice`), which
+    /// reproduces the builtin.
+    ///
+    /// ### in
+    /// - rdi: receiver: Array (class- and frozen-guarded)
+    /// - rsi: start: Fixnum (tagged)
+    /// - rdx: val: Value
+    ///
+    /// ### out
+    /// - rax: non-null on success (the caller's `handle_error` checks it)
+    ///
+    pub(crate) fn emit_array_slice_assign(&mut self, f: u64, len: usize) {
+        let slow = self.jit.label();
+        let src_heap = self.jit.label();
+        let src_ready = self.jit.label();
+        let dst_heap = self.jit.label();
+        let dst_ready = self.jit.label();
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            sarq rsi, 1;                 // untag start
+            js   slow;                   // negative start: let the callee wrap it
+            // A self-assignment would copy a buffer over itself; hand it to
+            // the callee, which snapshots the source first.
+            cmpq rdi, rdx;
+            jeq  slow;
+            // `val` must be an Array...
+            testq rdx, 0b111;
+            jnz  slow;
+            cmpw [rdx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            jne  slow;
+            // ...of exactly `len` elements. r8 <- its data.
+            movq rax, [rdx + (RVALUE_OFFSET_ARY_CAPA)];
+            cmpq rax, (ARRAY_INLINE_CAPA);
+            jgt  src_heap;
+            cmpq rax, (len);
+            jne  slow;
+            lea  r8, [rdx + (RVALUE_OFFSET_INLINE)];
+        src_ready:
+            // rax <- the receiver's length, r9 <- its data.
+            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+            cmpq rax, (ARRAY_INLINE_CAPA);
+            jgt  dst_heap;
+            lea  r9, [rdi + (RVALUE_OFFSET_INLINE)];
+        dst_ready:
+            // The replaced run must lie inside the receiver.
+            movq rcx, rsi;
+            addq rcx, (len);
+            cmpq rcx, rax;
+            jgt  slow;
+        }
+        for i in 0..len {
+            let disp = (i * 8) as i32;
+            monoasm! { &mut self.jit,
+                movq rax, [r8 + (disp)];
+                movq [r9 + rsi * 8 + (disp)], rax;
+            }
+        }
+        // Several children stored at once: remember the receiver wholesale.
+        self.emit_write_barrier_bulk_rdi();
+        monoasm! { &mut self.jit,
+            movq rax, rdx;               // `[]=` evaluates to the assigned value
+            jmp  exit;
+        }
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        src_heap:
+            movq rcx, [rdx + (RVALUE_OFFSET_HEAP_LEN)];
+            cmpq rcx, (len);
+            jne  slow;
+            movq r8, [rdx + (RVALUE_OFFSET_HEAP_PTR)];
+            jmp  src_ready;
+        dst_heap:
+            movq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            movq r9, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+            jmp  dst_ready;
+        slow:
+            // set_array_slice(base, start, len, val, vm, globals).
+            // rdi = base and rsi = start are already in place.
+            movq rcx, rdx;               // val  -> arg3
+            movq rdx, (len);             // len  -> arg2
+            movq r8, rbx;                // vm
+            movq r9, r12;                // globals
+            movq rax, (f);
+            call rax;
+            jmp  exit;
+        }
+        self.jit.select_page(0);
+        self.jit.bind_label(exit);
+    }
+
+    /// `Array#rotate!`: `ary_rotate_(recv, count)`. recv in rdi; the count
+    /// arrives tagged in rsi (or is the implicit `1`), and the callee takes a
+    /// plain `i64`. → rax.
+    pub(crate) fn emit_array_rotate_(&mut self, f: u64, has_arg: bool) {
+        if has_arg {
+            monoasm! { &mut self.jit, sarq rsi, 1; }
+        } else {
+            monoasm! { &mut self.jit, movq rsi, 1; }
+        }
         monoasm! { &mut self.jit,
             movq rax, (f);
             call rax;

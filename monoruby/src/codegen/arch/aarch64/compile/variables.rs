@@ -167,9 +167,36 @@ impl Codegen {
             and x9, x(c), x9;
             cbnz x9, skip;             // immediate child -> skip
         );
-        // Slow path: save the caller-saved regs the JIT may have live, pass the
-        // parent in the C-ABI arg0 (x0), and call. `x(p)` is untouched by the
-        // saves, so it still holds the parent when read into x0.
+        self.a64_write_barrier_call(p);
+        self.jit.bind_label(skip);
+    }
+
+    ///
+    /// The bulk variant of [`Self::emit_write_barrier`], for an inline store
+    /// that wrote *several* children (an array slice copy). Checking each one
+    /// is not worth it, so an armed parent is remembered regardless of what
+    /// was stored — the same safe over-approximation
+    /// `RValue::write_barrier_bulk` makes. aarch64 twin of x86
+    /// `emit_write_barrier_bulk_rdi`.
+    ///
+    pub(in crate::codegen::jitgen) fn emit_write_barrier_bulk(&mut self, parent: GP) {
+        let skip = self.jit.label();
+        let p = parent.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            ldrb w9, [x(p), #(RVALUE_OFFSET_FLAG as u32)];
+            tbz x9, #(6), skip;        // WB_ARMED clear -> skip
+        );
+        self.a64_write_barrier_call(p);
+        self.jit.bind_label(skip);
+    }
+
+    ///
+    /// The write barrier's out-of-line half: save the caller-saved regs the
+    /// JIT may have live, pass the parent in the C-ABI arg0 (x0), and call.
+    /// `x(p)` is untouched by the saves, so it still holds the parent when
+    /// read into x0.
+    ///
+    fn a64_write_barrier_call(&mut self, p: u32) {
         let f = jit_write_barrier as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             sub sp, sp, #(144);
@@ -214,7 +241,6 @@ impl Codegen {
             ldr x0, [sp, #(0)];
             add sp, sp, #(144);
         );
-        self.jit.bind_label(skip);
     }
 
     /// Store `src` into a heap-spilled instance variable of the object in rdi

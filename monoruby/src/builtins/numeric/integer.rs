@@ -52,7 +52,15 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(INTEGER_CLASS, "<", lt, 1);
     globals.define_basic_op(INTEGER_CLASS, "!=", ne, 1);
     globals.define_builtin_func(INTEGER_CLASS, "<=>", cmp, 1);
-    globals.define_builtin_func_with(INTEGER_CLASS, "[]", index, 1, 2, false);
+    globals.define_builtin_inline_func_with(
+        INTEGER_CLASS,
+        "[]",
+        index,
+        inline_gen2!(integer_index),
+        1,
+        2,
+        false,
+    );
     globals.define_builtin_func(INTEGER_CLASS, "even?", even_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_, 0);
     globals.define_builtin_func(INTEGER_CLASS, "nonzero?", nonzero_, 0);
@@ -1336,6 +1344,60 @@ fn integer_bitxor(
 }
 
 ///
+/// JIT-inline `Integer#[nth]`, the single-bit-extraction form, when `nth`
+/// is a compile-time fixnum literal. The receiver's `INTEGER_CLASS` guard
+/// has already proven Fixnum, so the whole method collapses to a
+/// shift/and/or triple (see `gen_bit_index_imm`) instead of a call into
+/// `index`, which pays a `Value::unpack` and a `coerce_to_int_i64` per bit.
+///
+/// Only the literal-`nth` shape is inlined: emulator-style bit tests
+/// (`data[7]`, `@_a[6]`) are overwhelmingly constant-indexed, and a
+/// variable `nth` would need the negative / out-of-range branches inline
+/// for no measured benefit.
+///
+fn integer_index(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    nth_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    // `self[nth, len]` / `self[range]` keep the generic path.
+    if !callsite.is_simple() || callsite.pos_num != 1 || nth_class != Some(INTEGER_CLASS) {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+    let Some(nth) = state.is_fixnum_literal(args) else {
+        return false;
+    };
+    let nth = nth.get();
+
+    // A negative bit position always reads 0.
+    if nth < 0 {
+        state.def_C(dst, Immediate::check_fixnum(0).unwrap());
+        return true;
+    }
+
+    // Both operands concrete: fold.
+    if let Some(base) = state.is_fixnum_literal(recv) {
+        let bit = (base.get() >> nth.min(63)) & 1;
+        state.def_C(dst, Immediate::check_fixnum(bit).unwrap());
+        return true;
+    }
+
+    let nth = nth.min(63) as u8;
+    state.load(ir, recv, GP::Rdi);
+    ir.inline(move |r#gen, _, _, _| r#gen.gen_bit_index_imm(nth));
+    state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    true
+}
+
+///
 /// ### Integer#[]
 ///
 /// self[nth] -> Integer
@@ -2463,6 +2525,39 @@ mod tests {
     #[test]
     fn integer_index_negative() {
         run_tests(&["0b11010[-2, 3]", "0b11010[1, 3]"]);
+    }
+
+    /// `Integer#[nth]` with a literal `nth` is JIT-inlined by `integer_index`
+    /// down to `gen_bit_index_imm`'s shift/and/or triple. Covers the emitted
+    /// form, the two folds (negative `nth`, and a literal receiver as well),
+    /// the `nth >= 63` clamp, and every shape that has to stay on the generic
+    /// `index` builtin — a non-literal `nth`, the `self[nth, len]` form and a
+    /// splat call site. A Bignum receiver fails the call site's
+    /// `INTEGER_CLASS` guard (which the inline path relies on to prove
+    /// Fixnum) and must leave JIT'd code.
+    #[test]
+    fn integer_index_jit_inline() {
+        run_test(
+            r##"
+        def bits(n) = [n[0], n[1], n[5], n[62], n[63], n[64], n[100], n[-1], n[-70]]
+        # Both operands literal: folded away at compile time.
+        def folded = [0b1011010[0], 0b1011010[1], 0b1011010[3], (-1)[70], (-8)[2], 5[-1]]
+        # `nth` is not a literal -> the generic `Integer#[]`.
+        def var(n, i) = n[i]
+        # `self[nth, len]` is a different form -> generic too.
+        def two(n) = n[1, 3]
+        # A splat call site is not `simple`.
+        def splat(n, a) = n[*a]
+        50.times { bits(0); folded; var(0, 1); two(0); splat(0, [1]) }
+        res = []
+        [0, 1, -1, 255, -256, 4611686018427387903, -4611686018427387904,
+         2 ** 100, -(2 ** 100)].each do |n|
+          res << bits(n) << var(n, 3) << two(n) << splat(n, [4])
+        end
+        res << folded
+        res
+        "##,
+        );
     }
 
     #[test]

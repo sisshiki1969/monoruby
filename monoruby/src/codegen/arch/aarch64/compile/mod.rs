@@ -2206,6 +2206,9 @@ impl Codegen {
         let lfp = GP::R14.a64().0; // x22
         let off = dst.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::expand_array as *const () as u64;
+        // The fast path (when emitted) falls through to the runtime call
+        // below on `slow`, and jumps past it on success.
+        let fast = self.expand_array_fast_path(off, len, rest_pos);
         self.emit_fpr_save(using_fpr, false);
         // x2 already holds `src` (GP::Rdx). Fill the remaining C-args.
         // x19 = EXEC (&mut Executor), x20 = GLOBALS (&mut Globals).
@@ -2223,7 +2226,88 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
+        if let Some(exit) = fast {
+            self.jit.bind_label(exit);
+        }
         true
+    }
+
+    ///
+    /// aarch64 twin of the x86 `expand_array_fast_path`: when `src` (x2) is
+    /// already an `Array` holding at least `len` elements, destructuring is
+    /// just `len` moves onto the destination slots. `off` is the byte
+    /// displacement of `dst` below the LFP; slot `dst.0 + i` sits a further
+    /// `i * 8` below. Cold blocks stay on this page (aarch64 b/b.cond cannot
+    /// reach monoasm's second page).
+    ///
+    /// Returns the `exit` label the caller must bind after the runtime call
+    /// (which doubles as the fall-through `slow` target), or `None` when no
+    /// fast path was emitted.
+    ///
+    fn expand_array_fast_path(
+        &mut self,
+        off: u32,
+        len: usize,
+        rest_pos: Option<usize>,
+    ) -> Option<DestLabel> {
+        const MAX_INLINE_EXPAND: usize = 8;
+        if rest_pos.is_some() || len == 0 || len > MAX_INLINE_EXPAND {
+            return None;
+        }
+        let src = GP::Rdx.a64().0; // x2
+        let lfp = GP::R14.a64().0; // x22
+        let heap = self.jit.label();
+        let copy = self.jit.label();
+        let slow = self.jit.label();
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (0b111);
+            and x9, x(src), x9;
+            cbnz x9, slow;                                  // immediate -> slow
+            ldrb w9, [x(src), #(RVALUE_OFFSET_TY as u32)];
+            cmp x9, #(ObjTy::ARRAY.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &slow);
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x(src), #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            cmp x9, #(ARRAY_INLINE_CAPA as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &heap);
+        // Inline buffer: x9 is the length, the elements follow in place.
+        monoasm_arm64!(&mut self.jit,
+            cmp x9, #(len as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &slow);
+        monoasm_arm64!(&mut self.jit,
+            add x11, x(src), #(RVALUE_OFFSET_INLINE as u32);
+        );
+        self.jit.bind_label(copy.clone());
+        for i in 0..len {
+            let src_disp = (i * 8) as u32;
+            monoasm_arm64!(&mut self.jit, ldr x9, [x11, #(src_disp)];);
+            self.a64_frame_store(9, lfp, off + (i * 8) as u32);
+        }
+        monoasm_arm64!(&mut self.jit,
+            // Non-null x0: `expand_array` signals errors with a null return,
+            // and the caller's `handle_error` checks it.
+            mov x0, #(1);
+            b exit;
+        );
+        self.jit.bind_label(heap);
+        // Spilled buffer: x9 is the capacity, the length lives beside the
+        // pointer.
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x(src), #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x10, #(len as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &slow);
+        monoasm_arm64!(&mut self.jit,
+            ldr x11, [x(src), #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            b copy;
+        );
+        // The runtime call the caller emits next *is* the slow path.
+        self.jit.bind_label(slow);
+        Some(exit)
     }
 
     // ---- exception / non-local control flow -------------------------------
