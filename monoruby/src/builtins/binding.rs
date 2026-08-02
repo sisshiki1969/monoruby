@@ -17,6 +17,19 @@ pub(super) fn init(globals: &mut Globals) {
         1,
     );
     globals.define_builtin_func(BINDING_CLASS, "local_variable_get", local_variable_get, 1);
+    globals.define_builtin_func(BINDING_CLASS, "implicit_parameters", implicit_parameters, 0);
+    globals.define_builtin_func(
+        BINDING_CLASS,
+        "implicit_parameter_defined?",
+        implicit_parameter_defined,
+        1,
+    );
+    globals.define_builtin_func(
+        BINDING_CLASS,
+        "implicit_parameter_get",
+        implicit_parameter_get,
+        1,
+    );
     globals.define_builtin_funcs_with_effect(
         BINDING_CLASS,
         "local_variable_set",
@@ -263,6 +276,152 @@ fn local_variable_set(
     Ok(val)
 }
 
+///
+/// ### Binding#implicit_parameters
+///
+/// - implicit_parameters -> [Symbol]
+///
+/// The implicit block parameters of the scope this binding captured:
+/// `[:it]`, `[:_1, .., :_N]` up to the highest numbered parameter that
+/// scope references, or `[]`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Binding/i/implicit_parameters.html]
+#[monoruby_builtin]
+fn implicit_parameters(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let names = implicit_params_of(globals, self_val.as_binding_inner());
+    Ok(Value::array_from_iter(names.into_iter().map(Value::symbol)))
+}
+
+///
+/// ### Binding#implicit_parameter_defined?
+///
+/// - implicit_parameter_defined?(symbol) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Binding/i/implicit_parameter_defined=3f.html]
+#[monoruby_builtin]
+fn implicit_parameter_defined(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let name = arg_to_implicit_name(arg, vm, globals)?;
+    if !is_implicit_param_name(name) {
+        return Err(MonorubyErr::nameerr_with_name(
+            format!("'{name}' is not an implicit parameter"),
+            name,
+        ));
+    }
+    let self_val = lfp.self_val();
+    let defined = implicit_params_of(globals, self_val.as_binding_inner()).contains(&name);
+    Ok(Value::bool(defined))
+}
+
+///
+/// ### Binding#implicit_parameter_get
+///
+/// - implicit_parameter_get(symbol) -> object
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Binding/i/implicit_parameter_get.html]
+#[monoruby_builtin]
+fn implicit_parameter_get(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let name = arg_to_implicit_name(arg, vm, globals)?;
+    if !is_implicit_param_name(name) {
+        return Err(MonorubyErr::nameerr_with_name(
+            format!("'{name}' is not an implicit parameter"),
+            name,
+        ));
+    }
+    let self_val = lfp.self_val();
+    let inner = self_val.as_binding_inner();
+    if implicit_params_of(globals, inner).contains(&name) {
+        // An implicit parameter occupies an ordinary local slot of the
+        // scope that declares it, so the plain lookup finds it — and the
+        // membership test above is what keeps a parent scope's parameter
+        // (which the same lookup would walk out to) from answering here.
+        if let Some((host, slot)) = lookup_local_in_binding(globals, inner, name) {
+            return Ok(host.register(slot).unwrap_or_default());
+        }
+    }
+    Err(MonorubyErr::nameerr_with_name(
+        format!(
+            "implicit parameter '{}' is not defined for {}",
+            name,
+            self_val.to_s(&globals.store)
+        ),
+        name,
+    ))
+}
+
+/// The implicit block parameters of the scope `inner` was captured in.
+///
+/// Nothing is walked: a parent scope's implicit parameters are not this
+/// scope's, and neither are a nested block's. The answer is a static
+/// property of the block — the parameters exist for the whole scope even
+/// if the reference that created them comes later in it.
+fn implicit_params_of(globals: &Globals, inner: &BindingInner) -> Vec<IdentId> {
+    let Some(iseq_id) = globals.store[inner.outer_fid()].is_iseq() else {
+        return vec![];
+    };
+    let params = &globals.store[iseq_id].args;
+    if params.it_param() {
+        return vec![IdentId::get_id("it")];
+    }
+    // Numbered parameters are synthesized as ordinary leading parameters
+    // named `_1`.., and `_1`.. is reserved syntax, so a parameter can
+    // only carry such a name by being one.
+    let mut out = vec![];
+    for i in 1..=9u32 {
+        let name = IdentId::get_id(&format!("_{i}"));
+        if params.args_names.get(i as usize - 1) != Some(&Some(name)) {
+            break;
+        }
+        out.push(name);
+    }
+    out
+}
+
+/// `it` and `_1`..`_9` are the only names an implicit parameter can have;
+/// anything else is a NameError rather than a plain `false`.
+fn is_implicit_param_name(name: IdentId) -> bool {
+    let s = name.get_name();
+    if s == "it" {
+        return true;
+    }
+    let b = s.as_bytes();
+    b.len() == 2 && b[0] == b'_' && (b'1'..=b'9').contains(&b[1])
+}
+
+/// Coerce an `implicit_parameter_defined?` argument to an interned name.
+/// A Symbol, a String, or anything with `#to_str`; everything else is a
+/// TypeError naming the offending object.
+fn arg_to_implicit_name(arg: Value, vm: &mut Executor, globals: &mut Globals) -> Result<IdentId> {
+    if let Some(sym) = arg.try_symbol() {
+        return Ok(sym);
+    }
+    if arg.is_str().is_some() || globals.check_method(arg, IdentId::get_id("to_str")).is_some() {
+        let s = arg.coerce_to_str(vm, globals)?;
+        return Ok(IdentId::get_id(&s));
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "{} is not a symbol nor a string",
+        arg.inspect(&globals.store)
+    )))
+}
+
 /// Coerce a `local_variable_*` argument to an interned name. Returns
 /// `Ok(None)` when the value parses to something that cannot be a local
 /// variable (e.g. `:$0`, `:@x`, `:Foo`); callers decide whether that
@@ -272,12 +431,10 @@ fn arg_to_local_name(
     vm: &mut Executor,
     globals: &mut Globals,
 ) -> Result<Option<IdentId>> {
-    let name = if let Some(sym) = arg.try_symbol() {
-        sym
-    } else {
-        let s = arg.coerce_to_string(vm, globals)?;
-        IdentId::get_id(&s)
-    };
+    // Same coercion — and the same TypeError — as the implicit-parameter
+    // accessors: CRuby names the offending object rather than reporting a
+    // generic conversion failure.
+    let name = arg_to_implicit_name(arg, vm, globals)?;
     let s = name.get_name();
     if is_valid_local_name(&s) {
         Ok(Some(name))
@@ -786,5 +943,91 @@ mod tests {
         // `_0` and `_10` are ordinary (not numbered) names.
         run_test(r#"binding.local_variable_defined?(:_0)"#);
         run_test(r#"binding.local_variable_defined?(:_10)"#);
+    }
+
+    #[test]
+    fn binding_implicit_parameters() {
+        // The implicit parameters belong to the scope the binding was
+        // captured in — not a parent's, not a nested block's — and they
+        // exist for the whole scope, however late the reference that
+        // created them appears.
+        run_test_once(
+            r##"
+            [
+              binding.implicit_parameters,
+              proc { it; binding.implicit_parameters }.call(:a),
+              proc { _3; binding.implicit_parameters }.call(:a, :b, :c, :d),
+              proc { r = binding.implicit_parameters; a = it; r }.call(:a),
+              proc { foo = it; proc { binding.implicit_parameters }.call }.call(:a),
+              proc { foo = -> { _1 }; binding.implicit_parameters }.call,
+              proc { |x| binding.implicit_parameters }.call(:a),
+            ]
+            "##,
+        );
+    }
+
+    #[test]
+    fn binding_implicit_parameter_defined() {
+        run_test_once(
+            r##"
+            def try; yield; rescue => e; [e.class.to_s, e.message]; end
+            [
+              binding.implicit_parameter_defined?(:it),
+              binding.implicit_parameter_defined?(:_1),
+              proc { it; binding.implicit_parameter_defined?(:it) }.call(:a),
+              proc { _3;
+                [binding.implicit_parameter_defined?(:_1),
+                 binding.implicit_parameter_defined?(:_3),
+                 binding.implicit_parameter_defined?(:_4)]
+              }.call(:a, :b, :c, :d),
+              # a String or anything with #to_str names one too
+              proc { _1; binding.implicit_parameter_defined?("_1") }.call(:a),
+              # a parent's / a nested block's parameters are not this scope's
+              proc { foo = _1; -> { binding.implicit_parameter_defined?(:_1) }.call }.call(:a),
+              proc { foo = -> { it }; binding.implicit_parameter_defined?(:it) }.call,
+              try { binding.implicit_parameter_defined?(:a) },
+              try { binding.implicit_parameter_defined?(1) },
+            ]
+            "##,
+        );
+    }
+
+    #[test]
+    fn binding_implicit_parameter_get() {
+        run_test_once(
+            r##"
+            def try; yield; rescue => e; [e.class.to_s, e.message.split(" for ")[0]]; end
+            [
+              proc { _1; binding.implicit_parameter_get(:_1) }.call(:a),
+              proc { r = binding.implicit_parameter_get(:_1); _1; r }.call(:a),
+              proc { _3;
+                [binding.implicit_parameter_get(:_1),
+                 binding.implicit_parameter_get(:_2),
+                 binding.implicit_parameter_get(:_3)]
+              }.call(:a, :b, :c, :d),
+              proc { it; binding.implicit_parameter_get("it") }.call(:a),
+              try { proc { binding.implicit_parameter_get(:_1) }.call },
+              # defined only in a parent scope: still not defined here
+              try { proc { foo = _1; proc { binding.implicit_parameter_get(:_1) }.call }.call(:a) },
+              try { binding.implicit_parameter_get(:a) },
+              try { binding.implicit_parameter_get(1) },
+            ]
+            "##,
+        );
+    }
+
+    #[test]
+    fn binding_name_argument_type_error() {
+        // A non-Symbol / non-String name names the offending object.
+        run_test_once(
+            r##"
+            def try; yield; rescue => e; [e.class.to_s, e.message]; end
+            [
+              try { binding.local_variable_defined?(1) },
+              try { binding.local_variable_get(1) },
+              try { binding.local_variable_set(1, 2) },
+            ]
+            "##,
+        );
     }
 }
