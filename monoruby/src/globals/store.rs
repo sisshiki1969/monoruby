@@ -364,7 +364,12 @@ impl Store {
     /// Get class name of *ClassId*.
     pub(crate) fn get_class_name(&self, class: ClassId) -> String {
         let class_obj = self.classes[class].get_module();
-        match self.classes[class].get_name() {
+        match self.classes[class].get_name().filter(|_| {
+            // An ancestor erased by `set_temporary_name(nil)` makes the
+            // whole subtree anonymous again, so fall through to the
+            // `#<Module:0x..>` rendering below.
+            !self.classes.is_name_erased(class)
+        }) {
             Some(name) => {
                 // A name set explicitly via `Module#set_temporary_name`
                 // overrides parent-chain rendering — CRuby returns the

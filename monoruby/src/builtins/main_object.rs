@@ -113,13 +113,7 @@ fn main_private(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 /// via the standard arity check.
 #[monoruby_builtin]
 fn main_using(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let arg = lfp.arg(0);
-    if arg.is_class_or_module().is_none() {
-        return Err(MonorubyErr::typeerr(format!(
-            "wrong argument type {} (expected Module)",
-            arg.get_real_class_name(globals)
-        )));
-    }
+    super::module::expect_refinement_module(globals, lfp.arg(0))?;
     Ok(lfp.self_val())
 }
 

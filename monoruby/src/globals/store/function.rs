@@ -1421,13 +1421,17 @@ impl FuncInfo {
         let req = self.min_positional_args() as i64;
         let has_required_kw = p.required_kw_num() > 0;
         let req_count = req + has_required_kw as i64;
-        // Non-lambda procs/blocks only go negative for an explicit rest
-        // or an optional positional; purely-optional keywords (or
-        // `**kwrest`) are ignored. Lambdas, named methods and
-        // `define_method` additionally fold a no-required-keyword set
-        // into one optional argument (CRuby `Method#arity`).
+        // A non-lambda proc / block goes negative only for an explicit
+        // rest. Optional positionals do not make it variable — the proc
+        // accepts any argument count anyway, so CRuby reports just the
+        // required ones (`proc { |a, b=1| }.arity == 1`, where the
+        // lambda of the same shape reports `-2`) — and purely-optional
+        // keywords (or `**kwrest`) are ignored. Lambdas, named methods
+        // and `define_method` bodies go negative for an optional
+        // positional too, and additionally fold a no-required-keyword
+        // set into one optional argument (CRuby `Method#arity`).
         let variable = if self.is_block_style() {
-            self.opt_num() > 0 || self.is_explicit_rest()
+            self.is_explicit_rest()
         } else {
             self.opt_num() > 0
                 || self.is_explicit_rest()

@@ -2303,12 +2303,21 @@ impl Value {
 
     pub(crate) fn try_symbol_or_string(&self) -> Option<IdentId> {
         if let Some(sym) = self.try_symbol() {
-            Some(sym)
-        } else if let Some(s) = self.is_str() {
-            Some(IdentId::get_id(s))
-        } else {
-            None
+            return Some(sym);
         }
+        if let Some(s) = self.is_str() {
+            return Some(IdentId::get_id(s));
+        }
+        // A String names an identifier by its bytes. `is_str` only
+        // accepts valid UTF-8, so an EUC-JP constant name would fall
+        // through here and be reported as un-nameable; intern the raw
+        // bytes under their encoding instead, exactly as a Symbol
+        // built from the same String would be.
+        let inner = self.is_rstring_inner()?;
+        Some(IdentId::get_id_from_bytes(
+            inner.as_bytes().to_vec(),
+            inner.encoding(),
+        ))
     }
 
     ///

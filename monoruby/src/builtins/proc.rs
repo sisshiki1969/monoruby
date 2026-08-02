@@ -36,6 +36,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(PROC_CLASS, "to_s", &["inspect"], to_s, 0);
     globals.define_builtin_func(PROC_CLASS, "lambda?", lambda_, 0);
     globals.define_builtin_func(PROC_CLASS, "arity", proc_arity, 0);
+    globals.define_builtin_func(PROC_CLASS, "to_proc", to_proc, 0);
     // `==` / `eql?` compare the underlying block; `eql?` is registered as
     // an alias so they share the same FuncId (ruby/spec requires
     // `instance_method(:eql?) == instance_method(:==)`).
@@ -705,6 +706,17 @@ fn proc_arity(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     }
     let func_id = proc.func_id();
     Ok(Value::integer(globals[func_id].arity()))
+}
+
+///
+/// ### Proc#to_proc
+///
+/// - to_proc -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/to_proc.html]
+#[monoruby_builtin]
+fn to_proc(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(lfp.self_val())
 }
 
 #[cfg(test)]

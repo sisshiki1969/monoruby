@@ -245,6 +245,14 @@ pub struct ClassInfo {
     ///
     name_explicit_temporary: bool,
     ///
+    /// True when the name was explicitly erased by
+    /// `Module#set_temporary_name(nil)`. Such a module is not merely
+    /// anonymous: it stops acting as a name prefix, so anything nested
+    /// under it reports `Module#name == nil` rather than falling back to
+    /// the `#<Module:0x..>::Inner` rendering a never-named module gets.
+    ///
+    name_erased: bool,
+    ///
     /// the parent class of this class.
     ///
     parent: Option<ClassId>,
@@ -409,6 +417,7 @@ impl ClassInfo {
             name_value: None,
             name_permanent: false,
             name_explicit_temporary: false,
+            name_erased: false,
             parent: None,
             object: None,
             methods: HashMap::default(),
@@ -431,6 +440,7 @@ impl ClassInfo {
             name_value: None,
             name_permanent: false,
             name_explicit_temporary: false,
+            name_erased: false,
             parent: None,
             object: None,
             methods: HashMap::default(),
@@ -529,6 +539,7 @@ impl ClassInfo {
         self.name_value = None;
         self.name_permanent = true;
         self.name_explicit_temporary = false;
+        self.name_erased = false;
     }
 
     /// Set a non-permanent (temporary) name. Distinguished from
@@ -540,6 +551,7 @@ impl ClassInfo {
         self.name_value = None;
         self.name_permanent = false;
         self.name_explicit_temporary = true;
+        self.name_erased = false;
     }
 
     pub(crate) fn clear_name(&mut self) {
@@ -547,6 +559,11 @@ impl ClassInfo {
         self.name_value = None;
         self.name_permanent = false;
         self.name_explicit_temporary = false;
+        self.name_erased = true;
+    }
+
+    pub(crate) fn is_name_erased(&self) -> bool {
+        self.name_erased
     }
 
     pub(crate) fn is_name_explicit_temporary(&self) -> bool {
@@ -750,6 +767,31 @@ impl ClassInfoTable {
         let mut parts = self.get_parents(class_id);
         parts.reverse();
         parts.join("::")
+    }
+
+    /// Whether *class_id* has no name at all, because some module on its
+    /// lexical parent chain had its name erased by
+    /// `Module#set_temporary_name(nil)`. Nesting under a never-named
+    /// module still yields `#<Module:0x..>::Inner`; nesting under an
+    /// *erased* one yields nothing, and re-naming that ancestor brings
+    /// the whole subtree's names back.
+    pub(crate) fn is_name_erased(&self, class: ClassId) -> bool {
+        if self[class].is_name_erased() {
+            return true;
+        }
+        let mut cur = class;
+        while let Some(parent) = self[cur].parent {
+            if parent == OBJECT_CLASS || self[parent].name.is_some() {
+                // A named ancestor terminates the walk: everything below
+                // it renders through that name.
+                return false;
+            }
+            if self[parent].is_name_erased() {
+                return true;
+            }
+            cur = parent;
+        }
+        false
     }
 
     pub(crate) fn get_parents(&self, mut class: ClassId) -> Vec<String> {
@@ -999,19 +1041,44 @@ impl ClassInfoTable {
         name: IdentId,
     ) -> Option<MethodTableEntry> {
         let mut visi = None;
+        // A `public :inherited_method` declaration is a visibility modifier,
+        // not a definition: CRuby records a ZSUPER entry that re-resolves the
+        // real definition at call time, so redefining the ancestor's method
+        // afterwards is picked up through the subclass too. Remember the
+        // shadow and keep walking; its own `func_id` (a copy taken when the
+        // declaration ran) is only the fallback for when no ancestor defines
+        // the name any more.
+        let mut shadow: Option<&MethodTableEntry> = None;
         loop {
             if !module.has_origin()
                 && let Some(entry) = self[module.id()].methods.get(&name)
             {
-                if entry.func_id.is_some() {
+                if entry.is_visibility_shadow() {
+                    if visi.is_none() {
+                        visi = Some(entry.visibility);
+                    }
+                    if shadow.is_none() {
+                        shadow = Some(entry);
+                    }
+                } else if entry.func_id.is_some() {
                     let visibility = if let Some(visi) = visi {
                         visi
                     } else {
                         entry.visibility
                     };
-                    return Some(MethodTableEntry {
-                        visibility,
-                        ..entry.clone()
+                    return Some(match shadow {
+                        // The shadow owns the entry as far as reflection is
+                        // concerned (`C.instance_method(:m).owner == C`), but
+                        // the body is whatever the ancestor defines *now*.
+                        Some(shadow) => MethodTableEntry {
+                            owner: shadow.owner,
+                            visibility,
+                            ..entry.clone()
+                        },
+                        None => MethodTableEntry {
+                            visibility,
+                            ..entry.clone()
+                        },
                     });
                 } else if entry.visibility == Visibility::Undefined {
                     return None;
@@ -1019,7 +1086,16 @@ impl ClassInfoTable {
                     visi = Some(entry.visibility);
                 }
             }
-            module = module.superclass()?;
+            module = match module.superclass() {
+                Some(module) => module,
+                None => {
+                    let shadow = shadow?;
+                    return Some(MethodTableEntry {
+                        visibility: visi.unwrap_or(shadow.visibility),
+                        ..shadow.clone()
+                    });
+                }
+            };
         }
     }
 

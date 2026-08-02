@@ -224,6 +224,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "protected", protected);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "public", public);
+    globals.define_private_builtin_func(MODULE_CLASS, "using", using, 1);
     // hook methods (no-op by default, overridden by startup.rb)
     globals.define_private_builtin_func(MODULE_CLASS, "method_added", module_noop_hook, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "method_removed", module_noop_hook, 1);
@@ -885,14 +886,26 @@ fn autoload_resolution_candidates(
 /// CRuby raises `NameError` for autoload/const_set when the symbol cannot be
 /// a constant.
 fn validate_constant_name(name: IdentId) -> Result<()> {
-    let s = name.to_string();
-    let mut chars = s.chars();
-    let first = chars.next();
-    let valid = matches!(first, Some(c) if c.is_ascii_uppercase())
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let ident = name.get_ident_name_clone();
+    let valid = match ident.as_str() {
+        Some(s) => is_valid_const_name(s),
+        // A name in a non-UTF-8 encoding (`ConstantSpecs.const_set
+        // "CS_CONSTλ".encode("euc-jp"), 1`) is judged bytewise, as
+        // CRuby's `rb_enc_*` predicates do: it must still start with an
+        // uppercase ASCII letter, and every byte of a multibyte
+        // character (>= 0x80) counts as a name character.
+        None => {
+            let b = ident.as_bytes();
+            matches!(b.first(), Some(c) if c.is_ascii_uppercase())
+                && b[1..]
+                    .iter()
+                    .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c >= 0x80)
+        }
+    };
     if !valid {
         return Err(MonorubyErr::nameerr(format!(
-            "wrong constant name {s}"
+            "wrong constant name {}",
+            ident.to_string_lossy()
         )));
     }
     Ok(())
@@ -1151,37 +1164,37 @@ fn is_valid_const_name(name: &str) -> bool {
     chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
-/// Walk a (possibly scoped) constant path. Coerces *name_arg* to a
-/// Symbol or String (via `#to_str`); a Symbol is treated as a bare
-/// name (a `::`-containing Symbol is a NameError). A String may be
-/// fully-qualified (`"::A::B"` -> start at Object) or relative
-/// (`"A::B"` -> start at *receiver*).
+/// Coerce *name_arg* to a Symbol or String (via `#to_str`) and split it
+/// into the sequence of interned constant names the path denotes. A
+/// Symbol is a bare name (a `::`-containing Symbol is a NameError); a
+/// String may be fully-qualified (`"::A::B"` -> the returned flag asks
+/// the caller to start at Object) or relative (`"A::B"`).
 ///
-/// Each segment is validated by `is_valid_const_name`. Returns
-/// `Ok(Some(v))` on hit, `Ok(None)` if any segment is missing,
-/// or `Err(NameError)` for malformed names.
-fn lookup_constant_path(
+/// Every segment is validated, so the caller only has to walk the chain.
+fn constant_path_segments(
     vm: &mut Executor,
     globals: &mut Globals,
-    receiver: Module,
     name_arg: Value,
-    inherit: bool,
-) -> Result<Option<Value>> {
-    // Coerce to a String we can split, but remember whether the input
-    // was a Symbol (Symbols may not contain `::`).
-    let (path, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
-        (sym.get_name().to_string(), true)
-    } else if let Some(s) = name_arg.is_str() {
-        (s.to_string(), false)
+) -> Result<(bool, Vec<IdentId>)> {
+    let (name, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
+        (sym, true)
+    } else if name_arg.is_rstring().is_some()
+        && let Some(id) = name_arg.try_symbol_or_string()
+    {
+        (id, false)
     } else if let Some(func_id) = globals.check_method(name_arg, IdentId::TO_STR) {
         let result = vm.invoke_func_inner(globals, func_id, name_arg, &[], None, None)?;
-        if let Some(s) = result.is_str() {
-            (s.to_string(), false)
-        } else {
-            return Err(MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into String",
-                name_arg.get_real_class_name(&globals.store)
-            )));
+        match result
+            .is_rstring()
+            .and_then(|_| result.try_symbol_or_string())
+        {
+            Some(id) => (id, false),
+            None => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "no implicit conversion of {} into String",
+                    name_arg.get_real_class_name(&globals.store)
+                )));
+            }
         }
     } else {
         return Err(MonorubyErr::typeerr(format!(
@@ -1190,13 +1203,24 @@ fn lookup_constant_path(
         )));
     };
 
+    let ident = name.get_ident_name_clone();
+    let Some(path) = ident.as_str() else {
+        // A name in a non-UTF-8 encoding (`const_get "CS_CONSTλ".encode("euc-jp")`)
+        // denotes exactly one constant: its bytes are not a `&str` we can
+        // split, and `::` — being ASCII — never occurs inside a character of
+        // an ASCII-compatible encoding, so there is nothing to split. Take it
+        // whole, interned bytewise, exactly as `const_set` stored it.
+        validate_constant_name(name)?;
+        return Ok((false, vec![name]));
+    };
+
     let (start_at_object, segs): (bool, Vec<&str>) = if was_symbol {
+        // CRuby rejects `::`-containing Symbols outright (Symbols are
+        // bare names; they can't carry scope qualifiers).
         if path.contains("::") {
-            return Err(MonorubyErr::nameerr(format!(
-                "wrong constant name {path}"
-            )));
+            return Err(MonorubyErr::nameerr(format!("wrong constant name {path}")));
         }
-        (false, vec![path.as_str()])
+        (false, vec![path])
     } else if let Some(rest) = path.strip_prefix("::") {
         (true, rest.split("::").collect())
     } else {
@@ -1204,10 +1228,26 @@ fn lookup_constant_path(
     };
 
     if segs.iter().any(|s| !is_valid_const_name(s)) {
-        return Err(MonorubyErr::nameerr(format!(
-            "wrong constant name {path}"
-        )));
+        return Err(MonorubyErr::nameerr(format!("wrong constant name {path}")));
     }
+
+    Ok((
+        start_at_object,
+        segs.into_iter().map(IdentId::get_id).collect(),
+    ))
+}
+
+/// Walk a (possibly scoped) constant path. Returns `Ok(Some(v))` on hit,
+/// `Ok(None)` if any segment is missing, or `Err(NameError)` for
+/// malformed names.
+fn lookup_constant_path(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Module,
+    name_arg: Value,
+    inherit: bool,
+) -> Result<Option<Value>> {
+    let (start_at_object, segs) = constant_path_segments(vm, globals, name_arg)?;
 
     // Walk the scope chain. The first segment honours `inherit`; nested
     // segments are looked up directly on the resolved class (CRuby
@@ -1220,8 +1260,7 @@ fn lookup_constant_path(
         receiver
     };
     let last_idx = segs.len() - 1;
-    for (i, seg) in segs.iter().enumerate() {
-        let id = IdentId::get_id(seg);
+    for (i, id) in segs.into_iter().enumerate() {
         // For the *first* segment, defer to the inherit flag (and
         // implicitly walk Object for modules / superclasses for
         // classes, as `get_constant_superclass_with_class` does). For
@@ -1271,45 +1310,7 @@ fn probe_constant_path(
     name_arg: Value,
     inherit: bool,
 ) -> Result<bool> {
-    let (path, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
-        (sym.get_name().to_string(), true)
-    } else if let Some(s) = name_arg.is_str() {
-        (s.to_string(), false)
-    } else if let Some(func_id) = globals.check_method(name_arg, IdentId::TO_STR) {
-        let result = vm.invoke_func_inner(globals, func_id, name_arg, &[], None, None)?;
-        if let Some(s) = result.is_str() {
-            (s.to_string(), false)
-        } else {
-            return Err(MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into String",
-                name_arg.get_real_class_name(&globals.store)
-            )));
-        }
-    } else {
-        return Err(MonorubyErr::typeerr(format!(
-            "no implicit conversion of {} into String",
-            name_arg.get_real_class_name(&globals.store)
-        )));
-    };
-
-    let (start_at_object, segs): (bool, Vec<&str>) = if was_symbol {
-        if path.contains("::") {
-            return Err(MonorubyErr::nameerr(format!(
-                "wrong constant name {path}"
-            )));
-        }
-        (false, vec![path.as_str()])
-    } else if let Some(rest) = path.strip_prefix("::") {
-        (true, rest.split("::").collect())
-    } else {
-        (false, path.split("::").collect())
-    };
-
-    if segs.iter().any(|s| !is_valid_const_name(s)) {
-        return Err(MonorubyErr::nameerr(format!(
-            "wrong constant name {path}"
-        )));
-    }
+    let (start_at_object, segs) = constant_path_segments(vm, globals, name_arg)?;
 
     let mut current = if start_at_object {
         globals.store[OBJECT_CLASS].get_module()
@@ -1317,8 +1318,7 @@ fn probe_constant_path(
         receiver
     };
     let last_idx = segs.len() - 1;
-    for (i, seg) in segs.iter().enumerate() {
-        let id = IdentId::get_id(seg);
+    for (i, id) in segs.into_iter().enumerate() {
         if i == last_idx {
             // Final segment: non-triggering probe. For the receiver
             // (i == 0) honour `inherit`; for nested resolved classes
@@ -1373,12 +1373,7 @@ fn const_set(
     let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
-    let name_str = name.get_name();
-    if !is_valid_const_name(&name_str) {
-        return Err(MonorubyErr::nameerr(format!(
-            "wrong constant name {name_str}"
-        )));
-    }
+    validate_constant_name(name)?;
     let module = self_val.as_class().id();
     let val = lfp.arg(1);
     // Warn (via Ruby's `$stderr` so mspec's `complain` matcher captures it)
@@ -1517,44 +1512,7 @@ fn lookup_constant_with_owner(
     name_arg: Value,
     inherit: bool,
 ) -> Result<Option<(ClassId, Option<(String, u32)>)>> {
-    let (path, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
-        (sym.get_name().to_string(), true)
-    } else if let Some(s) = name_arg.is_str() {
-        (s.to_string(), false)
-    } else if let Some(func_id) = globals.check_method(name_arg, IdentId::TO_STR) {
-        let result = vm.invoke_func_inner(globals, func_id, name_arg, &[], None, None)?;
-        if let Some(s) = result.is_str() {
-            (s.to_string(), false)
-        } else {
-            return Err(MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into String",
-                name_arg.get_real_class_name(&globals.store)
-            )));
-        }
-    } else {
-        return Err(MonorubyErr::typeerr(format!(
-            "no implicit conversion of {} into String",
-            name_arg.get_real_class_name(&globals.store)
-        )));
-    };
-
-    let (start_at_object, segs): (bool, Vec<&str>) = if was_symbol {
-        // CRuby rejects `::`-containing Symbols outright (Symbols are
-        // bare names; they can't carry scope qualifiers).
-        if path.contains("::") {
-            return Err(MonorubyErr::nameerr(format!(
-                "wrong constant name {path}"
-            )));
-        }
-        (false, vec![path.as_str()])
-    } else if let Some(rest) = path.strip_prefix("::") {
-        (true, rest.split("::").collect())
-    } else {
-        (false, path.split("::").collect())
-    };
-    if segs.iter().any(|s| !is_valid_const_name(s)) {
-        return Err(MonorubyErr::nameerr(format!("wrong constant name {path}")));
-    }
+    let (start_at_object, segs) = constant_path_segments(vm, globals, name_arg)?;
 
     let mut current = if start_at_object {
         globals.store[OBJECT_CLASS].get_module()
@@ -1562,8 +1520,7 @@ fn lookup_constant_with_owner(
         receiver
     };
     let last_idx = segs.len() - 1;
-    for (i, seg) in segs.iter().enumerate() {
-        let id = IdentId::get_id(seg);
+    for (i, id) in segs.into_iter().enumerate() {
         // First segment honours `inherit`; later segments are looked
         // up directly on the resolved class, matching CRuby's scoped
         // resolution.
@@ -2534,7 +2491,7 @@ fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    if globals.store[class_id].get_name().is_none() {
+    if globals.store[class_id].get_name().is_none() || globals.store.is_name_erased(class_id) {
         return Ok(Value::nil());
     }
     if let Some(cached) = globals.store[class_id].cached_name_value() {
@@ -3025,6 +2982,44 @@ fn set_temporary_name(
     // Invalidate so the next call rebuilds with the new chain.
     globals.store.invalidate_descendant_name_caches(class_id);
     Ok(lfp.self_val())
+}
+
+///
+/// ### Module#using
+/// - using(module) -> self
+///
+/// Refinements are not implemented, so a module can never carry any: this
+/// validates the argument and the calling scope the way CRuby does, then
+/// activates the (necessarily empty) set of refinements. The same shape as
+/// `main.using`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/using.html]
+#[monoruby_builtin]
+fn using(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // CRuby permits `using` only where a cref is being built — a class or
+    // module body, a block run in one, or the top level — never inside a
+    // method body, where the activation would outlive the call.
+    if let Some(caller) = vm.cfp().prev()
+        && globals.store[caller.outermost_lfp().func_id()].is_method()
+    {
+        return Err(MonorubyErr::runtimeerr(
+            "Module#using is not permitted in methods",
+        ));
+    }
+    expect_refinement_module(globals, lfp.arg(0))?;
+    Ok(lfp.self_val())
+}
+
+/// Argument check shared by `Module#using` and `main.using`: the argument
+/// must be a Module and *not* a Class (a Class can't hold refinements).
+pub(super) fn expect_refinement_module(globals: &Globals, arg: Value) -> Result<()> {
+    match arg.is_class_or_module() {
+        Some(module) if module.is_module() => Ok(()),
+        _ => Err(MonorubyErr::typeerr(format!(
+            "wrong argument type {} (expected Module)",
+            arg.get_real_class_name(&globals.store)
+        ))),
+    }
 }
 
 ///
@@ -7294,6 +7289,91 @@ mod tests {
               define_method(:scale, &Coercible.new)
             end
             Box.new.scale(7)
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_using_argchecks() {
+        // Refinements are unimplemented, so `using` only has to agree
+        // with CRuby on what it accepts and where it may appear.
+        run_test(r#"Module.new { using Module.new }.class.to_s"#);
+        run_test(r#"m = Module.new; r = nil; mod = Module.new { r = using m }; r.equal?(mod)"#);
+        // A Class is not a refinement container.
+        run_test_error(r#"Module.new { using Class.new }"#);
+        run_test_error(r#"Module.new { using "foo" }"#);
+        // ... and it is not permitted in a method body.
+        run_test(
+            r#"
+            mod = Module.new do
+              def self.foo
+                using Module.new
+              end
+            end
+            begin
+              mod.foo
+            rescue RuntimeError => e
+              e.message
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn visibility_shadow_follows_redefinition() {
+        // `public :inherited_method` is a visibility modifier, not a
+        // copy of the body: redefining the ancestor's method afterwards
+        // must be visible through the subclass (CRuby's ZSUPER entry).
+        run_test(
+            r#"
+            class VSParent
+              private
+              def m; :before; end
+            end
+            class VSChild < VSParent
+              public :m
+            end
+            class VSParent
+              def m; :after; end
+            end
+            [VSChild.new.m,
+             VSChild.instance_method(:m).owner.to_s,
+             VSChild.public_instance_methods(false).include?(:m)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn non_utf8_constant_name() {
+        // A constant named by a String in a non-UTF-8 encoding is one
+        // name, not a `::`-separated path: it must round-trip through
+        // const_set / const_get / const_defined?.
+        run_test(
+            r#"
+            m = Module.new
+            name = "CS_CONST\u{3bb}".encode("euc-jp")
+            m.const_set(name, 2)
+            [m.const_get(name), m.const_defined?(name), m.constants.size]
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_erases_nested_names() {
+        // A never-named module still qualifies what is nested under it,
+        // but one whose name was explicitly erased does not — and
+        // re-naming it brings the subtree's names back.
+        run_test(
+            r#"
+            m = Module.new
+            m::N = Module.new
+            a = m::N.name.sub(/0x\h+/, "0xADDR")
+            m.set_temporary_name "m"
+            b = m::N.name
+            m.set_temporary_name nil
+            c = m::N.name
+            m.set_temporary_name "y"
+            [a, b, c, m::N.name]
             "#,
         );
     }
