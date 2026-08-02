@@ -43,6 +43,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "close_write", close_write, 0);
     globals.define_builtin_func(IO_CLASS, "close_read", close_read, 0);
     globals.define_builtin_func(IO_CLASS, "closed?", closed_, 0);
+    globals.define_builtin_func(IO_CLASS, "sync", io_sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
     globals.define_builtin_func_with(IO_CLASS, "seek", seek, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 2, false);
@@ -1000,7 +1001,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {
         lfp.self_val().as_io_inner_mut().write(&bytes, &mut done, _store)
     })?;
-    lfp.self_val().as_io_inner_mut().flush()?;
+    lfp.self_val().as_io_inner_mut().flush(&globals.store)?;
     Ok(lfp.self_val())
 }
 
@@ -1102,7 +1103,7 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     }
     // Flush after all writes
     let mut self_ = lfp.self_val();
-    self_.as_io_inner_mut().flush()?;
+    self_.as_io_inner_mut().flush(&globals.store)?;
     Ok(Value::nil())
 }
 
@@ -1199,9 +1200,9 @@ fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/flush.html]
 #[monoruby_builtin]
-fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn flush(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    self_.as_io_inner_mut().flush()?;
+    self_.as_io_inner_mut().flush(&globals.store)?;
 
     Ok(lfp.self_val())
 }
@@ -1575,7 +1576,7 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if lfp.self_val().as_io_inner().is_closed() {
         return Ok(Value::nil());
     }
-    let popen_result = lfp.self_val().as_io_inner_mut().close()?;
+    let popen_result = lfp.self_val().as_io_inner_mut().close(&globals.store)?;
     if let Some((exit_status, pid)) = popen_result {
         // Set $? (Process::Status) via Process::Status.new(exitstatus, pid)
         let status_class =
@@ -1603,7 +1604,7 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn close_write(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
@@ -1626,7 +1627,7 @@ fn close_write(
             return Err(MonorubyErr::ioerr("closing non-duplex IO for writing"));
         }
         _ => {
-            io.close()?;
+            io.close(&globals.store)?;
         }
     }
     Ok(Value::nil())
@@ -1636,7 +1637,7 @@ fn close_write(
 #[monoruby_builtin]
 fn close_read(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
@@ -1658,7 +1659,7 @@ fn close_read(
             return Err(MonorubyErr::ioerr("closing non-duplex IO for reading"));
         }
         _ => {
-            io.close()?;
+            io.close(&globals.store)?;
         }
     }
     Ok(Value::nil())
@@ -1672,6 +1673,31 @@ fn closed_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(Value::bool(lfp.self_val().as_io_inner().is_closed()))
 }
 
+///
+/// ### IO#sync
+///
+/// - sync -> bool
+///
+/// True when every write reaches the fd before returning. Defaults to
+/// true only for the process's stderr, as in CRuby. A TTY writes through
+/// regardless (CRuby's `FMODE_TTY`), which `#sync` does not report.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/sync.html]
+#[monoruby_builtin]
+fn io_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
+    Ok(Value::bool(lfp.self_val().as_io_inner().sync()))
+}
+
+///
+/// ### IO#sync=
+///
+/// - sync=(bool) -> bool
+///
+/// Changes the policy for *subsequent* writes; anything already buffered
+/// stays buffered until the next flush, matching CRuby.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/sync=3d.html]
 #[monoruby_builtin]
 fn assign_sync(
     _vm: &mut Executor,
@@ -1680,6 +1706,8 @@ fn assign_sync(
     _: BytecodePtr,
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
+    let sync = lfp.arg(0).as_bool();
+    lfp.self_val().as_io_inner_mut().set_sync(sync);
     Ok(lfp.arg(0))
 }
 
@@ -1966,7 +1994,7 @@ fn io_class_readlines(
             Ok(vm.temp_pop())
         })();
         // Close the fd now — leaving it to GC lets descriptors pile up.
-        let _ = io_val.as_io_inner_mut().close();
+        let _ = io_val.as_io_inner_mut().close(&globals.store);
         result
     })
 }
@@ -2151,7 +2179,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
             Ok(Value::nil())
         })();
         // Close the fd now — leaving it to GC lets descriptors pile up.
-        let _ = io_val.as_io_inner_mut().close();
+        let _ = io_val.as_io_inner_mut().close(&globals.store);
         result
     })
 }
@@ -2288,6 +2316,10 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     };
     let mut read_io = make_end(vm, globals, fds[0], "r")?;
     let mut write_io = make_end(vm, globals, fds[1], "w")?;
+    // CRuby's `rb_io_s_pipe` marks the write end synchronous. It is not a
+    // nicety: both ends usually live in one process, so a buffered write
+    // would leave the reader blocked on data that never reaches the pipe.
+    write_io.as_io_inner_mut().set_sync(true);
 
     // The read end carries the requested (or default) encodings; the
     // write end carries none — `#initialize` with mode "w" already left
@@ -2305,8 +2337,8 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             let r = vm.invoke_block_once(globals, bh, &[read_io, write_io]);
             // Both ends close at block exit (idempotent for ends the
             // block already closed), success or raise.
-            let _ = read_io.as_io_inner_mut().close();
-            let _ = write_io.as_io_inner_mut().close();
+            let _ = read_io.as_io_inner_mut().close(&globals.store);
+            let _ = write_io.as_io_inner_mut().close(&globals.store);
             r
         }
         None => Ok(Value::array2(read_io, write_io)),
@@ -2539,7 +2571,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         let data = vm.get_block_data(globals, bh)?;
         let res = vm.invoke_block(globals, &data, &[io_val]);
         let mut io_close = io_val;
-        if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
+        if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close(&globals.store) {
             if let Ok(status_class) =
                 vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
             {
@@ -2768,10 +2800,10 @@ fn io_reopen_io(globals: &mut Globals, self_: Value, other: Value) -> Result<Val
     };
     // Flush both write sides before re-pointing the descriptor.
     if self_.as_io_inner().is_writable() {
-        self_.as_io_inner_mut().flush()?;
+        self_.as_io_inner_mut().flush(&globals.store)?;
     }
     if other.as_io_inner().is_writable() {
-        other.as_io_inner_mut().flush()?;
+        other.as_io_inner_mut().flush(&globals.store)?;
     }
     let fd1 = self_.as_io_inner().fileno()?;
     let fd2 = other.as_io_inner().fileno()?;
@@ -2878,7 +2910,7 @@ fn io_reopen_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     })?;
     if was_open {
         if self_.as_io_inner().is_writable() {
-            self_.as_io_inner_mut().flush()?;
+            self_.as_io_inner_mut().flush(&globals.store)?;
         }
         let fd1 = self_.as_io_inner().fileno()?;
         let tmpfd = std::os::fd::AsRawFd::as_raw_fd(&file);
@@ -3572,8 +3604,8 @@ fn io_path(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fsync.html]
 #[monoruby_builtin]
-fn io_fsync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ret = lfp.self_val().as_io_inner_mut().fsync(false)?;
+fn io_fsync(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ret = lfp.self_val().as_io_inner_mut().fsync(false, &globals.store)?;
     Ok(Value::integer(ret as i64))
 }
 
@@ -3585,11 +3617,11 @@ fn io_fsync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 #[monoruby_builtin]
 fn io_fdatasync(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let ret = lfp.self_val().as_io_inner_mut().fsync(true)?;
+    let ret = lfp.self_val().as_io_inner_mut().fsync(true, &globals.store)?;
     Ok(Value::integer(ret as i64))
 }
 
@@ -3730,6 +3762,10 @@ fn io_pread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         _ => None,
     };
     lfp.self_val().as_io_inner().ensure_readable()?;
+    // A positional read goes to the fd directly, so anything still sitting
+    // in the write buffer has to land first or `pread` reads stale bytes
+    // (CRuby flushes via `rb_io_check_char_readable`).
+    lfp.self_val().as_io_inner_mut().flush(&globals.store)?;
 
     // maxlen == 0: return "" (or the buffer unchanged) without
     // touching the file — the offset is ignored even if out of range.
@@ -3789,7 +3825,7 @@ fn io_pwrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     lfp.self_val().as_io_inner().ensure_writable()?;
     // Flush any buffered writes so the file offset/content the OS sees
     // is consistent before the positional write.
-    lfp.self_val().as_io_inner_mut().flush()?;
+    lfp.self_val().as_io_inner_mut().flush(&globals.store)?;
     let fd = lfp.self_val().as_io_inner().fileno()?;
     // SAFETY: fd is valid, bytes is a valid buffer of `bytes.len()`.
     let n = unsafe {
@@ -4496,7 +4532,7 @@ fn set_encoding_by_bom(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_ = lfp.self_val();
+    let self_ = lfp.self_val();
     if !self_.as_io_inner().is_readable() {
         return Ok(Value::nil());
     }
@@ -5236,7 +5272,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                     blocking_io_region(vm, globals, vv, libc::POLLOUT, |_store| {
                         vv.as_io_inner_mut().write(chunk, &mut done, _store)
                     })?;
-                    vv.as_io_inner_mut().flush()
+                    vv.as_io_inner_mut().flush(&globals.store)
                 }
                 _ => unreachable!(),
             }
@@ -5352,10 +5388,10 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     // Close only the endpoints this call opened (path forms); IO
     // arguments are left open, per CRuby.
     if let Some(mut v) = src_io_owned {
-        let _ = v.as_io_inner_mut().close();
+        let _ = v.as_io_inner_mut().close(&globals.store);
     }
     if let Some(mut v) = dst_io_owned {
-        let _ = v.as_io_inner_mut().close();
+        let _ = v.as_io_inner_mut().close(&globals.store);
     }
     Ok(Value::integer(result? as i64))
 }
@@ -8526,6 +8562,141 @@ mod tests {
             end
             File.unlink(path)
             r
+            "##,
+        );
+    }
+
+    /// monoruby buffers IO itself (see `value/rvalue/io/buf.rs`), so the
+    /// points at which bytes actually reach the fd are observable. Each
+    /// case is compared against CRuby by the harness.
+    #[test]
+    fn io_write_buffering_points() {
+        // A buffered write is invisible until the buffer is flushed,
+        // and `#flush` / `#close` both push it out.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_points.txt"
+            res = []
+            f = File.open(path, "w")
+            f.write("abc")
+            res << File.size?(path)     # nil: still buffered
+            f.flush
+            res << File.size?(path)     # 3
+            f.write("de")
+            f.close
+            res << File.size?(path)     # 5: close flushes
+            res << File.read(path)
+            File.unlink(path)
+            res
+            "##,
+        );
+        // `sync = true` writes through; `#sync` round-trips.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_sync.txt"
+            res = []
+            f = File.open(path, "w")
+            res << f.sync
+            f.sync = true
+            res << f.sync
+            f.write("xyz")
+            res << File.size?(path)     # 3: written through
+            f.sync = false
+            res << f.sync
+            f.write("pq")
+            res << File.size?(path)     # still 3
+            f.close
+            res << File.size?(path)
+            File.unlink(path)
+            res
+            "##,
+        );
+        // A read through the same descriptor sees the pending write, and
+        // so does a positional read; seeking flushes first too.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_rw.txt"
+            res = []
+            f = File.open(path, "w+")
+            f.write("hello")
+            f.rewind
+            res << f.read              # "hello"
+            f.write("world")
+            res << f.pread(10, 0)      # "helloworld"
+            f.seek(0)
+            res << f.read
+            f.close
+            File.unlink(path)
+            res
+            "##,
+        );
+        // A write bigger than the 8KiB buffer goes straight out, and the
+        // content still comes back in order.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_big.txt"
+            f = File.open(path, "w")
+            f.write("head")
+            f.write("z" * 20000)
+            f.write("tail")
+            f.close
+            s = File.read(path)
+            res = [s.size, s[0, 4], s[-4, 4], s.count("z")]
+            File.unlink(path)
+            res
+            "##,
+        );
+    }
+
+    /// `#sync` defaults follow CRuby: only the process's stderr, a pipe's
+    /// write end, a socket and a popen stream start synchronized.
+    #[test]
+    fn io_sync_defaults() {
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            res = [$stdout.sync, $stderr.sync, $stdin.sync, r.sync, w.sync]
+            r.close
+            w.close
+            res
+            "##,
+        );
+        // A pipe's write end is synchronized, so the reader in the same
+        // process sees the bytes without an explicit flush.
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            w.write("through")
+            res = r.read(7)
+            r.close
+            w.close
+            res
+            "##,
+        );
+        run_test_once(
+            r##"
+            io = IO.popen("cat", "r+")
+            res = [io.sync]
+            io.close
+            res
+            "##,
+        );
+        // `#sync` / `#sync=` on a closed stream raise IOError.
+        run_test_error(r##"f = File.open("/tmp/mr_sync_closed.txt", "w"); f.close; f.sync"##);
+        run_test_error(r##"f = File.open("/tmp/mr_sync_closed2.txt", "w"); f.close; f.sync = true"##);
+    }
+
+    /// `Kernel#p` / `#print` and `$stdout.write` share one buffer, so
+    /// their output cannot be reordered against each other.
+    #[test]
+    fn stdout_writers_share_one_buffer() {
+        run_test_once(
+            r##"
+            $stdout.write("a")
+            print "b"
+            $stdout.write("c")
+            $stdout.flush
+            nil
             "##,
         );
     }
