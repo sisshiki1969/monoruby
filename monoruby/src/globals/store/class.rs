@@ -269,9 +269,14 @@ pub struct ClassInfo {
     ///
     constant_locations: HashMap<IdentId, (String, u32)>,
     ///
-    /// class variable table.
+    /// class variable table (insertion-ordered).
     ///
-    class_variables: Option<HashMap<IdentId, Value>>,
+    /// Ordered because `Module#class_variables` reports definition order
+    /// in CRuby. A plain `HashMap` made the order depend on how the
+    /// names happened to hash, i.e. on unrelated interning done earlier
+    /// in the process.
+    ///
+    class_variables: Option<indexmap::IndexMap<IdentId, Value>>,
     ///
     /// instance variable table (insertion-ordered).
     ///
@@ -666,7 +671,7 @@ impl ClassInfo {
         if let Some(cv) = &mut self.class_variables {
             cv.insert(name, val);
         } else {
-            let mut cv = HashMap::default();
+            let mut cv = indexmap::IndexMap::default();
             cv.insert(name, val);
             self.class_variables = Some(cv);
         }
@@ -677,7 +682,9 @@ impl ClassInfo {
     }
 
     pub(crate) fn remove_cvar(&mut self, name: IdentId) -> Option<Value> {
-        self.class_variables.as_mut()?.remove(&name)
+        // `shift_remove`, not `swap_remove`: removing one class variable
+        // must not reorder the rest.
+        self.class_variables.as_mut()?.shift_remove(&name)
     }
 
     fn cvar_names(&self) -> Vec<IdentId> {
