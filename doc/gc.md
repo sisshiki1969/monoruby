@@ -493,10 +493,15 @@ proc/args/result/exception/joiners/pending/masks/last_status をマークする�
 
 | メソッド | 実装 | 挙動 |
 | --- | --- | --- |
-| `GC.start` | `request_gc(true)` | 次セーフポイントで**メジャー**収集を要求。引数(`full_mark:` 等)は互換のため受けるが無視(常に full)。インライン実行は危険なので即実行はしない。 |
+| `GC.start` | `builtins/gc.rb` + `__request_gc` | `request_gc(full_mark)` で収集を要求したあと、**ループ後方辺(セーフポイント)を跨いで `GC.count` が進むまで回る**ので、CRuby 同様に回収を終えてから返る。builtin の中で直接 `gc()` を呼べないのは、JIT 呼び出し元の生きたレジスタがセーフポイント以外では退避されておらずルート走査から見えないため。`full_mark: false` はマイナーを許す(強制しない)。 |
 | `GC.disable` / `GC.enable` | `Globals::gc_enable(false/true)` | GC の有効/無効を切り替え、直前の disable 状態を bool で返す。`GC_ENABLED`(§4 の malloc 経路が参照)も同期。 |
 | `GC.count` | `total_gc_counter` | 総 GC 回数。 |
-| `GC.stat` | `stat`(CRuby 互換キー) | `count` 等一部のキーだけが実カウンタに対応、他は 0 を返す。 |
+| `GC.stat` | `stat`(CRuby 4.0 のキー順) | ページ数・スロット数・累計確保/解放オブジェクト数・old 世代・malloc 量・フェーズ別時間まで実カウンタ。圧縮とファイナライザ、CRuby 固有の old malloc 会計だけが 0(概念が無いため)。 |
+| `GC.total_time` / `GC.measure_total_time` | `gc_time_ns` | `gc()` の実測ナノ秒。`measure_total_time = false` の間は計測自体を行わない(`GC::Profiler` が有効なら計測は続く)。 |
+| `GC.stress` | `Allocator::stress` | 収集の最後に poll フラグをトリガ帯へ戻すので、**以降すべてのセーフポイントで収集**する。CRuby の「確保ごと」は JIT が確保の高速路をインライン化する都合で再現できないが、ルート漏れの炙り出しという用途は同じ。 |
+| `GC.config` | `builtins/gc.rb` + `__allow_full_mark` | `:rgengc_allow_full_mark` は実ノブで、false の間 `decide_gc_kind` はメジャーを選ばない(明示的な `GC.start` は依然メジャーを強制する)。`:implementation` は読み取り専用。 |
+| `GC.auto_compact` / `GC.compact` | — | `NotImplementedError`。monoruby の収集器はオブジェクトを移動しないので、CRuby が圧縮非対応環境で返すのと同じ答えを返す。 |
+| `GC::Profiler` | `Allocator::profile` | 有効な間、収集ごとに `GcProfileRecord`(invoke time / 所要時間 / live バイト / ヒープ総バイト / 総スロット / メジャーか)を積む。`result` は CRuby と同じ表形式、`raw_data` は同じキー、`total_time` は秒の Float。 |
 
 コマンドラインでは `--no-gc` で GC を無効化できる。GC 無効時は `gc()` が即 return
 するため、`request_gc_if_malloc_over` は `GC_ENABLED` を見て要求自体をスキップする

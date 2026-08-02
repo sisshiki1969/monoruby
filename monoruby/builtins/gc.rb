@@ -1,51 +1,61 @@
 module GC
-  # `GC.count` and `GC.start` are implemented in Rust (they read the
-  # allocator's collection counter / force a full collection).
+  # Most of the module is implemented in Rust (`src/builtins/gc.rs`),
+  # reading the allocator's own counters: `count`, `stat`, `total_time`,
+  # `measure_total_time`, `stress`, `enable` / `disable`, and the whole
+  # of `GC::Profiler`. What is left here needs either Ruby-level control
+  # flow (`start`) or is pure bookkeeping (`config`).
 
-  # --- boolean mode flags -------------------------------------------------
-  # monoruby has no stress mode, no auto-compaction and no time
-  # measurement, but the accessors round-trip a stored value so callers
-  # (and specs) can set and read them back.
-  @stress = false
-  @measure_total_time = false
-  @auto_compact = false
-
-  def self.stress
-    @stress
+  def self.start(full_mark: true, immediate_mark: true, immediate_sweep: true)
+    before = count
+    __request_gc(full_mark)
+    # The collection runs at the next VM safepoint, never inside the
+    # builtin above: only at a safepoint are the JIT caller's live
+    # registers spilled where the root scan can find them. A loop
+    # back-edge *is* such a safepoint, so spin over one until the
+    # collection has happened and `GC.start` returns synchronously, the
+    # way CRuby's does.
+    #
+    # The trip count is bounded because the counter never moves while
+    # collection is disabled (`GC.disable`), which is also why this is a
+    # `while` and not a bare `until`.
+    spins = 0
+    while count == before && spins < 100
+      spins += 1
+    end
+    nil
   end
 
-  def self.stress=(flag)
-    @stress = flag
+  # Instance form (available via `obj.extend(GC)`).
+  def garbage_collect(full_mark: true, immediate_mark: true, immediate_sweep: true)
+    GC.start(full_mark: full_mark, immediate_mark: immediate_mark,
+             immediate_sweep: immediate_sweep)
   end
 
-  def self.measure_total_time
-    @measure_total_time
-  end
-
-  def self.measure_total_time=(flag)
-    @measure_total_time = flag
-  end
-
+  # monoruby's collector never moves an object, so there is no
+  # compaction to switch on. CRuby raises NotImplementedError from these
+  # on platforms whose GC cannot compact either, and callers already
+  # handle that — reporting a stored flag instead would claim a
+  # behaviour that does not exist.
   def self.auto_compact
-    @auto_compact
+    raise NotImplementedError, "GC.auto_compact is not supported on this platform"
   end
 
-  def self.auto_compact=(flag)
-    @auto_compact = flag
+  def self.auto_compact=(_flag)
+    raise NotImplementedError, "GC.auto_compact= is not supported on this platform"
   end
 
-  # Total time spent in GC, in nanoseconds. monoruby does not measure
-  # this, so report 0 (an Integer, never decreasing).
-  def self.total_time
-    0
+  def self.compact
+    raise NotImplementedError, "GC.compact is not supported on this platform"
   end
 
   # --- GC.config ----------------------------------------------------------
+  # `:rgengc_allow_full_mark` is a real knob: with it off, the collector
+  # only ever chooses a minor collection on its own (an explicit
+  # `GC.start` still forces a full one).
   def self.config(*args)
-    @config ||= { implementation: "default", rgengc_allow_full_mark: true }
-    return @config.dup if args.empty?
+    return __config if args.empty?
     arg = args[0]
-    return @config.dup if arg.nil?
+    return __config if arg.nil?
     unless arg.is_a?(Hash)
       raise ArgumentError, "GC.config requires a Hash argument"
     end
@@ -53,53 +63,26 @@ module GC
     if arg.key?(:implementation)
       raise ArgumentError, 'Attempting to set read-only key "Implementation"'
     end
-    # Update known knobs (coercing arbitrary truthy/falsey values to a
-    # boolean, as MRI does); unknown keys are ignored.
-    arg.each do |k, v|
-      next unless @config.key?(k)
-      @config[k] = v ? true : false
+    # Known knobs take any truthy/falsey value (as MRI does); unknown
+    # keys are ignored.
+    if arg.key?(:rgengc_allow_full_mark)
+      self.__allow_full_mark = arg[:rgengc_allow_full_mark] ? true : false
     end
-    @config.dup
+    __config
   end
 
-  # Instance form (available via `obj.extend(GC)`); always returns nil.
-  def garbage_collect(full_mark: true, immediate_mark: true, immediate_sweep: true)
-    GC.start
-    nil
+  # Key order matches CRuby's, so `p GC.config` reads the same.
+  def self.__config
+    { rgengc_allow_full_mark: __allow_full_mark, implementation: "default" }
   end
+  private_class_method :__config
 
   module Profiler
-    @enabled = false
-
-    def self.enabled?
-      @enabled
-    end
-
-    def self.enable
-      @enabled = true
-      nil
-    end
-
-    def self.disable
-      @enabled = false
-      nil
-    end
-
-    def self.clear
-      nil
-    end
-
-    def self.result
-      ""
-    end
-
+    # `enabled?` / `enable` / `disable` / `clear` / `result` /
+    # `raw_data` / `total_time` are implemented in Rust.
     def self.report(out = $stdout)
       out.print(result)
       nil
-    end
-
-    def self.total_time
-      0.0
     end
   end
 end

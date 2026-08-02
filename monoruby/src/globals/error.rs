@@ -322,7 +322,7 @@ impl MonorubyErr {
             MonorubyErrKind::NotMethod { .. } => "NoMethodError",
             MonorubyErrKind::Arguments => "ArgumentError",
             MonorubyErrKind::Syntax => "SyntaxError",
-            MonorubyErrKind::Unimplemented => "RuntimeError",
+            MonorubyErrKind::Unimplemented => "NotImplementedError",
             MonorubyErrKind::Name(..) => "NameError",
             MonorubyErrKind::DivideByZero => "ZeroDivisionError",
             MonorubyErrKind::LocalJump => "LocalJumpError",

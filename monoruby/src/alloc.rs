@@ -153,11 +153,23 @@ fn malloc_hard_limit_abort(size: usize, projected: usize, limit: usize) -> ! {
     std::process::abort();
 }
 
-/// Address (as `usize`; `0` until the VM registers it) of the JIT/VM
-/// allocation flag — the same `u32` the GC-arena path nudges. Stored
-/// globally so `RurubyAlloc::alloc` can request a GC without reaching into
-/// the (non-reentrant) thread-local `Allocator`.
-static MALLOC_GC_FLAG_ADDR: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// Address (as `usize`; `0` until the VM registers it) of the JIT/VM
+    /// allocation flag — the same `u32` the GC-arena path nudges. Kept
+    /// beside the thread-local `Allocator` it belongs to (a `Cell<usize>`
+    /// with a `const` initialiser, so reading it allocates nothing and
+    /// runs no destructor: `RurubyAlloc::alloc` reaches it from inside
+    /// the global allocator, where the non-reentrant `ALLOC` itself is
+    /// off limits).
+    ///
+    /// Per-thread rather than global because each VM thread has its own
+    /// heap and its own flag; a process-wide slot would let one thread's
+    /// `GC.start` nudge another thread's flag, and its own request would
+    /// then never fire. Only the interpreter's own thread has a
+    /// registered flag, so allocations on helper threads (preempt timer,
+    /// fd poller) simply request nothing.
+    static MALLOC_GC_FLAG_ADDR: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// `MALLOC_AMOUNT` ceiling above which a GC is requested. Recomputed after
 /// each GC from the post-collection live amount (see `Allocator::gc`).
@@ -180,6 +192,18 @@ pub(crate) fn set_gc_enabled(enabled: bool) {
 /// `GC.start` asks for one at the next poll via [`request_gc`].
 static GC_FORCE_MAJOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Live bytes in tracked `malloc` buffers (`GC.stat`'s
+/// `malloc_increase_bytes`).
+pub(crate) fn malloc_amount() -> usize {
+    MALLOC_AMOUNT.load(Ordering::Relaxed)
+}
+
+/// The `malloc_amount` ceiling that triggers the next collection
+/// (`GC.stat`'s `malloc_increase_bytes_limit`).
+pub(crate) fn malloc_gc_threshold() -> usize {
+    MALLOC_GC_THRESHOLD.load(Ordering::Relaxed)
+}
+
 /// Request a garbage collection at the next VM safepoint (`GC.start`).
 ///
 /// Only nudges the JIT/VM alloc flag into its trigger band (and, when
@@ -197,7 +221,7 @@ pub(crate) fn request_gc(force_major: bool) {
 /// preempt bit or a value already in the band. Atomic because the preempt
 /// timer ORs its bit into the same word from another OS thread.
 fn nudge_flag() {
-    let addr = MALLOC_GC_FLAG_ADDR.load(Ordering::Relaxed);
+    let addr = MALLOC_GC_FLAG_ADDR.try_with(|a| a.get()).unwrap_or(0);
     if addr == 0 {
         return;
     }
@@ -248,7 +272,7 @@ fn request_gc_if_malloc_over(total: usize) {
 
 /// Register the VM allocation-flag address with the malloc-trigger path.
 pub(crate) fn set_malloc_gc_flag_addr(addr: *mut u32) {
-    MALLOC_GC_FLAG_ADDR.store(addr as usize, Ordering::Relaxed);
+    let _ = MALLOC_GC_FLAG_ADDR.try_with(|a| a.set(addr as usize));
 }
 
 thread_local!(
@@ -498,6 +522,59 @@ pub struct Allocator<T> {
     free_log_pos: usize,
     /// `GcKind` of the collection currently sweeping (forensics tag).
     current_kind: u8,
+    /// Reference instant for `GcProfileRecord::invoke_time`, taken when
+    /// the allocator is created (as close to process start as monoruby
+    /// gets). CRuby measures its profiler's "Invoke Time" the same way.
+    epoch: std::time::Instant,
+    /// Wall-clock time spent inside `gc()`, split by phase. Accumulated
+    /// only while `measure_time` is set — that is CRuby's
+    /// `GC.measure_total_time`, which is on by default.
+    gc_time_ns: u64,
+    mark_time_ns: u64,
+    sweep_time_ns: u64,
+    /// `GC.measure_total_time`.
+    measure_time: bool,
+    /// Objects reclaimed by every sweep so far (`GC.stat`'s
+    /// `total_freed_objects`).
+    total_freed_objects: usize,
+    /// Pages ever put into service, and pages ever salvaged back into
+    /// `free_pages`. Both monotonic, as CRuby's counterparts are.
+    total_allocated_pages: usize,
+    total_freed_pages: usize,
+    /// `GC::Profiler`: whether to append a record per collection, and
+    /// the records collected so far.
+    profile_enabled: bool,
+    profile: Vec<GcProfileRecord>,
+    /// `GC.stress`: re-arm the poll flag at the end of every collection
+    /// so the next safepoint collects again.
+    stress: bool,
+    /// `GC.config[:rgengc_allow_full_mark]`. When false, `decide_gc_kind`
+    /// never chooses a major collection on its own; an explicit
+    /// `GC.start` still forces one.
+    allow_full_mark: bool,
+}
+
+///
+/// One collection's profile, recorded while `GC::Profiler` is enabled.
+/// The field set mirrors what CRuby's `GC::Profiler.raw_data` reports.
+///
+#[derive(Debug, Clone, Copy)]
+pub struct GcProfileRecord {
+    /// Seconds from the allocator's epoch to the start of this
+    /// collection (`GC_INVOKE_TIME`).
+    pub invoke_time: f64,
+    /// Nanoseconds spent in this collection (`GC_TIME`).
+    pub gc_time_ns: u64,
+    /// Bytes held by live objects after the collection (`HEAP_USE_SIZE`).
+    pub heap_use_size: usize,
+    /// Bytes of heap the collector owns (`HEAP_TOTAL_SIZE`).
+    pub heap_total_size: usize,
+    /// Slots in that heap (`HEAP_TOTAL_OBJECTS`).
+    pub heap_total_objects: usize,
+    /// Whether this was a major (full-heap) collection. CRuby reports
+    /// `GC_IS_MARKED`, which is true for every non-lazy collection; for
+    /// monoruby the major/minor distinction is the informative bit.
+    pub major: bool,
 }
 
 /// Whether `MONORUBY_GC_FREE_LOG=1` forensics are enabled (cached).
@@ -674,6 +751,19 @@ impl<T: GCBox> Allocator<T> {
             free_log: Vec::new(),
             free_log_pos: 0,
             current_kind: 0,
+            epoch: std::time::Instant::now(),
+            gc_time_ns: 0,
+            mark_time_ns: 0,
+            sweep_time_ns: 0,
+            measure_time: true,
+            total_freed_objects: 0,
+            // The first page is in service from the start.
+            total_allocated_pages: 1,
+            total_freed_pages: 0,
+            profile_enabled: false,
+            profile: Vec::new(),
+            stress: false,
+            allow_full_mark: true,
         }
     }
 
@@ -889,6 +979,128 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
+    /// Pages currently in service: the filled ones plus the page bump
+    /// allocation is carving out of.
+    ///
+    pub fn page_count(&self) -> usize {
+        self.pages.len() + 1
+    }
+
+    /// Pages salvaged by a previous sweep and waiting to be reused
+    /// (CRuby's `heap_empty_pages`).
+    pub fn empty_page_count(&self) -> usize {
+        self.free_pages.len()
+    }
+
+    /// Object slots the in-service pages hold in total.
+    pub fn available_slots(&self) -> usize {
+        self.page_count() * DATA_LEN
+    }
+
+    /// Slots that can still be handed out without putting another page
+    /// into service: the free list plus the tail of the current page.
+    pub fn allocatable_slots(&self) -> usize {
+        self.free_list_count + (DATA_LEN - self.used_in_current)
+    }
+
+    /// Bytes one object slot occupies.
+    pub const fn slot_size() -> usize {
+        GCBOX_SIZE
+    }
+
+    /// Objects reclaimed by every sweep so far.
+    pub fn total_freed(&self) -> usize {
+        self.total_freed_objects
+    }
+
+    /// Pages ever put into service / ever salvaged back.
+    pub fn total_allocated_pages(&self) -> usize {
+        self.total_allocated_pages
+    }
+
+    pub fn total_freed_pages(&self) -> usize {
+        self.total_freed_pages
+    }
+
+    /// Old-generation objects, and the threshold at which their growth
+    /// forces the next major collection.
+    pub fn old_count(&self) -> usize {
+        self.old_count
+    }
+
+    pub fn old_objects_limit(&self) -> usize {
+        self.old_major_threshold
+    }
+
+    /// Old-generation objects currently in the remembered set (they hold
+    /// a reference into the young generation).
+    pub fn remembered_count(&self) -> usize {
+        self.remembered.len()
+    }
+
+    /// Total / mark-phase / sweep-phase nanoseconds spent collecting.
+    /// Zero while `GC.measure_total_time` is off.
+    pub fn gc_time_ns(&self) -> u64 {
+        self.gc_time_ns
+    }
+
+    pub fn mark_time_ns(&self) -> u64 {
+        self.mark_time_ns
+    }
+
+    pub fn sweep_time_ns(&self) -> u64 {
+        self.sweep_time_ns
+    }
+
+    /// `GC.measure_total_time`.
+    pub fn measure_time(&self) -> bool {
+        self.measure_time
+    }
+
+    pub fn set_measure_time(&mut self, flag: bool) {
+        self.measure_time = flag;
+    }
+
+    /// `GC.stress`. Turning it on arms the poll flag immediately, so the
+    /// next safepoint collects without waiting for allocation pressure.
+    pub fn stress(&self) -> bool {
+        self.stress
+    }
+
+    pub fn set_stress(&mut self, flag: bool) {
+        self.stress = flag;
+        if flag {
+            nudge_flag();
+        }
+    }
+
+    /// `GC.config[:rgengc_allow_full_mark]`.
+    pub fn allow_full_mark(&self) -> bool {
+        self.allow_full_mark
+    }
+
+    pub fn set_allow_full_mark(&mut self, flag: bool) {
+        self.allow_full_mark = flag;
+    }
+
+    /// `GC::Profiler` state and the records collected so far.
+    pub fn profile_enabled(&self) -> bool {
+        self.profile_enabled
+    }
+
+    pub fn set_profile_enabled(&mut self, flag: bool) {
+        self.profile_enabled = flag;
+    }
+
+    pub fn profile_records(&self) -> &[GcProfileRecord] {
+        &self.profile
+    }
+
+    pub fn clear_profile(&mut self) {
+        self.profile.clear();
+    }
+
+    ///
     /// Returns the number of old-generation objects (popcount of every
     /// page's `old_bits`). Confirms that promotion is taking effect, and
     /// cross-checks the incrementally maintained `old_count` field.
@@ -943,10 +1155,13 @@ impl<T: GCBox> Allocator<T> {
             // Allocate new page.
             self.used_in_current = 1;
             self.pages.push(self.current_page);
-            self.current_page = self
-                .free_pages
-                .pop_front()
-                .unwrap_or_else(|| self.new_page());
+            self.current_page = match self.free_pages.pop_front() {
+                Some(page) => page,
+                None => {
+                    self.total_allocated_pages += 1;
+                    self.new_page()
+                }
+            };
             // A page entering service must start with a zeroed
             // old-generation bitmap: fresh arena pages are uninitialised,
             // and salvaged pages may carry stale old bits. This keeps a
@@ -992,6 +1207,12 @@ impl<T: GCBox> Allocator<T> {
     /// caught by the triggers above.
     ///
     fn decide_gc_kind(&self) -> GcKind {
+        // `GC.config[:rgengc_allow_full_mark] = false` takes the major
+        // collection off the table entirely; only an explicit `GC.start`
+        // can still force one.
+        if !self.allow_full_mark {
+            return GcKind::Minor;
+        }
         if self.old_count >= self.old_major_threshold
             || self.minors_since_major >= MAX_MINORS_PER_MAJOR
         {
@@ -1011,6 +1232,14 @@ impl<T: GCBox> Allocator<T> {
         } else {
             self.decide_gc_kind()
         };
+        // Timing is off unless somebody is reading it: `GC.total_time`
+        // (via `measure_total_time`) or `GC::Profiler`.
+        let clock = (self.measure_time || self.profile_enabled).then(|| {
+            (
+                self.epoch.elapsed().as_secs_f64(),
+                std::time::Instant::now(),
+            )
+        });
         self.total_gc_counter += 1;
         self.current_kind = match kind {
             GcKind::Minor => 0,
@@ -1095,6 +1324,7 @@ impl<T: GCBox> Allocator<T> {
         // Drop dead entries from the remembered set before sweep frees
         // them: keep only objects still marked this cycle.
         self.filter_remembered();
+        let mark_elapsed = clock.map(|(_, t)| t.elapsed());
         self.salvage_empty_pages();
         self.sweep();
         if has_heap_frames {
@@ -1116,6 +1346,31 @@ impl<T: GCBox> Allocator<T> {
             eprintln!("free list: {}", self.free_list_count);
         }
         self.unset_alloc_flag();
+        if let Some((invoke_time, started)) = clock {
+            let total = started.elapsed().as_nanos() as u64;
+            let mark = mark_elapsed.map_or(0, |d| d.as_nanos() as u64).min(total);
+            if self.measure_time {
+                self.gc_time_ns += total;
+                self.mark_time_ns += mark;
+                self.sweep_time_ns += total - mark;
+            }
+            if self.profile_enabled {
+                let pages = self.page_count();
+                self.profile.push(GcProfileRecord {
+                    invoke_time,
+                    gc_time_ns: total,
+                    heap_use_size: self.mark_counter * GCBOX_SIZE,
+                    heap_total_size: pages * DATA_LEN * GCBOX_SIZE,
+                    heap_total_objects: pages * DATA_LEN,
+                    major: kind == GcKind::Major,
+                });
+            }
+        }
+        // `GC.stress`: lift the poll flag straight back into its trigger
+        // band so the very next safepoint collects again.
+        if self.stress {
+            nudge_flag();
+        }
         let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
         // Allow malloc to grow by half the live amount (at least
         // MALLOC_THRESHOLD) before the next GC. Additive-only growth would
@@ -1393,6 +1648,7 @@ impl<T: GCBox> Allocator<T> {
                     let mut page = self.pages.remove(len - i - 1);
                     page.as_mut().drop_inner_cells();
                     self.free_pages.push_back(page);
+                    self.total_freed_pages += 1;
                     #[cfg(feature = "gc-debug")]
                     eprintln!("salvage: {:?}", page);
                 }
@@ -1467,6 +1723,10 @@ impl<T: GCBox> Allocator<T> {
         }
 
         self.free = anchor.next();
+        // Cells that were already on the free list are swept again (the
+        // sweep is idempotent), so they appear in both counts: what this
+        // collection actually reclaimed is the growth of the list.
+        self.total_freed_objects += c.saturating_sub(self.free_list_count);
         self.free_list_count = c;
         if let Some(log) = log {
             let gc = self.total_gc_counter as u32;
