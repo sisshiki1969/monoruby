@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-81f8c76a.js";
+            window.path_to_searchindex_js = "../searchindex-f7d3acc3.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -625,10 +625,15 @@ proc/args/result/exception/joiners/pending/masks/last_status をマークする�
 <tr><th>メソッド</th><th>実装</th><th>挙動</th></tr>
 </thead>
 <tbody>
-<tr><td><code>GC.start</code></td><td><code>request_gc(true)</code></td><td>次セーフポイントで<strong>メジャー</strong>収集を要求。引数(<code>full_mark:</code> 等)は互換のため受けるが無視(常に full)。インライン実行は危険なので即実行はしない。</td></tr>
+<tr><td><code>GC.start</code></td><td><code>builtins/gc.rb</code> + <code>__request_gc</code></td><td><code>request_gc(full_mark)</code> で収集を要求したあと、<strong>ループ後方辺(セーフポイント)を跨いで <code>GC.count</code> が進むまで回る</strong>ので、CRuby 同様に回収を終えてから返る。builtin の中で直接 <code>gc()</code> を呼べないのは、JIT 呼び出し元の生きたレジスタがセーフポイント以外では退避されておらずルート走査から見えないため。<code>full_mark: false</code> はマイナーを許す(強制しない)。</td></tr>
 <tr><td><code>GC.disable</code> / <code>GC.enable</code></td><td><code>Globals::gc_enable(false/true)</code></td><td>GC の有効/無効を切り替え、直前の disable 状態を bool で返す。<code>GC_ENABLED</code>(§4 の malloc 経路が参照)も同期。</td></tr>
 <tr><td><code>GC.count</code></td><td><code>total_gc_counter</code></td><td>総 GC 回数。</td></tr>
-<tr><td><code>GC.stat</code></td><td><code>stat</code>(CRuby 互換キー)</td><td><code>count</code> 等一部のキーだけが実カウンタに対応、他は 0 を返す。</td></tr>
+<tr><td><code>GC.stat</code></td><td><code>stat</code>(CRuby 4.0 のキー順)</td><td>ページ数・スロット数・累計確保/解放オブジェクト数・old 世代・malloc 量・フェーズ別時間まで実カウンタ。圧縮とファイナライザ、CRuby 固有の old malloc 会計だけが 0(概念が無いため)。</td></tr>
+<tr><td><code>GC.total_time</code> / <code>GC.measure_total_time</code></td><td><code>gc_time_ns</code></td><td><code>gc()</code> の実測ナノ秒。<code>measure_total_time = false</code> の間は計測自体を行わない(<code>GC::Profiler</code> が有効なら計測は続く)。</td></tr>
+<tr><td><code>GC.stress</code></td><td><code>Allocator::stress</code></td><td>収集の最後に poll フラグをトリガ帯へ戻すので、<strong>以降すべてのセーフポイントで収集</strong>する。CRuby の「確保ごと」は JIT が確保の高速路をインライン化する都合で再現できないが、ルート漏れの炙り出しという用途は同じ。</td></tr>
+<tr><td><code>GC.config</code></td><td><code>builtins/gc.rb</code> + <code>__allow_full_mark</code></td><td><code>:rgengc_allow_full_mark</code> は実ノブで、false の間 <code>decide_gc_kind</code> はメジャーを選ばない(明示的な <code>GC.start</code> は依然メジャーを強制する)。<code>:implementation</code> は読み取り専用。</td></tr>
+<tr><td><code>GC.auto_compact</code> / <code>GC.compact</code></td><td>—</td><td><code>NotImplementedError</code>。monoruby の収集器はオブジェクトを移動しないので、CRuby が圧縮非対応環境で返すのと同じ答えを返す。</td></tr>
+<tr><td><code>GC::Profiler</code></td><td><code>Allocator::profile</code></td><td>有効な間、収集ごとに <code>GcProfileRecord</code>(invoke time / 所要時間 / live バイト / ヒープ総バイト / 総スロット / メジャーか)を積む。<code>result</code> は CRuby と同じ表形式、<code>raw_data</code> は同じキー、<code>total_time</code> は秒の Float。</td></tr>
 </tbody>
 </table>
 </div>
