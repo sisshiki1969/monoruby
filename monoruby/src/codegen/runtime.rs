@@ -359,6 +359,15 @@ pub(super) extern "C" fn enter_classdef<'a>(
     if let Some(info) = globals.store.iseq_mut(func_id) {
         info.lexical_context = lexical_context;
     }
+    // This body's own iseq is the first place that knows the line of the
+    // `class Foo` / `module Foo` keyword itself; `define_class`, running
+    // before the frame existed, could only see the enclosing body's line.
+    if let Some(iseq) = globals.store[func_id].is_iseq() {
+        let info = &globals.store[iseq];
+        let line = info.sourceinfo.get_line(&info.loc) as u32;
+        let file = info.sourceinfo.file_name().to_string();
+        vm.record_pending_const_loc(globals, file, line);
+    }
     globals.get_func_data(func_id)
 }
 

@@ -1417,6 +1417,8 @@ fn caller_frames(
     let mut cfp = vm.cfp();
     let mut v = Vec::new();
     let mut inner_cfp: Option<crate::executor::Cfp> = None;
+    // Consumed by the first frame whose pc the walk cannot recover.
+    let mut hook_site = vm.hook_site().cloned();
     // The frame walk mirrors `collect_backtrace` (including the
     // transparent-trampoline skip); see there for the pc-slot
     // mechanics.
@@ -1454,6 +1456,16 @@ fn caller_frames(
                         }
                         let idx = info.get_pc_index(Some(pc)).to_usize();
                         Some(info.sourceinfo.get_line(&info.sourcemap[idx]))
+                    })
+                    // The first frame whose pc cannot be recovered, while
+                    // a `method_added`-style hook is running, *is* the
+                    // invoker boundary the hook was dispatched across: the
+                    // definition site it carries is this frame's line.
+                    .or_else(|| {
+                        hook_site.take().filter(|(file, _)| {
+                            *file == crate::globals::display_path(&info.sourceinfo)
+                        })
+                        .map(|(_, line)| line as i64)
                     })
                     .unwrap_or_else(|| info.sourceinfo.get_line(&info.loc));
                 Some((info.sourceinfo.clone(), line))

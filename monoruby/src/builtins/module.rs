@@ -3149,7 +3149,7 @@ pub(super) fn change_visi(
     globals.change_method_visibility_for_class(class_id, &names, visi)?;
     for (name, was_missing) in names.iter().zip(was_missing_locally) {
         if was_missing && globals.store[class_id].has_own_method(*name) {
-            vm.invoke_method_added(globals, class_id, *name)?;
+            vm.invoke_method_added(globals, class_id, *name, None)?;
         }
     }
     Ok(res)
@@ -7457,6 +7457,50 @@ mod tests {
             a = IEv::CallerScope::Caller.new.get(r)
             r.singleton_class.const_set(:FOO, :singleton)
             [a, IEv::CallerScope::Caller.new.get(r)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_source_location_of_the_class_keyword() {
+        // The location recorded for a constant created by `class Foo` /
+        // `module Foo` is that keyword's own line, not the line of the
+        // body it appears in.
+        run_test_once(
+            r#"
+            module CslOuter
+              class CslInner
+              end
+              module CslMod
+              end
+            end
+            base = CslOuter.const_source_location(:CslInner)[1]
+            [base, CslOuter.const_source_location(:CslMod)[1] - base]
+            "#,
+        );
+    }
+
+    #[test]
+    fn method_added_sees_the_def_line() {
+        // `caller_locations` inside `method_added` reports the line of
+        // the `def` that triggered it. The hook is dispatched through
+        // the invoker, which writes no caller pc, so the location has to
+        // travel out-of-band.
+        run_test_once(
+            r#"
+            $lines = []
+            Class.new do
+              def self.method_added(name)
+                $lines << caller_locations(1, 1)[0].lineno
+              end
+
+              def first
+              end
+
+              def second
+              end
+            end
+            $lines.map { |l| l - $lines[0] }
             "#,
         );
     }

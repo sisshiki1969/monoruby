@@ -242,10 +242,10 @@ fn struct_initialize(
         let name = arg.expect_symbol_or_string(globals)?;
         let slot = i as u16;
         globals.define_struct_reader(class_id, name, slot, inline, Visibility::Public);
-        vm.invoke_method_added(globals, class_id, name)?;
+        vm.invoke_method_added(globals, class_id, name, None)?;
         let writer_name =
             globals.define_struct_writer(class_id, name, slot, inline, Visibility::Public);
-        vm.invoke_method_added(globals, class_id, writer_name)?;
+        vm.invoke_method_added(globals, class_id, writer_name, None)?;
     }
 
     new_struct.set_instance_var(&mut globals.store, "/members", Value::array(members))?;

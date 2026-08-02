@@ -215,6 +215,28 @@ pub struct Executor {
     /// stack, but semantically it is another thread's stack (CRuby:
     /// break in a thread body is an immediate LocalJumpError).
     break_barriers: Vec<Cfp>,
+    /// The `(parent, name)` of a constant just created by the `class` /
+    /// `module` keyword, waiting for its source location.
+    ///
+    /// `define_class` runs *before* the body's frame exists, so the only
+    /// location it can see is the enclosing frame's — the line of the
+    /// surrounding `module`, not of this `class Foo`. The body's own
+    /// iseq does carry the right line, and `enter_classdef` (which runs
+    /// immediately after, on every arch and in both tiers) has it, so
+    /// the location is recorded there.
+    pending_const_loc: Option<(ClassId, IdentId)>,
+    /// Stack of definition sites (`file`, `line`) for the
+    /// `method_added` / `singleton_method_added` / `const_added` hooks
+    /// currently running.
+    ///
+    /// A hook is dispatched from Rust through the invoker, which does
+    /// not write a caller pc into the new frame's cont slot — so
+    /// `caller_locations` inside the hook cannot recover the line of the
+    /// `def` / definition that triggered it and would report the
+    /// enclosing body's own line instead. The backtrace walk consults
+    /// this for the first frame whose pc it cannot resolve, which is
+    /// exactly that invoker boundary.
+    hook_sites: Vec<(String, u32)>,
     temp_stack: Vec<Value>,
     /// How the method_missing dispatch currently being set up was
     /// called. Consumed (read-and-cleared) by the default
@@ -315,6 +337,8 @@ impl std::default::Default for Executor {
             root_svar: None,
             adapter_blocks: Vec::new(),
             break_barriers: Vec::new(),
+            pending_const_loc: None,
+            hook_sites: Vec::new(),
             temp_stack: vec![],
             method_missing_style: MethodMissingStyle::Plain,
             require_level: 0,
@@ -2261,6 +2285,7 @@ impl Executor {
         globals: &mut Globals,
         class_id: ClassId,
         name: IdentId,
+        func_id: Option<FuncId>,
     ) -> Result<()> {
         let module = globals.store[class_id].get_module();
         let (hook, receiver) = if let Some(original_obj) = module.is_singleton() {
@@ -2268,8 +2293,36 @@ impl Executor {
         } else {
             (IdentId::METHOD_ADDED, module.into())
         };
-        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        // `caller_locations` inside the hook must report the line of the
+        // `def` that triggered it. The hook is dispatched through the
+        // invoker, which writes no caller pc, so the location travels
+        // out-of-band — see `hook_sites`.
+        let pushed = func_id
+            .and_then(|func_id| globals.store[func_id].is_iseq())
+            .map(|iseq| {
+                let info = &globals.store[iseq];
+                (
+                    crate::globals::display_path(&info.sourceinfo).into_owned(),
+                    info.sourceinfo.get_line(&info.loc) as u32,
+                )
+            });
+        let pushed = pushed.is_some_and(|site| {
+            self.hook_sites.push(site);
+            true
+        });
+        let res =
+            self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None);
+        if pushed {
+            self.hook_sites.pop();
+        }
+        res?;
         Ok(())
+    }
+
+    /// The definition site of the innermost `method_added`-style hook
+    /// currently running, if any. See [`Self::hook_sites`].
+    pub(crate) fn hook_site(&self) -> Option<&(String, u32)> {
+        self.hook_sites.last()
     }
 
     /// Register a singleton method and invoke the singleton_method_added hook.
@@ -2317,7 +2370,7 @@ impl Executor {
         // `alias`); checking before the store mutation (as the `def` path
         // used to) misses the very definition that sets the flags.
         Codegen::check_bop_redefine(self.cfp());
-        self.invoke_method_added(globals, class_id, name)
+        self.invoke_method_added(globals, class_id, name, Some(func_id))
     }
 
     /// Like `add_method`, but records an explicit *original* definition
@@ -2335,7 +2388,7 @@ impl Executor {
         globals.add_method_with_original(class_id, name, func_id, visibility, original_name);
         // BOP-redefinition eviction — see `add_method`.
         Codegen::check_bop_redefine(self.cfp());
-        self.invoke_method_added(globals, class_id, name)
+        self.invoke_method_added(globals, class_id, name, Some(func_id))
     }
 
     /// Create an alias and invoke the method_added hook.
@@ -2349,7 +2402,7 @@ impl Executor {
         globals.alias_method_for_class(class_id, new_name, old_name)?;
         // BOP-redefinition eviction (`alias_method :+, :other`) — see `add_method`.
         Codegen::check_bop_redefine(self.cfp());
-        self.invoke_method_added(globals, class_id, new_name)
+        self.invoke_method_added(globals, class_id, new_name, None)
     }
 
     /// Define an attr_reader and invoke the method_added hook.
@@ -2361,7 +2414,7 @@ impl Executor {
         visi: Visibility,
     ) -> Result<IdentId> {
         let name = globals.define_attr_reader(class_id, method_name, visi);
-        self.invoke_method_added(globals, class_id, name)?;
+        self.invoke_method_added(globals, class_id, name, None)?;
         Ok(name)
     }
 
@@ -2374,7 +2427,7 @@ impl Executor {
         visi: Visibility,
     ) -> Result<IdentId> {
         let name = globals.define_attr_writer(class_id, method_name, visi);
-        self.invoke_method_added(globals, class_id, name)?;
+        self.invoke_method_added(globals, class_id, name, None)?;
         Ok(name)
     }
 
@@ -3326,28 +3379,6 @@ impl Executor {
             // `rb_vm_get_cref` / `rb_const_set` does the same.
             None => self.lexical_context_class_id(globals),
         };
-        // Capture the call-site location *before* we create / look up
-        // the class so we can attach it to the constant if this is the
-        // first definition. Walks the CFP chain for the nearest Ruby
-        // (iseq) frame and uses its current PC line — matches CRuby's
-        // `Module#const_source_location` returning `[__FILE__,
-        // __LINE__]` of `class Foo; end` / `module Foo; end`.
-        let class_def_loc = {
-            let mut frame = Some(self.cfp());
-            let mut found = None;
-            while let Some(c) = frame {
-                let fid = c.lfp().func_id();
-                if let Some(iseq_id) = globals.store[fid].is_iseq() {
-                    let iseq = &globals.store[iseq_id];
-                    let line = iseq.sourceinfo.get_line(&iseq.loc) as u32;
-                    let file = iseq.sourceinfo.file_name().to_string();
-                    found = Some((file, line));
-                    break;
-                }
-                frame = c.prev();
-            }
-            found
-        };
         // A qualified definition (`class A::B`) is a qualified constant
         // access, so `private_constant`-marked names are rejected — CRuby
         // raises "private constant A::B referenced". An unqualified `class
@@ -3390,9 +3421,6 @@ impl Executor {
                 } else {
                     let new_class =
                         globals.define_class_with_identid(name, Some(superclass), parent);
-                    if let Some((file, line)) = class_def_loc.clone() {
-                        globals.store[parent].record_constant_location(name, file, line);
-                    }
                     // CRuby invokes `const_added` BEFORE `inherited` when a
                     // new class is created via the `class` keyword.
                     let parent_val = globals.store[parent].get_module().into();
@@ -3412,15 +3440,16 @@ impl Executor {
                         None,
                         None,
                     )?;
+                    // Marked *after* the hooks, so a hook that defines a
+                    // class of its own consumes its own mark first and
+                    // does not steal this one.
+                    self.pending_const_loc = Some((parent, name));
                     return self.finish_class_def(globals, new_class);
                 };
                 (new_module, true)
             }
         };
         if is_new {
-            if let Some((file, line)) = class_def_loc {
-                globals.store[parent].record_constant_location(name, file, line);
-            }
             // Module case: const_added without inherited.
             let parent_val = globals.store[parent].get_module().into();
             self.invoke_method_inner(
@@ -3431,9 +3460,23 @@ impl Executor {
                 None,
                 None,
             )?;
+            self.pending_const_loc = Some((parent, name));
         }
         self.push_class_context(self_val.id());
         Ok(self_val.as_val())
+    }
+
+    /// Consume the mark left by `define_class` and record *loc* as the
+    /// new constant's source location. See `pending_const_loc`.
+    pub(crate) fn record_pending_const_loc(
+        &mut self,
+        globals: &mut Globals,
+        file: String,
+        line: u32,
+    ) {
+        if let Some((parent, name)) = self.pending_const_loc.take() {
+            globals.store[parent].record_constant_location(name, file, line);
+        }
     }
 
     fn finish_class_def(&mut self, _globals: &mut Globals, new_class: Module) -> Result<Value> {
