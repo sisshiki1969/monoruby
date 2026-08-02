@@ -529,17 +529,6 @@ impl IoInner {
         res.map_err(|e| drain_err(e, store))
     }
 
-    /// Bytes accepted from Ruby but not yet handed to the kernel.
-    pub fn buffered_write_len(&self) -> usize {
-        match self {
-            Self::Stdout => stdout_buf().buffered_len(),
-            Self::Stderr => stderr_buf().buffered_len(),
-            Self::File(file) => file.wbuf.borrow().buffered_len(),
-            Self::Popen(p) => p.writer.as_ref().map(|w| w.buffered_len()).unwrap_or(0),
-            Self::Stdin | Self::Closed(..) => 0,
-        }
-    }
-
     /// `IO#sync`.
     pub fn sync(&self) -> bool {
         match self {

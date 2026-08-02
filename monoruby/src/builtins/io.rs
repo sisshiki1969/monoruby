@@ -8565,4 +8565,139 @@ mod tests {
             "##,
         );
     }
+
+    /// monoruby buffers IO itself (see `value/rvalue/io/buf.rs`), so the
+    /// points at which bytes actually reach the fd are observable. Each
+    /// case is compared against CRuby by the harness.
+    #[test]
+    fn io_write_buffering_points() {
+        // A buffered write is invisible until the buffer is flushed,
+        // and `#flush` / `#close` both push it out.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_points.txt"
+            res = []
+            f = File.open(path, "w")
+            f.write("abc")
+            res << File.size?(path)     # nil: still buffered
+            f.flush
+            res << File.size?(path)     # 3
+            f.write("de")
+            f.close
+            res << File.size?(path)     # 5: close flushes
+            res << File.read(path)
+            File.unlink(path)
+            res
+            "##,
+        );
+        // `sync = true` writes through; `#sync` round-trips.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_sync.txt"
+            res = []
+            f = File.open(path, "w")
+            res << f.sync
+            f.sync = true
+            res << f.sync
+            f.write("xyz")
+            res << File.size?(path)     # 3: written through
+            f.sync = false
+            res << f.sync
+            f.write("pq")
+            res << File.size?(path)     # still 3
+            f.close
+            res << File.size?(path)
+            File.unlink(path)
+            res
+            "##,
+        );
+        // A read through the same descriptor sees the pending write, and
+        // so does a positional read; seeking flushes first too.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_rw.txt"
+            res = []
+            f = File.open(path, "w+")
+            f.write("hello")
+            f.rewind
+            res << f.read              # "hello"
+            f.write("world")
+            res << f.pread(10, 0)      # "helloworld"
+            f.seek(0)
+            res << f.read
+            f.close
+            File.unlink(path)
+            res
+            "##,
+        );
+        // A write bigger than the 8KiB buffer goes straight out, and the
+        // content still comes back in order.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_big.txt"
+            f = File.open(path, "w")
+            f.write("head")
+            f.write("z" * 20000)
+            f.write("tail")
+            f.close
+            s = File.read(path)
+            res = [s.size, s[0, 4], s[-4, 4], s.count("z")]
+            File.unlink(path)
+            res
+            "##,
+        );
+    }
+
+    /// `#sync` defaults follow CRuby: only the process's stderr, a pipe's
+    /// write end, a socket and a popen stream start synchronized.
+    #[test]
+    fn io_sync_defaults() {
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            res = [$stdout.sync, $stderr.sync, $stdin.sync, r.sync, w.sync]
+            r.close
+            w.close
+            res
+            "##,
+        );
+        // A pipe's write end is synchronized, so the reader in the same
+        // process sees the bytes without an explicit flush.
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            w.write("through")
+            res = r.read(7)
+            r.close
+            w.close
+            res
+            "##,
+        );
+        run_test_once(
+            r##"
+            io = IO.popen("cat", "r+")
+            res = [io.sync]
+            io.close
+            res
+            "##,
+        );
+        // `#sync` / `#sync=` on a closed stream raise IOError.
+        run_test_error(r##"f = File.open("/tmp/mr_sync_closed.txt", "w"); f.close; f.sync"##);
+        run_test_error(r##"f = File.open("/tmp/mr_sync_closed2.txt", "w"); f.close; f.sync = true"##);
+    }
+
+    /// `Kernel#p` / `#print` and `$stdout.write` share one buffer, so
+    /// their output cannot be reordered against each other.
+    #[test]
+    fn stdout_writers_share_one_buffer() {
+        run_test_once(
+            r##"
+            $stdout.write("a")
+            print "b"
+            $stdout.write("c")
+            $stdout.flush
+            nil
+            "##,
+        );
+    }
 }

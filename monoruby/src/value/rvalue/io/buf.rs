@@ -448,3 +448,349 @@ impl<T: Write> IoWriter<T> {
         self.buf.write(&mut self.inner, data, progress, signal_pending)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sink that records everything written and can be told to fail the
+    /// next `write` with a chosen error, or to accept only `chunk` bytes
+    /// at a time (short writes, as a pipe does).
+    #[derive(Default, Debug)]
+    struct MockSink {
+        written: Vec<u8>,
+        chunk: Option<usize>,
+        fail_with: Vec<std::io::ErrorKind>,
+        calls: usize,
+    }
+
+    impl Write for MockSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.calls += 1;
+            if !self.fail_with.is_empty() {
+                return Err(self.fail_with.remove(0).into());
+            }
+            let n = self.chunk.map_or(buf.len(), |c| c.min(buf.len()));
+            self.written.extend_from_slice(&buf[..n]);
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn never() -> impl Fn() -> bool {
+        || false
+    }
+
+    fn write_all(w: &mut WriteBuf, sink: &mut MockSink, data: &[u8]) {
+        let mut progress = 0;
+        w.write(sink, data, &mut progress, &never()).ok().unwrap();
+        assert_eq!(progress, data.len());
+    }
+
+    // ---------------------------------------------------------------
+    // write side
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn buffered_write_holds_until_capacity() {
+        let mut w = WriteBuf::new(false, false);
+        let mut sink = MockSink::default();
+        write_all(&mut w, &mut sink, b"hello");
+        // Nothing reaches the sink yet.
+        assert_eq!(w.buffered_len(), 5);
+        assert!(sink.written.is_empty());
+        w.drain(&mut sink, &never()).ok().unwrap();
+        assert_eq!(sink.written, b"hello");
+        assert_eq!(w.buffered_len(), 0);
+    }
+
+    #[test]
+    fn buffered_write_spills_at_capacity() {
+        let mut w = WriteBuf::new(false, false);
+        let mut sink = MockSink::default();
+        // Just under capacity stays buffered...
+        let small = vec![b'a'; IO_BUF_CAPA - 1];
+        write_all(&mut w, &mut sink, &small);
+        assert!(sink.written.is_empty());
+        // ...and the byte that would fill it pushes everything out.
+        write_all(&mut w, &mut sink, b"b");
+        assert_eq!(sink.written.len(), IO_BUF_CAPA);
+        assert_eq!(w.buffered_len(), 0);
+    }
+
+    #[test]
+    fn write_larger_than_buffer_goes_direct() {
+        let mut w = WriteBuf::new(false, false);
+        let mut sink = MockSink::default();
+        write_all(&mut w, &mut sink, b"pending");
+        let big = vec![b'z'; IO_BUF_CAPA * 2];
+        write_all(&mut w, &mut sink, &big);
+        // The buffered prefix is flushed first, so ordering holds, and
+        // the large write is not copied through the buffer.
+        assert_eq!(&sink.written[..7], b"pending");
+        assert_eq!(sink.written.len(), 7 + big.len());
+        assert_eq!(w.buffered_len(), 0);
+    }
+
+    #[test]
+    fn sync_and_tty_write_through() {
+        for (sync, tty) in [(true, false), (false, true)] {
+            let mut w = WriteBuf::new(sync, tty);
+            assert!(w.writes_through());
+            let mut sink = MockSink::default();
+            write_all(&mut w, &mut sink, b"now");
+            assert_eq!(sink.written, b"now");
+            assert_eq!(w.buffered_len(), 0);
+        }
+    }
+
+    #[test]
+    fn set_sync_flushes_the_buffered_prefix_on_the_next_write() {
+        let mut w = WriteBuf::new(false, false);
+        let mut sink = MockSink::default();
+        write_all(&mut w, &mut sink, b"buffered");
+        assert!(!w.sync());
+        w.set_sync(true);
+        assert!(w.sync());
+        write_all(&mut w, &mut sink, b"-through");
+        assert_eq!(sink.written, b"buffered-through");
+    }
+
+    #[test]
+    fn short_writes_are_retried_until_everything_is_out() {
+        let mut w = WriteBuf::new(true, false);
+        let mut sink = MockSink {
+            chunk: Some(3),
+            ..Default::default()
+        };
+        write_all(&mut w, &mut sink, b"0123456789");
+        assert_eq!(sink.written, b"0123456789");
+        assert!(sink.calls >= 4);
+    }
+
+    #[test]
+    fn bare_eintr_is_retried() {
+        let mut w = WriteBuf::new(false, false);
+        let mut sink = MockSink {
+            fail_with: vec![std::io::ErrorKind::Interrupted],
+            ..Default::default()
+        };
+        write_all(&mut w, &mut sink, b"x");
+        // No signal is pending, so the EINTR is just a restart.
+        w.drain(&mut sink, &never()).ok().unwrap();
+        assert_eq!(sink.written, b"x");
+    }
+
+    #[test]
+    fn a_pending_signal_stops_the_drain_and_keeps_the_rest() {
+        let mut w = WriteBuf::new(false, false);
+        let mut sink = MockSink {
+            chunk: Some(2),
+            ..Default::default()
+        };
+        write_all(&mut w, &mut sink, b"abcdef");
+        // Signal pending from the start: nothing is written, everything
+        // stays buffered for the retry.
+        let err = w.drain(&mut sink, &|| true).err().unwrap();
+        assert!(matches!(err, DrainErr::Signal));
+        assert_eq!(w.buffered_len(), 6);
+        assert!(sink.written.is_empty());
+        // The retry, with no signal pending, completes it.
+        w.drain(&mut sink, &never()).ok().unwrap();
+        assert_eq!(sink.written, b"abcdef");
+    }
+
+    #[test]
+    fn would_block_keeps_only_what_the_kernel_refused() {
+        let mut w = WriteBuf::new(false, false);
+        let mut sink = MockSink::default();
+        write_all(&mut w, &mut sink, b"abcdef");
+        sink.chunk = Some(2);
+        sink.fail_with = vec![];
+        // First `write(2)` takes 2 bytes, the second reports EAGAIN.
+        let mut sink = MockSink {
+            chunk: Some(2),
+            fail_with: vec![],
+            ..Default::default()
+        };
+        w.drain(&mut sink, &never()).ok().unwrap();
+        assert_eq!(sink.written, b"abcdef");
+
+        // Now a sink that refuses outright.
+        let mut w = WriteBuf::new(false, false);
+        let mut sink = MockSink {
+            fail_with: vec![std::io::ErrorKind::WouldBlock],
+            ..Default::default()
+        };
+        write_all(&mut w, &mut sink, b"xy");
+        let err = w.drain(&mut sink, &never()).err().unwrap();
+        assert!(matches!(err, DrainErr::WouldBlock));
+        assert_eq!(w.buffered_len(), 2);
+    }
+
+    #[test]
+    fn a_hard_error_surfaces_and_a_zero_write_is_an_error() {
+        let mut w = WriteBuf::new(false, false);
+        let mut sink = MockSink {
+            fail_with: vec![std::io::ErrorKind::BrokenPipe],
+            ..Default::default()
+        };
+        write_all(&mut w, &mut sink, b"x");
+        assert!(matches!(
+            w.drain(&mut sink, &never()).err().unwrap(),
+            DrainErr::Io(_)
+        ));
+
+        let mut w = WriteBuf::new(false, false);
+        let mut sink = MockSink {
+            chunk: Some(0),
+            ..Default::default()
+        };
+        write_all(&mut w, &mut sink, b"x");
+        assert!(matches!(
+            w.drain(&mut sink, &never()).err().unwrap(),
+            DrainErr::Io(_)
+        ));
+    }
+
+    #[test]
+    fn write_through_failure_leaves_nothing_buffered() {
+        // A broken pipe must not strand the bytes: a later `#flush` or
+        // `#close` would raise EPIPE all over again.
+        let mut w = WriteBuf::new(true, false);
+        let mut sink = MockSink {
+            fail_with: vec![std::io::ErrorKind::BrokenPipe],
+            ..Default::default()
+        };
+        let mut progress = 0;
+        let err = w.write(&mut sink, b"gone", &mut progress, &never()).err().unwrap();
+        assert!(matches!(err, DrainErr::Io(_)));
+        assert_eq!(w.buffered_len(), 0);
+        assert_eq!(progress, 0);
+    }
+
+    #[test]
+    fn io_writer_pairs_the_buffer_with_its_sink() {
+        let mut w = IoWriter::new(MockSink::default(), false, false);
+        let mut progress = 0;
+        w.write(b"pair", &mut progress, &never()).ok().unwrap();
+        assert_eq!(w.buffered_len(), 4);
+        assert!(!w.sync());
+        w.set_sync(true);
+        assert!(w.sync());
+        w.drain(&never()).ok().unwrap();
+        assert_eq!(w.get_ref().written, b"pair");
+    }
+
+    // ---------------------------------------------------------------
+    // read side
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn reader_refills_on_demand_and_reports_what_it_holds() {
+        let data: Vec<u8> = (0..100u8).collect();
+        let mut r = IoReader::new(std::io::Cursor::new(data.clone()));
+        assert!(r.buffer().is_empty());
+        let mut out = [0u8; 10];
+        assert_eq!(r.read(&mut out).unwrap(), 10);
+        assert_eq!(out, data[..10]);
+        // One refill pulled everything; the rest is buffered.
+        assert_eq!(r.buffer().len(), 90);
+        let mut rest = Vec::new();
+        r.read_to_end(&mut rest).unwrap();
+        assert_eq!(rest, data[10..]);
+        assert_eq!(r.read(&mut out).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_request_at_least_as_large_as_the_buffer_bypasses_it() {
+        let data = vec![7u8; IO_BUF_CAPA * 2];
+        let mut r = IoReader::new(std::io::Cursor::new(data.clone()));
+        let mut out = vec![0u8; IO_BUF_CAPA * 2];
+        let n = r.read(&mut out).unwrap();
+        assert_eq!(n, data.len());
+        assert!(r.buffer().is_empty());
+    }
+
+    #[test]
+    fn fill_buf_and_consume_walk_the_buffer() {
+        let mut r = IoReader::new(std::io::Cursor::new(b"abcdef".to_vec()));
+        assert_eq!(r.fill_buf().unwrap(), b"abcdef");
+        r.consume(2);
+        assert_eq!(r.buffer(), b"cdef");
+        // Over-consuming saturates rather than running past the buffer.
+        r.consume(100);
+        assert!(r.buffer().is_empty());
+        assert_eq!(r.fill_buf().unwrap(), b"");
+    }
+
+    #[test]
+    fn seek_is_relative_to_the_logical_position() {
+        let data: Vec<u8> = (0..50u8).collect();
+        let mut r = IoReader::new(std::io::Cursor::new(data));
+        let mut out = [0u8; 4];
+        r.read(&mut out).unwrap(); // logical position 4, fd at 50
+        assert_eq!(r.buffer().len(), 46);
+        // `Current(0)` reports the logical position and drops the buffer.
+        assert_eq!(r.seek(SeekFrom::Current(0)).unwrap(), 4);
+        assert!(r.buffer().is_empty());
+        r.read(&mut out).unwrap();
+        assert_eq!(out, [4, 5, 6, 7]);
+        // Absolute and relative seeks both discard the read-ahead.
+        assert_eq!(r.seek(SeekFrom::Start(10)).unwrap(), 10);
+        r.read(&mut out).unwrap();
+        assert_eq!(out, [10, 11, 12, 13]);
+        assert_eq!(r.seek(SeekFrom::Current(-4)).unwrap(), 10);
+        assert_eq!(r.seek(SeekFrom::End(-1)).unwrap(), 49);
+    }
+
+    /// The `Debug` impls are diagnostics, but they read the buffer state
+    /// through the same accessors the hot paths use — a wrong field here
+    /// is a wrong field everywhere.
+    #[test]
+    fn debug_reports_the_buffer_state() {
+        let mut r = IoReader::new(std::io::Cursor::new(b"abcdef".to_vec()));
+        let mut out = [0u8; 2];
+        r.read(&mut out).unwrap();
+        assert!(format!("{r:?}").contains("buffered: 4"));
+
+        let mut w = IoWriter::new(MockSink::default(), true, false);
+        let mut progress = 0;
+        w.write(b"xyz", &mut progress, &never()).ok().unwrap();
+        let s = format!("{w:?}");
+        assert!(s.contains("sync: true"), "{s}");
+        assert!(s.contains("buffered: 0"), "{s}");
+
+        // A standard descriptor reports its fd, and reads/writes reach it
+        // without going through `std::io::stdout()`.
+        let devnull = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .unwrap();
+        let fd = devnull.as_raw_fd();
+        let mut std_fd = StdFd::new(fd);
+        assert_eq!(std_fd.as_raw_fd(), fd);
+        assert_eq!(format!("{std_fd:?}"), format!("StdFd({fd})"));
+        assert_eq!(std_fd.write(b"discarded").unwrap(), 9);
+        std_fd.flush().unwrap();
+        // `StdFd` borrows: dropping it must not close the descriptor.
+        drop(std_fd);
+        assert_eq!((&devnull).write(b"still open").unwrap(), 10);
+
+        let zero_file = std::fs::File::open("/dev/zero").unwrap();
+        let mut zero = StdFd::new(zero_file.as_raw_fd());
+        let mut buf = [1u8; 4];
+        assert_eq!(zero.read(&mut buf).unwrap(), 4);
+        assert_eq!(buf, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn accessors_reach_the_wrapped_stream() {
+        let mut r = IoReader::new(std::io::Cursor::new(b"xy".to_vec()));
+        assert_eq!(r.get_ref().position(), 0);
+        r.get_mut().set_position(1);
+        assert_eq!(r.into_inner().position(), 1);
+    }
+}
