@@ -325,7 +325,7 @@ fn module_nesting(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let nesting = vm.current_class_nesting();
+    let nesting = vm.current_class_nesting(globals);
     let ary: Vec<Value> = nesting
         .into_iter()
         .map(|class_id| globals.store[class_id].get_module().as_val())
@@ -949,6 +949,12 @@ fn class_eval(
         let expr = crate::builtins::eval_source_bytes(vm, globals, args[0])?;
         let cfp = vm.cfp();
         let caller_cfp = cfp.prev().unwrap();
+        // The eval body is anchored to the Ruby scope that *wrote* the
+        // call — its locals and its lexical nesting — which is not the
+        // immediate caller when we were reached through a builtin
+        // (`send`, a Rust helper, mspec, …). The location below still
+        // comes from the immediate caller, whose pc we were handed.
+        let outer_cfp = caller_cfp.nearest_ruby_frame();
         let path = if supplied >= 2 {
             args[1].coerce_to_str(vm, globals)?
         } else {
@@ -965,12 +971,12 @@ fn class_eval(
         let fid = globals.compile_script_eval(
             expr,
             path,
-            caller_cfp,
+            outer_cfp,
             Some(module.id()),
             lineno,
             src_encoding,
         )?;
-        let proc = ProcData::new(caller_cfp.lfp(), fid);
+        let proc = ProcData::new(outer_cfp.lfp(), fid);
         // class_eval "..." string form: runtime-only push, just like
         // the block form. The compiled eval body itself receives the
         // module as its lexical context via `compile_script_eval`'s
@@ -7374,6 +7380,83 @@ mod tests {
             c = m::N.name
             m.set_temporary_name "y"
             [a, b, c, m::N.name]
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_nesting_inside_method_body() {
+        // `Module.nesting` reports the nesting where the running code
+        // was *written*. Calling a method from an unrelated class body
+        // must not leak that body's scope into the answer.
+        run_test(
+            r#"
+            module NestA
+              module NestB
+                def self.f; Module.nesting.map(&:to_s); end
+                def self.g; [1].map { Module.nesting.map(&:to_s) }.first; end
+              end
+            end
+            module NestC
+              $r = [NestA::NestB.f, NestA::NestB.g]
+            end
+            $r << Module.nesting.map(&:to_s)
+            "#,
+        );
+    }
+
+    #[test]
+    fn eval_resolves_constants_in_the_caller_scope() {
+        // The eval body is anchored to the Ruby scope that wrote the
+        // call, even when reached through a builtin frame (`send`), and
+        // the receiver of a `module_eval` / `instance_eval` is pushed
+        // *onto* that scope rather than replacing it.
+        run_test(
+            r#"
+            module EvA
+              Lookup = :found
+              module EvB
+                def self.direct;      module_eval("Lookup"); end
+                def self.via_send(m); send(m, "Lookup"); end
+                def self.nesting;     module_eval("Module.nesting.map(&:to_s)"); end
+                def self.plain;       eval("Lookup"); end
+                def self.plain_send(m); send(m, "Lookup"); end
+              end
+            end
+            [EvA::EvB.direct,
+             EvA::EvB.via_send(:module_eval),
+             EvA::EvB.nesting,
+             EvA::EvB.plain,
+             EvA::EvB.plain_send(:eval)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn instance_eval_constant_lookup_order() {
+        // `instance_eval "..."` looks in the receiver's singleton class,
+        // then the receiver's class, and only then in the caller's
+        // lexical scope.
+        run_test(
+            r#"
+            module IEv
+              module ReceiverScope
+                class Receiver
+                  FOO = :Receiver
+                end
+              end
+              module CallerScope
+                FOO = :CallerScope
+                class Caller
+                  FOO = :Caller
+                  def get(receiver) = receiver.instance_eval("FOO")
+                end
+              end
+            end
+            r = IEv::ReceiverScope::Receiver.new
+            a = IEv::CallerScope::Caller.new.get(r)
+            r.singleton_class.const_set(:FOO, :singleton)
+            [a, IEv::CallerScope::Caller.new.get(r)]
             "#,
         );
     }

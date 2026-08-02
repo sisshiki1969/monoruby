@@ -1338,20 +1338,32 @@ impl Executor {
             .lexical_class(&globals.store)
     }
 
-    /// Returns the lexical class nesting at the current point of execution,
-    /// from innermost to outermost. Used by `Module.nesting`.
-    pub(crate) fn current_class_nesting(&self) -> Vec<ClassId> {
-        let frame = match self.lexical_class.last() {
-            Some(f) => f,
-            None => return vec![],
+    /// Returns the lexical class nesting captured where the currently
+    /// executing Ruby code was *written*, innermost first — CRuby's cref
+    /// chain, which is what `Module.nesting` reports.
+    ///
+    /// The runtime cref stack cannot answer this: it is not pushed per
+    /// call, so a method called from inside some *other* class body would
+    /// see that body's scope rather than its own def-site nesting. The
+    /// per-iseq `lexical_context` is exactly the def-site chain
+    /// (outermost first), so it is the authority here.
+    pub(crate) fn current_class_nesting(&self, globals: &Globals) -> Vec<ClassId> {
+        // Skip our own builtin frame(s) to the Ruby code that asked.
+        let fid = self.cfp().get_source_pos();
+        let Some(mut iseq) = globals.store[fid].is_iseq() else {
+            return vec![];
         };
-        frame
+        // A block carries no lexical context of its own; it is written
+        // inside its mother (a method body, a class body or the top
+        // level), and inherits that scope.
+        if globals.store[iseq].lexical_context.is_empty() {
+            iseq = globals.store[iseq].mother().0;
+        }
+        globals.store[iseq]
+            .lexical_context
             .iter()
             .rev()
-            .filter_map(|cref| match cref.context {
-                DefinitionContext::Class(class_id) => Some(class_id),
-                DefinitionContext::Receiver(_) => None,
-            })
+            .copied()
             .collect()
     }
 

@@ -559,11 +559,15 @@ impl Store {
         let func_id = cfp.lfp().func_id();
         if let Some(iseq_id) = self[func_id].is_iseq() {
             let iseq = &self[iseq_id];
-            let loc = if let Some(pc) = pc {
-                let bc_index = iseq.get_pc_index(Some(pc));
-                iseq.sourcemap[bc_index.to_usize()]
-            } else {
-                iseq.loc
+            // The pc is only meaningful if it actually points into this
+            // frame's bytecode. It may not: when the call was reached
+            // through a JIT-inlined dispatch (`send`), the frame we land
+            // on is the inliner's, not the one whose pc we were handed.
+            // Fall back to the function's own location there rather than
+            // indexing the sourcemap out of range.
+            let loc = match pc.filter(|pc| iseq.contains_pc(*pc)) {
+                Some(pc) => iseq.sourcemap[iseq.get_pc_index(Some(pc)).to_usize()],
+                None => iseq.loc,
             };
             format!(
                 "{}:{}",

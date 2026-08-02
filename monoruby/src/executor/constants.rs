@@ -362,14 +362,29 @@ impl Executor {
         // eval where the eval's ISeqInfo has the receiver's class set).
         let frame_func = self.cfp().lfp().func_id();
         if frame_func != current_func {
-            if let Some(v) = self.search_lexical_stack(globals, name, frame_func)? {
-                return Ok(Some(v));
-            }
             // instance_eval("...") checks the receiver's class between
-            // the singleton class and the caller's lexical scopes.
-            if let Some(c) = Self::instance_eval_class(globals, frame_func) {
-                if globals.store.get_constant(c, name).is_some() {
-                    if let Some(v) = self.get_constant(globals, c, name)? {
+            // the singleton class and the caller's lexical scopes. The
+            // singleton is the innermost entry of the eval body's own
+            // nesting and the caller's scopes are the rest, so the walk
+            // is split around the receiver-class check.
+            match Self::instance_eval_class(globals, frame_func) {
+                Some(c) => {
+                    if let Some(v) = self.search_lexical_slice(globals, name, frame_func, 0..1)? {
+                        return Ok(Some(v));
+                    }
+                    if globals.store.get_constant(c, name).is_some()
+                        && let Some(v) = self.get_constant(globals, c, name)?
+                    {
+                        return Ok(Some(v));
+                    }
+                    if let Some(v) =
+                        self.search_lexical_slice(globals, name, frame_func, 1..usize::MAX)?
+                    {
+                        return Ok(Some(v));
+                    }
+                }
+                None => {
+                    if let Some(v) = self.search_lexical_stack(globals, name, frame_func)? {
                         return Ok(Some(v));
                     }
                 }
@@ -767,6 +782,20 @@ impl Executor {
         name: IdentId,
         current_func: FuncId,
     ) -> Result<Option<Value>> {
+        self.search_lexical_slice(globals, name, current_func, 0..usize::MAX)
+    }
+
+    /// Walk `current_func`'s lexical nesting, innermost first, over the
+    /// given slice of it. The range exists for `instance_eval "..."`,
+    /// whose lookup order interleaves the receiver's *class* between the
+    /// innermost entry (the receiver's singleton class) and the rest.
+    fn search_lexical_slice(
+        &mut self,
+        globals: &mut Globals,
+        name: IdentId,
+        current_func: FuncId,
+        range: std::ops::Range<usize>,
+    ) -> Result<Option<Value>> {
         // `current_func` can legitimately be a builtin frame when the
         // `Module#class_eval` / `instance_eval` / `Kernel#eval` site
         // walked the cfp chain to find the nearest Ruby frame for the
@@ -787,7 +816,11 @@ impl Executor {
         if let Some(first) = stack.first_mut() {
             *first = self.runtime_innermost_cref(globals, *first, current_func);
         }
-        for module in stack {
+        let end = range.end.min(stack.len());
+        if range.start >= end {
+            return Ok(None);
+        }
+        for module in stack[range.start..end].to_vec() {
             if globals.store.get_constant(module, name).is_some() {
                 // Trigger autoload / read the value. If the autoload
                 // resolved to "no constant" (e.g. the file did not

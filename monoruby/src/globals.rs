@@ -968,7 +968,21 @@ impl Globals {
                 let fid =
                     bytecodegen::bytecode_compile_eval(self, result, outer, Loc::default(), None)?;
                 if let Some(class_id) = receiver_class {
+                    // The receiver is pushed *onto* the eval site's own
+                    // nesting, not in place of it: CRuby resolves a
+                    // constant in `Mod.module_eval "Lookup"` through the
+                    // receiver first and then the caller's lexical
+                    // scope. A block carries no nesting of its own, so
+                    // take its mother's.
+                    let outer_ctx = {
+                        let mut iseq = outer;
+                        if self.store[iseq].lexical_context.is_empty() {
+                            iseq = self.store[iseq].mother().0;
+                        }
+                        self.store[iseq].lexical_context.clone()
+                    };
                     if let Some(info) = self.store.iseq_mut(fid) {
+                        info.lexical_context = outer_ctx;
                         info.lexical_context.push(class_id);
                         // A receiver-anchored eval (`class_eval` /
                         // `instance_eval` with a string) defines

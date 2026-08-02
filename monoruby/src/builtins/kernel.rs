@@ -3458,6 +3458,12 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     let expr = crate::builtins::eval_source_bytes(vm, globals, lfp.arg(0))?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
+    // The eval body is anchored to the Ruby scope that *wrote* the
+    // call — its locals and its lexical nesting — which is not the
+    // immediate caller when we were reached through a builtin
+    // (`send`, a Rust helper, mspec, …). The location below still
+    // comes from the immediate caller, whose pc we were handed.
+    let outer_cfp = caller_cfp.nearest_ruby_frame();
     let fname = if let Some(f) = lfp.try_arg(2) {
         f.coerce_to_str(vm, globals)?
     } else {
@@ -3484,10 +3490,10 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
         let fid = globals
-            .compile_script_eval(expr, fname, caller_cfp, None, lineno, src_encoding)
+            .compile_script_eval(expr, fname, outer_cfp, None, lineno, src_encoding)
             .map_err(downgrade_eval_fatal)?;
         vm.flush_compile_warnings(globals);
-        let proc = ProcData::new(caller_cfp.lfp(), fid);
+        let proc = ProcData::new(outer_cfp.lfp(), fid);
         // Isolate the eval's cref so toggles like `module_function`,
         // `private`, … set inside the eval'd source don't leak to
         // the surrounding class/module body. Mirrors CRuby's

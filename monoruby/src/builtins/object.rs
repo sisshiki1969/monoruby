@@ -483,6 +483,12 @@ fn instance_eval_inner(
         let expr = crate::builtins::eval_source_bytes(vm, globals, args[0])?;
         let cfp = vm.cfp();
         let caller_cfp = cfp.prev().unwrap();
+        // The eval body is anchored to the Ruby scope that *wrote* the
+        // call — its locals and its lexical nesting — which is not the
+        // immediate caller when we were reached through a builtin
+        // (`send`, a Rust helper, mspec, …). The location below still
+        // comes from the immediate caller, whose pc we were handed.
+        let outer_cfp = caller_cfp.nearest_ruby_frame();
         let path = if argc >= 2 {
             args[1].coerce_to_str(vm, globals)?
         } else {
@@ -503,7 +509,7 @@ fn instance_eval_inner(
         let fid = globals.compile_script_eval(
             expr,
             path,
-            caller_cfp,
+            outer_cfp,
             Some(receiver_class),
             lineno,
             src_encoding,
@@ -516,7 +522,7 @@ fn instance_eval_inner(
             info.instance_eval_class = Some(real_class);
         }
         vm.flush_compile_warnings(globals);
-        let proc = ProcData::new(caller_cfp.lfp(), fid);
+        let proc = ProcData::new(outer_cfp.lfp(), fid);
         vm.invoke_block_with_self(globals, &proc, self_val, &[])
     } else {
         Err(MonorubyErr::wrong_number_of_arg_range(argc, 1..=3))
