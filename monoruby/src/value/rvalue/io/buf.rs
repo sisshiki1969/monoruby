@@ -325,12 +325,18 @@ impl WriteBuf {
     /// A write-through stream (`sync`, or a TTY) never touches the buffer:
     /// CRuby's `io_binwrite` hands the bytes straight to `write(2)`, so a
     /// failure leaves nothing behind for a later `#flush` or `#close` to
-    /// re-raise — which is what a broken pipe depends on. `*progress`
-    /// records what the kernel took, so a restart after a signal or an
-    /// `EAGAIN` park resumes mid-buffer without duplicating output.
+    /// re-raise — which is what a broken pipe depends on.
     ///
-    /// Otherwise the bytes are accumulated and only handed over once the
-    /// buffer reaches [`IO_BUF_CAPA`].
+    /// Otherwise the bytes are accumulated, *unless* they would not fit
+    /// alongside what is already buffered: then the buffer is drained and
+    /// the data goes straight to the kernel, exactly as CRuby does
+    /// (`fptr->wbuf.capa <= fptr->wbuf.len + len`). Copying a 64 KiB
+    /// write through an 8 KiB buffer would cost more than it saves.
+    ///
+    /// `*progress` records what has been accepted — bytes copied into the
+    /// buffer, or bytes the kernel took — so a restart after a signal or
+    /// an `EAGAIN` park resumes exactly where it stopped and never
+    /// duplicates output.
     pub(crate) fn write(
         &mut self,
         sink: &mut impl Write,
@@ -338,38 +344,49 @@ impl WriteBuf {
         progress: &mut usize,
         signal_pending: &dyn Fn() -> bool,
     ) -> std::result::Result<(), DrainErr> {
-        if self.writes_through() {
-            // Anything a previous buffered phase left behind goes first,
-            // or the output would be reordered.
-            self.drain(sink, signal_pending)?;
-            while *progress < data.len() {
+        if !self.writes_through() && self.buf.len() + (data.len() - *progress) < IO_BUF_CAPA {
+            self.buf.extend_from_slice(&data[*progress..]);
+            *progress = data.len();
+            return Ok(());
+        }
+        // Anything a previous buffered phase left behind goes first, or
+        // the output would be reordered.
+        self.drain(sink, signal_pending)?;
+        write_direct(sink, data, progress, signal_pending)
+    }
+}
+
+/// `write(2)` until `data[*progress..]` is gone, polling `signal_pending`
+/// before every kernel entry (a signal delivered while we were in
+/// userspace sets no `EINTR`, and entering a blocking write with it
+/// already pending would block unkillably).
+fn write_direct(
+    sink: &mut impl Write,
+    data: &[u8],
+    progress: &mut usize,
+    signal_pending: &dyn Fn() -> bool,
+) -> std::result::Result<(), DrainErr> {
+    while *progress < data.len() {
+        if signal_pending() {
+            return Err(DrainErr::Signal);
+        }
+        match sink.write(&data[*progress..]) {
+            Ok(0) => return Err(DrainErr::Io(std::io::Error::other("write returned 0"))),
+            Ok(n) => *progress += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                // A bare EINTR with no Ruby-visible signal pending is just
+                // a restart; anything else has to reach a poll point.
                 if signal_pending() {
                     return Err(DrainErr::Signal);
                 }
-                match sink.write(&data[*progress..]) {
-                    Ok(0) => return Err(DrainErr::Io(std::io::Error::other("write returned 0"))),
-                    Ok(n) => *progress += n,
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
-                        if signal_pending() {
-                            return Err(DrainErr::Signal);
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        return Err(DrainErr::WouldBlock);
-                    }
-                    Err(e) => return Err(DrainErr::Io(e)),
-                }
             }
-            return Ok(());
-        }
-        self.buf.extend_from_slice(&data[*progress..]);
-        *progress = data.len();
-        if self.buf.len() >= IO_BUF_CAPA {
-            self.drain(sink, signal_pending)
-        } else {
-            Ok(())
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err(DrainErr::WouldBlock);
+            }
+            Err(e) => return Err(DrainErr::Io(e)),
         }
     }
+    Ok(())
 }
 
 /// A [`WriteBuf`] paired with the sink it owns — the standard
