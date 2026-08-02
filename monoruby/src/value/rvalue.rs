@@ -49,7 +49,7 @@ mod enumerator;
 mod exception;
 mod fiber;
 mod hash;
-mod io;
+pub(crate) mod io;
 mod io_buffer;
 mod ivar_table;
 mod match_data;

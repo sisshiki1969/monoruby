@@ -1,6 +1,5 @@
 use crate::ast::{BlockInfo, Loc, LvarCollector, Node, ParamKind, SourceInfoRef};
-use std::io::{BufWriter, Stdout, stdout};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
@@ -194,8 +193,6 @@ pub struct Globals {
     pub no_jit: bool,
     /// suppress loading gem.
     pub no_gems: bool,
-    /// stdout.
-    stdout: BufWriter<Stdout>,
     /// library directries.
     load_path: Value,
     /// standard PRNG
@@ -491,7 +488,6 @@ impl Globals {
             gvars: GvarTable::new(),
             no_jit,
             no_gems,
-            stdout: BufWriter::new(stdout()),
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_features,
@@ -841,7 +837,7 @@ impl Globals {
         // runs the ensure clauses of its current fiber chain (never of
         // suspended fibers) on the way out.
         crate::scheduler::terminate_all(&mut executor, self);
-        let _ = self.flush_stdout();
+        crate::rvalue::io::flush_std_streams();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();
         #[cfg(feature = "gc-log")]
@@ -1097,26 +1093,26 @@ impl Globals {
         })
     }
 
+    /// Push monoruby's own stdout buffer out to the kernel.
+    ///
+    /// `Kernel#p` / `#print` and `$stdout.write` share that one buffer, so
+    /// their output can never be reordered relative to each other — which
+    /// a second, Rust-side writer over the same fd would allow.
     pub fn flush_stdout(&mut self) -> Result<()> {
-        self.stdout
-            .flush()
-            .map_err(|e| MonorubyErr::runtimeerr(format!("flush: {}", e)))
+        crate::rvalue::io::flush_stdout(&self.store)
     }
 
     pub fn write_stdout(&mut self, bytes: &[u8]) -> Result<()> {
-        self.stdout
-            .write_all(bytes)
-            .map_err(|e| MonorubyErr::runtimeerr(format!("write: {}", e)))
+        crate::rvalue::io::write_stdout(bytes, &self.store)
     }
 
     pub fn print_value(&mut self, val: Value) -> Result<()> {
         if let Some(s) = val.is_rstring() {
-            self.stdout.write_all(&s)
+            crate::rvalue::io::write_stdout(&s, &self.store)
         } else {
             let v = val.to_s(&self.store).into_bytes();
-            self.stdout.write_all(&v)
+            crate::rvalue::io::write_stdout(&v, &self.store)
         }
-        .map_err(|e| MonorubyErr::runtimeerr(format!("write: {}", e)))
     }
 
     // Handling global variables.

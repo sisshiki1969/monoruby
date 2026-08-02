@@ -27,22 +27,6 @@ class IO
     include IO::WaitWritable
   end
 
-  # The sync flag is per-object bookkeeping only: monoruby's writes are
-  # unbuffered, so semantically every IO behaves as if sync were on. The
-  # flag still round-trips through #sync= and defaults to true for the
-  # process's stderr (fd 2), matching CRuby.
-  def sync
-    raise IOError, "closed stream" if closed?
-    s = @sync
-    s.nil? ? fileno == 2 : s
-  end
-
-  def sync=(v)
-    raise IOError, "closed stream" if closed?
-    @sync = v ? true : false
-    v
-  end
-
   # CRuby's IO#putc: a String argument writes its first character, any
   # other argument is converted with #to_int and the low byte is written.
   def putc(ch)
