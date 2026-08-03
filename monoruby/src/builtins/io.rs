@@ -554,6 +554,18 @@ pub(super) fn fd_rw_mode(fd: i32) -> (bool, bool) {
 // demand).
 // ----------------------------------------------------------------------
 
+/// `IdentId`s the read paths would otherwise re-intern on every call.
+/// Interning takes the global identifier table's lock and hashes the
+/// name; `IO#gets` did it six or seven times per line.
+static ENC_EXT_ID: std::sync::LazyLock<IdentId> =
+    std::sync::LazyLock::new(|| IdentId::get_id(ENC_EXT_IVAR));
+static ENC_INT_ID: std::sync::LazyLock<IdentId> =
+    std::sync::LazyLock::new(|| IdentId::get_id(ENC_INT_IVAR));
+static ENC_DYN_ID: std::sync::LazyLock<IdentId> =
+    std::sync::LazyLock::new(|| IdentId::get_id(ENC_DYN_MARKER));
+static LINENO_ID: std::sync::LazyLock<IdentId> =
+    std::sync::LazyLock::new(|| IdentId::get_id("/lineno"));
+
 const ENC_EXT_IVAR: &str = "/enc_ext";
 const ENC_INT_IVAR: &str = "/enc_int";
 const ENC_DYN_MARKER: &str = "__io_dynamic_default_external__";
@@ -1128,12 +1140,8 @@ fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             Ok(Value::string(s))
         }
     };
-    let sep = globals
-        .get_gvar(IdentId::get_id("$,"))
-        .filter(|v| !v.is_nil());
-    let rs = globals
-        .get_gvar(IdentId::get_id("$\\"))
-        .filter(|v| !v.is_nil());
+    let sep = Some(globals.ofs()).filter(|v| !v.is_nil());
+    let rs = Some(globals.ors()).filter(|v| !v.is_nil());
     let args = lfp.arg(0).as_array();
     if args.is_empty() {
         // `print` with no arguments writes `$_` (the caller's frame-local
@@ -1223,14 +1231,7 @@ fn getline_args(
     kw_chomp_idx: usize,
 ) -> Result<(Option<Vec<u8>>, Option<usize>, bool)> {
     // Default separator: `$/` — "\n" unless reassigned; nil slurps.
-    let mut sep: Option<Vec<u8>> = match globals.get_gvar(IdentId::get_id("$/")) {
-        None => Some(b"\n".to_vec()),
-        Some(v) if v.is_nil() => None,
-        Some(v) => match v.is_rstring() {
-            Some(rs) => Some(rs.as_bytes().to_vec()),
-            None => Some(b"\n".to_vec()),
-        },
-    };
+    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
     let mut limit_arg: Option<Value> = None;
     match (lfp.try_arg(0), lfp.try_arg(1)) {
         (None, _) => {}
@@ -1304,14 +1305,14 @@ fn io_completes_utf8(globals: &mut Globals, io: Value) -> bool {
 fn bump_lineno(globals: &mut Globals, io: Value) -> Result<()> {
     let cur = globals
         .store
-        .get_ivar(io, IdentId::get_id("/lineno"))
+        .get_ivar(io, *LINENO_ID)
         .and_then(|v| v.try_fixnum())
         .unwrap_or(0);
     let n = cur + 1;
     globals
         .store
-        .set_ivar(io, IdentId::get_id("/lineno"), Value::integer(n))?;
-    globals.set_gvar(IdentId::get_id("$."), Value::integer(n));
+        .set_ivar(io, *LINENO_ID, Value::integer(n))?;
+    globals.set_lineno(Value::integer(n));
     Ok(())
 }
 
@@ -1495,7 +1496,8 @@ pub(crate) fn wait_fd_single(
 fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
     let self_ = lfp.self_val();
-    let complete_utf8 = io_completes_utf8(globals, self_);
+    let (ext, intl) = io_encodings(globals, self_);
+    let complete_utf8 = ext == crate::value::Encoding::Utf8;
     let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         lfp.self_val()
             .as_io_inner_mut()
@@ -1507,7 +1509,7 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
                 chomp_line(&mut buf, sep.as_deref(), limit);
             }
             bump_lineno(globals, self_)?;
-            let s = tagged_read_string(globals, self_, buf, false);
+            let s = tagged_read_string_with(globals, buf, ext, intl);
             // `$_` is frame-local: set it on the calling Ruby scope's
             // LEP (the builtin's own native frame is skipped).
             vm.set_last_read_line(s);
@@ -2046,14 +2048,7 @@ fn class_getline_args(
         chomp = c.as_bool();
     }
     // Default separator: `$/` — "\n" unless reassigned; nil slurps.
-    let mut sep: Option<Vec<u8>> = match globals.get_gvar(IdentId::get_id("$/")) {
-        None => Some(b"\n".to_vec()),
-        Some(v) if v.is_nil() => None,
-        Some(v) => match v.is_rstring() {
-            Some(rs) => Some(rs.as_bytes().to_vec()),
-            None => Some(b"\n".to_vec()),
-        },
-    };
+    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
     let mut limit_arg: Option<Value> = None;
     match (lfp.try_arg(1), lfp.try_arg(2)) {
         (None, _) => {}
@@ -2171,7 +2166,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
                 // which updates `$.` and `$_` per line (and leaves `$_`
                 // nil at EOF).
                 lineno += 1;
-                globals.set_gvar(IdentId::get_id("$."), Value::integer(lineno));
+                globals.set_lineno(Value::integer(lineno));
                 vm.set_last_read_line(line);
                 vm.invoke_block(globals, &p, &[line])?;
             }
@@ -3228,7 +3223,7 @@ fn io_rewind(
         .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
     globals
         .store
-        .set_ivar(self_, IdentId::get_id("/lineno"), Value::integer(0))?;
+        .set_ivar(self_, *LINENO_ID, Value::integer(0))?;
     Ok(Value::integer(0))
 }
 
@@ -3408,15 +3403,14 @@ fn io_getc(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    let ext_obj = read_io_encoding(globals, self_, false);
-    let ext = enc_obj_to_enum(globals, ext_obj).unwrap_or(crate::value::Encoding::Utf8);
+    let (ext, intl) = io_encodings(globals, self_);
     let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         read_one_char_enc(lfp.self_val().as_io_inner_mut(), ext)
     })?;
     if buf.is_empty() {
         Ok(Value::nil())
     } else {
-        Ok(tagged_read_string(globals, self_, buf, false))
+        Ok(tagged_read_string_with(globals, buf, ext, intl))
     }
 }
 
@@ -3547,7 +3541,7 @@ fn io_lineno(
     lfp.self_val().as_io_inner().ensure_readable()?;
     let stored = globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/lineno"));
+        .get_ivar(lfp.self_val(), *LINENO_ID);
     Ok(stored.unwrap_or_else(|| Value::integer(0)))
 }
 
@@ -3574,7 +3568,7 @@ fn io_lineno_set(
     }
     globals.store.set_ivar(
         lfp.self_val(),
-        IdentId::get_id("/lineno"),
+        *LINENO_ID,
         Value::integer(n),
     )?;
     Ok(Value::integer(n))
@@ -4615,8 +4609,11 @@ fn detect_and_consume_bom(
 /// An Encoding object -> the internal `Encoding` enum (folding the
 /// names the enum doesn't represent distinctly down to ASCII-8BIT).
 pub(super) fn enc_obj_to_enum(globals: &Globals, v: Value) -> Option<crate::value::Encoding> {
-    super::encoding::encoding_object_name(globals, v)
-        .and_then(|n| crate::value::Encoding::try_from_str(&n).ok())
+    // Borrow the name out of the Encoding object's ivar rather than
+    // cloning it: this runs three times per `IO#getc` / `IO#gets`.
+    let name_v = globals.store.get_ivar(v, IdentId::_ENCODING)?;
+    let name = name_v.is_str()?;
+    crate::value::Encoding::try_from_str(name).ok()
 }
 
 /// Tag `bytes` with the resolved external encoding (defaulting to
@@ -4674,6 +4671,21 @@ fn tagged_read_string(
         s.as_rstring_inner_mut().set_encoding(E::Ascii8);
         return s;
     }
+    let (ext, intl) = io_encodings(globals, io);
+    tagged_read_string_with(globals, bytes, ext, intl)
+}
+
+/// The stream's `(external, internal)` encodings, resolved once.
+///
+/// Callers that need them anyway (`IO#getc`, `IO#gets`) resolve here and
+/// hand the result to [`tagged_read_string_with`]: going back through
+/// `tagged_read_string` would repeat the ivar reads and the name parse
+/// two more times per character or line.
+fn io_encodings(
+    globals: &mut Globals,
+    io: Value,
+) -> (crate::value::Encoding, Option<crate::value::Encoding>) {
+    use crate::value::Encoding as E;
     let ext_v = read_io_encoding(globals, io, false);
     let int_v = read_io_encoding(globals, io, true);
     let ext = enc_obj_to_enum(globals, ext_v).unwrap_or(E::Utf8);
@@ -4682,16 +4694,21 @@ fn tagged_read_string(
     } else {
         enc_obj_to_enum(globals, int_v)
     };
+    (ext, intl)
+}
+
+/// [`tagged_read_string`] with the encodings already resolved.
+fn tagged_read_string_with(
+    globals: &mut Globals,
+    bytes: Vec<u8>,
+    ext: crate::value::Encoding,
+    intl: Option<crate::value::Encoding>,
+) -> Value {
     let (out, final_enc) = match intl {
         Some(i) if i != ext => {
             let opts = super::encoding::TranscodeOpts::default();
-            match super::encoding::transcode_bytes_with_opts(
-                &bytes,
-                ext,
-                i,
-                &opts,
-                &globals.store,
-            ) {
+            match super::encoding::transcode_bytes_with_opts(&bytes, ext, i, &opts, &globals.store)
+            {
                 Ok(b) => (b, i),
                 Err(_) => (bytes, ext),
             }
@@ -4705,7 +4722,7 @@ fn tagged_read_string(
 
 /// Read `/enc_ext` / `/enc_int`, resolving the live-default marker.
 fn read_io_encoding(globals: &mut Globals, io: Value, internal: bool) -> Value {
-    let id = IdentId::get_id(if internal { ENC_INT_IVAR } else { ENC_EXT_IVAR });
+    let id = if internal { *ENC_INT_ID } else { *ENC_EXT_ID };
     match globals.store.get_ivar(io, id) {
         None => {
             // IOs not created through our path (pipe/popen/stdio):
@@ -4722,7 +4739,7 @@ fn read_io_encoding(globals: &mut Globals, io: Value, internal: bool) -> Value {
             }
         }
         Some(v) => {
-            if !internal && v.try_symbol() == Some(IdentId::get_id(ENC_DYN_MARKER)) {
+            if !internal && v.try_symbol() == Some(*ENC_DYN_ID) {
                 enc_default_external_obj(globals)
             } else {
                 v

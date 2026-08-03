@@ -189,6 +189,9 @@ pub struct Globals {
     pub store: Store,
     /// global variables and special variables.
     pub(crate) gvars: GvarTable,
+    /// The separator globals, held as plain fields rather than table
+    /// entries. See [`SpecialGvars`].
+    special_gvars: SpecialGvars,
     /// suppress jit compilation.
     pub no_jit: bool,
     /// suppress loading gem.
@@ -293,6 +296,7 @@ impl alloc::GC<RValue> for Globals {
         self.loaded_features.mark(alloc);
         self.store.mark(alloc);
         self.gvars.mark_values(|v| v.mark(alloc));
+        self.special_gvars.mark(|v| v.mark(alloc));
         self.gvar_traces
             .values()
             .flatten()
@@ -486,6 +490,7 @@ impl Globals {
             main_object,
             store: Store::new(),
             gvars: GvarTable::new(),
+            special_gvars: SpecialGvars::default(),
             no_jit,
             no_gems,
             load_path: Value::array_empty(),

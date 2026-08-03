@@ -89,14 +89,21 @@ jobs:
     # specific to native-M1 + coverage instrumentation and is tracked
     # separately. The Linux `amd64` job owns the Codecov upload.
     runs-on: macos-latest
-    # Backstop: if a hung attempt somehow escapes the per-attempt 25-min cap on
-    # the Test step below, GitHub cancels the job cleanly here (2 attempts ×
-    # 25 min + setup/clone overhead) rather than letting the runner die with
+    # Backstop: if a hung attempt somehow escapes the per-attempt cap on the
+    # Test step below, GitHub cancels the job cleanly here (2 attempts x
+    # 35 min + setup/clone overhead) rather than letting the runner die with
     # "lost communication".
-    timeout-minutes: 70
+    timeout-minutes: 95
     env:
       CARGO_TERM_COLOR: always
       SKIP_COV: "1"
+      # Drop `gc-stress` (a collection per allocation) on this runner only.
+      # It was the single biggest multiplier in the run, and the M1 runner
+      # was finishing right at its per-attempt cap — three commits in a row
+      # passed only on the second attempt, and the fourth then exhausted
+      # both. The Linux `amd64` job still runs with it, so every push
+      # still exercises the GC paths under stress.
+      SKIP_GC_STRESS: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Ruby
@@ -154,7 +161,7 @@ jobs:
         #     the step (last log lines + memory trajectory + any watchdog
         #     forensics). It lives on the GitHub side, so it SURVIVES runner
         #     death — the progress log of record for silent hangs.
-        #   * retry — cap each attempt at 25 min and retry once, so a clean
+        #   * retry — cap each attempt at 35 min and retry once, so a clean
         #     hang fails fast (normal pass ~11 min) and the rerun recovers;
         #   * a background memory watchdog: watches every monoruby AND ruby
         #     process (bin/test diffs against CRuby and runs mspec) plus the
@@ -180,10 +187,10 @@ jobs:
           # parallelism on the M1 runner is 3; halving it tests the
           # parallel-interaction hypothesis and lowers peak pressure.
           # A normal pass is ~11 min, so the ~+40% nextest time stays
-          # well under the 25-min attempt cap.
+          # well under the attempt cap.
           NEXTEST_TEST_THREADS: "2"
         with:
-          timeout_minutes: 25
+          timeout_minutes: 35
           max_attempts: 2
           command: |
             set -o pipefail

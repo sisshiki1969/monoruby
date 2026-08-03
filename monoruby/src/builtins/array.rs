@@ -1942,16 +1942,10 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         None => true,
         Some(v) => v.is_nil(),
     };
-    if would_use_global_sep {
-        let gvar_id = IdentId::get_id("$,");
-        if let Some(v) = globals.get_gvar(gvar_id) {
-            if !v.is_nil() {
-                // `:deprecated`-category (silent unless
-                // `Warning[:deprecated]`), matching CRuby — see the
-                // `$;` warning in `String#split`.
-                vm.warn_deprecated(globals, "warning: $, is set to non-nil value")?;
-            }
-        }
+    if would_use_global_sep && !globals.ofs().is_nil() {
+        // `:deprecated`-category (silent unless `Warning[:deprecated]`),
+        // matching CRuby — see the `$;` warning in `String#split`.
+        vm.warn_deprecated(globals, "warning: $, is set to non-nil value")?;
     }
 
     // Empty array shortcut: CRuby returns `""` tagged US-ASCII
@@ -2037,10 +2031,11 @@ fn join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 
 /// Get the value of $, (output field separator) as a String.
 fn get_output_field_separator(globals: &mut Globals) -> Option<String> {
-    let gvar_id = IdentId::get_id("$,");
-    match globals.get_gvar(gvar_id) {
-        Some(v) if !v.is_nil() => Some(v.to_s(&globals.store)),
-        _ => None,
+    let v = globals.ofs();
+    if v.is_nil() {
+        None
+    } else {
+        Some(v.to_s(&globals.store))
     }
 }
 

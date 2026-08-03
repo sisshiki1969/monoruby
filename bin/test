@@ -20,7 +20,17 @@ RUBY=(ruby --yjit)
 # on the AArch64 JIT its pool is empty (`GP_ALLOC_POOL = &[]`), so it is inert
 # there — no pool allocation happens, which sidesteps the macOS-runner
 # `optcarrot --opt` divergence that the (non-empty) aarch64 pool path used to hit.
-STRESS_FEATURES=(--features stress-spill-pool,gc-stress)
+#
+# SKIP_GC_STRESS=1 drops `gc-stress` (a collection per allocation) while
+# keeping the spill stress. The `darwin` job sets it: that runner was
+# finishing right at its per-attempt cap, and `gc-stress` is the single
+# biggest multiplier in the run. The Linux `amd64` job still runs with it,
+# so the GC paths stay covered on every push.
+STRESS_FEATURE_LIST=stress-spill-pool
+if [ "${SKIP_GC_STRESS:-0}" != "1" ]; then
+  STRESS_FEATURE_LIST="$STRESS_FEATURE_LIST,gc-stress"
+fi
+STRESS_FEATURES=(--features "$STRESS_FEATURE_LIST")
 
 # Coverage wrappers. SKIP_COV=1 runs the whole script without llvm-cov
 # instrumentation and uploads nothing. Used by the arm64 macOS `darwin` job:
@@ -45,7 +55,7 @@ fi
 # --- Hang diagnostics (CI flaky-hang investigation) ------------------------
 # `phase` prints a flushed, timestamped marker so a truncated or timed-out CI
 # log shows the last phase reached (this works in the normal job too: when the
-# `darwin` retry wrapper kills a hung attempt at its 25-min cap, the last
+# `darwin` retry wrapper kills a hung attempt at its per-attempt cap, the last
 # `[phase ...]` line names the culprit). Under CI_HANG_DEBUG=1 a background
 # watchdog additionally samples the native + Ruby stacks of any stuck
 # `monoruby` process after HANG_DEADLINE seconds (a normal run is ~11 min),

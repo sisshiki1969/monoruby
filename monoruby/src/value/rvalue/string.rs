@@ -1,4 +1,10 @@
 use super::*;
+
+/// Longest encoding name `Encoding::try_from_str` can recognise
+/// (`WINDOWS_31J` and friends are far shorter; the cap only has to be an
+/// upper bound for the stack-buffer fast path).
+const MAX_ENC_NAME: usize = 32;
+
 use smallvec::SmallVec;
 use std::cell::Cell;
 use std::cmp::Ordering;
@@ -460,8 +466,30 @@ impl Encoding {
     /// `ArgumentError` matching CRuby.
     pub fn try_from_str(s: &str) -> Result<Self> {
         // Normalize: uppercase, replace '-' / '.' with '_'.
-        let normalized = s.to_uppercase().replace('-', "_").replace('.', "_");
-        match normalized.as_str() {
+        //
+        // Every name we recognise is ASCII and short, so normalise into a
+        // stack buffer. The obvious
+        // `s.to_uppercase().replace('-', "_").replace('.', "_")` allocates
+        // three times per call, and this runs on every `IO#getc` /
+        // `IO#gets` (three times each, resolving the stream's encodings).
+        let mut buf = [0u8; MAX_ENC_NAME];
+        let normalized: &str = if s.len() <= MAX_ENC_NAME && s.is_ascii() {
+            for (i, b) in s.as_bytes().iter().enumerate() {
+                buf[i] = match b {
+                    b'-' | b'.' => b'_',
+                    b => b.to_ascii_uppercase(),
+                };
+            }
+            // SAFETY: the input was ASCII and every replacement is ASCII.
+            unsafe { std::str::from_utf8_unchecked(&buf[..s.len()]) }
+        } else {
+            // Only reachable for names no encoding has; fall through to
+            // the error arm below without a fast path.
+            return Err(MonorubyErr::argumenterr(format!(
+                "unknown encoding name - {s}"
+            )));
+        };
+        match normalized {
             // `UTF8-MAC` and the legacy `UTF_8_MAC` are CRuby's
             // HFS+/macOS-NFD UTF-8 variants. We don't apply the
             // NFD normalisation, so they're treated as plain
@@ -2529,6 +2557,21 @@ mod encoding_tests {
 
     #[test]
     fn try_from_str_normalises_separators_and_aliases() {
+        // The normalisation runs in a fixed stack buffer, so the edges of
+        // that buffer matter: an empty name, a name exactly at the cap, a
+        // longer one, and a non-ASCII one must all still be rejected
+        // rather than truncated into a match.
+        assert!(Encoding::try_from_str("").is_err());
+        assert!(Encoding::try_from_str(&"A".repeat(MAX_ENC_NAME)).is_err());
+        assert!(Encoding::try_from_str(&"A".repeat(MAX_ENC_NAME + 1)).is_err());
+        assert!(Encoding::try_from_str("UTF-8\u{3042}").is_err());
+        // `.` normalises like `-` (CRuby accepts `UTF.8`).
+        assert_eq!(Encoding::try_from_str("UTF.8").unwrap(), Encoding::Utf8);
+        // The longest name we recognise still fits the buffer.
+        assert_eq!(
+            Encoding::try_from_str("ANSI_X3.4-1968").unwrap(),
+            Encoding::UsAscii
+        );
         assert_eq!(Encoding::try_from_str("UTF-8").unwrap(), Encoding::Utf8);
         assert_eq!(Encoding::try_from_str("utf-8").unwrap(), Encoding::Utf8);
         assert_eq!(Encoding::try_from_str("UTF8").unwrap(), Encoding::Utf8);
