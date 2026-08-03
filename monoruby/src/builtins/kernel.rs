@@ -715,14 +715,7 @@ fn argf_gets_raw(vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
     // command-line switch or by assignment): nil slurps the whole
     // input, "" is paragraph mode, any other string reads up to and
     // including that byte sequence.
-    let sep: Option<Vec<u8>> = match globals.get_gvar(IdentId::get_id("$/")) {
-        Some(v) if v.is_nil() => None,
-        Some(v) => match v.is_rstring_inner() {
-            Some(s) => Some(s.as_bytes().to_vec()),
-            None => Some(b"\n".to_vec()),
-        },
-        None => Some(b"\n".to_vec()),
-    };
+    let sep: Option<Vec<u8>> = globals.rs_bytes();
     let mut buffer: Vec<u8> = Vec::new();
     let mut source = ARGF_SOURCE.lock().unwrap();
     let n = loop {
@@ -776,12 +769,8 @@ fn argf_gets_raw(vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
     }
     // Bump `$.` (input line number) and set `$_` (frame-local last
     // read line), matching CRuby.
-    let lineno = globals
-        .get_gvar(IdentId::get_id("$."))
-        .and_then(|v| v.try_fixnum())
-        .unwrap_or(0)
-        + 1;
-    globals.set_gvar(IdentId::get_id("$."), Value::integer(lineno));
+    let lineno = globals.lineno().try_fixnum().unwrap_or(0) + 1;
+    globals.set_lineno(Value::integer(lineno));
     let s = Value::string_from_vec(buffer);
     vm.set_last_read_line(s);
     Ok(s)
@@ -809,9 +798,7 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     let rs = match lfp.try_arg(0) {
         Some(rs) => rs,
-        None => globals
-            .get_gvar(IdentId::get_id("$/"))
-            .unwrap_or_else(|| Value::string_from_str("\n")),
+        None => globals.rs(),
     };
     let res = vm.invoke_method_inner(globals, IdentId::get_id("chomp"), line, &[rs], None, None)?;
     vm.set_last_read_line(res);

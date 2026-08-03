@@ -64,6 +64,125 @@ pub enum GvarEntry {
     },
 }
 
+/// The globals that are read on every line of IO or every `String#split`
+/// — `$/`, `$\`, `$,`, `$;` and `$.`.
+///
+/// They live here as plain fields rather than as [`GvarTable`] entries so
+/// the interpreter can read them with a struct field access. Going through
+/// the table meant interning the name (`IdentId::get_id`, a lock on the
+/// global identifier table plus a string hash) and then a second hash to
+/// find the entry — per `IO#gets`, per `IO#print`, per `String#chomp`.
+///
+/// Ruby still sees ordinary global variables: each is registered as a
+/// [`GvarEntry::Hooked`] whose getter and setter read and write the field
+/// below, so assignment, `defined?`, aliases (`$-0`, `$RS`, `$OFS`, …) and
+/// `trace_var` all behave exactly as before. Rust code uses the typed
+/// accessors on [`Globals`] instead (`Globals::rs()`, `set_rs()`, …).
+///
+/// The fields are GC roots: [`Self::mark`] is called from `Globals::mark`,
+/// since `GvarTable::mark_values` only visits `Simple` entries.
+pub struct SpecialGvars {
+    /// `$/` — input record separator. `nil` means "slurp".
+    rs: Value,
+    /// `$\` — output record separator, appended by `IO#print`.
+    ors: Value,
+    /// `$,` — output field separator for `IO#print` and `Array#join`.
+    ofs: Value,
+    /// `$;` — default separator for `String#split`.
+    fs: Value,
+    /// `$.` — line number of the last line read.
+    lineno: Value,
+}
+
+impl Default for SpecialGvars {
+    fn default() -> Self {
+        // `$/` starts as a frozen "\n" (CRuby); the rest start nil / 0.
+        let mut rs = Value::string_from_str("\n");
+        rs.set_frozen();
+        Self {
+            rs,
+            ors: Value::nil(),
+            ofs: Value::nil(),
+            fs: Value::nil(),
+            lineno: Value::integer(0),
+        }
+    }
+}
+
+impl SpecialGvars {
+    pub(crate) fn mark<F: FnMut(Value)>(&self, mut f: F) {
+        f(self.rs);
+        f(self.ors);
+        f(self.ofs);
+        f(self.fs);
+        f(self.lineno);
+    }
+}
+
+impl Globals {
+    /// `$/` — input record separator.
+    pub(crate) fn rs(&self) -> Value {
+        self.special_gvars.rs
+    }
+
+    /// `$/` as raw bytes, or `None` when it is `nil` (read everything).
+    ///
+    /// This is the shape every caller wants: `IO#gets`, `IO#each_line`,
+    /// `String#chomp`, `String#lines`, `Kernel#gets`.
+    pub(crate) fn rs_bytes(&self) -> Option<Vec<u8>> {
+        let v = self.special_gvars.rs;
+        if v.is_nil() {
+            return None;
+        }
+        // A non-String `$/` reads as the default "\n", matching what the
+        // IO line readers did before this was a field.
+        Some(match v.is_rstring() {
+            Some(rs) => rs.as_bytes().to_vec(),
+            None => b"\n".to_vec(),
+        })
+    }
+
+    pub(crate) fn set_rs(&mut self, val: Value) {
+        self.special_gvars.rs = val;
+    }
+
+    /// `$\` — output record separator.
+    pub(crate) fn ors(&self) -> Value {
+        self.special_gvars.ors
+    }
+
+    pub(crate) fn set_ors(&mut self, val: Value) {
+        self.special_gvars.ors = val;
+    }
+
+    /// `$,` — output field separator.
+    pub(crate) fn ofs(&self) -> Value {
+        self.special_gvars.ofs
+    }
+
+    pub(crate) fn set_ofs(&mut self, val: Value) {
+        self.special_gvars.ofs = val;
+    }
+
+    /// `$;` — default `String#split` separator.
+    pub(crate) fn fs(&self) -> Value {
+        self.special_gvars.fs
+    }
+
+    pub(crate) fn set_fs(&mut self, val: Value) {
+        self.special_gvars.fs = val;
+    }
+
+    /// `$.` — line number of the last line read.
+    pub(crate) fn lineno(&self) -> Value {
+        self.special_gvars.lineno
+    }
+
+    pub(crate) fn set_lineno(&mut self, val: Value) {
+        self.special_gvars.lineno = val;
+    }
+}
+
 /// Table of all global variables.
 #[derive(Default)]
 pub struct GvarTable {
@@ -803,16 +922,47 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         IdentId::get_id("$LOADED_FEATURES"),
     );
 
-    // --- Record separator ---------------------------------------------------
+    // --- Separators and line number -----------------------------------------
 
-    // `$/` (the input record separator, used as the default argument of
-    // `String#chomp`, `IO#gets`, `String#lines`, …) defaults to "\n" in
-    // CRuby. It is a plain, assignable global; seed the default value so
-    // reads return "\n" before any assignment. `$-0` is its alias.
-    let mut sep = Value::string_from_str("\n");
-    sep.set_frozen();
-    globals.set_gvar(IdentId::get_id("$/"), sep);
+    // `$/`, `$\`, `$,`, `$;` and `$.` are read on every line of IO and
+    // every `String#split`, so they live as plain fields on `Globals`
+    // (see `SpecialGvars`) instead of table entries. Ruby still sees
+    // ordinary assignable globals: these hooks read and write those
+    // fields, so `defined?`, aliases and `trace_var` are unaffected.
+    //
+    // Each getter returns `Some` unconditionally — CRuby reports all
+    // five as defined even before they are assigned.
+    macro_rules! field_gvar {
+        ($name:literal, $get:ident, $set:ident, $getter:ident, $setter:ident) => {
+            fn $getter(_: &mut Executor, globals: &mut Globals, _: IdentId) -> Option<Value> {
+                Some(globals.$get())
+            }
+            fn $setter(
+                _: &mut Executor,
+                globals: &mut Globals,
+                _: IdentId,
+                val: Value,
+            ) -> Result<()> {
+                globals.$set(val);
+                Ok(())
+            }
+            globals.define_hooked_variable(
+                IdentId::get_id($name),
+                $getter,
+                Some($setter),
+            );
+        };
+    }
+
+    field_gvar!("$/", rs, set_rs, get_rs, set_rs_hook);
+    field_gvar!("$\\", ors, set_ors, get_ors, set_ors_hook);
+    field_gvar!("$,", ofs, set_ofs, get_ofs, set_ofs_hook);
+    field_gvar!("$;", fs, set_fs, get_fs, set_fs_hook);
+    field_gvar!("$.", lineno, set_lineno, get_lineno, set_lineno_hook);
+
+    // English aliases and the command-line-flag spellings.
     globals.alias_global_variable(IdentId::get_id("$-0"), IdentId::get_id("$/"));
+    globals.alias_global_variable(IdentId::get_id("$-F"), IdentId::get_id("$;"));
 
     // --- Exception backtrace --------------------------------------------------
 
@@ -862,12 +1012,6 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
         Some(set_errinfo_backtrace),
     );
 
-    // `$.` (last input line number) defaults to 0 in CRuby. Seeding it
-    // matters beyond fidelity: its Ruby-level setter coerces with
-    // `#to_int`, and code like rubygems' StubSpecification saves and
-    // restores `$.` verbatim — a nil default would blow up the
-    // restore.
-    globals.set_gvar(IdentId::get_id("$."), Value::integer(0));
 
     // `$=` (the pre-1.9 case-insensitivity toggle) is a defunct
     // special: it reads as false and assignments are ignored, with a
@@ -1122,5 +1266,57 @@ mod tests {
         let mut visited = 0;
         t.mark_values(|_| visited += 1);
         assert_eq!(visited, 1);
+    }
+
+    /// `$/`, `$\`, `$,`, `$;` and `$.` are stored as fields on `Globals`
+    /// rather than table entries, so everything Ruby can do to a global
+    /// has to keep working through their hooks: read the default, assign,
+    /// `defined?`, the `$-0` / `$-F` aliases, a user `alias`, and
+    /// `trace_var`. Each case is compared against CRuby by the harness.
+    #[test]
+    fn field_backed_special_gvars() {
+        use crate::tests::*;
+        // Defaults, and that all five report as defined before assignment.
+        run_test_once(r##"[$/, $\, $,, $;, $.]"##);
+        run_test_once(
+            r##"[defined?($/), defined?($\), defined?($,), defined?($;), defined?($.)]"##,
+        );
+        run_test_once(r##"$/.frozen?"##);
+        // Assignment round-trips, and `$-0` / `$-F` stay in step.
+        run_test_once(r##"$/ = "X"; r = [$/, $-0]; $/ = "\n"; r"##);
+        run_test_once(r##"$-0 = "Y"; r = [$/, $-0]; $/ = "\n"; r"##);
+        run_test_once(r##"$; = ","; r = [$;, $-F]; $; = nil; r"##);
+        run_test_once(r##"$. = 42; $."##);
+        // A user alias shares the same storage.
+        run_test_once(r##"alias $myrs $/; $myrs = "Q"; r = [$/, $myrs]; $/ = "\n"; r"##);
+        // The separators still drive the operations that read them.
+        run_test_once(r##"$; = ","; r = "a,b,c".split; $; = nil; r"##);
+        run_test_once(r##"$/ = "c"; r = "abc".chomp; $/ = "\n"; r"##);
+        run_test_once(r##"$/ = nil; r = "a\nb".chomp; $/ = "\n"; r"##);
+        // `trace_var` fires on assignment through the hook.
+        run_test_once(
+            r##"
+            tr = []
+            trace_var(:$/) { |v| tr << v }
+            $/ = "Z"
+            $/ = "\n"
+            untrace_var(:$/)
+            tr
+            "##,
+        );
+        // `$.` is bumped by a line read, and `$/` selects the separator.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_gvar_lines.txt"
+            File.write(path, "l1\nl2\n")
+            r = []
+            File.open(path) { |f| f.gets; r << $.; f.gets; r << $. }
+            $/ = nil
+            File.open(path) { |f| r << f.gets }
+            $/ = "\n"
+            File.unlink(path)
+            r
+            "##,
+        );
     }
 }

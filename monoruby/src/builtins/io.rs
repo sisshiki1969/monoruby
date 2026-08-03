@@ -565,8 +565,6 @@ static ENC_DYN_ID: std::sync::LazyLock<IdentId> =
     std::sync::LazyLock::new(|| IdentId::get_id(ENC_DYN_MARKER));
 static LINENO_ID: std::sync::LazyLock<IdentId> =
     std::sync::LazyLock::new(|| IdentId::get_id("/lineno"));
-static RS_GVAR_ID: std::sync::LazyLock<IdentId> =
-    std::sync::LazyLock::new(|| IdentId::get_id("$/"));
 
 const ENC_EXT_IVAR: &str = "/enc_ext";
 const ENC_INT_IVAR: &str = "/enc_int";
@@ -1142,12 +1140,8 @@ fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             Ok(Value::string(s))
         }
     };
-    let sep = globals
-        .get_gvar(IdentId::get_id("$,"))
-        .filter(|v| !v.is_nil());
-    let rs = globals
-        .get_gvar(IdentId::get_id("$\\"))
-        .filter(|v| !v.is_nil());
+    let sep = Some(globals.ofs()).filter(|v| !v.is_nil());
+    let rs = Some(globals.ors()).filter(|v| !v.is_nil());
     let args = lfp.arg(0).as_array();
     if args.is_empty() {
         // `print` with no arguments writes `$_` (the caller's frame-local
@@ -1237,14 +1231,7 @@ fn getline_args(
     kw_chomp_idx: usize,
 ) -> Result<(Option<Vec<u8>>, Option<usize>, bool)> {
     // Default separator: `$/` — "\n" unless reassigned; nil slurps.
-    let mut sep: Option<Vec<u8>> = match globals.get_gvar(*RS_GVAR_ID) {
-        None => Some(b"\n".to_vec()),
-        Some(v) if v.is_nil() => None,
-        Some(v) => match v.is_rstring() {
-            Some(rs) => Some(rs.as_bytes().to_vec()),
-            None => Some(b"\n".to_vec()),
-        },
-    };
+    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
     let mut limit_arg: Option<Value> = None;
     match (lfp.try_arg(0), lfp.try_arg(1)) {
         (None, _) => {}
@@ -1325,7 +1312,7 @@ fn bump_lineno(globals: &mut Globals, io: Value) -> Result<()> {
     globals
         .store
         .set_ivar(io, *LINENO_ID, Value::integer(n))?;
-    globals.set_gvar(IdentId::get_id("$."), Value::integer(n));
+    globals.set_lineno(Value::integer(n));
     Ok(())
 }
 
@@ -2061,14 +2048,7 @@ fn class_getline_args(
         chomp = c.as_bool();
     }
     // Default separator: `$/` — "\n" unless reassigned; nil slurps.
-    let mut sep: Option<Vec<u8>> = match globals.get_gvar(*RS_GVAR_ID) {
-        None => Some(b"\n".to_vec()),
-        Some(v) if v.is_nil() => None,
-        Some(v) => match v.is_rstring() {
-            Some(rs) => Some(rs.as_bytes().to_vec()),
-            None => Some(b"\n".to_vec()),
-        },
-    };
+    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
     let mut limit_arg: Option<Value> = None;
     match (lfp.try_arg(1), lfp.try_arg(2)) {
         (None, _) => {}
@@ -2186,7 +2166,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
                 // which updates `$.` and `$_` per line (and leaves `$_`
                 // nil at EOF).
                 lineno += 1;
-                globals.set_gvar(IdentId::get_id("$."), Value::integer(lineno));
+                globals.set_lineno(Value::integer(lineno));
                 vm.set_last_read_line(line);
                 vm.invoke_block(globals, &p, &[line])?;
             }
