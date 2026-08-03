@@ -1291,6 +1291,13 @@ mod tests {
         run_test_once(r##"alias $myrs $/; $myrs = "Q"; r = [$/, $myrs]; $/ = "\n"; r"##);
         // The separators still drive the operations that read them.
         run_test_once(r##"$; = ","; r = "a,b,c".split; $; = nil; r"##);
+        run_test_once(r##"$; = "|"; r = ["a|b".split, "a|b".split(",")]; $; = nil; r"##);
+        // `Array#join` falls back to `$,` for a missing *or* nil separator.
+        run_test_once(
+            r##"$, = "-"; r = [[1,2,3].join, [1,2,3].join(nil), [1,2,3].join("+"), [].join,
+                              [[1,2],[3]].join]; $, = nil; r"##,
+        );
+        run_test_once(r##"$\ = "!"; r = $\; $\ = nil; r"##);
         run_test_once(r##"$/ = "c"; r = "abc".chomp; $/ = "\n"; r"##);
         run_test_once(r##"$/ = nil; r = "a\nb".chomp; $/ = "\n"; r"##);
         // `trace_var` fires on assignment through the hook.
