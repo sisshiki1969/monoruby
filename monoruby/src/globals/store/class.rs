@@ -276,11 +276,15 @@ pub struct ClassInfo {
     /// names happened to hash, i.e. on unrelated interning done earlier
     /// in the process.
     ///
-    class_variables: Option<indexmap::IndexMap<IdentId, Value>>,
+    class_variables: Option<indexmap::IndexMap<IdentId, Value, fxhash::FxBuildHasher>>,
     ///
     /// instance variable table (insertion-ordered).
     ///
-    ivar_names: indexmap::IndexMap<IdentId, IvarId>,
+    /// `IdentId` is a `u32`, so the default SipHash costs more to compute
+    /// than the collision it guards against — and this map is consulted on
+    /// every ivar read. Hashing it showed up as ~15% of `IO#gets`;
+    /// `fxhash` is already the crate-wide `HashMap` hasher.
+    ivar_names: indexmap::IndexMap<IdentId, IvarId, fxhash::FxBuildHasher>,
     ///
     /// Object type of instances of this class.
     ///

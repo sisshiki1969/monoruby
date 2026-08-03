@@ -235,12 +235,14 @@ fn read_step(reader: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
     }
 }
 
+/// How much a single unbuffered `read(2)` asks for at most.
+const READ_CHUNK: usize = 8192;
+
 /// Signal-interruptible replacement for `bytes().take(len).collect()`:
 /// append up to `len` bytes to `out`, stopping early at EOF. On
 /// `Interrupted`, bytes read so far remain in `out` so the caller can
 /// preserve them (pushback) before surfacing the interrupt.
 fn read_upto(reader: &mut impl Read, len: usize, out: &mut Vec<u8>) -> std::io::Result<()> {
-    let mut buf = [0u8; 8192];
     while out.len() < len {
         // A signal delivered while we were in userspace (e.g. right after
         // the previous chunk) sets the pending bit without EINTR-ing
@@ -249,10 +251,25 @@ fn read_upto(reader: &mut impl Read, len: usize, out: &mut Vec<u8>) -> std::io::
         if signal_pending() {
             return Err(std::io::ErrorKind::Interrupted.into());
         }
-        let want = (len - out.len()).min(buf.len());
-        match read_step(reader, &mut buf[..want])? {
-            0 => break,
-            n => out.extend_from_slice(&buf[..n]),
+        // Read straight into `out`'s tail. A fixed `[0u8; 8192]` scratch
+        // array here cost an 8 KiB `memset` *per call* — 60% of `IO#getc`,
+        // which asks for a single byte.
+        let want = (len - out.len()).min(READ_CHUNK);
+        let start = out.len();
+        out.resize(start + want, 0);
+        let n = match read_step(reader, &mut out[start..]) {
+            Ok(n) => n,
+            Err(e) => {
+                // Drop the uninitialised tail but keep what was read, so
+                // the caller can push it back before the interrupt
+                // propagates.
+                out.truncate(start);
+                return Err(e);
+            }
+        };
+        out.truncate(start + n);
+        if n == 0 {
+            break;
         }
     }
     Ok(())
@@ -261,15 +278,23 @@ fn read_upto(reader: &mut impl Read, len: usize, out: &mut Vec<u8>) -> std::io::
 /// Signal-interruptible replacement for `read_to_end`. On `Interrupted`,
 /// bytes read so far remain in `out`.
 fn read_all(reader: &mut impl Read, out: &mut Vec<u8>) -> std::io::Result<()> {
-    let mut buf = [0u8; 8192];
     loop {
         // See `read_upto` on why this is checked before every kernel entry.
         if signal_pending() {
             return Err(std::io::ErrorKind::Interrupted.into());
         }
-        match read_step(reader, &mut buf)? {
-            0 => return Ok(()),
-            n => out.extend_from_slice(&buf[..n]),
+        let start = out.len();
+        out.resize(start + READ_CHUNK, 0);
+        let n = match read_step(reader, &mut out[start..]) {
+            Ok(n) => n,
+            Err(e) => {
+                out.truncate(start);
+                return Err(e);
+            }
+        };
+        out.truncate(start + n);
+        if n == 0 {
+            return Ok(());
         }
     }
 }
