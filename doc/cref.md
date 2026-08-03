@@ -148,7 +148,10 @@ parent CREFs via `CREF_FL_OMOD_SHARED`). `using Foo` populates the
 *current* CREF's hash; the lookup walks the chain.
 
 monoruby does not implement refinements; the `Cref` struct has no
-`refinements` field.
+`refinements` field. See `doc/refinements.md` for what the missing field
+is the smallest part of — the per-frame CREF this document describes is a
+prerequisite, and every method-resolution cache in the tree is keyed
+without a cref.
 
 ---
 
