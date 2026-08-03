@@ -20,7 +20,7 @@ pub use exception::ExceptionInner;
 pub use fiber::*;
 pub use hash::*;
 pub(crate) use io::NonblockGuard;
-pub use io::{IoInner, NonblockRead, NonblockWrite, fd_is_owned};
+pub use io::{ExtEnc, IoInner, IoKind, NonblockRead, NonblockWrite, fd_is_owned};
 pub use io_buffer::*;
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
@@ -623,7 +623,7 @@ impl RValue {
                 ObjTy::PROC => self.proc_tos(),
                 ObjTy::HASH => self.as_hashmap().debug(store),
                 ObjTy::REGEXP => self.as_regex().tos(),
-                ObjTy::IO => self.as_io().to_string(),
+                ObjTy::IO => self.as_io().kind().to_string(),
                 ObjTy::EXCEPTION => self.as_exception().message().to_string(),
                 ObjTy::METHOD => self.as_method().debug(store),
                 ObjTy::FIBER => self.fiber_debug(store),
@@ -943,7 +943,7 @@ impl alloc::GCBox for RValue {
                 ObjTy::PROC => self.as_proc().mark(alloc),
                 ObjTy::HASH => self.as_hashmap().mark(alloc),
                 ObjTy::REGEXP => {}
-                ObjTy::IO => {}
+                ObjTy::IO => self.as_io().mark(alloc),
                 ObjTy::EXCEPTION => self.as_exception().mark(alloc),
                 ObjTy::METHOD => self.as_method().mark(alloc),
                 ObjTy::FIBER => self.as_fiber().mark(alloc),

@@ -2,7 +2,7 @@ use super::*;
 use std::fs::File;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
-use std::rc::Rc;
+
 
 //
 // IO class
@@ -179,7 +179,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let obj = Value::new_io_with_class(IoInner::Closed(None), class);
+    let obj = Value::new_io_with_class(IoInner::closed(None), class);
     io_init_from_fd(vm, globals, lfp, obj)?;
     if lfp.block().is_some() {
         // CRuby warns through rb_warn; route via Kernel#warn so the
@@ -481,9 +481,9 @@ pub(super) fn io_init_from_fd(
     let (slot, i) =
         resolve_io_encodings(globals, ext_obj, int_obj, binmode, readable, writable, de, di);
     store_io_encodings(globals, obj, slot, i);
-    let _ = globals
-        .store
-        .set_ivar(obj, IdentId::get_id(BINMODE_IVAR), Value::bool(binmode));
+    if binmode {
+        obj.as_io_inner_mut().set_binmode();
+    }
     Ok(())
 }
 
@@ -557,19 +557,7 @@ pub(super) fn fd_rw_mode(fd: i32) -> (bool, bool) {
 /// `IdentId`s the read paths would otherwise re-intern on every call.
 /// Interning takes the global identifier table's lock and hashes the
 /// name; `IO#gets` did it six or seven times per line.
-static ENC_EXT_ID: std::sync::LazyLock<IdentId> =
-    std::sync::LazyLock::new(|| IdentId::get_id(ENC_EXT_IVAR));
-static ENC_INT_ID: std::sync::LazyLock<IdentId> =
-    std::sync::LazyLock::new(|| IdentId::get_id(ENC_INT_IVAR));
-static ENC_DYN_ID: std::sync::LazyLock<IdentId> =
-    std::sync::LazyLock::new(|| IdentId::get_id(ENC_DYN_MARKER));
-static LINENO_ID: std::sync::LazyLock<IdentId> =
-    std::sync::LazyLock::new(|| IdentId::get_id("/lineno"));
 
-const ENC_EXT_IVAR: &str = "/enc_ext";
-const ENC_INT_IVAR: &str = "/enc_int";
-const ENC_DYN_MARKER: &str = "__io_dynamic_default_external__";
-const BINMODE_IVAR: &str = "/binmode";
 
 #[derive(Clone, Copy)]
 enum ExtSlot {
@@ -723,20 +711,33 @@ fn resolve_io_encodings(
     }
 }
 
-/// Persist a resolved encoding pair as ivars on the IO object.
-fn store_io_encodings(globals: &mut Globals, io: Value, ext: ExtSlot, int: Option<Value>) {
-    let ext_val = match ext {
-        ExtSlot::Fixed(v) => v,
-        ExtSlot::Dynamic => Value::symbol(IdentId::get_id(ENC_DYN_MARKER)),
-        ExtSlot::Nil => Value::nil(),
+/// Persist a resolved encoding pair on the IO object.
+fn store_io_encodings(_globals: &mut Globals, mut io: Value, ext: ExtSlot, int: Option<Value>) {
+    let (state, obj) = match ext {
+        ExtSlot::Fixed(v) => (ExtEnc::Fixed, Some(v)),
+        ExtSlot::Dynamic => (ExtEnc::Dynamic, None),
+        ExtSlot::Nil => (ExtEnc::Nil, None),
     };
-    let int_val = int.unwrap_or_else(Value::nil);
-    let _ = globals
-        .store
-        .set_ivar(io, IdentId::get_id(ENC_EXT_IVAR), ext_val);
-    let _ = globals
-        .store
-        .set_ivar(io, IdentId::get_id(ENC_INT_IVAR), int_val);
+    let inner = io.as_io_inner_mut();
+    inner.set_ext_enc(state, obj);
+    inner.set_int_enc(int.filter(|v| !v.is_nil()));
+}
+
+/// The stream's external encoding when it is a *concrete, non-binary*
+/// one — i.e. neither unset, nor nil, nor "follow
+/// `Encoding.default_external`", nor ASCII-8BIT. Both callers use it to
+/// answer "has a real external encoding already been chosen?".
+fn fixed_ext_encoding(globals: &mut Globals, io: Value) -> Option<Value> {
+    let inner = io.as_io_inner();
+    if inner.ext_state() != ExtEnc::Fixed {
+        return None;
+    }
+    let e = inner.ext_enc()?;
+    if e.is_nil() || enc_is_binary(globals, e) {
+        None
+    } else {
+        Some(e)
+    }
 }
 
 /// Strip a leading "BOM|" (case-insensitive) from an external-encoding
@@ -919,7 +920,7 @@ pub(super) fn init_io_encodings(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    io: Value,
+    mut io: Value,
     mode: &str,
     readable: bool,
     opt_range: std::ops::Range<usize>,
@@ -934,9 +935,7 @@ pub(super) fn init_io_encodings(
     let (slot, i) = resolve_io_encodings(globals, ext, int, binmode, readable, writable, de, di);
     store_io_encodings(globals, io, slot, i);
     if binmode {
-        let _ = globals
-            .store
-            .set_ivar(io, IdentId::get_id(BINMODE_IVAR), Value::bool(true));
+        io.as_io_inner_mut().set_binmode();
     }
     // A "BOM|utf-..." encoding: peek the stream for a byte-order mark;
     // a detected BOM is consumed and *overrides* the external encoding,
@@ -949,7 +948,7 @@ pub(super) fn init_io_encodings(
 
 /// Allocator for `IO` and its subclasses.
 pub(crate) extern "C" fn io_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
-    Value::new_io_with_class(IoInner::Closed(None), class_id)
+    Value::new_io_with_class(IoInner::closed(None), class_id)
 }
 
 
@@ -972,15 +971,9 @@ pub(super) fn bytes_for_write(
     } else {
         Value::string(vm.to_s(globals, v)?)
     };
-    let ext = match globals.store.get_ivar(io, IdentId::get_id(ENC_EXT_IVAR)) {
-        Some(e)
-            if !e.is_nil()
-                && e.try_symbol() != Some(IdentId::get_id(ENC_DYN_MARKER))
-                && !enc_is_binary(globals, e) =>
-        {
-            e
-        }
-        _ => return Ok(sval.is_rstring().unwrap().to_vec()),
+    let ext = match fixed_ext_encoding(globals, io) {
+        Some(e) => e,
+        None => return Ok(sval.is_rstring().unwrap().to_vec()),
     };
     let same = match (
         sval.is_rstring().map(|r| r.encoding()),
@@ -1302,16 +1295,8 @@ fn io_completes_utf8(globals: &mut Globals, io: Value) -> bool {
 }
 
 /// Bump the IO's line counter and `$.` after a successful line read.
-fn bump_lineno(globals: &mut Globals, io: Value) -> Result<()> {
-    let cur = globals
-        .store
-        .get_ivar(io, *LINENO_ID)
-        .and_then(|v| v.try_fixnum())
-        .unwrap_or(0);
-    let n = cur + 1;
-    globals
-        .store
-        .set_ivar(io, *LINENO_ID, Value::integer(n))?;
+fn bump_lineno(globals: &mut Globals, mut io: Value) -> Result<()> {
+    let n = io.as_io_inner_mut().bump_lineno();
     globals.set_lineno(Value::integer(n));
     Ok(())
 }
@@ -1612,16 +1597,12 @@ fn close_write(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    match io {
-        IoInner::Popen(popen) => {
-            let popen = Rc::get_mut(popen).unwrap();
-            popen.writer = None;
-            if popen.reader.is_none() {
-                *io = IoInner::Closed(None);
-            }
+    match io.kind() {
+        IoKind::Popen(_) => {
+            io.popen_close_write();
         }
         // CRuby: no-op on an already-closed stream.
-        IoInner::Closed(..) => {}
+        IoKind::Closed(..) => {}
         // CRuby: a stream that is not readable (nothing left once the
         // write side goes) is simply closed; only a readable non-duplex
         // stream refuses.
@@ -1645,16 +1626,12 @@ fn close_read(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    match io {
-        IoInner::Popen(popen) => {
-            let popen = Rc::get_mut(popen).unwrap();
-            popen.reader = None;
-            if popen.writer.is_none() {
-                *io = IoInner::Closed(None);
-            }
+    match io.kind() {
+        IoKind::Popen(_) => {
+            io.popen_close_read();
         }
         // CRuby: no-op on an already-closed stream.
-        IoInner::Closed(..) => {}
+        IoKind::Closed(..) => {}
         // CRuby: a stream that is not writable is simply closed; only a
         // writable non-duplex stream refuses.
         _ if io.is_writable() => {
@@ -2298,7 +2275,7 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // core/io/pipe_spec "does not use IO.new method").
     let init_id = IdentId::get_id("initialize");
     let make_end = |vm: &mut Executor, globals: &mut Globals, fd: i32, mode: &str| -> Result<Value> {
-        let obj = Value::new_io_with_class(IoInner::Closed(None), class);
+        let obj = Value::new_io_with_class(IoInner::closed(None), class);
         vm.invoke_method_inner(
             globals,
             init_id,
@@ -2711,7 +2688,7 @@ fn io_initialize_copy(
     };
     let path = other.as_io_inner().path();
     let has_path = path.is_some();
-    *self_.as_io_inner_mut() = IoInner::from_raw_fd_autoclose(
+    let mut dup = IoInner::from_raw_fd_autoclose(
         newfd,
         path.unwrap_or_default(),
         has_path,
@@ -2719,6 +2696,10 @@ fn io_initialize_copy(
         writable,
         true,
     );
+    // `#lineno`, the encodings and binmode are per-object state that the
+    // copy inherits (and then advances independently).
+    dup.copy_state_from(other.as_io_inner());
+    *self_.as_io_inner_mut() = dup;
     Ok(self_)
 }
 
@@ -2925,8 +2906,10 @@ fn io_reopen_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     } else {
         // Closed receiver: adopt the fresh fd directly.
         let fd = std::os::fd::IntoRawFd::into_raw_fd(file);
-        *self_.as_io_inner_mut() =
-            IoInner::from_raw_fd_autoclose(fd, path, true, readable, writable, true);
+        let inner = self_.as_io_inner_mut();
+        let mut fresh = IoInner::from_raw_fd_autoclose(fd, path, true, readable, writable, true);
+        fresh.copy_state_from(inner);
+        *inner = fresh;
     }
     Ok(self_)
 }
@@ -2946,7 +2929,7 @@ fn rebuild_reopened_inner(
     writable: bool,
 ) {
     let inner = self_.as_io_inner_mut();
-    if !matches!(inner, IoInner::File(_)) {
+    if !matches!(inner.kind(), IoKind::File(_)) {
         return;
     }
     let was_autoclose = inner.is_autoclose();
@@ -2955,7 +2938,7 @@ fn rebuild_reopened_inner(
     // re-registers ownership if it had it.
     inner.set_autoclose(false);
     let has_path = path.is_some();
-    *inner = IoInner::from_raw_fd_autoclose(
+    let mut fresh = IoInner::from_raw_fd_autoclose(
         fd,
         path.unwrap_or_default(),
         has_path,
@@ -2963,6 +2946,11 @@ fn rebuild_reopened_inner(
         writable,
         was_autoclose,
     );
+    // The stream is replaced, the *object* is not: `#lineno`, the
+    // encodings and binmode survive a reopen (they were instance
+    // variables before, which this swap left untouched).
+    fresh.copy_state_from(inner);
+    *inner = fresh;
 }
 
 ///
@@ -3032,16 +3020,14 @@ fn io_binmode(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let self_ = lfp.self_val();
+    let mut self_ = lfp.self_val();
     ensure_io_open(self_)?;
     // CRuby: binmode forces external = ASCII-8BIT, internal = nil.
     let bin = enc_by_name(globals, "ASCII-8BIT")
         .map(ExtSlot::Fixed)
         .unwrap_or(ExtSlot::Nil);
     store_io_encodings(globals, self_, bin, None);
-    let _ = globals
-        .store
-        .set_ivar(self_, IdentId::get_id(BINMODE_IVAR), Value::bool(true));
+    self_.as_io_inner_mut().set_binmode();
     Ok(self_)
 }
 
@@ -3056,17 +3042,12 @@ fn io_binmode(
 #[monoruby_builtin]
 fn io_binmode_(
     _vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
-    let b = globals
-        .store
-        .get_ivar(lfp.self_val(), IdentId::get_id(BINMODE_IVAR))
-        .map(|v| v.as_bool())
-        .unwrap_or(false);
-    Ok(Value::bool(b))
+    Ok(Value::bool(lfp.self_val().as_io_inner().binmode()))
 }
 
 ///
@@ -3221,9 +3202,7 @@ fn io_rewind(
         .as_io_inner_mut()
         .seek(0, 0)
         .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
-    globals
-        .store
-        .set_ivar(self_, *LINENO_ID, Value::integer(0))?;
+    self_.as_io_inner_mut().set_lineno(0);
     Ok(Value::integer(0))
 }
 
@@ -3534,15 +3513,12 @@ fn parse_whence(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) ->
 #[monoruby_builtin]
 fn io_lineno(
     _vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     lfp.self_val().as_io_inner().ensure_readable()?;
-    let stored = globals
-        .store
-        .get_ivar(lfp.self_val(), *LINENO_ID);
-    Ok(stored.unwrap_or_else(|| Value::integer(0)))
+    Ok(Value::integer(lfp.self_val().as_io_inner().lineno()))
 }
 
 ///
@@ -3566,11 +3542,7 @@ fn io_lineno_set(
             "integer {n} too big to convert to `int'"
         )));
     }
-    globals.store.set_ivar(
-        lfp.self_val(),
-        *LINENO_ID,
-        Value::integer(n),
-    )?;
+    lfp.self_val().as_io_inner_mut().set_lineno(n);
     Ok(Value::integer(n))
 }
 
@@ -4533,26 +4505,16 @@ fn set_encoding_by_bom(
     // Preconditions (CRuby `rb_io_set_encoding_by_bom`): the stream
     // must be in binmode, with no external/internal encoding already
     // chosen — a BOM determines the external encoding from scratch.
-    let binmode = globals
-        .store
-        .get_ivar(self_, IdentId::get_id(BINMODE_IVAR))
-        .map(|v| v.as_bool())
-        .unwrap_or(false);
+    let binmode = self_.as_io_inner().binmode();
     if !binmode {
         return Err(MonorubyErr::argumenterr(
             "ASCII incompatible encoding needs binmode",
         ));
     }
-    if let Some(int) = globals.store.get_ivar(self_, IdentId::get_id(ENC_INT_IVAR))
-        && !int.is_nil()
-    {
+    if self_.as_io_inner().int_enc().is_some() {
         return Err(MonorubyErr::argumenterr("encoding conversion is set"));
     }
-    if let Some(ext) = globals.store.get_ivar(self_, IdentId::get_id(ENC_EXT_IVAR))
-        && !ext.is_nil()
-        && ext.try_symbol() != Some(IdentId::get_id(ENC_DYN_MARKER))
-        && !enc_is_binary(globals, ext)
-    {
+    if let Some(ext) = fixed_ext_encoding(globals, self_) {
         let name = super::encoding::encoding_object_name(globals, ext)
             .unwrap_or_else(|| "UTF-8".to_string());
         return Err(MonorubyErr::argumenterr(format!(
@@ -4722,27 +4684,23 @@ fn tagged_read_string_with(
 
 /// Read `/enc_ext` / `/enc_int`, resolving the live-default marker.
 fn read_io_encoding(globals: &mut Globals, io: Value, internal: bool) -> Value {
-    let id = if internal { *ENC_INT_ID } else { *ENC_EXT_ID };
-    match globals.store.get_ivar(io, id) {
-        None => {
-            // IOs not created through our path (pipe/popen/stdio):
-            // external defaults to default_external, internal to nil.
-            // Exception: the write-only stdio streams — CRuby reports
-            // `nil` for STDOUT/STDERR's external encoding until one is
-            // set explicitly with `#set_encoding`.
-            let write_only_stdio = io.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::IO)
-                && matches!(io.as_io_inner(), IoInner::Stdout | IoInner::Stderr);
-            if internal || write_only_stdio {
+    let inner = io.as_io_inner();
+    if internal {
+        return inner.int_enc().unwrap_or_default();
+    }
+    match inner.ext_state() {
+        ExtEnc::Fixed => inner.ext_enc().unwrap_or_default(),
+        ExtEnc::Nil => Value::nil(),
+        // Explicitly following `Encoding.default_external`, or never set
+        // at all — both resolve it now, so a later change to it is seen.
+        // Exception: the write-only stdio streams, where CRuby reports
+        // `nil` until one is set explicitly with `#set_encoding`.
+        ExtEnc::Dynamic => enc_default_external_obj(globals),
+        ExtEnc::Unset => {
+            if matches!(inner.kind(), IoKind::Stdout | IoKind::Stderr) {
                 Value::nil()
             } else {
                 enc_default_external_obj(globals)
-            }
-        }
-        Some(v) => {
-            if !internal && v.try_symbol() == Some(*ENC_DYN_ID) {
-                enc_default_external_obj(globals)
-            } else {
-                v
             }
         }
     }
@@ -6176,6 +6134,51 @@ mod tests {
     // coverage but multiplies subprocess pressure by 25× and drags whole-
     // suite wall time past minutes under default 8-thread parallelism on
     // macOS. CRuby comparison still runs once for output parity.
+
+    /// `#lineno`, the encodings and binmode live in `IoInner` rather
+    /// than in hidden instance variables, so the paths that build a
+    /// *fresh* descriptor for an existing object — `#dup` /
+    /// `#initialize_copy` and `#reopen` — have to carry them over
+    /// explicitly. They used to ride along for free.
+    #[test]
+    fn io_per_object_state_survives_dup_and_reopen() {
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_iostate_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "one\ntwo\nthree\n")
+            r = []
+            f = File.open(path, "r:UTF-8:EUC-JP")
+            f.gets
+            r << [f.external_encoding.to_s, f.internal_encoding.to_s, f.lineno, f.binmode?]
+            g = f.dup
+            r << [g.external_encoding.to_s, g.internal_encoding.to_s, g.lineno, g.binmode?]
+            g.close
+            f.close
+            # The encodings stay readable after close (CRuby keeps them).
+            r << [f.external_encoding.to_s, f.internal_encoding.to_s]
+            # binmode is per object and survives a dup too.
+            h = File.open(path)
+            h.binmode
+            r << [h.binmode?, h.external_encoding.to_s, h.dup.binmode?]
+            h.close
+            # reopen swaps the stream, not the object.
+            i = File.open(path)
+            i.gets
+            i.reopen(path)
+            r << i.lineno
+            i.close
+            # #lineno= round-trips, and none of these are visible as
+            # instance variables.
+            j = File.open(path)
+            j.lineno = 41
+            j.gets
+            r << [j.lineno, j.instance_variables]
+            j.close
+            File.unlink(path)
+            r
+            "##,
+        );
+    }
 
     #[test]
         fn io_dup_ioctl_and_exact_reads() {
