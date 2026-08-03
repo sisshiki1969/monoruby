@@ -3606,7 +3606,13 @@ impl Executor {
     }
 
     pub(crate) fn generate_binding(&mut self, pc: BytecodePtr) -> Binding {
-        let lfp = self.cfp().prev().unwrap().lfp();
+        // A Binding captures the Ruby scope that asked for it. Reached
+        // through a builtin (`send(:binding)`, a Rust-written helper),
+        // the immediate caller is that builtin's frame — a Binding
+        // anchored there has no iseq at all, so `Binding#eval` raised
+        // "eval with binding requires a Ruby method context" and
+        // `Binding#local_variables` aborted the process on `as_iseq`.
+        let lfp = self.cfp().prev().unwrap().nearest_ruby_frame().lfp();
         Binding::from_outer(lfp, pc)
     }
 

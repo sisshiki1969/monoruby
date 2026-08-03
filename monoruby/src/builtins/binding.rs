@@ -1030,4 +1030,29 @@ mod tests {
             "##,
         );
     }
+
+    #[test]
+    fn binding_through_send_anchors_to_the_ruby_caller() {
+        // `send(:binding)` reaches `Kernel#binding` through a builtin
+        // frame. The Binding must still capture the Ruby method that
+        // asked, not the builtin in between — otherwise it carries no
+        // iseq and every method on it fails.
+        run_test_once(
+            r#"
+            class BSend
+              def direct; binding; end
+              def via_send; send(:binding); end
+              def with_local; a = 1; send(:binding); end
+            end
+            o = BSend.new
+            b = o.via_send
+            [b.eval("__method__").to_s,
+             b.eval("self").class.to_s,
+             b.receiver.class.to_s,
+             b.local_variables,
+             o.with_local.local_variables,
+             o.with_local.local_variable_get(:a)]
+            "#,
+        );
+    }
 }
