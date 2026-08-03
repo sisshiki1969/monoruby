@@ -619,12 +619,11 @@ enum ArgfSource {
 
 static ARGF_SOURCE: std::sync::Mutex<ArgfSource> = std::sync::Mutex::new(ArgfSource::Uninit);
 
-/// Shift the next file name off `ARGV`, if any.
+/// Shift the next file name off the program-argument array, if any.
+/// Reads it straight off `Globals` — the same object `ARGV` and `$*`
+/// name — rather than looking the constant back up.
 fn shift_argv(globals: &mut Globals) -> Option<String> {
-    let argv = globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("ARGV"))?;
-    let mut ary = argv.try_array_ty()?;
+    let mut ary = globals.argv().try_array_ty()?;
     if ary.is_empty() {
         return None;
     }
@@ -685,6 +684,41 @@ fn read_record(
     }
 }
 
+/// The ARGF object `Kernel#gets` reads from. Resolved from the `ARGF`
+/// constant the first time it is needed and then bound for good: CRuby
+/// holds its `argf` object in a C global, so reassigning the constant
+/// never redirects `gets`. Binding it also keeps a constant lookup out
+/// of the `while gets` / `-n` / `-p` hot loop.
+pub(crate) fn argf_object(globals: &mut Globals) -> Option<Value> {
+    if let Some(argf) = globals.argf {
+        return Some(argf);
+    }
+    let argf = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("ARGF"))?;
+    globals.argf = Some(argf);
+    Some(argf)
+}
+
+/// The `FuncId` of a `gets` *overriding* `ARGFClass#gets` on the ARGF
+/// object, if one is installed (mspec does this with singleton stubs).
+/// The answer is memoised against the global class version, so the
+/// method lookup runs again only after a method is (re)defined.
+fn argf_gets_override(globals: &mut Globals, argf: Value) -> Option<FuncId> {
+    let version = Globals::class_version();
+    if let Some((cached_version, fid)) = globals.argf_gets
+        && cached_version == version
+    {
+        return fid;
+    }
+    let fid = match globals.find_method_for_object(argf, IdentId::get_id("gets")) {
+        Ok((fid, _, owner)) if owner != argf.real_class(&globals.store).id() => Some(fid),
+        _ => None,
+    };
+    globals.argf_gets = Some((version, fid));
+    fid
+}
+
 #[monoruby_builtin]
 fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // CRuby's `Kernel#gets` is `ARGF.gets` — dispatched, so a singleton
@@ -692,18 +726,12 @@ fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
     // stub runs in its own frame and could not reach the caller's
     // frame-local `$_`). Without an override, use the raw record reader
     // directly, which also maintains `$.`.
-    if let Some(argf) = globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("ARGF"))
+    if let Some(argf) = argf_object(globals)
+        && let Some(fid) = argf_gets_override(globals, argf)
     {
-        let gets_id = IdentId::get_id("gets");
-        if let Ok((fid, _, owner)) = globals.find_method_for_object(argf, gets_id)
-            && owner != argf.real_class(&globals.store).id()
-        {
-            let res = vm.invoke_func_inner(globals, fid, argf, &[], None, None)?;
-            vm.set_last_read_line(res);
-            return Ok(res);
-        }
+        let res = vm.invoke_func_inner(globals, fid, argf, &[], None, None)?;
+        vm.set_last_read_line(res);
+        return Ok(res);
     }
     argf_gets_raw(vm, globals)
 }
@@ -9356,6 +9384,56 @@ mod tests {
               r
             ensure
               File.unlink(f1, f2) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn argv_argf_specials() {
+        // `$*` and `$<` read through Globals-backed hooks and are
+        // read-only; a singleton `gets` on ARGF intercepts `Kernel#gets`
+        // (called twice to also hit the class-version-memoised probe).
+        run_test_once(
+            r#"
+            r = []
+            r << $*
+            r << $*.equal?(ARGV)
+            r << defined?($<)
+            r << $<.to_s
+            r << $<.equal?(ARGF)
+            r << (begin; $* = []; rescue NameError => e; e.message; end)
+            r << (begin; $< = nil; rescue NameError => e; e.message; end)
+            def ARGF.gets; "stubbed"; end
+            r << gets
+            r << gets
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_gets_argv_files() {
+        // Real (un-stubbed) `Kernel#gets`: file names pushed onto ARGV
+        // are shifted off and read in order, `$.` advances, and end of
+        // input reads as nil. Keeps `gets` off stdin, so it cannot hang.
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            f = File.join(Dir.tmpdir, "kgets_#{Process.pid}.txt")
+            File.write(f, "a\nb\n")
+            begin
+              ARGV << f
+              r = []
+              r << gets
+              r << $.
+              r << gets
+              r << gets
+              r << $.
+              r << ARGV
+              r
+            ensure
+              File.unlink(f) rescue nil
             end
             "#,
         );

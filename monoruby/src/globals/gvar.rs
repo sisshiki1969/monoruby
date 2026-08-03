@@ -730,6 +730,21 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
     }
     globals.define_hooked_variable(IdentId::get_id("$?"), get_last_status, None);
 
+    // `$*` — the program arguments, the very same array as `ARGV`.
+    // Read-only, like CRuby: the array itself is mutable (`$*.shift`),
+    // but the variable cannot be rebound to another object.
+    fn get_argv(_vm: &mut Executor, globals: &mut Globals, _name: IdentId) -> Option<Value> {
+        Some(globals.argv())
+    }
+    globals.define_hooked_variable(IdentId::get_id("$*"), get_argv, None);
+
+    // `$<` — the ARGF object, read-only. The same binding `Kernel#gets`
+    // uses; reassigning the `ARGF` constant does not redirect it.
+    fn get_argf(_vm: &mut Executor, globals: &mut Globals, _name: IdentId) -> Option<Value> {
+        crate::builtins::kernel::argf_object(globals)
+    }
+    globals.define_hooked_variable(IdentId::get_id("$<"), get_argf, None);
+
     globals.define_hooked_variable(IdentId::get_id("$!"), get_errinfo, None);
     globals.define_hooked_variable(
         IdentId::get_id(crate::globals::ERRINFO_INTERNAL_GVAR),
