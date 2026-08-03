@@ -31,17 +31,21 @@ module GC
              immediate_sweep: immediate_sweep)
   end
 
-  # monoruby's collector never moves an object, so there is no
-  # compaction to switch on. CRuby raises NotImplementedError from these
-  # on platforms whose GC cannot compact either, and callers already
-  # handle that — reporting a stored flag instead would claim a
-  # behaviour that does not exist.
+  # monoruby's collector never moves an object, so compaction is always
+  # off. Disabling it (false) is a no-op; enabling it (true) raises, the
+  # same way CRuby does on platforms that do not support compaction.
+  # Accepting false without raising is essential for harnesses (e.g.
+  # yjit-bench's harness-common.rb) that call `GC.auto_compact = false`
+  # unconditionally to disable compaction before benchmarking.
   def self.auto_compact
-    raise NotImplementedError, "GC.auto_compact is not supported on this platform"
+    false
   end
 
-  def self.auto_compact=(_flag)
-    raise NotImplementedError, "GC.auto_compact= is not supported on this platform"
+  def self.auto_compact=(flag)
+    if flag
+      raise NotImplementedError, "GC.auto_compact= is not supported on this platform"
+    end
+    false
   end
 
   def self.compact

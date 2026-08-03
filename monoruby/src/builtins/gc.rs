@@ -621,17 +621,12 @@ mod tests {
     }
 
     #[test]
-    fn gc_auto_compact_is_unsupported() {
-        // monoruby never moves an object, so both accessors raise —
-        // exactly as CRuby does where its GC cannot compact. Written so
-        // the answer is the same on both.
-        run_test_once(
-            r##"
-            r = begin; GC.auto_compact; rescue NotImplementedError; false; end
-            w = begin; GC.auto_compact = false; rescue NotImplementedError; false; end
-            [[true, false].include?(r), [true, false].include?(w)]
-            "##,
-        );
+    fn gc_auto_compact() {
+        // auto_compact is always false (no compaction), auto_compact=false
+        // is a no-op, and auto_compact=true raises NotImplementedError.
+        run_test_once("GC.auto_compact");
+        run_test_once("GC.auto_compact = false");
+        run_test_once("begin; GC.auto_compact = true; rescue NotImplementedError; :ok; end");
     }
 
     #[test]
