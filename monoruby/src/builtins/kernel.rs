@@ -9390,6 +9390,56 @@ mod tests {
     }
 
     #[test]
+    fn argv_argf_specials() {
+        // `$*` and `$<` read through Globals-backed hooks and are
+        // read-only; a singleton `gets` on ARGF intercepts `Kernel#gets`
+        // (called twice to also hit the class-version-memoised probe).
+        run_test_once(
+            r#"
+            r = []
+            r << $*
+            r << $*.equal?(ARGV)
+            r << defined?($<)
+            r << $<.to_s
+            r << $<.equal?(ARGF)
+            r << (begin; $* = []; rescue NameError => e; e.message; end)
+            r << (begin; $< = nil; rescue NameError => e; e.message; end)
+            def ARGF.gets; "stubbed"; end
+            r << gets
+            r << gets
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn kernel_gets_argv_files() {
+        // Real (un-stubbed) `Kernel#gets`: file names pushed onto ARGV
+        // are shifted off and read in order, `$.` advances, and end of
+        // input reads as nil. Keeps `gets` off stdin, so it cannot hang.
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            f = File.join(Dir.tmpdir, "kgets_#{Process.pid}.txt")
+            File.write(f, "a\nb\n")
+            begin
+              ARGV << f
+              r = []
+              r << gets
+              r << $.
+              r << gets
+              r << gets
+              r << $.
+              r << ARGV
+              r
+            ensure
+              File.unlink(f) rescue nil
+            end
+            "#,
+        );
+    }
+
+    #[test]
     fn argf_basic_shape() {
         run_test_no_result_check(
             r#"
