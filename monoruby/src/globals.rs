@@ -265,6 +265,25 @@ pub struct Globals {
     /// runs finalizers only at exit, never asynchronously at GC time,
     /// which the spec explicitly permits.
     pub(crate) finalizers: Vec<(u64, Value)>,
+    /// The program-argument array: the single object behind the `ARGV`
+    /// constant, `$*`, and the file-name queue that `ARGF` and
+    /// `Kernel#gets` consume. CRuby keeps it in a C global (`rb_argv`)
+    /// rather than reading the constant back, so reassigning `ARGV`
+    /// redirects neither; holding it here does the same, and lets `gets`
+    /// reach the queue without a constant lookup per stream switch.
+    argv: Value,
+    /// The ARGF object `Kernel#gets` reads from, resolved from the
+    /// `ARGF` constant on first use and then bound for the process's
+    /// lifetime. CRuby binds its `argf` object at startup, so
+    /// reassigning the `ARGF` constant never redirects `gets` — and
+    /// binding it once keeps the constant lookup out of the `gets` hot
+    /// loop (`while gets`, `-n`/`-p`).
+    pub(crate) argf: Option<Value>,
+    /// Memoised answer to "does the ARGF object carry a `gets` that
+    /// overrides `ARGFClass#gets`?" — mspec installs such singleton
+    /// stubs. Keyed on the global class version, so defining or
+    /// redefining any method invalidates it.
+    pub(crate) argf_gets: Option<(u32, Option<FuncId>)>,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
@@ -308,6 +327,13 @@ impl alloc::GC<RValue> for Globals {
             v.mark(alloc);
         }
         self.random_seed_obj.mark(alloc);
+        // The argv array and the bound ARGF object outlive any
+        // reassignment of the `ARGV` / `ARGF` constants, so from then on
+        // they are reachable only from here.
+        self.argv.mark(alloc);
+        if let Some(v) = &self.argf {
+            v.mark(alloc);
+        }
         self.symbol_names.values().for_each(|v| v.mark(alloc));
         // Trap handler Procs are GC roots: they are reachable only from
         // this table, yet may be invoked at any future poll point.
@@ -524,6 +550,9 @@ impl Globals {
             exit_trap_handler: None,
             at_exit_handlers: Vec::new(),
             finalizers: Vec::new(),
+            argv: Value::array_empty(),
+            argf: None,
+            argf_gets: None,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "profile")]
@@ -598,6 +627,9 @@ impl Globals {
         globals.random_init(None);
         gvar::init_builtin_gvars(&mut globals);
         crate::builtins::init_builtins(&mut globals);
+        // `ARGV` exists from the start — empty until the CLI fills it
+        // in — and names the same array as `$*` and the ARGF queue.
+        globals.set_argv(globals.argv());
         globals
             .store
             .set_ivar(main_object, IdentId::_NAME, Value::string_from_str("main"))
@@ -1413,6 +1445,23 @@ impl Globals {
                     .insert((func_id, class_id, *reason), 1);
             }
         };
+    }
+}
+
+// Program arguments (`ARGV` / `$*` / the ARGF file queue)
+impl Globals {
+    /// The program-argument array. Both the `ARGV` constant and `$*`
+    /// name this same object, and `ARGF` / `Kernel#gets` shift the file
+    /// names to read off its front.
+    pub fn argv(&self) -> Value {
+        self.argv
+    }
+
+    /// Install the program-argument array, re-pointing the `ARGV`
+    /// constant at it. `$*` needs no update: it reads through a hook.
+    pub fn set_argv(&mut self, argv: Value) {
+        self.argv = argv;
+        self.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
     }
 }
 

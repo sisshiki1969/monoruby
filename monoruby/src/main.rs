@@ -869,9 +869,11 @@ fn main() {
         }
     }
 
-    let argv = Value::array_from_iter(prog_args.iter().map(|s| Value::string(lossy(s))));
-    globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
-    globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
+    // Installs the array as `ARGV`; `$*` and the ARGF file queue read
+    // the same object straight off `Globals`.
+    globals.set_argv(Value::array_from_iter(
+        prog_args.iter().map(|s| Value::string(lossy(s))),
+    ));
 
     if opts.ast {
         dump_ast(&code);
