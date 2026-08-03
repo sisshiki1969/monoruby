@@ -622,11 +622,11 @@ mod tests {
 
     #[test]
     fn gc_auto_compact() {
-        // auto_compact is always false (no compaction), auto_compact=false
-        // is a no-op, and auto_compact=true raises NotImplementedError.
-        run_test_once("GC.auto_compact");
-        run_test_once("GC.auto_compact = false");
-        run_test_once("begin; GC.auto_compact = true; rescue NotImplementedError; :ok; end");
+        // Round-trips the stored value; monoruby never actually compacts
+        // but the API must be compatible with callers that set it freely.
+        run_test_once("[true, false].include?(GC.auto_compact)");
+        run_test_once("GC.auto_compact = false; GC.auto_compact");
+        run_test_once("GC.auto_compact = true; GC.auto_compact");
     }
 
     #[test]

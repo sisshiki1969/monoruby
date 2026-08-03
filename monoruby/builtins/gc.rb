@@ -32,20 +32,17 @@ module GC
   end
 
   # monoruby's collector never moves an object, so compaction is always
-  # off. Disabling it (false) is a no-op; enabling it (true) raises, the
-  # same way CRuby does on platforms that do not support compaction.
-  # Accepting false without raising is essential for harnesses (e.g.
-  # yjit-bench's harness-common.rb) that call `GC.auto_compact = false`
-  # unconditionally to disable compaction before benchmarking.
+  # off. The accessors round-trip a stored value so callers (including
+  # yjit-bench's harness-common.rb which calls `GC.auto_compact = false`
+  # unconditionally) get the same interface as CRuby without errors.
+  @auto_compact = false
+
   def self.auto_compact
-    false
+    @auto_compact
   end
 
   def self.auto_compact=(flag)
-    if flag
-      raise NotImplementedError, "GC.auto_compact= is not supported on this platform"
-    end
-    false
+    @auto_compact = flag ? true : false
   end
 
   def self.compact
