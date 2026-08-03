@@ -128,18 +128,12 @@ impl Globals {
     /// `$/` as raw bytes, or `None` when it is `nil` (read everything).
     ///
     /// This is the shape every caller wants: `IO#gets`, `IO#each_line`,
-    /// `String#chomp`, `String#lines`, `Kernel#gets`.
+    /// `String#chomp`, `String#lines`, `Kernel#gets`. Assignment rejects
+    /// anything but a String or nil (`write_special_check`), so there is
+    /// no third case to handle.
     pub(crate) fn rs_bytes(&self) -> Option<Vec<u8>> {
         let v = self.special_gvars.rs;
-        if v.is_nil() {
-            return None;
-        }
-        // A non-String `$/` reads as the default "\n", matching what the
-        // IO line readers did before this was a field.
-        Some(match v.is_rstring() {
-            Some(rs) => rs.as_bytes().to_vec(),
-            None => b"\n".to_vec(),
-        })
+        Some(v.is_rstring()?.as_bytes().to_vec())
     }
 
     pub(crate) fn set_rs(&mut self, val: Value) {
@@ -1300,6 +1294,9 @@ mod tests {
         run_test_once(r##"$\ = "!"; r = $\; $\ = nil; r"##);
         run_test_once(r##"$/ = "c"; r = "abc".chomp; $/ = "\n"; r"##);
         run_test_once(r##"$/ = nil; r = "a\nb".chomp; $/ = "\n"; r"##);
+        // `chomp!` returns nil when `$/` is nil (nothing to strip).
+        run_test_once(r##"$/ = nil; s = "a\nb"; r = [s.chomp!, s]; $/ = "\n"; r"##);
+        run_test_once(r##"$/ = "b"; s = "ab"; r = [s.chomp!, s]; $/ = "\n"; r"##);
         // `trace_var` fires on assignment through the hook.
         run_test_once(
             r##"
