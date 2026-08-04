@@ -354,3 +354,85 @@ fn gets_honours_record_separator() {
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout), "one--");
 }
+
+#[test]
+fn inplace_edit_with_backup() {
+    // `-i.bak`: each ARGV file is rewritten from the script's stdout
+    // writes while the original bytes survive under the .bak name.
+    let dir = std::env::temp_dir().join(format!("cli_inplace_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f1 = dir.join("a.txt");
+    let f2 = dir.join("b.txt");
+    std::fs::write(&f1, "A1\nA2\n").unwrap();
+    std::fs::write(&f2, "B1\nB2\n").unwrap();
+    let out = run_with_stdin(
+        monoruby().args([
+            "-i.bak",
+            "-e",
+            "while line = ARGF.gets do puts line.chomp + '!' end",
+            f1.to_str().unwrap(),
+            f2.to_str().unwrap(),
+        ]),
+        "",
+    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(std::fs::read_to_string(&f1).unwrap(), "A1!\nA2!\n");
+    assert_eq!(std::fs::read_to_string(&f2).unwrap(), "B1!\nB2!\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("a.txt.bak")).unwrap(),
+        "A1\nA2\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("b.txt.bak")).unwrap(),
+        "B1\nB2\n"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn inplace_edit_without_backup() {
+    // Bare `-i`: rewritten in place, no backup left behind. Also routes
+    // the write family through the redirected $stdout.
+    let dir = std::env::temp_dir().join(format!("cli_inplace_nb_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f1 = dir.join("c.txt");
+    std::fs::write(&f1, "x1\nx2\n").unwrap();
+    let out = run_with_stdin(
+        monoruby().args([
+            "-i",
+            "-e",
+            "while line = ARGF.gets do ARGF.print line.upcase; end; ARGF.write ARGF.puts",
+            f1.to_str().unwrap(),
+        ]),
+        "",
+    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(std::fs::read_to_string(&f1).unwrap(), "X1\nX2\n");
+    assert!(!dir.join("c.txt.bak").exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn argf_filename_global_tracks_walk() {
+    // `$FILENAME` follows the file `Kernel#gets` is reading; ARGF.printf
+    // exercises the un-redirected write path.
+    let dir = std::env::temp_dir().join(format!("cli_filename_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f1 = dir.join("n1.txt");
+    let f2 = dir.join("n2.txt");
+    std::fs::write(&f1, "1\n").unwrap();
+    std::fs::write(&f2, "2\n").unwrap();
+    let out = run_with_stdin(
+        monoruby().args([
+            "-e",
+            "names = []; while gets; names << File.basename($FILENAME); end; \
+             ARGF.printf(\"%s\", names.join(','))",
+            f1.to_str().unwrap(),
+            f2.to_str().unwrap(),
+        ]),
+        "",
+    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "n1.txt,n2.txt");
+    std::fs::remove_dir_all(&dir).ok();
+}

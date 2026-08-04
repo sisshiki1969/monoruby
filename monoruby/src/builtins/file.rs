@@ -91,7 +91,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_funcs_rest(file, "delete", &["unlink"], delete);
     globals.define_builtin_class_func_rest(file, "chmod", chmod);
     globals.define_builtin_class_func(file, "symlink", file_symlink, 2);
-    globals.define_builtin_class_func(file, "readlines", readlines, 1);
+    globals.define_builtin_class_func_with_kw(
+        file,
+        "readlines",
+        readlines,
+        1,
+        3,
+        false,
+        &["chomp"],
+        true,
+    );
 
     globals.define_builtin_class_func(file, "size", file_size, 1);
     globals.define_builtin_module_func(file_test, "size", file_size, 1);
@@ -199,19 +208,77 @@ fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             ));
         }
     };
-    let mut contents = vec![];
-    match std::io::Read::read_to_end(&mut file, &mut contents) {
-        Ok(_) => {}
-        Err(err) => {
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &err,
-                "rb_io_read",
-                &filename_str,
-            ));
+    // Optional length / offset, plus a trailing options Hash
+    // (`File.read(path, length, offset)` /
+    //  `File.read(path, encoding: "...", mode: "...")`).
+    let mut positional: Vec<Value> = vec![];
+    let mut opts_enc: Option<Value> = None;
+    for i in 1..=3 {
+        let Some(v) = lfp.try_arg(i) else { break };
+        if v.is_nil() {
+            positional.push(v);
+        } else if let Some(h) = v.try_hash_ty() {
+            opts_enc = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?;
+        } else {
+            positional.push(v);
         }
+    }
+    let length = match positional.first() {
+        Some(v) if !v.is_nil() => {
+            let l = v.coerce_to_int_i64(vm, globals)?;
+            if l < 0 {
+                return Err(MonorubyErr::argumenterr(format!("negative length {l} given")));
+            }
+            Some(l as usize)
+        }
+        _ => None,
     };
-    Ok(Value::string_from_vec(contents))
+    let offset = match positional.get(1) {
+        Some(v) if !v.is_nil() => v.coerce_to_int_i64(vm, globals)?.max(0) as u64,
+        _ => 0,
+    };
+    if offset > 0 {
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(offset)).map_err(|err| {
+            MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_read", &filename_str)
+        })?;
+    }
+    let mut contents = vec![];
+    let res = match length {
+        Some(l) => std::io::Read::read_to_end(&mut std::io::Read::take(file, l as u64), &mut contents),
+        None => std::io::Read::read_to_end(&mut file, &mut contents),
+    };
+    if let Err(err) = res {
+        return Err(MonorubyErr::errno_with_path(
+            &globals.store,
+            &err,
+            "rb_io_read",
+            &filename_str,
+        ));
+    }
+    // A sized read that hits EOF immediately reads as nil; sized reads
+    // come back binary, like `IO#read(len)`. An `encoding:` option tags
+    // the result explicitly.
+    let res = match length {
+        Some(l) if l > 0 && contents.is_empty() => return Ok(Value::nil()),
+        Some(_) => Value::bytes(contents),
+        None => Value::string_from_vec(contents),
+    };
+    if let Some(enc_v) = opts_enc {
+        let name = if let Some(s) = enc_v.is_str() {
+            Some(s.to_string())
+        } else {
+            super::encoding::encoding_object_name(globals, enc_v)
+        };
+        if let Some(name) = name
+            && let Ok(enc) = crate::value::Encoding::try_from_str(&name)
+        {
+            let bytes = res.as_rstring_inner().as_bytes().to_vec();
+            return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                &bytes, enc,
+            )));
+        }
+    }
+    Ok(res)
 }
 
 ///
@@ -1431,13 +1498,103 @@ fn file_symlink(
 #[monoruby_builtin]
 fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_str(vm, globals)?;
-    let content = std::fs::read_to_string(&path)
+    let content = std::fs::read(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
-    let lines: Vec<Value> = content
-        .lines()
-        .map(|l| Value::string(format!("{}\n", l)))
+    // Optional separator / limit, `chomp:` keyword — `IO#gets` rules,
+    // shifted one slot right of the path argument.
+    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
+    let mut limit: Option<usize> = None;
+    match (lfp.try_arg(1), lfp.try_arg(2)) {
+        (None, _) => {}
+        (Some(v), None) => {
+            if v.is_nil() {
+                sep = None;
+            } else if let Some(rs) = v.is_rstring() {
+                sep = Some(rs.as_bytes().to_vec());
+            } else {
+                let l = v.coerce_to_int_i64(vm, globals)?;
+                limit = (l >= 0).then_some(l as usize);
+            }
+        }
+        (Some(v), Some(l)) => {
+            sep = if v.is_nil() {
+                None
+            } else {
+                Some(v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec())
+            };
+            let l = l.coerce_to_int_i64(vm, globals)?;
+            limit = (l >= 0).then_some(l as usize);
+        }
+    }
+    let chomp = lfp.try_arg(3).is_some_and(|v| v.as_bool());
+    let lines: Vec<Value> = split_records(&content, sep.as_deref(), limit, chomp)
+        .into_iter()
+        .map(Value::string_from_vec)
         .collect();
     Ok(Value::array_from_vec(lines))
+}
+
+/// Split `content` into records the way repeated `IO#gets(sep, limit)`
+/// would: each record ends with `sep` (kept unless `chomp`), a `nil`
+/// separator slurps, `""` is paragraph mode, and `limit` caps a
+/// record's byte length.
+fn split_records(
+    content: &[u8],
+    sep: Option<&[u8]>,
+    limit: Option<usize>,
+    chomp: bool,
+) -> Vec<Vec<u8>> {
+    let mut out: Vec<Vec<u8>> = vec![];
+    match sep {
+        None => {
+            if !content.is_empty() {
+                out.push(content.to_vec());
+            }
+        }
+        Some([]) => {
+            // Paragraph mode: records end at a blank line; extra blank
+            // lines between paragraphs are skipped.
+            let mut i = 0;
+            while i < content.len() {
+                while content[i..].starts_with(b"\n") {
+                    i += 1;
+                }
+                if i >= content.len() {
+                    break;
+                }
+                let end = content[i..]
+                    .windows(2)
+                    .position(|w| w == b"\n\n")
+                    .map(|p| i + p + 2)
+                    .unwrap_or(content.len());
+                out.push(content[i..end].to_vec());
+                i = end;
+            }
+        }
+        Some(sep) => {
+            let mut i = 0;
+            while i < content.len() {
+                let mut end = content[i..]
+                    .windows(sep.len())
+                    .position(|w| w == sep)
+                    .map(|p| i + p + sep.len())
+                    .unwrap_or(content.len());
+                if let Some(l) = limit
+                    && end - i > l
+                {
+                    end = i + l;
+                }
+                out.push(content[i..end].to_vec());
+                i = end;
+            }
+        }
+    }
+    if chomp {
+        for rec in &mut out {
+            super::io::chomp_line(rec, sep, limit);
+        }
+    }
+    out
 }
 
 ///

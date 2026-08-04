@@ -574,13 +574,22 @@ fn enc_by_name(globals: &Globals, name: &str) -> Option<Value> {
 }
 
 /// `Encoding.default_external` object (UTF-8 if unset).
+///
+/// The unset fallback resolves `Encoding::UTF_8` by constant id — NOT
+/// through `find_encoding_object`, which scans every constant under
+/// `Encoding` normalizing names and made each read on an
+/// `ExtEnc::Dynamic` stream (any plain `File.open(name)`) ~40× slower.
 pub(super) fn enc_default_external_obj(globals: &mut Globals) -> Value {
     if let Some(v) = globals.get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
         && !v.is_nil()
     {
         return v;
     }
-    enc_by_name(globals, "UTF-8").unwrap_or(Value::nil())
+    let enc_class = super::encoding::encoding_class(globals);
+    globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::UTF_8)
+        .unwrap_or(Value::nil())
 }
 
 /// `Encoding.default_internal` object, or `None` if unset.
@@ -1217,7 +1226,7 @@ fn flush(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// or negative). A single non-String argument is taken as the limit
 /// (coerced with `#to_int`); with two arguments the first must be a
 /// String (`#to_str`). A limit outside `i64` raises `RangeError`.
-fn getline_args(
+pub(super) fn getline_args(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
@@ -1267,7 +1276,7 @@ fn getline_args(
 ///   paragraph (a final paragraph cut short by EOF keeps its bytes);
 /// - `nil` separator: no-op — CRuby only chomps at a separator boundary,
 ///   and a slurped read has none.
-fn chomp_line(buf: &mut Vec<u8>, sep: Option<&[u8]>, _limit: Option<usize>) {
+pub(super) fn chomp_line(buf: &mut Vec<u8>, sep: Option<&[u8]>, _limit: Option<usize>) {
     match sep {
         None => {}
         Some([]) => {
@@ -4643,7 +4652,7 @@ fn tagged_read_string(
 /// hand the result to [`tagged_read_string_with`]: going back through
 /// `tagged_read_string` would repeat the ivar reads and the name parse
 /// two more times per character or line.
-fn io_encodings(
+pub(super) fn io_encodings(
     globals: &mut Globals,
     io: Value,
 ) -> (crate::value::Encoding, Option<crate::value::Encoding>) {
@@ -4660,7 +4669,7 @@ fn io_encodings(
 }
 
 /// [`tagged_read_string`] with the encodings already resolved.
-fn tagged_read_string_with(
+pub(super) fn tagged_read_string_with(
     globals: &mut Globals,
     bytes: Vec<u8>,
     ext: crate::value::Encoding,

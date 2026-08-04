@@ -246,4 +246,6 @@ require_relative 'filetest'
 require_relative 'env'
 require_relative 'pathname_builtins'
 
-require_relative 'argf'
+# ARGF is implemented in Rust (builtins/argf.rs); only the
+# Enumerable mix-in has to wait until the module exists.
+ARGF.class.include(Enumerable)

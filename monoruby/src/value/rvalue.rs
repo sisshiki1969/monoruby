@@ -21,6 +21,7 @@ pub use fiber::*;
 pub use hash::*;
 pub(crate) use io::NonblockGuard;
 pub use io::{ExtEnc, IoInner, IoKind, NonblockRead, NonblockWrite, fd_is_owned};
+pub use argf::*;
 pub use io_buffer::*;
 pub use ivar_table::*;
 pub use match_data::MatchDataInner;
@@ -50,6 +51,7 @@ mod exception;
 mod fiber;
 mod hash;
 pub(crate) mod io;
+mod argf;
 mod io_buffer;
 mod ivar_table;
 mod match_data;
@@ -132,6 +134,7 @@ impl std::fmt::Debug for ObjTy {
                 25 => "ARITHMETIC_SEQUENCE",
                 26 => "IO_BUFFER",
                 27 => "THREAD",
+                28 => "ARGF",
                 _ => return write!(f, "INVALID({ty})"),
             }
         )
@@ -172,6 +175,7 @@ impl ObjTy {
     pub const ARITHMETIC_SEQUENCE: Self = Self(std::num::NonZeroU8::new(25).unwrap());
     pub const IO_BUFFER: Self = Self(std::num::NonZeroU8::new(26).unwrap());
     pub const THREAD: Self = Self(std::num::NonZeroU8::new(27).unwrap());
+    pub const ARGF: Self = Self(std::num::NonZeroU8::new(28).unwrap());
 }
 
 #[repr(C)]
@@ -211,6 +215,9 @@ pub union ObjKind {
     struct_inner: ManuallyDrop<StructInner>,
     arithmetic_sequence: ManuallyDrop<ArithmeticSequenceInner>,
     io_buffer: ManuallyDrop<Box<IoBufferInner>>,
+    /// Boxed: keeps the walk state (queue, stream, encodings, in-place
+    /// bookkeeping) off the fixed-size RValue cell.
+    argf: ManuallyDrop<Box<ArgfInner>>,
 }
 
 impl ObjKind {
@@ -496,6 +503,12 @@ impl ObjKind {
         }
     }
 
+    fn argf(inner: ArgfInner) -> Self {
+        Self {
+            argf: ManuallyDrop::new(Box::new(inner)),
+        }
+    }
+
     fn arithmetic_sequence(begin: Value, end: Value, step: Value, exclude_end: bool) -> Self {
         Self {
             arithmetic_sequence: ManuallyDrop::new(ArithmeticSequenceInner::new(
@@ -552,6 +565,7 @@ impl std::fmt::Debug for RValue {
                             }
                             ObjTy::TIME => format!("{:?}", self.kind.time),
                             ObjTy::IO_BUFFER => format!("{:?}", self.kind.io_buffer),
+                            ObjTy::ARGF => format!("{:?}", self.kind.argf),
                             ObjTy::ARRAY => format!("{:?}", self.kind.array),
                             ObjTy::RANGE => format!("{:?}", self.kind.range),
                             ObjTy::EXCEPTION => format!("{:?}", self.kind.exception),
@@ -866,6 +880,7 @@ impl alloc::GCBox for RValue {
                 ObjTy::BINDING => ManuallyDrop::drop(&mut self.kind.binding),
                 ObjTy::IO => ManuallyDrop::drop(&mut self.kind.io),
                 ObjTy::IO_BUFFER => ManuallyDrop::drop(&mut self.kind.io_buffer),
+                ObjTy::ARGF => ManuallyDrop::drop(&mut self.kind.argf),
                 ObjTy::RATIONAL => ManuallyDrop::drop(&mut self.kind.rational),
                 ObjTy::STRUCT => ManuallyDrop::drop(&mut self.kind.struct_inner),
                 ObjTy::MATCHDATA => ManuallyDrop::drop(&mut self.kind.matchdata),
@@ -956,6 +971,7 @@ impl alloc::GCBox for RValue {
                 ObjTy::STRUCT => self.as_struct_inner().mark(alloc),
                 ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().mark(alloc),
                 ObjTy::IO_BUFFER => self.as_io_buffer().mark(alloc),
+                ObjTy::ARGF => self.as_argf().mark(alloc),
                 _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
             }
         }
@@ -1354,6 +1370,7 @@ impl RValue {
                     ObjTy::STRING => ObjKind::string_from_inner(self.as_rstring().clone()),
                     ObjTy::TIME => ObjKind::time(self.as_time().clone()),
                     ObjTy::IO_BUFFER => ObjKind::io_buffer(self.as_io_buffer().clone()),
+                    ObjTy::ARGF => ObjKind::argf(self.as_argf().clone()),
                     ObjTy::ARRAY => {
                         let mut v = vec![];
                         for e in self.as_array().iter() {
@@ -1446,6 +1463,9 @@ impl RValue {
                         ObjTy::IO_BUFFER => ObjKind {
                             io_buffer: self.kind.io_buffer.clone(),
                         },
+                        ObjTy::ARGF => ObjKind {
+                            argf: self.kind.argf.clone(),
+                        },
                         ObjTy::ARRAY => ObjKind {
                             array: self.kind.array.clone(),
                         },
@@ -1529,6 +1549,9 @@ impl RValue {
                         },
                         ObjTy::IO_BUFFER => ObjKind {
                             io_buffer: self.kind.io_buffer.clone(),
+                        },
+                        ObjTy::ARGF => ObjKind {
+                            argf: self.kind.argf.clone(),
                         },
                         ObjTy::ARRAY => ObjKind {
                             array: self.kind.array.clone(),
@@ -2133,6 +2156,14 @@ impl RValue {
         }
     }
 
+    pub(super) fn new_argf(class_id: ClassId, inner: ArgfInner) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::ARGF),
+            kind: ObjKind::argf(inner),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_arithmetic_sequence(
         begin: Value,
         end: Value,
@@ -2441,6 +2472,18 @@ impl RValue {
         assert_eq!(self.ty(), ObjTy::IO_BUFFER);
         // SAFETY: type checked above.
         unsafe { &mut self.kind.io_buffer }
+    }
+
+    pub(super) fn as_argf(&self) -> &ArgfInner {
+        assert_eq!(self.ty(), ObjTy::ARGF);
+        // SAFETY: type checked above.
+        unsafe { &self.kind.argf }
+    }
+
+    pub(super) fn as_argf_mut(&mut self) -> &mut ArgfInner {
+        assert_eq!(self.ty(), ObjTy::ARGF);
+        // SAFETY: type checked above.
+        unsafe { &mut self.kind.argf }
     }
 
     pub(super) unsafe fn as_arithmetic_sequence(&self) -> &ArithmeticSequenceInner {

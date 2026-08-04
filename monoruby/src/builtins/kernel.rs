@@ -603,92 +603,16 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// - gets([NOT SUPPORTED]rs = $/) -> String | nil
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/gets.html]
-/// Where `Kernel#gets` currently reads from. CRuby's `gets` is
-/// `ARGF.gets`: when `ARGV` holds file names they are consumed (shifted
-/// off `ARGV`) and read in order; only an initially-empty `ARGV` reads
-/// stdin. `Kernel#gets` is only ever called from the single Ruby
-/// thread, so a process-global is fine.
-enum ArgfSource {
-    /// Not yet decided — first `gets` call picks stdin or the ARGV files.
-    Uninit,
-    Stdin,
-    File(std::io::BufReader<std::fs::File>),
-    /// All ARGV files exhausted.
-    Done,
-}
+/// `Kernel#gets` is CRuby's `ARGF.gets`: file names in `ARGV` are
+/// consumed (shifted off) and read in order; only an initially-empty
+/// `ARGV` reads stdin. It reads through the very ARGF object bound in
+/// `Globals::argf`, so `ARGF.lineno` / `$.` / `$FILENAME` stay
+/// consistent whichever of the two entry points is used.
 
-static ARGF_SOURCE: std::sync::Mutex<ArgfSource> = std::sync::Mutex::new(ArgfSource::Uninit);
-
-/// Shift the next file name off the program-argument array, if any.
-/// Reads it straight off `Globals` — the same object `ARGV` and `$*`
-/// name — rather than looking the constant back up.
-fn shift_argv(globals: &mut Globals) -> Option<String> {
-    let mut ary = globals.argv().try_array_ty()?;
-    if ary.is_empty() {
-        return None;
-    }
-    let first = ary[0];
-    let name = first
-        .is_rstring_inner()
-        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())?;
-    ary.remove(0);
-    Some(name)
-}
-
-/// Read one record (up to and including the separator) from `reader`
-/// into `buffer`. `sep` is the raw `$/` value: `None` slurps the whole
-/// input, `Some(b"")` is paragraph mode.
-fn read_record(
-    reader: &mut dyn std::io::BufRead,
-    sep: &Option<Vec<u8>>,
-    buffer: &mut Vec<u8>,
-) -> std::io::Result<usize> {
-    match sep {
-        None => reader.read_to_end(buffer),
-        Some(sep) if sep.is_empty() => {
-            // Paragraph mode: skip leading blank lines, then read
-            // up to (and including) an empty line.
-            let mut line: Vec<u8> = Vec::new();
-            loop {
-                line.clear();
-                if reader.read_until(b'\n', &mut line)? == 0 {
-                    return Ok(buffer.len());
-                }
-                if line != b"\n" {
-                    buffer.extend_from_slice(&line);
-                    break;
-                }
-            }
-            loop {
-                line.clear();
-                if reader.read_until(b'\n', &mut line)? == 0 {
-                    return Ok(buffer.len());
-                }
-                buffer.extend_from_slice(&line);
-                if line == b"\n" {
-                    return Ok(buffer.len());
-                }
-            }
-        }
-        Some(sep) => {
-            let last = *sep.last().unwrap();
-            loop {
-                if reader.read_until(last, buffer)? == 0 {
-                    return Ok(buffer.len());
-                }
-                if buffer.ends_with(sep) {
-                    return Ok(buffer.len());
-                }
-            }
-        }
-    }
-}
-
-/// The ARGF object `Kernel#gets` reads from. Resolved from the `ARGF`
-/// constant the first time it is needed and then bound for good: CRuby
-/// holds its `argf` object in a C global, so reassigning the constant
-/// never redirects `gets`. Binding it also keeps a constant lookup out
-/// of the `while gets` / `-n` / `-p` hot loop.
+/// The ARGF object `Kernel#gets` reads from — bound in `Globals::argf`
+/// at init time (CRuby holds its `argf` object in a C global the same
+/// way, which is why reassigning the `ARGF` constant never redirects
+/// `gets`).
 pub(crate) fn argf_object(globals: &mut Globals) -> Option<Value> {
     if let Some(argf) = globals.argf {
         return Some(argf);
@@ -700,7 +624,7 @@ pub(crate) fn argf_object(globals: &mut Globals) -> Option<Value> {
     Some(argf)
 }
 
-/// The `FuncId` of a `gets` *overriding* `ARGFClass#gets` on the ARGF
+/// The `FuncId` of a `gets` *overriding* `ARGF.class#gets` on the ARGF
 /// object, if one is installed (mspec does this with singleton stubs).
 /// The answer is memoised against the global class version, so the
 /// method lookup runs again only after a method is (re)defined.
@@ -724,84 +648,21 @@ fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
     // CRuby's `Kernel#gets` is `ARGF.gets` — dispatched, so a singleton
     // stub on the ARGF object intercepts it (`$_` is still set here: the
     // stub runs in its own frame and could not reach the caller's
-    // frame-local `$_`). Without an override, use the raw record reader
-    // directly, which also maintains `$.`.
-    if let Some(argf) = argf_object(globals)
-        && let Some(fid) = argf_gets_override(globals, argf)
-    {
+    // frame-local `$_`). Without an override, drive the walk directly —
+    // no dispatch per line.
+    let Some(argf) = argf_object(globals) else {
+        return Ok(Value::nil());
+    };
+    if let Some(fid) = argf_gets_override(globals, argf) {
         let res = vm.invoke_func_inner(globals, fid, argf, &[], None, None)?;
         vm.set_last_read_line(res);
         return Ok(res);
     }
-    argf_gets_raw(vm, globals)
-}
-
-/// The raw ARGV/stdin record reader backing `Kernel#gets`: honours `$/`,
-/// advances `$.`, and sets `$_`.
-fn argf_gets_raw(vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
-    // Honour the input record separator `$/` (set by the `-0`
-    // command-line switch or by assignment): nil slurps the whole
-    // input, "" is paragraph mode, any other string reads up to and
-    // including that byte sequence.
-    let sep: Option<Vec<u8>> = globals.rs_bytes();
-    let mut buffer: Vec<u8> = Vec::new();
-    let mut source = ARGF_SOURCE.lock().unwrap();
-    let n = loop {
-        match &mut *source {
-            ArgfSource::Uninit => match shift_argv(globals) {
-                Some(name) if name != "-" => match std::fs::File::open(&name) {
-                    Ok(f) => *source = ArgfSource::File(std::io::BufReader::new(f)),
-                    Err(_) => {
-                        return Err(MonorubyErr::runtimeerr(format!(
-                            "No such file or directory @ rb_sysopen - {name}"
-                        )));
-                    }
-                },
-                Some(_) | None => *source = ArgfSource::Stdin,
-            },
-            ArgfSource::Stdin => {
-                let stdin = std::io::stdin();
-                let mut lock = stdin.lock();
-                break read_record(&mut lock, &sep, &mut buffer).unwrap_or(0);
-            }
-            ArgfSource::File(reader) => {
-                let n = read_record(reader, &sep, &mut buffer).unwrap_or(0);
-                if n > 0 {
-                    break n;
-                }
-                // Current file exhausted: move on to the next ARGV
-                // entry, or report end-of-input when none remain.
-                match shift_argv(globals) {
-                    Some(name) if name != "-" => match std::fs::File::open(&name) {
-                        Ok(f) => *source = ArgfSource::File(std::io::BufReader::new(f)),
-                        Err(_) => {
-                            return Err(MonorubyErr::runtimeerr(format!(
-                                "No such file or directory @ rb_sysopen - {name}"
-                            )));
-                        }
-                    },
-                    Some(_) => *source = ArgfSource::Stdin,
-                    None => *source = ArgfSource::Done,
-                }
-            }
-            ArgfSource::Done => break 0,
-        }
-    };
-    drop(source);
-    // Zero bytes read means end-of-input. CRuby's `gets` then returns
-    // nil (and `while gets` terminates); returning the empty buffer
-    // string here would loop forever since "" is truthy.
-    if n == 0 {
-        vm.set_last_read_line(Value::nil());
-        return Ok(Value::nil());
-    }
-    // Bump `$.` (input line number) and set `$_` (frame-local last
-    // read line), matching CRuby.
-    let lineno = globals.lineno().try_fixnum().unwrap_or(0) + 1;
-    globals.set_lineno(Value::integer(lineno));
-    let s = Value::string_from_vec(buffer);
-    vm.set_last_read_line(s);
-    Ok(s)
+    let sep = globals.rs_bytes();
+    Ok(
+        crate::builtins::argf::argf_getline_raw(vm, globals, argf, sep.as_deref(), None, false)?
+            .unwrap_or_default(),
+    )
 }
 
 ///
