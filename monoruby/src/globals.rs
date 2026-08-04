@@ -1458,10 +1458,26 @@ impl Globals {
     }
 
     /// Install the program-argument array, re-pointing the `ARGV`
-    /// constant at it. `$*` needs no update: it reads through a hook.
+    /// constant at it, `$*` (which reads through a hook), and the
+    /// process-wide ARGF object's file queue.
     pub fn set_argv(&mut self, argv: Value) {
         self.argv = argv;
         self.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
+        if let Some(mut argf) = self.argf
+            && let Some(inner) = argf.try_argf_inner_mut()
+        {
+            inner.argv = argv;
+        }
+    }
+
+    /// The `-i[extension]` switch: put the process-wide ARGF into
+    /// in-place-edit mode (`""` = no backup files).
+    pub fn set_argf_inplace(&mut self, ext: String) {
+        if let Some(mut argf) = self.argf
+            && let Some(inner) = argf.try_argf_inner_mut()
+        {
+            inner.inplace = Some(ext);
+        }
     }
 }
 

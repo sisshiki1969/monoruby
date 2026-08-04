@@ -1531,6 +1531,24 @@ impl ClassInfoTable {
         self.define_class_with_identid(name_id, superclass, parent)
     }
 
+    /// A class with a display name but no constant binding and a custom
+    /// instance type — CRuby's `rb_class_new` + `rb_set_class_path`
+    /// pattern, used for `ARGF.class` (its name cannot be a constant).
+    pub(crate) fn define_dotted_class(
+        &mut self,
+        name: &str,
+        superclass: Option<Module>,
+        instance_ty: ObjTy,
+    ) -> Module {
+        let superclass = match superclass {
+            Some(class) => class,
+            None => self.object_class(),
+        };
+        let module = self.define_class_inner(None, superclass, None, false, Some(instance_ty));
+        self[module.id()].set_name(name.to_string());
+        module
+    }
+
     // TODO: we must name the unnamed class when the class object is assigned to constant later.
     pub(crate) fn define_unnamed_class(&mut self, superclass: Option<Module>) -> Module {
         let superclass = match superclass {

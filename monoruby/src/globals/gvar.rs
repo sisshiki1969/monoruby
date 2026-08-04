@@ -745,6 +745,14 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
     }
     globals.define_hooked_variable(IdentId::get_id("$<"), get_argf, None);
 
+    // `$FILENAME` — the name of the file ARGF is currently reading
+    // ("-" for stdin), read-only.
+    fn get_filename(_vm: &mut Executor, globals: &mut Globals, _name: IdentId) -> Option<Value> {
+        let argf = globals.argf?;
+        Some(crate::builtins::argf::filename_of(argf))
+    }
+    globals.define_hooked_variable(IdentId::get_id("$FILENAME"), get_filename, None);
+
     globals.define_hooked_variable(IdentId::get_id("$!"), get_errinfo, None);
     globals.define_hooked_variable(
         IdentId::get_id(crate::globals::ERRINFO_INTERNAL_GVAR),

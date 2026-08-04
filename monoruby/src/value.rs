@@ -1305,6 +1305,10 @@ impl Value {
         RValue::new_io_buffer(inner).pack()
     }
 
+    pub fn new_argf(class_id: ClassId, inner: ArgfInner) -> Self {
+        RValue::new_argf(class_id, inner).pack()
+    }
+
     pub fn arithmetic_sequence(begin: Value, end: Value, step: Value, exclude_end: bool) -> Self {
         RValue::new_arithmetic_sequence(begin, end, step, exclude_end).pack()
     }
@@ -2999,6 +3003,22 @@ impl Value {
 
     pub fn as_io_buffer_inner_mut(&mut self) -> &mut IoBufferInner {
         self.rvalue_mut().as_io_buffer_mut()
+    }
+
+    /// The receiver's ArgfInner. `None` unless the value is an ARGF
+    /// object (`ObjTy::ARGF`) — e.g. a bare `ARGF.class.allocate`.
+    pub fn try_argf_inner(&self) -> Option<&ArgfInner> {
+        let rv = self.try_rvalue()?;
+        (rv.ty() == ObjTy::ARGF).then(|| rv.as_argf())
+    }
+
+    pub fn try_argf_inner_mut(&mut self) -> Option<&mut ArgfInner> {
+        let rv = self.try_rvalue()?;
+        if rv.ty() == ObjTy::ARGF {
+            Some(self.rvalue_mut().as_argf_mut())
+        } else {
+            None
+        }
     }
 
     pub fn as_arithmetic_sequence_inner(&self) -> &ArithmeticSequenceInner {
