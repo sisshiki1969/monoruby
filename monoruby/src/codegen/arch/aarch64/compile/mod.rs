@@ -973,6 +973,15 @@ impl Codegen {
             } => {
                 self.a64_integer_binop_imm(lhs, imm, kind, &deopt);
             }
+            // Fixnum doubling: add the tagged value to itself *before* the
+            // retag adjustment (safe for a shared operand register), overflow
+            // -> deopt, then `-1` retags. Twin of x86 `integer_double`.
+            LInst::IntegerDouble { reg, deopt } => {
+                let r = reg.a64().0;
+                monoasm_arm64!(&mut self.jit, adds x(r), x(r), x(r););
+                self.jit.bcond_label(monoasm::Cond::Vs, &deopt);
+                monoasm_arm64!(&mut self.jit, sub x(r), x(r), #(1u32););
+            }
             // Fixnum unary negate (tagged); deopt on i63 overflow.
             LInst::FixnumNeg { reg, deopt } => {
                 let r = reg.a64().0;

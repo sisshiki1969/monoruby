@@ -89,6 +89,7 @@ impl Codegen {
             | AsmInst::IntegerCmpBrReg { .. }
             | AsmInst::IntegerCmpBrImm { .. }
             | AsmInst::IntegerBinOpImm { .. }
+            | AsmInst::IntegerDouble { .. }
             | AsmInst::FloatBinOp { .. }
             | AsmInst::FloatUnOp { .. }
             | AsmInst::I64ToBoth(..)
@@ -617,6 +618,9 @@ impl Codegen {
                 deopt,
             } => {
                 self.integer_binop_imm(lhs, imm, kind, &deopt);
+            }
+            LInst::IntegerDouble { reg, deopt } => {
+                self.integer_double(reg, &deopt);
             }
             // Fixnum unary negate (tagged); deopt on i63 overflow.
             LInst::FixnumNeg { reg, deopt } => {

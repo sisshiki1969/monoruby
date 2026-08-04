@@ -1740,6 +1740,17 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     ///
+    /// Fixnum doubling `dst = lhs + lhs` (both operands share one register).
+    /// The tagged-order sequence (`add; jo; sub 1`) reads the shared operand
+    /// before any untag, so computing in place in the shared register is
+    /// safe (when `lhs` is clean — the usual dirty rule applies).
+    ///
+    IntegerDouble {
+        dst: GP,
+        lhs: GP,
+        deopt: AsmDeopt,
+    },
+    ///
     /// register-form fixnum comparison `dst = lhs <kind> rhs`
     /// (a bool `Value`), operands already in GP registers and fixnum-guarded.
     /// The lowering compares and stores the boolean to `dst`'s stack home.

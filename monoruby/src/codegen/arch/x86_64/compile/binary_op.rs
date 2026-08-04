@@ -163,6 +163,31 @@ impl Codegen {
     }
 
     ///
+    /// Fixnum doubling: `reg = reg + reg` on the tagged value, adding
+    /// *before* untagging so the sequence is safe when both operands share
+    /// this register: `(2a+1)+(2a+1) = 4a+2`, then `-1` retags to `2(2a)+1`.
+    /// The `jo` on `4a+2` is an exact i63 overflow check (`4a+1 == i64::MAX`
+    /// has no integer solution).
+    ///
+    pub(super) fn integer_double(&mut self, reg: GP, deopt: &DestLabel) {
+        let r = reg as u64;
+        assert_eq!(0, self.jit.get_page());
+        let overflow = self.jit.label();
+        monoasm!( &mut self.jit,
+            addq R(r), R(r);
+            jo overflow;
+            subq R(r), 1;
+        );
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        overflow:
+            movq rdi, (Value::symbol_from_str("_arith_overflow").id());
+            jmp deopt;
+        );
+        self.jit.select_page(0);
+    }
+
+    ///
     /// gen code for Integer#% (rem) of two fixnums.
     ///
     /// ### in
