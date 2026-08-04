@@ -303,6 +303,18 @@ impl Codegen {
                     });
                 }
             }
+            // Fixnum doubling (`x + x`): move the shared operand into `dst`
+            // when they differ, then the tagged-order add/sub sequence.
+            AsmInst::IntegerDouble { dst, lhs, deopt } => {
+                let deopt = labels[deopt].clone();
+                if dst != lhs {
+                    self.encode_linst(LInst::Mov {
+                        dst: dst.into(),
+                        src: lhs.into(),
+                    });
+                }
+                self.encode_linst(LInst::IntegerDouble { reg: dst, deopt });
+            }
             // Immediate-form binop: like `IntegerBinOpReg`, but the constant is
             // folded into the instruction (no rhs register, no untag).
             AsmInst::IntegerBinOpImm {

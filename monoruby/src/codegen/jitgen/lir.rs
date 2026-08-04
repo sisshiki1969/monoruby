@@ -482,6 +482,16 @@ pub(in crate::codegen) enum LInst {
         imm: i32,
         deopt: DestLabel,
     },
+    /// Fixnum doubling (`x + x` with both operands in one register):
+    /// `add reg, reg; jo; sub reg, 1` — the addition happens on the tagged
+    /// value *before* any untag, so a shared operand register is safe, and
+    /// `(2a+1)+(2a+1)-1 = 2(2a)+1`. The `jo` on the intermediate `4a+2` is
+    /// exact: `4a+1 == i64::MAX` has no integer solution, so the off-by-one
+    /// never fires spuriously.
+    IntegerDouble {
+        reg: GP,
+        deopt: DestLabel,
+    },
     /// Fixnum unary negate on the tagged value in `reg`; deopt on i63 overflow
     /// (e.g. `-i63::MIN`).
     FixnumNeg {

@@ -544,6 +544,8 @@ impl AbstractFrame {
         // 1. Load the operands into registers (reusing a resident copy).
         let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
         let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        // Same slot on both sides (`x + x`): one guard proves both operands.
+        let rhs_guard = rhs_guard && lhs != rhs;
         // 1b. For `Mul`/`Div`: if `rhs` is a dirty resident, write it to its home
         //     and mark it clean *before* the deopt snapshot. The op clobbers
         //     `rhs_gp` before the side-exit, so the snapshot must re-home `rhs`
@@ -589,12 +591,18 @@ impl AbstractFrame {
         //    (its register must survive to the side exit for the deopt
         //    write-back). `Mul`/`Div` clobber `rhs` and (Div) produce in
         //    `rax`, so pin both operands and take a distinct register.
+        //    `x + x` (both operands in one register) uses the tagged-order
+        //    doubling sequence, which reads the shared operand before any
+        //    untag — so it may compute in place in the shared register too.
+        let double = kind == BinOpK::Add && lhs_gp == rhs_gp;
         let dst_gp = if rhs_clobbered {
             let (gp, spill) = self.gp_regfile.alloc_reg(&[lhs_gp, rhs_gp]);
             if let Some((reg, slot)) = spill {
                 ir.reg2stack(reg, slot);
             }
             gp
+        } else if double {
+            self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[])
         } else {
             self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[rhs_gp])
         };
@@ -610,7 +618,15 @@ impl AbstractFrame {
             ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
             self.refine_S_fixnum(rhs);
         }
-        ir.integer_binop_reg(kind, dst_gp, lhs_gp, rhs_gp, deopt);
+        if double {
+            ir.push(AsmInst::IntegerDouble {
+                dst: dst_gp,
+                lhs: lhs_gp,
+                deopt,
+            });
+        } else {
+            ir.integer_binop_reg(kind, dst_gp, lhs_gp, rhs_gp, deopt);
+        }
         // The op left garbage in `rhs_gp`: forget that it cached `rhs`.
         if rhs_clobbered {
             self.gp_regfile.invalidate(rhs);
@@ -1183,6 +1199,8 @@ mod tests {
                 x = j + 3
                 res << x + x << x * x << x - x << (x + x) + x
                 res << (x == x) << (x < x)
+                big = 4611686018427387000 + j
+                res << big + big
                 j = j + 1
               end
               res
