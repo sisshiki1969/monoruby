@@ -1013,17 +1013,26 @@ fn internal_encoding(
     let inner = expect_inner(lfp.self_val())?;
     match inner.current {
         Some(cur) => invoke0(vm, globals, cur, "internal_encoding"),
-        None => vm.invoke_method_inner(
-            globals,
-            IdentId::get_id("default_internal"),
-            globals
-                .store
-                .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Encoding"))
-                .unwrap_or_default(),
-            &[],
-            None,
-            None,
-        ),
+        // No stream open yet. CRuby answers with the *pending* internal
+        // encoding: the one a prior `set_encoding(ext, int)` recorded,
+        // or — a CRuby quirk — the default external object.
+        None => {
+            if let Some(int_arg) = inner.enc_args.get(1).copied() {
+                let enc_class = globals
+                    .store
+                    .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Encoding"))
+                    .unwrap_or_default();
+                return vm.invoke_method_inner(
+                    globals,
+                    IdentId::get_id("find"),
+                    enc_class,
+                    &[int_arg],
+                    None,
+                    None,
+                );
+            }
+            Ok(super::io::enc_default_external_obj(globals))
+        }
     }
 }
 
@@ -1100,4 +1109,282 @@ fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     stdout_delegate(vm, globals, lfp, "puts")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    /// A fresh two-file walk for each expression: `f1` holds "A1\nA2\n",
+    /// `f2` holds "B1\nB2\n", and `a` is `ARGF.class.new(f1, f2)`.
+    fn with_two_files(body: &str) -> String {
+        format!(
+            r#"
+            require 'tmpdir'
+            f1 = File.join(Dir.tmpdir, "argf_t1_#{{Process.pid}}_#{{rand(100000)}}.txt")
+            f2 = File.join(Dir.tmpdir, "argf_t2_#{{Process.pid}}_#{{rand(100000)}}.txt")
+            File.write(f1, "A1\nA2\n"); File.write(f2, "B1\nB2\n")
+            begin
+              a = ARGF.class.new(f1, f2)
+              {body}
+            ensure
+              File.unlink(f1, f2) rescue nil
+            end
+            "#
+        )
+    }
+
+    #[test]
+    fn argf_gets_family() {
+        run_test_once(&with_two_files(
+            r#"
+            r = []
+            r << a.gets
+            r << a.gets("2\n")
+            r << a.gets(nil)
+            r << a.gets
+            b = ARGF.class.new(f1, f2)
+            r << b.gets(3)
+            r << b.gets("1", 1)
+            r << b.gets(chomp: true)
+            r << ARGF.class.new(f1).read(2).encoding.to_s
+            c = ARGF.class.new(f1)
+            r << c.readline
+            c.read
+            r << (begin; c.readline; rescue EOFError => e; e.message; end)
+            r
+            "#,
+        ));
+    }
+
+    #[test]
+    fn argf_readlines_each_line() {
+        run_test_once(&with_two_files(
+            r#"
+            r = []
+            r << a.readlines
+            b = ARGF.class.new(f1, f2)
+            r << b.readlines("1\n", chomp: true)
+            c = ARGF.class.new(f1, f2)
+            acc = []
+            ret = c.each_line { |l| acc << l }
+            r << acc
+            r << ret.equal?(c)
+            d = ARGF.class.new(f1)
+            e = d.each_line
+            r << e.class.to_s
+            r << e.to_a
+            r << ARGF.class.new(f1).to_a
+            r << ARGF.class.new(f1).each_line("1\n").to_a
+            r
+            "#,
+        ));
+    }
+
+    #[test]
+    fn argf_read_partial_nonblock() {
+        run_test_once(&with_two_files(
+            r#"
+            r = []
+            r << a.read(2)
+            r << a.read
+            b = ARGF.class.new(f1, f2)
+            r << b.read(7)          # spans the file boundary
+            r << b.read
+            r << b.read             # exhausted -> nil
+            r << ARGF.class.new(f1).read(0)
+            buf = +"zz"
+            r << [ARGF.class.new(f1).read(3, buf), buf]
+            r << (begin; ARGF.class.new(f1).read(-1); rescue ArgumentError => e; e.message; end)
+            c = ARGF.class.new(f1, f2)
+            r << c.readpartial(100)
+            r << c.readpartial(100) # EOF of f1, more files -> ""
+            r << c.readpartial(100)
+            r << (begin; c.readpartial(100); rescue EOFError => e; e.message; end)
+            d = ARGF.class.new(f1)
+            r << d.read_nonblock(2)
+            rbuf = +"ww"
+            r << [d.read_nonblock(100, rbuf), rbuf]
+            r << (begin; d.read_nonblock(4); rescue EOFError => e; e.message; end)
+            r
+            "#,
+        ));
+    }
+
+    #[test]
+    fn argf_char_byte_readers() {
+        run_test_once(&with_two_files(
+            r#"
+            r = []
+            r << a.getc
+            r << a.getbyte
+            r << a.readchar
+            r << a.readbyte
+            b = ARGF.class.new(f1)
+            b.read
+            r << b.getc
+            r << b.getbyte
+            r << (begin; b.readchar; rescue EOFError => e; e.message; end)
+            c = ARGF.class.new(f1, f2)
+            bytes = []; c.each_byte { |x| bytes << x }
+            r << bytes
+            d = ARGF.class.new(f1)
+            chars = []; d.each_char { |x| chars << x }
+            r << chars
+            e = ARGF.class.new(f1)
+            cps = []; e.each_codepoint { |x| cps << x }
+            r << cps
+            r << ARGF.class.new(f1).each_byte.first(3)
+            r << ARGF.class.new(f1).each_char.class.to_s
+            r
+            "#,
+        ));
+    }
+
+    #[test]
+    fn argf_positioning() {
+        run_test_once(&with_two_files(
+            r#"
+            r = []
+            r << a.pos
+            r << a.read(2)
+            r << a.tell
+            a.pos = 0
+            r << a.gets
+            a.seek(3)
+            r << a.gets
+            a.seek(0, IO::SEEK_END)
+            r << a.gets           # rolls to f2
+            a.rewind
+            r << a.gets
+            b = ARGF.class.new(f1)
+            b.read
+            r << (begin; b.pos; rescue ArgumentError => e; e.message; end)
+            r << (begin; b.seek(0); rescue ArgumentError => e; e.message; end)
+            r << (begin; b.rewind; rescue ArgumentError => e; e.message; end)
+            r << (begin; b.fileno; rescue ArgumentError => e; e.message; end)
+            r << (begin; b.eof?; rescue IOError => e; e.message; end)
+            r
+            "#,
+        ));
+    }
+
+    #[test]
+    fn argf_lineno_rewind_and_state() {
+        run_test_once(&with_two_files(
+            r#"
+            r = []
+            a.gets
+            r << a.lineno
+            a.rewind
+            r << a.lineno
+            a.lineno = 7
+            r << a.lineno
+            a.gets
+            r << a.lineno
+            b = ARGF.class.new(f1, f2)
+            r << b.eof?
+            b.gets; b.gets
+            r << b.eof?
+            b.gets
+            r << b.eof?
+            c = ARGF.class.new(f1, f2)
+            io = c.to_io
+            r << io.class.to_s
+            c.close
+            r << io.closed?
+            r << c.close.equal?(c)
+            d = ARGF.class.new(f1, f2)
+            r << d.getc
+            d.skip
+            r << d.getc
+            r
+            "#,
+        ));
+    }
+
+    #[test]
+    fn argf_identity_and_filename() {
+        run_test_once(&with_two_files(
+            r#"
+            r = []
+            r << (a.filename == f1)
+            r << (a.path == f1)
+            r << (a.gets; a.filename == f1)
+            2.times { a.gets }
+            r << (a.filename == f2)
+            r << a.argv
+            r << a.to_s
+            r << a.inspect
+            r << (a.fileno.is_a?(Integer))
+            r << (a.file.is_a?(File))
+            r << ARGF.class.new(f1).to_i.is_a?(Integer)
+            r
+            "#,
+        ));
+    }
+
+    #[test]
+    fn argf_encodings_and_modes() {
+        run_test_once(&with_two_files(
+            r#"
+            r = []
+            r << a.binmode?
+            a.binmode
+            r << a.binmode?
+            r << a.gets.encoding.to_s
+            b = ARGF.class.new(f1, f2)
+            b.set_encoding("US-ASCII")
+            r << b.gets.encoding.to_s
+            b.gets; b.gets            # roll into f2
+            r << b.gets.encoding.to_s # remembered across files
+            c = ARGF.class.new(f1)
+            r << (c.external_encoding == Encoding.default_external)
+            r << (c.internal_encoding == Encoding.default_external)
+            c.gets
+            r << c.internal_encoding
+            ie = ARGF.class.new(f1)
+            ie.set_encoding("UTF-8", "UTF-16")
+            r << ie.internal_encoding.to_s
+            r << c.inplace_mode
+            c.inplace_mode = ".bak"
+            r << c.inplace_mode
+            c.inplace_mode = nil
+            r << c.inplace_mode
+            r << (begin; c.inplace_mode = 1; rescue TypeError => e; e.message; end)
+            r
+            "#,
+        ));
+    }
+
+    #[test]
+    fn file_read_and_readlines_args() {
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            f = File.join(Dir.tmpdir, "file_read_args_#{Process.pid}.txt")
+            File.write(f, "para1a\npara1b\n\npara2\n")
+            begin
+              r = []
+              r << File.read(f)
+              r << File.read(f, 4)
+              r << File.read(f, 4).encoding.to_s
+              r << File.read(f, 4, 2)
+              r << File.read(f, nil, 7)
+              r << File.read(f, 1000)
+              r << File.read(f, 4, 1000)
+              r << File.read(f, encoding: "US-ASCII").encoding.to_s
+              r << File.readlines(f)
+              r << File.readlines(f, "a\n")
+              r << File.readlines(f, nil)
+              r << File.readlines(f, chomp: true)
+              r << File.readlines(f, "")            # paragraph mode
+              r << File.readlines(f, "1", 2)
+              r
+            ensure
+              File.unlink(f) rescue nil
+            end
+            "#,
+        );
+    }
 }
