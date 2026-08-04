@@ -471,6 +471,17 @@ pub(in crate::codegen) enum LInst {
         rhs: GP,
         deopt: DestLabel,
     },
+    /// Fixnum fast-path `lhs <op> imm` with a compile-time constant folded into
+    /// the instruction's immediate operand. `imm` is the **doubled untagged**
+    /// constant `2k`: the tagged identity `(2a+1) ± 2k = 2(a±k)+1` needs no
+    /// untag adjustment, and the overflow flag is preserved (`2a+1 ± 2k`
+    /// overflows i64 iff `a ± k` overflows i63). Add/Sub only.
+    IntegerBinOpImm {
+        kind: BinOpK,
+        lhs: GP,
+        imm: i32,
+        deopt: DestLabel,
+    },
     /// Fixnum unary negate on the tagged value in `reg`; deopt on i63 overflow
     /// (e.g. `-i63::MIN`).
     FixnumNeg {
@@ -828,6 +839,14 @@ pub(in crate::codegen) enum LInst {
         kind: CmpKind,
         lhs: GP,
         rhs: GP,
+    },
+    /// Fixnum comparison against a compile-time constant. `imm` is the
+    /// **tagged** constant `2k+1` (tagged fixnums compare in the same order
+    /// as their untagged values). Boolean result in the accumulator.
+    IntegerCmpImm {
+        kind: CmpKind,
+        lhs: GP,
+        imm: i32,
     },
     Ret,
     MethodRet {

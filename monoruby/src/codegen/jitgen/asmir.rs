@@ -1725,6 +1725,21 @@ pub(super) enum AsmInst {
         deopt: AsmDeopt,
     },
     ///
+    /// Immediate-form fixnum `dst = lhs <kind> imm2k` (`Add`/`Sub` only).
+    /// `imm` is the doubled untagged constant `2k`, folded straight into the
+    /// instruction: no register materialization and no untag adjustment
+    /// (`(2a+1) ± 2k = 2(a±k)+1`), overflow still detected. Computes in place
+    /// in the `dst` position (the lowering moves `lhs` into `dst` first when
+    /// they differ).
+    ///
+    IntegerBinOpImm {
+        kind: BinOpK,
+        dst: GP,
+        lhs: GP,
+        imm: i32,
+        deopt: AsmDeopt,
+    },
+    ///
     /// register-form fixnum comparison `dst = lhs <kind> rhs`
     /// (a bool `Value`), operands already in GP registers and fixnum-guarded.
     /// The lowering compares and stores the boolean to `dst`'s stack home.
@@ -1734,6 +1749,17 @@ pub(super) enum AsmInst {
         dst: Option<SlotId>,
         lhs: GP,
         rhs: GP,
+    },
+    ///
+    /// Immediate-form fixnum comparison `dst = lhs <kind> imm` (a bool
+    /// `Value`). `imm` is the tagged constant `2k+1` (tagged fixnums compare
+    /// in the same order as their untagged values).
+    ///
+    IntegerCmpImm {
+        kind: CmpKind,
+        dst: Option<SlotId>,
+        lhs: GP,
+        imm: i32,
     },
     ///
     /// Register-form fused fixnum compare + conditional branch, operands already
@@ -1746,6 +1772,17 @@ pub(super) enum AsmInst {
         branch_dest: JitLabel,
         lhs: GP,
         rhs: GP,
+    },
+    ///
+    /// Immediate-form fused fixnum compare + conditional branch. `imm` is the
+    /// tagged constant `2k+1`.
+    ///
+    IntegerCmpBrImm {
+        kind: CmpKind,
+        brkind: BrKind,
+        branch_dest: JitLabel,
+        lhs: GP,
+        imm: i32,
     },
     FloatCmp {
         kind: CmpKind,

@@ -423,6 +423,44 @@ impl Codegen {
 
     /// Compare two tagged fixnums (the tag preserves order). Mirrors x86
     /// `cmp_integer`.
+    /// Immediate-form fixnum Add/Sub, twin of x86 `integer_binop_imm`: the
+    /// constant is folded in as the doubled untagged value `2k`
+    /// (`(2a+1) ± 2k = 2(a±k)+1` — no untag adjustment), with the overflow
+    /// flag checked exactly as in `a64_integer_binop`. A negative or
+    /// out-of-12-bit immediate is materialized in scratch x9.
+    pub(super) fn a64_integer_binop_imm(
+        &mut self,
+        lhs: GP,
+        imm: i32,
+        kind: BinOpK,
+        deopt: &DestLabel,
+    ) {
+        let l = lhs.a64().0;
+        let v = imm as i64;
+        // Normalize to a non-negative magnitude: `add -k` == `sub k`.
+        let (add, mag) = match kind {
+            BinOpK::Add => (v >= 0, v.unsigned_abs()),
+            BinOpK::Sub => (v < 0, v.unsigned_abs()),
+            _ => unreachable!(),
+        };
+        if mag <= 4095 {
+            let m = mag as u32;
+            if add {
+                monoasm_arm64!(&mut self.jit, adds x(l), x(l), #(m););
+            } else {
+                monoasm_arm64!(&mut self.jit, subs x(l), x(l), #(m););
+            }
+        } else {
+            monoasm_arm64!(&mut self.jit, mov x9, (mag););
+            if add {
+                monoasm_arm64!(&mut self.jit, adds x(l), x(l), x9;);
+            } else {
+                monoasm_arm64!(&mut self.jit, subs x(l), x(l), x9;);
+            }
+        }
+        self.jit.bcond_label(monoasm::Cond::Vs, deopt);
+    }
+
     pub(super) fn a64_cmp_integer(&mut self, lhs: GP, rhs: GP) {
         let l = lhs.a64().0;
         let r = rhs.a64().0;
@@ -451,6 +489,23 @@ impl Codegen {
         rhs: GP,
     ) -> bool {
         self.a64_cmp_integer(lhs, rhs);
+        self.a64_flag_to_bool(kind);
+        true
+    }
+
+    /// Integer comparison against a tagged immediate (`2k+1`); result Value
+    /// lands in the accumulator. x9 is lowering scratch, as everywhere.
+    pub(in crate::codegen::jitgen) fn emit_integer_cmp_imm(
+        &mut self,
+        kind: CmpKind,
+        lhs: GP,
+        imm: i32,
+    ) -> bool {
+        let l = lhs.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (imm as i64 as u64);
+            cmp x(l), x9;
+        );
         self.a64_flag_to_bool(kind);
         true
     }
