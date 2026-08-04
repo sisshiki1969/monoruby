@@ -126,6 +126,43 @@ impl Codegen {
     }
 
     ///
+    /// Immediate-form fixnum Add/Sub: the constant is folded into the
+    /// instruction as the doubled untagged value `2k`, so no untag adjustment
+    /// is needed (`(2a+1) ± 2k = 2(a±k)+1`) and `jo` still detects i63
+    /// overflow.
+    ///
+    /// ### in/out
+    /// - lhs: tagged Fixnum operand, receives the tagged result
+    ///
+    pub(super) fn integer_binop_imm(&mut self, lhs: GP, imm: i32, kind: BinOpK, deopt: &DestLabel) {
+        let lhs_r = lhs as u64;
+        assert_eq!(0, self.jit.get_page());
+        let overflow = self.jit.label();
+        match kind {
+            BinOpK::Add => {
+                monoasm!( &mut self.jit,
+                    addq R(lhs_r), (imm);
+                    jo overflow;
+                );
+            }
+            BinOpK::Sub => {
+                monoasm!( &mut self.jit,
+                    subq R(lhs_r), (imm);
+                    jo overflow;
+                );
+            }
+            _ => unreachable!(),
+        }
+        self.jit.select_page(1);
+        monoasm!( &mut self.jit,
+        overflow:
+            movq rdi, (Value::symbol_from_str("_arith_overflow").id());
+            jmp deopt;
+        );
+        self.jit.select_page(0);
+    }
+
+    ///
     /// gen code for Integer#% (rem) of two fixnums.
     ///
     /// ### in
@@ -470,6 +507,16 @@ impl Codegen {
             xorq rax, rax;
         };
         self.cmp_integer(lhs, rhs);
+        self.flag_to_bool(kind);
+    }
+
+    /// Fixnum comparison against a tagged immediate (`2k+1`); bool Value in rax.
+    pub(super) fn integer_cmp_imm(&mut self, kind: CmpKind, lhs: GP, imm: i32) {
+        let l = lhs as u64;
+        monoasm! { &mut self.jit,
+            xorq rax, rax;
+            cmpq R(l), (imm);
+        };
         self.flag_to_bool(kind);
     }
 

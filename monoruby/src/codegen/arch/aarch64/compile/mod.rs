@@ -978,6 +978,14 @@ impl Codegen {
             } => {
                 self.a64_integer_binop(lhs, rhs, kind, &deopt);
             }
+            LInst::IntegerBinOpImm {
+                kind,
+                lhs,
+                imm,
+                deopt,
+            } => {
+                self.a64_integer_binop_imm(lhs, imm, kind, &deopt);
+            }
             // Fixnum unary negate (tagged); deopt on i63 overflow.
             LInst::FixnumNeg { reg, deopt } => {
                 let r = reg.a64().0;

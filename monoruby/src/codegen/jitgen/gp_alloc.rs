@@ -192,6 +192,11 @@ impl GpRegFile {
         GP_ALLOC_SET.iter().position(|&r| r == reg).unwrap()
     }
 
+    /// True when `reg` holds no resident (free for immediate reuse).
+    pub(in crate::codegen::jitgen) fn is_free(&self, reg: GP) -> bool {
+        self.holder[Self::index_of(reg)].is_none()
+    }
+
     /// The register currently caching `slot`, if any (the reuse lookup).
     pub(in crate::codegen::jitgen) fn reg_of(&self, slot: SlotId) -> Option<GP> {
         self.holder

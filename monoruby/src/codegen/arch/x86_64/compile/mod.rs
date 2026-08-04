@@ -85,7 +85,10 @@ impl Codegen {
             | AsmInst::FprRestore(..)
             | AsmInst::IntegerBinOpReg { .. }
             | AsmInst::IntegerCmpReg { .. }
+            | AsmInst::IntegerCmpImm { .. }
             | AsmInst::IntegerCmpBrReg { .. }
+            | AsmInst::IntegerCmpBrImm { .. }
+            | AsmInst::IntegerBinOpImm { .. }
             | AsmInst::FloatBinOp { .. }
             | AsmInst::FloatUnOp { .. }
             | AsmInst::I64ToBoth(..)
@@ -607,6 +610,14 @@ impl Codegen {
                 deopt,
             } => {
                 self.integer_binop(lhs, rhs, kind, &deopt);
+            }
+            LInst::IntegerBinOpImm {
+                kind,
+                lhs,
+                imm,
+                deopt,
+            } => {
+                self.integer_binop_imm(lhs, imm, kind, &deopt);
             }
             // Fixnum unary negate (tagged); deopt on i63 overflow.
             LInst::FixnumNeg { reg, deopt } => {
@@ -1612,6 +1623,18 @@ impl Codegen {
         rhs: GP,
     ) -> bool {
         self.integer_cmp(kind, lhs, rhs);
+        true
+    }
+
+    /// Integer comparison against a tagged immediate; result Value lands in
+    /// the accumulator.
+    pub(in crate::codegen::jitgen) fn emit_integer_cmp_imm(
+        &mut self,
+        kind: CmpKind,
+        lhs: GP,
+        imm: i32,
+    ) -> bool {
+        self.integer_cmp_imm(kind, lhs, imm);
         true
     }
 
