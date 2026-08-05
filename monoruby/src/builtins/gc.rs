@@ -488,6 +488,16 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn gc_compact_is_a_full_gc_noop() {
+        // The `GC.compact if GC.respond_to?(:compact)` guard idiom must
+        // run the call, and the return keeps CRuby's shape (per-type
+        // tables, empty here because nothing ever moves).
+        run_test_once(r#"(GC.compact if GC.respond_to?(:compact)).class.to_s"#);
+        run_test_once(r#"GC.compact.keys"#);
+        run_test_once(r#"GC.latest_compact_info.keys"#);
+    }
+
+    #[test]
     fn gc_stat() {
         run_test("GC.stat.class");
         run_test("GC.stat.is_a?(Hash)");
