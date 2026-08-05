@@ -45,8 +45,18 @@ module GC
     @auto_compact = flag ? true : false
   end
 
+  # `compact` degrades to a full collection and reports that nothing
+  # moved, in CRuby's return shape (empty per-type tables). It must not
+  # raise: the idiomatic `GC.compact if GC.respond_to?(:compact)` guard
+  # passes here, so the call has to succeed.
   def self.compact
-    raise NotImplementedError, "GC.compact is not supported on this platform"
+    GC.start
+    { considered: {}, moved: {}, moved_up: {}, moved_down: {} }
+  end
+
+  # What the last (non-)compaction did — same shape as `compact`.
+  def self.latest_compact_info
+    { considered: {}, moved: {}, moved_up: {}, moved_down: {} }
   end
 
   # --- GC.config ----------------------------------------------------------
