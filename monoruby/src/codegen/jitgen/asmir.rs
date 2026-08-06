@@ -929,6 +929,15 @@ impl AsmIr {
         });
     }
 
+    pub(super) fn array_min_max(&mut self, using_fpr: UsingFpr, args: SlotId, len: u16, min: bool) {
+        self.push(AsmInst::ArrayMinMax {
+            args,
+            len,
+            min,
+            using_fpr,
+        });
+    }
+
     pub(super) fn new_hash(&mut self, using_fpr: UsingFpr, args: SlotId, len: usize) {
         self.push(AsmInst::NewHash(args, len, using_fpr));
     }
@@ -1907,6 +1916,14 @@ pub(super) enum AsmInst {
     ///
     /// - caller save registers
     ///
+    /// `[a, b, …].min` / `.max` fused: compare the literal's elements in
+    /// their slots, no Array allocated. See `try_fuse_array_minmax`.
+    ArrayMinMax {
+        args: SlotId,
+        len: u16,
+        min: bool,
+        using_fpr: UsingFpr,
+    },
     NewArray {
         callid: CallSiteId,
         /// `Some((args, len))` when the literal has no splat and `1 <= len <=

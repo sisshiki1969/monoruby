@@ -697,6 +697,12 @@ pub(in crate::codegen) enum LInst {
         inline: Option<(SlotId, u16)>,
         using_fpr: UsingFpr,
     },
+    ArrayMinMax {
+        args: SlotId,
+        len: u16,
+        min: bool,
+        using_fpr: UsingFpr,
+    },
     NewHash {
         args: SlotId,
         len: usize,

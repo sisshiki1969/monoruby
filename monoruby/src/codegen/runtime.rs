@@ -608,6 +608,67 @@ pub(super) extern "C" fn gen_lambda(
     vm.generate_lambda(globals, func_id, pc).into()
 }
 
+/// `[a, b, …].min` / `.max` with the Array allocation elided: compare
+/// the literal's elements right in their stack slots (they descend from
+/// `src`, like `gen_hash`'s). The compare loop mirrors the builtin
+/// `Array#min` / `#max` exactly (`best <=> v`, replace on
+/// Greater/Less, ties keep the earlier element, incomparable pairs
+/// raise through `compare_values`), so the fused JIT path and the VM
+/// builtin are indistinguishable. An empty literal reads as nil.
+fn opt_array_minmax(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+    is_min: bool,
+) -> Option<Value> {
+    if len == 0 {
+        return Some(Value::nil());
+    }
+    let replace_on = if is_min {
+        std::cmp::Ordering::Greater
+    } else {
+        std::cmp::Ordering::Less
+    };
+    let mut best = unsafe { *src };
+    for i in 1..len {
+        let v = unsafe { *src.sub(i) };
+        let ord = if let (Some(a), Some(b)) = (best.try_fixnum(), v.try_fixnum()) {
+            a.cmp(&b)
+        } else {
+            match vm.compare_values(globals, best, v) {
+                Ok(ord) => ord,
+                Err(err) => {
+                    vm.set_error(err);
+                    return None;
+                }
+            }
+        };
+        if ord == replace_on {
+            best = v;
+        }
+    }
+    Some(best)
+}
+
+pub(super) extern "C" fn opt_array_min(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+) -> Option<Value> {
+    opt_array_minmax(vm, globals, src, len, true)
+}
+
+pub(super) extern "C" fn opt_array_max(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+) -> Option<Value> {
+    opt_array_minmax(vm, globals, src, len, false)
+}
+
 pub(super) extern "C" fn gen_hash(
     vm: &mut Executor,
     globals: &mut Globals,

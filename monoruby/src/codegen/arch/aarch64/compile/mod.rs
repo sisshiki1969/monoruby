@@ -1618,6 +1618,40 @@ impl Codegen {
     }
 
     /// rax <- Hash literal via gen_hash(vm, globals, &slot[args], len).
+    /// x0 <- min/max of the `len` values at `args`, computed in place —
+    /// the fused, allocation-free `[a, b, …].min` / `.max`. Same call
+    /// shape as `emit_new_hash`.
+    pub(in crate::codegen::jitgen) fn emit_array_min_max(
+        &mut self,
+        args: SlotId,
+        len: u16,
+        min: bool,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = args.0 as u32 * 8 + LFP_SELF as u32;
+        let f = if min {
+            runtime::opt_array_min as *const () as u64
+        } else {
+            runtime::opt_array_max as *const () as u64
+        };
+        self.emit_fpr_save(using_fpr, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;              // vm
+            mov x1, x20;              // globals
+        );
+        self.a64_addr_sub(2, lfp, off); // x2 = &slot[args]
+        monoasm_arm64!(&mut self.jit,
+            mov x3, (len as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        true
+    }
+
     pub(in crate::codegen::jitgen) fn emit_new_hash(
         &mut self,
         args: SlotId,

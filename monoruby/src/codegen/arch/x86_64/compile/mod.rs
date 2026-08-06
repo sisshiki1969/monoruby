@@ -68,6 +68,7 @@ impl Codegen {
             | AsmInst::StoreDynVar { .. }
             | AsmInst::CreateArray { .. }
             | AsmInst::NewArray { .. }
+            | AsmInst::ArrayMinMax { .. }
             | AsmInst::NewHash(..)
             | AsmInst::HashInsert { .. }
             | AsmInst::ArrayConcat { .. }
@@ -1126,6 +1127,33 @@ impl Codegen {
         using_fpr: UsingFpr,
     ) -> bool {
         self.new_hash(args, len, using_fpr);
+        true
+    }
+
+    /// rax <- min/max of the `len` values at `args`, computed in place —
+    /// the fused, allocation-free `[a, b, …].min` / `.max`.
+    pub(in crate::codegen::jitgen) fn emit_array_min_max(
+        &mut self,
+        args: SlotId,
+        len: u16,
+        min: bool,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let f = if min {
+            runtime::opt_array_min as usize
+        } else {
+            runtime::opt_array_max as usize
+        };
+        self.fpr_save(using_fpr);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rdx, [rbp - (rbp_local(args))];
+            movq rcx, (len as usize);
+            movq rax, (f);
+            call rax;
+        );
+        self.fpr_restore(using_fpr);
         true
     }
 
