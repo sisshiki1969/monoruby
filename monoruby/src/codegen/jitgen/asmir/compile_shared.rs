@@ -960,11 +960,12 @@ impl Codegen {
             // Generic `yield` (block target resolved at runtime). aarch64 builds
             // the block frame and calls the funcdata indirectly; the x86-only
             // return-address eviction patch is applied by the x86 emit_yield.
-            AsmInst::Yield { callid, error, evict } => {
+            AsmInst::Yield { callid, simple, error, evict } => {
                 let evict_label = labels[evict].clone();
                 let error = labels[error].clone();
                 self.encode_linst(LInst::Yield {
                     callid,
+                    simple,
                     error,
                     evict,
                     evict_label,
@@ -1451,8 +1452,8 @@ impl Codegen {
             LInst::EnsureEnd { loop_jit_spill_bytes } => {
                 self.emit_ensure_end(loop_jit_spill_bytes);
             }
-            LInst::Yield { callid, error, evict, evict_label } => {
-                self.emit_yield(callid, &error, evict, &evict_label);
+            LInst::Yield { callid, simple, error, evict, evict_label } => {
+                self.emit_yield(callid, simple, &error, evict, &evict_label);
             }
             LInst::Unreachable => {
                 self.emit_unreachable();

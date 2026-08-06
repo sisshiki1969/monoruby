@@ -121,7 +121,12 @@ impl Codegen {
     /// - caller save registers
     /// - r15
     ///
-    pub(super) fn gen_yield(&mut self, callid: CallSiteId, error: &DestLabel) -> CodePtr {
+    pub(super) fn gen_yield(
+        &mut self,
+        callid: CallSiteId,
+        simple: bool,
+        error: &DestLabel,
+    ) -> CodePtr {
         self.get_proc_data();
         self.handle_error(&error);
         // rax <- outer, rdx <- FuncId
@@ -145,7 +150,11 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
         }
-        self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
+        self.generic_handle_arguments(if simple {
+            runtime::jit_handle_arguments_no_block_for_yield
+        } else {
+            runtime::jit_handle_arguments_no_block
+        });
         self.handle_error(error);
         self.call_funcdata()
     }

@@ -1576,6 +1576,9 @@ pub(super) enum AsmInst {
     },
     Yield {
         callid: CallSiteId,
+        /// Statically simple call site: plain positional args, so the
+        /// runtime argument transfer takes the direct-copy path.
+        simple: bool,
         error: AsmError,
         evict: AsmEvict,
     },

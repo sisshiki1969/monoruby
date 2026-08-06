@@ -2232,11 +2232,12 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_yield(
         &mut self,
         callid: CallSiteId,
+        simple: bool,
         error: &DestLabel,
         evict: AsmEvict,
         evict_label: &DestLabel,
     ) -> bool {
-        let return_addr = self.gen_yield(callid, error);
+        let return_addr = self.gen_yield(callid, simple, error);
         self.set_deopt_with_return_addr(return_addr, evict, evict_label);
         true
     }
