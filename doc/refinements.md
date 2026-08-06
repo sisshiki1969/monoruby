@@ -323,11 +323,9 @@ making the 96 fail silently instead of loudly.
 Ordered so that each stage is independently testable and the
 non-refining fast paths stay untouched until the last one.
 
-**Stage 0 — per-frame cref.** Move the CREF chain from
-`Executor::lexical_class` onto the frame (see `doc/cref.md` §monoruby for
-the current layout and what already depends on it). This is a prerequisite
-and is independently valuable: it is the same defect that made
-`Module.nesting` read another scope's stack.
+**Stage 0 — per-frame cref.** See §7 for what this does and does not
+require of the frame layout. Independently valuable: it is the same defect
+that made `Module.nesting` read another scope's stack.
 
 **Stage 1 — data model, no lookup change.** `Cref` gains
 `refinements: Option<Rc<HashMap<ClassId, Module>>>` (shared with the outer
@@ -354,3 +352,104 @@ refinement rule (§3.7).
 Stages 0–2 make refinements *correct but slow*; Stage 3–4 make them not
 slow down everything else. Stopping after Stage 2 is a defensible
 intermediate state. Stopping after Stage 1 is not — that is the trap in §4.
+
+---
+
+## 7. Does this change the method frame layout?
+
+Not for method frames. It does need a mutable cell somewhere for the
+scopes that can run `using` — but those are a small, bounded set, and the
+JIT never has to read it from machine code.
+
+### 7.1 What each kind of body actually needs
+
+Two measurements bound the requirement (CRuby 4.0.2):
+
+```ruby
+pr = proc { 1 + 1 }        # created BEFORE the using
+def m_before = 1 + 1       # defined BEFORE the using
+using R
+p pr.call     # => "refined+"   block sees the later activation
+p m_before    # => 2            method does not
+```
+
+A block created before the `using` **is** refined; a method defined before
+it is **not**. So the cref is a *mutable cell owned by the scope's
+environment*, shared by reference with every block that captured that
+environment, while `def` snapshots the pointer at definition time. A static
+per-iseq field cannot express both halves.
+
+But the mutable half is needed only where `using` is legal, and that is
+narrow (verified):
+
+| position | `using` |
+|---|---|
+| toplevel | `main.using` — ok |
+| class / module body, `Class.new { }` | `Module#using` — ok |
+| `Kernel#eval` at toplevel | ok |
+| **method body** | `RuntimeError: Module#using is not permitted in methods` |
+| **outside toplevel via main** | `RuntimeError: main.using is permitted only at toplevel` |
+
+A method body therefore only ever needs a **read-only snapshot taken at
+`def`** — which is precisely what `ISeqInfo::lexical_context` and
+`ISeqInfo::nested_definee` already are. Method frames need no new slot.
+
+The same applies to the JIT: it compiles method / block / loop bodies and
+resolves methods at *compile* time, in Rust, with a live frame in hand. It
+never needs to load a cref from machine code, so none of the emitted
+prologues change.
+
+### 7.2 Three places the mutable cell could live
+
+**(A) A new `LFP_CREF` word in the local frame.** The faithful option, and
+there is a template: `LFP_SVAR` was added for the structurally identical
+problem — `$~` owned by the LEP, shared with blocks through the outer
+chain, lazily allocated with `0` as the "unset" sentinel, marked in
+`Lfp::mark`. A cref slot would copy it line for line.
+
+The cost is the layout shift. Today:
+
+```
+LFP_OUTER 0   LFP_META 8   LFP_SVAR 16   LFP_BLOCK 24   LFP_SELF 32   LFP_ARG0 40
+RSP_LOCAL_FRAME = 40
+```
+
+Inserting a word moves `LFP_ARG0` and `RSP_LOCAL_FRAME` to 48, which
+reaches 41 `LFP_ARG0` and 149 `RSP_LOCAL_FRAME` references across 26 files
+— both architectures' `vmgen/{init_method,method_call,definition}`, both
+JIT `compile/` trees, the invokers and native wrappers, `Lfp::heap_frame` /
+`move_frame_to_heap` / `frame_bytes`, and `Lfp::mark`. It also spends 8
+bytes on *every* frame for something only non-method frames use.
+
+**(B) A side table on the `Executor`, keyed by LEP.** The codebase already
+keys per-frame state this way: `deferred_unwind: Vec<(Lfp, MonorubyErr)>`
+and `adapter_blocks: Vec<(Value, ProcData)>`. Resolving "my scope's cref"
+is the same outer-chain walk to the LEP that `$~` does, followed by a
+lookup. No layout change, per-execution correct, and behind the Stage-2
+global gate a non-refining program never touches it.
+
+What it has to handle: `move_frame_to_heap` changes an `Lfp`'s identity
+(`deferred_unwind` carries the same exposure), entries must be dropped when
+the frame dies so a reused stack address cannot inherit a stale cref, and
+the stored crefs must be reachable from the GC.
+
+**(C) Per-iseq storage, no frame involvement at all.** Put the cref next to
+`lexical_context` on `ISeqInfo`, last-execution-wins — which is already how
+`enter_classdef` stamps `lexical_context` today. `using` writes the running
+scope's cell, blocks read their mother's, `def` snapshots.
+
+This inherits the staleness class `ISeqInfo` already documents: one cell
+per iseq, so re-entrant execution of a scope that runs `using` (a recursive
+or concurrently-loaded `Class.new { using … }`, the same file required on
+two threads) shares it. Rare, given §7.1's table — but silently wrong when
+it happens, which is the failure mode §4 argues against.
+
+### 7.3 Recommendation
+
+(B). It leaves the frame layout alone, is correct per execution rather than
+per iseq, and costs nothing while no refinement has been activated. (A) is
+the more faithful model and is known-feasible, but it taxes every call in
+every program for a feature most never use; it is the right answer only if
+per-frame cref turns out to be wanted for other reasons too — `doc/cref.md`
+lists several places where monoruby's single VM-wide `lexical_class` stack
+already diverges from CRuby, so that is not far-fetched.
