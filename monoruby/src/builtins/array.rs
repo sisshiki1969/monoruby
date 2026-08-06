@@ -2415,7 +2415,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/min.html]
 #[monoruby_builtin]
-fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(crate) fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::nil());
@@ -2455,7 +2455,7 @@ fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
 #[monoruby_builtin]
-fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(crate) fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::nil());
@@ -5088,6 +5088,73 @@ mod tests {
             r##"[[].sum, [].sum(0.0), [1, 2, 3].sum, [3, 5.5].sum, [2.5, 3.0].sum(0.0) {|e| e * e }, ["a", "b", "c"].sum("")]"##,
         );
         run_test_error("[Object.new].sum");
+    }
+
+    #[test]
+    fn array_literal_minmax_fusion() {
+        // The JIT fuses `[a, b].min`/`.max` into an allocation-free
+        // compare (see `try_fuse_array_minmax`); these run hot loops so
+        // the fused code path is what's being compared against CRuby.
+        run_test(
+            r#"
+            a, b, c = 3, 9, 5
+            f, g = 1.5, -2.5
+            s1, s2 = "abc", "abd"
+            r = nil
+            100.times do
+              r = [
+                [a, b].min, [b, a].min, [a, b].max, [b, a].max,
+                [a].min, [].min, [].max,
+                [f, g].min, [f, g].max, [a, f].min, [a, f].max,
+                [s1, s2].min, [s1, s2].max,
+                [a, b, c].min, [a, b, c].max,
+                [1.0, 1].min.class.to_s, [1, 1.0].max.class.to_s,
+              ]
+            end
+            r
+            "#,
+        );
+        // Incomparable elements raise; the error must fire from the
+        // fused path too.
+        run_test(
+            r#"
+            r = nil
+            100.times do
+              begin
+                [1, "x"].min
+              rescue ArgumentError
+                r = :raised
+              end
+            end
+            r
+            "#,
+        );
+        // Non-fusable shapes keep the normal builtin: a named receiver,
+        // a block, a splat.
+        run_test(
+            r#"
+            a, b = 3, 9
+            x = [b, a]
+            r = nil
+            100.times do
+              r = [x.min, x.max, [a, b].min { |p, q| q <=> p }, [*x, 1].min]
+            end
+            r
+            "#,
+        );
+        // Redefinition takes effect (class-version deopt).
+        run_test_once(
+            r#"
+            a, b = 3, 9
+            r = []
+            50.times { r << [a, b].min }
+            class Array
+              def min = :redefined
+            end
+            50.times { r << [a, b].min }
+            [r.first, r.last]
+            "#,
+        );
     }
 
     #[test]

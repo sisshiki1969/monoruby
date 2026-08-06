@@ -201,6 +201,9 @@ impl Codegen {
                 inline,
                 using_fpr,
             }),
+            AsmInst::ArrayMinMax { args, len, min, using_fpr } => {
+                self.encode_linst(LInst::ArrayMinMax { args, len, min, using_fpr })
+            }
             AsmInst::NewHash(args, len, using_fpr) => {
                 self.encode_linst(LInst::NewHash { args, len, using_fpr })
             }
@@ -1313,6 +1316,9 @@ impl Codegen {
                 using_fpr,
             } => {
                 self.emit_new_array(callid, inline, using_fpr);
+            }
+            LInst::ArrayMinMax { args, len, min, using_fpr } => {
+                self.emit_array_min_max(args, len, min, using_fpr);
             }
             LInst::NewHash { args, len, using_fpr } => {
                 self.emit_new_hash(args, len, using_fpr);

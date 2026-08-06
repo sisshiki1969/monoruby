@@ -2,7 +2,7 @@ use super::*;
 
 pub(crate) mod argf;
 mod arithmetic_sequence;
-mod array;
+pub(crate) mod array;
 mod binding;
 mod bool_class;
 mod class;
