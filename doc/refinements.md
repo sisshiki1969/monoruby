@@ -118,8 +118,9 @@ express "the set as it stood when this body was defined" unless the field
 is snapshotted per definition — which is exactly a per-frame cref by
 another name.
 
-This is Stage 0 of any implementation, and it is a frame-layout change,
-not a lookup change.
+This is Stage 0 of any implementation. It is a change to where scope
+state is *stored*, not to how lookup works — and, as §7 works out, it does
+not have to be a change to the frame layout.
 
 ---
 
