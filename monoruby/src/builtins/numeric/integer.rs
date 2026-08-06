@@ -21,8 +21,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         inline_gen2!(integer_succ),
         0,
     );
-    globals.define_builtin_func(INTEGER_CLASS, "upto", upto, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "downto", downto, 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, inline_gen2!(integer_tof), 0);
     globals.define_basic_op(INTEGER_CLASS, "+", add, 1);
     globals.define_basic_op(INTEGER_CLASS, "-", sub, 1);
@@ -88,150 +86,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         &["half"],
         false,
     );
-}
-
-struct PosStep {
-    cur: i64,
-    limit: i64,
-    step: i64, // must be > 0
-}
-
-impl Iterator for PosStep {
-    type Item = Value;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.cur > self.limit {
-            None
-        } else {
-            let v = Value::integer(self.cur);
-            self.cur += self.step;
-            Some(v)
-        }
-    }
-}
-
-struct NegStep {
-    cur: i64,
-    limit: i64,
-    step: i64, // must be < 0
-}
-
-impl Iterator for NegStep {
-    type Item = Value;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.limit > self.cur {
-            None
-        } else {
-            let v = Value::integer(self.cur);
-            self.cur += self.step;
-            Some(v)
-        }
-    }
-}
-
-///
-/// ### Integer#upto
-///
-/// - upto(max) {|n| ... } -> Integer
-/// - upto(max) -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/upto.html]
-#[monoruby_builtin]
-fn upto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = if let Some(f) = lfp.arg(0).try_float() {
-        if f.is_nan() {
-            return Ok(lfp.self_val());
-        }
-        f.floor() as i64
-    } else {
-        match lfp.arg(0).coerce_to_int_i64(vm, globals) {
-            Ok(v) => v,
-            Err(_) => return Err(MonorubyErr::argumenterr(format!("bad value for range"))),
-        }
-    };
-    let bh = match lfp.block() {
-        None => {
-            let id = IdentId::get_id("upto");
-            // Size hint: `stop - start + 1` if `stop >= start`, else 0.
-            let size = if limit >= cur {
-                Value::integer(limit - cur + 1)
-            } else {
-                Value::integer(0)
-            };
-            return vm.generate_enumerator_with_size(
-                id,
-                lfp.self_val(),
-                lfp.iter().collect(),
-                pc,
-                Some(size),
-            );
-        }
-        Some(block) => block,
-    };
-    if cur > limit {
-        return Ok(lfp.self_val());
-    }
-
-    let iter = PosStep {
-        cur,
-        limit,
-        step: 1,
-    };
-    vm.invoke_block_iter1(globals, bh, iter)?;
-    Ok(lfp.self_val())
-}
-
-///
-/// ### Integer#downto
-///
-/// - downto(min) {|n| ... } -> self
-/// - downto(min) -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/downto.html]
-#[monoruby_builtin]
-fn downto(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let cur = lfp.self_val().expect_integer(globals)?;
-    let limit = if let Some(f) = lfp.arg(0).try_float() {
-        if f.is_nan() {
-            return Ok(lfp.self_val());
-        }
-        f.ceil() as i64
-    } else {
-        match lfp.arg(0).coerce_to_int_i64(vm, globals) {
-            Ok(v) => v,
-            Err(_) => return Err(MonorubyErr::argumenterr(format!("bad value for range"))),
-        }
-    };
-    let bh = match lfp.block() {
-        None => {
-            let id = IdentId::get_id("downto");
-            // Size hint: `start - stop + 1` if `start >= stop`, else 0.
-            let size = if cur >= limit {
-                Value::integer(cur - limit + 1)
-            } else {
-                Value::integer(0)
-            };
-            return vm.generate_enumerator_with_size(
-                id,
-                lfp.self_val(),
-                lfp.iter().collect(),
-                pc,
-                Some(size),
-            );
-        }
-        Some(block) => block,
-    };
-    if cur < limit {
-        return Ok(lfp.self_val());
-    }
-
-    let iter = NegStep {
-        cur,
-        limit,
-        step: -1,
-    };
-    vm.invoke_block_iter1(globals, bh, iter)?;
-    Ok(lfp.self_val())
 }
 
 /// ### Integer#chr
@@ -2854,6 +2708,49 @@ mod tests {
     #[test]
     fn try_convert_error_message() {
         run_test_error(r#"class C; def to_int; "str"; end; end; Integer.try_convert(C.new)"#);
+    }
+
+    #[test]
+    fn upto_downto_pure_ruby_semantics() {
+        // The pure-Ruby implementation must keep every edge CRuby has:
+        // Float limits, empty spans, self return, comparison failures
+        // (message included), enumerator size behaviour, the
+        // Fixnum->Bignum crossing, and allocation-free block calls.
+        run_test_once(
+            r#"
+            r = []
+            r << 1.upto(3).to_a
+            r << 5.downto(3).to_a
+            r << 1.upto(2.5).to_a
+            r << 5.downto(2.5).to_a
+            r << 3.upto(1).to_a
+            r << 1.downto(3).to_a
+            r << (1.upto(3) { }).equal?(1)
+            r << (5.downto(3) { }).equal?(5)
+            r << (begin; 1.upto("x") { }; rescue ArgumentError => e; e.message; end)
+            r << (begin; 1.downto("x") { }; rescue ArgumentError => e; e.message; end)
+            r << 1.upto(5).size
+            r << 5.downto(1).size
+            r << 1.upto(3).inspect.include?("upto")
+            big = 2**62
+            r << (big - 1).upto(big + 1).to_a.size
+            r << (big + 1).downto(big - 1).to_a.size
+            r << 1.upto(3).each_slice(2).to_a
+            r
+            "#,
+        );
+        // A short span with a block allocates nothing (the old wrapper
+        // materialized one Proc per call through its `&block`).
+        run_test_no_result_check(
+            r#"
+            3.upto(9) { }   # warm caches
+            before = GC.stat[:total_allocated_objects]
+            1000.times { 3.upto(9) { } }
+            allocs = GC.stat[:total_allocated_objects] - before
+            raise "upto allocates: #{allocs}" if allocs > 50
+            :ok
+            "#,
+        );
     }
 
     #[test]
