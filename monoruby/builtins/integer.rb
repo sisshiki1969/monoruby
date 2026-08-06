@@ -27,23 +27,33 @@ class Integer
     self
   end
 
-  alias __upto upto
-  alias __downto downto
-
-  def upto(limit, &block)
-    if block
-      __upto(limit, &block)
-    else
-      to_enum(:__upto, limit) { self <= limit ? limit - self + 1 : 0 }
+  # Pure Ruby, like #times above: the JIT compiles the while loop per
+  # call site with the yield lowered to a near-direct block call, which
+  # beats a native loop crossing the Rust->block invoker boundary every
+  # iteration for the common short spans (and allocates nothing — a
+  # `&block` parameter would materialize a Proc per call).
+  def upto(limit)
+    unless block_given?
+      return to_enum(:upto, limit) { self <= limit ? limit - self + 1 : 0 }
     end
+    i = self
+    while i <= limit
+      yield i
+      i += 1
+    end
+    self
   end
 
-  def downto(limit, &block)
-    if block
-      __downto(limit, &block)
-    else
-      to_enum(:__downto, limit) { self >= limit ? self - limit + 1 : 0 }
+  def downto(limit)
+    unless block_given?
+      return to_enum(:downto, limit) { self >= limit ? self - limit + 1 : 0 }
     end
+    i = self
+    while i >= limit
+      yield i
+      i -= 1
+    end
+    self
   end
 
   def negative?
