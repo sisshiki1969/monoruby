@@ -219,7 +219,7 @@ impl Meta {
     ///
     /// "simple" means that the function has no optional, rest, keyword, keyword rest, and block parameters.
     ///
-    fn is_simple(&self) -> bool {
+    pub(crate) fn is_simple(&self) -> bool {
         (self.kind & 0b1_0000) != 0
     }
 

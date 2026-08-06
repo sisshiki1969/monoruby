@@ -1914,3 +1914,43 @@ mod tests {
         run_test(r#"def m(a:); a; end; m(a: 5)"#);
     }
 }
+#[cfg(test)]
+mod fast_yield_tests {
+    use crate::tests::*;
+
+    #[test]
+    fn simple_yield_argument_shapes() {
+        // The simple-yield direct-copy path (jit_handle_arguments_no_
+        // block_for_yield) must agree with the generic path on every
+        // block binding rule. Each case iterates enough for the JIT to
+        // compile the yielding loop, and run_test compares the final
+        // values against CRuby.
+        run_tests(&[
+            // exact arity — the direct-copy fast path
+            r#"def a; s = 0; 200.times { |i| yield i }; s; end
+               acc = []; a { |x| acc << x }; [acc.size, acc.first, acc.last]"#,
+            // fewer args than params: nil-fill (loose block binding)
+            r#"acc = nil; def b; 100.times { yield 7 }; end
+               b { |x, y| acc = [x, y] }; acc"#,
+            // more args than params: extras dropped
+            r#"acc = nil; def c; 100.times { yield 1, 2, 3 }; end
+               c { |x, y| acc = [x, y] }; acc"#,
+            // single-Array auto-splat into a multi-param block
+            r#"acc = nil; def d; 100.times { yield [4, 5] }; end
+               d { |x, y| acc = [x, y] }; acc"#,
+            // single-param block keeps a passed Array whole
+            r#"acc = nil; def e; 100.times { yield [4, 5] }; end
+               e { |x| acc = x }; acc"#,
+            // optional / rest / keyword blocks stay on the flexible path
+            r#"acc = nil; def f; 100.times { yield 1 }; end
+               f { |x, y = 9| acc = [x, y] }; acc"#,
+            r#"acc = nil; def g; 100.times { yield 1, 2, 3 }; end
+               g { |x, *r| acc = [x, r] }; acc"#,
+            r#"acc = nil; def h; 100.times { yield 1 }; end
+               h { |x, k: 5| acc = [x, k] }; acc"#,
+            // zero-arg yield into a param-less block
+            r#"n = 0; def z; 300.times { yield }; end
+               z { n += 1 }; n"#,
+        ]);
+    }
+}

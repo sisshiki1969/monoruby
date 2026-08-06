@@ -914,6 +914,7 @@ pub(in crate::codegen) enum LInst {
     },
     Yield {
         callid: CallSiteId,
+        simple: bool,
         error: DestLabel,
         evict: AsmEvict,
         evict_label: DestLabel,
