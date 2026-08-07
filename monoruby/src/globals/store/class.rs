@@ -2187,8 +2187,21 @@ impl Store {
         obj: Value,
         func_name: IdentId,
     ) -> Result<(FuncId, Visibility, ClassId)> {
+        self.find_method_for_object_refined(obj, func_name, RefinementSetId::EMPTY)
+    }
+
+    /// [`Self::find_method_for_object`] as seen from a scope whose
+    /// activated refinements are *set*. The reflective entry points
+    /// (`Object#method`, `respond_to?`, …) resolve through their
+    /// *caller's* set, since Ruby 4.0 has them honour refinements.
+    pub(crate) fn find_method_for_object_refined(
+        &self,
+        obj: Value,
+        func_name: IdentId,
+        set: RefinementSetId,
+    ) -> Result<(FuncId, Visibility, ClassId)> {
         let class = obj.class();
-        if let Some(entry) = self.check_method_for_class(class, func_name)
+        if let Some(entry) = self.check_method_with_refinements(class, func_name, set)
             && let Some(func_id) = entry.func_id()
         {
             Ok((func_id, entry.visibility, entry.owner))
@@ -2207,7 +2220,18 @@ impl Store {
         class: ClassId,
         func_name: IdentId,
     ) -> Result<(FuncId, Visibility, ClassId)> {
-        if let Some(entry) = self.check_method_for_class(class, func_name)
+        self.find_method_for_class_refined(class, func_name, RefinementSetId::EMPTY)
+    }
+
+    /// [`Self::find_method_for_class`] as seen from a scope whose
+    /// activated refinements are *set* (`Module#instance_method`).
+    pub(crate) fn find_method_for_class_refined(
+        &self,
+        class: ClassId,
+        func_name: IdentId,
+        set: RefinementSetId,
+    ) -> Result<(FuncId, Visibility, ClassId)> {
+        if let Some(entry) = self.check_method_with_refinements(class, func_name, set)
             && let Some(func_id) = entry.func_id()
         {
             Ok((func_id, entry.visibility, entry.owner))

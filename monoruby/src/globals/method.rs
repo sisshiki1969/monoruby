@@ -906,15 +906,22 @@ impl Globals {
         new_name: IdentId,
         old_name: IdentId,
     ) -> Result<()> {
+        // Inside a refinement, `alias new old` names the *refined
+        // class's* method: the refinement module itself only holds what
+        // the `refine` block has defined so far.
+        let source_class = match self.store[class_id].refined_class() {
+            Some(refined) if !self.store[class_id].has_own_method(old_name) => refined,
+            _ => class_id,
+        };
         let (func_id, visibility, _) = self
-            .find_method_for_class(class_id, old_name)
+            .find_method_for_class(source_class, old_name)
             .map_err(|_| MonorubyErr::undefined_method(old_name, class_id.get_name(&self.store)))?;
         // The alias inherits the *source* method's original definition
         // name, so chained aliases all report the root: `Method#name`
         // is the alias, `#original_name` the original.
         let original_name = self
             .store
-            .search_method_by_class_id(class_id, old_name)
+            .search_method_by_class_id(source_class, old_name)
             .map(|e| e.original_name())
             .unwrap_or(old_name);
         // Special "always-private" method names: aliasing TO one of these

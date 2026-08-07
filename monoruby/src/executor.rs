@@ -2337,7 +2337,16 @@ impl Executor {
     fn frame_refinements(globals: &Globals, cfp: Option<Cfp>) -> RefinementSetId {
         let mut cfp = cfp;
         while let Some(c) = cfp {
-            if let Some(iseq) = globals.store[c.lfp().func_id()].is_iseq() {
+            let fid = c.lfp().func_id();
+            // monoruby writes part of its core library in Ruby
+            // (`builtins/*.rb`). Those bodies are not the scope the user
+            // wrote against, so a protocol dispatch made from inside one
+            // — `#to_proc` for a `&obj` argument, `#to_s` behind
+            // interpolation — must keep walking out to the caller's
+            // scope. The same frames are already transparent to `$~`.
+            if !globals.store[fid].meta().is_svar_transparent()
+                && let Some(iseq) = globals.store[fid].is_iseq()
+            {
                 return globals.store.iseq_refinements(iseq);
             }
             cfp = c.prev();
@@ -3117,17 +3126,26 @@ impl Executor {
     }
 
     pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
-        match receiver.unpack() {
-            // String operands round-trip via `to_s` to themselves
-            // (or to whatever the user-overridden `to_s` returns),
-            // so the receiver is the answer. Going through
-            // `to_s(&globals.store)` would route through
-            // `from_utf8_lossy` and corrupt invalid byte sequences
-            // (relevant to interpolation: `"abc#{x}"` for an `x`
-            // tagged UTF-8 with broken bytes).
-            RV::String(_) => return Ok(receiver),
-            RV::Object(_) => {}
-            _ => return Ok(Value::string(receiver.to_s(&globals.store))),
+        // A refinement of the receiver's `to_s` has to be honoured here
+        // too — interpolating an Integer is the common case, and that
+        // takes the built-in shortcut below unless a refinement is in
+        // play (`doc/refinements.md` §1(d)).
+        let refined_to_s = globals.store.refinements().is_active()
+            && globals.store.refinements().is_refined_name(IdentId::TO_S)
+            && !self.current_refinements(globals).is_empty();
+        if !refined_to_s {
+            match receiver.unpack() {
+                // String operands round-trip via `to_s` to themselves
+                // (or to whatever the user-overridden `to_s` returns),
+                // so the receiver is the answer. Going through
+                // `to_s(&globals.store)` would route through
+                // `from_utf8_lossy` and corrupt invalid byte sequences
+                // (relevant to interpolation: `"abc#{x}"` for an `x`
+                // tagged UTF-8 with broken bytes).
+                RV::String(_) => return Ok(receiver),
+                RV::Object(_) => {}
+                _ => return Ok(Value::string(receiver.to_s(&globals.store))),
+            }
         }
         let func_id = self.find_method(globals, receiver, IdentId::TO_S, true)?;
         self.invoke_func_inner(globals, func_id, receiver, &[], None, None)
@@ -3415,13 +3433,25 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Result<Option<Value>> {
-        Ok(
-            if let Some(func_id) = globals.check_method(receiver, method) {
+        // Resolve through the caller's refinement set: this is how
+        // `&obj`'s `#to_proc` coercion, the `#to_s` behind string
+        // interpolation and the other implicit-protocol dispatches reach
+        // a refined method (`doc/refinements.md` §1(d)).
+        let set = if globals.store.refinements().is_active() {
+            self.current_refinements(globals)
+        } else {
+            RefinementSetId::EMPTY
+        };
+        let func_id = globals
+            .store
+            .check_method_with_refinements(receiver.class(), method, set)
+            .and_then(|entry| entry.func_id());
+        Ok(match func_id {
+            Some(func_id) => {
                 Some(self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args)?)
-            } else {
-                None
-            },
-        )
+            }
+            None => None,
+        })
     }
 
     ///

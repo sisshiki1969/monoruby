@@ -5447,10 +5447,18 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     } else {
         false
     };
-    let found = if include_all {
-        globals.check_method(lfp.self_val(), name).is_some()
-    } else {
-        globals.check_public_method(lfp.self_val(), name).is_some()
+    // Ruby 4.0 has the reflective entry points honour refinements, so
+    // this resolves through the *caller's* set, not through none.
+    let set = vm.caller_refinements(globals);
+    let found = match globals
+        .store
+        .check_method_with_refinements(lfp.self_val().class(), name, set)
+    {
+        Some(entry) => {
+            entry.func_id().is_some()
+                && (include_all || entry.visibility() == Visibility::Public)
+        }
+        None => false,
     };
     if found {
         return Ok(Value::bool(true));
@@ -5680,7 +5688,8 @@ fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // error raised by the conversion (e.g. a NoMethodError from #to_str)
     // propagates as-is.
     let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
-    method_object_impl(vm, globals, receiver, method_name, false)
+    let set = vm.caller_refinements(globals);
+    method_object_impl(vm, globals, receiver, method_name, false, set)
 }
 
 ///
@@ -5702,7 +5711,8 @@ fn public_method(
 ) -> Result<Value> {
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
-    method_object_impl(vm, globals, receiver, method_name, true)
+    let set = vm.caller_refinements(globals);
+    method_object_impl(vm, globals, receiver, method_name, true, set)
 }
 
 fn method_object_impl(
@@ -5711,8 +5721,12 @@ fn method_object_impl(
     receiver: Value,
     method_name: IdentId,
     public_only: bool,
+    set: RefinementSetId,
 ) -> Result<Value> {
-    match globals.find_method_for_object(receiver, method_name) {
+    match globals
+        .store
+        .find_method_for_object_refined(receiver, method_name, set)
+    {
         Ok((func_id, visi, owner)) if !public_only || visi == Visibility::Public => {
             let original_name = globals
                 .store

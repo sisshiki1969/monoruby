@@ -1895,6 +1895,21 @@ fn instance_methods(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    // On a *refinement*, the list is the refined class's plus whatever
+    // the refine block has defined so far: inside `refine Array do … end`
+    // `instance_methods` answers as `Array.instance_methods` does
+    // (CRuby).
+    if let Some(refined) = globals.store[class_id].refined_class()
+        && inherited_too
+    {
+        let mut names = globals.store.get_method_names_inherit(refined, false);
+        for name in globals.store.get_method_names(class_id) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        return Ok(Value::array_from_vec(names));
+    }
     Ok(Value::array_from_vec(if !inherited_too {
         globals.store.get_method_names(class_id)
     } else {
@@ -2177,8 +2192,10 @@ fn instance_method(
 ) -> Result<Value> {
     let klass = lfp.self_val().as_class();
     let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
+    let set = vm.caller_refinements(globals);
     let (func_id, _, owner) = globals
-        .find_method_for_class(klass.id(), method_name)
+        .store
+        .find_method_for_class_refined(klass.id(), method_name, set)
         .map_err(|_| {
             MonorubyErr::nameerr_with_name(
                 format!(
@@ -3156,8 +3173,12 @@ fn import_methods(
             }
         }
     }
-    let mut imports = vec![];
+    // Importing happens module by module: a module whose methods are
+    // not all written in Ruby raises when the walk reaches it, and the
+    // modules *before* it stay imported (CRuby). The argument type check
+    // above is the all-or-nothing part.
     for module in &modules {
+        let mut imports = vec![];
         // `ancestors` of a plain module is `[self]`; anything more means
         // it includes or prepends something, whose methods are *not*
         // imported. CRuby warns rather than failing.
@@ -3178,9 +3199,9 @@ fn import_methods(
             }
             imports.push((name, func_id, visi));
         }
-    }
-    for (name, func_id, visi) in imports {
-        globals.add_method(refinement, name, func_id, visi);
+        for (name, func_id, visi) in imports {
+            globals.add_method(refinement, name, func_id, visi);
+        }
     }
     Globals::class_version_inc();
     Ok(lfp.self_val())
@@ -6521,6 +6542,83 @@ mod tests {
               def shout; "GLOBAL"; end
             end
             [before, JitHot.new.run(300), "hi".shout]
+            "#,
+        );
+    }
+
+    #[test]
+    fn reflection_honours_the_callers_refinements() {
+        // Ruby 4.0 has `send`, `respond_to?`, `Object#method`,
+        // `instance_method`, blocks and `eval` all resolve through the
+        // activated refinement.
+        run_test_once(
+            r#"
+            module RefR
+              refine String do
+                def foo; "refined"; end
+              end
+            end
+            class RefC
+              using RefR
+              def direct      = "x".foo
+              def via_send    = "x".send(:foo)
+              def via_respond = "x".respond_to?(:foo)
+              def via_method  = "x".method(:foo).call
+              def via_unbound = String.instance_method(:foo).bind("x").call
+              def in_block    = [1].map { "x".foo }.first
+              def in_eval     = eval('"x".foo')
+            end
+            c = RefC.new
+            [c.direct, c.via_send, c.via_respond, c.via_method,
+             c.via_unbound, c.in_block, c.in_eval,
+             ("x".foo rescue $!.class.to_s),
+             "x".respond_to?(:foo)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn implicit_protocol_dispatch_honours_refinements() {
+        // String interpolation's `#to_s`, `Symbol#to_proc` and the
+        // `&obj` coercion's `#to_proc` all dispatch from inside
+        // monoruby's own Ruby-level core library; the scope that counts
+        // is still the user's.
+        run_test_once(
+            r##"
+            module ProtoR
+              refine Integer do
+                def to_s; "<" + (self + 0).abs.inspect + ">"; end
+              end
+              refine String do
+                def to_proc; ->(*) { "coerced" }; end
+              end
+            end
+            Module.new do
+              using ProtoR
+              def self.run
+                ["#{7}", [1, 2].map(&:to_s), ["a"].map(&"anything")]
+              end
+            end.run
+            "##,
+        );
+    }
+
+    #[test]
+    fn alias_inside_a_refinement_names_the_refined_class() {
+        // `alias new old` in a refine block resolves `old` on the class
+        // being refined; the alias exists only under the refinement.
+        run_test_once(
+            r#"
+            r = Module.new do
+              refine Array do
+                alias_method :orig_count, :count
+              end
+            end
+            inner = Module.new do
+              using r
+              def self.run; [1, 2].orig_count; end
+            end
+            [inner.run, ([1, 2].orig_count rescue $!.class.to_s)]
             "#,
         );
     }
