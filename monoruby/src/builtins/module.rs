@@ -211,11 +211,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "private_constant", private_constant);
     globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "ruby2_keywords", ruby2_keywords);
-    // `used_refinements` (both class and instance forms) is mocked in
-    // Ruby — see `Module#used_refinements` / `Module.used_refinements`
-    // in `builtins/startup.rb`. Both return `[]` since refinements
-    // aren't implemented; defining in Ruby lets specs that actually
-    // exercise refinements override the implementation.
     globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
     globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
     globals.define_builtin_func(MODULE_CLASS, "set_temporary_name", set_temporary_name, 1);
@@ -225,6 +220,36 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func_rest(MODULE_CLASS, "protected", protected);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "public", public);
     globals.define_private_builtin_func(MODULE_CLASS, "using", using, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "refine", refine, 1);
+    globals.define_builtin_func(MODULE_CLASS, "refinements", refinements, 0);
+    globals.define_builtin_class_func(MODULE_CLASS, "used_refinements", used_refinements, 0);
+    globals.define_builtin_class_func(MODULE_CLASS, "used_modules", used_modules, 0);
+    // `Refinement` — a Module subclass; `refine` returns one.
+    let module_obj = globals.store[MODULE_CLASS].get_module();
+    globals.define_builtin_class(
+        "Refinement",
+        REFINEMENT_CLASS,
+        module_obj,
+        OBJECT_CLASS,
+        ObjTy::MODULE,
+    );
+    globals.define_builtin_func(REFINEMENT_CLASS, "target", refinement_target, 0);
+    globals.define_builtin_funcs(
+        REFINEMENT_CLASS,
+        "to_s",
+        &["inspect"],
+        refinement_tos,
+        0,
+    );
+    // A refinement is not a mixin: CRuby undefines the hooks that would
+    // let one be included / extended, and makes `include` / `prepend`
+    // raise rather than silently building a broken ancestor chain.
+    for m in ["append_features", "prepend_features", "extend_object"] {
+        let _ = globals.undef_method_for_class(REFINEMENT_CLASS, IdentId::get_id(m));
+    }
+    globals.define_builtin_func_rest(REFINEMENT_CLASS, "include", refinement_include);
+    globals.define_builtin_func_rest(REFINEMENT_CLASS, "prepend", refinement_include);
+    globals.define_builtin_func_rest(REFINEMENT_CLASS, "import_methods", import_methods);
     // hook methods (no-op by default, overridden by startup.rb)
     globals.define_private_builtin_func(MODULE_CLASS, "method_added", module_noop_hook, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "method_removed", module_noop_hook, 1);
@@ -2073,6 +2098,13 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// `Module#prepend` and `Module#include` for their up-front
 /// `TypeError` checks before invoking the per-argument hooks.
 fn require_module_argument(globals: &Globals, arg: Value, op: &str) -> Result<()> {
+    // A Refinement is a Module, but it is not a mixin: CRuby rejects it
+    // here rather than letting it into an ancestor chain.
+    if arg.class() == REFINEMENT_CLASS {
+        return Err(MonorubyErr::typeerr(format!(
+            "Cannot {op} refinement"
+        )));
+    }
     if arg.ty() == Some(ObjTy::MODULE) {
         Ok(())
     } else {
@@ -3012,15 +3044,292 @@ fn using(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             "Module#using is not permitted in methods",
         ));
     }
-    expect_refinement_module(globals, lfp.arg(0))?;
+    let arg = expect_refinement_module(globals, lfp.arg(0))?;
+    activate(vm, globals, arg);
     Ok(lfp.self_val())
+}
+
+/// Collect *module*'s refinements and activate them in the calling scope.
+pub(super) fn activate(vm: &mut Executor, globals: &mut Globals, module: ClassId) {
+    let added: Vec<(ClassId, ClassId)> = globals.store[module]
+        .own_refinements()
+        .iter()
+        .filter_map(|r| globals.store[*r].refined_class().map(|c| (c, *r)))
+        .collect();
+    vm.activate_refinements(globals, &added);
+}
+
+///
+/// ### Module#refine
+/// - refine(klass) { ... } -> Refinement
+///
+/// Creates (or reuses) the refinement module this module holds for
+/// *klass*, evaluates the block with it as the definee, and returns it.
+/// The refinement is inert until some scope activates it with `using`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/refine.html]
+#[monoruby_builtin]
+fn refine(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let owner = lfp.self_val().as_class_id();
+    let arg = lfp.arg(0);
+    let refined = match arg.is_class_or_module() {
+        Some(m) => m.id(),
+        None => {
+            return Err(MonorubyErr::typeerr(format!(
+                "wrong argument type {} (expected Class or Module)",
+                arg.get_real_class_name(&globals.store)
+            )));
+        }
+    };
+    let bh = lfp.expect_block()?;
+    let data = vm.get_block_data(globals, bh)?;
+    // `refine` on the same class twice extends the module made the first
+    // time, so both blocks' methods land in one refinement (CRuby).
+    let refinement = match globals.store[owner]
+        .own_refinements()
+        .iter()
+        .copied()
+        .find(|r| globals.store[*r].refined_class() == Some(refined))
+    {
+        Some(existing) => globals.store[existing].get_module(),
+        None => {
+            let module = globals.store.define_unnamed_module();
+            let mut val = module.as_val();
+            val.change_class(REFINEMENT_CLASS);
+            globals.store[module.id()].set_refinement_of(refined, owner);
+            globals.store[owner].add_refinement(module.id());
+            module
+        }
+    };
+    // A refinement exists now, so the resolution gate must come off even
+    // if the block defines nothing.
+    globals.store.refinements_mut().activate();
+    let module_val = refinement.as_val();
+    // CRuby activates a refinement inside its own `refine` block, so a
+    // `def` there sees it (a refined method may call its siblings) and
+    // so may the block's own straight-line code. Swap the scope's cell
+    // for the duration; the enclosing body is unaffected once it is put
+    // back.
+    let saved = vm.begin_refine_block(globals, refined, refinement.id());
+    vm.push_runtime_class_context(refinement.id());
+    let res = vm.invoke_block_with_self(globals, &data, module_val, &[]);
+    vm.pop_class_context();
+    vm.end_refine_block(globals, saved);
+    res?;
+    Ok(module_val)
+}
+
+///
+/// ### Refinement#import_methods
+/// - import_methods(*modules) -> self
+///
+/// Copies the modules' own methods into the refinement, so that calls
+/// between them resolve within the refinement once it is activated.
+/// Only methods written in Ruby can be imported, and only the modules'
+/// *own* methods — anything they inherit is skipped (with a warning).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Refinement/i/import_methods.html]
+#[monoruby_builtin]
+fn import_methods(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let refinement = lfp.self_val().as_class_id();
+    let args: Vec<Value> = lfp.arg(0).as_array().iter().cloned().collect();
+    // Everything is validated before anything is imported: a bad
+    // argument late in the list must leave the refinement untouched.
+    let mut modules = vec![];
+    for v in &args {
+        match v.is_class_or_module() {
+            Some(m) if m.is_module() && v.class() != REFINEMENT_CLASS => modules.push(m.id()),
+            _ => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "wrong argument type {} (expected Module)",
+                    v.get_real_class_name(&globals.store)
+                )));
+            }
+        }
+    }
+    let mut imports = vec![];
+    for module in &modules {
+        // `ancestors` of a plain module is `[self]`; anything more means
+        // it includes or prepends something, whose methods are *not*
+        // imported. CRuby warns rather than failing.
+        if globals.ancestors(*module).len() > 1 {
+            let msg = format!(
+                "warning: {} has ancestors, but Refinement#import_methods doesn't import their methods\n",
+                globals.store.get_class_name(*module)
+            );
+            emit_stderr_warning(vm, globals, &msg);
+        }
+        for (name, func_id, visi) in globals.store[*module].own_method_entries() {
+            let Some(func_id) = func_id else { continue };
+            if globals.store[func_id].is_iseq().is_none() {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "Can't import method which is not defined with Ruby code: {}#{name}",
+                    globals.store.get_class_name(*module)
+                )));
+            }
+            imports.push((name, func_id, visi));
+        }
+    }
+    for (name, func_id, visi) in imports {
+        globals.add_method(refinement, name, func_id, visi);
+    }
+    Globals::class_version_inc();
+    Ok(lfp.self_val())
+}
+
+/// Write *msg* to Ruby's `$stderr` so mspec's `complain` matcher sees it.
+fn emit_stderr_warning(vm: &mut Executor, globals: &mut Globals, msg: &str) {
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or(Value::nil());
+    let _ = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[Value::string(msg.to_string())],
+        None,
+        None,
+    );
+}
+
+///
+/// ### Refinement#target
+/// - target -> Class
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Refinement/i/target.html]
+#[monoruby_builtin]
+fn refinement_target(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Ok(match globals.store[class_id].refined_class() {
+        Some(refined) => globals.store[refined].get_module().as_val(),
+        None => Value::nil(),
+    })
+}
+
+///
+/// `Refinement#to_s` / `#inspect` — `#<refinement:String@Shout>`.
+/// Unlike `Module#to_s` this ignores any constant the refinement got
+/// bound to; the refined class and the owner are what identify it.
+#[monoruby_builtin]
+fn refinement_tos(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let info = &globals.store[class_id];
+    let s = match (info.refined_class(), info.refinement_owner()) {
+        (Some(refined), Some(owner)) => format!(
+            "#<refinement:{}@{}>",
+            globals.store.get_class_name(refined),
+            globals.store.get_class_name(owner)
+        ),
+        // `Refinement.new` — a Refinement that refines nothing.
+        _ => format!("#<Refinement:0x{:016x}>", lfp.self_val().id()),
+    };
+    Ok(Value::string(s))
+}
+
+/// `Refinement#include` / `#prepend` — always a TypeError. A refinement
+/// is not a mixin target. CRuby names the method in the message, so the
+/// two share an implementation but not a message.
+#[monoruby_builtin]
+fn refinement_include(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    let name = vm
+        .cfp()
+        .lfp()
+        .func_id();
+    let name = globals.store[name].name().unwrap_or(IdentId::get_id("include"));
+    Err(MonorubyErr::typeerr(format!(
+        "Refinement#{name} has been removed"
+    )))
+}
+
+///
+/// ### Module#refinements
+/// - refinements -> [Refinement]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/refinements.html]
+#[monoruby_builtin]
+fn refinements(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let v: Vec<Value> = globals.store[class_id]
+        .own_refinements()
+        .to_vec()
+        .into_iter()
+        .map(|r| globals.store[r].get_module().as_val())
+        .collect();
+    Ok(Value::array_from_vec(v))
+}
+
+///
+/// ### Module.used_refinements
+/// - used_refinements -> [Refinement]
+///
+/// The refinements activated in the *caller's* scope.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/s/used_refinements.html]
+#[monoruby_builtin]
+fn used_refinements(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let set = vm.caller_refinements(globals);
+    let v: Vec<Value> = globals
+        .store
+        .refinements()
+        .entries(set)
+        .to_vec()
+        .into_iter()
+        .map(|(_, module)| globals.store[module].get_module().as_val())
+        .collect();
+    Ok(Value::array_from_vec(v))
+}
+
+///
+/// ### Module.used_modules
+/// - used_modules -> [Module]
+///
+/// The modules `using`-ed in the caller's scope — the owners of the
+/// refinements [`used_refinements`] reports.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/s/used_modules.html]
+#[monoruby_builtin]
+fn used_modules(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    let set = vm.caller_refinements(globals);
+    let mut owners: Vec<ClassId> = vec![];
+    for (_, module) in globals.store.refinements().entries(set).to_vec() {
+        if let Some(owner) = globals.store[module].refinement_owner()
+            && !owners.contains(&owner)
+        {
+            owners.push(owner);
+        }
+    }
+    let v = owners
+        .into_iter()
+        .map(|o| globals.store[o].get_module().as_val())
+        .collect();
+    Ok(Value::array_from_vec(v))
 }
 
 /// Argument check shared by `Module#using` and `main.using`: the argument
 /// must be a Module and *not* a Class (a Class can't hold refinements).
-pub(super) fn expect_refinement_module(globals: &Globals, arg: Value) -> Result<()> {
+pub(super) fn expect_refinement_module(globals: &Globals, arg: Value) -> Result<ClassId> {
     match arg.is_class_or_module() {
-        Some(module) if module.is_module() => Ok(()),
+        Some(module) if module.is_module() => Ok(module.id()),
         _ => Err(MonorubyErr::typeerr(format!(
             "wrong argument type {} (expected Module)",
             arg.get_real_class_name(&globals.store)
@@ -5945,23 +6254,118 @@ mod tests {
         );
     }
 
-    // ----- Module.used_refinements (Ruby-side mock) -----
+    // ----- refinements -----
 
     #[test]
-    fn used_refinements_mock_returns_empty_array() {
-        // monoruby has no refinement support; `Module.used_refinements`
-        // is mocked in `builtins/startup.rb` to return `[]` so callers
-        // (RSpec, Sorbet, …) that defensively read the list don't
-        // crash. Only the class form is present, matching CRuby.
-        run_test(r#"Module.used_refinements"#);
+    fn refine_builds_a_refinement() {
+        // `refine` returns a Refinement that knows its target, and the
+        // refined class itself is untouched.
+        run_test(
+            r#"
+            m = Module.new do
+              refine String do
+                def shout; upcase; end
+              end
+            end
+            r = m.refinements[0]
+            [r.class.to_s,
+             r.target.to_s,
+             r.instance_methods(false),
+             m.refinements.size,
+             String.instance_methods(false).include?(:shout)]
+            "#,
+        );
     }
 
     #[test]
-    fn used_refinements_no_instance_method() {
-        // CRuby exposes only the class form, so calling
-        // `Module.new.used_refinements` raises NoMethodError. Our mock
-        // follows the same shape.
-        run_test_error(r#"Module.new.used_refinements"#);
+    fn refine_is_idempotent_per_refined_class() {
+        // Two `refine` blocks for the same class extend one refinement.
+        run_test(
+            r#"
+            m = Module.new do
+              refine(String) { def a; end }
+              refine(String) { def b; end }
+              refine(Array)  { def c; end }
+            end
+            [m.refinements.size,
+             m.refinements.map { |r| r.target.to_s }.sort,
+             m.refinements.find { |r| r.target == String }.instance_methods(false).sort]
+            "#,
+        );
+    }
+
+    #[test]
+    fn refinement_is_not_a_mixin() {
+        // A Refinement is a Module, but it cannot be included, prepended
+        // or extended with, and it defines none of the hooks that would
+        // let it be.
+        run_test(
+            r#"
+            r = Module.new { refine(String) { } }.refinements[0]
+            out = []
+            out << Refinement.private_instance_methods(true).include?(:append_features)
+            out << Refinement.private_instance_methods(true).include?(:prepend_features)
+            out << Refinement.private_instance_methods(true).include?(:extend_object)
+            [[:include, -> { Class.new.include(r) }],
+             [:extend,  -> { Object.new.extend(r) }],
+             [:r_include, -> { r.include(Module.new) }],
+             [:r_prepend, -> { r.prepend(Module.new) }]].each do |name, blk|
+              begin
+                blk.call
+                out << [name, :no_raise]
+              rescue TypeError
+                out << [name, :TypeError]
+              end
+            end
+            out
+            "#,
+        );
+    }
+
+    #[test]
+    fn used_refinements_follows_the_scope() {
+        // `Module.used_refinements` / `used_modules` report the *caller's*
+        // scope, so they are empty outside the `using`.
+        run_test(
+            r#"
+            m = Module.new { refine(String) { def z; end } }
+            inner = nil
+            Module.new do
+              using m
+              inner = [Module.used_refinements.size, Module.used_modules.size]
+            end
+            [inner, Module.used_refinements, Module.used_modules]
+            "#,
+        );
+    }
+
+    #[test]
+    fn refinement_import_methods_argument_checks() {
+        // Nothing is imported unless every argument is a Ruby module.
+        run_test(
+            r#"
+            src = Module.new { def imported; :imported; end }
+            out = []
+            Module.new do
+              refine String do
+                begin
+                  import_methods src, Integer
+                rescue TypeError
+                  out << :TypeError
+                end
+                out << instance_methods(false)
+                begin
+                  import_methods src, Kernel
+                rescue ArgumentError
+                  out << :ArgumentError
+                end
+                import_methods src
+                out << instance_methods(false)
+              end
+            end
+            out
+            "#,
+        );
     }
 
     // ----- eval through builtin frames -----

@@ -4892,6 +4892,10 @@ fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // Reject non-Modules up front (CRuby checks the whole argument list
     // before extending anything).
     for v in args.iter() {
+        // A Refinement is a Module but not a mixin (CRuby rejects it here).
+        if v.class() == REFINEMENT_CLASS {
+            return Err(MonorubyErr::typeerr("Cannot extend object with refinement"));
+        }
         if v.is_module().is_none() {
             return Err(MonorubyErr::typeerr(format!(
                 "wrong argument type {} (expected Module)",

@@ -83,6 +83,12 @@ pub const THREAD_CLASS: ClassId = ClassId::new(59);
 /// every other builtin class via the class table (`Store::mark`).
 pub const YIELDER_CLASS: ClassId = ClassId::new(60);
 
+/// `Refinement` — the class of the anonymous module `Module#refine`
+/// returns. A subclass of `Module` carrying two extra facts: which class
+/// it refines (`Refinement#target`) and which module `refine` was called
+/// on (for `Module.used_modules` and for `#to_s`).
+pub const REFINEMENT_CLASS: ClassId = ClassId::new(61);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ClassId(NonZeroU32);
@@ -257,6 +263,19 @@ pub struct ClassInfo {
     ///
     parent: Option<ClassId>,
     ///
+    /// Refinements defined directly on this module by `Module#refine`,
+    /// in definition order. Empty for everything that is not a module
+    /// hosting refinements. Backs `Module#refinements`.
+    ///
+    refinements: Vec<ClassId>,
+    ///
+    /// Set on a *refinement module* (an object of class `Refinement`):
+    /// the class it refines and the module `refine` was called on.
+    /// `None` on everything else.
+    ///
+    refined_class: Option<ClassId>,
+    refinement_owner: Option<ClassId>,
+    ///
     /// corresponding class object.
     ///
     object: Option<Module>,
@@ -419,6 +438,9 @@ impl ClassInfo {
             name_explicit_temporary: false,
             name_erased: false,
             parent: None,
+            refinements: Vec::new(),
+            refined_class: None,
+            refinement_owner: None,
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
@@ -442,6 +464,9 @@ impl ClassInfo {
             name_explicit_temporary: false,
             name_erased: false,
             parent: None,
+            refinements: Vec::new(),
+            refined_class: None,
+            refinement_owner: None,
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
@@ -566,6 +591,35 @@ impl ClassInfo {
         self.name_erased
     }
 
+    /// Refinements defined directly on this module, in definition order.
+    pub(crate) fn own_refinements(&self) -> &[ClassId] {
+        &self.refinements
+    }
+
+    /// Register a refinement module created by `refine` on this module.
+    /// A second `refine` of the same class reuses the existing module
+    /// (CRuby: `Module#refine` is idempotent per refined class).
+    pub(crate) fn add_refinement(&mut self, refinement: ClassId) {
+        if !self.refinements.contains(&refinement) {
+            self.refinements.push(refinement);
+        }
+    }
+
+    /// The class this refinement module refines, if it is one.
+    pub(crate) fn refined_class(&self) -> Option<ClassId> {
+        self.refined_class
+    }
+
+    /// The module `refine` was called on, if this is a refinement module.
+    pub(crate) fn refinement_owner(&self) -> Option<ClassId> {
+        self.refinement_owner
+    }
+
+    pub(crate) fn set_refinement_of(&mut self, refined: ClassId, owner: ClassId) {
+        self.refined_class = Some(refined);
+        self.refinement_owner = Some(owner);
+    }
+
     pub(crate) fn is_name_explicit_temporary(&self) -> bool {
         self.name_explicit_temporary
     }
@@ -631,6 +685,16 @@ impl ClassInfo {
     /// of an already-local entry (which doesn't).
     pub(crate) fn has_own_method(&self, name: IdentId) -> bool {
         self.methods.contains_key(&name)
+    }
+
+    /// `(name, FuncId, visibility)` for every method defined directly on
+    /// this module, in no particular order. Used by
+    /// `Refinement#import_methods`, which copies them wholesale.
+    pub(crate) fn own_method_entries(&self) -> Vec<(IdentId, Option<FuncId>, Visibility)> {
+        self.methods
+            .iter()
+            .map(|(name, entry)| (*name, entry.func_id(), entry.visibility))
+            .collect()
     }
 
     /// Returns true if the constant `name` defined on this class/module is

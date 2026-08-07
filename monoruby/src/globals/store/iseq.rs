@@ -217,6 +217,25 @@ pub struct ISeqInfo {
     ///
     pub(crate) nested_definee: Option<ClassId>,
     ///
+    /// The refinement set code written in this body resolves under, or
+    /// `None` to inherit the enclosing body's (see
+    /// `Store::iseq_refinements`, the only reader).
+    ///
+    /// Set for the two kinds of body that own one:
+    ///
+    /// - a **method** body: the snapshot `def` took of the defining
+    ///   scope's set. Fixed for every invocation, because `using` is
+    ///   illegal inside a method.
+    /// - a **scope** that ran `using` — the top level, a class / module
+    ///   body, an eval body, or a block whose `self` is a module
+    ///   (`Module.new { using R }`). Updated by each `using`.
+    ///
+    /// `None` everywhere else, so an ordinary block resolves through its
+    /// lexical parent and therefore sees a `using` that runs in that
+    /// parent *after* the block was created — which is what CRuby does.
+    ///
+    pub(crate) refinements: Option<RefinementSetId>,
+    ///
     /// `true` when this method's body (including nested blocks) uses
     /// its implicit block: a `yield`, or any form of `super` (which
     /// forwards the block). Set during bytecode compilation on the
@@ -340,6 +359,7 @@ impl ISeqInfo {
             hint: ISeqHint::Normal,
             uses_block: false,
             nested_definee: None,
+            refinements: None,
             singleton_classdef: false,
             module_classdef: false,
             in_singleton_lexical: false,

@@ -2319,6 +2319,119 @@ impl Executor {
         Ok(())
     }
 
+    ///
+    /// The refinement set the code in the *current* frame resolves under.
+    ///
+    /// See `Store::iseq_refinements` for why one rule (walk to the mother
+    /// iseq) covers methods, class bodies, the top level and blocks alike.
+    /// A native frame has no scope of its own, so the walk skips out to
+    /// the Ruby frame that called it.
+    ///
+    pub(crate) fn current_refinements(&self, globals: &Globals) -> RefinementSetId {
+        let fid = self.cfp().get_source_pos();
+        match globals.store[fid].is_iseq() {
+            Some(iseq) => globals.store.iseq_refinements(iseq),
+            None => RefinementSetId::EMPTY,
+        }
+    }
+
+    ///
+    /// The refinement set of the scope that called the builtin currently
+    /// running — what `Module.used_refinements` and the reflective entry
+    /// points (`send`, `respond_to?`, …) must resolve under.
+    ///
+    pub(crate) fn caller_refinements(&self, globals: &Globals) -> RefinementSetId {
+        match self.cfp().prev() {
+            Some(caller) => {
+                let fid = caller.get_source_pos();
+                match globals.store[fid].is_iseq() {
+                    Some(iseq) => globals.store.iseq_refinements(iseq),
+                    None => RefinementSetId::EMPTY,
+                }
+            }
+            None => RefinementSetId::EMPTY,
+        }
+    }
+
+    ///
+    /// `using`: activate *added* in the calling scope.
+    ///
+    /// The write lands on the scope's *mother* iseq — the top level, a
+    /// class/module body or an eval body, the only places `using` is
+    /// legal — where every block written in that scope will read it.
+    ///
+    pub(crate) fn activate_refinements(
+        &mut self,
+        globals: &mut Globals,
+        added: &[(ClassId, ClassId)],
+    ) {
+        if added.is_empty() {
+            return;
+        }
+        let Some(scope) = self.caller_scope_iseq(globals) else {
+            return;
+        };
+        let base = globals.store.iseq_refinements(scope);
+        let set = globals.store.refinements_mut().activated(base, added);
+        globals.store[scope].refinements = Some(set);
+        // Every inline cache and every compiled entry resolved under the
+        // old set. `using` runs once per scope at load time, so the blunt
+        // global invalidation is the right trade (doc/refinements.md §6.1).
+        if set != base {
+            Globals::class_version_inc();
+        }
+    }
+
+    ///
+    /// Activate *refinement* in the calling scope for the duration of a
+    /// `refine` block, returning what to restore afterwards.
+    ///
+    /// The refinement being defined is active inside its own block
+    /// (CRuby), which is what lets a refined method call its siblings and
+    /// what `Refinement#import_methods` relies on.
+    ///
+    pub(crate) fn begin_refine_block(
+        &mut self,
+        globals: &mut Globals,
+        refined: ClassId,
+        refinement: ClassId,
+    ) -> Option<(ISeqId, Option<RefinementSetId>)> {
+        let scope = self.caller_scope_iseq(globals)?;
+        let saved = globals.store[scope].refinements;
+        let base = globals.store.iseq_refinements(scope);
+        let set = globals
+            .store
+            .refinements_mut()
+            .activated(base, &[(refined, refinement)]);
+        globals.store[scope].refinements = Some(set);
+        Some((scope, saved))
+    }
+
+    pub(crate) fn end_refine_block(
+        &mut self,
+        globals: &mut Globals,
+        saved: Option<(ISeqId, Option<RefinementSetId>)>,
+    ) {
+        if let Some((scope, saved)) = saved {
+            globals.store[scope].refinements = saved;
+        }
+    }
+
+    /// The iseq that a `using` executed by the caller of the currently
+    /// running builtin must write its cell on — the calling body itself
+    /// (see `Store::refinement_cell_owner`).
+    fn caller_scope_iseq(&self, globals: &Globals) -> Option<ISeqId> {
+        let caller = self.cfp().prev()?;
+        let iseq = globals.store[caller.get_source_pos()].is_iseq()?;
+        Some(globals.store.refinement_cell_owner(iseq))
+    }
+
+    /// The refinement set the definition site of a new method should
+    /// snapshot — see `ISeqInfo::refinements`.
+    pub(crate) fn definition_refinements(&self, globals: &Globals) -> RefinementSetId {
+        self.current_refinements(globals)
+    }
+
     /// The definition site of the innermost `method_added`-style hook
     /// currently running, if any. See [`Self::hook_sites`].
     pub(crate) fn hook_site(&self) -> Option<&(String, u32)> {
@@ -2586,6 +2699,12 @@ impl Executor {
                 name,
                 (func.get() as u64) + ((name.get() as u64) << 32)
             )));
+        }
+        // The new body resolves under the refinement set as it stands
+        // *now* — `def` snapshots (doc/refinements.md §7.1).
+        let refinements = self.definition_refinements(globals);
+        if let Some(iseq) = globals.store[func].is_iseq() {
+            globals.store[iseq].refinements = Some(refinements);
         }
         let cref = self.get_class_context();
         let in_method_body = self.def_in_method_body(globals);

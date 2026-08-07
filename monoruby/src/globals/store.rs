@@ -10,9 +10,12 @@ use std::{cell::RefCell, pin::Pin};
 mod class;
 mod function;
 mod iseq;
+mod refinement;
 pub use class::*;
 pub use function::*;
 pub(crate) use iseq::*;
+pub use refinement::RefinementSetId;
+pub(crate) use refinement::RefinementTable;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MethodTableEntry {
@@ -119,6 +122,10 @@ pub struct Store {
     /// where `"abc".equal?("abc")` is true under the magic comment. Rooted
     /// for GC in [`Store::mark`].
     frozen_str_pool: HashMap<(Vec<u8>, crate::value::Encoding), Value>,
+    /// Interned refinement sets, the union of refined method names, and
+    /// the "any refinement exists" gate. See `globals/store/refinement.rs`
+    /// and `doc/refinements.md` §6.
+    refinements: RefinementTable,
 }
 
 impl std::ops::Deref for Store {
@@ -237,6 +244,7 @@ impl Store {
             method_cache: RefCell::new(GlobalMethodCache::default()),
             compile_warnings: vec![],
             frozen_str_pool: HashMap::default(),
+            refinements: RefinementTable::new(),
         }
     }
 

@@ -112,8 +112,9 @@ fn main_private(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 /// and otherwise no-ops. `using` with no argument raises ArgumentError
 /// via the standard arity check.
 #[monoruby_builtin]
-fn main_using(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    super::module::expect_refinement_module(globals, lfp.arg(0))?;
+fn main_using(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let arg = super::module::expect_refinement_module(globals, lfp.arg(0))?;
+    super::module::activate(vm, globals, arg);
     Ok(lfp.self_val())
 }
 
