@@ -1,20 +1,36 @@
-# Refinements — what stands in the way, and where
+# Refinements — the design, and why it is shaped this way
 
-monoruby does not implement refinements. `Module#refine` is undefined;
-`Module#using` and `main.using` exist but only validate their argument
-(there is never a refinement to activate). `Module#used_refinements` and
-`Module#refinements` are Ruby-level mocks returning `[]`.
+monoruby implements refinements. `Module#refine`, `Module#using` and
+`main.using` are real, `Refinement` is a class with `#target` and
+`#import_methods`, and `Module#refinements` / `Module.used_refinements` /
+`Module.used_modules` report the truth. The interpreter and the JIT both
+resolve through an activated refinement.
 
-This document records *why* that is, in terms of the resolution machinery
-that would have to change. Read it together with `doc/cref.md` (which
-describes the CREF that refinements hang off) and `doc/jit.md`.
+This document is the design record: §§1–5 are the problem — what
+refinements do to method resolution and where each of monoruby's
+resolution paths would break under the naive approach — and §§6–7 are the
+implementation that avoids it. Read it together with `doc/cref.md` (the
+CREF refinements hang off) and `doc/jit.md`.
 
-The short version: refinements make the resolved method a function of the
-**caller's lexical scope**, and every method-resolution path in monoruby —
-the global method cache, the VM inline cache, JIT compile-time resolution,
-and the class-version repair path — is keyed without it. The JIT's repair
-path is the dangerous one: it would silently re-validate machine code that
-resolved the wrong method.
+The short version of the problem: refinements make the resolved method a
+function of the **caller's lexical scope**, and every method-resolution
+path in monoruby — the global method cache, the VM inline cache, JIT
+compile-time resolution, and the class-version repair path — was keyed
+without it. The repair path was the dangerous one: left alone it would
+silently re-validate machine code that resolved the wrong method.
+
+The short version of the answer (§6): represent an activated set as an
+interned `u32`, treat it as a compile-time constant of each body with
+`class_version` as the invalidation channel, and gate everything on "does
+this process contain a refinement at all". A program that never calls
+`refine` emits byte-identical machine code to the one that predates all of
+this — checked against an `emit-asm` baseline, not assumed.
+
+**Known gaps.** A refinement of a *basic operation* (`Integer#+` and the
+other dispatch-table fast paths) is not seen, in either tier — §6.7. And
+one refinement cell per iseq means a *block* that runs `using` and
+executes more than once bases on the previous execution's set
+(`ISeqInfo::refinements`, §7.2 option C).
 
 ---
 
@@ -90,9 +106,9 @@ There is no "reflection is exempt" shortcut to lean on.
 
 ---
 
-## 2. The prerequisite monoruby does not have: a per-frame cref
+## 2. The prerequisite: per-scope cref state
 
-`doc/cref.md` covers this in full; the part that blocks refinements:
+`doc/cref.md` covers this in full; the part that blocked refinements:
 
 ```rust
 // Executor
@@ -118,13 +134,14 @@ express "the set as it stood when this body was defined" unless the field
 is snapshotted per definition — which is exactly a per-frame cref by
 another name.
 
-This is the first step of any implementation. It is a change to where
-scope state is *stored*, not to how lookup works — and, as §7 works out, it does
-not have to be a change to the frame layout.
+This was the first step. It is a change to where scope state is *stored*,
+not to how lookup works — and, as §7 works out, it did not have to be a
+change to the frame layout: the cell lives on `ISeqInfo`, resolved through
+the lexical-parent chain.
 
 ---
 
-## 3. Where each resolution layer breaks
+## 3. Where each resolution layer would have broken
 
 ### 3.1 Global method cache
 
@@ -269,14 +286,15 @@ chain model; `super` from a refinement needs its own resolution rule.
 
 ---
 
-## 4. Why the cheap version is worse than nothing
+## 4. Why the cheap version would have been worse than nothing
 
 A stub `refine` that creates an anonymous module, evaluates the block in
 it and returns it — no activation — was prototyped and measured. It
 unblocks 55 of the 59 `core/binding` examples (see §5) because the blocker
 there is a fixture that merely *calls* `refine` at load time.
 
-It was not kept. Without activation, `refine` turns every refinement-using
+It was not kept, and the real thing was implemented instead. Without
+activation, `refine` turns every refinement-using
 program from a clear `NoMethodError` at the `refine` call into a silently
 wrong result at every refined call site. The same trade-off applies to
 `using`, which is why the existing `Module#using` is documented as
@@ -480,7 +498,10 @@ and taking the global basic-op cliff. With `refined_names` it is neither:
   *caller's* set: the same `nearest_ruby_frame` walk the eval builtins now
   use, then that frame's set id. Only reached with the gate on.
 
-### 6.9 Order of work
+### 6.9 Order of work — as landed
+
+Each step shipped on its own, with the spec ledger and (from step 3) the
+`emit-asm` baseline checked at every one.
 
 1. `refine` / `using` build and intern sets; `Module#refinements` and
    `used_refinements` stop being mocks. Lookup still ignores them, so
@@ -494,11 +515,17 @@ and taking the global basic-op cliff. With `refined_names` it is neither:
    baseline for the gate-off case.
 4. Inline-generator gate, `super`, reflection.
 
-Steps 1–2 are shippable on their own: refinements work, refinement-using
-code is slower than it could be, and nothing else in the system changes
-speed. Step 3 is where the §3.4 hazard is actually closed, so the JIT must
-stay refusing until it lands — a refusal is a performance choice, a wrong
-`FuncId` is not.
+Steps 1–2 were shippable on their own: refinements worked, refinement-using
+code was slower than it needed to be, and nothing else in the system
+changed speed. Step 3 is where the §3.4 hazard is actually closed, which
+is why the JIT kept refusing until it landed — a refusal is a performance
+choice, a wrong `FuncId` is not.
+
+Over core/{refinement,module,main,binding,kernel,proc,class,basicobject}
+and language, the four steps took 137 failing examples to 30. What is left
+is §6.7's basic ops, the per-iseq cell's re-execution case, and one
+`import_methods` example that is not a defect (monoruby implements Zlib in
+Ruby, so importing from it legitimately succeeds).
 
 ---
 
