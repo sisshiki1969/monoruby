@@ -234,7 +234,17 @@ pub struct ISeqInfo {
     /// lexical parent and therefore sees a `using` that runs in that
     /// parent *after* the block was created — which is what CRuby does.
     ///
+    /// One cell per iseq, which is the known limitation of storing this
+    /// here rather than per frame (`doc/refinements.md` §7.2 option C): a
+    /// block that runs `using` and is *executed more than once* keeps the
+    /// previous execution's set as its base. Re-activating the same
+    /// module is idempotent, so this only shows when each execution
+    /// activates a *different* refinement — `Module.new { using
+    /// make_refinement }` in a loop. A class body does not have the
+    /// problem: `enter_classdef` re-seeds its cell on every entry.
+    ///
     pub(crate) refinements: Option<RefinementSetId>,
+
     ///
     /// `true` when this method's body (including nested blocks) uses
     /// its implicit block: a `yield`, or any form of `super` (which

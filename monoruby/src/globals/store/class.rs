@@ -1101,8 +1101,30 @@ impl ClassInfoTable {
     ///
     pub(super) fn search_method(
         &self,
+        module: Module,
+        name: IdentId,
+    ) -> Option<MethodTableEntry> {
+        self.search_method_refined(module, name, &[])
+    }
+
+    ///
+    /// [`Self::search_method`] with a scope's activated refinements in
+    /// play.
+    ///
+    /// A refinement sits immediately ahead of the position it refines, so
+    /// the walk probes it just before each module's own table. That keeps
+    /// a subclass's real method ahead of a refinement of its *superclass*,
+    /// which a two-phase "refinements first, then the chain" search would
+    /// get wrong.
+    ///
+    /// `refinements` is empty for every scope that activated nothing, and
+    /// the loop then costs one `is_empty` test per position.
+    ///
+    pub(super) fn search_method_refined(
+        &self,
         mut module: Module,
         name: IdentId,
+        refinements: &[(ClassId, ClassId)],
     ) -> Option<MethodTableEntry> {
         let mut visi = None;
         // A `public :inherited_method` declaration is a visibility modifier,
@@ -1114,6 +1136,21 @@ impl ClassInfoTable {
         // the name any more.
         let mut shadow: Option<&MethodTableEntry> = None;
         loop {
+            if !refinements.is_empty() {
+                // A class may carry several activated refinements; they
+                // are ordered most-recently-activated first.
+                for (_, refinement) in refinements.iter().filter(|(c, _)| *c == module.id()) {
+                    if let Some(entry) = self[*refinement].methods.get(&name)
+                        && entry.func_id.is_some()
+                    {
+                        let visibility = visi.unwrap_or(entry.visibility);
+                        return Some(MethodTableEntry {
+                            visibility,
+                            ..entry.clone()
+                        });
+                    }
+                }
+            }
             if !module.has_origin()
                 && let Some(entry) = self[module.id()].methods.get(&name)
             {
@@ -2038,6 +2075,13 @@ impl Store {
         original_name: IdentId,
     ) {
         self[func_id].set_owner_class(owner);
+        // Defining into a refinement module puts `name` on the list the
+        // resolution fast paths consult, so the cost of refinements stays
+        // proportional to how many names are refined
+        // (`doc/refinements.md` §6.2).
+        if self[owner].refined_class().is_some() {
+            self.refinements_mut().add_refined_name(name);
+        }
         self.insert_method(
             owner,
             name,

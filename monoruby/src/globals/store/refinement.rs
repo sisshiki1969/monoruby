@@ -40,13 +40,12 @@ impl Default for RefinementSetId {
 ///
 /// The interning pool for [`RefinementSetId`].
 ///
-/// A set is stored as a `(refined class, refinement module)` list kept
-/// sorted by refined class, so two activations that reach the same set by
-/// different routes intern to the same id.
-///
-/// Later activations of the same refined class win, matching CRuby: a
-/// second `using` that refines an already-refined class replaces the
-/// earlier entry for that class rather than stacking behind it.
+/// A set is stored as a `(refined class, refinement module)` list, sorted
+/// by refined class so that two activations reaching the same set intern
+/// to the same id. The sort is *stable*, because a class may be refined
+/// by several modules at once and their relative order is meaningful:
+/// the most recently activated refinement of a class is searched first,
+/// and the ones before it remain reachable behind it.
 ///
 #[derive(Debug, Default)]
 pub(crate) struct RefinementTable {
@@ -109,20 +108,10 @@ impl RefinementTable {
         &self.sets[set.0 as usize]
     }
 
-    /// The refinement module activated for *class_id* in *set*, if any.
-    pub(crate) fn lookup(&self, set: RefinementSetId, class_id: ClassId) -> Option<ClassId> {
-        if set.is_empty() {
-            return None;
-        }
-        self.entries(set)
-            .iter()
-            .find(|(refined, _)| *refined == class_id)
-            .map(|(_, module)| *module)
-    }
-
-    /// Intern *entries* (any order) and return its id.
+    /// Intern *entries* and return its id. The order of same-class
+    /// entries is preserved (see the type doc), so the sort is stable.
     fn intern(&mut self, mut entries: Vec<(ClassId, ClassId)>) -> RefinementSetId {
-        entries.sort_unstable_by_key(|(refined, _)| refined.u32());
+        entries.sort_by_key(|(refined, _)| refined.u32());
         if entries.is_empty() {
             return RefinementSetId::EMPTY;
         }
@@ -149,12 +138,12 @@ impl RefinementTable {
         }
         let mut entries = self.entries(base).to_vec();
         for (refined, module) in added {
-            match entries.iter_mut().find(|(c, _)| c == refined) {
-                // Re-refining a class the scope already refines replaces
-                // the earlier entry.
-                Some(slot) => slot.1 = *module,
-                None => entries.push((*refined, *module)),
-            }
+            // Activating a refinement that is already active moves it to
+            // the front rather than duplicating it; a *different*
+            // refinement of an already-refined class goes in front of the
+            // earlier one, which stays reachable behind it (CRuby).
+            entries.retain(|(c, m)| !(c == refined && m == module));
+            entries.insert(0, (*refined, *module));
         }
         self.intern(entries)
     }
@@ -187,6 +176,69 @@ impl Store {
             cur = self[id].outer;
         }
         RefinementSetId::EMPTY
+    }
+
+    ///
+    /// Resolve *name* for a receiver of class *class_id* as seen from a
+    /// scope whose activated refinements are *set*.
+    ///
+    /// The `set.is_empty()` case — every call site in a program that
+    /// never refines anything, and every call site outside a `using` in
+    /// one that does — is the untouched fast path, global method cache
+    /// and all. Only a non-empty set walks the chain uncached.
+    ///
+    pub(crate) fn check_method_with_refinements(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+        set: RefinementSetId,
+    ) -> Option<MethodTableEntry> {
+        // `BOOL_CLASS` is an internal lookup key with no module object of
+        // its own; the unrefined path knows how to unify `TrueClass` and
+        // `FalseClass` for it, and `Executor::find_method` retries with
+        // the receiver's real class — which does walk the refined chain.
+        let Some(module) = self[class_id].try_get_module().filter(|_| !set.is_empty()) else {
+            return self.check_method_for_class(class_id, name);
+        };
+        self.classes
+            .search_method_refined(module, name, self.refinements.entries(set))
+    }
+
+    ///
+    /// Every `(refined class, refinement)` pair *module* contributes to a
+    /// `using`: its own, plus those of everything it includes or
+    /// prepends. CRuby activates a module's ancestors' refinements too.
+    ///
+    /// Ordered outermost-ancestor-first so that the module's own
+    /// refinements, applied last, end up searched first.
+    ///
+    pub(crate) fn refinements_of_module(&self, module: ClassId) -> Vec<(ClassId, ClassId)> {
+        let mut out = vec![];
+        for m in self.ancestors(module).into_iter().rev() {
+            out.extend(self.own_refinement_entries(m.id()));
+        }
+        out
+    }
+
+    /// The `(refined class, refinement)` pairs *module* defines itself.
+    pub(crate) fn own_refinement_entries(&self, module: ClassId) -> Vec<(ClassId, ClassId)> {
+        self[module]
+            .own_refinements()
+            .iter()
+            .filter_map(|r| self[*r].refined_class().map(|c| (c, *r)))
+            .collect()
+    }
+
+    ///
+    /// The set *iseq* would resolve under if it had no cell of its own —
+    /// its lexical parent's. The base a fresh execution of a scope
+    /// restarts its `using` chain from.
+    ///
+    pub(crate) fn enclosing_refinements(&self, iseq: ISeqId) -> RefinementSetId {
+        match self[iseq].outer {
+            Some(outer) => self.iseq_refinements(outer),
+            None => RefinementSetId::EMPTY,
+        }
     }
 
     ///

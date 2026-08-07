@@ -3051,11 +3051,7 @@ fn using(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 
 /// Collect *module*'s refinements and activate them in the calling scope.
 pub(super) fn activate(vm: &mut Executor, globals: &mut Globals, module: ClassId) {
-    let added: Vec<(ClassId, ClassId)> = globals.store[module]
-        .own_refinements()
-        .iter()
-        .filter_map(|r| globals.store[*r].refined_class().map(|c| (c, *r)))
-        .collect();
+    let added = globals.store.refinements_of_module(module);
     vm.activate_refinements(globals, &added);
 }
 
@@ -3081,7 +3077,9 @@ fn refine(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             )));
         }
     };
-    let bh = lfp.expect_block()?;
+    let Some(bh) = lfp.block() else {
+        return Err(MonorubyErr::argumenterr("no block given"));
+    };
     let data = vm.get_block_data(globals, bh)?;
     // `refine` on the same class twice extends the module made the first
     // time, so both blocks' methods land in one refinement (CRuby).
@@ -3116,6 +3114,12 @@ fn refine(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     vm.pop_class_context();
     vm.end_refine_block(globals, saved);
     res?;
+    // Every refinement defined in one module is visible from every other
+    // one's method bodies (CRuby), but the sibling defined *after* this
+    // block could not have been in the snapshot its `def`s took. Re-stamp
+    // them all now that the owner's set has grown; `refine` is a
+    // load-time call, and a refinement's method table is small.
+    vm.restamp_refinement_methods(globals, owner);
     Ok(module_val)
 }
 
@@ -6325,8 +6329,11 @@ mod tests {
     #[test]
     fn used_refinements_follows_the_scope() {
         // `Module.used_refinements` / `used_modules` report the *caller's*
-        // scope, so they are empty outside the `using`.
-        run_test(
+        // scope, so they are empty outside the `using`. Single-shot: the
+        // block runs `using` on a fresh module, which the per-iseq cell
+        // would accumulate across `run_test`'s 25 repeats (see
+        // `ISeqInfo::refinements`).
+        run_test_once(
             r#"
             m = Module.new { refine(String) { def z; end } }
             inner = nil
@@ -6335,6 +6342,133 @@ mod tests {
               inner = [Module.used_refinements.size, Module.used_modules.size]
             end
             [inner, Module.used_refinements, Module.used_modules]
+            "#,
+        );
+    }
+
+    #[test]
+    fn using_activates_from_that_point_in_the_scope() {
+        // Activation is a runtime event at a lexical position: the same
+        // call resolves differently before and after it.
+        run_test_once(
+            r#"
+            module UsingA
+              refine(String) { def tag; "A"; end }
+            end
+            out = []
+            out << ("x".tag rescue "-")
+            using UsingA
+            out << ("x".tag rescue "-")
+            out
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_def_snapshots_but_a_block_reads_through() {
+        // A method defined before the `using` never sees it; a block
+        // created before it does, because the block resolves through its
+        // lexical parent at call time.
+        run_test_once(
+            r#"
+            module SnapA
+              refine(String) { def tag;  "A"; end }
+            end
+            module SnapB
+              refine(String) { def tag2; "B"; end }
+            end
+            chk = -> { [ ("x".tag rescue "-"), ("x".tag2 rescue "-") ] }
+            def snap0; [ ("x".tag rescue "-"), ("x".tag2 rescue "-") ]; end
+            using SnapA
+            def snap1; [ ("x".tag rescue "-"), ("x".tag2 rescue "-") ]; end
+            using SnapB
+            def snap2; [ ("x".tag rescue "-"), ("x".tag2 rescue "-") ]; end
+            [chk.call, snap0, snap1, snap2]
+            "#,
+        );
+    }
+
+    #[test]
+    fn refinement_does_not_escape_its_scope() {
+        // The refined method is invisible outside the activating scope,
+        // and the refined class itself never gains it.
+        run_test_once(
+            r#"
+            module EscA
+              refine(String) { def only_here; :yes; end }
+            end
+            inner = Module.new do
+              using EscA
+              def self.run; "x".only_here; end
+            end
+            [inner.run,
+             ("x".only_here rescue $!.class.to_s),
+             String.instance_methods(false).include?(:only_here)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn using_gathers_refinements_of_ancestors() {
+        // `using M` activates what M's *included* modules refine too.
+        run_test_once(
+            r#"
+            module AncInner
+              refine(Integer) { def wrap; "<#{to_s}>"; end }
+            end
+            module AncOuter
+              include AncInner
+              refine(String) { def wrap; "'" + self + "'"; end }
+            end
+            Module.new do
+              using AncOuter
+              def self.run; [1.wrap, "x".wrap]; end
+            end.run
+            "#,
+        );
+    }
+
+    #[test]
+    fn sibling_refinements_see_each_other() {
+        // All the refinements defined in *one* module are visible from
+        // each other's method bodies, including a sibling defined after
+        // the body that calls into it.
+        run_test_once(
+            r#"
+            module Json
+              refine(Integer) { def fmt; to_s; end }
+              refine(Array)   { def fmt; "[" + map { |i| i.fmt }.join(",") + "]"; end }
+              refine(Hash)    { def fmt; "{" + map { |k, v| k.fmt + ":" + v.fmt }.join(",") + "}"; end }
+            end
+            Module.new do
+              using Json
+              def self.run; [{1 => 2}, {3 => 4}].fmt; end
+            end.run
+            "#,
+        );
+    }
+
+    #[test]
+    fn using_is_rejected_where_it_is_illegal() {
+        // `Module#using` is out in a method body, `main.using` anywhere
+        // but the top level.
+        run_test_once(
+            r#"
+            OUT = []
+            MAIN = self
+            m = Module.new do
+              def self.f; using Module.new; end
+            end
+            begin; m.f; rescue RuntimeError => e; OUT << e.message; end
+            module UsingPos
+              begin
+                MAIN.send(:using, Module.new)
+                OUT << :no_raise
+              rescue RuntimeError => e
+                OUT << e.message
+              end
+            end
+            OUT
             "#,
         );
     }

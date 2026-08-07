@@ -2328,11 +2328,21 @@ impl Executor {
     /// the Ruby frame that called it.
     ///
     pub(crate) fn current_refinements(&self, globals: &Globals) -> RefinementSetId {
-        let fid = self.cfp().get_source_pos();
-        match globals.store[fid].is_iseq() {
-            Some(iseq) => globals.store.iseq_refinements(iseq),
-            None => RefinementSetId::EMPTY,
+        Self::frame_refinements(globals, self.cfp)
+    }
+
+    /// The set for the nearest Ruby frame at or outside *cfp*. `EMPTY`
+    /// when there is no frame at all (an `at_exit` handler runs with the
+    /// control-frame chain already torn down) or no Ruby frame below.
+    fn frame_refinements(globals: &Globals, cfp: Option<Cfp>) -> RefinementSetId {
+        let mut cfp = cfp;
+        while let Some(c) = cfp {
+            if let Some(iseq) = globals.store[c.lfp().func_id()].is_iseq() {
+                return globals.store.iseq_refinements(iseq);
+            }
+            cfp = c.prev();
         }
+        RefinementSetId::EMPTY
     }
 
     ///
@@ -2341,16 +2351,7 @@ impl Executor {
     /// points (`send`, `respond_to?`, …) must resolve under.
     ///
     pub(crate) fn caller_refinements(&self, globals: &Globals) -> RefinementSetId {
-        match self.cfp().prev() {
-            Some(caller) => {
-                let fid = caller.get_source_pos();
-                match globals.store[fid].is_iseq() {
-                    Some(iseq) => globals.store.iseq_refinements(iseq),
-                    None => RefinementSetId::EMPTY,
-                }
-            }
-            None => RefinementSetId::EMPTY,
-        }
+        Self::frame_refinements(globals, self.cfp.and_then(|c| c.prev()))
     }
 
     ///
@@ -2424,6 +2425,71 @@ impl Executor {
         let caller = self.cfp().prev()?;
         let iseq = globals.store[caller.get_source_pos()].is_iseq()?;
         Some(globals.store.refinement_cell_owner(iseq))
+    }
+
+    ///
+    /// Re-stamp every method defined in any of *owner*'s refinements with
+    /// the set "the scope that ran `refine` ∪ all of *owner*'s
+    /// refinements".
+    ///
+    /// A `def` inside `refine Foo do … end` snapshots what was activated
+    /// when it ran, which cannot include a sibling `refine Bar do … end`
+    /// that has not executed yet — but CRuby makes all of one module's
+    /// refinements mutually visible from their method bodies. Running
+    /// this at the end of each `refine` converges: by the last one, every
+    /// body has the whole set.
+    ///
+    pub(crate) fn restamp_refinement_methods(&mut self, globals: &mut Globals, owner: ClassId) {
+        // The owner's *own* refinements only. A module it includes may
+        // host refinements too, but those are not visible from this
+        // module's refined method bodies — only from a scope that
+        // `using`s it (CRuby).
+        let entries = globals.store.own_refinement_entries(owner);
+        if entries.is_empty() {
+            return;
+        }
+        let base = self.current_refinements(globals);
+        let set = globals.store.refinements_mut().activated(base, &entries);
+        let iseqs: Vec<ISeqId> = entries
+            .iter()
+            .flat_map(|(_, r)| {
+                globals.store[*r]
+                    .own_method_entries()
+                    .into_iter()
+                    .filter_map(|(_, fid, _)| fid)
+                    .collect::<Vec<_>>()
+            })
+            .filter_map(|fid| globals.store[fid].is_iseq())
+            .collect();
+        for iseq in iseqs {
+            globals.store[iseq].refinements = Some(set);
+        }
+    }
+
+    ///
+    /// Whether the body that called the currently running builtin is the
+    /// file's top level — not a method, not a class/module body, and not
+    /// nested in one.
+    ///
+    /// `main.using` is legal only there. A block counts as its lexical
+    /// parent, so `[1].each { using R }` at the top level is allowed,
+    /// exactly as CRuby has it.
+    ///
+    pub(crate) fn caller_is_toplevel(&self, globals: &Globals) -> bool {
+        let Some(caller) = self.cfp().prev() else {
+            return false;
+        };
+        let Some(iseq) = globals.store[caller.get_source_pos()].is_iseq() else {
+            return false;
+        };
+        let mother = globals.store[iseq].mother().0;
+        let fid = globals.store[mother].func_id();
+        let info = &globals.store[fid];
+        // A `class`/`module` body and a method body are both out. The top
+        // level of a `Kernel#load(path, true)`-wrapped script is *in* —
+        // it is still that file's top level, however the wrap rearranges
+        // its lexical scope.
+        !info.is_classdef() && !info.is_method()
     }
 
     /// The refinement set the definition site of a new method should
@@ -2773,11 +2839,22 @@ impl Executor {
         // succeeds when both `TrueClass` and `FalseClass` resolve to the
         // same `FuncId`; otherwise it falls back to the per-class lookup.
         let class_id = recv.class_for_ic();
+        // The resolved method depends on the *caller's* scope once
+        // refinements are in play. `EMPTY` — every scope in a program
+        // that never refines anything — takes the same path as before.
+        let set = if globals.store.refinements().is_active() {
+            self.current_refinements(globals)
+        } else {
+            RefinementSetId::EMPTY
+        };
         let entry = globals
-            .check_method_for_class(class_id, func_name)
+            .store
+            .check_method_with_refinements(class_id, func_name, set)
             .or_else(|| {
                 if class_id == BOOL_CLASS {
-                    globals.check_method_for_class(recv.class(), func_name)
+                    globals
+                        .store
+                        .check_method_with_refinements(recv.class(), func_name, set)
                 } else {
                     None
                 }
