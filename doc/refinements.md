@@ -118,8 +118,8 @@ express "the set as it stood when this body was defined" unless the field
 is snapshotted per definition — which is exactly a per-frame cref by
 another name.
 
-This is Stage 0 of any implementation. It is a change to where scope
-state is *stored*, not to how lookup works — and, as §7 works out, it does
+This is the first step of any implementation. It is a change to where
+scope state is *stored*, not to how lookup works — and, as §7 works out, it does
 not have to be a change to the frame layout.
 
 ---
@@ -168,8 +168,8 @@ This cache is *per call site*, so in principle it can hold a cref-dependent
 answer — a given call site has exactly one cref. The problem is
 invalidation: nothing in these two guards notices that `using` ran. Making
 `using` bump the global `class_version` works but is blunt — it invalidates
-every inline cache in the program, and `using` at the top of a file is
-common.
+every inline cache in the program. §6.1 argues that is the right trade
+anyway, because `using` is a load-time event, not a hot-path one.
 
 ### 3.3 JIT compile-time resolution
 
@@ -249,12 +249,11 @@ Two mechanisms bypass dispatch entirely:
   de-optimisation.
 
 Property (c) says `Integer#+` is refinable, so a refinement must reach both.
-The options are (i) teach the inline generators to fire only when the
-compiling cref has no refinement for that name — which means giving
-`InlineGen` the cref — or (ii) fall back to `set_bop_redefine`, which
-permanently disables the operator fast paths for the whole process the
-moment any file refines one. (ii) is a large, irreversible performance
-cliff for a feature most programs never touch.
+Framed as an either/or — thread the cref into every `InlineGen`, or take
+the process-wide `set_bop_redefine` cliff — both options are bad. §6.7
+splits it instead: the JIT's inline generators gate per call site on a
+`refined_names` set, and only the VM's dispatch-table basic ops take the
+global hit.
 
 ### 3.7 super
 
@@ -319,40 +318,187 @@ making the 96 fail silently instead of loudly.
 
 ---
 
-## 6. A staged implementation, if it is ever done
+## 6. An implementation strategy that keeps the performance
 
-Ordered so that each stage is independently testable and the
-non-refining fast paths stay untouched until the last one.
+The naive framing of §3 — "every cache key has to grow a cref" — is what
+makes refinements look prohibitive. It is avoidable. The design below rests
+on one representation choice and two observations, and its acceptance
+criterion is that a program which never calls `refine` executes *the same
+machine code it does today*.
 
-**Stage 0 — per-frame cref.** See §7 for what this does and does not
-require of the frame layout. Independently valuable: it is the same defect
-that made `Module.nesting` read another scope's stack.
+### 6.0 The representation: an interned set id
 
-**Stage 1 — data model, no lookup change.** `Cref` gains
-`refinements: Option<Rc<HashMap<ClassId, Module>>>` (shared with the outer
-cref until written, mirroring CRuby's `CREF_FL_OMOD_SHARED`). `refine`
-builds the anonymous module and records its refined class; `using` merges
-a module's set into the current cref. `Module#refinements` /
-`used_refinements` stop being mocks. Lookup still ignores all of it.
+Represent an activated refinement set as an interned `RefinementSetId(u32)`:
 
-**Stage 2 — resolution, behind a global gate.** Add
-`search_method_with_cref`. Keep a process-wide "any refinement has ever
-been activated" flag; while it is false — the overwhelmingly common case —
-every path in §3 keeps its current key and its current speed. This gate is
-what keeps the feature from costing anything when unused.
+```rust
+RefinementSetId::EMPTY == 0                  // no refinements activated
+using M   on a scope holding S   =>   intern(S ∪ refinements_of(M))
+```
 
-**Stage 3 — caches.** Extend the method-cache key and the VM inline-cache
-guard for the refining case only. Make `using` bump `class_version`.
+Interning is hash-consing over a table of small sets; equal sets get equal
+ids. Real programs have a handful of distinct activations, so the table
+stays tiny.
 
-**Stage 4 — JIT.** Thread the compiling iseq's cref into `JitContext`;
-record it in `inline_cache_map` entries so `update_inline_cache` re-asks
-the same question (§3.4); suppress inline generators and basic-op fast
-paths for names refined in the compiling cref (§3.6); give `super` its
-refinement rule (§3.7).
+This is the move that makes everything else cheap. The cref's refinement
+state stops being a `Hash[refined_class => module]` that has to be walked
+and starts being **a `u32` that can be compared, stored in a cache entry,
+and baked into compiled code as a constant**.
 
-Stages 0–2 make refinements *correct but slow*; Stage 3–4 make them not
-slow down everything else. Stopping after Stage 2 is a defensible
-intermediate state. Stopping after Stage 1 is not — that is the trap in §4.
+### 6.1 Observation 1 — a call site's set is a compile-time constant
+
+`using` is illegal in a method body (§7.1), so:
+
+- A **method body** snapshots its scope's set at `def`. Every invocation of
+  that method resolves under the same id.
+- A **block** reads its home scope's live cell — but that cell changes only
+  when `using` runs in that scope, and `using` is a load-time event.
+
+So for any iseq, the set is constant except across a `using` in its home
+scope. That is precisely the shape a JIT speculates on: **treat the set id
+as a compile-time constant, and let `using` bump `class_version`.**
+
+`using` bumping the global class version invalidates every inline cache and
+every JIT entry in the program. That sounds violent until you notice it is
+exactly what a `def` at load time already does, and `using` happens once
+per scope during startup, never in a loop.
+
+### 6.2 Observation 2 — the cost should scale with *refined names*, not with *using refinements at all*
+
+Maintain
+
+```rust
+refined_names: HashSet<IdentId>   // union of names any refinement defines
+```
+
+This is typically a handful of symbols. Then:
+
+- the global method cache and the per-class memoized predicates
+  (`no_to_str`, `neq_basic_at`, …) **keep their existing key**, and simply
+  refuse to serve a name in `refined_names`;
+- those names — and only those — take
+  `search_method_with_refinements(recv_class, name, set_id)`.
+
+A program that refines `String#blank?` pays nothing on `Array#each`,
+`Integer#+`, or any of the other tens of thousands of call sites. The tax
+is proportional to how much is refined, which is the right shape and is
+what keeps a refinement-using program fast, not just a refinement-free one.
+
+### 6.3 Where the mutable cell lives
+
+Only toplevel / class-module bodies / eval-at-toplevel own one (§7.1), and
+now it holds a `u32`. §7.2 option **(B)** — a side table on the `Executor`
+keyed by LEP, alongside the existing `deferred_unwind` — stays the
+recommendation: no frame-layout change, correct per execution, and
+allocated only once a refinement exists.
+
+A block finds its own set by the same outer-chain walk to the LEP that
+`$~` already does. A method finds its own on its `FuncInfo`, written by
+`def`. (`def` re-executing under a *different* set writes a different id;
+since `using` already bumped the version, that is self-correcting rather
+than stale — unlike `lexical_context`, which has no such guard.)
+
+### 6.4 The zero-cost gate
+
+A process-wide flag, false until the first `refine` call:
+
+| path | flag false | flag true |
+|---|---|---|
+| `search_method` | today's code | + `refined_names` check |
+| global method cache | today's key | today's key; skipped for refined names |
+| VM inline cache | today's two guards | unchanged (see 6.5) |
+| `jit_check_method` | today's lookup | takes `set_id` |
+| `update_inline_cache` | today's loop | + id comparison (see 6.6) |
+| inline generators | fire as today | gated per call site (see 6.7) |
+
+The acceptance criterion is stronger than "fast": with the flag false the
+emitted machine code must be **identical**, which `--features emit-asm`
+makes directly checkable against a baseline. Benchmarks (optcarrot and
+`benchmark/`) then cannot regress, by construction rather than by
+measurement.
+
+### 6.5 VM inline cache — no format change
+
+The cached triple lives in the bytecode operand words
+(`CACHED_FUNCID` / `CACHED_CLASS` / `CACHED_VERSION`) and has no room for a
+fourth. It does not need one: a call site has exactly one set id, so the
+cached `FuncId` is already the right answer *for that site*. The warm path
+(`runtime::find_method`) has `vm`, hence the current frame, hence the set —
+it resolves with it and caches the result. `using`'s version bump forces a
+re-warm. Nothing in the guard sequence changes.
+
+### 6.6 JIT — closing the repair hole for 4 bytes
+
+`inline_cache_map` entries grow from
+
+```rust
+(ClassId, Option<IdentId>, FuncId)
+```
+
+to
+
+```rust
+(ClassId, Option<IdentId>, RefinementSetId, FuncId)
+```
+
+and `update_inline_cache`'s re-check calls the set-aware lookup. That is
+the whole fix for §3.4's silent-wrong-answer path: the repair now re-asks
+the question the compiler asked. Four bytes per recorded call site, no
+runtime cost, and with the gate off every recorded id is `EMPTY` and the
+comparison is a constant-folded no-op.
+
+`JitContext` gains the set id of the iseq it is compiling — read from the
+`FuncInfo` snapshot for a method, or from the live frame for a block/loop,
+both at compile time in Rust. **No emitted prologue changes and no machine
+code ever loads a cref.**
+
+### 6.7 Inline generators and basic ops — split the two
+
+§3.6 framed this as a choice between threading the cref into `InlineGen`
+and taking the global basic-op cliff. With `refined_names` it is neither:
+
+- **Inline generators** (`Array#[]`, `String#size`, …) are consulted at JIT
+  compile time, where the set id is known. Gate them on
+  `set_id == EMPTY || !refined_names.contains(name)`. A refinement of
+  `Array#[]` costs the fast path **only in scopes that activated it**;
+  every other scope keeps it.
+- **Basic ops in the VM** (`vm_binops`, the comparison dispatch entries)
+  are selected by a dispatch table with no call-site context, and
+  `remove_vm_bop_optimization` is a one-way process-wide switch. Refining
+  one of those does take the global hit. That is acceptable because it is
+  the same hit a *global* monkey patch of `Integer#+` takes today — the
+  honest comparison — and because the JIT, which is where the time
+  actually goes, keeps per-scope precision via the gate above.
+
+### 6.8 The remaining pieces
+
+- **`super` inside a refinement** means "the method this refinement
+  shadows". Record `refined_class: Option<ClassId>` on the refinement
+  module and special-case `find_super` when the running body belongs to
+  one, instead of trying to express it as a position in the real ancestor
+  chain (§3.7).
+- **Reflection** (`send`, `respond_to?`, `Object#method`) resolves with the
+  *caller's* set: the same `nearest_ruby_frame` walk the eval builtins now
+  use, then that frame's set id. Only reached with the gate on.
+
+### 6.9 Order of work
+
+1. `refine` / `using` build and intern sets; `Module#refinements` and
+   `used_refinements` stop being mocks. Lookup still ignores them, so
+   nothing can regress yet.
+2. `search_method_with_refinements` + `refined_names` + the gate. `using`
+   bumps `class_version`. Correct end-to-end through the VM; the JIT still
+   refuses to compile any iseq with a non-empty set (deopt to VM), which is
+   safe because the gate keeps that path cold.
+3. `RefinementSetId` into `JitContext` and `inline_cache_map`; lift the
+   step-2 refusal. This is the step that must not move the emit-asm
+   baseline for the gate-off case.
+4. Inline-generator gate, `super`, reflection.
+
+Steps 1–2 are shippable on their own: refinements work, refinement-using
+code is slower than it could be, and nothing else in the system changes
+speed. Step 3 is where the §3.4 hazard is actually closed, so the JIT must
+stay refusing until it lands — a refusal is a performance choice, a wrong
+`FuncId` is not.
 
 ---
 
