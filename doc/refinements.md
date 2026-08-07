@@ -364,21 +364,42 @@ JIT never has to read it from machine code.
 
 ### 7.1 What each kind of body actually needs
 
-Two measurements bound the requirement (CRuby 4.0.2):
+The requirement is bounded by what a scope's *own* refinement state does
+when it changes mid-execution. Two `using` calls in one scope, with a
+`proc` and a `def` interleaved between them (CRuby 4.0.2):
 
 ```ruby
-pr = proc { 1 + 1 }        # created BEFORE the using
-def m_before = 1 + 1       # defined BEFORE the using
-using R
-p pr.call     # => "refined+"   block sees the later activation
-p m_before    # => 2            method does not
+module A; refine(Integer) { def tag;  "A" } end
+module B; refine(Integer) { def tag2; "B" } end
+
+p0 = proc { … }   ;   def m0 = …          # before both
+using A
+p1 = proc { … }   ;   def m1 = …          # between
+using B
+p2 = proc { … }   ;   def m2 = …          # after both
+
+# procs:   p0 -> [A, B]    p1 -> [A, B]    p2 -> [A, B]
+# methods: m0 -> [-, -]    m1 -> [A, -]    m2 -> [A, B]
 ```
 
-A block created before the `using` **is** refined; a method defined before
-it is **not**. So the cref is a *mutable cell owned by the scope's
-environment*, shared by reference with every block that captured that
-environment, while `def` snapshots the pointer at definition time. A static
-per-iseq field cannot express both halves.
+Every proc sees the final state, **including the one created before any
+`using` ran**. Every method sees the state as of its own `def`, and the
+three methods in one scope carry three different sets.
+
+So the scope's refinement set is genuinely modified at runtime; a block
+reads the scope's live state at call time rather than snapshotting it,
+while `def` snapshots. The cell must therefore be *mutable, owned by the
+scope's environment, and read through* — not a value copied into each
+closure. A static per-iseq field cannot express both halves.
+
+Runtime mutation of a CREF is not itself new to monoruby: bare `private` /
+`public` / `protected` already write `Cref::visibility` in place
+(`set_context_visibility`), `module_function` writes `Cref::module_function`
+(`set_module_function` / `clear_module_function`), and class bodies and
+evals push and pop entries (`push_class_context`, `push_eval_cref`). What
+refinements add is that **method resolution** starts depending on that
+mutable state — and that the mutation must be visible to blocks already
+created and invisible to methods already defined.
 
 But the mutable half is needed only where `using` is legal, and that is
 narrow (verified):
