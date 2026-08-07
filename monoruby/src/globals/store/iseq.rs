@@ -63,11 +63,33 @@ impl ISeqId {
     }
 }
 
+///
+/// One method call the JIT resolved at compile time, recorded so that a
+/// later class-version bump can be *repaired* instead of forcing a
+/// recompile: if every entry still resolves to the same `FuncId`, the
+/// compiled code is still correct and only needs the new version stamped
+/// into it (`Store::update_inline_cache`).
+///
+/// The refinement set is part of the record because it is part of the
+/// question the compiler asked. Without it the repair would re-ask the
+/// *unrefined* question after a `using` moved the version, confirm the
+/// unrefined answer, and re-validate machine code that must now dispatch
+/// into the refinement — see `doc/refinements.md` §3.4.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InlineCacheEntry {
+    pub recv_class: ClassId,
+    /// `None` for a `super` call site.
+    pub name: Option<IdentId>,
+    pub refinements: RefinementSetId,
+    pub func_id: FuncId,
+}
+
 #[derive(Debug, Clone)]
 pub struct JitInfo {
     pub entry: DestLabel,
     pub class_version_label: DestLabel,
-    pub inline_cache_map: Vec<(ClassId, Option<IdentId>, FuncId)>,
+    pub inline_cache_map: Vec<InlineCacheEntry>,
 }
 
 ///
@@ -715,7 +737,7 @@ impl ISeqInfo {
     pub(crate) fn get_cache_map(
         &self,
         self_class: ClassId,
-    ) -> Option<&Vec<(ClassId, Option<IdentId>, FuncId)>> {
+    ) -> Option<&Vec<InlineCacheEntry>> {
         self.jit_entry
             .get(&self_class)
             .map(|info| &info.inline_cache_map)
@@ -724,7 +746,7 @@ impl ISeqInfo {
     pub(crate) fn set_cache_map(
         &mut self,
         self_class: ClassId,
-        cache: Vec<(ClassId, Option<IdentId>, FuncId)>,
+        cache: Vec<InlineCacheEntry>,
     ) {
         self.jit_entry
             .get_mut(&self_class)

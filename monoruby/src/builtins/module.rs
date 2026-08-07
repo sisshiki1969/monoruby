@@ -6474,6 +6474,58 @@ mod tests {
     }
 
     #[test]
+    fn refined_call_sites_survive_jit_compilation() {
+        // `run_test` repeats enough to compile: the refined call has to
+        // resolve the same way once it is machine code, and two scopes
+        // with different sets must not share an answer. The third class
+        // activates nothing and must still see the unrefined world.
+        run_test(
+            r#"
+            module JitR1
+              refine(String) { def kind; "R1"; end }
+            end
+            module JitR2
+              refine(String) { def kind; "R2"; end }
+            end
+            class JitA
+              using JitR1
+              def run(n); r = nil; n.times { r = "x".kind }; r; end
+            end
+            class JitB
+              using JitR2
+              def run(n); r = nil; n.times { r = "x".kind }; r; end
+            end
+            class JitC
+              def run(n); r = nil; n.times { r = ("x".kind rescue "none") }; r; end
+            end
+            [JitA.new.run(30), JitB.new.run(30), JitC.new.run(30)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn redefining_the_refined_class_reaches_compiled_code() {
+        // Reopening the refined class after the body is compiled must
+        // not disturb the refinement, and must be visible outside it.
+        run_test_once(
+            r#"
+            module JitR3
+              refine(String) { def shout; upcase + "!"; end }
+            end
+            class JitHot
+              using JitR3
+              def run(n); r = nil; n.times { r = "hi".shout }; r; end
+            end
+            before = JitHot.new.run(300)
+            class String
+              def shout; "GLOBAL"; end
+            end
+            [before, JitHot.new.run(300), "hi".shout]
+            "#,
+        );
+    }
+
+    #[test]
     fn refinement_import_methods_argument_checks() {
         // Nothing is imported unless every argument is a Ruby module.
         run_test(

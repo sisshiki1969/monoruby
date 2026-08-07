@@ -12,7 +12,7 @@ impl Codegen {
         jit_entry: DestLabel,
         class_version: u32,
         is_recompile: Option<RecompileReason>,
-    ) -> Option<(Vec<(ClassId, Option<IdentId>, FuncId)>, DestLabel)> {
+    ) -> Option<(Vec<InlineCacheEntry>, DestLabel)> {
         self.compile(
             globals,
             iseq_id,
@@ -159,7 +159,7 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         _is_recompile: Option<RecompileReason>,
-    ) -> Option<(Vec<(ClassId, Option<IdentId>, FuncId)>, DestLabel)> {
+    ) -> Option<(Vec<InlineCacheEntry>, DestLabel)> {
         if position.is_none() && globals.store[iseq_id].jit_invalidated() {
             return None;
         }
@@ -172,18 +172,6 @@ impl Codegen {
         // both the method and loop JIT opt out; the interpreter runs `redo`
         // correctly.
         if globals.store[iseq_id].contains_redo() {
-            return None;
-        }
-        // Step 3 of `doc/refinements.md` §6.9 has not landed: the JIT
-        // resolves methods at compile time without a refinement set, and
-        // `update_inline_cache`'s repair would re-confirm the *unrefined*
-        // answer after a `using` bumped the class version — a wrong
-        // `FuncId`, silently. Until the set is threaded through both,
-        // decline any body that resolves under one. The gate keeps this
-        // cold: no refinement anywhere means every set is EMPTY.
-        if globals.store.refinements().is_active()
-            && !globals.store.iseq_refinements(iseq_id).is_empty()
-        {
             return None;
         }
         #[cfg(feature = "profile")]

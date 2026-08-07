@@ -2377,9 +2377,14 @@ impl Store {
         lfp: Lfp,
         recv_class: ClassId,
         name: Option<IdentId>,
+        refinements: RefinementSetId,
     ) -> Option<FuncId> {
         if let Some(method_name) = name {
-            self.check_method_for_class(recv_class, method_name)
+            // Re-ask with the *same* refinement set the compiler used;
+            // asking the unrefined question would confirm an answer the
+            // compiled code is no longer allowed to give
+            // (`doc/refinements.md` §3.4).
+            self.check_method_with_refinements(recv_class, method_name, refinements)
                 .map(|entry| entry.func_id())
                 .flatten()
         } else {
@@ -2399,9 +2404,10 @@ impl Store {
             // JIT entry was invalidated (e.g. by BOP redefinition). Fall back to recompile.
             return false;
         };
-        for (recv_class, name, comptime_fid) in cache_map {
-            let func_id = self.check_method_for_name(lfp, *recv_class, *name);
-            if func_id != Some(*comptime_fid) {
+        for entry in cache_map {
+            let func_id =
+                self.check_method_for_name(lfp, entry.recv_class, entry.name, entry.refinements);
+            if func_id != Some(entry.func_id) {
                 return false;
             }
         }

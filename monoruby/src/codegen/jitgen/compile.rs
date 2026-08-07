@@ -1095,10 +1095,19 @@ impl<'a> JitContext<'a> {
     /// visibility gate in `compile_method_call`).
     ///
     fn jit_check_method(&self, class_id: ClassId, name: IdentId) -> Option<(FuncId, Visibility)> {
-        let class_version = self.class_version();
-        let entry = self
-            .store
-            .check_method_for_class_with_version(class_id, name, class_version)?;
+        let refinements = self.refinements();
+        let entry = if refinements.is_empty() {
+            let class_version = self.class_version();
+            self.store
+                .check_method_for_class_with_version(class_id, name, class_version)?
+        } else {
+            // The compiling body activated refinements, so resolution is
+            // a function of its set too. Recorded with the result in
+            // `inline_method_cache`, so the class-version repair asks the
+            // same question later (`doc/refinements.md` §6.6).
+            self.store
+                .check_method_with_refinements(class_id, name, refinements)?
+        };
         Some((entry.func_id()?, entry.visibility()))
     }
 

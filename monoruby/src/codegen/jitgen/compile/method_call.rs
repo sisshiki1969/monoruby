@@ -141,7 +141,12 @@ impl<'a> JitContext<'a> {
         }
         let callsite = &self.store[callid];
         self.inline_method_cache
-            .push((recv_class, callsite.name, func_id));
+            .push(InlineCacheEntry {
+                recv_class,
+                name: callsite.name,
+                refinements: self.refinements(),
+                func_id,
+            });
         let recv = callsite.recv;
 
         if self.store[func_id].possibly_capture_without_block() {
