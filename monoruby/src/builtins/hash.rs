@@ -3769,6 +3769,25 @@ mod tests {
         ]);
     }
 
+    /// `Hash#replace` transfers the compare_by_identity mode in both
+    /// directions — including for small (inline-representation) hashes,
+    /// whose mode bit lives in the header flags byte and must travel
+    /// with the replacement (ruby/spec core/hash/replace_spec.rb).
+    #[test]
+    fn hash_replace_compare_by_identity() {
+        run_tests(&[
+            "h = { a: 1, c: 3 }; \
+             h.replace({ b: 2, d: 4 }.compare_by_identity); \
+             h.compare_by_identity?",
+            "h = { a: 1, c: 3 }.compare_by_identity; \
+             h.replace(b: 2, d: 4); \
+             h.compare_by_identity?",
+            // identity lookups keep working through the transfer
+            "s = +'k'; src = {}.compare_by_identity; src[s] = 1; \
+             h = {}; h.replace(src); [h.compare_by_identity?, h[s], h[+'k']]",
+        ]);
+    }
+
     /// `h.default = x` inside `each` is legal (it does not change the key
     /// set) but forces a small hash out of its inline representation
     /// mid-iteration; the live iteration count must survive the move, so

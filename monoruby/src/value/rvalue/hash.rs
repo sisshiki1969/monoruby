@@ -39,6 +39,12 @@ const R2K_BIT: u8 = 0b0000_1000;
 const ITER_MASK: u8 = 0b0011_0000;
 const ITER_SHIFT: u8 = 4;
 const ITER_MAX: u8 = 3;
+/// The *inline* hash is identity-keyed (`compare_by_identity`).
+/// Identity probing is a pure id scan — no hashing, no Ruby code, and
+/// an id can never go stale — so an identity-keyed inline hash may hold
+/// *any* keys, heap ones included. The boxed form does not use this
+/// bit; there the `HashContent` variant (Map vs IdentMap) is the truth.
+const IDENT_BIT: u8 = 0b0100_0000;
 
 /// Max pairs held inline: the full 48-byte payload.
 pub(crate) const INLINE_CAP: usize = 3;
@@ -48,11 +54,12 @@ pub(super) fn flags_is_boxed(flags: u8) -> bool {
     flags & REP_MASK == REP_BOXED
 }
 
-/// The flags a dup/clone of a hash must carry: the representation bits
-/// travel with the copied body, while the ruby2_keywords flag and any
-/// live iteration count belong to the source object only.
+/// The flags a dup/clone of a hash must carry: the representation and
+/// identity-mode bits travel with the copied body, while the
+/// ruby2_keywords flag and any live iteration count belong to the
+/// source object only.
 pub(super) fn sanitize_dup_flags(flags: u8) -> u8 {
-    flags & REP_MASK
+    flags & (REP_MASK | IDENT_BIT)
 }
 
 /// Drop the live content of `body` according to `flags` (the RValue
@@ -474,12 +481,20 @@ impl<'a> HashRef<'a> {
         HashId(self.body.as_ptr() as usize)
     }
 
-    /// Position of packed key `k` among the inline pairs. Packed values
-    /// are eql? iff their bits are equal (`Value::eql`'s immediate arm),
-    /// so this scan is exactly a map's digest-probe + eql? for these
-    /// keys. Heap keys can never match a packed key.
-    fn inline_pos_packed(&self, k: Value) -> Option<usize> {
-        if !k.is_packed_value() {
+    /// Is this an identity-keyed *inline* hash?
+    fn is_ident_inline(&self) -> bool {
+        self.is_inline() && self.flags() & IDENT_BIT != 0
+    }
+
+    /// Position of `k` among the inline pairs when no `#hash` dispatch
+    /// can be observable: an identity-keyed hash compares ids for any
+    /// key, and in an eql?-keyed hash only a packed probe can match
+    /// (packed values are eql? iff their bits are equal — `Value::eql`'s
+    /// immediate arm — so the id scan is exactly a map's digest-probe +
+    /// eql? for them). An eql?-keyed heap probe returns `None`; whether
+    /// its `#hash` must be observed is the caller's business.
+    fn inline_pos_noobs(&self, k: Value) -> Option<usize> {
+        if !self.is_ident_inline() && !k.is_packed_value() {
             return None;
         }
         self.inline_pairs()
@@ -488,20 +503,19 @@ impl<'a> HashRef<'a> {
     }
 
     /// Position of `k` among the inline pairs, observing the same
-    /// `#hash` protocol a boxed-map lookup would: a heap probe is hashed
-    /// exactly once (dispatching a user-defined `#hash` and propagating
-    /// its errors) even though it can never be eql? to a packed key.
+    /// `#hash` protocol a boxed-map lookup would: an eql?-keyed heap
+    /// probe is hashed exactly once (dispatching a user-defined `#hash`
+    /// and propagating its errors) even though it can never be eql? to a
+    /// packed key. Identity-keyed lookups never hash (matching the
+    /// IdentKey map, which digests ids natively).
     fn inline_pos(
         &self,
         k: Value,
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<Option<usize>> {
-        if k.is_packed_value() {
-            Ok(self
-                .inline_pairs()
-                .iter()
-                .position(|(ek, _)| ek.id() == k.id()))
+        if self.is_ident_inline() || k.is_packed_value() {
+            Ok(self.inline_pos_noobs(k))
         } else {
             k.calculate_hash(vm, globals)?;
             Ok(None)
@@ -521,7 +535,11 @@ impl<'a> HashRef<'a> {
     }
 
     pub fn is_compare_by_identity(&self) -> bool {
-        matches!(self.content(), ContentRef::Ident(_))
+        if self.is_inline() {
+            self.flags() & IDENT_BIT != 0
+        } else {
+            matches!(self.content(), ContentRef::Ident(_))
+        }
     }
 
     pub(crate) fn ruby2_keywords_flag(&self) -> bool {
@@ -774,30 +792,28 @@ impl std::fmt::Debug for HashRef<'_> {
 impl RubyEql<Executor, Globals, MonorubyErr> for HashRef<'_> {
     // This type of equality is used for comparison for keys of Hash.
     fn eql(&self, other: &Self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
-        match (self.content(), other.content()) {
-            // A hash and an identity-compared hash never compare equal.
-            (ContentRef::Ident(m1), ContentRef::Ident(m2)) => m1.eql(m2, vm, globals),
-            (ContentRef::Ident(_), _) | (_, ContentRef::Ident(_)) => Ok(false),
-            // Both eql?-keyed: representation (inline vs boxed) must not
-            // matter, so compare pairwise through `get` — the same probe
-            // protocol RubyMap::eql uses.
-            _ => {
-                if self.len() != other.len() {
-                    return Ok(false);
-                }
-                for (k, v) in self.iter() {
-                    match other.get(k, vm, globals)? {
-                        None => return Ok(false),
-                        Some(ov) => {
-                            if !v.eql(&ov, vm, globals)? {
-                                return Ok(false);
-                            }
-                        }
+        // A hash and an identity-compared hash never compare equal.
+        if self.is_compare_by_identity() != other.is_compare_by_identity() {
+            return Ok(false);
+        }
+        // Same mode: representation (inline vs boxed) must not matter,
+        // so compare pairwise through `get` — the same probe protocol
+        // RubyMap::eql uses (which for identity hashes is native id
+        // digesting/comparison on both sides).
+        if self.len() != other.len() {
+            return Ok(false);
+        }
+        for (k, v) in self.iter() {
+            match other.get(k, vm, globals)? {
+                None => return Ok(false),
+                Some(ov) => {
+                    if !v.eql(&ov, vm, globals)? {
+                        return Ok(false);
                     }
                 }
-                Ok(true)
             }
         }
+        Ok(true)
     }
 }
 
@@ -810,9 +826,18 @@ impl RubyHash<Executor, Globals, MonorubyErr> for HashRef<'_> {
     ) -> Result<()> {
         match self.content() {
             ContentRef::Inline(pairs) => {
-                for (key, val) in pairs {
-                    key.ruby_hash(state, e, g)?;
-                    val.ruby_hash(state, e, g)?;
+                if self.is_ident_inline() {
+                    // digest keys by id, matching `IdentKey::ruby_hash`
+                    // so inline and boxed identity hashes digest alike
+                    for (key, val) in pairs {
+                        key.id().hash(state);
+                        val.ruby_hash(state, e, g)?;
+                    }
+                } else {
+                    for (key, val) in pairs {
+                        key.ruby_hash(state, e, g)?;
+                        val.ruby_hash(state, e, g)?;
+                    }
                 }
             }
             ContentRef::Map(h) => {
@@ -960,21 +985,26 @@ impl<'a> HashRefMut<'a> {
         }
         if self.is_inline() {
             let len = self.inline_len();
-            if let Some(i) = self.as_ref().inline_pos_packed(k) {
+            let ident = self.as_ref().is_ident_inline();
+            if let Some(i) = self.as_ref().inline_pos_noobs(k) {
                 // SAFETY: rep is inline; i < len.
                 unsafe { self.body_mut().inline[i].1 = v };
-            } else if is_inline_key(k) && len < INLINE_CAP {
+            } else if (ident || is_inline_key(k)) && len < INLINE_CAP {
+                // An identity-keyed inline hash accepts any key (id
+                // probing never goes stale); an eql?-keyed one only
+                // packed immediates.
                 // SAFETY: rep is inline; the slot exists (len < CAP).
                 unsafe { self.body_mut().inline[len] = (k, v) };
                 self.set_rep(len as u8 + 1);
             } else {
-                // 4th pair or heap key: move to the boxed map. A heap
-                // key's user-defined #hash is observed (once) by the map
-                // insert, matching the boxed-representation protocol.
-                self.promote(false, vm, globals)?;
+                // 4th pair — or, in eql? mode, a heap key: move to the
+                // boxed map. An eql?-keyed heap key's user-defined
+                // #hash is observed (once) by the map insert, matching
+                // the boxed-representation protocol.
+                self.promote(ident, vm, globals)?;
                 match &mut self.boxed_mut().content {
                     HashContent::Map(m) => m.insert(k, v, vm, globals)?,
-                    HashContent::IdentMap(_) => unreachable!(),
+                    HashContent::IdentMap(m) => m.insert(IdentKey(k), v, vm, globals)?,
                 };
             }
             return Ok(());
@@ -1031,35 +1061,37 @@ impl<'a> HashRefMut<'a> {
     pub fn clear(&mut self) -> Result<()> {
         self.as_ref().check_iter()?;
         if self.is_inline() {
+            // Keep the mode bit: a cleared identity hash stays
+            // identity-compared.
             self.install(
                 0,
                 HashBody {
                     inline: empty_pairs(),
                 },
             );
-        } else if matches!(self.boxed_mut().content, HashContent::IdentMap(_)) {
-            // An identity-compared hash must stay identity-compared, so
-            // it keeps its boxed map. (The default also survives, as in
-            // CRuby: `clear` does not touch it.)
-            match &mut self.boxed_mut().content {
-                HashContent::IdentMap(m) => m.clear(),
-                HashContent::Map(_) => unreachable!(),
-            }
         } else if self.boxed_mut().default.is_some() {
-            // A default keeps the hash boxed; just empty the map.
+            // A default keeps the hash boxed; just empty the map (the
+            // default itself survives, as in CRuby: `clear` does not
+            // touch it).
             match &mut self.boxed_mut().content {
                 HashContent::Map(m) => m.clear(),
-                HashContent::IdentMap(_) => unreachable!(),
+                HashContent::IdentMap(m) => m.clear(),
             }
         } else {
             // Give the boxed storage back — an emptied, default-less
-            // hash is small again by definition.
+            // hash is small again by definition. An identity-compared
+            // hash keeps its mode via the inline mode bit.
+            let ident = matches!(self.boxed_mut().content, HashContent::IdentMap(_));
             self.install(
                 0,
                 HashBody {
                     inline: empty_pairs(),
                 },
             );
+            if ident {
+                let f = self.flags();
+                self.set_flags(f | IDENT_BIT);
+            }
         }
         Ok(())
     }
@@ -1109,7 +1141,8 @@ impl<'a> HashRefMut<'a> {
             return Ok(());
         }
         if self.is_inline() {
-            self.promote(false, vm, globals)?;
+            let ident = self.as_ref().is_ident_inline();
+            self.promote(ident, vm, globals)?;
         }
         self.boxed_mut().default = Some(Box::new(HashDefault::Value(default)));
         Ok(())
@@ -1122,7 +1155,8 @@ impl<'a> HashRefMut<'a> {
         globals: &mut Globals,
     ) -> Result<()> {
         if self.is_inline() {
-            self.promote(false, vm, globals)?;
+            let ident = self.as_ref().is_ident_inline();
+            self.promote(ident, vm, globals)?;
         }
         self.boxed_mut().default = Some(Box::new(HashDefault::Proc(default_proc)));
         Ok(())
@@ -1141,7 +1175,12 @@ impl<'a> HashRefMut<'a> {
     pub fn compare_by_identity(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         self.as_ref().check_iter()?;
         if self.is_inline() {
-            return self.promote(true, vm, globals);
+            // Just flip the mode bit: the existing keys are packed
+            // immediates, for which eql? and identity coincide, so the
+            // pairs stay valid verbatim — and the hash stays inline.
+            let f = self.flags();
+            self.set_flags(f | IDENT_BIT);
+            return Ok(());
         }
         if let HashContent::Map(m) = &self.boxed_mut().content {
             let mut new_map = RubyMap::default();
@@ -1174,27 +1213,18 @@ impl<'a> HashRefMut<'a> {
             "the map must be empty to change its mode"
         );
         if ident {
-            if !self.as_ref().is_compare_by_identity() {
-                let default = if self.is_inline() {
-                    None
-                } else {
-                    self.boxed_mut().default.take()
-                };
-                self.install(
-                    REP_BOXED,
-                    HashBody {
-                        boxed: ManuallyDrop::new(BoxedHash {
-                            content: HashContent::IdentMap(Box::new(RubyMap::default())),
-                            default,
-                            iter_lev: std::cell::Cell::new(0),
-                        }),
-                    },
-                );
+            if self.is_inline() {
+                // stays inline: the empty pair array serves both modes
+                let f = self.flags();
+                self.set_flags(f | IDENT_BIT);
+            } else if !self.as_ref().is_compare_by_identity() {
+                self.boxed_mut().content = HashContent::IdentMap(Box::new(RubyMap::default()));
             }
+        } else if self.is_inline() {
+            let f = self.flags();
+            self.set_flags(f & !IDENT_BIT);
         } else if self.as_ref().is_compare_by_identity() {
-            let default = self.boxed_mut().default.take();
-            if default.is_some() {
-                self.boxed_mut().default = default;
+            if self.boxed_mut().default.is_some() {
                 self.boxed_mut().content = HashContent::Map(Box::new(RubyMap::default()));
             } else {
                 self.install(
@@ -1498,16 +1528,17 @@ impl Hashmap {
         Ok(())
     }
 
-    /// Replace the whole content (`Hash#replace`). Bulk barrier: the new
-    /// content may reference young objects.
+    /// Replace the whole content (`Hash#replace`). The source's
+    /// representation, identity-mode, and r2k bits replace the
+    /// receiver's (`Hash#replace` transfers the compare_by_identity
+    /// flag in both directions). Bulk barrier: the new content may
+    /// reference young objects.
     pub fn replace_inner(&mut self, inner: HashmapInner) {
         let (flags, body) = inner.into_parts();
         let mut m = self.0.as_hashmap_inner_mut();
-        // keep the receiver's iteration state out of it: replace is a
-        // key-set change and is rejected during iteration by callers.
         m.install(flags & REP_MASK, body);
         let f = m.flags();
-        m.set_flags((f & !R2K_BIT) | (flags & R2K_BIT));
+        m.set_flags((f & !(IDENT_BIT | R2K_BIT)) | (flags & (IDENT_BIT | R2K_BIT)));
         self.0.write_barrier_bulk();
     }
 
@@ -1879,5 +1910,109 @@ mod tests {
         let mut dbg = HashmapInner::default();
         dbg.insert(Value::integer(1), Value::integer(2), e, g).unwrap();
         assert!(!format!("{dbg:?}").is_empty());
+    }
+
+    /// Identity-keyed hashes use the inline representation too: the mode
+    /// bit lives in the flags byte, id probing accepts heap keys, and
+    /// the boxed transitions preserve the mode in both directions.
+    #[test]
+    fn hash_ident_inline() {
+        let mut globals = Globals::new_test();
+        let e = &mut Executor::default();
+        let g = &mut globals;
+
+        // compare_by_identity on a populated inline hash stays inline
+        let mut h = HashmapInner::default();
+        h.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
+        h.compare_by_identity(e, g).unwrap();
+        assert!(h.is_compare_by_identity());
+        assert!(rep_of(&h) != REP_BOXED);
+
+        // heap keys go inline under identity mode; same-content distinct
+        // strings are distinct keys, and re-probing with the same object
+        // hits
+        let s1 = Value::string_from_str("key");
+        let s2 = Value::string_from_str("key");
+        h.insert(s1, Value::integer(100), e, g).unwrap();
+        assert!(rep_of(&h) != REP_BOXED);
+        assert_eq!(2, h.len());
+        assert_eq!(Some(Value::integer(100)), h.get(s1, e, g).unwrap());
+        assert_eq!(None, h.get(s2, e, g).unwrap());
+        assert!(h.contains_key(s1, e, g).unwrap());
+        assert!(!h.contains_key(s2, e, g).unwrap());
+        assert_eq!(Some(Value::integer(100)), h.remove(s1, e, g).unwrap());
+        h.insert(s1, Value::integer(100), e, g).unwrap();
+
+        // the 4th pair promotes to the boxed IdentMap with identical
+        // behavior
+        h.insert(s2, Value::integer(200), e, g).unwrap();
+        h.insert(Value::integer(9), Value::integer(90), e, g).unwrap();
+        assert_eq!(REP_BOXED, rep_of(&h));
+        assert!(h.is_compare_by_identity());
+        assert_eq!(4, h.len());
+        assert_eq!(Some(Value::integer(100)), h.get(s1, e, g).unwrap());
+        assert_eq!(Some(Value::integer(200)), h.get(s2, e, g).unwrap());
+
+        // clear demotes a default-less boxed ident hash back to inline,
+        // keeping the mode
+        h.clear().unwrap();
+        assert!(rep_of(&h) != REP_BOXED);
+        assert!(h.is_compare_by_identity());
+        h.insert(s1, Value::integer(1), e, g).unwrap();
+        assert!(rep_of(&h) != REP_BOXED);
+
+        // inline-ident and boxed-ident with the same entries are eql and
+        // digest alike; ident never equals eql?-keyed
+        let mut inline_i = HashmapInner::default();
+        inline_i.compare_by_identity(e, g).unwrap();
+        inline_i.insert(s1, Value::integer(1), e, g).unwrap();
+        let mut boxed_i = HashmapInner::default();
+        boxed_i.compare_by_identity(e, g).unwrap();
+        boxed_i.insert(s1, Value::integer(1), e, g).unwrap();
+        for i in 0..3 {
+            boxed_i
+                .insert(Value::integer(i), Value::integer(i), e, g)
+                .unwrap();
+        }
+        assert_eq!(REP_BOXED, rep_of(&boxed_i));
+        for i in 0..3 {
+            boxed_i.remove(Value::integer(i), e, g).unwrap();
+        }
+        assert!(inline_i.eql(&boxed_i, e, g).unwrap());
+        assert!(boxed_i.eql(&inline_i, e, g).unwrap());
+        let digest = |m: &HashmapInner, e: &mut Executor, g: &mut Globals| {
+            let mut s = crate::value::seeded_hasher();
+            m.ruby_hash(&mut s, e, g).unwrap();
+            std::hash::Hasher::finish(&s)
+        };
+        assert_eq!(digest(&inline_i, e, g), digest(&boxed_i, e, g));
+
+        // clone keeps the identity mode (and the inline representation)
+        let copy = inline_i.clone();
+        assert!(copy.is_compare_by_identity());
+        assert!(rep_of(&copy) != REP_BOXED);
+        assert_eq!(Some(Value::integer(1)), copy.get(s1, e, g).unwrap());
+
+        // a default still forces boxing, into an IdentMap
+        let mut di = HashmapInner::default();
+        di.compare_by_identity(e, g).unwrap();
+        di.insert(s1, Value::integer(1), e, g).unwrap();
+        di.as_mut()
+            .set_defalut_value(Value::integer(7), e, g)
+            .unwrap();
+        assert_eq!(REP_BOXED, rep_of(&di));
+        assert!(di.is_compare_by_identity());
+        assert_eq!(Some(Value::integer(1)), di.get(s1, e, g).unwrap());
+        assert_eq!(Some(Value::integer(7)), di.defalut_value());
+
+        // shift preserves insertion order across the mode
+        let mut sh = HashmapInner::default();
+        sh.compare_by_identity(e, g).unwrap();
+        sh.insert(s1, Value::integer(1), e, g).unwrap();
+        sh.insert(s2, Value::integer(2), e, g).unwrap();
+        let (k, v) = sh.shift(e, g).unwrap().unwrap();
+        assert_eq!((s1.id(), Value::integer(1)), (k.id(), v));
+        let (k, v) = sh.shift(e, g).unwrap().unwrap();
+        assert_eq!((s2.id(), Value::integer(2)), (k.id(), v));
     }
 }
