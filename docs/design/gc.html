@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f7d3acc3.js";
+            window.path_to_searchindex_js = "../searchindex-829612b4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -380,15 +380,18 @@ call-site には poll を置かない — <code>doc/threads.md</code> §8.3)。a
 struct Metadata {          // rvalue.rs:2373
     flag:  u16,
     ty:    Option&lt;ObjTy&gt;,  // 1 バイト
-    _padding: u8,          // JIT の 2 バイト cmpw が隣接バイトを読むため 0 固定
+    ty_flags: u8,          // ObjTy 固有のメタデータ(HASH: 小ハッシュ表現ビット)
     class: Option&lt;ClassId&gt;,
 }
 </code></pre>
 <ul>
 <li>フリーリスト上のセルは <code>next</code>(次の空きセル)として解釈され、生存セルは <code>meta</code>。</li>
-<li><code>_padding</code> を 0 に固定するのは、JIT が型判定に <code>cmpw [ty]</code>(2 バイト)を使い
-隣接バイトも読むため。したがって<strong>世代別 GC の age は <code>ty</code> の隣ではなく
-<code>flag</code> の上位バイトに置く</strong>。</li>
+<li><code>ty_flags</code> は ObjTy 固有のメタデータバイト。JIT の型判定は両アーキテクチャとも
+1 バイト読み(x86-64 <code>cmpb</code> / aarch64 <code>ldrb</code>)なので、隣接バイトが任意の値でも
+問題ない。HASH オブジェクトはここにインライン表現のビット(hash.rs の
+<code>HashFlags</code>)を置く。dup/リテラルコピー(<code>Header::newborn</code> /
+<code>CellHeader::NewbornOf</code>)はこのバイトを保存する。世代別 GC の age は従来どおり
+<code>flag</code> の上位バイトに置く。</li>
 </ul>
 <h3 id="flag-u16-のビット割り当てrvaluers2447-以降"><a class="header" href="#flag-u16-のビット割り当てrvaluers2447-以降"><code>flag: u16</code> のビット割り当て(<code>rvalue.rs:2447</code> 以降)</a></h3>
 <div class="table-wrapper">
