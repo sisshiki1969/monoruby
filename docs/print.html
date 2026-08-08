@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-829612b4.js";
+            window.path_to_searchindex_js = "searchindex-8814013c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e1173681.js"></script>
@@ -6985,7 +6985,10 @@ fall back to the <em>block’s captured</em> CREF, not the runtime receiver.</p>
 parent CREFs via <code>CREF_FL_OMOD_SHARED</code>). <code>using Foo</code> populates the
 <em>current</em> CREF’s hash; the lookup walks the chain.</p>
 <p>monoruby does not implement refinements; the <code>Cref</code> struct has no
-<code>refinements</code> field.</p>
+<code>refinements</code> field. See <code>doc/refinements.md</code> for what the missing field
+is the smallest part of — the per-frame CREF this document describes is a
+prerequisite, and every method-resolution cache in the tree is keyed
+without a cref.</p>
 <hr>
 <h2 id="monoruby-1"><a class="header" href="#monoruby-1">monoruby</a></h2>
 <h3 id="layout-1"><a class="header" href="#layout-1">Layout</a></h3>
