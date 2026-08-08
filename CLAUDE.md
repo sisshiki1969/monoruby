@@ -87,6 +87,7 @@ monoruby/                   # Workspace root
 │   ├── refresh-prism-vendored # Rebuild/force-push the prism vendored branch
 │   └── irm                 # Launch REPL (cargo run --bin irm)
 ├── doc/                    # Architecture documentation
+│   ├── README.md           # Index of every document, with kind + language
 │   ├── jit.md              # JIT stub code details
 │   ├── method_args.md      # Method argument handling
 │   └── progress_2025-2026.md # Progress notes
