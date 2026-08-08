@@ -41,6 +41,7 @@ pub fn fill_closed_std_fds() {
         for fd in 0..3 {
             let closed = libc::fcntl(fd, libc::F_GETFD) == -1
                 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF);
+            #[cfg(target_os = "linux")]
             let sanitized = if closed {
                 false
             } else {
@@ -51,6 +52,10 @@ pub fn fill_closed_std_fds() {
                 is_devnull
                     && (libc::fcntl(fd, libc::F_GETFL) & libc::O_ACCMODE) == libc::O_RDWR
             };
+            // The /dev/null device numbering above is Linux's; elsewhere
+            // only genuinely closed fds are (conservatively) normalized.
+            #[cfg(not(target_os = "linux"))]
+            let sanitized = false;
             if !(closed || sanitized) {
                 continue;
             }

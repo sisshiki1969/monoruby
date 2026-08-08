@@ -53,6 +53,29 @@ pub(crate) struct ExecSpec {
 const STAGE_CHDIR: u8 = b'c';
 const STAGE_EXEC: u8 = b'x';
 
+/// Portable CLOEXEC pipe: `pipe2(O_CLOEXEC)` where available (Linux),
+/// `pipe` + `fcntl(FD_CLOEXEC)` elsewhere (macOS has no pipe2).
+pub(crate) fn pipe_cloexec() -> std::io::Result<(libc::c_int, libc::c_int)> {
+    let mut fds: [libc::c_int; 2] = [0; 2];
+    // SAFETY: fds is a valid pointer to a 2-element array of c_int.
+    #[cfg(target_os = "linux")]
+    let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+    #[cfg(not(target_os = "linux"))]
+    let rc = unsafe {
+        let rc = libc::pipe(fds.as_mut_ptr());
+        if rc == 0 {
+            libc::fcntl(fds[0], libc::F_SETFD, libc::FD_CLOEXEC);
+            libc::fcntl(fds[1], libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+        rc
+    };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok((fds[0], fds[1]))
+    }
+}
+
 /// Parse `Process.spawn`/`exec` arguments into an `ExecSpec`.
 pub(crate) fn parse_spawn_args(
     vm: &mut Executor,
@@ -595,14 +618,10 @@ pub(crate) fn do_spawn(
     globals: &mut Globals,
     spec: &ExecSpec,
 ) -> Result<i64> {
-    let mut fds: [libc::c_int; 2] = [0; 2];
-    // SAFETY: pipe2 fills the two fds; O_CLOEXEC so a successful execve
-    // closes the write end and the parent sees EOF.
-    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } == -1 {
-        let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pipe2"));
-    }
-    let (rfd, wfd) = (fds[0], fds[1]);
+    // CLOEXEC so a successful execve closes the write end and the
+    // parent sees EOF.
+    let (rfd, wfd) = pipe_cloexec()
+        .map_err(|err| MonorubyErr::errno_with_msg(&globals.store, &err, "pipe2"))?;
     // SAFETY: monoruby's threads are green (single OS thread), so the
     // child is single-threaded and consistent; everything it touches was
     // prepared pre-fork.

@@ -2280,15 +2280,14 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         };
     }
 
-    let mut fds: [libc::c_int; 2] = [0; 2];
-    // SAFETY: fds is a valid pointer to a 2-element array of c_int.
-    // O_CLOEXEC by default, like CRuby: pipe ends do not leak across
+    // CLOEXEC by default, like CRuby: pipe ends do not leak across
     // exec unless explicitly redirected (or close_on_exec = false).
-    let ret = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
-    if ret == -1 {
-        let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pipe(2)"));
-    }
+    let fds: [libc::c_int; 2] = match crate::builtins::spawn::pipe_cloexec() {
+        Ok((r, w)) => [r, w],
+        Err(err) => {
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pipe(2)"));
+        }
+    };
 
     // Allocate + dispatch #initialize (NOT `new`: a redefined `new` must
     // not be called, but a redefined #initialize must — see
