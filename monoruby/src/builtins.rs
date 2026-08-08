@@ -42,8 +42,10 @@ mod range;
 mod regexp;
 mod set;
 mod socket;
+pub(crate) mod spawn;
 mod string;
 pub(crate) mod struct_class;
+mod data_class;
 mod symbol;
 mod thread;
 mod time;
@@ -123,6 +125,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     io::init(globals);
     io_buffer::init(globals);
     struct_class::init(globals);
+    data_class::init(globals);
     file::init(globals);
     argf::init(globals);
     socket::init(globals);

@@ -2280,13 +2280,14 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         };
     }
 
-    let mut fds: [libc::c_int; 2] = [0; 2];
-    // SAFETY: fds is a valid pointer to a 2-element array of c_int.
-    let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if ret == -1 {
-        let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pipe(2)"));
-    }
+    // CLOEXEC by default, like CRuby: pipe ends do not leak across
+    // exec unless explicitly redirected (or close_on_exec = false).
+    let fds: [libc::c_int; 2] = match crate::builtins::spawn::pipe_cloexec() {
+        Ok((r, w)) => [r, w],
+        Err(err) => {
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pipe(2)"));
+        }
+    };
 
     // Allocate + dispatch #initialize (NOT `new`: a redefined `new` must
     // not be called, but a redefined #initialize must — see
@@ -3968,6 +3969,24 @@ pub(super) fn io_wait_class(globals: &Globals, name: &str) -> Option<ClassId> {
 /// or returns `nil`.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/read_nonblock.html]
+/// Validate the `exception:` keyword of `read_nonblock`/`write_nonblock`:
+/// CRuby (`rb_opts_exception_p`) accepts only literal `true`/`false` and
+/// raises ArgumentError otherwise — before any IO is attempted, so the
+/// ArgumentError takes precedence over EOF/closed-stream conditions.
+fn nonblock_exception_kw(store: &Store, v: Option<Value>) -> Result<bool> {
+    let Some(v) = v else { return Ok(true) };
+    if v == Value::bool(true) {
+        Ok(true)
+    } else if v == Value::bool(false) {
+        Ok(false)
+    } else {
+        Err(MonorubyErr::argumenterr(format!(
+            "expected true or false as exception: {}",
+            v.inspect(store)
+        )))
+    }
+}
+
 #[monoruby_builtin]
 fn io_read_nonblock(
     vm: &mut Executor,
@@ -3987,7 +4006,7 @@ fn io_read_nonblock(
         _ => None,
     };
     // `exception:` keyword is at slot 2 (positional max 2).
-    let exception = lfp.try_arg(2).map_or(true, |v| v.as_bool());
+    let exception = nonblock_exception_kw(&globals.store, lfp.try_arg(2))?;
     if lfp.self_val().as_io_inner().is_closed() {
         return Err(MonorubyErr::ioerr("closed stream"));
     }
@@ -4059,7 +4078,7 @@ fn io_write_nonblock(
         vm.to_s(globals, lfp.arg(0))?.into_bytes()
     };
     // `exception:` keyword is at slot 1 (positional max 1).
-    let exception = lfp.try_arg(1).map_or(true, |v| v.as_bool());
+    let exception = nonblock_exception_kw(&globals.store, lfp.try_arg(1))?;
     if lfp.self_val().as_io_inner().is_closed() {
         return Err(MonorubyErr::ioerr("closed stream"));
     }
@@ -7752,6 +7771,30 @@ mod tests {
             v = r.read_nonblock(5, exception: false)
             r.close
             raise "expected nil, got #{v.inspect}" unless v.nil?
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_nonblock_exception_kw_validation() {
+        // `exception:` accepts only literal true/false — validated before
+        // any IO, so it wins over EOF/closed-stream conditions.
+        run_test_error(r#"r, w = IO.pipe; r.read_nonblock(4, exception: 0)"#);
+        run_test_error(r#"r, w = IO.pipe; r.read_nonblock(4, exception: nil)"#);
+        run_test_error(r#"r, w = IO.pipe; w.write_nonblock("x", exception: "false")"#);
+    }
+
+    #[test]
+    fn io_pipe_close_on_exec_default() {
+        // CRuby marks pipe fds CLOEXEC; `close_on_exec=` can clear it.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            a = [r.close_on_exec?, w.close_on_exec?]
+            w.close_on_exec = false
+            a << w.close_on_exec?
+            r.close; w.close
+            a
             "#,
         );
     }

@@ -257,7 +257,7 @@ fn struct_initialize(
 }
 
 #[monoruby_builtin]
-fn struct_members(
+pub(super) fn struct_members(
     _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
@@ -266,17 +266,14 @@ fn struct_members(
     // `self` is the struct class itself. A class produced via
     // `Class.new(SomeStruct)` stores `/members` on its ancestor, so walk
     // the superclass chain rather than assuming the ivar is local.
-    let members = get_members(globals, lfp.self_val().as_class())?;
+    let members = get_members(&globals.store, lfp.self_val().as_class())?;
     Ok(members.into())
 }
 
-fn get_members(globals: &mut Globals, mut class: Module) -> Result<Array> {
+pub(super) fn get_members(store: &Store, mut class: Module) -> Result<Array> {
     let mut members = None;
     loop {
-        if let Some(m) = globals
-            .store
-            .get_ivar(class.as_val(), IdentId::get_id("/members"))
-        {
+        if let Some(m) = store.get_ivar(class.as_val(), IdentId::get_id("/members")) {
             members = Some(m);
             break;
         } else if let Some(s) = class.superclass()
@@ -306,7 +303,7 @@ fn initialize(
     let kw_args = kw_args_val.and_then(|v| v.try_hash_ty());
     let mut self_val = lfp.self_val();
     let class_obj = self_val.get_class_obj(globals);
-    let members = get_members(globals, class_obj)?;
+    let members = get_members(&globals.store, class_obj)?;
     let keyword_init = is_keyword_init(globals, class_obj);
 
     if keyword_init {
@@ -466,7 +463,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     // the path that's anonymous) are detected via `get_name() == None`
     // — in that case render `#<struct member=...>` with no class name.
     let class_name = if globals.store[class_id].get_name().is_some()
-        && let Some(qualified) = qualified_real_class_name(globals, class_id)
+        && let Some(qualified) = qualified_real_class_name(&globals.store, class_id)
     {
         Some(qualified)
     } else {
@@ -479,7 +476,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         inspect.push_str(name);
     }
 
-    let members = get_members(globals, struct_class)?;
+    let members = get_members(&globals.store, struct_class)?;
     let slots = self_val.try_struct();
     let mut first = true;
     for (i, m) in members.iter().enumerate() {
@@ -504,8 +501,8 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// parent chain. Returns `None` if any ancestor (including the class
 /// itself) is anonymous, matching CRuby's "drop class label entirely
 /// if any segment is anonymous" rule for `Struct#inspect`.
-fn qualified_real_class_name(globals: &Globals, class_id: ClassId) -> Option<String> {
-    let parents = globals.store.get_parents(class_id);
+pub(super) fn qualified_real_class_name(store: &Store, class_id: ClassId) -> Option<String> {
+    let parents = store.get_parents(class_id);
     if parents.iter().any(|s| s.starts_with("#<")) {
         // `get_parents` renders anonymous segments as `#<Class:...>`.
         return None;
@@ -529,7 +526,7 @@ fn qualified_real_class_name(globals: &Globals, class_id: ClassId) -> Option<Str
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Struct/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     if self_val.class() != other.class() {
@@ -574,7 +571,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// (so `1.eql?(1.0)` is false). Recursive structures use the same
 /// `exec_recursive_paired` machinery as `==`.
 #[monoruby_builtin]
-fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     if self_val.class() != other.class() {
@@ -615,7 +612,7 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// Struct#!=
 ///
 #[monoruby_builtin]
-fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     if self_val.class() != other.class() {
@@ -660,7 +657,7 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// Struct subclasses with identical content do not collide. Recursive
 /// structures hash to a sentinel via `HASH_RECURSION_GUARD`.
 #[monoruby_builtin]
-fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::hash::Hasher;
     let self_val = lfp.self_val();
     let id = self_val.id();
@@ -687,11 +684,11 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 }
 
 #[monoruby_builtin]
-fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn members(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // Walk the superclass chain: an instance of a `Class.new(SomeStruct)`
     // subclass has `/members` defined on the ancestor, not its own class.
     let class_obj = lfp.self_val().get_class_obj(globals);
-    let members = get_members(globals, class_obj)?;
+    let members = get_members(&globals.store, class_obj)?;
     Ok(members.into())
 }
 

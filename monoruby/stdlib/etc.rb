@@ -1,8 +1,7 @@
-# Minimal Etc stub for monoruby.
-#
-# Etc is a C extension that exposes passwd/group info and machine
-# metadata. concurrent-ruby only reaches for `Etc.nprocessors`, and that
-# is the only surface area ActiveRecord indirectly needs.
+# Etc for monoruby: passwd/group lookups are backed by hidden Rust
+# builtins on Process (`Process.__getpwnam` etc. — libc getpwnam(3)
+# family), so NSS-backed users resolve the same way CRuby's C extension
+# does. The machine-metadata helpers remain simple stubs.
 
 module Etc
   VERSION = "1.4.3"
@@ -37,10 +36,65 @@ module Etc
     attr_accessor :name, :passwd, :gid, :mem
   end
 
-  def self.getpwuid(_uid = nil); nil; end
-  def self.getpwnam(_name); nil; end
-  def self.getgrgid(_gid = nil); nil; end
-  def self.getgrnam(_name); nil; end
-  def self.passwd; nil; end
-  def self.group; nil; end
+  def self.__passwd(h)
+    return nil if h.nil?
+    pw = Passwd.new
+    pw.name = h[:name]
+    pw.passwd = h[:passwd]
+    pw.uid = h[:uid]
+    pw.gid = h[:gid]
+    pw.gecos = h[:gecos]
+    pw.dir = h[:dir]
+    pw.shell = h[:shell]
+    pw
+  end
+  private_class_method :__passwd
+
+  def self.__group(h)
+    return nil if h.nil?
+    gr = Group.new
+    gr.name = h[:name]
+    gr.passwd = h[:passwd]
+    gr.gid = h[:gid]
+    gr.mem = h[:mem]
+    gr
+  end
+  private_class_method :__group
+
+  def self.getpwuid(uid = nil)
+    uid = Process.uid if uid.nil?
+    pw = __passwd(Process.__getpwuid(uid))
+    raise ArgumentError, "can't find user for #{uid}" if pw.nil?
+    pw
+  end
+
+  def self.getpwnam(name)
+    pw = __passwd(Process.__getpwnam(name))
+    raise ArgumentError, "can't find user for #{name}" if pw.nil?
+    pw
+  end
+
+  def self.getgrgid(gid = nil)
+    gid = Process.gid if gid.nil?
+    gr = __group(Process.__getgrgid(gid))
+    raise ArgumentError, "can't find group for #{gid}" if gr.nil?
+    gr
+  end
+
+  def self.getgrnam(name)
+    gr = __group(Process.__getgrnam(name))
+    raise ArgumentError, "can't find group for #{name}" if gr.nil?
+    gr
+  end
+
+  # Database enumeration (getpwent/getgrent) is not implemented; these
+  # keep their historical stub behavior. (CRuby's Etc.passwd/Etc.group
+  # walk the database from the top, which is NOT "the current user".)
+  def self.passwd
+    nil
+  end
+
+  def self.group
+    nil
+  end
 end
