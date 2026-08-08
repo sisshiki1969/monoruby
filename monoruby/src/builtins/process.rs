@@ -1096,6 +1096,15 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn signal_trap_negative_name() {
+        // A leading '-' is rejected with a dedicated message, before the
+        // signal-table lookup.
+        run_test_once(
+            r##"[(begin; Signal.trap("-HUP") {}; rescue => e; [e.class, e.message]; end), (begin; Signal.trap(:"-INT") {}; rescue => e; e.message; end)]"##,
+        );
+    }
+
+    #[test]
     fn process() {
         run_test_no_result_check("Process.clock_gettime Process::CLOCK_MONOTONIC, :nanosecond");
         run_test_no_result_check("Process.clock_gettime Process::CLOCK_MONOTONIC");

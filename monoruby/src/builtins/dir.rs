@@ -96,6 +96,9 @@ fn read_entries_via_fd(
             libc::close(dup);
             return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "readdir"));
         }
+        // dup(2) shares the directory offset with the original fd (a
+        // previous full listing leaves it at EOF), so always start over.
+        libc::rewinddir(dirp);
         let mut names: Vec<Vec<u8>> = vec![];
         loop {
             let ent = libc::readdir(dirp);
@@ -1159,6 +1162,52 @@ fn chroot(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn dir_entries_encoding_keyword() {
+        // entries/foreach/children accept `encoding:` and tag names with
+        // it (default: external encoding); default_internal transcodes.
+        run_test_once(
+            r##"(d="/tmp/mono_de_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/a", ""); a=Dir.entries(d, encoding: "euc-jp").map { |e| e.encoding.name }.uniq; b=Dir.children(d, encoding: Encoding::ISO_8859_1).map { |e| e.encoding.name }.uniq; c=Dir.foreach(d, encoding: "iso-8859-1").to_a.map { |e| e.encoding.name }.uniq; names=[]; Dir.foreach(d, encoding: Encoding::ISO_8859_1) { |e| names << e.encoding.name }; e2=Dir.entries(d).map { |x| x.encoding.name }.uniq; File.unlink("#{d}/a"); Dir.rmdir(d); [a,b,c,names.uniq,e2])"##,
+        );
+    }
+
+    #[test]
+    fn dir_glob_encoding_and_flags_keyword() {
+        // Matches inherit the pattern's encoding; the flags: keyword is
+        // accepted and preferred over the positional argument.
+        run_test_once(
+            r##"(d="/tmp/mono_ge_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/.dot", ""); File.write("#{d}/plain", ""); a=Dir.glob("*", base: d).sort; b=Dir.glob("*", flags: File::FNM_DOTMATCH, base: d).sort; c=Dir.glob("*", :ignored, flags: File::FNM_DOTMATCH, base: d).sort; e2=Dir.glob("pl*".encode(Encoding::EUC_JP), base: d).map { |x| x.encoding.name }; f=Dir["pl*", base: d]; File.unlink("#{d}/.dot"); File.unlink("#{d}/plain"); Dir.rmdir(d); [a,b,c,e2,f])"##,
+        );
+    }
+
+    #[test]
+    fn dir_for_fd_shares_descriptor() {
+        // Dir.for_fd shares the fd (no dup): closing the original makes
+        // the wrapper's close(2) fail with CRuby's closedir EBADF; the
+        // wrapper lists the same entries and has a nil path.
+        run_test_once(
+            r##"(d="/tmp/mono_ff_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/x", ""); dir=Dir.open(d); a=dir.fileno.is_a?(Integer); dn=Dir.for_fd(dir.fileno); b=dn.to_a.sort; c=dn.path; dir.close; e2=(begin; dn.close; rescue => e; [e.class, e.message]; end); f=(begin; Dir.for_fd("x"); rescue => e; e.class; end); File.unlink("#{d}/x"); Dir.rmdir(d); [a,b,c,e2,f])"##,
+        );
+    }
+
+    #[test]
+    fn dir_pwd_binary_names() {
+        // mkdir/chdir/pwd round-trip raw non-ASCII bytes; pwd tags the
+        // result UTF-8 when it decodes.
+        run_test_once(
+            r##"(base="/tmp/mono_pwd_#{Process.pid}"; Dir.mkdir(base); name="#{base}/あ".dup.force_encoding(Encoding::BINARY); Dir.mkdir(name); r=Dir.chdir(name) { [Dir.pwd.encoding.name, Dir.pwd.force_encoding("binary") == name] }; Dir.rmdir(name); Dir.rmdir(base); r)"##,
+        );
+    }
+
+    #[test]
+    fn dir_chdir_restore_failure() {
+        // Dir.chdir's block form surfaces the Errno when the original
+        // directory vanished inside the block.
+        run_test_once(
+            r##"(d1="/tmp/mono_cr1_#{Process.pid}"; d2="/tmp/mono_cr2_#{Process.pid}"; Dir.mkdir(d1); Dir.mkdir(d2); r=(begin; Dir.chdir(d1) { Dir.chdir(d2) { Dir.unlink(d1) } }; rescue => e; e.class; end); Dir.rmdir(d2); r)"##,
+        );
+    }
 
     #[test]
     fn dir_methods_coverage() {
