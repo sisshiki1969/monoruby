@@ -421,14 +421,9 @@ impl<T> IoWriter<T> {
         self.buf.set_sync(sync);
     }
 
-    pub(crate) fn buffered_len(&self) -> usize {
-        self.buf.buffered_len()
-    }
-
     pub(crate) fn get_ref(&self) -> &T {
         &self.inner
     }
-
 }
 
 impl<T: Write> IoWriter<T> {
@@ -445,7 +440,8 @@ impl<T: Write> IoWriter<T> {
         progress: &mut usize,
         signal_pending: &dyn Fn() -> bool,
     ) -> std::result::Result<(), DrainErr> {
-        self.buf.write(&mut self.inner, data, progress, signal_pending)
+        self.buf
+            .write(&mut self.inner, data, progress, signal_pending)
     }
 }
 
@@ -665,7 +661,10 @@ mod tests {
             ..Default::default()
         };
         let mut progress = 0;
-        let err = w.write(&mut sink, b"gone", &mut progress, &never()).err().unwrap();
+        let err = w
+            .write(&mut sink, b"gone", &mut progress, &never())
+            .err()
+            .unwrap();
         assert!(matches!(err, DrainErr::Io(_)));
         assert_eq!(w.buffered_len(), 0);
         assert_eq!(progress, 0);
@@ -676,7 +675,7 @@ mod tests {
         let mut w = IoWriter::new(MockSink::default(), false, false);
         let mut progress = 0;
         w.write(b"pair", &mut progress, &never()).ok().unwrap();
-        assert_eq!(w.buffered_len(), 4);
+        assert_eq!(w.buf.buffered_len(), 4);
         assert!(!w.sync());
         w.set_sync(true);
         assert!(w.sync());

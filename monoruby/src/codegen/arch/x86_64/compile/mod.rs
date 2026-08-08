@@ -10,8 +10,8 @@ mod init_method;
 mod method_call;
 mod variables;
 
-use crate::alloc::{BUMP_INLINE_LIMIT, CELL_SIZE_SHIFT, PAGE_DATA_OFFSET};
 use super::compile_shared::{extend_ivar, unreachable};
+use crate::alloc::{BUMP_INLINE_LIMIT, CELL_SIZE_SHIFT, PAGE_DATA_OFFSET};
 use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind};
 
 /// Resolve a LIR register operand to its x86 register number. The scratch
@@ -600,7 +600,10 @@ impl Codegen {
                     jne  deopt;
                 }
             }
-            LInst::GuardConstVersion { const_version, deopt } => {
+            LInst::GuardConstVersion {
+                const_version,
+                deopt,
+            } => {
                 self.guard_const_version(const_version, &deopt);
             }
             // Fixnum fast-path arithmetic with an overflow deopt.
@@ -648,7 +651,10 @@ impl Codegen {
             // ---- FP transfer / convert (spill-aware) -------------------------
             LInst::FprMove { src, dst, base } => {
                 if src != dst {
-                    match (PhysMap::new(base).resolve(src), PhysMap::new(base).resolve(dst)) {
+                    match (
+                        PhysMap::new(base).resolve(src),
+                        PhysMap::new(base).resolve(dst),
+                    ) {
                         (FPRegLoc::Xmm(s), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
                             movq xmm(d), xmm(s);
                         ),
@@ -658,10 +664,12 @@ impl Codegen {
                         (FPRegLoc::Spill(s_off), FPRegLoc::Xmm(d)) => monoasm!( &mut self.jit,
                             movq xmm(d), [rbp - (s_off)];
                         ),
-                        (FPRegLoc::Spill(s_off), FPRegLoc::Spill(d_off)) => monoasm!( &mut self.jit,
-                            movq xmm0, [rbp - (s_off)];
-                            movq [rbp - (d_off)], xmm0;
-                        ),
+                        (FPRegLoc::Spill(s_off), FPRegLoc::Spill(d_off)) => {
+                            monoasm!( &mut self.jit,
+                                movq xmm0, [rbp - (s_off)];
+                                movq [rbp - (d_off)], xmm0;
+                            )
+                        }
                     }
                 }
             }
@@ -694,7 +702,10 @@ impl Codegen {
             }
             LInst::FprSwap { lhs, rhs, base } => {
                 if lhs != rhs {
-                    match (PhysMap::new(base).resolve(lhs), PhysMap::new(base).resolve(rhs)) {
+                    match (
+                        PhysMap::new(base).resolve(lhs),
+                        PhysMap::new(base).resolve(rhs),
+                    ) {
                         (FPRegLoc::Xmm(lp), FPRegLoc::Xmm(rp)) => monoasm!( &mut self.jit,
                             movq xmm0, xmm(lp);
                             movq xmm(lp), xmm(rp);
@@ -710,16 +721,23 @@ impl Codegen {
                             movq [rbp - (l_off)], xmm(rp);
                             movq xmm(rp), xmm0;
                         ),
-                        (FPRegLoc::Spill(l_off), FPRegLoc::Spill(r_off)) => monoasm!( &mut self.jit,
-                            movq xmm0, [rbp - (l_off)];
-                            movq xmm1, [rbp - (r_off)];
-                            movq [rbp - (r_off)], xmm0;
-                            movq [rbp - (l_off)], xmm1;
-                        ),
+                        (FPRegLoc::Spill(l_off), FPRegLoc::Spill(r_off)) => {
+                            monoasm!( &mut self.jit,
+                                movq xmm0, [rbp - (l_off)];
+                                movq xmm1, [rbp - (r_off)];
+                                movq [rbp - (r_off)], xmm0;
+                                movq [rbp - (l_off)], xmm1;
+                            )
+                        }
                     }
                 }
             }
-            LInst::FloatToFpr { src, dst, deopt, base } => {
+            LInst::FloatToFpr {
+                src,
+                dst,
+                deopt,
+                base,
+            } => {
                 let (work, spill_off) = match PhysMap::new(base).resolve(dst) {
                     FPRegLoc::Xmm(p) => (p, None),
                     FPRegLoc::Spill(off) => (0u64, Some(off)),
@@ -747,7 +765,13 @@ impl Codegen {
                 }
             }
             // ---- FP arithmetic / comparison ----------------------------------
-            LInst::FloatBinOp { kind, lhs, rhs, dst, base } => {
+            LInst::FloatBinOp {
+                kind,
+                lhs,
+                rhs,
+                dst,
+                base,
+            } => {
                 self.float_binop(kind, dst, (lhs, rhs), base);
             }
             LInst::FloatUnOp { kind, dst, base } => match kind {
@@ -767,7 +791,12 @@ impl Codegen {
                 UnOpK::Pos => {}
                 _ => unreachable!(),
             },
-            LInst::FloatCmp { kind, lhs, rhs, base } => {
+            LInst::FloatCmp {
+                kind,
+                lhs,
+                rhs,
+                base,
+            } => {
                 monoasm! { &mut self.jit,
                     xorq rax, rax;
                 };
@@ -788,7 +817,13 @@ impl Codegen {
             // ---- FP pool save/restore + FP C-calls ---------------------------
             LInst::FprSave { using_fpr, cont } => self.fpr_save_with_cont(using_fpr, cont),
             LInst::FprRestore { using_fpr, cont } => self.fpr_restore_with_cont(using_fpr, cont),
-            LInst::CFunc_F_F { f, src, dst, using_fpr, base } => {
+            LInst::CFunc_F_F {
+                f,
+                src,
+                dst,
+                using_fpr,
+                base,
+            } => {
                 self.fpr_save(using_fpr);
                 self.load_fpr_into_xmm0(src, base);
                 monoasm!( &mut self.jit,
@@ -798,7 +833,14 @@ impl Codegen {
                 self.fpr_restore(using_fpr);
                 self.store_fpr_into_xmm(dst, base);
             }
-            LInst::CFunc_FF_F { f, lhs, rhs, dst, using_fpr, base } => {
+            LInst::CFunc_FF_F {
+                f,
+                lhs,
+                rhs,
+                dst,
+                using_fpr,
+                base,
+            } => {
                 self.fpr_save(using_fpr);
                 self.load_fpr_into_xmm0(lhs, base);
                 self.load_fpr_into_xmm1(rhs, base);
@@ -967,7 +1009,11 @@ impl Codegen {
     // overflow).
 
     /// rax <- Array of the `len` slots starting at `src`.
-    pub(in crate::codegen::jitgen) fn emit_create_array(&mut self, src: SlotId, len: usize) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_create_array(
+        &mut self,
+        src: SlotId,
+        len: usize,
+    ) -> bool {
         monoasm!( &mut self.jit,
             lea  rdi, [r14 - (conv(src))];
             movq rsi, (len);
@@ -1140,9 +1186,9 @@ impl Codegen {
         using_fpr: UsingFpr,
     ) -> bool {
         let f = if min {
-            runtime::opt_array_min as usize
+            runtime::opt_array_min as *const () as usize
         } else {
-            runtime::opt_array_max as usize
+            runtime::opt_array_max as *const () as usize
         };
         self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
@@ -1227,7 +1273,11 @@ impl Codegen {
     }
 
     /// rax <- `src` coerced to an Array (`Array(x)` / splat).
-    pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_fpr: UsingFpr) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_to_a(
+        &mut self,
+        src: SlotId,
+        using_fpr: UsingFpr,
+    ) -> bool {
         self.to_a(src, using_fpr);
         true
     }
@@ -1669,7 +1719,6 @@ impl Codegen {
         true
     }
 
-
     /// Method epilogue: tear down the frame and return.
     pub(in crate::codegen::jitgen) fn emit_ret(&mut self) {
         self.epilogue();
@@ -1823,7 +1872,10 @@ impl Codegen {
     }
 
     /// Loop-JIT entry: reserve the loop body's spill area on the native stack.
-    pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(&mut self, offset: LoopRspOffset) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(
+        &mut self,
+        offset: LoopRspOffset,
+    ) -> bool {
         let bytes = offset.unwrap_concrete();
         if bytes > 0 {
             monoasm! { &mut self.jit, subq rsp, (bytes as i32); }
@@ -1845,7 +1897,11 @@ impl Codegen {
     }
 
     /// `undef`-method via runtime::undef_method(vm, globals, id).
-    pub(in crate::codegen::jitgen) fn emit_undef_method(&mut self, undef: IdentId, using_fpr: UsingFpr) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_undef_method(
+        &mut self,
+        undef: IdentId,
+        using_fpr: UsingFpr,
+    ) -> bool {
         self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
@@ -1859,7 +1915,12 @@ impl Codegen {
     }
 
     /// Alias a global var via runtime::alias_global_var(globals, new, old).
-    pub(in crate::codegen::jitgen) fn emit_alias_gvar(&mut self, new: IdentId, old: IdentId, using_fpr: UsingFpr) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_alias_gvar(
+        &mut self,
+        new: IdentId,
+        old: IdentId,
+        using_fpr: UsingFpr,
+    ) -> bool {
         self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, r12;          // &mut Globals
@@ -2243,7 +2304,10 @@ impl Codegen {
         true
     }
 
-    pub(in crate::codegen::jitgen) fn emit_ensure_end(&mut self, _loop_jit_spill_bytes: usize) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_ensure_end(
+        &mut self,
+        _loop_jit_spill_bytes: usize,
+    ) -> bool {
         let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             movq rdi, rbx;
@@ -2269,7 +2333,6 @@ impl Codegen {
         self.set_deopt_with_return_addr(return_addr, evict, evict_label);
         true
     }
-
 
     // ---- &block forwarding (former per-arch arms) ----
 

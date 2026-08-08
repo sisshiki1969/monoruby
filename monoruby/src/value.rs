@@ -1261,9 +1261,9 @@ impl Value {
         RValue::new_regexp_with_class(regexp, class_id).pack()
     }
 
-    pub(crate) fn new_io(io: IoInner) -> Self {
-        RValue::new_io(io).pack()
-    }
+    //pub(crate) fn new_io(io: IoInner) -> Self {
+    //    RValue::new_io(io).pack()
+    //}
 
     pub(crate) fn new_io_with_class(io: IoInner, class_id: ClassId) -> Self {
         RValue::new_io_with_class(io, class_id).pack()

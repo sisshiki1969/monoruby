@@ -31,7 +31,7 @@ impl Store {
         rval.get_ivar(self, name)
     }
 
-    pub(crate) fn get_ivars(&self, mut val: Value) -> Vec<(IdentId, Value)> {
+    pub(crate) fn get_ivars(&self, val: Value) -> Vec<(IdentId, Value)> {
         let class_id = val.class();
         let rval = match val.try_rvalue() {
             Some(rval) => rval,

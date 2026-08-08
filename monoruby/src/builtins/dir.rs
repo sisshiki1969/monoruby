@@ -524,10 +524,11 @@ fn glob_impl(
             }
             // Matches inherit the pattern's encoding (glob_spec.rb
             // "preserves the encoding of the path").
-            all_matches
-                .extend(matches.into_iter().map(|m| {
-                    RStringInner::from_encoding(m.as_bytes(), *enc)
-                }));
+            all_matches.extend(
+                matches
+                    .into_iter()
+                    .map(|m| RStringInner::from_encoding(m.as_bytes(), *enc)),
+            );
         }
     }
     Ok(all_matches)
@@ -817,7 +818,10 @@ fn home(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     if let Some(arg) = lfp.try_arg(0)
         && !arg.is_nil()
     {
-        let user = arg.coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
+        let user = arg
+            .coerce_to_path_rstring(vm, globals)?
+            .to_str()?
+            .to_string();
         let c_user = std::ffi::CString::new(user.as_bytes())
             .map_err(|_| MonorubyErr::argumenterr("user name cannot contain NUL"))?;
         // SAFETY: `getpwnam` reads the passwd DB for the NUL-terminated name
@@ -970,7 +974,12 @@ fn entries(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// Open `path` with `O_RDONLY|O_DIRECTORY|O_CLOEXEC` and return the fd.
 /// Backs `Dir#initialize` in builtins/dir.rb.
 #[monoruby_builtin]
-fn dir_open_fd(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn dir_open_fd(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
     super::file::check_path_encoding(globals, &path)?;
     if path.as_bytes().contains(&0) {
@@ -1004,13 +1013,22 @@ fn dir_open_fd(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 /// close(2) a directory fd, surfacing failures the way CRuby's
 /// `closedir` does (`Errno::EBADF: Bad file descriptor - closedir`).
 #[monoruby_builtin]
-fn dir_close_fd(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn dir_close_fd(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let fd = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
     // SAFETY: close(2); an invalid fd is reported via errno, not UB.
     let rc = unsafe { libc::close(fd) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "closedir"));
+        return Err(MonorubyErr::errno_with_msg(
+            &globals.store,
+            &err,
+            "closedir",
+        ));
     }
     Ok(Value::nil())
 }
@@ -1035,25 +1053,22 @@ fn dir_entries_fd(
 
 /// Read the `@path` ivar set by Ruby-side `Dir#initialize`.
 fn dir_path_ivar(globals: &Globals, self_: Value) -> Result<String> {
-    match globals
-        .store
-        .get_ivar(self_, IdentId::get_id("@path"))
-    {
+    match globals.store.get_ivar(self_, IdentId::get_id("@path")) {
         Some(v) if !v.is_nil() => Ok(v.to_s(&globals.store)),
         _ => Err(MonorubyErr::ioerr("uninitialized Dir")),
     }
 }
 
-fn dir_check_closed(globals: &Globals, self_: Value) -> Result<()> {
-    let v = globals
-        .store
-        .get_ivar(self_, IdentId::get_id("@closed"));
-    if v.map(|v| v.as_bool()).unwrap_or(false) {
-        Err(MonorubyErr::ioerr("closed directory"))
-    } else {
-        Ok(())
-    }
-}
+//fn dir_check_closed(globals: &Globals, self_: Value) -> Result<()> {
+//    let v = globals
+//        .store
+//        .get_ivar(self_, IdentId::get_id("@closed"));
+//    if v.map(|v| v.as_bool()).unwrap_or(false) {
+//        Err(MonorubyErr::ioerr("closed directory"))
+//    } else {
+//        Ok(())
+//    }
+//}
 
 ///
 /// ### Dir#chdir
@@ -1080,9 +1095,8 @@ fn dir_inst_chdir(
     } else {
         None
     };
-    std::env::set_current_dir(&path).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_dir_s_chdir", &path)
-    })?;
+    std::env::set_current_dir(&path)
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_dir_s_chdir", &path))?;
     if let Some(bh) = lfp.block() {
         let result = vm.invoke_block_once(globals, bh, &[lfp.self_val()]);
         if let Some(prev) = saved {
@@ -1636,9 +1650,7 @@ mod tests {
 
     #[test]
     fn dir_foreach_missing_path_raises() {
-        run_test_error(
-            r#"Dir.foreach("/no_such_dir_xyz_qq_foreach") { |_| }"#,
-        );
+        run_test_error(r#"Dir.foreach("/no_such_dir_xyz_qq_foreach") { |_| }"#);
     }
 
     #[test]

@@ -26,9 +26,9 @@ impl RefinementSetId {
         self == Self::EMPTY
     }
 
-    pub fn get(self) -> u32 {
-        self.0
-    }
+    //pub fn get(self) -> u32 {
+    //    self.0
+    //}
 }
 
 impl Default for RefinementSetId {
@@ -229,17 +229,17 @@ impl Store {
             .collect()
     }
 
-    ///
-    /// The set *iseq* would resolve under if it had no cell of its own —
-    /// its lexical parent's. The base a fresh execution of a scope
-    /// restarts its `using` chain from.
-    ///
-    pub(crate) fn enclosing_refinements(&self, iseq: ISeqId) -> RefinementSetId {
-        match self[iseq].outer {
-            Some(outer) => self.iseq_refinements(outer),
-            None => RefinementSetId::EMPTY,
-        }
-    }
+    //
+    // The set *iseq* would resolve under if it had no cell of its own —
+    // its lexical parent's. The base a fresh execution of a scope
+    // restarts its `using` chain from.
+    //
+    //pub(crate) fn enclosing_refinements(&self, iseq: ISeqId) -> RefinementSetId {
+    //    match self[iseq].outer {
+    //        Some(outer) => self.iseq_refinements(outer),
+    //        None => RefinementSetId::EMPTY,
+    //    }
+    //}
 
     ///
     /// The iseq that owns the refinement cell *iseq* resolves through —

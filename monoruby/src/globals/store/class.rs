@@ -910,7 +910,9 @@ impl ClassInfoTable {
             // not just singleton-ness — matters for metaclasses of
             // metaclasses, whose class field starts out pointing at a
             // singleton attached to something else.)
-            if class.is_singleton().is_some_and(|attached| attached.id() == original_obj.as_val().id())
+            if class
+                .is_singleton()
+                .is_some_and(|attached| attached.id() == original_obj.as_val().id())
             {
                 return class;
             }
@@ -1110,11 +1112,7 @@ impl ClassInfoTable {
     ///
     /// This fn checks whole superclass chain everytime called.
     ///
-    pub(super) fn search_method(
-        &self,
-        module: Module,
-        name: IdentId,
-    ) -> Option<MethodTableEntry> {
+    pub(super) fn search_method(&self, module: Module, name: IdentId) -> Option<MethodTableEntry> {
         self.search_method_refined(module, name, &[])
     }
 
@@ -1331,7 +1329,11 @@ impl ClassInfoTable {
     /// nearer module doesn't surface as public via a deeper public
     /// definition.
     pub(crate) fn get_public_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
-        self.walk_method_names(class_id, MethodTableEntry::is_public, Self::stop_before_object)
+        self.walk_method_names(
+            class_id,
+            MethodTableEntry::is_public,
+            Self::stop_before_object,
+        )
     }
 
     /// Public-only "non-inherited" view used by `Kernel#public_methods(false)`.
@@ -1354,7 +1356,11 @@ impl ClassInfoTable {
 
     /// Protected-only "non-inherited" view used by `Kernel#protected_methods(false)`.
     pub(crate) fn get_protected_method_names_direct(&self, class_id: ClassId) -> Vec<Value> {
-        self.walk_method_names(class_id, Self::is_protected, Self::stop_after_first_real_class)
+        self.walk_method_names(
+            class_id,
+            Self::is_protected,
+            Self::stop_after_first_real_class,
+        )
     }
 
     ///
@@ -1474,7 +1480,9 @@ impl ClassInfoTable {
                     None => break None,
                 }
             };
-            let Some(target) = target_iclass else { continue };
+            let Some(target) = target_iclass else {
+                continue;
+            };
             if already_present {
                 continue;
             }
@@ -1575,7 +1583,11 @@ impl ClassInfoTable {
     /// Get private method names in the class of *class_id* and its ancestors.
     ///
     pub(crate) fn get_private_method_names_inherit(&self, class_id: ClassId) -> Vec<Value> {
-        self.walk_method_names(class_id, MethodTableEntry::is_private, Self::stop_before_object)
+        self.walk_method_names(
+            class_id,
+            MethodTableEntry::is_private,
+            Self::stop_before_object,
+        )
     }
 
     /// `obj.private_methods(true)`: like the above but also includes
@@ -2289,18 +2301,18 @@ impl Store {
         self.check_method_for_class(class_id, name)?.func_id()
     }
 
-    ///
-    /// Check whether a public method *name* for object *obj* exists.
-    ///
-    pub(crate) fn check_public_method(&self, obj: Value, name: IdentId) -> Option<FuncId> {
-        let class_id = obj.class();
-        let entry = self.check_method_for_class(class_id, name)?;
-        if entry.visibility == Visibility::Public {
-            entry.func_id()
-        } else {
-            None
-        }
-    }
+    //
+    // Check whether a public method *name* for object *obj* exists.
+    //
+    //pub(crate) fn check_public_method(&self, obj: Value, name: IdentId) -> Option<FuncId> {
+    //    let class_id = obj.class();
+    //    let entry = self.check_method_for_class(class_id, name)?;
+    //    if entry.visibility == Visibility::Public {
+    //        entry.func_id()
+    //    } else {
+    //        None
+    //    }
+    //}
 
     ///
     /// Change visibility of methods `names` class *class_id*.
@@ -2508,8 +2520,7 @@ impl Store {
         let Some(entry_fid) = entry.func_id() else {
             return false;
         };
-        entry_fid == fid
-            || matches!(&self[entry_fid].kind, FuncKind::Proc(p) if p.func_id() == fid)
+        entry_fid == fid || matches!(&self[entry_fid].kind, FuncKind::Proc(p) if p.func_id() == fid)
     }
 
     ///

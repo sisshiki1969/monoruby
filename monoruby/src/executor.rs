@@ -744,7 +744,8 @@ impl Executor {
         {
             use std::io::Seek;
             let _ = file.seek(std::io::SeekFrom::Start(offset as u64));
-            let data = Value::new_file(file, path.to_string_lossy().into_owned(), None, true, false);
+            let data =
+                Value::new_file(file, path.to_string_lossy().into_owned(), None, true, false);
             globals.set_constant_by_str(OBJECT_CLASS, "DATA", data);
         }
     }
@@ -918,9 +919,7 @@ impl Executor {
                     // `stop?` with a backtrace inside `Kernel#require`,
                     // which the concurrent-require specs poll for.
                     match globals.loading_features.get(&path) {
-                        Some(&loader)
-                            if loader != crate::scheduler::current_thread(self).id() =>
-                        {
+                        Some(&loader) if loader != crate::scheduler::current_thread(self).id() => {
                             if crate::scheduler::thread_alive_by_id(loader) {
                                 crate::scheduler::sleep(
                                     self,
@@ -1185,10 +1184,11 @@ impl Executor {
     /// of the wrap module — the same default a top-level `def` gets on
     /// `Object`.
     pub(crate) fn push_wrap_class_context(&mut self, class_id: ClassId) {
-        self.lexical_class
-            .last_mut()
-            .unwrap()
-            .push(Cref::new(class_id, false, Visibility::Private));
+        self.lexical_class.last_mut().unwrap().push(Cref::new(
+            class_id,
+            false,
+            Visibility::Private,
+        ));
     }
 
     /// Runtime-only push used by `class_eval` / `module_eval` /
@@ -1234,9 +1234,7 @@ impl Executor {
     /// boolean returned by the matching push so a top-level eval
     /// (no top cref to dup) skips the pop too.
     pub(crate) fn pop_eval_cref(&mut self, was_pushed: bool) {
-        if was_pushed
-            && let Some(crefs) = self.lexical_class.last_mut()
-        {
+        if was_pushed && let Some(crefs) = self.lexical_class.last_mut() {
             crefs.pop();
         }
     }
@@ -1745,14 +1743,14 @@ impl Executor {
         };
     }
 
-    pub(crate) fn push_internal_error_location(&mut self, fid: FuncId) {
-        match &mut self.exception {
-            Some(err) => {
-                err.push_internal_trace(fid);
-            }
-            None => unreachable!(),
-        };
-    }
+    //pub(crate) fn push_internal_error_location(&mut self, fid: FuncId) {
+    //    match &mut self.exception {
+    //        Some(err) => {
+    //            err.push_internal_trace(fid);
+    //        }
+    //        None => unreachable!(),
+    //    };
+    //}
 
     ///
     /// Complete the pending exception's backtrace with the frames that
@@ -1799,7 +1797,8 @@ impl Executor {
                     let slot = inner_cfp.caller_pc_slot();
                     if slot != 0
                         && slot % 8 == 0
-                        && let Some(pc) = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _) }
+                        && let Some(pc) =
+                            unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _) }
                         && info.contains_pc(pc)
                     {
                         let idx = info.get_pc_index(Some(pc)).to_usize();
@@ -2729,12 +2728,7 @@ impl Executor {
                 // lexical class — and never a singleton owner, since a
                 // `def expr.m` body's cref is its surrounding scope.
                 match globals.store[method_fid].owner_class().last() {
-                    Some(&owner)
-                        if globals.store[owner]
-                            .get_module()
-                            .is_singleton()
-                            .is_none() =>
-                    {
+                    Some(&owner) if globals.store[owner].get_module().is_singleton().is_none() => {
                         owner
                     }
                     _ => self.lexical_context_class_id(globals),
@@ -3580,7 +3574,9 @@ impl Executor {
             ))
         })?;
         if m.is_singleton().is_some() {
-            return Err(MonorubyErr::typeerr("can't make subclass of singleton class"));
+            return Err(MonorubyErr::typeerr(
+                "can't make subclass of singleton class",
+            ));
         }
         Ok(m)
     }
@@ -4627,8 +4623,14 @@ pub(crate) extern "C" fn execute_gc(
                 "[GC-BREAK] GC #{break_at}: trigger_exec={:016x} root_exec={:016x} fiber_depth={fiber_depth}",
                 triggering_executor as usize, executor as *const Executor as usize,
             );
-            eprintln!("[GC-BREAK] scheduler: {}", crate::scheduler::dump_state_for_gc());
-            eprintln!("[GC-BREAK] backtrace:\n{}", std::backtrace::Backtrace::force_capture());
+            eprintln!(
+                "[GC-BREAK] scheduler: {}",
+                crate::scheduler::dump_state_for_gc()
+            );
+            eprintln!(
+                "[GC-BREAK] backtrace:\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
         }
         alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc(&Root { globals, executor }));
     }

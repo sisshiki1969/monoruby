@@ -197,8 +197,7 @@ impl<'a> JitContext<'a> {
             return false;
         }
         let next_pc = self.get_pc(next_pos);
-        let TraceIr::MethodCall { callid: mcid, .. } = TraceIr::from_pc(next_pc, self.store)
-        else {
+        let TraceIr::MethodCall { callid: mcid, .. } = TraceIr::from_pc(next_pc, self.store) else {
             return false;
         };
         let mcs = &self.store[mcid];
@@ -221,9 +220,9 @@ impl<'a> JitContext<'a> {
         let call_dst = mcs.dst;
         // `Array#min` / `#max` must still be the builtins.
         let expected = if is_min {
-            crate::builtins::array::min as usize as u64
+            crate::builtins::array::min as *const () as usize as u64
         } else {
-            crate::builtins::array::max as usize as u64
+            crate::builtins::array::max as *const () as usize as u64
         };
         let Some(fid) = self
             .store
@@ -608,19 +607,7 @@ impl<'a> JitContext<'a> {
                 rhs,
                 ic,
                 polymorphic,
-            } => {
-                return self.binary_cmp(
-                    state,
-                    ir,
-                    kind,
-                    dst,
-                    lhs,
-                    rhs,
-                    ic,
-                    polymorphic,
-                    bc_pos,
-                )
-            }
+            } => return self.binary_cmp(state, ir, kind, dst, lhs, rhs, ic, polymorphic, bc_pos),
             TraceIr::BinCmpBr {
                 kind,
                 _dst: _,
@@ -1070,7 +1057,9 @@ impl<'a> JitContext<'a> {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].pos_num, 0);
-            self.compile_method_call(state, ir, recv_class, None, func_id, visibility, callid, false)
+            self.compile_method_call(
+                state, ir, recv_class, None, func_id, visibility, callid, false,
+            )
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
@@ -1126,7 +1115,9 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].args, idx);
             assert_eq!(self.store[callid].args + 1usize, src);
             assert_eq!(self.store[callid].pos_num, 2);
-            self.compile_method_call(state, ir, recv_class, idx_class, fid, visibility, callid, false)
+            self.compile_method_call(
+                state, ir, recv_class, idx_class, fid, visibility, callid, false,
+            )
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }

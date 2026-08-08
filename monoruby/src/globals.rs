@@ -18,8 +18,8 @@ pub(crate) use dump::log_deoptimize;
 pub use error::*;
 pub use gvar::*;
 use prng::*;
-pub use require::{load_file, read_source_file};
 pub(crate) use require::RequireLoad;
+pub use require::{load_file, read_source_file};
 pub use store::*;
 
 pub static WARNING: std::sync::LazyLock<AtomicU8> = std::sync::LazyLock::new(|| AtomicU8::new(0u8));
@@ -610,19 +610,11 @@ impl Globals {
         );
         assert_eq!(
             WITH_INDEX_ADAPTER_FUNCID,
-            globals.define_builtin_func_rest(
-                OBJECT_CLASS,
-                "",
-                with_index_adapter
-            )
+            globals.define_builtin_func_rest(OBJECT_CLASS, "", with_index_adapter)
         );
         assert_eq!(
             WITH_OBJECT_ADAPTER_FUNCID,
-            globals.define_builtin_func_rest(
-                OBJECT_CLASS,
-                "",
-                with_object_adapter
-            )
+            globals.define_builtin_func_rest(OBJECT_CLASS, "", with_object_adapter)
         );
         globals.random_init(None);
         gvar::init_builtin_gvars(&mut globals);
@@ -726,8 +718,7 @@ impl Globals {
         // gem's built C-extension directory. The cfg!-derived default is
         // only the fallback when no Ruby was available at build time.
         let platform = ruby_platform();
-        let mut ruby_description =
-            Value::string(format!("{pcg_name} {pcg_version} [{platform}]"));
+        let mut ruby_description = Value::string(format!("{pcg_name} {pcg_version} [{platform}]"));
         let mut ruby_engine = Value::string_from_str("ruby");
         let mut ruby_version_val = Value::string_from_str(&ruby_version);
         let mut ruby_engine_version = Value::string_from_str(&ruby_version);
@@ -912,8 +903,8 @@ impl Globals {
             {
                 executor.set_error(err);
                 let obj = executor.take_ex_obj(self);
-                let err = MonorubyErr::new_from_exception(obj.is_exception().unwrap())
-                    .with_original(obj);
+                let err =
+                    MonorubyErr::new_from_exception(obj.is_exception().unwrap()).with_original(obj);
                 Err(err)
             }
             other => other,
@@ -1511,9 +1502,9 @@ impl Globals {
         self.random_seed_obj = exact;
     }
 
-    pub(crate) fn random_seed(&self) -> i32 {
-        self.random.seed
-    }
+    //pub(crate) fn random_seed(&self) -> i32 {
+    //    self.random.seed
+    //}
 
     pub(crate) fn random_init(&mut self, seed: Option<i64>) {
         let used = self.random.init_with_seed(seed);

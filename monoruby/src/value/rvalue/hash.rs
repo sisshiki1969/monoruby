@@ -288,18 +288,11 @@ impl HashmapInner {
         self.as_mut().set_ruby2_keywords_flag()
     }
 
-    pub(crate) fn unset_ruby2_keywords_flag(&mut self) {
-        self.as_mut().unset_ruby2_keywords_flag()
-    }
-
-    pub(crate) fn ruby2_keywords_flag(&self) -> bool {
-        self.as_ref().ruby2_keywords_flag()
-    }
-
     pub fn defalut_value(&self) -> Option<Value> {
         self.as_ref().defalut_value()
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.as_ref().len()
     }
@@ -308,10 +301,12 @@ impl HashmapInner {
         self.as_ref().is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn keys(&self) -> Vec<Value> {
         self.as_ref().keys()
     }
 
+    #[cfg(test)]
     pub(crate) fn values(&self) -> Vec<Value> {
         self.as_ref().values()
     }
@@ -344,12 +339,7 @@ impl HashmapInner {
         self.as_mut().shift(vm, globals)
     }
 
-    pub fn contains_key(
-        &self,
-        k: Value,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<bool> {
+    pub fn contains_key(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         self.as_ref().contains_key(k, vm, globals)
     }
 }
@@ -1378,12 +1368,7 @@ impl Hashmap {
         self.inner().get(k, vm, globals)
     }
 
-    pub fn contains_key(
-        &self,
-        k: Value,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<bool> {
+    pub fn contains_key(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         self.inner().contains_key(k, vm, globals)
     }
 
@@ -1443,9 +1428,10 @@ impl Hashmap {
         self.inner().inspect_inner(store, set)
     }
 
-    pub(crate) fn ruby2_keywords_flag(&self) -> bool {
-        self.inner().ruby2_keywords_flag()
-    }
+    //#[cfg(test)]
+    //pub(crate) fn ruby2_keywords_flag(&self) -> bool {
+    //    self.inner().ruby2_keywords_flag()
+    //}
 
     fn id(&self) -> HashId {
         self.inner().id()
@@ -1486,11 +1472,7 @@ impl Hashmap {
         self.0.as_hashmap_inner_mut().shift(vm, globals)
     }
 
-    pub fn compare_by_identity(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<()> {
+    pub fn compare_by_identity(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         self.0
             .as_hashmap_inner_mut()
             .compare_by_identity(vm, globals)?;
@@ -1499,7 +1481,9 @@ impl Hashmap {
     }
 
     pub fn set_compare_by_identity_empty(&mut self, ident: bool) -> Result<()> {
-        self.0.as_hashmap_inner_mut().set_compare_by_identity_empty(ident)
+        self.0
+            .as_hashmap_inner_mut()
+            .set_compare_by_identity_empty(ident)
     }
 
     pub fn set_defalut_value(
@@ -1612,13 +1596,17 @@ mod tests {
         assert_eq!(0, rep_of(&h));
 
         // fill the three inline slots
-        h.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
-        h.insert(Value::integer(2), Value::integer(20), e, g).unwrap();
-        h.insert(Value::integer(3), Value::integer(30), e, g).unwrap();
+        h.insert(Value::integer(1), Value::integer(10), e, g)
+            .unwrap();
+        h.insert(Value::integer(2), Value::integer(20), e, g)
+            .unwrap();
+        h.insert(Value::integer(3), Value::integer(30), e, g)
+            .unwrap();
         assert_eq!(3, rep_of(&h));
         assert_eq!(3, h.len());
         // in-place update does not promote
-        h.insert(Value::integer(2), Value::integer(21), e, g).unwrap();
+        h.insert(Value::integer(2), Value::integer(21), e, g)
+            .unwrap();
         assert_eq!(3, rep_of(&h));
         assert_eq!(
             Some(Value::integer(21)),
@@ -1637,14 +1625,16 @@ mod tests {
         );
         assert_eq!(2, h.len());
         assert_eq!(None, h.remove(Value::integer(1), e, g).unwrap());
-        h.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
+        h.insert(Value::integer(1), Value::integer(10), e, g)
+            .unwrap();
         assert_eq!(
             vec![Value::integer(2), Value::integer(3), Value::integer(1)],
             h.keys()
         );
 
         // 4th pair promotes to the boxed map with entries preserved
-        h.insert(Value::integer(4), Value::integer(40), e, g).unwrap();
+        h.insert(Value::integer(4), Value::integer(40), e, g)
+            .unwrap();
         assert_eq!(REP_BOXED, rep_of(&h));
         assert_eq!(4, h.len());
         assert_eq!(
@@ -1674,9 +1664,13 @@ mod tests {
         // inline and boxed hashes with the same entries are eql and hash
         // equal
         let mut inline = HashmapInner::default();
-        inline.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
+        inline
+            .insert(Value::integer(1), Value::integer(10), e, g)
+            .unwrap();
         let mut boxed = HashmapInner::default();
-        boxed.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
+        boxed
+            .insert(Value::integer(1), Value::integer(10), e, g)
+            .unwrap();
         for i in 8..11 {
             boxed
                 .insert(Value::integer(i), Value::integer(i), e, g)
@@ -1714,13 +1708,15 @@ mod tests {
         // clear returns a boxed, default-less hash to the inline form
         let mut c = HashmapInner::default();
         for i in 0..5 {
-            c.insert(Value::integer(i), Value::integer(i), e, g).unwrap();
+            c.insert(Value::integer(i), Value::integer(i), e, g)
+                .unwrap();
         }
         assert_eq!(REP_BOXED, rep_of(&c));
         c.clear().unwrap();
         assert_eq!(0, rep_of(&c));
         assert!(c.is_empty());
-        c.insert(Value::integer(1), Value::integer(1), e, g).unwrap();
+        c.insert(Value::integer(1), Value::integer(1), e, g)
+            .unwrap();
         assert_eq!(1, rep_of(&c));
 
         // compare_by_identity promotes an inline hash to an ident map
@@ -1746,10 +1742,12 @@ mod tests {
 
         // clone of an inline hash stays inline and is independent
         let mut orig = HashmapInner::default();
-        orig.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
+        orig.insert(Value::integer(1), Value::integer(10), e, g)
+            .unwrap();
         let mut copy = orig.clone();
         assert_eq!(1, rep_of(&copy));
-        copy.insert(Value::integer(2), Value::integer(20), e, g).unwrap();
+        copy.insert(Value::integer(2), Value::integer(20), e, g)
+            .unwrap();
         assert_eq!(1, orig.len());
         assert_eq!(2, copy.len());
 
@@ -1780,9 +1778,11 @@ mod tests {
 
         // identity-keyed: full method surface
         let mut h = HashmapInner::default();
-        h.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
+        h.insert(Value::integer(1), Value::integer(10), e, g)
+            .unwrap();
         h.compare_by_identity(e, g).unwrap();
-        h.insert(Value::integer(2), Value::integer(20), e, g).unwrap();
+        h.insert(Value::integer(2), Value::integer(20), e, g)
+            .unwrap();
         assert!(h.contains_key(Value::integer(1), e, g).unwrap());
         assert!(!h.contains_key(Value::integer(3), e, g).unwrap());
         assert_eq!(2, h.len());
@@ -1802,12 +1802,15 @@ mod tests {
         // the ident ruby_hash arm digests by id
         let mut i1 = HashmapInner::default();
         i1.compare_by_identity(e, g).unwrap();
-        i1.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
+        i1.insert(Value::integer(1), Value::integer(10), e, g)
+            .unwrap();
         let i2 = i1.clone();
         assert!(i2.is_compare_by_identity());
         assert!(i1.eql(&i2, e, g).unwrap());
         let mut plain = HashmapInner::default();
-        plain.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
+        plain
+            .insert(Value::integer(1), Value::integer(10), e, g)
+            .unwrap();
         assert!(!i1.eql(&plain, e, g).unwrap());
         assert!(!plain.eql(&i1, e, g).unwrap());
         let mut s = crate::value::seeded_hasher();
@@ -1815,12 +1818,16 @@ mod tests {
 
         // eql: length mismatch and value mismatch
         let mut short = HashmapInner::default();
-        short.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
+        short
+            .insert(Value::integer(1), Value::integer(10), e, g)
+            .unwrap();
         let mut long = short.clone();
-        long.insert(Value::integer(2), Value::integer(20), e, g).unwrap();
+        long.insert(Value::integer(2), Value::integer(20), e, g)
+            .unwrap();
         assert!(!short.eql(&long, e, g).unwrap());
         let mut diff = HashmapInner::default();
-        diff.insert(Value::integer(1), Value::integer(99), e, g).unwrap();
+        diff.insert(Value::integer(1), Value::integer(99), e, g)
+            .unwrap();
         assert!(!short.eql(&diff, e, g).unwrap());
 
         // an emptied boxed map can switch to identity mode
@@ -1845,11 +1852,14 @@ mod tests {
         let mut d = HashmapInner::default();
         assert_eq!(Some(Value::nil()), d.defalut_value());
         assert_eq!(None, d.as_ref().default_value());
-        d.insert(Value::integer(1), Value::integer(2), e, g).unwrap();
+        d.insert(Value::integer(1), Value::integer(2), e, g)
+            .unwrap();
         assert_eq!(1, rep_of(&d));
         d.as_mut().set_defalut_value(Value::nil(), e, g).unwrap();
         assert_eq!(1, rep_of(&d)); // nil default keeps it inline
-        d.as_mut().set_defalut_value(Value::integer(42), e, g).unwrap();
+        d.as_mut()
+            .set_defalut_value(Value::integer(42), e, g)
+            .unwrap();
         assert_eq!(REP_BOXED, rep_of(&d)); // a real default boxes
         assert_eq!(Some(Value::integer(42)), d.defalut_value());
         assert_eq!(Some(Value::integer(42)), d.as_ref().default_value());
@@ -1867,16 +1877,17 @@ mod tests {
         // r2k flag travels in the flags byte and is dropped by clone
         let mut r = HashmapInner::default();
         r.set_ruby2_keywords_flag();
-        assert!(r.ruby2_keywords_flag());
-        assert!(!r.clone().ruby2_keywords_flag());
-        r.unset_ruby2_keywords_flag();
-        assert!(!r.ruby2_keywords_flag());
+        assert!(r.as_ref().ruby2_keywords_flag());
+        assert!(!r.clone().as_ref().ruby2_keywords_flag());
+        r.as_mut().unset_ruby2_keywords_flag();
+        assert!(!r.as_ref().ruby2_keywords_flag());
 
         // iteration guard: inline bits count up and down, and inserting
         // a new key mid-iteration fails while updating an existing one
         // succeeds
         let mut it = HashmapInner::default();
-        it.insert(Value::integer(1), Value::integer(1), e, g).unwrap();
+        it.insert(Value::integer(1), Value::integer(1), e, g)
+            .unwrap();
         {
             let r = it.as_ref();
             let _g1 = r.iter_guard();
@@ -1908,7 +1919,8 @@ mod tests {
 
         // Debug walks the pairs
         let mut dbg = HashmapInner::default();
-        dbg.insert(Value::integer(1), Value::integer(2), e, g).unwrap();
+        dbg.insert(Value::integer(1), Value::integer(2), e, g)
+            .unwrap();
         assert!(!format!("{dbg:?}").is_empty());
     }
 
@@ -1923,7 +1935,8 @@ mod tests {
 
         // compare_by_identity on a populated inline hash stays inline
         let mut h = HashmapInner::default();
-        h.insert(Value::integer(1), Value::integer(10), e, g).unwrap();
+        h.insert(Value::integer(1), Value::integer(10), e, g)
+            .unwrap();
         h.compare_by_identity(e, g).unwrap();
         assert!(h.is_compare_by_identity());
         assert!(rep_of(&h) != REP_BOXED);
@@ -1946,7 +1959,8 @@ mod tests {
         // the 4th pair promotes to the boxed IdentMap with identical
         // behavior
         h.insert(s2, Value::integer(200), e, g).unwrap();
-        h.insert(Value::integer(9), Value::integer(90), e, g).unwrap();
+        h.insert(Value::integer(9), Value::integer(90), e, g)
+            .unwrap();
         assert_eq!(REP_BOXED, rep_of(&h));
         assert!(h.is_compare_by_identity());
         assert_eq!(4, h.len());

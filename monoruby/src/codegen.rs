@@ -1451,7 +1451,7 @@ struct InstanceVarCache {
 }
 
 extern "C" fn get_instance_var_with_cache(
-    mut base: Value,
+    base: Value,
     name: IdentId,
     globals: &mut Globals,
     cache: &mut InstanceVarCache,
