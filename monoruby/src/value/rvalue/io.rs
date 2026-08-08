@@ -406,6 +406,10 @@ fn utf8_missing_bytes(buf: &[u8]) -> usize {
 pub struct FileDescriptor {
     reader: ManuallyDrop<IoReader<std::fs::File>>,
     name: String,
+    /// The path as originally passed to `File.open`/`File.new`: raw
+    /// bytes plus the argument's encoding tag, so `IO#path`/`#to_path`
+    /// can reproduce it exactly (`name` is its lossy display form).
+    path_raw: Option<(Vec<u8>, crate::value::Encoding)>,
     /// Whether `name` is a real filesystem path (surfaced via `IO#path`).
     /// `false` for placeholder names like `fd 3`/`pipe` created from a raw
     /// fd without an explicit `path:` option — CRuby's `IO#path` is `nil`
@@ -859,12 +863,19 @@ impl IoInner {
         Self::with_kind(IoKind::Stderr)
     }
 
-    pub(super) fn file(file: std::fs::File, name: String, readable: bool, writable: bool) -> Self {
+    pub(super) fn file(
+        file: std::fs::File,
+        name: String,
+        path_raw: Option<(Vec<u8>, crate::value::Encoding)>,
+        readable: bool,
+        writable: bool,
+    ) -> Self {
         register_owned_fd(file.as_raw_fd());
         let is_tty = file.is_terminal();
         Self::with_kind(IoKind::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(IoReader::new(file)),
             name,
+            path_raw,
             has_path: true,
             readable,
             writable,
@@ -885,6 +896,7 @@ impl IoInner {
         Self::with_kind(IoKind::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(IoReader::new(file)),
             name,
+            path_raw: None,
             has_path: false,
             readable: true,
             writable: true,
@@ -937,6 +949,7 @@ impl IoInner {
         Self::with_kind(IoKind::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(IoReader::new(file)),
             name,
+            path_raw: None,
             has_path,
             readable,
             writable,
@@ -1809,6 +1822,16 @@ impl IoInner {
             IoKind::File(file) if file.has_path => Some(file.name.clone()),
             IoKind::Closed(p) => p.as_deref().cloned(),
             IoKind::File(_) | IoKind::Popen(_) => None,
+        }
+    }
+
+    /// The exact path bytes + encoding as passed at open time, when the
+    /// stream was opened from a path (`IO#path` preserves the argument's
+    /// encoding — core/file/to_path_spec.rb).
+    pub fn path_raw(&self) -> Option<&(Vec<u8>, crate::value::Encoding)> {
+        match &self.kind {
+            IoKind::File(file) if file.has_path => file.path_raw.as_ref(),
+            _ => None,
         }
     }
 

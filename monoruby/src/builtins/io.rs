@@ -504,14 +504,17 @@ pub(super) fn io_open_opts(
     lfp: Lfp,
     range: std::ops::Range<usize>,
     fd: i64,
+    extra: Option<Value>,
 ) -> Result<(String, bool, bool)> {
     let mut autoclose = true;
     let mut name = format!("fd {}", fd);
     let mut has_path = false;
-    for i in range {
-        if let Some(arg) = lfp.try_arg(i)
-            && let Some(h) = arg.try_hash_ty()
-        {
+    let candidates = range
+        .filter_map(|i| lfp.try_arg(i))
+        .chain(extra)
+        .collect::<Vec<_>>();
+    for arg in candidates {
+        if let Some(h) = arg.try_hash_ty() {
             if let Some(v) = h.get(Value::symbol(IdentId::get_id("autoclose")), vm, globals)? {
                 autoclose = v.as_bool();
             }
@@ -647,7 +650,7 @@ fn coerce_enc_arg(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<
 
 /// Argument `Value` -> Encoding object: an `Encoding` is taken as-is, a
 /// String is resolved by name; anything else (incl. `nil`) -> `None`.
-fn arg_to_enc_obj(globals: &Globals, v: Value) -> Option<Value> {
+pub(super) fn arg_to_enc_obj(globals: &Globals, v: Value) -> Option<Value> {
     if v.is_nil() {
         return None;
     }
@@ -778,6 +781,7 @@ fn parse_open_encodings(
     lfp: Lfp,
     opt_range: std::ops::Range<usize>,
     mode: &str,
+    extra: Option<Value>,
 ) -> Result<(Option<Value>, Option<Value>, bool, bool)> {
     let base = mode.split(':').next().unwrap_or("");
     let binmode = base.contains('b');
@@ -794,8 +798,11 @@ fn parse_open_encodings(
     let mut ext = mext.and_then(|s| enc_by_name(globals, s));
     let mut int = mint.and_then(|s| enc_by_name(globals, s));
 
-    for i in opt_range {
-        let Some(arg) = lfp.try_arg(i) else { continue };
+    let candidates = opt_range
+        .filter_map(|i| lfp.try_arg(i))
+        .chain(extra)
+        .collect::<Vec<_>>();
+    for arg in candidates {
         let Some(h) = arg.try_hash_ty() else { continue };
         if let Some(v) = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?
             && !v.is_nil()
@@ -933,8 +940,10 @@ pub(super) fn init_io_encodings(
     mode: &str,
     readable: bool,
     opt_range: std::ops::Range<usize>,
+    extra: Option<Value>,
 ) -> Result<()> {
-    let (ext, int, binmode, bom) = parse_open_encodings(vm, globals, lfp, opt_range, mode)?;
+    let (ext, int, binmode, bom) =
+        parse_open_encodings(vm, globals, lfp, opt_range, mode, extra)?;
     // The stream's write-ability decides whether a missing external
     // encoding tracks default_external (read-only) or stays nil.
     let base = mode.split(':').next().unwrap_or("");
@@ -1961,7 +1970,7 @@ fn io_class_readlines(
     let file = std::fs::File::open(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     let complete_utf8 = ext_completes_utf8(globals, ext_obj);
-    let mut io_val = Value::new_file(file, path, true, false);
+    let mut io_val = Value::new_file(file, path, None, true, false);
     vm.with_temp_scope(|vm| {
         // Root the transient File IO (and the result lines) across the
         // per-line allocations below.
@@ -2133,7 +2142,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
     let file = std::fs::File::open(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     let complete_utf8 = ext_completes_utf8(globals, ext_obj);
-    let mut io_val = Value::new_file(file, path, true, false);
+    let mut io_val = Value::new_file(file, path, None, true, false);
     vm.with_temp_scope(|vm| {
         // Root the transient File IO across the block calls below.
         vm.temp_push(io_val);
@@ -3567,7 +3576,11 @@ fn io_lineno_set(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/path.html]
 #[monoruby_builtin]
 fn io_path(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(match lfp.self_val().as_io_inner().path() {
+    let io = lfp.self_val();
+    if let Some((bytes, enc)) = io.as_io_inner().path_raw() {
+        return Ok(super::file::path_value(bytes, *enc));
+    }
+    Ok(match io.as_io_inner().path() {
         Some(p) => Value::string(p),
         None => Value::nil(),
     })
@@ -4591,7 +4604,7 @@ pub(super) fn enc_obj_to_enum(globals: &Globals, v: Value) -> Option<crate::valu
 /// `Encoding.default_external`), transcoding external -> internal when
 /// an internal encoding is set and differs and the external is not
 /// BINARY. Used by the `IO.readlines` / `IO.foreach` class methods.
-fn tag_with_encs(
+pub(super) fn tag_with_encs(
     globals: &mut Globals,
     bytes: Vec<u8>,
     ext_obj: Option<Value>,
@@ -5186,7 +5199,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         Src::Path(p) => {
             let file = std::fs::File::open(p)
                 .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", p))?;
-            let v = Value::new_file(file, p.clone(), true, false);
+            let v = Value::new_file(file, p.clone(), None, true, false);
             src_io_owned = Some(v);
             Some(v)
         }
@@ -5202,7 +5215,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                 .truncate(true)
                 .open(p)
                 .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", p))?;
-            let v = Value::new_file(file, p.clone(), false, true);
+            let v = Value::new_file(file, p.clone(), None, false, true);
             dst_io_owned = Some(v);
             Some(v)
         }

@@ -948,6 +948,13 @@ fn trap_signo(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<i3
             arg.get_real_class_name(&globals.store)
         )));
     };
+    // CRuby rejects a leading '-' with a dedicated message before the
+    // signal-table lookup (core/signal/trap_spec.rb).
+    if name.starts_with('-') {
+        return Err(MonorubyErr::argumenterr(format!(
+            "negative signal name: {name}"
+        )));
+    }
     signal_name_to_number(&name).ok_or_else(|| {
         MonorubyErr::argumenterr(format!(
             "unsupported signal 'SIG{}'",
