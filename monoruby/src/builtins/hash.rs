@@ -2490,6 +2490,61 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 mod tests {
     use crate::tests::*;
 
+    #[test]
+    fn small_hash_linear_scan() {
+        // The ar_table-style fast path (HashContent::linear_lookup):
+        // immediate keys on <=8-entry tables answer by identity scan.
+        // Every rule it must preserve is pinned against CRuby here.
+        run_test_once(
+            r#"
+            r = []
+            h = { 1 => :a, 5 => :b, 9 => :c }
+            r << [h[1], h[9], h[7], h.key?(5), h.key?(7)]
+            h2 = { a: 1, nil => 3, true => 4, false => 5, 1.5 => 6 }
+            r << [h2[:a], h2[nil], h2[true], h2[false], h2[1.5], h2[:zz]]
+            # Fixnum and Float keys never alias (eql? distinguishes)
+            h3 = { 1 => :int, 1.0 => :float }
+            r << [h3[1], h3[1.0]]
+            # default value / default proc fire on a fast-path miss
+            h5 = Hash.new(:dflt); h5[3] = :x
+            r << [h5[3], h5[4]]
+            h6 = Hash.new { |_, k| "miss#{k}" }; h6[1] = :hit
+            r << [h6[1], h6[2]]
+            # compare_by_identity: same-content distinct strings differ
+            s1 = +"key"; s2 = +"key"
+            h7 = {}.compare_by_identity
+            h7[s1] = :one; h7[42] = :int
+            r << [h7[s1], h7[s2], h7[42]]
+            # growth across the boundary keeps hits and order; deletion
+            # back under it re-enables the scan
+            h8 = {}
+            (1..12).each { |i| h8[i] = i * 10 }
+            r << [h8[3], h8[11], h8.keys.first(3)]
+            (6..12).each { |i| h8.delete(i) }
+            r << [h8[3], h8[7], h8.size]
+            # NaN key: identity semantics (same flonum bits hit)
+            n = 0.0 / 0.0
+            h9 = { n => :nan }
+            r << [h9[n], h9[0.0 / 0.0]]
+            r
+            "#,
+        );
+        // Object keys keep the hashed path: #hash must still be
+        // consulted (a custom hash/eql? pair keeps working).
+        run_test_once(
+            r#"
+            class HKey
+              attr_reader :h
+              def initialize(h) = @h = h
+              def hash = @h
+              def eql?(o) = o.is_a?(HKey) && o.h == @h
+            end
+            k1 = HKey.new(42); k2 = HKey.new(42)
+            { k1 => :obj }[k2]
+            "#,
+        );
+    }
+
     /// Serializes ENV-mutating tests in this module. `setenv(3)` and
     /// `unsetenv(3)` are not thread-safe (they manipulate the process-
     /// wide `environ` array), so running ENV tests in parallel can race

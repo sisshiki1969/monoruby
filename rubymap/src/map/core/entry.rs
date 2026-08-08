@@ -14,6 +14,10 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     where
         K: RubyEql<E, G, R>,
     {
+        // The Entry API hands out live references into the indices
+        // table; promote a linear map instead of teaching every entry
+        // flavour about both modes.
+        self.ensure_indexed();
         let entries = &mut self.entries;
         let eq = equivalent(&key, entries);
         Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
