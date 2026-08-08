@@ -3510,6 +3510,32 @@ pub(super) fn exec(
 ) -> Result<Value> {
     use std::ffi::CString;
     let args = lfp.arg(0).as_array();
+    // Validate exec-option types *before* the point of no return: CRuby
+    // checks the options hash up front, so e.g.
+    // `Process.exec("true", unsetenv_others: 1)` raises ArgumentError
+    // instead of replacing the process. The ruby/spec
+    // "Process.exec options validation" examples call exec in-process
+    // and count on the raise happening first — without it the whole
+    // test runner is silently replaced by the exec'd command.
+    for v in args.iter() {
+        if let Some(h) = v.try_hash_ty() {
+            for (k, val) in h.iter() {
+                if let Some(sym) = k.try_symbol() {
+                    let name = format!("{sym}");
+                    if (name == "unsetenv_others" || name == "close_others")
+                        && !(val.is_nil()
+                            || val == Value::bool(true)
+                            || val == Value::bool(false))
+                    {
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "expected true or false as {name}: {}",
+                            val.inspect(&globals.store)
+                        )));
+                    }
+                }
+            }
+        }
+    }
     // Filter out trailing Hash arguments (keyword args like close_others:)
     let str_args: Vec<String> = args
         .iter()
@@ -3596,7 +3622,7 @@ pub(super) fn exec(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/fork.html]
 #[monoruby_builtin]
-fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // SAFETY: fork() is a POSIX system call. We call it in a single-threaded context.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
