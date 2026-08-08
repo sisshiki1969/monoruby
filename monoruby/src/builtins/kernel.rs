@@ -3516,7 +3516,12 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// ### Kernel.#exec
 ///
-/// - exec(command, *args) -> ()
+/// - exec([env,] command..., options={}) -> ()
+///
+/// Full CRuby option semantics (env hash, command array, redirects,
+/// :chdir/:pgroup/:umask/:unsetenv_others/:close_others) via
+/// `builtins::spawn`. All validation happens before the point of no
+/// return; the process is only replaced once the spec is fully parsed.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/exec.html]
 #[monoruby_builtin]
@@ -3526,110 +3531,9 @@ pub(super) fn exec(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    use std::ffi::CString;
-    let args = lfp.arg(0).as_array();
-    // Validate exec-option types *before* the point of no return: CRuby
-    // checks the options hash up front, so e.g.
-    // `Process.exec("true", unsetenv_others: 1)` raises ArgumentError
-    // instead of replacing the process. The ruby/spec
-    // "Process.exec options validation" examples call exec in-process
-    // and count on the raise happening first — without it the whole
-    // test runner is silently replaced by the exec'd command.
-    for v in args.iter() {
-        if let Some(h) = v.try_hash_ty() {
-            for (k, val) in h.iter() {
-                if let Some(sym) = k.try_symbol() {
-                    let name = format!("{sym}");
-                    if (name == "unsetenv_others" || name == "close_others")
-                        && !(val.is_nil()
-                            || val == Value::bool(true)
-                            || val == Value::bool(false))
-                    {
-                        return Err(MonorubyErr::argumenterr(format!(
-                            "expected true or false as {name}: {}",
-                            val.inspect(&globals.store)
-                        )));
-                    }
-                }
-            }
-        }
-    }
-    // Filter out trailing Hash arguments (keyword args like close_others:)
-    let str_args: Vec<String> = args
-        .iter()
-        .filter(|v| v.try_hash_ty().is_none())
-        .map(|v| v.coerce_to_string(vm, globals))
-        .collect::<Result<Vec<_>>>()?;
-    if str_args.is_empty() {
-        return Err(MonorubyErr::argumenterr(
-            "wrong number of arguments (given 0, expected 1+)",
-        ));
-    }
-    if str_args.len() == 1 {
-        // Single string: use shell
-        let (program, shell_args) = prepare_command_arg(&str_args[0]);
-        // A NUL byte anywhere in the argv would silently turn this
-        // into an abort via the next `CString::new(...).unwrap()`.
-        // CRuby raises `ArgumentError: string contains null byte` —
-        // mirror that. Same below for the multi-arg execvp form.
-        let mut all_args = vec![
-            CString::new(program.clone())
-                .map_err(|_| MonorubyErr::argumenterr("string contains null byte"))?,
-        ];
-        for a in &shell_args {
-            all_args.push(
-                CString::new(a.as_str())
-                    .map_err(|_| MonorubyErr::argumenterr("string contains null byte"))?,
-            );
-        }
-        let c_program = CString::new(program)
-            .map_err(|_| MonorubyErr::argumenterr("string contains null byte"))?;
-        // SAFETY: execvp replaces the process. Only fails if the program is not found.
-        unsafe {
-            libc::execvp(
-                c_program.as_ptr(),
-                all_args
-                    .iter()
-                    .map(|a| a.as_ptr())
-                    .chain(std::iter::once(std::ptr::null()))
-                    .collect::<Vec<_>>()
-                    .as_ptr(),
-            )
-        };
-        Err(MonorubyErr::runtimeerr(format!(
-            "exec failed: {}",
-            std::io::Error::last_os_error()
-        )))
-    } else {
-        // Multiple args: first is program, rest are argv. NUL bytes
-        // in any of them ⇒ `ArgumentError: string contains null byte`
-        // (CRuby behaviour) instead of the prior abort.
-        let c_program = CString::new(str_args[0].as_str())
-            .map_err(|_| MonorubyErr::argumenterr("string contains null byte"))?;
-        let c_args: Vec<CString> = str_args
-            .iter()
-            .map(|s| {
-                CString::new(s.as_str())
-                    .map_err(|_| MonorubyErr::argumenterr("string contains null byte"))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        // SAFETY: execvp replaces the process. Only fails if the program is not found.
-        unsafe {
-            libc::execvp(
-                c_program.as_ptr(),
-                c_args
-                    .iter()
-                    .map(|a| a.as_ptr())
-                    .chain(std::iter::once(std::ptr::null()))
-                    .collect::<Vec<_>>()
-                    .as_ptr(),
-            )
-        };
-        Err(MonorubyErr::runtimeerr(format!(
-            "exec failed: {}",
-            std::io::Error::last_os_error()
-        )))
-    }
+    let args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+    let spec = crate::builtins::spawn::parse_spawn_args(vm, globals, &args)?;
+    Err(crate::builtins::spawn::do_exec(globals, &spec))
 }
 
 ///
@@ -3641,16 +3545,24 @@ pub(super) fn exec(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/fork.html]
 #[monoruby_builtin]
 pub(super) fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // SAFETY: fork() is a POSIX system call. We call it in a single-threaded context.
-    let pid = unsafe { libc::fork() };
-    if pid < 0 {
-        return Err(MonorubyErr::runtimeerr("fork failed"));
-    }
+    // Dispatch through `Process._fork` BY NAME (Ruby 3.1+): a
+    // user-defined (or mocked) `_fork` intercepts the actual fork.
+    let process_mod = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Process"))
+        .ok_or_else(|| MonorubyErr::runtimeerr("Process module not found"))?;
+    let pid_val = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("_fork"),
+        process_mod,
+        &[],
+        None,
+        None,
+    )?;
+    let pid = pid_val.try_fixnum().unwrap_or(-1);
     if pid == 0 {
-        // Child process: only the forking thread exists here — the other
-        // green threads' state belongs to the parent (CRuby marks them
-        // dead).
-        crate::scheduler::fork_child_reset_threads(vm);
+        // Child process (the default `_fork` already reset the green-
+        // thread scheduler).
         if let Some(bh) = lfp.block() {
             let data = vm.get_block_data(globals, bh)?;
             match vm.invoke_block(globals, &data, &[]) {
@@ -3678,21 +3590,21 @@ pub(super) fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
         }
         Ok(Value::nil())
     } else {
-        // Parent process
-        Ok(Value::integer(pid as i64))
+        // Parent: return whatever `_fork` produced (an overridden _fork's
+        // value must be passed through object-identically).
+        Ok(pid_val)
     }
 }
 
 ///
 /// ### Kernel.#spawn
 ///
-/// - spawn(command... [, options]) -> Integer
+/// - spawn([env,] command..., options={}) -> Integer
 ///
-/// Launches an external command in a new child process and returns its PID
-/// immediately (unlike `system`, it does not wait). Honours the `:in` /
-/// `:out` / `:err` redirect options (each an IO or fd Integer) — the form
-/// `Open3` uses to wire up pipes, which is what lets bundler fetch git-source
-/// gems via `Open3.capture3("git", ...)`.
+/// Launches an external command and returns its PID immediately. Exec
+/// failures in the child are reported back through a CLOEXEC pipe: the
+/// child is reaped (`$?` shows exit status 127) and the matching
+/// `Errno::*` is raised here, per CRuby.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/spawn.html]
 #[monoruby_builtin]
@@ -3702,107 +3614,10 @@ pub(super) fn spawn(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    use std::ffi::CString;
-    let null_byte = || MonorubyErr::argumenterr("string contains null byte");
-
-    let mut items: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
-
-    // Trailing options Hash: honour :in / :out / :err fd redirections,
-    // recorded as (child_fd, source_fd) pairs.
-    let mut redirects: Vec<(i32, i32)> = vec![];
-    if let Some(last) = items.last() {
-        if let Some(h) = last.try_hash_ty() {
-            for (name, child_fd) in [("in", 0i32), ("out", 1), ("err", 2)] {
-                if let Some(v) = h.get(Value::symbol(IdentId::get_id(name)), vm, globals)? {
-                    let src = if let Some(i) = v.try_fixnum() {
-                        i as i32
-                    } else if v.ty() == Some(ObjTy::IO) {
-                        v.as_io_inner().fileno()?
-                    } else {
-                        return Err(MonorubyErr::argumenterr(format!(
-                            "spawn: unsupported redirect value for :{name}"
-                        )));
-                    };
-                    redirects.push((child_fd, src));
-                }
-            }
-            items.pop();
-        }
-    }
-
-    let str_args: Vec<String> = items
-        .iter()
-        .map(|v| v.coerce_to_string(vm, globals))
-        .collect::<Result<Vec<_>>>()?;
-    if str_args.is_empty() {
-        return Err(MonorubyErr::argumenterr(
-            "wrong number of arguments (given 0, expected 1+)",
-        ));
-    }
-
-    // Build argv as CStrings up front so the child needs no allocation.
-    let argv: Vec<CString> = if str_args.len() == 1 {
-        // Single string ⇒ shell-style split (mirrors `system` / `exec`).
-        let (program, sh_args) = prepare_command_arg(&str_args[0]);
-        let mut v = vec![CString::new(program).map_err(|_| null_byte())?];
-        for a in sh_args {
-            v.push(CString::new(a).map_err(|_| null_byte())?);
-        }
-        v
-    } else {
-        str_args
-            .iter()
-            .map(|s| CString::new(s.as_str()).map_err(|_| null_byte()))
-            .collect::<Result<Vec<_>>>()?
-    };
-    let mut argv_ptrs: Vec<*const libc::c_char> = argv.iter().map(|a| a.as_ptr()).collect();
-    argv_ptrs.push(std::ptr::null());
-    let max_fd = match unsafe { libc::sysconf(libc::_SC_OPEN_MAX) } {
-        n if n > 0 => n as i32,
-        _ => 1024,
-    };
-
-    // SAFETY: monoruby has no real OS threads (Thread is cooperative), so
-    // fork() leaves the child single-threaded and consistent. The child only
-    // performs async-signal-safe libc calls (dup2/close/execvp) before
-    // replacing itself; every allocation above happened in the parent.
-    let pid = unsafe { libc::fork() };
-    if pid < 0 {
-        return Err(MonorubyErr::runtimeerr(format!(
-            "spawn failed: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    if pid == 0 {
-        // ===== child =====
-        unsafe {
-            // Restore default signal dispositions before exec. monoruby
-            // ignores SIGPIPE (and installs other handlers); a freshly
-            // exec'd program expects the defaults, e.g. so a command in a
-            // pipeline dies on SIGPIPE instead of seeing EPIPE and printing
-            // a "Broken pipe" error. Mirrors CRuby's spawn.
-            for sig in 1..32 {
-                if sig != libc::SIGKILL && sig != libc::SIGSTOP {
-                    libc::signal(sig, libc::SIG_DFL);
-                }
-            }
-            for &(child_fd, src_fd) in &redirects {
-                if src_fd != child_fd {
-                    libc::dup2(src_fd, child_fd);
-                }
-            }
-            // IO.pipe fds are not close-on-exec, so close every other
-            // descriptor (>= 3); otherwise a leaked write end keeps the pipe
-            // open and the reader never sees EOF when the child exits.
-            for fd in 3..max_fd {
-                libc::close(fd);
-            }
-            libc::execvp(argv[0].as_ptr(), argv_ptrs.as_ptr());
-            libc::_exit(127);
-        }
-    }
-    // ===== parent =====
-    Ok(Value::integer(pid as i64))
+    let args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+    let spec = crate::builtins::spawn::parse_spawn_args(vm, globals, &args)?;
+    let pid = crate::builtins::spawn::do_spawn(vm, globals, &spec)?;
+    Ok(Value::integer(pid))
 }
 
 ///

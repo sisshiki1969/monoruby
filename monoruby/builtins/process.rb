@@ -15,11 +15,28 @@ module Process
   # runs at #value/#join time), which matches Open3's "drain the pipes first,
   # then read the exit status" ordering.
   def self.detach(pid)
+    unless pid.is_a?(Integer)
+      unless pid.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{pid.nil? ? "nil" : pid.class} into Integer"
+      end
+      converted = pid.to_int
+      unless converted.is_a?(Integer)
+        raise TypeError, "can't convert #{pid.class} to Integer (#{pid.class}#to_int gives #{converted.class})"
+      end
+      pid = converted
+    end
     Thread::Waiter.new(pid)
   end
 
   class Tms
     attr_accessor :utime, :stime, :cutime, :cstime
+
+    def initialize(utime = nil, stime = nil, cutime = nil, cstime = nil)
+      @utime = utime
+      @stime = stime
+      @cutime = cutime
+      @cstime = cstime
+    end
   end
 
   # Wraps the raw POSIX wait(2) status word (as returned by `waitpid`).

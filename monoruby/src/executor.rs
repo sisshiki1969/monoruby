@@ -24,6 +24,57 @@ pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp, BytecodePtr
 /// back through JIT-assembled frames (which carry no unwind info), so
 /// the unwinder would abort anyway. A single hook here is the one place
 /// panics are surfaced — caller-visible diagnostics, then abort.
+/// Normalize std fds (0/1/2) that arrived CLOSED at exec, CRuby-style
+/// (`fill_standard_fds`): stdin gets `/dev/null` (read-only), while a
+/// missing stdout/stderr becomes the WRITE end of a pipe whose read end
+/// is closed — so a user write raises `Errno::EPIPE` instead of silently
+/// landing in whatever file the interpreter opened onto the freed slot.
+///
+/// Rust's std runtime has already "sanitized" closed std fds before
+/// `main` by opening `/dev/null` O_RDWR on them, so "was closed at
+/// exec" is detected as exactly that signature (`/dev/null` + O_RDWR —
+/// a shell redirect uses O_WRONLY/O_RDONLY, so real redirections are
+/// left alone).
+pub fn fill_closed_std_fds() {
+    // SAFETY: plain fcntl/fstat/open/pipe/dup2 syscalls on our own fds.
+    unsafe {
+        for fd in 0..3 {
+            let closed = libc::fcntl(fd, libc::F_GETFD) == -1
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF);
+            let sanitized = if closed {
+                false
+            } else {
+                let mut st: libc::stat = std::mem::zeroed();
+                let is_devnull = libc::fstat(fd, &mut st) == 0
+                    && (st.st_mode & libc::S_IFMT) == libc::S_IFCHR
+                    && st.st_rdev == libc::makedev(1, 3);
+                is_devnull
+                    && (libc::fcntl(fd, libc::F_GETFL) & libc::O_ACCMODE) == libc::O_RDWR
+            };
+            if !(closed || sanitized) {
+                continue;
+            }
+            if fd == 0 {
+                let devnull = c"/dev/null";
+                let got = libc::open(devnull.as_ptr(), libc::O_RDONLY);
+                if got >= 0 && got != fd {
+                    libc::dup2(got, fd);
+                    libc::close(got);
+                }
+            } else {
+                let mut fds: [libc::c_int; 2] = [0; 2];
+                if libc::pipe(fds.as_mut_ptr()) == 0 {
+                    libc::close(fds[0]);
+                    if fds[1] != fd {
+                        libc::dup2(fds[1], fd);
+                        libc::close(fds[1]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn install_panic_hook() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -443,6 +494,19 @@ impl Executor {
         globals.set_gvar(IdentId::get_id("$0"), program_name);
         // $PROGRAM_NAME is an alias of $0 in Ruby; make them share one entry.
         globals.alias_global_variable(IdentId::get_id("$PROGRAM_NAME"), IdentId::get_id("$0"));
+        // Capture the original program name for `Process.argv0`: a frozen
+        // private copy (later `$0 = ...` assignments must not affect it),
+        // stored on the Process module so every call returns the same object.
+        if let Some(process_mod) = globals
+            .store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Process"))
+        {
+            let mut argv0 = program_name.dup();
+            argv0.set_frozen();
+            let _ = globals
+                .store
+                .set_ivar(process_mod, IdentId::get_id("/argv0"), argv0);
+        }
         // $VERBOSE default mirrors CRuby: -W0 -> nil (silent), -W1
         // (the default) -> false, -W2 -> true. `$-v` / `$-w` are
         // aliases of $VERBOSE.
@@ -4573,7 +4637,14 @@ pub(crate) extern "C" fn execute_gc(
     // coalesced signal). The CODEGEN borrow is released before
     // dispatching so a trap handler (which JIT-compiles, GCs, …) can
     // re-enter freely. See doc/signal.md A6/A7.
-    let pending = crate::codegen::signal_table::take_pending_signals();
+    // Signal (trap-handler / default-exception) delivery happens only on
+    // the MAIN green thread, matching CRuby: a signal arriving while a
+    // non-main thread runs stays pending until main's next poll point.
+    let pending = if crate::scheduler::on_main_thread() {
+        crate::codegen::signal_table::take_pending_signals()
+    } else {
+        0
+    };
     if let Some(signo) = crate::codegen::signal_table::lowest_pending_signo(pending) {
         use crate::codegen::signal_table::{self, SignalDisposition};
         match globals.signal_disposition(signo) {

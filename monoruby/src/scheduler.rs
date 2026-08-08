@@ -247,6 +247,19 @@ pub(crate) fn current_thread(vm: &mut Executor) -> Value {
     SCHEDULER.with(|s| s.borrow().current.unwrap())
 }
 
+/// Whether the currently running green thread is the main thread.
+/// `true` before the Thread machinery is initialized (only one implicit
+/// thread exists then). Signal trap handlers must only run here.
+pub(crate) fn on_main_thread() -> bool {
+    SCHEDULER.with(|s| {
+        let s = s.borrow();
+        match (s.current, s.main) {
+            (Some(c), Some(m)) => c.id() == m.id(),
+            _ => true,
+        }
+    })
+}
+
 /// The main thread's `Thread` object.
 pub(crate) fn main_thread(vm: &mut Executor) -> Value {
     ensure_main(vm);
