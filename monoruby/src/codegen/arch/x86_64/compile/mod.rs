@@ -2123,7 +2123,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             testq rdx, 0b111;                                   // immediate?
             jnz  slow;
-            cmpw [rdx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            cmpb [rdx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
             jne  slow;
             movq rax, [rdx + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);

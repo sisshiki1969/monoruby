@@ -217,15 +217,18 @@ union Header { next: Option<NonNull<RValue>>, meta: Metadata }
 struct Metadata {          // rvalue.rs:2373
     flag:  u16,
     ty:    Option<ObjTy>,  // 1 バイト
-    _padding: u8,          // JIT の 2 バイト cmpw が隣接バイトを読むため 0 固定
+    ty_flags: u8,          // ObjTy 固有のメタデータ(HASH: 小ハッシュ表現ビット)
     class: Option<ClassId>,
 }
 ```
 
 - フリーリスト上のセルは `next`(次の空きセル)として解釈され、生存セルは `meta`。
-- `_padding` を 0 に固定するのは、JIT が型判定に `cmpw [ty]`(2 バイト)を使い
-  隣接バイトも読むため。したがって**世代別 GC の age は `ty` の隣ではなく
-  `flag` の上位バイトに置く**。
+- `ty_flags` は ObjTy 固有のメタデータバイト。JIT の型判定は両アーキテクチャとも
+  1 バイト読み(x86-64 `cmpb` / aarch64 `ldrb`)なので、隣接バイトが任意の値でも
+  問題ない。HASH オブジェクトはここにインライン表現のビット(hash.rs の
+  `HashFlags`)を置く。dup/リテラルコピー(`Header::newborn` /
+  `CellHeader::NewbornOf`)はこのバイトを保存する。世代別 GC の age は従来どおり
+  `flag` の上位バイトに置く。
 
 ### `flag: u16` のビット割り当て(`rvalue.rs:2447` 以降)
 

@@ -1089,6 +1089,16 @@ impl RValue {
         self.header.ty()
     }
 
+    /// The per-`ObjTy` metadata byte (see `Metadata::ty_flags`). For
+    /// HASH objects this holds the small-hash representation bits.
+    pub(crate) fn ty_flags(&self) -> u8 {
+        self.header.ty_flags()
+    }
+
+    pub(crate) fn set_ty_flags(&mut self, flags: u8) {
+        self.header.set_ty_flags(flags)
+    }
+
     pub(crate) fn is_frozen(&self) -> bool {
         self.header.is_frozen()
     }
@@ -2526,11 +2536,16 @@ union Header {
 struct Metadata {
     flag: u16,
     ty: Option<ObjTy>,
-    /// MUST stay zero: the JIT compares the type with a 2-byte `cmpw
-    /// [ty]` that also reads this adjacent byte (e.g. the Array check in
-    /// `object_send_splat_arg0`). The generational GC age therefore lives
-    /// in the high byte of `flag`, not here. See gc.md.
-    _padding: u8,
+    /// Per-`ObjTy` metadata byte. Zero for most types; a HASH object
+    /// keeps its small-hash representation bits here (see
+    /// `hash::HashFlags`), which frees the whole 48-byte payload for
+    /// three inline key-value pairs. All JIT type checks read `ty` with
+    /// 1-byte loads (x86-64 `cmpb`, aarch64 `ldrb`), so this byte may
+    /// hold arbitrary values. Copied verbatim by `Header::newborn` and
+    /// the JIT literal-copy path (`CellHeader::NewbornOf`) — dup/clone
+    /// preserve it — and rewritten wholesale when a freed cell is
+    /// reused.
+    ty_flags: u8,
     class: Option<ClassId>,
 }
 
@@ -2546,10 +2561,19 @@ impl Header {
             meta: Metadata {
                 flag: 1,
                 ty: Some(ty),
-                _padding: 0,
+                ty_flags: 0,
                 class: Some(class),
             },
         }
+    }
+
+    /// The per-`ObjTy` metadata byte (see `Metadata::ty_flags`).
+    fn ty_flags(&self) -> u8 {
+        unsafe { self.meta.ty_flags }
+    }
+
+    fn set_ty_flags(&mut self, flags: u8) {
+        self.meta.ty_flags = flags;
     }
 
     fn is_live(&self) -> bool {
@@ -2679,10 +2703,11 @@ impl Header {
     }
 
     /// Generational GC age (number of collections survived), stored in
-    /// the high byte of `flag` so the type byte's neighbour stays zero
-    /// (see `Metadata::_padding`). The low byte holds the live/frozen/
-    /// chilled/OLD/WB_ARMED flags and is read by the write barrier; age
-    /// occupies bits 8..15, untouched by those byte-wide flag tests.
+    /// the high byte of `flag` (the byte next to `ty` belongs to the
+    /// per-type metadata, `Metadata::ty_flags`). The low byte holds the
+    /// live/frozen/chilled/OLD/WB_ARMED flags and is read by the write
+    /// barrier; age occupies bits 8..15, untouched by those byte-wide
+    /// flag tests.
     fn age(&self) -> u8 {
         unsafe { (self.meta.flag >> 8) as u8 }
     }

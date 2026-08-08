@@ -226,7 +226,7 @@ impl Codegen {
             // `val` must be an Array...
             testq rdx, 0b111;
             jnz  slow;
-            cmpw [rdx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            cmpb [rdx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
             jne  slow;
             // ...of exactly `len` elements. r8 <- its data.
             movq rax, [rdx + (RVALUE_OFFSET_ARY_CAPA)];
