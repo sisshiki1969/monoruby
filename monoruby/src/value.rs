@@ -494,7 +494,7 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
                                 lhs_id,
                                 rhs_id,
                                 || {
-                                    let r = lhs.as_hashmap().eql(rhs.as_hashmap(), vm, globals)?;
+                                    let r = lhs.as_hashmap().eql(&rhs.as_hashmap(), vm, globals)?;
                                     Ok(Value::bool(r))
                                 },
                                 Value::bool(true),
@@ -2568,7 +2568,7 @@ impl Value {
         Ok(self.as_hash())
     }
 
-    pub(crate) fn as_hashmap_inner(&self) -> &HashmapInner {
+    pub(crate) fn as_hashmap_inner(&self) -> HashRef<'_> {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a hash.
         unsafe { self.rvalue().as_hashmap() }
@@ -2610,7 +2610,7 @@ impl Value {
     /// `Hashmap` wrapper, whose `DerefMut`/inherent methods run the
     /// generational write barrier. This makes barrier bypass a type
     /// error rather than a code-review concern.
-    fn as_hashmap_inner_mut(&mut self) -> &mut HashmapInner {
+    fn as_hashmap_inner_mut(&mut self) -> HashRefMut<'_> {
         assert_eq!(ObjTy::HASH, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a hash.
         unsafe { self.rvalue_mut().as_hashmap_mut() }

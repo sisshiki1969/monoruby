@@ -79,6 +79,9 @@ const CHILLED_LITERAL_BIT: u16 = 0b1000_0000;
 pub const NEWBORN_FLAG_MASK: u16 = 0b0001_0111 | CHILLED_LITERAL_BIT;
 pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.flag);
 pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
+// `ty_flags_ptr` addresses the per-type metadata byte as `ty` + 1.
+const _: () =
+    assert!(std::mem::offset_of!(RValue, header.meta.ty_flags) == RVALUE_OFFSET_TY + 1);
 pub const RVALUE_OFFSET_CLASS: usize = std::mem::offset_of!(RValue, header.meta.class);
 pub const RVALUE_OFFSET_VAR: usize = std::mem::offset_of!(RValue, var_table);
 pub const RVALUE_OFFSET_KIND: usize = std::mem::offset_of!(RValue, kind);
@@ -192,7 +195,10 @@ pub union ObjKind {
     range: ManuallyDrop<RangeInner>,
     exception: ManuallyDrop<Box<ExceptionInner>>,
     proc: ManuallyDrop<ProcInner>,
-    hash: ManuallyDrop<HashmapInner>,
+    /// The Hash payload. Its representation (inline pairs vs boxed map)
+    /// is discriminated by the header's `ty_flags` byte, not by the
+    /// payload itself — see `hash.rs`.
+    hash: ManuallyDrop<HashBody>,
     regexp: ManuallyDrop<RegexpInner>,
     io: ManuallyDrop<IoInner>,
     method: ManuallyDrop<MethodInner>,
@@ -330,30 +336,9 @@ impl ObjKind {
         }
     }
 
-    fn hash_from(map: RubyMap<Value, Value>) -> Self {
+    fn hash_body(body: HashBody) -> Self {
         Self {
-            hash: ManuallyDrop::new(HashmapInner::new(map)),
-        }
-    }
-
-    fn hash_with_default(default: Value) -> Self {
-        Self {
-            hash: ManuallyDrop::new(HashmapInner::new_with_default(RubyMap::default(), default)),
-        }
-    }
-
-    fn hash_with_default_proc(default_proc: Proc) -> Self {
-        Self {
-            hash: ManuallyDrop::new(HashmapInner::new_with_default_proc(
-                RubyMap::default(),
-                default_proc,
-            )),
-        }
-    }
-
-    fn hash_from_inner(inner: HashmapInner) -> Self {
-        Self {
-            hash: ManuallyDrop::new(inner),
+            hash: ManuallyDrop::new(body),
         }
     }
 
@@ -570,7 +555,7 @@ impl std::fmt::Debug for RValue {
                             ObjTy::RANGE => format!("{:?}", self.kind.range),
                             ObjTy::EXCEPTION => format!("{:?}", self.kind.exception),
                             ObjTy::PROC => format!("{:?}", self.kind.proc),
-                            ObjTy::HASH => format!("{:?}", self.kind.hash),
+                            ObjTy::HASH => format!("{:?}", self.as_hashmap()),
                             ObjTy::REGEXP => format!("{:?}", self.kind.regexp),
                             ObjTy::IO => format!("{:?}", self.kind.io),
                             ObjTy::METHOD => format!("{:?}", self.kind.method),
@@ -871,7 +856,10 @@ impl alloc::GCBox for RValue {
                 ObjTy::TIME => ManuallyDrop::drop(&mut self.kind.time),
                 ObjTy::ARRAY => ManuallyDrop::drop(&mut self.kind.array),
                 ObjTy::EXCEPTION => ManuallyDrop::drop(&mut self.kind.exception),
-                ObjTy::HASH => ManuallyDrop::drop(&mut self.kind.hash),
+                // The Hash payload's live union field is discriminated by
+                // the header flags byte: only the boxed form owns heap
+                // memory (inline pairs are plain Values).
+                ObjTy::HASH => drop_hash_body(self.header.ty_flags(), &mut self.kind.hash),
                 ObjTy::REGEXP => ManuallyDrop::drop(&mut self.kind.regexp),
                 ObjTy::FIBER => ManuallyDrop::drop(&mut self.kind.fiber),
                 ObjTy::THREAD => ManuallyDrop::drop(&mut self.kind.thread),
@@ -1097,6 +1085,18 @@ impl RValue {
 
     pub(crate) fn set_ty_flags(&mut self, flags: u8) {
         self.header.set_ty_flags(flags)
+    }
+
+    /// Raw pointer to the `ty_flags` byte, for the hash handles that
+    /// pair it with the payload (the iteration guard mutates its bits
+    /// through a shared borrow, `Cell`-style).
+    pub(crate) fn ty_flags_ptr(&self) -> std::ptr::NonNull<u8> {
+        // SAFETY: the byte after `ty` is `ty_flags` (checked below).
+        unsafe {
+            std::ptr::NonNull::new_unchecked(
+                (self as *const RValue as *mut u8).add(RVALUE_OFFSET_TY + 1),
+            )
+        }
     }
 
     pub(crate) fn is_frozen(&self) -> bool {
@@ -1442,6 +1442,11 @@ impl RValue {
         let mut header = self.header.newborn();
         // dup does not copy the frozen or chilled flag (clone does).
         unsafe { header.meta.flag &= !(0b110 | CHILLED_LITERAL_BIT) };
+        // A hash copy keeps its representation bits but not the source's
+        // ruby2_keywords flag or live iteration count.
+        if unsafe { self.try_ty() } == Some(ObjTy::HASH) {
+            header.set_ty_flags(hash::sanitize_dup_flags(header.ty_flags()));
+        }
         RValue {
             header,
             var_table: self.var_table.clone(),
@@ -1486,7 +1491,7 @@ impl RValue {
                             proc: self.kind.proc.clone(),
                         },
                         ObjTy::HASH => ObjKind {
-                            hash: self.kind.hash.clone(),
+                            hash: ManuallyDrop::new(self.as_hashmap().clone_body()),
                         },
                         ObjTy::REGEXP => ObjKind {
                             regexp: self.kind.regexp.clone(),
@@ -1528,7 +1533,12 @@ impl RValue {
 
     pub(super) fn clone_value(&self) -> Self {
         // clone keeps frozen / chilled, but not the source's GC state.
-        let header = self.header.newborn();
+        let mut header = self.header.newborn();
+        // A hash copy keeps its representation bits but not the source's
+        // ruby2_keywords flag or live iteration count.
+        if unsafe { self.try_ty() } == Some(ObjTy::HASH) {
+            header.set_ty_flags(hash::sanitize_dup_flags(header.ty_flags()));
+        }
         RValue {
             header,
             var_table: self.var_table.clone(),
@@ -1573,7 +1583,7 @@ impl RValue {
                             proc: self.kind.proc.clone(),
                         },
                         ObjTy::HASH => ObjKind {
-                            hash: self.kind.hash.clone(),
+                            hash: ManuallyDrop::new(self.as_hashmap().clone_body()),
                         },
                         ObjTy::REGEXP => ObjKind {
                             regexp: self.kind.regexp.clone(),
@@ -1862,39 +1872,43 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_hash(map: RubyMap<Value, Value>) -> Self {
+    /// The Hash representation bits live in the header's `ty_flags`
+    /// byte; every Hash constructor funnels through here so flags and
+    /// payload are installed together.
+    fn new_hash_with_class(class_id: ClassId, inner: HashmapInner) -> Self {
+        let (flags, body) = inner.into_parts();
+        let mut header = Header::new(class_id, ObjTy::HASH);
+        header.set_ty_flags(flags);
         RValue {
-            header: Header::new(HASH_CLASS, ObjTy::HASH),
-            kind: ObjKind::hash_from(map),
+            header,
+            kind: ObjKind::hash_body(body),
             var_table: None,
         }
+    }
+
+    pub(super) fn new_hash(map: RubyMap<Value, Value>) -> Self {
+        Self::new_hash_with_class(HASH_CLASS, HashmapInner::new(map))
     }
 
     pub(super) fn new_hash_from_inner(inner: HashmapInner) -> Self {
-        RValue {
-            header: Header::new(HASH_CLASS, ObjTy::HASH),
-            kind: ObjKind::hash_from_inner(inner),
-            var_table: None,
-        }
+        Self::new_hash_with_class(HASH_CLASS, inner)
     }
 
     pub(super) fn new_hash_with_class_and_default(class_id: ClassId, default: Value) -> Self {
-        RValue {
-            header: Header::new(class_id, ObjTy::HASH),
-            kind: ObjKind::hash_with_default(default),
-            var_table: None,
-        }
+        Self::new_hash_with_class(
+            class_id,
+            HashmapInner::new_with_default(RubyMap::default(), default),
+        )
     }
 
     pub(super) fn new_hash_with_class_and_default_proc(
         class_id: ClassId,
         default_proc: Proc,
     ) -> Self {
-        RValue {
-            header: Header::new(class_id, ObjTy::HASH),
-            kind: ObjKind::hash_with_default_proc(default_proc),
-            var_table: None,
-        }
+        Self::new_hash_with_class(
+            class_id,
+            HashmapInner::new_with_default_proc(RubyMap::default(), default_proc),
+        )
     }
 
     pub(super) fn new_regexp(regexp: RegexpInner) -> Self {
@@ -2378,8 +2392,8 @@ impl RValue {
         unsafe { &self.kind.matchdata }
     }
 
-    pub(crate) unsafe fn as_hashmap(&self) -> &HashmapInner {
-        unsafe { &self.kind.hash }
+    pub(crate) unsafe fn as_hashmap(&self) -> HashRef<'_> {
+        unsafe { HashRef::from_rvalue(self) }
     }
 
     pub(crate) unsafe fn as_struct_inner(&self) -> &StructInner {
@@ -2390,8 +2404,8 @@ impl RValue {
         unsafe { &mut self.kind.struct_inner }
     }
 
-    pub(super) unsafe fn as_hashmap_mut(&mut self) -> &mut HashmapInner {
-        unsafe { &mut self.kind.hash }
+    pub(super) unsafe fn as_hashmap_mut(&mut self) -> HashRefMut<'_> {
+        unsafe { HashRefMut::from_rvalue(self) }
     }
 
     pub(super) unsafe fn as_regex(&self) -> &RegexpInner {

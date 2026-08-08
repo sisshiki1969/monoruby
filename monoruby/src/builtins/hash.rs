@@ -211,9 +211,9 @@ fn initialize(
                 "wrong number of arguments (given 1, expected 0)",
             ));
         }
-        hash.set_defalut_proc(vm.generate_proc(globals, bh, pc)?);
+        hash.set_defalut_proc(vm.generate_proc(globals, bh, pc)?, vm, globals)?;
     } else {
-        hash.set_defalut_value(lfp.try_arg(0).unwrap_or_default());
+        hash.set_defalut_value(lfp.try_arg(0).unwrap_or_default(), vm, globals)?;
     }
     Ok(lfp.self_val())
 }
@@ -504,7 +504,7 @@ fn default_proc_assign(
     let arg = lfp.arg(0);
     if arg.is_nil() {
         let mut hash = lfp.self_val().as_hash();
-        hash.set_defalut_value(Value::nil());
+        hash.set_defalut_value(Value::nil(), vm, globals)?;
         return Ok(Value::nil());
     }
     // Coerce via :to_proc when arg is not already a Proc, mirroring CRuby.
@@ -537,7 +537,7 @@ fn default_proc_assign(
         }
     }
     let mut hash = lfp.self_val().as_hash();
-    hash.set_defalut_proc(proc);
+    hash.set_defalut_proc(proc, vm, globals)?;
     Ok(proc_val)
 }
 
@@ -549,14 +549,16 @@ fn default_proc_assign(
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/default=3d.html]
 #[monoruby_builtin]
 fn default_assign(
-    _: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let default = lfp.arg(0);
-    lfp.self_val().as_hash().set_defalut_value(default);
+    lfp.self_val()
+        .as_hash()
+        .set_defalut_value(default, vm, globals)?;
     Ok(default)
 }
 
@@ -925,7 +927,7 @@ fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val().as_hash_mut(&globals.store)?;
     let arg = lfp.arg(0).coerce_to_hash(vm, globals)?;
-    self_.replace_inner(arg.inner().clone());
+    self_.replace_inner(arg.inner().clone_inner());
 
     Ok(lfp.self_val())
 }
@@ -966,7 +968,7 @@ fn clone(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // Use the real class (skipping singleton/iclass) so that singleton
     // methods on the receiver do NOT show up on the clone.
     let class_id = lfp.self_val().real_class(&globals.store).id();
-    let inner = lfp.self_val().as_hashmap_inner().clone();
+    let inner = lfp.self_val().as_hashmap_inner().clone_inner();
     let mut v = Value::hash_from_inner(inner);
     if class_id != HASH_CLASS {
         v.change_class(class_id);
@@ -1812,7 +1814,7 @@ fn env_to_hash(
         }
         return Ok(Value::hash(new_map));
     }
-    let inner = lfp.self_val().as_hashmap_inner().clone();
+    let inner = lfp.self_val().as_hashmap_inner().clone_inner();
     Ok(Value::hash_from_inner(inner))
 }
 
@@ -2492,9 +2494,10 @@ mod tests {
 
     #[test]
     fn small_hash_linear_scan() {
-        // The ar_table-style fast path (HashContent::linear_lookup):
-        // immediate keys on <=8-entry tables answer by identity scan.
-        // Every rule it must preserve is pinned against CRuby here.
+        // The small-hash fast paths (rubymap's AR mode and the inline
+        // 2-pair representation in HashmapInner): immediate keys on small
+        // tables answer by identity scan. Every rule they must preserve
+        // is pinned against CRuby here.
         run_test_once(
             r#"
             r = []
@@ -3758,6 +3761,38 @@ mod tests {
             "h = {a: 1}; \
              begin; h.each { raise 'stop' }; rescue; end; \
              h[:b] = 2; h.keys.sort",
+            // Deep nesting on a small (inline) hash: the depth counter
+            // saturates and un-saturates soundly across many levels.
+            "h = {a: 1}; r = 0; \
+             h.each { h.each { h.each { h.each { h.each { r += 1 } } } } }; \
+             h[:b] = 2; [r, h.keys.sort]",
+        ]);
+    }
+
+    /// `h.default = x` inside `each` is legal (it does not change the key
+    /// set) but forces a small hash out of its inline representation
+    /// mid-iteration; the live iteration count must survive the move, so
+    /// a new-key insert still raises inside the block and mutation is
+    /// allowed again afterwards.
+    #[test]
+    fn hash_default_set_during_iteration() {
+        run_tests(&[
+            "h = {a: 1}; \
+             h.each { h.default = 5 }; \
+             h[:b] = 2; [h[:zz], h.keys.sort]",
+            r##"
+            h = {a: 1}
+            err = nil
+            h.each do
+              h.default = 5
+              begin
+                h[:new_key] = 1
+              rescue RuntimeError => e
+                err = e.message
+              end
+            end
+            [err, h[:miss], h.size]
+            "##,
         ]);
     }
 

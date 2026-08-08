@@ -676,7 +676,7 @@ pub(super) extern "C" fn gen_hash(
     len: usize,
 ) -> Option<Value> {
     match gen_hash_inner(vm, globals, src, len) {
-        Ok(map) => Some(Value::hash(map)),
+        Ok(map) => Some(Value::hash_from_inner(map)),
         Err(err) => {
             vm.set_error(err);
             None
@@ -689,8 +689,11 @@ fn gen_hash_inner(
     globals: &mut Globals,
     src: *const Value,
     len: usize,
-) -> Result<RubyMap<Value, Value>> {
-    let mut map = RubyMap::default();
+) -> Result<crate::value::rvalue::HashmapInner> {
+    // Build the HashmapInner directly (not a RubyMap first) so a small
+    // literal with packed keys lands in the inline representation without
+    // ever touching the heap.
+    let mut map = crate::value::rvalue::HashmapInner::default();
     if len > 0 {
         let mut iter = unsafe { std::slice::from_raw_parts(src.sub(len * 2 - 1), len * 2) }
             .iter()
