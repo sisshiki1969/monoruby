@@ -4738,3 +4738,33 @@ fn gc_break_at() -> Option<usize> {
     static AT: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
     *AT.get_or_init(|| std::env::var("MONORUBY_GC_BREAK").ok()?.parse().ok())
 }
+
+#[cfg(test)]
+mod std_fd_tests {
+    /// `fill_closed_std_fds` must reopen a CLOSED std fd (as a broken
+    /// pipe for stderr) and leave open fds alone. Exercised in a forked
+    /// child so the test process's own std fds stay untouched; the child
+    /// exits via `exit` so its coverage profile is flushed.
+    #[test]
+    fn fill_closed_std_fds_repairs_closed_stderr() {
+        // SAFETY: fork + plain fd syscalls; the child does no allocation
+        // beyond what exit() needs and reports via its exit status.
+        unsafe {
+            let pid = libc::fork();
+            if pid == 0 {
+                libc::close(2);
+                super::fill_closed_std_fds();
+                let repaired = libc::fcntl(2, libc::F_GETFD) != -1;
+                // Second call: the all-open scan path is a no-op.
+                super::fill_closed_std_fds();
+                let still_open = libc::fcntl(2, libc::F_GETFD) != -1;
+                std::process::exit(if repaired && still_open { 0 } else { 1 });
+            }
+            assert!(pid > 0);
+            let mut st: i32 = 0;
+            libc::waitpid(pid, &mut st, 0);
+            assert!(libc::WIFEXITED(st));
+            assert_eq!(libc::WEXITSTATUS(st), 0);
+        }
+    }
+}

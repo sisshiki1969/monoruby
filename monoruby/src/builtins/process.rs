@@ -2720,8 +2720,11 @@ mod new_api_tests {
               g = Process.groups
               Process.groups = g
               (Process.groups.sort == g.sort)
-            rescue Errno::EPERM
-              :eperm
+            rescue SystemCallError
+              # Non-root (EPERM), or macOS's NGROUPS_MAX quirks (EINVAL):
+              # both implementations fail the same syscall the same way,
+              # but the exact errno is platform-dependent.
+              :syscall_error
             end
             "#,
         );
@@ -2857,6 +2860,32 @@ mod new_api_tests {
     fn process_groups_set_by_name_error() {
         run_test_error(r#"Process.groups = ["no-such-group-xyzzy"]"#);
         run_test_error(r#"Process.maxgroups = -3"#);
+    }
+
+    #[test]
+    fn process_daemon_default_args() {
+        // Default daemon(): chdir("/") and /dev/null std streams apply in
+        // the detached grandchild, which reports its state through a file
+        // and exits normally (flushing its coverage profile).
+        run_test_once(
+            r#"
+            require "tmpdir"
+            Dir.mktmpdir do |d|
+              out = File.join(d, "out")
+              pid = fork do
+                Process.daemon
+                File.write(out, [Dir.pwd, STDOUT.fileno, STDERR.fileno].inspect)
+                exit
+              end
+              Process.wait(pid)
+              50.times do
+                break if File.exist?(out) && File.size(out) > 0
+                sleep 0.1
+              end
+              File.read(out)
+            end
+            "#,
+        );
     }
 
     #[test]

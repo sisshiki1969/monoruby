@@ -959,6 +959,40 @@ mod tests {
     }
 
     #[test]
+    fn spawn_enoexec_sh_fallback_and_coercions() {
+        // A +x script without a shebang: execve fails ENOEXEC and the
+        // child retries through /bin/sh, like execvp.
+        run_test_once(
+            r##"
+            require "tmpdir"
+            Dir.mktmpdir do |d|
+              path = "#{d}/script"
+              File.write(path, "echo no-shebang
+")
+              File.chmod(0o755, path)
+              r, w = IO.pipe
+              Process.wait Process.spawn(path, out: w)
+              w.close
+              r.read
+            end
+            "##,
+        );
+        // env via #to_hash, command array via #to_ary (with extra argv).
+        run_test_once(
+            r#"
+            env = Object.new
+            def env.to_hash = {"VIA_TO_HASH" => "yes"}
+            cmd = Object.new
+            def cmd.to_ary = ["/bin/sh", "shname"]
+            r, w = IO.pipe
+            Process.wait Process.spawn(env, cmd, "-c", "echo $VIA_TO_HASH-$0", out: w)
+            w.close
+            r.read
+            "#,
+        );
+    }
+
+    #[test]
     fn spawn_close_others_and_env_paths() {
         run_test_once(
             r#"
