@@ -63,11 +63,33 @@ impl ISeqId {
     }
 }
 
+///
+/// One method call the JIT resolved at compile time, recorded so that a
+/// later class-version bump can be *repaired* instead of forcing a
+/// recompile: if every entry still resolves to the same `FuncId`, the
+/// compiled code is still correct and only needs the new version stamped
+/// into it (`Store::update_inline_cache`).
+///
+/// The refinement set is part of the record because it is part of the
+/// question the compiler asked. Without it the repair would re-ask the
+/// *unrefined* question after a `using` moved the version, confirm the
+/// unrefined answer, and re-validate machine code that must now dispatch
+/// into the refinement — see `doc/refinements.md` §3.4.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InlineCacheEntry {
+    pub recv_class: ClassId,
+    /// `None` for a `super` call site.
+    pub name: Option<IdentId>,
+    pub refinements: RefinementSetId,
+    pub func_id: FuncId,
+}
+
 #[derive(Debug, Clone)]
 pub struct JitInfo {
     pub entry: DestLabel,
     pub class_version_label: DestLabel,
-    pub inline_cache_map: Vec<(ClassId, Option<IdentId>, FuncId)>,
+    pub inline_cache_map: Vec<InlineCacheEntry>,
 }
 
 ///
@@ -217,6 +239,35 @@ pub struct ISeqInfo {
     ///
     pub(crate) nested_definee: Option<ClassId>,
     ///
+    /// The refinement set code written in this body resolves under, or
+    /// `None` to inherit the enclosing body's (see
+    /// `Store::iseq_refinements`, the only reader).
+    ///
+    /// Set for the two kinds of body that own one:
+    ///
+    /// - a **method** body: the snapshot `def` took of the defining
+    ///   scope's set. Fixed for every invocation, because `using` is
+    ///   illegal inside a method.
+    /// - a **scope** that ran `using` — the top level, a class / module
+    ///   body, an eval body, or a block whose `self` is a module
+    ///   (`Module.new { using R }`). Updated by each `using`.
+    ///
+    /// `None` everywhere else, so an ordinary block resolves through its
+    /// lexical parent and therefore sees a `using` that runs in that
+    /// parent *after* the block was created — which is what CRuby does.
+    ///
+    /// One cell per iseq, which is the known limitation of storing this
+    /// here rather than per frame (`doc/refinements.md` §7.2 option C): a
+    /// block that runs `using` and is *executed more than once* keeps the
+    /// previous execution's set as its base. Re-activating the same
+    /// module is idempotent, so this only shows when each execution
+    /// activates a *different* refinement — `Module.new { using
+    /// make_refinement }` in a loop. A class body does not have the
+    /// problem: `enter_classdef` re-seeds its cell on every entry.
+    ///
+    pub(crate) refinements: Option<RefinementSetId>,
+
+    ///
     /// `true` when this method's body (including nested blocks) uses
     /// its implicit block: a `yield`, or any form of `super` (which
     /// forwards the block). Set during bytecode compilation on the
@@ -340,6 +391,7 @@ impl ISeqInfo {
             hint: ISeqHint::Normal,
             uses_block: false,
             nested_definee: None,
+            refinements: None,
             singleton_classdef: false,
             module_classdef: false,
             in_singleton_lexical: false,
@@ -685,7 +737,7 @@ impl ISeqInfo {
     pub(crate) fn get_cache_map(
         &self,
         self_class: ClassId,
-    ) -> Option<&Vec<(ClassId, Option<IdentId>, FuncId)>> {
+    ) -> Option<&Vec<InlineCacheEntry>> {
         self.jit_entry
             .get(&self_class)
             .map(|info| &info.inline_cache_map)
@@ -694,7 +746,7 @@ impl ISeqInfo {
     pub(crate) fn set_cache_map(
         &mut self,
         self_class: ClassId,
-        cache: Vec<(ClassId, Option<IdentId>, FuncId)>,
+        cache: Vec<InlineCacheEntry>,
     ) {
         self.jit_entry
             .get_mut(&self_class)

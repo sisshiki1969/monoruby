@@ -356,8 +356,23 @@ pub(super) extern "C" fn enter_classdef<'a>(
         found.map(|s| s.to_vec()).unwrap_or_default()
     };
     lexical_context.push(self_value.id());
+    // A class / module body is one of the few scopes where `using` is
+    // legal, so it owns a refinement cell. Seed it from the enclosing
+    // scope on every entry; each `using` in the body updates it from
+    // there (`ISeqInfo::refinements`).
+    let outer_refinements = vm.current_refinements(globals);
     if let Some(info) = globals.store.iseq_mut(func_id) {
         info.lexical_context = lexical_context;
+        info.refinements = Some(outer_refinements);
+    }
+    // This body's own iseq is the first place that knows the line of the
+    // `class Foo` / `module Foo` keyword itself; `define_class`, running
+    // before the frame existed, could only see the enclosing body's line.
+    if let Some(iseq) = globals.store[func_id].is_iseq() {
+        let info = &globals.store[iseq];
+        let line = info.sourceinfo.get_line(&info.loc) as u32;
+        let file = info.sourceinfo.file_name().to_string();
+        vm.record_pending_const_loc(globals, file, line);
     }
     globals.get_func_data(func_id)
 }
@@ -1809,6 +1824,7 @@ pub(super) extern "C" fn singleton_define_method(
             None => Vec::new(),
         };
         globals.store[iseq].lexical_context = parent_ctx;
+        globals.store[iseq].refinements = Some(vm.definition_refinements(globals));
         // `def expr.m` captures the *surrounding* cref, not the
         // receiver's singleton: a plain nested `def` in its body
         // targets the scope this definition appears in (CRuby:

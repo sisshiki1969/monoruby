@@ -12,7 +12,7 @@ impl Codegen {
         jit_entry: DestLabel,
         class_version: u32,
         is_recompile: Option<RecompileReason>,
-    ) -> Option<(Vec<(ClassId, Option<IdentId>, FuncId)>, DestLabel)> {
+    ) -> Option<(Vec<InlineCacheEntry>, DestLabel)> {
         self.compile(
             globals,
             iseq_id,
@@ -159,7 +159,7 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         _is_recompile: Option<RecompileReason>,
-    ) -> Option<(Vec<(ClassId, Option<IdentId>, FuncId)>, DestLabel)> {
+    ) -> Option<(Vec<InlineCacheEntry>, DestLabel)> {
         if position.is_none() && globals.store[iseq_id].jit_invalidated() {
             return None;
         }

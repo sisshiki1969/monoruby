@@ -10,9 +10,12 @@ use std::{cell::RefCell, pin::Pin};
 mod class;
 mod function;
 mod iseq;
+mod refinement;
 pub use class::*;
 pub use function::*;
 pub(crate) use iseq::*;
+pub use refinement::RefinementSetId;
+pub(crate) use refinement::RefinementTable;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MethodTableEntry {
@@ -119,6 +122,10 @@ pub struct Store {
     /// where `"abc".equal?("abc")` is true under the magic comment. Rooted
     /// for GC in [`Store::mark`].
     frozen_str_pool: HashMap<(Vec<u8>, crate::value::Encoding), Value>,
+    /// Interned refinement sets, the union of refined method names, and
+    /// the "any refinement exists" gate. See `globals/store/refinement.rs`
+    /// and `doc/refinements.md` §6.
+    refinements: RefinementTable,
 }
 
 impl std::ops::Deref for Store {
@@ -237,6 +244,7 @@ impl Store {
             method_cache: RefCell::new(GlobalMethodCache::default()),
             compile_warnings: vec![],
             frozen_str_pool: HashMap::default(),
+            refinements: RefinementTable::new(),
         }
     }
 
@@ -364,7 +372,12 @@ impl Store {
     /// Get class name of *ClassId*.
     pub(crate) fn get_class_name(&self, class: ClassId) -> String {
         let class_obj = self.classes[class].get_module();
-        match self.classes[class].get_name() {
+        match self.classes[class].get_name().filter(|_| {
+            // An ancestor erased by `set_temporary_name(nil)` makes the
+            // whole subtree anonymous again, so fall through to the
+            // `#<Module:0x..>` rendering below.
+            !self.classes.is_name_erased(class)
+        }) {
             Some(name) => {
                 // A name set explicitly via `Module#set_temporary_name`
                 // overrides parent-chain rendering — CRuby returns the
@@ -554,11 +567,15 @@ impl Store {
         let func_id = cfp.lfp().func_id();
         if let Some(iseq_id) = self[func_id].is_iseq() {
             let iseq = &self[iseq_id];
-            let loc = if let Some(pc) = pc {
-                let bc_index = iseq.get_pc_index(Some(pc));
-                iseq.sourcemap[bc_index.to_usize()]
-            } else {
-                iseq.loc
+            // The pc is only meaningful if it actually points into this
+            // frame's bytecode. It may not: when the call was reached
+            // through a JIT-inlined dispatch (`send`), the frame we land
+            // on is the inliner's, not the one whose pc we were handed.
+            // Fall back to the function's own location there rather than
+            // indexing the sourcemap out of range.
+            let loc = match pc.filter(|pc| iseq.contains_pc(*pc)) {
+                Some(pc) => iseq.sourcemap[iseq.get_pc_index(Some(pc)).to_usize()],
+                None => iseq.loc,
             };
             format!(
                 "{}:{}",

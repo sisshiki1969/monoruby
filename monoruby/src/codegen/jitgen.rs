@@ -327,7 +327,7 @@ impl Codegen {
         class_version: u32,
         const_version: u64,
     ) -> JitResult<(
-        Vec<(ClassId, Option<IdentId>, FuncId)>,
+        Vec<InlineCacheEntry>,
         SpecializedCodeInfo,
         DestLabel,
     )> {
@@ -337,7 +337,18 @@ impl Codegen {
             JitType::Entry
         };
         let frame = JitStackFrame::new(store, jit_type, 0, iseq_id, None, self_class, None);
-        let mut ctx = JitContext::new(store, true, class_version, const_version, vec![]);
+        // The set the body resolves under is a compile-time constant of
+        // the iseq (`doc/refinements.md` §6.1); `using` moves the class
+        // version, which is what re-checks it.
+        let refinements = store.iseq_refinements(iseq_id);
+        let mut ctx = JitContext::new(
+            store,
+            true,
+            class_version,
+            const_version,
+            refinements,
+            vec![],
+        );
         let mut frame = ctx.traceir_to_asmir(frame)?;
         let specialized_info = SpecializedCodeInfo::from(&frame);
 

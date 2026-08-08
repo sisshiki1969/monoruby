@@ -895,10 +895,19 @@ fn unshift(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 fn concat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ary = lfp.self_val().as_array_mut(&globals.store)?;
     let mut ary: Array = Array::new_empty();
-    for a in lfp.arg(0).as_array().iter().cloned() {
-        let converted = a.coerce_to_array(vm, globals)?;
-        ary.extend_from_slice(&converted);
-    }
+    let args: Vec<Value> = lfp.arg(0).as_array().iter().cloned().collect();
+    vm.with_temp_scope(|vm| {
+        // `coerce_to_array` dispatches `#to_ary` — arbitrary Ruby, which
+        // may collect. The accumulator is reachable only from this Rust
+        // local, so it has to be rooted for the duration or the sweep
+        // takes it and `extend_from_slice` reads a dead RValue.
+        vm.temp_push(ary.into());
+        for a in args {
+            let converted = a.coerce_to_array(vm, globals)?;
+            ary.extend_from_slice(&converted);
+        }
+        Ok::<(), MonorubyErr>(())
+    })?;
     self_ary.extend_from_slice(&ary);
     Ok(self_ary.into())
 }

@@ -211,11 +211,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(MODULE_CLASS, "private_constant", private_constant);
     globals.define_builtin_func_rest(MODULE_CLASS, "deprecate_constant", deprecate_constant);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "ruby2_keywords", ruby2_keywords);
-    // `used_refinements` (both class and instance forms) is mocked in
-    // Ruby — see `Module#used_refinements` / `Module.used_refinements`
-    // in `builtins/startup.rb`. Both return `[]` since refinements
-    // aren't implemented; defining in Ruby lets specs that actually
-    // exercise refinements override the implementation.
     globals.define_builtin_funcs(MODULE_CLASS, "to_s", &["inspect"], tos, 0);
     globals.define_builtin_func(MODULE_CLASS, "name", name, 0);
     globals.define_builtin_func(MODULE_CLASS, "set_temporary_name", set_temporary_name, 1);
@@ -224,6 +219,37 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func_rest(MODULE_CLASS, "private", private);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "protected", protected);
     globals.define_private_builtin_func_rest(MODULE_CLASS, "public", public);
+    globals.define_private_builtin_func(MODULE_CLASS, "using", using, 1);
+    globals.define_private_builtin_func(MODULE_CLASS, "refine", refine, 1);
+    globals.define_builtin_func(MODULE_CLASS, "refinements", refinements, 0);
+    globals.define_builtin_class_func(MODULE_CLASS, "used_refinements", used_refinements, 0);
+    globals.define_builtin_class_func(MODULE_CLASS, "used_modules", used_modules, 0);
+    // `Refinement` — a Module subclass; `refine` returns one.
+    let module_obj = globals.store[MODULE_CLASS].get_module();
+    globals.define_builtin_class(
+        "Refinement",
+        REFINEMENT_CLASS,
+        module_obj,
+        OBJECT_CLASS,
+        ObjTy::MODULE,
+    );
+    globals.define_builtin_func(REFINEMENT_CLASS, "target", refinement_target, 0);
+    globals.define_builtin_funcs(
+        REFINEMENT_CLASS,
+        "to_s",
+        &["inspect"],
+        refinement_tos,
+        0,
+    );
+    // A refinement is not a mixin: CRuby undefines the hooks that would
+    // let one be included / extended, and makes `include` / `prepend`
+    // raise rather than silently building a broken ancestor chain.
+    for m in ["append_features", "prepend_features", "extend_object"] {
+        let _ = globals.undef_method_for_class(REFINEMENT_CLASS, IdentId::get_id(m));
+    }
+    globals.define_builtin_func_rest(REFINEMENT_CLASS, "include", refinement_include);
+    globals.define_builtin_func_rest(REFINEMENT_CLASS, "prepend", refinement_include);
+    globals.define_builtin_func_rest(REFINEMENT_CLASS, "import_methods", import_methods);
     // hook methods (no-op by default, overridden by startup.rb)
     globals.define_private_builtin_func(MODULE_CLASS, "method_added", module_noop_hook, 1);
     globals.define_private_builtin_func(MODULE_CLASS, "method_removed", module_noop_hook, 1);
@@ -324,7 +350,7 @@ fn module_nesting(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let nesting = vm.current_class_nesting();
+    let nesting = vm.current_class_nesting(globals);
     let ary: Vec<Value> = nesting
         .into_iter()
         .map(|class_id| globals.store[class_id].get_module().as_val())
@@ -885,14 +911,26 @@ fn autoload_resolution_candidates(
 /// CRuby raises `NameError` for autoload/const_set when the symbol cannot be
 /// a constant.
 fn validate_constant_name(name: IdentId) -> Result<()> {
-    let s = name.to_string();
-    let mut chars = s.chars();
-    let first = chars.next();
-    let valid = matches!(first, Some(c) if c.is_ascii_uppercase())
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let ident = name.get_ident_name_clone();
+    let valid = match ident.as_str() {
+        Some(s) => is_valid_const_name(s),
+        // A name in a non-UTF-8 encoding (`ConstantSpecs.const_set
+        // "CS_CONSTλ".encode("euc-jp"), 1`) is judged bytewise, as
+        // CRuby's `rb_enc_*` predicates do: it must still start with an
+        // uppercase ASCII letter, and every byte of a multibyte
+        // character (>= 0x80) counts as a name character.
+        None => {
+            let b = ident.as_bytes();
+            matches!(b.first(), Some(c) if c.is_ascii_uppercase())
+                && b[1..]
+                    .iter()
+                    .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c >= 0x80)
+        }
+    };
     if !valid {
         return Err(MonorubyErr::nameerr(format!(
-            "wrong constant name {s}"
+            "wrong constant name {}",
+            ident.to_string_lossy()
         )));
     }
     Ok(())
@@ -936,6 +974,12 @@ fn class_eval(
         let expr = crate::builtins::eval_source_bytes(vm, globals, args[0])?;
         let cfp = vm.cfp();
         let caller_cfp = cfp.prev().unwrap();
+        // The eval body is anchored to the Ruby scope that *wrote* the
+        // call — its locals and its lexical nesting — which is not the
+        // immediate caller when we were reached through a builtin
+        // (`send`, a Rust helper, mspec, …). The location below still
+        // comes from the immediate caller, whose pc we were handed.
+        let outer_cfp = caller_cfp.nearest_ruby_frame();
         let path = if supplied >= 2 {
             args[1].coerce_to_str(vm, globals)?
         } else {
@@ -952,12 +996,12 @@ fn class_eval(
         let fid = globals.compile_script_eval(
             expr,
             path,
-            caller_cfp,
+            outer_cfp,
             Some(module.id()),
             lineno,
             src_encoding,
         )?;
-        let proc = ProcData::new(caller_cfp.lfp(), fid);
+        let proc = ProcData::new(outer_cfp.lfp(), fid);
         // class_eval "..." string form: runtime-only push, just like
         // the block form. The compiled eval body itself receives the
         // module as its lexical context via `compile_script_eval`'s
@@ -1151,37 +1195,37 @@ fn is_valid_const_name(name: &str) -> bool {
     chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
-/// Walk a (possibly scoped) constant path. Coerces *name_arg* to a
-/// Symbol or String (via `#to_str`); a Symbol is treated as a bare
-/// name (a `::`-containing Symbol is a NameError). A String may be
-/// fully-qualified (`"::A::B"` -> start at Object) or relative
-/// (`"A::B"` -> start at *receiver*).
+/// Coerce *name_arg* to a Symbol or String (via `#to_str`) and split it
+/// into the sequence of interned constant names the path denotes. A
+/// Symbol is a bare name (a `::`-containing Symbol is a NameError); a
+/// String may be fully-qualified (`"::A::B"` -> the returned flag asks
+/// the caller to start at Object) or relative (`"A::B"`).
 ///
-/// Each segment is validated by `is_valid_const_name`. Returns
-/// `Ok(Some(v))` on hit, `Ok(None)` if any segment is missing,
-/// or `Err(NameError)` for malformed names.
-fn lookup_constant_path(
+/// Every segment is validated, so the caller only has to walk the chain.
+fn constant_path_segments(
     vm: &mut Executor,
     globals: &mut Globals,
-    receiver: Module,
     name_arg: Value,
-    inherit: bool,
-) -> Result<Option<Value>> {
-    // Coerce to a String we can split, but remember whether the input
-    // was a Symbol (Symbols may not contain `::`).
-    let (path, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
-        (sym.get_name().to_string(), true)
-    } else if let Some(s) = name_arg.is_str() {
-        (s.to_string(), false)
+) -> Result<(bool, Vec<IdentId>)> {
+    let (name, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
+        (sym, true)
+    } else if name_arg.is_rstring().is_some()
+        && let Some(id) = name_arg.try_symbol_or_string()
+    {
+        (id, false)
     } else if let Some(func_id) = globals.check_method(name_arg, IdentId::TO_STR) {
         let result = vm.invoke_func_inner(globals, func_id, name_arg, &[], None, None)?;
-        if let Some(s) = result.is_str() {
-            (s.to_string(), false)
-        } else {
-            return Err(MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into String",
-                name_arg.get_real_class_name(&globals.store)
-            )));
+        match result
+            .is_rstring()
+            .and_then(|_| result.try_symbol_or_string())
+        {
+            Some(id) => (id, false),
+            None => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "no implicit conversion of {} into String",
+                    name_arg.get_real_class_name(&globals.store)
+                )));
+            }
         }
     } else {
         return Err(MonorubyErr::typeerr(format!(
@@ -1190,13 +1234,24 @@ fn lookup_constant_path(
         )));
     };
 
+    let ident = name.get_ident_name_clone();
+    let Some(path) = ident.as_str() else {
+        // A name in a non-UTF-8 encoding (`const_get "CS_CONSTλ".encode("euc-jp")`)
+        // denotes exactly one constant: its bytes are not a `&str` we can
+        // split, and `::` — being ASCII — never occurs inside a character of
+        // an ASCII-compatible encoding, so there is nothing to split. Take it
+        // whole, interned bytewise, exactly as `const_set` stored it.
+        validate_constant_name(name)?;
+        return Ok((false, vec![name]));
+    };
+
     let (start_at_object, segs): (bool, Vec<&str>) = if was_symbol {
+        // CRuby rejects `::`-containing Symbols outright (Symbols are
+        // bare names; they can't carry scope qualifiers).
         if path.contains("::") {
-            return Err(MonorubyErr::nameerr(format!(
-                "wrong constant name {path}"
-            )));
+            return Err(MonorubyErr::nameerr(format!("wrong constant name {path}")));
         }
-        (false, vec![path.as_str()])
+        (false, vec![path])
     } else if let Some(rest) = path.strip_prefix("::") {
         (true, rest.split("::").collect())
     } else {
@@ -1204,10 +1259,26 @@ fn lookup_constant_path(
     };
 
     if segs.iter().any(|s| !is_valid_const_name(s)) {
-        return Err(MonorubyErr::nameerr(format!(
-            "wrong constant name {path}"
-        )));
+        return Err(MonorubyErr::nameerr(format!("wrong constant name {path}")));
     }
+
+    Ok((
+        start_at_object,
+        segs.into_iter().map(IdentId::get_id).collect(),
+    ))
+}
+
+/// Walk a (possibly scoped) constant path. Returns `Ok(Some(v))` on hit,
+/// `Ok(None)` if any segment is missing, or `Err(NameError)` for
+/// malformed names.
+fn lookup_constant_path(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Module,
+    name_arg: Value,
+    inherit: bool,
+) -> Result<Option<Value>> {
+    let (start_at_object, segs) = constant_path_segments(vm, globals, name_arg)?;
 
     // Walk the scope chain. The first segment honours `inherit`; nested
     // segments are looked up directly on the resolved class (CRuby
@@ -1220,8 +1291,7 @@ fn lookup_constant_path(
         receiver
     };
     let last_idx = segs.len() - 1;
-    for (i, seg) in segs.iter().enumerate() {
-        let id = IdentId::get_id(seg);
+    for (i, id) in segs.into_iter().enumerate() {
         // For the *first* segment, defer to the inherit flag (and
         // implicitly walk Object for modules / superclasses for
         // classes, as `get_constant_superclass_with_class` does). For
@@ -1271,45 +1341,7 @@ fn probe_constant_path(
     name_arg: Value,
     inherit: bool,
 ) -> Result<bool> {
-    let (path, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
-        (sym.get_name().to_string(), true)
-    } else if let Some(s) = name_arg.is_str() {
-        (s.to_string(), false)
-    } else if let Some(func_id) = globals.check_method(name_arg, IdentId::TO_STR) {
-        let result = vm.invoke_func_inner(globals, func_id, name_arg, &[], None, None)?;
-        if let Some(s) = result.is_str() {
-            (s.to_string(), false)
-        } else {
-            return Err(MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into String",
-                name_arg.get_real_class_name(&globals.store)
-            )));
-        }
-    } else {
-        return Err(MonorubyErr::typeerr(format!(
-            "no implicit conversion of {} into String",
-            name_arg.get_real_class_name(&globals.store)
-        )));
-    };
-
-    let (start_at_object, segs): (bool, Vec<&str>) = if was_symbol {
-        if path.contains("::") {
-            return Err(MonorubyErr::nameerr(format!(
-                "wrong constant name {path}"
-            )));
-        }
-        (false, vec![path.as_str()])
-    } else if let Some(rest) = path.strip_prefix("::") {
-        (true, rest.split("::").collect())
-    } else {
-        (false, path.split("::").collect())
-    };
-
-    if segs.iter().any(|s| !is_valid_const_name(s)) {
-        return Err(MonorubyErr::nameerr(format!(
-            "wrong constant name {path}"
-        )));
-    }
+    let (start_at_object, segs) = constant_path_segments(vm, globals, name_arg)?;
 
     let mut current = if start_at_object {
         globals.store[OBJECT_CLASS].get_module()
@@ -1317,8 +1349,7 @@ fn probe_constant_path(
         receiver
     };
     let last_idx = segs.len() - 1;
-    for (i, seg) in segs.iter().enumerate() {
-        let id = IdentId::get_id(seg);
+    for (i, id) in segs.into_iter().enumerate() {
         if i == last_idx {
             // Final segment: non-triggering probe. For the receiver
             // (i == 0) honour `inherit`; for nested resolved classes
@@ -1373,12 +1404,7 @@ fn const_set(
     let self_val = lfp.self_val();
     self_val.ensure_not_frozen(&globals.store)?;
     let name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
-    let name_str = name.get_name();
-    if !is_valid_const_name(&name_str) {
-        return Err(MonorubyErr::nameerr(format!(
-            "wrong constant name {name_str}"
-        )));
-    }
+    validate_constant_name(name)?;
     let module = self_val.as_class().id();
     let val = lfp.arg(1);
     // Warn (via Ruby's `$stderr` so mspec's `complain` matcher captures it)
@@ -1517,44 +1543,7 @@ fn lookup_constant_with_owner(
     name_arg: Value,
     inherit: bool,
 ) -> Result<Option<(ClassId, Option<(String, u32)>)>> {
-    let (path, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
-        (sym.get_name().to_string(), true)
-    } else if let Some(s) = name_arg.is_str() {
-        (s.to_string(), false)
-    } else if let Some(func_id) = globals.check_method(name_arg, IdentId::TO_STR) {
-        let result = vm.invoke_func_inner(globals, func_id, name_arg, &[], None, None)?;
-        if let Some(s) = result.is_str() {
-            (s.to_string(), false)
-        } else {
-            return Err(MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into String",
-                name_arg.get_real_class_name(&globals.store)
-            )));
-        }
-    } else {
-        return Err(MonorubyErr::typeerr(format!(
-            "no implicit conversion of {} into String",
-            name_arg.get_real_class_name(&globals.store)
-        )));
-    };
-
-    let (start_at_object, segs): (bool, Vec<&str>) = if was_symbol {
-        // CRuby rejects `::`-containing Symbols outright (Symbols are
-        // bare names; they can't carry scope qualifiers).
-        if path.contains("::") {
-            return Err(MonorubyErr::nameerr(format!(
-                "wrong constant name {path}"
-            )));
-        }
-        (false, vec![path.as_str()])
-    } else if let Some(rest) = path.strip_prefix("::") {
-        (true, rest.split("::").collect())
-    } else {
-        (false, path.split("::").collect())
-    };
-    if segs.iter().any(|s| !is_valid_const_name(s)) {
-        return Err(MonorubyErr::nameerr(format!("wrong constant name {path}")));
-    }
+    let (start_at_object, segs) = constant_path_segments(vm, globals, name_arg)?;
 
     let mut current = if start_at_object {
         globals.store[OBJECT_CLASS].get_module()
@@ -1562,8 +1551,7 @@ fn lookup_constant_with_owner(
         receiver
     };
     let last_idx = segs.len() - 1;
-    for (i, seg) in segs.iter().enumerate() {
-        let id = IdentId::get_id(seg);
+    for (i, id) in segs.into_iter().enumerate() {
         // First segment honours `inherit`; later segments are looked
         // up directly on the resolved class, matching CRuby's scoped
         // resolution.
@@ -1907,6 +1895,21 @@ fn instance_methods(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     let inherited_too = lfp.try_arg(0).is_none() || lfp.arg(0).as_bool();
+    // On a *refinement*, the list is the refined class's plus whatever
+    // the refine block has defined so far: inside `refine Array do … end`
+    // `instance_methods` answers as `Array.instance_methods` does
+    // (CRuby).
+    if let Some(refined) = globals.store[class_id].refined_class()
+        && inherited_too
+    {
+        let mut names = globals.store.get_method_names_inherit(refined, false);
+        for name in globals.store.get_method_names(class_id) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        return Ok(Value::array_from_vec(names));
+    }
     Ok(Value::array_from_vec(if !inherited_too {
         globals.store.get_method_names(class_id)
     } else {
@@ -2110,6 +2113,13 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// `Module#prepend` and `Module#include` for their up-front
 /// `TypeError` checks before invoking the per-argument hooks.
 fn require_module_argument(globals: &Globals, arg: Value, op: &str) -> Result<()> {
+    // A Refinement is a Module, but it is not a mixin: CRuby rejects it
+    // here rather than letting it into an ancestor chain.
+    if arg.class() == REFINEMENT_CLASS {
+        return Err(MonorubyErr::typeerr(format!(
+            "Cannot {op} refinement"
+        )));
+    }
     if arg.ty() == Some(ObjTy::MODULE) {
         Ok(())
     } else {
@@ -2182,8 +2192,10 @@ fn instance_method(
 ) -> Result<Value> {
     let klass = lfp.self_val().as_class();
     let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
+    let set = vm.caller_refinements(globals);
     let (func_id, _, owner) = globals
-        .find_method_for_class(klass.id(), method_name)
+        .store
+        .find_method_for_class_refined(klass.id(), method_name, set)
         .map_err(|_| {
             MonorubyErr::nameerr_with_name(
                 format!(
@@ -2534,7 +2546,7 @@ fn tos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    if globals.store[class_id].get_name().is_none() {
+    if globals.store[class_id].get_name().is_none() || globals.store.is_name_erased(class_id) {
         return Ok(Value::nil());
     }
     if let Some(cached) = globals.store[class_id].cached_name_value() {
@@ -3028,6 +3040,329 @@ fn set_temporary_name(
 }
 
 ///
+/// ### Module#using
+/// - using(module) -> self
+///
+/// Refinements are not implemented, so a module can never carry any: this
+/// validates the argument and the calling scope the way CRuby does, then
+/// activates the (necessarily empty) set of refinements. The same shape as
+/// `main.using`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/using.html]
+#[monoruby_builtin]
+fn using(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // CRuby permits `using` only where a cref is being built — a class or
+    // module body, a block run in one, or the top level — never inside a
+    // method body, where the activation would outlive the call.
+    if let Some(caller) = vm.cfp().prev()
+        && globals.store[caller.outermost_lfp().func_id()].is_method()
+    {
+        return Err(MonorubyErr::runtimeerr(
+            "Module#using is not permitted in methods",
+        ));
+    }
+    let arg = expect_refinement_module(globals, lfp.arg(0))?;
+    activate(vm, globals, arg);
+    Ok(lfp.self_val())
+}
+
+/// Collect *module*'s refinements and activate them in the calling scope.
+pub(super) fn activate(vm: &mut Executor, globals: &mut Globals, module: ClassId) {
+    let added = globals.store.refinements_of_module(module);
+    vm.activate_refinements(globals, &added);
+}
+
+///
+/// ### Module#refine
+/// - refine(klass) { ... } -> Refinement
+///
+/// Creates (or reuses) the refinement module this module holds for
+/// *klass*, evaluates the block with it as the definee, and returns it.
+/// The refinement is inert until some scope activates it with `using`.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/refine.html]
+#[monoruby_builtin]
+fn refine(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let owner = lfp.self_val().as_class_id();
+    let arg = lfp.arg(0);
+    let refined = match arg.is_class_or_module() {
+        Some(m) => m.id(),
+        None => {
+            return Err(MonorubyErr::typeerr(format!(
+                "wrong argument type {} (expected Class or Module)",
+                arg.get_real_class_name(&globals.store)
+            )));
+        }
+    };
+    let Some(bh) = lfp.block() else {
+        return Err(MonorubyErr::argumenterr("no block given"));
+    };
+    let data = vm.get_block_data(globals, bh)?;
+    // `refine` on the same class twice extends the module made the first
+    // time, so both blocks' methods land in one refinement (CRuby).
+    let refinement = match globals.store[owner]
+        .own_refinements()
+        .iter()
+        .copied()
+        .find(|r| globals.store[*r].refined_class() == Some(refined))
+    {
+        Some(existing) => globals.store[existing].get_module(),
+        None => {
+            let module = globals.store.define_unnamed_module();
+            let mut val = module.as_val();
+            val.change_class(REFINEMENT_CLASS);
+            globals.store[module.id()].set_refinement_of(refined, owner);
+            globals.store[owner].add_refinement(module.id());
+            module
+        }
+    };
+    // A refinement exists now, so the resolution gate must come off even
+    // if the block defines nothing.
+    globals.store.refinements_mut().activate();
+    let module_val = refinement.as_val();
+    // CRuby activates a refinement inside its own `refine` block, so a
+    // `def` there sees it (a refined method may call its siblings) and
+    // so may the block's own straight-line code. Swap the scope's cell
+    // for the duration; the enclosing body is unaffected once it is put
+    // back.
+    let saved = vm.begin_refine_block(globals, refined, refinement.id());
+    vm.push_runtime_class_context(refinement.id());
+    let res = vm.invoke_block_with_self(globals, &data, module_val, &[]);
+    vm.pop_class_context();
+    vm.end_refine_block(globals, saved);
+    res?;
+    // Every refinement defined in one module is visible from every other
+    // one's method bodies (CRuby), but the sibling defined *after* this
+    // block could not have been in the snapshot its `def`s took. Re-stamp
+    // them all now that the owner's set has grown; `refine` is a
+    // load-time call, and a refinement's method table is small.
+    vm.restamp_refinement_methods(globals, owner);
+    Ok(module_val)
+}
+
+///
+/// ### Refinement#import_methods
+/// - import_methods(*modules) -> self
+///
+/// Copies the modules' own methods into the refinement, so that calls
+/// between them resolve within the refinement once it is activated.
+/// Only methods written in Ruby can be imported, and only the modules'
+/// *own* methods — anything they inherit is skipped (with a warning).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Refinement/i/import_methods.html]
+#[monoruby_builtin]
+fn import_methods(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let refinement = lfp.self_val().as_class_id();
+    let args: Vec<Value> = lfp.arg(0).as_array().iter().cloned().collect();
+    // Everything is validated before anything is imported: a bad
+    // argument late in the list must leave the refinement untouched.
+    let mut modules = vec![];
+    for v in &args {
+        match v.is_class_or_module() {
+            Some(m) if m.is_module() && v.class() != REFINEMENT_CLASS => modules.push(m.id()),
+            _ => {
+                return Err(MonorubyErr::typeerr(format!(
+                    "wrong argument type {} (expected Module)",
+                    v.get_real_class_name(&globals.store)
+                )));
+            }
+        }
+    }
+    // Importing happens module by module: a module whose methods are
+    // not all written in Ruby raises when the walk reaches it, and the
+    // modules *before* it stay imported (CRuby). The argument type check
+    // above is the all-or-nothing part.
+    for module in &modules {
+        let mut imports = vec![];
+        // `ancestors` of a plain module is `[self]`; anything more means
+        // it includes or prepends something, whose methods are *not*
+        // imported. CRuby warns rather than failing.
+        if globals.ancestors(*module).len() > 1 {
+            let msg = format!(
+                "warning: {} has ancestors, but Refinement#import_methods doesn't import their methods\n",
+                globals.store.get_class_name(*module)
+            );
+            emit_stderr_warning(vm, globals, &msg);
+        }
+        for (name, func_id, visi) in globals.store[*module].own_method_entries() {
+            let Some(func_id) = func_id else { continue };
+            if globals.store[func_id].is_iseq().is_none() {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "Can't import method which is not defined with Ruby code: {}#{name}",
+                    globals.store.get_class_name(*module)
+                )));
+            }
+            imports.push((name, func_id, visi));
+        }
+        for (name, func_id, visi) in imports {
+            globals.add_method(refinement, name, func_id, visi);
+        }
+    }
+    Globals::class_version_inc();
+    Ok(lfp.self_val())
+}
+
+/// Write *msg* to Ruby's `$stderr` so mspec's `complain` matcher sees it.
+fn emit_stderr_warning(vm: &mut Executor, globals: &mut Globals, msg: &str) {
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or(Value::nil());
+    let _ = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("write"),
+        stderr,
+        &[Value::string(msg.to_string())],
+        None,
+        None,
+    );
+}
+
+///
+/// ### Refinement#target
+/// - target -> Class
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Refinement/i/target.html]
+#[monoruby_builtin]
+fn refinement_target(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    Ok(match globals.store[class_id].refined_class() {
+        Some(refined) => globals.store[refined].get_module().as_val(),
+        None => Value::nil(),
+    })
+}
+
+///
+/// `Refinement#to_s` / `#inspect` — `#<refinement:String@Shout>`.
+/// Unlike `Module#to_s` this ignores any constant the refinement got
+/// bound to; the refined class and the owner are what identify it.
+#[monoruby_builtin]
+fn refinement_tos(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let info = &globals.store[class_id];
+    let s = match (info.refined_class(), info.refinement_owner()) {
+        (Some(refined), Some(owner)) => format!(
+            "#<refinement:{}@{}>",
+            globals.store.get_class_name(refined),
+            globals.store.get_class_name(owner)
+        ),
+        // `Refinement.new` — a Refinement that refines nothing.
+        _ => format!("#<Refinement:0x{:016x}>", lfp.self_val().id()),
+    };
+    Ok(Value::string(s))
+}
+
+/// `Refinement#include` / `#prepend` — always a TypeError. A refinement
+/// is not a mixin target. CRuby names the method in the message, so the
+/// two share an implementation but not a message.
+#[monoruby_builtin]
+fn refinement_include(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    let name = vm
+        .cfp()
+        .lfp()
+        .func_id();
+    let name = globals.store[name].name().unwrap_or(IdentId::get_id("include"));
+    Err(MonorubyErr::typeerr(format!(
+        "Refinement#{name} has been removed"
+    )))
+}
+
+///
+/// ### Module#refinements
+/// - refinements -> [Refinement]
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/refinements.html]
+#[monoruby_builtin]
+fn refinements(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let v: Vec<Value> = globals.store[class_id]
+        .own_refinements()
+        .to_vec()
+        .into_iter()
+        .map(|r| globals.store[r].get_module().as_val())
+        .collect();
+    Ok(Value::array_from_vec(v))
+}
+
+///
+/// ### Module.used_refinements
+/// - used_refinements -> [Refinement]
+///
+/// The refinements activated in the *caller's* scope.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/s/used_refinements.html]
+#[monoruby_builtin]
+fn used_refinements(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let set = vm.caller_refinements(globals);
+    let v: Vec<Value> = globals
+        .store
+        .refinements()
+        .entries(set)
+        .to_vec()
+        .into_iter()
+        .map(|(_, module)| globals.store[module].get_module().as_val())
+        .collect();
+    Ok(Value::array_from_vec(v))
+}
+
+///
+/// ### Module.used_modules
+/// - used_modules -> [Module]
+///
+/// The modules `using`-ed in the caller's scope — the owners of the
+/// refinements [`used_refinements`] reports.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/s/used_modules.html]
+#[monoruby_builtin]
+fn used_modules(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    let set = vm.caller_refinements(globals);
+    let mut owners: Vec<ClassId> = vec![];
+    for (_, module) in globals.store.refinements().entries(set).to_vec() {
+        if let Some(owner) = globals.store[module].refinement_owner()
+            && !owners.contains(&owner)
+        {
+            owners.push(owner);
+        }
+    }
+    let v = owners
+        .into_iter()
+        .map(|o| globals.store[o].get_module().as_val())
+        .collect();
+    Ok(Value::array_from_vec(v))
+}
+
+/// Argument check shared by `Module#using` and `main.using`: the argument
+/// must be a Module and *not* a Class (a Class can't hold refinements).
+pub(super) fn expect_refinement_module(globals: &Globals, arg: Value) -> Result<ClassId> {
+    match arg.is_class_or_module() {
+        Some(module) if module.is_module() => Ok(module.id()),
+        _ => Err(MonorubyErr::typeerr(format!(
+            "wrong argument type {} (expected Module)",
+            arg.get_real_class_name(&globals.store)
+        ))),
+    }
+}
+
+///
 /// ### Module#module_function
 /// - module_function(*name) -> self
 ///
@@ -3148,7 +3483,7 @@ pub(super) fn change_visi(
     globals.change_method_visibility_for_class(class_id, &names, visi)?;
     for (name, was_missing) in names.iter().zip(was_missing_locally) {
         if was_missing && globals.store[class_id].has_own_method(*name) {
-            vm.invoke_method_added(globals, class_id, *name)?;
+            vm.invoke_method_added(globals, class_id, *name, None)?;
         }
     }
     Ok(res)
@@ -5944,23 +6279,377 @@ mod tests {
         );
     }
 
-    // ----- Module.used_refinements (Ruby-side mock) -----
+    // ----- refinements -----
 
     #[test]
-    fn used_refinements_mock_returns_empty_array() {
-        // monoruby has no refinement support; `Module.used_refinements`
-        // is mocked in `builtins/startup.rb` to return `[]` so callers
-        // (RSpec, Sorbet, …) that defensively read the list don't
-        // crash. Only the class form is present, matching CRuby.
-        run_test(r#"Module.used_refinements"#);
+    fn refine_builds_a_refinement() {
+        // `refine` returns a Refinement that knows its target, and the
+        // refined class itself is untouched.
+        run_test(
+            r#"
+            m = Module.new do
+              refine String do
+                def shout; upcase; end
+              end
+            end
+            r = m.refinements[0]
+            [r.class.to_s,
+             r.target.to_s,
+             r.instance_methods(false),
+             m.refinements.size,
+             String.instance_methods(false).include?(:shout)]
+            "#,
+        );
     }
 
     #[test]
-    fn used_refinements_no_instance_method() {
-        // CRuby exposes only the class form, so calling
-        // `Module.new.used_refinements` raises NoMethodError. Our mock
-        // follows the same shape.
-        run_test_error(r#"Module.new.used_refinements"#);
+    fn refine_is_idempotent_per_refined_class() {
+        // Two `refine` blocks for the same class extend one refinement.
+        run_test(
+            r#"
+            m = Module.new do
+              refine(String) { def a; end }
+              refine(String) { def b; end }
+              refine(Array)  { def c; end }
+            end
+            [m.refinements.size,
+             m.refinements.map { |r| r.target.to_s }.sort,
+             m.refinements.find { |r| r.target == String }.instance_methods(false).sort]
+            "#,
+        );
+    }
+
+    #[test]
+    fn refinement_is_not_a_mixin() {
+        // A Refinement is a Module, but it cannot be included, prepended
+        // or extended with, and it defines none of the hooks that would
+        // let it be.
+        run_test(
+            r#"
+            r = Module.new { refine(String) { } }.refinements[0]
+            out = []
+            out << Refinement.private_instance_methods(true).include?(:append_features)
+            out << Refinement.private_instance_methods(true).include?(:prepend_features)
+            out << Refinement.private_instance_methods(true).include?(:extend_object)
+            [[:include, -> { Class.new.include(r) }],
+             [:extend,  -> { Object.new.extend(r) }],
+             [:r_include, -> { r.include(Module.new) }],
+             [:r_prepend, -> { r.prepend(Module.new) }]].each do |name, blk|
+              begin
+                blk.call
+                out << [name, :no_raise]
+              rescue TypeError
+                out << [name, :TypeError]
+              end
+            end
+            out
+            "#,
+        );
+    }
+
+    #[test]
+    fn used_refinements_follows_the_scope() {
+        // `Module.used_refinements` / `used_modules` report the *caller's*
+        // scope, so they are empty outside the `using`. Single-shot: the
+        // block runs `using` on a fresh module, which the per-iseq cell
+        // would accumulate across `run_test`'s 25 repeats (see
+        // `ISeqInfo::refinements`).
+        run_test_once(
+            r#"
+            m = Module.new { refine(String) { def z; end } }
+            inner = nil
+            Module.new do
+              using m
+              inner = [Module.used_refinements.size, Module.used_modules.size]
+            end
+            [inner, Module.used_refinements, Module.used_modules]
+            "#,
+        );
+    }
+
+    #[test]
+    fn using_activates_from_that_point_in_the_scope() {
+        // Activation is a runtime event at a lexical position: the same
+        // call resolves differently before and after it.
+        run_test_once(
+            r#"
+            module UsingA
+              refine(String) { def tag; "A"; end }
+            end
+            out = []
+            out << ("x".tag rescue "-")
+            using UsingA
+            out << ("x".tag rescue "-")
+            out
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_def_snapshots_but_a_block_reads_through() {
+        // A method defined before the `using` never sees it; a block
+        // created before it does, because the block resolves through its
+        // lexical parent at call time.
+        run_test_once(
+            r#"
+            module SnapA
+              refine(String) { def tag;  "A"; end }
+            end
+            module SnapB
+              refine(String) { def tag2; "B"; end }
+            end
+            chk = -> { [ ("x".tag rescue "-"), ("x".tag2 rescue "-") ] }
+            def snap0; [ ("x".tag rescue "-"), ("x".tag2 rescue "-") ]; end
+            using SnapA
+            def snap1; [ ("x".tag rescue "-"), ("x".tag2 rescue "-") ]; end
+            using SnapB
+            def snap2; [ ("x".tag rescue "-"), ("x".tag2 rescue "-") ]; end
+            [chk.call, snap0, snap1, snap2]
+            "#,
+        );
+    }
+
+    #[test]
+    fn refinement_does_not_escape_its_scope() {
+        // The refined method is invisible outside the activating scope,
+        // and the refined class itself never gains it.
+        run_test_once(
+            r#"
+            module EscA
+              refine(String) { def only_here; :yes; end }
+            end
+            inner = Module.new do
+              using EscA
+              def self.run; "x".only_here; end
+            end
+            [inner.run,
+             ("x".only_here rescue $!.class.to_s),
+             String.instance_methods(false).include?(:only_here)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn using_gathers_refinements_of_ancestors() {
+        // `using M` activates what M's *included* modules refine too.
+        run_test_once(
+            r#"
+            module AncInner
+              refine(Integer) { def wrap; "<#{to_s}>"; end }
+            end
+            module AncOuter
+              include AncInner
+              refine(String) { def wrap; "'" + self + "'"; end }
+            end
+            Module.new do
+              using AncOuter
+              def self.run; [1.wrap, "x".wrap]; end
+            end.run
+            "#,
+        );
+    }
+
+    #[test]
+    fn sibling_refinements_see_each_other() {
+        // All the refinements defined in *one* module are visible from
+        // each other's method bodies, including a sibling defined after
+        // the body that calls into it.
+        run_test_once(
+            r#"
+            module Json
+              refine(Integer) { def fmt; to_s; end }
+              refine(Array)   { def fmt; "[" + map { |i| i.fmt }.join(",") + "]"; end }
+              refine(Hash)    { def fmt; "{" + map { |k, v| k.fmt + ":" + v.fmt }.join(",") + "}"; end }
+            end
+            Module.new do
+              using Json
+              def self.run; [{1 => 2}, {3 => 4}].fmt; end
+            end.run
+            "#,
+        );
+    }
+
+    #[test]
+    fn using_is_rejected_where_it_is_illegal() {
+        // `Module#using` is out in a method body, `main.using` anywhere
+        // but the top level.
+        run_test_once(
+            r#"
+            OUT = []
+            MAIN = self
+            m = Module.new do
+              def self.f; using Module.new; end
+            end
+            begin; m.f; rescue RuntimeError => e; OUT << e.message; end
+            module UsingPos
+              begin
+                MAIN.send(:using, Module.new)
+                OUT << :no_raise
+              rescue RuntimeError => e
+                OUT << e.message
+              end
+            end
+            OUT
+            "#,
+        );
+    }
+
+    #[test]
+    fn refined_call_sites_survive_jit_compilation() {
+        // `run_test` repeats enough to compile: the refined call has to
+        // resolve the same way once it is machine code, and two scopes
+        // with different sets must not share an answer. The third class
+        // activates nothing and must still see the unrefined world.
+        run_test(
+            r#"
+            module JitR1
+              refine(String) { def kind; "R1"; end }
+            end
+            module JitR2
+              refine(String) { def kind; "R2"; end }
+            end
+            class JitA
+              using JitR1
+              def run(n); r = nil; n.times { r = "x".kind }; r; end
+            end
+            class JitB
+              using JitR2
+              def run(n); r = nil; n.times { r = "x".kind }; r; end
+            end
+            class JitC
+              def run(n); r = nil; n.times { r = ("x".kind rescue "none") }; r; end
+            end
+            [JitA.new.run(30), JitB.new.run(30), JitC.new.run(30)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn redefining_the_refined_class_reaches_compiled_code() {
+        // Reopening the refined class after the body is compiled must
+        // not disturb the refinement, and must be visible outside it.
+        run_test_once(
+            r#"
+            module JitR3
+              refine(String) { def shout; upcase + "!"; end }
+            end
+            class JitHot
+              using JitR3
+              def run(n); r = nil; n.times { r = "hi".shout }; r; end
+            end
+            before = JitHot.new.run(300)
+            class String
+              def shout; "GLOBAL"; end
+            end
+            [before, JitHot.new.run(300), "hi".shout]
+            "#,
+        );
+    }
+
+    #[test]
+    fn reflection_honours_the_callers_refinements() {
+        // Ruby 4.0 has `send`, `respond_to?`, `Object#method`,
+        // `instance_method`, blocks and `eval` all resolve through the
+        // activated refinement.
+        run_test_once(
+            r#"
+            module RefR
+              refine String do
+                def foo; "refined"; end
+              end
+            end
+            class RefC
+              using RefR
+              def direct      = "x".foo
+              def via_send    = "x".send(:foo)
+              def via_respond = "x".respond_to?(:foo)
+              def via_method  = "x".method(:foo).call
+              def via_unbound = String.instance_method(:foo).bind("x").call
+              def in_block    = [1].map { "x".foo }.first
+              def in_eval     = eval('"x".foo')
+            end
+            c = RefC.new
+            [c.direct, c.via_send, c.via_respond, c.via_method,
+             c.via_unbound, c.in_block, c.in_eval,
+             ("x".foo rescue $!.class.to_s),
+             "x".respond_to?(:foo)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn implicit_protocol_dispatch_honours_refinements() {
+        // String interpolation's `#to_s`, `Symbol#to_proc` and the
+        // `&obj` coercion's `#to_proc` all dispatch from inside
+        // monoruby's own Ruby-level core library; the scope that counts
+        // is still the user's.
+        run_test_once(
+            r##"
+            module ProtoR
+              refine Integer do
+                def to_s; "<" + (self + 0).abs.inspect + ">"; end
+              end
+              refine String do
+                def to_proc; ->(*) { "coerced" }; end
+              end
+            end
+            Module.new do
+              using ProtoR
+              def self.run
+                ["#{7}", [1, 2].map(&:to_s), ["a"].map(&"anything")]
+              end
+            end.run
+            "##,
+        );
+    }
+
+    #[test]
+    fn alias_inside_a_refinement_names_the_refined_class() {
+        // `alias new old` in a refine block resolves `old` on the class
+        // being refined; the alias exists only under the refinement.
+        run_test_once(
+            r#"
+            r = Module.new do
+              refine Array do
+                alias_method :orig_count, :count
+              end
+            end
+            inner = Module.new do
+              using r
+              def self.run; [1, 2].orig_count; end
+            end
+            [inner.run, ([1, 2].orig_count rescue $!.class.to_s)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn refinement_import_methods_argument_checks() {
+        // Nothing is imported unless every argument is a Ruby module.
+        run_test(
+            r#"
+            src = Module.new { def imported; :imported; end }
+            out = []
+            Module.new do
+              refine String do
+                begin
+                  import_methods src, Integer
+                rescue TypeError
+                  out << :TypeError
+                end
+                out << instance_methods(false)
+                begin
+                  import_methods src, Kernel
+                rescue ArgumentError
+                  out << :ArgumentError
+                end
+                import_methods src
+                out << instance_methods(false)
+              end
+            end
+            out
+            "#,
+        );
     }
 
     // ----- eval through builtin frames -----
@@ -7294,6 +7983,212 @@ mod tests {
               define_method(:scale, &Coercible.new)
             end
             Box.new.scale(7)
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_using_argchecks() {
+        // Refinements are unimplemented, so `using` only has to agree
+        // with CRuby on what it accepts and where it may appear.
+        run_test(r#"Module.new { using Module.new }.class.to_s"#);
+        run_test(r#"m = Module.new; r = nil; mod = Module.new { r = using m }; r.equal?(mod)"#);
+        // A Class is not a refinement container.
+        run_test_error(r#"Module.new { using Class.new }"#);
+        run_test_error(r#"Module.new { using "foo" }"#);
+        // ... and it is not permitted in a method body.
+        run_test(
+            r#"
+            mod = Module.new do
+              def self.foo
+                using Module.new
+              end
+            end
+            begin
+              mod.foo
+            rescue RuntimeError => e
+              e.message
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn visibility_shadow_follows_redefinition() {
+        // `public :inherited_method` is a visibility modifier, not a
+        // copy of the body: redefining the ancestor's method afterwards
+        // must be visible through the subclass (CRuby's ZSUPER entry).
+        run_test(
+            r#"
+            class VSParent
+              private
+              def m; :before; end
+            end
+            class VSChild < VSParent
+              public :m
+            end
+            class VSParent
+              def m; :after; end
+            end
+            [VSChild.new.m,
+             VSChild.instance_method(:m).owner.to_s,
+             VSChild.public_instance_methods(false).include?(:m)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn non_utf8_constant_name() {
+        // A constant named by a String in a non-UTF-8 encoding is one
+        // name, not a `::`-separated path: it must round-trip through
+        // const_set / const_get / const_defined?.
+        run_test(
+            r#"
+            m = Module.new
+            name = "CS_CONST\u{3bb}".encode("euc-jp")
+            m.const_set(name, 2)
+            [m.const_get(name), m.const_defined?(name), m.constants.size]
+            "#,
+        );
+    }
+
+    #[test]
+    fn set_temporary_name_erases_nested_names() {
+        // A never-named module still qualifies what is nested under it,
+        // but one whose name was explicitly erased does not — and
+        // re-naming it brings the subtree's names back.
+        run_test(
+            r#"
+            m = Module.new
+            m::N = Module.new
+            a = m::N.name.sub(/0x\h+/, "0xADDR")
+            m.set_temporary_name "m"
+            b = m::N.name
+            m.set_temporary_name nil
+            c = m::N.name
+            m.set_temporary_name "y"
+            [a, b, c, m::N.name]
+            "#,
+        );
+    }
+
+    #[test]
+    fn module_nesting_inside_method_body() {
+        // `Module.nesting` reports the nesting where the running code
+        // was *written*. Calling a method from an unrelated class body
+        // must not leak that body's scope into the answer.
+        run_test(
+            r#"
+            module NestA
+              module NestB
+                def self.f; Module.nesting.map(&:to_s); end
+                def self.g; [1].map { Module.nesting.map(&:to_s) }.first; end
+              end
+            end
+            module NestC
+              $r = [NestA::NestB.f, NestA::NestB.g]
+            end
+            $r << Module.nesting.map(&:to_s)
+            "#,
+        );
+    }
+
+    #[test]
+    fn eval_resolves_constants_in_the_caller_scope() {
+        // The eval body is anchored to the Ruby scope that wrote the
+        // call, even when reached through a builtin frame (`send`), and
+        // the receiver of a `module_eval` / `instance_eval` is pushed
+        // *onto* that scope rather than replacing it.
+        run_test(
+            r#"
+            module EvA
+              Lookup = :found
+              module EvB
+                def self.direct;      module_eval("Lookup"); end
+                def self.via_send(m); send(m, "Lookup"); end
+                def self.nesting;     module_eval("Module.nesting.map(&:to_s)"); end
+                def self.plain;       eval("Lookup"); end
+                def self.plain_send(m); send(m, "Lookup"); end
+              end
+            end
+            [EvA::EvB.direct,
+             EvA::EvB.via_send(:module_eval),
+             EvA::EvB.nesting,
+             EvA::EvB.plain,
+             EvA::EvB.plain_send(:eval)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn instance_eval_constant_lookup_order() {
+        // `instance_eval "..."` looks in the receiver's singleton class,
+        // then the receiver's class, and only then in the caller's
+        // lexical scope.
+        run_test(
+            r#"
+            module IEv
+              module ReceiverScope
+                class Receiver
+                  FOO = :Receiver
+                end
+              end
+              module CallerScope
+                FOO = :CallerScope
+                class Caller
+                  FOO = :Caller
+                  def get(receiver) = receiver.instance_eval("FOO")
+                end
+              end
+            end
+            r = IEv::ReceiverScope::Receiver.new
+            a = IEv::CallerScope::Caller.new.get(r)
+            r.singleton_class.const_set(:FOO, :singleton)
+            [a, IEv::CallerScope::Caller.new.get(r)]
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_source_location_of_the_class_keyword() {
+        // The location recorded for a constant created by `class Foo` /
+        // `module Foo` is that keyword's own line, not the line of the
+        // body it appears in.
+        run_test_once(
+            r#"
+            module CslOuter
+              class CslInner
+              end
+              module CslMod
+              end
+            end
+            base = CslOuter.const_source_location(:CslInner)[1]
+            [base, CslOuter.const_source_location(:CslMod)[1] - base]
+            "#,
+        );
+    }
+
+    #[test]
+    fn method_added_sees_the_def_line() {
+        // `caller_locations` inside `method_added` reports the line of
+        // the `def` that triggered it. The hook is dispatched through
+        // the invoker, which writes no caller pc, so the location has to
+        // travel out-of-band.
+        run_test_once(
+            r#"
+            $lines = []
+            Class.new do
+              def self.method_added(name)
+                $lines << caller_locations(1, 1)[0].lineno
+              end
+
+              def first
+              end
+
+              def second
+              end
+            end
+            $lines.map { |l| l - $lines[0] }
             "#,
         );
     }

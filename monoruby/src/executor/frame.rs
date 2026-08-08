@@ -148,6 +148,28 @@ impl Cfp {
         }
         unreachable!("get_source_pos: non-native method not found.")
     }
+
+    ///
+    /// Walk outwards to the nearest Ruby frame, `self` included.
+    ///
+    /// `Kernel#eval` / `Module#class_eval` / `BasicObject#instance_eval`
+    /// may be reached through builtin frames (`send`, a Rust-written
+    /// helper, mspec, …), and the eval body has to be anchored to the
+    /// Ruby scope that wrote the call — its locals, its lexical nesting
+    /// — not to the builtin that happens to sit in between.
+    ///
+    pub(crate) fn nearest_ruby_frame(&self) -> Cfp {
+        let mut cfp = Some(*self);
+        while let Some(inner_cfp) = cfp {
+            if !inner_cfp.lfp().meta().is_native() {
+                return inner_cfp;
+            }
+            cfp = inner_cfp.prev();
+        }
+        // No Ruby frame anywhere below: keep the frame we were given, so
+        // the caller reports its own error rather than panicking here.
+        *self
+    }
 }
 
 impl Executor {

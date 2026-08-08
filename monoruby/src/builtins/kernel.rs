@@ -1293,6 +1293,8 @@ fn caller_frames(
     let mut cfp = vm.cfp();
     let mut v = Vec::new();
     let mut inner_cfp: Option<crate::executor::Cfp> = None;
+    // Consumed by the first frame whose pc the walk cannot recover.
+    let mut hook_site = vm.hook_site().cloned();
     // The frame walk mirrors `collect_backtrace` (including the
     // transparent-trampoline skip); see there for the pc-slot
     // mechanics.
@@ -1330,6 +1332,16 @@ fn caller_frames(
                         }
                         let idx = info.get_pc_index(Some(pc)).to_usize();
                         Some(info.sourceinfo.get_line(&info.sourcemap[idx]))
+                    })
+                    // The first frame whose pc cannot be recovered, while
+                    // a `method_added`-style hook is running, *is* the
+                    // invoker boundary the hook was dispatched across: the
+                    // definition site it carries is this frame's line.
+                    .or_else(|| {
+                        hook_site.take().filter(|(file, _)| {
+                            *file == crate::globals::display_path(&info.sourceinfo)
+                        })
+                        .map(|(_, line)| line as i64)
                     })
                     .unwrap_or_else(|| info.sourceinfo.get_line(&info.loc));
                 Some((info.sourceinfo.clone(), line))
@@ -3334,6 +3346,12 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     let expr = crate::builtins::eval_source_bytes(vm, globals, lfp.arg(0))?;
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
+    // The eval body is anchored to the Ruby scope that *wrote* the
+    // call — its locals and its lexical nesting — which is not the
+    // immediate caller when we were reached through a builtin
+    // (`send`, a Rust helper, mspec, …). The location below still
+    // comes from the immediate caller, whose pc we were handed.
+    let outer_cfp = caller_cfp.nearest_ruby_frame();
     let fname = if let Some(f) = lfp.try_arg(2) {
         f.coerce_to_str(vm, globals)?
     } else {
@@ -3360,10 +3378,10 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
         let fid = globals
-            .compile_script_eval(expr, fname, caller_cfp, None, lineno, src_encoding)
+            .compile_script_eval(expr, fname, outer_cfp, None, lineno, src_encoding)
             .map_err(downgrade_eval_fatal)?;
         vm.flush_compile_warnings(globals);
-        let proc = ProcData::new(caller_cfp.lfp(), fid);
+        let proc = ProcData::new(outer_cfp.lfp(), fid);
         // Isolate the eval's cref so toggles like `module_function`,
         // `private`, … set inside the eval'd source don't leak to
         // the surrounding class/module body. Mirrors CRuby's
@@ -4776,6 +4794,10 @@ fn extend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // Reject non-Modules up front (CRuby checks the whole argument list
     // before extending anything).
     for v in args.iter() {
+        // A Refinement is a Module but not a mixin (CRuby rejects it here).
+        if v.class() == REFINEMENT_CLASS {
+            return Err(MonorubyErr::typeerr("Cannot extend object with refinement"));
+        }
         if v.is_module().is_none() {
             return Err(MonorubyErr::typeerr(format!(
                 "wrong argument type {} (expected Module)",
@@ -5327,10 +5349,18 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     } else {
         false
     };
-    let found = if include_all {
-        globals.check_method(lfp.self_val(), name).is_some()
-    } else {
-        globals.check_public_method(lfp.self_val(), name).is_some()
+    // Ruby 4.0 has the reflective entry points honour refinements, so
+    // this resolves through the *caller's* set, not through none.
+    let set = vm.caller_refinements(globals);
+    let found = match globals
+        .store
+        .check_method_with_refinements(lfp.self_val().class(), name, set)
+    {
+        Some(entry) => {
+            entry.func_id().is_some()
+                && (include_all || entry.visibility() == Visibility::Public)
+        }
+        None => false,
     };
     if found {
         return Ok(Value::bool(true));
@@ -5560,7 +5590,8 @@ fn method(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // error raised by the conversion (e.g. a NoMethodError from #to_str)
     // propagates as-is.
     let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
-    method_object_impl(vm, globals, receiver, method_name, false)
+    let set = vm.caller_refinements(globals);
+    method_object_impl(vm, globals, receiver, method_name, false, set)
 }
 
 ///
@@ -5582,7 +5613,8 @@ fn public_method(
 ) -> Result<Value> {
     let receiver = lfp.self_val();
     let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
-    method_object_impl(vm, globals, receiver, method_name, true)
+    let set = vm.caller_refinements(globals);
+    method_object_impl(vm, globals, receiver, method_name, true, set)
 }
 
 fn method_object_impl(
@@ -5591,8 +5623,12 @@ fn method_object_impl(
     receiver: Value,
     method_name: IdentId,
     public_only: bool,
+    set: RefinementSetId,
 ) -> Result<Value> {
-    match globals.find_method_for_object(receiver, method_name) {
+    match globals
+        .store
+        .find_method_for_object_refined(receiver, method_name, set)
+    {
         Ok((func_id, visi, owner)) if !public_only || visi == Visibility::Public => {
             let original_name = globals
                 .store

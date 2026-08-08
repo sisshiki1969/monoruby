@@ -637,9 +637,21 @@ pub(crate) struct JitContext<'a> {
     const_version: u64,
 
     ///
+    /// The refinement set the body being compiled resolves under.
+    ///
+    /// `EMPTY` for every compilation in a program that never refines
+    /// anything, which is what keeps the emitted code identical to what
+    /// it was before refinements existed. Recorded alongside each
+    /// compile-time resolution in [`Self::inline_method_cache`] so the
+    /// class-version repair re-asks the same question
+    /// (`doc/refinements.md` §6.6).
+    ///
+    refinements: RefinementSetId,
+
+    ///
     /// Inline cache for method calls.
     ///
-    pub(crate) inline_method_cache: Vec<(ClassId, Option<IdentId>, FuncId)>,
+    pub(crate) inline_method_cache: Vec<InlineCacheEntry>,
     ///
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
@@ -669,6 +681,7 @@ impl<'a> JitContext<'a> {
         codegen_mode: bool,
         class_version: u32,
         const_version: u64,
+        refinements: RefinementSetId,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
         Self {
@@ -677,6 +690,7 @@ impl<'a> JitContext<'a> {
             fused_skip: None,
             class_version,
             const_version,
+            refinements,
             inline_method_cache: vec![],
             stack_frame,
             next_specialized_id: 0,
@@ -693,6 +707,7 @@ impl<'a> JitContext<'a> {
             fused_skip: None,
             class_version: self.class_version,
             const_version: self.const_version,
+            refinements: self.refinements,
             inline_method_cache: vec![],
             stack_frame,
             // The cloned context emits AsmIr only for analysis (it is
@@ -1194,6 +1209,11 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn total_reg_num(&self) -> usize {
         self.iseq().total_reg_num()
+    }
+
+    /// The refinement set the body being compiled resolves under.
+    pub(crate) fn refinements(&self) -> RefinementSetId {
+        self.refinements
     }
 
     pub(crate) fn class_version(&self) -> u32 {

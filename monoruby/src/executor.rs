@@ -215,6 +215,28 @@ pub struct Executor {
     /// stack, but semantically it is another thread's stack (CRuby:
     /// break in a thread body is an immediate LocalJumpError).
     break_barriers: Vec<Cfp>,
+    /// The `(parent, name)` of a constant just created by the `class` /
+    /// `module` keyword, waiting for its source location.
+    ///
+    /// `define_class` runs *before* the body's frame exists, so the only
+    /// location it can see is the enclosing frame's — the line of the
+    /// surrounding `module`, not of this `class Foo`. The body's own
+    /// iseq does carry the right line, and `enter_classdef` (which runs
+    /// immediately after, on every arch and in both tiers) has it, so
+    /// the location is recorded there.
+    pending_const_loc: Option<(ClassId, IdentId)>,
+    /// Stack of definition sites (`file`, `line`) for the
+    /// `method_added` / `singleton_method_added` / `const_added` hooks
+    /// currently running.
+    ///
+    /// A hook is dispatched from Rust through the invoker, which does
+    /// not write a caller pc into the new frame's cont slot — so
+    /// `caller_locations` inside the hook cannot recover the line of the
+    /// `def` / definition that triggered it and would report the
+    /// enclosing body's own line instead. The backtrace walk consults
+    /// this for the first frame whose pc it cannot resolve, which is
+    /// exactly that invoker boundary.
+    hook_sites: Vec<(String, u32)>,
     temp_stack: Vec<Value>,
     /// How the method_missing dispatch currently being set up was
     /// called. Consumed (read-and-cleared) by the default
@@ -315,6 +337,8 @@ impl std::default::Default for Executor {
             root_svar: None,
             adapter_blocks: Vec::new(),
             break_barriers: Vec::new(),
+            pending_const_loc: None,
+            hook_sites: Vec::new(),
             temp_stack: vec![],
             method_missing_style: MethodMissingStyle::Plain,
             require_level: 0,
@@ -1338,20 +1362,32 @@ impl Executor {
             .lexical_class(&globals.store)
     }
 
-    /// Returns the lexical class nesting at the current point of execution,
-    /// from innermost to outermost. Used by `Module.nesting`.
-    pub(crate) fn current_class_nesting(&self) -> Vec<ClassId> {
-        let frame = match self.lexical_class.last() {
-            Some(f) => f,
-            None => return vec![],
+    /// Returns the lexical class nesting captured where the currently
+    /// executing Ruby code was *written*, innermost first — CRuby's cref
+    /// chain, which is what `Module.nesting` reports.
+    ///
+    /// The runtime cref stack cannot answer this: it is not pushed per
+    /// call, so a method called from inside some *other* class body would
+    /// see that body's scope rather than its own def-site nesting. The
+    /// per-iseq `lexical_context` is exactly the def-site chain
+    /// (outermost first), so it is the authority here.
+    pub(crate) fn current_class_nesting(&self, globals: &Globals) -> Vec<ClassId> {
+        // Skip our own builtin frame(s) to the Ruby code that asked.
+        let fid = self.cfp().get_source_pos();
+        let Some(mut iseq) = globals.store[fid].is_iseq() else {
+            return vec![];
         };
-        frame
+        // A block carries no lexical context of its own; it is written
+        // inside its mother (a method body, a class body or the top
+        // level), and inherits that scope.
+        if globals.store[iseq].lexical_context.is_empty() {
+            iseq = globals.store[iseq].mother().0;
+        }
+        globals.store[iseq]
+            .lexical_context
             .iter()
             .rev()
-            .filter_map(|cref| match cref.context {
-                DefinitionContext::Class(class_id) => Some(class_id),
-                DefinitionContext::Receiver(_) => None,
-            })
+            .copied()
             .collect()
     }
 
@@ -2249,6 +2285,7 @@ impl Executor {
         globals: &mut Globals,
         class_id: ClassId,
         name: IdentId,
+        func_id: Option<FuncId>,
     ) -> Result<()> {
         let module = globals.store[class_id].get_module();
         let (hook, receiver) = if let Some(original_obj) = module.is_singleton() {
@@ -2256,8 +2293,224 @@ impl Executor {
         } else {
             (IdentId::METHOD_ADDED, module.into())
         };
-        self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None)?;
+        // `caller_locations` inside the hook must report the line of the
+        // `def` that triggered it. The hook is dispatched through the
+        // invoker, which writes no caller pc, so the location travels
+        // out-of-band — see `hook_sites`.
+        let pushed = func_id
+            .and_then(|func_id| globals.store[func_id].is_iseq())
+            .map(|iseq| {
+                let info = &globals.store[iseq];
+                (
+                    crate::globals::display_path(&info.sourceinfo).into_owned(),
+                    info.sourceinfo.get_line(&info.loc) as u32,
+                )
+            });
+        let pushed = pushed.is_some_and(|site| {
+            self.hook_sites.push(site);
+            true
+        });
+        let res =
+            self.invoke_method_inner(globals, hook, receiver, &[Value::symbol(name)], None, None);
+        if pushed {
+            self.hook_sites.pop();
+        }
+        res?;
         Ok(())
+    }
+
+    ///
+    /// The refinement set the code in the *current* frame resolves under.
+    ///
+    /// See `Store::iseq_refinements` for why one rule (walk to the mother
+    /// iseq) covers methods, class bodies, the top level and blocks alike.
+    /// A native frame has no scope of its own, so the walk skips out to
+    /// the Ruby frame that called it.
+    ///
+    pub(crate) fn current_refinements(&self, globals: &Globals) -> RefinementSetId {
+        Self::frame_refinements(globals, self.cfp)
+    }
+
+    /// The set for the nearest Ruby frame at or outside *cfp*. `EMPTY`
+    /// when there is no frame at all (an `at_exit` handler runs with the
+    /// control-frame chain already torn down) or no Ruby frame below.
+    fn frame_refinements(globals: &Globals, cfp: Option<Cfp>) -> RefinementSetId {
+        let mut cfp = cfp;
+        while let Some(c) = cfp {
+            let fid = c.lfp().func_id();
+            // monoruby writes part of its core library in Ruby
+            // (`builtins/*.rb`). Those bodies are not the scope the user
+            // wrote against, so a protocol dispatch made from inside one
+            // — `#to_proc` for a `&obj` argument, `#to_s` behind
+            // interpolation — must keep walking out to the caller's
+            // scope. The same frames are already transparent to `$~`.
+            if !globals.store[fid].meta().is_svar_transparent()
+                && let Some(iseq) = globals.store[fid].is_iseq()
+            {
+                return globals.store.iseq_refinements(iseq);
+            }
+            cfp = c.prev();
+        }
+        RefinementSetId::EMPTY
+    }
+
+    ///
+    /// The refinement set of the scope that called the builtin currently
+    /// running — what `Module.used_refinements` and the reflective entry
+    /// points (`send`, `respond_to?`, …) must resolve under.
+    ///
+    pub(crate) fn caller_refinements(&self, globals: &Globals) -> RefinementSetId {
+        Self::frame_refinements(globals, self.cfp.and_then(|c| c.prev()))
+    }
+
+    ///
+    /// `using`: activate *added* in the calling scope.
+    ///
+    /// The write lands on the scope's *mother* iseq — the top level, a
+    /// class/module body or an eval body, the only places `using` is
+    /// legal — where every block written in that scope will read it.
+    ///
+    pub(crate) fn activate_refinements(
+        &mut self,
+        globals: &mut Globals,
+        added: &[(ClassId, ClassId)],
+    ) {
+        if added.is_empty() {
+            return;
+        }
+        let Some(scope) = self.caller_scope_iseq(globals) else {
+            return;
+        };
+        let base = globals.store.iseq_refinements(scope);
+        let set = globals.store.refinements_mut().activated(base, added);
+        globals.store[scope].refinements = Some(set);
+        // Every inline cache and every compiled entry resolved under the
+        // old set. `using` runs once per scope at load time, so the blunt
+        // global invalidation is the right trade (doc/refinements.md §6.1).
+        if set != base {
+            Globals::class_version_inc();
+        }
+    }
+
+    ///
+    /// Activate *refinement* in the calling scope for the duration of a
+    /// `refine` block, returning what to restore afterwards.
+    ///
+    /// The refinement being defined is active inside its own block
+    /// (CRuby), which is what lets a refined method call its siblings and
+    /// what `Refinement#import_methods` relies on.
+    ///
+    pub(crate) fn begin_refine_block(
+        &mut self,
+        globals: &mut Globals,
+        refined: ClassId,
+        refinement: ClassId,
+    ) -> Option<(ISeqId, Option<RefinementSetId>)> {
+        let scope = self.caller_scope_iseq(globals)?;
+        let saved = globals.store[scope].refinements;
+        let base = globals.store.iseq_refinements(scope);
+        let set = globals
+            .store
+            .refinements_mut()
+            .activated(base, &[(refined, refinement)]);
+        globals.store[scope].refinements = Some(set);
+        Some((scope, saved))
+    }
+
+    pub(crate) fn end_refine_block(
+        &mut self,
+        globals: &mut Globals,
+        saved: Option<(ISeqId, Option<RefinementSetId>)>,
+    ) {
+        if let Some((scope, saved)) = saved {
+            globals.store[scope].refinements = saved;
+        }
+    }
+
+    /// The iseq that a `using` executed by the caller of the currently
+    /// running builtin must write its cell on — the calling body itself
+    /// (see `Store::refinement_cell_owner`).
+    fn caller_scope_iseq(&self, globals: &Globals) -> Option<ISeqId> {
+        let caller = self.cfp().prev()?;
+        let iseq = globals.store[caller.get_source_pos()].is_iseq()?;
+        Some(globals.store.refinement_cell_owner(iseq))
+    }
+
+    ///
+    /// Re-stamp every method defined in any of *owner*'s refinements with
+    /// the set "the scope that ran `refine` ∪ all of *owner*'s
+    /// refinements".
+    ///
+    /// A `def` inside `refine Foo do … end` snapshots what was activated
+    /// when it ran, which cannot include a sibling `refine Bar do … end`
+    /// that has not executed yet — but CRuby makes all of one module's
+    /// refinements mutually visible from their method bodies. Running
+    /// this at the end of each `refine` converges: by the last one, every
+    /// body has the whole set.
+    ///
+    pub(crate) fn restamp_refinement_methods(&mut self, globals: &mut Globals, owner: ClassId) {
+        // The owner's *own* refinements only. A module it includes may
+        // host refinements too, but those are not visible from this
+        // module's refined method bodies — only from a scope that
+        // `using`s it (CRuby).
+        let entries = globals.store.own_refinement_entries(owner);
+        if entries.is_empty() {
+            return;
+        }
+        let base = self.current_refinements(globals);
+        let set = globals.store.refinements_mut().activated(base, &entries);
+        let iseqs: Vec<ISeqId> = entries
+            .iter()
+            .flat_map(|(_, r)| {
+                globals.store[*r]
+                    .own_method_entries()
+                    .into_iter()
+                    .filter_map(|(_, fid, _)| fid)
+                    .collect::<Vec<_>>()
+            })
+            .filter_map(|fid| globals.store[fid].is_iseq())
+            .collect();
+        for iseq in iseqs {
+            globals.store[iseq].refinements = Some(set);
+        }
+    }
+
+    ///
+    /// Whether the body that called the currently running builtin is the
+    /// file's top level — not a method, not a class/module body, and not
+    /// nested in one.
+    ///
+    /// `main.using` is legal only there. A block counts as its lexical
+    /// parent, so `[1].each { using R }` at the top level is allowed,
+    /// exactly as CRuby has it.
+    ///
+    pub(crate) fn caller_is_toplevel(&self, globals: &Globals) -> bool {
+        let Some(caller) = self.cfp().prev() else {
+            return false;
+        };
+        let Some(iseq) = globals.store[caller.get_source_pos()].is_iseq() else {
+            return false;
+        };
+        let mother = globals.store[iseq].mother().0;
+        let fid = globals.store[mother].func_id();
+        let info = &globals.store[fid];
+        // A `class`/`module` body and a method body are both out. The top
+        // level of a `Kernel#load(path, true)`-wrapped script is *in* —
+        // it is still that file's top level, however the wrap rearranges
+        // its lexical scope.
+        !info.is_classdef() && !info.is_method()
+    }
+
+    /// The refinement set the definition site of a new method should
+    /// snapshot — see `ISeqInfo::refinements`.
+    pub(crate) fn definition_refinements(&self, globals: &Globals) -> RefinementSetId {
+        self.current_refinements(globals)
+    }
+
+    /// The definition site of the innermost `method_added`-style hook
+    /// currently running, if any. See [`Self::hook_sites`].
+    pub(crate) fn hook_site(&self) -> Option<&(String, u32)> {
+        self.hook_sites.last()
     }
 
     /// Register a singleton method and invoke the singleton_method_added hook.
@@ -2305,7 +2558,7 @@ impl Executor {
         // `alias`); checking before the store mutation (as the `def` path
         // used to) misses the very definition that sets the flags.
         Codegen::check_bop_redefine(self.cfp());
-        self.invoke_method_added(globals, class_id, name)
+        self.invoke_method_added(globals, class_id, name, Some(func_id))
     }
 
     /// Like `add_method`, but records an explicit *original* definition
@@ -2323,7 +2576,7 @@ impl Executor {
         globals.add_method_with_original(class_id, name, func_id, visibility, original_name);
         // BOP-redefinition eviction — see `add_method`.
         Codegen::check_bop_redefine(self.cfp());
-        self.invoke_method_added(globals, class_id, name)
+        self.invoke_method_added(globals, class_id, name, Some(func_id))
     }
 
     /// Create an alias and invoke the method_added hook.
@@ -2337,7 +2590,7 @@ impl Executor {
         globals.alias_method_for_class(class_id, new_name, old_name)?;
         // BOP-redefinition eviction (`alias_method :+, :other`) — see `add_method`.
         Codegen::check_bop_redefine(self.cfp());
-        self.invoke_method_added(globals, class_id, new_name)
+        self.invoke_method_added(globals, class_id, new_name, None)
     }
 
     /// Define an attr_reader and invoke the method_added hook.
@@ -2349,7 +2602,7 @@ impl Executor {
         visi: Visibility,
     ) -> Result<IdentId> {
         let name = globals.define_attr_reader(class_id, method_name, visi);
-        self.invoke_method_added(globals, class_id, name)?;
+        self.invoke_method_added(globals, class_id, name, None)?;
         Ok(name)
     }
 
@@ -2362,7 +2615,7 @@ impl Executor {
         visi: Visibility,
     ) -> Result<IdentId> {
         let name = globals.define_attr_writer(class_id, method_name, visi);
-        self.invoke_method_added(globals, class_id, name)?;
+        self.invoke_method_added(globals, class_id, name, None)?;
         Ok(name)
     }
 
@@ -2522,6 +2775,12 @@ impl Executor {
                 (func.get() as u64) + ((name.get() as u64) << 32)
             )));
         }
+        // The new body resolves under the refinement set as it stands
+        // *now* — `def` snapshots (doc/refinements.md §7.1).
+        let refinements = self.definition_refinements(globals);
+        if let Some(iseq) = globals.store[func].is_iseq() {
+            globals.store[iseq].refinements = Some(refinements);
+        }
         let cref = self.get_class_context();
         let in_method_body = self.def_in_method_body(globals);
         let class_id = self.plain_def_definee(globals)?;
@@ -2589,11 +2848,22 @@ impl Executor {
         // succeeds when both `TrueClass` and `FalseClass` resolve to the
         // same `FuncId`; otherwise it falls back to the per-class lookup.
         let class_id = recv.class_for_ic();
+        // The resolved method depends on the *caller's* scope once
+        // refinements are in play. `EMPTY` — every scope in a program
+        // that never refines anything — takes the same path as before.
+        let set = if globals.store.refinements().is_active() {
+            self.current_refinements(globals)
+        } else {
+            RefinementSetId::EMPTY
+        };
         let entry = globals
-            .check_method_for_class(class_id, func_name)
+            .store
+            .check_method_with_refinements(class_id, func_name, set)
             .or_else(|| {
                 if class_id == BOOL_CLASS {
-                    globals.check_method_for_class(recv.class(), func_name)
+                    globals
+                        .store
+                        .check_method_with_refinements(recv.class(), func_name, set)
                 } else {
                     None
                 }
@@ -2856,17 +3126,26 @@ impl Executor {
     }
 
     pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
-        match receiver.unpack() {
-            // String operands round-trip via `to_s` to themselves
-            // (or to whatever the user-overridden `to_s` returns),
-            // so the receiver is the answer. Going through
-            // `to_s(&globals.store)` would route through
-            // `from_utf8_lossy` and corrupt invalid byte sequences
-            // (relevant to interpolation: `"abc#{x}"` for an `x`
-            // tagged UTF-8 with broken bytes).
-            RV::String(_) => return Ok(receiver),
-            RV::Object(_) => {}
-            _ => return Ok(Value::string(receiver.to_s(&globals.store))),
+        // A refinement of the receiver's `to_s` has to be honoured here
+        // too — interpolating an Integer is the common case, and that
+        // takes the built-in shortcut below unless a refinement is in
+        // play (`doc/refinements.md` §1(d)).
+        let refined_to_s = globals.store.refinements().is_active()
+            && globals.store.refinements().is_refined_name(IdentId::TO_S)
+            && !self.current_refinements(globals).is_empty();
+        if !refined_to_s {
+            match receiver.unpack() {
+                // String operands round-trip via `to_s` to themselves
+                // (or to whatever the user-overridden `to_s` returns),
+                // so the receiver is the answer. Going through
+                // `to_s(&globals.store)` would route through
+                // `from_utf8_lossy` and corrupt invalid byte sequences
+                // (relevant to interpolation: `"abc#{x}"` for an `x`
+                // tagged UTF-8 with broken bytes).
+                RV::String(_) => return Ok(receiver),
+                RV::Object(_) => {}
+                _ => return Ok(Value::string(receiver.to_s(&globals.store))),
+            }
         }
         let func_id = self.find_method(globals, receiver, IdentId::TO_S, true)?;
         self.invoke_func_inner(globals, func_id, receiver, &[], None, None)
@@ -3154,13 +3433,25 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Result<Option<Value>> {
-        Ok(
-            if let Some(func_id) = globals.check_method(receiver, method) {
+        // Resolve through the caller's refinement set: this is how
+        // `&obj`'s `#to_proc` coercion, the `#to_s` behind string
+        // interpolation and the other implicit-protocol dispatches reach
+        // a refined method (`doc/refinements.md` §1(d)).
+        let set = if globals.store.refinements().is_active() {
+            self.current_refinements(globals)
+        } else {
+            RefinementSetId::EMPTY
+        };
+        let func_id = globals
+            .store
+            .check_method_with_refinements(receiver.class(), method, set)
+            .and_then(|entry| entry.func_id());
+        Ok(match func_id {
+            Some(func_id) => {
                 Some(self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args)?)
-            } else {
-                None
-            },
-        )
+            }
+            None => None,
+        })
     }
 
     ///
@@ -3314,28 +3605,6 @@ impl Executor {
             // `rb_vm_get_cref` / `rb_const_set` does the same.
             None => self.lexical_context_class_id(globals),
         };
-        // Capture the call-site location *before* we create / look up
-        // the class so we can attach it to the constant if this is the
-        // first definition. Walks the CFP chain for the nearest Ruby
-        // (iseq) frame and uses its current PC line — matches CRuby's
-        // `Module#const_source_location` returning `[__FILE__,
-        // __LINE__]` of `class Foo; end` / `module Foo; end`.
-        let class_def_loc = {
-            let mut frame = Some(self.cfp());
-            let mut found = None;
-            while let Some(c) = frame {
-                let fid = c.lfp().func_id();
-                if let Some(iseq_id) = globals.store[fid].is_iseq() {
-                    let iseq = &globals.store[iseq_id];
-                    let line = iseq.sourceinfo.get_line(&iseq.loc) as u32;
-                    let file = iseq.sourceinfo.file_name().to_string();
-                    found = Some((file, line));
-                    break;
-                }
-                frame = c.prev();
-            }
-            found
-        };
         // A qualified definition (`class A::B`) is a qualified constant
         // access, so `private_constant`-marked names are rejected — CRuby
         // raises "private constant A::B referenced". An unqualified `class
@@ -3378,9 +3647,6 @@ impl Executor {
                 } else {
                     let new_class =
                         globals.define_class_with_identid(name, Some(superclass), parent);
-                    if let Some((file, line)) = class_def_loc.clone() {
-                        globals.store[parent].record_constant_location(name, file, line);
-                    }
                     // CRuby invokes `const_added` BEFORE `inherited` when a
                     // new class is created via the `class` keyword.
                     let parent_val = globals.store[parent].get_module().into();
@@ -3400,15 +3666,16 @@ impl Executor {
                         None,
                         None,
                     )?;
+                    // Marked *after* the hooks, so a hook that defines a
+                    // class of its own consumes its own mark first and
+                    // does not steal this one.
+                    self.pending_const_loc = Some((parent, name));
                     return self.finish_class_def(globals, new_class);
                 };
                 (new_module, true)
             }
         };
         if is_new {
-            if let Some((file, line)) = class_def_loc {
-                globals.store[parent].record_constant_location(name, file, line);
-            }
             // Module case: const_added without inherited.
             let parent_val = globals.store[parent].get_module().into();
             self.invoke_method_inner(
@@ -3419,9 +3686,23 @@ impl Executor {
                 None,
                 None,
             )?;
+            self.pending_const_loc = Some((parent, name));
         }
         self.push_class_context(self_val.id());
         Ok(self_val.as_val())
+    }
+
+    /// Consume the mark left by `define_class` and record *loc* as the
+    /// new constant's source location. See `pending_const_loc`.
+    pub(crate) fn record_pending_const_loc(
+        &mut self,
+        globals: &mut Globals,
+        file: String,
+        line: u32,
+    ) {
+        if let Some((parent, name)) = self.pending_const_loc.take() {
+            globals.store[parent].record_constant_location(name, file, line);
+        }
     }
 
     fn finish_class_def(&mut self, _globals: &mut Globals, new_class: Module) -> Result<Value> {
@@ -3551,7 +3832,13 @@ impl Executor {
     }
 
     pub(crate) fn generate_binding(&mut self, pc: BytecodePtr) -> Binding {
-        let lfp = self.cfp().prev().unwrap().lfp();
+        // A Binding captures the Ruby scope that asked for it. Reached
+        // through a builtin (`send(:binding)`, a Rust-written helper),
+        // the immediate caller is that builtin's frame — a Binding
+        // anchored there has no iseq at all, so `Binding#eval` raised
+        // "eval with binding requires a Ruby method context" and
+        // `Binding#local_variables` aborted the process on `as_iseq`.
+        let lfp = self.cfp().prev().unwrap().nearest_ruby_frame().lfp();
         Binding::from_outer(lfp, pc)
     }
 

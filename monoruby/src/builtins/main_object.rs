@@ -14,9 +14,6 @@ pub(super) fn init(globals: &mut Globals) {
     // the original argument value (per spec parity with `Module#public`).
     globals.define_builtin_singleton_func_with(main, "public", main_public, 0, 0, true);
     globals.define_builtin_singleton_func_with(main, "private", main_private, 0, 0, true);
-    // Refinements aren't supported by monoruby; `using` is provided
-    // as a stub that argument-checks (ArgumentError on no-args,
-    // TypeError on non-Module) and otherwise no-ops.
     globals.define_builtin_singleton_func(main, "using", main_using, 1);
     // CRuby's main object responds to a private `ruby2_keywords`
     // (no-op). monoruby doesn't propagate keyword splat metadata, so
@@ -107,19 +104,19 @@ fn main_private(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 ///
 /// - using(mod) -> self
 ///
-/// Stub for refinement support. monoruby does not implement
-/// refinements, so this validates the argument (must be a Module)
-/// and otherwise no-ops. `using` with no argument raises ArgumentError
-/// via the standard arity check.
+/// Activates *mod*'s refinements for the rest of the file. Legal only
+/// at the actual top level — CRuby raises from a method body or a
+/// class/module body, even when the call is routed through `main`
+/// (`MAIN.send(:using, …)` inside a `module`).
 #[monoruby_builtin]
-fn main_using(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let arg = lfp.arg(0);
-    if arg.is_class_or_module().is_none() {
-        return Err(MonorubyErr::typeerr(format!(
-            "wrong argument type {} (expected Module)",
-            arg.get_real_class_name(globals)
-        )));
+fn main_using(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    if !vm.caller_is_toplevel(globals) {
+        return Err(MonorubyErr::runtimeerr(
+            "main.using is permitted only at toplevel",
+        ));
     }
+    let arg = super::module::expect_refinement_module(globals, lfp.arg(0))?;
+    super::module::activate(vm, globals, arg);
     Ok(lfp.self_val())
 }
 

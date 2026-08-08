@@ -83,6 +83,12 @@ pub const THREAD_CLASS: ClassId = ClassId::new(59);
 /// every other builtin class via the class table (`Store::mark`).
 pub const YIELDER_CLASS: ClassId = ClassId::new(60);
 
+/// `Refinement` — the class of the anonymous module `Module#refine`
+/// returns. A subclass of `Module` carrying two extra facts: which class
+/// it refines (`Refinement#target`) and which module `refine` was called
+/// on (for `Module.used_modules` and for `#to_s`).
+pub const REFINEMENT_CLASS: ClassId = ClassId::new(61);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ClassId(NonZeroU32);
@@ -245,9 +251,30 @@ pub struct ClassInfo {
     ///
     name_explicit_temporary: bool,
     ///
+    /// True when the name was explicitly erased by
+    /// `Module#set_temporary_name(nil)`. Such a module is not merely
+    /// anonymous: it stops acting as a name prefix, so anything nested
+    /// under it reports `Module#name == nil` rather than falling back to
+    /// the `#<Module:0x..>::Inner` rendering a never-named module gets.
+    ///
+    name_erased: bool,
+    ///
     /// the parent class of this class.
     ///
     parent: Option<ClassId>,
+    ///
+    /// Refinements defined directly on this module by `Module#refine`,
+    /// in definition order. Empty for everything that is not a module
+    /// hosting refinements. Backs `Module#refinements`.
+    ///
+    refinements: Vec<ClassId>,
+    ///
+    /// Set on a *refinement module* (an object of class `Refinement`):
+    /// the class it refines and the module `refine` was called on.
+    /// `None` on everything else.
+    ///
+    refined_class: Option<ClassId>,
+    refinement_owner: Option<ClassId>,
     ///
     /// corresponding class object.
     ///
@@ -418,7 +445,11 @@ impl ClassInfo {
             name_value: None,
             name_permanent: false,
             name_explicit_temporary: false,
+            name_erased: false,
             parent: None,
+            refinements: Vec::new(),
+            refined_class: None,
+            refinement_owner: None,
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
@@ -440,7 +471,11 @@ impl ClassInfo {
             name_value: None,
             name_permanent: false,
             name_explicit_temporary: false,
+            name_erased: false,
             parent: None,
+            refinements: Vec::new(),
+            refined_class: None,
+            refinement_owner: None,
             object: None,
             methods: HashMap::default(),
             constants: HashMap::default(),
@@ -538,6 +573,7 @@ impl ClassInfo {
         self.name_value = None;
         self.name_permanent = true;
         self.name_explicit_temporary = false;
+        self.name_erased = false;
     }
 
     /// Set a non-permanent (temporary) name. Distinguished from
@@ -549,6 +585,7 @@ impl ClassInfo {
         self.name_value = None;
         self.name_permanent = false;
         self.name_explicit_temporary = true;
+        self.name_erased = false;
     }
 
     pub(crate) fn clear_name(&mut self) {
@@ -556,6 +593,40 @@ impl ClassInfo {
         self.name_value = None;
         self.name_permanent = false;
         self.name_explicit_temporary = false;
+        self.name_erased = true;
+    }
+
+    pub(crate) fn is_name_erased(&self) -> bool {
+        self.name_erased
+    }
+
+    /// Refinements defined directly on this module, in definition order.
+    pub(crate) fn own_refinements(&self) -> &[ClassId] {
+        &self.refinements
+    }
+
+    /// Register a refinement module created by `refine` on this module.
+    /// A second `refine` of the same class reuses the existing module
+    /// (CRuby: `Module#refine` is idempotent per refined class).
+    pub(crate) fn add_refinement(&mut self, refinement: ClassId) {
+        if !self.refinements.contains(&refinement) {
+            self.refinements.push(refinement);
+        }
+    }
+
+    /// The class this refinement module refines, if it is one.
+    pub(crate) fn refined_class(&self) -> Option<ClassId> {
+        self.refined_class
+    }
+
+    /// The module `refine` was called on, if this is a refinement module.
+    pub(crate) fn refinement_owner(&self) -> Option<ClassId> {
+        self.refinement_owner
+    }
+
+    pub(crate) fn set_refinement_of(&mut self, refined: ClassId, owner: ClassId) {
+        self.refined_class = Some(refined);
+        self.refinement_owner = Some(owner);
     }
 
     pub(crate) fn is_name_explicit_temporary(&self) -> bool {
@@ -623,6 +694,16 @@ impl ClassInfo {
     /// of an already-local entry (which doesn't).
     pub(crate) fn has_own_method(&self, name: IdentId) -> bool {
         self.methods.contains_key(&name)
+    }
+
+    /// `(name, FuncId, visibility)` for every method defined directly on
+    /// this module, in no particular order. Used by
+    /// `Refinement#import_methods`, which copies them wholesale.
+    pub(crate) fn own_method_entries(&self) -> Vec<(IdentId, Option<FuncId>, Visibility)> {
+        self.methods
+            .iter()
+            .map(|(name, entry)| (*name, entry.func_id(), entry.visibility))
+            .collect()
     }
 
     /// Returns true if the constant `name` defined on this class/module is
@@ -761,6 +842,31 @@ impl ClassInfoTable {
         let mut parts = self.get_parents(class_id);
         parts.reverse();
         parts.join("::")
+    }
+
+    /// Whether *class_id* has no name at all, because some module on its
+    /// lexical parent chain had its name erased by
+    /// `Module#set_temporary_name(nil)`. Nesting under a never-named
+    /// module still yields `#<Module:0x..>::Inner`; nesting under an
+    /// *erased* one yields nothing, and re-naming that ancestor brings
+    /// the whole subtree's names back.
+    pub(crate) fn is_name_erased(&self, class: ClassId) -> bool {
+        if self[class].is_name_erased() {
+            return true;
+        }
+        let mut cur = class;
+        while let Some(parent) = self[cur].parent {
+            if parent == OBJECT_CLASS || self[parent].name.is_some() {
+                // A named ancestor terminates the walk: everything below
+                // it renders through that name.
+                return false;
+            }
+            if self[parent].is_name_erased() {
+                return true;
+            }
+            cur = parent;
+        }
+        false
     }
 
     pub(crate) fn get_parents(&self, mut class: ClassId) -> Vec<String> {
@@ -1006,23 +1112,85 @@ impl ClassInfoTable {
     ///
     pub(super) fn search_method(
         &self,
-        mut module: Module,
+        module: Module,
         name: IdentId,
     ) -> Option<MethodTableEntry> {
+        self.search_method_refined(module, name, &[])
+    }
+
+    ///
+    /// [`Self::search_method`] with a scope's activated refinements in
+    /// play.
+    ///
+    /// A refinement sits immediately ahead of the position it refines, so
+    /// the walk probes it just before each module's own table. That keeps
+    /// a subclass's real method ahead of a refinement of its *superclass*,
+    /// which a two-phase "refinements first, then the chain" search would
+    /// get wrong.
+    ///
+    /// `refinements` is empty for every scope that activated nothing, and
+    /// the loop then costs one `is_empty` test per position.
+    ///
+    pub(super) fn search_method_refined(
+        &self,
+        mut module: Module,
+        name: IdentId,
+        refinements: &[(ClassId, ClassId)],
+    ) -> Option<MethodTableEntry> {
         let mut visi = None;
+        // A `public :inherited_method` declaration is a visibility modifier,
+        // not a definition: CRuby records a ZSUPER entry that re-resolves the
+        // real definition at call time, so redefining the ancestor's method
+        // afterwards is picked up through the subclass too. Remember the
+        // shadow and keep walking; its own `func_id` (a copy taken when the
+        // declaration ran) is only the fallback for when no ancestor defines
+        // the name any more.
+        let mut shadow: Option<&MethodTableEntry> = None;
         loop {
+            if !refinements.is_empty() {
+                // A class may carry several activated refinements; they
+                // are ordered most-recently-activated first.
+                for (_, refinement) in refinements.iter().filter(|(c, _)| *c == module.id()) {
+                    if let Some(entry) = self[*refinement].methods.get(&name)
+                        && entry.func_id.is_some()
+                    {
+                        let visibility = visi.unwrap_or(entry.visibility);
+                        return Some(MethodTableEntry {
+                            visibility,
+                            ..entry.clone()
+                        });
+                    }
+                }
+            }
             if !module.has_origin()
                 && let Some(entry) = self[module.id()].methods.get(&name)
             {
-                if entry.func_id.is_some() {
+                if entry.is_visibility_shadow() {
+                    if visi.is_none() {
+                        visi = Some(entry.visibility);
+                    }
+                    if shadow.is_none() {
+                        shadow = Some(entry);
+                    }
+                } else if entry.func_id.is_some() {
                     let visibility = if let Some(visi) = visi {
                         visi
                     } else {
                         entry.visibility
                     };
-                    return Some(MethodTableEntry {
-                        visibility,
-                        ..entry.clone()
+                    return Some(match shadow {
+                        // The shadow owns the entry as far as reflection is
+                        // concerned (`C.instance_method(:m).owner == C`), but
+                        // the body is whatever the ancestor defines *now*.
+                        Some(shadow) => MethodTableEntry {
+                            owner: shadow.owner,
+                            visibility,
+                            ..entry.clone()
+                        },
+                        None => MethodTableEntry {
+                            visibility,
+                            ..entry.clone()
+                        },
                     });
                 } else if entry.visibility == Visibility::Undefined {
                     return None;
@@ -1030,7 +1198,16 @@ impl ClassInfoTable {
                     visi = Some(entry.visibility);
                 }
             }
-            module = module.superclass()?;
+            module = match module.superclass() {
+                Some(module) => module,
+                None => {
+                    let shadow = shadow?;
+                    return Some(MethodTableEntry {
+                        visibility: visi.unwrap_or(shadow.visibility),
+                        ..shadow.clone()
+                    });
+                }
+            };
         }
     }
 
@@ -1927,6 +2104,13 @@ impl Store {
         original_name: IdentId,
     ) {
         self[func_id].set_owner_class(owner);
+        // Defining into a refinement module puts `name` on the list the
+        // resolution fast paths consult, so the cost of refinements stays
+        // proportional to how many names are refined
+        // (`doc/refinements.md` §6.2).
+        if self[owner].refined_class().is_some() {
+            self.refinements_mut().add_refined_name(name);
+        }
         self.insert_method(
             owner,
             name,
@@ -2032,8 +2216,21 @@ impl Store {
         obj: Value,
         func_name: IdentId,
     ) -> Result<(FuncId, Visibility, ClassId)> {
+        self.find_method_for_object_refined(obj, func_name, RefinementSetId::EMPTY)
+    }
+
+    /// [`Self::find_method_for_object`] as seen from a scope whose
+    /// activated refinements are *set*. The reflective entry points
+    /// (`Object#method`, `respond_to?`, …) resolve through their
+    /// *caller's* set, since Ruby 4.0 has them honour refinements.
+    pub(crate) fn find_method_for_object_refined(
+        &self,
+        obj: Value,
+        func_name: IdentId,
+        set: RefinementSetId,
+    ) -> Result<(FuncId, Visibility, ClassId)> {
         let class = obj.class();
-        if let Some(entry) = self.check_method_for_class(class, func_name)
+        if let Some(entry) = self.check_method_with_refinements(class, func_name, set)
             && let Some(func_id) = entry.func_id()
         {
             Ok((func_id, entry.visibility, entry.owner))
@@ -2052,7 +2249,18 @@ impl Store {
         class: ClassId,
         func_name: IdentId,
     ) -> Result<(FuncId, Visibility, ClassId)> {
-        if let Some(entry) = self.check_method_for_class(class, func_name)
+        self.find_method_for_class_refined(class, func_name, RefinementSetId::EMPTY)
+    }
+
+    /// [`Self::find_method_for_class`] as seen from a scope whose
+    /// activated refinements are *set* (`Module#instance_method`).
+    pub(crate) fn find_method_for_class_refined(
+        &self,
+        class: ClassId,
+        func_name: IdentId,
+        set: RefinementSetId,
+    ) -> Result<(FuncId, Visibility, ClassId)> {
+        if let Some(entry) = self.check_method_with_refinements(class, func_name, set)
             && let Some(func_id) = entry.func_id()
         {
             Ok((func_id, entry.visibility, entry.owner))
@@ -2222,9 +2430,14 @@ impl Store {
         lfp: Lfp,
         recv_class: ClassId,
         name: Option<IdentId>,
+        refinements: RefinementSetId,
     ) -> Option<FuncId> {
         if let Some(method_name) = name {
-            self.check_method_for_class(recv_class, method_name)
+            // Re-ask with the *same* refinement set the compiler used;
+            // asking the unrefined question would confirm an answer the
+            // compiled code is no longer allowed to give
+            // (`doc/refinements.md` §3.4).
+            self.check_method_with_refinements(recv_class, method_name, refinements)
                 .map(|entry| entry.func_id())
                 .flatten()
         } else {
@@ -2244,9 +2457,10 @@ impl Store {
             // JIT entry was invalidated (e.g. by BOP redefinition). Fall back to recompile.
             return false;
         };
-        for (recv_class, name, comptime_fid) in cache_map {
-            let func_id = self.check_method_for_name(lfp, *recv_class, *name);
-            if func_id != Some(*comptime_fid) {
+        for entry in cache_map {
+            let func_id =
+                self.check_method_for_name(lfp, entry.recv_class, entry.name, entry.refinements);
+            if func_id != Some(entry.func_id) {
                 return false;
             }
         }
