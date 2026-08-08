@@ -1,14 +1,6 @@
 module Process
-  CLOCK_REALTIME = 0
-  CLOCK_MONOTONIC = 1
-  CLOCK_PROCESS_CPUTIME_ID = 2
-  CLOCK_THREAD_CPUTIME_ID	= 3
-  CLOCK_MONOTONIC_RAW	= 4
-  CLOCK_REALTIME_COARSE	= 5
-  CLOCK_MONOTONIC_COARSE = 6
-  CLOCK_BOOTTIME = 7
-  CLOCK_REALTIME_ALARM = 8
-  CLOCK_BOOTTIME_ALARM = 9
+  # CLOCK_* constants are installed from libc (platform-correct values)
+  # in builtins/process.rs.
 
   # Reap child `pid` and return a thread whose #value waits for it and yields
   # the resulting Process::Status. monoruby's Thread is cooperative (the block

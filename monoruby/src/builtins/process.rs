@@ -120,6 +120,29 @@ pub(super) fn init(globals: &mut Globals) {
     // wait(2) flag constants.
     globals.set_constant_by_str(klass, "WNOHANG", Value::integer(libc::WNOHANG as i64));
     globals.set_constant_by_str(klass, "WUNTRACED", Value::integer(libc::WUNTRACED as i64));
+    // clock_gettime(2)/clock_getres(2) clock ids, from libc so each
+    // platform gets ITS values (e.g. CLOCK_MONOTONIC is 1 on Linux but
+    // 6 on macOS — the old hardcoded Ruby constants were Linux's).
+    macro_rules! set_clock_const {
+        ($name:literal, $val:expr) => {
+            globals.set_constant_by_str(klass, $name, Value::integer($val as i64));
+        };
+    }
+    set_clock_const!("CLOCK_REALTIME", libc::CLOCK_REALTIME);
+    set_clock_const!("CLOCK_MONOTONIC", libc::CLOCK_MONOTONIC);
+    set_clock_const!("CLOCK_PROCESS_CPUTIME_ID", libc::CLOCK_PROCESS_CPUTIME_ID);
+    set_clock_const!("CLOCK_THREAD_CPUTIME_ID", libc::CLOCK_THREAD_CPUTIME_ID);
+    set_clock_const!("CLOCK_MONOTONIC_RAW", libc::CLOCK_MONOTONIC_RAW);
+    #[cfg(target_os = "linux")]
+    {
+        set_clock_const!("CLOCK_REALTIME_COARSE", libc::CLOCK_REALTIME_COARSE);
+        set_clock_const!("CLOCK_MONOTONIC_COARSE", libc::CLOCK_MONOTONIC_COARSE);
+        set_clock_const!("CLOCK_BOOTTIME", libc::CLOCK_BOOTTIME);
+        set_clock_const!("CLOCK_REALTIME_ALARM", libc::CLOCK_REALTIME_ALARM);
+        set_clock_const!("CLOCK_BOOTTIME_ALARM", libc::CLOCK_BOOTTIME_ALARM);
+    }
+    #[cfg(target_os = "macos")]
+    set_clock_const!("CLOCK_UPTIME_RAW", libc::CLOCK_UPTIME_RAW);
     // `Process::UID` / `Process::GID` (real/effective id accessors) and
     // `Process::Sys` (thin syscall wrappers).
     let uid_mod = globals
@@ -1497,10 +1520,10 @@ fn process_clock_getres(
     let clock = lfp.arg(0);
     let ns: i64 = if let Some(sym) = clock.try_symbol() {
         match sym.get_name().as_str() {
-            // Documented emulation clocks (resolution fixed by their API).
+            // Documented emulation clocks (resolution fixed by their
+            // API); the supported set matches CRuby's clock_getres.
             "GETTIMEOFDAY_BASED_CLOCK_REALTIME"
-            | "GETRUSAGE_BASED_CLOCK_PROCESS_CPUTIME_ID"
-            | "GETTIMEOFDAY_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1_000,
+            | "GETRUSAGE_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1_000,
             "TIME_BASED_CLOCK_REALTIME" => 1_000_000_000,
             "TIMES_BASED_CLOCK_MONOTONIC" | "TIMES_BASED_CLOCK_PROCESS_CPUTIME_ID" => {
                 // times(2) ticks: 1/HZ seconds.
@@ -1509,9 +1532,14 @@ fn process_clock_getres(
             }
             "CLOCK_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1_000,
             other => {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "unexpected clock: {other}"
-                )));
+                // CRuby raises Errno::EINVAL (not ArgumentError) for an
+                // unknown symbolic clock.
+                let err = std::io::Error::from_raw_os_error(libc::EINVAL);
+                return Err(MonorubyErr::errno_with_msg(
+                    &globals.store,
+                    &err,
+                    &format!("clock_getres(:{other})"),
+                ));
             }
         }
     } else {
@@ -2528,7 +2556,7 @@ mod new_api_tests {
               ok = a.size == 2 && pids.all? { |p| st = a.assoc(p); st && st[1].is_a?(Process::Status) }
               w.write([ok, a.map { |_, st| st.exitstatus }.sort, Process.waitall].inspect)
               w.close
-              exit!
+              exit
             end
             w.close
             res = r.read
@@ -2615,7 +2643,7 @@ mod new_api_tests {
               res << $?.nil?
               w.write(res.inspect)
               w.close
-              exit!
+              exit
             end
             w.close
             res = r.read
@@ -2712,7 +2740,7 @@ mod new_api_tests {
                 before = Process.pid
                 Process.daemon(true, true)
                 File.write(out, (before == Process.pid).to_s)
-                exit!
+                exit
               end
               Process.wait(pid)
               50.times do
@@ -2723,6 +2751,112 @@ mod new_api_tests {
             end
             "#,
         );
+    }
+
+    #[test]
+    fn etc_passwd_group_database() {
+        // The hidden __getpw*/__getgr* helpers behind stdlib Etc.
+        run_test_once(
+            r#"
+            require "etc"
+            pw = Etc.getpwnam("root")
+            gr = Etc.getgrgid(0)
+            me = Etc.getpwuid(Process.uid)
+            [
+              pw.uid, pw.gid, pw.dir.is_a?(String), pw.shell.is_a?(String),
+              Etc.getpwuid(0).name, gr.name, gr.mem.is_a?(Array),
+              Etc.getgrnam(gr.name).gid, me.name == Etc.passwd.name,
+              Etc.group.gid == Process.gid,
+            ]
+            "#,
+        );
+        run_test_error(r#"require "etc"; Etc.getpwnam("no-such-user-xyzzy")"#);
+        run_test_error(r#"require "etc"; Etc.getgrnam("no-such-group-xyzzy")"#);
+    }
+
+    #[test]
+    fn process_id_setters_to_current_ids() {
+        // Setting each id to its CURRENT value succeeds even without
+        // privileges, exercising every setter's happy path (and the
+        // String-name resolution) portably.
+        run_test_once(
+            r#"
+            require "etc"
+            a = []
+            a << (Process.uid = Process.uid)
+            a << (Process.gid = Process.gid)
+            a << (Process.euid = Process.euid)
+            a << (Process.egid = Process.egid)
+            Process.euid = Etc.getpwuid(Process.uid).name
+            a << (Process.euid == Process.uid)
+            a
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_clock_getres_units_and_clocks() {
+        run_tests(&[
+            r#"Process.clock_getres(:TIMES_BASED_CLOCK_MONOTONIC, :nanosecond).is_a?(Integer)"#,
+            r#"Process.clock_getres(:TIMES_BASED_CLOCK_PROCESS_CPUTIME_ID, :nanosecond).is_a?(Integer)"#,
+            r#"Process.clock_getres(:CLOCK_BASED_CLOCK_PROCESS_CPUTIME_ID, :nanosecond)"#,
+            r#"Process.clock_getres(:TIME_BASED_CLOCK_REALTIME, :second)"#,
+            r#"Process.clock_getres(:TIME_BASED_CLOCK_REALTIME, :millisecond)"#,
+            r#"Process.clock_getres(:TIME_BASED_CLOCK_REALTIME, :microsecond)"#,
+            r#"Process.clock_getres(:TIME_BASED_CLOCK_REALTIME, :float_millisecond)"#,
+            r#"Process.clock_getres(:TIME_BASED_CLOCK_REALTIME, :float_microsecond)"#,
+            r#"Process.clock_getres(:TIME_BASED_CLOCK_REALTIME).is_a?(Float)"#,
+            r#"Process.clock_getres(:TIME_BASED_CLOCK_REALTIME, nil).is_a?(Float)"#,
+        ]);
+        run_test_error(r#"Process.clock_getres(:TIME_BASED_CLOCK_REALTIME, :bogus_unit)"#);
+        // Unsupported emulation clock: Errno::EINVAL, like CRuby.
+        run_test_error(
+            r#"Process.clock_getres(:GETTIMEOFDAY_BASED_CLOCK_PROCESS_CPUTIME_ID, :nanosecond)"#,
+        );
+        run_test_error(r#"Process.clock_getres(:TIME_BASED_CLOCK_REALTIME, 1)"#);
+    }
+
+    #[test]
+    fn process_status_wait_wnohang_and_flags() {
+        // Isolated in a fork (wildcard reaping); exits via `exit` so the
+        // child's coverage profile is flushed.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              res = []
+              cr, cw = IO.pipe
+              cpid = fork { cr.close; Signal.trap("TERM") { exit! }; cw << 1; cw.close; sleep }
+              cw.close
+              res << Process::Status.wait(cpid, Process::WNOHANG)
+              cr.read(1); cr.close
+              Process.kill("TERM", cpid)
+              st = Process::Status.wait(cpid, 0)
+              res << (st.pid == cpid)
+              w.write(res.inspect)
+              w.close
+              exit
+            end
+            w.close
+            res = r.read
+            Process.wait(pid)
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_daemon_arg_validation() {
+        // Validated BEFORE the fork — must raise in-process.
+        run_test_error(r#"Process.daemon(1)"#);
+        run_test_error(r#"Process.daemon(true, "true")"#);
+    }
+
+    #[test]
+    fn process_groups_set_by_name_error() {
+        run_test_error(r#"Process.groups = ["no-such-group-xyzzy"]"#);
+        run_test_error(r#"Process.maxgroups = -3"#);
     }
 
     #[test]

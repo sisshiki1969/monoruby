@@ -415,7 +415,10 @@ fn parse_redirect(
             let rs = path_v.coerce_to_path_rstring(vm, globals)?;
             let path = CString::new(rs.as_bytes().to_vec()).map_err(|_| null_byte())?;
             let flags = match ary.get(1).copied() {
-                None => default_flags(&child_fds),
+                // CRuby: the Array form WITHOUT a mode defaults to
+                // read-only regardless of the target fd (unlike the bare
+                // String form, whose default depends on the fd).
+                None => libc::O_RDONLY,
                 Some(m) => {
                     if let Some(i) = m.try_fixnum() {
                         i as i32
@@ -860,6 +863,134 @@ mod tests {
               File.read("#{d}/o")
             end
             "##,
+        );
+    }
+
+    #[test]
+    fn exec_applies_child_setup_in_process() {
+        // Run a full option set through `do_exec`'s child_exec in a
+        // forked child whose exec FAILS: pgroup/umask/chdir/redirects all
+        // apply in-process (recorded by coverage, verified via Dir.pwd),
+        // then the ENOENT surfaces as an in-process raise. The child
+        // exits normally so its profile is flushed.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              res = nil
+              begin
+                Process.exec(
+                  {"EXEC_T" => "1"},
+                  "definitely-no-such-cmd-xyzzy",
+                  out: "/dev/null",
+                  err: [:child, :out],
+                  umask: 0,
+                  pgroup: 0,
+                  chdir: "/",
+                )
+              rescue Errno::ENOENT
+                res = [Dir.pwd, File.umask, Process.getpgrp == Process.pid]
+              end
+              w.write(res.inspect)
+              w.close
+              exit
+            end
+            w.close
+            res = r.read
+            Process.wait(pid)
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn spawn_redirect_parse_forms() {
+        // Exercise the remaining redirect-value shapes; each spawns
+        // `true` (cheap) or validates without forking.
+        run_test_once(
+            r##"
+            require "tmpdir"
+            res = []
+            Dir.mktmpdir do |d|
+              # [path, mode-string], [path, flags-Integer, perm]
+              Process.wait Process.spawn("echo b", out: ["#{d}/r1", "a"])
+              Process.wait Process.spawn("echo c", out: ["#{d}/r2", File::WRONLY | File::CREAT, 0o600])
+              res << File.read("#{d}/r1")
+              res << File.read("#{d}/r2")
+              # :in from a file: bare-String value and mode-less Array
+              # value (the latter defaults to read-only, CRuby-style)
+              File.write("#{d}/in", "stdin-data")
+              rr, ww = IO.pipe
+              Process.wait Process.spawn("cat", in: "#{d}/in", out: ww)
+              ww.close
+              res << rr.read
+              rr2, ww2 = IO.pipe
+              Process.wait Process.spawn("cat", in: ["#{d}/in"], out: ww2)
+              ww2.close
+              res << rr2.read
+              # IO value on :in + Integer fd value + symbol target
+              File.open("#{d}/in") do |f|
+                r2, w2 = IO.pipe
+                Process.wait Process.spawn("cat", in: f, out: w2.fileno, err: :out)
+                w2.close
+                res << r2.read
+              end
+              # #to_io object as redirect value
+              wrapper = Object.new
+              File.open("#{d}/r3", "w") do |f|
+                wrapper.define_singleton_method(:to_io) { f }
+                Process.wait Process.spawn("echo via-to-io", out: wrapper)
+              end
+              res << File.read("#{d}/r3")
+              # IO object as redirect KEY
+              File.open("#{d}/r4", "w") do |f|
+                Process.wait Process.spawn("echo io-key >&#{f.fileno}", f => f.fileno)
+                # (fd => fd form is covered by ruby/spec)
+              end
+            end
+            res
+            "##,
+        );
+        run_test_error(r#"Process.spawn("true", out: :bogus_target)"#);
+        run_test_error(r#"Process.spawn("true", out: Object.new)"#);
+        run_test_error(r#"Process.spawn("true", [:out, :bogus] => "/dev/null")"#);
+        run_test_error(r#"Process.spawn("true", out: [:child, :bogus])"#);
+    }
+
+    #[test]
+    fn spawn_close_others_and_env_paths() {
+        run_test_once(
+            r#"
+            # close_others: true still keeps the redirected fds.
+            r, w = IO.pipe
+            Process.wait Process.spawn("echo kept", out: w, close_others: true)
+            w.close
+            r.read
+            "#,
+        );
+        run_test_once(
+            r#"
+            # unsetenv_others with an env hash keeps only the given vars
+            # (PATH-less exec still works via the absolute-path shell).
+            r, w = IO.pipe
+            Process.wait Process.spawn({"KEEP" => "yes"}, "echo [$KEEP][$HOME]", unsetenv_others: true, out: w)
+            w.close
+            r.read
+            "#,
+        );
+        // env-key/value #to_str coercion.
+        run_test_once(
+            r#"
+            k = Object.new
+            def k.to_str = "COERCED"
+            v = Object.new
+            def v.to_str = "val"
+            r, w = IO.pipe
+            Process.wait Process.spawn({k => v}, "echo $COERCED", out: w)
+            w.close
+            r.read
+            "#,
         );
     }
 
