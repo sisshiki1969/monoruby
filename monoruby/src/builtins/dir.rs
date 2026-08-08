@@ -16,7 +16,7 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         2,
         false,
-        &["base", "sort"],
+        &["base", "sort", "flags"],
         false,
     );
     globals.define_builtin_class_func_with_kw(
@@ -34,8 +34,26 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_with(klass, "chdir", chdir, 0, 1, false);
     globals.define_builtin_class_func(klass, "exist?", exist, 1);
     globals.define_builtin_class_func_with(klass, "mkdir", mkdir, 1, 2, false);
-    globals.define_builtin_class_func_with(klass, "entries", entries, 1, 2, false);
-    globals.define_builtin_class_func_with(klass, "foreach", foreach, 1, 2, false);
+    globals.define_builtin_class_func_with_kw(
+        klass,
+        "entries",
+        entries,
+        1,
+        1,
+        false,
+        &["encoding"],
+        false,
+    );
+    globals.define_builtin_class_func_with_kw(
+        klass,
+        "foreach",
+        foreach,
+        1,
+        2,
+        false,
+        &["encoding"],
+        false,
+    );
     globals.define_builtin_class_funcs(klass, "rmdir", &["delete", "unlink"], rmdir, 1);
 
     // Methods that need libc syscalls or external state. The rest of Dir's
@@ -44,8 +62,65 @@ pub(super) fn init(globals: &mut Globals) {
     // Ruby ivars.
     globals.define_builtin_class_func(klass, "fchdir", fchdir, 1);
     globals.define_builtin_class_func(klass, "chroot", chroot, 1);
-    globals.define_builtin_func(klass, "fileno", dir_fileno, 0);
     globals.define_builtin_func_with(klass, "chdir", dir_inst_chdir, 0, 0, false);
+    // fd-backed internals for builtins/dir.rb: every Dir instance holds a
+    // real O_DIRECTORY descriptor so `fileno`, `Dir.for_fd`, and the
+    // close(2)-level double-close detection behave like CRuby's DIR*.
+    globals.define_builtin_class_func(klass, "__open_fd", dir_open_fd, 1);
+    globals.define_builtin_class_func(klass, "__close_fd", dir_close_fd, 1);
+    globals.define_builtin_class_func(klass, "__entries_fd", dir_entries_fd, 2);
+}
+
+/// Read a directory's entry names (including "." and "..") through a
+/// *duplicate* of `fd` so the caller's descriptor position/ownership is
+/// untouched, tagging each name with `enc` (or the default external
+/// encoding) and transcoding to the default internal encoding when set
+/// (entries whose bytes don't convert keep the external tag).
+fn read_entries_via_fd(
+    globals: &mut Globals,
+    fd: i32,
+    enc_obj: Option<Value>,
+) -> Result<Vec<Value>> {
+    // SAFETY: dup(2) then fdopendir(3); the DIR* takes ownership of the
+    // dup'd fd and is released with closedir below. readdir entries are
+    // copied out before the next readdir call.
+    unsafe {
+        let dup = libc::dup(fd);
+        if dup < 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "readdir"));
+        }
+        let dirp = libc::fdopendir(dup);
+        if dirp.is_null() {
+            let err = std::io::Error::last_os_error();
+            libc::close(dup);
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "readdir"));
+        }
+        // dup(2) shares the directory offset with the original fd (a
+        // previous full listing leaves it at EOF), so always start over.
+        libc::rewinddir(dirp);
+        let mut names: Vec<Vec<u8>> = vec![];
+        loop {
+            let ent = libc::readdir(dirp);
+            if ent.is_null() {
+                break;
+            }
+            let name = std::ffi::CStr::from_ptr((*ent).d_name.as_ptr());
+            names.push(name.to_bytes().to_vec());
+        }
+        libc::closedir(dirp);
+        Ok(names
+            .into_iter()
+            .map(|n| super::io::tag_with_encs(globals, n, enc_obj, None))
+            .collect())
+    }
+}
+
+/// Resolve an `encoding:` keyword value (String name or Encoding
+/// object; nil/absent → None = default external).
+fn entries_enc_obj(globals: &Globals, v: Option<Value>) -> Option<Value> {
+    v.filter(|v| !v.is_nil())
+        .and_then(|v| super::io::arg_to_enc_obj(globals, v))
 }
 
 ///
@@ -55,20 +130,19 @@ pub(super) fn init(globals: &mut Globals) {
 /// Same as `Dir.entries` but excludes the `"."` and `".."` entries.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/children.html]
-#[monoruby_builtin]
-fn children(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
+/// List a directory's entry names as raw byte vectors (no "." / "..").
+fn read_dir_names(globals: &Globals, path: &RString) -> Result<Vec<Vec<u8>>> {
+    use std::os::unix::ffi::OsStrExt;
+    let display = String::from_utf8_lossy(path.as_bytes()).to_string();
+    let dir = super::file::bytes_to_pathbuf(path.as_bytes());
     let mut result = vec![];
-    for entry in std::fs::read_dir(&path)
-        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?
+    for entry in std::fs::read_dir(&dir)
+        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &display))?
     {
-        let entry =
-            entry.map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
-        result.push(Value::string(
-            entry.file_name().to_string_lossy().to_string(),
-        ));
+        let entry = entry.map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &display))?;
+        result.push(entry.file_name().as_os_str().as_bytes().to_vec());
     }
-    Ok(Value::array_from_vec(result))
+    Ok(result)
 }
 
 ///
@@ -83,25 +157,35 @@ fn children(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/foreach.html]
 #[monoruby_builtin]
 fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    // The `encoding:` keyword lives in slot 2; the spare positional
+    // slot 1 carries it through an Enumerator replay (which passes
+    // positional arguments only).
+    let enc_val = lfp.try_arg(2).or_else(|| lfp.try_arg(1));
     // Without a block, return a (lazy, size-less) Enumerator that replays
     // `Dir.foreach(path)` when iterated — matching CRuby, which defers the
     // directory read (and any ENOENT) until enumeration.
     let Some(bh) = lfp.block() else {
         let method = IdentId::get_id("foreach");
-        return vm.generate_enumerator(method, lfp.self_val(), vec![lfp.arg(0)], pc);
+        let mut args = vec![lfp.arg(0)];
+        if let Some(e) = enc_val
+            && !e.is_nil()
+        {
+            args.push(e);
+        }
+        return vm.generate_enumerator(method, lfp.self_val(), args, pc);
     };
-    let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?.to_str()?.to_string();
-    let mut names = vec![".".to_string(), "..".to_string()];
-    for entry in std::fs::read_dir(&path)
-        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?
-    {
-        let entry =
-            entry.map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
-        names.push(entry.file_name().to_string_lossy().to_string());
-    }
+    let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
+    super::file::check_path_encoding(globals, &path)?;
+    let enc_obj = entries_enc_obj(globals, enc_val);
+    let mut names: Vec<Vec<u8>> = vec![b".".to_vec(), b"..".to_vec()];
+    names.extend(read_dir_names(globals, &path)?);
+    let entries: Vec<Value> = names
+        .into_iter()
+        .map(|n| super::io::tag_with_encs(globals, n, enc_obj, None))
+        .collect();
     let p = vm.get_block_data(globals, bh)?;
-    for name in names {
-        vm.invoke_block(globals, &p, &[Value::string(name)])?;
+    for name in entries {
+        vm.invoke_block(globals, &p, &[name])?;
     }
     Ok(Value::nil())
 }
@@ -112,14 +196,13 @@ fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/rmdir.html]
 #[monoruby_builtin]
 fn rmdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = lfp
-        .arg(0)
-        .coerce_to_path_rstring(vm, globals)?
-        .to_str()?
-        .to_string();
+    let rs = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
+    super::file::check_path_encoding(globals, &rs)?;
+    let path = super::file::bytes_to_pathbuf(rs.as_bytes());
+    let display = path.to_string_lossy().to_string();
     std::fs::remove_dir(&path).map_err(|e| {
         let desc = errno_description(&e);
-        MonorubyErr::from_io_err(globals, &e, format!("{} @ dir_s_rmdir - {}", desc, path))
+        MonorubyErr::from_io_err(globals, &e, format!("{} @ dir_s_rmdir - {}", desc, display))
     })?;
     Ok(Value::integer(0))
 }
@@ -132,11 +215,10 @@ fn rmdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/mkdir.html]
 #[monoruby_builtin]
 fn mkdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = lfp
-        .arg(0)
-        .coerce_to_path_rstring(vm, globals)?
-        .to_str()?
-        .to_string();
+    let rs = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
+    super::file::check_path_encoding(globals, &rs)?;
+    let path = super::file::bytes_to_pathbuf(rs.as_bytes());
+    let display = path.to_string_lossy().to_string();
     let mode = if let Some(m) = lfp.try_arg(1) {
         m.coerce_to_int_i64(vm, globals)? as u32
     } else {
@@ -149,7 +231,7 @@ fn mkdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             Err(MonorubyErr::from_io_err(
                 globals,
                 &e,
-                format!("{} @ dir_s_mkdir - {}", desc, path),
+                format!("{} @ dir_s_mkdir - {}", desc, display),
             ))
         }
     }
@@ -258,7 +340,15 @@ enum PathComponent {
 #[monoruby_builtin]
 fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let pat_val = lfp.arg(0);
-    let flags = lfp.try_arg(1).and_then(|v| v.try_fixnum()).unwrap_or(0);
+    // `flags:` keyword wins over the positional flags argument
+    // (core/dir/glob_spec.rb "prefers the keyword argument").
+    let flags = if let Some(f) = lfp.try_arg(4)
+        && !f.is_nil()
+    {
+        f.coerce_to_int_i64(vm, globals)?
+    } else {
+        lfp.try_arg(1).and_then(|v| v.try_fixnum()).unwrap_or(0)
+    };
     let base = if let Some(base) = lfp.try_arg(2)
         && !base.is_nil()
     {
@@ -277,25 +367,19 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // single-String form ("nul-separated glob pattern is deprecated")
     // and the Array form ("path name contains null byte"), matching
     // CRuby.
-    let patterns: Vec<String> = if pat_val.is_array_ty() {
+    let patterns: Vec<(String, crate::value::Encoding)> = if pat_val.is_array_ty() {
         pat_val
             .as_array_inner()
             .iter()
             .map(|v| {
-                let s = v
-                    .coerce_to_path_rstring_allow_nul(vm, globals)?
-                    .to_str()?
-                    .to_string();
-                reject_array_pattern_nul(&s)?;
+                let s = glob_pattern(vm, globals, *v)?;
+                reject_array_pattern_nul(&s.0)?;
                 Ok(s)
             })
             .collect::<Result<_>>()?
     } else {
-        let s = pat_val
-            .coerce_to_path_rstring_allow_nul(vm, globals)?
-            .to_str()?
-            .to_string();
-        reject_single_pattern_nul(&s)?;
+        let s = glob_pattern(vm, globals, pat_val)?;
+        reject_single_pattern_nul(&s.0)?;
         vec![s]
     };
 
@@ -343,17 +427,14 @@ fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // (single-String NUL message); with several it behaves like the
     // Array form.
     let single = pat_val.len() == 1;
-    let patterns: Vec<String> = pat_val
+    let patterns: Vec<(String, crate::value::Encoding)> = pat_val
         .iter()
         .map(|v| {
-            let s = v
-                .coerce_to_path_rstring_allow_nul(vm, globals)?
-                .to_str()?
-                .to_string();
+            let s = glob_pattern(vm, globals, *v)?;
             if single {
-                reject_single_pattern_nul(&s)?;
+                reject_single_pattern_nul(&s.0)?;
             } else {
-                reject_array_pattern_nul(&s)?;
+                reject_array_pattern_nul(&s.0)?;
             }
             Ok(s)
         })
@@ -402,15 +483,35 @@ fn reject_array_pattern_nul(s: &str) -> Result<()> {
     Ok(())
 }
 
+/// Coerce one glob pattern, keeping its encoding for the result tags.
+/// An ASCII-incompatible pattern encoding raises CRuby's
+/// `Encoding::CompatibilityError` ("… UTF-16BE and US-ASCII").
+fn glob_pattern(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<(String, crate::value::Encoding)> {
+    let rs = v.coerce_to_path_rstring_allow_nul(vm, globals)?;
+    let enc = rs.encoding();
+    if !enc.is_ascii_compatible() {
+        return Err(MonorubyErr::incompatible_encoding(
+            &globals.store,
+            enc,
+            crate::value::Encoding::UsAscii,
+        ));
+    }
+    Ok((rs.to_str()?.to_string(), enc))
+}
+
 fn glob_impl(
-    patterns: Vec<String>,
+    patterns: Vec<(String, crate::value::Encoding)>,
     flags: i64,
     base: Option<String>,
     sort: bool,
 ) -> Result<Vec<RStringInner>> {
     let noescape = flags & FNM_NOESCAPE != 0;
     let mut all_matches = vec![];
-    for pattern_str in &patterns {
+    for (pattern_str, enc) in &patterns {
         // Brace alternations expand first, in source order, and each
         // expansion contributes its own (individually sorted) result
         // group — duplicates across groups are kept (CRuby:
@@ -421,13 +522,15 @@ fn glob_impl(
             if sort {
                 matches.sort();
             }
-            all_matches.extend(matches);
+            // Matches inherit the pattern's encoding (glob_spec.rb
+            // "preserves the encoding of the path").
+            all_matches
+                .extend(matches.into_iter().map(|m| {
+                    RStringInner::from_encoding(m.as_bytes(), *enc)
+                }));
         }
     }
-    Ok(all_matches
-        .into_iter()
-        .map(RStringInner::from_string)
-        .collect())
+    Ok(all_matches)
 }
 
 /// Parse one (brace-free) glob pattern string and append matches.
@@ -750,11 +853,16 @@ fn home(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/getwd.html]
 #[monoruby_builtin]
 fn pwd(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
-    let pwd = std::env::current_dir()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    Ok(Value::string(pwd))
+    let cwd = std::env::current_dir().unwrap();
+    let bytes = super::file::pathbuf_bytes(&cwd);
+    // The cwd is reported in the filesystem (UTF-8) encoding; raw bytes
+    // that don't decode fall back to BINARY (core/dir/pwd_spec.rb).
+    let enc = if std::str::from_utf8(bytes).is_ok() {
+        crate::value::Encoding::Utf8
+    } else {
+        crate::value::Encoding::Ascii8
+    };
+    Ok(super::file::path_value(bytes, enc))
 }
 
 ///
@@ -768,27 +876,51 @@ fn pwd(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Valu
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/chdir.html]
 #[monoruby_builtin]
 fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = if let Some(path) = lfp.try_arg(0) {
-        path.coerce_to_path_rstring(vm, globals)?.to_str()?.to_string()
+    let (path, path_val) = if let Some(path) = lfp.try_arg(0) {
+        let rs = path.coerce_to_path_rstring(vm, globals)?;
+        super::file::check_path_encoding(globals, &rs)?;
+        let enc = rs.encoding();
+        (
+            super::file::bytes_to_pathbuf(rs.as_bytes()),
+            super::file::path_value(rs.as_bytes(), enc),
+        )
     } else {
-        dirs::home_dir().unwrap().to_string_lossy().to_string()
+        let home = dirs::home_dir().unwrap();
+        let v = super::file::path_value(
+            super::file::pathbuf_bytes(&home),
+            crate::value::Encoding::Utf8,
+        );
+        (home, v)
     };
+    let display = path.to_string_lossy().to_string();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let old_pwd = std::env::current_dir().unwrap();
         match std::env::set_current_dir(&path) {
             Ok(_) => {}
             Err(err) => {
-                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, &path));
+                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, &display));
             }
         }
-        let path = Value::string(path);
-        let res = vm.invoke_block(globals, &data, &[path]);
-        let _ = std::env::set_current_dir(old_pwd);
-        res
+        let res = vm.invoke_block(globals, &data, &[path_val]);
+        // Restoring the original directory can itself fail (it may have
+        // been removed inside the block); CRuby surfaces that Errno
+        // (core/dir/chdir_spec.rb "raises an Errno::ENOENT if the
+        // original directory no longer exists").
+        match std::env::set_current_dir(&old_pwd) {
+            Ok(_) => res,
+            Err(err) => {
+                res?;
+                Err(MonorubyErr::errno_with_msg(
+                    &globals.store,
+                    &err,
+                    &old_pwd.to_string_lossy(),
+                ))
+            }
+        }
     } else {
         std::env::set_current_dir(&path)
-            .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
+            .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &display))?;
         Ok(Value::integer(0))
     }
 }
@@ -803,12 +935,9 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/exist=3f.html]
 #[monoruby_builtin]
 fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path_str = lfp
-        .arg(0)
-        .coerce_to_path_rstring(vm, globals)?
-        .to_str()?
-        .to_string();
-    let path = std::path::Path::new(&path_str);
+    let rs = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
+    super::file::check_path_encoding(globals, &rs)?;
+    let path = super::file::bytes_to_pathbuf(rs.as_bytes());
     Ok(Value::bool(path.is_dir()))
 }
 
@@ -823,24 +952,85 @@ fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/entries.html]
 #[monoruby_builtin]
 fn entries(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = lfp
-        .arg(0)
-        .coerce_to_path_rstring(vm, globals)?
-        .to_str()?
-        .to_string();
-    let mut result = vec![
-        Value::string(".".to_string()),
-        Value::string("..".to_string()),
-    ];
-    for entry in
-        std::fs::read_dir(&path).map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?
-    {
-        let entry = entry.map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, &path))?;
-        result.push(Value::string(
-            entry.file_name().to_string_lossy().to_string(),
+    let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
+    super::file::check_path_encoding(globals, &path)?;
+    let enc_obj = entries_enc_obj(globals, lfp.try_arg(1));
+    let mut names: Vec<Vec<u8>> = vec![b".".to_vec(), b"..".to_vec()];
+    names.extend(read_dir_names(globals, &path)?);
+    let result: Vec<Value> = names
+        .into_iter()
+        .map(|n| super::io::tag_with_encs(globals, n, enc_obj, None))
+        .collect();
+    Ok(Value::array_from_vec(result))
+}
+
+///
+/// ### Dir.__open_fd (internal)
+///
+/// Open `path` with `O_RDONLY|O_DIRECTORY|O_CLOEXEC` and return the fd.
+/// Backs `Dir#initialize` in builtins/dir.rb.
+#[monoruby_builtin]
+fn dir_open_fd(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
+    super::file::check_path_encoding(globals, &path)?;
+    if path.as_bytes().contains(&0) {
+        return Err(MonorubyErr::argumenterr("path name contains null byte"));
+    }
+    let display = String::from_utf8_lossy(path.as_bytes()).to_string();
+    let c = std::ffi::CString::new(path.as_bytes().to_vec()).unwrap();
+    // SAFETY: open(2) with a NUL-terminated path; the fd's ownership moves
+    // to the Ruby-side Dir object (closed via Dir.__close_fd).
+    let fd = unsafe {
+        libc::open(
+            c.as_ptr(),
+            libc::O_DIRECTORY | libc::O_RDONLY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_path(
+            &globals.store,
+            &err,
+            "dir_initialize",
+            &display,
         ));
     }
-    Ok(Value::array_from_vec(result))
+    Ok(Value::integer(fd as i64))
+}
+
+///
+/// ### Dir.__close_fd (internal)
+///
+/// close(2) a directory fd, surfacing failures the way CRuby's
+/// `closedir` does (`Errno::EBADF: Bad file descriptor - closedir`).
+#[monoruby_builtin]
+fn dir_close_fd(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let fd = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
+    // SAFETY: close(2); an invalid fd is reported via errno, not UB.
+    let rc = unsafe { libc::close(fd) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "closedir"));
+    }
+    Ok(Value::nil())
+}
+
+///
+/// ### Dir.__entries_fd (internal)
+///
+/// Entry names (including "." and "..") of the directory open at `fd`,
+/// tagged/transcoded per the optional `encoding` argument.
+#[monoruby_builtin]
+fn dir_entries_fd(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let fd = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
+    let enc_obj = entries_enc_obj(globals, Some(lfp.arg(1)));
+    let entries = read_entries_via_fd(globals, fd, enc_obj)?;
+    Ok(Value::array_from_vec(entries))
 }
 
 /// Read the `@path` ivar set by Ruby-side `Dir#initialize`.
@@ -901,42 +1091,6 @@ fn dir_inst_chdir(
         return result;
     }
     Ok(Value::integer(0))
-}
-
-///
-/// ### Dir#fileno
-/// - fileno -> Integer
-///
-/// Returns a file descriptor for the directory by opening it with
-/// `O_DIRECTORY`. monoruby does not currently keep a `DIR *` open per Dir
-/// instance, so each call opens a fresh descriptor — comparing two `fileno`
-/// values from the same Dir will give the same number for the same path.
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Dir/i/fileno.html]
-#[monoruby_builtin]
-fn dir_fileno(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let self_ = lfp.self_val();
-    dir_check_closed(globals, self_)?;
-    let path = dir_path_ivar(globals, self_)?;
-    let c = std::ffi::CString::new(path.as_bytes())
-        .map_err(|_| MonorubyErr::argumenterr("path contains NUL byte"))?;
-    // SAFETY: O_DIRECTORY | O_RDONLY is a POSIX-defined open mode.
-    let fd = unsafe { libc::open(c.as_ptr(), libc::O_DIRECTORY | libc::O_RDONLY) };
-    if fd < 0 {
-        let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_path(
-            &globals.store,
-            &err,
-            "rb_dir_s_fileno",
-            &path,
-        ));
-    }
-    Ok(Value::integer(fd as i64))
 }
 
 ///
@@ -1008,6 +1162,52 @@ fn chroot(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn dir_entries_encoding_keyword() {
+        // entries/foreach/children accept `encoding:` and tag names with
+        // it (default: external encoding); default_internal transcodes.
+        run_test_once(
+            r##"(d="/tmp/mono_de_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/a", ""); a=Dir.entries(d, encoding: "euc-jp").map { |e| e.encoding.name }.uniq; b=Dir.children(d, encoding: Encoding::ISO_8859_1).map { |e| e.encoding.name }.uniq; c=Dir.foreach(d, encoding: "iso-8859-1").to_a.map { |e| e.encoding.name }.uniq; names=[]; Dir.foreach(d, encoding: Encoding::ISO_8859_1) { |e| names << e.encoding.name }; e2=Dir.entries(d).map { |x| x.encoding.name }.uniq; File.unlink("#{d}/a"); Dir.rmdir(d); [a,b,c,names.uniq,e2])"##,
+        );
+    }
+
+    #[test]
+    fn dir_glob_encoding_and_flags_keyword() {
+        // Matches inherit the pattern's encoding; the flags: keyword is
+        // accepted and preferred over the positional argument.
+        run_test_once(
+            r##"(d="/tmp/mono_ge_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/.dot", ""); File.write("#{d}/plain", ""); a=Dir.glob("*", base: d).sort; b=Dir.glob("*", flags: File::FNM_DOTMATCH, base: d).sort; c=Dir.glob("*", :ignored, flags: File::FNM_DOTMATCH, base: d).sort; e2=Dir.glob("pl*".encode(Encoding::EUC_JP), base: d).map { |x| x.encoding.name }; f=Dir["pl*", base: d]; File.unlink("#{d}/.dot"); File.unlink("#{d}/plain"); Dir.rmdir(d); [a,b,c,e2,f])"##,
+        );
+    }
+
+    #[test]
+    fn dir_for_fd_shares_descriptor() {
+        // Dir.for_fd shares the fd (no dup): closing the original makes
+        // the wrapper's close(2) fail with CRuby's closedir EBADF; the
+        // wrapper lists the same entries and has a nil path.
+        run_test_once(
+            r##"(d="/tmp/mono_ff_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/x", ""); dir=Dir.open(d); a=dir.fileno.is_a?(Integer); dn=Dir.for_fd(dir.fileno); b=dn.to_a.sort; c=dn.path; dir.close; e2=(begin; dn.close; rescue => e; [e.class, e.message]; end); f=(begin; Dir.for_fd("x"); rescue => e; e.class; end); File.unlink("#{d}/x"); Dir.rmdir(d); [a,b,c,e2,f])"##,
+        );
+    }
+
+    #[test]
+    fn dir_pwd_binary_names() {
+        // mkdir/chdir/pwd round-trip raw non-ASCII bytes; pwd tags the
+        // result UTF-8 when it decodes.
+        run_test_once(
+            r##"(base="/tmp/mono_pwd_#{Process.pid}"; Dir.mkdir(base); name="#{base}/あ".dup.force_encoding(Encoding::BINARY); Dir.mkdir(name); r=Dir.chdir(name) { [Dir.pwd.encoding.name, Dir.pwd.force_encoding("binary") == name] }; Dir.rmdir(name); Dir.rmdir(base); r)"##,
+        );
+    }
+
+    #[test]
+    fn dir_chdir_restore_failure() {
+        // Dir.chdir's block form surfaces the Errno when the original
+        // directory vanished inside the block.
+        run_test_once(
+            r##"(d1="/tmp/mono_cr1_#{Process.pid}"; d2="/tmp/mono_cr2_#{Process.pid}"; Dir.mkdir(d1); Dir.mkdir(d2); r=(begin; Dir.chdir(d1) { Dir.chdir(d2) { Dir.unlink(d1) } }; rescue => e; e.class; end); Dir.rmdir(d2); r)"##,
+        );
+    }
 
     #[test]
     fn dir_methods_coverage() {

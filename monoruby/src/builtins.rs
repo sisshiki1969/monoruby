@@ -1,7 +1,8 @@
 use super::*;
 
+pub(crate) mod argf;
 mod arithmetic_sequence;
-mod array;
+pub(crate) mod array;
 mod binding;
 mod bool_class;
 mod class;
@@ -123,6 +124,7 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     io_buffer::init(globals);
     struct_class::init(globals);
     file::init(globals);
+    argf::init(globals);
     socket::init(globals);
     fiddle::init(globals);
     ffi::init(globals);

@@ -471,6 +471,27 @@ pub(in crate::codegen) enum LInst {
         rhs: GP,
         deopt: DestLabel,
     },
+    /// Fixnum fast-path `lhs <op> imm` with a compile-time constant folded into
+    /// the instruction's immediate operand. `imm` is the **doubled untagged**
+    /// constant `2k`: the tagged identity `(2a+1) ± 2k = 2(a±k)+1` needs no
+    /// untag adjustment, and the overflow flag is preserved (`2a+1 ± 2k`
+    /// overflows i64 iff `a ± k` overflows i63). Add/Sub only.
+    IntegerBinOpImm {
+        kind: BinOpK,
+        lhs: GP,
+        imm: i32,
+        deopt: DestLabel,
+    },
+    /// Fixnum doubling (`x + x` with both operands in one register):
+    /// `add reg, reg; jo; sub reg, 1` — the addition happens on the tagged
+    /// value *before* any untag, so a shared operand register is safe, and
+    /// `(2a+1)+(2a+1)-1 = 2(2a)+1`. The `jo` on the intermediate `4a+2` is
+    /// exact: `4a+1 == i64::MAX` has no integer solution, so the off-by-one
+    /// never fires spuriously.
+    IntegerDouble {
+        reg: GP,
+        deopt: DestLabel,
+    },
     /// Fixnum unary negate on the tagged value in `reg`; deopt on i63 overflow
     /// (e.g. `-i63::MIN`).
     FixnumNeg {
@@ -676,6 +697,12 @@ pub(in crate::codegen) enum LInst {
         inline: Option<(SlotId, u16)>,
         using_fpr: UsingFpr,
     },
+    ArrayMinMax {
+        args: SlotId,
+        len: u16,
+        min: bool,
+        using_fpr: UsingFpr,
+    },
     NewHash {
         args: SlotId,
         len: usize,
@@ -829,6 +856,14 @@ pub(in crate::codegen) enum LInst {
         lhs: GP,
         rhs: GP,
     },
+    /// Fixnum comparison against a compile-time constant. `imm` is the
+    /// **tagged** constant `2k+1` (tagged fixnums compare in the same order
+    /// as their untagged values). Boolean result in the accumulator.
+    IntegerCmpImm {
+        kind: CmpKind,
+        lhs: GP,
+        imm: i32,
+    },
     Ret,
     MethodRet {
         pc: BytecodePtr,
@@ -885,6 +920,7 @@ pub(in crate::codegen) enum LInst {
     },
     Yield {
         callid: CallSiteId,
+        simple: bool,
         error: DestLabel,
         evict: AsmEvict,
         evict_label: DestLabel,

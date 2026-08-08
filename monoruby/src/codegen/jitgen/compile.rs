@@ -157,6 +157,105 @@ impl<'a> JitContext<'a> {
         self.new_continue(end, next_bbid, state);
     }
 
+    /// CRuby's `opt_newarray_send` for min/max: fuse
+    /// `dst = [a, b, …]; res = dst.min` (an Array literal immediately
+    /// consumed by an argument-less, block-less `min`/`max` on a
+    /// temporary) into a single allocation-free compare over the
+    /// literal's element slots. Conditions:
+    ///
+    /// * the very next instruction (same basic block) is the consuming
+    ///   call, its receiver is this literal, and the literal lands in a
+    ///   temporary slot (a local could be re-read later);
+    /// * the literal has no splat;
+    /// * `Array#min` / `#max` still resolve to the builtins — anything
+    ///   else (including later redefinition, which bumps the guarded
+    ///   class version and deopts) takes the normal path.
+    ///
+    /// On success the consuming call's work is emitted here and the
+    /// call instruction itself is skipped via `fused_skip`.
+    fn try_fuse_array_minmax(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        bc_pos: BcIndex,
+        arr_dst: SlotId,
+        callid: CallSiteId,
+    ) -> bool {
+        let cs = &self.store[callid];
+        if !cs.splat_pos.is_empty() {
+            return false;
+        }
+        let (args, len) = (cs.args, cs.pos_num as u16);
+        // The literal must land in a temporary.
+        if (arr_dst.0 as usize) <= self.iseq().local_num() {
+            return false;
+        }
+        // The consuming call must be the next instruction of the same
+        // basic block.
+        let next_pos = bc_pos + 1;
+        if self.iseq().bb_info.is_bb_head(next_pos).is_some() {
+            return false;
+        }
+        let next_pc = self.get_pc(next_pos);
+        let TraceIr::MethodCall { callid: mcid, .. } = TraceIr::from_pc(next_pc, self.store)
+        else {
+            return false;
+        };
+        let mcs = &self.store[mcid];
+        let min_id = IdentId::get_id("min");
+        let max_id = IdentId::get_id("max");
+        let is_min = match mcs.name {
+            Some(name) if name == min_id => true,
+            Some(name) if name == max_id => false,
+            _ => return false,
+        };
+        if mcs.recv != arr_dst
+            || mcs.pos_num != 0
+            || !mcs.kw_args.is_empty()
+            || !mcs.hash_splat_pos.is_empty()
+            || mcs.block_fid.is_some()
+            || mcs.block_arg.is_some()
+        {
+            return false;
+        }
+        let call_dst = mcs.dst;
+        // `Array#min` / `#max` must still be the builtins.
+        let expected = if is_min {
+            crate::builtins::array::min as usize as u64
+        } else {
+            crate::builtins::array::max as usize as u64
+        };
+        let Some(fid) = self
+            .store
+            .check_method_for_class_with_version(
+                ARRAY_CLASS,
+                if is_min { min_id } else { max_id },
+                self.class_version(),
+            )
+            .and_then(|e| e.func_id())
+        else {
+            return false;
+        };
+        match self.store[fid].kind {
+            FuncKind::Builtin { abs_address } if abs_address == expected => {}
+            _ => return false,
+        }
+        // Emit: guarded by the class version (redefinition deopts), the
+        // compare can dispatch a user `<=>` (a side effect) and raise.
+        state.write_back_range(ir, args, len);
+        state.discard(call_dst);
+        state.discard(arr_dst);
+        self.guard_class_version(state, ir, true);
+        let using_fpr = state.get_using_fpr(ir);
+        let error = ir.new_error(state);
+        ir.array_min_max(using_fpr, args, len, is_min);
+        ir.handle_error(error);
+        state.def_rax2acc(ir, call_dst);
+        state.unset_side_effect_guard();
+        self.fused_skip = Some(next_pos);
+        true
+    }
+
     fn compile_instruction(
         &mut self,
         ir: &mut AsmIr,
@@ -164,6 +263,12 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         assert!(state.no_capture_guard());
+        // A fusing arm (e.g. `try_fuse_array_minmax`) already emitted this
+        // instruction's work together with its predecessor's.
+        if self.fused_skip == Some(bc_pos) {
+            self.fused_skip = None;
+            return Ok(CompileResult::Continue);
+        }
         let pc = self.get_pc(bc_pos);
         state.set_pc(pc);
         let trace_ir = TraceIr::from_pc(pc, self.store);
@@ -251,6 +356,9 @@ impl<'a> JitContext<'a> {
                 state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
             }
             TraceIr::Array { dst, callid } => {
+                if self.try_fuse_array_minmax(state, ir, bc_pos, dst, callid) {
+                    return Ok(CompileResult::Continue);
+                }
                 let CallSiteInfo { args, pos_num, .. } = self.store[callid];
                 state.write_back_range(ir, args, pos_num as u16);
                 state.discard(dst);

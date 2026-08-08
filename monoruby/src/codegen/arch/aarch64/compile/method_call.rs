@@ -1203,6 +1203,7 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_yield(
         &mut self,
         callid: CallSiteId,
+        simple: bool,
         error: &DestLabel,
         evict: AsmEvict,
         evict_label: &DestLabel,
@@ -1213,7 +1214,11 @@ impl Codegen {
         // continuation frame is already reserved by the surrounding
         // fpr_save_cont, so no extra push here.
         let f_yield = runtime::get_yield_data as *const () as u64;
-        let f_args = runtime::jit_handle_arguments_no_block as *const () as u64;
+        let f_args = if simple {
+            runtime::jit_handle_arguments_no_block_for_yield as *const () as u64
+        } else {
+            runtime::jit_handle_arguments_no_block as *const () as u64
+        };
         // get_yield_data(vm, globals) -> x0 = outer Lfp, x1 = FuncId.
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;

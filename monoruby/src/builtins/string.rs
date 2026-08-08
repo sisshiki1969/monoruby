@@ -2028,7 +2028,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     };
     let sep = match lfp.try_arg(0) {
         Some(v) if !v.is_nil() => resolve(vm, globals, v)?,
-        _ => match globals.get_gvar(IdentId::get_id("$;")) {
+        _ => match Some(globals.fs()) {
             Some(fs) if !fs.is_nil() => {
                 // CRuby emits this as a `:deprecated`-category warning:
                 // silent unless `Warning[:deprecated]` is enabled (mspec
@@ -2510,13 +2510,13 @@ fn chomp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         // No argument: the separator defaults to `$/` (itself "\n"
         // unless reassigned). `$/ = nil` means "never chomp".
-        match globals.get_gvar(IdentId::get_id("$/")) {
-            Some(v) if v.is_nil() => return Ok(lfp.self_val().dup()),
-            Some(v) => {
-                rs_owned = v.coerce_to_rstring(vm, globals)?;
-                rs_owned.as_bytes()
+        {
+            let v = globals.rs();
+            if v.is_nil() {
+                return Ok(lfp.self_val().dup());
             }
-            None => b"\n",
+            rs_owned = v.coerce_to_rstring(vm, globals)?;
+            rs_owned.as_bytes()
         }
     };
 
@@ -2549,13 +2549,13 @@ fn chomp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     } else {
         // No argument: the separator defaults to `$/` (itself "\n"
         // unless reassigned). `$/ = nil` means "never chomp".
-        match globals.get_gvar(IdentId::get_id("$/")) {
-            Some(v) if v.is_nil() => return Ok(Value::nil()),
-            Some(v) => {
-                rs_owned = v.coerce_to_rstring(vm, globals)?;
-                rs_owned.as_bytes()
+        {
+            let v = globals.rs();
+            if v.is_nil() {
+                return Ok(Value::nil());
             }
-            None => b"\n",
+            rs_owned = v.coerce_to_rstring(vm, globals)?;
+            rs_owned.as_bytes()
         }
     };
 
@@ -4776,7 +4776,7 @@ fn line_ranges(
         // (recognising "\r\n"/"\r" line ends under `chomp:`); `nil`
         // slurps the whole string; any other value acts like an
         // explicit separator argument.
-        None => match globals.get_gvar(IdentId::get_id("$/")) {
+        None => match Some(globals.rs()) {
             None => Sep::Default,
             Some(v) if v.is_nil() => Sep::Whole,
             Some(v) => {

@@ -744,7 +744,7 @@ impl Executor {
         {
             use std::io::Seek;
             let _ = file.seek(std::io::SeekFrom::Start(offset as u64));
-            let data = Value::new_file(file, path.to_string_lossy().into_owned(), true, false);
+            let data = Value::new_file(file, path.to_string_lossy().into_owned(), None, true, false);
             globals.set_constant_by_str(OBJECT_CLASS, "DATA", data);
         }
     }

@@ -621,6 +621,10 @@ impl JitStackFrame {
 pub(crate) struct JitContext<'a> {
     pub store: &'a Store,
     codegen_mode: bool,
+    /// Set by an instruction-fusing arm (`try_fuse_array_minmax`): the
+    /// bytecode position whose work was already emitted by its
+    /// predecessor, to be skipped by `compile_instruction`.
+    pub(super) fused_skip: Option<BcIndex>,
 
     ///
     /// Class version at compile time.
@@ -683,6 +687,7 @@ impl<'a> JitContext<'a> {
         Self {
             store,
             codegen_mode,
+            fused_skip: None,
             class_version,
             const_version,
             refinements,
@@ -699,6 +704,7 @@ impl<'a> JitContext<'a> {
         Self {
             store: self.store,
             codegen_mode: false,
+            fused_skip: None,
             class_version: self.class_version,
             const_version: self.const_version,
             refinements: self.refinements,

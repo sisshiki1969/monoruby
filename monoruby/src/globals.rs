@@ -1,6 +1,5 @@
 use crate::ast::{BlockInfo, Loc, LvarCollector, Node, ParamKind, SourceInfoRef};
-use std::io::{BufWriter, Stdout, stdout};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
@@ -190,12 +189,13 @@ pub struct Globals {
     pub store: Store,
     /// global variables and special variables.
     pub(crate) gvars: GvarTable,
+    /// The separator globals, held as plain fields rather than table
+    /// entries. See [`SpecialGvars`].
+    special_gvars: SpecialGvars,
     /// suppress jit compilation.
     pub no_jit: bool,
     /// suppress loading gem.
     pub no_gems: bool,
-    /// stdout.
-    stdout: BufWriter<Stdout>,
     /// library directries.
     load_path: Value,
     /// standard PRNG
@@ -265,6 +265,25 @@ pub struct Globals {
     /// runs finalizers only at exit, never asynchronously at GC time,
     /// which the spec explicitly permits.
     pub(crate) finalizers: Vec<(u64, Value)>,
+    /// The program-argument array: the single object behind the `ARGV`
+    /// constant, `$*`, and the file-name queue that `ARGF` and
+    /// `Kernel#gets` consume. CRuby keeps it in a C global (`rb_argv`)
+    /// rather than reading the constant back, so reassigning `ARGV`
+    /// redirects neither; holding it here does the same, and lets `gets`
+    /// reach the queue without a constant lookup per stream switch.
+    argv: Value,
+    /// The ARGF object `Kernel#gets` reads from, resolved from the
+    /// `ARGF` constant on first use and then bound for the process's
+    /// lifetime. CRuby binds its `argf` object at startup, so
+    /// reassigning the `ARGF` constant never redirects `gets` — and
+    /// binding it once keeps the constant lookup out of the `gets` hot
+    /// loop (`while gets`, `-n`/`-p`).
+    pub(crate) argf: Option<Value>,
+    /// Memoised answer to "does the ARGF object carry a `gets` that
+    /// overrides `ARGFClass#gets`?" — mspec installs such singleton
+    /// stubs. Keyed on the global class version, so defining or
+    /// redefining any method invalidates it.
+    pub(crate) argf_gets: Option<(u32, Option<FuncId>)>,
     /// stats for deoptimization
     #[cfg(feature = "profile")]
     deopt_stats: HashMap<(FuncId, bytecodegen::BcIndex), usize>,
@@ -296,6 +315,7 @@ impl alloc::GC<RValue> for Globals {
         self.loaded_features.mark(alloc);
         self.store.mark(alloc);
         self.gvars.mark_values(|v| v.mark(alloc));
+        self.special_gvars.mark(|v| v.mark(alloc));
         self.gvar_traces
             .values()
             .flatten()
@@ -307,6 +327,13 @@ impl alloc::GC<RValue> for Globals {
             v.mark(alloc);
         }
         self.random_seed_obj.mark(alloc);
+        // The argv array and the bound ARGF object outlive any
+        // reassignment of the `ARGV` / `ARGF` constants, so from then on
+        // they are reachable only from here.
+        self.argv.mark(alloc);
+        if let Some(v) = &self.argf {
+            v.mark(alloc);
+        }
         self.symbol_names.values().for_each(|v| v.mark(alloc));
         // Trap handler Procs are GC roots: they are reachable only from
         // this table, yet may be invoked at any future poll point.
@@ -489,9 +516,9 @@ impl Globals {
             main_object,
             store: Store::new(),
             gvars: GvarTable::new(),
+            special_gvars: SpecialGvars::default(),
             no_jit,
             no_gems,
-            stdout: BufWriter::new(stdout()),
             load_path: Value::array_empty(),
             random: Box::new(Prng::new()),
             loaded_features,
@@ -523,6 +550,9 @@ impl Globals {
             exit_trap_handler: None,
             at_exit_handlers: Vec::new(),
             finalizers: Vec::new(),
+            argv: Value::array_empty(),
+            argf: None,
+            argf_gets: None,
             #[cfg(feature = "profile")]
             deopt_stats: HashMap::default(),
             #[cfg(feature = "profile")]
@@ -597,6 +627,9 @@ impl Globals {
         globals.random_init(None);
         gvar::init_builtin_gvars(&mut globals);
         crate::builtins::init_builtins(&mut globals);
+        // `ARGV` exists from the start — empty until the CLI fills it
+        // in — and names the same array as `$*` and the ARGF queue.
+        globals.set_argv(globals.argv());
         globals
             .store
             .set_ivar(main_object, IdentId::_NAME, Value::string_from_str("main"))
@@ -841,7 +874,7 @@ impl Globals {
         // runs the ensure clauses of its current fiber chain (never of
         // suspended fibers) on the way out.
         crate::scheduler::terminate_all(&mut executor, self);
-        let _ = self.flush_stdout();
+        crate::rvalue::io::flush_std_streams();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();
         #[cfg(feature = "gc-log")]
@@ -1111,26 +1144,26 @@ impl Globals {
         })
     }
 
+    /// Push monoruby's own stdout buffer out to the kernel.
+    ///
+    /// `Kernel#p` / `#print` and `$stdout.write` share that one buffer, so
+    /// their output can never be reordered relative to each other — which
+    /// a second, Rust-side writer over the same fd would allow.
     pub fn flush_stdout(&mut self) -> Result<()> {
-        self.stdout
-            .flush()
-            .map_err(|e| MonorubyErr::runtimeerr(format!("flush: {}", e)))
+        crate::rvalue::io::flush_stdout(&self.store)
     }
 
     pub fn write_stdout(&mut self, bytes: &[u8]) -> Result<()> {
-        self.stdout
-            .write_all(bytes)
-            .map_err(|e| MonorubyErr::runtimeerr(format!("write: {}", e)))
+        crate::rvalue::io::write_stdout(bytes, &self.store)
     }
 
     pub fn print_value(&mut self, val: Value) -> Result<()> {
         if let Some(s) = val.is_rstring() {
-            self.stdout.write_all(&s)
+            crate::rvalue::io::write_stdout(&s, &self.store)
         } else {
             let v = val.to_s(&self.store).into_bytes();
-            self.stdout.write_all(&v)
+            crate::rvalue::io::write_stdout(&v, &self.store)
         }
-        .map_err(|e| MonorubyErr::runtimeerr(format!("write: {}", e)))
     }
 
     // Handling global variables.
@@ -1426,6 +1459,39 @@ impl Globals {
                     .insert((func_id, class_id, *reason), 1);
             }
         };
+    }
+}
+
+// Program arguments (`ARGV` / `$*` / the ARGF file queue)
+impl Globals {
+    /// The program-argument array. Both the `ARGV` constant and `$*`
+    /// name this same object, and `ARGF` / `Kernel#gets` shift the file
+    /// names to read off its front.
+    pub fn argv(&self) -> Value {
+        self.argv
+    }
+
+    /// Install the program-argument array, re-pointing the `ARGV`
+    /// constant at it, `$*` (which reads through a hook), and the
+    /// process-wide ARGF object's file queue.
+    pub fn set_argv(&mut self, argv: Value) {
+        self.argv = argv;
+        self.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
+        if let Some(mut argf) = self.argf
+            && let Some(inner) = argf.try_argf_inner_mut()
+        {
+            inner.argv = argv;
+        }
+    }
+
+    /// The `-i[extension]` switch: put the process-wide ARGF into
+    /// in-place-edit mode (`""` = no backup files).
+    pub fn set_argf_inplace(&mut self, ext: String) {
+        if let Some(mut argf) = self.argf
+            && let Some(inner) = argf.try_argf_inner_mut()
+        {
+            inner.inplace = Some(ext);
+        }
     }
 }
 

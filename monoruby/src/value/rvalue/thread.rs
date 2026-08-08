@@ -71,6 +71,15 @@ pub struct ThreadInner {
     /// `Thread.handle_interrupt` mask stack (innermost last). Each frame
     /// is the `{Class => timing}` pairs of one handle_interrupt block.
     pub(crate) masks: Vec<Vec<(Value, InterruptTiming)>>,
+    /// Depth of `Thread.__uninterruptible` sections. While non-zero, ALL
+    /// asynchronous interrupts (including kill, which `handle_interrupt`
+    /// cannot mask) are deferred: nothing is delivered at parks and a
+    /// queued interrupt does not wake this thread. The green-thread
+    /// analogue of CRuby's `mutex_lock_uninterruptible` (the
+    /// `rb_mutex_sleep` re-acquire), used by `Thread::Mutex#sleep` so a
+    /// `ConditionVariable#wait`er killed after being signaled still
+    /// re-acquires the mutex before dying.
+    pub(crate) uninterruptible: u32,
     /// Whether the thread's current/last park was a *blocking* operation
     /// (sleep / join / fd wait / queue pop) as opposed to `Thread.pass`.
     /// Consulted when delivering a pending interrupt masked
@@ -175,6 +184,7 @@ impl ThreadInner {
             pending: Default::default(),
             killed: false,
             masks: vec![],
+            uninterruptible: 0,
             park_blocking: false,
             park_permit: false,
             last_status: None,
@@ -206,6 +216,7 @@ impl ThreadInner {
             pending: Default::default(),
             killed: false,
             masks: vec![],
+            uninterruptible: 0,
             park_blocking: false,
             park_permit: false,
             last_status: None,
@@ -229,6 +240,7 @@ impl ThreadInner {
             pending: Default::default(),
             killed: false,
             masks: vec![],
+            uninterruptible: 0,
             park_blocking: false,
             park_permit: false,
             last_status: None,

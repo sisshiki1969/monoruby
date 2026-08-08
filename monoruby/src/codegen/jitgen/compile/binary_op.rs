@@ -515,12 +515,37 @@ impl AbstractFrame {
         lhs: SlotId,
         rhs: SlotId,
     ) {
+        // Immediate form: `Add`/`Sub` with a compile-time fixnum constant on
+        // one side (either side for the commutative `Add`) folds the constant
+        // into the instruction's immediate operand — no register
+        // materialization, no untag adjustment (`(2a+1) ± 2k = 2(a±k)+1`),
+        // overflow detection preserved. Constant-constant was already folded
+        // by `binop_integer`.
+        if matches!(kind, BinOpK::Add | BinOpK::Sub) {
+            let var_imm = if let Some(k) = self.is_fixnum_literal(rhs) {
+                Some((lhs, k.get()))
+            } else if kind == BinOpK::Add
+                && let Some(k) = self.is_fixnum_literal(lhs)
+            {
+                Some((rhs, k.get()))
+            } else {
+                None
+            };
+            if let Some((var, k)) = var_imm
+                && let Some(imm) = k.checked_mul(2).and_then(|v| i32::try_from(v).ok())
+            {
+                self.binop_integer_imm(ir, kind, dst, var, imm);
+                return;
+            }
+        }
         // `Mul` and `Div` destroy the `rhs` register before their overflow /
         // divide-by-zero side-exit (Mul `sarq`s it; Div's idiv sequence too).
         let rhs_clobbered = matches!(kind, BinOpK::Mul | BinOpK::Div);
         // 1. Load the operands into registers (reusing a resident copy).
         let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
         let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        // Same slot on both sides (`x + x`): one guard proves both operands.
+        let rhs_guard = rhs_guard && lhs != rhs;
         // 1b. For `Mul`/`Div`: if `rhs` is a dirty resident, write it to its home
         //     and mark it clean *before* the deopt snapshot. The op clobbers
         //     `rhs_gp` before the side-exit, so the snapshot must re-home `rhs`
@@ -533,6 +558,12 @@ impl AbstractFrame {
             ir.reg2stack(reg, rhs);
             self.gp_regfile.sync(rhs);
         }
+        // Whether `lhs`'s snapshot recovery depends on `lhs_gp` surviving the
+        // op: a dirty resident is re-homed *from the register* by the deopt
+        // write-back, so an in-place Add/Sub (which clobbers the register
+        // before the overflow side-exit) must not be chosen for it — see
+        // `binop_dst_reg`. Captured before the snapshot.
+        let lhs_dirty = self.gp_regfile.dirty_reg_of(lhs).is_some();
         // 2. Snapshot the deopt write-back *before* clearing: it must re-home the
         //    dirty residents that are live at this op's PC — which includes a
         //    dirty operand that is itself a dead-after temporary (a prior binop
@@ -553,20 +584,28 @@ impl AbstractFrame {
         //    allocation (so the result can reuse a freed operand's register).
         let next_sp = self.next_sp();
         self.gp_regfile.free_above_sp(next_sp);
-        // 5. Allocate the result register and run the op. `Add`/`Sub` compute in
-        //    the lhs position, so pin only `rhs_gp` and let the result reuse
-        //    `lhs_gp` in place (no move). `Mul`/`Div` clobber `rhs` and (Div)
-        //    produce in `rax`, so pin both operands — `lhs_gp` must survive the op
-        //    intact for the deopt write-back — and take a distinct register.
-        let pinned: &[GP] = if rhs_clobbered {
-            &[lhs_gp, rhs_gp]
+        // 5. Choose the result register and run the op. `Add`/`Sub` compute in
+        //    the dst position; `binop_dst_reg` prefers `lhs_gp` itself (in
+        //    place, or a binding transfer from a clean live resident — no
+        //    move), falling back to a distinct register when `lhs` is dirty
+        //    (its register must survive to the side exit for the deopt
+        //    write-back). `Mul`/`Div` clobber `rhs` and (Div) produce in
+        //    `rax`, so pin both operands and take a distinct register.
+        //    `x + x` (both operands in one register) uses the tagged-order
+        //    doubling sequence, which reads the shared operand before any
+        //    untag — so it may compute in place in the shared register too.
+        let double = kind == BinOpK::Add && lhs_gp == rhs_gp;
+        let dst_gp = if rhs_clobbered {
+            let (gp, spill) = self.gp_regfile.alloc_reg(&[lhs_gp, rhs_gp]);
+            if let Some((reg, slot)) = spill {
+                ir.reg2stack(reg, slot);
+            }
+            gp
+        } else if double {
+            self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[])
         } else {
-            &[rhs_gp]
+            self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[rhs_gp])
         };
-        let (dst_gp, spill) = self.gp_regfile.alloc_reg(pinned);
-        if let Some((reg, slot)) = spill {
-            ir.reg2stack(reg, slot);
-        }
         // An operand not yet proven a fixnum is only speculatively an integer,
         // so guard it; the guard then *proves* it a fixnum, so refine its
         // abstract type in place (keeping the resident) — a later integer op on
@@ -579,7 +618,15 @@ impl AbstractFrame {
             ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
             self.refine_S_fixnum(rhs);
         }
-        ir.integer_binop_reg(kind, dst_gp, lhs_gp, rhs_gp, deopt);
+        if double {
+            ir.push(AsmInst::IntegerDouble {
+                dst: dst_gp,
+                lhs: lhs_gp,
+                deopt,
+            });
+        } else {
+            ir.integer_binop_reg(kind, dst_gp, lhs_gp, rhs_gp, deopt);
+        }
         // The op left garbage in `rhs_gp`: forget that it cached `rhs`.
         if rhs_clobbered {
             self.gp_regfile.invalidate(rhs);
@@ -590,6 +637,87 @@ impl AbstractFrame {
             self.def_S_guarded(dst, Guarded::Fixnum);
             self.gp_regfile.bind(dst_gp, dst, /* dirty */ true);
         }
+    }
+
+    /// Immediate-form fixnum `Add`/`Sub`: `dst = lhs <kind> k` with the
+    /// constant folded into the instruction (see `AsmInst::IntegerBinOpImm`).
+    /// `imm` is the doubled untagged constant `2k` (i32-gated by the caller).
+    fn binop_integer_imm(
+        &mut self,
+        ir: &mut AsmIr,
+        kind: BinOpK,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        imm: i32,
+    ) {
+        let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
+        let lhs_dirty = self.gp_regfile.dirty_reg_of(lhs).is_some();
+        let deopt = ir.new_deopt(self);
+        if let Some(dst) = dst {
+            self.gp_regfile.invalidate(dst);
+        }
+        let next_sp = self.next_sp();
+        self.gp_regfile.free_above_sp(next_sp);
+        let dst_gp = self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[]);
+        if lhs_guard {
+            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+            self.refine_S_fixnum(lhs);
+        }
+        ir.push(AsmInst::IntegerBinOpImm {
+            kind,
+            dst: dst_gp,
+            lhs: lhs_gp,
+            imm,
+            deopt,
+        });
+        if let Some(dst) = dst {
+            self.def_S_guarded(dst, Guarded::Fixnum);
+            self.gp_regfile.bind(dst_gp, dst, /* dirty */ true);
+        }
+    }
+
+    /// Choose the result register for an `Add`/`Sub`-family op that computes
+    /// in place in the dst position.
+    ///
+    /// * `lhs` **clean** (or already unbound — a dead-after temp freed by
+    ///   `free_above_sp`, a dst-aliasing operand dropped by `invalidate`, or
+    ///   a constant's load register): compute in place in `lhs_gp`. A live
+    ///   clean resident transfers its register to the result with no data
+    ///   move (its stack home is current, so nothing is lost); the slot
+    ///   simply drops to `S`.
+    /// * `lhs` **dirty**: the deopt write-back re-homes `lhs` *from
+    ///   `lhs_gp`*, and the op would clobber that register before the
+    ///   overflow side-exit — the interpreter would then re-execute the op
+    ///   with a corrupted operand. Compute in a distinct register instead
+    ///   (the lowering's `mov dst, lhs` preserves the operand register for
+    ///   the side exit).
+    fn binop_dst_reg(
+        &mut self,
+        ir: &mut AsmIr,
+        lhs: SlotId,
+        lhs_gp: GP,
+        lhs_dirty: bool,
+        extra_pinned: &[GP],
+    ) -> GP {
+        // Never compute in place in a register that also carries another live
+        // operand (`x + x`: lhs and rhs share one register — clobbering it
+        // in place would corrupt the rhs read).
+        if !lhs_dirty && !extra_pinned.contains(&lhs_gp) {
+            if self.gp_regfile.is_free(lhs_gp) {
+                return lhs_gp;
+            }
+            if self.gp_regfile.reg_of(lhs) == Some(lhs_gp) {
+                self.gp_regfile.invalidate(lhs);
+                return lhs_gp;
+            }
+        }
+        let mut pinned = vec![lhs_gp];
+        pinned.extend_from_slice(extra_pinned);
+        let (gp, spill) = self.gp_regfile.alloc_reg(&pinned);
+        if let Some((reg, slot)) = spill {
+            ir.reg2stack(reg, slot);
+        }
+        gp
     }
 
     /// Bring `slot` into a GP register, reusing its resident copy when present
@@ -724,6 +852,39 @@ impl AbstractFrame {
         lhs: SlotId,
         rhs: SlotId,
     ) {
+        // Immediate form: a compile-time fixnum constant rhs is folded into
+        // the compare as its tagged value `2k+1` (tagged fixnums compare in
+        // the same order as their untagged values) — no register
+        // materialization. Constant-constant was folded by the caller.
+        if let Some(k) = self.is_fixnum_literal(rhs)
+            && let Some(imm) = k
+                .get()
+                .checked_mul(2)
+                .and_then(|v| v.checked_add(1))
+                .and_then(|v| i32::try_from(v).ok())
+        {
+            let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
+            let deopt = ir.new_deopt(self);
+            if let Some(dst) = dst {
+                self.gp_regfile.invalidate(dst);
+            }
+            let next_sp = self.next_sp();
+            self.gp_regfile.free_above_sp(next_sp);
+            if lhs_guard {
+                ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+                self.refine_S_fixnum(lhs);
+            }
+            ir.push(AsmInst::IntegerCmpImm {
+                kind,
+                dst,
+                lhs: lhs_gp,
+                imm,
+            });
+            if let Some(dst) = dst {
+                self.def_S(dst);
+            }
+            return;
+        }
         let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
         let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
         // Snapshot the deopt write-back before clearing (the guards side-exit to
@@ -790,6 +951,31 @@ impl AbstractFrame {
         brkind: BrKind,
         branch_dest: JitLabel,
     ) {
+        // Immediate form, as in `gen_cmp_integer_gp`: fold a constant rhs
+        // into the compare as its tagged value `2k+1`.
+        if let Some(k) = self.is_fixnum_literal(rhs)
+            && let Some(imm) = k
+                .get()
+                .checked_mul(2)
+                .and_then(|v| v.checked_add(1))
+                .and_then(|v| i32::try_from(v).ok())
+        {
+            let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
+            let deopt = ir.new_deopt(self);
+            if lhs_guard {
+                ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+                self.refine_S_fixnum(lhs);
+            }
+            self.flush_gp(ir);
+            ir.push(AsmInst::IntegerCmpBrImm {
+                kind,
+                brkind,
+                branch_dest,
+                lhs: lhs_gp,
+                imm,
+            });
+            return;
+        }
         let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
         let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
         // Snapshot the deopt write-back before the flush/branch (the guards
@@ -870,5 +1056,187 @@ impl AbstractFrame {
             FOpClass::Integer => self.load_fpr_fixnum(ir, rhs),
             FOpClass::Float => self.load_fpr(ir, rhs),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    #[test]
+    fn binop_overflow_deopt_dirty_operand() {
+        // Regression: an Add whose lhs is a *dirty* GP resident (a prior
+        // binop result) must not compute in place — the overflow side-exit
+        // re-homes the operand from its register, and an in-place op would
+        // have clobbered it, making the interpreter re-execute the op with
+        // a corrupted operand (silently wrong results).
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def drive
+              res = []
+              a = 3
+              b = 1537228672809129300
+              c = 4611686018427387000
+              j = 0
+              while j < 30
+                res << (a * b) + c + j
+                res << (a * b) - c - j
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn binop_imm_overflow_boundaries() {
+        // Immediate-form Add/Sub at the fixnum limits: the folded `add reg, 2k`
+        // must still overflow-deopt exactly where tagged arithmetic does.
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def drive
+              res = []
+              i = 4611686018427387800
+              j = 0
+              while j < 30
+                res << i + 200            # crosses FIXNUM MAX -> bignum via deopt
+                res << i + 103
+                res << (-i) - 300         # crosses FIXNUM MIN
+                res << i - 1
+                i = i + 1
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn binop_imm_forms() {
+        // Immediate forms and their fallbacks: small consts (folded),
+        // i32-boundary consts (2k just fits / just overflows i32 -> register
+        // fallback), commutative const-lhs Add, and const rhs Sub.
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def drive
+              res = []
+              x = 1000
+              j = 0
+              while j < 30
+                res << x + 1
+                res << x - 7
+                res << 1 + x
+                res << x + 1073741823    # 2k == i32::MAX - 1: folded
+                res << x + 1073741824    # 2k overflows i32: register form
+                res << x - 1073741824
+                res << x + (-5)
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn cmp_imm_forms() {
+        // Immediate-form comparisons: bool results and fused compare+branch,
+        // against small and i32-boundary constants (tagged 2k+1 gate).
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def drive
+              res = []
+              x = 500
+              j = 0
+              while j < 40
+                res << (j < 20) << (j <= 20) << (j > 20) << (j >= 20)
+                res << (j == 7) << (j != 7)
+                res << (x < 1073741823) << (x < 1073741824)
+                if j < 25
+                  res << :lo
+                else
+                  res << :hi
+                end
+                if x == 500
+                  res << :eq
+                end
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn binop_shared_operand_register() {
+        // `x + x` (and friends): lhs and rhs share one register, so the
+        // result must NOT compute in place there (regression: the in-place
+        // clobber corrupted the rhs read, yielding an untagged even value).
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def drive
+              res = []
+              j = 0
+              while j < 30
+                x = j + 3
+                res << x + x << x * x << x - x << (x + x) + x
+                res << (x == x) << (x < x)
+                big = 4611686018427387000 + j
+                res << big + big
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn binop_resident_transfer() {
+        // Binding transfer: `y = x + k` where `x` is a clean live resident
+        // hands x's register to y (no copy); `x` must still read correctly
+        // from its home afterwards, including across an overflow deopt.
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def drive
+              res = []
+              j = 0
+              while j < 30
+                x = j * 3
+                y = x + 1
+                z = x + y
+                w = z - j
+                res << x << y << z << w
+                big = 4611686018427387900 + j
+                p = big + 2
+                q = big + 5
+                res << p << q << big
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
     }
 }

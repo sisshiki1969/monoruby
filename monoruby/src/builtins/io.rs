@@ -2,7 +2,7 @@ use super::*;
 use std::fs::File;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
-use std::rc::Rc;
+
 
 //
 // IO class
@@ -43,6 +43,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "close_write", close_write, 0);
     globals.define_builtin_func(IO_CLASS, "close_read", close_read, 0);
     globals.define_builtin_func(IO_CLASS, "closed?", closed_, 0);
+    globals.define_builtin_func(IO_CLASS, "sync", io_sync, 0);
     globals.define_builtin_func(IO_CLASS, "sync=", assign_sync, 1);
     globals.define_builtin_func_with(IO_CLASS, "seek", seek, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "read", read, 0, 2, false);
@@ -178,7 +179,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let obj = Value::new_io_with_class(IoInner::Closed(None), class);
+    let obj = Value::new_io_with_class(IoInner::closed(None), class);
     io_init_from_fd(vm, globals, lfp, obj)?;
     if lfp.block().is_some() {
         // CRuby warns through rb_warn; route via Kernel#warn so the
@@ -480,9 +481,9 @@ pub(super) fn io_init_from_fd(
     let (slot, i) =
         resolve_io_encodings(globals, ext_obj, int_obj, binmode, readable, writable, de, di);
     store_io_encodings(globals, obj, slot, i);
-    let _ = globals
-        .store
-        .set_ivar(obj, IdentId::get_id(BINMODE_IVAR), Value::bool(binmode));
+    if binmode {
+        obj.as_io_inner_mut().set_binmode();
+    }
     Ok(())
 }
 
@@ -503,14 +504,17 @@ pub(super) fn io_open_opts(
     lfp: Lfp,
     range: std::ops::Range<usize>,
     fd: i64,
+    extra: Option<Value>,
 ) -> Result<(String, bool, bool)> {
     let mut autoclose = true;
     let mut name = format!("fd {}", fd);
     let mut has_path = false;
-    for i in range {
-        if let Some(arg) = lfp.try_arg(i)
-            && let Some(h) = arg.try_hash_ty()
-        {
+    let candidates = range
+        .filter_map(|i| lfp.try_arg(i))
+        .chain(extra)
+        .collect::<Vec<_>>();
+    for arg in candidates {
+        if let Some(h) = arg.try_hash_ty() {
             if let Some(v) = h.get(Value::symbol(IdentId::get_id("autoclose")), vm, globals)? {
                 autoclose = v.as_bool();
             }
@@ -553,10 +557,10 @@ pub(super) fn fd_rw_mode(fd: i32) -> (bool, bool) {
 // demand).
 // ----------------------------------------------------------------------
 
-const ENC_EXT_IVAR: &str = "/enc_ext";
-const ENC_INT_IVAR: &str = "/enc_int";
-const ENC_DYN_MARKER: &str = "__io_dynamic_default_external__";
-const BINMODE_IVAR: &str = "/binmode";
+/// `IdentId`s the read paths would otherwise re-intern on every call.
+/// Interning takes the global identifier table's lock and hashes the
+/// name; `IO#gets` did it six or seven times per line.
+
 
 #[derive(Clone, Copy)]
 enum ExtSlot {
@@ -573,13 +577,22 @@ fn enc_by_name(globals: &Globals, name: &str) -> Option<Value> {
 }
 
 /// `Encoding.default_external` object (UTF-8 if unset).
+///
+/// The unset fallback resolves `Encoding::UTF_8` by constant id — NOT
+/// through `find_encoding_object`, which scans every constant under
+/// `Encoding` normalizing names and made each read on an
+/// `ExtEnc::Dynamic` stream (any plain `File.open(name)`) ~40× slower.
 pub(super) fn enc_default_external_obj(globals: &mut Globals) -> Value {
     if let Some(v) = globals.get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
         && !v.is_nil()
     {
         return v;
     }
-    enc_by_name(globals, "UTF-8").unwrap_or(Value::nil())
+    let enc_class = super::encoding::encoding_class(globals);
+    globals
+        .store
+        .get_constant_noautoload(enc_class, IdentId::UTF_8)
+        .unwrap_or(Value::nil())
 }
 
 /// `Encoding.default_internal` object, or `None` if unset.
@@ -637,7 +650,7 @@ fn coerce_enc_arg(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<
 
 /// Argument `Value` -> Encoding object: an `Encoding` is taken as-is, a
 /// String is resolved by name; anything else (incl. `nil`) -> `None`.
-fn arg_to_enc_obj(globals: &Globals, v: Value) -> Option<Value> {
+pub(super) fn arg_to_enc_obj(globals: &Globals, v: Value) -> Option<Value> {
     if v.is_nil() {
         return None;
     }
@@ -710,20 +723,33 @@ fn resolve_io_encodings(
     }
 }
 
-/// Persist a resolved encoding pair as ivars on the IO object.
-fn store_io_encodings(globals: &mut Globals, io: Value, ext: ExtSlot, int: Option<Value>) {
-    let ext_val = match ext {
-        ExtSlot::Fixed(v) => v,
-        ExtSlot::Dynamic => Value::symbol(IdentId::get_id(ENC_DYN_MARKER)),
-        ExtSlot::Nil => Value::nil(),
+/// Persist a resolved encoding pair on the IO object.
+fn store_io_encodings(_globals: &mut Globals, mut io: Value, ext: ExtSlot, int: Option<Value>) {
+    let (state, obj) = match ext {
+        ExtSlot::Fixed(v) => (ExtEnc::Fixed, Some(v)),
+        ExtSlot::Dynamic => (ExtEnc::Dynamic, None),
+        ExtSlot::Nil => (ExtEnc::Nil, None),
     };
-    let int_val = int.unwrap_or_else(Value::nil);
-    let _ = globals
-        .store
-        .set_ivar(io, IdentId::get_id(ENC_EXT_IVAR), ext_val);
-    let _ = globals
-        .store
-        .set_ivar(io, IdentId::get_id(ENC_INT_IVAR), int_val);
+    let inner = io.as_io_inner_mut();
+    inner.set_ext_enc(state, obj);
+    inner.set_int_enc(int.filter(|v| !v.is_nil()));
+}
+
+/// The stream's external encoding when it is a *concrete, non-binary*
+/// one — i.e. neither unset, nor nil, nor "follow
+/// `Encoding.default_external`", nor ASCII-8BIT. Both callers use it to
+/// answer "has a real external encoding already been chosen?".
+fn fixed_ext_encoding(globals: &mut Globals, io: Value) -> Option<Value> {
+    let inner = io.as_io_inner();
+    if inner.ext_state() != ExtEnc::Fixed {
+        return None;
+    }
+    let e = inner.ext_enc()?;
+    if e.is_nil() || enc_is_binary(globals, e) {
+        None
+    } else {
+        Some(e)
+    }
 }
 
 /// Strip a leading "BOM|" (case-insensitive) from an external-encoding
@@ -755,6 +781,7 @@ fn parse_open_encodings(
     lfp: Lfp,
     opt_range: std::ops::Range<usize>,
     mode: &str,
+    extra: Option<Value>,
 ) -> Result<(Option<Value>, Option<Value>, bool, bool)> {
     let base = mode.split(':').next().unwrap_or("");
     let binmode = base.contains('b');
@@ -771,8 +798,11 @@ fn parse_open_encodings(
     let mut ext = mext.and_then(|s| enc_by_name(globals, s));
     let mut int = mint.and_then(|s| enc_by_name(globals, s));
 
-    for i in opt_range {
-        let Some(arg) = lfp.try_arg(i) else { continue };
+    let candidates = opt_range
+        .filter_map(|i| lfp.try_arg(i))
+        .chain(extra)
+        .collect::<Vec<_>>();
+    for arg in candidates {
         let Some(h) = arg.try_hash_ty() else { continue };
         if let Some(v) = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?
             && !v.is_nil()
@@ -906,12 +936,14 @@ pub(super) fn init_io_encodings(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    io: Value,
+    mut io: Value,
     mode: &str,
     readable: bool,
     opt_range: std::ops::Range<usize>,
+    extra: Option<Value>,
 ) -> Result<()> {
-    let (ext, int, binmode, bom) = parse_open_encodings(vm, globals, lfp, opt_range, mode)?;
+    let (ext, int, binmode, bom) =
+        parse_open_encodings(vm, globals, lfp, opt_range, mode, extra)?;
     // The stream's write-ability decides whether a missing external
     // encoding tracks default_external (read-only) or stays nil.
     let base = mode.split(':').next().unwrap_or("");
@@ -921,9 +953,7 @@ pub(super) fn init_io_encodings(
     let (slot, i) = resolve_io_encodings(globals, ext, int, binmode, readable, writable, de, di);
     store_io_encodings(globals, io, slot, i);
     if binmode {
-        let _ = globals
-            .store
-            .set_ivar(io, IdentId::get_id(BINMODE_IVAR), Value::bool(true));
+        io.as_io_inner_mut().set_binmode();
     }
     // A "BOM|utf-..." encoding: peek the stream for a byte-order mark;
     // a detected BOM is consumed and *overrides* the external encoding,
@@ -936,7 +966,7 @@ pub(super) fn init_io_encodings(
 
 /// Allocator for `IO` and its subclasses.
 pub(crate) extern "C" fn io_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
-    Value::new_io_with_class(IoInner::Closed(None), class_id)
+    Value::new_io_with_class(IoInner::closed(None), class_id)
 }
 
 
@@ -959,15 +989,9 @@ pub(super) fn bytes_for_write(
     } else {
         Value::string(vm.to_s(globals, v)?)
     };
-    let ext = match globals.store.get_ivar(io, IdentId::get_id(ENC_EXT_IVAR)) {
-        Some(e)
-            if !e.is_nil()
-                && e.try_symbol() != Some(IdentId::get_id(ENC_DYN_MARKER))
-                && !enc_is_binary(globals, e) =>
-        {
-            e
-        }
-        _ => return Ok(sval.is_rstring().unwrap().to_vec()),
+    let ext = match fixed_ext_encoding(globals, io) {
+        Some(e) => e,
+        None => return Ok(sval.is_rstring().unwrap().to_vec()),
     };
     let same = match (
         sval.is_rstring().map(|r| r.encoding()),
@@ -1000,7 +1024,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {
         lfp.self_val().as_io_inner_mut().write(&bytes, &mut done, _store)
     })?;
-    lfp.self_val().as_io_inner_mut().flush()?;
+    lfp.self_val().as_io_inner_mut().flush(&globals.store)?;
     Ok(lfp.self_val())
 }
 
@@ -1102,7 +1126,7 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     }
     // Flush after all writes
     let mut self_ = lfp.self_val();
-    self_.as_io_inner_mut().flush()?;
+    self_.as_io_inner_mut().flush(&globals.store)?;
     Ok(Value::nil())
 }
 
@@ -1127,12 +1151,8 @@ fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             Ok(Value::string(s))
         }
     };
-    let sep = globals
-        .get_gvar(IdentId::get_id("$,"))
-        .filter(|v| !v.is_nil());
-    let rs = globals
-        .get_gvar(IdentId::get_id("$\\"))
-        .filter(|v| !v.is_nil());
+    let sep = Some(globals.ofs()).filter(|v| !v.is_nil());
+    let rs = Some(globals.ors()).filter(|v| !v.is_nil());
     let args = lfp.arg(0).as_array();
     if args.is_empty() {
         // `print` with no arguments writes `$_` (the caller's frame-local
@@ -1199,9 +1219,9 @@ fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/flush.html]
 #[monoruby_builtin]
-fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn flush(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    self_.as_io_inner_mut().flush()?;
+    self_.as_io_inner_mut().flush(&globals.store)?;
 
     Ok(lfp.self_val())
 }
@@ -1215,21 +1235,14 @@ fn flush(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
 /// or negative). A single non-String argument is taken as the limit
 /// (coerced with `#to_int`); with two arguments the first must be a
 /// String (`#to_str`). A limit outside `i64` raises `RangeError`.
-fn getline_args(
+pub(super) fn getline_args(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     kw_chomp_idx: usize,
 ) -> Result<(Option<Vec<u8>>, Option<usize>, bool)> {
     // Default separator: `$/` — "\n" unless reassigned; nil slurps.
-    let mut sep: Option<Vec<u8>> = match globals.get_gvar(IdentId::get_id("$/")) {
-        None => Some(b"\n".to_vec()),
-        Some(v) if v.is_nil() => None,
-        Some(v) => match v.is_rstring() {
-            Some(rs) => Some(rs.as_bytes().to_vec()),
-            None => Some(b"\n".to_vec()),
-        },
-    };
+    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
     let mut limit_arg: Option<Value> = None;
     match (lfp.try_arg(0), lfp.try_arg(1)) {
         (None, _) => {}
@@ -1272,7 +1285,7 @@ fn getline_args(
 ///   paragraph (a final paragraph cut short by EOF keeps its bytes);
 /// - `nil` separator: no-op — CRuby only chomps at a separator boundary,
 ///   and a slurped read has none.
-fn chomp_line(buf: &mut Vec<u8>, sep: Option<&[u8]>, _limit: Option<usize>) {
+pub(super) fn chomp_line(buf: &mut Vec<u8>, sep: Option<&[u8]>, _limit: Option<usize>) {
     match sep {
         None => {}
         Some([]) => {
@@ -1300,17 +1313,9 @@ fn io_completes_utf8(globals: &mut Globals, io: Value) -> bool {
 }
 
 /// Bump the IO's line counter and `$.` after a successful line read.
-fn bump_lineno(globals: &mut Globals, io: Value) -> Result<()> {
-    let cur = globals
-        .store
-        .get_ivar(io, IdentId::get_id("/lineno"))
-        .and_then(|v| v.try_fixnum())
-        .unwrap_or(0);
-    let n = cur + 1;
-    globals
-        .store
-        .set_ivar(io, IdentId::get_id("/lineno"), Value::integer(n))?;
-    globals.set_gvar(IdentId::get_id("$."), Value::integer(n));
+fn bump_lineno(globals: &mut Globals, mut io: Value) -> Result<()> {
+    let n = io.as_io_inner_mut().bump_lineno();
+    globals.set_lineno(Value::integer(n));
     Ok(())
 }
 
@@ -1494,7 +1499,8 @@ pub(crate) fn wait_fd_single(
 fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
     let self_ = lfp.self_val();
-    let complete_utf8 = io_completes_utf8(globals, self_);
+    let (ext, intl) = io_encodings(globals, self_);
+    let complete_utf8 = ext == crate::value::Encoding::Utf8;
     let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         lfp.self_val()
             .as_io_inner_mut()
@@ -1506,7 +1512,7 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
                 chomp_line(&mut buf, sep.as_deref(), limit);
             }
             bump_lineno(globals, self_)?;
-            let s = tagged_read_string(globals, self_, buf, false);
+            let s = tagged_read_string_with(globals, buf, ext, intl);
             // `$_` is frame-local: set it on the calling Ruby scope's
             // LEP (the builtin's own native frame is skipped).
             vm.set_last_read_line(s);
@@ -1575,7 +1581,7 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if lfp.self_val().as_io_inner().is_closed() {
         return Ok(Value::nil());
     }
-    let popen_result = lfp.self_val().as_io_inner_mut().close()?;
+    let popen_result = lfp.self_val().as_io_inner_mut().close(&globals.store)?;
     if let Some((exit_status, pid)) = popen_result {
         // Set $? (Process::Status) via Process::Status.new(exitstatus, pid)
         let status_class =
@@ -1603,22 +1609,18 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn close_write(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    match io {
-        IoInner::Popen(popen) => {
-            let popen = Rc::get_mut(popen).unwrap();
-            popen.writer = None;
-            if popen.reader.is_none() {
-                *io = IoInner::Closed(None);
-            }
+    match io.kind() {
+        IoKind::Popen(_) => {
+            io.popen_close_write();
         }
         // CRuby: no-op on an already-closed stream.
-        IoInner::Closed(..) => {}
+        IoKind::Closed(..) => {}
         // CRuby: a stream that is not readable (nothing left once the
         // write side goes) is simply closed; only a readable non-duplex
         // stream refuses.
@@ -1626,7 +1628,7 @@ fn close_write(
             return Err(MonorubyErr::ioerr("closing non-duplex IO for writing"));
         }
         _ => {
-            io.close()?;
+            io.close(&globals.store)?;
         }
     }
     Ok(Value::nil())
@@ -1636,29 +1638,25 @@ fn close_write(
 #[monoruby_builtin]
 fn close_read(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
-    match io {
-        IoInner::Popen(popen) => {
-            let popen = Rc::get_mut(popen).unwrap();
-            popen.reader = None;
-            if popen.writer.is_none() {
-                *io = IoInner::Closed(None);
-            }
+    match io.kind() {
+        IoKind::Popen(_) => {
+            io.popen_close_read();
         }
         // CRuby: no-op on an already-closed stream.
-        IoInner::Closed(..) => {}
+        IoKind::Closed(..) => {}
         // CRuby: a stream that is not writable is simply closed; only a
         // writable non-duplex stream refuses.
         _ if io.is_writable() => {
             return Err(MonorubyErr::ioerr("closing non-duplex IO for reading"));
         }
         _ => {
-            io.close()?;
+            io.close(&globals.store)?;
         }
     }
     Ok(Value::nil())
@@ -1672,6 +1670,31 @@ fn closed_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     Ok(Value::bool(lfp.self_val().as_io_inner().is_closed()))
 }
 
+///
+/// ### IO#sync
+///
+/// - sync -> bool
+///
+/// True when every write reaches the fd before returning. Defaults to
+/// true only for the process's stderr, as in CRuby. A TTY writes through
+/// regardless (CRuby's `FMODE_TTY`), which `#sync` does not report.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/sync.html]
+#[monoruby_builtin]
+fn io_sync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    ensure_io_open(lfp.self_val())?;
+    Ok(Value::bool(lfp.self_val().as_io_inner().sync()))
+}
+
+///
+/// ### IO#sync=
+///
+/// - sync=(bool) -> bool
+///
+/// Changes the policy for *subsequent* writes; anything already buffered
+/// stays buffered until the next flush, matching CRuby.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/sync=3d.html]
 #[monoruby_builtin]
 fn assign_sync(
     _vm: &mut Executor,
@@ -1680,6 +1703,8 @@ fn assign_sync(
     _: BytecodePtr,
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
+    let sync = lfp.arg(0).as_bool();
+    lfp.self_val().as_io_inner_mut().set_sync(sync);
     Ok(lfp.arg(0))
 }
 
@@ -1945,7 +1970,7 @@ fn io_class_readlines(
     let file = std::fs::File::open(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     let complete_utf8 = ext_completes_utf8(globals, ext_obj);
-    let mut io_val = Value::new_file(file, path, true, false);
+    let mut io_val = Value::new_file(file, path, None, true, false);
     vm.with_temp_scope(|vm| {
         // Root the transient File IO (and the result lines) across the
         // per-line allocations below.
@@ -1966,7 +1991,7 @@ fn io_class_readlines(
             Ok(vm.temp_pop())
         })();
         // Close the fd now — leaving it to GC lets descriptors pile up.
-        let _ = io_val.as_io_inner_mut().close();
+        let _ = io_val.as_io_inner_mut().close(&globals.store);
         result
     })
 }
@@ -2018,14 +2043,7 @@ fn class_getline_args(
         chomp = c.as_bool();
     }
     // Default separator: `$/` — "\n" unless reassigned; nil slurps.
-    let mut sep: Option<Vec<u8>> = match globals.get_gvar(IdentId::get_id("$/")) {
-        None => Some(b"\n".to_vec()),
-        Some(v) if v.is_nil() => None,
-        Some(v) => match v.is_rstring() {
-            Some(rs) => Some(rs.as_bytes().to_vec()),
-            None => Some(b"\n".to_vec()),
-        },
-    };
+    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
     let mut limit_arg: Option<Value> = None;
     match (lfp.try_arg(1), lfp.try_arg(2)) {
         (None, _) => {}
@@ -2124,7 +2142,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
     let file = std::fs::File::open(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     let complete_utf8 = ext_completes_utf8(globals, ext_obj);
-    let mut io_val = Value::new_file(file, path, true, false);
+    let mut io_val = Value::new_file(file, path, None, true, false);
     vm.with_temp_scope(|vm| {
         // Root the transient File IO across the block calls below.
         vm.temp_push(io_val);
@@ -2143,7 +2161,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
                 // which updates `$.` and `$_` per line (and leaves `$_`
                 // nil at EOF).
                 lineno += 1;
-                globals.set_gvar(IdentId::get_id("$."), Value::integer(lineno));
+                globals.set_lineno(Value::integer(lineno));
                 vm.set_last_read_line(line);
                 vm.invoke_block(globals, &p, &[line])?;
             }
@@ -2151,7 +2169,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
             Ok(Value::nil())
         })();
         // Close the fd now — leaving it to GC lets descriptors pile up.
-        let _ = io_val.as_io_inner_mut().close();
+        let _ = io_val.as_io_inner_mut().close(&globals.store);
         result
     })
 }
@@ -2275,7 +2293,7 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // core/io/pipe_spec "does not use IO.new method").
     let init_id = IdentId::get_id("initialize");
     let make_end = |vm: &mut Executor, globals: &mut Globals, fd: i32, mode: &str| -> Result<Value> {
-        let obj = Value::new_io_with_class(IoInner::Closed(None), class);
+        let obj = Value::new_io_with_class(IoInner::closed(None), class);
         vm.invoke_method_inner(
             globals,
             init_id,
@@ -2288,6 +2306,10 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     };
     let mut read_io = make_end(vm, globals, fds[0], "r")?;
     let mut write_io = make_end(vm, globals, fds[1], "w")?;
+    // CRuby's `rb_io_s_pipe` marks the write end synchronous. It is not a
+    // nicety: both ends usually live in one process, so a buffered write
+    // would leave the reader blocked on data that never reaches the pipe.
+    write_io.as_io_inner_mut().set_sync(true);
 
     // The read end carries the requested (or default) encodings; the
     // write end carries none — `#initialize` with mode "w" already left
@@ -2305,8 +2327,8 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             let r = vm.invoke_block_once(globals, bh, &[read_io, write_io]);
             // Both ends close at block exit (idempotent for ends the
             // block already closed), success or raise.
-            let _ = read_io.as_io_inner_mut().close();
-            let _ = write_io.as_io_inner_mut().close();
+            let _ = read_io.as_io_inner_mut().close(&globals.store);
+            let _ = write_io.as_io_inner_mut().close(&globals.store);
             r
         }
         None => Ok(Value::array2(read_io, write_io)),
@@ -2539,7 +2561,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         let data = vm.get_block_data(globals, bh)?;
         let res = vm.invoke_block(globals, &data, &[io_val]);
         let mut io_close = io_val;
-        if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close() {
+        if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close(&globals.store) {
             if let Ok(status_class) =
                 vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
             {
@@ -2684,7 +2706,7 @@ fn io_initialize_copy(
     };
     let path = other.as_io_inner().path();
     let has_path = path.is_some();
-    *self_.as_io_inner_mut() = IoInner::from_raw_fd_autoclose(
+    let mut dup = IoInner::from_raw_fd_autoclose(
         newfd,
         path.unwrap_or_default(),
         has_path,
@@ -2692,6 +2714,10 @@ fn io_initialize_copy(
         writable,
         true,
     );
+    // `#lineno`, the encodings and binmode are per-object state that the
+    // copy inherits (and then advances independently).
+    dup.copy_state_from(other.as_io_inner());
+    *self_.as_io_inner_mut() = dup;
     Ok(self_)
 }
 
@@ -2768,10 +2794,10 @@ fn io_reopen_io(globals: &mut Globals, self_: Value, other: Value) -> Result<Val
     };
     // Flush both write sides before re-pointing the descriptor.
     if self_.as_io_inner().is_writable() {
-        self_.as_io_inner_mut().flush()?;
+        self_.as_io_inner_mut().flush(&globals.store)?;
     }
     if other.as_io_inner().is_writable() {
-        other.as_io_inner_mut().flush()?;
+        other.as_io_inner_mut().flush(&globals.store)?;
     }
     let fd1 = self_.as_io_inner().fileno()?;
     let fd2 = other.as_io_inner().fileno()?;
@@ -2878,7 +2904,7 @@ fn io_reopen_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     })?;
     if was_open {
         if self_.as_io_inner().is_writable() {
-            self_.as_io_inner_mut().flush()?;
+            self_.as_io_inner_mut().flush(&globals.store)?;
         }
         let fd1 = self_.as_io_inner().fileno()?;
         let tmpfd = std::os::fd::AsRawFd::as_raw_fd(&file);
@@ -2898,8 +2924,10 @@ fn io_reopen_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     } else {
         // Closed receiver: adopt the fresh fd directly.
         let fd = std::os::fd::IntoRawFd::into_raw_fd(file);
-        *self_.as_io_inner_mut() =
-            IoInner::from_raw_fd_autoclose(fd, path, true, readable, writable, true);
+        let inner = self_.as_io_inner_mut();
+        let mut fresh = IoInner::from_raw_fd_autoclose(fd, path, true, readable, writable, true);
+        fresh.copy_state_from(inner);
+        *inner = fresh;
     }
     Ok(self_)
 }
@@ -2919,7 +2947,7 @@ fn rebuild_reopened_inner(
     writable: bool,
 ) {
     let inner = self_.as_io_inner_mut();
-    if !matches!(inner, IoInner::File(_)) {
+    if !matches!(inner.kind(), IoKind::File(_)) {
         return;
     }
     let was_autoclose = inner.is_autoclose();
@@ -2928,7 +2956,7 @@ fn rebuild_reopened_inner(
     // re-registers ownership if it had it.
     inner.set_autoclose(false);
     let has_path = path.is_some();
-    *inner = IoInner::from_raw_fd_autoclose(
+    let mut fresh = IoInner::from_raw_fd_autoclose(
         fd,
         path.unwrap_or_default(),
         has_path,
@@ -2936,6 +2964,11 @@ fn rebuild_reopened_inner(
         writable,
         was_autoclose,
     );
+    // The stream is replaced, the *object* is not: `#lineno`, the
+    // encodings and binmode survive a reopen (they were instance
+    // variables before, which this swap left untouched).
+    fresh.copy_state_from(inner);
+    *inner = fresh;
 }
 
 ///
@@ -3005,16 +3038,14 @@ fn io_binmode(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let self_ = lfp.self_val();
+    let mut self_ = lfp.self_val();
     ensure_io_open(self_)?;
     // CRuby: binmode forces external = ASCII-8BIT, internal = nil.
     let bin = enc_by_name(globals, "ASCII-8BIT")
         .map(ExtSlot::Fixed)
         .unwrap_or(ExtSlot::Nil);
     store_io_encodings(globals, self_, bin, None);
-    let _ = globals
-        .store
-        .set_ivar(self_, IdentId::get_id(BINMODE_IVAR), Value::bool(true));
+    self_.as_io_inner_mut().set_binmode();
     Ok(self_)
 }
 
@@ -3029,17 +3060,12 @@ fn io_binmode(
 #[monoruby_builtin]
 fn io_binmode_(
     _vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
-    let b = globals
-        .store
-        .get_ivar(lfp.self_val(), IdentId::get_id(BINMODE_IVAR))
-        .map(|v| v.as_bool())
-        .unwrap_or(false);
-    Ok(Value::bool(b))
+    Ok(Value::bool(lfp.self_val().as_io_inner().binmode()))
 }
 
 ///
@@ -3194,9 +3220,7 @@ fn io_rewind(
         .as_io_inner_mut()
         .seek(0, 0)
         .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
-    globals
-        .store
-        .set_ivar(self_, IdentId::get_id("/lineno"), Value::integer(0))?;
+    self_.as_io_inner_mut().set_lineno(0);
     Ok(Value::integer(0))
 }
 
@@ -3376,15 +3400,14 @@ fn io_getc(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    let ext_obj = read_io_encoding(globals, self_, false);
-    let ext = enc_obj_to_enum(globals, ext_obj).unwrap_or(crate::value::Encoding::Utf8);
+    let (ext, intl) = io_encodings(globals, self_);
     let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         read_one_char_enc(lfp.self_val().as_io_inner_mut(), ext)
     })?;
     if buf.is_empty() {
         Ok(Value::nil())
     } else {
-        Ok(tagged_read_string(globals, self_, buf, false))
+        Ok(tagged_read_string_with(globals, buf, ext, intl))
     }
 }
 
@@ -3508,15 +3531,12 @@ fn parse_whence(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) ->
 #[monoruby_builtin]
 fn io_lineno(
     _vm: &mut Executor,
-    globals: &mut Globals,
+    _globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     lfp.self_val().as_io_inner().ensure_readable()?;
-    let stored = globals
-        .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/lineno"));
-    Ok(stored.unwrap_or_else(|| Value::integer(0)))
+    Ok(Value::integer(lfp.self_val().as_io_inner().lineno()))
 }
 
 ///
@@ -3540,11 +3560,7 @@ fn io_lineno_set(
             "integer {n} too big to convert to `int'"
         )));
     }
-    globals.store.set_ivar(
-        lfp.self_val(),
-        IdentId::get_id("/lineno"),
-        Value::integer(n),
-    )?;
+    lfp.self_val().as_io_inner_mut().set_lineno(n);
     Ok(Value::integer(n))
 }
 
@@ -3560,7 +3576,11 @@ fn io_lineno_set(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/path.html]
 #[monoruby_builtin]
 fn io_path(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(match lfp.self_val().as_io_inner().path() {
+    let io = lfp.self_val();
+    if let Some((bytes, enc)) = io.as_io_inner().path_raw() {
+        return Ok(super::file::path_value(bytes, *enc));
+    }
+    Ok(match io.as_io_inner().path() {
         Some(p) => Value::string(p),
         None => Value::nil(),
     })
@@ -3572,8 +3592,8 @@ fn io_path(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fsync.html]
 #[monoruby_builtin]
-fn io_fsync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ret = lfp.self_val().as_io_inner_mut().fsync(false)?;
+fn io_fsync(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ret = lfp.self_val().as_io_inner_mut().fsync(false, &globals.store)?;
     Ok(Value::integer(ret as i64))
 }
 
@@ -3585,11 +3605,11 @@ fn io_fsync(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 #[monoruby_builtin]
 fn io_fdatasync(
     _vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let ret = lfp.self_val().as_io_inner_mut().fsync(true)?;
+    let ret = lfp.self_val().as_io_inner_mut().fsync(true, &globals.store)?;
     Ok(Value::integer(ret as i64))
 }
 
@@ -3730,6 +3750,10 @@ fn io_pread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         _ => None,
     };
     lfp.self_val().as_io_inner().ensure_readable()?;
+    // A positional read goes to the fd directly, so anything still sitting
+    // in the write buffer has to land first or `pread` reads stale bytes
+    // (CRuby flushes via `rb_io_check_char_readable`).
+    lfp.self_val().as_io_inner_mut().flush(&globals.store)?;
 
     // maxlen == 0: return "" (or the buffer unchanged) without
     // touching the file — the offset is ignored even if out of range.
@@ -3789,7 +3813,7 @@ fn io_pwrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     lfp.self_val().as_io_inner().ensure_writable()?;
     // Flush any buffered writes so the file offset/content the OS sees
     // is consistent before the positional write.
-    lfp.self_val().as_io_inner_mut().flush()?;
+    lfp.self_val().as_io_inner_mut().flush(&globals.store)?;
     let fd = lfp.self_val().as_io_inner().fileno()?;
     // SAFETY: fd is valid, bytes is a valid buffer of `bytes.len()`.
     let n = unsafe {
@@ -4496,33 +4520,23 @@ fn set_encoding_by_bom(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_ = lfp.self_val();
+    let self_ = lfp.self_val();
     if !self_.as_io_inner().is_readable() {
         return Ok(Value::nil());
     }
     // Preconditions (CRuby `rb_io_set_encoding_by_bom`): the stream
     // must be in binmode, with no external/internal encoding already
     // chosen — a BOM determines the external encoding from scratch.
-    let binmode = globals
-        .store
-        .get_ivar(self_, IdentId::get_id(BINMODE_IVAR))
-        .map(|v| v.as_bool())
-        .unwrap_or(false);
+    let binmode = self_.as_io_inner().binmode();
     if !binmode {
         return Err(MonorubyErr::argumenterr(
             "ASCII incompatible encoding needs binmode",
         ));
     }
-    if let Some(int) = globals.store.get_ivar(self_, IdentId::get_id(ENC_INT_IVAR))
-        && !int.is_nil()
-    {
+    if self_.as_io_inner().int_enc().is_some() {
         return Err(MonorubyErr::argumenterr("encoding conversion is set"));
     }
-    if let Some(ext) = globals.store.get_ivar(self_, IdentId::get_id(ENC_EXT_IVAR))
-        && !ext.is_nil()
-        && ext.try_symbol() != Some(IdentId::get_id(ENC_DYN_MARKER))
-        && !enc_is_binary(globals, ext)
-    {
+    if let Some(ext) = fixed_ext_encoding(globals, self_) {
         let name = super::encoding::encoding_object_name(globals, ext)
             .unwrap_or_else(|| "UTF-8".to_string());
         return Err(MonorubyErr::argumenterr(format!(
@@ -4579,15 +4593,18 @@ fn detect_and_consume_bom(
 /// An Encoding object -> the internal `Encoding` enum (folding the
 /// names the enum doesn't represent distinctly down to ASCII-8BIT).
 pub(super) fn enc_obj_to_enum(globals: &Globals, v: Value) -> Option<crate::value::Encoding> {
-    super::encoding::encoding_object_name(globals, v)
-        .and_then(|n| crate::value::Encoding::try_from_str(&n).ok())
+    // Borrow the name out of the Encoding object's ivar rather than
+    // cloning it: this runs three times per `IO#getc` / `IO#gets`.
+    let name_v = globals.store.get_ivar(v, IdentId::_ENCODING)?;
+    let name = name_v.is_str()?;
+    crate::value::Encoding::try_from_str(name).ok()
 }
 
 /// Tag `bytes` with the resolved external encoding (defaulting to
 /// `Encoding.default_external`), transcoding external -> internal when
 /// an internal encoding is set and differs and the external is not
 /// BINARY. Used by the `IO.readlines` / `IO.foreach` class methods.
-fn tag_with_encs(
+pub(super) fn tag_with_encs(
     globals: &mut Globals,
     bytes: Vec<u8>,
     ext_obj: Option<Value>,
@@ -4638,6 +4655,21 @@ fn tagged_read_string(
         s.as_rstring_inner_mut().set_encoding(E::Ascii8);
         return s;
     }
+    let (ext, intl) = io_encodings(globals, io);
+    tagged_read_string_with(globals, bytes, ext, intl)
+}
+
+/// The stream's `(external, internal)` encodings, resolved once.
+///
+/// Callers that need them anyway (`IO#getc`, `IO#gets`) resolve here and
+/// hand the result to [`tagged_read_string_with`]: going back through
+/// `tagged_read_string` would repeat the ivar reads and the name parse
+/// two more times per character or line.
+pub(super) fn io_encodings(
+    globals: &mut Globals,
+    io: Value,
+) -> (crate::value::Encoding, Option<crate::value::Encoding>) {
+    use crate::value::Encoding as E;
     let ext_v = read_io_encoding(globals, io, false);
     let int_v = read_io_encoding(globals, io, true);
     let ext = enc_obj_to_enum(globals, ext_v).unwrap_or(E::Utf8);
@@ -4646,16 +4678,21 @@ fn tagged_read_string(
     } else {
         enc_obj_to_enum(globals, int_v)
     };
+    (ext, intl)
+}
+
+/// [`tagged_read_string`] with the encodings already resolved.
+pub(super) fn tagged_read_string_with(
+    globals: &mut Globals,
+    bytes: Vec<u8>,
+    ext: crate::value::Encoding,
+    intl: Option<crate::value::Encoding>,
+) -> Value {
     let (out, final_enc) = match intl {
         Some(i) if i != ext => {
             let opts = super::encoding::TranscodeOpts::default();
-            match super::encoding::transcode_bytes_with_opts(
-                &bytes,
-                ext,
-                i,
-                &opts,
-                &globals.store,
-            ) {
+            match super::encoding::transcode_bytes_with_opts(&bytes, ext, i, &opts, &globals.store)
+            {
                 Ok(b) => (b, i),
                 Err(_) => (bytes, ext),
             }
@@ -4669,27 +4706,23 @@ fn tagged_read_string(
 
 /// Read `/enc_ext` / `/enc_int`, resolving the live-default marker.
 fn read_io_encoding(globals: &mut Globals, io: Value, internal: bool) -> Value {
-    let id = IdentId::get_id(if internal { ENC_INT_IVAR } else { ENC_EXT_IVAR });
-    match globals.store.get_ivar(io, id) {
-        None => {
-            // IOs not created through our path (pipe/popen/stdio):
-            // external defaults to default_external, internal to nil.
-            // Exception: the write-only stdio streams — CRuby reports
-            // `nil` for STDOUT/STDERR's external encoding until one is
-            // set explicitly with `#set_encoding`.
-            let write_only_stdio = io.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::IO)
-                && matches!(io.as_io_inner(), IoInner::Stdout | IoInner::Stderr);
-            if internal || write_only_stdio {
+    let inner = io.as_io_inner();
+    if internal {
+        return inner.int_enc().unwrap_or_default();
+    }
+    match inner.ext_state() {
+        ExtEnc::Fixed => inner.ext_enc().unwrap_or_default(),
+        ExtEnc::Nil => Value::nil(),
+        // Explicitly following `Encoding.default_external`, or never set
+        // at all — both resolve it now, so a later change to it is seen.
+        // Exception: the write-only stdio streams, where CRuby reports
+        // `nil` until one is set explicitly with `#set_encoding`.
+        ExtEnc::Dynamic => enc_default_external_obj(globals),
+        ExtEnc::Unset => {
+            if matches!(inner.kind(), IoKind::Stdout | IoKind::Stderr) {
                 Value::nil()
             } else {
                 enc_default_external_obj(globals)
-            }
-        }
-        Some(v) => {
-            if !internal && v.try_symbol() == Some(IdentId::get_id(ENC_DYN_MARKER)) {
-                enc_default_external_obj(globals)
-            } else {
-                v
             }
         }
     }
@@ -5166,7 +5199,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         Src::Path(p) => {
             let file = std::fs::File::open(p)
                 .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", p))?;
-            let v = Value::new_file(file, p.clone(), true, false);
+            let v = Value::new_file(file, p.clone(), None, true, false);
             src_io_owned = Some(v);
             Some(v)
         }
@@ -5182,7 +5215,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                 .truncate(true)
                 .open(p)
                 .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", p))?;
-            let v = Value::new_file(file, p.clone(), false, true);
+            let v = Value::new_file(file, p.clone(), None, false, true);
             dst_io_owned = Some(v);
             Some(v)
         }
@@ -5236,7 +5269,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                     blocking_io_region(vm, globals, vv, libc::POLLOUT, |_store| {
                         vv.as_io_inner_mut().write(chunk, &mut done, _store)
                     })?;
-                    vv.as_io_inner_mut().flush()
+                    vv.as_io_inner_mut().flush(&globals.store)
                 }
                 _ => unreachable!(),
             }
@@ -5352,10 +5385,10 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     // Close only the endpoints this call opened (path forms); IO
     // arguments are left open, per CRuby.
     if let Some(mut v) = src_io_owned {
-        let _ = v.as_io_inner_mut().close();
+        let _ = v.as_io_inner_mut().close(&globals.store);
     }
     if let Some(mut v) = dst_io_owned {
-        let _ = v.as_io_inner_mut().close();
+        let _ = v.as_io_inner_mut().close(&globals.store);
     }
     Ok(Value::integer(result? as i64))
 }
@@ -6123,6 +6156,51 @@ mod tests {
     // coverage but multiplies subprocess pressure by 25× and drags whole-
     // suite wall time past minutes under default 8-thread parallelism on
     // macOS. CRuby comparison still runs once for output parity.
+
+    /// `#lineno`, the encodings and binmode live in `IoInner` rather
+    /// than in hidden instance variables, so the paths that build a
+    /// *fresh* descriptor for an existing object — `#dup` /
+    /// `#initialize_copy` and `#reopen` — have to carry them over
+    /// explicitly. They used to ride along for free.
+    #[test]
+    fn io_per_object_state_survives_dup_and_reopen() {
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_iostate_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "one\ntwo\nthree\n")
+            r = []
+            f = File.open(path, "r:UTF-8:EUC-JP")
+            f.gets
+            r << [f.external_encoding.to_s, f.internal_encoding.to_s, f.lineno, f.binmode?]
+            g = f.dup
+            r << [g.external_encoding.to_s, g.internal_encoding.to_s, g.lineno, g.binmode?]
+            g.close
+            f.close
+            # The encodings stay readable after close (CRuby keeps them).
+            r << [f.external_encoding.to_s, f.internal_encoding.to_s]
+            # binmode is per object and survives a dup too.
+            h = File.open(path)
+            h.binmode
+            r << [h.binmode?, h.external_encoding.to_s, h.dup.binmode?]
+            h.close
+            # reopen swaps the stream, not the object.
+            i = File.open(path)
+            i.gets
+            i.reopen(path)
+            r << i.lineno
+            i.close
+            # #lineno= round-trips, and none of these are visible as
+            # instance variables.
+            j = File.open(path)
+            j.lineno = 41
+            j.gets
+            r << [j.lineno, j.instance_variables]
+            j.close
+            File.unlink(path)
+            r
+            "##,
+        );
+    }
 
     #[test]
         fn io_dup_ioctl_and_exact_reads() {
@@ -8526,6 +8604,141 @@ mod tests {
             end
             File.unlink(path)
             r
+            "##,
+        );
+    }
+
+    /// monoruby buffers IO itself (see `value/rvalue/io/buf.rs`), so the
+    /// points at which bytes actually reach the fd are observable. Each
+    /// case is compared against CRuby by the harness.
+    #[test]
+    fn io_write_buffering_points() {
+        // A buffered write is invisible until the buffer is flushed,
+        // and `#flush` / `#close` both push it out.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_points.txt"
+            res = []
+            f = File.open(path, "w")
+            f.write("abc")
+            res << File.size?(path)     # nil: still buffered
+            f.flush
+            res << File.size?(path)     # 3
+            f.write("de")
+            f.close
+            res << File.size?(path)     # 5: close flushes
+            res << File.read(path)
+            File.unlink(path)
+            res
+            "##,
+        );
+        // `sync = true` writes through; `#sync` round-trips.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_sync.txt"
+            res = []
+            f = File.open(path, "w")
+            res << f.sync
+            f.sync = true
+            res << f.sync
+            f.write("xyz")
+            res << File.size?(path)     # 3: written through
+            f.sync = false
+            res << f.sync
+            f.write("pq")
+            res << File.size?(path)     # still 3
+            f.close
+            res << File.size?(path)
+            File.unlink(path)
+            res
+            "##,
+        );
+        // A read through the same descriptor sees the pending write, and
+        // so does a positional read; seeking flushes first too.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_rw.txt"
+            res = []
+            f = File.open(path, "w+")
+            f.write("hello")
+            f.rewind
+            res << f.read              # "hello"
+            f.write("world")
+            res << f.pread(10, 0)      # "helloworld"
+            f.seek(0)
+            res << f.read
+            f.close
+            File.unlink(path)
+            res
+            "##,
+        );
+        // A write bigger than the 8KiB buffer goes straight out, and the
+        // content still comes back in order.
+        run_test_once(
+            r##"
+            path = "/tmp/mr_buf_big.txt"
+            f = File.open(path, "w")
+            f.write("head")
+            f.write("z" * 20000)
+            f.write("tail")
+            f.close
+            s = File.read(path)
+            res = [s.size, s[0, 4], s[-4, 4], s.count("z")]
+            File.unlink(path)
+            res
+            "##,
+        );
+    }
+
+    /// `#sync` defaults follow CRuby: only the process's stderr, a pipe's
+    /// write end, a socket and a popen stream start synchronized.
+    #[test]
+    fn io_sync_defaults() {
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            res = [$stdout.sync, $stderr.sync, $stdin.sync, r.sync, w.sync]
+            r.close
+            w.close
+            res
+            "##,
+        );
+        // A pipe's write end is synchronized, so the reader in the same
+        // process sees the bytes without an explicit flush.
+        run_test_once(
+            r##"
+            r, w = IO.pipe
+            w.write("through")
+            res = r.read(7)
+            r.close
+            w.close
+            res
+            "##,
+        );
+        run_test_once(
+            r##"
+            io = IO.popen("cat", "r+")
+            res = [io.sync]
+            io.close
+            res
+            "##,
+        );
+        // `#sync` / `#sync=` on a closed stream raise IOError.
+        run_test_error(r##"f = File.open("/tmp/mr_sync_closed.txt", "w"); f.close; f.sync"##);
+        run_test_error(r##"f = File.open("/tmp/mr_sync_closed2.txt", "w"); f.close; f.sync = true"##);
+    }
+
+    /// `Kernel#p` / `#print` and `$stdout.write` share one buffer, so
+    /// their output cannot be reordered against each other.
+    #[test]
+    fn stdout_writers_share_one_buffer() {
+        run_test_once(
+            r##"
+            $stdout.write("a")
+            print "b"
+            $stdout.write("c")
+            $stdout.flush
+            nil
             "##,
         );
     }

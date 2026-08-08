@@ -121,7 +121,12 @@ impl Codegen {
     /// - caller save registers
     /// - r15
     ///
-    pub(super) fn gen_yield(&mut self, callid: CallSiteId, error: &DestLabel) -> CodePtr {
+    pub(super) fn gen_yield(
+        &mut self,
+        callid: CallSiteId,
+        simple: bool,
+        error: &DestLabel,
+    ) -> CodePtr {
         self.get_proc_data();
         self.handle_error(&error);
         // rax <- outer, rdx <- FuncId
@@ -145,7 +150,11 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movl r8, (callid.get()); // CallSiteId
         }
-        self.generic_handle_arguments(runtime::jit_handle_arguments_no_block);
+        self.generic_handle_arguments(if simple {
+            runtime::jit_handle_arguments_no_block_for_yield
+        } else {
+            runtime::jit_handle_arguments_no_block
+        });
         self.handle_error(error);
         self.call_funcdata()
     }
@@ -505,7 +514,7 @@ impl Codegen {
             movq rcx, [rbp - (rbp_local(args))];
             testq rcx, 0b111;
             jnz  exit;
-            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            cmpb [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
             jne  exit;
             movq rax, [rcx + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);
@@ -716,7 +725,7 @@ impl Codegen {
             movq rcx, [rbp - (rbp_local(rest_slot))];
             testq rcx, 0b111;
             jnz  fallback;
-            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            cmpb [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
             jne  fallback;
             // rax = len, rsi = element base (inline vs heap)
             movq rax, [rcx + (RVALUE_OFFSET_ARY_CAPA)];

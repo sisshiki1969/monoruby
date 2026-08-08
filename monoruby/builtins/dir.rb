@@ -19,11 +19,36 @@ class Dir
     path = path.to_path if path.respond_to?(:to_path)
     path = path.to_str if path.respond_to?(:to_str)
     raise TypeError, "no implicit conversion of #{path.class} into String" unless path.is_a?(String)
-    raise Errno::ENOENT, "No such file or directory @ dir_initialize - #{path}" unless File.directory?(path)
     @path = path
-    @entries = Dir.entries(path)
+    # Every Dir holds a real O_DIRECTORY|O_CLOEXEC descriptor (like
+    # CRuby's DIR*): #fileno returns it, #close closes it at the
+    # close(2) level, and Dir.for_fd can share it.
+    @fd = Dir.__open_fd(path)
+    @entries = Dir.__entries_fd(@fd, encoding)
     @pos = 0
     @closed = false
+  end
+
+  # Wrap an existing directory file descriptor (no dup: closing this Dir
+  # closes the caller's fd, and a second close raises Errno::EBADF).
+  def self.for_fd(fd)
+    raise TypeError, "no implicit conversion of #{fd.class} into Integer" unless fd.is_a?(Integer)
+    dir = allocate
+    dir.__setup_fd(fd)
+    dir
+  end
+
+  def __setup_fd(fd)
+    @path = nil
+    @fd = fd
+    @entries = Dir.__entries_fd(fd, nil)
+    @pos = 0
+    @closed = false
+  end
+
+  def fileno
+    raise IOError, "closed directory" if @closed
+    @fd
   end
 
   def read
@@ -83,7 +108,9 @@ class Dir
   end
 
   def close
+    return nil if @closed
     @closed = true
+    Dir.__close_fd(@fd) if @fd
     nil
   end
 
@@ -98,7 +125,7 @@ class Dir
   end
 
   def self.children(path, encoding: nil)
-    entries(path).reject { |e| e == "." || e == ".." }
+    entries(path, encoding: encoding).reject { |e| e == "." || e == ".." }
   end
 
   def self.each_child(path, encoding: nil, &block)

@@ -118,6 +118,8 @@ struct Opts {
     record_sep: Option<String>,
     /// `-F pattern`.
     field_sep: Option<String>,
+    /// `-i[extension]`: in-place edit of the ARGV files ("" = no backup).
+    inplace: Option<String>,
     /// `-x[dir]`.
     dash_x: bool,
     x_dir: Option<String>,
@@ -402,6 +404,10 @@ fn parse_short_cluster(
                 }
                 opts.record_sep = Some(String::from_utf8_lossy(&bytes[start..idx]).into_owned());
             }
+            'i' => {
+                opts.inplace = Some(String::from_utf8_lossy(&bytes[idx..]).into_owned());
+                return Ok(());
+            }
             'x' => {
                 opts.dash_x = true;
                 if idx < bytes.len() {
@@ -562,7 +568,7 @@ fn print_usage() {
     println!(
         "Usage: monoruby [switches] [--] [programfile] [arguments]
   -0[octal]       specify record separator (\\0, if no argument)
-  -a              autosplit mode with -n or -p (splits $_ into $F)
+  -a              autosplit mode with -n or -p (splits $_ into $F)\n  -i[extension]   edit ARGV files in place (make backup if extension supplied)
   -c              check syntax only
   -Cdirectory     cd to directory before executing your script
   -d, --debug     set debugging flags (set $DEBUG to true)
@@ -869,9 +875,14 @@ fn main() {
         }
     }
 
-    let argv = Value::array_from_iter(prog_args.iter().map(|s| Value::string(lossy(s))));
-    globals.set_constant_by_str(OBJECT_CLASS, "ARGV", argv);
-    globals.set_gvar(monoruby::IdentId::get_id("$*"), argv);
+    // Installs the array as `ARGV`; `$*` and the ARGF file queue read
+    // the same object straight off `Globals`.
+    globals.set_argv(Value::array_from_iter(
+        prog_args.iter().map(|s| Value::string(lossy(s))),
+    ));
+    if let Some(ext) = opts.inplace.clone() {
+        globals.set_argf_inplace(ext);
+    }
 
     if opts.ast {
         dump_ast(&code);

@@ -68,6 +68,7 @@ impl Codegen {
             | AsmInst::StoreDynVar { .. }
             | AsmInst::CreateArray { .. }
             | AsmInst::NewArray { .. }
+            | AsmInst::ArrayMinMax { .. }
             | AsmInst::NewHash(..)
             | AsmInst::HashInsert { .. }
             | AsmInst::ArrayConcat { .. }
@@ -85,7 +86,11 @@ impl Codegen {
             | AsmInst::FprRestore(..)
             | AsmInst::IntegerBinOpReg { .. }
             | AsmInst::IntegerCmpReg { .. }
+            | AsmInst::IntegerCmpImm { .. }
             | AsmInst::IntegerCmpBrReg { .. }
+            | AsmInst::IntegerCmpBrImm { .. }
+            | AsmInst::IntegerBinOpImm { .. }
+            | AsmInst::IntegerDouble { .. }
             | AsmInst::FloatBinOp { .. }
             | AsmInst::FloatUnOp { .. }
             | AsmInst::I64ToBoth(..)
@@ -607,6 +612,17 @@ impl Codegen {
             } => {
                 self.integer_binop(lhs, rhs, kind, &deopt);
             }
+            LInst::IntegerBinOpImm {
+                kind,
+                lhs,
+                imm,
+                deopt,
+            } => {
+                self.integer_binop_imm(lhs, imm, kind, &deopt);
+            }
+            LInst::IntegerDouble { reg, deopt } => {
+                self.integer_double(reg, &deopt);
+            }
             // Fixnum unary negate (tagged); deopt on i63 overflow.
             LInst::FixnumNeg { reg, deopt } => {
                 let r = reg as u64;
@@ -1114,6 +1130,33 @@ impl Codegen {
         true
     }
 
+    /// rax <- min/max of the `len` values at `args`, computed in place —
+    /// the fused, allocation-free `[a, b, …].min` / `.max`.
+    pub(in crate::codegen::jitgen) fn emit_array_min_max(
+        &mut self,
+        args: SlotId,
+        len: u16,
+        min: bool,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let f = if min {
+            runtime::opt_array_min as usize
+        } else {
+            runtime::opt_array_max as usize
+        };
+        self.fpr_save(using_fpr);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rdx, [rbp - (rbp_local(args))];
+            movq rcx, (len as usize);
+            movq rax, (f);
+            call rax;
+        );
+        self.fpr_restore(using_fpr);
+        true
+    }
+
     /// rax <- the Hash in `hash` after inserting the `len` key/value pairs
     /// at `args` (chunked Hash literal).
     pub(in crate::codegen::jitgen) fn emit_hash_insert(
@@ -1614,6 +1657,18 @@ impl Codegen {
         true
     }
 
+    /// Integer comparison against a tagged immediate; result Value lands in
+    /// the accumulator.
+    pub(in crate::codegen::jitgen) fn emit_integer_cmp_imm(
+        &mut self,
+        kind: CmpKind,
+        lhs: GP,
+        imm: i32,
+    ) -> bool {
+        self.integer_cmp_imm(kind, lhs, imm);
+        true
+    }
+
 
     /// Method epilogue: tear down the frame and return.
     pub(in crate::codegen::jitgen) fn emit_ret(&mut self) {
@@ -2068,7 +2123,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             testq rdx, 0b111;                                   // immediate?
             jnz  slow;
-            cmpw [rdx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            cmpb [rdx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
             jne  slow;
             movq rax, [rdx + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);
@@ -2205,11 +2260,12 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_yield(
         &mut self,
         callid: CallSiteId,
+        simple: bool,
         error: &DestLabel,
         evict: AsmEvict,
         evict_label: &DestLabel,
     ) -> bool {
-        let return_addr = self.gen_yield(callid, error);
+        let return_addr = self.gen_yield(callid, simple, error);
         self.set_deopt_with_return_addr(return_addr, evict, evict_label);
         true
     }

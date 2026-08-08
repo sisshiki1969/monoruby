@@ -1,5 +1,4 @@
 use super::*;
-use std::path::Path;
 use std::{
     fs::File,
     io::{Seek, SeekFrom},
@@ -43,9 +42,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "extname", file_extname, 1);
     globals.define_builtin_class_func(file, "path", file_path, 1);
     globals.define_builtin_class_func_with(file, "realpath", realpath, 1, 2, false);
-    globals.define_builtin_class_func_with(file, "open", open, 1, 4, false);
-    globals.define_builtin_class_func_with(file, "new", open, 1, 4, false);
-    globals.define_builtin_class_func_with(IO_CLASS, "open", open, 1, 4, false);
+    globals.define_builtin_class_func_with_kw(file, "open", open, 1, 3, false, OPEN_KW, true);
+    globals.define_builtin_class_func_with_kw(file, "new", file_new, 1, 3, false, OPEN_KW, true);
+    globals.define_builtin_class_func_with_kw(IO_CLASS, "open", open, 1, 3, false, OPEN_KW, true);
 
     globals.define_builtin_class_func(file, "directory?", directory_, 1);
     globals.define_builtin_module_func(file_test, "directory?", directory_, 1);
@@ -91,7 +90,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_funcs_rest(file, "delete", &["unlink"], delete);
     globals.define_builtin_class_func_rest(file, "chmod", chmod);
     globals.define_builtin_class_func(file, "symlink", file_symlink, 2);
-    globals.define_builtin_class_func(file, "readlines", readlines, 1);
+    globals.define_builtin_class_func_with_kw(
+        file,
+        "readlines",
+        readlines,
+        1,
+        3,
+        false,
+        &["chomp"],
+        true,
+    );
 
     globals.define_builtin_class_func(file, "size", file_size, 1);
     globals.define_builtin_module_func(file_test, "size", file_size, 1);
@@ -199,19 +207,77 @@ fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             ));
         }
     };
-    let mut contents = vec![];
-    match std::io::Read::read_to_end(&mut file, &mut contents) {
-        Ok(_) => {}
-        Err(err) => {
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &err,
-                "rb_io_read",
-                &filename_str,
-            ));
+    // Optional length / offset, plus a trailing options Hash
+    // (`File.read(path, length, offset)` /
+    //  `File.read(path, encoding: "...", mode: "...")`).
+    let mut positional: Vec<Value> = vec![];
+    let mut opts_enc: Option<Value> = None;
+    for i in 1..=3 {
+        let Some(v) = lfp.try_arg(i) else { break };
+        if v.is_nil() {
+            positional.push(v);
+        } else if let Some(h) = v.try_hash_ty() {
+            opts_enc = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?;
+        } else {
+            positional.push(v);
         }
+    }
+    let length = match positional.first() {
+        Some(v) if !v.is_nil() => {
+            let l = v.coerce_to_int_i64(vm, globals)?;
+            if l < 0 {
+                return Err(MonorubyErr::argumenterr(format!("negative length {l} given")));
+            }
+            Some(l as usize)
+        }
+        _ => None,
     };
-    Ok(Value::string_from_vec(contents))
+    let offset = match positional.get(1) {
+        Some(v) if !v.is_nil() => v.coerce_to_int_i64(vm, globals)?.max(0) as u64,
+        _ => 0,
+    };
+    if offset > 0 {
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(offset)).map_err(|err| {
+            MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_read", &filename_str)
+        })?;
+    }
+    let mut contents = vec![];
+    let res = match length {
+        Some(l) => std::io::Read::read_to_end(&mut std::io::Read::take(file, l as u64), &mut contents),
+        None => std::io::Read::read_to_end(&mut file, &mut contents),
+    };
+    if let Err(err) = res {
+        return Err(MonorubyErr::errno_with_path(
+            &globals.store,
+            &err,
+            "rb_io_read",
+            &filename_str,
+        ));
+    }
+    // A sized read that hits EOF immediately reads as nil; sized reads
+    // come back binary, like `IO#read(len)`. An `encoding:` option tags
+    // the result explicitly.
+    let res = match length {
+        Some(l) if l > 0 && contents.is_empty() => return Ok(Value::nil()),
+        Some(_) => Value::bytes(contents),
+        None => Value::string_from_vec(contents),
+    };
+    if let Some(enc_v) = opts_enc {
+        let name = if let Some(s) = enc_v.is_str() {
+            Some(s.to_string())
+        } else {
+            super::encoding::encoding_object_name(globals, enc_v)
+        };
+        if let Some(name) = name
+            && let Ok(enc) = crate::value::Encoding::try_from_str(&name)
+        {
+            let bytes = res.as_rstring_inner().as_bytes().to_vec();
+            return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                &bytes, enc,
+            )));
+        }
+    }
+    Ok(res)
 }
 
 ///
@@ -370,7 +436,7 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     fn flatten(
         vm: &mut Executor,
         globals: &mut Globals,
-        parts: &mut Vec<String>,
+        parts: &mut Vec<(Vec<u8>, crate::value::Encoding)>,
         val: Value,
         seen: &mut Vec<u64>,
     ) -> Result<()> {
@@ -379,7 +445,7 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 // An empty array argument joins as a single empty component,
                 // so `File.join([], [])` == "/" (core/file/join_spec.rb).
                 if ainfo.len() == 0 {
-                    parts.push(String::new());
+                    parts.push((Vec::new(), crate::value::Encoding::Utf8));
                     return Ok(());
                 }
                 let id = val.id();
@@ -394,11 +460,10 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             }
             None => {
                 let s = val.coerce_to_path_rstring_allow_nul(vm, globals)?;
-                let s = s.to_str()?.to_string();
                 if s.as_bytes().contains(&0) {
                     return Err(MonorubyErr::argumenterr("string contains null byte"));
                 }
-                parts.push(s);
+                parts.push((s.as_bytes().to_vec(), s.encoding()));
             }
         }
         Ok(())
@@ -413,24 +478,30 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     // separators and drops the left part's trailing ones ("usr//" + "/bin" ->
     // "usr/bin", "usr/" + "//bin" -> "usr//bin"); when exactly one side has one
     // it is reused; when neither does a "/" is inserted.
-    let mut path = String::new();
-    for (i, part) in parts.iter().enumerate() {
+    let mut path: Vec<u8> = Vec::new();
+    // The joined result carries the first non-UTF-8 component's encoding
+    // (join_spec.rb "preserves the encoding of the path").
+    let mut enc = crate::value::Encoding::Utf8;
+    for (i, (part, part_enc)) in parts.iter().enumerate() {
+        if enc == crate::value::Encoding::Utf8 && *part_enc != crate::value::Encoding::Utf8 {
+            enc = *part_enc;
+        }
         if i == 0 {
-            path.push_str(part);
+            path.extend_from_slice(part);
             continue;
         }
-        let left_sep = path.ends_with('/');
-        let right_sep = part.starts_with('/');
+        let left_sep = path.last() == Some(&b'/');
+        let right_sep = part.first() == Some(&b'/');
         if left_sep && right_sep {
-            while path.ends_with('/') {
+            while path.last() == Some(&b'/') {
                 path.pop();
             }
         } else if !left_sep && !right_sep {
-            path.push('/');
+            path.push(b'/');
         }
-        path.push_str(part);
+        path.extend_from_slice(part);
     }
-    Ok(Value::string(path))
+    Ok(path_value(&path, enc))
 }
 
 ///
@@ -446,36 +517,139 @@ fn file_expand_path(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let current_dir = match std::env::current_dir() {
-        Ok(dir) => dir,
-        Err(err) => {
-            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "."));
-        }
-    };
-    let arg0 = to_path(vm, globals, lfp.arg(0))?;
-    let path = if let Some(arg1) = lfp.try_arg(1)
+    // CRuby converts the result to the filesystem encoding; with an
+    // ASCII-incompatible default_external this is impossible up front.
+    let de = super::io::enc_default_external_obj(globals);
+    if let Some(e) = super::io::enc_obj_to_enum(globals, de)
+        && !e.is_ascii_compatible()
+    {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!("incompatible character encodings: UTF-8 and {}", e.name()),
+        ));
+    }
+    let rs = to_path_rstring(vm, globals, lfp.arg(0))?;
+    let enc = rs.encoding();
+    let dfl: Option<Vec<u8>> = if let Some(arg1) = lfp.try_arg(1)
         && !arg1.is_nil()
     {
-        let mut path = to_path(vm, globals, arg1)?;
-        path.push(arg0);
-        path
+        Some(to_path_rstring(vm, globals, arg1)?.as_bytes().to_vec())
     } else {
-        arg0
+        None
     };
+    let res = expand_path_bytes(rs.as_bytes(), dfl.as_deref())?;
+    Ok(path_value(&res, enc))
+}
 
-    let mut res_path = std::path::PathBuf::new();
-    res_path.push(current_dir);
+/// Expand `path` into an absolute byte path against `dfl` (both may
+/// start with `~`/`~user`), mirroring CRuby's `rb_file_expand_path`:
+/// `.`/`..` are collapsed lexically, interior slash runs are squeezed,
+/// and the leading slash run of the absolute prefix is preserved
+/// verbatim (`////some/path` stays as written).
+fn expand_path_bytes(path: &[u8], dfl: Option<&[u8]>) -> Result<Vec<u8>> {
+    if path.first() == Some(&b'~') {
+        let (home, rest) = if path.len() == 1 || path[1] == b'/' {
+            (expand_home_dir()?, &path[1..])
+        } else {
+            let end = path.iter().position(|&b| b == b'/').unwrap_or(path.len());
+            (user_home_dir(&path[1..end])?, &path[end..])
+        };
+        if home.first() != Some(&b'/') {
+            return Err(MonorubyErr::argumenterr("non-absolute home"));
+        }
+        let mut joined = home;
+        joined.extend_from_slice(rest);
+        Ok(normalize_abs_bytes(&joined))
+    } else if path.first() == Some(&b'/') {
+        Ok(normalize_abs_bytes(path))
+    } else {
+        let mut base = match dfl {
+            Some(d) => expand_path_bytes(d, None)?,
+            None => cwd_bytes()?,
+        };
+        if base.last() != Some(&b'/') {
+            base.push(b'/');
+        }
+        base.extend_from_slice(path);
+        Ok(normalize_abs_bytes(&base))
+    }
+}
 
-    extend(&mut res_path, path)?;
+/// Current working directory as raw bytes.
+fn cwd_bytes() -> Result<Vec<u8>> {
+    match std::env::current_dir() {
+        Ok(dir) => Ok(pathbuf_bytes(&dir).to_vec()),
+        Err(err) => Err(MonorubyErr::runtimeerr(format!(
+            "failed to get current directory: {err}"
+        ))),
+    }
+}
 
-    #[cfg(windows)]
-    let res_path = PathBuf::from(
-        std::env::var("HOMEDRIVE")
-            .or_else(|_| Err(RubyError::internal("Failed to get home drive.")))?,
-    )
-    .join(res_path);
+/// `$HOME` (must be set and non-empty; falls back to the passwd entry
+/// when unset — CRuby raises "non-absolute home" for a set-but-empty or
+/// relative HOME later, in the caller's absolute check).
+fn expand_home_dir() -> Result<Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt;
+    match std::env::var_os("HOME") {
+        Some(h) if !h.is_empty() => Ok(h.as_bytes().to_vec()),
+        Some(_) => Err(MonorubyErr::argumenterr("non-absolute home")),
+        None => {
+            // SAFETY: getpwuid returns a pointer to a static passwd entry
+            // (or null); pw_dir is read immediately before any other libc
+            // call could clobber the buffer.
+            unsafe {
+                let pw = libc::getpwuid(libc::getuid());
+                if pw.is_null() {
+                    return Err(MonorubyErr::argumenterr("couldn't find HOME environment -- expanding `~'"));
+                }
+                Ok(std::ffi::CStr::from_ptr((*pw).pw_dir).to_bytes().to_vec())
+            }
+        }
+    }
+}
 
-    Ok(Value::string(conv_pathbuf(&res_path)))
+/// Home directory of the named user (for `~user` expansion).
+fn user_home_dir(user: &[u8]) -> Result<Vec<u8>> {
+    let display = String::from_utf8_lossy(user).to_string();
+    let c_user = std::ffi::CString::new(user)
+        .map_err(|_| MonorubyErr::argumenterr("user name contains null byte"))?;
+    // SAFETY: getpwnam reads the passwd DB for the NUL-terminated name and
+    // returns a pointer into a static buffer (or null when unknown); pw_dir
+    // is copied out immediately.
+    unsafe {
+        let pw = libc::getpwnam(c_user.as_ptr());
+        if pw.is_null() {
+            return Err(MonorubyErr::argumenterr(format!(
+                "user {display} doesn't exist"
+            )));
+        }
+        Ok(std::ffi::CStr::from_ptr((*pw).pw_dir).to_bytes().to_vec())
+    }
+}
+
+/// Lexically normalize an absolute byte path: squeeze interior slash
+/// runs, drop `.`, collapse `..` (never above root), and keep the
+/// leading run of slashes exactly as written.
+fn normalize_abs_bytes(bytes: &[u8]) -> Vec<u8> {
+    let lead = bytes.iter().take_while(|&&b| b == b'/').count().max(1);
+    let mut comps: Vec<&[u8]> = vec![];
+    for c in bytes[lead.min(bytes.len())..].split(|&b| b == b'/') {
+        match c {
+            b"" | b"." => {}
+            b".." => {
+                comps.pop();
+            }
+            c => comps.push(c),
+        }
+    }
+    let mut out = vec![b'/'; lead];
+    for (i, c) in comps.iter().enumerate() {
+        if i > 0 {
+            out.push(b'/');
+        }
+        out.extend_from_slice(c);
+    }
+    out
 }
 
 ///
@@ -513,43 +687,42 @@ fn file_basename(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let filename = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
-    let suffix = if let Some(arg1) = lfp.try_arg(1) {
-        let s = arg1.coerce_to_string(vm, globals)?;
+    let filename = to_path_rstring(vm, globals, lfp.arg(0))?;
+    let enc = filename.encoding();
+    let suffix: Option<Vec<u8>> = if let Some(arg1) = lfp.try_arg(1) {
+        let s = arg1.coerce_to_rstring(vm, globals)?;
         if s.is_empty() {
             None
         } else {
-            Some(s.to_string())
+            Some(s.as_bytes().to_vec())
         }
     } else {
         None
     };
     if filename.is_empty() {
-        return Ok(Value::string_from_str(""));
+        return Ok(path_value(b"", enc));
     }
-    let filename = filename.to_str()?.to_string();
-    let basename = if let Some(s) = filename.split('/').rev().find(|s| !s.is_empty()) {
-        s
-    } else {
-        "/"
-    };
+    let basename: &[u8] = filename
+        .as_bytes()
+        .split(|&b| b == b'/')
+        .rev()
+        .find(|s| !s.is_empty())
+        .unwrap_or(b"/");
     if let Some(suffix) = suffix {
-        if suffix == ".*" {
+        if suffix == b".*" {
             // CRuby treats the ".*" suffix specially: strip the last
             // extension (a '.' that is not the leading char, so
             // dotfiles like ".bashrc" are preserved).
-            if let Some(pos) = basename.rfind('.') {
+            if let Some(pos) = basename.iter().rposition(|&b| b == b'.') {
                 if pos > 0 {
-                    return Ok(Value::string_from_str(&basename[..pos]));
+                    return Ok(path_value(&basename[..pos], enc));
                 }
             }
         } else if basename.ends_with(&suffix) {
-            return Ok(Value::string_from_str(
-                &basename[..basename.len() - suffix.len()],
-            ));
+            return Ok(path_value(&basename[..basename.len() - suffix.len()], enc));
         }
     }
-    Ok(Value::string_from_str(basename))
+    Ok(path_value(basename, enc))
 }
 
 ///
@@ -623,25 +796,30 @@ fn file_extname(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let filename = to_path_str(vm, globals, lfp.arg(0))?;
+    let filename = to_path_rstring(vm, globals, lfp.arg(0))?;
+    let enc = filename.encoding();
     // Work on the final path component; an extension is the part after the
     // last dot, but a basename that is nothing but dots ("...", "..") or
     // starts with its only dot (".profile") has no extension.
-    let base = filename.rsplit('/').next().unwrap_or("");
-    let extname = match base.rfind('.') {
+    let base: &[u8] = filename
+        .as_bytes()
+        .rsplit(|&b| b == b'/')
+        .next()
+        .unwrap_or(b"");
+    let extname: &[u8] = match base.iter().rposition(|&b| b == b'.') {
         // No extension when nothing but dots precedes the last dot:
         // ".profile" / ".." / "...a" → "".
-        Some(pos) if !base[..pos].is_empty() && !base[..pos].bytes().all(|b| b == b'.') => {
+        Some(pos) if !base[..pos].is_empty() && !base[..pos].iter().all(|&b| b == b'.') => {
             if pos + 1 < base.len() {
-                base[pos..].to_string()
+                &base[pos..]
             } else {
                 // Trailing dot: "foo." → "." on non-Windows CRuby.
-                ".".to_string()
+                b"."
             }
         }
-        _ => "".to_string(),
+        _ => b"",
     };
-    Ok(Value::string(extname))
+    Ok(path_value(extname, enc))
 }
 
 ///
@@ -777,7 +955,8 @@ fn flock_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/path.html]
 #[monoruby_builtin]
 fn file_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::string(to_path_str(vm, globals, lfp.arg(0))?))
+    let rs = to_path_rstring(vm, globals, lfp.arg(0))?;
+    Ok(path_value(rs.as_bytes(), rs.encoding()))
 }
 
 ///
@@ -787,43 +966,164 @@ fn file_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/realpath.html]
 #[monoruby_builtin]
 fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut pathname = if let Some(arg1) = lfp.try_arg(1) {
-        let path_str = to_path_str(vm, globals, arg1)?;
-        let path = std::path::PathBuf::from(&path_str);
-        match path.canonicalize() {
-            Ok(path) => path,
-            Err(err) => {
-                return Err(MonorubyErr::errno_with_path(
-                    &globals.store,
-                    &err,
-                    "rb_file_s_realpath",
-                    &path_str,
-                ));
+    let rs = to_path_rstring(vm, globals, lfp.arg(0))?;
+    let enc = rs.encoding();
+    let base: Option<Vec<u8>> = if let Some(arg1) = lfp.try_arg(1)
+        && !arg1.is_nil()
+    {
+        Some(to_path_rstring(vm, globals, arg1)?.as_bytes().to_vec())
+    } else {
+        None
+    };
+    let resolved = check_realpath(globals, rs.as_bytes(), base.as_deref(), true)?;
+    Ok(resolved_path_value(globals, resolved, enc, true))
+}
+
+/// Tag a resolved (filesystem / UTF-8) path with the path argument's
+/// encoding: converted when possible; when the conversion fails,
+/// `File.realpath` *forces* the argument's encoding onto the raw bytes
+/// while `File.realdirpath` keeps the resolved UTF-8 tag (CRuby's
+/// realpath specs distinguish the two).
+fn resolved_path_value(
+    globals: &Globals,
+    bytes: Vec<u8>,
+    enc: crate::value::Encoding,
+    force: bool,
+) -> Value {
+    use crate::value::Encoding as E;
+    if enc == E::Utf8 {
+        return path_value(&bytes, E::Utf8);
+    }
+    let topts = super::encoding::TranscodeOpts::default();
+    match super::encoding::transcode_bytes_with_opts(&bytes, E::Utf8, enc, &topts, &globals.store) {
+        Ok(b) => path_value(&b, enc),
+        Err(_) if force => path_value(&bytes, enc),
+        Err(_) => path_value(&bytes, E::Utf8),
+    }
+}
+
+/// Resolve `path` (absolutized against `base` / the cwd) component-wise
+/// the way CRuby's `rb_check_realpath` does: each component is
+/// `lstat`ed, symlinks are followed (raising `ELOOP` after too many
+/// hops), and `..` collapses the resolved prefix *lexically* — so
+/// `dir/file/../` resolves to `dir` without an `ENOTDIR`. With
+/// `strict_last` false (File.realdirpath) the final component may be
+/// absent; everything else must exist.
+///
+/// Error spelling follows CRuby: strict-mode ENOENT/ELOOP report the
+/// path *as given* (base-joined) under `rb_check_realpath_internal`
+/// (CRuby's native realpath(3) path); every other failure reports the
+/// resolved-so-far prefix under `realpath_rec` (the emulation).
+fn check_realpath(
+    globals: &Globals,
+    path: &[u8],
+    base: Option<&[u8]>,
+    strict_last: bool,
+) -> Result<Vec<u8>> {
+    use std::collections::VecDeque;
+    fn push_front_components(queue: &mut VecDeque<Vec<u8>>, bytes: &[u8]) {
+        for c in bytes.split(|&b| b == b'/').rev() {
+            if !c.is_empty() {
+                queue.push_front(c.to_vec());
             }
         }
-    } else {
-        match std::env::current_dir() {
-            Ok(path) => path,
-            Err(err) => {
-                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "."));
+    }
+    // The user-facing path for strict-mode native-style errors: the
+    // argument as written, prefixed by the base when one was given and
+    // the argument is relative.
+    let given_display = {
+        let arg = String::from_utf8_lossy(path).to_string();
+        match base {
+            Some(b) if path.first() != Some(&b'/') => {
+                format!("{}/{}", String::from_utf8_lossy(b), arg)
             }
+            _ => arg,
         }
     };
-    pathname.push(std::path::PathBuf::from(to_path_str(
-        vm,
-        globals,
-        lfp.arg(0),
-    )?));
-    let pathname_str = pathname.to_string_lossy().to_string();
-    match pathname.canonicalize() {
-        Ok(file) => Ok(Value::string(file.to_string_lossy().to_string())),
-        Err(err) => Err(MonorubyErr::errno_with_path(
-            &globals.store,
-            &err,
-            "rb_file_s_realpath",
-            &pathname_str,
-        )),
+    let raise = |raw: i32, resolved: &[u8]| {
+        let err = std::io::Error::from_raw_os_error(raw);
+        if strict_last && matches!(raw, libc::ENOENT | libc::ELOOP) {
+            MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_check_realpath_internal",
+                &given_display,
+            )
+        } else {
+            MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "realpath_rec",
+                &String::from_utf8_lossy(resolved),
+            )
+        }
+    };
+    if path.is_empty() {
+        return Err(raise(libc::ENOENT, b""));
     }
+    let mut queue: VecDeque<Vec<u8>> = VecDeque::new();
+    push_front_components(&mut queue, path);
+    if path.first() != Some(&b'/') {
+        let abs_base: Vec<u8> = match base {
+            Some(b) if b.first() == Some(&b'/') => b.to_vec(),
+            Some(b) => {
+                let mut cur = cwd_bytes()?;
+                cur.push(b'/');
+                cur.extend_from_slice(b);
+                cur
+            }
+            None => cwd_bytes()?,
+        };
+        push_front_components(&mut queue, &abs_base);
+    }
+
+    let mut resolved: Vec<u8> = Vec::new();
+    let mut links = 0usize;
+    while let Some(comp) = queue.pop_front() {
+        if comp == b"." {
+            continue;
+        }
+        if comp == b".." {
+            while let Some(b) = resolved.pop() {
+                if b == b'/' {
+                    break;
+                }
+            }
+            continue;
+        }
+        let prev_len = resolved.len();
+        resolved.push(b'/');
+        resolved.extend_from_slice(&comp);
+        match std::fs::symlink_metadata(bytes_to_pathbuf(&resolved)) {
+            Ok(md) if md.file_type().is_symlink() => {
+                links += 1;
+                if links > 40 {
+                    return Err(raise(libc::ELOOP, &resolved));
+                }
+                let target = std::fs::read_link(bytes_to_pathbuf(&resolved))
+                    .map_err(|e| raise(e.raw_os_error().unwrap_or(libc::EIO), &resolved))?;
+                let tb = pathbuf_bytes(&target).to_vec();
+                resolved.truncate(prev_len);
+                if tb.first() == Some(&b'/') {
+                    resolved.clear();
+                }
+                push_front_components(&mut queue, &tb);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                let missing_last_ok = !strict_last
+                    && queue.is_empty()
+                    && e.kind() == std::io::ErrorKind::NotFound;
+                if !missing_last_ok {
+                    return Err(raise(e.raw_os_error().unwrap_or(libc::EIO), &resolved));
+                }
+            }
+        }
+    }
+    if resolved.is_empty() {
+        resolved.push(b'/');
+    }
+    Ok(resolved)
 }
 
 ///
@@ -904,8 +1204,113 @@ pub(super) fn block_close(
     }
 }
 
+/// Keyword parameters accepted by `File.open` / `File.new` / `IO.open`.
+/// Their slots start right after the 3 positional parameters (path,
+/// mode, perm); the kw_rest Hash (transcode options and other extras
+/// monoruby accepts but does not implement) sits after them.
+pub(super) const OPEN_KW: &[&str] = &[
+    "flags",
+    "mode",
+    "perm",
+    "encoding",
+    "external_encoding",
+    "internal_encoding",
+    "textmode",
+    "binmode",
+    "autoclose",
+    "path",
+    "newline",
+    "invalid",
+    "undef",
+    "replace",
+    "fallback",
+    "xml",
+];
+
+/// A named `OPEN_KW` keyword's value (absent or nil → `None`).
+fn open_kw(lfp: Lfp, name: &str) -> Option<Value> {
+    let i = OPEN_KW.iter().position(|n| *n == name)?;
+    lfp.try_arg(3 + i).filter(|v| !v.is_nil())
+}
+
+/// Collect the named keyword slots (+ any kw_rest extras) back into an
+/// options Hash so the shared IO option readers (`io_open_opts`,
+/// `init_io_encodings`) see keyword and positional-Hash call forms
+/// uniformly.
+fn open_kw_hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<Value>> {
+    let mut map = RubyMap::default();
+    let mut any = false;
+    for (i, name) in OPEN_KW.iter().enumerate() {
+        if let Some(v) = lfp.try_arg(3 + i) {
+            map.insert(Value::symbol(IdentId::get_id(name)), v, vm, globals)?;
+            any = true;
+        }
+    }
+    if let Some(rest) = lfp.try_arg(3 + OPEN_KW.len())
+        && rest.try_hash_ty().is_some()
+    {
+        for (k, v) in rest.as_hash().iter() {
+            map.insert(k, v, vm, globals)?;
+            any = true;
+        }
+    }
+    Ok(if any { Some(Value::hash(map)) } else { None })
+}
+
+/// Translate a mode string ("r", "wb+", "wx", …; a ":enc" suffix is
+/// ignored here) into open(2) flags + the binmode marker. Unknown or
+/// misplaced letters raise CRuby's "invalid access mode" ArgumentError
+/// (the 'x' creation guard is only valid with 'w').
+fn oflags_from_mode_string(mode: &str) -> Result<(i64, bool)> {
+    let base = mode.split(':').next().unwrap_or("");
+    let invalid = || MonorubyErr::argumenterr(format!("invalid access mode {base}"));
+    let mut it = base.chars();
+    let first = it.next();
+    let mut oflags: i64 = match first {
+        Some('r') => libc::O_RDONLY as i64,
+        Some('w') => (libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC) as i64,
+        Some('a') => (libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND) as i64,
+        _ => return Err(invalid()),
+    };
+    let mut binmode = false;
+    for c in it {
+        match c {
+            'b' => binmode = true,
+            't' => {}
+            '+' => {
+                oflags = (oflags & !(libc::O_ACCMODE as i64)) | libc::O_RDWR as i64;
+            }
+            'x' => {
+                if first != Some('w') {
+                    return Err(invalid());
+                }
+                oflags |= libc::O_EXCL as i64;
+            }
+            _ => return Err(invalid()),
+        }
+    }
+    Ok((oflags, binmode))
+}
+
 #[monoruby_builtin]
 fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    open_impl(vm, globals, lfp, false)
+}
+
+/// `File.new` — same as `File.open` except a given block is *not*
+/// called (CRuby warns and returns the File).
+#[monoruby_builtin]
+fn file_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    open_impl(vm, globals, lfp, true)
+}
+
+fn open_impl(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    is_new: bool,
+) -> Result<Value> {
+    let kw_hash = open_kw_hash(vm, globals, lfp)?;
     // If the first argument is an Integer, treat it as a file descriptor.
     if let Some(fd) = lfp.arg(0).try_fixnum() {
         let fd_i32 = fd as i32;
@@ -920,12 +1325,26 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 &format!("fd {}", fd),
             ));
         }
+        // An integer mode cannot change an already-open fd's access mode;
+        // CRuby surfaces the mismatch as Errno::EINVAL
+        // (core/file/new_spec.rb "can't alter mode or permissions when
+        // opening a file").
+        if let Some(n) = lfp.try_arg(1).and_then(|v| v.try_fixnum()) {
+            let want = (n as i32) & libc::O_ACCMODE;
+            // SAFETY: fcntl(F_GETFL) on the fd validated above.
+            let cur = unsafe { libc::fcntl(fd_i32, libc::F_GETFL) };
+            if cur != -1 && (cur & libc::O_ACCMODE) != want {
+                let err = std::io::Error::from_raw_os_error(libc::EINVAL);
+                return Err(MonorubyErr::errno_plain(&globals.store, &err));
+            }
+        }
         // Scan trailing args for an options Hash and pick up `:path`
         // (display name) and `:autoclose` (fd ownership) — required by
         // patterns like `File.new(io.fileno, autoclose: false, path: "")`
         // (logger/log_device.rb feature-detection code) where the caller
         // explicitly disclaims ownership of the borrowed fd.
-        let (name, has_path, autoclose) = super::io::io_open_opts(vm, globals, lfp, 1..4, fd)?;
+        let (name, has_path, autoclose) =
+            super::io::io_open_opts(vm, globals, lfp, 1..3, fd, kw_hash)?;
         let (readable, writable) = super::io::fd_rw_mode(fd_i32);
         // If another monoruby IO already owns this fd, borrow it (autoclose
         // = false) instead of creating a second closing `OwnedFd`, which
@@ -954,8 +1373,15 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 }
                 .to_string()
             });
-        super::io::init_io_encodings(vm, globals, lfp, res, &mode_for_enc, readable, 1..4)?;
+        super::io::init_io_encodings(vm, globals, lfp, res, &mode_for_enc, readable, 1..3, kw_hash)?;
         if let Some(bh) = lfp.block() {
+            if is_new {
+                vm.ruby_warn(
+                    globals,
+                    "warning: File::new() does not take block; use File::open() instead",
+                )?;
+                return Ok(res);
+            }
             let r = vm.invoke_block_once(globals, bh, &[res]);
             // Match CRuby File.open(...) {|io| ... }: close at block exit.
             // Holding the underlying fd open across blocks defeats `flock`
@@ -965,123 +1391,92 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         return Ok(res);
     }
 
-    // Resolve the open mode. Each later position overrides the earlier one
-    // when it provides an explicit `:mode` (matching CRuby's option-Hash
-    // precedence): trailing options Hash > explicit mode arg > default "r".
-    let mut mode = "r".to_string();
-    if let Some(arg1) = lfp.try_arg(1) {
-        if arg1.is_nil() {
-            // explicit nil => keep default
-        } else if let Some(n) = arg1.try_fixnum() {
-            mode = mode_string_from_flags(n);
-        } else if arg1.is_rstring().is_some() {
-            mode = arg1.coerce_to_string(vm, globals)?;
-        } else if let Some(h) = arg1.try_hash_ty() {
-            if let Some(m) =
-                h.get(Value::symbol(IdentId::get_id("mode")), vm, globals)?
+    // Resolve the open mode into open(2) flags. Precedence (CRuby):
+    // `mode:` keyword > positional mode arg (String / Integer / Hash
+    // with `:mode`) > default "r". A `flags:` keyword ORs extra bits on
+    // top of either form.
+    let mut mode_val: Option<Value> = None;
+    if let Some(arg1) = lfp.try_arg(1)
+        && !arg1.is_nil()
+    {
+        if let Some(h) = arg1.try_hash_ty() {
+            if let Some(m) = h.get(Value::symbol(IdentId::get_id("mode")), vm, globals)?
                 && !m.is_nil()
             {
-                if let Some(n) = m.try_fixnum() {
-                    mode = mode_string_from_flags(n);
-                } else {
-                    mode = m.coerce_to_string(vm, globals)?;
-                }
+                mode_val = Some(m);
             }
+        } else {
+            mode_val = Some(arg1);
         }
     }
-    // Look at later args (perm, opts) for a Hash with :mode.
-    for i in 2..4 {
-        if let Some(arg) = lfp.try_arg(i)
-            && let Some(h) = arg.try_hash_ty()
-            && let Some(m) = h.get(Value::symbol(IdentId::get_id("mode")), vm, globals)?
-            && !m.is_nil()
-        {
+    if let Some(m) = open_kw(lfp, "mode") {
+        mode_val = Some(m);
+    }
+    // `mode` (the string form) also drives the encoding suffix parsing
+    // in init_io_encodings, so keep a string spelling alongside the
+    // flag bits.
+    let (mut oflags, mut binmode, mode) = match mode_val {
+        None => (libc::O_RDONLY as i64, false, "r".to_string()),
+        Some(m) => {
             if let Some(n) = m.try_fixnum() {
-                mode = mode_string_from_flags(n);
+                (n, false, mode_string_from_flags(n))
             } else {
-                mode = m.coerce_to_string(vm, globals)?;
+                let s = m.coerce_to_string(vm, globals)?;
+                let (f, b) = oflags_from_mode_string(&s)?;
+                (f, b, s)
             }
         }
+    };
+    if let Some(f) = open_kw(lfp, "flags") {
+        oflags |= f.coerce_to_int_i64(vm, globals)?;
     }
-    let mut opt = File::options();
-    // Strip encoding suffix (e.g. ":UTF-8") and normalize the mode string:
-    // remove 'b' (binary) flag since it has no effect on Unix.
-    let mode_base = mode.split(':').next().unwrap().replace('b', "");
-    let (readable, writable) = match mode_base.as_str() {
-        "r" => (true, false),
-        "w" | "a" | "w-" | "-w" => (false, true),
-        "r+" | "+r" | "w+" | "+w" | "a+" | "+a" => (true, true),
-        _ => (true, false),
-    };
-    let opt = match mode_base.as_str() {
-        "r" => opt.read(true),
-        "w" => opt.write(true).create(true).truncate(true),
-        // Internal spellings (mode_string_from_flags): write+create
-        // without truncation, and bare write-only.
-        "w-" => opt.write(true).create(true),
-        "-w" => opt.write(true),
-        "a" => opt.write(true).create(true).append(true),
-        "r+" | "+r" => opt.read(true).write(true),
-        "w+" | "+w" => opt.read(true).write(true).create(true).truncate(true),
-        "a+" | "+a" => opt.read(true).write(true).create(true).append(true),
-        _ => {
-            return Err(MonorubyErr::argumenterr(format!(
-                "Invalid access mode {}",
-                mode
-            )));
-        }
-    };
+    if open_kw(lfp, "binmode").is_some_and(|v| v.as_bool()) {
+        binmode = true;
+    }
+    // CRuby rejects newline decorators on a binary-mode stream.
+    if binmode && open_kw(lfp, "newline").is_some() {
+        return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
+    }
+    let access = (oflags as i32) & libc::O_ACCMODE;
+    let readable = access == libc::O_RDONLY || access == libc::O_RDWR;
+    let writable = access == libc::O_WRONLY || access == libc::O_RDWR;
     // Creation permissions: the positional Integer after the mode, or a
-    // `:perm` entry in a trailing options Hash (both CRuby forms; only
-    // applied when the open creates the file).
-    let mut perm: Option<u32> = None;
+    // `perm:` keyword (only applied when the open creates the file).
+    let mut perm: i64 = 0o666;
     if let Some(arg2) = lfp.try_arg(2)
         && let Some(n) = arg2.try_fixnum()
     {
-        perm = Some(n as u32);
+        perm = n;
     }
-    for i in 1..4 {
-        if let Some(arg) = lfp.try_arg(i)
-            && let Some(h) = arg.try_hash_ty()
-            && let Some(m) = h.get(Value::symbol(IdentId::get_id("perm")), vm, globals)?
-            && let Some(n) = m.try_fixnum()
-        {
-            perm = Some(n as u32);
-        }
+    if let Some(p) = open_kw(lfp, "perm")
+        && let Some(n) = p.try_fixnum()
+    {
+        perm = n;
     }
-    if let Some(p) = perm {
-        use std::os::unix::fs::OpenOptionsExt;
-        opt.mode(p);
-    }
-    let path = to_path_str(vm, globals, lfp.arg(0))?;
+    let path_rs = to_path_rstring(vm, globals, lfp.arg(0))?;
+    let path_bytes = path_rs.as_bytes().to_vec();
+    let path = String::from_utf8_lossy(&path_bytes).to_string();
+    // NUL bytes were rejected by to_path_rstring, so this cannot fail.
+    let cpath = std::ffi::CString::new(path_bytes.clone())
+        .map_err(|_| MonorubyErr::argumenterr("path name contains null byte"))?;
+    let open_flags = (oflags as i32) | libc::O_CLOEXEC;
     // A FIFO's open(2) blocks in the kernel until the peer end appears;
-    // opening it inline through std would freeze every green thread (and
-    // the process). Detect the FIFO up front and run the blocking open on
+    // opening it inline would freeze every green thread (and the
+    // process). Detect the FIFO up front and run the blocking open on
     // a native worker instead, parking only this thread
     // (doc/threads.md §9). A TOCTOU miss here just falls back to
     // the previous inline behavior.
-    let is_fifo = std::fs::metadata(&path)
+    let is_fifo = std::fs::metadata(bytes_to_pathbuf(&path_bytes))
         .map(|m| std::os::unix::fs::FileTypeExt::is_fifo(&m.file_type()))
         .unwrap_or(false);
-    let file = if is_fifo && let Ok(cpath) = std::ffi::CString::new(path.as_str()) {
-        let flags = match mode_base.as_str() {
-            "r" => libc::O_RDONLY,
-            "w" => libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
-            "w-" => libc::O_WRONLY | libc::O_CREAT,
-            "-w" => libc::O_WRONLY,
-            "a" => libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND,
-            "r+" | "+r" => libc::O_RDWR,
-            "w+" | "+w" => libc::O_RDWR | libc::O_CREAT | libc::O_TRUNC,
-            "a+" | "+a" => libc::O_RDWR | libc::O_CREAT | libc::O_APPEND,
-            _ => unreachable!(),
-        } | libc::O_CLOEXEC;
+    let file = if is_fifo {
         let comp = crate::native_pool::run_blocking(
             vm,
             globals,
             crate::native_pool::NativeOp::Open {
                 path: cpath,
-                flags,
-                mode: 0o666,
+                flags: open_flags,
+                mode: perm as u32,
             },
         )?;
         if comp.ret < 0 {
@@ -1097,21 +1492,38 @@ fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         // transfers to the File here.
         unsafe { <File as std::os::fd::FromRawFd>::from_raw_fd(comp.ret as i32) }
     } else {
-        match opt.open(&path) {
-            Ok(file) => file,
-            Err(err) => {
-                return Err(MonorubyErr::errno_with_path(
-                    &globals.store,
-                    &err,
-                    "rb_sysopen",
-                    &path,
-                ));
-            }
+        // SAFETY: open(2) with a NUL-terminated path; the returned fd (when
+        // valid) is owned by the File constructed below.
+        let fd = unsafe { libc::open(cpath.as_ptr(), open_flags, perm as libc::c_uint) };
+        if fd < 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_path(
+                &globals.store,
+                &err,
+                "rb_sysopen",
+                &path,
+            ));
         }
+        // SAFETY: `fd` is a fresh descriptor from open(2); ownership
+        // transfers to the File here.
+        unsafe { <File as std::os::fd::FromRawFd>::from_raw_fd(fd) }
     };
-    let res = Value::new_file(file, path, readable, writable);
-    super::io::init_io_encodings(vm, globals, lfp, res, &mode, readable, 1..4)?;
+    let res = Value::new_file(
+        file,
+        path,
+        Some((path_bytes.clone(), path_rs.encoding())),
+        readable,
+        writable,
+    );
+    super::io::init_io_encodings(vm, globals, lfp, res, &mode, readable, 1..3, kw_hash)?;
     if let Some(bh) = lfp.block() {
+        if is_new {
+            vm.ruby_warn(
+                globals,
+                "warning: File::new() does not take block; use File::open() instead",
+            )?;
+            return Ok(res);
+        }
         let r = vm.invoke_block_once(globals, bh, &[res]);
         // CRuby File.open(...) {|io| ... } closes the file at block exit.
         return block_close(vm, globals, res, r);
@@ -1226,14 +1638,15 @@ fn absolute_path(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let file_name = to_path_str(vm, globals, lfp.arg(0))?;
-    if Path::new(&file_name).is_absolute() {
-        return Ok(Value::string(file_name));
+    let rs = to_path_rstring(vm, globals, lfp.arg(0))?;
+    let enc = rs.encoding();
+    if rs.as_bytes().first() == Some(&b'/') {
+        return Ok(path_value(rs.as_bytes(), enc));
     }
     let base = if let Some(arg1) = lfp.try_arg(1)
         && !arg1.is_nil()
     {
-        std::path::PathBuf::from(to_path_str(vm, globals, arg1)?)
+        bytes_to_pathbuf(to_path_rstring(vm, globals, arg1)?.as_bytes())
     } else {
         match std::env::current_dir() {
             Ok(dir) => dir,
@@ -1241,8 +1654,8 @@ fn absolute_path(
         }
     };
     let mut result = base;
-    result.push(&file_name);
-    Ok(Value::string(conv_pathbuf(&result)))
+    result.push(bytes_to_pathbuf(rs.as_bytes()));
+    Ok(path_value(pathbuf_bytes(&result), enc))
 }
 
 ///
@@ -1268,76 +1681,107 @@ fn absolute_path_(
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/split.html]
 #[monoruby_builtin]
 fn file_split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let filename = to_path(vm, globals, lfp.arg(0))?;
-    let mut dir = match filename.parent() {
-        Some(ostr) => conv_pathbuf(ostr),
-        None => "".to_string(),
+    let rs = to_path_rstring(vm, globals, lfp.arg(0))?;
+    let enc = rs.encoding();
+    let filename = normalize_pathbuf(rs.as_bytes());
+    let dir: Vec<u8> = match filename.parent() {
+        Some(p) if !pathbuf_bytes(p).is_empty() => pathbuf_bytes(p).to_vec(),
+        _ => b".".to_vec(),
     };
-    if dir.is_empty() {
-        dir = ".".to_string();
-    }
-    let base = match filename.file_name() {
-        Some(ostr) => ostr.to_string_lossy().to_string(),
+    let base: Vec<u8> = match filename.file_name() {
+        Some(ostr) => {
+            use std::os::unix::ffi::OsStrExt;
+            ostr.as_bytes().to_vec()
+        }
         None => {
             if filename.as_os_str() == "/" {
-                "/".to_string()
+                b"/".to_vec()
             } else {
-                "".to_string()
+                Vec::new()
             }
         }
     };
-    Ok(Value::array2(Value::string(dir), Value::string(base)))
+    Ok(Value::array2(path_value(&dir, enc), path_value(&base, enc)))
 }
 
 // Utils
 
-fn extend(path: &mut std::path::PathBuf, extend: std::path::PathBuf) -> Result<()> {
-    for elem in extend.components() {
-        match elem {
-            std::path::Component::CurDir => {}
-            std::path::Component::Normal(comp) if comp == "~" => {
-                path.clear();
-                let home_dir = match dirs::home_dir() {
-                    Some(dir) => dir,
-                    None => {
-                        return Err(MonorubyErr::runtimeerr("Failed to get home directory."));
-                    }
-                };
-                path.push(home_dir);
-            }
-            std::path::Component::Normal(comp) => path.push(comp),
-            std::path::Component::ParentDir => {
-                path.pop();
-            }
-            std::path::Component::RootDir => {
-                path.clear();
-                path.push(std::path::Component::RootDir);
-            }
-            _ => {}
-        };
-    }
-    Ok(())
-}
-
 /// Convert `file` to PathBuf.
 fn to_path(vm: &mut Executor, globals: &mut Globals, file: Value) -> Result<std::path::PathBuf> {
-    let file = to_path_str(vm, globals, file)?;
+    let file = to_path_rstring(vm, globals, file)?;
+    Ok(normalize_pathbuf(file.as_bytes()))
+}
+
+/// Lexically normalize raw path bytes into a `PathBuf`, collapsing
+/// `name/..` pairs.
+fn normalize_pathbuf(bytes: &[u8]) -> std::path::PathBuf {
     let mut path = std::path::PathBuf::new();
-    for p in std::path::PathBuf::from(file).iter() {
+    for p in bytes_to_pathbuf(bytes).iter() {
         if p == ".." && path.file_name().is_some() {
             path.pop();
         } else {
             path.push(p);
         };
     }
-    Ok(path)
+    path
+}
+
+/// Coerce `val` to a path String, keeping the raw bytes and the encoding
+/// tag. Mirrors CRuby's `rb_get_path`: NUL bytes raise ArgumentError and
+/// an ASCII-incompatible encoding raises `Encoding::CompatibilityError`.
+pub(super) fn to_path_rstring(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+) -> Result<RString> {
+    // Check the encoding before the NUL-byte scan: a UTF-16/32 path is a
+    // CompatibilityError even though its bytes contain NULs.
+    let rs = val.coerce_to_path_rstring_allow_nul(vm, globals)?;
+    check_path_encoding(globals, &rs)?;
+    if rs.as_bytes().contains(&0) {
+        return Err(MonorubyErr::argumenterr("path name contains null byte"));
+    }
+    Ok(rs)
+}
+
+/// Reject ASCII-incompatible path encodings (UTF-16/32, ISO-2022-JP)
+/// with CRuby's `Encoding::CompatibilityError` message.
+pub(super) fn check_path_encoding(globals: &Globals, rs: &RString) -> Result<()> {
+    let enc = rs.encoding();
+    if !enc.is_ascii_compatible() {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!(
+                "path name must be ASCII-compatible ({}): \"{}\"",
+                enc.name(),
+                rs.inspect().trim_matches('"'),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Build a `PathBuf` from raw path bytes (no UTF-8 requirement on Unix).
+pub(super) fn bytes_to_pathbuf(bytes: &[u8]) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+}
+
+/// The raw bytes of a `Path`.
+pub(super) fn pathbuf_bytes(path: &std::path::Path) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes()
+}
+
+/// Build a path result String from raw bytes tagged with `enc` — the
+/// encoding of the originating path argument, which CRuby's path
+/// operations preserve in their results.
+pub(super) fn path_value(bytes: &[u8], enc: crate::value::Encoding) -> Value {
+    Value::string_from_inner(RStringInner::from_encoding(bytes, enc))
 }
 
 pub(super) fn to_path_str(vm: &mut Executor, globals: &mut Globals, val: Value) -> Result<String> {
-    Ok(val
-        .coerce_to_path_rstring(vm, globals)?
-        .to_str()?
-        .to_string())
+    Ok(to_path_rstring(vm, globals, val)?.to_str()?.to_string())
 }
 
 #[cfg(not(windows))]
@@ -1431,13 +1875,103 @@ fn file_symlink(
 #[monoruby_builtin]
 fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_str(vm, globals)?;
-    let content = std::fs::read_to_string(&path)
+    let content = std::fs::read(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
-    let lines: Vec<Value> = content
-        .lines()
-        .map(|l| Value::string(format!("{}\n", l)))
+    // Optional separator / limit, `chomp:` keyword — `IO#gets` rules,
+    // shifted one slot right of the path argument.
+    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
+    let mut limit: Option<usize> = None;
+    match (lfp.try_arg(1), lfp.try_arg(2)) {
+        (None, _) => {}
+        (Some(v), None) => {
+            if v.is_nil() {
+                sep = None;
+            } else if let Some(rs) = v.is_rstring() {
+                sep = Some(rs.as_bytes().to_vec());
+            } else {
+                let l = v.coerce_to_int_i64(vm, globals)?;
+                limit = (l >= 0).then_some(l as usize);
+            }
+        }
+        (Some(v), Some(l)) => {
+            sep = if v.is_nil() {
+                None
+            } else {
+                Some(v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec())
+            };
+            let l = l.coerce_to_int_i64(vm, globals)?;
+            limit = (l >= 0).then_some(l as usize);
+        }
+    }
+    let chomp = lfp.try_arg(3).is_some_and(|v| v.as_bool());
+    let lines: Vec<Value> = split_records(&content, sep.as_deref(), limit, chomp)
+        .into_iter()
+        .map(Value::string_from_vec)
         .collect();
     Ok(Value::array_from_vec(lines))
+}
+
+/// Split `content` into records the way repeated `IO#gets(sep, limit)`
+/// would: each record ends with `sep` (kept unless `chomp`), a `nil`
+/// separator slurps, `""` is paragraph mode, and `limit` caps a
+/// record's byte length.
+fn split_records(
+    content: &[u8],
+    sep: Option<&[u8]>,
+    limit: Option<usize>,
+    chomp: bool,
+) -> Vec<Vec<u8>> {
+    let mut out: Vec<Vec<u8>> = vec![];
+    match sep {
+        None => {
+            if !content.is_empty() {
+                out.push(content.to_vec());
+            }
+        }
+        Some([]) => {
+            // Paragraph mode: records end at a blank line; extra blank
+            // lines between paragraphs are skipped.
+            let mut i = 0;
+            while i < content.len() {
+                while content[i..].starts_with(b"\n") {
+                    i += 1;
+                }
+                if i >= content.len() {
+                    break;
+                }
+                let end = content[i..]
+                    .windows(2)
+                    .position(|w| w == b"\n\n")
+                    .map(|p| i + p + 2)
+                    .unwrap_or(content.len());
+                out.push(content[i..end].to_vec());
+                i = end;
+            }
+        }
+        Some(sep) => {
+            let mut i = 0;
+            while i < content.len() {
+                let mut end = content[i..]
+                    .windows(sep.len())
+                    .position(|w| w == sep)
+                    .map(|p| i + p + sep.len())
+                    .unwrap_or(content.len());
+                if let Some(l) = limit
+                    && end - i > l
+                {
+                    end = i + l;
+                }
+                out.push(content[i..end].to_vec());
+                i = end;
+            }
+        }
+    }
+    if chomp {
+        for rec in &mut out {
+            super::io::chomp_line(rec, sep, limit);
+        }
+    }
+    out
 }
 
 ///
@@ -2514,56 +3048,133 @@ fn file_realdirpath(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let path_str = to_path_str(vm, globals, lfp.arg(0))?;
-    let mut joined = if Path::new(&path_str).is_absolute() {
-        std::path::PathBuf::from(&path_str)
+    let rs = to_path_rstring(vm, globals, lfp.arg(0))?;
+    let enc = rs.encoding();
+    let base: Option<Vec<u8>> = if let Some(arg1) = lfp.try_arg(1)
+        && !arg1.is_nil()
+    {
+        Some(to_path_rstring(vm, globals, arg1)?.as_bytes().to_vec())
     } else {
-        let base = if let Some(arg1) = lfp.try_arg(1)
-            && !arg1.is_nil()
-        {
-            std::path::PathBuf::from(to_path_str(vm, globals, arg1)?)
-        } else {
-            std::env::current_dir().map_err(|e| {
-                MonorubyErr::errno_with_msg(&globals.store, &e, ".")
-            })?
-        };
-        let mut p = base;
-        p.push(&path_str);
-        p
+        None
     };
-    // If the full path exists, canonicalize it and we're done.
-    if let Ok(canon) = joined.canonicalize() {
-        return Ok(Value::string(conv_pathbuf(&canon)));
-    }
-    // Otherwise canonicalize the parent directory and append the basename.
-    let basename = match joined.file_name() {
-        Some(n) => n.to_owned(),
-        None => {
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &std::io::Error::from_raw_os_error(libc::ENOENT),
-                "rb_file_s_realdirpath",
-                &joined.to_string_lossy(),
-            ));
-        }
-    };
-    joined.pop();
-    let parent = joined.canonicalize().map_err(|e| {
-        MonorubyErr::errno_with_path(
-            &globals.store,
-            &e,
-            "rb_file_s_realdirpath",
-            &joined.to_string_lossy(),
-        )
-    })?;
-    let mut out = parent;
-    out.push(basename);
-    Ok(Value::string(conv_pathbuf(&out)))
+    let resolved = check_realpath(globals, rs.as_bytes(), base.as_deref(), false)?;
+    Ok(resolved_path_value(globals, resolved, enc, false))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn file_path_ops_preserve_encoding() {
+        // basename/extname/split/join/path/absolute_path/expand_path
+        // preserve the path argument's encoding in their results.
+        run_test_once(
+            r##"(p="/foo/bar.baz".encode(Encoding::EUC_JP); [File.basename(p).encoding.name, File.basename(p, ".baz").encoding.name, File.basename(p, ".*"), File.extname(p).encoding.name, File.split(p).map { |x| x.encoding.name }, File.join(p, "q").encoding.name, File.path(p).encoding.name, File.absolute_path(p).encoding.name, File.expand_path("./a".encode(Encoding::Windows_1251)).encoding.name, File.expand_path(p).encoding.name])"##,
+        );
+    }
+
+    #[test]
+    fn file_path_ops_reject_ascii_incompatible() {
+        // UTF-16/32 path arguments raise Encoding::CompatibilityError
+        // (before the NUL-byte scan — UTF-32 "ab" contains NULs).
+        run_test_once(
+            r##"(f = ->(x) { begin; x.call; rescue => e; e.class; end }; [f.(-> { File.basename("/foo/bar".encode(Encoding::UTF_16LE)) }), f.(-> { File.path("ab".encode(Encoding::UTF_32BE)) }), f.(-> { File.extname("a.b".encode(Encoding::UTF_16BE)) }), f.(-> { Dir.glob("nope*".encode(Encoding::UTF_16BE)) }), (begin; Dir.glob("x*".encode(Encoding::UTF_16BE)); rescue => e; e.message; end)])"##,
+        );
+    }
+
+    #[test]
+    fn file_expand_path_slashes_and_tilde() {
+        // Leading slash runs survive verbatim, interior runs squeeze,
+        // ~user expands via getpwnam, mid-path ~ stays literal.
+        run_test_once(
+            r##"[File.expand_path("////some/path"), File.expand_path("//some/path"), File.expand_path("/some////path"), File.expand_path("/a/./b/../c//d/"), File.expand_path("~root/x"), File.expand_path("/~root/a"), File.expand_path("a", "/"), File.expand_path("../../bin", "/tmp/x"), (begin; File.expand_path("~no_such_user_zzq"); rescue => e; [e.class, e.message]; end)]"##,
+        );
+    }
+
+    #[test]
+    fn file_realpath_component_resolution() {
+        // dir/file/../ resolves lexically (no ENOTDIR); a missing
+        // intermediate component reports CRuby's realpath error message;
+        // a self-referential symlink is ELOOP.
+        run_test_once(
+            r##"(d="/tmp/mono_rp_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/file", ""); a=(File.realpath("#{d}/file/../")==d); b=(begin; File.realpath("/no_such_dir_zzq/x"); rescue => e; [e.class, e.message]; end); File.symlink("#{d}/self", "#{d}/self"); c=(begin; File.realpath("#{d}/self"); rescue => e; e.class; end); c2=(begin; File.realdirpath("#{d}/self"); rescue => e; e.class; end); File.unlink("#{d}/self"); File.unlink("#{d}/file"); Dir.rmdir(d); [a,b,c,c2])"##,
+        );
+    }
+
+    #[test]
+    fn file_realdirpath_dangling_symlinks() {
+        // The final component may be absent; a dangling symlink resolves
+        // to its (absent) target; a missing intermediate dir is ENOENT.
+        run_test_once(
+            r##"(d="/tmp/mono_rdp_#{Process.pid}"; Dir.mkdir(d); a=(File.realdirpath("#{d}/missing") == "#{d}/missing"); File.symlink("#{d}/absent_file", "#{d}/link"); b=(File.realdirpath("#{d}/link") == "#{d}/absent_file"); c=(begin; File.realdirpath("#{d}/no_dir/file"); rescue => e; [e.class, e.message.sub(d, "")]; end); File.unlink("#{d}/link"); Dir.rmdir(d); [a, b, c])"##,
+        );
+    }
+
+    #[test]
+    fn file_realpath_result_encoding() {
+        // Resolved paths convert to the argument's encoding; realpath
+        // forces it when the conversion fails, realdirpath keeps UTF-8.
+        run_test_once(
+            r##"(d="/tmp/mono_rpe_あ_#{Process.pid}"; Dir.mkdir(d); a=File.realpath(".".encode(Encoding::ISO_8859_1), d).encoding.name; b=File.realdirpath(".".encode(Encoding::ISO_8859_1), d).encoding.name; c=File.realpath(d.encode(Encoding::EUC_JP)).encoding.name rescue c=$!.class; Dir.rmdir(d); [a, b])"##,
+        );
+    }
+
+    #[test]
+    fn file_open_integer_modes() {
+        // Integer modes keep their creation bits: CREAT creates,
+        // CREAT|EXCL raises EEXIST, TRUNC truncates a read-only open,
+        // WRONLY|APPEND appends without truncating.
+        run_test_once(
+            r##"(f="/tmp/mono_om_#{Process.pid}"; a=File.open(f, File::CREAT) { |x| x.class }; b=(begin; File.open(f, File::CREAT|File::EXCL); rescue => e; e.class; end); File.write(f, "hello\n"); File.open(f, File::WRONLY|File::APPEND) { |x| x.write("more\n") }; c=File.read(f); d=File.open(f, File::TRUNC) { |x| x.gets }; e2=File.read(f); File.delete(f); [a,b,c,d,e2])"##,
+        );
+    }
+
+    #[test]
+    fn file_open_mode_string_x_flag_and_errors() {
+        // 'wx' maps to O_EXCL; 'rx'/'ax'/unknown modes raise CRuby's
+        // lowercase "invalid access mode"; 4 positional args raise the
+        // arity error.
+        run_test_once(
+            r##"(f="/tmp/mono_x_#{Process.pid}"; a=File.open(f, "wx") { |x| x.write("c") }; b=File.read(f); c=(begin; File.open(f, "wx"); rescue => e; e.class; end); d=(begin; File.open(f, "rx"); rescue => e; [e.class, e.message]; end); e2=(begin; File.open(f, "ax"); rescue => e; e.message; end); g=(begin; File.open(f, "fake"); rescue => e; e.message; end); h=(begin; File.open(f, "w", 0o644, "extra"); rescue => e; [e.class, e.message]; end); File.delete(f); [a,b,c,d,e2,g,h])"##,
+        );
+    }
+
+    #[test]
+    fn file_open_keyword_options() {
+        // mode:/flags:/perm: keywords; flags: ORs onto both string and
+        // integer modes; binmode+newline is rejected.
+        run_test_once(
+            r##"(f="/tmp/mono_kw_#{Process.pid}"; File.write(f, ""); a=(begin; File.open(f, "w", flags: File::EXCL) {}; rescue => e; e.class; end); b=(begin; File.open(f, File::WRONLY|File::CREAT, flags: File::EXCL) {}; rescue => e; e.class; end); c=File.open(f, mode: "r") { |x| x.class }; d=(begin; File.open(f, "rb", newline: :universal) {}; rescue => e; [e.class, e.message]; end); File.delete(f); g="/tmp/mono_kw2_#{Process.pid}"; File.open(g, "w", perm: 0o600) {}; h=format("%o", File.stat(g).mode & 0o7777); File.delete(g); [a,b,c,d,h])"##,
+        );
+    }
+
+    #[test]
+    fn file_new_ignores_block_and_fd_creation_flags() {
+        // File.new never yields a given block (returns the File), and
+        // creation flags on an existing fd raise Errno::EINVAL.
+        run_test_once(
+            r##"(f="/tmp/mono_nb_#{Process.pid}"; fh=File.new(f, "w") { raise "block called" }; a=fh.class; fh.close; b=File.exist?(f); io=File.new(f); c=(begin; File.new(io.fileno, File::CREAT|File::TRUNC|File::WRONLY); rescue => e; [e.class, e.message]; end); c2=File.new(io.fileno, File::TRUNC, autoclose: false).class; io.close; File.delete(f); [a,b,c,c2])"##,
+        );
+    }
+
+    #[test]
+    fn file_to_path_preserves_open_encoding() {
+        // IO#path/#to_path reproduce the exact path argument, including
+        // its encoding tag.
+        run_test_once(
+            r##"(f="/tmp/mono_tpe_#{Process.pid}"; File.write(f, ""); io=File.new(f.encode(Encoding::EUC_JP)); a=[io.to_path.encoding.name, io.path == f]; io.close; File.delete(f); a)"##,
+        );
+    }
+
+    #[test]
+    fn io_write_open_args_option() {
+        // IO.write's :open_args — a trailing Hash inside the array is
+        // keyword-splatted into File.open.
+        run_test_once(
+            r##"(f="/tmp/mono_oa_#{Process.pid}"; n=IO.write(f, "hi", open_args: ["w", nil, {encoding: "UTF-8"}]); r=File.read(f); File.delete(f); [n, r])"##,
+        );
+    }
 
     #[test]
     fn file_to_path_coercion() {

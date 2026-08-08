@@ -1246,6 +1246,9 @@ impl<K, V, E, G, R, S> RubyMap<K, V, E, G, R, S> {
     ///
     /// Computes in **O(1)** time.
     pub fn get_index_entry(&mut self, index: usize) -> Option<IndexedEntry<'_, K, V, E, G, R>> {
+        // IndexedEntry holds live references into the indices table;
+        // promote a linear map first (see IndexMapCore::ensure_indexed).
+        self.core.ensure_indexed();
         if index >= self.len() {
             return None;
         }

@@ -493,7 +493,13 @@ class Thread
       begin
         timeout ? Kernel.sleep(timeout) : Thread.stop
       ensure
-        lock
+        # The re-acquire must complete even when a kill / Thread#raise
+        # arrives while parked waiting for the lock (CRuby re-acquires
+        # with mutex_lock_uninterruptible): a ConditionVariable#wait-er
+        # killed after being signaled still owns the mutex in its own
+        # ensure blocks. The deferred interrupt fires right after the
+        # lock is held.
+        Thread.__uninterruptible { lock }
       end
       (Process.clock_gettime(Process::CLOCK_MONOTONIC) - start).round
     end
@@ -512,11 +518,29 @@ class Thread
     # StopIteration subclass (so `loop { q.pop }` ends cleanly on close);
     # a `raise ClosedQueueError` inside a `loop` block would be silently
     # eaten and turned into a nil return.
-    def initialize
+    def initialize(enum = nil)
       @items = []
       @closed = false
       @mutex = Mutex.new
       @cv_pop = ConditionVariable.new
+      unless enum.nil?
+        # CRuby's rb_convert_type protocol (to_a), messages included.
+        unless enum.respond_to?(:to_a)
+          raise TypeError, "can't convert #{enum.class} into Array"
+        end
+        ary = enum.to_a # a NoMethodError raised inside #to_a propagates
+        unless ary.is_a?(Array)
+          raise TypeError,
+                "can't convert #{enum.class} into Array (#{enum.class}#to_a gives #{ary.class})"
+        end
+        @items.concat(ary)
+      end
+    end
+
+    # Queue holds runtime synchronization state: freezing is rejected
+    # (CRuby raises regardless of receiver state).
+    def freeze
+      raise TypeError, "cannot freeze #{self}"
     end
 
     def push(item)
@@ -622,8 +646,7 @@ class Thread
 
   class SizedQueue < Queue
     def initialize(max)
-      max = max.to_int if !max.is_a?(Integer) && max.respond_to?(:to_int)
-      raise ArgumentError, "queue size must be positive" unless max.is_a?(Integer) && max > 0
+      max = __check_capacity(max)
       super()
       @max = max
       @cv_push = ConditionVariable.new
@@ -631,8 +654,28 @@ class Thread
 
     attr_reader :max
 
+    # CRuby's NUM2LONG semantics for the capacity: a non-Integer converts
+    # via #to_int (so 12.9 truncates to 12), anything inconvertible is a
+    # TypeError, and only then is positivity checked (ArgumentError).
+    def __check_capacity(v)
+      unless v.is_a?(Integer)
+        unless v.respond_to?(:to_int)
+          raise TypeError, "no implicit conversion of #{v.class} into Integer"
+        end
+        klass = v.class
+        v = v.to_int
+        unless v.is_a?(Integer)
+          raise TypeError,
+                "can't convert #{klass} to Integer (#{klass}#to_int gives #{v.class})"
+        end
+      end
+      raise ArgumentError, "queue size must be positive" unless v > 0
+      v
+    end
+    private :__check_capacity
+
     def max=(new_max)
-      raise ArgumentError, "queue size must be positive" unless new_max.is_a?(Integer) && new_max > 0
+      new_max = __check_capacity(new_max)
       @mutex.synchronize do
         grew = new_max > @max
         @max = new_max

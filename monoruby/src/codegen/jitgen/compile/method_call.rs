@@ -1110,8 +1110,19 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
+        // A statically simple call site (plain positional arguments) can
+        // hand the values to the block via the direct-copy path; the
+        // callee side stays dynamic (see
+        // `jit_handle_arguments_no_block_for_yield`).
+        let simple = callinfo.splat_pos.is_empty()
+            && callinfo.kw_args.is_empty()
+            && callinfo.hash_splat_pos.is_empty()
+            && !callinfo.forwarding
+            && callinfo.block_fid.is_none()
+            && callinfo.block_arg.is_none();
         ir.push(AsmInst::Yield {
             callid,
+            simple,
             error,
             evict,
         });

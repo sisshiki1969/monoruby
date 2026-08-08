@@ -488,6 +488,16 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn gc_compact_is_a_full_gc_noop() {
+        // The `GC.compact if GC.respond_to?(:compact)` guard idiom must
+        // run the call, and the return keeps CRuby's shape (per-type
+        // tables, empty here because nothing ever moves).
+        run_test_once(r#"(GC.compact if GC.respond_to?(:compact)).class.to_s"#);
+        run_test_once(r#"GC.compact.keys"#);
+        run_test_once(r#"GC.latest_compact_info.keys"#);
+    }
+
+    #[test]
     fn gc_stat() {
         run_test("GC.stat.class");
         run_test("GC.stat.is_a?(Hash)");
@@ -621,17 +631,12 @@ mod tests {
     }
 
     #[test]
-    fn gc_auto_compact_is_unsupported() {
-        // monoruby never moves an object, so both accessors raise —
-        // exactly as CRuby does where its GC cannot compact. Written so
-        // the answer is the same on both.
-        run_test_once(
-            r##"
-            r = begin; GC.auto_compact; rescue NotImplementedError; false; end
-            w = begin; GC.auto_compact = false; rescue NotImplementedError; false; end
-            [[true, false].include?(r), [true, false].include?(w)]
-            "##,
-        );
+    fn gc_auto_compact() {
+        // Round-trips the stored value; monoruby never actually compacts
+        // but the API must be compatible with callers that set it freely.
+        run_test_once("[true, false].include?(GC.auto_compact)");
+        run_test_once("GC.auto_compact = false; GC.auto_compact");
+        run_test_once("GC.auto_compact = true; GC.auto_compact");
     }
 
     #[test]

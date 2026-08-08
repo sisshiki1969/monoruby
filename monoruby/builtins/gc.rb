@@ -31,21 +31,32 @@ module GC
              immediate_sweep: immediate_sweep)
   end
 
-  # monoruby's collector never moves an object, so there is no
-  # compaction to switch on. CRuby raises NotImplementedError from these
-  # on platforms whose GC cannot compact either, and callers already
-  # handle that — reporting a stored flag instead would claim a
-  # behaviour that does not exist.
+  # monoruby's collector never moves an object, so compaction is always
+  # off. The accessors round-trip a stored value so callers (including
+  # yjit-bench's harness-common.rb which calls `GC.auto_compact = false`
+  # unconditionally) get the same interface as CRuby without errors.
+  @auto_compact = false
+
   def self.auto_compact
-    raise NotImplementedError, "GC.auto_compact is not supported on this platform"
+    @auto_compact
   end
 
-  def self.auto_compact=(_flag)
-    raise NotImplementedError, "GC.auto_compact= is not supported on this platform"
+  def self.auto_compact=(flag)
+    @auto_compact = flag ? true : false
   end
 
+  # `compact` degrades to a full collection and reports that nothing
+  # moved, in CRuby's return shape (empty per-type tables). It must not
+  # raise: the idiomatic `GC.compact if GC.respond_to?(:compact)` guard
+  # passes here, so the call has to succeed.
   def self.compact
-    raise NotImplementedError, "GC.compact is not supported on this platform"
+    GC.start
+    { considered: {}, moved: {}, moved_up: {}, moved_down: {} }
+  end
+
+  # What the last (non-)compaction did — same shape as `compact`.
+  def self.latest_compact_info
+    { considered: {}, moved: {}, moved_up: {}, moved_down: {} }
   end
 
   # --- GC.config ----------------------------------------------------------

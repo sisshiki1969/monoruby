@@ -17,7 +17,11 @@ pub(super) fn init(globals: &mut Globals) {
     let object_class = globals.store.object_class();
     globals.define_class("Tms", object_class, klass);
     globals.define_builtin_module_func(klass, "pid", pid, 0);
-    globals.define_builtin_module_func(klass, "fork", process_fork, 0);
+    // Share Kernel#fork's implementation: it resets the green-thread
+    // scheduler in the child and maps an uncaught SystemExit /
+    // SignalException in the block to the right process exit, which the
+    // old Process-local copy did not.
+    globals.define_builtin_module_func(klass, "fork", crate::builtins::kernel::fork, 0);
     globals.define_builtin_module_func(klass, "times", times, 0);
     globals.define_builtin_module_func_with(klass, "clock_gettime", clock_gettime, 1, 2, false);
     globals.define_builtin_module_func_with(klass, "exit!", process_exit_bang, 0, 1, false);
@@ -288,41 +292,6 @@ fn process_setrlimit(
         ));
     }
     Ok(Value::nil())
-}
-
-///
-/// ### Process.#fork
-///
-/// - fork -> Integer | nil
-/// - fork { ... } -> Integer | nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/fork.html]
-#[monoruby_builtin]
-fn process_fork(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    // SAFETY: fork() is a POSIX system call. We call it in a single-threaded context.
-    let pid = unsafe { libc::fork() };
-    if pid < 0 {
-        return Err(MonorubyErr::runtimeerr("fork failed"));
-    }
-    if pid == 0 {
-        // Child process
-        if let Some(bh) = lfp.block() {
-            let data = vm.get_block_data(globals, bh)?;
-            match vm.invoke_block(globals, &data, &[]) {
-                Ok(_) => std::process::exit(0),
-                Err(_) => std::process::exit(1),
-            }
-        }
-        Ok(Value::nil())
-    } else {
-        // Parent process
-        Ok(Value::integer(pid as i64))
-    }
 }
 
 ///
@@ -948,6 +917,13 @@ fn trap_signo(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<i3
             arg.get_real_class_name(&globals.store)
         )));
     };
+    // CRuby rejects a leading '-' with a dedicated message before the
+    // signal-table lookup (core/signal/trap_spec.rb).
+    if name.starts_with('-') {
+        return Err(MonorubyErr::argumenterr(format!(
+            "negative signal name: {name}"
+        )));
+    }
     signal_name_to_number(&name).ok_or_else(|| {
         MonorubyErr::argumenterr(format!(
             "unsupported signal 'SIG{}'",
@@ -1087,6 +1063,15 @@ pub(super) fn signal_trap(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn signal_trap_negative_name() {
+        // A leading '-' is rejected with a dedicated message, before the
+        // signal-table lookup.
+        run_test_once(
+            r##"[(begin; Signal.trap("-HUP") {}; rescue => e; [e.class, e.message]; end), (begin; Signal.trap(:"-INT") {}; rescue => e; e.message; end)]"##,
+        );
+    }
 
     #[test]
     fn process() {
@@ -1629,6 +1614,23 @@ mod tests {
         // an ArgumentError, not an abort.
         run_test_error(r#"Process.exec("ls\0", "-la")"#);
         run_test_error(r#"Process.exec("ls", "-l\0a")"#);
+    }
+
+    /// Boolean exec options must be validated *before* the exec — a bad
+    /// value has to raise ArgumentError in-process instead of replacing
+    /// the caller with the exec'd command. (The ruby/spec
+    /// "Process.exec options validation" examples exec `true`
+    /// in-process; without the early raise the whole test runner is
+    /// silently replaced, which is exactly how the rubyspec-stats CI's
+    /// core stats.yml ended up empty.)
+    #[test]
+    fn process_exec_option_validation() {
+        run_tests(&[
+            r#"begin; Process.exec("true", unsetenv_others: 1); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Process.exec("true", unsetenv_others: "true"); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; Process.exec("true", close_others: 1); rescue ArgumentError => e; e.message; end"#,
+            r#"begin; exec("true", close_others: "x"); rescue ArgumentError => e; e.message; end"#,
+        ]);
     }
 
     /// `Process.exec`/`abort`/`exit` are also reachable as Module

@@ -296,13 +296,22 @@ pub struct ClassInfo {
     ///
     constant_locations: HashMap<IdentId, (String, u32)>,
     ///
-    /// class variable table.
+    /// class variable table (insertion-ordered).
     ///
-    class_variables: Option<HashMap<IdentId, Value>>,
+    /// Ordered because `Module#class_variables` reports definition order
+    /// in CRuby. A plain `HashMap` made the order depend on how the
+    /// names happened to hash, i.e. on unrelated interning done earlier
+    /// in the process.
+    ///
+    class_variables: Option<indexmap::IndexMap<IdentId, Value, fxhash::FxBuildHasher>>,
     ///
     /// instance variable table (insertion-ordered).
     ///
-    ivar_names: indexmap::IndexMap<IdentId, IvarId>,
+    /// `IdentId` is a `u32`, so the default SipHash costs more to compute
+    /// than the collision it guards against — and this map is consulted on
+    /// every ivar read. Hashing it showed up as ~15% of `IO#gets`;
+    /// `fxhash` is already the crate-wide `HashMap` hasher.
+    ivar_names: indexmap::IndexMap<IdentId, IvarId, fxhash::FxBuildHasher>,
     ///
     /// Object type of instances of this class.
     ///
@@ -747,7 +756,7 @@ impl ClassInfo {
         if let Some(cv) = &mut self.class_variables {
             cv.insert(name, val);
         } else {
-            let mut cv = HashMap::default();
+            let mut cv = indexmap::IndexMap::default();
             cv.insert(name, val);
             self.class_variables = Some(cv);
         }
@@ -758,7 +767,9 @@ impl ClassInfo {
     }
 
     pub(crate) fn remove_cvar(&mut self, name: IdentId) -> Option<Value> {
-        self.class_variables.as_mut()?.remove(&name)
+        // `shift_remove`, not `swap_remove`: removing one class variable
+        // must not reorder the rest.
+        self.class_variables.as_mut()?.shift_remove(&name)
     }
 
     fn cvar_names(&self) -> Vec<IdentId> {
@@ -1695,6 +1706,24 @@ impl ClassInfoTable {
     ) -> Module {
         let name_id = IdentId::get_id(name);
         self.define_class_with_identid(name_id, superclass, parent)
+    }
+
+    /// A class with a display name but no constant binding and a custom
+    /// instance type — CRuby's `rb_class_new` + `rb_set_class_path`
+    /// pattern, used for `ARGF.class` (its name cannot be a constant).
+    pub(crate) fn define_dotted_class(
+        &mut self,
+        name: &str,
+        superclass: Option<Module>,
+        instance_ty: ObjTy,
+    ) -> Module {
+        let superclass = match superclass {
+            Some(class) => class,
+            None => self.object_class(),
+        };
+        let module = self.define_class_inner(None, superclass, None, false, Some(instance_ty));
+        self[module.id()].set_name(name.to_string());
+        module
     }
 
     // TODO: we must name the unnamed class when the class object is assigned to constant later.

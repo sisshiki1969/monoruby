@@ -623,6 +623,67 @@ pub(super) extern "C" fn gen_lambda(
     vm.generate_lambda(globals, func_id, pc).into()
 }
 
+/// `[a, b, …].min` / `.max` with the Array allocation elided: compare
+/// the literal's elements right in their stack slots (they descend from
+/// `src`, like `gen_hash`'s). The compare loop mirrors the builtin
+/// `Array#min` / `#max` exactly (`best <=> v`, replace on
+/// Greater/Less, ties keep the earlier element, incomparable pairs
+/// raise through `compare_values`), so the fused JIT path and the VM
+/// builtin are indistinguishable. An empty literal reads as nil.
+fn opt_array_minmax(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+    is_min: bool,
+) -> Option<Value> {
+    if len == 0 {
+        return Some(Value::nil());
+    }
+    let replace_on = if is_min {
+        std::cmp::Ordering::Greater
+    } else {
+        std::cmp::Ordering::Less
+    };
+    let mut best = unsafe { *src };
+    for i in 1..len {
+        let v = unsafe { *src.sub(i) };
+        let ord = if let (Some(a), Some(b)) = (best.try_fixnum(), v.try_fixnum()) {
+            a.cmp(&b)
+        } else {
+            match vm.compare_values(globals, best, v) {
+                Ok(ord) => ord,
+                Err(err) => {
+                    vm.set_error(err);
+                    return None;
+                }
+            }
+        };
+        if ord == replace_on {
+            best = v;
+        }
+    }
+    Some(best)
+}
+
+pub(super) extern "C" fn opt_array_min(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+) -> Option<Value> {
+    opt_array_minmax(vm, globals, src, len, true)
+}
+
+pub(super) extern "C" fn opt_array_max(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+) -> Option<Value> {
+    opt_array_minmax(vm, globals, src, len, false)
+}
+
 pub(super) extern "C" fn gen_hash(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -630,7 +691,7 @@ pub(super) extern "C" fn gen_hash(
     len: usize,
 ) -> Option<Value> {
     match gen_hash_inner(vm, globals, src, len) {
-        Ok(map) => Some(Value::hash(map)),
+        Ok(map) => Some(Value::hash_from_inner(map)),
         Err(err) => {
             vm.set_error(err);
             None
@@ -643,8 +704,11 @@ fn gen_hash_inner(
     globals: &mut Globals,
     src: *const Value,
     len: usize,
-) -> Result<RubyMap<Value, Value>> {
-    let mut map = RubyMap::default();
+) -> Result<crate::value::rvalue::HashmapInner> {
+    // Build the HashmapInner directly (not a RubyMap first) so a small
+    // literal with packed keys lands in the inline representation without
+    // ever touching the heap.
+    let mut map = crate::value::rvalue::HashmapInner::default();
     if len > 0 {
         let mut iter = unsafe { std::slice::from_raw_parts(src.sub(len * 2 - 1), len * 2) }
             .iter()
@@ -1208,6 +1272,52 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     callid: CallSiteId,
 ) -> Option<Value> {
     match set_frame_arguments(vm, globals, callee_lfp, caller_lfp, callid) {
+        Ok(_) => Some(Value::nil()),
+        Err(mut err) => {
+            err.push_internal_trace(callee_lfp.func_id());
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+/// Argument transfer for a *simple* generic `yield` site (no splat, no
+/// keywords, no block argument — checked statically at JIT compile
+/// time): the positional values sit contiguously at the call site's
+/// argument slots, so they go through the direct `positional_simple`
+/// copy instead of the generic `CallSiteInfo` re-interpretation. The
+/// callee side stays fully dynamic — `positional_simple` /
+/// `fill_positional_args` handle block-style loose binding (nil-fill,
+/// dropped extras, single-Array auto-splat) and keyword defaults for
+/// whatever block turns up at runtime.
+pub(super) extern "C" fn jit_handle_arguments_no_block_for_yield(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    caller_lfp: Lfp,
+    callee_lfp: Lfp,
+    callid: CallSiteId,
+) -> Option<Value> {
+    let (args_slot, pos_num) = {
+        let cs = &globals.store[callid];
+        (cs.args, cs.pos_num)
+    };
+    let src = caller_lfp.register_ptr(args_slot) as *const Value;
+    // Exact-arity fixed-parameter callee (the overwhelmingly common
+    // `N.times { |i| … }` shape): a straight slot copy. `is_simple`
+    // excludes optional/rest/keyword/block params, so nothing needs
+    // nil-filling, expanding or dropping; single-Array auto-splat only
+    // applies when the block wants more values than it got, which the
+    // equality rules out.
+    let callee_fid = callee_lfp.func_id();
+    let info = &globals.store[callee_fid];
+    if info.meta().is_simple() && info.req_num() == pos_num {
+        let dst = callee_lfp.register_ptr(SlotId(1)) as *mut Option<Value>;
+        for i in 0..pos_num {
+            unsafe { *dst.sub(i) = Some(*src.sub(i)) };
+        }
+        return Some(Value::nil());
+    }
+    match set_frame_arguments_simple(vm, globals, callee_lfp, caller_lfp, callid, src, pos_num) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {
             err.push_internal_trace(callee_lfp.func_id());

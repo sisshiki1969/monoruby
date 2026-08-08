@@ -201,6 +201,9 @@ impl Codegen {
                 inline,
                 using_fpr,
             }),
+            AsmInst::ArrayMinMax { args, len, min, using_fpr } => {
+                self.encode_linst(LInst::ArrayMinMax { args, len, min, using_fpr })
+            }
             AsmInst::NewHash(args, len, using_fpr) => {
                 self.encode_linst(LInst::NewHash { args, len, using_fpr })
             }
@@ -303,6 +306,41 @@ impl Codegen {
                     });
                 }
             }
+            // Fixnum doubling (`x + x`): move the shared operand into `dst`
+            // when they differ, then the tagged-order add/sub sequence.
+            AsmInst::IntegerDouble { dst, lhs, deopt } => {
+                let deopt = labels[deopt].clone();
+                if dst != lhs {
+                    self.encode_linst(LInst::Mov {
+                        dst: dst.into(),
+                        src: lhs.into(),
+                    });
+                }
+                self.encode_linst(LInst::IntegerDouble { reg: dst, deopt });
+            }
+            // Immediate-form binop: like `IntegerBinOpReg`, but the constant is
+            // folded into the instruction (no rhs register, no untag).
+            AsmInst::IntegerBinOpImm {
+                kind,
+                dst,
+                lhs,
+                imm,
+                deopt,
+            } => {
+                let deopt = labels[deopt].clone();
+                if dst != lhs {
+                    self.encode_linst(LInst::Mov {
+                        dst: dst.into(),
+                        src: lhs.into(),
+                    });
+                }
+                self.encode_linst(LInst::IntegerBinOpImm {
+                    kind,
+                    lhs: dst,
+                    imm,
+                    deopt,
+                });
+            }
             // Register-form comparison. Operands are already in GP registers and
             // fixnum-guarded, so just compare (result in rax) and store the
             // boolean to `dst`'s slot.
@@ -313,6 +351,21 @@ impl Codegen {
                 rhs,
             } => {
                 self.encode_linst(LInst::IntegerCmp { kind, lhs, rhs });
+                if let Some(dst) = dst {
+                    self.encode_linst(LInst::Store {
+                        src: GP::Rax,
+                        mem: LMem::Slot(dst),
+                    });
+                }
+            }
+            // Immediate-form comparison against a tagged constant.
+            AsmInst::IntegerCmpImm {
+                kind,
+                dst,
+                lhs,
+                imm,
+            } => {
+                self.encode_linst(LInst::IntegerCmpImm { kind, lhs, imm });
                 if let Some(dst) = dst {
                     self.encode_linst(LInst::Store {
                         src: GP::Rax,
@@ -333,6 +386,25 @@ impl Codegen {
                 self.encode_linst(LInst::Cmp {
                     lhs: lhs.into(),
                     rhs: rhs.into(),
+                });
+                let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
+                if brkind == BrKind::BrIfNot {
+                    cond = cond.invert();
+                }
+                self.encode_linst(LInst::CondBr { cond, target });
+            }
+            // Immediate-form fused compare + branch (tagged constant rhs).
+            AsmInst::IntegerCmpBrImm {
+                kind,
+                brkind,
+                branch_dest,
+                lhs,
+                imm,
+            } => {
+                let target = frame.resolve_label(&mut self.jit, branch_dest);
+                self.encode_linst(LInst::Cmp {
+                    lhs: lhs.into(),
+                    rhs: LOperand::Imm(imm as i64),
                 });
                 let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
                 if brkind == BrKind::BrIfNot {
@@ -891,11 +963,12 @@ impl Codegen {
             // Generic `yield` (block target resolved at runtime). aarch64 builds
             // the block frame and calls the funcdata indirectly; the x86-only
             // return-address eviction patch is applied by the x86 emit_yield.
-            AsmInst::Yield { callid, error, evict } => {
+            AsmInst::Yield { callid, simple, error, evict } => {
                 let evict_label = labels[evict].clone();
                 let error = labels[error].clone();
                 self.encode_linst(LInst::Yield {
                     callid,
+                    simple,
                     error,
                     evict,
                     evict_label,
@@ -1244,6 +1317,9 @@ impl Codegen {
             } => {
                 self.emit_new_array(callid, inline, using_fpr);
             }
+            LInst::ArrayMinMax { args, len, min, using_fpr } => {
+                self.emit_array_min_max(args, len, min, using_fpr);
+            }
             LInst::NewHash { args, len, using_fpr } => {
                 self.emit_new_hash(args, len, using_fpr);
             }
@@ -1337,6 +1413,9 @@ impl Codegen {
             LInst::IntegerCmp { kind, lhs, rhs } => {
                 self.emit_integer_cmp(kind, lhs, rhs);
             }
+            LInst::IntegerCmpImm { kind, lhs, imm } => {
+                self.emit_integer_cmp_imm(kind, lhs, imm);
+            }
             LInst::Ret => {
                 self.emit_ret();
             }
@@ -1379,8 +1458,8 @@ impl Codegen {
             LInst::EnsureEnd { loop_jit_spill_bytes } => {
                 self.emit_ensure_end(loop_jit_spill_bytes);
             }
-            LInst::Yield { callid, error, evict, evict_label } => {
-                self.emit_yield(callid, &error, evict, &evict_label);
+            LInst::Yield { callid, simple, error, evict, evict_label } => {
+                self.emit_yield(callid, simple, &error, evict, &evict_label);
             }
             LInst::Unreachable => {
                 self.emit_unreachable();
