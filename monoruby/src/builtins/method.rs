@@ -7,7 +7,13 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Method", METHOD_CLASS, ObjTy::METHOD);
     globals.store[METHOD_CLASS].clear_alloc_func();
-    globals.define_builtin_funcs_rest(METHOD_CLASS, "call", &["[]", "==="], call);
+    // rest + kw_rest: caller keyword arguments are collected separately
+    // (`lfp.try_arg(1)`) and forwarded to the target method as keywords,
+    // so `m.call(a: 1)` reaches `def foo(a:)` / `def foo(**kw)` correctly
+    // instead of degrading into a positional Hash.
+    globals.define_builtin_funcs_with_kw(
+        METHOD_CLASS, "call", &["[]", "==="], call, 0, 0, true, &[], true,
+    );
     globals.define_builtin_func(METHOD_CLASS, "arity", arity, 0);
     globals.define_builtin_func(METHOD_CLASS, "to_proc", to_proc, 0);
     globals.define_builtin_func(METHOD_CLASS, "source_location", source_location, 0);
@@ -26,7 +32,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.store[UMETHOD_CLASS].clear_alloc_func();
     globals.define_builtin_func(UMETHOD_CLASS, "arity", uarity, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "bind", bind, 1);
-    globals.define_builtin_func_rest(UMETHOD_CLASS, "bind_call", bind_call);
+    // rest + kw_rest, like Method#call: keywords forward as keywords.
+    globals.define_builtin_func_with_kw(UMETHOD_CLASS, "bind_call", bind_call, 0, 0, true, &[], true);
     globals.define_builtin_func(UMETHOD_CLASS, "source_location", usource_location, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "name", uname, 0);
     globals.define_builtin_func(UMETHOD_CLASS, "original_name", uoriginal_name, 0);
@@ -101,6 +108,16 @@ fn umethod_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// - self === *args -> object
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Method/i/call.html]
+/// The kw_rest Hash collected at `slot` (for `call`/`bind_call`,
+/// registered rest + kw_rest), as forwardable keyword arguments. An
+/// absent or empty Hash means "no keywords" (`m.call(**{})` behaves
+/// like `m.call`), matching Ruby call semantics.
+fn forwarded_kw(lfp: Lfp, slot: usize) -> Option<Hashmap> {
+    lfp.try_arg(slot)
+        .filter(|v| v.try_hash_ty().is_some_and(|h| !h.is_empty()))
+        .map(Hashmap::new)
+}
+
 #[monoruby_builtin]
 fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
@@ -121,7 +138,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             receiver,
             &args,
             lfp.block(),
-            None,
+            forwarded_kw(lfp, 1),
         );
     }
 
@@ -131,7 +148,7 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         receiver,
         &lfp.arg(0).as_array(),
         lfp.block(),
-        None,
+        forwarded_kw(lfp, 1),
     )
 }
 
@@ -797,7 +814,14 @@ fn bind_call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let owner = method.owner();
     let func_id = method.func_id();
     check_bind_receiver(globals, owner, receiver)?;
-    vm.invoke_func_inner(globals, func_id, receiver, &args, lfp.block(), None)
+    vm.invoke_func_inner(
+        globals,
+        func_id,
+        receiver,
+        &args,
+        lfp.block(),
+        forwarded_kw(lfp, 1),
+    )
 }
 
 #[cfg(test)]
@@ -1501,6 +1525,35 @@ mod tests {
               end
             end
             "##,
+        );
+    }
+
+    #[test]
+    fn method_call_forwards_keywords() {
+        // Method#call / #[] / #=== and UnboundMethod#bind_call forward
+        // caller keywords AS keywords (not a trailing positional Hash),
+        // while a literal Hash stays positional.
+        run_test_with_prelude(
+            r#"
+            f = Foo.new
+            [
+              f.method(:kw).call(a: 1),
+              f.method(:kw)[a: 2, b: 3],
+              f.method(:kwrest).call(x: 9),
+              f.method(:mix).call(5, k: 3),
+              f.method(:plain).call({h: 1}),
+              Foo.instance_method(:kwrest).bind_call(f, a: 1),
+              f.method(:kwrest).call(**{}),
+            ]
+            "#,
+            r#"
+            class Foo
+              def kw(a:, b: 2) = [a, b]
+              def kwrest(**kw) = kw
+              def mix(x, k: 9) = [x, k]
+              def plain(h) = h
+            end
+            "#,
         );
     }
 

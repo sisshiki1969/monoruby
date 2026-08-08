@@ -339,16 +339,36 @@ class Thread
     def __init_waiter(pid)
       @pid = pid
       self[:pid] = pid
+      # Reap the child as soon as it exits, not only at #value/#join time:
+      # a real green thread parks on a pidfd (pollable process handle)
+      # and collects the status when it fires, so detached children never
+      # linger as zombies that a later `Process.wait(-1)` would reap by
+      # accident (CRuby's detach thread gives the same guarantee).
+      waiter = self
+      fd = ::Process.__pidfd_open(pid)
+      if fd
+        @reaper = ::Thread.new do
+          begin
+            io = ::IO.for_fd(fd)
+            ::IO.select([io])
+            io.close
+          rescue ::Exception
+          end
+          waiter.__send__(:__reap)
+        end
+      end
     end
     private :__init_waiter
 
     attr_reader :pid
 
     def value
+      @reaper.join if @reaper
       __reap
     end
 
     def join(limit = nil)
+      @reaper.join(limit) if @reaper
       __reap
       self
     end

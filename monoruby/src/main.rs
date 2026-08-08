@@ -600,6 +600,7 @@ fn print_usage() {
 }
 
 fn main() {
+    monoruby::fill_closed_std_fds();
     install_panic_hook();
     let _frame_stats = FrameStatsGuard;
     let tokens: Vec<OsString> = std::env::args_os().skip(1).collect();

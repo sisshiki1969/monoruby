@@ -428,6 +428,29 @@ impl Globals {
         func_id
     }
 
+    /// Like `define_builtin_module_func_with`, but also registers
+    /// `aliases` sharing the SAME FuncId, so `Process.method(:waitpid) ==
+    /// Process.method(:wait)` holds (Method#== compares FuncIds).
+    pub(crate) fn define_builtin_module_funcs_with(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        aliases: &[&str],
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+    ) -> FuncId {
+        let func_id = self
+            .store
+            .new_builtin_func(name, address, min, max, rest, &[], false);
+        self.new_builtin_module_fn(class_id, name, func_id);
+        for alias in aliases {
+            self.new_builtin_module_fn(class_id, alias, func_id);
+        }
+        func_id
+    }
+
     pub(crate) fn define_builtin_module_func_with(
         &mut self,
         class_id: ClassId,

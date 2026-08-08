@@ -1261,7 +1261,7 @@ fn open_kw_hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Op
 /// ignored here) into open(2) flags + the binmode marker. Unknown or
 /// misplaced letters raise CRuby's "invalid access mode" ArgumentError
 /// (the 'x' creation guard is only valid with 'w').
-fn oflags_from_mode_string(mode: &str) -> Result<(i64, bool)> {
+pub(super) fn oflags_from_mode_string(mode: &str) -> Result<(i64, bool)> {
     let base = mode.split(':').next().unwrap_or("");
     let invalid = || MonorubyErr::argumenterr(format!("invalid access mode {base}"));
     let mut it = base.chars();
