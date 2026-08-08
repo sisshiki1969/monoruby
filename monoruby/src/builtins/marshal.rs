@@ -634,7 +634,7 @@ impl<'a> MarshalReader<'a> {
         self.building.remove(&hash.id());
         if has_default {
             let default = self.read_value(vm, globals)?;
-            map.set_defalut_value(default);
+            map.set_defalut_value(default, vm, globals)?;
         }
         Ok(hash)
     }

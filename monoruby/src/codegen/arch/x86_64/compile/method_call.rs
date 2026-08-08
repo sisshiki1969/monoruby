@@ -514,7 +514,7 @@ impl Codegen {
             movq rcx, [rbp - (rbp_local(args))];
             testq rcx, 0b111;
             jnz  exit;
-            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            cmpb [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
             jne  exit;
             movq rax, [rcx + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);
@@ -725,7 +725,7 @@ impl Codegen {
             movq rcx, [rbp - (rbp_local(rest_slot))];
             testq rcx, 0b111;
             jnz  fallback;
-            cmpw [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            cmpb [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
             jne  fallback;
             // rax = len, rsi = element base (inline vs heap)
             movq rax, [rcx + (RVALUE_OFFSET_ARY_CAPA)];

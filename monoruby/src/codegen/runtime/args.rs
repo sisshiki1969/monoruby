@@ -1445,7 +1445,7 @@ fn hash_splat_and_kw_rest(
                 if h.is_nil() {
                     continue;
                 }
-                let mut h = h.as_hashmap_inner().clone();
+                let mut h = h.as_hashmap_inner().clone_inner();
                 for name in kw_names.iter() {
                     let sym = Value::symbol(*name);
                     h.remove(sym, vm, globals)?;

@@ -1508,3 +1508,135 @@ fn disjoint_indices_mut_fail_duplicate() {
         Err(crate::GetDisjointMutError::OverlappingIndices)
     );
 }
+
+/// Exercise every linear-mode (ar_table) arm of `IndexMapCore` through
+/// the public API: small maps never build the indices table, the 9th
+/// insert promotes, and every mutation flavour works in both modes.
+#[test]
+fn linear_mode_small_maps() {
+    let mut e = E;
+    let mut g = G;
+
+    // Linear insert / update / lookup, then promotion at the 9th key.
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    for i in 0..8 {
+        assert_eq!(map.insert(i, i * 10, &mut e, &mut g).unwrap(), None);
+    }
+    assert_eq!(map.insert(3, 333, &mut e, &mut g).unwrap(), Some(30)); // linear replace
+    assert_eq!(map.get(&3, &mut e, &mut g).unwrap(), Some(&333));
+    assert_eq!(map.get(&99, &mut e, &mut g).unwrap(), None); // linear miss
+    assert_eq!(map.insert(8, 80, &mut e, &mut g).unwrap(), None); // promotes
+    assert_eq!(map.len(), 9);
+    for i in 0..9 {
+        assert!(map.get(&i, &mut e, &mut g).unwrap().is_some());
+    }
+
+    // Linear removals: by key (shift + swap), by index, and pop.
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    for i in 0..6 {
+        map.insert(i, i, &mut e, &mut g).unwrap();
+    }
+    assert_eq!(map.shift_remove(&2, &mut e, &mut g).unwrap(), Some(2));
+    assert_eq!(map.shift_remove(&42, &mut e, &mut g).unwrap(), None);
+    assert_eq!(map.swap_remove(&0, &mut e, &mut g).unwrap(), Some(0));
+    assert_eq!(map.swap_remove(&42, &mut e, &mut g).unwrap(), None);
+    assert_eq!(map.pop(&mut e, &mut g).unwrap(), Some((4, 4)));
+    let keys: Vec<i32> = map.keys().copied().collect();
+    assert_eq!(keys, vec![5, 1, 3]);
+
+    // Order maintenance while linear: move_index both directions,
+    // reverse, retain, truncate.
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    for i in 0..5 {
+        map.insert(i, i, &mut e, &mut g).unwrap();
+    }
+    map.move_index(0, 3, &mut e, &mut g).unwrap();
+    map.move_index(3, 1, &mut e, &mut g).unwrap();
+    map.reverse();
+    map.retain(|k, _| *k != 2);
+    map.truncate(3, &mut e, &mut g).unwrap();
+    assert_eq!(map.len(), 3);
+    assert_eq!(map.get(&2, &mut e, &mut g).unwrap(), None);
+
+    // drain / split_off on a linear map keep both halves working.
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    for i in 0..6 {
+        map.insert(i, i, &mut e, &mut g).unwrap();
+    }
+    let drained: Vec<(i32, i32)> = map.drain(0..2, &mut e, &mut g).unwrap().collect();
+    assert_eq!(drained, vec![(0, 0), (1, 1)]);
+    let tail = map.split_off(2, &mut e, &mut g).unwrap();
+    assert_eq!(map.len(), 2);
+    assert_eq!(tail.len(), 2);
+    assert_eq!(tail.get(&5, &mut e, &mut g).unwrap(), Some(&5));
+
+    // clear resets to linear; reserve past AR_MAX promotes eagerly,
+    // a small reserve/reserve_exact/shrink_to stays linear.
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    map.insert(1, 1, &mut e, &mut g).unwrap();
+    map.reserve(2);
+    map.reserve_exact(2);
+    map.shrink_to(0);
+    assert_eq!(map.get(&1, &mut e, &mut g).unwrap(), Some(&1));
+    map.reserve(64); // promotes
+    map.insert(2, 2, &mut e, &mut g).unwrap();
+    assert_eq!(map.len(), 2);
+    map.clear();
+    map.insert(7, 7, &mut e, &mut g).unwrap();
+    assert_eq!(map.get(&7, &mut e, &mut g).unwrap(), Some(&7));
+    let mut map2: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    map2.reserve_exact(64); // promotes the exact flavour too
+    map2.insert(1, 1, &mut e, &mut g).unwrap();
+    assert_eq!(map2.len(), 1);
+
+    // with_capacity: small stays table-free, large pre-builds.
+    let small: RubyMap<i32, i32, E, G, ()> = RubyMap::with_capacity(4);
+    assert_eq!(small.len(), 0);
+    let mut large: RubyMap<i32, i32, E, G, ()> = RubyMap::with_capacity(32);
+    large.insert(1, 1, &mut e, &mut g).unwrap();
+    assert_eq!(large.get(&1, &mut e, &mut g).unwrap(), Some(&1));
+
+    // clone of a linear map stays consistent.
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    map.insert(1, 10, &mut e, &mut g).unwrap();
+    let clone = map.clone();
+    assert_eq!(clone.get(&1, &mut e, &mut g).unwrap(), Some(&10));
+
+    // Entry / IndexedEntry APIs promote a linear map and stay correct.
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    map.insert(1, 10, &mut e, &mut g).unwrap();
+    *map.entry(2, &mut e, &mut g).unwrap().or_insert(20) += 1;
+    assert_eq!(map.get(&2, &mut e, &mut g).unwrap(), Some(&21));
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    for i in 0..3 {
+        map.insert(i, i, &mut e, &mut g).unwrap();
+    }
+    let entry = map.get_index_entry(1).unwrap();
+    assert_eq!(*entry.key(), 1);
+
+    // Index-based removals on a linear map.
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    for i in 0..5 {
+        map.insert(i, i, &mut e, &mut g).unwrap();
+    }
+    assert_eq!(map.shift_remove_index(1, &mut e, &mut g).unwrap(), Some((1, 1)));
+    assert_eq!(map.swap_remove_index(0, &mut e, &mut g).unwrap(), Some((0, 0)));
+    assert_eq!(map.shift_remove_index(99, &mut e, &mut g).unwrap(), None);
+    assert_eq!(map.swap_remove_index(99, &mut e, &mut g).unwrap(), None);
+    let keys: Vec<i32> = map.keys().copied().collect();
+    assert_eq!(keys, vec![4, 2, 3]);
+}
+
+/// Symbol-keyed maps take the `insert_full_sym` linear arm: replace,
+/// promote past AR_MAX, and lookup.
+#[test]
+fn linear_mode_sym_maps() {
+    let mut map: RubyMap<Value, i32, E, G, ()> = RubyMap::new();
+    for i in 0..8 {
+        assert_eq!(map.insert_sym(Symbol(i), i), None);
+    }
+    assert_eq!(map.insert_sym(Symbol(3), 333), Some(3)); // linear replace
+    assert_eq!(map.insert_sym(Symbol(8), 8), None); // promotes
+    assert_eq!(map.len(), 9);
+    assert_eq!(map.insert_sym(Symbol(8), 88), Some(8)); // indexed replace
+}

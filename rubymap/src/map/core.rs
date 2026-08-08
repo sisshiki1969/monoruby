@@ -32,6 +32,19 @@ pub use entry::{Entry, IndexedEntry, OccupiedEntry, VacantEntry};
 pub(crate) struct IndexMapCore<K, V, E, G, R> {
     /// indices mapping from the entry hash to its index.
     indices: Indices<E, G, R>,
+    /// CRuby's ar_table idea: while the map stays at or below
+    /// [`AR_MAX`] entries, `indices` is left unbuilt (empty, no
+    /// allocation) and lookups scan `entries` linearly, comparing the
+    /// stored hash first and `eql` only on a hash match — the same
+    /// probe/eql pattern as the indexed path, so nothing observable
+    /// changes. The first insert taking the map past `AR_MAX` (or an
+    /// operation that needs the table, e.g. the `Entry` API) promotes
+    /// via [`Self::ensure_indexed`]; promotion is one-way except
+    /// `clear`, which resets to linear.
+    ///
+    /// Invariants: `linear` ⇒ `indices.is_empty()`;
+    /// `!linear` ⇒ `indices.len() == entries.len()`.
+    linear: bool,
     /// entries is a dense vec maintaining entry order.
     entries: Entries<K, V>,
 }
@@ -123,6 +136,7 @@ where
     }
 
     fn clone_from(&mut self, other: &Self) {
+        self.linear = other.linear;
         self.indices.clone_from(&other.indices);
         if self.entries.capacity() < other.entries.len() {
             // If we must resize, match the indices capacity.
@@ -160,6 +174,10 @@ impl<K, V, E, G, R> crate::Entries for IndexMapCore<K, V, E, G, R> {
     }
 }
 
+/// Entry count up to which the indices table is left unbuilt (see the
+/// `linear` field). Matches CRuby's `RHASH_AR_TABLE_MAX_SIZE`.
+const AR_MAX: usize = 8;
+
 impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     /// The maximum capacity before the `entries` allocation would exceed `isize::MAX`.
     const MAX_ENTRIES_CAPACITY: usize = (isize::MAX as usize) / mem::size_of::<Bucket<K, V>>();
@@ -169,6 +187,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         IndexMapCore {
             indices: Indices::new(),
             entries: Vec::new(),
+            linear: true,
         }
     }
 
@@ -179,25 +198,73 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
 
     #[inline]
     pub(crate) fn with_capacity(n: usize) -> Self {
-        IndexMapCore {
-            indices: Indices::with_capacity(n),
-            entries: Vec::with_capacity(n),
+        // A small-capacity map starts linear: the indices allocation is
+        // deferred until (if ever) it outgrows `AR_MAX`.
+        if n <= AR_MAX {
+            IndexMapCore {
+                indices: Indices::new(),
+                entries: Vec::with_capacity(n),
+                linear: true,
+            }
+        } else {
+            IndexMapCore {
+                indices: Indices::with_capacity(n),
+                entries: Vec::with_capacity(n),
+                linear: false,
+            }
         }
     }
 
     #[inline]
     pub(crate) fn len(&self) -> usize {
-        self.indices.len()
+        self.entries.len()
     }
 
     #[inline]
     pub(crate) fn capacity(&self) -> usize {
-        Ord::min(self.indices.capacity(), self.entries.capacity())
+        if self.linear {
+            self.entries.capacity()
+        } else {
+            Ord::min(self.indices.capacity(), self.entries.capacity())
+        }
+    }
+
+    /// Build the indices table from `entries` and leave linear mode.
+    /// Idempotent; the entry hashes were computed at insertion time, so
+    /// no key is re-hashed.
+    pub(super) fn ensure_indexed(&mut self) {
+        if self.linear {
+            self.indices
+                .reserve(self.entries.len(), get_hash(&self.entries));
+            insert_bulk_no_grow(&mut self.indices, &self.entries);
+            self.linear = false;
+        }
+    }
+
+    /// Linear-mode lookup: stored-hash compare first, `eql` only on a
+    /// hash match — the indexed path's exact probe pattern.
+    fn linear_find<Q>(
+        &self,
+        hash: HashValue,
+        key: &Q,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<usize>, R>
+    where
+        Q: ?Sized + Equivalent<K, E, G, R>,
+    {
+        for (i, entry) in self.entries.iter().enumerate() {
+            if entry.hash == hash && key.equivalent(&entry.key, e, g)? {
+                return Ok(Some(i));
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) fn clear(&mut self) {
         self.indices.clear();
         self.entries.clear();
+        self.linear = true;
     }
 
     pub(crate) fn truncate(&mut self, len: usize, e: &mut E, g: &mut G) -> Result<(), R> {
@@ -234,13 +301,35 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         self.erase_indices(at, self.entries.len(), e, g)?;
         let entries = self.entries.split_off(at);
 
+        if self.linear {
+            return Ok(Self {
+                indices: Indices::new(),
+                entries,
+                linear: true,
+            });
+        }
         let mut indices = Indices::with_capacity(entries.len());
         insert_bulk_no_grow(&mut indices, &entries);
-        Ok(Self { indices, entries })
+        Ok(Self {
+            indices,
+            entries,
+            linear: false,
+        })
     }
 
     /// Reserve capacity for `additional` more key-value pairs.
     pub(crate) fn reserve(&mut self, additional: usize) {
+        // A reservation that must outgrow linear mode builds the table
+        // up front (so the bulk insert that follows doesn't pay a
+        // per-insert promotion check); a small one stays linear.
+        if self.linear {
+            if self.entries.len() + additional > AR_MAX {
+                self.ensure_indexed();
+            } else {
+                self.entries.reserve(additional);
+                return;
+            }
+        }
         self.indices.reserve(additional, get_hash(&self.entries));
         // Only grow entries if necessary, since we also round up capacity.
         if additional > self.entries.capacity() - self.entries.len() {
@@ -250,22 +339,34 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
 
     /// Reserve capacity for `additional` more key-value pairs, without over-allocating.
     pub(crate) fn reserve_exact(&mut self, additional: usize) {
+        if self.linear {
+            if self.entries.len() + additional > AR_MAX {
+                self.ensure_indexed();
+            } else {
+                self.entries.reserve_exact(additional);
+                return;
+            }
+        }
         self.indices.reserve(additional, get_hash(&self.entries));
         self.entries.reserve_exact(additional);
     }
 
     /// Shrink the capacity of the map with a lower bound
     pub(crate) fn shrink_to(&mut self, min_capacity: usize) {
-        self.indices
-            .shrink_to(min_capacity, get_hash(&self.entries));
+        if !self.linear {
+            self.indices
+                .shrink_to(min_capacity, get_hash(&self.entries));
+        }
         self.entries.shrink_to(min_capacity);
     }
 
     /// Remove the last key-value pair
     pub(crate) fn pop(&mut self, e: &mut E, g: &mut G) -> Result<Option<(K, V)>, R> {
         Ok(if let Some(entry) = self.entries.pop() {
-            let last = self.entries.len();
-            erase_index(&mut self.indices, entry.hash, last, e, g)?;
+            if !self.linear {
+                let last = self.entries.len();
+                erase_index(&mut self.indices, entry.hash, last, e, g)?;
+            }
             Some((entry.key, entry.value))
         } else {
             None
@@ -283,6 +384,9 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     where
         Q: ?Sized + Equivalent<K, E, G, R>,
     {
+        if self.linear {
+            return self.linear_find(hash, key, e, g);
+        }
         let eq = equivalent(key, &self.entries);
         Ok(self.indices.find(hash.get(), eq, e, g)?.copied())
     }
@@ -309,6 +413,18 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     where
         K: RubyEql<E, G, R>,
     {
+        if self.linear {
+            if let Some(i) = self.linear_find(hash, &key, e, g)? {
+                return Ok((i, Some(mem::replace(&mut self.entries[i].value, value))));
+            }
+            if self.entries.len() < AR_MAX {
+                let i = self.entries.len();
+                self.push_entry(hash, key, value);
+                return Ok((i, None));
+            }
+            // Crossing AR_MAX: build the table once, then fall through.
+            self.ensure_indexed();
+        }
         let eq = equivalent(&key, &self.entries);
         let hasher = get_hash(&self.entries);
         match self.indices.entry(hash.get(), eq, hasher, e, g)? {
@@ -336,6 +452,19 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         I: ruby_traits::RubySymEql,
         K: Borrow<I> + From<I>,
     {
+        if self.linear {
+            for (i, entry) in self.entries.iter().enumerate() {
+                if entry.hash == hash && SymEquivalent::equivalent(&key, entry.key.borrow()) {
+                    return (i, Some(mem::replace(&mut self.entries[i].value, value)));
+                }
+            }
+            if self.entries.len() < AR_MAX {
+                let i = self.entries.len();
+                self.push_entry(hash, K::from(key), value);
+                return (i, None);
+            }
+            self.ensure_indexed();
+        }
         let eq = sym_equivalent(&key, &self.entries);
         let hasher = get_hash(&self.entries);
         match self.indices.entry_sym(hash.get(), eq, hasher) {
@@ -365,6 +494,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     where
         K: RubyEql<E, G, R>,
     {
+        self.ensure_indexed();
         let eq = equivalent(&key, &self.entries);
         let hasher = get_hash(&self.entries);
         match self.indices.entry(hash.get(), eq, hasher, e, g)? {
@@ -398,6 +528,15 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     where
         Q: ?Sized + Equivalent<K, E, G, R>,
     {
+        if self.linear {
+            return Ok(match self.linear_find(hash, key, e, g)? {
+                Some(index) => {
+                    let entry = self.entries.remove(index);
+                    Some((index, entry.key, entry.value))
+                }
+                None => None,
+            });
+        }
         let eq = equivalent(key, &self.entries);
         Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
             Ok(entry) => {
@@ -417,6 +556,14 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         e: &mut E,
         g: &mut G,
     ) -> Result<Option<(K, V)>, R> {
+        if self.linear {
+            return Ok(if index < self.entries.len() {
+                let entry = self.entries.remove(index);
+                Some((entry.key, entry.value))
+            } else {
+                None
+            });
+        }
         self.borrow_mut().shift_remove_index(index, e, g)
     }
 
@@ -429,6 +576,17 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         e: &mut E,
         g: &mut G,
     ) -> Result<(), R> {
+        if self.linear {
+            // Pure entry rotation; there are no indices to fix up.
+            let _ = &self.entries[from];
+            let _ = &self.entries[to];
+            if from < to {
+                self.entries[from..=to].rotate_left(1);
+            } else {
+                self.entries[to..=from].rotate_right(1);
+            }
+            return Ok(());
+        }
         self.borrow_mut().move_index(from, to, e, g)
     }
 
@@ -443,6 +601,15 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     where
         Q: ?Sized + Equivalent<K, E, G, R>,
     {
+        if self.linear {
+            return Ok(match self.linear_find(hash, key, e, g)? {
+                Some(index) => {
+                    let entry = self.entries.swap_remove(index);
+                    Some((index, entry.key, entry.value))
+                }
+                None => None,
+            });
+        }
         let eq = equivalent(key, &self.entries);
         Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
             Ok(entry) => {
@@ -462,6 +629,14 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         e: &mut E,
         g: &mut G,
     ) -> Result<Option<(K, V)>, R> {
+        if self.linear {
+            return Ok(if index < self.entries.len() {
+                let entry = self.entries.swap_remove(index);
+                Some((entry.key, entry.value))
+            } else {
+                None
+            });
+        }
         self.borrow_mut().swap_remove_index(index, e, g)
     }
 
@@ -470,6 +645,10 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     /// All of these items should still be at their original location in `entries`.
     /// This is used by `drain`, which will let `Vec::drain` do the work on `entries`.
     fn erase_indices(&mut self, start: usize, end: usize, e: &mut E, g: &mut G) -> Result<(), R> {
+        if self.linear {
+            // No table to fix up; the caller adjusts `entries` itself.
+            return Ok(());
+        }
         let (init, shifted_entries) = self.entries.split_at(end);
         let (start_entries, erased_entries) = init.split_at(start);
 
@@ -522,12 +701,16 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     {
         self.entries
             .retain_mut(|entry| keep(&mut entry.key, &mut entry.value));
-        if self.entries.len() < self.indices.len() {
+        if !self.linear && self.entries.len() < self.indices.len() {
             self.rebuild_hash_table();
         }
     }
 
     fn rebuild_hash_table(&mut self) {
+        if self.linear {
+            debug_assert!(self.indices.is_empty());
+            return;
+        }
         self.indices.clear();
         insert_bulk_no_grow(&mut self.indices, &self.entries);
     }
@@ -553,7 +736,10 @@ fn reserve_entries<K, V, E, G, R>(
     // Use a soft-limit on the maximum capacity, but if the caller explicitly
     // requested more, do it and let them have the resulting panic.
     let try_capacity = try_capacity.min(IndexMapCore::<K, V, E, G, R>::MAX_ENTRIES_CAPACITY);
-    let try_add = try_capacity - entries.len();
+    // In linear mode the indices table has capacity 0, so the sync-up
+    // target can sit below the current length; saturate instead of
+    // underflowing (try_add == 0 then falls through to reserve_exact).
+    let try_add = try_capacity.saturating_sub(entries.len());
     if try_add > additional && entries.try_reserve_exact(try_add).is_ok() {
         return;
     }
