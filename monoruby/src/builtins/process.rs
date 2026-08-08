@@ -1515,10 +1515,11 @@ fn process_clock_getres(
             }
         }
     } else {
-        let clk_id = clock.coerce_to_int_i64(vm, globals)? as i32;
+        let clk_id = clock.coerce_to_int_i64(vm, globals)?;
         let mut tp: libc::timespec = unsafe { std::mem::zeroed() };
-        // SAFETY: clock_getres fills the timespec on success.
-        let rc = unsafe { libc::clock_getres(clk_id, &mut tp) };
+        // SAFETY: clock_getres fills the timespec on success. `as _`:
+        // clockid_t is i32 on Linux but u32 on macOS.
+        let rc = unsafe { libc::clock_getres(clk_id as _, &mut tp) };
         if rc != 0 {
             let err = std::io::Error::last_os_error();
             return Err(MonorubyErr::errno_with_msg(
