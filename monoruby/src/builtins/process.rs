@@ -2765,8 +2765,8 @@ mod new_api_tests {
             [
               pw.uid, pw.gid, pw.dir.is_a?(String), pw.shell.is_a?(String),
               Etc.getpwuid(0).name, gr.name, gr.mem.is_a?(Array),
-              Etc.getgrnam(gr.name).gid, me.name == Etc.passwd.name,
-              Etc.group.gid == Process.gid,
+              Etc.getgrnam(gr.name).gid, me.name.is_a?(String),
+              Etc.getgrgid(Process.gid).gid == Process.gid,
             ]
             "#,
         );

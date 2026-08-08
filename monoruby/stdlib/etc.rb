@@ -87,11 +87,14 @@ module Etc
     gr
   end
 
+  # Database enumeration (getpwent/getgrent) is not implemented; these
+  # keep their historical stub behavior. (CRuby's Etc.passwd/Etc.group
+  # walk the database from the top, which is NOT "the current user".)
   def self.passwd
-    getpwuid
+    nil
   end
 
   def self.group
-    getgrgid
+    nil
   end
 end
