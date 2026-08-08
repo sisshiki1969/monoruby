@@ -1975,10 +1975,11 @@ impl RValue {
     pub(super) fn new_file(
         file: std::fs::File,
         name: String,
+        path_raw: Option<(Vec<u8>, crate::value::Encoding)>,
         readable: bool,
         writable: bool,
     ) -> Self {
-        let inner = IoInner::file(file, name, readable, writable);
+        let inner = IoInner::file(file, name, path_raw, readable, writable);
         RValue {
             header: Header::new(FILE_CLASS, ObjTy::IO),
             kind: ObjKind::io(inner),

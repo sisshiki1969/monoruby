@@ -164,7 +164,15 @@ class IO
 
   def self.__class_write(name, string, offset, binary, opts)
     if (open_args = opts[:open_args])
-      f = File.open(name, *open_args)
+      # A trailing options Hash inside open_args is keyword-splatted:
+      # File.open takes at most 3 positional arguments (CRuby treats the
+      # trailing Hash of an open_args array as keyword options too).
+      if open_args.is_a?(Array) && open_args.last.is_a?(Hash)
+        *head, kw = open_args
+        f = File.open(name, *head, **kw)
+      else
+        f = File.open(name, *open_args)
+      end
     else
       opts = opts.dup
       mode = opts.delete(:mode)

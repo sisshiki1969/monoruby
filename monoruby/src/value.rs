@@ -1284,10 +1284,11 @@ impl Value {
     pub(crate) fn new_file(
         file: std::fs::File,
         name: String,
+        path_raw: Option<(Vec<u8>, crate::value::Encoding)>,
         readable: bool,
         writable: bool,
     ) -> Self {
-        RValue::new_file(file, name, readable, writable).pack()
+        RValue::new_file(file, name, path_raw, readable, writable).pack()
     }
 
     pub(crate) fn new_socket(file: std::fs::File, name: String, class_id: ClassId) -> Self {
