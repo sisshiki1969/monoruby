@@ -52,6 +52,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(THREAD_CLASS, "kill", thread_class_kill, 1);
     globals.define_builtin_class_func(THREAD_CLASS, "exit", thread_class_exit, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "handle_interrupt", handle_interrupt, 1);
+    globals.define_builtin_class_func(THREAD_CLASS, "__uninterruptible", thread_uninterruptible, 0);
     globals.define_builtin_class_func_with(
         THREAD_CLASS,
         "pending_interrupt?",
@@ -132,6 +133,36 @@ fn handle_interrupt(
     // the delivered interrupt takes precedence over the block's own
     // exception (CRuby).
     scheduler::deliver_pending_now(vm, globals, cur, false)?;
+    res
+}
+
+///
+/// ### Thread.__uninterruptible { ... }
+///
+/// Internal: run the block with ALL asynchronous interrupts — including
+/// kill, which `handle_interrupt` cannot mask — deferred. Nothing is
+/// delivered at parks inside the block and a queued interrupt does not
+/// wake this thread (its ordinary wake source, e.g. `Mutex#unlock`'s
+/// permit, still does). Deferred interrupts fire at block exit, taking
+/// precedence over the block's own exception (as `handle_interrupt`).
+///
+/// The green-thread analogue of CRuby's `mutex_lock_uninterruptible`
+/// (the `rb_mutex_sleep` re-acquire): `Thread::Mutex#sleep` wraps its
+/// ensure-side `lock` in this so a `ConditionVariable#wait`er killed
+/// after being signaled still re-acquires the mutex before dying.
+#[monoruby_builtin]
+fn thread_uninterruptible(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let bh = lfp.expect_block()?;
+    let cur = scheduler::current_thread(vm);
+    scheduler::set_uninterruptible(cur, true);
+    let res = vm.invoke_block_once(globals, bh, &[]);
+    scheduler::set_uninterruptible(cur, false);
+    scheduler::deliver_pending_now(vm, globals, cur, true)?;
     res
 }
 

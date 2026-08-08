@@ -641,6 +641,13 @@ pub(crate) fn join(
 /// a thread. Kill is unmaskable. For a raise, the innermost mask entry
 /// whose class covers the exception's class wins; default `Immediate`.
 fn interrupt_timing(store: &Store, inner: &ThreadInner, int: &PendingInterrupt) -> InterruptTiming {
+    // A `Thread.__uninterruptible` section defers EVERYTHING, kill
+    // included: nothing is deliverable and nothing is wake-worthy until
+    // the section exits (where the deferred queue fires) — the
+    // `mutex_lock_uninterruptible` analogue.
+    if inner.uninterruptible > 0 {
+        return InterruptTiming::Never;
+    }
     let exc_class = match int {
         PendingInterrupt::Kill => return InterruptTiming::Immediate,
         PendingInterrupt::Raise(err) => err.class_id(),
@@ -791,6 +798,17 @@ pub(crate) fn pending_interrupt_p(store: &Store, thread: Value, filter: Option<M
 /// is delivered at resume.
 fn set_park_blocking(mut thread: Value, blocking: bool) {
     thread.as_thread_inner_mut().park_blocking = blocking;
+}
+
+/// Enter / leave a `Thread.__uninterruptible` section on `thread`
+/// (a depth counter, so nesting composes).
+pub(crate) fn set_uninterruptible(mut thread: Value, on: bool) {
+    let inner = thread.as_thread_inner_mut();
+    if on {
+        inner.uninterruptible += 1;
+    } else {
+        inner.uninterruptible -= 1;
+    }
 }
 
 /// Push / pop a `handle_interrupt` mask frame on the current thread.
