@@ -719,7 +719,11 @@ impl<T: GCBox> Allocator<T> {
             total_freed_pages: 0,
             profile_enabled: false,
             profile: Vec::new(),
-            stress: false,
+            // `gc-stress` builds start in `GC.stress` mode: the jit_module
+            // poll-word initializer arms the GC lane at startup, and the
+            // end-of-collection re-arm below keeps every safepoint
+            // collecting from then on.
+            stress: cfg!(feature = "gc-stress"),
             allow_full_mark: true,
         }
     }

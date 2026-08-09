@@ -515,7 +515,7 @@ proc/args/result/exception/joiners/pending/masks/last_status をマークする�
 | --- | --- |
 | `gc-log` | 終了時に GC 統計を出力(old 数の実 popcount 等)。 |
 | `gc-debug` | GC 中の各種アサート・ダンプ。`old_count` と実 popcount の一致検証など。 |
-| `gc-stress` | **毎回のアロケーションで GC** を走らせる(`bin/test` が使用)。世代別のバリア/remembered set 漏れを最も強く炙り出す。 |
+| `gc-stress` | 起動時から `GC.stress` 相当: **毎セーフポイントで GC** を走らせる(`bin/test` の nextest フェーズが使用。CI では x86-64 のみ)。世代別のバリア/remembered set 漏れを最も強く炙り出す。 |
 | `gc-verify` | マイナー GC 後に独立フル再マークで健全性検証(§6.5)。 |
 
 環境変数 `MONORUBY_MALLOC_HARD_LIMIT`(例 `3G`。K/M/G サフィックス可)を設定すると、
