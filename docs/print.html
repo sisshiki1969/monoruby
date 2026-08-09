@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-14c3001e.js";
+            window.path_to_searchindex_js = "searchindex-1b6b02bb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e1173681.js"></script>
@@ -6178,6 +6178,30 @@ USR1, USR2)へ自動で <code>sigaction</code>。CHLD/CONT/WINCH/TSTP や PIPE �
 <p><strong>シグナル配送は GC・プリエンプションより前</strong>に同じ poll 内で行われる。
 <code>execute_gc</code> は<strong>ハンドラ呼び出し中に CODEGEN 借用を保持しない</strong>ので、trap ハンドラが
 その内部で JIT コンパイルや GC を起こしても自由に再入できる。</p>
+<h3 id="41-配送ゲートschedulersignal_delivery_ok"><a class="header" href="#41-配送ゲートschedulersignal_delivery_ok">4.1 配送ゲート(<code>scheduler::signal_delivery_ok</code>)</a></h3>
+<p>すべての poll 地点で配送してよいわけではない。3 条件を満たす poll だけが drain する:</p>
+<ol>
+<li><strong>メインのグリーンスレッド上</strong>であること(<code>current == main</code>)。CRuby と同じく、
+非メインスレッド実行中に届いたシグナルはメインの次の poll まで保留される。</li>
+<li>スケジューラ自身の<strong>機構(<code>machinery</code>)が走っていない</strong>こと。</li>
+<li>スケジューラの<strong>入口(<code>pass</code> / <code>sleep</code> / <code>join</code> / <code>terminate_all</code>)の中でない</strong>こと。
+これらの内側ではコンテキストが既にスイッチ用に保存されている(あるいは直後に
+保存される)場合があり、その上に積んだ Ruby フレームは保存コンテキストの復帰時に
+<strong>もう一度</strong>実行されてしまう。</li>
+</ol>
+<p>3 番目は <code>SCHED_CALL_DEPTH</code>(RAII ガード <code>SchedCall</code>)で数える。<strong>この深度は
+コンテキストスイッチと一緒に持ち回らなければならない</strong> — カウンタは OS スレッドの
+thread-local だが、ガードは各グリーンスレッドのスタック上にあり、park した
+スレッドは Rust フレームごと凍結されるのでガードが解放されないまま残る。
+<code>dispatch</code> は <code>machinery</code> と同じ区間で深度を退避・復元し、park 中の深度は
+<code>ThreadInner::sched_call_depth</code> に置く。</p>
+<blockquote>
+<p>これを怠ると、<code>sleep</code> で park したスレッドが 1 本あるだけでカウンタが恒久的に
+1 以上に張り付き、以後 <code>Signal.trap</code> ハンドラが<strong>二度と走らなくなる</strong>。
+<code>nil until flag</code> は無限に回り、次のブロッキング書き込みが内部マーカー
+<code>__monoruby_signal_interrupt__</code>(§ マーカー)を RuntimeError として表に出す。
+回帰テスト: <code>process.rs</code> の <code>signal_delivered_while_another_thread_is_parked</code>。</p>
+</blockquote>
 <hr>
 <h2 id="5-signo--既定例外a4signo_to_error"><a class="header" href="#5-signo--既定例外a4signo_to_error">5. signo → 既定例外(A4;<code>signo_to_error</code>)</a></h2>
 <p><code>Signal.trap</code> ハンドラが無い場合、<code>Default</code>/<code>SystemDefault</code> は既定例外に落ちる:</p>
