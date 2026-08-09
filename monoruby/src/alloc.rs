@@ -153,33 +153,14 @@ fn malloc_hard_limit_abort(size: usize, projected: usize, limit: usize) -> ! {
     std::process::abort();
 }
 
-thread_local! {
-    /// Address (as `usize`; `0` until the VM registers it) of the JIT/VM
-    /// allocation flag — the same `u32` the GC-arena path nudges. Kept
-    /// beside the thread-local `Allocator` it belongs to (a `Cell<usize>`
-    /// with a `const` initialiser, so reading it allocates nothing and
-    /// runs no destructor: `RurubyAlloc::alloc` reaches it from inside
-    /// the global allocator, where the non-reentrant `ALLOC` itself is
-    /// off limits).
-    ///
-    /// Per-thread rather than global because each VM thread has its own
-    /// heap and its own flag; a process-wide slot would let one thread's
-    /// `GC.start` nudge another thread's flag, and its own request would
-    /// then never fire. Only the interpreter's own thread has a
-    /// registered flag, so allocations on helper threads (preempt timer,
-    /// fd poller) simply request nothing.
-    static MALLOC_GC_FLAG_ADDR: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 /// `MALLOC_AMOUNT` ceiling above which a GC is requested. Recomputed after
 /// each GC from the post-collection live amount (see `Allocator::gc`).
 static MALLOC_GC_THRESHOLD: AtomicUsize = AtomicUsize::new(MALLOC_THRESHOLD);
 
 /// Mirror of `Allocator::gc_enabled`, readable from the global allocator
 /// without touching the (non-reentrant) thread-local `Allocator`. When GC is
-/// disabled (`--no-gc`), `gc()` early-returns without clearing the alloc flag,
-/// so requesting a collection would leave the flag stuck in the trigger band
-/// and spin the safepoint poll. Skip the request entirely in that case.
+/// disabled (`--no-gc`), `gc()` voids the request instead of collecting;
+/// skipping the request here just avoids even that no-op poll.
 static GC_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Keep `GC_ENABLED` in step with `Allocator::gc_enabled` (see `Globals::gc_enable`).
@@ -206,35 +187,15 @@ pub(crate) fn malloc_gc_threshold() -> usize {
 
 /// Request a garbage collection at the next VM safepoint (`GC.start`).
 ///
-/// Only nudges the JIT/VM alloc flag into its trigger band (and, when
-/// `force_major`, records that the pending collection must be Major); the
-/// actual collection runs from the safepoint poll where live registers
-/// are spilled, so this is safe to call from inside a builtin.
+/// Only arms the poll word's GC lane (and, when `force_major`, records
+/// that the pending collection must be Major); the actual collection runs
+/// from the safepoint poll where live registers are spilled, so this is
+/// safe to call from inside a builtin.
 pub(crate) fn request_gc(force_major: bool) {
     if force_major {
         GC_FORCE_MAJOR.store(true, Ordering::Relaxed);
     }
-    nudge_flag();
-}
-
-/// Lift the poll flag into its `>= 8` trigger band without disturbing the
-/// preempt bit or a value already in the band. Atomic because the preempt
-/// timer ORs its bit into the same word from another OS thread.
-fn nudge_flag() {
-    let addr = MALLOC_GC_FLAG_ADDR.try_with(|a| a.get()).unwrap_or(0);
-    if addr == 0 {
-        return;
-    }
-    // SAFETY: `addr` is the registered JIT alloc-flag location, valid for
-    // the VM thread's lifetime.
-    let flag = unsafe { &*(addr as *const std::sync::atomic::AtomicU32) };
-    let _ = flag.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-        if v & !crate::preempt::PREEMPT_BIT >= 8 {
-            None
-        } else {
-            Some(v | 8)
-        }
-    });
+    crate::poll_flag::set_gc();
 }
 
 /// Request a GC at the next VM safepoint when live malloc has crossed the
@@ -256,23 +217,10 @@ fn request_gc_if_malloc_over(total: usize) {
     if !GC_ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    // The VM/JIT GC poll fires when this `u32` is `>= 8`: the GC-arena path
-    // bumps it `+= 1` per nearly-full page (so ~8 pages of `RValue`s trips
-    // it), and the signal handler adds 10. To actually request a GC we must
-    // therefore lift it to the `>= 8` trigger band — writing a small value
-    // like `1` only joins the page-fill accumulation and is effectively a
-    // no-op. `nudge_flag` ORs `8` in only when the flag (preempt bit aside)
-    // is below the band, so we request exactly one collection, never stomp a
-    // value already in the trigger/signal range, and never climb unboundedly
-    // while we sit over threshold. Racing the async signal handler is
-    // harmless: a signal's delivery rides the separate `pending_signals`
-    // bitmap, so the poll still fires and `execute_gc` still drains it.
-    nudge_flag();
-}
-
-/// Register the VM allocation-flag address with the malloc-trigger path.
-pub(crate) fn set_malloc_gc_flag_addr(addr: *mut u32) {
-    let _ = MALLOC_GC_FLAG_ADDR.try_with(|a| a.set(addr as usize));
+    // Idempotent lane set: staying over threshold across many mallocs
+    // re-arms the same request, never anything unbounded. Racing the async
+    // signal handler is harmless too — the lanes are separate bytes.
+    crate::poll_flag::set_gc();
 }
 
 thread_local!(
@@ -284,6 +232,11 @@ const GCBOX_SIZE: usize = std::mem::size_of::<RValue>();
 const PAGE_LEN: usize = 64 * SIZE;
 const DATA_LEN: usize = 64 * (SIZE - 1);
 const THRESHOLD: usize = 64 * (SIZE - 2);
+
+/// Pages filling to `THRESHOLD` before the arena requests a collection
+/// (~8 pages ≈ 32K `RValue`s between GCs, matching the old `>= 8` poll
+/// band that accumulated `+1` per page).
+const PAGES_PER_GC_TRIGGER: u32 = 8;
 const ALLOC_SIZE: usize = PAGE_LEN * GCBOX_SIZE; // 2^18 = 256kb
 const MALLOC_THRESHOLD: usize = 256 * 1024;
 const MAX_PAGES: usize = 8192;
@@ -498,8 +451,12 @@ pub struct Allocator<T> {
     /// `OLD` yet), so the barrier is currently inert. See
     /// `doc/gc.md`.
     remembered: Vec<std::ptr::NonNull<T>>,
-    /// Flag for GC timing.
-    alloc_flag: Option<*mut u32>,
+    /// Arena pressure toward the next GC request: pages that filled to
+    /// `THRESHOLD` since the last collection. At [`PAGES_PER_GC_TRIGGER`]
+    /// the poll word's GC lane is armed; a completed collection resets
+    /// this (`ack_gc_request`). The counter lives here — the poll word
+    /// itself carries no arithmetic, only lane bits.
+    pages_since_gc: u32,
     /// Flag whether GC is enabled or not.
     pub gc_enabled: bool,
     /// Registry of promoted heap frames (`Box<[u64]>` buffers that
@@ -745,7 +702,7 @@ impl<T: GCBox> Allocator<T> {
             promoting: false,
             aging: Vec::new(),
             remembered: Vec::new(),
-            alloc_flag: None,
+            pages_since_gc: 0,
             gc_enabled: true,
             heap_frames: std::collections::HashMap::default(),
             free_log: Vec::new(),
@@ -845,16 +802,6 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
-    /// Set address of allocation flag.
-    ///
-    pub(crate) fn set_alloc_flag_address(&mut self, address: *mut u32) {
-        self.alloc_flag = Some(address);
-        // Let the global allocator reach the same flag for malloc-driven
-        // GC requests.
-        set_malloc_gc_flag_addr(address);
-    }
-
-    ///
     /// Address of the free-list head (`self.free`), exposed so the JIT can
     /// inline the free-list allocation fast path (pop a recycled cell)
     /// without a runtime call. `self.free` is `Option<NonNull<T>>`, which is
@@ -906,27 +853,25 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
-    /// Set allocation flag.
+    /// A page just filled to `THRESHOLD`: accumulate arena pressure and
+    /// arm the poll word's GC lane once enough pages have filled since
+    /// the last collection.
     ///
-    fn set_alloc_flag(&self) {
-        if let Some(flag) = self.alloc_flag {
-            // SAFETY: registered poll-flag location; atomic because the
-            // preempt timer ORs a bit into the same word from another
-            // OS thread.
-            unsafe { &*(flag as *const std::sync::atomic::AtomicU32) }
-                .fetch_add(1, Ordering::Relaxed);
+    fn on_page_pressure(&mut self) {
+        self.pages_since_gc += 1;
+        if self.pages_since_gc >= PAGES_PER_GC_TRIGGER {
+            crate::poll_flag::set_gc();
         }
     }
 
     ///
-    /// Unset allocation flag (keeping a concurrently-set preempt bit).
+    /// A collection answered (or, with GC disabled, voided) the pending
+    /// request: clear the GC lane and restart the arena-pressure count.
+    /// Other lanes (preempt tick, pending signal) are untouched.
     ///
-    fn unset_alloc_flag(&self) {
-        if let Some(flag) = self.alloc_flag {
-            // SAFETY: as in `set_alloc_flag`.
-            unsafe { &*(flag as *const std::sync::atomic::AtomicU32) }
-                .fetch_and(crate::preempt::PREEMPT_BIT, Ordering::Relaxed);
-        }
+    fn ack_gc_request(&mut self) {
+        self.pages_since_gc = 0;
+        crate::poll_flag::clear_gc();
     }
 
     ///
@@ -1061,7 +1006,7 @@ impl<T: GCBox> Allocator<T> {
         self.measure_time = flag;
     }
 
-    /// `GC.stress`. Turning it on arms the poll flag immediately, so the
+    /// `GC.stress`. Turning it on arms the GC lane immediately, so the
     /// next safepoint collects without waiting for allocation pressure.
     pub fn stress(&self) -> bool {
         self.stress
@@ -1070,7 +1015,7 @@ impl<T: GCBox> Allocator<T> {
     pub fn set_stress(&mut self, flag: bool) {
         self.stress = flag;
         if flag {
-            nudge_flag();
+            crate::poll_flag::set_gc();
         }
     }
 
@@ -1173,7 +1118,7 @@ impl<T: GCBox> Allocator<T> {
         } else {
             // Bump allocation.
             if self.used_in_current == THRESHOLD {
-                self.set_alloc_flag();
+                self.on_page_pressure();
             }
             let ptr = unsafe { self.current_page.as_ref().get_cell(self.used_in_current) };
             self.used_in_current += 1;
@@ -1224,6 +1169,9 @@ impl<T: GCBox> Allocator<T> {
 
     pub(crate) fn gc(&mut self, root: &impl GCRoot<T>) {
         if !self.gc_enabled {
+            // Void the request (`--no-gc`): leaving the GC lane armed
+            // would send every subsequent safepoint through this no-op.
+            self.ack_gc_request();
             return;
         }
         // A pending `GC.start` request forces a Major collection.
@@ -1345,7 +1293,7 @@ impl<T: GCBox> Allocator<T> {
             assert_eq!(self.free_list_count, self.check_free_list());
             eprintln!("free list: {}", self.free_list_count);
         }
-        self.unset_alloc_flag();
+        self.ack_gc_request();
         if let Some((invoke_time, started)) = clock {
             let total = started.elapsed().as_nanos() as u64;
             let mark = mark_elapsed.map_or(0, |d| d.as_nanos() as u64).min(total);
@@ -1366,10 +1314,10 @@ impl<T: GCBox> Allocator<T> {
                 });
             }
         }
-        // `GC.stress`: lift the poll flag straight back into its trigger
-        // band so the very next safepoint collects again.
+        // `GC.stress`: re-arm the GC lane so the very next safepoint
+        // collects again.
         if self.stress {
-            nudge_flag();
+            crate::poll_flag::set_gc();
         }
         let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
         // Allow malloc to grow by half the live amount (at least

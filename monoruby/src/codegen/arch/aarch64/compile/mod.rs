@@ -1373,11 +1373,12 @@ impl Codegen {
         true
     }
 
-    /// GC safepoint: if alloc_flag >= 8 (signal/gc-stress nudge), write back
-    /// live values, run execute_gc(vm, globals), and on error jump to the error
-    /// handler. The GC path is laid out inline but skipped on the common path.
-    /// Bails (`false`) like `emit_check_stack`. `base` is unused on aarch64.
-    /// Mirrors x86 `jit_execute_gc`.
+    /// Safepoint poll: if any lane of the poll word is set (GC request,
+    /// preempt tick, pending signal — see poll_flag.rs), write back live
+    /// values, run execute_gc(vm, globals), and on error jump to the error
+    /// handler. The slow path is laid out inline but skipped on the common
+    /// path. Bails (`false`) like `emit_check_stack`. `base` is unused on
+    /// aarch64. Mirrors x86 `jit_execute_gc`.
     pub(in crate::codegen::jitgen) fn emit_exec_gc(
         &mut self,
         write_back: WriteBack,
@@ -1386,16 +1387,15 @@ impl Codegen {
     ) -> bool {
         let error = error.clone();
         let skip = self.jit.label();
-        let af_addr = self
+        let pf_addr = self
             .jit
-            .get_label_address(&self.alloc_flag.clone())
+            .get_label_address(&self.poll_flag.clone())
             .as_ptr() as u64;
         monoasm_arm64!(&mut self.jit,
-            mov x9, (af_addr);
-            ldr w9, [x9];
-            cmp x9, #(8u32);
+            mov x9, (pf_addr);
+            ldr w9, [x9];         // zero-extends into x9
+            cbz x9, skip;         // all lanes clear -> no poll
         );
-        self.jit.bcond_label(monoasm::Cond::Lt, &skip); // < 8 -> no GC
         self.a64_gen_write_back_for_deopt(&write_back, base);
         let f = crate::executor::execute_gc as *const () as u64;
         // Preserve the GP-alloc pool (x5-x8 = GP::R8-R11) across the call. They

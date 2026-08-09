@@ -1317,7 +1317,7 @@ pub(super) fn signal_trap(
     let installed = crate::codegen::CODEGEN.with(|codegen| {
         let codegen = codegen.borrow();
         match new_disp {
-            SignalDisposition::Handler(_) => codegen.install_signal_stub(signo),
+            SignalDisposition::Handler(_) => codegen.install_signal_handler(signo),
             SignalDisposition::Ignore { .. } => codegen.install_signal_ignore(signo),
             SignalDisposition::Default => codegen.install_signal_default(signo),
             SignalDisposition::SystemDefault => codegen.install_signal_system_default(signo),
