@@ -178,6 +178,46 @@ pub(crate) fn mark(alloc: &mut crate::alloc::Allocator<RValue>) {
 /// only while a thread's Ruby code (not the scheduler's own machinery) is
 /// running, and only when another live thread could actually use the
 /// slice. See `Scheduler::machinery`.
+thread_local! {
+    /// Nesting depth of scheduler entry points (`pass`, `sleep`, `join`,
+    /// `terminate_all`) on the current stack. Signal trap handlers must
+    /// not run at poll points inside these: the running context may
+    /// already be saved for a switch, and Ruby frames pushed on top of a
+    /// saved context are resumed AGAIN when it is restored.
+    static SCHED_CALL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// RAII guard for `SCHED_CALL_DEPTH`.
+struct SchedCall;
+impl SchedCall {
+    fn enter() -> Self {
+        SCHED_CALL_DEPTH.with(|d| d.set(d.get() + 1));
+        SchedCall
+    }
+}
+impl Drop for SchedCall {
+    fn drop(&mut self) {
+        SCHED_CALL_DEPTH.with(|d| d.set(d.get() - 1));
+    }
+}
+
+/// Whether a poll point may run signal trap handlers here: only on the
+/// main green thread, only while the scheduler's own machinery is not
+/// on the stack, and only OUTSIDE scheduler entry points (a handler
+/// invoked over a context that is about to be — or already is — saved
+/// gets replayed when that context is restored).
+pub(crate) fn signal_delivery_ok() -> bool {
+    SCHED_CALL_DEPTH.with(|d| d.get()) == 0
+        && SCHEDULER.with(|s| {
+            let s = s.borrow();
+            !s.machinery
+                && match (s.current, s.main) {
+                    (Some(c), Some(m)) => c.id() == m.id(),
+                    _ => true,
+                }
+        })
+}
+
 pub(crate) fn preempt_ok() -> bool {
     SCHEDULER.with(|s| {
         let s = s.borrow();
@@ -421,6 +461,7 @@ pub(crate) fn sleep(
     globals: &mut Globals,
     dur: Option<Duration>,
 ) -> Result<Duration> {
+    let _guard = SchedCall::enter();
     ensure_main(vm);
     flush_pending_reports(vm, globals);
     // A pending interrupt allowed at blocking points fires *instead of*
@@ -523,6 +564,7 @@ pub(crate) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
 
 /// `Thread.pass`: give every currently runnable thread a chance to run.
 pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
+    let _guard = SchedCall::enter();
     ensure_main(vm);
     flush_pending_reports(vm, globals);
     // `Thread.pass` is a delivery point for `:immediate` interrupts but
@@ -600,6 +642,7 @@ pub(crate) fn join(
     target: Value,
     timeout: Option<Duration>,
 ) -> Result<bool> {
+    let _guard = SchedCall::enter();
     ensure_main(vm);
     let cur = SCHEDULER.with(|s| s.borrow().current.unwrap());
     if target == cur {

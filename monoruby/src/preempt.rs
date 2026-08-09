@@ -179,6 +179,22 @@ pub(crate) fn consume_poll_flag() -> (u32, bool) {
     })
 }
 
+/// Re-arm the poll flag the way the async signal stub does (+10 lands
+/// in the "GC request" band, so every poll site fires): used when a
+/// poll on a NON-main green thread consumed the flag but had to leave
+/// the pending signal for the main thread — without this the wakeup is
+/// swallowed and main may never poll again (e.g. a `Thread.pass until
+/// flag` spin performs no allocation).
+pub(crate) fn renudge_signal_wakeup() {
+    STATE.with(|st| {
+        let addr = *st.borrow().shared.flag_addr.lock().unwrap();
+        if addr != 0 {
+            // SAFETY: owning-thread access, as in `consume_poll_flag`.
+            unsafe { &*(addr as *const AtomicU32) }.fetch_add(10, Ordering::Relaxed);
+        }
+    });
+}
+
 /// Stress mode: re-arm the flag so the very next poll site fires again.
 pub(crate) fn stress_renudge() {
     if !stress() {

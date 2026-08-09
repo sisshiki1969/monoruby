@@ -4645,9 +4645,17 @@ pub(crate) extern "C" fn execute_gc(
     // Signal (trap-handler / default-exception) delivery happens only on
     // the MAIN green thread, matching CRuby: a signal arriving while a
     // non-main thread runs stays pending until main's next poll point.
-    let pending = if crate::scheduler::on_main_thread() {
+    let pending = if crate::scheduler::signal_delivery_ok() {
         crate::codegen::signal_table::take_pending_signals()
     } else {
+        // The signal stays pending for the main thread (or for a poll
+        // outside the scheduler machinery) — but this poll consumed the
+        // flag the async handler armed (and the GC below resets it), so
+        // re-arm it or the wakeup is swallowed and the handler may never
+        // run.
+        if crate::codegen::signal_table::has_pending_signals() {
+            crate::preempt::renudge_signal_wakeup();
+        }
         0
     };
     if let Some(signo) = crate::codegen::signal_table::lowest_pending_signo(pending) {

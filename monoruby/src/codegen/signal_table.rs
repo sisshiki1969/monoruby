@@ -38,6 +38,11 @@ pub(crate) fn take_pending_signals() -> u32 {
     PENDING_SIGNALS.swap(0, Ordering::Relaxed)
 }
 
+/// Whether any signal is pending (without consuming it).
+pub(crate) fn has_pending_signals() -> bool {
+    PENDING_SIGNALS.load(Ordering::Relaxed) != 0
+}
+
 /// List of POSIX signals monoruby installs an async-signal handler
 /// for *by default*. This is CRuby's default-convert set (verified
 /// against CRuby 4.0.2): a terminating signal delivered to the process
