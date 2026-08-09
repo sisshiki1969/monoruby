@@ -155,20 +155,17 @@ impl Codegen {
         );
     }
 
-    /// VM-side GC/signal poll. If `alloc_flag >= 8` (the signal handler nudges
-    /// it by 10), call `exec_gc` which drains pending signals + runs GC. The
-    /// hot path is two loads, a compare, and a fall-through branch.
+    /// VM-side safepoint poll. If any lane of the poll word is set (GC
+    /// request, preempt tick, pending signal — see poll_flag.rs), call
+    /// `exec_gc`. The hot path is a load and a fall-through `cbz`.
     pub(in crate::codegen) fn a64_vm_execute_gc(&mut self) {
         let gc = self.exec_gc.clone();
         let skip = self.jit.label();
-        let af_addr = self.jit.get_label_address(&self.alloc_flag).as_ptr() as u64;
+        let pf_addr = self.jit.get_label_address(&self.poll_flag).as_ptr() as u64;
         monoasm_arm64!(&mut self.jit,
-            mov x10, (af_addr);
-            ldr w11, [x10];
-            cmp x11, #(8);
-        );
-        self.jit.bcond_label(Cond::Lt, &skip);
-        monoasm_arm64!(&mut self.jit,
+            mov x10, (pf_addr);
+            ldr w11, [x10];       // zero-extends into x11
+            cbz x11, skip;
             bl gc;
             skip:
         );

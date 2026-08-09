@@ -1,30 +1,19 @@
 //! Phase-1 preemptive scheduling for the M:1 green-thread runtime.
 //!
-//! A dedicated timer OS thread "nudges" the interpreter's GC poll flag
-//! every [`TICK`] while two or more green threads are alive. The VM and
-//! JIT already poll that flag (`>= 8` calls `execute_gc`) at every
-//! method call and loop back-edge, so the nudge makes the running
-//! thread reach `execute_gc`, which consumes the request and calls
-//! `scheduler::pass` — i.e. preemption is exactly "as if every thread
-//! called `Thread.pass` at its next safepoint", reusing the existing
-//! cooperative switching machinery unchanged: no new context-switch
-//! paths and zero codegen changes.
+//! A dedicated timer OS thread arms the poll word's PREEMPT lane every
+//! [`TICK`] while two or more green threads are alive. The VM and JIT
+//! poll that word (any non-zero lane calls `execute_gc`) at every method
+//! call and loop back-edge, so the tick makes the running thread reach
+//! `execute_gc`, which consumes the lane and calls `scheduler::pass` —
+//! i.e. preemption is exactly "as if every thread called `Thread.pass`
+//! at its next safepoint", reusing the existing cooperative switching
+//! machinery unchanged: no new context-switch paths and zero codegen
+//! changes.
 //!
-//! ## The flag protocol
-//!
-//! The poll flag is a `u32` in JIT memory, shared by several writers:
-//! - the RValue-arena path adds `+1` per nearly-full page,
-//! - the signal stubs add `+10`,
-//! - `request_gc` / the malloc trigger lift it into the `>= 8` band,
-//! - the preempt timer ORs in [`PREEMPT_BIT`].
-//!
-//! [`consume_poll_flag`] (top of `execute_gc`) strips `PREEMPT_BIT` and
-//! reports `(base, preempt)`: a collection is wanted only when
-//! `base >= 8`, so a pure preempt tick never triggers a spurious full
-//! GC, and page-fill accumulation below the trigger band is preserved.
-//! `PREEMPT_BIT` is bit 30, not 31: the x86-64 poll is `cmpl ...; jge`
-//! (a *signed* compare), so bit 31 would read as negative and the poll
-//! would never fire.
+//! The lane protocol (who sets/clears which byte of the word) lives in
+//! poll_flag.rs; `execute_gc` consumes the PREEMPT lane through
+//! [`crate::poll_flag::consume_preempt`]. This module owns only the
+//! timer thread and the stress switches.
 //!
 //! ## Lifetime safety
 //!
@@ -32,14 +21,16 @@
 //! by this thread's `Codegen`. `flag_addr` is behind a mutex: the timer
 //! locks it around every write, and [`codegen_dropped`] (called from
 //! `Codegen::drop`) zeroes it under the same lock before the memory is
-//! freed — after that the timer can never dereference it again.
+//! freed — after that the timer can never dereference it again. (This is
+//! why the timer does not use poll_flag.rs's registries: excluding
+//! teardown needs the lock.)
 //!
 //! ## Env switches
 //!
 //! - `MONORUBY_NO_PREEMPT=1` — never start the timer (cooperative-only,
 //!   for debugging and bisection).
 //! - `MONORUBY_PREEMPT_STRESS=1` — treat *every* poll-site visit as a
-//!   preempt request and re-arm the flag after each poll, so every
+//!   preempt request and re-arm the lane after each poll, so every
 //!   safepoint performs a switch attempt: the deterministic torture
 //!   mode, the scheduling analog of `gc-stress`.
 
@@ -47,8 +38,7 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// See the module doc: bit 30, not 31 (the x86-64 poll compare is signed).
-pub(crate) const PREEMPT_BIT: u32 = 1 << 30;
+use crate::poll_flag::PREEMPT_LANE;
 
 /// Timeslice; the same order of magnitude as CRuby's thread quantum.
 const TICK: std::time::Duration = std::time::Duration::from_millis(10);
@@ -56,7 +46,7 @@ const TICK: std::time::Duration = std::time::Duration::from_millis(10);
 struct Shared {
     /// Tells the timer thread to exit at its next tick.
     stop: AtomicBool,
-    /// Address of this interpreter's poll flag (0 = detached). The mutex
+    /// Address of this interpreter's poll word (0 = detached). The mutex
     /// makes timer writes and detachment mutually exclusive, so the
     /// timer can never write into freed JIT memory.
     flag_addr: Mutex<usize>,
@@ -88,15 +78,15 @@ pub(crate) fn stress() -> bool {
     *ON.get_or_init(|| std::env::var_os("MONORUBY_PREEMPT_STRESS").is_some())
 }
 
-/// Register the interpreter's poll-flag address (from `Codegen` init).
+/// Register the interpreter's poll-word address (from `Codegen` init).
 pub(crate) fn register_flag(addr: *mut u32) {
     STATE.with(|st| {
         *st.borrow().shared.flag_addr.lock().unwrap() = addr as usize;
     });
     if stress() {
         // Arm the very first poll; `stress_renudge` re-arms after each one.
-        // SAFETY: `addr` is the live poll flag just registered.
-        unsafe { &*(addr as *const AtomicU32) }.fetch_or(PREEMPT_BIT, Ordering::Relaxed);
+        // SAFETY: `addr` is the live poll word just registered.
+        unsafe { &*(addr as *const AtomicU32) }.fetch_or(PREEMPT_LANE, Ordering::Relaxed);
     }
 }
 
@@ -149,46 +139,15 @@ fn timer_loop(shared: Arc<Shared>) {
             // SAFETY: non-zero only while the owning `Codegen` is alive;
             // the lock excludes concurrent detachment.
             let flag = unsafe { &*(*addr as *const AtomicU32) };
-            flag.fetch_or(PREEMPT_BIT, Ordering::Relaxed);
+            flag.fetch_or(PREEMPT_LANE, Ordering::Relaxed);
         }
     }
 }
 
-/// Consume the poll flag at `execute_gc` entry: strip `PREEMPT_BIT` and
-/// return `(base, preempt)`. `base >= 8` means an actual GC request
-/// (page-fill accumulation, malloc trigger, `GC.start`, or a signal
-/// stub's `+10`); a pure preempt tick leaves `base` below the band.
-pub(crate) fn consume_poll_flag() -> (u32, bool) {
-    STATE.with(|st| {
-        let st = st.borrow();
-        let addr = *st.shared.flag_addr.lock().unwrap();
-        if addr == 0 {
-            // Defensive: a direct `execute_gc` call with no registered
-            // flag behaves exactly as before this module existed.
-            return (8, false);
-        }
-        // SAFETY: this is the owning interpreter thread — the flag (JIT
-        // memory in this thread's `Codegen`) is alive while it executes.
-        let flag = unsafe { &*(addr as *const AtomicU32) };
-        let v = flag.load(Ordering::Relaxed);
-        let preempt = v & PREEMPT_BIT != 0;
-        if preempt {
-            flag.fetch_and(!PREEMPT_BIT, Ordering::Relaxed);
-        }
-        (v & !PREEMPT_BIT, preempt || stress())
-    })
-}
-
-/// Stress mode: re-arm the flag so the very next poll site fires again.
+/// Stress mode: re-arm the lane so the very next poll site fires again.
 pub(crate) fn stress_renudge() {
     if !stress() {
         return;
     }
-    STATE.with(|st| {
-        let addr = *st.borrow().shared.flag_addr.lock().unwrap();
-        if addr != 0 {
-            // SAFETY: owning-thread access, as in `consume_poll_flag`.
-            unsafe { &*(addr as *const AtomicU32) }.fetch_or(PREEMPT_BIT, Ordering::Relaxed);
-        }
-    });
+    crate::poll_flag::set_preempt();
 }

@@ -432,7 +432,9 @@ pub struct JitModule {
     pub(crate) jit: JitMemory,
     class_version: DestLabel,
     const_version: DestLabel,
-    alloc_flag: DestLabel,
+    /// The safepoint poll word (see poll_flag.rs for the lane protocol).
+    /// JIT data so the VM/JIT poll sites can address it rip-relative.
+    poll_flag: DestLabel,
     ///
     /// Raise error.
     ///
@@ -635,11 +637,6 @@ pub(crate) enum CellHeader {
 ///
 pub struct Codegen {
     pub(crate) jit: JitModule,
-    /// Pre-generated async-signal-safe asm stub for every signal in
-    /// `signal_table::TRAPPABLE_SIGNALS`, keyed by signo. Generated once
-    /// at `Codegen::new`; `Signal.trap` looks up the stub here and
-    /// `sigaction(2)`s it at trap time. See doc/signal.md A7.
-    signal_stubs: HashMap<i32, CodePtr>,
     class_version_addr: *mut u32,
     const_version_addr: *mut u64,
 
@@ -852,9 +849,13 @@ pub(crate) struct VmHandlers {
 
 impl Drop for Codegen {
     fn drop(&mut self) {
-        // The poll flag lives in this Codegen's JIT memory and the
-        // preempt timer writes to it from another OS thread: detach it
-        // before the memory is freed. See preempt.rs.
+        // The poll word lives in this Codegen's JIT memory and is written
+        // by the preempt timer (another OS thread) and the signal handler
+        // (async context): detach it everywhere before the memory is
+        // freed. See preempt.rs and poll_flag.rs.
+        let label = self.poll_flag.clone();
+        let addr = self.jit.get_label_address(&label).as_ptr() as *mut u32;
+        crate::poll_flag::unregister(addr);
         crate::preempt::codegen_dropped();
     }
 }
@@ -1012,7 +1013,6 @@ impl Codegen {
 
         let mut codegen = Self {
             jit,
-            signal_stubs: HashMap::default(),
             class_version_addr,
             const_version_addr,
             alloc_free_head_addr: std::ptr::null_mut(),
@@ -1051,17 +1051,6 @@ impl Codegen {
             jit_compile_time: std::time::Duration::default(),
         };
         codegen.construct_vm();
-        // Pre-generate an async-signal-safe stub for every signal we
-        // permit trapping (signal_table::TRAPPABLE_SIGNALS). Doing it all
-        // up front means `Signal.trap` only has to sigaction(2) at trap
-        // time — no JIT codegen on a live buffer. SIGSEGV/SIGBUS/SIGFPE/
-        // SIGILL/SIGABRT are deliberately absent: those are genuine
-        // programming errors and are left to the kernel's core-dump path.
-        // See doc/signal.md A2/A7.
-        for &signo in signal_table::TRAPPABLE_SIGNALS {
-            let codeptr = codegen.signal_handler_for(signo);
-            codegen.signal_stubs.insert(signo, codeptr);
-        }
         codegen.jit.finalize();
 
         // Only the default-install set (POSIX_SIGNALS, i.e. SIGINT) is
@@ -1076,7 +1065,7 @@ impl Codegen {
             if signo == libc::SIGALRM && crate::watchdog::armed() {
                 continue;
             }
-            if !codegen.install_signal_stub(signo) {
+            if !codegen.install_signal_handler(signo) {
                 panic!("Failed to set signal handler for signo {signo}");
             }
         }
@@ -1095,13 +1084,14 @@ impl Codegen {
         let info = codegen.get_wrapper_info(pair);
         codegen.vm_code_position = (Some(info.0), info.1, Some(info.2), info.3);
 
-        let address = codegen.jit.get_label_address(&codegen.alloc_flag).as_ptr() as *mut u32;
-        // The preempt timer nudges the same flag from its own OS thread;
-        // register it (detached again in `Codegen::drop`).
+        let address = codegen.jit.get_label_address(&codegen.poll_flag).as_ptr() as *mut u32;
+        // Register the poll word: the owning-thread + signal-handler
+        // registries (poll_flag.rs) and the preempt timer's mutex-guarded
+        // copy (preempt.rs). All detached again in `Codegen::drop`.
+        crate::poll_flag::register(address);
         crate::preempt::register_flag(address);
         alloc::ALLOC.with(|alloc| {
-            let mut alloc = alloc.borrow_mut();
-            alloc.set_alloc_flag_address(address);
+            let alloc = alloc.borrow_mut();
             // Capture the allocator's free-list state addresses for the JIT
             // inline-allocation fast path (stable thread-local; see the
             // Codegen field docs).
@@ -1145,17 +1135,12 @@ impl Codegen {
         CompilationUnitId(id)
     }
 
-    pub(crate) fn signal_handler_for(&mut self, signo: i32) -> CodePtr {
-        self.jit.signal_handler_for(self.alloc_flag.clone(), signo)
-    }
-
     /// `sigaction(2)` `signo` to `handler` with `flags`. Returns true on
     /// success. The handler must be either one of the libc `SIG_*`
-    /// sentinels or a pointer to a stub from `signal_stubs`.
+    /// sentinels or `signal_table::signal_handler`.
     unsafe fn sigaction_to(signo: i32, handler: libc::sighandler_t, flags: i32) -> bool {
         // SAFETY: caller passes a valid signo and a handler that is
-        // either a libc sentinel or a stable code pointer into the JIT
-        // buffer (which lives for the process lifetime).
+        // either a libc sentinel or the process-lifetime Rust handler.
         unsafe {
             let mut sa: libc::sigaction = std::mem::zeroed();
             sa.sa_sigaction = handler;
@@ -1165,14 +1150,14 @@ impl Codegen {
         }
     }
 
-    /// Arm `signo` with its pre-generated async-signal-safe stub so the
-    /// next poll point observes the pending bit. Returns false if no
-    /// stub was generated for `signo` (i.e. it is not trappable) or the
+    /// Arm `signo` with the async-signal-safe Rust handler
+    /// (`signal_table::signal_handler`) so the next poll point observes
+    /// the pending bit. Returns false if `signo` is not trappable or the
     /// syscall failed.
-    pub(crate) fn install_signal_stub(&self, signo: i32) -> bool {
-        let Some(codeptr) = self.signal_stubs.get(&signo) else {
+    pub(crate) fn install_signal_handler(&self, signo: i32) -> bool {
+        if !signal_table::is_trappable(signo) {
             return false;
-        };
+        }
         // No SA_RESTART, deliberately (like CRuby): a signal must EINTR a
         // blocking syscall so the interpreter can reach a poll point and
         // convert the pending signal. With SA_RESTART, a read(2) that has
@@ -1180,9 +1165,23 @@ impl Codegen {
         // a process blocked on an idle pipe can never be terminated by
         // SIGTERM. The blocking primitives (value/rvalue/io.rs, sleep,
         // waitpid, select) all retry bare EINTRs themselves.
-        // SAFETY: codeptr is a stable pointer into the finalized JIT
-        // buffer.
-        unsafe { Self::sigaction_to(signo, codeptr.as_ptr() as libc::sighandler_t, 0) }
+        // SAFETY: the handler is a plain `extern "C" fn(i32)` living in
+        // the executable for the process lifetime.
+        let ok = unsafe {
+            Self::sigaction_to(
+                signo,
+                signal_table::signal_handler as *const () as usize as libc::sighandler_t,
+                0,
+            )
+        };
+        if ok {
+            // sigaction is process-wide, so this interpreter now owns
+            // signal handling: point the handler's poll-word registry at
+            // it too (crucial after fork / in parallel-test processes —
+            // see `adopt_signal_registry`).
+            crate::poll_flag::adopt_signal_registry();
+        }
+        ok
     }
 
     /// Set `signo` to `SIG_IGN` (silently discard).
@@ -1191,12 +1190,12 @@ impl Codegen {
         unsafe { Self::sigaction_to(signo, libc::SIG_IGN, 0) }
     }
 
-    /// Restore `signo` to monoruby's default disposition: re-arm the stub
-    /// for default-installed signals (so SIGINT keeps raising `Interrupt`),
-    /// otherwise revert to the kernel `SIG_DFL`.
+    /// Restore `signo` to monoruby's default disposition: re-arm the
+    /// handler for default-installed signals (so SIGINT keeps raising
+    /// `Interrupt`), otherwise revert to the kernel `SIG_DFL`.
     pub(crate) fn install_signal_default(&self, signo: i32) -> bool {
         if signal_table::is_default_installed(signo) {
-            self.install_signal_stub(signo)
+            self.install_signal_handler(signo)
         } else {
             // SAFETY: SIG_DFL is always a valid disposition.
             unsafe { Self::sigaction_to(signo, libc::SIG_DFL, 0) }
@@ -1205,9 +1204,9 @@ impl Codegen {
 
     /// Set `signo` to the OS default disposition (`SIG_DFL`)
     /// unconditionally — the `"SYSTEM_DEFAULT"` trap command. Unlike
-    /// `install_signal_default`, this does *not* re-arm monoruby's stub
-    /// for the default-installed set: the caller explicitly wants the
-    /// kernel's behaviour.
+    /// `install_signal_default`, this does *not* re-arm monoruby's
+    /// handler for the default-installed set: the caller explicitly wants
+    /// the kernel's behaviour.
     pub(crate) fn install_signal_system_default(&self, signo: i32) -> bool {
         // SAFETY: SIG_DFL is always a valid disposition.
         unsafe { Self::sigaction_to(signo, libc::SIG_DFL, 0) }

@@ -136,7 +136,7 @@ flushing_reports: flush_pending_reports の再入ラッチ
 ループのインスタンスは常に高々 1 つ)。
 
 `SCHED_RSP` は **OS スレッドごと**(`thread_local` の `Cell<u64>`)。各 OS スレッドの
-`Codegen` が自分のスロットのアドレスをスタブに焼き込む(alloc_flag と同じ構図)。
+`Codegen` が自分のスロットのアドレスをスタブに焼き込む(poll ワードと同じ構図)。
 テストハーネスのように複数のインタプリタが別 OS スレッドで並走しても衝突しない。
 
 ### 3.2 コンテキストスイッチのスタブ(×2 アーキ)
@@ -354,26 +354,26 @@ fd を持たない旧 `blocking_region` は全サイトが `blocking_io_region` 
   走る(`on_thread_count(live)` が `live >= 2` で起動、`live < 2` で停止)。単独スレッドの
   プログラムはタイマを 1 本も生やさずコストゼロ。
 - `MONORUBY_NO_PREEMPT` / `MONORUBY_PREEMPT_STRESS` が設定されているとタイマは起動しない。
-- 毎 tick、`flag_addr` の mutex を取ってから poll フラグに `fetch_or(PREEMPT_BIT)`。
+- 毎 tick、`flag_addr` の mutex を取ってから poll ワードの PREEMPT レーンを `fetch_or`。
   `Codegen::drop`(`codegen_dropped`)が同じ mutex 下で `flag_addr` を 0 に落とすので、
   タイマが解放済み JIT メモリを触ることはない(マルチインタプリタのテストハーネス対策)。
 
-### 8.2 フラグプロトコル
+### 8.2 レーンプロトコル
 
-poll フラグは **GC の `alloc_flag` と同じ 1 つの `u32`**。複数の書き手がいる:
+poll ワードは **GC・シグナルと同じ 1 つの `u32`** で、8bit×4 のレーンに分割される
+(全体像は `poll_flag.rs` / `doc/safepoint.md` §3):
 
-| 書き手 | 操作 |
-|---|---|
-| RValue アリーナ(ページ充填) | `+= 1` |
-| シグナルスタブ | `+= 10` |
-| malloc トリガ / `GC.start` | `>= 8` 帯へ持ち上げ |
-| プリエンプトタイマ | `\|= 1 << 30`(`PREEMPT_BIT`) |
+| byte | レーン | 書き手 |
+|---|---|---|
+| 0 | GC | アリーナのページ圧力 / malloc トリガ / `GC.start` |
+| 1 | PREEMPT | プリエンプトタイマ |
+| 2 | SIGNAL | シグナルハンドラ |
 
-- **ビット 30**であってビット 31 ではない: x86-64 の poll は `cmpl [rip+alloc_flag], 8; jge`
-  という**符号付き**比較なので、ビット 31 だと負値に読めて発火しない。
-- タイマは別 OS スレッドから書くので、フラグアクセスはすべてアトミック
-  (タイマ `fetch_or`、GC 後の `unset_alloc_flag` は `fetch_and(PREEMPT_BIT)` で
-  ベース帯だけ落として並行設定されたプリエンプトビットを**保存**する)。
+- 全書き込みは冪等なアトミック `fetch_or` / 自レーン byte のみの `fetch_and` clear。
+  タイマ(別 OS スレッド)とシグナルハンドラ(async-signal 文脈)が同じ語に書いても、
+  レーンが byte で分かれているため互いの更新を失わない。
+- poll はワード全体の**ゼロ判定**(`cmpl …, 0; jne` / `ldr; cbz`)なので符号の罠もない
+  (旧設計は符号付き `jge` の都合で PREEMPT がビット 30 に制限されていた)。
 
 ### 8.3 poll 配置
 
@@ -398,12 +398,12 @@ poll フラグは **GC の `alloc_flag` と同じ 1 つの `u32`**。複数の�
 セーフポイントから呼ばれる `execute_gc`(executor.rs)の順序:
 
 1. `watchdog::poll()`。
-2. `let (flag_base, preempt) = preempt::consume_poll_flag();` — プリエンプトビットを剥がし、
-   `(ベース値, プリエンプトか)` を返す(フラグ未登録なら防御的に `(8, false)`)。
+2. `let preempt = poll_flag::consume_preempt() || preempt::stress();` — PREEMPT レーンを
+   消費する。
 3. 保留シグナルを drain(エラーを立てて `None` を返しうる)。
-4. `flag_base >= 8` のときだけ実際に GC(純プリエンプト tick はベースが 8 未満なので
+4. GC レーンが立っているときだけ実際に GC(純プリエンプト tick は GC レーンに触れないので
    スキップ = 偽の full GC を起こさない)。
-5. `stress_renudge()` — stress モードでは切替の**前に**フラグを再武装し、切替先スレッドも
+5. `stress_renudge()` — stress モードでは切替の**前に**レーンを再武装し、切替先スレッドも
    poll するようにする。
 6. `if preempt && scheduler::preempt_ok() { scheduler::pass(vm, globals)? }`。
    `pass` の `Err`(kill/raise がこのスレッドに配送された)は `set_error` + `None` で浮上。

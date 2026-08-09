@@ -12,7 +12,7 @@ GC(`doc/gc.md`)・タイムスライスプリエンプション(`doc/threads.md`
 | poll のコード生成(x86-64) | `codegen/arch/x86_64/jit_module.rs`(`execute_gc_inner`) / `vmgen/init_method.rs`(`vm_init`) / `vmgen.rs`(`vm_loop_start`) |
 | poll のコード生成(aarch64) | `codegen/arch/aarch64/codegen.rs`(`a64_vm_execute_gc`) / `vmgen.rs` |
 | セーフポイント本体 | `executor.rs`(`execute_gc`) |
-| poll フラグ | `alloc.rs`(`alloc_flag` / `set_alloc_flag` / `unset_alloc_flag`) / `preempt.rs`(`PREEMPT_BIT` / `consume_poll_flag`) |
+| poll ワード | `poll_flag.rs`(レーン定義・set/clear/consume) / `alloc.rs`(ページ圧力・`ack_gc_request`) / `preempt.rs`(タイマ) |
 | JIT tier の poll IR | `codegen/jitgen/asmir.rs`(`AsmInst::ExecGc`) / `codegen/jitgen/compile.rs` |
 
 ---
@@ -20,7 +20,7 @@ GC(`doc/gc.md`)・タイムスライスプリエンプション(`doc/threads.md`
 ## 1. セーフポイントとは何か
 
 セーフポイントとは、実行中のインタプリタが**フレームを完全に整合した(GC-complete な)状態
-にしたうえで poll フラグを検査する**地点である。フラグがトリガ帯に立っていれば、その場で
+にしたうえで poll ワードを検査する**地点である。いずれかのレーンが立っていれば、その場で
 `execute_gc`(`executor.rs`)を呼び、以下のいずれか(または複数)を行う:
 
 - **GC**: マーク&スイープ(`doc/gc.md`)。
@@ -54,24 +54,25 @@ GC(`doc/gc.md`)・タイムスライスプリエンプション(`doc/threads.md`
 
 ---
 
-## 3. poll フラグ `alloc_flag`(`u32`)
+## 3. poll ワード(`poll_flag.rs`、`u32`)
 
-VM/JIT が参照する単一の `u32`。3 イベントすべてがこの 1 語を共有する。**ベース値(下位)が
-8 以上でトリガ帯**、上位ビット `PREEMPT_BIT` がプリエンプト要求。
+VM/JIT が参照する単一の `u32`。3 イベントすべてがこの 1 語を共有し、**8bit×4 のレーン**に
+分割される。poll は**ワード全体のゼロ判定 1 個**(非ゼロ = いずれかのレーンが立っている)。
 
-| 書き手 | 操作 | 意味 |
-| --- | --- | --- |
-| ページ充填 | `set_alloc_flag`:`+= 1` | ほぼ満杯ページごと(約 8 ページで 8 に到達)→ GC |
-| malloc 圧 / `GC.start` | `>= 8` 帯へ持ち上げ | 外部バッファ圧・明示 GC → GC |
-| シグナルハンドラ | `+= 10` | 保留シグナル配送 |
-| プリエンプトタイマ | `\|= 1 << 30`(`PREEMPT_BIT`) | タイムスライス切替 |
+| byte | レーン | 立てる側 | 落とす側 |
+| --- | --- | --- | --- |
+| 0 | GC | ページ圧力(8 ページで `set_gc`)/ malloc 圧 / `GC.start` / `GC.stress` 再武装 | 収集完了(`ack_gc_request`。`--no-gc` の空収集も同様) |
+| 1 | PREEMPT | プリエンプトタイマ(別 OS スレッド)/ stress 再武装 | poll 入口の `consume_preempt` |
+| 2 | SIGNAL | シグナルハンドラ(async-signal 文脈) | ビットマップを drain した poll(main 配送時) |
+| 3 | 予備 | — | — |
 
-- **ビット 30** であってビット 31 ではない: x86-64 poll は `cmpl …; jge`(符号付き比較)なので、
-  ビット 31 だと負値に読めて発火しない。
-- タイマは別 OS スレッドから書くので、フラグアクセスはすべてアトミック。GC 後の
-  `unset_alloc_flag` は `fetch_and(PREEMPT_BIT)` でベース帯だけ落とし、並行して立った
-  プリエンプトビットは保存する。
-- 詳細な相互作用は `doc/gc.md` §4.1、`doc/threads.md` §8.2 を参照。
+- 全書き込みは**冪等なアトミック演算**(`fetch_or` で set、`fetch_and` で自レーンの byte のみ
+  clear)。別スレッド・async-signal 文脈からの書き込みが互いのレーンを失わせることはない。
+- ページ圧力の「8 ページ」カウンタはアロケータ内部(`pages_since_gc`)にあり、poll ワード自体は
+  算術を持たない(旧設計はページ充填 `+=1`・シグナル `+=10`・`>= 8` トリガ帯を 1 語に重畳し、
+  符号付き比較の都合で PREEMPT がビット 30 に制限されていた)。
+- 詳細な相互作用は `poll_flag.rs` のモジュールドキュメント、`doc/gc.md` §4.1、
+  `doc/threads.md` §8.2 を参照。
 
 ---
 
@@ -120,8 +121,8 @@ native(非 Ruby)の callee には entry poll がないが、任意の非有界�
 `execute_gc_inner`(`jit_module.rs`)が出力する。ホットパスは 1 比較 + fall-through:
 
 ```asm
-    cmpl [rip + alloc_flag], 8
-    jge  gc          ; ベース値 >= 8(またはプリエンプトビット)なら収集パスへ
+    cmpl [rip + poll_flag], 0
+    jne  gc          ; いずれかのレーンが立っていれば slow path へ
 exit:
     ; --- 別ページ ---
 gc:
@@ -132,7 +133,7 @@ gc:
     jmp  error        ; None(=例外/シグナル/割り込み)なら伝播
 ```
 
-- **fall-through が最頻ケース**(フラグ未武装)で、収集本体は `select_page(1)` の別ページに
+- **fall-through が最頻ケース**(全レーン未武装)で、収集本体は `select_page(1)` の別ページに
   置いてホットパスの I-cache を汚さない。
 - `exec_gc` は `execute_gc` を呼ぶスタブ。戻り値 `Some` を `rax != 0`、`None` を `rax == 0` として
   分岐する。
@@ -142,10 +143,9 @@ gc:
 `a64_vm_execute_gc`(`codegen.rs`)が対称に出力する:
 
 ```asm
-    mov x10, alloc_flag_addr
+    mov x10, poll_flag_addr
     ldr w11, [x10]
-    cmp x11, #8
-    b.lt skip
+    cbz x11, skip
     bl  gc
 skip:
 ```
@@ -185,15 +185,17 @@ poll でフラグが立っていたら、収集本体に入る**前**に、レ�
 
 1. **`watchdog::poll()`** — poll 到達はインタプリタの進捗なので、ハングウォッチドッグの
    カウントダウンをリセット(`doc/signal.md`)。
-2. **`preempt::consume_poll_flag()`** — プリエンプトビットを剥がし `(ベース値, プリエンプトか)`
-   を得る。以降の GC 判定はベース値で行う(純プリエンプト tick で偽の full GC を起こさない)。
-   フラグ未登録なら防御的に `(8, false)`。
-3. **保留シグナルの drain** — `PENDING_SIGNALS` ビットマップを取り、最小番号のシグナルを
-   `Signal.trap` ハンドラ呼び出し / 既定例外(SIGINT ⇒ `Interrupt` 等)に変換。エラーを
-   立てて `None` を返しうる。
-4. **GC(ベース値 `>= 8` のときだけ)** — `parent_fiber` を辿ってルート Executor へ行き、
+2. **`poll_flag::consume_preempt()`** — PREEMPT レーンを消費する。GC 判定は GC レーンで
+   独立に行う(純プリエンプト tick で偽の full GC を起こさない)。ワード未登録なら
+   防御的に「GC 要求あり」とみなす。
+3. **保留シグナルの drain** — SIGNAL レーンをクリアしてから `PENDING_SIGNALS` ビットマップを
+   取り、最小番号のシグナルを `Signal.trap` ハンドラ呼び出し / 既定例外(SIGINT ⇒
+   `Interrupt` 等)に変換。エラーを立てて `None` を返しうる。配送が main にゲートされ
+   drain できない poll では SIGNAL レーンを残し(main の wakeup 維持)、GC も次の poll へ
+   延期する(`doc/signal.md` §4.1)。
+4. **GC(GC レーンが立っているときだけ)** — `parent_fiber` を辿ってルート Executor へ行き、
    `ALLOC.borrow_mut().gc(&Root { globals, executor })`。
-5. **`preempt::stress_renudge()`** — stress モードでは切替の**前に**フラグを再武装し、
+5. **`preempt::stress_renudge()`** — stress モードでは切替の**前に**レーンを再武装し、
    切替先スレッドも poll するようにする。
 6. **プリエンプション** — `preempt && scheduler::preempt_ok()` のとき `scheduler::pass`。
    `Err`(このスレッドへ配送された kill/raise)は `set_error` + `None` で浮上させる。

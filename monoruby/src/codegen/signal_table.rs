@@ -15,8 +15,8 @@ use crate::{MonorubyErr, Value};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Process-global bitmap of pending Unix signals — bit `n` corresponds
-/// to signal `n + 1` (SIGINT = 2 ⇒ bit 1). Written from the per-signal
-/// asm stubs (`signal_handler_for`), drained at poll time.
+/// to signal `n + 1` (SIGINT = 2 ⇒ bit 1). Written by [`signal_handler`],
+/// drained at poll time.
 ///
 /// This is deliberately a *process* global, not per-`Codegen` JIT data:
 /// POSIX signals are process-wide, and `sigaction` is process-wide. With
@@ -28,9 +28,22 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// which Codegen installed the handler.
 pub(crate) static PENDING_SIGNALS: AtomicU32 = AtomicU32::new(0);
 
-/// Absolute address of `PENDING_SIGNALS`, baked into the asm stubs.
-pub(crate) fn pending_signals_addr() -> u64 {
-    &PENDING_SIGNALS as *const AtomicU32 as u64
+/// The process's signal handler, installed via `sigaction(2)` for every
+/// armed signal (`sa_handler` style, so the kernel passes the signo).
+///
+/// Runs in async-signal context: the entire body is two lock-free relaxed
+/// atomic ops — record the signo in the pending bitmap, then arm the poll
+/// word's SIGNAL lane so the next safepoint drains it. No locks, no
+/// allocation, no TLS. This replaces the old per-signo JIT asm stubs,
+/// whose unsynchronized read-modify-write (`addl` without `lock`) could
+/// race the preempt timer's `fetch_or` on the same word and lose one of
+/// the two updates — and which turned into a call into freed JIT memory
+/// if a signal arrived after the installing `Codegen` was dropped.
+pub(crate) extern "C" fn signal_handler(signo: i32) {
+    if (1..=32).contains(&signo) {
+        PENDING_SIGNALS.fetch_or(1 << (signo - 1) as u32, Ordering::Relaxed);
+    }
+    crate::poll_flag::set_signal_from_handler();
 }
 
 /// Atomically drain the pending-signal bitmap.

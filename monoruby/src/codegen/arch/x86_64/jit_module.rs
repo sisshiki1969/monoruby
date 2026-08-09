@@ -1,5 +1,5 @@
 //! x86-64 `JitModule` asm methods: VM construction primitives, frame
-//! setup, register save/restore, GC poll, and the per-signal stub.
+//! setup, register save/restore, and the safepoint poll.
 //!
 //! Counterpart of `arch/aarch64/jit_module.rs`. These are inherent
 //! `impl JitModule` methods on the arch-neutral `JitModule` defined in
@@ -15,7 +15,13 @@ impl JitModule {
         let class_version = jit.data_i32(1);
         let bop_redefined_flags = jit.data_i32(0);
         let const_version = jit.data_i64(1);
-        let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
+        // The poll word (poll_flag.rs). Under `gc-stress` the GC lane
+        // starts armed so the very first safepoint collects.
+        let poll_flag = jit.data_i32(if cfg!(feature = "gc-stress") {
+            crate::poll_flag::GC_LANE as i32
+        } else {
+            0
+        });
         let entry_raise = jit.label();
         let entry_panic = jit.label();
         let exec_gc = jit.label();
@@ -38,7 +44,7 @@ impl JitModule {
             jit,
             class_version,
             const_version,
-            alloc_flag,
+            poll_flag,
             entry_raise,
             exec_gc,
             f64_to_val,
@@ -257,14 +263,16 @@ impl JitModule {
         error: &DestLabel,
         write_back: impl FnOnce(&mut Self),
     ) {
-        let alloc_flag = self.alloc_flag.clone();
+        let poll_flag = self.poll_flag.clone();
         let gc = self.jit.label();
         let exit = self.jit.label();
         let exec_gc = self.exec_gc.clone();
         assert_eq!(0, self.jit.get_page());
+        // Any armed lane (GC / preempt / signal) sends the poll through
+        // `execute_gc`; the hot path is one fused compare-and-branch.
         monoasm! { &mut self.jit,
-            cmpl [rip + alloc_flag], 8;
-            jge  gc;
+            cmpl [rip + poll_flag], 0;
+            jne  gc;
         exit:
         };
         self.jit.select_page(1);
@@ -279,36 +287,6 @@ impl JitModule {
         self.jit.select_page(0);
     }
 
-    /// Emit a per-signal asm stub. Each stub OR-sets its own bit into
-    /// the process-global `signal_table::PENDING_SIGNALS` bitmap and
-    /// nudges `alloc_flag` so the next GC poll in `execute_gc` notices
-    /// the signal and converts it to a Ruby exception. `signo` is the
-    /// POSIX signal number (1..32).
-    ///
-    /// The handler runs in async-signal context; the only operations
-    /// performed are a memory OR and an ADD, both async-signal-safe on
-    /// x86-64, and rax is caller-saved under the C ABI a signal handler
-    /// is invoked with. No call into Rust. The bitmap is a process
-    /// global (its absolute address is baked in) so the recording side
-    /// and the polling side agree even when several `Codegen`s exist
-    /// (each re-`sigaction`s process-wide; see signal_table.rs).
-    pub(crate) fn signal_handler_for(
-        &mut self,
-        alloc_flag: DestLabel,
-        signo: i32,
-    ) -> CodePtr {
-        debug_assert!((1..=32).contains(&signo));
-        let bit: i32 = 1 << (signo - 1);
-        let ps_addr = crate::codegen::signal_table::pending_signals_addr();
-        let codeptr = self.jit.get_current_address();
-        monoasm! { &mut self.jit,
-            addl [rip + alloc_flag], 10;
-            movq rax, (ps_addr);
-            orl  [rax], (bit);
-            ret;
-        }
-        codeptr
-    }
     ///
     /// Save caller-save registers (except rax) in stack.
     ///

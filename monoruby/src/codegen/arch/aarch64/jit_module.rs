@@ -116,7 +116,13 @@ impl JitModule {
         let class_version = jit.data_i32(1);
         let bop_redefined_flags = jit.data_i32(0);
         let const_version = jit.data_i64(1);
-        let alloc_flag = jit.data_i32(if cfg!(feature = "gc-stress") { 1 } else { 0 });
+        // The poll word (poll_flag.rs). Under `gc-stress` the GC lane
+        // starts armed so the very first safepoint collects.
+        let poll_flag = jit.data_i32(if cfg!(feature = "gc-stress") {
+            crate::poll_flag::GC_LANE as i32
+        } else {
+            0
+        });
         let entry_raise = jit.label();
         let entry_panic = jit.label();
         let exec_gc = jit.label();
@@ -137,7 +143,7 @@ impl JitModule {
             jit,
             class_version,
             const_version,
-            alloc_flag,
+            poll_flag,
             entry_raise,
             exec_gc,
             f64_to_val,
@@ -169,53 +175,4 @@ impl JitModule {
         j
     }
 
-    // --- invokers / entry points ---
-    /// Real `method_invoker` for the simple case (0 args, no kw): set up the
-    /// Ruby frame and call into `vm_entry`, then return the result to Rust.
-    /// AAPCS64 in: x0 exec, x1 globals, x2 funcid, x3 self, x4 args, x5 len,
-    /// x6 block, x7 hashmap. The frame offsets match x86 because aarch64's
-    /// `stp fp,lr` (16B at vm_entry) equals x86's `call`(8B)+`push rbp`(8B).
-    /// TODO(aarch64): argument copying (assumes 0 args) + stack-overflow check.
-    /// Invoker prologue: save callee-saved globals + fp/lr + X25/X26, then set
-    /// EXEC=x0, GLOBALS=x1.
-    /// Per-signal async-signal-safe stub. Mirrors the x86 version
-    /// (`addl [alloc_flag], 10; orl [pending_signals], (bit); ret`). The
-    /// handler nudges `alloc_flag` (so the next GC poll notices the signal)
-    /// and OR-sets the signal bit into `pending_signals`. `signo` is folded
-    /// into the immediate bit at codegen time, so the running handler does
-    /// only memory ops and returns.
-    ///
-    /// The RMW isn't atomic (no ldxr/stxr — these would be illegal at this
-    /// level inside async-signal context too), so a nested signal during the
-    /// sequence may lose an increment / a bit. The x86 version has the same
-    /// property (no LOCK prefix); the lossy case is rare and harmless — the
-    /// next allocation poll picks it up.
-    pub(crate) fn signal_handler_for(
-        &mut self,
-        alloc_flag: DestLabel,
-        signo: i32,
-    ) -> CodePtr {
-        debug_assert!((1..=32).contains(&signo));
-        let bit: u64 = 1u64 << (signo - 1);
-        let af_addr = self.jit.get_label_address(&alloc_flag).as_ptr() as u64;
-        // Process-global bitmap (see signal_table.rs): recording and
-        // polling agree even when several Codegens exist.
-        let ps_addr = crate::codegen::signal_table::pending_signals_addr();
-        let p = self.jit.get_current_address();
-        monoasm_arm64!(&mut self.jit,
-            // alloc_flag += 10  (32-bit RMW)
-            mov x0, (af_addr);
-            ldr w1, [x0];
-            add x1, x1, #10;
-            str w1, [x0];
-            // pending_signals |= bit  (32-bit RMW)
-            mov x0, (ps_addr);
-            ldr w1, [x0];
-            mov x2, (bit);
-            orr x1, x1, x2;
-            str w1, [x0];
-            ret;
-        );
-        p
-    }
 }
