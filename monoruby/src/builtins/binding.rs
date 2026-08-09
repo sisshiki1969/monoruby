@@ -566,6 +566,67 @@ mod tests {
     }
 
     #[test]
+    fn binding_dup_shares_storage_but_not_new_names() {
+        // core/binding/dup_spec.rb "retains original binding variables but
+        // the list is distinct": an eval-introduced local lives in the
+        // frame it was born in and is reached through the outer chain, so
+        // a dup'd Binding writes the SAME storage — while a name
+        // introduced through one Binding does not become visible through
+        // the other. Copying the locals into a fresh frame per eval (the
+        // pre-#1067 scheme) got the second half right and the first half
+        // wrong.
+        run_test(
+            r#"
+            def m
+              binding
+            end
+            bind1 = m
+            eval "a = 1", bind1
+            bind2 = bind1.dup
+            eval("a = 2", bind2)
+            leak = begin
+              eval("b = 3", bind2)
+              eval("b", bind1)
+            rescue NameError
+              :not_leaked
+            end
+            [eval("a", bind1), eval("a", bind2), eval("b", bind2), leak,
+             bind1.local_variables.sort, bind2.local_variables.sort]
+            "#,
+        );
+        // The same sharing through local_variable_set on an
+        // eval-introduced (not method-frame) local.
+        run_test(
+            r#"
+            def m
+              binding
+            end
+            b1 = m
+            b1.local_variable_set(:z, 10)
+            b2 = b1.dup
+            b2.local_variable_set(:z, 20)
+            [b1.local_variable_get(:z), b2.local_variable_get(:z)]
+            "#,
+        );
+        // Chained evals: later evals see earlier evals' locals through
+        // the chain, and assignment updates in place. The binding comes
+        // from a method, not toplevel — the harness wraps the snippet in
+        // its own toplevel locals, which a toplevel binding would report.
+        run_test(
+            r#"
+            def m
+              binding
+            end
+            b = m
+            eval("x = 1", b)
+            eval("y = x + 1", b)
+            eval("x = y * 2", b)
+            [eval("[x, y]", b), b.local_variables.sort]
+            "#,
+        );
+    }
+
+    #[test]
     fn binding_new() {
         run_test(
             r#"

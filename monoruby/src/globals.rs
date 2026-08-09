@@ -1,4 +1,4 @@
-use crate::ast::{BlockInfo, Loc, LvarCollector, Node, ParamKind, SourceInfoRef};
+use crate::ast::{BlockInfo, Loc, Node, ParamKind, SourceInfoRef};
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
@@ -1064,30 +1064,29 @@ impl Globals {
     ) -> Result<Option<usize>> {
         let line_offset = lineno - 1;
         let outer_fid = binding.outer_fid();
-        let outer = match self.store[outer_fid].is_iseq() {
-            Some(iseq) => iseq,
-            None => {
-                return Err(MonorubyErr::runtimeerr(
-                    "eval with binding requires a Ruby method context",
-                ));
-            }
+        if self.store[outer_fid].is_iseq().is_none() {
+            return Err(MonorubyErr::runtimeerr(
+                "eval with binding requires a Ruby method context",
+            ));
+        }
+        // The scope this eval body compiles under. A binding that has
+        // already hosted an eval carries its own frame; new code compiles
+        // as a CHILD of that frame's iseq, so the locals earlier evals
+        // introduced resolve through the outer chain (depth >= 1) into the
+        // frame they were born in. They must NOT be re-declared as the new
+        // fid's own locals: that came with a value copy into a fresh frame,
+        // and any other Binding sharing the old frame (`#dup`) kept seeing
+        // the stale copy (#1067).
+        let outer = match binding.func_id() {
+            Some(fid) => self.store[fid].as_iseq(),
+            None => self.store[outer_fid].as_iseq(),
         };
         let external_context = self.store.scoped_locals(outer);
-
-        let context = if let Some(fid) = binding.func_id() {
-            let mut lvar = LvarCollector::new();
-            for (name, _) in &self.store.iseq(fid).locals {
-                lvar.insert(&name.get_name());
-            }
-            Some(lvar)
-        } else {
-            None
-        };
 
         let (fid, data_offset) = match crate::parser::parse_program_binding(
             code,
             path,
-            context.clone(),
+            None,
             Some(&external_context),
             line_offset,
             src_encoding,
@@ -1096,7 +1095,7 @@ impl Globals {
             Ok(res) => {
                 let data_offset = res.data_offset;
                 let res =
-                    bytecodegen::bytecode_compile_eval(self, res, outer, Loc::default(), context);
+                    bytecodegen::bytecode_compile_eval(self, res, outer, Loc::default(), None);
                 #[cfg(feature = "emit-bc")]
                 self.dump_bc();
                 res.map(|fid| (fid, data_offset))
@@ -1194,23 +1193,23 @@ impl Globals {
     }
 
     ///
-    /// Create new heap binding frame with *fid* and *self_val*.
+    /// Create a new heap frame for *fid* and chain it onto *binding*.
     ///
-    /// local variables are copied from *binding_lfp* if any.
-    ///
+    /// The frame's outer is the binding's current frame — or the captured
+    /// caller frame for a binding that has not hosted an eval yet. Locals
+    /// are NOT copied: earlier evals' locals stay in the frame they were
+    /// born in and are reached through the outer chain, so every Binding
+    /// sharing those frames (`#dup` / `#clone` copies the pointer) reads
+    /// and writes the same storage (#1067). Only the locals this fid
+    /// itself declares live in the new frame.
     fn new_binding_frame(&mut self, fid: FuncId, self_val: Value, mut binding: Binding) {
         let meta = self.store[fid].meta();
         let mut lfp = Lfp::heap_frame(self_val, meta);
-        lfp.set_outer(Some(binding.outer_lfp()));
-        if let Some(binding_lfp) = binding.binding() {
-            let locals_len = self.locals_len(binding_lfp.func_id());
-            for i in SlotId(1)..SlotId(1) + locals_len {
-                let v = binding_lfp.register(i);
-                // SAFETY: Setting register values during frame initialization.
-                // The slot index is within bounds (1..locals_len).
-                unsafe { lfp.set_register(i, v) }
-            }
-        }
+        let outer = match binding.binding() {
+            Some(prev) => prev,
+            None => binding.outer_lfp(),
+        };
+        lfp.set_outer(Some(outer));
         binding.set_inner(lfp);
     }
 
