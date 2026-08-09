@@ -206,11 +206,11 @@ pub(crate) fn signal_delivery_ok() -> bool {
     SCHED_CALL_DEPTH.with(|d| d.get()) == 0
         && SCHEDULER.with(|s| {
             let s = s.borrow();
-            !s.machinery
-                && match (s.current, s.main) {
-                    (Some(c), Some(m)) => c.id() == m.id(),
-                    _ => true,
-                }
+            // `zip` + `is_none_or`: before the Thread machinery is
+            // initialized only one implicit thread exists, so delivery is
+            // allowed. (In practice `require` initializes the machinery
+            // during startup, so the None case is defensive.)
+            !s.machinery && s.current.zip(s.main).is_none_or(|(c, m)| c.id() == m.id())
         })
 }
 
