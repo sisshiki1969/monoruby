@@ -4629,11 +4629,11 @@ pub(crate) extern "C" fn execute_gc(
     // hang watchdog's countdown (no-op unless armed). See
     // doc/signal.md B+.
     crate::watchdog::poll();
-    // Strip the preempt bit off the poll flag first: `(base, preempt)`
-    // decides below whether this poll wants a collection (`base >= 8`), a
-    // timeslice switch, or both. A pure preempt tick must not run a
-    // spurious full GC. See preempt.rs for the flag protocol.
-    let (flag_base, preempt) = crate::preempt::consume_poll_flag();
+    // Consume the PREEMPT lane first: whether this poll wants a
+    // collection, a timeslice switch, or both is decided lane by lane —
+    // a pure preempt tick never runs a spurious full GC. See
+    // poll_flag.rs for the lane protocol.
+    let preempt = crate::poll_flag::consume_preempt() || crate::preempt::stress();
     let current_exec = executor as *mut Executor;
     // Drain the pending-signal bitmap. The lowest-numbered pending signal
     // is consumed; any others observed in the same drain are dropped on
@@ -4646,25 +4646,28 @@ pub(crate) extern "C" fn execute_gc(
     // the MAIN green thread, matching CRuby: a signal arriving while a
     // non-main thread runs stays pending until main's next poll point.
     let pending = if crate::scheduler::signal_delivery_ok() {
+        // Clear the SIGNAL lane *before* draining: a signal landing in
+        // between re-arms both, costing one spurious poll; the reverse
+        // order could drop the arming of a bit this drain never saw.
+        crate::poll_flag::clear_signal();
         crate::codegen::signal_table::take_pending_signals()
     } else {
         // The signal stays pending for the main thread (or for a poll
-        // outside the scheduler machinery); `deferred_signal` below keeps
-        // this poll from consuming the flag arming, so main still wakes.
+        // outside the scheduler machinery). The SIGNAL lane is left
+        // armed, which keeps the poll word non-zero: main still wakes
+        // (an allocation-free `nil until flag` spin on main polls only
+        // while the word is non-zero).
         0
     };
     // A pending signal this poll may not drain (delivery is gated to the
-    // main thread outside scheduler entry points). Two things follow:
-    // - The collection is skipped for this poll. Running the GC here has
-    //   been observed to corrupt live state (a heap frame freed while a
-    //   pending-signal drain is still owed to main manifests as a wedged
-    //   process at exit, spinning in a swept frame — see the regression
-    //   tests around `process_kill_from_thread`); deferring the
-    //   collection to the next ungated poll is always safe, since the
-    //   poll flag is left armed (only a completed `gc()` resets it).
-    // - That armed flag doubles as main's wakeup: an allocation-free
-    //   `nil until flag` spin on main polls only while the flag is up,
-    //   so clearing it here would swallow the handler forever.
+    // main thread outside scheduler entry points): skip the collection
+    // for this poll. Running the GC here has been observed to corrupt
+    // live state (a heap frame freed while a pending-signal drain is
+    // still owed to main manifests as a wedged process at exit, spinning
+    // in a swept frame — see the regression tests around
+    // `process_kill_from_thread`); deferring the collection to the next
+    // ungated poll is always safe, since the GC lane stays armed (only a
+    // completed collection clears it).
     let deferred_signal = pending == 0 && crate::codegen::signal_table::has_pending_signals();
     if let Some(signo) = crate::codegen::signal_table::lowest_pending_signo(pending) {
         use crate::codegen::signal_table::{self, SignalDisposition};
@@ -4695,7 +4698,7 @@ pub(crate) extern "C" fn execute_gc(
             }
         }
     }
-    if flag_base >= 8 && !deferred_signal {
+    if crate::poll_flag::gc_requested() && !deferred_signal {
         // Forensics (`MONORUBY_GC_BREAK=N`): dump the trigger context of GC
         // #N — who called into the collector, from which executor, and what
         // the scheduler state was — right before that collection runs.

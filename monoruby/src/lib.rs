@@ -56,6 +56,7 @@ mod globals;
 mod id_table;
 mod native_pool;
 pub mod parser;
+mod poll_flag;
 mod preempt;
 mod ruby_probe;
 mod scheduler;

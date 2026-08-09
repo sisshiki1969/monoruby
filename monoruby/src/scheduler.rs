@@ -56,7 +56,7 @@ thread_local! {
     /// terminates. One slot per OS thread: the interpreter (scheduler,
     /// allocator, JIT) is per-OS-thread, and each OS thread's `Codegen`
     /// bakes *its own* slot address into its stubs — exactly like the
-    /// alloc_flag. A process-global slot would be corrupted when several
+    /// poll word. A process-global slot would be corrupted when several
     /// interpreters run on different OS threads (the test harness).
     static SCHED_RSP: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

@@ -26,6 +26,7 @@ monoruby/                   # Workspace root
 │   │   │   └── prism_backend.rs # Drives the `ruby-prism` crate
 │   │   ├── ast/            # monoruby AST (node, lvar_collector, source_info, error)
 │   │   ├── alloc.rs        # Custom GC allocator (mark-and-sweep)
+│   │   ├── poll_flag.rs    # Safepoint poll word (GC/preempt/signal byte lanes)
 │   │   ├── id_table.rs     # Interned identifier table (IdentId)
 │   │   ├── value.rs        # Value type (tagged-union, 64-bit, NonZeroU64)
 │   │   ├── value/
