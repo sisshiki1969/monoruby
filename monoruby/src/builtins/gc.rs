@@ -668,20 +668,29 @@ mod tests {
     fn gc_config_suppresses_self_chosen_major() {
         // With full marking off the collector only ever picks a minor
         // collection; an explicit `GC.start` still forces a major.
-        run_test_once(
+        //
+        // The big loop exists to organically drive collections in a normal
+        // build; under gc-stress every safepoint collects already, and the
+        // full-size loop runs for >5min on CI.
+        let n = if cfg!(feature = "gc-stress") {
+            5_000
+        } else {
+            200_000
+        };
+        run_test_once(&format!(
             r##"
             GC.config(rgengc_allow_full_mark: false)
             begin
               major = GC.stat(:major_gc_count)
-              200000.times { Object.new }
+              {n}.times {{ Object.new }}
               a = GC.stat(:major_gc_count) == major
               GC.start
               [a, GC.stat(:major_gc_count) > major]
             ensure
               GC.config(rgengc_allow_full_mark: true)
             end
-            "##,
-        );
+            "##
+        ));
     }
 
     #[test]

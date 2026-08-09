@@ -4392,13 +4392,23 @@ mod tests {
         // GC skips scanning it, and all of its elements are swept while
         // still reachable — a later read then trips `Dead object`. The
         // allocation churn after the build is what forces that minor GC.
-        run_test_once(
+        //
+        // The large sizes exist only to trigger that GC organically in a
+        // normal build; under gc-stress every safepoint already collects,
+        // and marking a 300k-element array per safepoint would take >10min
+        // on CI, so the stress build uses a small workload instead.
+        let (build, churn) = if cfg!(feature = "gc-stress") {
+            (2_000, 1_000)
+        } else {
+            (300_000, 200_000)
+        };
+        run_test_once(&format!(
             r#"
-            a = Array.new(300_000) { |i| [i % 1000] }
-            200_000.times { [1] }
-            a.map { |x| x[0] }.sum
-            "#,
-        );
+            a = Array.new({build}) {{ |i| [i % 1000] }}
+            {churn}.times {{ [1] }}
+            a.map {{ |x| x[0] }}.sum
+            "#
+        ));
     }
 
     #[test]
@@ -4407,14 +4417,23 @@ mod tests {
         // elements while `merge` overwrites their slots in the receiver,
         // and the comparator can allocate (and thus GC) right in that
         // window — so the buffer itself has to be GC-visible.
-        run_test_once(
+        //
+        // As above: the large size makes a GC land in that window by
+        // chance in a normal build, while under gc-stress every safepoint
+        // collects anyway and a large sort would run for >10min on CI.
+        let n = if cfg!(feature = "gc-stress") {
+            2_000
+        } else {
+            200_000
+        };
+        run_test_once(&format!(
             r#"
             a = []
-            200_000.times { |i| a << [(i * 7919) % 1000] }
-            a.sort! { |x, y| [x[0]] <=> [y[0]] }
+            {n}.times {{ |i| a << [(i * 7919) % 1000] }}
+            a.sort! {{ |x, y| [x[0]] <=> [y[0]] }}
             [a.size, a.first[0], a.last[0]]
-            "#,
-        );
+            "#
+        ));
     }
 
     #[test]
