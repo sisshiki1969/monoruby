@@ -125,6 +125,31 @@ ret
 `execute_gc` は**ハンドラ呼び出し中に CODEGEN 借用を保持しない**ので、trap ハンドラが
 その内部で JIT コンパイルや GC を起こしても自由に再入できる。
 
+### 4.1 配送ゲート(`scheduler::signal_delivery_ok`)
+
+すべての poll 地点で配送してよいわけではない。3 条件を満たす poll だけが drain する:
+
+1. **メインのグリーンスレッド上**であること(`current == main`)。CRuby と同じく、
+   非メインスレッド実行中に届いたシグナルはメインの次の poll まで保留される。
+2. スケジューラ自身の**機構(`machinery`)が走っていない**こと。
+3. スケジューラの**入口(`pass` / `sleep` / `join` / `terminate_all`)の中でない**こと。
+   これらの内側ではコンテキストが既にスイッチ用に保存されている(あるいは直後に
+   保存される)場合があり、その上に積んだ Ruby フレームは保存コンテキストの復帰時に
+   **もう一度**実行されてしまう。
+
+3 番目は `SCHED_CALL_DEPTH`(RAII ガード `SchedCall`)で数える。**この深度は
+コンテキストスイッチと一緒に持ち回らなければならない** — カウンタは OS スレッドの
+thread-local だが、ガードは各グリーンスレッドのスタック上にあり、park した
+スレッドは Rust フレームごと凍結されるのでガードが解放されないまま残る。
+`dispatch` は `machinery` と同じ区間で深度を退避・復元し、park 中の深度は
+`ThreadInner::sched_call_depth` に置く。
+
+> これを怠ると、`sleep` で park したスレッドが 1 本あるだけでカウンタが恒久的に
+> 1 以上に張り付き、以後 `Signal.trap` ハンドラが**二度と走らなくなる**。
+> `nil until flag` は無限に回り、次のブロッキング書き込みが内部マーカー
+> `__monoruby_signal_interrupt__`(§ マーカー)を RuntimeError として表に出す。
+> 回帰テスト: `process.rs` の `signal_delivered_while_another_thread_is_parked`。
+
 ---
 
 ## 5. signo → 既定例外(A4;`signo_to_error`)

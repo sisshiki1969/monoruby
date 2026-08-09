@@ -2748,6 +2748,50 @@ mod new_api_tests {
     }
 
     #[test]
+    fn signal_delivered_while_another_thread_is_parked() {
+        // A trap handler on MAIN must still run while a second thread sits
+        // parked inside `sleep`. `sleep`/`pass`/`join` bump the
+        // scheduler-entry depth that gates signal delivery, and a parked
+        // thread keeps that guard alive on its own frozen stack — so the
+        // depth has to travel with the context switch. When it did not,
+        // one sleeping thread pinned the count above zero and no
+        // `Signal.trap` handler ever ran again: `nil until f` spun
+        // forever, and the next blocking write surfaced the internal
+        // `__monoruby_signal_interrupt__` marker as a RuntimeError.
+        //
+        // Forked, like the two tests above, so a starvation regression
+        // fails by timeout instead of wedging the harness.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              f = nil
+              Signal.trap(:TERM) { f = 1 }
+              Thread.new { sleep }          # parked, never joined
+              Process.kill(:TERM, Process.pid)
+              nil until f
+              w.write("handler-ran")        # must not raise
+              w.close
+              exit
+            end
+            w.close
+            got = nil
+            100.times do
+              break if (got = r.read_nonblock(64, exception: false)) && got != :wait_readable
+              sleep 0.1
+            end
+            if got.nil? || got == :wait_readable
+              Process.kill(:KILL, pid) rescue nil
+              got = "starved"
+            end
+            Process.wait(pid)
+            [got, $?.exitstatus]
+            "#,
+        );
+    }
+
+    #[test]
     fn process_kill_group_signal_forms() {
         // Signal-name parsing for the group forms ("-TERM", negative
         // Integer) plus the non-Int/String rejection. The actual group

@@ -176,10 +176,20 @@ pub(crate) fn mark(alloc: &mut crate::alloc::Allocator<RValue>) {
 
 thread_local! {
     /// Nesting depth of scheduler entry points (`pass`, `sleep`, `join`,
-    /// `terminate_all`) on the current stack. Signal trap handlers must
-    /// not run at poll points inside these: the running context may
-    /// already be saved for a switch, and Ruby frames pushed on top of a
-    /// saved context are resumed AGAIN when it is restored.
+    /// `terminate_all`) on the CURRENTLY RUNNING green thread's stack.
+    /// Signal trap handlers must not run at poll points inside these: the
+    /// running context may already be saved for a switch, and Ruby frames
+    /// pushed on top of a saved context are resumed AGAIN when it is
+    /// restored.
+    ///
+    /// The counter lives on the OS thread but the guards live on green
+    /// thread stacks, which park with their Rust frames — and therefore
+    /// their guards — frozen. So it must be swapped for the resumed
+    /// thread's own saved depth across every context switch
+    /// (`swap_sched_call_depth`, bracketed in `dispatch` alongside
+    /// `machinery`). Without that swap a thread parked inside `sleep`
+    /// leaves the count permanently ≥ 1, and `signal_delivery_ok` below
+    /// never lets a `Signal.trap` handler run again.
     static SCHED_CALL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -195,6 +205,12 @@ impl Drop for SchedCall {
     fn drop(&mut self) {
         SCHED_CALL_DEPTH.with(|d| d.set(d.get() - 1));
     }
+}
+
+/// Install `depth` as the running context's scheduler-entry depth and
+/// return the previous value. See `SCHED_CALL_DEPTH`.
+fn swap_sched_call_depth(depth: u32) -> u32 {
+    SCHED_CALL_DEPTH.with(|d| d.replace(depth))
 }
 
 /// Whether a poll point may run signal trap handlers here: only on the
@@ -1330,6 +1346,20 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
     // control is inside the resumed thread, `machinery` is cleared so
     // timeslice preemption can fire in its Ruby code; it is restored the
     // moment control returns to this (scheduler) context.
+    //
+    // `SCHED_CALL_DEPTH` is swapped over the same span. It counts the
+    // scheduler entry points on the RUNNING stack, and a parked thread
+    // keeps its guards alive on its own frozen stack, so the counter has
+    // to follow the switch: the resumed thread gets the depth it parked
+    // with (0 for one starting its body), and on the way back the
+    // scheduler context's own depth is restored. Leaving the counter
+    // alone would let one thread parked inside `sleep` pin it above zero
+    // for good, and `signal_delivery_ok` would refuse every trap handler
+    // from then on.
+    let saved_depth = swap_sched_call_depth(match &entry {
+        Entry::Invoke(..) => 0,
+        _ => thread.as_thread_inner().sched_call_depth,
+    });
     let ret = match entry {
         Entry::Invoke(proc_data, args, len, handle) => {
             let invoker = CODEGEN.with(|c| c.borrow().thread_invoker);
@@ -1363,6 +1393,7 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
             ret
         }
         Entry::Skip(err) => {
+            swap_sched_call_depth(saved_depth);
             finalize_unstarted(globals, thread, err);
             SCHEDULER.with(|s| {
                 let mut s = s.borrow_mut();
@@ -1372,6 +1403,7 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
         }
     };
     // Control is back in the scheduler context.
+    thread.as_thread_inner_mut().sched_call_depth = swap_sched_call_depth(saved_depth);
     if thread.as_thread_inner().body_terminated() {
         finalize(globals, thread, ret);
     }

@@ -97,6 +97,12 @@ pub struct ThreadInner {
     /// last child status per thread, so a fresh thread sees `nil` until
     /// it reaps a child of its own.
     pub(crate) last_status: Option<Value>,
+    /// This thread's own `SCHED_CALL_DEPTH` while it is not running.
+    /// The counter is a thread-local on the OS thread, but its RAII
+    /// guards sit on this green thread's stack and stay alive across a
+    /// park, so the scheduler swaps the counter through here at every
+    /// context switch. See `scheduler::SCHED_CALL_DEPTH`.
+    pub(crate) sched_call_depth: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +194,7 @@ impl ThreadInner {
             park_blocking: false,
             park_permit: false,
             last_status: None,
+            sched_call_depth: 0,
         }
     }
 
@@ -220,6 +227,7 @@ impl ThreadInner {
             park_blocking: false,
             park_permit: false,
             last_status: None,
+            sched_call_depth: 0,
         }
     }
 
@@ -244,6 +252,7 @@ impl ThreadInner {
             park_blocking: false,
             park_permit: false,
             last_status: None,
+            sched_call_depth: 0,
         }
     }
 
