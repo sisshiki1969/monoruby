@@ -955,7 +955,14 @@ impl Globals {
         } else {
             visibility
         };
-        self.add_method_with_original(class_id, new_name, func_id, forced_visibility, original_name);
+        self.add_method_with_original(
+            class_id,
+            new_name,
+            func_id,
+            forced_visibility,
+            original_name,
+            true,
+        );
         Ok(())
     }
 }

@@ -3189,15 +3189,26 @@ fn import_methods(
             );
             emit_stderr_warning(vm, globals, &msg);
         }
-        for (name, func_id, visi) in globals.store[*module].own_method_entries() {
-            let Some(func_id) = func_id else { continue };
-            if globals.store[func_id].is_iseq().is_none() {
+        for (name, entry) in globals.store[*module].own_method_table() {
+            let Some(func_id) = entry.func_id() else {
+                continue;
+            };
+            // Only genuinely `def`-defined bodies can be imported. CRuby
+            // requires the entry itself to be VM_METHOD_TYPE_ISEQ, so an
+            // `alias` entry or a visibility re-declaration of an inherited
+            // method (`private :inherited`) raises even though the body it
+            // leads to is written in Ruby — while `define_method(name,
+            // method_obj)` re-registers the original ISEQ and imports.
+            if globals.store[func_id].is_iseq().is_none()
+                || entry.is_alias()
+                || entry.is_visibility_shadow()
+            {
                 return Err(MonorubyErr::argumenterr(format!(
                     "Can't import method which is not defined with Ruby code: {}#{name}",
                     globals.store.get_class_name(*module)
                 )));
             }
-            imports.push((name, func_id, visi));
+            imports.push((*name, func_id, entry.visibility()));
         }
         for (name, func_id, visi) in imports {
             globals.add_method(refinement, name, func_id, visi);
@@ -6648,6 +6659,50 @@ mod tests {
               end
             end
             out
+            "#,
+        );
+    }
+
+    #[test]
+    fn refinement_import_methods_requires_def_defined_bodies() {
+        // CRuby's check is on the method-entry TYPE, not on where the body
+        // ultimately came from: an `alias` entry (either form) and a
+        // visibility re-declaration of an inherited method raise even
+        // though the body they lead to is plain Ruby, while
+        // `define_method(name, method_obj)` re-registers the original
+        // ISEQ and imports. `define_method` with a block, accessors and
+        // native methods raise. Each rejecting module carries ONLY the
+        // offending entry — a raise mid-module leaves earlier entries of
+        // that module imported in CRuby, and this must not depend on
+        // method-table iteration order.
+        run_test(
+            r#"
+            probe = lambda do |src|
+              begin
+                Module.new { refine(String) { import_methods src } }
+                :imported
+              rescue ArgumentError => e
+                # The message names the module by its inspect (an address
+                # for anonymous modules); keep only the stable tail.
+                "ArgumentError: ##{e.message.split('#').last}"
+              end
+            end
+            base = Module.new { def rm; 1; end }
+            [
+              probe.call(Module.new { def ok; 1; end }),
+              probe.call(Module.new { include base; private :rm }),
+              probe.call(Module.new { define_method(:dm) { 1 } }),
+              probe.call(Module.new { define_method(:dm2, base.instance_method(:rm)) }),
+              probe.call(Module.new { attr_reader :foo }),
+              probe.call(Module.new { def s; 1; end; alias_method :am, :s }.tap { |m| m.send(:remove_method, :s) }),
+              probe.call(Module.new { def s; 1; end; alias kw s }.tap { |m| m.send(:remove_method, :s) }),
+            ]
+            "#,
+        );
+        // Math's methods are native in both implementations.
+        run_test_error(
+            r#"
+            Module.new { refine(String) { import_methods Math } }
             "#,
         );
     }

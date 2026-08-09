@@ -2641,7 +2641,7 @@ impl Executor {
         visibility: Visibility,
         original_name: IdentId,
     ) -> Result<()> {
-        globals.add_method_with_original(class_id, name, func_id, visibility, original_name);
+        globals.add_method_with_original(class_id, name, func_id, visibility, original_name, false);
         // BOP-redefinition eviction — see `add_method`.
         Codegen::check_bop_redefine(self.cfp());
         self.invoke_method_added(globals, class_id, name, Some(func_id))
