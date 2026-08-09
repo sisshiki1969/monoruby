@@ -819,53 +819,82 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     };
 
     // Complex / Complex: Smith's algorithm using `quo` on the components.
+    // Every intermediate can be a heap numeric (Rational/Bignum) that
+    // only a Rust local references while the next `quo`/`*`/`+` dispatch
+    // runs Ruby — root each until the components are extracted.
     if let Some(o) = other.try_complex() {
         let (b_re, b_im) = (o.re().get(), o.im().get());
         let one = Value::integer(1);
-        let abs_re = f_abs(vm, globals, b_re)?;
-        let abs_im = f_abs(vm, globals, b_im)?;
-        let (mut x, mut y);
-        if f_gt(vm, globals, abs_re, abs_im)? {
-            // r = b_im / b_re ; n = b_re * (1 + r*r)
-            let r = f_quo(vm, globals, b_im, b_re)?;
-            let rr = f_mul(vm, globals, r, r)?;
-            let one_plus = f_add(vm, globals, one, rr)?;
-            let n = f_mul(vm, globals, b_re, one_plus)?;
-            // x = (a_re + a_im*r) / n ; y = (a_im - a_re*r) / n
-            let aim_r = f_mul(vm, globals, a_im, r)?;
-            let num_x = f_add(vm, globals, a_re, aim_r)?;
-            let are_r = f_mul(vm, globals, a_re, r)?;
-            let num_y = f_sub(vm, globals, a_im, are_r)?;
-            x = f_quo(vm, globals, num_x, n)?;
-            y = f_quo(vm, globals, num_y, n)?;
-        } else {
-            // r = b_re / b_im ; n = b_im * (1 + r*r)
-            let r = f_quo(vm, globals, b_re, b_im)?;
-            let rr = f_mul(vm, globals, r, r)?;
-            let one_plus = f_add(vm, globals, one, rr)?;
-            let n = f_mul(vm, globals, b_im, one_plus)?;
-            // x = (a_re*r + a_im) / n ; y = (a_im*r - a_re) / n
-            let are_r = f_mul(vm, globals, a_re, r)?;
-            let num_x = f_add(vm, globals, are_r, a_im)?;
-            let aim_r = f_mul(vm, globals, a_im, r)?;
-            let num_y = f_sub(vm, globals, aim_r, a_re)?;
-            x = f_quo(vm, globals, num_x, n)?;
-            y = f_quo(vm, globals, num_y, n)?;
-        }
-        x = rational_canonicalize(x);
-        y = rational_canonicalize(y);
-        let re_r = Real::try_from(globals, x)?;
-        let im_r = Real::try_from(globals, y)?;
-        return Ok(Value::complex(re_r, im_r));
+        return vm.with_temp_scope(|vm| {
+            let abs_re = f_abs(vm, globals, b_re)?;
+            vm.temp_push(abs_re);
+            let abs_im = f_abs(vm, globals, b_im)?;
+            vm.temp_push(abs_im);
+            let (mut x, mut y);
+            if f_gt(vm, globals, abs_re, abs_im)? {
+                // r = b_im / b_re ; n = b_re * (1 + r*r)
+                let r = f_quo(vm, globals, b_im, b_re)?;
+                vm.temp_push(r);
+                let rr = f_mul(vm, globals, r, r)?;
+                vm.temp_push(rr);
+                let one_plus = f_add(vm, globals, one, rr)?;
+                vm.temp_push(one_plus);
+                let n = f_mul(vm, globals, b_re, one_plus)?;
+                vm.temp_push(n);
+                // x = (a_re + a_im*r) / n ; y = (a_im - a_re*r) / n
+                let aim_r = f_mul(vm, globals, a_im, r)?;
+                vm.temp_push(aim_r);
+                let num_x = f_add(vm, globals, a_re, aim_r)?;
+                vm.temp_push(num_x);
+                let are_r = f_mul(vm, globals, a_re, r)?;
+                vm.temp_push(are_r);
+                let num_y = f_sub(vm, globals, a_im, are_r)?;
+                vm.temp_push(num_y);
+                x = f_quo(vm, globals, num_x, n)?;
+                vm.temp_push(x);
+                y = f_quo(vm, globals, num_y, n)?;
+            } else {
+                // r = b_re / b_im ; n = b_im * (1 + r*r)
+                let r = f_quo(vm, globals, b_re, b_im)?;
+                vm.temp_push(r);
+                let rr = f_mul(vm, globals, r, r)?;
+                vm.temp_push(rr);
+                let one_plus = f_add(vm, globals, one, rr)?;
+                vm.temp_push(one_plus);
+                let n = f_mul(vm, globals, b_im, one_plus)?;
+                vm.temp_push(n);
+                // x = (a_re*r + a_im) / n ; y = (a_im*r - a_re) / n
+                let are_r = f_mul(vm, globals, a_re, r)?;
+                vm.temp_push(are_r);
+                let num_x = f_add(vm, globals, are_r, a_im)?;
+                vm.temp_push(num_x);
+                let aim_r = f_mul(vm, globals, a_im, r)?;
+                vm.temp_push(aim_r);
+                let num_y = f_sub(vm, globals, aim_r, a_re)?;
+                vm.temp_push(num_y);
+                x = f_quo(vm, globals, num_x, n)?;
+                vm.temp_push(x);
+                y = f_quo(vm, globals, num_y, n)?;
+            }
+            x = rational_canonicalize(x);
+            y = rational_canonicalize(y);
+            let re_r = Real::try_from(globals, x)?;
+            let im_r = Real::try_from(globals, y)?;
+            Ok(Value::complex(re_r, im_r))
+        });
     }
 
-    // Complex / real: divide each component by the real divisor.
+    // Complex / real: divide each component by the real divisor. `x`
+    // must survive the second `quo` dispatch — root it.
     if is_real_divisor(vm, globals, other)? {
-        let x = rational_canonicalize(f_quo(vm, globals, a_re, other)?);
-        let y = rational_canonicalize(f_quo(vm, globals, a_im, other)?);
-        let re_r = Real::try_from(globals, x)?;
-        let im_r = Real::try_from(globals, y)?;
-        return Ok(Value::complex(re_r, im_r));
+        return vm.with_temp_scope(|vm| {
+            let x = rational_canonicalize(f_quo(vm, globals, a_re, other)?);
+            vm.temp_push(x);
+            let y = rational_canonicalize(f_quo(vm, globals, a_im, other)?);
+            let re_r = Real::try_from(globals, x)?;
+            let im_r = Real::try_from(globals, y)?;
+            Ok(Value::complex(re_r, im_r))
+        });
     }
 
     // Otherwise fall back to the coerce protocol (`rb_num_coerce_bin`). The

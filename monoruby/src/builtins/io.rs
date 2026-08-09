@@ -2596,27 +2596,37 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let res = vm.invoke_block(globals, &data, &[io_val]);
-        let mut io_close = io_val;
-        if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close(&globals.store) {
-            if let Ok(status_class) =
-                vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
+        // Root the block's return value (and the IO) across the
+        // Process::Status construction below, which re-enters Ruby while
+        // both live only in Rust locals.
+        vm.with_temp_scope(|vm| {
+            if let Ok(v) = res {
+                vm.temp_push(v);
+            }
+            vm.temp_push(io_val);
+            let mut io_close = io_val;
+            if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close(&globals.store)
             {
-                if let Ok(status_obj) = vm.invoke_method_inner(
-                    globals,
-                    IdentId::NEW,
-                    status_class,
-                    &[
-                        Value::integer(exit_status as i64),
-                        Value::integer(pid as i64),
-                    ],
-                    None,
-                    None,
-                ) {
-                    crate::scheduler::set_last_status(vm, status_obj);
+                if let Ok(status_class) =
+                    vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
+                {
+                    if let Ok(status_obj) = vm.invoke_method_inner(
+                        globals,
+                        IdentId::NEW,
+                        status_class,
+                        &[
+                            Value::integer(exit_status as i64),
+                            Value::integer(pid as i64),
+                        ],
+                        None,
+                        None,
+                    ) {
+                        crate::scheduler::set_last_status(vm, status_obj);
+                    }
                 }
             }
-        }
-        res
+            res
+        })
     } else {
         Ok(io_val)
     }
