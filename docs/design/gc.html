@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1b6b02bb.js";
+            window.path_to_searchindex_js = "../searchindex-c959a123.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -251,7 +251,7 @@ GC は VM セーフポイントで同期的に実行され、並行 GC やイン
 <tr><td><code>promoting</code></td><td>マーク中に昇格候補を収集するか(実マーク中のみ true)</td></tr>
 <tr><td><code>aging</code></td><td>今サイクルで生存した昇格候補(マーク後に加齢)</td></tr>
 <tr><td><code>remembered</code></td><td>remembered set(old→young 参照を持つ old オブジェクト)</td></tr>
-<tr><td><code>alloc_flag</code></td><td>GC 起動フラグ(<code>u32</code>)のアドレス</td></tr>
+<tr><td><code>pages_since_gc</code></td><td>前回の収集以降に <code>THRESHOLD</code> まで充填したページ数(8 で GC レーンを立てる)</td></tr>
 <tr><td><code>heap_frames</code></td><td>ヒープに退避したフレームバッファの登録表(§9)</td></tr>
 </tbody>
 </table>
@@ -261,7 +261,7 @@ GC は VM セーフポイントで同期的に実行され、並行 GC やイン
 const GCBOX_SIZE: usize  = size_of::&lt;RValue&gt;();          // 64
 const PAGE_LEN: usize    = 64 * SIZE;                     // 4096 セル/ページ
 const DATA_LEN: usize    = 64 * (SIZE - 1);               // 4032 データセル
-const THRESHOLD: usize   = 64 * (SIZE - 2);               // 3968(alloc_flag を立てる位置)
+const THRESHOLD: usize   = 64 * (SIZE - 2);               // 3968(ページ圧力を数える位置)
 const ALLOC_SIZE: usize  = PAGE_LEN * GCBOX_SIZE;         // 262144 = 256KB
 const MAX_PAGES: usize   = 8192;
 </code></pre>
@@ -291,8 +291,8 @@ mark-external 方式なので、生存中のオブジェクト内容を汚さな
 スイープされたセルの再利用。</li>
 <li>空でなければ<strong>現ページのバンプ割り当て</strong>。
 <ul>
-<li><code>used_in_current == THRESHOLD</code>(3968)に達したら <code>set_alloc_flag()</code> で
-<code>alloc_flag += 1</code>(GC を要求;§4)。</li>
+<li><code>used_in_current == THRESHOLD</code>(3968)に達したら <code>on_page_pressure()</code> で
+<code>pages_since_gc += 1</code>、8 ページ目で poll ワードの GC レーンを立てる(GC を要求;§4)。</li>
 <li><code>used_in_current == DATA_LEN</code>(4032)でページ満杯 → <code>free_pages</code> から再利用、
 なければ <code>new_page()</code> で新規ページ。新ページは <code>clear_old_bits()</code> で
 old ビットマップを 0 初期化(マイナー GC のシード整合性のため)。</li>
@@ -313,38 +313,32 @@ old ビットマップを 0 初期化(マイナー GC のシード整合性の�
 <p>GC は「アロケーションの延長で即実行」はしない。JIT の生きたレジスタが未退避の
 まま GC ルート走査に入るのは危険なため、<strong>フラグを立てて次のセーフポイントで
 実行</strong>する。</p>
-<h3 id="41-起動フラグ-alloc_flagu32"><a class="header" href="#41-起動フラグ-alloc_flagu32">4.1 起動フラグ <code>alloc_flag</code>(<code>u32</code>)</a></h3>
-<p>VM/JIT が参照する単一の <code>u32</code>。<strong>8 以上(ベース値)でトリガ帯</strong>。これを立てる経路:</p>
+<h3 id="41-poll-ワードの-gc-レーンpoll_flagrs"><a class="header" href="#41-poll-ワードの-gc-レーンpoll_flagrs">4.1 poll ワードの GC レーン(<code>poll_flag.rs</code>)</a></h3>
+<p>VM/JIT が参照する poll ワード(<code>u32</code>、8bit×4 レーン。全体像は <code>doc/safepoint.md</code> §3)の
+<strong>byte 0 が GC レーン</strong>。これを立てる経路:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>経路</th><th>実装</th><th>フラグ操作</th></tr>
+<tr><th>経路</th><th>実装</th><th>操作</th></tr>
 </thead>
 <tbody>
-<tr><td>ページ充填</td><td><code>set_alloc_flag</code>(<code>alloc.rs:681</code>)</td><td>ほぼ満杯ページごとに <code>+= 1</code>(約 8 ページで 8 に到達)</td></tr>
-<tr><td>malloc 圧(§8)</td><td><code>request_gc_if_malloc_over</code>(<code>alloc.rs:123</code>)</td><td>8 未満なら <code>8</code> を書く</td></tr>
-<tr><td><code>GC.start</code></td><td><code>request_gc(true)</code>(<code>alloc.rs:84</code>)</td><td>8 未満なら <code>8</code> を書く + メジャー強制</td></tr>
-<tr><td>シグナル配送</td><td>シグナルハンドラ(<code>jit_module.rs</code>)</td><td><code>+= 10</code>(<code>doc/signal.md</code>)</td></tr>
-<tr><td>プリエンプト tick</td><td>タイマ OS スレッド(<code>preempt.rs</code>)</td><td><code>|= 1 &lt;&lt; 30</code>(<code>PREEMPT_BIT</code>;<code>doc/threads.md</code> §8)</td></tr>
+<tr><td>ページ圧力</td><td><code>on_page_pressure</code>(<code>alloc.rs</code>)</td><td><code>pages_since_gc</code> が 8 に達したら <code>set_gc()</code></td></tr>
+<tr><td>malloc 圧(§8)</td><td><code>request_gc_if_malloc_over</code></td><td><code>set_gc()</code></td></tr>
+<tr><td><code>GC.start</code></td><td><code>request_gc(true)</code></td><td><code>set_gc()</code> + メジャー強制</td></tr>
+<tr><td><code>GC.stress</code></td><td><code>set_stress(true)</code> / 各収集の末尾</td><td><code>set_gc()</code>(再武装)</td></tr>
 </tbody>
 </table>
 </div>
-<p>「8 未満のときだけ 8 を書く」ことで、ページ充填の累積値やシグナルの <code>+10</code> を
-踏み潰さず、ちょうど 1 回の収集を要求する。</p>
-<blockquote>
-<p><strong>この <code>u32</code> はプリエンプションの poll フラグと同一の語</strong>である(<code>doc/threads.md</code> §8)。
-タイマ OS スレッドが上位ビット <code>PREEMPT_BIT</code>(= <code>1 &lt;&lt; 30</code>。ビット 31 でないのは
-x86-64 poll <code>cmpl …; jge</code> が<strong>符号付き</strong>比較で、ビット 31 だと負値に読めて発火しないため)を
-立てる。別スレッドから書くのでフラグアクセスはすべてアトミックになった。GC 判定は
-<strong>ベース値</strong>(プリエンプトビットを剥がした値)が <code>&gt;= 8</code> かどうかで行うので、純粋な
-プリエンプト tick が偽の full GC を起こすことはない(§4.3 手順 2)。GC 完了後の
-<code>unset_alloc_flag</code>(<code>alloc.rs:694</code>)は <code>fetch_and(PREEMPT_BIT)</code> でベース帯だけ落とし、
-並行して立ったプリエンプトビットは保存する。</p>
-</blockquote>
+<p>すべて冪等な <code>fetch_or</code> で、シグナル(SIGNAL レーン)・プリエンプト(PREEMPT レーン)とは
+byte が分かれているため互いを踏み潰す競合は原理的にない。GC 判定は GC レーン単体で行うので、
+純粋なプリエンプト tick やシグナル到着が偽の full GC を起こすことはない(§4.3 手順 2)。
+収集の完了時は <code>ack_gc_request</code>(<code>alloc.rs</code>)が <strong>GC レーンの byte だけ</strong>を落とし、
+<code>pages_since_gc</code> を 0 に戻す(並行して立った他レーンは保存される)。<code>--no-gc</code> 時の
+空収集も同じ経路で要求を無効化するため、レーンが立ちっぱなしで poll が空回りすることはない。</p>
 <h3 id="42-poll-のコード生成"><a class="header" href="#42-poll-のコード生成">4.2 poll のコード生成</a></h3>
 <p><code>execute_gc_inner</code>(<code>codegen/arch/x86_64/jit_module.rs:255</code>)が poll を出力:</p>
-<pre><code class="language-asm">cmpl [rip + alloc_flag], 8
-jge  gc          ; フラグ &gt;= 8 なら収集パスへ
+<pre><code class="language-asm">cmpl [rip + poll_flag], 0
+jne  gc          ; いずれかのレーンが立っていれば slow path へ
 exit:
 ; gc: (別ページ)
 ;   write_back(生きたレジスタを退避)
@@ -356,19 +350,21 @@ exit:
 <p>この poll は<strong>呼び出し先エントリ(callee entry)とループのバックエッジ</strong>という
 セーフポイントで実行される(<code>vm_execute_gc</code>;<code>vmgen/init_method.rs</code> / <code>vm_loop_start</code> ほか。
 call-site には poll を置かない — <code>doc/threads.md</code> §8.3)。aarch64 backend も
-同等のフラグ比較を出力する。</p>
+同等のゼロ判定(<code>ldr; cbz</code>)を出力する。</p>
 <h3 id="43-execute_gcexecutorrs3743"><a class="header" href="#43-execute_gcexecutorrs3743">4.3 <code>execute_gc</code>(<code>executor.rs:3743</code>)</a></h3>
 <p>セーフポイントから呼ばれる <code>extern "C"</code> 関数。順に:</p>
 <ol>
 <li><code>watchdog::poll()</code> — ハングウォッチドッグのカウントダウンをリセット。</li>
-<li><code>preempt::consume_poll_flag()</code> で<strong>プリエンプトビットを剥がし</strong>、<code>(ベース値, プリエンプトか)</code>
-を得る(§4.1 の注)。以降の GC 判定はベース値で行う。</li>
-<li><strong>保留シグナルの処理</strong> — <code>pending_signals</code> ビットマップを drain し、最小番号の
-シグナルを <code>Signal.trap</code> ハンドラ呼び出し / 既定例外(SIGINT ⇒ <code>Interrupt</code> 等)に
-変換(<code>doc/signal.md</code>)。</li>
-<li><strong>ベース値が <code>&gt;= 8</code> のときだけ</strong> GC 本体を実行:<code>parent_fiber</code> を辿って
+<li><code>poll_flag::consume_preempt()</code> で <strong>PREEMPT レーンを消費</strong>する。GC 判定は GC レーンで
+独立に行う(§4.1)。</li>
+<li><strong>保留シグナルの処理</strong> — SIGNAL レーンをクリアしてから <code>PENDING_SIGNALS</code> ビットマップを
+drain し、最小番号のシグナルを <code>Signal.trap</code> ハンドラ呼び出し / 既定例外(SIGINT ⇒
+<code>Interrupt</code> 等)に変換(<code>doc/signal.md</code>)。</li>
+<li><strong>GC レーンが立っているときだけ</strong> GC 本体を実行:<code>parent_fiber</code> を辿って
 **ルート Executor(最上位ファイバ)**へ行き、
-<code>ALLOC.with(|a| a.borrow_mut().gc(&amp;Root { globals, executor }))</code>。</li>
+<code>ALLOC.with(|a| a.borrow_mut().gc(&amp;Root { globals, executor }))</code>。
+drain できなかった保留シグナルがある poll では収集を次の poll へ延期する
+(<code>doc/signal.md</code> §4.1)。</li>
 <li>プリエンプトビットが立っていて <code>scheduler::preempt_ok()</code> なら <code>scheduler::pass</code>
 (タイムスライス切替。<code>doc/threads.md</code> §8.4)。</li>
 </ol>
@@ -612,8 +608,8 @@ proc/args/result/exception/joiners/pending/masks/last_status をマークする�
 無視すると閾値が GB 級に張り付き、通常の String/Array/Hash 成長で永遠に GC が
 発火しなくなる。同じ判定で <code>dealloc</code> も gate するので <code>MALLOC_AMOUNT</code> は
 アンダーフローしない。</li>
-<li><code>request_gc_if_malloc_over</code>(<code>alloc.rs:123</code>)が <code>MALLOC_AMOUNT &gt;= MALLOC_GC_THRESHOLD</code>
-で <code>alloc_flag</code> を 8 に持ち上げる(GC 要求;割り当てフリーで安全)。</li>
+<li><code>request_gc_if_malloc_over</code>(<code>alloc.rs</code>)が <code>MALLOC_AMOUNT &gt;= MALLOC_GC_THRESHOLD</code>
+で poll ワードの GC レーンを立てる(GC 要求;割り当てフリーで安全)。</li>
 <li>閾値 <code>MALLOC_GC_THRESHOLD</code> は各 GC 後に
 <code>malloced + max(malloced/2, MALLOC_THRESHOLD)</code> へ再設定(<code>alloc.rs:986</code>)。
 加算のみだと巨大ヒープでも 256KB ごとに GC してしまうので、乗算項で比例させる。</li>
@@ -671,13 +667,13 @@ stderr へ出力して abort する(<code>alloc.rs</code> の <code>malloc_hard_
 <li>monoruby の GC は <strong>非移動・単一スレッド・stop-the-world の世代別 mark &amp; sweep</strong>。</li>
 <li>256KB ページ + マーク/old の 2 枚のビットマップ(mark-external)で、非移動と
 世代別を両立。ページはアドレスマスクで O(1) 逆引き。</li>
-<li>割り当てはフリーリスト → バンプ。閾値到達で <code>alloc_flag</code> を立て、<strong>次のセーフ
-ポイント</strong>で <code>execute_gc</code> が同期収集する(JIT レジスタ退避のため即実行はしない)。</li>
+<li>割り当てはフリーリスト → バンプ。ページ圧力の閾値到達で poll ワードの GC レーンを立て、
+<strong>次のセーフポイント</strong>で <code>execute_gc</code> が同期収集する(JIT レジスタ退避のため即実行はしない)。</li>
 <li>世代別の心臓部は、<strong>3 回生存で昇格(aging)</strong>・<strong>適応的メジャー閾値</strong>・
 <strong>1 ビット高速パスの書き込みバリア + remembered set(自己クリーニング付き)</strong>。
 マイナーは old をシードマークして young + old→young 辺だけを辿る。</li>
-<li>外部 malloc 圧・シグナル・<code>GC.start</code> も同じ <code>alloc_flag</code> 経由で同一のセーフ
-ポイント収集に集約される。</li>
+<li>外部 malloc 圧・シグナル・<code>GC.start</code> も同じ poll ワード経由で同一のセーフ
+ポイント収集に集約される(レーン分割は <code>poll_flag.rs</code> / <code>doc/safepoint.md</code> §3)。</li>
 </ul>
 
                     </main>

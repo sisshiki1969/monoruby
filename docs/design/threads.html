@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1b6b02bb.js";
+            window.path_to_searchindex_js = "../searchindex-c959a123.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -310,7 +310,7 @@ switch する。つまり制御はループ中の pending な dispatch 呼び出
 スロットは 1 個で足りる(green thread は <code>scheduler_run</code> を呼ばないため、
 ループのインスタンスは常に高々 1 つ)。</p>
 <p><code>SCHED_RSP</code> は <strong>OS スレッドごと</strong>(<code>thread_local</code> の <code>Cell&lt;u64&gt;</code>)。各 OS スレッドの
-<code>Codegen</code> が自分のスロットのアドレスをスタブに焼き込む(alloc_flag と同じ構図)。
+<code>Codegen</code> が自分のスロットのアドレスをスタブに焼き込む(poll ワードと同じ構図)。
 テストハーネスのように複数のインタプリタが別 OS スレッドで並走しても衝突しない。</p>
 <h3 id="32-コンテキストスイッチのスタブ2-アーキ"><a class="header" href="#32-コンテキストスイッチのスタブ2-アーキ">3.2 コンテキストスイッチのスタブ(×2 アーキ)</a></h3>
 <p><code>codegen/arch/{x86_64,aarch64}/invoker.rs</code> に 3 種。いずれも <code>parent_fiber</code> に触らない:</p>
@@ -523,31 +523,31 @@ fd ポーラで処理)。DNS(<code>getaddrinfo</code>)は CRuby 同様インラ�
 走る(<code>on_thread_count(live)</code> が <code>live &gt;= 2</code> で起動、<code>live &lt; 2</code> で停止)。単独スレッドの
 プログラムはタイマを 1 本も生やさずコストゼロ。</li>
 <li><code>MONORUBY_NO_PREEMPT</code> / <code>MONORUBY_PREEMPT_STRESS</code> が設定されているとタイマは起動しない。</li>
-<li>毎 tick、<code>flag_addr</code> の mutex を取ってから poll フラグに <code>fetch_or(PREEMPT_BIT)</code>。
+<li>毎 tick、<code>flag_addr</code> の mutex を取ってから poll ワードの PREEMPT レーンを <code>fetch_or</code>。
 <code>Codegen::drop</code>(<code>codegen_dropped</code>)が同じ mutex 下で <code>flag_addr</code> を 0 に落とすので、
 タイマが解放済み JIT メモリを触ることはない(マルチインタプリタのテストハーネス対策)。</li>
 </ul>
-<h3 id="82-フラグプロトコル"><a class="header" href="#82-フラグプロトコル">8.2 フラグプロトコル</a></h3>
-<p>poll フラグは <strong>GC の <code>alloc_flag</code> と同じ 1 つの <code>u32</code></strong>。複数の書き手がいる:</p>
+<h3 id="82-レーンプロトコル"><a class="header" href="#82-レーンプロトコル">8.2 レーンプロトコル</a></h3>
+<p>poll ワードは <strong>GC・シグナルと同じ 1 つの <code>u32</code></strong> で、8bit×4 のレーンに分割される
+(全体像は <code>poll_flag.rs</code> / <code>doc/safepoint.md</code> §3):</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>書き手</th><th>操作</th></tr>
+<tr><th>byte</th><th>レーン</th><th>書き手</th></tr>
 </thead>
 <tbody>
-<tr><td>RValue アリーナ(ページ充填)</td><td><code>+= 1</code></td></tr>
-<tr><td>シグナルスタブ</td><td><code>+= 10</code></td></tr>
-<tr><td>malloc トリガ / <code>GC.start</code></td><td><code>&gt;= 8</code> 帯へ持ち上げ</td></tr>
-<tr><td>プリエンプトタイマ</td><td><code>|= 1 &lt;&lt; 30</code>(<code>PREEMPT_BIT</code>)</td></tr>
+<tr><td>0</td><td>GC</td><td>アリーナのページ圧力 / malloc トリガ / <code>GC.start</code></td></tr>
+<tr><td>1</td><td>PREEMPT</td><td>プリエンプトタイマ</td></tr>
+<tr><td>2</td><td>SIGNAL</td><td>シグナルハンドラ</td></tr>
 </tbody>
 </table>
 </div>
 <ul>
-<li><strong>ビット 30</strong>であってビット 31 ではない: x86-64 の poll は <code>cmpl [rip+alloc_flag], 8; jge</code>
-という<strong>符号付き</strong>比較なので、ビット 31 だと負値に読めて発火しない。</li>
-<li>タイマは別 OS スレッドから書くので、フラグアクセスはすべてアトミック
-(タイマ <code>fetch_or</code>、GC 後の <code>unset_alloc_flag</code> は <code>fetch_and(PREEMPT_BIT)</code> で
-ベース帯だけ落として並行設定されたプリエンプトビットを<strong>保存</strong>する)。</li>
+<li>全書き込みは冪等なアトミック <code>fetch_or</code> / 自レーン byte のみの <code>fetch_and</code> clear。
+タイマ(別 OS スレッド)とシグナルハンドラ(async-signal 文脈)が同じ語に書いても、
+レーンが byte で分かれているため互いの更新を失わない。</li>
+<li>poll はワード全体の<strong>ゼロ判定</strong>(<code>cmpl …, 0; jne</code> / <code>ldr; cbz</code>)なので符号の罠もない
+(旧設計は符号付き <code>jge</code> の都合で PREEMPT がビット 30 に制限されていた)。</li>
 </ul>
 <h3 id="83-poll-配置"><a class="header" href="#83-poll-配置">8.3 poll 配置</a></h3>
 <p><strong>callee-entry + ループバックエッジのみ。call-site poll は無い</strong>(JVM/CRuby 方式)。</p>
@@ -570,12 +570,12 @@ poll-free でも 1 反復ごとにプリエンプト・シグナル応答可能�
 <p>セーフポイントから呼ばれる <code>execute_gc</code>(executor.rs)の順序:</p>
 <ol>
 <li><code>watchdog::poll()</code>。</li>
-<li><code>let (flag_base, preempt) = preempt::consume_poll_flag();</code> — プリエンプトビットを剥がし、
-<code>(ベース値, プリエンプトか)</code> を返す(フラグ未登録なら防御的に <code>(8, false)</code>)。</li>
+<li><code>let preempt = poll_flag::consume_preempt() || preempt::stress();</code> — PREEMPT レーンを
+消費する。</li>
 <li>保留シグナルを drain(エラーを立てて <code>None</code> を返しうる)。</li>
-<li><code>flag_base &gt;= 8</code> のときだけ実際に GC(純プリエンプト tick はベースが 8 未満なので
+<li>GC レーンが立っているときだけ実際に GC(純プリエンプト tick は GC レーンに触れないので
 スキップ = 偽の full GC を起こさない)。</li>
-<li><code>stress_renudge()</code> — stress モードでは切替の<strong>前に</strong>フラグを再武装し、切替先スレッドも
+<li><code>stress_renudge()</code> — stress モードでは切替の<strong>前に</strong>レーンを再武装し、切替先スレッドも
 poll するようにする。</li>
 <li><code>if preempt &amp;&amp; scheduler::preempt_ok() { scheduler::pass(vm, globals)? }</code>。
 <code>pass</code> の <code>Err</code>(kill/raise がこのスレッドに配送された)は <code>set_error</code> + <code>None</code> で浮上。</li>

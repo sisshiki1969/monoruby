@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1b6b02bb.js";
+            window.path_to_searchindex_js = "searchindex-c959a123.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e1173681.js"></script>
@@ -4743,7 +4743,7 @@ GC は VM セーフポイントで同期的に実行され、並行 GC やイン
 <tr><td><code>promoting</code></td><td>マーク中に昇格候補を収集するか(実マーク中のみ true)</td></tr>
 <tr><td><code>aging</code></td><td>今サイクルで生存した昇格候補(マーク後に加齢)</td></tr>
 <tr><td><code>remembered</code></td><td>remembered set(old→young 参照を持つ old オブジェクト)</td></tr>
-<tr><td><code>alloc_flag</code></td><td>GC 起動フラグ(<code>u32</code>)のアドレス</td></tr>
+<tr><td><code>pages_since_gc</code></td><td>前回の収集以降に <code>THRESHOLD</code> まで充填したページ数(8 で GC レーンを立てる)</td></tr>
 <tr><td><code>heap_frames</code></td><td>ヒープに退避したフレームバッファの登録表(§9)</td></tr>
 </tbody>
 </table>
@@ -4753,7 +4753,7 @@ GC は VM セーフポイントで同期的に実行され、並行 GC やイン
 const GCBOX_SIZE: usize  = size_of::&lt;RValue&gt;();          // 64
 const PAGE_LEN: usize    = 64 * SIZE;                     // 4096 セル/ページ
 const DATA_LEN: usize    = 64 * (SIZE - 1);               // 4032 データセル
-const THRESHOLD: usize   = 64 * (SIZE - 2);               // 3968(alloc_flag を立てる位置)
+const THRESHOLD: usize   = 64 * (SIZE - 2);               // 3968(ページ圧力を数える位置)
 const ALLOC_SIZE: usize  = PAGE_LEN * GCBOX_SIZE;         // 262144 = 256KB
 const MAX_PAGES: usize   = 8192;
 </code></pre>
@@ -4783,8 +4783,8 @@ mark-external 方式なので、生存中のオブジェクト内容を汚さな
 スイープされたセルの再利用。</li>
 <li>空でなければ<strong>現ページのバンプ割り当て</strong>。
 <ul>
-<li><code>used_in_current == THRESHOLD</code>(3968)に達したら <code>set_alloc_flag()</code> で
-<code>alloc_flag += 1</code>(GC を要求;§4)。</li>
+<li><code>used_in_current == THRESHOLD</code>(3968)に達したら <code>on_page_pressure()</code> で
+<code>pages_since_gc += 1</code>、8 ページ目で poll ワードの GC レーンを立てる(GC を要求;§4)。</li>
 <li><code>used_in_current == DATA_LEN</code>(4032)でページ満杯 → <code>free_pages</code> から再利用、
 なければ <code>new_page()</code> で新規ページ。新ページは <code>clear_old_bits()</code> で
 old ビットマップを 0 初期化(マイナー GC のシード整合性のため)。</li>
@@ -4805,38 +4805,32 @@ old ビットマップを 0 初期化(マイナー GC のシード整合性の�
 <p>GC は「アロケーションの延長で即実行」はしない。JIT の生きたレジスタが未退避の
 まま GC ルート走査に入るのは危険なため、<strong>フラグを立てて次のセーフポイントで
 実行</strong>する。</p>
-<h3 id="41-起動フラグ-alloc_flagu32"><a class="header" href="#41-起動フラグ-alloc_flagu32">4.1 起動フラグ <code>alloc_flag</code>(<code>u32</code>)</a></h3>
-<p>VM/JIT が参照する単一の <code>u32</code>。<strong>8 以上(ベース値)でトリガ帯</strong>。これを立てる経路:</p>
+<h3 id="41-poll-ワードの-gc-レーンpoll_flagrs"><a class="header" href="#41-poll-ワードの-gc-レーンpoll_flagrs">4.1 poll ワードの GC レーン(<code>poll_flag.rs</code>)</a></h3>
+<p>VM/JIT が参照する poll ワード(<code>u32</code>、8bit×4 レーン。全体像は <code>doc/safepoint.md</code> §3)の
+<strong>byte 0 が GC レーン</strong>。これを立てる経路:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>経路</th><th>実装</th><th>フラグ操作</th></tr>
+<tr><th>経路</th><th>実装</th><th>操作</th></tr>
 </thead>
 <tbody>
-<tr><td>ページ充填</td><td><code>set_alloc_flag</code>(<code>alloc.rs:681</code>)</td><td>ほぼ満杯ページごとに <code>+= 1</code>(約 8 ページで 8 に到達)</td></tr>
-<tr><td>malloc 圧(§8)</td><td><code>request_gc_if_malloc_over</code>(<code>alloc.rs:123</code>)</td><td>8 未満なら <code>8</code> を書く</td></tr>
-<tr><td><code>GC.start</code></td><td><code>request_gc(true)</code>(<code>alloc.rs:84</code>)</td><td>8 未満なら <code>8</code> を書く + メジャー強制</td></tr>
-<tr><td>シグナル配送</td><td>シグナルハンドラ(<code>jit_module.rs</code>)</td><td><code>+= 10</code>(<code>doc/signal.md</code>)</td></tr>
-<tr><td>プリエンプト tick</td><td>タイマ OS スレッド(<code>preempt.rs</code>)</td><td><code>|= 1 &lt;&lt; 30</code>(<code>PREEMPT_BIT</code>;<code>doc/threads.md</code> §8)</td></tr>
+<tr><td>ページ圧力</td><td><code>on_page_pressure</code>(<code>alloc.rs</code>)</td><td><code>pages_since_gc</code> が 8 に達したら <code>set_gc()</code></td></tr>
+<tr><td>malloc 圧(§8)</td><td><code>request_gc_if_malloc_over</code></td><td><code>set_gc()</code></td></tr>
+<tr><td><code>GC.start</code></td><td><code>request_gc(true)</code></td><td><code>set_gc()</code> + メジャー強制</td></tr>
+<tr><td><code>GC.stress</code></td><td><code>set_stress(true)</code> / 各収集の末尾</td><td><code>set_gc()</code>(再武装)</td></tr>
 </tbody>
 </table>
 </div>
-<p>「8 未満のときだけ 8 を書く」ことで、ページ充填の累積値やシグナルの <code>+10</code> を
-踏み潰さず、ちょうど 1 回の収集を要求する。</p>
-<blockquote>
-<p><strong>この <code>u32</code> はプリエンプションの poll フラグと同一の語</strong>である(<code>doc/threads.md</code> §8)。
-タイマ OS スレッドが上位ビット <code>PREEMPT_BIT</code>(= <code>1 &lt;&lt; 30</code>。ビット 31 でないのは
-x86-64 poll <code>cmpl …; jge</code> が<strong>符号付き</strong>比較で、ビット 31 だと負値に読めて発火しないため)を
-立てる。別スレッドから書くのでフラグアクセスはすべてアトミックになった。GC 判定は
-<strong>ベース値</strong>(プリエンプトビットを剥がした値)が <code>&gt;= 8</code> かどうかで行うので、純粋な
-プリエンプト tick が偽の full GC を起こすことはない(§4.3 手順 2)。GC 完了後の
-<code>unset_alloc_flag</code>(<code>alloc.rs:694</code>)は <code>fetch_and(PREEMPT_BIT)</code> でベース帯だけ落とし、
-並行して立ったプリエンプトビットは保存する。</p>
-</blockquote>
+<p>すべて冪等な <code>fetch_or</code> で、シグナル(SIGNAL レーン)・プリエンプト(PREEMPT レーン)とは
+byte が分かれているため互いを踏み潰す競合は原理的にない。GC 判定は GC レーン単体で行うので、
+純粋なプリエンプト tick やシグナル到着が偽の full GC を起こすことはない(§4.3 手順 2)。
+収集の完了時は <code>ack_gc_request</code>(<code>alloc.rs</code>)が <strong>GC レーンの byte だけ</strong>を落とし、
+<code>pages_since_gc</code> を 0 に戻す(並行して立った他レーンは保存される)。<code>--no-gc</code> 時の
+空収集も同じ経路で要求を無効化するため、レーンが立ちっぱなしで poll が空回りすることはない。</p>
 <h3 id="42-poll-のコード生成"><a class="header" href="#42-poll-のコード生成">4.2 poll のコード生成</a></h3>
 <p><code>execute_gc_inner</code>(<code>codegen/arch/x86_64/jit_module.rs:255</code>)が poll を出力:</p>
-<pre><code class="language-asm">cmpl [rip + alloc_flag], 8
-jge  gc          ; フラグ &gt;= 8 なら収集パスへ
+<pre><code class="language-asm">cmpl [rip + poll_flag], 0
+jne  gc          ; いずれかのレーンが立っていれば slow path へ
 exit:
 ; gc: (別ページ)
 ;   write_back(生きたレジスタを退避)
@@ -4848,19 +4842,21 @@ exit:
 <p>この poll は<strong>呼び出し先エントリ(callee entry)とループのバックエッジ</strong>という
 セーフポイントで実行される(<code>vm_execute_gc</code>;<code>vmgen/init_method.rs</code> / <code>vm_loop_start</code> ほか。
 call-site には poll を置かない — <code>doc/threads.md</code> §8.3)。aarch64 backend も
-同等のフラグ比較を出力する。</p>
+同等のゼロ判定(<code>ldr; cbz</code>)を出力する。</p>
 <h3 id="43-execute_gcexecutorrs3743"><a class="header" href="#43-execute_gcexecutorrs3743">4.3 <code>execute_gc</code>(<code>executor.rs:3743</code>)</a></h3>
 <p>セーフポイントから呼ばれる <code>extern "C"</code> 関数。順に:</p>
 <ol>
 <li><code>watchdog::poll()</code> — ハングウォッチドッグのカウントダウンをリセット。</li>
-<li><code>preempt::consume_poll_flag()</code> で<strong>プリエンプトビットを剥がし</strong>、<code>(ベース値, プリエンプトか)</code>
-を得る(§4.1 の注)。以降の GC 判定はベース値で行う。</li>
-<li><strong>保留シグナルの処理</strong> — <code>pending_signals</code> ビットマップを drain し、最小番号の
-シグナルを <code>Signal.trap</code> ハンドラ呼び出し / 既定例外(SIGINT ⇒ <code>Interrupt</code> 等)に
-変換(<code>doc/signal.md</code>)。</li>
-<li><strong>ベース値が <code>&gt;= 8</code> のときだけ</strong> GC 本体を実行:<code>parent_fiber</code> を辿って
+<li><code>poll_flag::consume_preempt()</code> で <strong>PREEMPT レーンを消費</strong>する。GC 判定は GC レーンで
+独立に行う(§4.1)。</li>
+<li><strong>保留シグナルの処理</strong> — SIGNAL レーンをクリアしてから <code>PENDING_SIGNALS</code> ビットマップを
+drain し、最小番号のシグナルを <code>Signal.trap</code> ハンドラ呼び出し / 既定例外(SIGINT ⇒
+<code>Interrupt</code> 等)に変換(<code>doc/signal.md</code>)。</li>
+<li><strong>GC レーンが立っているときだけ</strong> GC 本体を実行:<code>parent_fiber</code> を辿って
 **ルート Executor(最上位ファイバ)**へ行き、
-<code>ALLOC.with(|a| a.borrow_mut().gc(&amp;Root { globals, executor }))</code>。</li>
+<code>ALLOC.with(|a| a.borrow_mut().gc(&amp;Root { globals, executor }))</code>。
+drain できなかった保留シグナルがある poll では収集を次の poll へ延期する
+(<code>doc/signal.md</code> §4.1)。</li>
 <li>プリエンプトビットが立っていて <code>scheduler::preempt_ok()</code> なら <code>scheduler::pass</code>
 (タイムスライス切替。<code>doc/threads.md</code> §8.4)。</li>
 </ol>
@@ -5104,8 +5100,8 @@ proc/args/result/exception/joiners/pending/masks/last_status をマークする�
 無視すると閾値が GB 級に張り付き、通常の String/Array/Hash 成長で永遠に GC が
 発火しなくなる。同じ判定で <code>dealloc</code> も gate するので <code>MALLOC_AMOUNT</code> は
 アンダーフローしない。</li>
-<li><code>request_gc_if_malloc_over</code>(<code>alloc.rs:123</code>)が <code>MALLOC_AMOUNT &gt;= MALLOC_GC_THRESHOLD</code>
-で <code>alloc_flag</code> を 8 に持ち上げる(GC 要求;割り当てフリーで安全)。</li>
+<li><code>request_gc_if_malloc_over</code>(<code>alloc.rs</code>)が <code>MALLOC_AMOUNT &gt;= MALLOC_GC_THRESHOLD</code>
+で poll ワードの GC レーンを立てる(GC 要求;割り当てフリーで安全)。</li>
 <li>閾値 <code>MALLOC_GC_THRESHOLD</code> は各 GC 後に
 <code>malloced + max(malloced/2, MALLOC_THRESHOLD)</code> へ再設定(<code>alloc.rs:986</code>)。
 加算のみだと巨大ヒープでも 256KB ごとに GC してしまうので、乗算項で比例させる。</li>
@@ -5163,13 +5159,13 @@ stderr へ出力して abort する(<code>alloc.rs</code> の <code>malloc_hard_
 <li>monoruby の GC は <strong>非移動・単一スレッド・stop-the-world の世代別 mark &amp; sweep</strong>。</li>
 <li>256KB ページ + マーク/old の 2 枚のビットマップ(mark-external)で、非移動と
 世代別を両立。ページはアドレスマスクで O(1) 逆引き。</li>
-<li>割り当てはフリーリスト → バンプ。閾値到達で <code>alloc_flag</code> を立て、<strong>次のセーフ
-ポイント</strong>で <code>execute_gc</code> が同期収集する(JIT レジスタ退避のため即実行はしない)。</li>
+<li>割り当てはフリーリスト → バンプ。ページ圧力の閾値到達で poll ワードの GC レーンを立て、
+<strong>次のセーフポイント</strong>で <code>execute_gc</code> が同期収集する(JIT レジスタ退避のため即実行はしない)。</li>
 <li>世代別の心臓部は、<strong>3 回生存で昇格(aging)</strong>・<strong>適応的メジャー閾値</strong>・
 <strong>1 ビット高速パスの書き込みバリア + remembered set(自己クリーニング付き)</strong>。
 マイナーは old をシードマークして young + old→young 辺だけを辿る。</li>
-<li>外部 malloc 圧・シグナル・<code>GC.start</code> も同じ <code>alloc_flag</code> 経由で同一のセーフ
-ポイント収集に集約される。</li>
+<li>外部 malloc 圧・シグナル・<code>GC.start</code> も同じ poll ワード経由で同一のセーフ
+ポイント収集に集約される(レーン分割は <code>poll_flag.rs</code> / <code>doc/safepoint.md</code> §3)。</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="thread--fiber--non-blocking-io--プリエンプション-の実装"><a class="header" href="#thread--fiber--non-blocking-io--プリエンプション-の実装">Thread / Fiber / non-blocking IO / プリエンプション の実装</a></h1>
@@ -5305,7 +5301,7 @@ switch する。つまり制御はループ中の pending な dispatch 呼び出
 スロットは 1 個で足りる(green thread は <code>scheduler_run</code> を呼ばないため、
 ループのインスタンスは常に高々 1 つ)。</p>
 <p><code>SCHED_RSP</code> は <strong>OS スレッドごと</strong>(<code>thread_local</code> の <code>Cell&lt;u64&gt;</code>)。各 OS スレッドの
-<code>Codegen</code> が自分のスロットのアドレスをスタブに焼き込む(alloc_flag と同じ構図)。
+<code>Codegen</code> が自分のスロットのアドレスをスタブに焼き込む(poll ワードと同じ構図)。
 テストハーネスのように複数のインタプリタが別 OS スレッドで並走しても衝突しない。</p>
 <h3 id="32-コンテキストスイッチのスタブ2-アーキ"><a class="header" href="#32-コンテキストスイッチのスタブ2-アーキ">3.2 コンテキストスイッチのスタブ(×2 アーキ)</a></h3>
 <p><code>codegen/arch/{x86_64,aarch64}/invoker.rs</code> に 3 種。いずれも <code>parent_fiber</code> に触らない:</p>
@@ -5518,31 +5514,31 @@ fd ポーラで処理)。DNS(<code>getaddrinfo</code>)は CRuby 同様インラ�
 走る(<code>on_thread_count(live)</code> が <code>live &gt;= 2</code> で起動、<code>live &lt; 2</code> で停止)。単独スレッドの
 プログラムはタイマを 1 本も生やさずコストゼロ。</li>
 <li><code>MONORUBY_NO_PREEMPT</code> / <code>MONORUBY_PREEMPT_STRESS</code> が設定されているとタイマは起動しない。</li>
-<li>毎 tick、<code>flag_addr</code> の mutex を取ってから poll フラグに <code>fetch_or(PREEMPT_BIT)</code>。
+<li>毎 tick、<code>flag_addr</code> の mutex を取ってから poll ワードの PREEMPT レーンを <code>fetch_or</code>。
 <code>Codegen::drop</code>(<code>codegen_dropped</code>)が同じ mutex 下で <code>flag_addr</code> を 0 に落とすので、
 タイマが解放済み JIT メモリを触ることはない(マルチインタプリタのテストハーネス対策)。</li>
 </ul>
-<h3 id="82-フラグプロトコル"><a class="header" href="#82-フラグプロトコル">8.2 フラグプロトコル</a></h3>
-<p>poll フラグは <strong>GC の <code>alloc_flag</code> と同じ 1 つの <code>u32</code></strong>。複数の書き手がいる:</p>
+<h3 id="82-レーンプロトコル"><a class="header" href="#82-レーンプロトコル">8.2 レーンプロトコル</a></h3>
+<p>poll ワードは <strong>GC・シグナルと同じ 1 つの <code>u32</code></strong> で、8bit×4 のレーンに分割される
+(全体像は <code>poll_flag.rs</code> / <code>doc/safepoint.md</code> §3):</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>書き手</th><th>操作</th></tr>
+<tr><th>byte</th><th>レーン</th><th>書き手</th></tr>
 </thead>
 <tbody>
-<tr><td>RValue アリーナ(ページ充填)</td><td><code>+= 1</code></td></tr>
-<tr><td>シグナルスタブ</td><td><code>+= 10</code></td></tr>
-<tr><td>malloc トリガ / <code>GC.start</code></td><td><code>&gt;= 8</code> 帯へ持ち上げ</td></tr>
-<tr><td>プリエンプトタイマ</td><td><code>|= 1 &lt;&lt; 30</code>(<code>PREEMPT_BIT</code>)</td></tr>
+<tr><td>0</td><td>GC</td><td>アリーナのページ圧力 / malloc トリガ / <code>GC.start</code></td></tr>
+<tr><td>1</td><td>PREEMPT</td><td>プリエンプトタイマ</td></tr>
+<tr><td>2</td><td>SIGNAL</td><td>シグナルハンドラ</td></tr>
 </tbody>
 </table>
 </div>
 <ul>
-<li><strong>ビット 30</strong>であってビット 31 ではない: x86-64 の poll は <code>cmpl [rip+alloc_flag], 8; jge</code>
-という<strong>符号付き</strong>比較なので、ビット 31 だと負値に読めて発火しない。</li>
-<li>タイマは別 OS スレッドから書くので、フラグアクセスはすべてアトミック
-(タイマ <code>fetch_or</code>、GC 後の <code>unset_alloc_flag</code> は <code>fetch_and(PREEMPT_BIT)</code> で
-ベース帯だけ落として並行設定されたプリエンプトビットを<strong>保存</strong>する)。</li>
+<li>全書き込みは冪等なアトミック <code>fetch_or</code> / 自レーン byte のみの <code>fetch_and</code> clear。
+タイマ(別 OS スレッド)とシグナルハンドラ(async-signal 文脈)が同じ語に書いても、
+レーンが byte で分かれているため互いの更新を失わない。</li>
+<li>poll はワード全体の<strong>ゼロ判定</strong>(<code>cmpl …, 0; jne</code> / <code>ldr; cbz</code>)なので符号の罠もない
+(旧設計は符号付き <code>jge</code> の都合で PREEMPT がビット 30 に制限されていた)。</li>
 </ul>
 <h3 id="83-poll-配置"><a class="header" href="#83-poll-配置">8.3 poll 配置</a></h3>
 <p><strong>callee-entry + ループバックエッジのみ。call-site poll は無い</strong>(JVM/CRuby 方式)。</p>
@@ -5565,12 +5561,12 @@ poll-free でも 1 反復ごとにプリエンプト・シグナル応答可能�
 <p>セーフポイントから呼ばれる <code>execute_gc</code>(executor.rs)の順序:</p>
 <ol>
 <li><code>watchdog::poll()</code>。</li>
-<li><code>let (flag_base, preempt) = preempt::consume_poll_flag();</code> — プリエンプトビットを剥がし、
-<code>(ベース値, プリエンプトか)</code> を返す(フラグ未登録なら防御的に <code>(8, false)</code>)。</li>
+<li><code>let preempt = poll_flag::consume_preempt() || preempt::stress();</code> — PREEMPT レーンを
+消費する。</li>
 <li>保留シグナルを drain(エラーを立てて <code>None</code> を返しうる)。</li>
-<li><code>flag_base &gt;= 8</code> のときだけ実際に GC(純プリエンプト tick はベースが 8 未満なので
+<li>GC レーンが立っているときだけ実際に GC(純プリエンプト tick は GC レーンに触れないので
 スキップ = 偽の full GC を起こさない)。</li>
-<li><code>stress_renudge()</code> — stress モードでは切替の<strong>前に</strong>フラグを再武装し、切替先スレッドも
+<li><code>stress_renudge()</code> — stress モードでは切替の<strong>前に</strong>レーンを再武装し、切替先スレッドも
 poll するようにする。</li>
 <li><code>if preempt &amp;&amp; scheduler::preempt_ok() { scheduler::pass(vm, globals)? }</code>。
 <code>pass</code> の <code>Err</code>(kill/raise がこのスレッドに配送された)は <code>set_error</code> + <code>None</code> で浮上。</li>
@@ -5858,7 +5854,7 @@ GC(<code>doc/gc.md</code>)・タイムスライスプリエンプション(<code
 <tr><td>poll のコード生成(x86-64)</td><td><code>codegen/arch/x86_64/jit_module.rs</code>(<code>execute_gc_inner</code>) / <code>vmgen/init_method.rs</code>(<code>vm_init</code>) / <code>vmgen.rs</code>(<code>vm_loop_start</code>)</td></tr>
 <tr><td>poll のコード生成(aarch64)</td><td><code>codegen/arch/aarch64/codegen.rs</code>(<code>a64_vm_execute_gc</code>) / <code>vmgen.rs</code></td></tr>
 <tr><td>セーフポイント本体</td><td><code>executor.rs</code>(<code>execute_gc</code>)</td></tr>
-<tr><td>poll フラグ</td><td><code>alloc.rs</code>(<code>alloc_flag</code> / <code>set_alloc_flag</code> / <code>unset_alloc_flag</code>) / <code>preempt.rs</code>(<code>PREEMPT_BIT</code> / <code>consume_poll_flag</code>)</td></tr>
+<tr><td>poll ワード</td><td><code>poll_flag.rs</code>(レーン定義・set/clear/consume) / <code>alloc.rs</code>(ページ圧力・<code>ack_gc_request</code>) / <code>preempt.rs</code>(タイマ)</td></tr>
 <tr><td>JIT tier の poll IR</td><td><code>codegen/jitgen/asmir.rs</code>(<code>AsmInst::ExecGc</code>) / <code>codegen/jitgen/compile.rs</code></td></tr>
 </tbody>
 </table>
@@ -5866,7 +5862,7 @@ GC(<code>doc/gc.md</code>)・タイムスライスプリエンプション(<code
 <hr>
 <h2 id="1-セーフポイントとは何か"><a class="header" href="#1-セーフポイントとは何か">1. セーフポイントとは何か</a></h2>
 <p>セーフポイントとは、実行中のインタプリタが<strong>フレームを完全に整合した(GC-complete な)状態
-にしたうえで poll フラグを検査する</strong>地点である。フラグがトリガ帯に立っていれば、その場で
+にしたうえで poll ワードを検査する</strong>地点である。いずれかのレーンが立っていれば、その場で
 <code>execute_gc</code>(<code>executor.rs</code>)を呼び、以下のいずれか(または複数)を行う:</p>
 <ul>
 <li><strong>GC</strong>: マーク&amp;スイープ(<code>doc/gc.md</code>)。</li>
@@ -5895,29 +5891,30 @@ Rust のアロケータや <code>RefCell</code> に触れられない。ハン�
 してから処理に入る。プリエンプションが安全なのも「GC が起きうるのと<strong>同じ</strong>地点でしか
 切り替わらない」ため — register write-back を含め GC と全く同じ扱いになる。</p>
 <hr>
-<h2 id="3-poll-フラグ-alloc_flagu32"><a class="header" href="#3-poll-フラグ-alloc_flagu32">3. poll フラグ <code>alloc_flag</code>(<code>u32</code>)</a></h2>
-<p>VM/JIT が参照する単一の <code>u32</code>。3 イベントすべてがこの 1 語を共有する。<strong>ベース値(下位)が
-8 以上でトリガ帯</strong>、上位ビット <code>PREEMPT_BIT</code> がプリエンプト要求。</p>
+<h2 id="3-poll-ワードpoll_flagrsu32"><a class="header" href="#3-poll-ワードpoll_flagrsu32">3. poll ワード(<code>poll_flag.rs</code>、<code>u32</code>)</a></h2>
+<p>VM/JIT が参照する単一の <code>u32</code>。3 イベントすべてがこの 1 語を共有し、<strong>8bit×4 のレーン</strong>に
+分割される。poll は<strong>ワード全体のゼロ判定 1 個</strong>(非ゼロ = いずれかのレーンが立っている)。</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>書き手</th><th>操作</th><th>意味</th></tr>
+<tr><th>byte</th><th>レーン</th><th>立てる側</th><th>落とす側</th></tr>
 </thead>
 <tbody>
-<tr><td>ページ充填</td><td><code>set_alloc_flag</code>:<code>+= 1</code></td><td>ほぼ満杯ページごと(約 8 ページで 8 に到達)→ GC</td></tr>
-<tr><td>malloc 圧 / <code>GC.start</code></td><td><code>&gt;= 8</code> 帯へ持ち上げ</td><td>外部バッファ圧・明示 GC → GC</td></tr>
-<tr><td>シグナルハンドラ</td><td><code>+= 10</code></td><td>保留シグナル配送</td></tr>
-<tr><td>プリエンプトタイマ</td><td><code>|= 1 &lt;&lt; 30</code>(<code>PREEMPT_BIT</code>)</td><td>タイムスライス切替</td></tr>
+<tr><td>0</td><td>GC</td><td>ページ圧力(8 ページで <code>set_gc</code>)/ malloc 圧 / <code>GC.start</code> / <code>GC.stress</code> 再武装</td><td>収集完了(<code>ack_gc_request</code>。<code>--no-gc</code> の空収集も同様)</td></tr>
+<tr><td>1</td><td>PREEMPT</td><td>プリエンプトタイマ(別 OS スレッド)/ stress 再武装</td><td>poll 入口の <code>consume_preempt</code></td></tr>
+<tr><td>2</td><td>SIGNAL</td><td>シグナルハンドラ(async-signal 文脈)</td><td>ビットマップを drain した poll(main 配送時)</td></tr>
+<tr><td>3</td><td>予備</td><td>—</td><td>—</td></tr>
 </tbody>
 </table>
 </div>
 <ul>
-<li><strong>ビット 30</strong> であってビット 31 ではない: x86-64 poll は <code>cmpl …; jge</code>(符号付き比較)なので、
-ビット 31 だと負値に読めて発火しない。</li>
-<li>タイマは別 OS スレッドから書くので、フラグアクセスはすべてアトミック。GC 後の
-<code>unset_alloc_flag</code> は <code>fetch_and(PREEMPT_BIT)</code> でベース帯だけ落とし、並行して立った
-プリエンプトビットは保存する。</li>
-<li>詳細な相互作用は <code>doc/gc.md</code> §4.1、<code>doc/threads.md</code> §8.2 を参照。</li>
+<li>全書き込みは<strong>冪等なアトミック演算</strong>(<code>fetch_or</code> で set、<code>fetch_and</code> で自レーンの byte のみ
+clear)。別スレッド・async-signal 文脈からの書き込みが互いのレーンを失わせることはない。</li>
+<li>ページ圧力の「8 ページ」カウンタはアロケータ内部(<code>pages_since_gc</code>)にあり、poll ワード自体は
+算術を持たない(旧設計はページ充填 <code>+=1</code>・シグナル <code>+=10</code>・<code>&gt;= 8</code> トリガ帯を 1 語に重畳し、
+符号付き比較の都合で PREEMPT がビット 30 に制限されていた)。</li>
+<li>詳細な相互作用は <code>poll_flag.rs</code> のモジュールドキュメント、<code>doc/gc.md</code> §4.1、
+<code>doc/threads.md</code> §8.2 を参照。</li>
 </ul>
 <hr>
 <h2 id="4-poll-の配置"><a class="header" href="#4-poll-の配置">4. poll の配置</a></h2>
@@ -5950,8 +5947,8 @@ poll してはならない制約(§8)とも整合する。</p>
 <h2 id="5-poll-のコード生成"><a class="header" href="#5-poll-のコード生成">5. poll のコード生成</a></h2>
 <h3 id="51-vm-tierx86-64"><a class="header" href="#51-vm-tierx86-64">5.1 VM tier(x86-64)</a></h3>
 <p><code>execute_gc_inner</code>(<code>jit_module.rs</code>)が出力する。ホットパスは 1 比較 + fall-through:</p>
-<pre><code class="language-asm">    cmpl [rip + alloc_flag], 8
-    jge  gc          ; ベース値 &gt;= 8(またはプリエンプトビット)なら収集パスへ
+<pre><code class="language-asm">    cmpl [rip + poll_flag], 0
+    jne  gc          ; いずれかのレーンが立っていれば slow path へ
 exit:
     ; --- 別ページ ---
 gc:
@@ -5962,17 +5959,16 @@ gc:
     jmp  error        ; None(=例外/シグナル/割り込み)なら伝播
 </code></pre>
 <ul>
-<li><strong>fall-through が最頻ケース</strong>(フラグ未武装)で、収集本体は <code>select_page(1)</code> の別ページに
+<li><strong>fall-through が最頻ケース</strong>(全レーン未武装)で、収集本体は <code>select_page(1)</code> の別ページに
 置いてホットパスの I-cache を汚さない。</li>
 <li><code>exec_gc</code> は <code>execute_gc</code> を呼ぶスタブ。戻り値 <code>Some</code> を <code>rax != 0</code>、<code>None</code> を <code>rax == 0</code> として
 分岐する。</li>
 </ul>
 <h3 id="52-vm-tieraarch64"><a class="header" href="#52-vm-tieraarch64">5.2 VM tier(aarch64)</a></h3>
 <p><code>a64_vm_execute_gc</code>(<code>codegen.rs</code>)が対称に出力する:</p>
-<pre><code class="language-asm">    mov x10, alloc_flag_addr
+<pre><code class="language-asm">    mov x10, poll_flag_addr
     ldr w11, [x10]
-    cmp x11, #8
-    b.lt skip
+    cbz x11, skip
     bl  gc
 skip:
 </code></pre>
@@ -6004,15 +6000,17 @@ VM tier との違いは、退避すべきライブレジスタ集合が<strong>�
 <ol>
 <li><strong><code>watchdog::poll()</code></strong> — poll 到達はインタプリタの進捗なので、ハングウォッチドッグの
 カウントダウンをリセット(<code>doc/signal.md</code>)。</li>
-<li><strong><code>preempt::consume_poll_flag()</code></strong> — プリエンプトビットを剥がし <code>(ベース値, プリエンプトか)</code>
-を得る。以降の GC 判定はベース値で行う(純プリエンプト tick で偽の full GC を起こさない)。
-フラグ未登録なら防御的に <code>(8, false)</code>。</li>
-<li><strong>保留シグナルの drain</strong> — <code>PENDING_SIGNALS</code> ビットマップを取り、最小番号のシグナルを
-<code>Signal.trap</code> ハンドラ呼び出し / 既定例外(SIGINT ⇒ <code>Interrupt</code> 等)に変換。エラーを
-立てて <code>None</code> を返しうる。</li>
-<li><strong>GC(ベース値 <code>&gt;= 8</code> のときだけ)</strong> — <code>parent_fiber</code> を辿ってルート Executor へ行き、
+<li><strong><code>poll_flag::consume_preempt()</code></strong> — PREEMPT レーンを消費する。GC 判定は GC レーンで
+独立に行う(純プリエンプト tick で偽の full GC を起こさない)。ワード未登録なら
+防御的に「GC 要求あり」とみなす。</li>
+<li><strong>保留シグナルの drain</strong> — SIGNAL レーンをクリアしてから <code>PENDING_SIGNALS</code> ビットマップを
+取り、最小番号のシグナルを <code>Signal.trap</code> ハンドラ呼び出し / 既定例外(SIGINT ⇒
+<code>Interrupt</code> 等)に変換。エラーを立てて <code>None</code> を返しうる。配送が main にゲートされ
+drain できない poll では SIGNAL レーンを残し(main の wakeup 維持)、GC も次の poll へ
+延期する(<code>doc/signal.md</code> §4.1)。</li>
+<li><strong>GC(GC レーンが立っているときだけ)</strong> — <code>parent_fiber</code> を辿ってルート Executor へ行き、
 <code>ALLOC.borrow_mut().gc(&amp;Root { globals, executor })</code>。</li>
-<li><strong><code>preempt::stress_renudge()</code></strong> — stress モードでは切替の<strong>前に</strong>フラグを再武装し、
+<li><strong><code>preempt::stress_renudge()</code></strong> — stress モードでは切替の<strong>前に</strong>レーンを再武装し、
 切替先スレッドも poll するようにする。</li>
 <li><strong>プリエンプション</strong> — <code>preempt &amp;&amp; scheduler::preempt_ok()</code> のとき <code>scheduler::pass</code>。
 <code>Err</code>(このスレッドへ配送された kill/raise)は <code>set_error</code> + <code>None</code> で浮上させる。</li>
@@ -6085,16 +6083,18 @@ blocking/poll 地点以外では切り替わらない)—— GVL 下で CRuby �
 <p>シグナルハンドラは async-signal 文脈で走るため、そこでは Rust のアロケータ・<code>RefCell</code>・
 libc 呼び出しに触れられない。そこで <strong>2 段階</strong>にする:</p>
 <ol>
-<li><strong>記録(async-signal 文脈)</strong>: ハンドラスタブは、プロセスグローバルなビットマップに
-自分のビットを OR し、poll フラグ(<code>alloc_flag</code>)を <code>+= 10</code> して即 <code>ret</code>。メモリの
-ADD と OR だけで、Rust には一切入らない。</li>
+<li><strong>記録(async-signal 文脈)</strong>: Rust ハンドラ(<code>signal_table::signal_handler</code>)が、
+プロセスグローバルなビットマップに自分のビットを <code>fetch_or</code> し、poll ワード
+(<code>poll_flag.rs</code>)の SIGNAL レーンを <code>fetch_or</code> して即 return。lock-free な
+アトミック演算 2 つだけ(ロックなし・確保なし・TLS なし)。</li>
 <li><strong>配送(セーフポイント)</strong>: 次に VM/JIT がセーフポイント(callee-entry / ループ
 バックエッジ、<code>doc/safepoint.md</code> §4)へ到達すると <code>execute_gc</code>(<code>executor.rs</code>)が
 ビットマップを drain し、最小番号のシグナルを Ruby 例外 / <code>Signal.trap</code> ハンドラ呼び出しに
 変換する。</li>
 </ol>
-<p>この構造により、シグナルは GC・プリエンプションと同一の <code>alloc_flag</code>・同一の poll・
-同一の <code>execute_gc</code> を共有する。<code>+= 10</code> はトリガ帯(<code>&gt;= 8</code>)を確実に踏むためのナッジ。</p>
+<p>この構造により、シグナルは GC・プリエンプションと同一の poll ワード・同一の poll・
+同一の <code>execute_gc</code> を共有する。ワードは 8bit×4 のレーン(GC / PREEMPT / SIGNAL / 予備)に
+分割されており、poll はワード全体のゼロ判定 1 個(<code>poll_flag.rs</code> 参照)。</p>
 <hr>
 <h2 id="2-ペンディングビットマップsignal_tablers"><a class="header" href="#2-ペンディングビットマップsignal_tablers">2. ペンディングビットマップ(<code>signal_table.rs</code>)</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -6105,39 +6105,41 @@ ADD と OR だけで、Rust には一切入らない。</li>
 <li><strong>プロセスグローバル</strong>な <code>AtomicU32</code>。ビット <code>n</code> = シグナル <code>n+1</code>(SIGINT=2 ⇒ bit1)。</li>
 <li>プロセスグローバルにする理由: <code>sigaction</code> はプロセス全体に効くので、<code>Codegen</code> ごとに
 ビットマップを分けると、2 個目の <code>Codegen</code> がハンドラを自分のビットマップへ向け直した際に
-シグナルを取りこぼす。1 枚のグローバルにすれば、記録側(スタブ)と drain 側が
+シグナルを取りこぼす。1 枚のグローバルにすれば、記録側(ハンドラ)と drain 側が
 どの <code>Codegen</code> がインストールしたかによらず一致する。</li>
-<li><code>pending_signals_addr()</code> — スタブに焼き込む絶対アドレス。</li>
 <li><code>take_pending_signals()</code> — <code>swap(0, Relaxed)</code> でアトミックに drain。</li>
 <li><code>lowest_pending_signo(bitmap)</code> — <code>bitmap.trailing_zeros() + 1</code>。<strong>最小番号の signo が優先</strong>
 (§6)。1 回の drain で配送するのは 1 シグナルだけ。</li>
 </ul>
-<h3 id="ハンドラスタブa2-の一部signal_handler_for"><a class="header" href="#ハンドラスタブa2-の一部signal_handler_for">ハンドラスタブ(A2 の一部;<code>signal_handler_for</code>)</a></h3>
-<p>x86-64(<code>jit_module.rs</code>)が出力する内容そのもの:</p>
-<pre><code class="language-asm">addl [rip + alloc_flag], 10   ; 次の poll を必ず発火させる
-movq rax, (ps_addr)
-orl  [rax], (bit)             ; PENDING_SIGNALS に自分のビットを OR
-ret
-</code></pre>
-<ul>
-<li><strong>Rust を呼ばない</strong>。メモリの ADD と OR、そして <code>ret</code> のみ。<code>rax</code> はシグナルハンドラの
-C ABI で caller-saved。</li>
-<li>RMW は <strong>LOCK 前置しない</strong>(async-signal 文脈では <code>ldxr/stxr</code> 相当が使えない)。ネストした
-シグナルで増分/ビットを稀に取りこぼしうるが無害(次の poll が拾う)。</li>
-<li>aarch64(<code>jit_module.rs</code>)も対称。ただし alloc_flag のアドレス取得法が異なる
-(x86 は rip 相対、aarch64 はラベルアドレス)。</li>
-</ul>
-<p><strong>async-signal-safe な理由</strong>: 静的に既知の絶対アドレスへのロード/ストアと <code>ret</code> だけ。
-ロックなし・確保なし・libc 呼び出しなし・再入 Rust なし。</p>
+<h3 id="rust-ハンドラa2signal_tablesignal_handler"><a class="header" href="#rust-ハンドラa2signal_tablesignal_handler">Rust ハンドラ(A2;<code>signal_table::signal_handler</code>)</a></h3>
+<p><code>sa_handler</code> 形式で <code>sigaction(2)</code> される単一の <code>extern "C" fn(signo: i32)</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub(crate) extern "C" fn signal_handler(signo: i32) {
+    if (1..=32).contains(&amp;signo) {
+        PENDING_SIGNALS.fetch_or(1 &lt;&lt; (signo - 1) as u32, Ordering::Relaxed);
+    }
+    crate::poll_flag::set_signal_from_handler(); // SIGNAL レーンを fetch_or
+}
+<span class="boring">}</span></code></pre>
+<p><strong>async-signal-safe な理由</strong>: 本体は lock-free な relaxed アトミック演算 2 つだけ。
+ロックなし・確保なし・TLS なし・libc 呼び出しなし。poll ワードのアドレスは
+<code>poll_flag.rs</code> のプロセスグローバルなレジストリ(<code>AtomicUsize</code>、最後に登録した
+<code>Codegen</code> が勝つ — <code>sigaction</code> のプロセスワイド性と対応)から取得する。</p>
+<p>かつては signo ごとに JIT asm スタブ(<code>addl [alloc_flag], 10; orl [pending], bit</code>)を
+事前生成していたが、(1) lock なし RMW がプリエンプトタイマの <code>fetch_or</code> と競合して
+どちらかの更新を失いうる、(2) インストール元 <code>Codegen</code> の解放後にシグナルが来ると
+解放済み JIT メモリを実行する、という 2 つの欠陥があり、Rust ハンドラ+アトミック演算に
+置き換えた。</p>
 <hr>
 <h2 id="3-sigaction-のインストールa3"><a class="header" href="#3-sigaction-のインストールa3">3. sigaction のインストール(A3)</a></h2>
-<p><code>codegen.rs</code> の <code>sigaction_to</code> / <code>install_signal_stub</code> がプロセスワイドに <code>libc::sigaction</code> する。</p>
+<p><code>codegen.rs</code> の <code>sigaction_to</code> / <code>install_signal_handler</code> がプロセスワイドに <code>libc::sigaction</code> する。</p>
 <ul>
 <li><strong><code>SA_RESTART</code> を付けない</strong>(<code>flags = 0</code>)。これは意図的(§8)。シグナルがブロッキング
 syscall を EINTR で中断させ、インタプリタを poll 地点へ到達させるため。</li>
-<li><strong>スタブ事前生成(A2)</strong>: <code>Codegen::new</code> 時に <code>TRAPPABLE_SIGNALS</code> 全てのスタブを
-<code>signal_stubs: HashMap&lt;i32, CodePtr&gt;</code> に用意する。ゆえに実行時の trap は <code>sigaction(2)</code>
-だけで済み、稼働中のバッファに JIT コード生成を行わない。</li>
+<li>ハンドラは全 signo 共通の Rust 関数(§2)なので事前生成物はなく、実行時の trap は
+<code>sigaction(2)</code> だけで済む(稼働中のバッファに JIT コード生成を行わない、という
+旧スタブ方式の利点はそのまま)。<code>install_signal_handler</code> は <code>is_trappable</code> で守られる。</li>
 <li><strong>デフォルトインストール</strong>: 起動時に <code>POSIX_SIGNALS</code>(HUP, INT, QUIT, ALRM, TERM,
 USR1, USR2)へ自動で <code>sigaction</code>。CHLD/CONT/WINCH/TSTP や PIPE は既定では張らない。
 ウォッチドッグが armed のとき(§9)は SIGALRM をスキップしてハンドラを奪わない。</li>
@@ -6159,8 +6161,10 @@ USR1, USR2)へ自動で <code>sigaction</code>。CHLD/CONT/WINCH/TSTP や PIPE �
 <p><code>execute_gc</code>(<code>executor.rs</code>)がセーフポイントで実行する処理のうち、シグナル部分:</p>
 <ol>
 <li><code>watchdog::poll()</code>(§9)。</li>
-<li><code>preempt::consume_poll_flag()</code> でプリエンプトビットを剥がす。</li>
-<li><strong>シグナル drain</strong>: <code>take_pending_signals()</code> → <code>lowest_pending_signo()</code>。signo があれば
+<li><code>poll_flag::consume_preempt()</code> で PREEMPT レーンを消費する。</li>
+<li><strong>シグナル drain</strong>: SIGNAL レーンをクリアしてから <code>take_pending_signals()</code> →
+<code>lowest_pending_signo()</code>(クリア→drain の順序: 間に届いたシグナルはレーンとビットを
+立て直すので余分な poll 1 回で済む。逆順はビットの arming を失いうる)。signo があれば
 <code>globals.signal_disposition(signo)</code> で分岐:
 <ul>
 <li><code>Handler(handler)</code> → <code>arg = Value::integer(signo)</code>、<code>#call</code> を <code>invoke_method_inner</code> で
@@ -6172,7 +6176,7 @@ USR1, USR2)へ自動で <code>sigaction</code>。CHLD/CONT/WINCH/TSTP や PIPE �
 (CRuby も coalesce したシグナルの全配送を保証しない)。</li>
 </ul>
 </li>
-<li>GC 本体(ベース値 <code>&gt;= 8</code> のとき)。</li>
+<li>GC 本体(GC レーンが立っているとき)。</li>
 <li>プリエンプション(<code>scheduler::pass</code>)。</li>
 </ol>
 <p><strong>シグナル配送は GC・プリエンプションより前</strong>に同じ poll 内で行われる。
@@ -6323,12 +6327,13 @@ SIGALRM をスキップ)。</li>
 <hr>
 <h2 id="9-スレッド--スケジューラとの関係"><a class="header" href="#9-スレッド--スケジューラとの関係">9. スレッド / スケジューラとの関係</a></h2>
 <ul>
-<li><strong>どのスレッドが変換するか</strong>: poll 地点(<code>execute_gc</code>)に到達したスレッド。シグナルは
-main ではなく<strong>ポーリングしたスレッド</strong>で変換される(<code>doc/threads.md</code> §10 の既知の制限。
-CRuby は main へ配送)。</li>
-<li>poll フラグは GC の <code>alloc_flag</code> と同一の <code>u32</code>。書き手はページ充填 <code>+=1</code>、
-<strong>シグナルスタブ <code>+=10</code></strong>、malloc/<code>GC.start</code> の <code>&gt;=8</code> 持ち上げ、プリエンプトタイマ
-<code>|= 1&lt;&lt;30</code>(<code>doc/threads.md</code> §8.2 / <code>doc/gc.md</code> §4.1)。</li>
+<li><strong>どのスレッドが変換するか</strong>: main グリーンスレッド(§4.1 の配送ゲート、CRuby と同じ)。
+非 main スレッドの poll ではビットマップと SIGNAL レーンが残り、main の次の poll が配送する。</li>
+<li>poll ワードは GC・プリエンプションと共有の <code>u32</code> で、8bit×4 のレーンに分割
+(<code>poll_flag.rs</code>)。書き手はアリーナのページ圧力 / malloc / <code>GC.start</code>(GC レーン)、
+<strong>シグナルハンドラ(SIGNAL レーン)</strong>、プリエンプトタイマ(PREEMPT レーン)。
+全書き込みは冪等なアトミック <code>fetch_or</code>/<code>fetch_and</code>(<code>doc/threads.md</code> §8.2 /
+<code>doc/gc.md</code> §4.1)。</li>
 <li>グリーンスレッドをまたぐブロッキング IO はスケジューラの fd ポーラで park する。
 シグナルによる EINTR が待機を起こし poll 地点を通すので、他スレッドが park していても
 シグナル応答性が保たれる。</li>
@@ -6346,13 +6351,13 @@ CRuby は main へ配送)。</li>
 <hr>
 <h2 id="11-まとめ"><a class="header" href="#11-まとめ">11. まとめ</a></h2>
 <ul>
-<li>シグナルは async-signal 文脈で<strong>ビットを立てて <code>alloc_flag</code> をナッジするだけ</strong>、実配送は
+<li>シグナルは async-signal 文脈で<strong>ビットマップと SIGNAL レーンを立てるだけ</strong>、実配送は
 次のセーフポイント(<code>doc/safepoint.md</code>)で <code>execute_gc</code> が行う遅延モデル。GC・
-プリエンプションと poll・フラグ・入口関数を完全に共有する。</li>
+プリエンプションと poll・ワード・入口関数を完全に共有する。</li>
 <li>ビットマップ・trap テーブルはプロセス/インタプリタ単位で、trap ハンドラは GC ルート。</li>
 <li><code>SA_RESTART</code> を意図的に外し、ブロッキング IO は <code>signal_interrupt</code> マーカー経由で
 EINTR を poll 地点へ運ぶ(SIGTERM 応答性の担保)。</li>
-<li>最小 signo 優先(A6)、SIGINT→<code>Interrupt</code>(A4)、<code>Signal.trap</code>(A7)、スタブ事前生成(A2)、
+<li>最小 signo 優先(A6)、SIGINT→<code>Interrupt</code>(A4)、<code>Signal.trap</code>(A7)、共通 Rust ハンドラ(A2)、
 デフォルトインストール(A3)、ハングウォッチドッグ(B+)。</li>
 <li>捕捉されない SignalException は同じシグナルで自死し、親に正しいシグナル死を見せる。</li>
 </ul>

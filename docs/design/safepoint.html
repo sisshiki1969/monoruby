@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1b6b02bb.js";
+            window.path_to_searchindex_js = "../searchindex-c959a123.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -192,7 +192,7 @@ GC(<code>doc/gc.md</code>)・タイムスライスプリエンプション(<code
 <tr><td>poll のコード生成(x86-64)</td><td><code>codegen/arch/x86_64/jit_module.rs</code>(<code>execute_gc_inner</code>) / <code>vmgen/init_method.rs</code>(<code>vm_init</code>) / <code>vmgen.rs</code>(<code>vm_loop_start</code>)</td></tr>
 <tr><td>poll のコード生成(aarch64)</td><td><code>codegen/arch/aarch64/codegen.rs</code>(<code>a64_vm_execute_gc</code>) / <code>vmgen.rs</code></td></tr>
 <tr><td>セーフポイント本体</td><td><code>executor.rs</code>(<code>execute_gc</code>)</td></tr>
-<tr><td>poll フラグ</td><td><code>alloc.rs</code>(<code>alloc_flag</code> / <code>set_alloc_flag</code> / <code>unset_alloc_flag</code>) / <code>preempt.rs</code>(<code>PREEMPT_BIT</code> / <code>consume_poll_flag</code>)</td></tr>
+<tr><td>poll ワード</td><td><code>poll_flag.rs</code>(レーン定義・set/clear/consume) / <code>alloc.rs</code>(ページ圧力・<code>ack_gc_request</code>) / <code>preempt.rs</code>(タイマ)</td></tr>
 <tr><td>JIT tier の poll IR</td><td><code>codegen/jitgen/asmir.rs</code>(<code>AsmInst::ExecGc</code>) / <code>codegen/jitgen/compile.rs</code></td></tr>
 </tbody>
 </table>
@@ -200,7 +200,7 @@ GC(<code>doc/gc.md</code>)・タイムスライスプリエンプション(<code
 <hr>
 <h2 id="1-セーフポイントとは何か"><a class="header" href="#1-セーフポイントとは何か">1. セーフポイントとは何か</a></h2>
 <p>セーフポイントとは、実行中のインタプリタが<strong>フレームを完全に整合した(GC-complete な)状態
-にしたうえで poll フラグを検査する</strong>地点である。フラグがトリガ帯に立っていれば、その場で
+にしたうえで poll ワードを検査する</strong>地点である。いずれかのレーンが立っていれば、その場で
 <code>execute_gc</code>(<code>executor.rs</code>)を呼び、以下のいずれか(または複数)を行う:</p>
 <ul>
 <li><strong>GC</strong>: マーク&amp;スイープ(<code>doc/gc.md</code>)。</li>
@@ -229,29 +229,30 @@ Rust のアロケータや <code>RefCell</code> に触れられない。ハン�
 してから処理に入る。プリエンプションが安全なのも「GC が起きうるのと<strong>同じ</strong>地点でしか
 切り替わらない」ため — register write-back を含め GC と全く同じ扱いになる。</p>
 <hr>
-<h2 id="3-poll-フラグ-alloc_flagu32"><a class="header" href="#3-poll-フラグ-alloc_flagu32">3. poll フラグ <code>alloc_flag</code>(<code>u32</code>)</a></h2>
-<p>VM/JIT が参照する単一の <code>u32</code>。3 イベントすべてがこの 1 語を共有する。<strong>ベース値(下位)が
-8 以上でトリガ帯</strong>、上位ビット <code>PREEMPT_BIT</code> がプリエンプト要求。</p>
+<h2 id="3-poll-ワードpoll_flagrsu32"><a class="header" href="#3-poll-ワードpoll_flagrsu32">3. poll ワード(<code>poll_flag.rs</code>、<code>u32</code>)</a></h2>
+<p>VM/JIT が参照する単一の <code>u32</code>。3 イベントすべてがこの 1 語を共有し、<strong>8bit×4 のレーン</strong>に
+分割される。poll は<strong>ワード全体のゼロ判定 1 個</strong>(非ゼロ = いずれかのレーンが立っている)。</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>書き手</th><th>操作</th><th>意味</th></tr>
+<tr><th>byte</th><th>レーン</th><th>立てる側</th><th>落とす側</th></tr>
 </thead>
 <tbody>
-<tr><td>ページ充填</td><td><code>set_alloc_flag</code>:<code>+= 1</code></td><td>ほぼ満杯ページごと(約 8 ページで 8 に到達)→ GC</td></tr>
-<tr><td>malloc 圧 / <code>GC.start</code></td><td><code>&gt;= 8</code> 帯へ持ち上げ</td><td>外部バッファ圧・明示 GC → GC</td></tr>
-<tr><td>シグナルハンドラ</td><td><code>+= 10</code></td><td>保留シグナル配送</td></tr>
-<tr><td>プリエンプトタイマ</td><td><code>|= 1 &lt;&lt; 30</code>(<code>PREEMPT_BIT</code>)</td><td>タイムスライス切替</td></tr>
+<tr><td>0</td><td>GC</td><td>ページ圧力(8 ページで <code>set_gc</code>)/ malloc 圧 / <code>GC.start</code> / <code>GC.stress</code> 再武装</td><td>収集完了(<code>ack_gc_request</code>。<code>--no-gc</code> の空収集も同様)</td></tr>
+<tr><td>1</td><td>PREEMPT</td><td>プリエンプトタイマ(別 OS スレッド)/ stress 再武装</td><td>poll 入口の <code>consume_preempt</code></td></tr>
+<tr><td>2</td><td>SIGNAL</td><td>シグナルハンドラ(async-signal 文脈)</td><td>ビットマップを drain した poll(main 配送時)</td></tr>
+<tr><td>3</td><td>予備</td><td>—</td><td>—</td></tr>
 </tbody>
 </table>
 </div>
 <ul>
-<li><strong>ビット 30</strong> であってビット 31 ではない: x86-64 poll は <code>cmpl …; jge</code>(符号付き比較)なので、
-ビット 31 だと負値に読めて発火しない。</li>
-<li>タイマは別 OS スレッドから書くので、フラグアクセスはすべてアトミック。GC 後の
-<code>unset_alloc_flag</code> は <code>fetch_and(PREEMPT_BIT)</code> でベース帯だけ落とし、並行して立った
-プリエンプトビットは保存する。</li>
-<li>詳細な相互作用は <code>doc/gc.md</code> §4.1、<code>doc/threads.md</code> §8.2 を参照。</li>
+<li>全書き込みは<strong>冪等なアトミック演算</strong>(<code>fetch_or</code> で set、<code>fetch_and</code> で自レーンの byte のみ
+clear)。別スレッド・async-signal 文脈からの書き込みが互いのレーンを失わせることはない。</li>
+<li>ページ圧力の「8 ページ」カウンタはアロケータ内部(<code>pages_since_gc</code>)にあり、poll ワード自体は
+算術を持たない(旧設計はページ充填 <code>+=1</code>・シグナル <code>+=10</code>・<code>&gt;= 8</code> トリガ帯を 1 語に重畳し、
+符号付き比較の都合で PREEMPT がビット 30 に制限されていた)。</li>
+<li>詳細な相互作用は <code>poll_flag.rs</code> のモジュールドキュメント、<code>doc/gc.md</code> §4.1、
+<code>doc/threads.md</code> §8.2 を参照。</li>
 </ul>
 <hr>
 <h2 id="4-poll-の配置"><a class="header" href="#4-poll-の配置">4. poll の配置</a></h2>
@@ -284,8 +285,8 @@ poll してはならない制約(§8)とも整合する。</p>
 <h2 id="5-poll-のコード生成"><a class="header" href="#5-poll-のコード生成">5. poll のコード生成</a></h2>
 <h3 id="51-vm-tierx86-64"><a class="header" href="#51-vm-tierx86-64">5.1 VM tier(x86-64)</a></h3>
 <p><code>execute_gc_inner</code>(<code>jit_module.rs</code>)が出力する。ホットパスは 1 比較 + fall-through:</p>
-<pre><code class="language-asm">    cmpl [rip + alloc_flag], 8
-    jge  gc          ; ベース値 &gt;= 8(またはプリエンプトビット)なら収集パスへ
+<pre><code class="language-asm">    cmpl [rip + poll_flag], 0
+    jne  gc          ; いずれかのレーンが立っていれば slow path へ
 exit:
     ; --- 別ページ ---
 gc:
@@ -296,17 +297,16 @@ gc:
     jmp  error        ; None(=例外/シグナル/割り込み)なら伝播
 </code></pre>
 <ul>
-<li><strong>fall-through が最頻ケース</strong>(フラグ未武装)で、収集本体は <code>select_page(1)</code> の別ページに
+<li><strong>fall-through が最頻ケース</strong>(全レーン未武装)で、収集本体は <code>select_page(1)</code> の別ページに
 置いてホットパスの I-cache を汚さない。</li>
 <li><code>exec_gc</code> は <code>execute_gc</code> を呼ぶスタブ。戻り値 <code>Some</code> を <code>rax != 0</code>、<code>None</code> を <code>rax == 0</code> として
 分岐する。</li>
 </ul>
 <h3 id="52-vm-tieraarch64"><a class="header" href="#52-vm-tieraarch64">5.2 VM tier(aarch64)</a></h3>
 <p><code>a64_vm_execute_gc</code>(<code>codegen.rs</code>)が対称に出力する:</p>
-<pre><code class="language-asm">    mov x10, alloc_flag_addr
+<pre><code class="language-asm">    mov x10, poll_flag_addr
     ldr w11, [x10]
-    cmp x11, #8
-    b.lt skip
+    cbz x11, skip
     bl  gc
 skip:
 </code></pre>
@@ -338,15 +338,17 @@ VM tier との違いは、退避すべきライブレジスタ集合が<strong>�
 <ol>
 <li><strong><code>watchdog::poll()</code></strong> — poll 到達はインタプリタの進捗なので、ハングウォッチドッグの
 カウントダウンをリセット(<code>doc/signal.md</code>)。</li>
-<li><strong><code>preempt::consume_poll_flag()</code></strong> — プリエンプトビットを剥がし <code>(ベース値, プリエンプトか)</code>
-を得る。以降の GC 判定はベース値で行う(純プリエンプト tick で偽の full GC を起こさない)。
-フラグ未登録なら防御的に <code>(8, false)</code>。</li>
-<li><strong>保留シグナルの drain</strong> — <code>PENDING_SIGNALS</code> ビットマップを取り、最小番号のシグナルを
-<code>Signal.trap</code> ハンドラ呼び出し / 既定例外(SIGINT ⇒ <code>Interrupt</code> 等)に変換。エラーを
-立てて <code>None</code> を返しうる。</li>
-<li><strong>GC(ベース値 <code>&gt;= 8</code> のときだけ)</strong> — <code>parent_fiber</code> を辿ってルート Executor へ行き、
+<li><strong><code>poll_flag::consume_preempt()</code></strong> — PREEMPT レーンを消費する。GC 判定は GC レーンで
+独立に行う(純プリエンプト tick で偽の full GC を起こさない)。ワード未登録なら
+防御的に「GC 要求あり」とみなす。</li>
+<li><strong>保留シグナルの drain</strong> — SIGNAL レーンをクリアしてから <code>PENDING_SIGNALS</code> ビットマップを
+取り、最小番号のシグナルを <code>Signal.trap</code> ハンドラ呼び出し / 既定例外(SIGINT ⇒
+<code>Interrupt</code> 等)に変換。エラーを立てて <code>None</code> を返しうる。配送が main にゲートされ
+drain できない poll では SIGNAL レーンを残し(main の wakeup 維持)、GC も次の poll へ
+延期する(<code>doc/signal.md</code> §4.1)。</li>
+<li><strong>GC(GC レーンが立っているときだけ)</strong> — <code>parent_fiber</code> を辿ってルート Executor へ行き、
 <code>ALLOC.borrow_mut().gc(&amp;Root { globals, executor })</code>。</li>
-<li><strong><code>preempt::stress_renudge()</code></strong> — stress モードでは切替の<strong>前に</strong>フラグを再武装し、
+<li><strong><code>preempt::stress_renudge()</code></strong> — stress モードでは切替の<strong>前に</strong>レーンを再武装し、
 切替先スレッドも poll するようにする。</li>
 <li><strong>プリエンプション</strong> — <code>preempt &amp;&amp; scheduler::preempt_ok()</code> のとき <code>scheduler::pass</code>。
 <code>Err</code>(このスレッドへ配送された kill/raise)は <code>set_error</code> + <code>None</code> で浮上させる。</li>
