@@ -4645,11 +4645,27 @@ pub(crate) extern "C" fn execute_gc(
     // Signal (trap-handler / default-exception) delivery happens only on
     // the MAIN green thread, matching CRuby: a signal arriving while a
     // non-main thread runs stays pending until main's next poll point.
-    let pending = if crate::scheduler::on_main_thread() {
+    let pending = if crate::scheduler::signal_delivery_ok() {
         crate::codegen::signal_table::take_pending_signals()
     } else {
+        // The signal stays pending for the main thread (or for a poll
+        // outside the scheduler machinery); `deferred_signal` below keeps
+        // this poll from consuming the flag arming, so main still wakes.
         0
     };
+    // A pending signal this poll may not drain (delivery is gated to the
+    // main thread outside scheduler entry points). Two things follow:
+    // - The collection is skipped for this poll. Running the GC here has
+    //   been observed to corrupt live state (a heap frame freed while a
+    //   pending-signal drain is still owed to main manifests as a wedged
+    //   process at exit, spinning in a swept frame — see the regression
+    //   tests around `process_kill_from_thread`); deferring the
+    //   collection to the next ungated poll is always safe, since the
+    //   poll flag is left armed (only a completed `gc()` resets it).
+    // - That armed flag doubles as main's wakeup: an allocation-free
+    //   `nil until flag` spin on main polls only while the flag is up,
+    //   so clearing it here would swallow the handler forever.
+    let deferred_signal = pending == 0 && crate::codegen::signal_table::has_pending_signals();
     if let Some(signo) = crate::codegen::signal_table::lowest_pending_signo(pending) {
         use crate::codegen::signal_table::{self, SignalDisposition};
         match globals.signal_disposition(signo) {
@@ -4679,7 +4695,7 @@ pub(crate) extern "C" fn execute_gc(
             }
         }
     }
-    if flag_base >= 8 {
+    if flag_base >= 8 && !deferred_signal {
         // Forensics (`MONORUBY_GC_BREAK=N`): dump the trigger context of GC
         // #N — who called into the collector, from which executor, and what
         // the scheduler state was — right before that collection runs.

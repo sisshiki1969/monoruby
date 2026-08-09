@@ -174,6 +174,46 @@ pub(crate) fn mark(alloc: &mut crate::alloc::Allocator<RValue>) {
     SCHEDULER.with(|s| s.borrow().mark(alloc));
 }
 
+thread_local! {
+    /// Nesting depth of scheduler entry points (`pass`, `sleep`, `join`,
+    /// `terminate_all`) on the current stack. Signal trap handlers must
+    /// not run at poll points inside these: the running context may
+    /// already be saved for a switch, and Ruby frames pushed on top of a
+    /// saved context are resumed AGAIN when it is restored.
+    static SCHED_CALL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// RAII guard for `SCHED_CALL_DEPTH`.
+struct SchedCall;
+impl SchedCall {
+    fn enter() -> Self {
+        SCHED_CALL_DEPTH.with(|d| d.set(d.get() + 1));
+        SchedCall
+    }
+}
+impl Drop for SchedCall {
+    fn drop(&mut self) {
+        SCHED_CALL_DEPTH.with(|d| d.set(d.get() - 1));
+    }
+}
+
+/// Whether a poll point may run signal trap handlers here: only on the
+/// main green thread, only while the scheduler's own machinery is not
+/// on the stack, and only OUTSIDE scheduler entry points (a handler
+/// invoked over a context that is about to be — or already is — saved
+/// gets replayed when that context is restored).
+pub(crate) fn signal_delivery_ok() -> bool {
+    SCHED_CALL_DEPTH.with(|d| d.get()) == 0
+        && SCHEDULER.with(|s| {
+            let s = s.borrow();
+            // `zip` + `is_none_or`: before the Thread machinery is
+            // initialized only one implicit thread exists, so delivery is
+            // allowed. (In practice `require` initializes the machinery
+            // during startup, so the None case is defensive.)
+            !s.machinery && s.current.zip(s.main).is_none_or(|(c, m)| c.id() == m.id())
+        })
+}
+
 /// Whether a timeslice switch may be injected at the current poll point:
 /// only while a thread's Ruby code (not the scheduler's own machinery) is
 /// running, and only when another live thread could actually use the
@@ -245,19 +285,6 @@ pub(crate) fn dump_state_for_gc() -> String {
 pub(crate) fn current_thread(vm: &mut Executor) -> Value {
     ensure_main(vm);
     SCHEDULER.with(|s| s.borrow().current.unwrap())
-}
-
-/// Whether the currently running green thread is the main thread.
-/// `true` before the Thread machinery is initialized (only one implicit
-/// thread exists then). Signal trap handlers must only run here.
-pub(crate) fn on_main_thread() -> bool {
-    SCHEDULER.with(|s| {
-        let s = s.borrow();
-        match (s.current, s.main) {
-            (Some(c), Some(m)) => c.id() == m.id(),
-            _ => true,
-        }
-    })
 }
 
 /// The main thread's `Thread` object.
@@ -421,6 +448,7 @@ pub(crate) fn sleep(
     globals: &mut Globals,
     dur: Option<Duration>,
 ) -> Result<Duration> {
+    let _guard = SchedCall::enter();
     ensure_main(vm);
     flush_pending_reports(vm, globals);
     // A pending interrupt allowed at blocking points fires *instead of*
@@ -523,6 +551,7 @@ pub(crate) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
 
 /// `Thread.pass`: give every currently runnable thread a chance to run.
 pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
+    let _guard = SchedCall::enter();
     ensure_main(vm);
     flush_pending_reports(vm, globals);
     // `Thread.pass` is a delivery point for `:immediate` interrupts but
@@ -600,6 +629,7 @@ pub(crate) fn join(
     target: Value,
     timeout: Option<Duration>,
 ) -> Result<bool> {
+    let _guard = SchedCall::enter();
     ensure_main(vm);
     let cur = SCHEDULER.with(|s| s.borrow().current.unwrap());
     if target == cur {
