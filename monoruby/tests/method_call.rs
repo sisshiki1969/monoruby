@@ -1384,13 +1384,19 @@ fn block_optional() {
 
 #[test]
 fn nested_blockargproxy() {
+    // Under gc-stress every safepoint collects, so the 10^4-yield nest (x25
+    // runs) blows past nextest's 600s CI timeout. 3^3 outer iterations with
+    // the innermost loop kept at 10 still JIT-compiles every frame and
+    // exercises the same BlockArgProxy forwarding chain.
+    let n = if cfg!(feature = "gc-stress") { 3 } else { 10 };
     run_test_with_prelude(
         r#"
         $x = 0
         g { 42 }
         $x
         "#,
-        r#"
+        &format!(
+            r#"
         def e
           10.times do
             $x += yield
@@ -1398,19 +1404,20 @@ fn nested_blockargproxy() {
         end
 
         def f(&q)
-          10.times do
+          {n}.times do
             e(&q)
           end
         end
 
         def g(&p)
-          10.times do
-            10.times do
+          {n}.times do
+            {n}.times do
               f(&p)
             end
           end
         end
-        "#,
+        "#
+        ),
     );
 }
 
@@ -3575,7 +3582,13 @@ fn object_send_inline() {
     // block, keywords, class method, arity errors, NoMethodError, and a varying
     // method name (LFU symbol-cache promotion), all hammered to trigger the
     // inline generator. Must match CRuby.
-    run_test(
+    //
+    // Under gc-stress every safepoint collects and 50k iterations (x25 runs)
+    // exceed nextest's 600s CI timeout; 500 iterations still clear the JIT
+    // thresholds (5 calls / 15 loop iters in test mode) and the LFU
+    // symbol-cache promotion the loop exists to provoke.
+    let n = if cfg!(feature = "gc-stress") { 500 } else { 50000 };
+    run_test(&format!(
         r##"
         class C
           def m0; "m0"; end
@@ -3589,19 +3602,19 @@ fn object_send_inline() {
         end
         c = C.new
         res = []
-        50000.times do
+        {n}.times do
           c.send(:m0); c.send(:m1, 5); c.__send__(:m6, 1,2,3,4,5,6)
           c.send(:rest, 1, 2, 3); c.send(:opt, 10)
         end
         res << c.send(:m0) << c.send(:m1, 42) << c.__send__(:m6, 1,2,3,4,5,6)
         res << c.send("m0") << c.send(:rest) << c.send(:rest, 1, 2, 3, 4)
         res << c.send(:opt, 10) << c.send(:opt, 10, 20)
-        res << c.send(:blk) { 777 } << c.send(:kw, a: 9, b: 4)
+        res << c.send(:blk) {{ 777 }} << c.send(:kw, a: 9, b: 4)
         res << c.send(*[:m1, 88]) << C.send(:smeth, 8)
         res << (c.send(:opt) rescue "argerr")
         res << (c.send(:nope, 1) rescue $!.class.name)
-        [:m0, :m1, :rest].each { |m| res << (m == :m1 ? c.send(m, 7) : c.send(m)) }
+        [:m0, :m1, :rest].each {{ |m| res << (m == :m1 ? c.send(m, 7) : c.send(m)) }}
         res
-        "##,
-    );
+        "##
+    ));
 }
