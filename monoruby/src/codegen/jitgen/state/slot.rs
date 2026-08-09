@@ -2088,7 +2088,16 @@ mod tests {
     /// refinement. Expected result: `1249925000.0`.
     #[test]
     fn test_fpr_swap_mixed_refinement() {
-        run_test(
+        // Loop JIT compiles at 15 iterations in test mode, so a small n
+        // still exercises the swap path; under gc-stress every safepoint
+        // collects and run_test's 25 warm-up runs of a 100k-iteration
+        // loop would flirt with the CI timeout.
+        let n = if cfg!(feature = "gc-stress") {
+            2_000
+        } else {
+            100_000
+        };
+        run_test(&format!(
             r###"
         def f(n)
           x = 0.0
@@ -2103,9 +2112,9 @@ mod tests {
           end
           x
         end
-        f(100000)
-        "###,
-        );
+        f({n})
+        "###
+        ));
     }
 
     /// §15.5: a loop-carried float enters a loop JIT from the VM as a boxed
