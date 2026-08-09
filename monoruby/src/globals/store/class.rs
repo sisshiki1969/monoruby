@@ -706,6 +706,13 @@ impl ClassInfo {
             .collect()
     }
 
+    /// Own-method entries with their full table records — for callers
+    /// that need the alias / visibility-shadow flags, not just the fid
+    /// (`Refinement#import_methods`).
+    pub(crate) fn own_method_table(&self) -> impl Iterator<Item = (&IdentId, &MethodTableEntry)> {
+        self.methods.iter()
+    }
+
     /// Returns true if the constant `name` defined on this class/module is
     /// marked as private. Constants are public by default. Returns false if
     /// the constant is not defined on this class.
@@ -2066,7 +2073,7 @@ impl Store {
         func_id: FuncId,
         visibility: Visibility,
     ) {
-        self.add_method_inner(class_id, name, func_id, visibility, false, name)
+        self.add_method_inner(class_id, name, func_id, visibility, false, name, false)
     }
 
     ///
@@ -2082,8 +2089,9 @@ impl Store {
         func_id: FuncId,
         visibility: Visibility,
         original_name: IdentId,
+        is_alias: bool,
     ) {
-        self.add_method_inner(class_id, name, func_id, visibility, false, original_name)
+        self.add_method_inner(class_id, name, func_id, visibility, false, original_name, is_alias)
     }
 
     ///
@@ -2098,7 +2106,7 @@ impl Store {
         func_id: FuncId,
         visibility: Visibility,
     ) {
-        self.add_method_inner(class_id, name, func_id, visibility, true, name)
+        self.add_method_inner(class_id, name, func_id, visibility, true, name, false)
     }
 
     ///
@@ -2114,6 +2122,7 @@ impl Store {
         visibility: Visibility,
         is_basic_op: bool,
         original_name: IdentId,
+        is_alias: bool,
     ) {
         self[func_id].set_owner_class(owner);
         // Defining into a refinement module puts `name` on the list the
@@ -2133,6 +2142,7 @@ impl Store {
                 is_basic_op,
                 original_name,
                 visibility_shadow: false,
+                is_alias,
             },
         );
         #[cfg(feature = "perf")]
@@ -2164,6 +2174,7 @@ impl Store {
                 is_basic_op: false,
                 original_name: name,
                 visibility_shadow: false,
+                is_alias: false,
             },
         );
     }
@@ -2388,6 +2399,7 @@ impl Store {
                             is_basic_op: false,
                             original_name,
                             visibility_shadow: true,
+                            is_alias: false,
                         },
                     );
                 }

@@ -35,6 +35,13 @@ pub(crate) struct MethodTableEntry {
     /// not a definition — `super` resolution must not treat the class
     /// as a position of the method body (`Store::body_dispatched_by`).
     visibility_shadow: bool,
+    /// Created by `alias_method` / the `alias` keyword. `original_name`
+    /// cannot stand in for this: `define_method(name, method_obj)` also
+    /// records the source's name there, yet CRuby treats it as an
+    /// ordinary ISEQ definition while an alias entry is its own method
+    /// type (`VM_METHOD_TYPE_ALIAS`) — which `Refinement#import_methods`
+    /// refuses even when the aliased body is written in Ruby.
+    is_alias: bool,
 }
 
 impl MethodTableEntry {
@@ -60,6 +67,10 @@ impl MethodTableEntry {
 
     pub fn is_visibility_shadow(&self) -> bool {
         self.visibility_shadow
+    }
+
+    pub fn is_alias(&self) -> bool {
+        self.is_alias
     }
 
     pub fn is_public(&self) -> bool {

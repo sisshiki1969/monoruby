@@ -274,6 +274,23 @@ Mutex/Queue/Thread の状態）を残し、*後続*ファイルをハングさ�
   保たれる。これにより `core/io`（103ファイル / 1483 example）・`core/file`・
   `core/kernel` がカテゴリ一括実行で crash せず完走するようになった。
 
+## 実装前提の非互換による tags（恒久・非ハング）
+
+原則（tags はハング専用、セマンティクス差は統計に出す）の唯一の例外として、
+**spec の前提がこの処理系上で成立し得ない** example をタグ化している。
+「いずれ直すべき差」ではなく、直すことが誤りになる類のもの。
+
+- `core/refinement/import_methods_tags.txt` — `raises ArgumentError when
+  importing methods from C extension`: この spec は「C 拡張のメソッドは
+  import できない」ことを検証するために、CRuby では確実に C 実装である
+  `Zlib` を素材に選んでいる。monoruby の `Zlib` は Ruby 実装
+  （`stdlib/zlib.rb`）なので import は**正しく成功**し、raise しないのが
+  正直な挙動。ガード自体（native builtin・attr アクセサ・
+  `define_method`+block・`alias` エントリ・可視性 shadow の拒否）は
+  実装済みで、`module.rs` のユニットテストが CRuby と突き合わせている。
+  Zlib が C 実装でなくなる限りこの example は恒久に成立しないため、
+  ハングではないが tag で除外する。
+
 ## グリーンスレッド導入後のタイムアウト tags（2026-07 追加 → 撤去済み）
 
 > **2026-07 更新**: 以下の 5 タグ（+ `kernel/exit`）は、タイムスライス・
