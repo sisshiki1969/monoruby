@@ -180,17 +180,23 @@ pub(super) fn init(globals: &mut Globals) {
 fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
     let obj = Value::new_io_with_class(IoInner::closed(None), class);
-    io_init_from_fd(vm, globals, lfp, obj)?;
-    if lfp.block().is_some() {
-        // CRuby warns through rb_warn; route via Kernel#warn so the
-        // Ruby-level $stderr (which specs capture) receives it.
-        let msg = Value::string_from_str(
-            "warning: IO::new() does not take block; use IO::open() instead",
-        );
-        let main = globals.main_object;
-        let _ = vm.invoke_method_inner(globals, IdentId::get_id("warn"), main, &[msg], None, None);
-    }
-    Ok(obj)
+    // Root the fresh IO across `io_init_from_fd` / `warn`, which re-enter
+    // Ruby while it lives only in this Rust local.
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(obj);
+        io_init_from_fd(vm, globals, lfp, obj)?;
+        if lfp.block().is_some() {
+            // CRuby warns through rb_warn; route via Kernel#warn so the
+            // Ruby-level $stderr (which specs capture) receives it.
+            let msg = Value::string_from_str(
+                "warning: IO::new() does not take block; use IO::open() instead",
+            );
+            let main = globals.main_object;
+            let _ =
+                vm.invoke_method_inner(globals, IdentId::get_id("warn"), main, &[msg], None, None);
+        }
+        Ok(obj)
+    })
 }
 
 ///
@@ -1039,21 +1045,29 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // CRuby's rb_io_puts: a real Array recurses; any other non-String is
     // first offered `#to_ary` (an Array result recurses, `nil` falls back
     // to `#to_s`, anything else is the usual conversion TypeError).
+    // The collector rides on the VM temp stack (the last entry, a rooted
+    // Array): elements can be freshly created (`"[...]"` markers) or come
+    // from a `#to_ary` result that nothing else references, and they must
+    // survive the later `#to_ary` / `#to_s` / `#write` re-entries.
     fn decompose(
         vm: &mut Executor,
         globals: &mut Globals,
-        collector: &mut Vec<Value>,
+        root_idx: usize,
         val: Value,
         seen: &mut Vec<u64>,
     ) -> Result<()> {
         if let Some(ary) = val.try_array_ty() {
             let id = val.id();
             if seen.contains(&id) {
-                collector.push(Value::string("[...]".to_string()));
+                let marker = Value::string("[...]".to_string());
+                vm.temp_at(root_idx).as_array().push(marker);
             } else {
                 seen.push(id);
-                for v in ary.iter() {
-                    decompose(vm, globals, collector, *v, seen)?;
+                for i in 0..ary.len() {
+                    // Re-read each element: the recursion can run Ruby
+                    // that mutates `ary`.
+                    let Some(v) = ary.get(i).copied() else { break };
+                    decompose(vm, globals, root_idx, v, seen)?;
                 }
                 seen.pop();
             }
@@ -1068,7 +1082,11 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             let converted =
                 vm.invoke_method_inner(globals, IdentId::get_id("to_ary"), val, &[], None, None)?;
             if converted.try_array_ty().is_some() {
-                return decompose(vm, globals, collector, converted, seen);
+                // Root the fresh `#to_ary` result while its elements are
+                // walked (nested `#to_ary`s can run Ruby in between).
+                // The push is rolled back by `with_temp_scope` below.
+                vm.temp_push(converted);
+                return decompose(vm, globals, root_idx, converted, seen);
             }
             if !converted.is_nil() {
                 return Err(MonorubyErr::typeerr(format!(
@@ -1079,55 +1097,66 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 )));
             }
         }
-        collector.push(val);
+        vm.temp_at(root_idx).as_array().push(val);
         Ok(())
     }
-    let mut collector = Vec::new();
-    let mut seen = Vec::new();
-    let args = lfp.arg(0).as_array();
-    let no_args = args.is_empty();
-    for v in args.iter().cloned() {
-        decompose(vm, globals, &mut collector, v, &mut seen)?;
-    }
-
-    let self_val = lfp.self_val();
-    let write_id = IdentId::get_id("write");
-    if no_args {
-        // puts with no args writes a newline. (An empty *array* argument
-        // decomposes to nothing and writes nothing — only the genuinely
-        // argument-less call gets the bare newline.)
-        let newline = Value::string_from_str("\n");
-        vm.invoke_method_inner(globals, write_id, self_val, &[newline], None, None)?;
-    } else {
-        for v in collector {
-            let s = if v.is_nil() {
-                String::new()
-            } else if let Some(rs) = v.is_rstring() {
-                String::from_utf8_lossy(rs.as_bytes()).into_owned()
-            } else {
-                // Stringify through the value's (possibly Ruby-defined)
-                // `to_s`, matching CRuby's `rb_obj_as_string`; fall back
-                // to the Rust-side formatter when `to_s` misbehaves.
-                let sv =
-                    vm.invoke_method_inner(globals, IdentId::get_id("to_s"), v, &[], None, None)?;
-                match sv.is_rstring() {
-                    Some(rs) => String::from_utf8_lossy(rs.as_bytes()).into_owned(),
-                    None => v.to_s(globals),
-                }
-            };
-            let needs_newline = !s.ends_with('\n');
-            let write_str = if needs_newline {
-                Value::string(s + "\n")
-            } else {
-                Value::string(s)
-            };
-            vm.invoke_method_inner(globals, write_id, self_val, &[write_str], None, None)?;
+    vm.with_temp_scope(|vm| {
+        let mut seen = Vec::new();
+        let args = lfp.arg(0).as_array();
+        let no_args = args.is_empty();
+        vm.temp_array_new(None);
+        let root_idx = vm.temp_len() - 1;
+        for v in args.iter().cloned() {
+            decompose(vm, globals, root_idx, v, &mut seen)?;
         }
-    }
-    // Flush after all writes
-    let mut self_ = lfp.self_val();
-    self_.as_io_inner_mut().flush(&globals.store)?;
-    Ok(Value::nil())
+
+        let self_val = lfp.self_val();
+        let write_id = IdentId::get_id("write");
+        if no_args {
+            // puts with no args writes a newline. (An empty *array* argument
+            // decomposes to nothing and writes nothing — only the genuinely
+            // argument-less call gets the bare newline.)
+            let newline = Value::string_from_str("\n");
+            vm.invoke_method_inner(globals, write_id, self_val, &[newline], None, None)?;
+        } else {
+            let len = vm.temp_at(root_idx).as_array().len();
+            for i in 0..len {
+                let v = vm.temp_at(root_idx).as_array()[i];
+                let s = if v.is_nil() {
+                    String::new()
+                } else if let Some(rs) = v.is_rstring() {
+                    String::from_utf8_lossy(rs.as_bytes()).into_owned()
+                } else {
+                    // Stringify through the value's (possibly Ruby-defined)
+                    // `to_s`, matching CRuby's `rb_obj_as_string`; fall back
+                    // to the Rust-side formatter when `to_s` misbehaves.
+                    let sv = vm.invoke_method_inner(
+                        globals,
+                        IdentId::get_id("to_s"),
+                        v,
+                        &[],
+                        None,
+                        None,
+                    )?;
+                    match sv.is_rstring() {
+                        Some(rs) => String::from_utf8_lossy(rs.as_bytes()).into_owned(),
+                        None => v.to_s(globals),
+                    }
+                };
+                let needs_newline = !s.ends_with('\n');
+                let write_str = if needs_newline {
+                    Value::string(s + "\n")
+                } else {
+                    Value::string(s)
+                };
+                vm.invoke_method_inner(globals, write_id, self_val, &[write_str], None, None)?;
+            }
+        }
+        // Flush after all writes
+        let mut self_ = lfp.self_val();
+        self_.as_io_inner_mut().flush(&globals.store)?;
+        Ok(Value::nil())
+    })
 }
 
 ///
@@ -2306,7 +2335,12 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         Ok(obj)
     };
     let mut read_io = make_end(vm, globals, fds[0], "r")?;
+    // `read_io` lives only in this Rust local while the second
+    // `#initialize` (and later the block) runs Ruby — root both ends.
+    vm.with_temp_scope(|vm| {
+    vm.temp_push(read_io);
     let mut write_io = make_end(vm, globals, fds[1], "w")?;
+    vm.temp_push(write_io);
     // CRuby's `rb_io_s_pipe` marks the write end synchronous. It is not a
     // nicety: both ends usually live in one process, so a buffered write
     // would leave the reader blocked on data that never reaches the pipe.
@@ -2334,6 +2368,7 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         }
         None => Ok(Value::array2(read_io, write_io)),
     }
+    })
 }
 
 /// ### IO.popen

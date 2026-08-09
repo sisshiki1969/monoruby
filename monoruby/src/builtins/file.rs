@@ -1362,33 +1362,47 @@ fn open_impl(
             effective_autoclose,
         );
         let res = Value::new_io_with_class(io_inner, FILE_CLASS);
-        let mode_for_enc = lfp
-            .try_arg(1)
-            .and_then(|a| a.is_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| {
-                match (readable, writable) {
-                    (true, true) => "r+",
-                    (false, true) => "w",
-                    _ => "r",
+        // The fresh File is referenced only by this Rust local while
+        // `init_io_encodings` / `ruby_warn` re-enter Ruby — root it.
+        return vm.with_temp_scope(|vm| {
+            vm.temp_push(res);
+            let mode_for_enc = lfp
+                .try_arg(1)
+                .and_then(|a| a.is_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| {
+                    match (readable, writable) {
+                        (true, true) => "r+",
+                        (false, true) => "w",
+                        _ => "r",
+                    }
+                    .to_string()
+                });
+            super::io::init_io_encodings(
+                vm,
+                globals,
+                lfp,
+                res,
+                &mode_for_enc,
+                readable,
+                1..3,
+                kw_hash,
+            )?;
+            if let Some(bh) = lfp.block() {
+                if is_new {
+                    vm.ruby_warn(
+                        globals,
+                        "warning: File::new() does not take block; use File::open() instead",
+                    )?;
+                    return Ok(res);
                 }
-                .to_string()
-            });
-        super::io::init_io_encodings(vm, globals, lfp, res, &mode_for_enc, readable, 1..3, kw_hash)?;
-        if let Some(bh) = lfp.block() {
-            if is_new {
-                vm.ruby_warn(
-                    globals,
-                    "warning: File::new() does not take block; use File::open() instead",
-                )?;
-                return Ok(res);
+                let r = vm.invoke_block_once(globals, bh, &[res]);
+                // Match CRuby File.open(...) {|io| ... }: close at block exit.
+                // Holding the underlying fd open across blocks defeats `flock`
+                // (rubygems' open_with_flock relies on this) and leaks fds.
+                return block_close(vm, globals, res, r);
             }
-            let r = vm.invoke_block_once(globals, bh, &[res]);
-            // Match CRuby File.open(...) {|io| ... }: close at block exit.
-            // Holding the underlying fd open across blocks defeats `flock`
-            // (rubygems' open_with_flock relies on this) and leaks fds.
-            return block_close(vm, globals, res, r);
-        }
-        return Ok(res);
+            Ok(res)
+        });
     }
 
     // Resolve the open mode into open(2) flags. Precedence (CRuby):
@@ -1515,20 +1529,25 @@ fn open_impl(
         readable,
         writable,
     );
-    super::io::init_io_encodings(vm, globals, lfp, res, &mode, readable, 1..3, kw_hash)?;
-    if let Some(bh) = lfp.block() {
-        if is_new {
-            vm.ruby_warn(
-                globals,
-                "warning: File::new() does not take block; use File::open() instead",
-            )?;
-            return Ok(res);
+    // The fresh File is referenced only by this Rust local while
+    // `init_io_encodings` / `ruby_warn` re-enter Ruby — root it.
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(res);
+        super::io::init_io_encodings(vm, globals, lfp, res, &mode, readable, 1..3, kw_hash)?;
+        if let Some(bh) = lfp.block() {
+            if is_new {
+                vm.ruby_warn(
+                    globals,
+                    "warning: File::new() does not take block; use File::open() instead",
+                )?;
+                return Ok(res);
+            }
+            let r = vm.invoke_block_once(globals, bh, &[res]);
+            // CRuby File.open(...) {|io| ... } closes the file at block exit.
+            return block_close(vm, globals, res, r);
         }
-        let r = vm.invoke_block_once(globals, bh, &[res]);
-        // CRuby File.open(...) {|io| ... } closes the file at block exit.
-        return block_close(vm, globals, res, r);
-    }
-    Ok(res)
+        Ok(res)
+    })
 }
 
 ///

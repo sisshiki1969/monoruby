@@ -705,6 +705,8 @@ impl TraceIr {
                     reg_num: op1_w1 as usize,
                     arg_num: op2_w2 as usize,
                     stack_offset: op3_w3 as usize,
+                    destruct_start: (op2 as u16) as usize,
+                    destruct_len: ((op2 >> 16) as u16) as usize,
                 }),
                 173 => TraceIr::ExpandArray {
                     src: SlotId::new(op1_w1),

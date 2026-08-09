@@ -642,7 +642,14 @@ impl<'a> BytecodeGen<'a> {
                 let op3 = self.slot_id(&src);
                 Bytecode::from(enc_www(149, op1.0, op2, op3.0))
             }
-            BytecodeInst::InitMethod(fn_info) => Bytecode::from(enc_www_fn_info(172, &fn_info)),
+            BytecodeInst::InitMethod(fn_info) => {
+                // Second word (low u32): destructured-param slot range —
+                // `destruct_start` in the low u16, `destruct_len` above it.
+                // Read back by `TraceIr` decode and the VM's `vm_init`.
+                let destruct =
+                    ((fn_info.destruct_len as u32) << 16) | (fn_info.destruct_start as u32);
+                Bytecode::from_u32(enc_www_fn_info(172, &fn_info), destruct)
+            }
             BytecodeInst::ExpandArray(src, dst, len, rest_pos) => {
                 let op1 = self.slot_id(&src);
                 let op2 = self.slot_id(&dst);

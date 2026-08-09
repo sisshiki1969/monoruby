@@ -719,11 +719,12 @@ impl<T: GCBox> Allocator<T> {
             total_freed_pages: 0,
             profile_enabled: false,
             profile: Vec::new(),
-            // `gc-stress` builds start in `GC.stress` mode: the jit_module
-            // poll-word initializer arms the GC lane at startup, and the
-            // end-of-collection re-arm below keeps every safepoint
-            // collecting from then on.
-            stress: cfg!(feature = "gc-stress"),
+            // Note: `gc-stress` builds do NOT set this — the runtime
+            // `GC.stress` flag keeps CRuby-identical semantics. The
+            // feature forces a collection at every safepoint directly in
+            // `execute_gc` (see poll_flag::StressRearm), independent of
+            // this flag.
+            stress: false,
             allow_full_mark: true,
         }
     }

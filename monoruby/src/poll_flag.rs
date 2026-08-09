@@ -146,6 +146,19 @@ pub(crate) fn gc_requested() -> bool {
     with_flag(|f| f.load(Ordering::Relaxed) & GC_LANE_MASK != 0).unwrap_or(true)
 }
 
+/// `gc-stress` builds force a collection at every safepoint. This guard
+/// re-arms the GC lane on drop, so `execute_gc` leaves the poll word
+/// non-zero on every exit path (normal, deferred, or error) and the next
+/// poll takes the slow path again.
+#[cfg(feature = "gc-stress")]
+pub(crate) struct StressRearm;
+#[cfg(feature = "gc-stress")]
+impl Drop for StressRearm {
+    fn drop(&mut self) {
+        set_gc();
+    }
+}
+
 /// Arm the preempt lane from the owning thread (stress mode re-arm; the
 /// timer thread writes through its own registered address in preempt.rs).
 pub(crate) fn set_preempt() {

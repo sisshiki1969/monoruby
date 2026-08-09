@@ -449,7 +449,7 @@ All test helpers invoke CRuby via `ruby` in `PATH` and assert output equality.
 | `deopt`             | Log deoptimizations (implies `jit-log`, `dump-bc`, `dump-traceir`)     |
 | `gc-log`            | Log GC statistics at exit                                              |
 | `gc-debug`          | GC debug assertions                                                    |
-| `gc-stress`         | Start in `GC.stress` mode: GC at every safepoint (stress test)         |
+| `gc-stress`         | Force a GC at every safepoint, unconditionally (stress test)           |
 | `stress-spill-pool` | Shrink `PHYS_FPR_POOL` to 2 to stress the FP-register spill paths      |
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |

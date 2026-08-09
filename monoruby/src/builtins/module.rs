@@ -557,6 +557,11 @@ fn attr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let visi = vm.context_visibility();
     let args = lfp.arg(0).as_array();
     let mut ary = Array::new_empty();
+    // Root the fresh result Array: the warning and the
+    // `#to_str`/`#to_sym` coercions below re-enter Ruby while it lives
+    // only in this Rust local.
+    vm.with_temp_scope(|vm| {
+    vm.temp_push(ary.into());
 
     // Detect the legacy `attr(name, true|false)` form.
     let legacy_writable = if args.len() == 2 {
@@ -602,6 +607,7 @@ fn attr(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     }
     Ok(ary.into())
+    })
 }
 
 ///

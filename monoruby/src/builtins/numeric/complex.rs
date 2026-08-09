@@ -435,13 +435,16 @@ fn fdiv(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     }
     let fdiv_id = IdentId::get_id("fdiv");
+    // Extract each result to an f64 *before* the next dispatch: a heap
+    // Float held only in a Rust local would not survive the GC a
+    // (possibly redefined) `fdiv` can trigger.
     let re = vm.invoke_method_inner(globals, fdiv_id, c.re().get(), &[other], None, None)?;
-    let im = vm.invoke_method_inner(globals, fdiv_id, c.im().get(), &[other], None, None)?;
     let re_f = match re.unpack() {
         RV::Float(f) => f,
         RV::Fixnum(i) => i as f64,
         _ => return Err(MonorubyErr::typeerr("fdiv did not return Float")),
     };
+    let im = vm.invoke_method_inner(globals, fdiv_id, c.im().get(), &[other], None, None)?;
     let im_f = match im.unpack() {
         RV::Float(f) => f,
         RV::Fixnum(i) => i as f64,
@@ -457,22 +460,35 @@ fn fdiv(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn numerator(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let c = self_val.as_complex();
-    let d = complex_denominator(vm, globals, c)?;
-    let num_id = IdentId::get_id("numerator");
-    let div_id = IdentId::_DIV;
-    let mul_id = IdentId::_MUL;
-    let den_id = IdentId::get_id("denominator");
-    let re_num = vm.invoke_method_inner(globals, num_id, c.re().get(), &[], None, None)?;
-    let re_den = vm.invoke_method_inner(globals, den_id, c.re().get(), &[], None, None)?;
-    let im_num = vm.invoke_method_inner(globals, num_id, c.im().get(), &[], None, None)?;
-    let im_den = vm.invoke_method_inner(globals, den_id, c.im().get(), &[], None, None)?;
-    let re_scale = vm.invoke_method_inner(globals, div_id, d, &[re_den], None, None)?;
-    let im_scale = vm.invoke_method_inner(globals, div_id, d, &[im_den], None, None)?;
-    let re = vm.invoke_method_inner(globals, mul_id, re_num, &[re_scale], None, None)?;
-    let im = vm.invoke_method_inner(globals, mul_id, im_num, &[im_scale], None, None)?;
-    let re_r = Real::try_from(globals, re)?;
-    let im_r = Real::try_from(globals, im)?;
-    Ok(Value::complex(re_r, im_r))
+    // Every intermediate can be a heap numeric (Bignum/Rational) that
+    // only these Rust locals reference across the following dispatches —
+    // keep each rooted for the duration.
+    vm.with_temp_scope(|vm| {
+        let d = complex_denominator(vm, globals, c)?;
+        vm.temp_push(d);
+        let num_id = IdentId::get_id("numerator");
+        let div_id = IdentId::_DIV;
+        let mul_id = IdentId::_MUL;
+        let den_id = IdentId::get_id("denominator");
+        let re_num = vm.invoke_method_inner(globals, num_id, c.re().get(), &[], None, None)?;
+        vm.temp_push(re_num);
+        let re_den = vm.invoke_method_inner(globals, den_id, c.re().get(), &[], None, None)?;
+        vm.temp_push(re_den);
+        let im_num = vm.invoke_method_inner(globals, num_id, c.im().get(), &[], None, None)?;
+        vm.temp_push(im_num);
+        let im_den = vm.invoke_method_inner(globals, den_id, c.im().get(), &[], None, None)?;
+        vm.temp_push(im_den);
+        let re_scale = vm.invoke_method_inner(globals, div_id, d, &[re_den], None, None)?;
+        vm.temp_push(re_scale);
+        let im_scale = vm.invoke_method_inner(globals, div_id, d, &[im_den], None, None)?;
+        vm.temp_push(im_scale);
+        let re = vm.invoke_method_inner(globals, mul_id, re_num, &[re_scale], None, None)?;
+        vm.temp_push(re);
+        let im = vm.invoke_method_inner(globals, mul_id, im_num, &[im_scale], None, None)?;
+        let re_r = Real::try_from(globals, re)?;
+        let im_r = Real::try_from(globals, im)?;
+        Ok(Value::complex(re_r, im_r))
+    })
 }
 
 ///
@@ -617,11 +633,16 @@ fn neg_op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let self_val = lfp.self_val();
     let c = self_val.as_complex();
     let neg_id = IdentId::_UMINUS;
-    let re = vm.invoke_method_inner(globals, neg_id, c.re().get(), &[], None, None)?;
-    let im = vm.invoke_method_inner(globals, neg_id, c.im().get(), &[], None, None)?;
-    let re_r = Real::try_from(globals, re)?;
-    let im_r = Real::try_from(globals, im)?;
-    Ok(Value::complex(re_r, im_r))
+    // `re` can be a heap numeric only this Rust local references while
+    // the second `-@` dispatch runs — root it.
+    vm.with_temp_scope(|vm| {
+        let re = vm.invoke_method_inner(globals, neg_id, c.re().get(), &[], None, None)?;
+        vm.temp_push(re);
+        let im = vm.invoke_method_inner(globals, neg_id, c.im().get(), &[], None, None)?;
+        let re_r = Real::try_from(globals, re)?;
+        let im_r = Real::try_from(globals, im)?;
+        Ok(Value::complex(re_r, im_r))
+    })
 }
 
 /// Format a Complex following CRuby's `nucomp_to_s` / `nucomp_inspect`.

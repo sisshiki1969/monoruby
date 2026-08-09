@@ -2140,21 +2140,6 @@ fn converter_new(
         ));
     }
     validate_converter_pair(src, dst, &globals.store)?;
-    let class = lfp.self_val();
-    let obj = Value::object(class.as_class_id());
-    // Stash the encodings as their canonical *names* so
-    // `encoding_value` and `try_from_str` can round-trip without
-    // a separate Encoding-to-id table.
-    let _ = globals.store.set_ivar(
-        obj,
-        IdentId::get_id(CONVERTER_SRC_IVAR),
-        Value::string_from_str(src.name()),
-    );
-    let _ = globals.store.set_ivar(
-        obj,
-        IdentId::get_id(CONVERTER_DST_IVAR),
-        Value::string_from_str(dst.name()),
-    );
     // Options Hash (`replace:` kwargs / `**opts` / trailing Hash).
     // With `kw_rest=true` the collected kwargs Hash is delivered in
     // the slot after the positional args (index 3 here); a literal
@@ -2168,6 +2153,7 @@ fn converter_new(
     // `INVALID_REPLACE` / `UNDEF_REPLACE` bitmask) or
     // `invalid:`/`undef: :replace` kwargs.
     let mut flags: i64 = 0;
+    let mut replace_inner: Option<crate::value::RStringInner> = None;
     if let Some(n) = lfp.try_arg(2).and_then(|v| v.try_fixnum()) {
         if n & 0x0000_0002 != 0 {
             flags |= CONVERTER_FLAG_INVALID_REPLACE;
@@ -2207,7 +2193,11 @@ fn converter_new(
                 if !rep.is_nil() {
                     // CRuby coerces via `#to_str`; a non-String
                     // return or an object without `#to_str`
-                    // (true/false/Integer) raises TypeError.
+                    // (true/false/Integer) raises TypeError. This
+                    // re-enters Ruby, so it runs BEFORE the converter
+                    // object exists — holding the fresh object in a
+                    // Rust local across `#to_str` left it invisible
+                    // to the GC (caught by true `gc-stress`).
                     let s = if let Some(st) = rep.is_str() {
                         st.to_string()
                     } else {
@@ -2215,14 +2205,33 @@ fn converter_new(
                     };
                     let mut inner = crate::value::RStringInner::from_string_scanned(s);
                     inner.set_encoding(dst);
-                    let _ = globals.store.set_ivar(
-                        obj,
-                        IdentId::get_id(CONVERTER_REPLACE_IVAR),
-                        Value::string_from_inner(inner),
-                    );
+                    replace_inner = Some(inner);
                 }
             }
         }
+    }
+    let class = lfp.self_val();
+    let obj = Value::object(class.as_class_id());
+    // Stash the encodings as their canonical *names* so
+    // `encoding_value` and `try_from_str` can round-trip without
+    // a separate Encoding-to-id table. `set_ivar` never re-enters
+    // Ruby, so `obj` needs no temp-stack rooting here.
+    let _ = globals.store.set_ivar(
+        obj,
+        IdentId::get_id(CONVERTER_SRC_IVAR),
+        Value::string_from_str(src.name()),
+    );
+    let _ = globals.store.set_ivar(
+        obj,
+        IdentId::get_id(CONVERTER_DST_IVAR),
+        Value::string_from_str(dst.name()),
+    );
+    if let Some(inner) = replace_inner {
+        let _ = globals.store.set_ivar(
+            obj,
+            IdentId::get_id(CONVERTER_REPLACE_IVAR),
+            Value::string_from_inner(inner),
+        );
     }
     if flags != 0 {
         let _ = globals.store.set_ivar(

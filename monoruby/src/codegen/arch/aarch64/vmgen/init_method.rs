@@ -10,6 +10,8 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
         let loop_ = self.jit.label();
+        let dskip = self.jit.label();
+        let dloop = self.jit.label();
         // allocate stack: sp -= stack_offset * 16
         monoasm_arm64!(&mut self.jit,
             ldrh x10, [x(PC.0)];
@@ -28,6 +30,24 @@ impl Codegen {
             ldrb x13, [x10];
             tbnz x13, #(7), skip;  // on_heap
             tbnz x13, #(3), skip;  // invalidated
+        // Destructured-parameter slots (`|(a, b)|`): inside the argument
+        // area (missed by the arg_num..reg_num fill below), written only
+        // by the `expand`s after entry — nil-fill them so the entry GC
+        // poll never marks stack garbage. Range rides in the second
+        // instruction word: start at `[PC+8]`, len at `[PC+10]`.
+            ldrh x12, [x(PC.0), #(10)];  // destruct_len
+            cbz x12, dskip;
+            ldrh x11, [x(PC.0), #(8)];   // destruct_start
+            neg x11, x11;
+            add x11, x(LFP.0), x11, lsl #(3);
+            sub x11, x11, #(LFP_ARG0 as u32);  // &slot[destruct_start]
+            mov x14, (NIL_VALUE);
+            dloop:
+            str x14, [x11];
+            sub x11, x11, #(8);
+            sub x12, x12, #(1);
+            cbnz x12, dloop;
+            dskip:
         // count = reg_num - arg_num
             ldrh x15, [x(PC.0), #(4)];  // reg_num
             ldrh x11, [x(PC.0), #(2)];  // arg_num

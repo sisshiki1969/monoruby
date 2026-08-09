@@ -611,8 +611,10 @@ fn exception_method(
     if arg.id() == self_v.id() {
         return Ok(self_v);
     }
-    let mut new_exc = self_v.dup();
+    // Coerce first: `#to_s` re-enters Ruby, and the dup would live only
+    // in a Rust local across it.
     let msg = arg.coerce_to_string(vm, globals)?;
+    let mut new_exc = self_v.dup();
     new_exc.is_exception_mut().unwrap().set_message(msg);
     Ok(new_exc)
 }
