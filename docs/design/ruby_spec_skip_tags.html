@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-8814013c.js";
+            window.path_to_searchindex_js = "../searchindex-14c3001e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -178,6 +178,18 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="rubyspec-ハング対策-skiptxt--tags-移行"><a class="header" href="#rubyspec-ハング対策-skiptxt--tags-移行">ruby/spec ハング対策: <code>skip.txt</code> → <code>tags/</code> 移行</a></h1>
+<blockquote>
+<p><strong>更新(2026-08-09): 最後のタグを削除、タグはゼロに。</strong> #1065 で
+<code>Process.kill</code> がプロセスグループ宛て負シグナル(<code>-TERM</code> / 負の番号)を
+実装し、<code>core/process/kill_tags.txt</code> の3件は pass するようになった。
+あわせて #1065 が持ち込んだ「trap ハンドラのメインスレッド配送」の
+副作用 — 非メインスレッドが <code>Process.kill</code> で自プロセスへシグナルを
+送った後、プロセスが <em>終了時に</em> スピンしてハングする(kill_spec 実行が
+サマリ出力後に固まる)— も修正済み(非メインの kill 内自己ドレインの
+スキップ + 遅延シグナルのポールフラグ再アーム)。タグ無しで kill_spec を
+反復実行(4回+)し、19 examples / 0F / 0E かつ終了ハング無しを確認して
+タグファイルを削除した。<code>spec/tags/</code> は現在 language/ 配下のみ。</p>
+</blockquote>
 <p>monoruby が ruby/spec スイートのハングをどう回避しているか、そして粗い
 ファイル単位スキップリストを「本当に救えない5ファイル」まで絞り込んだ監査の
 記録。<code>#899</code> 以降の単一スレッド化ランタイムを前提とする（最新反映時点）。</p>
