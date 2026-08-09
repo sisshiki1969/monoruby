@@ -2935,12 +2935,22 @@ fn method_call_on_fresh_class_each_iteration() {
     // each time. The JIT must not compile a specialization per singleton class
     // (the per-class warm-up profiler keeps these one-shot classes out of the
     // compiler). Correctness must be unaffected regardless.
+    //
+    // Each iteration leaks a class into the mark set, so under gc-stress (a
+    // collection at every safepoint) the cost is quadratic: 300 iterations
+    // x25 runs took 131s locally, the slowest test in the stress suite and
+    // close enough to nextest's 600s timeout to matter on the slower,
+    // coverage-instrumented CI runner. 40 fresh singleton classes still take
+    // the call site far past the warm-up threshold (5 calls in test mode).
+    let n = if cfg!(feature = "gc-stress") { 40 } else { 300 };
     run_test_with_prelude(
-        r##"
+        &format!(
+            r##"
         res = 0
-        300.times { res += Class.new.tag }
+        {n}.times {{ res += Class.new.tag }}
         res
-        "##,
+        "##
+        ),
         r##"
         class Object
           def tag = 7
