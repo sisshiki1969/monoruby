@@ -168,10 +168,17 @@ pub(crate) fn set_gc_enabled(enabled: bool) {
     GC_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-/// Set by `GC.start` so the next safepoint collection is a Major (full)
-/// one — running a collection inline from a builtin is unsafe, so
-/// `GC.start` asks for one at the next poll via [`request_gc`].
-static GC_FORCE_MAJOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    /// Set by `GC.start` so the next safepoint collection is a Major
+    /// (full) one — running a collection inline from a builtin is
+    /// unsafe, so `GC.start` asks for one at the next poll via
+    /// [`request_gc`]. Thread-local like the allocator itself: each
+    /// test thread runs its own interpreter, and a process-global flag
+    /// let one thread's `GC.start` turn another thread's next
+    /// collection into a Major (observable through
+    /// `GC.stat(:major_gc_count)` — deterministic under `gc-stress`).
+    static GC_FORCE_MAJOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Live bytes in tracked `malloc` buffers (`GC.stat`'s
 /// `malloc_increase_bytes`).
@@ -193,7 +200,7 @@ pub(crate) fn malloc_gc_threshold() -> usize {
 /// safe to call from inside a builtin.
 pub(crate) fn request_gc(force_major: bool) {
     if force_major {
-        GC_FORCE_MAJOR.store(true, Ordering::Relaxed);
+        GC_FORCE_MAJOR.with(|f| f.set(true));
     }
     crate::poll_flag::set_gc();
 }
@@ -1180,7 +1187,7 @@ impl<T: GCBox> Allocator<T> {
             return;
         }
         // A pending `GC.start` request forces a Major collection.
-        let kind = if GC_FORCE_MAJOR.swap(false, Ordering::Relaxed) || all_major_forced() {
+        let kind = if GC_FORCE_MAJOR.with(|f| f.replace(false)) || all_major_forced() {
             GcKind::Major
         } else {
             self.decide_gc_kind()
