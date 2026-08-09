@@ -174,10 +174,6 @@ pub(crate) fn mark(alloc: &mut crate::alloc::Allocator<RValue>) {
     SCHEDULER.with(|s| s.borrow().mark(alloc));
 }
 
-/// Whether a timeslice switch may be injected at the current poll point:
-/// only while a thread's Ruby code (not the scheduler's own machinery) is
-/// running, and only when another live thread could actually use the
-/// slice. See `Scheduler::machinery`.
 thread_local! {
     /// Nesting depth of scheduler entry points (`pass`, `sleep`, `join`,
     /// `terminate_all`) on the current stack. Signal trap handlers must
@@ -218,6 +214,10 @@ pub(crate) fn signal_delivery_ok() -> bool {
         })
 }
 
+/// Whether a timeslice switch may be injected at the current poll point:
+/// only while a thread's Ruby code (not the scheduler's own machinery) is
+/// running, and only when another live thread could actually use the
+/// slice. See `Scheduler::machinery`.
 pub(crate) fn preempt_ok() -> bool {
     SCHEDULER.with(|s| {
         let s = s.borrow();
@@ -285,19 +285,6 @@ pub(crate) fn dump_state_for_gc() -> String {
 pub(crate) fn current_thread(vm: &mut Executor) -> Value {
     ensure_main(vm);
     SCHEDULER.with(|s| s.borrow().current.unwrap())
-}
-
-/// Whether the currently running green thread is the main thread.
-/// `true` before the Thread machinery is initialized (only one implicit
-/// thread exists then). Signal trap handlers must only run here.
-pub(crate) fn on_main_thread() -> bool {
-    SCHEDULER.with(|s| {
-        let s = s.borrow();
-        match (s.current, s.main) {
-            (Some(c), Some(m)) => c.id() == m.id(),
-            _ => true,
-        }
-    })
 }
 
 /// The main thread's `Thread` object.

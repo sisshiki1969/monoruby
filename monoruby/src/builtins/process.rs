@@ -1091,19 +1091,15 @@ fn process_kill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
         signaled_self |= pid == self_pid || pid <= 0;
         count += 1;
     }
-    if signaled_self && crate::scheduler::signal_delivery_ok() {
+    if signaled_self {
         // A signal sent to ourselves is delivered before kill(2) returns
         // (single-threaded process, handler installed), so its pending bit
         // is already set. Drain it *now* so `Process.kill(:TERM, Process.pid)`
         // raises the converted SignalException (or runs the trap handler)
         // inside the `kill` call, as CRuby does — not at some later poll
-        // point after the caller's block has already returned.
-        //
-        // On a NON-main green thread the drain is gated anyway (handlers
-        // run on main, CRuby semantics), so skip the poll entirely: an
-        // execute_gc from this spot on a to-be-terminated thread has been
-        // observed to corrupt the scheduler's saved contexts and wedge
-        // the process at exit.
+        // point after the caller's block has already returned. On a
+        // non-main green thread this poll is a deferring no-op (delivery
+        // is gated to main; see `execute_gc`), which is exactly right.
         if crate::executor::execute_gc(vm, globals).is_none() {
             return Err(vm.take_error());
         }
@@ -2690,6 +2686,48 @@ mod new_api_tests {
               Thread.new { Process.kill(:TERM, Process.pid) }.join
               nil until f
               w.write("handler-on-main")
+              w.close
+              exit
+            end
+            w.close
+            got = nil
+            100.times do
+              break if (got = r.read_nonblock(64, exception: false)) && got != :wait_readable
+              sleep 0.1
+            end
+            if got.nil? || got == :wait_readable
+              Process.kill(:KILL, pid) rescue nil
+              got = "starved"
+            end
+            Process.wait(pid)
+            [got, $?.exitstatus]
+            "#,
+        );
+    }
+
+    #[test]
+    fn process_kill_from_thread_defers_gc_and_keeps_wakeup() {
+        // Same deferred-delivery setup, but the killer thread KEEPS
+        // RUNNING after the kill: its poll points fire with the signal
+        // still pending, taking the gated branch in `execute_gc`, which
+        // must (a) defer the collection — a GC at a gated poll with an
+        // undrained signal has been observed to free live state and
+        // wedge the process at exit — and (b) leave the poll flag armed
+        // so main's allocation-free `nil until f` spin still polls and
+        // runs the handler.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              f = nil
+              Signal.trap(:TERM) { f = 1 }
+              Thread.new do
+                Process.kill(:TERM, Process.pid)
+                50.times { Array.new(64) { +"x" } }
+              end.join
+              nil until f
+              w.write("renudged-to-main")
               w.close
               exit
             end
