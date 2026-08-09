@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c959a123.js";
+            window.path_to_searchindex_js = "../searchindex-435b8d1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -452,6 +452,21 @@ Drop 時に二重 <code>close(2)</code> して Rust std の IO-safety abort を�
 解放）とすることで、閉じるのは元の所有者だけになるようにした。fileno の同一性は
 保たれる。これにより <code>core/io</code>（103ファイル / 1483 example）・<code>core/file</code>・
 <code>core/kernel</code> がカテゴリ一括実行で crash せず完走するようになった。</li>
+</ul>
+<h2 id="実装前提の非互換による-tags恒久非ハング"><a class="header" href="#実装前提の非互換による-tags恒久非ハング">実装前提の非互換による tags（恒久・非ハング）</a></h2>
+<p>原則（tags はハング専用、セマンティクス差は統計に出す）の唯一の例外として、
+<strong>spec の前提がこの処理系上で成立し得ない</strong> example をタグ化している。
+「いずれ直すべき差」ではなく、直すことが誤りになる類のもの。</p>
+<ul>
+<li><code>core/refinement/import_methods_tags.txt</code> — <code>raises ArgumentError when importing methods from C extension</code>: この spec は「C 拡張のメソッドは
+import できない」ことを検証するために、CRuby では確実に C 実装である
+<code>Zlib</code> を素材に選んでいる。monoruby の <code>Zlib</code> は Ruby 実装
+（<code>stdlib/zlib.rb</code>）なので import は<strong>正しく成功</strong>し、raise しないのが
+正直な挙動。ガード自体（native builtin・attr アクセサ・
+<code>define_method</code>+block・<code>alias</code> エントリ・可視性 shadow の拒否）は
+実装済みで、<code>module.rs</code> のユニットテストが CRuby と突き合わせている。
+Zlib が C 実装でなくなる限りこの example は恒久に成立しないため、
+ハングではないが tag で除外する。</li>
 </ul>
 <h2 id="グリーンスレッド導入後のタイムアウト-tags2026-07-追加--撤去済み"><a class="header" href="#グリーンスレッド導入後のタイムアウト-tags2026-07-追加--撤去済み">グリーンスレッド導入後のタイムアウト tags（2026-07 追加 → 撤去済み）</a></h2>
 <blockquote>
