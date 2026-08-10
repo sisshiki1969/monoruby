@@ -1415,12 +1415,14 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 if err.is_some() {
                     return std::cmp::Ordering::Equal;
                 }
-                match vm.invoke_block(globals, &data, &[*a, *b]) {
-                    Ok(r) => match r.try_fixnum() {
-                        Some(n) if n < 0 => std::cmp::Ordering::Less,
-                        Some(n) if n > 0 => std::cmp::Ordering::Greater,
-                        _ => std::cmp::Ordering::Equal,
-                    },
+                // Interpret the block's result exactly as `Array#sort` does:
+                // an Integer's sign, a non-Integer via its own `<=>` against
+                // 0, and `nil` as "not comparable" (ArgumentError).
+                match vm
+                    .invoke_block(globals, &data, &[*a, *b])
+                    .and_then(|r| vm.cmpint(globals, r, *a, *b))
+                {
+                    Ok(ord) => ord,
                     Err(e) => {
                         err = Some(e);
                         std::cmp::Ordering::Equal
@@ -4647,6 +4649,37 @@ mod tests {
             rescue ArgumentError => e
               [e.class, e.message]
             end
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_sort_non_integer_comparator() {
+        // Regression for #1076: `Hash#sort` used to honour only Fixnum
+        // comparator results and silently treat everything else as "equal",
+        // so a Float or Bignum comparator returned an UNSORTED array with no
+        // error and a `nil` comparator swallowed CRuby's ArgumentError. It
+        // now follows `rb_cmpint` like `Array#sort`: an Integer's sign, any
+        // other object via its own `<=>` against 0, and `nil` as an error.
+        run_test(
+            r#"
+            h = { "b" => 2, "a" => 1, "c" => 3 }
+            [
+              h.sort { |x, y| (x[1] <=> y[1]) * 1.0 },            # Float
+              h.sort { |x, y| (x[1] <=> y[1]) * (10 ** 20) },     # Bignum
+              h.sort { |x, y| Rational(x[1] <=> y[1], 3) },       # Rational
+            ]
+            "#,
+        );
+        // `nil` names the two elements; a non-numeric result names itself
+        // against the 0 it was compared with — both exactly as CRuby does.
+        run_test(
+            r#"
+            h = { "b" => 2, "a" => 1, "c" => 3 }
+            [
+              (begin; h.sort { |x, y| nil }; rescue => e; [e.class, e.message]; end),
+              (begin; h.sort { |x, y| "z" }; rescue => e; [e.class, e.message]; end),
+            ]
             "#,
         );
     }
