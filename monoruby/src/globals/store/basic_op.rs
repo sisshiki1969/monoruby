@@ -131,7 +131,20 @@ pub(crate) struct BasicOpTable {
     /// *Which* pairs were replaced. Only consulted once `redefined` is
     /// true, i.e. never in a program that leaves the builtins alone, so a
     /// hash probe here costs nothing in the case that matters.
+    ///
+    /// Union of the two sets below: this is "the fast path for this pair is
+    /// no longer unconditionally sound", which is what every runtime guard
+    /// wants to know.
     redefined_set: HashSet<(ClassId, IdentId)>,
+    /// The subset replaced by an ordinary global redefinition. No scope
+    /// escapes one, so the JIT must never inline these.
+    globally_redefined_set: HashSet<(ClassId, IdentId)>,
+    /// The subset invalidated *only* by a refinement. A refinement binds
+    /// lexically, so a body being compiled under a set that does not refine
+    /// the pair may still inline it — see
+    /// `JitContext::assume_basic_op`. The VM's assembly guard has no call
+    /// site to ask about and stays coarse.
+    refined_set: HashSet<(ClassId, IdentId)>,
 }
 
 impl BasicOpTable {
@@ -148,6 +161,8 @@ impl BasicOpTable {
             armed: false,
             redefined: false,
             redefined_set: HashSet::default(),
+            globally_redefined_set: HashSet::default(),
+            refined_set: HashSet::default(),
         }
     }
 
@@ -167,10 +182,30 @@ impl BasicOpTable {
         self.names.contains(&name)
     }
 
-    /// Record that `class_id#name` was replaced.
+    /// Record that `class_id#name` was replaced outright.
     pub(crate) fn mark_redefined(&mut self, class_id: ClassId, name: IdentId) {
         self.redefined = true;
         self.redefined_set.insert((class_id, name));
+        self.globally_redefined_set.insert((class_id, name));
+    }
+
+    /// Record that `class_id#name` was replaced *by a refinement*. Same
+    /// consequence for every unconditional fast path, but a compiling scope
+    /// that does not activate the refinement can still inline it.
+    pub(crate) fn mark_refined(&mut self, class_id: ClassId, name: IdentId) {
+        self.redefined = true;
+        self.redefined_set.insert((class_id, name));
+        self.refined_set.insert((class_id, name));
+    }
+
+    /// Whether this pair was replaced by something no scope escapes.
+    pub(crate) fn globally_redefined_pair(&self, class_id: ClassId, name: IdentId) -> bool {
+        self.redefined && self.globally_redefined_set.contains(&(class_id, name))
+    }
+
+    /// Whether some refinement replaces this pair.
+    pub(crate) fn refined_pair(&self, class_id: ClassId, name: IdentId) -> bool {
+        self.redefined && self.refined_set.contains(&(class_id, name))
     }
 
     /// Whether *anything* has been replaced. The cheap gate.

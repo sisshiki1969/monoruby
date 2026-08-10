@@ -173,13 +173,13 @@ fn redefine_bop_polymorphic_chain() {
 // OSR/loop-JIT'd hot loop must not re-enter the stale loop body after a
 // basic-op redefinition. The compiled loop entry lives in the bytecode
 // (`BytecodePtr::write2`, `[pc+8]`) and the VM's `loop_start` handler branches
-// to it with no version check, and nothing reverts OSR bytecode-PC entries —
-// so the protection is the `remove_vm_bop_optimization` dispatch-table swap
-// that replaces `loop_start` with the no-opt handler (plain advance+dispatch),
-// making stale OSR entries unreachable. x86 always had that swap
-// (`dispatch[14] = vm_loop_start_no_opt`); the aarch64
-// `remove_vm_bop_optimization` was missing it, so `x * x` here kept returning
-// the pre-redefinition product (14700 instead of 300000).
+// to it with no version check. The protection is `clear_loop_jit_entries`:
+// evicting an iseq's JIT code also zeroes its `LoopStart` operands, so the
+// site returns to its "not compiled yet" state and recompiles on the next
+// iteration. This used to be a process-wide dispatch-table swap
+// (`remove_vm_bop_optimization` replacing `loop_start` with a no-opt handler);
+// aarch64 was once missing that swap, and `x * x` here kept returning the
+// pre-redefinition product (14700 instead of 300000).
 #[test]
 fn redefine_bop_offstack_osr_loop() {
     run_test(
@@ -208,6 +208,29 @@ fn redefine_bop_offstack_osr_loop() {
 // now gone (the dispatch-table swap covers it method-wide), so this test pins
 // the fold variant against regressions in the swap.
 #[test]
+/// Only the loops that inlined the operator lose their compiled body. A
+/// second loop that never used it keeps running its OSR body -- when the
+/// invalidation was process-wide, one redefinition stopped the VM entering
+/// *any* compiled loop for the rest of the process.
+#[test]
+fn redefine_bop_osr_loop_spares_unrelated_loops() {
+    // `run_test_once`, not `run_test`: aliasing `*` a second time in the same
+    // process would capture the replacement and recurse. The loop counts are
+    // already past the test-mode OSR threshold on the first pass.
+    run_test_once(
+        r##"
+        def osr_mul(n); s = 0; i = 0; while i < n; s = s + (i * 2); i = i + 1; end; s; end
+        def osr_add(n); s = 0; i = 0; while i < n; s = s + i;       i = i + 1; end; s; end
+        warm = [osr_mul(400), osr_add(400)]
+        class Integer
+          alias __osr_mul *
+          def *(o); __osr_mul(o); end
+        end
+        warm + [osr_mul(400), osr_add(400)]
+        "##,
+    );
+}
+
 fn redefine_bop_offstack_osr_loop_fold() {
     run_test(
         r##"

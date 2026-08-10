@@ -1548,22 +1548,4 @@ impl Codegen {
         );
         p
     }
-    /// Stop the VM from entering compiled OSR loop bodies. aarch64 twin of
-    /// the x86 `disable_vm_loop_jit`.
-    ///
-    /// The arithmetic / comparison handlers are no longer swapped: each
-    /// reads its own `VmBop` guard word inline (`a64_bop_guard`), so only
-    /// the operator actually redefined loses its fast path. `loop_start`
-    /// still has to go, because an off-stack method's `[pc+8]` keeps a
-    /// stale loop codeptr and nothing reverts OSR entries.
-    pub(crate) fn disable_vm_loop_jit(&mut self) {
-        self.dispatch[14] = self.a64_op_loop();
-        // Publish the freshly-emitted handler: on macOS/aarch64 this flips the
-        // MAP_JIT page back to executable and invalidates the I-cache, so the
-        // dispatch entry above can actually be jumped to. Mirrors the
-        // `self.jit.finalize()` in the x86 twin. Without it, the redefinition
-        // tests die on Apple Silicon the moment the VM reaches a `loop_start`
-        // (SIGILL: the CPU sees the page as it was before the write).
-        self.jit.finalize();
-    }
 }

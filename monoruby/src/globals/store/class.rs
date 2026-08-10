@@ -2455,12 +2455,24 @@ impl Store {
         if let Some(refined) = self.classes[class_id].refined_class()
             && self.basic_ops.contains(refined, name)
         {
-            self.set_bop_redefine(refined, name);
+            self.basic_ops.mark_refined(refined, name);
+            self.invalidate_bop_fast_paths(refined, name);
         }
     }
 
     fn set_bop_redefine(&mut self, class_id: ClassId, name: IdentId) {
         self.basic_ops.mark_redefined(class_id, name);
+        self.invalidate_bop_fast_paths(class_id, name);
+    }
+
+    ///
+    /// Retire every fast path that assumed `class_id#name`, whatever replaced
+    /// it. Split out from [`Self::set_bop_redefine`] so a refinement can share
+    /// it: the *reaction* is the same, only the recorded reason differs (a
+    /// refinement binds lexically, so the JIT can ask a finer question later —
+    /// see `Store::basic_op_refined_in_scope`).
+    ///
+    fn invalidate_bop_fast_paths(&mut self, class_id: ClassId, name: IdentId) {
         // The VM's assembly fast paths are fixnum-only, so only an Integer
         // redefinition can invalidate one; for every other class the
         // assembly stays correct as written and the Rust helper it falls
@@ -2479,19 +2491,15 @@ impl Store {
             // with no runtime guard have gone stale. Everything the JIT reached
             // through a real method call is already covered by the
             // class-version guard, which every definition bumps.
+            // `evict_jit_code` also zeroes each evicted iseq's `LoopStart`
+            // operands, so its compiled OSR loop bodies stop being entered
+            // too — the loop half of the invalidation is per iseq like the
+            // method half, and an unrelated redefinition no longer costs the
+            // process its loop JIT.
             let stale = self.evict_jit_code_for_bop(class_id, name);
             if stale.is_empty() {
-                // Nothing inlined it, so no compiled loop body can have
-                // inlined it either — the OSR entries stay safe to take.
                 return;
             }
-            // At least one body is stale, and an off-stack method's `[pc+8]`
-            // still holds its loop codeptr with nothing to revert it. Stop
-            // entering compiled loop bodies process-wide; making *this* per
-            // iseq means zeroing the `LoopStart` operands of the evicted
-            // bodies, which is the remaining piece of per-invariant
-            // invalidation.
-            codegen.disable_vm_loop_jit();
             // Revert the evicted methods' entry jumps back to `vm_entry`, so
             // the next call re-enters the interpreter and re-warms.
             // x86-only: this uses the x86 `apply_jmp_patch_address` to rewrite

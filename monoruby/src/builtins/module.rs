@@ -6473,6 +6473,33 @@ mod tests {
         );
     }
 
+    /// A refinement of a basic operation binds lexically like any other, so
+    /// a scope that never activated it keeps the builtin. That is also what
+    /// lets the JIT keep its inline path there: `assume_basic_op` asks the
+    /// compiling scope's set rather than a global flag, so `refine`-ing an
+    /// operator costs nothing outside the scopes that `using` it.
+    #[test]
+    fn refinement_of_a_basic_operation_does_not_escape_its_scope() {
+        run_test_once(
+            r#"
+            module BopScoped
+              refine(Integer) { def +(o); 42; end }
+            end
+            inner = Module.new do
+              using BopScoped
+              def self.run; 1 + 1; end
+            end
+            def outside(a, b); a + b; end
+            i = 0
+            while i < 200      # past the JIT thresholds, unrefined scope
+              outside(1, 1)
+              i = i.succ
+            end
+            [inner.run, outside(1, 1), 1 + 1]
+            "#,
+        );
+    }
+
     /// The library's own arithmetic is not the user's scope. monoruby writes
     /// `Array#map` and friends in Ruby, where CRuby uses C — and a C frame
     /// carries no cref, so a refinement of `Integer#+` must not reach the

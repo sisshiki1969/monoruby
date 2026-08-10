@@ -365,21 +365,6 @@ impl Codegen {
         }
     }
 
-    ///
-    /// Stop the VM from entering compiled OSR loop bodies.
-    ///
-    /// The arithmetic / comparison / unary handlers are *not* swapped any
-    /// more: each reads its own `VmBop` guard word inline, so only the
-    /// operator actually redefined loses its fast path. What remains is
-    /// purely a JIT concern — an off-stack method's `[pc+8]` still holds a
-    /// stale loop codeptr and nothing reverts OSR entries, so `loop_start`
-    /// becomes the plain advance-and-dispatch handler.
-    ///
-    pub(crate) fn disable_vm_loop_jit(&mut self) {
-        self.dispatch[14] = self.vm_loop_start_no_opt();
-        self.jit.finalize();
-    }
-
     /// Emit the inline basic-op guard: if `Integer#<bop>` has been replaced,
     /// leave the inline path for `generic` (which dispatches honestly).
     /// Placed *after* the fixnum guard, so it only costs the path it
@@ -795,12 +780,6 @@ impl Codegen {
         self.jit.bind_label(cont.clone());
         self.fetch_and_dispatch();
         self.gen_compile_loop(&compile, &cont);
-        label
-    }
-
-    fn vm_loop_start_no_opt(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        self.fetch_and_dispatch();
         label
     }
 
