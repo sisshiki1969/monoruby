@@ -5,8 +5,8 @@
 # local across a Ruby re-entry is invisible to the mark phase and gets swept),
 # but it is far too slow to run on every push: on the `amd64` job, stacked on
 # top of llvm-cov instrumentation, it turned a ~10 min nextest phase into
-# ~100 min. So the automatic `Rust` workflow now sets `SKIP_GC_STRESS=1` on
-# both of its jobs, and the stress coverage lives here instead — dispatched by
+# ~100 min. `gc-stress` is therefore opt-in (`GC_STRESS=1`), nothing enables
+# it implicitly, and the stress coverage lives here instead — dispatched by
 # hand from the Actions tab (or `gh workflow run gc-stress.yml`).
 #
 # Run this when touching the GC, frame layout, argument binding, or any
@@ -27,7 +27,7 @@ on:
         options: [both, x86_64, aarch64]
         default: both
       scope:
-        description: "nextest = unit + integration tests under gc-stress. full = the whole bin/test scope (also benchmarks / optcarrot / ruby-spec, which build WITHOUT gc-stress)."
+        description: "nextest = unit + integration tests under gc-stress (~minutes). full = the whole bin/test scope — benchmarks, optcarrot and ruby/spec under gc-stress too, which takes HOURS."
         type: choice
         options: [nextest, full]
         default: nextest
@@ -78,9 +78,11 @@ jobs:
       fail-fast: false
       matrix:
         target: ${{ fromJSON(needs.select.outputs.targets) }}
-    # Per-safepoint collection is slow by design; `full` on top of that is
-    # slower still. Well above any healthy run, well below a wedged one.
-    timeout-minutes: 240
+    # Per-safepoint collection is slow by design, and `full` now stresses the
+    # long-running phases too (optcarrot, ruby/spec) — hours, not minutes. 350
+    # is just under GitHub's 360-minute ceiling for hosted runners: high enough
+    # not to guillotine a healthy `full` run, and it still bounds a wedged one.
+    timeout-minutes: 350
     env:
       CARGO_TERM_COLOR: always
       # 20-min per-test cap instead of the default 10: under stress the
@@ -149,10 +151,11 @@ jobs:
           cargo nextest run "${args[@]}"
 
       # --- scope: full ------------------------------------------------------
-      # `bin/test` enables gc-stress for its nextest phase unless
-      # SKIP_GC_STRESS=1 (which is what the automatic workflow now sets), so
-      # simply NOT setting it here is what turns the stress on. SKIP_COV=1
-      # keeps llvm-cov out of the picture.
+      # GC_STRESS=1 turns the feature on for EVERY phase of `bin/test`, so the
+      # benchmark / optcarrot / ruby-bench / ruby-spec phases run under stress
+      # as well — that is the point of the manual run, since those phases are
+      # what exercise the JIT deepest. Expect hours. SKIP_COV=1 keeps llvm-cov
+      # out of the picture (it would only multiply the cost).
       - name: Clone optcarrot
         if: inputs.scope == 'full'
         run: git clone https://github.com/mame/optcarrot.git ../optcarrot
@@ -179,5 +182,6 @@ jobs:
       - name: bin/test under gc-stress
         if: inputs.scope == 'full'
         env:
+          GC_STRESS: "1"
           SKIP_COV: "1"
         run: bin/test
