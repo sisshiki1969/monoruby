@@ -47,7 +47,6 @@ jobs:
       # Match the normal `darwin` job: no `gc-stress` on this runner.
       # It is now a true per-safepoint stress mode and only the Linux
       # `amd64` job runs it (see bin/test).
-      SKIP_GC_STRESS: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Ruby

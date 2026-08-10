@@ -417,11 +417,12 @@ bin/test
 `bin/test` does:
 
 1. `cargo llvm-cov nextest` with the stress features (`stress-spill-pool`, plus
-   `gc-stress` unless `SKIP_GC_STRESS=1` — **both** automatic CI jobs set it,
-   so pushes/PRs no longer pay the per-safepoint stress; see the manual
-   `gc-stress` workflow below)
-2. Builds a debug benchmark binary **without** `gc-stress` (true per-safepoint
-   stress would make the benchmark/optcarrot/spec phases take hours)
+   `gc-stress` only when `GC_STRESS=1` is exported — it is opt-in, so pushes
+   and PRs never pay the per-safepoint stress; see the manual `gc-stress`
+   workflow below)
+2. Builds a debug benchmark binary with the **same** feature list, so under
+   `GC_STRESS=1` the benchmark/optcarrot/spec phases are stressed too (that
+   run takes hours — it is a manual, deliberate exercise)
 3. Runs benchmark scripts and `diff`s output against CRuby
 4. Runs optcarrot and compares output
 5. Generates `lcov.info` coverage report
@@ -522,7 +523,8 @@ Do not add new nightly features without necessity; prefer stable alternatives wh
 
 File: `.github/workflows/rust.yml`
 
-Triggered on push/PR to `master`. Two jobs run, **both with `SKIP_GC_STRESS=1`**:
+Triggered on push/PR to `master`. Neither job sets `GC_STRESS`, so neither
+pays the per-safepoint stress:
 
 - **Linux/x86-64** (`ubuntu-latest`): install Ruby 4.0+, Rust nightly,
   `cargo-llvm-cov` + `cargo-nextest`, clone optcarrot / ruby-bench / ruby-spec,
@@ -544,8 +546,9 @@ touching the GC, frame layout, argument binding, or any builtin that creates a
 Value and then re-enters Ruby.
 
 Inputs: `arch` (`both` / `x86_64` / `aarch64`), `scope` (`nextest` = the unit +
-integration suite under stress, `full` = the whole `bin/test` scope),
-`test_filter` (a nextest `-E` expression), `no_fail_fast`.
+integration suite under stress, minutes; `full` = the whole `bin/test` scope
+with `GC_STRESS=1`, so benchmarks / optcarrot / ruby-spec are stressed too —
+**hours**), `test_filter` (a nextest `-E` expression), `no_fail_fast`.
 
 It runs on `ubuntu-latest` (x86-64) and `ubuntu-24.04-arm` (**native** arm64
 Linux — not qemu), and collects no coverage. On the arm64 runner the job
@@ -608,5 +611,5 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 3. **Ruby in PATH**: Tests compare output against a system `ruby` binary matching the vendored pin (`4.0.2`, see `vendor/ruby-stdlib/.ruby-version`). Ensure Ruby is installed and the binary is accessible.
 4. **optcarrot**: The full CI test requires optcarrot cloned at `../optcarrot` relative to the repo root.
 5. **Library path**: `build.rs` does **not** invoke a host `ruby` for `$LOAD_PATH` / `RUBY_VERSION` (those come from the vendored snapshot). Host-installed *non-default* gems are discovered at run time by `src/ruby_probe.rs`, which invokes a host `ruby` once if present and caches `~/.monoruby/{library_path,gem_path}`. If no host Ruby is found, those caches stay empty and a warning is printed at startup, but the vendored stdlib still loads from the per-version install root (`~/.monoruby/v<version>/lib`).
-6. **gc-stress in tests**: `bin/test` runs the nextest phase with `--features gc-stress` (unless `SKIP_GC_STRESS=1`) to catch GC bugs. Since the true-stress restoration this means a collection at **every safepoint** — the test binary is drastically slower than a normal debug build, and long-running workloads (benchmarks, optcarrot, ruby/spec) are deliberately built without it. Both automatic CI jobs now skip it; run the manual `gc-stress` workflow instead. Tests whose loop counts exist only to reach the JIT thresholds should shrink them under `cfg!(feature = "gc-stress")` (see `tests/method_call.rs`) — otherwise they blow past nextest's per-test cap.
+6. **gc-stress in tests**: `gc-stress` is **opt-in** — `export GC_STRESS=1` before `bin/test` and it applies to **every** phase (nextest *and* the benchmark binary, so optcarrot / ruby-spec are stressed too). Since the true-stress restoration this means a collection at **every safepoint**, so a `GC_STRESS=1` run of the full scope is an hours-scale job. Nothing enables it implicitly, so the automatic CI never pays it; run the manual `gc-stress` workflow instead. Tests whose loop counts exist only to reach the JIT thresholds should shrink them under `cfg!(feature = "gc-stress")` (see `tests/method_call.rs`) — otherwise they blow past nextest's per-test cap.
 7. **Thread-local CODEGEN**: The JIT compiler is a thread-local singleton. Do not attempt to use it across threads.

@@ -21,31 +21,39 @@ RUBY=(ruby --yjit)
 # there — no pool allocation happens, which sidesteps the macOS-runner
 # `optcarrot --opt` divergence that the (non-empty) aarch64 pool path used to hit.
 #
-# `gc-stress` is now a true stress mode: the binary starts in `GC.stress`
-# and collects at EVERY safepoint. That makes long-running workloads
-# quadratic-ish (a trivial 100K-allocation loop takes ~100 s), so the
-# benchmark / optcarrot / ruby-bench / ruby-spec phases build WITHOUT it
-# and keep only the spill stress. SKIP_GC_STRESS=1 drops `gc-stress` from
-# the nextest phase too.
+# `gc-stress` is a true stress mode: the binary starts in `GC.stress` and
+# collects at EVERY safepoint. It is **opt-in** — export GC_STRESS=1 to turn
+# it on. Nothing enables it implicitly, so the automatic CI workflow needs no
+# opt-out; the manual .github/workflows/gc-stress.yml sets it.
 #
-# BOTH automatic CI jobs now set SKIP_GC_STRESS=1: even limited to the
-# nextest phase the stress dominated the run (~10 min -> ~100 min on the
-# coverage-instrumented `amd64` job, and the M1 `darwin` runner was
-# finishing right at its per-attempt cap). Stress coverage for x86-64 AND
-# aarch64 lives in .github/workflows/gc-stress.yml, dispatched by hand.
-# A local `bin/test` still stress-tests by default — export
-# SKIP_GC_STRESS=1 if you want the fast path.
-NEXTEST_FEATURE_LIST=stress-spill-pool
-if [ "${SKIP_GC_STRESS:-0}" != "1" ]; then
-  NEXTEST_FEATURE_LIST="$NEXTEST_FEATURE_LIST,gc-stress"
+# GC_STRESS=1 applies the feature to EVERY phase, not just nextest: the
+# benchmark binary is built with it too, so the benchmark / optcarrot /
+# ruby-bench / ruby-spec phases run under stress as well. That is the whole
+# point of a manual stress run — those phases are what exercise the JIT
+# deepest, and restricting the stress to the unit tests left the JIT x GC
+# interaction there unchecked (see #1079, an AArch64 JIT/GC bug that a unit
+# test happened to catch first).
+#
+# Be aware what that costs: per-safepoint collection makes long-running
+# workloads quadratic-ish — a trivial 100K-allocation loop takes ~100 s — so
+# optcarrot and ruby/spec go from seconds to a long grind. A full
+# GC_STRESS=1 run is an hours-scale job, not something to sit and wait for.
+GC_STRESS_ON=0
+[ "${GC_STRESS:-0}" = "1" ] && GC_STRESS_ON=1
+
+FEATURE_LIST=stress-spill-pool
+if [ "$GC_STRESS_ON" = "1" ]; then
+  FEATURE_LIST="$FEATURE_LIST,gc-stress"
   # Per-safepoint collection makes the heaviest JIT warm-up tests take minutes,
   # so use the `gc-stress` nextest profile (a 20-min per-test cap instead of
   # 10). Selected by env var rather than `--profile`, which `cargo llvm-cov`
   # would consume as the *cargo* profile.
   export NEXTEST_PROFILE=gc-stress
 fi
-NEXTEST_FEATURES=(--features "$NEXTEST_FEATURE_LIST")
-BENCH_FEATURES=(--features stress-spill-pool)
+NEXTEST_FEATURES=(--features "$FEATURE_LIST")
+# Same list as nextest: under GC_STRESS=1 the long-running phases are stressed
+# too, otherwise both are just the spill stress and no rebuild is needed.
+BENCH_FEATURES=(--features "$FEATURE_LIST")
 
 # Coverage wrappers. SKIP_COV=1 runs the whole script without llvm-cov
 # instrumentation and uploads nothing. Used by the arm64 macOS `darwin` job:
@@ -110,9 +118,11 @@ phase "nextest (unit + integration tests)"
 cov_clean
 cov_nextest "${NEXTEST_FEATURES[@]}"
 
-# Rebuild the benchmark binary WITHOUT `gc-stress` (see the feature-list
-# comment above): under true per-safepoint stress the benchmark/optcarrot/
-# spec phases would take hours. The feature change recompiles the lib once.
+# Build the binary the remaining phases run. It uses the same feature list as
+# nextest (see above), so under GC_STRESS=1 the benchmark / optcarrot /
+# ruby-bench / ruby-spec phases are stressed too — expect them to take hours
+# rather than seconds. Without GC_STRESS the lists are identical, so cargo
+# reuses the nextest build instead of recompiling the lib.
 phase "build benchmark binary"
 cov_build "${BENCH_FEATURES[@]}"
 
