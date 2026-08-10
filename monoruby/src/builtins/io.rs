@@ -8830,4 +8830,57 @@ mod tests {
             "##,
         );
     }
+
+    /// `IO.new` given a block warns and ignores it (the block form is
+    /// `IO.open`), returning the fresh IO. The IO is only reachable from a
+    /// Rust local while `io_init_from_fd` and the `warn` dispatch re-enter
+    /// Ruby, which is what the rooting guards.
+    #[test]
+    fn io_new_with_block_warns_and_returns_io() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_cov_io_new_#{Process.pid}"
+            begin
+              File.write(path, "hello\n")
+              fd = IO.sysopen(path, "r")
+              io = IO.new(fd, "r") { |x| :never_called }
+              res = [io.class, io.read]
+              io.close
+              res
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
+
+    /// `IO#puts` stringifies each decomposed element: `nil` writes an empty
+    /// line, and an object whose `to_s` returns a non-String falls back to
+    /// the Rust-side formatter (CRuby's `rb_any_to_s`). Both write through
+    /// the rooted collector Array.
+    #[test]
+    fn puts_stringifies_nil_and_bad_to_s() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_cov_puts_#{Process.pid}"
+            begin
+              class BadToS
+                def to_s; 42; end
+              end
+              File.open(path, "w") do |f|
+                f.puts nil
+                f.puts [nil, nil]
+                f.puts "plain"
+                f.puts BadToS.new
+              end
+              lines = File.readlines(path)
+              # The BadToS line renders as an address-bearing default
+              # `to_s`, so compare only its shape.
+              [lines.size, lines[0, 4], lines[4].start_with?("#<BadToS")]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "##,
+        );
+    }
 }

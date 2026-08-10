@@ -1357,4 +1357,32 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn complex_numerator_denominator() {
+        // `numerator` scales both components onto the common denominator
+        // (`denominator` = lcm of the parts'), dispatching `numerator` /
+        // `denominator` / `/` / `*` on each part. Every intermediate can be
+        // a heap numeric (Rational/Bignum) that only a Rust local holds
+        // across the next dispatch, which is what the rooting guards.
+        run_tests(&[
+            // Integer components: denominator 1, numerator == self.
+            "Complex(1, 2).numerator.to_s",
+            "Complex(1, 2).denominator",
+            // Rational components with different denominators.
+            "Complex(Rational(1, 2), Rational(2, 3)).numerator.to_s",
+            "Complex(Rational(1, 2), Rational(2, 3)).denominator",
+            // Mixed Rational / Integer.
+            "Complex(Rational(3, 4), 5).numerator.to_s",
+            "Complex(Rational(3, 4), 5).denominator",
+            "Complex(7, Rational(5, 6)).numerator.to_s",
+            // Negative and zero components.
+            "Complex(Rational(-1, 3), Rational(1, 6)).numerator.to_s",
+            "Complex(0, Rational(1, 2)).numerator.to_s",
+            // Bignum components: the intermediates are heap Integers.
+            "Complex(10**30, 3).numerator.to_s",
+            "Complex(Rational(10**30, 7), Rational(1, 3)).numerator.to_s",
+            "Complex(Rational(10**30, 7), Rational(1, 3)).denominator",
+        ]);
+    }
 }

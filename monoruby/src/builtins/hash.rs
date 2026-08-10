@@ -4619,4 +4619,84 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn hash_sort_with_comparator_block() {
+        // `Hash#sort` with a block sorts the freshly built [k, v] pair
+        // Arrays with a Ruby comparator — the pairs live only in a Rust
+        // Vec while that block runs, which is what the rooting covers.
+        // All three comparator outcomes (<0, >0 and 0) are exercised.
+        run_test(
+            r#"
+            h = { "b" => 2, "a" => 1, "c" => 3 }
+            [
+              h.sort { |x, y| x[0] <=> y[0] },
+              h.sort { |x, y| y[1] <=> x[1] },
+              h.sort { |x, y| 0 },
+            ]
+            "#,
+        );
+        // A comparator that raises propagates the error out of the sort.
+        run_test(
+            r#"
+            h = { "b" => 2, "a" => 1 }
+            begin
+              h.sort { |x, y| raise ArgumentError, "boom" }
+            rescue ArgumentError => e
+              [e.class, e.message]
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_to_h_with_block() {
+        // `Hash#to_h` with a block accumulates the block's fresh return
+        // Arrays into a new Hash; a return value that is not a 2-element
+        // Array is a TypeError / ArgumentError.
+        run_test(
+            r#"
+            h = { a: 1, b: 2 }
+            [
+              h.to_h { |k, v| [k.to_s, v * 10] },
+              h.to_h { |k, v| [v, k] },
+              {}.to_h { |k, v| [k, v] },
+              h.to_h,
+            ]
+            "#,
+        );
+        run_test(
+            r#"
+            h = { a: 1 }
+            [
+              (begin; h.to_h { |k, v| [1, 2, 3] }; rescue => e; e.class; end),
+              (begin; h.to_h { |k, v| 5 }; rescue => e; e.class; end),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn env_fetch_default_block_and_missing() {
+        // `ENV.fetch` coerces the key to a fresh String and keeps it alive
+        // across the `warn` call and the Ruby dispatches inside `get`.
+        // Covers all four outcomes: hit, default argument, block, and the
+        // block-supersedes-default warning path.
+        run_test(
+            r#"
+            ENV["MONORUBY_COV_FETCH"] = "hit"
+            res = [
+              ENV.fetch("MONORUBY_COV_FETCH"),
+              ENV.fetch("MONORUBY_COV_ABSENT", "dflt"),
+              ENV.fetch("MONORUBY_COV_FETCH", "dflt"),
+              ENV.fetch("MONORUBY_COV_ABSENT") { |k| "blk:#{k}" },
+              ENV.fetch("MONORUBY_COV_FETCH") { |k| "blk:#{k}" },
+              ENV.fetch("MONORUBY_COV_ABSENT", "dflt") { |k| "block wins" },
+              (begin; ENV.fetch("MONORUBY_COV_ABSENT"); rescue KeyError => e; e.class; end),
+            ]
+            ENV.delete("MONORUBY_COV_FETCH")
+            res
+            "#,
+        );
+    }
 }

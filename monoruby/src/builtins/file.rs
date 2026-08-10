@@ -4285,4 +4285,61 @@ mod tests {
             "#,
         );
     }
+
+    /// `File.new` / `File.open` given a raw file descriptor. The fresh File
+    /// is reachable only from a Rust local while `init_io_encodings` and
+    /// the `File::new() does not take block` warning re-enter Ruby, which
+    /// is what the rooting guards. Also covers the encoding-mode default
+    /// derived from the fd's access mode when no String mode is passed.
+    #[test]
+    fn file_from_fd_modes_and_block() {
+        run_test_once(
+            r#"
+            path = "/tmp/mono_cov_file_fd_#{Process.pid}"
+            begin
+              File.write(path, "hello")
+              # Read-only fd, no mode argument -> "r".
+              f = File.new(IO.sysopen(path, "r"))
+              a = [f.class, f.read]
+              f.close
+              # Write-only fd -> "w"; read-write fd -> "r+".
+              f = File.new(IO.sysopen(path, "w"))
+              b = f.class
+              f.close
+              f = File.new(IO.sysopen(path, "r+"))
+              c = f.class
+              f.close
+              # File.open(fd) with a block closes the File at block exit.
+              d = File.open(IO.sysopen(path, "r")) { |io| io.read }
+              # File.new(fd) with a block warns and ignores the block.
+              f = File.new(IO.sysopen(path, "r")) { |io| :never_called }
+              e = [f.class, f.read]
+              f.close
+              [a, b, c, d, e]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    /// `File.new(path)` given a block warns and ignores it, returning the
+    /// open File (the block form is `File.open`).
+    #[test]
+    fn file_new_with_block_warns() {
+        run_test_once(
+            r#"
+            path = "/tmp/mono_cov_file_new_#{Process.pid}"
+            begin
+              File.write(path, "hello")
+              f = File.new(path, "r") { |io| :never_called }
+              res = [f.class, f.read]
+              f.close
+              res
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
 }
