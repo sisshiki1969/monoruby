@@ -49,6 +49,48 @@ const IDENT_BIT: u8 = 0b0100_0000;
 /// Max pairs held inline: the full 48-byte payload.
 pub(crate) const INLINE_CAP: usize = 3;
 
+//
+// ## Layout constants for JIT-generated code
+//
+// `Hash#size` / `#__key_at` / `#__value_at` are emitted as machine code
+// that walks this representation directly, so the offsets it bakes in
+// must come from the compiler rather than from a reading of the struct
+// definitions. Nothing below is hand-computed: the pair is a `repr(Rust)`
+// tuple whose field order is unspecified, and the entry buckets reorder
+// their fields according to the key's niche (see `rubymap::EntriesLayout`).
+//
+
+/// Representation bits of the `ty_flags` byte, and the value meaning "boxed".
+pub const HASH_REP_MASK: u8 = REP_MASK;
+pub const HASH_REP_BOXED: u8 = REP_BOXED;
+
+/// The inline pair array, addressed from the start of the `RValue`.
+pub const HASH_INLINE_PAIRS_OFFSET: usize = RVALUE_OFFSET_KIND;
+pub const HASH_INLINE_PAIR_STRIDE: usize = std::mem::size_of::<(Value, Value)>();
+pub const HASH_INLINE_KEY_OFFSET: usize = std::mem::offset_of!((Value, Value), 0);
+pub const HASH_INLINE_VALUE_OFFSET: usize = std::mem::offset_of!((Value, Value), 1);
+
+/// The boxed content, addressed from the start of the `RValue`. The
+/// discriminant sits at `HASH_CONTENT_OFFSET` and the `Box<RubyMap<..>>`
+/// at `HASH_CONTENT_MAP_OFFSET`, per `HashContent`'s `repr(C, usize)`.
+pub const HASH_CONTENT_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(BoxedHash, content);
+pub const HASH_CONTENT_MAP_OFFSET: usize = HASH_CONTENT_OFFSET + std::mem::size_of::<usize>();
+
+/// The entry-storage layout shared by both boxed forms.
+///
+/// Returns `None` when the two instantiations disagree, or when
+/// `rubymap`'s probe cannot identify the vector's fields — in either case
+/// the caller must keep its out-of-line path, so an unrecognised layout
+/// costs speed rather than correctness. Identity-keyed maps are keyed by
+/// `IdentKey`, a transparent wrapper, so in practice the two agree and
+/// generated code need not branch on the discriminant.
+pub fn hash_entries_layout() -> Option<rubymap::EntriesLayout> {
+    type S = std::collections::hash_map::RandomState;
+    let by_value = rubymap::entries_layout::<Value, Value, (), (), (), S>()?;
+    let by_ident = rubymap::entries_layout::<IdentKey, Value, (), (), (), S>()?;
+    (by_value == by_ident).then_some(by_value)
+}
+
 /// Is the boxed representation live for this flags byte?
 pub(super) fn flags_is_boxed(flags: u8) -> bool {
     flags & REP_MASK == REP_BOXED
@@ -121,6 +163,12 @@ impl BoxedHash {
 }
 
 #[derive(Debug, Clone)]
+/// `repr(C, usize)` so the discriminant sits at offset 0 and the boxed
+/// map pointer at [`HASH_CONTENT_MAP_OFFSET`]. A `repr(Rust)` enum has no
+/// guaranteed layout and `offset_of!` cannot reach into a variant, so the
+/// JIT could not otherwise follow this pointer — see
+/// [`hash_entries_layout`].
+#[repr(C, usize)]
 enum HashContent {
     Map(Box<RubyMap<Value, Value>>),
     IdentMap(Box<RubyMap<IdentKey, Value>>),
@@ -2046,5 +2094,97 @@ mod tests {
         assert_eq!((s1.id(), Value::integer(1)), (k.id(), v));
         let (k, v) = sh.shift(e, g).unwrap().unwrap();
         assert_eq!((s2.id(), Value::integer(2)), (k.id(), v));
+    }
+
+    ///
+    /// Read entry `i` of `v` exactly the way JIT-generated code does:
+    /// through the layout constants alone, never through the Rust API.
+    ///
+    unsafe fn raw_entry_at(v: Value, i: usize) -> Option<(Value, Value)> {
+        unsafe {
+            let p = v.rvalue() as *const RValue as *const u8;
+            let rep = p.add(RVALUE_OFFSET_TY + 1).read() & HASH_REP_MASK;
+            if rep != HASH_REP_BOXED {
+                // Inline: the representation bits double as the length.
+                if i >= rep as usize {
+                    return None;
+                }
+                let pair = p.add(HASH_INLINE_PAIRS_OFFSET + i * HASH_INLINE_PAIR_STRIDE);
+                return Some((
+                    pair.add(HASH_INLINE_KEY_OFFSET).cast::<Value>().read(),
+                    pair.add(HASH_INLINE_VALUE_OFFSET).cast::<Value>().read(),
+                ));
+            }
+            let lay = hash_entries_layout().unwrap();
+            let map = p.add(HASH_CONTENT_MAP_OFFSET).cast::<*const u8>().read();
+            if i >= map.add(lay.len_offset).cast::<usize>().read() {
+                return None;
+            }
+            let entry = map
+                .add(lay.ptr_offset)
+                .cast::<*const u8>()
+                .read()
+                .add(i * lay.bucket_size);
+            Some((
+                entry.add(lay.key_offset).cast::<Value>().read(),
+                entry.add(lay.value_offset).cast::<Value>().read(),
+            ))
+        }
+    }
+
+    /// The offsets the machine-code intrinsics bake in must agree with
+    /// `entry_at` for both representations, across the inline→boxed
+    /// promotion. Every offset involved is chosen by the compiler — the
+    /// tuple's field order, the bucket's field order under `Value`'s
+    /// niche, the `Vec` word order — so a layout change has to fail here
+    /// rather than turn into wrong loads inside generated code.
+    #[test]
+    fn jit_layout_matches_entry_at() {
+        let mut globals = Globals::new_test();
+        let e = &mut Executor::default();
+        let g = &mut globals;
+        assert!(
+            hash_entries_layout().is_some(),
+            "the boxed forms must share one entry layout for the JIT to skip the tag check"
+        );
+        for n in [0usize, 1, 2, 3, 4, 10, 64] {
+            let mut inner = HashmapInner::default();
+            for i in 0..n {
+                inner
+                    .insert(Value::integer(i as i64), Value::integer(i as i64 * 7 + 1), e, g)
+                    .unwrap();
+            }
+            let v = Value::hash_from_inner(inner);
+            let h = v.as_hash();
+            assert_eq!(h.len(), n, "n={n}");
+            // Past the end too: the intrinsics answer nil rather than trap.
+            for i in 0..n + 2 {
+                assert_eq!(unsafe { raw_entry_at(v, i) }, h.entry_at(i), "n={n} i={i}");
+            }
+        }
+    }
+
+    /// The identity-keyed forms are keyed by `IdentKey`, so this pins the
+    /// assumption that they share the `Value`-keyed layout.
+    #[test]
+    fn jit_layout_matches_entry_at_compare_by_identity() {
+        let mut globals = Globals::new_test();
+        let e = &mut Executor::default();
+        let g = &mut globals;
+        for n in [1usize, 3, 4, 10] {
+            let mut inner = HashmapInner::default();
+            inner.set_compare_by_identity_empty(true).unwrap();
+            for i in 0..n {
+                inner
+                    .insert(Value::integer(i as i64), Value::integer(i as i64 + 100), e, g)
+                    .unwrap();
+            }
+            let v = Value::hash_from_inner(inner);
+            let h = v.as_hash();
+            assert_eq!(h.len(), n, "n={n}");
+            for i in 0..n + 2 {
+                assert_eq!(unsafe { raw_entry_at(v, i) }, h.entry_at(i), "n={n} i={i}");
+            }
+        }
     }
 }

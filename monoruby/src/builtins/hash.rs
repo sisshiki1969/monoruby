@@ -90,7 +90,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "keys", keys, 0);
     globals.define_builtin_func_rest(HASH_CLASS, "merge", merge);
     globals.define_builtin_funcs_rest(HASH_CLASS, "merge!", &["update"], merge_);
-    globals.define_builtin_funcs(HASH_CLASS, "size", &["length"], size, 0);
+    globals.define_builtin_inline_funcs(
+        HASH_CLASS,
+        "size",
+        &["length"],
+        size,
+        inline_gen2!(hash_size),
+        0,
+    );
     globals.define_builtin_func(HASH_CLASS, "delete_if", delete_if, 0);
     globals.define_builtin_func(HASH_CLASS, "reject", reject, 0);
     globals.define_builtin_func(HASH_CLASS, "shift", shift, 0);
@@ -943,51 +950,61 @@ fn entry_component(recv: Value, idx: i64, want_key: bool) -> Value {
     }
 }
 
-extern "C" fn hash_key_at_extern(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    base: Value,
-    idx: Value,
-) -> Option<Value> {
-    // Only the Fixnum case is inlined; the guard in the generator keeps
-    // anything else on the generic path.
-    let i = idx.try_fixnum()?;
-    Some(entry_component(base, i, true))
+///
+/// Inline `Hash#size` as machine code.
+///
+fn hash_size(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    // Without a recognised entry layout the boxed length is unreachable from
+    // generated code, so the generic path stays in charge.
+    let Some(layout) = hash_entries_layout() else {
+        return false;
+    };
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.hash_len_fixnum(GP::Rax, GP::Rdi, layout);
+    state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
 }
 
-extern "C" fn hash_value_at_extern(
-    _vm: &mut Executor,
-    _globals: &mut Globals,
-    base: Value,
-    idx: Value,
-) -> Option<Value> {
-    let i = idx.try_fixnum()?;
-    Some(entry_component(base, i, false))
-}
-
-/// Inline `Hash#__key_at` / `#__value_at` as a direct C-ABI call, reusing the
-/// `Hash#[]` call sequence (recv in Rdx, arg in Rcx, vm/globals loaded by the
-/// emitter). This skips method dispatch and the builtin trampoline while
-/// leaving the lookup itself in Rust.
+///
+/// Inline `Hash#__key_at` / `#__value_at` as machine code: the receiver's
+/// representation is decoded, bounds-checked and indexed in line. No call, no
+/// error edge — a negative or out-of-range index answers `nil` exactly as the
+/// builtin does, which is what lets the Ruby-level `while` loops these exist
+/// for bound themselves with `size` alone.
+///
 fn hash_entry_at_inline(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     store: &Store,
     callid: CallSiteId,
-    f: u64,
+    idx_class: Option<ClassId>,
+    want_key: bool,
 ) -> bool {
     let callsite = &store[callid];
-    if !callsite.is_simple() || callsite.pos_num != 1 {
+    if !callsite.is_simple() || callsite.pos_num != 1 || idx_class != Some(INTEGER_CLASS) {
         return false;
     }
-    state.load(ir, callsite.args, GP::Rcx);
+    let Some(layout) = hash_entries_layout() else {
+        return false;
+    };
+    // `load_fixnum` guards the tag, so a Bignum index deopts rather than being
+    // untagged into a nonsense position.
+    state.load_fixnum(ir, callsite.args, GP::Rcx);
     state.load(ir, callsite.recv, GP::Rdx);
-    let using_fpr = state.get_using_fpr(ir);
-    ir.fpr_save(using_fpr);
-    ir.inline(move |r#gen, _, _, _| r#gen.emit_hash_index(f));
-    ir.fpr_restore(using_fpr);
-    let error = ir.new_error(state);
-    ir.handle_error(error);
+    ir.hash_entry_at(want_key, layout);
     state.def_rax2acc(ir, callsite.dst);
     true
 }
@@ -999,9 +1016,9 @@ fn hash_key_at(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _: Option<ClassId>,
+    idx_class: Option<ClassId>,
 ) -> bool {
-    hash_entry_at_inline(state, ir, store, callid, hash_key_at_extern as *const () as u64)
+    hash_entry_at_inline(state, ir, store, callid, idx_class, true)
 }
 
 fn hash_value_at(
@@ -1011,15 +1028,9 @@ fn hash_value_at(
     store: &Store,
     callid: CallSiteId,
     _: ClassId,
-    _: Option<ClassId>,
+    idx_class: Option<ClassId>,
 ) -> bool {
-    hash_entry_at_inline(
-        state,
-        ir,
-        store,
-        callid,
-        hash_value_at_extern as *const () as u64,
-    )
+    hash_entry_at_inline(state, ir, store, callid, idx_class, false)
 }
 
 extern "C" fn hashindex(
@@ -5038,6 +5049,106 @@ mod tests {
               [h.__key_at(1), h.__value_at(1), h.__key_at(-1), h.__value_at(-1)]
             else
               [nil, nil, nil, nil]
+            end
+            "##,
+        );
+    }
+
+    /// Drive the intrinsics through the JIT the way they are meant to be
+    /// used — a hot `while` loop bounded by `size` — and pin the result to
+    /// CRuby. The loop is inside a method called many times, so the method
+    /// JIT compiles it and the machine-code path (not the interpreter's
+    /// builtin) produces these answers.
+    #[test]
+    fn hash_entry_at_intrinsics_jit() {
+        run_test(
+            r##"
+            def entries(h)
+              return h.to_a unless h.respond_to?(:__key_at)
+              r = []
+              i = 0
+              while i < h.size
+                r << [h.__key_at(i), h.__value_at(i)]
+                i += 1
+              end
+              r
+            end
+
+            small = { a: 1, b: 2 }          # inline representation
+            big = {}
+            i = 0
+            while i < 40; big[i] = i * 3; i += 1; end   # boxed representation
+            ident = {}
+            ident.compare_by_identity
+            ident[:x] = 1
+            ident[:y] = 2
+
+            out = []
+            n = 0
+            while n < 30
+              # One call site sees both representations, so the compiled code
+              # has to handle the inline/boxed split without deopting.
+              out << entries(small)
+              out << entries(big).last
+              out << entries(ident)
+              out << entries({})
+              n += 1
+            end
+            [out.uniq, small.size, big.size, ident.size, {}.size]
+            "##,
+        );
+    }
+
+    /// A hash that outgrows the inline representation while a compiled call
+    /// site is already hot: the same code must keep answering correctly
+    /// across the promotion.
+    #[test]
+    fn hash_entry_at_intrinsics_promotion() {
+        run_test(
+            r##"
+            def probe(h)
+              return [h.size, h.to_a.first, h.to_a.last] unless h.respond_to?(:__key_at)
+              [h.size, [h.__key_at(0), h.__value_at(0)],
+                       [h.__key_at(h.size - 1), h.__value_at(h.size - 1)]]
+            end
+
+            h = {}
+            out = []
+            i = 0
+            while i < 30
+              h[i] = i * 2
+              out << probe(h)
+              i += 1
+            end
+            out
+            "##,
+        );
+    }
+
+    /// Index types the machine-code path must not swallow. Both of these
+    /// are the builtin's own behaviour, and a hot call site has to keep it:
+    /// a Bignum index guards out of the compiled path (rather than being
+    /// untagged into a truncated position) and a non-Integer index still
+    /// raises TypeError.
+    #[test]
+    fn hash_entry_at_intrinsics_index_types() {
+        run_test(
+            r##"
+            h = { a: 1, b: 2 }
+            if h.respond_to?(:__key_at)
+              r = []
+              i = 0
+              while i < 30
+                r = [
+                  (begin; h.__key_at(2 ** 70); rescue RangeError; :range; end),
+                  (begin; h.__value_at(-(2 ** 70)); rescue RangeError; :range; end),
+                  (begin; h.__key_at("x"); rescue TypeError; :type; end),
+                ]
+                i += 1
+              end
+              r
+            else
+              [:range, :range, :type]
             end
             "##,
         );

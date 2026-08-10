@@ -1,7 +1,7 @@
 //! [`IndexMap`] is a hash table where the iteration order of the key-value
 //! pairs is independent of the hash values of the keys.
 
-mod core;
+pub(crate) mod core;
 mod iter;
 mod slice;
 

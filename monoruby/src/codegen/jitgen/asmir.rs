@@ -1009,6 +1009,18 @@ impl AsmIr {
         self.inst.push(AsmInst::ArrayLenFixnum { dst, base });
     }
 
+    /// Emit `dst <- fixnum(Hash#size)`: the fixnum-tagged entry count of the
+    /// hash receiver in `base`. Typed alternative to `inline` for `Hash#size`.
+    pub(crate) fn hash_len_fixnum(&mut self, dst: GP, base: GP, layout: rubymap::EntriesLayout) {
+        self.inst.push(AsmInst::HashLenFixnum { dst, base, layout });
+    }
+
+    /// Emit `Rax <- Hash#__key_at(Rcx)` / `#__value_at(Rcx)` for the hash in
+    /// `Rdx`. Typed alternative to the out-of-line C-ABI call.
+    pub(crate) fn hash_entry_at(&mut self, want_key: bool, layout: rubymap::EntriesLayout) {
+        self.inst.push(AsmInst::HashEntryAt { want_key, layout });
+    }
+
     /// Emit `dst <- fixnum(String#bytesize)`: the fixnum-tagged byte length of
     /// the string receiver in `base`. Typed alternative to `inline`.
     pub(crate) fn string_len_fixnum(&mut self, dst: GP, base: GP) {
@@ -1646,6 +1658,27 @@ pub(super) enum AsmInst {
     StringLenFixnum {
         dst: GP,
         base: GP,
+    },
+    /// `dst <- fixnum(Hash#size)` for the hash receiver in `base`.
+    ///
+    /// Unlike `ArrayLenFixnum` this cannot be a `cmov`: a small hash keeps its
+    /// length in the header's representation bits, while a boxed one keeps it in
+    /// the entry vector, and the pointer that vector hangs off is only valid on
+    /// the boxed side — so the two lengths cannot both be loaded speculatively.
+    HashLenFixnum {
+        dst: GP,
+        base: GP,
+        layout: rubymap::EntriesLayout,
+    },
+    /// `Rax <- Hash#__key_at(Rcx)` / `Hash#__value_at(Rcx)` for the hash in `Rdx`,
+    /// with the index arriving as a fixnum `Value`.
+    ///
+    /// Total by construction: a negative or out-of-range index answers `nil`
+    /// exactly as the builtin does, so the Ruby-level `while` loops these
+    /// intrinsics exist for need no error edge and no generic fallback.
+    HashEntryAt {
+        want_key: bool,
+        layout: rubymap::EntriesLayout,
     },
     /// `dst <- (src == nil) ? true : false` as a Ruby bool `Value` (`Object#nil?`).
     /// Typed replacement for the `emit_kernel_nil` closure. Uses `GP::Rsi` as a
