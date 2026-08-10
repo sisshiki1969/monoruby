@@ -491,10 +491,10 @@ pub struct JitModule {
     vm_stack_overflow: DestLabel,
     dispatch: Box<[CodePtr; 256]>,
     bop_redefined_flags: DestLabel,
-    /// Per-operator guard words, indexed by [`VmBop`]. Non-zero once
-    /// `Integer#<op>` is replaced; the VM handler for that operator reads
-    /// its own word and skips its inline computation.
-    bop_flags: Vec<DestLabel>,
+    /// One word, one bit per [`VmBop`]. A bit turns on once `Integer#<op>`
+    /// is replaced; the VM handler for that operator tests its own bit and
+    /// skips its inline computation.
+    bop_flags: DestLabel,
 }
 
 impl std::ops::Deref for JitModule {
@@ -1254,17 +1254,14 @@ impl Codegen {
             .get_label_address(&self.bop_redefined_flags)
             .as_ptr() as *mut u32;
         unsafe { *addr = !0 }
-        // The VM handlers each read their own word, so only the redefined
+        // The VM handlers each test their own bit, so only the redefined
         // operator loses its inline path — redefining `Integer#~` no longer
         // costs every `+`, `<` and `==` in the process. `None` means no VM
         // assembly path assumed this operator (a non-Integer class, or an
         // operator like `~` that computes nothing inline).
         if let Some(bop) = bop {
-            let addr = self
-                .jit
-                .get_label_address(&self.bop_flags[bop as usize])
-                .as_ptr() as *mut u32;
-            unsafe { *addr = !0 }
+            let addr = self.jit.get_label_address(&self.bop_flags).as_ptr() as *mut u64;
+            unsafe { *addr |= bop.bit() }
         }
         // Stop entering compiled OSR loop bodies: an off-stack method's
         // `[pc+8]` still holds a stale loop codeptr, and nothing reverts OSR
@@ -1363,11 +1360,17 @@ impl Codegen {
 
 /// The VM assembly fast paths that carry their own basic-op guard.
 ///
-/// Each variant owns one word in `Codegen::bop_flags`, which the handler
-/// reads right after its fixnum guard and before the inline computation —
-/// CRuby's `BASIC_OP_UNREDEFINED_P` in the same position. Non-zero means
-/// `Integer#<op>` has been replaced, and the handler falls through to its
-/// generic path (the Rust helper, which does the honest dispatch).
+/// Each variant names one **bit** of the single `Codegen::bop_flags` word,
+/// which the handler tests right after its fixnum guard and before the
+/// inline computation — CRuby's `BASIC_OP_UNREDEFINED_P` in the same
+/// position, and in the same shape (`ruby_vm_redefined_flag` is likewise a
+/// bitmap, not a word per case). A set bit means `Integer#<op>` has been
+/// replaced, and the handler falls through to its generic path (the Rust
+/// helper, which does the honest dispatch).
+///
+/// One word keeps every guard on one cache line and leaves 53 bits spare,
+/// which is where `(op, class)` pairs go when the JIT gets per-invariant
+/// invalidation.
 ///
 /// Only Integer appears here because every one of these assembly paths is
 /// fixnum-only; other receiver classes never reach the inline computation.
@@ -1394,7 +1397,10 @@ pub(crate) enum VmBop {
 }
 
 impl VmBop {
-    pub(crate) const COUNT: usize = 11;
+    /// This operator's bit in `Codegen::bop_flags`.
+    pub(crate) const fn bit(self) -> u64 {
+        1 << (self as u32)
+    }
 
     /// The guarded operator `name` denotes, or `None` when no VM assembly
     /// path assumes it.

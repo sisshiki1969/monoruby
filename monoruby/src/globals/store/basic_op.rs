@@ -321,6 +321,52 @@ mod tests {
         run_test_once("class Integer; def ~; :OVERRIDDEN; end; end; ~(3)");
     }
 
+    /// The classic way to redefine an operator without losing it: alias the
+    /// original, then call the alias from the replacement. The alias holds
+    /// the *builtin* entry, so reaching the implementation through it must
+    /// not consult the basic-op flag — otherwise the implementation
+    /// re-dispatches the operator's name, lands back on the replacement, and
+    /// recurses until the stack runs out. Every operator whose builtin body
+    /// is one of the shared `op::*_values` helpers is covered here.
+    #[test]
+    fn aliasing_an_operator_before_redefining_it_does_not_recurse() {
+        for (class, op, expr) in [
+            ("Integer", "+", "3 + 4"),
+            ("Integer", "-", "3 - 4"),
+            ("Integer", "*", "3 * 4"),
+            ("Integer", "/", "12 / 4"),
+            ("Integer", "%", "13 % 4"),
+            ("Integer", "**", "3 ** 4"),
+            ("Integer", "<<", "3 << 4"),
+            ("Integer", ">>", "48 >> 4"),
+            ("Integer", "<", "3 < 4"),
+            ("Integer", "<=", "3 <= 4"),
+            ("Integer", ">", "3 > 4"),
+            ("Integer", ">=", "3 >= 4"),
+            ("Float", "+", "3.0 + 4.0"),
+            ("Float", "-", "3.0 - 4.0"),
+            ("Float", "*", "3.0 * 4.0"),
+            ("Float", "/", "3.0 / 4.0"),
+            ("Float", "==", "3.0 == 4.0"),
+            ("Float", "<", "3.0 < 4.0"),
+            ("Float", ">=", "3.0 >= 4.0"),
+        ] {
+            run_test_once(&format!(
+                "class {class}; alias __orig :{op}; def {op}(o); __orig(o); end; end; {expr}"
+            ));
+        }
+        // Unary operators take no argument, so they need their own shape.
+        for (class, op, expr) in [
+            ("Integer", "-@", "-(3)"),
+            ("Float", "-@", "-(3.0)"),
+            ("Integer", "~", "~(3)"),
+        ] {
+            run_test_once(&format!(
+                "class {class}; alias __orig :{op}; def {op}; __orig; end; end; {expr}"
+            ));
+        }
+    }
+
     /// A redefinition on one class must not cost the *other* classes their
     /// fast paths. This is the property Step 2a exists for: before it, any
     /// entry in the table tripped a process-wide fallback.

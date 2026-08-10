@@ -385,9 +385,9 @@ impl Codegen {
     /// Placed *after* the fixnum guard, so it only costs the path it
     /// protects. See `VmBop`.
     fn vm_bop_guard(&mut self, bop: VmBop, generic: &DestLabel) {
-        let flag = self.bop_flags[bop as usize].clone();
+        let flag = self.bop_flags.clone();
         monoasm! { &mut self.jit,
-            cmpl [rip + flag], 0;
+            testq [rip + flag], (bop.bit());
             jnz  generic;
         };
     }

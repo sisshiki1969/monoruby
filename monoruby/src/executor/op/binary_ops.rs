@@ -179,6 +179,13 @@ pub(crate) fn try_coerce_and_apply_bit(
 macro_rules! binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
+            /// Guarded entry for callers that skipped the method lookup —
+            /// the VM and JIT generic paths. The VM's assembly handled
+            /// fixnum/fixnum before calling here; every arm of the
+            /// implementation answers a *non*-fixnum receiver (BigInt /
+            /// Float / Complex) without a lookup, so it is only sound while
+            /// that receiver's operator is still the builtin. One bool for a
+            /// program that redefines nothing.
             pub(crate) extern "C" fn [<$op _values>](
                 vm: &mut Executor,
                 globals: &mut Globals,
@@ -186,16 +193,26 @@ macro_rules! binop_values {
                 rhs: Value,
                 is_func_call: bool,
             ) -> Option<Value> {
-                // The VM's assembly handled fixnum/fixnum before calling
-                // here; every arm below answers a *non*-fixnum receiver
-                // (BigInt / Float / Complex) without a lookup, so it is
-                // only sound while that receiver's operator is still the
-                // builtin. One bool for a program that redefines nothing.
                 if globals.store.basic_op_redefined()
                     && globals.store.basic_op_redefined_for(lhs.class(), $op_str)
                 {
                     return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
                 }
+                [<$op _values_raw>](vm, globals, lhs, rhs, is_func_call)
+            }
+
+            /// The operator itself — the body of the builtin `Integer#<op>`
+            /// / `Float#<op>` / `Complex#<op>`. Reached only through a real
+            /// lookup, so it must not consult the basic-op flag: an alias of
+            /// the original would otherwise dispatch the name straight back
+            /// to the redefinition and recurse forever.
+            pub(crate) extern "C" fn [<$op _values_raw>](
+                vm: &mut Executor,
+                globals: &mut Globals,
+                lhs: Value,
+                rhs: Value,
+                is_func_call: bool,
+            ) -> Option<Value> {
                 match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
                     (Some(lhs), Some(rhs)) => return Some((lhs.$op(rhs)).into()),
                     _ => {}
@@ -261,20 +278,39 @@ binop_values!(
     (mul, IdentId::_MUL)
 );
 
-pub(crate) extern "C" fn div_values(
+/// Wrap a hand-written basic-op implementation in its guarded entry point,
+/// for the callers that reach the operator without a method lookup. The
+/// implementation itself stays unguarded — it is the builtin's body, and
+/// re-dispatching the name from inside it would recurse forever when an
+/// alias of the original is called. Same split as `binop_values!`.
+macro_rules! bop_entry {
+    ($name:ident, $raw:ident, $op:expr) => {
+        pub(crate) extern "C" fn $name(
+            vm: &mut Executor,
+            globals: &mut Globals,
+            lhs: Value,
+            rhs: Value,
+            is_func_call: bool,
+        ) -> Option<Value> {
+            if globals.store.basic_op_redefined()
+                && globals.store.basic_op_redefined_for(lhs.class(), $op)
+            {
+                return vm.invoke_method(globals, $op, is_func_call, lhs, &[rhs], None, None);
+            }
+            $raw(vm, globals, lhs, rhs, is_func_call)
+        }
+    };
+}
+
+bop_entry!(div_values, div_values_raw, IdentId::_DIV);
+
+pub(crate) extern "C" fn div_values_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    // Same reasoning as the `binop_values!` arms: everything below answers
-    // a non-fixnum receiver without a lookup.
-    if globals.store.basic_op_redefined()
-        && globals.store.basic_op_redefined_for(lhs.class(), IdentId::_DIV)
-    {
-        return vm.invoke_method(globals, IdentId::_DIV, is_func_call, lhs, &[rhs], None, None);
-    }
     match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
             if rhs.check_zero_div() && !lhs.is_float() {
@@ -308,20 +344,15 @@ pub(crate) extern "C" fn div_values(
     }
 }
 
-pub(crate) extern "C" fn rem_values(
+bop_entry!(rem_values, rem_values_raw, IdentId::_REM);
+
+pub(crate) extern "C" fn rem_values_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    // Same reasoning as the `binop_values!` arms: everything below answers
-    // a non-fixnum receiver without a lookup.
-    if globals.store.basic_op_redefined()
-        && globals.store.basic_op_redefined_for(lhs.class(), IdentId::_REM)
-    {
-        return vm.invoke_method(globals, IdentId::_REM, is_func_call, lhs, &[rhs], None, None);
-    }
     match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
             // For modulo, both integer zero and float zero raise ZeroDivisionError
@@ -453,20 +484,15 @@ pub(crate) extern "C" fn rem_ff(lhs: f64, rhs: f64) -> f64 {
 }
 
 // TODO: support rhs < 0.
-pub(crate) extern "C" fn pow_values(
+bop_entry!(pow_values, pow_values_raw, IdentId::_POW);
+
+pub(crate) extern "C" fn pow_values_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    // Same reasoning as the `binop_values!` arms: everything below answers
-    // a non-fixnum receiver without a lookup.
-    if globals.store.basic_op_redefined()
-        && globals.store.basic_op_redefined_for(lhs.class(), IdentId::_POW)
-    {
-        return vm.invoke_method(globals, IdentId::_POW, is_func_call, lhs, &[rhs], None, None);
-    }
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => pow_ii(lhs, rhs, vm)?,
         (RV::Fixnum(lhs), RV::BigInt(rhs)) => {
@@ -616,20 +642,15 @@ int_binop_values!(
     (bitxor, IdentId::_BXOR)
 );
 
-pub(crate) extern "C" fn shr_values(
+bop_entry!(shr_values, shr_values_raw, IdentId::_SHR);
+
+pub(crate) extern "C" fn shr_values_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    // Same reasoning as the `binop_values!` arms: everything below answers
-    // a non-fixnum receiver without a lookup.
-    if globals.store.basic_op_redefined()
-        && globals.store.basic_op_redefined_for(lhs.class(), IdentId::_SHR)
-    {
-        return vm.invoke_method(globals, IdentId::_SHR, is_func_call, lhs, &[rhs], None, None);
-    }
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
             if rhs >= 0 {
@@ -695,20 +716,15 @@ pub(crate) extern "C" fn shr_values(
     Some(v)
 }
 
-pub(crate) extern "C" fn shl_values(
+bop_entry!(shl_values, shl_values_raw, IdentId::_SHL);
+
+pub(crate) extern "C" fn shl_values_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    // Same reasoning as the `binop_values!` arms: everything below answers
-    // a non-fixnum receiver without a lookup.
-    if globals.store.basic_op_redefined()
-        && globals.store.basic_op_redefined_for(lhs.class(), IdentId::_SHL)
-    {
-        return vm.invoke_method(globals, IdentId::_SHL, is_func_call, lhs, &[rhs], None, None);
-    }
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
             if rhs >= 0 {

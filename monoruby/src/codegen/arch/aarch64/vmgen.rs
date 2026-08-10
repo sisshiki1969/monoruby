@@ -272,15 +272,12 @@ impl Codegen {
     /// `Integer#<bop>` has been replaced. Placed after the fixnum guard.
     /// See `VmBop`.
     fn a64_bop_guard(&mut self, bop: VmBop, generic: &DestLabel) {
-        let flag_addr = self
-            .jit
-            .get_label_address(&self.bop_flags[bop as usize])
-            .as_ptr() as u64;
+        let flag_addr = self.jit.get_label_address(&self.bop_flags).as_ptr() as u64;
         monoasm_arm64!(&mut self.jit,
             mov x9, (flag_addr);
-            ldr w9, [x9];
+            ldr x9, [x9];
         );
-        self.jit.cbnz_label(X9, generic);
+        self.jit.tbnz_label(X9, bop as u32, generic);
     }
 
     pub(in crate::codegen) fn a64_op_unop(&mut self, abs: u64) -> CodePtr {

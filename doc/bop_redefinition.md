@@ -401,6 +401,39 @@ Step 2b の対象。
 `basic_op_redefined()` 参照（`& ^ |` を多用するため）と見られる。VM は通常
 ウォームアップ経路なので、10 倍の崖を消す対価として受け入れた。
 
+**フラグは 1 ワード・1 演算子 1 ビット。** 当初は `VmBop` ごとに `data_i32` を
+1 語ずつ（11 語 44 バイト）確保していたが、これは CRuby の
+`ruby_vm_redefined_flag` がビットマップである理由をなぞり損ねていた。1 語
+（`data_i64`）にまとめ、`VmBop` は語の添字ではなくビット番号を意味するようにした。
+x86 は `cmpl [rip+f], 0` → `testq [rip+f], (1<<bit)`、aarch64 は
+`ldr w9/cbnz` → `ldr x9/tbnz #bit` で、**どちらも命令数は不変**。ガードが全部
+同じキャッシュラインに乗り、`bop_flags: Vec<DestLabel>` と `VmBop::COUNT` が
+消え、残る 53 ビットが Step 2b の `(op, class)` 用に空く。
+
+**Step 2a の取りこぼし — ガードを「実装」に置いてしまっていた。**
+`add_values` などの共有ヘルパは *VM/JIT の generic パス*（メソッド探索を
+飛ばした呼び出し元）だけでなく、**ビルトイン `Integer#+` の本体そのもの**でも
+ある。ガードをその共有ヘルパの先頭に置いたため、
+
+```ruby
+class Integer; alias __orig :+; def +(o); __orig(o); end; end
+1 + 2   # => StackOverflow
+```
+
+`__orig`（= 元のビルトイン）に入った時点でガードが再び発火し、名前 `+` で
+再ディスパッチして利用者の `+` に戻る、という無限再帰になっていた。CRuby が
+`BASIC_OP_UNREDEFINED_P` を命令側（`opt_plus`）に置き `rb_int_plus` には
+置かないのは、まさにこの理由である。
+
+修正は同じ形に揃えること — 実装を `*_values_raw` として無防備なまま残し、
+ガードは「探索を飛ばした呼び出し元のための入口」`*_values` に分離した。
+ビルトインの本体（`numeric.rs` の `binop!`/`unop!`、`integer.rs` の
+`cmpop!` と `% ** << >>`、`float.rs` の比較と `==`）は `_raw` を呼ぶ。
+`Array#sum` や `Numeric#angle` のように**探索せずに演算子を使う**内部呼び出しは
+ガード付きのままでよい（CRuby も同じ位置で BOP を見る）。
+検出には alias スイープ（253 ケース）を使い、39 → 10 = master と同数・同一集合まで
+戻した。回帰テストは `aliasing_an_operator_before_redefining_it_does_not_recurse`。
+
 **この手法の再利用先 — TracePoint。** 「JIT データ領域に 1 ワード置き、生成
 コードの決まった地点でそれを読んで分岐する」という形は basic op 固有ではなく、
 *実行中に切り替わりうるグローバルなスイッチ*全般に効く。次にこれを必要とする
