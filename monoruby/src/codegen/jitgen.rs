@@ -330,6 +330,7 @@ impl Codegen {
         Vec<InlineCacheEntry>,
         SpecializedCodeInfo,
         DestLabel,
+        Vec<(ClassId, IdentId)>,
     )> {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
@@ -359,6 +360,10 @@ impl Codegen {
         ctx.resolve_dyn_var_offsets(&mut frame.asm_info);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
+        // The basic-op invariants this body inlined without a runtime guard.
+        // Handed back so the iseq can remember what a later redefinition
+        // would actually invalidate (see `JitContext::assume_basic_op`).
+        let bop_deps = std::mem::take(&mut ctx.bop_deps);
 
         // Front-end (TraceIR→AsmIR) is arch-neutral and has run by here. The
         // shared `gen_machine_code` driver then drives the per-arch `gen_asm`
@@ -395,7 +400,7 @@ impl Codegen {
         // emission (e.g. the class-guard stub).
         #[cfg(target_arch = "x86_64")]
         self.jit.finalize();
-        Ok((inline_cache, specialized_info, class_version_label))
+        Ok((inline_cache, specialized_info, class_version_label, bop_deps))
     }
 }
 

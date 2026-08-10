@@ -456,9 +456,14 @@ pub(in crate::codegen) enum LInst {
     GuardCapture {
         deopt: DestLabel,
     },
-    /// Basic-operator-redefinition guard: deopt if any BOP was redefined.
+    /// Basic-operator-redefinition guard: deopt if the basic-op version has
+    /// moved since this code was emitted. `version` is the value observed at
+    /// lowering time — comparing against it (rather than against zero) keeps a
+    /// method compiled before some unrelated redefinition from deopting at
+    /// every `def` for the rest of the process.
     CheckBOP {
         deopt: DestLabel,
+        version: u32,
     },
     /// Fixnum fast-path arithmetic (`lhs <op> rhs`) on tagged integers, with an
     /// overflow side-exit to `deopt`. A macro-op: the encoder emits the arch's

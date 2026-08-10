@@ -57,7 +57,33 @@ pub extern "C" fn i64_to_value(i: i64) -> Value {
 macro_rules! cmp_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
+            /// Guarded entry: for callers that reach the operator *without*
+            /// a method lookup (the VM and JIT generic paths). Every arm of
+            /// the implementation answers non-fixnum receivers (BigInt /
+            /// Float) directly, which is sound only while the operator is
+            /// still the builtin — so a redefinition has to take over here.
+            /// Gated on one bool for unmodified programs.
             pub(crate) extern "C" fn [<cmp_ $op _values>](
+                vm: &mut Executor,
+                globals: &mut Globals,
+                lhs: Value,
+                rhs: Value,
+                is_func_call: bool,
+            ) -> Option<Value> {
+                if globals.store.basic_op_redefined()
+                    && globals.store.basic_op_redefined_for(lhs.class(), $op_str)
+                {
+                    return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                }
+                [<cmp_ $op _values_raw>](vm, globals, lhs, rhs, is_func_call)
+            }
+
+            /// The operator itself. This is the body of the builtin
+            /// `<class>#<op>`, reached only through a real method lookup,
+            /// so it must *not* consult the basic-op flag: an alias or a
+            /// `super` that lands here would otherwise dispatch the name
+            /// straight back to the redefinition and recurse forever.
+            pub(crate) extern "C" fn [<cmp_ $op _values_raw>](
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
@@ -147,18 +173,6 @@ macro_rules! cmp_values {
                 Some(Value::bool(b))
             }
         }
-
-        paste! {
-            pub(crate) extern "C" fn [<cmp_ $op _values_no_opt>](
-                vm: &mut Executor,
-                globals: &mut Globals,
-                lhs: Value,
-                rhs: Value,
-                is_func_call: bool,
-            ) -> Option<Value> {
-                vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None)
-            }
-        }
     };
     (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
         cmp_values!(($op1, $op_str1));
@@ -198,6 +212,30 @@ impl Executor {
     /// site). The numeric/String *reverse* dispatches keep funcall semantics
     /// (`rb_equal`), so only the direct receiver dispatch consults the flag.
     pub(crate) fn eq_values_vis(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+        is_func_call: bool,
+    ) -> Result<Value> {
+        // Every arm of the implementation answers without a lookup for nil /
+        // booleans / Integer / Float / Symbol / String, so a redefined `==`
+        // on the receiver's class has to take over here.
+        if globals.store.basic_op_redefined()
+            && globals
+                .store
+                .basic_op_redefined_for(lhs.class(), IdentId::_EQ)
+        {
+            return self.invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None);
+        }
+        self.eq_values_vis_raw(globals, lhs, rhs, is_func_call)
+    }
+
+    /// `==` without the basic-op check — this is the body of the builtin
+    /// `Float#==`, reached only through a real lookup. Re-dispatching `==`
+    /// from inside it would send an alias of the original straight back to
+    /// the redefinition and recurse forever.
+    pub(crate) fn eq_values_vis_raw(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
@@ -275,16 +313,6 @@ impl Executor {
         Ok(self.eq_values(globals, lhs, rhs)?.as_bool())
     }
 
-    pub(crate) fn eq_values_no_opt(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-        is_func_call: bool,
-    ) -> Result<Value> {
-        self.invoke_eq_raw_vis(globals, lhs, rhs, is_func_call)
-    }
-
     ///
     /// `!=` with CRuby-faithful result-value semantics: while `!=`
     /// resolves to a basic op / the default `BasicObject#!=`, the result
@@ -336,16 +364,6 @@ impl Executor {
         Ok(self.ne_values(globals, lhs, rhs)?.as_bool())
     }
 
-    pub(crate) fn ne_values_no_opt(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-        is_func_call: bool,
-    ) -> Result<Value> {
-        let func_id = self.find_method(globals, lhs, IdentId::_NEQ, is_func_call)?;
-        self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)
-    }
 }
 
 // `==` / `!=` wrappers return the dispatched method's value as-is (the
@@ -361,24 +379,6 @@ macro_rules! eq_values {
                 is_func_call: bool,
             ) -> Option<Value> {
                 match vm.[<$op _values_vis>](globals, lhs, rhs, is_func_call) {
-                    Ok(v) => Some(v),
-                    Err(err) => {
-                        vm.set_error(err);
-                        None
-                    }
-                }
-            }
-        }
-
-        paste! {
-            pub(crate) extern "C" fn [<cmp_ $op _values_no_opt>](
-                vm: &mut Executor,
-                globals: &mut Globals,
-                lhs: Value,
-                rhs: Value,
-                is_func_call: bool,
-            ) -> Option<Value> {
-                match vm.[<$op _values_no_opt>](globals, lhs, rhs, is_func_call) {
                     Ok(v) => Some(v),
                     Err(err) => {
                         vm.set_error(err);
@@ -493,6 +493,13 @@ fn cmp_teq_values_impl(
     rhs: Value,
     private_ok: bool,
 ) -> Option<Value> {
+    if globals.store.basic_op_redefined()
+        && globals
+            .store
+            .basic_op_redefined_for(lhs.class(), IdentId::_TEQ)
+    {
+        return vm.invoke_method(globals, IdentId::_TEQ, private_ok, lhs, &[rhs], None, None);
+    }
     let b = match (lhs.unpack(), rhs.unpack()) {
         (RV::Nil, RV::Nil) => true,
         (RV::Nil, _) => false,
@@ -530,16 +537,6 @@ fn cmp_teq_values_impl(
         }
     };
     Some(Value::bool(b))
-}
-
-pub(crate) extern "C" fn cmp_teq_values_no_opt(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-    is_func_call: bool,
-) -> Option<Value> {
-    vm.invoke_method(globals, IdentId::_TEQ, is_func_call, lhs, &[rhs], None, None)
 }
 
 pub(crate) fn cmp_teq_values_bool(
@@ -587,17 +584,6 @@ pub(crate) fn cmp_teq_values_bool(
         }
     };
     Ok(b)
-}
-
-#[allow(dead_code)]
-pub(crate) fn cmp_teq_values_bool_no_opt(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Result<bool> {
-    vm.invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None, None)
-        .map(|v| v.as_bool())
 }
 
 impl Executor {
@@ -834,33 +820,28 @@ impl Executor {
     }
 }
 
-macro_rules! unop_value_no_opt {
-    (($op:ident, $op_str:expr)) => {
-        paste! {
-            pub(crate) extern "C" fn [<$op _value_no_opt>](
-                vm: &mut Executor,
-                globals: &mut Globals,
-                lhs: Value,
-                is_func_call: bool,
-            ) -> Option<Value> {
-                vm.invoke_method(globals, $op_str, is_func_call, lhs, &[], None, None)
-            }
-        }
-    };
-    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
-        unop_value_no_opt!(($op1, $op_str1));
-        unop_value_no_opt!($(($op2, $op_str2)),+);
-    };
+/// Guarded entry for callers that skipped the method lookup. See
+/// [`neg_value_raw`] for why the implementation cannot carry this itself.
+pub(crate) extern "C" fn neg_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    is_func_call: bool,
+) -> Option<Value> {
+    if globals.store.basic_op_redefined()
+        && globals
+            .store
+            .basic_op_redefined_for(lhs.class(), IdentId::_UMINUS)
+    {
+        return vm.invoke_method(globals, IdentId::_UMINUS, is_func_call, lhs, &[], None, None);
+    }
+    neg_value_raw(vm, globals, lhs, is_func_call)
 }
 
-unop_value_no_opt!(
-    (bitnot, IdentId::_BNOT),
-    (pos, IdentId::_UPLUS),
-    (neg, IdentId::_UMINUS),
-    (not, IdentId::_NOT)
-);
-
-pub(crate) extern "C" fn neg_value(
+/// The body of the builtin `Integer#-@` / `Float#-@`. Reached only through
+/// a real lookup, so it must not re-dispatch `-@` on the basic-op flag —
+/// an alias of the original would otherwise recurse forever.
+pub(crate) extern "C" fn neg_value_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -892,7 +873,26 @@ pub(crate) extern "C" fn neg_value(
     Some(v)
 }
 
+/// Guarded entry for callers that skipped the method lookup. See
+/// [`neg_value_raw`].
 pub(crate) extern "C" fn pos_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    is_func_call: bool,
+) -> Option<Value> {
+    if globals.store.basic_op_redefined()
+        && globals
+            .store
+            .basic_op_redefined_for(lhs.class(), IdentId::_UPLUS)
+    {
+        return vm.invoke_method(globals, IdentId::_UPLUS, is_func_call, lhs, &[], None, None);
+    }
+    pos_value_raw(vm, globals, lhs, is_func_call)
+}
+
+/// The body of the builtin `+@`. See [`neg_value_raw`].
+pub(crate) extern "C" fn pos_value_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -909,7 +909,26 @@ pub(crate) extern "C" fn pos_value(
     Some(v)
 }
 
+/// Guarded entry for callers that skipped the method lookup. See
+/// [`neg_value_raw`].
 pub(crate) extern "C" fn not_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    is_func_call: bool,
+) -> Option<Value> {
+    if globals.store.basic_op_redefined()
+        && globals
+            .store
+            .basic_op_redefined_for(lhs.class(), IdentId::_NOT)
+    {
+        return vm.invoke_method(globals, IdentId::_NOT, is_func_call, lhs, &[], None, None);
+    }
+    not_value_raw(vm, globals, lhs, is_func_call)
+}
+
+/// The body of the builtin `!`. See [`neg_value_raw`].
+pub(crate) extern "C" fn not_value_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -931,7 +950,26 @@ pub(crate) extern "C" fn not_value(
     Some(v)
 }
 
+/// Guarded entry for callers that skipped the method lookup. See
+/// [`neg_value_raw`].
 pub(crate) extern "C" fn bitnot_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    is_func_call: bool,
+) -> Option<Value> {
+    if globals.store.basic_op_redefined()
+        && globals
+            .store
+            .basic_op_redefined_for(lhs.class(), IdentId::_BNOT)
+    {
+        return vm.invoke_method(globals, IdentId::_BNOT, is_func_call, lhs, &[], None, None);
+    }
+    bitnot_value_raw(vm, globals, lhs, is_func_call)
+}
+
+/// The body of the builtin `Numeric#~`. See [`neg_value_raw`].
+pub(crate) extern "C" fn bitnot_value_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,

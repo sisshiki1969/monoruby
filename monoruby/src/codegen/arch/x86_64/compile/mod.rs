@@ -854,14 +854,14 @@ impl Codegen {
             LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
             // BOP-redefinition guard: outline the deopt path (page 1) so the hot
             // path is a single load + branch.
-            LInst::CheckBOP { deopt } => {
+            LInst::CheckBOP { deopt, version } => {
                 let bop_flag = self.bop_redefined_flags.clone();
                 let l1 = self.jit.label();
                 assert_eq!(0, self.jit.get_page());
                 monoasm!(
                     &mut self.jit,
-                    cmpl [rip + bop_flag], 0;
-                    jnz l1;
+                    cmpl [rip + bop_flag], (version as i32);
+                    jne l1;
                 );
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,

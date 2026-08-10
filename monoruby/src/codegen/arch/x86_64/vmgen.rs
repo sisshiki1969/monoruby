@@ -15,7 +15,7 @@ mod variables;
 const OPCODE_SUB: i64 = 7 - 16;
 
 macro_rules! vm_cmp_opt {
-  ($op:ident) => {
+  ($op:ident, $bop:ident) => {
       paste! {
           fn [<vm_ $op _opt_rr>](&mut self) -> CodePtr {
               let label = self.jit.get_current_address();
@@ -24,6 +24,7 @@ macro_rules! vm_cmp_opt {
               self.vm_get_slot_value(GP::Rdi);
               self.vm_get_slot_value(GP::Rsi);
               self.guard_rdi_rsi_fixnum(&generic);
+              self.vm_bop_guard(VmBop::$bop, &generic);
               self.vm_save_binary_integer();
 
               self.[<icmp_ $op>]();
@@ -36,29 +37,15 @@ macro_rules! vm_cmp_opt {
               label
           }
 
-          fn [<vm_ $op _rr>](&mut self) -> CodePtr {
-              let label = self.jit.get_current_address();
-              let generic = self.jit.label();
-              self.fetch3();
-              self.vm_get_slot_value(GP::Rdi);
-              self.vm_get_slot_value(GP::Rsi);
-              self.vm_save_binary_integer();
-              self.vm_generic_binop(&generic, [<cmp_ $op _values_no_opt>] as _);
-              self.fetch_and_dispatch();
-
-              label
-          }
-
       }
   };
-  ($op1:ident, $($op2:ident),+) => {
-      vm_cmp_opt!($op1);
-      vm_cmp_opt!($($op2),+);
+  ($($op:ident: $bop:ident),+ $(,)?) => {
+      $( vm_cmp_opt!($op, $bop); )+
   };
 }
 
 impl Codegen {
-    vm_cmp_opt!(eq, ne, gt, ge, lt, le, teq);
+    vm_cmp_opt!(eq: Eq, ne: Ne, gt: Gt, ge: Ge, lt: Lt, le: Le, teq: TEq);
 
     /// RescueTEq: no fixnum fast path (a non-Module clause must raise
     /// TypeError, so every operand pair goes through the runtime
@@ -85,6 +72,7 @@ impl Codegen {
         self.vm_get_slot_value(GP::Rdi);
         self.vm_get_slot_value(GP::Rsi);
         self.guard_rdi_rsi_fixnum(&generic);
+        self.vm_bop_guard(VmBop::TEq, &generic);
         self.vm_save_binary_integer();
 
         self.icmp_eq();
@@ -262,8 +250,8 @@ impl Codegen {
         };
         self.fetch_and_dispatch();
 
-        let add_rr = self.vm_binops_opt(Self::int_add, add_values);
-        let sub_rr = self.vm_binops_opt(Self::int_sub, sub_values);
+        let add_rr = self.vm_binops_opt(Self::int_add, add_values, VmBop::Add);
+        let sub_rr = self.vm_binops_opt(Self::int_sub, sub_values, VmBop::Sub);
         let or_rr = self.vm_binops(bitor_values);
         let and_rr = self.vm_binops(bitand_values);
         let xor_rr = self.vm_binops(bitxor_values);
@@ -378,45 +366,30 @@ impl Codegen {
     }
 
     ///
-    /// Replace VM instruction routines with non-basic-op-optimized routines.
+    /// Stop the VM from entering compiled OSR loop bodies.
     ///
-    pub(in crate::codegen) fn remove_vm_bop_optimization(&mut self) {
+    /// The arithmetic / comparison / unary handlers are *not* swapped any
+    /// more: each reads its own `VmBop` guard word inline, so only the
+    /// operator actually redefined loses its fast path. What remains is
+    /// purely a JIT concern — an off-stack method's `[pc+8]` still holds a
+    /// stale loop codeptr and nothing reverts OSR entries, so `loop_start`
+    /// becomes the plain advance-and-dispatch handler.
+    ///
+    pub(crate) fn disable_vm_loop_jit(&mut self) {
         self.dispatch[14] = self.vm_loop_start_no_opt();
-
-        self.dispatch[121] = self.vm_pos_no_opt();
-        self.dispatch[122] = self.vm_neg_no_opt();
-        self.dispatch[123] = self.vm_bitnot_no_opt();
-        self.dispatch[124] = self.vm_not_no_opt();
-
-        self.dispatch[140] = self.vm_eq_rr();
-        self.dispatch[141] = self.vm_ne_rr();
-        self.dispatch[142] = self.vm_lt_rr();
-        self.dispatch[143] = self.vm_le_rr();
-        self.dispatch[144] = self.vm_gt_rr();
-        self.dispatch[145] = self.vm_ge_rr();
-        self.dispatch[146] = self.vm_teq_rr();
-
-        self.dispatch[150] = self.vm_eq_rr();
-        self.dispatch[151] = self.vm_ne_rr();
-        self.dispatch[152] = self.vm_lt_rr();
-        self.dispatch[153] = self.vm_le_rr();
-        self.dispatch[154] = self.vm_gt_rr();
-        self.dispatch[155] = self.vm_ge_rr();
-        self.dispatch[156] = self.vm_teq_rr();
-
-        self.dispatch[160] = self.vm_binops(add_values_no_opt);
-        self.dispatch[161] = self.vm_binops(sub_values_no_opt);
-        self.dispatch[162] = self.vm_binops(mul_values_no_opt);
-        self.dispatch[163] = self.vm_binops(div_values_no_opt);
-        self.dispatch[164] = self.vm_binops(bitor_values_no_opt);
-        self.dispatch[165] = self.vm_binops(bitand_values_no_opt);
-        self.dispatch[166] = self.vm_binops(bitxor_values_no_opt);
-        self.dispatch[167] = self.vm_binops(rem_values_no_opt);
-        self.dispatch[168] = self.vm_binops(pow_values_no_opt);
-        self.dispatch[169] = self.vm_binops(shl_values_no_opt);
-        self.dispatch[170] = self.vm_binops(shr_values_no_opt);
-
         self.jit.finalize();
+    }
+
+    /// Emit the inline basic-op guard: if `Integer#<bop>` has been replaced,
+    /// leave the inline path for `generic` (which dispatches honestly).
+    /// Placed *after* the fixnum guard, so it only costs the path it
+    /// protects. See `VmBop`.
+    fn vm_bop_guard(&mut self, bop: VmBop, generic: &DestLabel) {
+        let flag = self.bop_flags.clone();
+        monoasm! { &mut self.jit,
+            testq [rip + flag], (bop.bit());
+            jnz  generic;
+        };
     }
 
     fn fetch2(&mut self) {
@@ -1272,30 +1245,12 @@ impl Codegen {
         label
     }
 
-    fn vm_not_no_opt(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let generic = self.jit.label();
-        self.fetch3();
-        self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_generic_unop(&generic, not_value_no_opt);
-        label
-    }
-
     fn vm_bitnot(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
         self.vm_generic_unop(&generic, bitnot_value);
-        label
-    }
-
-    fn vm_bitnot_no_opt(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let generic = self.jit.label();
-        self.fetch3();
-        self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_generic_unop(&generic, bitnot_value_no_opt);
         label
     }
 
@@ -1306,6 +1261,7 @@ impl Codegen {
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
         self.guard_rdi_fixnum(&generic);
+        self.vm_bop_guard(VmBop::Neg, &generic);
         monoasm! { &mut self.jit,
             movq rax, rdi;  // save original tagged value for overflow case
             sarq rdi, 1;
@@ -1328,15 +1284,6 @@ impl Codegen {
         label
     }
 
-    fn vm_neg_no_opt(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let generic = self.jit.label();
-        self.fetch3();
-        self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_generic_unop(&generic, neg_value_no_opt);
-        label
-    }
-
     fn vm_pos(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
@@ -1346,18 +1293,10 @@ impl Codegen {
             testq rdi, 0x1;
             jz generic;
         }
+        self.vm_bop_guard(VmBop::Pos, &generic);
         self.vm_store_r15(GP::Rdi);
         self.fetch_and_dispatch();
         self.vm_generic_unop(&generic, pos_value);
-        label
-    }
-
-    fn vm_pos_no_opt(&mut self) -> CodePtr {
-        let label = self.jit.get_current_address();
-        let generic = self.jit.label();
-        self.fetch3();
-        self.vm_get_slot_value(GP::Rdi); // rdi <- lhs
-        self.vm_generic_unop(&generic, pos_value_no_opt);
         label
     }
 
@@ -1383,6 +1322,7 @@ impl Codegen {
         &mut self,
         opt_func: fn(&mut Codegen, DestLabel),
         generic_func: BinaryOpFn,
+        bop: VmBop,
     ) -> CodePtr {
         let common = self.jit.label();
         let ptr = self.jit.get_current_address();
@@ -1392,6 +1332,7 @@ impl Codegen {
         self.vm_get_slot_value(GP::Rdi);
         self.vm_get_slot_value(GP::Rsi);
         self.guard_rdi_rsi_fixnum(&generic);
+        self.vm_bop_guard(bop, &generic);
         self.jit.bind_label(common.clone());
         self.vm_save_binary_integer();
         opt_func(self, generic.clone());

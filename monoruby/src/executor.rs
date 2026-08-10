@@ -569,6 +569,9 @@ impl Executor {
         CODEGEN.with(|codegen| {
             codegen.borrow_mut().startup_flag = true;
         });
+        // The builtins have finished defining themselves; from here a
+        // definition that lands on a basic op really is a monkey patch.
+        globals.store.arm_basic_ops();
         #[cfg(feature = "profile")]
         globals.clear_stats();
         Ok(executor)

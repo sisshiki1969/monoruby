@@ -2186,6 +2186,13 @@ impl Store {
     ///
     pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Result<()> {
         Globals::class_version_inc();
+        // Removal invalidates a fast path exactly as replacement does —
+        // `Integer.remove_method(:+)` must make `1 + 2` raise NoMethodError,
+        // not keep answering 3. `undef_method` reaches `insert_method` via
+        // `add_empty_method`, so only this path needed its own check.
+        if self.basic_ops.contains(class_id, func_name) {
+            self.set_bop_redefine(class_id, func_name);
+        }
         if self.classes[class_id].methods.remove(&func_name).is_none() {
             Err(MonorubyErr::nameerr(format!(
                 "method `{}' not defined in {}",
@@ -2415,21 +2422,54 @@ impl Store {
     ///
     fn insert_method(&mut self, class_id: ClassId, name: IdentId, entry: MethodTableEntry) {
         Globals::class_version_inc();
-        if let Some(old) = self.classes[class_id].methods.insert(name, entry)
-            && old.is_basic_op
-        {
-            self.set_bop_redefine();
+        self.classes[class_id].methods.insert(name, entry);
+        // Membership is on the `(class, method)` pair, not on whatever
+        // entry was displaced: `Integer#!` / `#+@` / `#~`, `NilClass#==`
+        // and friends have no entry of their own to displace (they are
+        // inherited), yet defining one shadows a fast path all the same.
+        if self.basic_ops.contains(class_id, name) {
+            self.set_bop_redefine(class_id, name);
         }
     }
 
-    fn set_bop_redefine(&mut self) {
+    fn set_bop_redefine(&mut self, class_id: ClassId, name: IdentId) {
+        self.basic_ops.mark_redefined(class_id, name);
+        // The VM's assembly fast paths are fixnum-only, so only an Integer
+        // redefinition can invalidate one; for every other class the
+        // assembly stays correct as written and the Rust helper it falls
+        // through to dispatches honestly (it consults `redefined_pair`).
+        // And within Integer, only the operator actually redefined loses
+        // its path — that is what the per-operator guard word buys.
+        let bop = if class_id == INTEGER_CLASS {
+            VmBop::from_ident(name)
+        } else {
+            None
+        };
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
-            codegen.set_bop_redefine();
-            self.invalidate_jit_code();
-            // Revert JIT-compiled / jit-stub method entries back to `vm_entry`.
+            codegen.set_bop_redefine(bop);
+            // Only the compiled bodies that inlined *this* `(class, operator)`
+            // with no runtime guard have gone stale. Everything the JIT reached
+            // through a real method call is already covered by the
+            // class-version guard, which every definition bumps.
+            let stale = self.evict_jit_code_for_bop(class_id, name);
+            if stale.is_empty() {
+                // Nothing inlined it, so no compiled loop body can have
+                // inlined it either — the OSR entries stay safe to take.
+                return;
+            }
+            // At least one body is stale, and an off-stack method's `[pc+8]`
+            // still holds its loop codeptr with nothing to revert it. Stop
+            // entering compiled loop bodies process-wide; making *this* per
+            // iseq means zeroing the `LoopStart` operands of the evicted
+            // bodies, which is the remaining piece of per-invariant
+            // invalidation.
+            codegen.disable_vm_loop_jit();
+            // Revert the evicted methods' entry jumps back to `vm_entry`, so
+            // the next call re-enters the interpreter and re-warms.
             // x86-only: this uses the x86 `apply_jmp_patch_address` to rewrite
-            // the entry jumps in place.
+            // the entry jumps in place. (aarch64 instead zeroes the dispatch
+            // slots, which `evict_jit_code` has already done.)
             #[cfg(target_arch = "x86_64")]
             {
                 let vm_entry = codegen.vm_entry();
@@ -2438,7 +2478,7 @@ impl Store {
                         // Skip trivial methods (ConstReturn/SelfReturn) — their
                         // wrappers don't execute bytecode and contain no BOP
                         // usage, so patching them to vm_entry would break it.
-                        if self[iseq].hint != ISeqHint::Normal {
+                        if self[iseq].hint != ISeqHint::Normal || !stale.contains(&iseq) {
                             continue;
                         }
                         let entry = codegen.jit.get_label_address(&func.entry_label());

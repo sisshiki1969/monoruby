@@ -42,7 +42,7 @@ macro_rules! binop {
         paste! {
             #[monoruby_builtin]
             fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-                match super::op::[<$op _values>](vm, globals, lfp.self_val(), lfp.arg(0), false) {
+                match super::op::[<$op _values_raw>](vm, globals, lfp.self_val(), lfp.arg(0), false) {
                     Some(val) => Ok(val),
                     None => {
                         let err = vm.take_error();
@@ -124,7 +124,7 @@ macro_rules! unop {
         paste! {
             #[monoruby_builtin]
             fn $op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-                match super::op::[<$op _value>](vm, globals, lfp.self_val(), false) {
+                match super::op::[<$op _value_raw>](vm, globals, lfp.self_val(), false) {
                     Some(val) => Ok(val),
                     None => {
                         let err = vm.take_error();

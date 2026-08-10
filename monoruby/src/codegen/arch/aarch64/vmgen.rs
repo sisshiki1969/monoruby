@@ -62,20 +62,20 @@ impl Codegen {
         // integer comparisons (fixnum fast path; generic runtime fallback).
         // ops 140-146 and 150-156 share these single copies (the latter range
         // is emitted when the result feeds a branch).
-        let eq = self.a64_op_cmp(Cond::Eq, cmp_eq_values as *const () as u64);
-        let ne = self.a64_op_cmp(Cond::Ne, cmp_ne_values as *const () as u64);
-        let lt = self.a64_op_cmp(Cond::Lt, cmp_lt_values as *const () as u64);
-        let le = self.a64_op_cmp(Cond::Le, cmp_le_values as *const () as u64);
-        let gt = self.a64_op_cmp(Cond::Gt, cmp_gt_values as *const () as u64);
-        let ge = self.a64_op_cmp(Cond::Ge, cmp_ge_values as *const () as u64);
-        let teq = self.a64_op_cmp(Cond::Eq, cmp_teq_values as *const () as u64);
+        let eq = self.a64_op_cmp(Cond::Eq, cmp_eq_values as *const () as u64, VmBop::Eq);
+        let ne = self.a64_op_cmp(Cond::Ne, cmp_ne_values as *const () as u64, VmBop::Ne);
+        let lt = self.a64_op_cmp(Cond::Lt, cmp_lt_values as *const () as u64, VmBop::Lt);
+        let le = self.a64_op_cmp(Cond::Le, cmp_le_values as *const () as u64, VmBop::Le);
+        let gt = self.a64_op_cmp(Cond::Gt, cmp_gt_values as *const () as u64, VmBop::Gt);
+        let ge = self.a64_op_cmp(Cond::Ge, cmp_ge_values as *const () as u64, VmBop::Ge);
+        let teq = self.a64_op_cmp(Cond::Eq, cmp_teq_values as *const () as u64, VmBop::TEq);
         // Funcall-semantics TEq for the optimizable opcode (case/when
         // and rescue matching).
-        let teq_case = self.a64_op_cmp(Cond::Eq, cmp_teq_case_values as *const () as u64);
+        let teq_case = self.a64_op_cmp(Cond::Eq, cmp_teq_case_values as *const () as u64, VmBop::TEq);
         // RescueTEq: no fixnum fast path (a non-Module clause must
         // raise TypeError, so everything goes through the runtime
         // helper).
-        let teq_rescue = self.a64_op_cmp_no_opt(cmp_teq_rescue_values as *const () as u64);
+        let teq_rescue = self.a64_op_cmp_generic(cmp_teq_rescue_values as *const () as u64);
         let method_def = self.a64_op_method_def();
         let send_simple = self.a64_op_send(true);
         let send = self.a64_op_send(false);
@@ -268,6 +268,18 @@ impl Codegen {
 
     /// ops 121-124 `UnOp` (pos/neg/bitnot/not): fn(vm, globals, src `[pc+2]`)
     /// -> dst `[pc+4]`.
+    /// aarch64 twin of x86's `vm_bop_guard`: leave the inline path when
+    /// `Integer#<bop>` has been replaced. Placed after the fixnum guard.
+    /// See `VmBop`.
+    fn a64_bop_guard(&mut self, bop: VmBop, generic: &DestLabel) {
+        let flag_addr = self.jit.get_label_address(&self.bop_flags).as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (flag_addr);
+            ldr x9, [x9];
+        );
+        self.jit.tbnz_label(X9, bop as u32, generic);
+    }
+
     pub(in crate::codegen) fn a64_op_unop(&mut self, abs: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
@@ -1159,7 +1171,44 @@ impl Codegen {
     /// Integer comparison (ops 140-146): `%dst = (%lhs <cond> %rhs)` as a Ruby
     /// boolean. Bytecode: `+0` rhs, `+2` lhs, `+4` dst. Non-fixnum traps
     /// (generic runtime fallback TODO).
-    pub(in crate::codegen) fn a64_op_cmp(&mut self, cond: Cond, cmp_fn: u64) -> CodePtr {
+    /// Comparison handler with no fixnum fast path: every operand pair goes
+    /// straight to the runtime helper. `RescueTEq` needs it because a
+    /// non-Module rescue clause must raise `TypeError` rather than compare.
+    /// (Before the per-operator guard word this shape was also the swap-in
+    /// target for redefined operators; the handlers now guard themselves, so
+    /// `RescueTEq` is its only remaining user.)
+    pub(in crate::codegen) fn a64_op_cmp_generic(&mut self, cmp_fn: u64) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0)];  // rhs slot
+            ldrh x11, [x(PC.0), #(2)];  // lhs slot
+        );
+        self.a64_load_slot(X11, X13, X14); // X13 = lhs
+        self.a64_load_slot(X10, X14, X15); // X14 = rhs
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x13;
+            mov x3, x14;
+            // is_func_call = (lhs slot == self slot 0); the lhs slot is the
+            // `[PC+2]` bytecode operand. Passed in x4 (5th C-arg).
+            ldrh x4, [x(PC.0), #(2)];
+            cmp x4, #(0);
+            cset x4, eq;
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (cmp_fn);
+            blr x9;
+        );
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
+    pub(in crate::codegen) fn a64_op_cmp(
+        &mut self,
+        cond: Cond,
+        cmp_fn: u64,
+        bop: VmBop,
+    ) -> CodePtr {
         let p = self.jit.get_current_address();
         let generic = self.jit.label();
         let skip = self.jit.label();
@@ -1175,6 +1224,7 @@ impl Codegen {
             tbz x13, #(0), generic;
             tbz x14, #(0), generic;
         );
+        self.a64_bop_guard(bop, &generic);
         self.a64_save_binary_integer();
         monoasm_arm64!(&mut self.jit,
             cmp x13, x14;
@@ -1367,6 +1417,7 @@ impl Codegen {
     /// with a runtime fallback on non-fixnum/overflow. Operands are kept in
     /// X13/X14 so the fallback can use them; the result is computed in X9.
     pub(in crate::codegen) fn a64_op_iadd(&mut self, is_sub: bool) -> CodePtr {
+        let bop = if is_sub { VmBop::Sub } else { VmBop::Add };
         let p = self.jit.get_current_address();
         let generic = self.jit.label();
         let skip = self.jit.label();
@@ -1381,6 +1432,7 @@ impl Codegen {
             tbz x13, #(0), generic;
             tbz x14, #(0), generic;
         );
+        self.a64_bop_guard(bop, &generic);
         self.a64_save_binary_integer();
         if is_sub {
             monoasm_arm64!(&mut self.jit,
@@ -1496,115 +1548,22 @@ impl Codegen {
         );
         p
     }
-    /// Generic comparison handler with no fixnum fast path: calls
-    /// `cmp_fn(vm, globals, lhs, rhs) -> Option<Value>` and stores the result.
-    /// Used by `remove_vm_bop_optimization` to swap in the `_no_opt` runtimes
-    /// after a BOP redefinition so the inline `==`/`<`/… fast paths stop being
-    /// taken. Bytecode: `+0` rhs, `+2` lhs, `+4` dst (same as a64_op_cmp).
-    pub(in crate::codegen) fn a64_op_cmp_no_opt(&mut self, cmp_fn: u64) -> CodePtr {
-        let p = self.jit.get_current_address();
-        let raise = self.entry_raise.clone();
-        monoasm_arm64!(&mut self.jit,
-            ldrh x10, [x(PC.0)];  // rhs slot
-            ldrh x11, [x(PC.0), #(2)];  // lhs slot
-        );
-        self.a64_load_slot(X11, X13, X14); // X13 = lhs
-        self.a64_load_slot(X10, X14, X15); // X14 = rhs
-        monoasm_arm64!(&mut self.jit,
-            mov x2, x13;
-            mov x3, x14;
-            // is_func_call = (lhs slot == self slot 0); the lhs slot is the
-            // `[PC+2]` bytecode operand. Passed in x4 (5th C-arg).
-            ldrh x4, [x(PC.0), #(2)];
-            cmp x4, #(0);
-            cset x4, eq;
-            mov x0, x(EXEC.0);
-            mov x1, x(GLOBALS.0);
-            mov x9, (cmp_fn);
-            blr x9;
-        );
-        self.a64_checked_store_next(&raise);
-        p
-    }
-
-    /// Patch the dispatch table so the fixnum fast paths for arithmetic /
-    /// comparison / unary ops stop firing. Called from `set_bop_redefined`
-    /// when a basic op (e.g. `Integer#*`) is overridden — the new handlers
-    /// call the `_no_opt` runtimes which always invoke the redefined method
-    /// instead of returning the fixnum result inline. Mirrors the x86
-    /// `remove_vm_bop_optimization` in `vmgen.rs`.
-    pub(in crate::codegen) fn remove_vm_bop_optimization(&mut self) {
-        // loop_start (14): swap in the no-opt handler (plain advance +
-        // dispatch, same shape as loop_end) so the VM stops entering compiled
-        // OSR loop bodies — and stops triggering new loop compiles — entirely.
-        // Without this, an off-stack method's `[pc+8]` still holds its stale
-        // loop codeptr (nothing reverts OSR entries; `invalidate_jit_code`
-        // only covers method dispatch slots), so a fresh frame's loop_start
-        // would branch straight into loop code whose folds / inline integer
-        // arithmetic assume the now-redefined basic op. Mirrors the x86
-        // `remove_vm_bop_optimization`'s `dispatch[14] = vm_loop_start_no_opt`.
+    /// Stop the VM from entering compiled OSR loop bodies. aarch64 twin of
+    /// the x86 `disable_vm_loop_jit`.
+    ///
+    /// The arithmetic / comparison handlers are no longer swapped: each
+    /// reads its own `VmBop` guard word inline (`a64_bop_guard`), so only
+    /// the operator actually redefined loses its fast path. `loop_start`
+    /// still has to go, because an off-stack method's `[pc+8]` keeps a
+    /// stale loop codeptr and nothing reverts OSR entries.
+    pub(crate) fn disable_vm_loop_jit(&mut self) {
         self.dispatch[14] = self.a64_op_loop();
-
-        let add = self.a64_op_binop(add_values_no_opt);
-        let sub = self.a64_op_binop(sub_values_no_opt);
-        let mul = self.a64_op_binop(mul_values_no_opt);
-        let div = self.a64_op_binop(div_values_no_opt);
-        let bitor = self.a64_op_binop(bitor_values_no_opt);
-        let bitand = self.a64_op_binop(bitand_values_no_opt);
-        let bitxor = self.a64_op_binop(bitxor_values_no_opt);
-        let rem = self.a64_op_binop(rem_values_no_opt);
-        let pow = self.a64_op_binop(pow_values_no_opt);
-        let shl = self.a64_op_binop(shl_values_no_opt);
-        let shr = self.a64_op_binop(shr_values_no_opt);
-        self.dispatch[160] = add;
-        self.dispatch[161] = sub;
-        self.dispatch[162] = mul;
-        self.dispatch[163] = div;
-        self.dispatch[164] = bitor;
-        self.dispatch[165] = bitand;
-        self.dispatch[166] = bitxor;
-        self.dispatch[167] = rem;
-        self.dispatch[168] = pow;
-        self.dispatch[169] = shl;
-        self.dispatch[170] = shr;
-
-        let eq = self.a64_op_cmp_no_opt(cmp_eq_values_no_opt as *const () as u64);
-        let ne = self.a64_op_cmp_no_opt(cmp_ne_values_no_opt as *const () as u64);
-        let lt = self.a64_op_cmp_no_opt(cmp_lt_values_no_opt as *const () as u64);
-        let le = self.a64_op_cmp_no_opt(cmp_le_values_no_opt as *const () as u64);
-        let gt = self.a64_op_cmp_no_opt(cmp_gt_values_no_opt as *const () as u64);
-        let ge = self.a64_op_cmp_no_opt(cmp_ge_values_no_opt as *const () as u64);
-        let teq = self.a64_op_cmp_no_opt(cmp_teq_values_no_opt as *const () as u64);
-        self.dispatch[140] = eq;
-        self.dispatch[141] = ne;
-        self.dispatch[142] = lt;
-        self.dispatch[143] = le;
-        self.dispatch[144] = gt;
-        self.dispatch[145] = ge;
-        self.dispatch[146] = teq;
-        self.dispatch[150] = eq;
-        self.dispatch[151] = ne;
-        self.dispatch[152] = lt;
-        self.dispatch[153] = le;
-        self.dispatch[154] = gt;
-        self.dispatch[155] = ge;
-        self.dispatch[156] = teq;
-
-        let pos = self.a64_op_unop(pos_value_no_opt as *const () as u64);
-        let neg = self.a64_op_unop(neg_value_no_opt as *const () as u64);
-        let bitnot = self.a64_op_unop(bitnot_value_no_opt as *const () as u64);
-        let not = self.a64_op_unop(not_value_no_opt as *const () as u64);
-        self.dispatch[121] = pos;
-        self.dispatch[122] = neg;
-        self.dispatch[123] = bitnot;
-        self.dispatch[124] = not;
-
-        // Publish the freshly-emitted no-opt replacements: on macOS/aarch64
-        // this flips the MAP_JIT pages back to executable so the dispatch
-        // table entries above can actually be jumped to. Mirrors the
-        // matching `self.jit.finalize()` at the tail of vmgen.rs's x86-64
-        // `remove_vm_bop_optimization`; without it, BOP-redefinition tests
-        // SIGBUS on Apple Silicon.
+        // Publish the freshly-emitted handler: on macOS/aarch64 this flips the
+        // MAP_JIT page back to executable and invalidates the I-cache, so the
+        // dispatch entry above can actually be jumped to. Mirrors the
+        // `self.jit.finalize()` in the x86 twin. Without it, the redefinition
+        // tests die on Apple Silicon the moment the VM reaches a `loop_start`
+        // (SIGILL: the CPU sees the page as it was before the write).
         self.jit.finalize();
     }
 }

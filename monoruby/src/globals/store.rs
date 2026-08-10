@@ -7,6 +7,7 @@ use crate::bytecodegen::{BcLocal, CompileInfo, DestructureInfo, ForParamInfo, Op
 use super::*;
 use std::{cell::RefCell, pin::Pin};
 
+mod basic_op;
 mod class;
 mod function;
 mod iseq;
@@ -90,6 +91,9 @@ impl MethodTableEntry {
 pub struct Store {
     /// function info.
     pub(crate) functions: function::Funcs,
+    /// `(class, method)` pairs the VM / JIT fast paths assume — see
+    /// `basic_op::BasicOpTable` and `doc/bop_redefinition.md`.
+    basic_ops: basic_op::BasicOpTable,
     /// ISeq info.
     pub(crate) iseqs: Vec<ISeqInfo>,
     /// class table.
@@ -244,6 +248,7 @@ impl Store {
     pub(super) fn new() -> Self {
         Self {
             functions: function::Funcs::default(),
+            basic_ops: basic_op::BasicOpTable::new(),
             iseqs: vec![],
             constsite_info: vec![],
             callsite_info: vec![],
@@ -371,6 +376,30 @@ impl Store {
 }
 
 impl Store {
+    /// Start reporting basic-op redefinitions. Called once, after the Rust
+    /// builtins, `builtins/*.rb` and the gems have finished defining
+    /// themselves — their own definitions are exactly the ones the table
+    /// names, so arming any earlier reports the interpreter monkey-patching
+    /// itself. See `basic_op::BasicOpTable`.
+    pub(crate) fn arm_basic_ops(&mut self) {
+        self.basic_ops.arm();
+    }
+
+    /// Whether any basic op has been redefined. Read by the fast paths that
+    /// live in Rust rather than in the swappable dispatch table — currently
+    /// `runtime::{get_index, set_index}`.
+    pub(crate) fn basic_op_redefined(&self) -> bool {
+        self.basic_ops.redefined()
+    }
+
+    /// Whether `class_id#name` — a pair in `BASIC_OP_DEFS` — has been
+    /// replaced, so the fast path that assumed it must dispatch instead.
+    /// Gated on the cheap global bool, so a program that redefines nothing
+    /// never reaches the set probe.
+    pub(crate) fn basic_op_redefined_for(&self, class_id: ClassId, name: IdentId) -> bool {
+        self.basic_ops.redefined_pair(class_id, name)
+    }
+
     #[cfg(feature = "emit-bc")]
     pub(super) fn functions(&self) -> &[FuncInfo] {
         self.functions.functions()
@@ -1145,10 +1174,30 @@ impl Store {
         entry
     }
 
-    pub(super) fn invalidate_jit_code(&mut self) {
-        self.iseqs
-            .iter_mut()
-            .for_each(|info| info.invalidate_jit_code())
+    ///
+    /// Throw away the compiled bodies that inlined `class#name` without a
+    /// runtime guard — and only those.
+    ///
+    /// Everything else keeps its JIT code: a method that inlines `Integer#+`
+    /// is untouched when `Integer#~` is replaced, and any use of an operator
+    /// that went out as a real method call is already covered by the
+    /// class-version guard that every redefinition bumps. Returns the evicted
+    /// ids so the caller can revert their entry jumps and decide whether any
+    /// stale OSR loop body can still exist.
+    ///
+    pub(super) fn evict_jit_code_for_bop(
+        &mut self,
+        class: ClassId,
+        name: IdentId,
+    ) -> HashSet<ISeqId> {
+        let mut stale = HashSet::default();
+        for (i, info) in self.iseqs.iter_mut().enumerate() {
+            if info.depends_on_bop(class, name) {
+                info.evict_jit_code();
+                stale.insert(ISeqId::new(i));
+            }
+        }
+        stale
     }
 }
 

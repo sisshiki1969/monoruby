@@ -491,6 +491,10 @@ pub struct JitModule {
     vm_stack_overflow: DestLabel,
     dispatch: Box<[CodePtr; 256]>,
     bop_redefined_flags: DestLabel,
+    /// One word, one bit per [`VmBop`]. A bit turns on once `Integer#<op>`
+    /// is replaced; the VM handler for that operator tests its own bit and
+    /// skips its inline computation.
+    bop_flags: DestLabel,
 }
 
 impl std::ops::Deref for JitModule {
@@ -712,6 +716,14 @@ pub struct Codegen {
     pub(crate) switch_to_scheduler: extern "C" fn(*mut Executor, Value) -> Option<Value>,
     pub(crate) scheduler_resume: extern "C" fn(*mut Executor, u64) -> Option<Value>,
     pub(crate) startup_flag: bool,
+    /// Set by [`Self::set_bop_redefine`], consumed by the next
+    /// [`Self::check_bop_redefine`]. On-stack eviction has to happen for the
+    /// definition that *made* a basic op stale, not for every definition that
+    /// follows it: the old level-trigger read a sticky flag, so once any
+    /// program redefined one operator, every later `def` walked the whole
+    /// control-frame chain patching return addresses that were already
+    /// patched.
+    bop_eviction_pending: bool,
     /// (§9a-ii) When `Some`, `encode_linst*` and the per-arch fallthrough buffer
     /// the lowered `LInst`s here instead of emitting, so the region driver
     /// (`gen_asm`) collects the whole body into one ordered stream and drains it
@@ -1046,6 +1058,7 @@ impl Codegen {
             switch_to_scheduler,
             scheduler_resume,
             startup_flag: false,
+            bop_eviction_pending: false,
             lir_buf: None,
             #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
             jit_compile_time: std::time::Duration::default(),
@@ -1240,15 +1253,36 @@ impl Codegen {
         unsafe { *self.const_version_addr += 1 }
     }
 
-    pub(crate) fn set_bop_redefine(&mut self) {
+    /// Record that a basic op was redefined. `bop` names the VM assembly
+    /// path that just became unsound, if any.
+    pub(crate) fn set_bop_redefine(&mut self, bop: Option<VmBop>) {
+        // The basic-op version, compared by `AsmInst::CheckBOP` after a `def`
+        // inside JIT code against the value observed when that code was
+        // emitted. A counter rather than a sticky flag, so compiled code that
+        // outlived a redefinition is not condemned to deopt at every `def`
+        // forever after (same shape as the class-version guard).
         let addr = self
             .jit
             .get_label_address(&self.bop_redefined_flags)
             .as_ptr() as *mut u32;
-        unsafe { *addr = !0 }
-        self.remove_vm_bop_optimization();
+        unsafe { *addr = addr.read().wrapping_add(1) }
+        // Evict on-stack JIT frames once, for this definition — see
+        // `bop_eviction_pending`.
+        self.bop_eviction_pending = true;
+        // The VM handlers each test their own bit, so only the redefined
+        // operator loses its inline path — redefining `Integer#~` no longer
+        // costs every `+`, `<` and `==` in the process. `None` means no VM
+        // assembly path assumed this operator (a non-Integer class, or an
+        // operator like `~` that computes nothing inline).
+        if let Some(bop) = bop {
+            let addr = self.jit.get_label_address(&self.bop_flags).as_ptr() as *mut u64;
+            unsafe { *addr |= bop.bit() }
+        }
+        // Whether any compiled body actually went stale -- and so whether the
+        // OSR loop entries have to stop being taken -- is the caller's
+        // question: it owns the recorded per-iseq dependencies.
         #[cfg(any(test, feature = "jit-log"))]
-        eprintln!("### basic op redefined.");
+        eprintln!("### basic op redefined. (vm guard: {bop:?})");
     }
 
     ///
@@ -1337,19 +1371,89 @@ impl Codegen {
     }
 }
 
+/// The VM assembly fast paths that carry their own basic-op guard.
+///
+/// Each variant names one **bit** of the single `Codegen::bop_flags` word,
+/// which the handler tests right after its fixnum guard and before the
+/// inline computation — CRuby's `BASIC_OP_UNREDEFINED_P` in the same
+/// position, and in the same shape (`ruby_vm_redefined_flag` is likewise a
+/// bitmap, not a word per case). A set bit means `Integer#<op>` has been
+/// replaced, and the handler falls through to its generic path (the Rust
+/// helper, which does the honest dispatch).
+///
+/// One word keeps every guard on one cache line and leaves 53 bits spare,
+/// which is where `(op, class)` pairs go when the JIT gets per-invariant
+/// invalidation.
+///
+/// Only Integer appears here because every one of these assembly paths is
+/// fixnum-only; other receiver classes never reach the inline computation.
+/// And only operators with such a path appear: `~` and `!` compute nothing
+/// inline, so they need no flag.
+///
+/// Measured cost of the check: none. Nine runs of a VM-bound benchmark
+/// under `--no-jit` put guarded and unguarded builds inside each other's
+/// noise — the word stays in L1 and the branch is perfectly predicted.
+/// See `doc/bop_redefinition.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VmBop {
+    Add = 0,
+    Sub = 1,
+    Eq = 2,
+    Ne = 3,
+    Lt = 4,
+    Le = 5,
+    Gt = 6,
+    Ge = 7,
+    TEq = 8,
+    Pos = 9,
+    Neg = 10,
+}
+
+impl VmBop {
+    /// This operator's bit in `Codegen::bop_flags`.
+    pub(crate) const fn bit(self) -> u64 {
+        1 << (self as u32)
+    }
+
+    /// The guarded operator `name` denotes, or `None` when no VM assembly
+    /// path assumes it.
+    pub(crate) fn from_ident(name: IdentId) -> Option<Self> {
+        Some(match name {
+            IdentId::_ADD => Self::Add,
+            IdentId::_SUB => Self::Sub,
+            IdentId::_EQ => Self::Eq,
+            IdentId::_NEQ => Self::Ne,
+            IdentId::_LT => Self::Lt,
+            IdentId::_LE => Self::Le,
+            IdentId::_GT => Self::Gt,
+            IdentId::_GE => Self::Ge,
+            IdentId::_TEQ => Self::TEq,
+            IdentId::_UPLUS => Self::Pos,
+            IdentId::_UMINUS => Self::Neg,
+            _ => return None,
+        })
+    }
+}
+
 // handling invariants
 
 impl Codegen {
+    /// Called after every method definition. Evicts on-stack JIT frames only
+    /// when the definition just executed actually redefined a basic op —
+    /// `set_bop_redefine` arms the flag and this consumes it.
     pub fn check_bop_redefine(cfp: Cfp) {
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
-            if codegen.bop_redefine_flags() != 0 {
+            if std::mem::replace(&mut codegen.bop_eviction_pending, false) {
                 codegen.immediate_eviction(cfp);
             }
         });
     }
 
-    fn bop_redefine_flags(&self) -> u32 {
+    /// The basic-op version: bumped by every redefinition, baked into
+    /// `AsmInst::CheckBOP` sites so they deopt only on a change made *after*
+    /// they were compiled.
+    pub(in crate::codegen) fn bop_redefine_version(&self) -> u32 {
         let addr = self
             .jit
             .get_label_address(&self.bop_redefined_flags)

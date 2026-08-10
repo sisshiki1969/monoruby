@@ -1481,6 +1481,25 @@ pub(super) extern "C" fn get_index(
     let base_classid = base.class();
     class_slot.base = base_classid;
     class_slot.idx = index.class();
+    // `Array#[]` / `Hash#[]` below bypass method lookup, so they are only
+    // sound while those are still the builtins. Unlike the dispatch-table
+    // ops there is no `_no_opt` twin to swap in here — this helper *is* the
+    // implementation — so consult the flag directly. Cheap: the enclosing
+    // call is already a C-ABI call, and this is one load off `globals`.
+    if globals
+        .store
+        .basic_op_redefined_for(base_classid, IdentId::_INDEX)
+    {
+        return vm.invoke_method(
+            globals,
+            IdentId::_INDEX,
+            is_func_call,
+            base,
+            &[index],
+            None,
+            None,
+        );
+    }
     match base_classid {
         ARRAY_CLASS => {
             // Non-fixnum, non-range index: ask the index to slice
@@ -1603,6 +1622,10 @@ pub(super) extern "C" fn set_index(
     class_slot.idx = index.class();
     if base_classid == ARRAY_CLASS
         && let Some(idx) = index.try_fixnum()
+        // See `get_index`: this branch answers `Array#[]=` without a lookup.
+        && !globals
+            .store
+            .basic_op_redefined_for(base_classid, IdentId::_INDEX_ASSIGN)
     {
         class_slot.idx = INTEGER_CLASS;
         if base.is_frozen() {

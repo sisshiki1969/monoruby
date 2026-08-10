@@ -487,6 +487,16 @@ and taking the global basic-op cliff. With `refined_names` it is neither:
   honest comparison — and because the JIT, which is where the time
   actually goes, keeps per-scope precision via the gate above.
 
+> **Update.** Neither half of this shipped: a refinement of a basic
+> operation is still unseen by both tiers. The reason turned out to be
+> upstream of refinements — the basic-op mechanism itself carries a single
+> process-wide "something was redefined" bit and covers only 10 of the
+> operators the two tiers inline, so there is nothing per-`(op, class)` for
+> a per-scope set to extend. `doc/bop_redefinition.md` measures that and
+> sets out the order: give basic ops `(op, class)` granularity and full
+> coverage first, then a refinement set's own bitmask is a natural
+> extension of it. Done in the other order, the design has to be redone.
+
 ### 6.8 The remaining pieces
 
 - **`super` inside a refinement** means "the method this refinement

@@ -517,7 +517,8 @@ impl Codegen {
             // Basic-operator-redefinition guard: deopt if any BOP was redefined.
             AsmInst::CheckBOP { deopt } => {
                 let deopt = labels[deopt].clone();
-                self.encode_linst(LInst::CheckBOP { deopt });
+                let version = self.bop_redefine_version();
+                self.encode_linst(LInst::CheckBOP { deopt, version });
             }
             // Recompile-or-deopt point: both arches recompile the whole method
             // (or loop body) once a small miss counter warms, then deopt.

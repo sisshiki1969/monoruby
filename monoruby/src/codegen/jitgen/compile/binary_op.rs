@@ -48,6 +48,62 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    ///
+    /// May the guard-free inline implementation of `class#op` be emitted?
+    ///
+    /// It may while `class#op` is still the builtin. Answering `true` also
+    /// *records* the assumption, because the emitted code has no runtime
+    /// check of its own: `set_bop_redefine` reads the recorded set back to
+    /// find exactly the compiled bodies a later redefinition invalidates.
+    /// Answering `false` sends the operation down the ordinary method-call
+    /// path, which the class-version guard already protects — so a body
+    /// recompiled after a redefinition keeps inlining every *other* operator.
+    ///
+    pub(super) fn assume_basic_op(&mut self, class: ClassId, op: IdentId) -> bool {
+        if self.store.basic_op_redefined_for(class, op) {
+            return false;
+        }
+        if !self.bop_deps.contains(&(class, op)) {
+            self.bop_deps.push((class, op));
+        }
+        true
+    }
+
+    ///
+    /// [`AbstractState::binop_type`], demoted to the method-call
+    /// classification when the operator its fast path would inline has been
+    /// replaced.
+    ///
+    /// Both fast paths compute with the *receiver's* operator semantics — the
+    /// integer path for `Integer op Integer`, the fpr path for `Float op
+    /// Float` and for the mixed pairs (`1 + 2.0` is `Integer#+` with a Float
+    /// argument, and computes in xmm without ever consulting `Float#+`). So
+    /// the invariant to check, and to record, is the one belonging to `lhs`.
+    ///
+    fn binop_type_checked(
+        &mut self,
+        state: &AbstractState,
+        op: IdentId,
+        lhs: SlotId,
+        rhs: SlotId,
+        ic: Option<(ClassId, ClassId)>,
+    ) -> BinaryOpType {
+        let ty = state.binop_type(lhs, rhs, ic);
+        if let BinaryOpType::Other(..) = ty {
+            return ty;
+        }
+        let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+        match lhs_class {
+            Some(class) if !self.assume_basic_op(class, op) => {
+                // Redefined: take the ordinary call instead, which the
+                // class-version guard protects. Every other operator in this
+                // body keeps its inline path.
+                BinaryOpType::Other(lhs_class, rhs_class)
+            }
+            _ => ty,
+        }
+    }
+
     pub(super) fn binary_op(
         &mut self,
         state: &mut AbstractState,
@@ -79,7 +135,7 @@ impl<'a> JitContext<'a> {
                     ),
                 }
             }
-            _ => match state.binop_type(lhs, rhs, ic) {
+            _ => match self.binop_type_checked(state, kind.into(), lhs, rhs, ic) {
                 BinaryOpType::Integer(l, r) => {
                     // Both the constant fold (`100 * 100` -> 10000) and the
                     // register fast-path's inline arithmetic assume the builtin
@@ -137,7 +193,7 @@ impl<'a> JitContext<'a> {
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        match state.binop_type(lhs, rhs, ic) {
+        match self.binop_type_checked(state, kind.into(), lhs, rhs, ic) {
             BinaryOpType::Integer(l, r) => {
                 state.gen_cmp_integer(ir, kind, dst, l, r);
                 Ok(CompileResult::Continue)

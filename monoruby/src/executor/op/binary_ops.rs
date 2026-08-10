@@ -184,7 +184,34 @@ pub(crate) fn try_coerce_and_apply_bit(
 macro_rules! binop_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
+            /// Guarded entry for callers that skipped the method lookup —
+            /// the VM and JIT generic paths. The VM's assembly handled
+            /// fixnum/fixnum before calling here; every arm of the
+            /// implementation answers a *non*-fixnum receiver (BigInt /
+            /// Float / Complex) without a lookup, so it is only sound while
+            /// that receiver's operator is still the builtin. One bool for a
+            /// program that redefines nothing.
             pub(crate) extern "C" fn [<$op _values>](
+                vm: &mut Executor,
+                globals: &mut Globals,
+                lhs: Value,
+                rhs: Value,
+                is_func_call: bool,
+            ) -> Option<Value> {
+                if globals.store.basic_op_redefined()
+                    && globals.store.basic_op_redefined_for(lhs.class(), $op_str)
+                {
+                    return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                }
+                [<$op _values_raw>](vm, globals, lhs, rhs, is_func_call)
+            }
+
+            /// The operator itself — the body of the builtin `Integer#<op>`
+            /// / `Float#<op>` / `Complex#<op>`. Reached only through a real
+            /// lookup, so it must not consult the basic-op flag: an alias of
+            /// the original would otherwise dispatch the name straight back
+            /// to the redefinition and recurse forever.
+            pub(crate) extern "C" fn [<$op _values_raw>](
                 vm: &mut Executor,
                 globals: &mut Globals,
                 lhs: Value,
@@ -250,33 +277,39 @@ macro_rules! binop_values {
     };
 }
 
-macro_rules! binop_values_no_opt {
-    (($op:ident, $op_str:expr)) => {
-        paste! {
-            pub(crate) extern "C" fn [<$op _values_no_opt>](
-                vm: &mut Executor,
-                globals: &mut Globals,
-                lhs: Value,
-                rhs: Value,
-                is_func_call: bool,
-            ) -> Option<Value> {
-                vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None)
-            }
-        }
-    };
-    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
-        binop_values_no_opt!(($op1, $op_str1));
-        binop_values_no_opt!($(($op2, $op_str2)),+);
-    };
-}
-
 binop_values!(
     (add, IdentId::_ADD),
     (sub, IdentId::_SUB),
     (mul, IdentId::_MUL)
 );
 
-pub(crate) extern "C" fn div_values(
+/// Wrap a hand-written basic-op implementation in its guarded entry point,
+/// for the callers that reach the operator without a method lookup. The
+/// implementation itself stays unguarded — it is the builtin's body, and
+/// re-dispatching the name from inside it would recurse forever when an
+/// alias of the original is called. Same split as `binop_values!`.
+macro_rules! bop_entry {
+    ($name:ident, $raw:ident, $op:expr) => {
+        pub(crate) extern "C" fn $name(
+            vm: &mut Executor,
+            globals: &mut Globals,
+            lhs: Value,
+            rhs: Value,
+            is_func_call: bool,
+        ) -> Option<Value> {
+            if globals.store.basic_op_redefined()
+                && globals.store.basic_op_redefined_for(lhs.class(), $op)
+            {
+                return vm.invoke_method(globals, $op, is_func_call, lhs, &[rhs], None, None);
+            }
+            $raw(vm, globals, lhs, rhs, is_func_call)
+        }
+    };
+}
+
+bop_entry!(div_values, div_values_raw, IdentId::_DIV);
+
+pub(crate) extern "C" fn div_values_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -316,7 +349,9 @@ pub(crate) extern "C" fn div_values(
     }
 }
 
-pub(crate) extern "C" fn rem_values(
+bop_entry!(rem_values, rem_values_raw, IdentId::_REM);
+
+pub(crate) extern "C" fn rem_values_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -381,20 +416,6 @@ pub(crate) extern "C" fn rem_values(
     };
     Some(v)
 }
-
-binop_values_no_opt!(
-    (add, IdentId::_ADD),
-    (sub, IdentId::_SUB),
-    (mul, IdentId::_MUL),
-    (div, IdentId::_DIV),
-    (rem, IdentId::_REM),
-    (pow, IdentId::_POW),
-    (bitor, IdentId::_BOR),
-    (bitand, IdentId::_BAND),
-    (bitxor, IdentId::_BXOR),
-    (shl, IdentId::_SHL),
-    (shr, IdentId::_SHR)
-);
 
 /// Maximum result size in bits for integer exponentiation (16 GB on 64-bit).
 /// Matches CRuby's BIGLEN_LIMIT in bignum.c.
@@ -468,7 +489,9 @@ pub(crate) extern "C" fn rem_ff(lhs: f64, rhs: f64) -> f64 {
 }
 
 // TODO: support rhs < 0.
-pub(crate) extern "C" fn pow_values(
+bop_entry!(pow_values, pow_values_raw, IdentId::_POW);
+
+pub(crate) extern "C" fn pow_values_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -584,6 +607,16 @@ macro_rules! int_binop_values {
                 rhs: Value,
                 is_func_call: bool,
             ) -> Option<Value> {
+                // Fixnum and BigInt receivers are answered below without a
+                // lookup. Unlike the arithmetic ops these have no assembly
+                // fast path at all — the VM calls straight here — so this
+                // check is the only thing standing between a redefined
+                // `Integer#&` and a wrong answer.
+                if globals.store.basic_op_redefined()
+                    && globals.store.basic_op_redefined_for(lhs.class(), $op_str)
+                {
+                    return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                }
                 let v = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Value::integer(lhs.$op(&rhs)),
                     (RV::Fixnum(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
@@ -614,7 +647,9 @@ int_binop_values!(
     (bitxor, IdentId::_BXOR)
 );
 
-pub(crate) extern "C" fn shr_values(
+bop_entry!(shr_values, shr_values_raw, IdentId::_SHR);
+
+pub(crate) extern "C" fn shr_values_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,
@@ -686,7 +721,9 @@ pub(crate) extern "C" fn shr_values(
     Some(v)
 }
 
-pub(crate) extern "C" fn shl_values(
+bop_entry!(shl_values, shl_values_raw, IdentId::_SHL);
+
+pub(crate) extern "C" fn shl_values_raw(
     vm: &mut Executor,
     globals: &mut Globals,
     lhs: Value,

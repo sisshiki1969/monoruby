@@ -652,6 +652,16 @@ pub(crate) struct JitContext<'a> {
     /// Inline cache for method calls.
     ///
     pub(crate) inline_method_cache: Vec<InlineCacheEntry>,
+
+    ///
+    /// The `(class, operator)` basic-op invariants this body inlined *without*
+    /// a runtime guard — integer/float arithmetic, comparisons, and constant
+    /// folds. The emitted code is correct only while each of them is still the
+    /// builtin, so `set_bop_redefine` uses the recorded set to decide which
+    /// compiled bodies a redefinition actually invalidates (rather than
+    /// throwing away every compiled body in the process).
+    ///
+    pub(crate) bop_deps: Vec<(ClassId, IdentId)>,
     ///
     /// Stack frame for specialized compilation. (iseq, outer_scope, block_iseq)
     ///
@@ -692,6 +702,7 @@ impl<'a> JitContext<'a> {
             const_version,
             refinements,
             inline_method_cache: vec![],
+            bop_deps: vec![],
             stack_frame,
             next_specialized_id: 0,
             specialized_frame_sizes: HashMap::default(),
@@ -709,6 +720,7 @@ impl<'a> JitContext<'a> {
             const_version: self.const_version,
             refinements: self.refinements,
             inline_method_cache: vec![],
+            bop_deps: vec![],
             stack_frame,
             // The cloned context emits AsmIr only for analysis (it is
             // never codegen'd), so the id counter / size map can stay
