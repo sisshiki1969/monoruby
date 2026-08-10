@@ -2439,11 +2439,7 @@ pub(crate) fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         let mut min = ary[0];
         for v in &ary[1..] {
             let block_res = vm.invoke_block(globals, &data, &[*v, min])?;
-            if block_res.is_nil() {
-                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
-            }
-            let res = block_res.coerce_to_int_i64(vm, globals)?;
-            if res < 0 {
+            if vm.cmpint(globals, block_res, *v, min)? == std::cmp::Ordering::Less {
                 min = *v;
             }
         }
@@ -2479,11 +2475,7 @@ pub(crate) fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         let mut max = ary[0];
         for v in &ary[1..] {
             let block_res = vm.invoke_block(globals, &data, &[*v, max])?;
-            if block_res.is_nil() {
-                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
-            }
-            let res = block_res.coerce_to_int_i64(vm, globals)?;
-            if res > 0 {
+            if vm.cmpint(globals, block_res, *v, max)? == std::cmp::Ordering::Greater {
                 max = *v;
             }
         }
@@ -2518,17 +2510,11 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let data = vm.get_block_data(globals, bh)?;
         for v in &ary[1..] {
             let r_min = vm.invoke_block(globals, &data, &[*v, min])?;
-            if r_min.is_nil() {
-                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
-            }
-            if r_min.coerce_to_int_i64(vm, globals)? < 0 {
+            if vm.cmpint(globals, r_min, *v, min)? == std::cmp::Ordering::Less {
                 min = *v;
             }
             let r_max = vm.invoke_block(globals, &data, &[*v, max])?;
-            if r_max.is_nil() {
-                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
-            }
-            if r_max.coerce_to_int_i64(vm, globals)? > 0 {
+            if vm.cmpint(globals, r_max, *v, max)? == std::cmp::Ordering::Greater {
                 max = *v;
             }
         }
@@ -2624,33 +2610,7 @@ fn sort_with_buf(
         let data = vm.get_block_data(globals, bh)?;
         let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
             let block_res = vm.invoke_block(globals, &data, &[lhs, rhs])?;
-            if block_res.is_nil() {
-                return Err(MonorubyErr::argumenterr("comparison of elements failed"));
-            }
-            // Try to use <=> with 0 for non-Integer results
-            let res = match block_res.try_fixnum() {
-                Some(i) => i,
-                None => {
-                    // Try coercing via <=> with 0
-                    let cmp = vm.invoke_method_inner(
-                        globals,
-                        IdentId::_CMP,
-                        block_res,
-                        &[Value::integer(0)],
-                        None,
-                        None,
-                    )?;
-                    if cmp.is_nil() {
-                        return Err(MonorubyErr::argumenterr("comparison of elements failed"));
-                    }
-                    cmp.coerce_to_int_i64(vm, globals)?
-                }
-            };
-            Ok(match res {
-                0 => std::cmp::Ordering::Equal,
-                res if res < 0 => std::cmp::Ordering::Less,
-                _ => std::cmp::Ordering::Greater,
-            })
+            vm.cmpint(globals, block_res, lhs, rhs)
         };
         executor::op::sort_by(&mut ary, buf, f)?;
     } else {
@@ -7233,5 +7193,35 @@ mod tests {
             // No initial value and an empty receiver yields nil.
             r#"[].inject { |s, e| s + e }"#,
         ]);
+    }
+
+    #[test]
+    fn sort_min_max_non_integer_comparator() {
+        // Companion to #1076: `sort` / `min` / `max` / `minmax` all route a
+        // comparator block's result through the same `rb_cmpint` rules, so a
+        // Float, Bignum or Rational comparator sorts correctly...
+        run_test(
+            r#"
+            a = [3, 1, 2]
+            [
+              a.sort { |x, y| (x <=> y) * 1.0 },
+              a.sort { |x, y| (x <=> y) * (10 ** 20) },
+              a.min { |x, y| (x <=> y) * 1.0 },
+              a.max { |x, y| (x <=> y) * 1.0 },
+              a.minmax { |x, y| Rational(x <=> y, 3) },
+            ]
+            "#,
+        );
+        // ...and an incomparable result raises with CRuby's wording: `nil`
+        // names the two elements' classes, while a non-numeric result names
+        // itself against the 0 it was compared with.
+        run_test(
+            r#"
+            a = [[1], [2]]
+            f = ->(m) { begin; a.send(m) { |x, y| nil }; rescue => e; [e.class, e.message]; end }
+            g = ->(m) { begin; a.send(m) { |x, y| "z" }; rescue => e; [e.class, e.message]; end }
+            [:sort, :min, :max, :minmax].map { |m| [f.(m), g.(m)] }
+            "#,
+        );
     }
 }

@@ -41,6 +41,65 @@ impl Executor {
         };
         merge_sort(vec, buf, is_less)
     }
+
+    ///
+    /// Interpret a comparator block's return value as an ordering, following
+    /// CRuby's `rb_cmpint`.
+    ///
+    /// An Integer gives its sign directly; `nil` means the two elements are
+    /// not comparable; anything else is asked to compare *itself* against 0,
+    /// so a `Float`, `Bignum` or `Rational` comparator works the way CRuby's
+    /// does. `lhs`/`rhs` are the elements being compared and are only used to
+    /// name the operands in the error.
+    ///
+    /// Every caller that runs a user comparator block must go through this:
+    /// `Hash#sort` used to interpret only `Fixnum` and silently collapse
+    /// everything else to "equal", which returned an unsorted result with no
+    /// error for a `Float`/`Bignum` comparator and swallowed the
+    /// `ArgumentError` for `nil` (#1076).
+    ///
+    pub(crate) fn cmpint(
+        &mut self,
+        globals: &mut Globals,
+        res: Value,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<std::cmp::Ordering> {
+        if res.is_nil() {
+            return Err(cmperr(&globals.store, lhs, rhs));
+        }
+        let i = match res.try_fixnum() {
+            Some(i) => i,
+            None => {
+                let zero = Value::integer(0);
+                let cmp =
+                    self.invoke_method_inner(globals, IdentId::_CMP, res, &[zero], None, None)?;
+                if cmp.is_nil() {
+                    // CRuby reaches the same place through `res > 0`, and
+                    // names the comparator's own result: e.g. a String
+                    // comparator gives "comparison of String with 0 failed".
+                    return Err(cmperr(&globals.store, res, zero));
+                }
+                cmp.coerce_to_int_i64(self, globals)?
+            }
+        };
+        Ok(i.cmp(&0))
+    }
+}
+
+///
+/// CRuby's `rb_cmperr`: the receiver is named by class, and the argument by
+/// `inspect` when it is an immediate or a Float — so `0` reads as `0` rather
+/// than `Integer` — and by class otherwise.
+///
+pub(crate) fn cmperr(store: &Store, x: Value, y: Value) -> MonorubyErr {
+    let x_name = x.get_real_class_name(store);
+    let y_name = if y.is_packed_value() || matches!(y.unpack(), RV::Float(_)) {
+        y.inspect(store)
+    } else {
+        y.get_real_class_name(store)
+    };
+    MonorubyErr::argumenterr(format!("comparison of {x_name} with {y_name} failed"))
 }
 
 ///
