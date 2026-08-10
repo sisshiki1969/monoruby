@@ -1171,6 +1171,38 @@ impl Codegen {
     /// Integer comparison (ops 140-146): `%dst = (%lhs <cond> %rhs)` as a Ruby
     /// boolean. Bytecode: `+0` rhs, `+2` lhs, `+4` dst. Non-fixnum traps
     /// (generic runtime fallback TODO).
+    /// Comparison handler with no fixnum fast path: every operand pair goes
+    /// straight to the runtime helper. `RescueTEq` needs it because a
+    /// non-Module rescue clause must raise `TypeError` rather than compare.
+    /// (Before the per-operator guard word this shape was also the swap-in
+    /// target for redefined operators; the handlers now guard themselves, so
+    /// `RescueTEq` is its only remaining user.)
+    pub(in crate::codegen) fn a64_op_cmp_generic(&mut self, cmp_fn: u64) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0)];  // rhs slot
+            ldrh x11, [x(PC.0), #(2)];  // lhs slot
+        );
+        self.a64_load_slot(X11, X13, X14); // X13 = lhs
+        self.a64_load_slot(X10, X14, X15); // X14 = rhs
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x13;
+            mov x3, x14;
+            // is_func_call = (lhs slot == self slot 0); the lhs slot is the
+            // `[PC+2]` bytecode operand. Passed in x4 (5th C-arg).
+            ldrh x4, [x(PC.0), #(2)];
+            cmp x4, #(0);
+            cset x4, eq;
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (cmp_fn);
+            blr x9;
+        );
+        self.a64_checked_store_next(&raise);
+        p
+    }
+
     pub(in crate::codegen) fn a64_op_cmp(
         &mut self,
         cond: Cond,
