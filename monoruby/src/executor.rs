@@ -2414,10 +2414,47 @@ impl Executor {
             // wrote against, so a protocol dispatch made from inside one
             // — `#to_proc` for a `&obj` argument, `#to_s` behind
             // interpolation — must keep walking out to the caller's
-            // scope. The same frames are already transparent to `$~`.
+            // scope. CRuby performs those conversions in the caller's own
+            // iseq; monoruby performs them inside the callee, and walking
+            // out is what makes the two agree. The same frames are already
+            // transparent to `$~`.
+            //
+            // The library's *own* operations are the opposite case, and
+            // `lexical_frame_refinements` handles them.
             if !globals.store[fid].meta().is_svar_transparent()
                 && let Some(iseq) = globals.store[fid].is_iseq()
             {
+                return globals.store.iseq_refinements(iseq);
+            }
+            cfp = c.prev();
+        }
+        RefinementSetId::EMPTY
+    }
+
+    ///
+    /// The set for a *basic operation* resolved from the current frame.
+    ///
+    /// Same walk as [`Self::current_refinements`] except that monoruby's
+    /// Ruby-written core library ends it instead of being walked through.
+    /// The two cases the transparency serves pull in opposite directions:
+    ///
+    /// - `&obj` / interpolation convert in the callee here where CRuby
+    ///   converts in the caller, so those must reach the caller's scope.
+    /// - `Array#map`'s own `i += 1` is the library's code, and in CRuby it
+    ///   is C — invisible to any refinement. Reaching the caller's scope
+    ///   there let a refined `Integer#+` end the loop after one iteration.
+    ///
+    /// An operator is never a conversion performed on the caller's behalf,
+    /// so the operator paths ask this instead. See #1066.
+    ///
+    pub(crate) fn basic_op_refinements(&self, globals: &Globals) -> RefinementSetId {
+        let mut cfp = self.cfp;
+        while let Some(c) = cfp {
+            let fid = c.lfp().func_id();
+            if globals.store[fid].meta().is_svar_transparent() {
+                return RefinementSetId::EMPTY;
+            }
+            if let Some(iseq) = globals.store[fid].is_iseq() {
                 return globals.store.iseq_refinements(iseq);
             }
             cfp = c.prev();
@@ -2917,8 +2954,18 @@ impl Executor {
         // The resolved method depends on the *caller's* scope once
         // refinements are in play. `EMPTY` — every scope in a program
         // that never refines anything — takes the same path as before.
+        //
+        // An operator is resolved against the scope that *wrote* it, which
+        // is not the same walk: monoruby's Ruby-written core library must
+        // not pick up a caller's refinement of `Integer#+` for its own
+        // `i += 1`, while a conversion it performs for the caller (`&obj`,
+        // interpolation) must. See `Self::basic_op_refinements`.
         let set = if globals.store.refinements().is_active() {
-            self.current_refinements(globals)
+            if globals.store.is_basic_op_name(func_name) {
+                self.basic_op_refinements(globals)
+            } else {
+                self.current_refinements(globals)
+            }
         } else {
             RefinementSetId::EMPTY
         };

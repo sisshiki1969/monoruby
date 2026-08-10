@@ -113,6 +113,11 @@ pub(crate) const BASIC_OP_DEFS: &[(ClassId, &str)] = &[
 /// Interned [`BASIC_OP_DEFS`], plus the bootstrap latch.
 pub(crate) struct BasicOpTable {
     set: HashSet<(ClassId, IdentId)>,
+    /// Just the *names* in [`BASIC_OP_DEFS`], any class. Used to tell an
+    /// operator apart from a conversion performed on the caller's behalf
+    /// when resolving under refinements — see
+    /// `Executor::basic_op_refinements`.
+    names: HashSet<IdentId>,
     /// False until the builtins — Rust *and* the Ruby ones in
     /// `builtins/*.rb` — have finished defining themselves. Their own
     /// definitions land in this very table, so an armed lookup during
@@ -136,6 +141,10 @@ impl BasicOpTable {
                 .iter()
                 .map(|(class_id, name)| (*class_id, IdentId::get_id(name)))
                 .collect(),
+            names: BASIC_OP_DEFS
+                .iter()
+                .map(|(_, name)| IdentId::get_id(name))
+                .collect(),
             armed: false,
             redefined: false,
             redefined_set: HashSet::default(),
@@ -151,6 +160,11 @@ impl BasicOpTable {
     /// Whether replacing `class_id#name` invalidates a fast path.
     pub(crate) fn contains(&self, class_id: ClassId, name: IdentId) -> bool {
         self.armed && self.set.contains(&(class_id, name))
+    }
+
+    /// Whether `name` is an operator some class gets a fast path for.
+    pub(crate) fn is_basic_op_name(&self, name: IdentId) -> bool {
+        self.names.contains(&name)
     }
 
     /// Record that `class_id#name` was replaced.

@@ -2193,6 +2193,7 @@ impl Store {
         if self.basic_ops.contains(class_id, func_name) {
             self.set_bop_redefine(class_id, func_name);
         }
+        self.check_refined_basic_op(class_id, func_name);
         if self.classes[class_id].methods.remove(&func_name).is_none() {
             Err(MonorubyErr::nameerr(format!(
                 "method `{}' not defined in {}",
@@ -2429,6 +2430,32 @@ impl Store {
         // inherited), yet defining one shadows a fast path all the same.
         if self.basic_ops.contains(class_id, name) {
             self.set_bop_redefine(class_id, name);
+        }
+        self.check_refined_basic_op(class_id, name);
+    }
+
+    ///
+    /// A refinement of a basic operation invalidates the fast paths for it
+    /// just as a redefinition does.
+    ///
+    /// The method lands in the *refinement module*, so the pair to ask
+    /// about is `(the class it refines, name)` — `refine Integer { def + }`
+    /// inserts `+` into an anonymous module, not into `Integer`. Both tiers
+    /// then stop answering `Integer#+` without a lookup and dispatch
+    /// instead, and dispatch is already refinement-aware
+    /// (`Executor::find_method`, `JitContext::jit_check_method`), so the
+    /// refined scope gets the refined method and every other scope gets the
+    /// builtin.
+    ///
+    /// Reaching this from `insert_method` / `remove_method` — rather than
+    /// from `refine` itself — is what covers `def`, `define_method`,
+    /// `alias` and `Refinement#import_methods` in one place. See #1066.
+    ///
+    fn check_refined_basic_op(&mut self, class_id: ClassId, name: IdentId) {
+        if let Some(refined) = self.classes[class_id].refined_class()
+            && self.basic_ops.contains(refined, name)
+        {
+            self.set_bop_redefine(refined, name);
         }
     }
 
