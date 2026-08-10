@@ -544,7 +544,51 @@ iseq 単位にするには、捨てた iseq の `LoopStart` オペランドを�
   （エッジトリガ）、走査対象もその (op, class) に依存したフレームに絞る。
 - 効果: 「無関係な `Float#+` の再定義で fib が 24 倍遅くなる」が消える。
 
-### Step 3 — refinements の基本演算（#1066）
+### Step 3 — refinements の基本演算（#1066）— **実装済み**
+
+Step 1・2 を終えた時点で、残作業は**ペアを記録することだけ**だった。実験で
+確認できる: 意味を変えない再定義（`alias __p +; def +(o) = __p(o)`）で
+フラグ*だけ*を立てると、`refine Integer { def +(o) = 42 }` が VM・JIT とも
+CRuby と同じ 42 を返した。下流はすべて既に動いていた —
+`Executor::find_method` は refinement 対応、JIT は `assume_basic_op` が
+false を返して通常呼び出しへ降格し `jit_check_method` が
+`JitContext::refinements` の下で解決する。
+
+検知点は `refine` 側ではなく `insert_method` / `remove_method` に置いた。
+refinement のメソッドは refinement モジュール側の ClassId に入るので、
+`refined_class()` を引いて `(refined_class, name)` で照会する。この位置なら
+`def` / `define_method` / `alias` / `import_methods` を 1 箇所でカバーできる
+（Step 1 の「メソッド表を変更する全経路に検知点を置く」と同じ理由）。
+
+**必要だった前提修正 — ライブラリ境界。**
+`Executor::frame_refinements` は monoruby が Ruby で書いたコアライブラリの
+フレームを**透過**して呼び出し側スコープまで歩く。これは `&obj` の
+`to_proc` や補間の `to_s` のためで、CRuby がそれらを呼び出し側の iseq で
+行うのに対し monoruby は callee 側で行うため、透過しないと一致しない。
+
+ところが**演算子はその種の変換ではない**。`Array#map` 自身の `i += 1` は
+ライブラリのコードで、CRuby では C — どの refinement からも見えない。
+呼び出し側スコープで解決した結果、refine された `Integer#+` が 42 を返して
+`map` が 1 周で終了していた（`[1,2,3].map { |x| x*2 }` → `[2, nil, nil]`、
+`(1..3).sum` → 42）。
+
+そこで `find_method` が解決対象の**名前**で分岐するようにした:
+`BASIC_OP_DEFS` の演算子名ならライブラリ境界で歩みを止め
+（`Executor::basic_op_refinements`）、それ以外は従来どおり透過する。
+
+**残る不精度。** ペアの記録はプロセス全体なので、`refine` しただけで
+（`using` していないスコープでも）その演算子の inline を失う:
+
+| 条件 | `fib(29)`×3 |
+| --- | ---: |
+| baseline | 0.014 |
+| `refine(Integer) { def + }` 後 | 0.034 |
+
+精密版は `JitContext::assume_basic_op` に `self.refinements` を見せるだけで、
+「コンパイル中のスコープが refine していなければ inline 継続」にできる。
+VM 側の asm ガードは呼び出し地点の文脈を持たないグローバル語なので粗いまま。
+
+### Step 3 の当初計画（記録として保存）
 
 Step 2 の (op, class) ビットマスクができれば、#1066 が要求する
 「refinement セットごとの BOP ビットマスク」はその自然な拡張になる。

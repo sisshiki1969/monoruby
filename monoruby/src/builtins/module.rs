@@ -6446,6 +6446,76 @@ mod tests {
         );
     }
 
+    /// A refinement of a basic operation has to reach both tiers. Both the
+    /// VM's assembly and the JIT answer `Integer#+` without a lookup, so
+    /// `refine` has to invalidate that fast path the same way a redefinition
+    /// does; the dispatch it falls back to is already refinement-aware.
+    /// #1066.
+    #[test]
+    fn refinement_of_a_basic_operation_is_honored() {
+        run_test_once(
+            r#"
+            module BopPlus
+              refine(Integer) { def +(o); 42; end }
+            end
+            inner = Module.new do
+              using BopPlus
+              def self.direct; 1 + 1; end
+              def self.viajit(a, b); a + b; end
+            end
+            i = 0
+            while i < 200      # past the JIT thresholds
+              inner.viajit(1, 1)
+              i = i.succ
+            end
+            [inner.direct, inner.viajit(1, 1), 1 + 1]
+            "#,
+        );
+    }
+
+    /// The library's own arithmetic is not the user's scope. monoruby writes
+    /// `Array#map` and friends in Ruby, where CRuby uses C — and a C frame
+    /// carries no cref, so a refinement of `Integer#+` must not reach the
+    /// `i += 1` those bodies loop on. Before the fix `map` ended after one
+    /// iteration.
+    #[test]
+    fn refinement_of_a_basic_operation_does_not_leak_into_ruby_builtins() {
+        run_test_once(
+            r#"
+            module BopLeak
+              refine(Integer) { def +(o); 42; end }
+            end
+            inner = Module.new do
+              using BopLeak
+              def self.run
+                [[1, 2, 3].map { |x| x * 2 }, (1..3).sum, [1, 2, 3].sum, 1 + 1]
+              end
+            end
+            inner.run
+            "#,
+        );
+    }
+
+    /// The same boundary for a protocol dispatch: interpolation runs in the
+    /// user's own iseq and sees the refinement, while `Array#join` reaching
+    /// for `to_s` from inside the library does not. CRuby draws the line in
+    /// exactly this place because `join` is C.
+    #[test]
+    fn refinement_stops_at_the_ruby_implemented_builtin_boundary() {
+        run_test_once(
+            r##"
+            module BopToS
+              refine(Integer) { def to_s; "REFINED"; end }
+            end
+            inner = Module.new do
+              using BopToS
+              def self.run; ["#{1}", [1].join, [1].to_s, 1.to_s]; end
+            end
+            inner.run
+            "##,
+        );
+    }
+
     #[test]
     fn using_gathers_refinements_of_ancestors() {
         // `using M` activates what M's *included* modules refine too.

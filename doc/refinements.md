@@ -26,11 +26,12 @@ this process contain a refinement at all". A program that never calls
 `refine` emits byte-identical machine code to the one that predates all of
 this — checked against an `emit-asm` baseline, not assumed.
 
-**Known gaps.** A refinement of a *basic operation* (`Integer#+` and the
-other dispatch-table fast paths) is not seen, in either tier — §6.7. And
-one refinement cell per iseq means a *block* that runs `using` and
-executes more than once bases on the previous execution's set
-(`ISeqInfo::refinements`, §7.2 option C).
+**Known gaps.** One refinement cell per iseq means a *block* that runs
+`using` and executes more than once bases on the previous execution's set
+(`ISeqInfo::refinements`, §7.2 option C). Refinements of *basic operations*
+are now honoured in both tiers (§6.7), but coarsely: `refine`-ing one costs
+that operator's inline path process-wide, not only in the scopes that
+activate it.
 
 ---
 
@@ -487,15 +488,38 @@ and taking the global basic-op cliff. With `refined_names` it is neither:
   honest comparison — and because the JIT, which is where the time
   actually goes, keeps per-scope precision via the gate above.
 
-> **Update.** Neither half of this shipped: a refinement of a basic
-> operation is still unseen by both tiers. The reason turned out to be
-> upstream of refinements — the basic-op mechanism itself carries a single
-> process-wide "something was redefined" bit and covers only 10 of the
-> operators the two tiers inline, so there is nothing per-`(op, class)` for
-> a per-scope set to extend. `doc/bop_redefinition.md` measures that and
-> sets out the order: give basic ops `(op, class)` granularity and full
-> coverage first, then a refinement set's own bitmask is a natural
-> extension of it. Done in the other order, the design has to be redone.
+> **Update.** The order this called for was followed —
+> `doc/bop_redefinition.md` gave basic ops `(op, class)` granularity, full
+> coverage and per-iseq JIT invalidation first — and once that was in
+> place, honouring a refinement of a basic operation turned out to need
+> almost nothing beyond *marking the pair*. `insert_method` /
+> `remove_method` ask `refined_class()` for the class the refinement
+> refines and mark `(that class, name)`; both tiers then stop answering it
+> without a lookup, and the dispatch they fall back to was already
+> refinement-aware. `refine Integer { def +(o) = 42 }` now yields 42 in the
+> VM and in JIT-compiled code.
+>
+> Two things that fix did *not* buy:
+>
+> - **Per-scope precision.** Marking the pair is process-wide, so
+>   `refine`-ing `Integer#+` costs the inline path in every scope, not only
+>   the ones that `using` it (`fib(29)` 0.014 → 0.034). The precise version
+>   is the gate this section originally described, and it is now a small
+>   change: `JitContext::assume_basic_op` already takes `(class, op)` and
+>   the context already carries the set id, so the JIT can keep inlining
+>   wherever the compiling scope does not refine the operator. The VM's
+>   asm guard is a global word with no call-site context and stays coarse.
+> - **The inline-generator half**, which is still ungated.
+>
+> One boundary had to be drawn to make any of this correct — see
+> `Executor::basic_op_refinements`. monoruby writes part of its core
+> library in Ruby where CRuby uses C, and those frames are transparent to
+> refinements so that `&obj` / interpolation, which monoruby converts in
+> the callee and CRuby in the caller, reach the user's scope. An operator
+> is never such a conversion: `Array#map`'s own `i += 1` is library code,
+> C in CRuby and invisible to any refinement. Resolving it against the
+> caller ended the loop after one iteration. So operator names stop the
+> walk at the library boundary and everything else still walks out.
 
 ### 6.8 The remaining pieces
 

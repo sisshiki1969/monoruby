@@ -400,6 +400,11 @@ impl Store {
         self.basic_ops.redefined_pair(class_id, name)
     }
 
+    /// Whether `name` is one of the operators with a lookup-free fast path.
+    pub(crate) fn is_basic_op_name(&self, name: IdentId) -> bool {
+        self.basic_ops.is_basic_op_name(name)
+    }
+
     #[cfg(feature = "emit-bc")]
     pub(super) fn functions(&self) -> &[FuncInfo] {
         self.functions.functions()
