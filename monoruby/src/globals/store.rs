@@ -400,6 +400,60 @@ impl Store {
         self.basic_ops.redefined_pair(class_id, name)
     }
 
+    /// Whether `class_id#name` was replaced by something no lexical scope
+    /// escapes — an ordinary redefinition rather than a refinement. The JIT
+    /// must never inline one of these; see
+    /// [`Self::basic_op_refined_in_scope`] for the other half.
+    pub(crate) fn basic_op_globally_redefined_for(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+    ) -> bool {
+        self.basic_ops.globally_redefined_pair(class_id, name)
+    }
+
+    ///
+    /// Whether resolving `class_id#name` under *set* gives a different method
+    /// than resolving it with no refinements at all.
+    ///
+    /// This is the question a body being compiled has to ask before inlining
+    /// an operator that *some* refinement replaces: a refinement binds
+    /// lexically, so a scope that never activated it still gets the builtin
+    /// and may still inline.
+    ///
+    /// Answered by walking *set*'s own entries rather than by resolving the
+    /// method twice and comparing. Resolving the unrefined side would go
+    /// through the method cache, which reads the class version out of the
+    /// thread-local `CODEGEN` — already mutably borrowed while the JIT is
+    /// compiling, so it panics there. Walking the entries touches nothing
+    /// but the class table.
+    ///
+    /// Deliberately inclusive: a refinement module's ancestors count too
+    /// (CRuby activates them), and an entry found anywhere in that chain
+    /// means "do not inline". Erring towards a real call is always sound;
+    /// erring the other way would emit arithmetic the refinement was
+    /// supposed to replace.
+    ///
+    pub(crate) fn basic_op_refined_in_scope(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+        set: RefinementSetId,
+    ) -> bool {
+        if set.is_empty() || !self.basic_ops.refined_pair(class_id, name) {
+            return false;
+        }
+        self.refinements
+            .entries(set)
+            .iter()
+            .filter(|(refined, _)| *refined == class_id)
+            .any(|(_, module)| {
+                self.ancestors(*module)
+                    .iter()
+                    .any(|m| self[m.id()].own_method_table().any(|(n, _)| *n == name))
+            })
+    }
+
     /// Whether `name` is one of the operators with a lookup-free fast path.
     pub(crate) fn is_basic_op_name(&self, name: IdentId) -> bool {
         self.basic_ops.is_basic_op_name(name)

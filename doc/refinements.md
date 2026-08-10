@@ -29,9 +29,9 @@ this — checked against an `emit-asm` baseline, not assumed.
 **Known gaps.** One refinement cell per iseq means a *block* that runs
 `using` and executes more than once bases on the previous execution's set
 (`ISeqInfo::refinements`, §7.2 option C). Refinements of *basic operations*
-are now honoured in both tiers (§6.7), but coarsely: `refine`-ing one costs
-that operator's inline path process-wide, not only in the scopes that
-activate it.
+are honoured in both tiers (§6.7); the JIT keeps its inline path in scopes
+that do not activate the refinement, while the VM's assembly guard has no
+call site to ask about and gives it up process-wide.
 
 ---
 
@@ -501,14 +501,17 @@ and taking the global basic-op cliff. With `refined_names` it is neither:
 >
 > Two things that fix did *not* buy:
 >
-> - **Per-scope precision.** Marking the pair is process-wide, so
->   `refine`-ing `Integer#+` costs the inline path in every scope, not only
->   the ones that `using` it (`fib(29)` 0.014 → 0.034). The precise version
->   is the gate this section originally described, and it is now a small
->   change: `JitContext::assume_basic_op` already takes `(class, op)` and
->   the context already carries the set id, so the JIT can keep inlining
->   wherever the compiling scope does not refine the operator. The VM's
->   asm guard is a global word with no call-site context and stays coarse.
+> - **Per-scope precision in the JIT** — since added. `BasicOpTable` keeps
+>   the union it always did ("this pair is no longer unconditionally
+>   sound", which is what the runtime guards want) but records the reason
+>   alongside it, so `assume_basic_op` can ask two questions: a global
+>   redefinition binds everywhere and is never inlined, while a refinement
+>   is checked against the *compiling scope's* set
+>   (`Store::basic_op_refined_in_scope`). `refine`-ing an operator no
+>   longer costs anything outside the scopes that `using` it — `fib(29)`
+>   0.034 → 0.009, back to baseline. The VM's asm guard is a global word
+>   with no call-site context and stays coarse; correctness there rests on
+>   the dispatch it falls through to, which is refinement-aware.
 > - **The inline-generator half**, which is still ungated.
 >
 > One boundary had to be drawn to make any of this correct — see

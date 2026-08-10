@@ -2455,12 +2455,24 @@ impl Store {
         if let Some(refined) = self.classes[class_id].refined_class()
             && self.basic_ops.contains(refined, name)
         {
-            self.set_bop_redefine(refined, name);
+            self.basic_ops.mark_refined(refined, name);
+            self.invalidate_bop_fast_paths(refined, name);
         }
     }
 
     fn set_bop_redefine(&mut self, class_id: ClassId, name: IdentId) {
         self.basic_ops.mark_redefined(class_id, name);
+        self.invalidate_bop_fast_paths(class_id, name);
+    }
+
+    ///
+    /// Retire every fast path that assumed `class_id#name`, whatever replaced
+    /// it. Split out from [`Self::set_bop_redefine`] so a refinement can share
+    /// it: the *reaction* is the same, only the recorded reason differs (a
+    /// refinement binds lexically, so the JIT can ask a finer question later —
+    /// see `Store::basic_op_refined_in_scope`).
+    ///
+    fn invalidate_bop_fast_paths(&mut self, class_id: ClassId, name: IdentId) {
         // The VM's assembly fast paths are fixnum-only, so only an Integer
         // redefinition can invalidate one; for every other class the
         // assembly stays correct as written and the Rust helper it falls

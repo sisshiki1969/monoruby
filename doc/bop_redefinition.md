@@ -576,17 +576,41 @@ refinement のメソッドは refinement モジュール側の ClassId に入る
 `BASIC_OP_DEFS` の演算子名ならライブラリ境界で歩みを止め
 （`Executor::basic_op_refinements`）、それ以外は従来どおり透過する。
 
-**残る不精度。** ペアの記録はプロセス全体なので、`refine` しただけで
-（`using` していないスコープでも）その演算子の inline を失う:
+### Step 3b — JIT をスコープ単位にする — **実装済み**
 
-| 条件 | `fib(29)`×3 |
-| --- | ---: |
-| baseline | 0.014 |
-| `refine(Integer) { def + }` 後 | 0.034 |
+Step 3 直後はペアの記録がプロセス全体だったので、`refine` しただけで
+（`using` していないスコープでも）その演算子の inline を失っていた
+（`fib(29)` 0.009 → 0.034）。
 
-精密版は `JitContext::assume_basic_op` に `self.refinements` を見せるだけで、
-「コンパイル中のスコープが refine していなければ inline 継続」にできる。
-VM 側の asm ガードは呼び出し地点の文脈を持たないグローバル語なので粗いまま。
+**「何が無効化したか」を分けて記録する。** `BasicOpTable` の
+`redefined_set`（＝ fast path はもう無条件には健全でない、という和集合）を
+残したまま、内訳として `globally_redefined_set` と `refined_set` を持つ。
+`assume_basic_op` は 2 段で問う:
+
+1. グローバル再定義なら、どのスコープも逃れられないので inline しない。
+2. refinement 由来なら、**コンパイル中のスコープの `RefinementSetId` が
+   実際にそのペアを解決し直すか**だけを問う（`basic_op_refined_in_scope`）。
+   refine していないスコープ — refine しないプログラムの全スコープを含む —
+   は inline を維持する。
+
+判定は「set のエントリのうち当該クラスを refine するものを辿り、その
+refinement モジュール（と ancestors）が当該名を持つか」で行う。当初は
+「set 有り／無しで解決して比較する」正確版を書いたが、無し側が
+`check_method_for_class` → メソッドキャッシュ → `Globals::class_version()` と
+辿って **JIT コンパイル中に `CODEGEN` を borrow し panic した**（コンパイル時は
+既に `borrow_mut` 中）。エントリ走査ならクラス表しか触らない。判定は
+意図的に広めに倒してある — 迷ったら実呼び出しにするのは常に健全で、逆は
+refinement が置き換えたはずの算術をそのまま出してしまう。
+
+| 条件 | Step 3 | **Step 3b** |
+| --- | ---: | ---: |
+| baseline | 0.009 | 0.009 |
+| `refine(Integer) { def + }` 後（using 外） | 0.034 | **0.009** |
+| `refine(Integer) { def ~ }` 後 | 0.034 | **0.009** |
+| （参考）グローバル再定義後 | 0.032 | 0.032 |
+
+**refine しただけのコストが消えた。** VM 側の asm ガードは呼び出し地点の
+文脈を持たないグローバル語なので粗いまま（正しさは dispatch が担保する）。
 
 ### Step 3 の当初計画（記録として保存）
 

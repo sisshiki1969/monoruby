@@ -60,7 +60,18 @@ impl<'a> JitContext<'a> {
     /// recompiled after a redefinition keeps inlining every *other* operator.
     ///
     pub(super) fn assume_basic_op(&mut self, class: ClassId, op: IdentId) -> bool {
-        if self.store.basic_op_redefined_for(class, op) {
+        // An ordinary redefinition binds everywhere.
+        if self.store.basic_op_globally_redefined_for(class, op) {
+            return false;
+        }
+        // A refinement binds lexically, so only a body compiled under a set
+        // that actually resolves the pair differently has to give up its
+        // inline path. Every other scope — including every scope in a program
+        // that refines some *other* operator — keeps it.
+        if self
+            .store
+            .basic_op_refined_in_scope(class, op, self.refinements())
+        {
             return false;
         }
         if !self.bop_deps.contains(&(class, op)) {
