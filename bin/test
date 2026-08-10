@@ -22,14 +22,19 @@ RUBY=(ruby --yjit)
 # `optcarrot --opt` divergence that the (non-empty) aarch64 pool path used to hit.
 #
 # `gc-stress` is now a true stress mode: the binary starts in `GC.stress`
-# and collects at EVERY safepoint. That is affordable for the unit/
-# integration tests (small snippets), but makes long-running workloads
+# and collects at EVERY safepoint. That makes long-running workloads
 # quadratic-ish (a trivial 100K-allocation loop takes ~100 s), so the
 # benchmark / optcarrot / ruby-bench / ruby-spec phases build WITHOUT it
 # and keep only the spill stress. SKIP_GC_STRESS=1 drops `gc-stress` from
-# the nextest phase too; the `darwin` job sets it so the M1 runner stays
-# under its per-attempt cap. The Linux `amd64` job runs with it, so the
-# GC paths stay stress-covered on every push.
+# the nextest phase too.
+#
+# BOTH automatic CI jobs now set SKIP_GC_STRESS=1: even limited to the
+# nextest phase the stress dominated the run (~10 min -> ~100 min on the
+# coverage-instrumented `amd64` job, and the M1 `darwin` runner was
+# finishing right at its per-attempt cap). Stress coverage for x86-64 AND
+# aarch64 lives in .github/workflows/gc-stress.yml, dispatched by hand.
+# A local `bin/test` still stress-tests by default — export
+# SKIP_GC_STRESS=1 if you want the fast path.
 NEXTEST_FEATURE_LIST=stress-spill-pool
 if [ "${SKIP_GC_STRESS:-0}" != "1" ]; then
   NEXTEST_FEATURE_LIST="$NEXTEST_FEATURE_LIST,gc-stress"
