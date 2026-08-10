@@ -2186,6 +2186,13 @@ impl Store {
     ///
     pub(crate) fn remove_method(&mut self, class_id: ClassId, func_name: IdentId) -> Result<()> {
         Globals::class_version_inc();
+        // Removal invalidates a fast path exactly as replacement does —
+        // `Integer.remove_method(:+)` must make `1 + 2` raise NoMethodError,
+        // not keep answering 3. `undef_method` reaches `insert_method` via
+        // `add_empty_method`, so only this path needed its own check.
+        if self.basic_ops.contains(class_id, func_name) {
+            self.set_bop_redefine();
+        }
         if self.classes[class_id].methods.remove(&func_name).is_none() {
             Err(MonorubyErr::nameerr(format!(
                 "method `{}' not defined in {}",
@@ -2415,14 +2422,18 @@ impl Store {
     ///
     fn insert_method(&mut self, class_id: ClassId, name: IdentId, entry: MethodTableEntry) {
         Globals::class_version_inc();
-        if let Some(old) = self.classes[class_id].methods.insert(name, entry)
-            && old.is_basic_op
-        {
+        self.classes[class_id].methods.insert(name, entry);
+        // Membership is on the `(class, method)` pair, not on whatever
+        // entry was displaced: `Integer#!` / `#+@` / `#~`, `NilClass#==`
+        // and friends have no entry of their own to displace (they are
+        // inherited), yet defining one shadows a fast path all the same.
+        if self.basic_ops.contains(class_id, name) {
             self.set_bop_redefine();
         }
     }
 
     fn set_bop_redefine(&mut self) {
+        self.basic_ops.mark_redefined();
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             codegen.set_bop_redefine();
