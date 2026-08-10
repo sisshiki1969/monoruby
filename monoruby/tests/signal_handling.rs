@@ -120,25 +120,27 @@ fn fork_child_signal_death_is_observable() {
 
 #[test]
 fn sleep_is_interrupted_by_signals() {
-    // A trap firing mid-sleep interrupts the nanosleep promptly; the whole
-    // script must finish far sooner than the requested 30s sleep.
-    let start = std::time::Instant::now();
+    // A trap firing mid-sleep interrupts the nanosleep promptly, rather than
+    // being deferred to the safepoint after the full 30s elapses. Printing
+    // "wake" alone does not prove that — a trap drained *after* an
+    // uninterrupted `sleep 30` raises the same RuntimeError — so the script
+    // times its own sleep with CLOCK_MONOTONIC. Measuring in-script (instead
+    // of wall-clocking the child from here) keeps the bound independent of
+    // process startup, which under gc-stress + coverage instrumentation costs
+    // ~35s on its own and swamped the old 10s outer budget.
     let out = monoruby(
         r##"Signal.trap("ALRM") { raise "wake" }
            pid = fork { sleep 0.2; Process.kill :ALRM, Process.ppid }
+           t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
            begin
              sleep 30
              puts :overslept
            rescue RuntimeError => e
              puts e.message
            end
+           puts((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t) < 10)
            Process.wait(pid)"##,
     );
-    assert_eq!(stdout(&out), "wake\n");
+    assert_eq!(stdout(&out), "wake\ntrue\n");
     assert!(out.status.success());
-    assert!(
-        start.elapsed() < std::time::Duration::from_secs(10),
-        "sleep was not interrupted (took {:?})",
-        start.elapsed()
-    );
 }
