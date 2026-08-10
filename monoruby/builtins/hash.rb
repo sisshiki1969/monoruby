@@ -11,8 +11,13 @@ class Hash
   def to_h
     unless block_given?
       return self if self.instance_of?(Hash)
-      h = Hash[self]
+      h = {}
+      # Set identity comparison BEFORE filling: `Hash[self]` would insert
+      # under normal `eql?` comparison first, collapsing keys that are equal
+      # but not identical, and turning it on afterwards cannot separate them
+      # again. (`{"k" => 1}` and a distinct `"k" => 2` became one entry.)
       h.compare_by_identity if compare_by_identity?
+      each { |k, v| h[k] = v }
       if (dp = default_proc)
         h.default_proc = dp
       else

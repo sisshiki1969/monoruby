@@ -4738,4 +4738,89 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn hash_to_h_semantics() {
+        // Pins every behaviour of `Hash#to_h` against CRuby. Written before
+        // moving the implementation from `builtins/hash.rb` into Rust, so any
+        // divergence introduced by the port shows up here.
+
+        // No block: a plain Hash returns *itself* (identity, not a copy).
+        run_test(
+            r#"
+            h = { a: 1, b: 2 }
+            [h.to_h.equal?(h), h.to_h, {}.to_h]
+            "#,
+        );
+        // No block on a subclass: a new *plain* Hash, carrying the receiver's
+        // default / default_proc / compare_by_identity.
+        run_test(
+            r#"
+            sub = Class.new(Hash)
+            o = sub.new
+            o[:x] = 1
+            r = o.to_h
+            [r.class, r, r.equal?(o)]
+            "#,
+        );
+        run_test(
+            r#"
+            sub = Class.new(Hash)
+            o = sub.new(99)
+            o[:x] = 1
+            r = o.to_h
+            [r.class, r[:missing], r.default]
+            "#,
+        );
+        run_test(
+            r#"
+            sub = Class.new(Hash)
+            o = sub.new { |h, k| "gen:#{k}" }
+            o[:x] = 1
+            r = o.to_h
+            [r.class, r[:missing], r.default_proc.nil?]
+            "#,
+        );
+        run_test(
+            r#"
+            sub = Class.new(Hash)
+            o = sub.new
+            o.compare_by_identity
+            a = "k"
+            b = "k"
+            o[a] = 1
+            o[b] = 2
+            r = o.to_h
+            [r.class, r.compare_by_identity?, r.size]
+            "#,
+        );
+        // Block form.
+        run_test(
+            r#"
+            h = { a: 1, b: 2 }
+            [h.to_h { |k, v| [k.to_s, v * 10] }, h.to_h { |k, v| [v, k] }, {}.to_h { |k, v| [k, v] }]
+            "#,
+        );
+        // A non-Array block result is coerced through `to_ary` when it has one.
+        run_test(
+            r#"
+            pairish = Class.new do
+              def initialize(a, b); @a = a; @b = b; end
+              def to_ary; [@a, @b]; end
+            end
+            { a: 1 }.to_h { |k, v| pairish.new(k.to_s, v + 1) }
+            "#,
+        );
+        // ...and otherwise raises, with CRuby's exception class and message.
+        run_test(
+            r#"
+            h = { a: 1 }
+            [
+              (begin; h.to_h { |k, v| 5 }; rescue => e; [e.class, e.message]; end),
+              (begin; h.to_h { |k, v| [1, 2, 3] }; rescue => e; [e.class, e.message]; end),
+              (begin; h.to_h { |k, v| [1] }; rescue => e; [e.class, e.message]; end),
+            ]
+            "#,
+        );
+    }
 }
