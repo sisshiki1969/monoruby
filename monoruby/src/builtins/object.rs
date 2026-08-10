@@ -554,9 +554,9 @@ mod tests {
 
     #[test]
     fn cmp_dispatch_raw_in_bop_redefined_mode() {
-        // Overwriting a basic op (Integer#!=) trips set_bop_redefine and
-        // flips the VM to the *_no_opt cmp handlers; those must also
-        // dispatch ==/!= raw (and honor the redefined basic op itself).
+        // Redefining a basic op (Integer#!=) makes the VM's `!=` handler
+        // take its generic path; that path must still dispatch ==/!= raw
+        // (and honor the redefined basic op itself).
         run_test_once(
             r##"
         class Integer; def !=(o); "INT-NE"; end; end

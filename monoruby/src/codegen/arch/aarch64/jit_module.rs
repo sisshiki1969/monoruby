@@ -115,6 +115,10 @@ impl JitModule {
         let mut jit = JitMemory::new();
         let class_version = jit.data_i32(1);
         let bop_redefined_flags = jit.data_i32(0);
+        // One word per `VmBop`, read inline by the VM handler that
+        // assumes that operator (see `VmBop`).
+        let bop_flags: Vec<DestLabel> =
+            (0..VmBop::COUNT).map(|_| jit.data_i32(0)).collect();
         let const_version = jit.data_i64(1);
         // The poll word (poll_flag.rs). Under `gc-stress` the GC lane
         // starts armed so the very first safepoint collects.
@@ -151,6 +155,7 @@ impl JitModule {
             entry_panic,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
             bop_redefined_flags,
+            bop_flags,
         };
         let raise = j.entry_raise.clone();
         let panic = j.entry_panic.clone();

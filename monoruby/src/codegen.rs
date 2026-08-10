@@ -491,6 +491,10 @@ pub struct JitModule {
     vm_stack_overflow: DestLabel,
     dispatch: Box<[CodePtr; 256]>,
     bop_redefined_flags: DestLabel,
+    /// Per-operator guard words, indexed by [`VmBop`]. Non-zero once
+    /// `Integer#<op>` is replaced; the VM handler for that operator reads
+    /// its own word and skips its inline computation.
+    bop_flags: Vec<DestLabel>,
 }
 
 impl std::ops::Deref for JitModule {
@@ -1240,22 +1244,35 @@ impl Codegen {
         unsafe { *self.const_version_addr += 1 }
     }
 
-    /// Record that a basic op was redefined. `swap_dispatch` asks for the
-    /// VM's dispatch table to be reverted to the `_no_opt` handlers; only
-    /// an Integer redefinition needs that, because the assembly fast paths
-    /// those handlers carry are fixnum-only (see
-    /// `Store::set_bop_redefine`).
-    pub(crate) fn set_bop_redefine(&mut self, swap_dispatch: bool) {
+    /// Record that a basic op was redefined. `bop` names the VM assembly
+    /// path that just became unsound, if any.
+    pub(crate) fn set_bop_redefine(&mut self, bop: Option<VmBop>) {
+        // The "anything was redefined" word, read by `AsmInst::CheckBOP`
+        // after a `def` inside JIT code.
         let addr = self
             .jit
             .get_label_address(&self.bop_redefined_flags)
             .as_ptr() as *mut u32;
         unsafe { *addr = !0 }
-        if swap_dispatch {
-            self.remove_vm_bop_optimization();
+        // The VM handlers each read their own word, so only the redefined
+        // operator loses its inline path — redefining `Integer#~` no longer
+        // costs every `+`, `<` and `==` in the process. `None` means no VM
+        // assembly path assumed this operator (a non-Integer class, or an
+        // operator like `~` that computes nothing inline).
+        if let Some(bop) = bop {
+            let addr = self
+                .jit
+                .get_label_address(&self.bop_flags[bop as usize])
+                .as_ptr() as *mut u32;
+            unsafe { *addr = !0 }
         }
+        // Stop entering compiled OSR loop bodies: an off-stack method's
+        // `[pc+8]` still holds a stale loop codeptr, and nothing reverts OSR
+        // entries. This is JIT invalidation, not a basic-op fast path, and
+        // stays global until the JIT gets per-invariant invalidation.
+        self.disable_vm_loop_jit();
         #[cfg(any(test, feature = "jit-log"))]
-        eprintln!("### basic op redefined. (vm dispatch swapped: {swap_dispatch})");
+        eprintln!("### basic op redefined. (vm guard: {bop:?})");
     }
 
     ///
@@ -1341,6 +1358,61 @@ impl Codegen {
 
             eprintln!("      {:06x}: {}", i, text);
         }
+    }
+}
+
+/// The VM assembly fast paths that carry their own basic-op guard.
+///
+/// Each variant owns one word in `Codegen::bop_flags`, which the handler
+/// reads right after its fixnum guard and before the inline computation —
+/// CRuby's `BASIC_OP_UNREDEFINED_P` in the same position. Non-zero means
+/// `Integer#<op>` has been replaced, and the handler falls through to its
+/// generic path (the Rust helper, which does the honest dispatch).
+///
+/// Only Integer appears here because every one of these assembly paths is
+/// fixnum-only; other receiver classes never reach the inline computation.
+/// And only operators with such a path appear: `~` and `!` compute nothing
+/// inline, so they need no flag.
+///
+/// Measured cost of the check: none. Nine runs of a VM-bound benchmark
+/// under `--no-jit` put guarded and unguarded builds inside each other's
+/// noise — the word stays in L1 and the branch is perfectly predicted.
+/// See `doc/bop_redefinition.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VmBop {
+    Add = 0,
+    Sub = 1,
+    Eq = 2,
+    Ne = 3,
+    Lt = 4,
+    Le = 5,
+    Gt = 6,
+    Ge = 7,
+    TEq = 8,
+    Pos = 9,
+    Neg = 10,
+}
+
+impl VmBop {
+    pub(crate) const COUNT: usize = 11;
+
+    /// The guarded operator `name` denotes, or `None` when no VM assembly
+    /// path assumes it.
+    pub(crate) fn from_ident(name: IdentId) -> Option<Self> {
+        Some(match name {
+            IdentId::_ADD => Self::Add,
+            IdentId::_SUB => Self::Sub,
+            IdentId::_EQ => Self::Eq,
+            IdentId::_NEQ => Self::Ne,
+            IdentId::_LT => Self::Lt,
+            IdentId::_LE => Self::Le,
+            IdentId::_GT => Self::Gt,
+            IdentId::_GE => Self::Ge,
+            IdentId::_TEQ => Self::TEq,
+            IdentId::_UPLUS => Self::Pos,
+            IdentId::_UMINUS => Self::Neg,
+            _ => return None,
+        })
     }
 }
 

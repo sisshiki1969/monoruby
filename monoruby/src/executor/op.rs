@@ -155,18 +155,6 @@ macro_rules! cmp_values {
                 Some(Value::bool(b))
             }
         }
-
-        paste! {
-            pub(crate) extern "C" fn [<cmp_ $op _values_no_opt>](
-                vm: &mut Executor,
-                globals: &mut Globals,
-                lhs: Value,
-                rhs: Value,
-                is_func_call: bool,
-            ) -> Option<Value> {
-                vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None)
-            }
-        }
     };
     (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
         cmp_values!(($op1, $op_str1));
@@ -293,16 +281,6 @@ impl Executor {
         Ok(self.eq_values(globals, lhs, rhs)?.as_bool())
     }
 
-    pub(crate) fn eq_values_no_opt(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-        is_func_call: bool,
-    ) -> Result<Value> {
-        self.invoke_eq_raw_vis(globals, lhs, rhs, is_func_call)
-    }
-
     ///
     /// `!=` with CRuby-faithful result-value semantics: while `!=`
     /// resolves to a basic op / the default `BasicObject#!=`, the result
@@ -354,16 +332,6 @@ impl Executor {
         Ok(self.ne_values(globals, lhs, rhs)?.as_bool())
     }
 
-    pub(crate) fn ne_values_no_opt(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-        is_func_call: bool,
-    ) -> Result<Value> {
-        let func_id = self.find_method(globals, lhs, IdentId::_NEQ, is_func_call)?;
-        self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)
-    }
 }
 
 // `==` / `!=` wrappers return the dispatched method's value as-is (the
@@ -379,24 +347,6 @@ macro_rules! eq_values {
                 is_func_call: bool,
             ) -> Option<Value> {
                 match vm.[<$op _values_vis>](globals, lhs, rhs, is_func_call) {
-                    Ok(v) => Some(v),
-                    Err(err) => {
-                        vm.set_error(err);
-                        None
-                    }
-                }
-            }
-        }
-
-        paste! {
-            pub(crate) extern "C" fn [<cmp_ $op _values_no_opt>](
-                vm: &mut Executor,
-                globals: &mut Globals,
-                lhs: Value,
-                rhs: Value,
-                is_func_call: bool,
-            ) -> Option<Value> {
-                match vm.[<$op _values_no_opt>](globals, lhs, rhs, is_func_call) {
                     Ok(v) => Some(v),
                     Err(err) => {
                         vm.set_error(err);
@@ -557,16 +507,6 @@ fn cmp_teq_values_impl(
     Some(Value::bool(b))
 }
 
-pub(crate) extern "C" fn cmp_teq_values_no_opt(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-    is_func_call: bool,
-) -> Option<Value> {
-    vm.invoke_method(globals, IdentId::_TEQ, is_func_call, lhs, &[rhs], None, None)
-}
-
 pub(crate) fn cmp_teq_values_bool(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -612,17 +552,6 @@ pub(crate) fn cmp_teq_values_bool(
         }
     };
     Ok(b)
-}
-
-#[allow(dead_code)]
-pub(crate) fn cmp_teq_values_bool_no_opt(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-) -> Result<bool> {
-    vm.invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None, None)
-        .map(|v| v.as_bool())
 }
 
 impl Executor {
@@ -858,32 +787,6 @@ impl Executor {
         Ok(res)
     }
 }
-
-macro_rules! unop_value_no_opt {
-    (($op:ident, $op_str:expr)) => {
-        paste! {
-            pub(crate) extern "C" fn [<$op _value_no_opt>](
-                vm: &mut Executor,
-                globals: &mut Globals,
-                lhs: Value,
-                is_func_call: bool,
-            ) -> Option<Value> {
-                vm.invoke_method(globals, $op_str, is_func_call, lhs, &[], None, None)
-            }
-        }
-    };
-    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
-        unop_value_no_opt!(($op1, $op_str1));
-        unop_value_no_opt!($(($op2, $op_str2)),+);
-    };
-}
-
-unop_value_no_opt!(
-    (bitnot, IdentId::_BNOT),
-    (pos, IdentId::_UPLUS),
-    (neg, IdentId::_UMINUS),
-    (not, IdentId::_NOT)
-);
 
 pub(crate) extern "C" fn neg_value(
     vm: &mut Executor,

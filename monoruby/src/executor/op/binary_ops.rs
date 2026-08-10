@@ -255,26 +255,6 @@ macro_rules! binop_values {
     };
 }
 
-macro_rules! binop_values_no_opt {
-    (($op:ident, $op_str:expr)) => {
-        paste! {
-            pub(crate) extern "C" fn [<$op _values_no_opt>](
-                vm: &mut Executor,
-                globals: &mut Globals,
-                lhs: Value,
-                rhs: Value,
-                is_func_call: bool,
-            ) -> Option<Value> {
-                vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None)
-            }
-        }
-    };
-    (($op1:ident, $op_str1:expr), $(($op2:ident, $op_str2:expr)),+) => {
-        binop_values_no_opt!(($op1, $op_str1));
-        binop_values_no_opt!($(($op2, $op_str2)),+);
-    };
-}
-
 binop_values!(
     (add, IdentId::_ADD),
     (sub, IdentId::_SUB),
@@ -400,20 +380,6 @@ pub(crate) extern "C" fn rem_values(
     };
     Some(v)
 }
-
-binop_values_no_opt!(
-    (add, IdentId::_ADD),
-    (sub, IdentId::_SUB),
-    (mul, IdentId::_MUL),
-    (div, IdentId::_DIV),
-    (rem, IdentId::_REM),
-    (pow, IdentId::_POW),
-    (bitor, IdentId::_BOR),
-    (bitand, IdentId::_BAND),
-    (bitxor, IdentId::_BXOR),
-    (shl, IdentId::_SHL),
-    (shr, IdentId::_SHR)
-);
 
 /// Maximum result size in bits for integer exponentiation (16 GB on 64-bit).
 /// Matches CRuby's BIGLEN_LIMIT in bignum.c.
@@ -610,6 +576,16 @@ macro_rules! int_binop_values {
                 rhs: Value,
                 is_func_call: bool,
             ) -> Option<Value> {
+                // Fixnum and BigInt receivers are answered below without a
+                // lookup. Unlike the arithmetic ops these have no assembly
+                // fast path at all — the VM calls straight here — so this
+                // check is the only thing standing between a redefined
+                // `Integer#&` and a wrong answer.
+                if globals.store.basic_op_redefined()
+                    && globals.store.basic_op_redefined_for(lhs.class(), $op_str)
+                {
+                    return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                }
                 let v = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Value::integer(lhs.$op(&rhs)),
                     (RV::Fixnum(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),

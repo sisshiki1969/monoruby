@@ -2433,20 +2433,21 @@ impl Store {
     }
 
     fn set_bop_redefine(&mut self, class_id: ClassId, name: IdentId) {
-        let was_integer = self.basic_ops.integer_redefined();
         self.basic_ops.mark_redefined(class_id, name);
         // The VM's assembly fast paths are fixnum-only, so only an Integer
-        // redefinition can invalidate them; for every other class the
+        // redefinition can invalidate one; for every other class the
         // assembly stays correct as written and the Rust helper it falls
-        // through to does the honest dispatch (it consults
-        // `redefined_pair`). Swapping the dispatch table for, say,
-        // `Float#+` would cost the whole process its integer arithmetic
-        // for nothing — the 24x cliff `doc/bop_redefinition.md` §1.5
-        // measured.
-        let swap_dispatch = self.basic_ops.integer_redefined() && !was_integer;
+        // through to dispatches honestly (it consults `redefined_pair`).
+        // And within Integer, only the operator actually redefined loses
+        // its path — that is what the per-operator guard word buys.
+        let bop = if class_id == INTEGER_CLASS {
+            VmBop::from_ident(name)
+        } else {
+            None
+        };
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
-            codegen.set_bop_redefine(swap_dispatch);
+            codegen.set_bop_redefine(bop);
             self.invalidate_jit_code();
             // Revert JIT-compiled / jit-stub method entries back to `vm_entry`.
             // x86-only: this uses the x86 `apply_jmp_patch_address` to rewrite

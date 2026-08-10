@@ -182,11 +182,6 @@ impl BasicOpTable {
         self.redefined && self.redefined_set.contains(&(class_id, name))
     }
 
-    /// Whether the VM's fixnum assembly is still valid. See
-    /// [`Self::integer_redefined`].
-    pub(crate) fn integer_redefined(&self) -> bool {
-        self.integer_redefined
-    }
 }
 
 #[cfg(test)]
