@@ -551,9 +551,16 @@ fn write_special_check(
         // still reaches this check, so match it too for the error
         // message's sake.
         "$/" | "$-0" => {
-            let val = frozen_string_or_nil(&n, val)?;
+            // Type-check, then warn, then copy — in that order:
+            // `__warn_deprecated` runs Ruby, and the fresh frozen copy
+            // would live only in a Rust local across it (its cell was
+            // collected under gc-stress, leaving `$/` dangling). `val`
+            // itself is safe: it is rooted by the caller's frame.
+            if !val.is_nil() && val.is_rstring_inner().is_none() {
+                return Err(MonorubyErr::typeerr(format!("value of {n} must be String")));
+            }
             warn_deprecated_separator(vm, globals, &n, val);
-            Ok(val)
+            frozen_string_or_nil(&n, val)
         }
         // Output record / field separators: String or nil, stored
         // as-is (CRuby does not copy these).

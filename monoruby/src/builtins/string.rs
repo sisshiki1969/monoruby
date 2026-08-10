@@ -355,9 +355,11 @@ fn uplus(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // CRuby `String#+` always returns a plain String, even for a String
     // subclass receiver — so build a fresh String rather than `dup`ing
-    // (which would carry over the receiver's class).
-    let mut self_ = Value::string_from_inner(lfp.self_val().as_rstring_inner().clone());
+    // (which would carry over the receiver's class). Coerce first:
+    // `#to_str` re-enters Ruby, and the fresh copy would live only in a
+    // Rust local across it.
     let other = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    let mut self_ = Value::string_from_inner(lfp.self_val().as_rstring_inner().clone());
     self_
         .as_rstring_inner_mut()
         .extend(&other, &globals.store)?;

@@ -1369,18 +1369,24 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         // Arity-1 mode: classify and return set of sets
         let mut groups: std::collections::HashMap<u64, Vec<Value>> = std::collections::HashMap::new();
         let mut group_order: Vec<u64> = Vec::new();
-        for k in &keys {
-            let classification = vm.invoke_block(globals, &data, &[*k])?;
-            let key = classification.id() as u64;
-            if !groups.contains_key(&key) {
-                group_order.push(key);
-            }
-            groups.entry(key).or_default().push(*k);
-        }
-        let result_set = new_empty_set();
-        // Root `result_set` and each freshly-built `subset` across the GC that
-        // `set_from_iter` / `insert` can trigger (see `classify`).
+        // The whole grouping runs inside one temp scope: each
+        // classification value is kept rooted so its identity (`id()`,
+        // the group key) can't be recycled by a GC for a later,
+        // different classification — under per-safepoint stress a freed
+        // result's address is reused almost immediately.
         vm.with_temp_scope(|vm| {
+            for k in &keys {
+                let classification = vm.invoke_block(globals, &data, &[*k])?;
+                vm.temp_push(classification);
+                let key = classification.id() as u64;
+                if !groups.contains_key(&key) {
+                    group_order.push(key);
+                }
+                groups.entry(key).or_default().push(*k);
+            }
+            let result_set = new_empty_set();
+            // Root `result_set` and each freshly-built `subset` across the GC
+            // that `set_from_iter` / `insert` can trigger (see `classify`).
             vm.temp_push(result_set);
             for key in group_order {
                 if let Some(elems) = groups.remove(&key) {

@@ -837,10 +837,15 @@ fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut lhs = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-    let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
-    lhs.extend(rhs.iter().cloned());
-    lhs.uniq(vm, globals)?;
-    Ok(lhs.as_val())
+    // Root the fresh copy across `#to_ary` and `uniq`'s Ruby
+    // `hash`/`eql?` dispatches, like `Array#&` above.
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(lhs.into());
+        let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
+        lhs.extend(rhs.iter().cloned());
+        lhs.uniq(vm, globals)?;
+        Ok(lhs.as_val())
+    })
 }
 
 ///
@@ -3663,30 +3668,34 @@ fn rotate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
-    let mut lists = vec![];
-    for rhs in lfp.arg(0).as_array().into_iter() {
-        lists.push(rhs.coerce_to_array(vm, globals)?);
-    }
-    // Check total product size to avoid memory exhaustion.
-    let mut total: usize = lhs.len();
-    for l in &lists {
-        total = total
-            .checked_mul(l.len())
-            .ok_or_else(|| MonorubyErr::rangeerr("too big to product"))?;
-        if total > 1_000_000 {
-            return Err(MonorubyErr::rangeerr("too big to product"));
+    // `#to_ary` may hand back fresh Arrays that only this Rust Vec (and
+    // later the lazy iterator) reference; root each across the remaining
+    // coercions and the block calls below.
+    vm.with_temp_scope(|vm| {
+        let mut lists = vec![];
+        for rhs in lfp.arg(0).as_array().into_iter() {
+            let list = rhs.coerce_to_array(vm, globals)?;
+            vm.temp_push(list.into());
+            lists.push(list);
         }
-    }
-    let iter = product_inner(lhs, lists);
-    if let Some(bh) = lfp.block() {
-        //let ary = Array::new_from_vec(v);
-        //vm.temp_push(ary.into());
-        vm.invoke_block_iter1(globals, bh, iter)?;
-        //vm.temp_pop();
-        Ok(lfp.self_val())
-    } else {
-        Ok(Value::array_from_iter(iter))
-    }
+        // Check total product size to avoid memory exhaustion.
+        let mut total: usize = lhs.len();
+        for l in &lists {
+            total = total
+                .checked_mul(l.len())
+                .ok_or_else(|| MonorubyErr::rangeerr("too big to product"))?;
+            if total > 1_000_000 {
+                return Err(MonorubyErr::rangeerr("too big to product"));
+            }
+        }
+        let iter = product_inner(lhs, lists);
+        if let Some(bh) = lfp.block() {
+            vm.invoke_block_iter1(globals, bh, iter)?;
+            Ok(lfp.self_val())
+        } else {
+            Ok(Value::array_from_iter(iter))
+        }
+    })
 }
 
 fn product_inner(lhs: Array, rhs: Vec<Array>) -> impl Iterator<Item = Value> {
@@ -3722,12 +3731,17 @@ fn product_inner(lhs: Array, rhs: Vec<Array>) -> impl Iterator<Item = Value> {
 #[monoruby_builtin]
 fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-    for rhs in lfp.arg(0).as_array().into_iter() {
-        let rhs = rhs.coerce_to_array(vm, globals)?;
-        ary.extend(rhs.into_iter().cloned());
-    }
-    ary.uniq(vm, globals)?;
-    Ok(ary.into())
+    // Root the accumulator across `#to_ary` and `uniq`'s Ruby
+    // `hash`/`eql?` dispatches, like `Array#intersection`.
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(ary.into());
+        for rhs in lfp.arg(0).as_array().into_iter() {
+            let rhs = rhs.coerce_to_array(vm, globals)?;
+            ary.extend(rhs.into_iter().cloned());
+        }
+        ary.uniq(vm, globals)?;
+        Ok(ary.into())
+    })
 }
 
 ///
@@ -3739,24 +3753,32 @@ fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs_v = lfp.self_val();
-    let others: Vec<_> = lfp
-        .arg(0)
-        .as_array()
-        .iter()
-        .map(|v| v.coerce_to_array(vm, globals))
-        .collect::<Result<Vec<_>>>()?;
-    let mut v = vec![];
-    'outer: for lhs in lhs_v.as_array().iter() {
-        for other in &others {
-            for rhs in other.iter() {
-                if lhs.eql(rhs, vm, globals)? {
-                    continue 'outer;
+    // `#to_ary` may hand back fresh Arrays referenced only by this Rust
+    // Vec; root each across the later coercions and `eql?` dispatches.
+    vm.with_temp_scope(|vm| {
+        let others: Vec<_> = lfp
+            .arg(0)
+            .as_array()
+            .iter()
+            .map(|v| {
+                let a = v.coerce_to_array(vm, globals)?;
+                vm.temp_push(a.into());
+                Ok(a)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut v = vec![];
+        'outer: for lhs in lhs_v.as_array().iter() {
+            for other in &others {
+                for rhs in other.iter() {
+                    if lhs.eql(rhs, vm, globals)? {
+                        continue 'outer;
+                    }
                 }
             }
+            v.push(*lhs);
         }
-        v.push(*lhs);
-    }
-    Ok(Value::array_from_vec(v))
+        Ok(Value::array_from_vec(v))
+    })
 }
 
 ///
@@ -3811,14 +3833,20 @@ fn intersection(
 #[monoruby_builtin]
 fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
-    for rhs in lfp.arg(0).coerce_to_array(vm, globals)?.iter().cloned() {
-        for lhs in lhs.iter().cloned() {
-            if lhs.eql(&rhs, vm, globals)? {
-                return Ok(Value::bool(true));
+    let rhs_ary = lfp.arg(0).coerce_to_array(vm, globals)?;
+    // A fresh `#to_ary` result is referenced only by this Rust local;
+    // root it across the `eql?` dispatches below.
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(rhs_ary.into());
+        for rhs in rhs_ary.iter().cloned() {
+            for lhs in lhs.iter().cloned() {
+                if lhs.eql(&rhs, vm, globals)? {
+                    return Ok(Value::bool(true));
+                }
             }
         }
-    }
-    Ok(Value::bool(false))
+        Ok(Value::bool(false))
+    })
 }
 
 ///
@@ -3835,8 +3863,13 @@ fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     match lfp.block() {
         None => {
             let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-            ary.uniq(vm, globals)?;
-            Ok(ary.into())
+            // Root the fresh copy across `uniq`'s Ruby `hash`/`eql?`
+            // dispatches.
+            vm.with_temp_scope(|vm| {
+                vm.temp_push(ary.into());
+                ary.uniq(vm, globals)?;
+                Ok(ary.into())
+            })
         }
         Some(bh) => vm.with_temp_scope(|vm| {
             let data = vm.get_block_data(globals, bh)?;
@@ -4359,13 +4392,23 @@ mod tests {
         // GC skips scanning it, and all of its elements are swept while
         // still reachable — a later read then trips `Dead object`. The
         // allocation churn after the build is what forces that minor GC.
-        run_test_once(
+        //
+        // The large sizes exist only to trigger that GC organically in a
+        // normal build; under gc-stress every safepoint already collects,
+        // and marking a 300k-element array per safepoint would take >10min
+        // on CI, so the stress build uses a small workload instead.
+        let (build, churn) = if cfg!(feature = "gc-stress") {
+            (2_000, 1_000)
+        } else {
+            (300_000, 200_000)
+        };
+        run_test_once(&format!(
             r#"
-            a = Array.new(300_000) { |i| [i % 1000] }
-            200_000.times { [1] }
-            a.map { |x| x[0] }.sum
-            "#,
-        );
+            a = Array.new({build}) {{ |i| [i % 1000] }}
+            {churn}.times {{ [1] }}
+            a.map {{ |x| x[0] }}.sum
+            "#
+        ));
     }
 
     #[test]
@@ -4374,14 +4417,23 @@ mod tests {
         // elements while `merge` overwrites their slots in the receiver,
         // and the comparator can allocate (and thus GC) right in that
         // window — so the buffer itself has to be GC-visible.
-        run_test_once(
+        //
+        // As above: the large size makes a GC land in that window by
+        // chance in a normal build, while under gc-stress every safepoint
+        // collects anyway and a large sort would run for >10min on CI.
+        let n = if cfg!(feature = "gc-stress") {
+            2_000
+        } else {
+            200_000
+        };
+        run_test_once(&format!(
             r#"
             a = []
-            200_000.times { |i| a << [(i * 7919) % 1000] }
-            a.sort! { |x, y| [x[0]] <=> [y[0]] }
+            {n}.times {{ |i| a << [(i * 7919) % 1000] }}
+            a.sort! {{ |x, y| [x[0]] <=> [y[0]] }}
             [a.size, a.first[0], a.last[0]]
-            "#,
-        );
+            "#
+        ));
     }
 
     #[test]

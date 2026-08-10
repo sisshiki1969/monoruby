@@ -326,6 +326,14 @@ pub(crate) struct FnInitInfo {
     pub arg_num: usize,
     /// stack offset (in 16 bytes unit) for local frame.
     pub stack_offset: usize,
+    /// First arg-area slot of the destructured-parameter locals
+    /// (`|(a, b)|`), and their count. These slots are inside the
+    /// argument area (so the `arg_num..reg_num` nil-fill misses them)
+    /// but no caller writes them — the prologue `expand` instructions
+    /// do, *after* the callee-entry GC poll — so the init must nil-fill
+    /// them too or the poll's root scan reads stack garbage.
+    pub destruct_start: usize,
+    pub destruct_len: usize,
 }
 
 impl std::fmt::Debug for FnInitInfo {
@@ -341,7 +349,11 @@ impl std::fmt::Debug for FnInitInfo {
 }
 
 impl FnInitInfo {
-    pub(super) fn new(total_reg_num: usize, params: &ParamsInfo) -> Self {
+    pub(super) fn new(
+        total_reg_num: usize,
+        params: &ParamsInfo,
+        destructed_args: std::ops::Range<usize>,
+    ) -> Self {
         let reg_num = total_reg_num - 1;
         let arg_num = params.args_names.len();
         let stack_offset = (reg_num * 8 + (RSP_LOCAL_FRAME + LFP_ARG0) as usize + 31) / 16;
@@ -349,6 +361,8 @@ impl FnInitInfo {
             reg_num,
             arg_num,
             stack_offset,
+            destruct_start: destructed_args.start,
+            destruct_len: destructed_args.len(),
         }
     }
 }

@@ -416,9 +416,13 @@ bin/test
 
 `bin/test` does:
 
-1. `cargo llvm-cov nextest` with all debug features enabled
-2. Builds a debug binary with `gc-stress`
-3. Runs benchmark scripts and `diff`s output against CRuby 3.4.1
+1. `cargo llvm-cov nextest` with the stress features (`stress-spill-pool`, plus
+   `gc-stress` unless `SKIP_GC_STRESS=1` — **both** automatic CI jobs set it,
+   so pushes/PRs no longer pay the per-safepoint stress; see the manual
+   `gc-stress` workflow below)
+2. Builds a debug benchmark binary **without** `gc-stress` (true per-safepoint
+   stress would make the benchmark/optcarrot/spec phases take hours)
+3. Runs benchmark scripts and `diff`s output against CRuby
 4. Runs optcarrot and compares output
 5. Generates `lcov.info` coverage report
 
@@ -446,7 +450,7 @@ All test helpers invoke CRuby via `ruby` in `PATH` and assert output equality.
 | `deopt`             | Log deoptimizations (implies `jit-log`, `dump-bc`, `dump-traceir`)     |
 | `gc-log`            | Log GC statistics at exit                                              |
 | `gc-debug`          | GC debug assertions                                                    |
-| `gc-stress`         | GC on every allocation (stress test)                                   |
+| `gc-stress`         | Force a GC at every safepoint, unconditionally (stress test)           |
 | `stress-spill-pool` | Shrink `PHYS_FPR_POOL` to 2 to stress the FP-register spill paths      |
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
@@ -518,7 +522,7 @@ Do not add new nightly features without necessity; prefer stable alternatives wh
 
 File: `.github/workflows/rust.yml`
 
-Triggered on push/PR to `master`. Two jobs run:
+Triggered on push/PR to `master`. Two jobs run, **both with `SKIP_GC_STRESS=1`**:
 
 - **Linux/x86-64** (`ubuntu-latest`): install Ruby 4.0+, Rust nightly,
   `cargo-llvm-cov` + `cargo-nextest`, clone optcarrot / ruby-bench / ruby-spec,
@@ -527,6 +531,28 @@ Triggered on push/PR to `master`. Two jobs run:
   runner exercising the VM + AArch64 JIT. Installs `bigdecimal`, `libffi` +
   `pkg-config` (Homebrew libffi is required on aarch64 macOS — see the
   target-specific dep block in `monoruby/Cargo.toml`), then runs the test scope.
+
+### Manual gc-stress workflow
+
+File: `.github/workflows/gc-stress.yml` — **`workflow_dispatch` only.**
+
+Per-safepoint collection is what finds unrooted-Value bugs, but it is far too
+slow for every push (stacked on llvm-cov it took the `amd64` nextest phase from
+~10 min to ~100 min), so it was moved out of the automatic runs. Dispatch this
+from the Actions tab — or `gh workflow run gc-stress.yml -f arch=both` — when
+touching the GC, frame layout, argument binding, or any builtin that creates a
+Value and then re-enters Ruby.
+
+Inputs: `arch` (`both` / `x86_64` / `aarch64`), `scope` (`nextest` = the unit +
+integration suite under stress, `full` = the whole `bin/test` scope),
+`test_filter` (a nextest `-E` expression), `no_fail_fast`.
+
+It runs on `ubuntu-latest` (x86-64) and `ubuntu-24.04-arm` (**native** arm64
+Linux — not qemu), and collects no coverage. On the arm64 runner the job
+overrides `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_{LINKER,RUNNER}` because
+`.cargo/config.toml` points that triple at the x86-64-host cross toolchain
+(`aarch64-linux-gnu-gcc` + `qemu-aarch64`), which would otherwise run every
+test under emulation.
 
 ---
 
@@ -582,5 +608,5 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 3. **Ruby in PATH**: Tests compare output against a system `ruby` binary matching the vendored pin (`4.0.2`, see `vendor/ruby-stdlib/.ruby-version`). Ensure Ruby is installed and the binary is accessible.
 4. **optcarrot**: The full CI test requires optcarrot cloned at `../optcarrot` relative to the repo root.
 5. **Library path**: `build.rs` does **not** invoke a host `ruby` for `$LOAD_PATH` / `RUBY_VERSION` (those come from the vendored snapshot). Host-installed *non-default* gems are discovered at run time by `src/ruby_probe.rs`, which invokes a host `ruby` once if present and caches `~/.monoruby/{library_path,gem_path}`. If no host Ruby is found, those caches stay empty and a warning is printed at startup, but the vendored stdlib still loads from the per-version install root (`~/.monoruby/v<version>/lib`).
-6. **gc-stress in tests**: The `bin/test` script builds with `--features gc-stress` to catch GC bugs; this makes the binary much slower than a normal debug build.
+6. **gc-stress in tests**: `bin/test` runs the nextest phase with `--features gc-stress` (unless `SKIP_GC_STRESS=1`) to catch GC bugs. Since the true-stress restoration this means a collection at **every safepoint** — the test binary is drastically slower than a normal debug build, and long-running workloads (benchmarks, optcarrot, ruby/spec) are deliberately built without it. Both automatic CI jobs now skip it; run the manual `gc-stress` workflow instead. Tests whose loop counts exist only to reach the JIT thresholds should shrink them under `cfg!(feature = "gc-stress")` (see `tests/method_call.rs`) — otherwise they blow past nextest's per-test cap.
 7. **Thread-local CODEGEN**: The JIT compiler is a thread-local singleton. Do not attempt to use it across threads.

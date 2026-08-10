@@ -41,6 +41,15 @@ impl Codegen {
                 );
             }
         }
+        // Destructured block params (`|(a, b)|`): their slots are inside
+        // the argument area, so the loop above misses them, and no caller
+        // writes them — the `expand`s after entry do. Nil-fill them so
+        // the callee-entry GC poll never marks stack garbage.
+        for i in 0..fn_info.destruct_len {
+            monoasm!( &mut self.jit,
+                movq [rbp - (RBP_LOCAL_FRAME + (fn_info.destruct_start + i) as i32 * 8 + LFP_ARG0)], (NIL_VALUE);
+            );
+        }
         self.jit.bind_label(l1);
     }
 }

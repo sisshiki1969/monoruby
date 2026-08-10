@@ -1454,7 +1454,12 @@ fn process_warmup(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: Byte
 /// when there are no children. `$?` is left at the last reaped child.
 #[monoruby_builtin]
 fn process_waitall(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut pairs: Vec<Value> = vec![];
+    // Accumulate into a rooted Array: each [pid, status] pair must
+    // survive the next iteration's Process::Status construction (Ruby
+    // re-entry) — a bare Rust Vec left them invisible to the GC.
+    vm.with_temp_scope(|vm| {
+    vm.temp_array_new(None);
+    let pairs_idx = vm.temp_len() - 1;
     loop {
         let mut status: i32 = 0;
         // SAFETY: waitpid is a POSIX system call.
@@ -1485,12 +1490,11 @@ fn process_waitall(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: Bytec
             None,
         )?;
         crate::scheduler::set_last_status(vm, status_obj);
-        pairs.push(Value::array_from_vec(vec![
-            Value::integer(ret as i64),
-            status_obj,
-        ]));
+        let pair = Value::array_from_vec(vec![Value::integer(ret as i64), status_obj]);
+        vm.temp_at(pairs_idx).as_array().push(pair);
     }
-    Ok(Value::array_from_vec(pairs))
+    Ok(vm.temp_at(pairs_idx))
+    })
 }
 
 ///

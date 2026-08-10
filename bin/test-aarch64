@@ -19,8 +19,10 @@
 #                 optcarrot) と ruby/spec をスキップ
 #   SKIP_COV=1    cargo llvm-cov を経由せず素の cargo test/nextest を使う
 #                 (CI でカバレッジを集めないとき)
-#   STRESS=1      gc-stress / stress-spill-pool も付ける。
-#                 qemu-user では unit test だけで 4 時間級になるので注意。
+#   STRESS=1      gc-stress / stress-spill-pool も付ける。gc-stress は
+#                 真のストレスモード (毎セーフポイント GC) になったため、
+#                 qemu-user では unit test だけでも非現実的な時間になる。
+#                 実機 aarch64 での利用を想定。
 #   THREADS=N     `cargo test -- --test-threads=N` (既定: テストごとに既定)
 #
 # 実機 aarch64 ホストでは:

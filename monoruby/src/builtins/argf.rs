@@ -228,8 +228,15 @@ fn force_stream(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Result
                     stdin_value(globals)
                 } else {
                     let f = open_file(vm, globals, name)?;
-                    inplace_redirect(vm, globals, argf, name)?;
-                    f
+                    // The fresh File lives only in this Rust local while
+                    // `inplace_redirect` re-enters Ruby (`close`,
+                    // `File.open`) — root it until it lands in
+                    // `inner.current` below.
+                    vm.with_temp_scope(|vm| {
+                        vm.temp_push(f);
+                        inplace_redirect(vm, globals, argf, name)?;
+                        Ok(f)
+                    })?
                 };
                 let inner = expect_inner(argf)?;
                 inner.state = ArgfState::Reading;

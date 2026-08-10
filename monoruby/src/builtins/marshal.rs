@@ -127,7 +127,14 @@ fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let mut cursor = MarshalReader::new(&data[2..]);
     cursor.freeze = freeze;
     cursor.proc = proc;
-    cursor.read_value(vm, globals)
+    // Root the reader's object link table for the whole load: it is the
+    // only reference to most partially-reconstructed values while
+    // `_load` / `marshal_load` / the load proc run Ruby.
+    let objects = cursor.objects;
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(objects.into());
+        cursor.read_value(vm, globals)
+    })
 }
 
 // ============================================================
@@ -139,8 +146,12 @@ struct MarshalReader<'a> {
     pos: usize,
     /// Symbol table for back-references (';' tag)
     symbols: Vec<IdentId>,
-    /// Object table for back-references ('@' tag)
-    objects: Vec<Value>,
+    /// Object table for back-references ('@' tag). A Ruby Array (not a
+    /// Rust Vec) so `load` can root the whole link table on the VM temp
+    /// stack: reconstruction re-enters Ruby (`_load`, `marshal_load`,
+    /// `set_backtrace`, hash inserts), and every partially-built object
+    /// in here must survive those collections.
+    objects: Array,
     /// `Marshal.load(.., freeze: true)`: deep-freeze reconstructed values.
     freeze: bool,
     /// `Marshal.load(src, proc)`: called with each reconstructed value.
@@ -157,7 +168,7 @@ impl<'a> MarshalReader<'a> {
             data,
             pos: 0,
             symbols: Vec::new(),
-            objects: Vec::new(),
+            objects: Array::new_empty(),
             freeze: false,
             proc: None,
             building: std::collections::HashSet::new(),
@@ -665,6 +676,11 @@ impl<'a> MarshalReader<'a> {
             .map(|f| f as *const () == crate::default_alloc_func as *const ())
             .unwrap_or(true);
         let obj = Value::object(module.id());
+        // Register the (still-empty) instance right away: the rooted
+        // link table keeps the fresh object alive across the ivar
+        // `read_value`s below, and a self-reference resolves to the
+        // instance rather than nil.
+        self.objects[obj_idx] = obj;
         // Read instance variables.
         let mut ivars: Vec<(IdentId, Value)> = Vec::with_capacity(ivar_count);
         for _ in 0..ivar_count {
@@ -1046,6 +1062,9 @@ impl<'a> MarshalReader<'a> {
         }
         let class_id = module.id();
         let mut instance = Value::struct_object(class_id, member_count);
+        // Register right away: the rooted link table keeps the fresh
+        // instance alive across the member `read_value`s below.
+        self.objects[obj_idx] = instance;
         for i in 0..member_count {
             let member_sym = self.read_symbol(vm, globals)?;
             let val = self.read_value(vm, globals)?;

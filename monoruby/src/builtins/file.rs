@@ -1362,33 +1362,47 @@ fn open_impl(
             effective_autoclose,
         );
         let res = Value::new_io_with_class(io_inner, FILE_CLASS);
-        let mode_for_enc = lfp
-            .try_arg(1)
-            .and_then(|a| a.is_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| {
-                match (readable, writable) {
-                    (true, true) => "r+",
-                    (false, true) => "w",
-                    _ => "r",
+        // The fresh File is referenced only by this Rust local while
+        // `init_io_encodings` / `ruby_warn` re-enter Ruby — root it.
+        return vm.with_temp_scope(|vm| {
+            vm.temp_push(res);
+            let mode_for_enc = lfp
+                .try_arg(1)
+                .and_then(|a| a.is_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| {
+                    match (readable, writable) {
+                        (true, true) => "r+",
+                        (false, true) => "w",
+                        _ => "r",
+                    }
+                    .to_string()
+                });
+            super::io::init_io_encodings(
+                vm,
+                globals,
+                lfp,
+                res,
+                &mode_for_enc,
+                readable,
+                1..3,
+                kw_hash,
+            )?;
+            if let Some(bh) = lfp.block() {
+                if is_new {
+                    vm.ruby_warn(
+                        globals,
+                        "warning: File::new() does not take block; use File::open() instead",
+                    )?;
+                    return Ok(res);
                 }
-                .to_string()
-            });
-        super::io::init_io_encodings(vm, globals, lfp, res, &mode_for_enc, readable, 1..3, kw_hash)?;
-        if let Some(bh) = lfp.block() {
-            if is_new {
-                vm.ruby_warn(
-                    globals,
-                    "warning: File::new() does not take block; use File::open() instead",
-                )?;
-                return Ok(res);
+                let r = vm.invoke_block_once(globals, bh, &[res]);
+                // Match CRuby File.open(...) {|io| ... }: close at block exit.
+                // Holding the underlying fd open across blocks defeats `flock`
+                // (rubygems' open_with_flock relies on this) and leaks fds.
+                return block_close(vm, globals, res, r);
             }
-            let r = vm.invoke_block_once(globals, bh, &[res]);
-            // Match CRuby File.open(...) {|io| ... }: close at block exit.
-            // Holding the underlying fd open across blocks defeats `flock`
-            // (rubygems' open_with_flock relies on this) and leaks fds.
-            return block_close(vm, globals, res, r);
-        }
-        return Ok(res);
+            Ok(res)
+        });
     }
 
     // Resolve the open mode into open(2) flags. Precedence (CRuby):
@@ -1515,20 +1529,25 @@ fn open_impl(
         readable,
         writable,
     );
-    super::io::init_io_encodings(vm, globals, lfp, res, &mode, readable, 1..3, kw_hash)?;
-    if let Some(bh) = lfp.block() {
-        if is_new {
-            vm.ruby_warn(
-                globals,
-                "warning: File::new() does not take block; use File::open() instead",
-            )?;
-            return Ok(res);
+    // The fresh File is referenced only by this Rust local while
+    // `init_io_encodings` / `ruby_warn` re-enter Ruby — root it.
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(res);
+        super::io::init_io_encodings(vm, globals, lfp, res, &mode, readable, 1..3, kw_hash)?;
+        if let Some(bh) = lfp.block() {
+            if is_new {
+                vm.ruby_warn(
+                    globals,
+                    "warning: File::new() does not take block; use File::open() instead",
+                )?;
+                return Ok(res);
+            }
+            let r = vm.invoke_block_once(globals, bh, &[res]);
+            // CRuby File.open(...) {|io| ... } closes the file at block exit.
+            return block_close(vm, globals, res, r);
         }
-        let r = vm.invoke_block_once(globals, bh, &[res]);
-        // CRuby File.open(...) {|io| ... } closes the file at block exit.
-        return block_close(vm, globals, res, r);
-    }
-    Ok(res)
+        Ok(res)
+    })
 }
 
 ///
@@ -4260,6 +4279,63 @@ mod tests {
               File.open(path, File::WRONLY) { |f| f.write("B") }
               b = File.read(path)
               [a, b]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    /// `File.new` / `File.open` given a raw file descriptor. The fresh File
+    /// is reachable only from a Rust local while `init_io_encodings` and
+    /// the `File::new() does not take block` warning re-enter Ruby, which
+    /// is what the rooting guards. Also covers the encoding-mode default
+    /// derived from the fd's access mode when no String mode is passed.
+    #[test]
+    fn file_from_fd_modes_and_block() {
+        run_test_once(
+            r#"
+            path = "/tmp/mono_cov_file_fd_#{Process.pid}"
+            begin
+              File.write(path, "hello")
+              # Read-only fd, no mode argument -> "r".
+              f = File.new(IO.sysopen(path, "r"))
+              a = [f.class, f.read]
+              f.close
+              # Write-only fd -> "w"; read-write fd -> "r+".
+              f = File.new(IO.sysopen(path, "w"))
+              b = f.class
+              f.close
+              f = File.new(IO.sysopen(path, "r+"))
+              c = f.class
+              f.close
+              # File.open(fd) with a block closes the File at block exit.
+              d = File.open(IO.sysopen(path, "r")) { |io| io.read }
+              # File.new(fd) with a block warns and ignores the block.
+              f = File.new(IO.sysopen(path, "r")) { |io| :never_called }
+              e = [f.class, f.read]
+              f.close
+              [a, b, c, d, e]
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    /// `File.new(path)` given a block warns and ignores it, returning the
+    /// open File (the block form is `File.open`).
+    #[test]
+    fn file_new_with_block_warns() {
+        run_test_once(
+            r#"
+            path = "/tmp/mono_cov_file_new_#{Process.pid}"
+            begin
+              File.write(path, "hello")
+              f = File.new(path, "r") { |io| :never_called }
+              res = [f.class, f.read]
+              f.close
+              res
             ensure
               File.unlink(path) rescue nil
             end

@@ -20,10 +20,18 @@ impl Codegen {
         );
         self.a64_sp_sub(prologue_bytes as u32);
         let clear_len = info.reg_num - info.arg_num;
-        if clear_len > 0 {
+        if clear_len > 0 || info.destruct_len > 0 {
             monoasm_arm64!(&mut self.jit, mov x9, (NIL_VALUE););
             for i in 0..clear_len {
                 let off = (info.arg_num + i) as u32 * 8 + LFP_ARG0 as u32;
+                self.a64_frame_store(9, lfp, off);
+            }
+            // Destructured block params (`|(a, b)|`): inside the argument
+            // area (missed by the loop above) and written only by the
+            // `expand`s after entry — nil-fill them so the entry GC poll
+            // never marks stack garbage. Mirrors x86 `init_func`.
+            for i in 0..info.destruct_len {
+                let off = (info.destruct_start + i) as u32 * 8 + LFP_ARG0 as u32;
                 self.a64_frame_store(9, lfp, off);
             }
         }

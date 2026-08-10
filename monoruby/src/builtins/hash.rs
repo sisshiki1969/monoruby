@@ -1398,33 +1398,40 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
-    let mut pairs: Vec<Value> = hash
-        .iter()
-        .map(|(k, v)| Value::array2(k, v))
-        .collect();
     if let Some(bh) = lfp.block() {
+        let mut pairs: Vec<Value> = hash
+            .iter()
+            .map(|(k, v)| Value::array2(k, v))
+            .collect();
         let data = vm.get_block_data(globals, bh)?;
-        // Stable sort with a comparator block.
-        let mut err: Option<MonorubyErr> = None;
-        pairs.sort_by(|a, b| {
-            if err.is_some() {
-                return std::cmp::Ordering::Equal;
-            }
-            match vm.invoke_block(globals, &data, &[*a, *b]) {
-                Ok(r) => match r.try_fixnum() {
-                    Some(n) if n < 0 => std::cmp::Ordering::Less,
-                    Some(n) if n > 0 => std::cmp::Ordering::Greater,
-                    _ => std::cmp::Ordering::Equal,
-                },
-                Err(e) => {
-                    err = Some(e);
-                    std::cmp::Ordering::Equal
+        // Root the pending pair Arrays: the comparator block runs
+        // arbitrary Ruby while they live only in this Rust Vec.
+        vm.with_temp_scope(|vm| {
+            vm.temp_array_new(pairs.len());
+            vm.temp_array_extend_from_slice(&pairs);
+            // Stable sort with a comparator block.
+            let mut err: Option<MonorubyErr> = None;
+            pairs.sort_by(|a, b| {
+                if err.is_some() {
+                    return std::cmp::Ordering::Equal;
                 }
+                match vm.invoke_block(globals, &data, &[*a, *b]) {
+                    Ok(r) => match r.try_fixnum() {
+                        Some(n) if n < 0 => std::cmp::Ordering::Less,
+                        Some(n) if n > 0 => std::cmp::Ordering::Greater,
+                        _ => std::cmp::Ordering::Equal,
+                    },
+                    Err(e) => {
+                        err = Some(e);
+                        std::cmp::Ordering::Equal
+                    }
+                }
+            });
+            if let Some(e) = err {
+                return Err(e);
             }
-        });
-        if let Some(e) = err {
-            return Err(e);
-        }
+            Ok(Value::array_from_vec(pairs))
+        })
     } else {
         let mut keys = hash.keys();
         // Root the merge buffer (see `Array::sort_inner`): the hash keeps
@@ -1441,12 +1448,19 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             };
             vm.sort(globals, &mut keys, buf)
         })?;
-        pairs = keys
-            .iter()
-            .map(|&k| Value::array2(k, hash.get(k, vm, globals).unwrap().unwrap()))
-            .collect();
+        // Each fresh pair must survive the Ruby `hash`/`eql?` dispatch
+        // inside `hash.get` for the following keys — accumulate into a
+        // rooted Array instead of a bare Rust Vec.
+        vm.with_temp_scope(|vm| {
+            vm.temp_array_new(keys.len());
+            let idx = vm.temp_len() - 1;
+            for &k in keys.iter() {
+                let v = hash.get(k, vm, globals)?.unwrap();
+                vm.temp_array_push(Value::array2(k, v));
+            }
+            Ok(vm.temp_at(idx))
+        })
     }
-    Ok(Value::array_from_vec(pairs))
 }
 
 ///
@@ -1512,6 +1526,12 @@ fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut h = lfp.self_val().dup().as_hash();
+    // The dup is a fresh Hash referenced only by this Rust local; root it
+    // across `#to_hash`, the block calls, and the Ruby `hash`/`eql?`
+    // dispatches inside get/insert (contrast `merge!`, where `h` is the
+    // frame-rooted receiver).
+    vm.with_temp_scope(|vm| {
+    vm.temp_push(h.into());
     if let Some(block) = lfp.block() {
         let data = vm.get_block_data(globals, block)?;
         for arg in lfp.arg(0).as_array().iter() {
@@ -1535,6 +1555,7 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 
     Ok(h.into())
+    })
 }
 
 ///
@@ -1654,18 +1675,24 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         let data = vm.get_block_data(globals, bh)?;
         let hash = lfp.self_val().as_hash();
         let pairs: Vec<(Value, Value)> = hash.iter().collect();
-        let mut new_map = RubyMap::default();
-        for (k, v) in pairs {
-            let result = vm.invoke_block(globals, &data, &[k, v])?;
-            let arr = result.expect_array_ty(globals)?;
-            if arr.len() != 2 {
-                return Err(MonorubyErr::typeerr(
-                    "wrong element type (expected array with 2 elements)",
-                ));
+        // Accumulate into a rooted Ruby Hash (not a bare Rust RubyMap):
+        // the entries come from the block's fresh return Arrays and must
+        // survive the following block calls.
+        vm.with_temp_scope(|vm| {
+            vm.temp_push(Value::hash(RubyMap::default()));
+            let map_idx = vm.temp_len() - 1;
+            for (k, v) in pairs {
+                let result = vm.invoke_block(globals, &data, &[k, v])?;
+                let arr = result.expect_array_ty(globals)?;
+                if arr.len() != 2 {
+                    return Err(MonorubyErr::typeerr(
+                        "wrong element type (expected array with 2 elements)",
+                    ));
+                }
+                vm.temp_at(map_idx).as_hash().insert(arr[0], arr[1], vm, globals)?;
             }
-            new_map.insert(arr[0], arr[1], vm, globals)?;
-        }
-        Ok(Value::hash(new_map))
+            Ok(vm.temp_at(map_idx))
+        })
     } else {
         Ok(lfp.self_val())
     }
@@ -1722,35 +1749,41 @@ fn env_fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let s = arg0.coerce_to_str(vm, globals)?;
         Value::string(s)
     };
-    let hash = lfp.self_val().as_hash();
-    let s = if let Some(bh) = lfp.block() {
-        if lfp.try_arg(1).is_some() {
-            let warn_id = IdentId::get_id("warn");
-            let msg = Value::string_from_str("warning: block supersedes default value argument");
-            vm.invoke_method_inner(globals, warn_id, lfp.self_val(), &[msg], None, None)?;
-        }
-        match hash.get(key, vm, globals)? {
-            Some(v) => v,
-            None => vm.invoke_block_once(globals, bh, &[key])?,
-        }
-    } else if let Some(arg1) = lfp.try_arg(1) {
-        match hash.get(key, vm, globals)? {
-            Some(v) => v,
-            None => arg1,
-        }
-    } else {
-        match hash.get(key, vm, globals)? {
-            Some(v) => v,
-            None => {
-                return Err(MonorubyErr::keyerr_with(
-                    format!("key not found: {}", key.inspect(&globals.store)),
-                    lfp.self_val(),
-                    key,
-                ));
+    // A coerced key is a fresh String referenced only by this Rust local;
+    // root it across the `warn` call and the Ruby dispatches in `get`.
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(key);
+        let hash = lfp.self_val().as_hash();
+        let s = if let Some(bh) = lfp.block() {
+            if lfp.try_arg(1).is_some() {
+                let warn_id = IdentId::get_id("warn");
+                let msg =
+                    Value::string_from_str("warning: block supersedes default value argument");
+                vm.invoke_method_inner(globals, warn_id, lfp.self_val(), &[msg], None, None)?;
             }
-        }
-    };
-    Ok(s)
+            match hash.get(key, vm, globals)? {
+                Some(v) => v,
+                None => vm.invoke_block_once(globals, bh, &[key])?,
+            }
+        } else if let Some(arg1) = lfp.try_arg(1) {
+            match hash.get(key, vm, globals)? {
+                Some(v) => v,
+                None => arg1,
+            }
+        } else {
+            match hash.get(key, vm, globals)? {
+                Some(v) => v,
+                None => {
+                    return Err(MonorubyErr::keyerr_with(
+                        format!("key not found: {}", key.inspect(&globals.store)),
+                        lfp.self_val(),
+                        key,
+                    ));
+                }
+            }
+        };
+        Ok(s)
+    })
 }
 
 ///
@@ -1779,7 +1812,12 @@ fn env_to_hash(
         let data = vm.get_block_data(globals, bh)?;
         let hash = lfp.self_val().as_hash();
         let pairs: Vec<(Value, Value)> = hash.iter().collect();
-        let mut new_map = RubyMap::default();
+        // Accumulate into a rooted Ruby Hash (not a bare Rust RubyMap):
+        // the entries come from the block's fresh return Arrays and must
+        // survive the following block calls.
+        return vm.with_temp_scope(|vm| {
+        vm.temp_push(Value::hash(RubyMap::default()));
+        let map_idx = vm.temp_len() - 1;
         for (k, v) in pairs {
             let result = vm.invoke_block(globals, &data, &[k, v])?;
             // CRuby coerces the block's return value to an Array *only* via
@@ -1810,9 +1848,10 @@ fn env_to_hash(
                     arr.len(),
                 )));
             }
-            new_map.insert(arr[0], arr[1], vm, globals)?;
+            vm.temp_at(map_idx).as_hash().insert(arr[0], arr[1], vm, globals)?;
         }
-        return Ok(Value::hash(new_map));
+        Ok(vm.temp_at(map_idx))
+        });
     }
     let inner = lfp.self_val().as_hashmap_inner().clone_inner();
     Ok(Value::hash_from_inner(inner))
@@ -1955,22 +1994,28 @@ fn env_delete(
     let key_val = lfp.arg(0);
     let key = coerce_env_string(key_val, vm, globals)?;
     let key_v = Value::string(key.clone());
-    let removed = lfp.self_val().as_hash().remove(key_v, vm, globals)?;
+    // `key_v` is a fresh String referenced only by this Rust local; root
+    // it across the Ruby dispatches in `remove` (it is passed to the
+    // block afterwards).
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(key_v);
+        let removed = lfp.self_val().as_hash().remove(key_v, vm, globals)?;
 
-    let c_key = std::ffi::CString::new(key.as_bytes())
-        .map_err(|_| MonorubyErr::argumenterr("bare \\0 in env"))?;
-    // SAFETY: `c_key` is a NUL-terminated C string whose storage outlives
-    // this call. `unsetenv` is a no-op if the variable is not set.
-    unsafe {
-        libc::unsetenv(c_key.as_ptr());
-    }
+        let c_key = std::ffi::CString::new(key.as_bytes())
+            .map_err(|_| MonorubyErr::argumenterr("bare \\0 in env"))?;
+        // SAFETY: `c_key` is a NUL-terminated C string whose storage outlives
+        // this call. `unsetenv` is a no-op if the variable is not set.
+        unsafe {
+            libc::unsetenv(c_key.as_ptr());
+        }
 
-    if removed.is_none()
-        && let Some(bh) = lfp.block()
-    {
-        return vm.invoke_block_once(globals, bh, &[key_v]);
-    }
-    Ok(removed.unwrap_or_default())
+        if removed.is_none()
+            && let Some(bh) = lfp.block()
+        {
+            return vm.invoke_block_once(globals, bh, &[key_v]);
+        }
+        Ok(removed.unwrap_or_default())
+    })
 }
 
 ///
@@ -2232,9 +2277,18 @@ fn env_merge_bang(
 
             if let Some(ref data) = block_data {
                 let key_v = Value::string(key.clone());
-                if let Some(old_v) = lfp.self_val().as_hash().get(key_v, vm, globals)? {
-                    let new_v = Value::string(value.clone());
-                    let result = vm.invoke_block(globals, data, &[key_v, old_v, new_v])?;
+                // `key_v` must survive the Ruby dispatches inside `get`
+                // — it is passed to the block afterwards.
+                let result = vm.with_temp_scope(|vm| {
+                    vm.temp_push(key_v);
+                    if let Some(old_v) = lfp.self_val().as_hash().get(key_v, vm, globals)? {
+                        let new_v = Value::string(value.clone());
+                        Ok(Some(vm.invoke_block(globals, data, &[key_v, old_v, new_v])?))
+                    } else {
+                        Ok(None)
+                    }
+                })?;
+                if let Some(result) = result {
                     value = coerce_env_string(result, vm, globals)?;
                 }
             }
@@ -4562,6 +4616,92 @@ mod tests {
             o = cls.new
             o["x"] = "y"
             o.map { |k, v| [k, v] }
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_sort_with_comparator_block() {
+        // `Hash#sort` with a block sorts the freshly built [k, v] pair
+        // Arrays with a Ruby comparator — the pairs live only in a Rust
+        // Vec while that block runs, which is what the rooting covers.
+        // All three comparator outcomes (<0, >0 and 0) are exercised.
+        run_test(
+            r#"
+            h = { "b" => 2, "a" => 1, "c" => 3 }
+            [
+              h.sort { |x, y| x[0] <=> y[0] },
+              h.sort { |x, y| y[1] <=> x[1] },
+              h.sort { |x, y| 0 },
+            ]
+            "#,
+        );
+        // A comparator that raises propagates the error out of the sort.
+        // Enough pairs that the sort keeps asking after the first raise, so
+        // the "an error is already pending" short-circuit is taken too.
+        run_test(
+            r#"
+            h = { "d" => 4, "b" => 2, "a" => 1, "c" => 3, "e" => 5 }
+            begin
+              h.sort { |x, y| raise ArgumentError, "boom" }
+            rescue ArgumentError => e
+              [e.class, e.message]
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_to_h_with_block() {
+        // NOTE: this exercises the *Ruby-level* `Hash#to_h` in
+        // `monoruby/builtins/hash.rb`, which reopens `class Hash` at startup
+        // and shadows the Rust builtin registered here. (`Hash.instance_method
+        // (:to_h).source_location` is `["<internal:hash>", 11]`.) The Rust
+        // `to_h` block branch is therefore not reachable from Ruby.
+        // A block return that is not a 2-element Array is a TypeError /
+        // ArgumentError, matching CRuby.
+        run_test(
+            r#"
+            h = { a: 1, b: 2 }
+            [
+              h.to_h { |k, v| [k.to_s, v * 10] },
+              h.to_h { |k, v| [v, k] },
+              {}.to_h { |k, v| [k, v] },
+              h.to_h,
+            ]
+            "#,
+        );
+        run_test(
+            r#"
+            h = { a: 1 }
+            [
+              (begin; h.to_h { |k, v| [1, 2, 3] }; rescue => e; e.class; end),
+              (begin; h.to_h { |k, v| 5 }; rescue => e; e.class; end),
+            ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn env_fetch_default_block_and_missing() {
+        // `ENV.fetch` coerces the key to a fresh String and keeps it alive
+        // across the `warn` call and the Ruby dispatches inside `get`.
+        // Covers all four outcomes: hit, default argument, block, and the
+        // block-supersedes-default warning path.
+        run_test(
+            r#"
+            ENV["MONORUBY_COV_FETCH"] = "hit"
+            res = [
+              ENV.fetch("MONORUBY_COV_FETCH"),
+              ENV.fetch("MONORUBY_COV_ABSENT", "dflt"),
+              ENV.fetch("MONORUBY_COV_FETCH", "dflt"),
+              ENV.fetch("MONORUBY_COV_ABSENT") { |k| "blk:#{k}" },
+              ENV.fetch("MONORUBY_COV_FETCH") { |k| "blk:#{k}" },
+              ENV.fetch("MONORUBY_COV_ABSENT", "dflt") { |k| "block wins" },
+              (begin; ENV.fetch("MONORUBY_COV_ABSENT"); rescue KeyError => e; e.class; end),
+            ]
+            ENV.delete("MONORUBY_COV_FETCH")
+            res
             "#,
         );
     }

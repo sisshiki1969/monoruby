@@ -38,7 +38,7 @@ Safepoint polls (`compare alloc_flag; conditionally call gc`) are emitted at **c
 | `--no-gc` CLI flag | Disable GC for the process |
 | `GC.count` / `GC.stat` | Collection counters / CRuby-compatible stats |
 
-Debugging Cargo features: `gc-log` (stats at exit), `gc-debug` (assertions), `gc-stress` (collect on every allocation — used by `bin/test` in CI), `gc-verify` (independent re-mark verification after each minor GC).
+Debugging Cargo features: `gc-log` (stats at exit), `gc-debug` (assertions), `gc-stress` (force a collection at every safepoint, unconditionally — used by `bin/test`'s nextest phase on x86-64 CI), `gc-verify` (independent re-mark verification after each minor GC).
 
 ## Further reading
 

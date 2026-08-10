@@ -3131,36 +3131,41 @@ impl Executor {
         let kw = if cs_kw_len == 0 {
             None
         } else {
-            let mut map = HashmapInner::default();
-            for (k, offset) in cs_kw_args.into_iter() {
-                map.insert(
-                    Value::symbol(k),
-                    lfp.register(cs_kw_pos + offset).unwrap(),
-                    self,
-                    globals,
-                )
-                .unwrap();
-            }
-            // Merge hash splat arguments into the keyword hash. `**obj`
-            // accepts any #to_hash-convertible object (implicit
-            // conversion), not just a Hash.
-            for pos in cs_hash_splat_pos.iter() {
-                if let Some(v) = lfp.register(*pos) {
-                    if !v.is_nil() {
-                        let hash = match v.coerce_to_hash(self, globals) {
-                            Ok(h) => h,
-                            Err(err) => {
-                                self.set_error(err);
-                                return None;
+            // Build the kwargs into a rooted Ruby Hash (not a bare Rust
+            // `HashmapInner`): `insert` / `#to_hash` re-enter Ruby, and a
+            // fresh `#to_hash` result plus the half-built map must
+            // survive those collections.
+            let res = self.with_temp_scope(|vm| {
+                vm.temp_push(Value::hash_from_inner(HashmapInner::default()));
+                let map_idx = vm.temp_len() - 1;
+                for (k, offset) in cs_kw_args.into_iter() {
+                    let key = Value::symbol(k);
+                    let val = lfp.register(cs_kw_pos + offset).unwrap();
+                    vm.temp_at(map_idx).as_hash().insert(key, val, vm, globals)?;
+                }
+                // Merge hash splat arguments into the keyword hash. `**obj`
+                // accepts any #to_hash-convertible object (implicit
+                // conversion), not just a Hash.
+                for pos in cs_hash_splat_pos.iter() {
+                    if let Some(v) = lfp.register(*pos) {
+                        if !v.is_nil() {
+                            let hash = v.coerce_to_hash(vm, globals)?;
+                            vm.temp_push(hash.into());
+                            for (k, v) in hash.iter() {
+                                vm.temp_at(map_idx).as_hash().insert(k, v, vm, globals)?;
                             }
-                        };
-                        for (k, v) in hash.iter() {
-                            map.insert(k, v, self, globals).unwrap();
                         }
                     }
                 }
+                Ok(vm.temp_at(map_idx).as_hash())
+            });
+            match res {
+                Ok(h) => Some(h),
+                Err(err) => {
+                    self.set_error(err);
+                    return None;
+                }
             }
-            Some(Value::hash_from_inner(map).as_hash())
         };
         // method_missing should always be callable regardless of visibility.
         // In Ruby, method_missing is conventionally private, but the VM must
@@ -4629,6 +4634,12 @@ pub(crate) extern "C" fn execute_gc(
     // hang watchdog's countdown (no-op unless armed). See
     // doc/signal.md B+.
     crate::watchdog::poll();
+    // `gc-stress`: force a collection at EVERY safepoint, unconditionally
+    // — independent of the runtime `GC.stress` flag and of how this poll
+    // was triggered. The guard re-arms the GC lane on every exit path, so
+    // the poll word never rests at zero and no poll skips this function.
+    #[cfg(feature = "gc-stress")]
+    let _stress_rearm = crate::poll_flag::StressRearm;
     // Consume the PREEMPT lane first: whether this poll wants a
     // collection, a timeslice switch, or both is decided lane by lane —
     // a pure preempt tick never runs a spurious full GC. See
@@ -4698,7 +4709,7 @@ pub(crate) extern "C" fn execute_gc(
             }
         }
     }
-    if crate::poll_flag::gc_requested() && !deferred_signal {
+    if (cfg!(feature = "gc-stress") || crate::poll_flag::gc_requested()) && !deferred_signal {
         // Forensics (`MONORUBY_GC_BREAK=N`): dump the trigger context of GC
         // #N — who called into the collector, from which executor, and what
         // the scheduler state was — right before that collection runs.

@@ -1166,6 +1166,13 @@ fn handle_keyword(
         if any_keyword_passed(globals, caller, caller_lfp)? {
             return Err(MonorubyErr::argumenterr("no keywords accepted"));
         }
+        // `**nil` still reserves a kwrest argument slot that nothing
+        // else writes (it binds no local); store a real Value or the
+        // callee-entry GC poll marks stack garbage. Mirrors
+        // `handle_keyword_simple` / the forwarding fast path.
+        if let Some(kwr) = globals[callee].kw_rest() {
+            unsafe { *callee_lfp.register_ptr(kwr) = Some(Value::nil()) };
+        }
         return Ok(());
     }
     let mut unknowns = ordinary_keyword(globals, callee, caller, callee_lfp, caller_lfp)?;

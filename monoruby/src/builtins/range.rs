@@ -987,6 +987,10 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                     None,
                 )?
                 .as_array();
+            // The `to_a` result is referenced only by this Rust local
+            // while the comparator block runs — root it.
+            vm.with_temp_scope(|vm| {
+            vm.temp_push(arr.into());
             for v in arr.iter() {
                 let v = *v;
                 let mn = match min_val {
@@ -1031,6 +1035,7 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 min_val.unwrap_or_else(Value::nil),
                 max_val.unwrap_or_else(Value::nil),
             ]))
+            })
         }
     } else {
         // No block: compute min and max directly

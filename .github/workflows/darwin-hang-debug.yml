@@ -44,6 +44,10 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       SKIP_COV: "1"
+      # Match the normal `darwin` job: no `gc-stress` on this runner.
+      # It is now a true per-safepoint stress mode and only the Linux
+      # `amd64` job runs it (see bin/test).
+      SKIP_GC_STRESS: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Ruby
@@ -79,8 +83,8 @@ jobs:
         run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
       - name: Pre-build test + benchmark binaries
         run: |
-          cargo nextest run --no-run --features stress-spill-pool,gc-stress
-          cargo build --bin monoruby --features stress-spill-pool,gc-stress
+          cargo nextest run --no-run --features stress-spill-pool
+          cargo build --bin monoruby --features stress-spill-pool
       - name: Loop bin/test under a memory watchdog (find the OOM culprit)
         env:
           ITERATIONS: ${{ github.event.inputs.iterations }}

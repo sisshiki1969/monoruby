@@ -1,0 +1,183 @@
+# gc-stress — manual, both architectures.
+#
+# `gc-stress` forces a collection at EVERY safepoint, unconditionally. That is
+# the mode that finds unrooted-Value bugs (a fresh object held only by a Rust
+# local across a Ruby re-entry is invisible to the mark phase and gets swept),
+# but it is far too slow to run on every push: on the `amd64` job, stacked on
+# top of llvm-cov instrumentation, it turned a ~10 min nextest phase into
+# ~100 min. So the automatic `Rust` workflow now sets `SKIP_GC_STRESS=1` on
+# both of its jobs, and the stress coverage lives here instead — dispatched by
+# hand from the Actions tab (or `gh workflow run gc-stress.yml`).
+#
+# Run this when touching the GC, frame layout, argument binding, or any
+# builtin that creates a Value and then re-enters Ruby (`invoke_block`,
+# `#to_str`/`#to_ary` coercion, hash `eql?` dispatch, `warn`, ...).
+#
+# Unlike the automatic job this collects NO coverage: instrumentation is a
+# ~7.5x multiplier on top of the stress multiplier and adds nothing here —
+# codecov is fed by the `Rust` workflow.
+name: gc-stress (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Architectures to run"
+        type: choice
+        options: [both, x86_64, aarch64]
+        default: both
+      scope:
+        description: "nextest = unit + integration tests under gc-stress. full = the whole bin/test scope (also benchmarks / optcarrot / ruby-spec, which build WITHOUT gc-stress)."
+        type: choice
+        options: [nextest, full]
+        default: nextest
+      test_filter:
+        description: "Optional nextest filter expression, e.g. test(sort) or package(monoruby). Ignored when scope=full."
+        type: string
+        default: ""
+      no_fail_fast:
+        description: "Keep going after the first failure (report every failing test in one run)."
+        type: boolean
+        default: true
+
+jobs:
+  # Turn the `arch` choice into the matrix. The runner label travels with the
+  # architecture in the JSON rather than via `include:`, because an `include:`
+  # entry whose `arch` does not match the selected combination is APPENDED as
+  # a new job instead of being dropped — which would run aarch64 even when the
+  # user asked for x86_64 only.
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.pick.outputs.targets }}
+    steps:
+      - id: pick
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          X86='{"arch":"x86_64","runner":"ubuntu-latest"}'
+          # GitHub-hosted native arm64 Linux runner (free for public repos).
+          # If this label is ever unavailable for the repo, `macos-latest` is
+          # the other native aarch64 option — but note it is
+          # aarch64-apple-darwin, and the darwin runner has a documented
+          # memory-fragility problem under long runs (see rust.yml).
+          ARM='{"arch":"aarch64","runner":"ubuntu-24.04-arm"}'
+          case "$ARCH" in
+            x86_64)  targets="[$X86]" ;;
+            aarch64) targets="[$ARM]" ;;
+            *)       targets="[$X86,$ARM]" ;;
+          esac
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "matrix: $targets"
+
+  stress:
+    needs: select
+    name: gc-stress (${{ matrix.target.arch }}, ${{ inputs.scope }})
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.select.outputs.targets) }}
+    # Per-safepoint collection is slow by design; `full` on top of that is
+    # slower still. Well above any healthy run, well below a wedged one.
+    timeout-minutes: 240
+    env:
+      CARGO_TERM_COLOR: always
+      # 20-min per-test cap instead of the default 10: under stress the
+      # heaviest JIT warm-up tests legitimately run for minutes. A genuinely
+      # hung test is still terminated and named. (`bin/test` sets this itself
+      # for scope=full; setting it here too keeps both scopes consistent.)
+      NEXTEST_PROFILE: gc-stress
+      # A runaway allocation aborts with a size report + backtrace, and
+      # nextest then names the offending test, instead of the runner dying.
+      MONORUBY_MALLOC_HARD_LIMIT: 6G
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Ruby
+        # The test harness diffs monoruby's output against this CRuby.
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.2"
+      - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
+        run: gem install bigdecimal --no-document
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+      - uses: taiki-e/install-action@nextest
+
+      - name: Neutralise the cross-compile config on native arm64
+        if: matrix.target.arch == 'aarch64'
+        # `.cargo/config.toml` pins `[target.aarch64-unknown-linux-gnu]` to the
+        # x86-64-host cross toolchain: linker `aarch64-linux-gnu-gcc` and
+        # runner `qemu-aarch64`. On a NATIVE arm64 runner that triple is the
+        # host, so cargo would apply both — linking with a compiler that is not
+        # installed and executing every test under qemu, which is precisely the
+        # combination `bin/test-aarch64` warns is unusable under gc-stress
+        # ("unit test だけで 4 時間級"). Environment variables win over
+        # config.toml, so override them here rather than editing the shared
+        # config. `env` is a no-op passthrough runner — cargo rejects an empty
+        # value ("invalid length 0, expected at least one element").
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=cc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER=env" >> "$GITHUB_ENV"
+
+      - name: Show toolchain
+        run: |
+          echo "arch:   $(uname -m)"
+          rustc -vV
+          ruby --version
+          cargo nextest --version
+
+      # --- scope: nextest ---------------------------------------------------
+      - name: nextest under gc-stress
+        if: inputs.scope == 'nextest'
+        env:
+          # Via env, not `${{ }}` interpolation into the script: a dispatch
+          # input must never be pasted into a shell command.
+          TEST_FILTER: ${{ inputs.test_filter }}
+          NO_FAIL_FAST: ${{ inputs.no_fail_fast }}
+        run: |
+          set -o pipefail
+          args=(--features stress-spill-pool,gc-stress)
+          if [ "$NO_FAIL_FAST" = "true" ]; then
+            args+=(--no-fail-fast)
+          fi
+          if [ -n "$TEST_FILTER" ]; then
+            args+=(-E "$TEST_FILTER")
+          fi
+          echo "cargo nextest run ${args[*]}"
+          cargo nextest run "${args[@]}"
+
+      # --- scope: full ------------------------------------------------------
+      # `bin/test` enables gc-stress for its nextest phase unless
+      # SKIP_GC_STRESS=1 (which is what the automatic workflow now sets), so
+      # simply NOT setting it here is what turns the stress on. SKIP_COV=1
+      # keeps llvm-cov out of the picture.
+      - name: Clone optcarrot
+        if: inputs.scope == 'full'
+        run: git clone https://github.com/mame/optcarrot.git ../optcarrot
+      - name: Clone ruby/spec and mspec (pinned)
+        if: inputs.scope == 'full'
+        # Same pinned revisions as the automatic workflow — keep in sync.
+        env:
+          SPEC_REV: baf5738ada1709afdbcf222c7609d3379b9d211d
+          MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
+        run: |
+          git init ../spec
+          git -C ../spec fetch --depth 1 https://github.com/ruby/spec.git "$SPEC_REV"
+          git -C ../spec checkout FETCH_HEAD
+          git init ../mspec
+          git -C ../mspec fetch --depth 1 https://github.com/ruby/mspec.git "$MSPEC_REV"
+          git -C ../mspec checkout FETCH_HEAD
+      - name: Clone ruby-bench
+        if: inputs.scope == 'full'
+        run: git clone --depth 1 https://github.com/ruby/ruby-bench.git ../ruby-bench
+      - name: Install ruby-bench gem dependencies
+        if: inputs.scope == 'full'
+        # bin/ruby-bench-diff requires `erubi`.
+        run: gem install erubi --no-document
+      - name: bin/test under gc-stress
+        if: inputs.scope == 'full'
+        env:
+          SKIP_COV: "1"
+        run: bin/test

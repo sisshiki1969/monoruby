@@ -601,6 +601,13 @@ struct BytecodeGen<'a> {
     exception_table: Vec<ExceptionEntry>,
     /// Merge info.
     merge_info: HashMap<Label, (Option<BcTemp>, Vec<MergeSourceInfo>)>,
+    /// Slot range (arg-area indices) of destructured-parameter locals
+    /// (`|(a, b)|`). These sit in the argument area, but no caller ever
+    /// writes them — the prologue `expand` instructions do, *after* the
+    /// callee-entry GC poll — so `init_method` must nil-fill them or the
+    /// poll's root scan reads stack garbage. Computed from the actual
+    /// `DestructureInfo` targets in `compile()`.
+    destructed_args: std::ops::Range<usize>,
 }
 
 impl<'a> std::ops::Index<Label> for BytecodeGen<'a> {
@@ -649,6 +656,7 @@ impl<'a> BytecodeGen<'a> {
 
             exception_table: vec![],
             merge_info: HashMap::default(),
+            destructed_args: 0..0,
         };
         if let Some(lvc) = binding {
             assert!(params.args_names.is_empty());
@@ -697,6 +705,15 @@ impl<'a> BytecodeGen<'a> {
             rest_pos,
         } in info.destruct_info
         {
+            // Record the union of the expand targets so `replace_init`
+            // can have `init_method` nil-fill them (see `destructed_args`).
+            let start = self.destructed_args.start.min(dst);
+            let end = self.destructed_args.end.max(dst + len);
+            self.destructed_args = if self.destructed_args.is_empty() {
+                dst..dst + len
+            } else {
+                start..end
+            };
             self.gen_expand_array(src, dst, len, rest_pos);
         }
         // A trivial-method hint (`ConstReturn` / `SelfReturn`) makes the
@@ -1972,7 +1989,7 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn replace_init(&mut self, params: &ParamsInfo) {
-        let fninfo = FnInitInfo::new(self.total_reg_num(), params);
+        let fninfo = FnInitInfo::new(self.total_reg_num(), params, self.destructed_args.clone());
         self.ir[0] = (BytecodeInst::InitMethod(fninfo), Loc::default());
     }
 }

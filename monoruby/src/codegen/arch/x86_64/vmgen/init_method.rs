@@ -24,6 +24,7 @@ impl Codegen {
         let label = self.jit.get_current_address();
         self.vm_init_func();
         self.fill_nil();
+        self.fill_destruct();
         // Callee-entry GC/preempt poll. This is the one point every call
         // path funnels through — including the Rust invokers
         // (`invoke_method` / `invoke_block`), which have no call-site
@@ -81,6 +82,38 @@ impl Codegen {
         l0:
             movq [r15 + rax * 8], (NIL_VALUE);
             subq rax, 1;
+            jne  l0;
+        l1:
+        };
+    }
+
+    ///
+    /// Fill NIL_VALUE to the destructured-parameter slots (`|(a, b)|`).
+    ///
+    /// They live inside the argument area (so `fill_nil` misses them),
+    /// and no caller writes them — the `expand` instructions after entry
+    /// do — so without this the callee-entry GC poll marks stack garbage.
+    /// The slot range rides in the instruction's second word:
+    /// `destruct_start` at `[r13 - 8]`, `destruct_len` at `[r13 - 6]`.
+    ///
+    /// ### destroy
+    /// - rax, rdi
+    ///
+    fn fill_destruct(&mut self) {
+        let l0 = self.jit.label();
+        let l1 = self.jit.label();
+        self.jit.branch_if_captured(&l1);
+        monoasm! { &mut self.jit,
+            movzxw rdi, [r13 - 6];  // destruct_len
+            testq rdi, rdi;
+            jz   l1;
+            movzxw rax, [r13 - 8];  // destruct_start
+            negq rax;
+            lea  rax, [r14 + rax * 8 - (LFP_ARG0)];  // &slot[destruct_start]
+        l0:
+            movq [rax], (NIL_VALUE);
+            subq rax, 8;
+            subq rdi, 1;
             jne  l0;
         l1:
         };

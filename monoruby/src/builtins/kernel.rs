@@ -1065,10 +1065,14 @@ pub(crate) fn make_exception_error(
             let cargs: Vec<Value> = msg_arg.into_iter().collect();
             let ex =
                 vm.invoke_method_inner(globals, IdentId::NEW, klass.as_val(), &cargs, None, None)?;
-            apply_backtrace(vm, globals, ex, bt_arg)?;
-            let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
-            fix_system_exit_status(globals, &mut err, ex);
-            return apply_cause(globals, err.with_original(ex), Some(ex), cause_kwarg);
+            // Root the fresh exception across `#set_backtrace` (Ruby).
+            return vm.with_temp_scope(|vm| {
+                vm.temp_push(ex);
+                apply_backtrace(vm, globals, ex, bt_arg)?;
+                let mut err = MonorubyErr::new_from_exception(ex.is_exception().unwrap());
+                fix_system_exit_status(globals, &mut err, ex);
+                apply_cause(globals, err.with_original(ex), Some(ex), cause_kwarg)
+            });
         }
         return Err(MonorubyErr::typeerr("exception class/object expected"));
     }
@@ -1093,9 +1097,13 @@ pub(crate) fn make_exception_error(
         let result = vm.invoke_method_inner(globals, exception_id, a0, &cargs, None, None)?;
         match result.is_exception() {
             Some(ex) => {
-                apply_backtrace(vm, globals, result, bt_arg)?;
-                let err = MonorubyErr::new_from_exception(ex).with_original(result);
-                return apply_cause(globals, err, Some(result), cause_kwarg);
+                // Root the `#exception` result across `#set_backtrace`.
+                return vm.with_temp_scope(|vm| {
+                    vm.temp_push(result);
+                    apply_backtrace(vm, globals, result, bt_arg)?;
+                    let err = MonorubyErr::new_from_exception(ex).with_original(result);
+                    apply_cause(globals, err, Some(result), cause_kwarg)
+                });
             }
             None => return Err(MonorubyErr::typeerr("exception object expected")),
         }

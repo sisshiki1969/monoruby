@@ -184,10 +184,17 @@ fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         .map(|n| super::io::tag_with_encs(globals, n, enc_obj, None))
         .collect();
     let p = vm.get_block_data(globals, bh)?;
-    for name in entries {
-        vm.invoke_block(globals, &p, &[name])?;
-    }
-    Ok(Value::nil())
+    // Root the not-yet-yielded name strings: the block body reaches
+    // safepoints, and a bare Rust `Vec<Value>` is invisible to the GC
+    // mark phase (caught by the true `gc-stress` mode).
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(entries.len());
+        vm.temp_array_extend_from_slice(&entries);
+        for name in entries {
+            vm.invoke_block(globals, &p, &[name])?;
+        }
+        Ok(Value::nil())
+    })
 }
 
 ///

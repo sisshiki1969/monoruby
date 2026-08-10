@@ -101,7 +101,12 @@ fn complex_real_op(
     let (re, im) = (c.re().get(), c.im().get());
     let new_re = vm.invoke_method_simple(globals, op, re, &[rhs])?;
     let new_im = if op == IdentId::_MUL {
-        vm.invoke_method_simple(globals, op, im, &[rhs])?
+        // `new_re` can be a fresh heap numeric only this Rust local
+        // references while the imaginary-part dispatch runs — root it.
+        vm.with_temp_scope(|vm| {
+            vm.temp_push(new_re);
+            vm.invoke_method_simple(globals, op, im, &[rhs])
+        })?
     } else {
         im
     };
