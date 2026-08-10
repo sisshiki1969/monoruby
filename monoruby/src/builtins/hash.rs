@@ -45,6 +45,24 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, ">", gt, 1);
     globals.define_builtin_func(HASH_CLASS, ">=", ge, 1);
     globals.define_builtin_inline_func(HASH_CLASS, "[]", index, inline_gen2!(hash_index), 1);
+    // Positional entry access, used by Ruby-level iteration written as a
+    // `while` loop over indices instead of an `each` block. Internal: the
+    // index is a position in the hash's own entry order, which is not part of
+    // the public Ruby interface.
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "__key_at",
+        key_at,
+        inline_gen2!(hash_key_at),
+        1,
+    );
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "__value_at",
+        value_at,
+        inline_gen2!(hash_value_at),
+        1,
+    );
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "replace", replace, 1);
@@ -887,6 +905,121 @@ fn hash_index(
     ir.handle_error(error);
     state.def_rax2acc(ir, callsite.dst);
     true
+}
+
+/// ### Hash#__key_at (internal)
+///
+/// The key of the `index`-th entry in insertion order, or `nil` when out of
+/// range. See `entry_at`.
+#[monoruby_builtin]
+fn key_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let idx = lfp.arg(0).coerce_to_i64(globals)?;
+    Ok(entry_component(lfp.self_val(), idx, true))
+}
+
+/// ### Hash#__value_at (internal)
+#[monoruby_builtin]
+fn value_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let idx = lfp.arg(0).coerce_to_i64(globals)?;
+    Ok(entry_component(lfp.self_val(), idx, false))
+}
+
+/// Shared by the builtin and the inlined C-ABI helper: a negative or
+/// out-of-range index is `nil` rather than an error, so a Ruby `while` loop
+/// can bound itself with `size` and never pay an error edge.
+fn entry_component(recv: Value, idx: i64, want_key: bool) -> Value {
+    if idx < 0 {
+        return Value::nil();
+    }
+    match recv.as_hash().entry_at(idx as usize) {
+        Some((k, v)) => {
+            if want_key {
+                k
+            } else {
+                v
+            }
+        }
+        None => Value::nil(),
+    }
+}
+
+extern "C" fn hash_key_at_extern(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    base: Value,
+    idx: Value,
+) -> Option<Value> {
+    // Only the Fixnum case is inlined; the guard in the generator keeps
+    // anything else on the generic path.
+    let i = idx.try_fixnum()?;
+    Some(entry_component(base, i, true))
+}
+
+extern "C" fn hash_value_at_extern(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    base: Value,
+    idx: Value,
+) -> Option<Value> {
+    let i = idx.try_fixnum()?;
+    Some(entry_component(base, i, false))
+}
+
+/// Inline `Hash#__key_at` / `#__value_at` as a direct C-ABI call, reusing the
+/// `Hash#[]` call sequence (recv in Rdx, arg in Rcx, vm/globals loaded by the
+/// emitter). This skips method dispatch and the builtin trampoline while
+/// leaving the lookup itself in Rust.
+fn hash_entry_at_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    store: &Store,
+    callid: CallSiteId,
+    f: u64,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    state.load(ir, callsite.args, GP::Rcx);
+    state.load(ir, callsite.recv, GP::Rdx);
+    let using_fpr = state.get_using_fpr(ir);
+    ir.fpr_save(using_fpr);
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_hash_index(f));
+    ir.fpr_restore(using_fpr);
+    let error = ir.new_error(state);
+    ir.handle_error(error);
+    state.def_rax2acc(ir, callsite.dst);
+    true
+}
+
+fn hash_key_at(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    hash_entry_at_inline(state, ir, store, callid, hash_key_at_extern as *const () as u64)
+}
+
+fn hash_value_at(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    hash_entry_at_inline(
+        state,
+        ir,
+        store,
+        callid,
+        hash_value_at_extern as *const () as u64,
+    )
 }
 
 extern "C" fn hashindex(
@@ -4821,6 +4954,49 @@ mod tests {
               (begin; h.to_h { |k, v| [1] }; rescue => e; [e.class, e.message]; end),
             ]
             "#,
+        );
+    }
+
+    #[test]
+    fn hash_entry_at_intrinsics() {
+        // `__key_at` / `__value_at` are monoruby-only, so the script computes
+        // the same value the other way round when they are absent — CRuby
+        // takes the `to_a` branch and the results must agree, which pins the
+        // intrinsics to CRuby's insertion order rather than to our own idea
+        // of it.
+        run_test(
+            r##"
+            def entries(h)
+              if h.respond_to?(:__key_at)
+                (0...h.size).map { |i| [h.__key_at(i), h.__value_at(i)] }
+              else
+                h.to_a
+              end
+            end
+            small = { a: 1, "b" => 2, 3 => :c }
+            big = {}
+            i = 0
+            while i < 100; big["k#{i}"] = i; i += 1; end
+            ident = {}
+            ident.compare_by_identity
+            x = "k"
+            y = "k"
+            ident[x] = 1
+            ident[y] = 2
+            [entries(small), entries(big).last, entries({}), entries(ident)]
+            "##,
+        );
+        // Out of range (and a negative index) is nil, so a `while` loop bounded
+        // by `size` never needs an error edge.
+        run_test(
+            r##"
+            h = { a: 1 }
+            if h.respond_to?(:__key_at)
+              [h.__key_at(1), h.__value_at(1), h.__key_at(-1), h.__value_at(-1)]
+            else
+              [nil, nil, nil, nil]
+            end
+            "##,
         );
     }
 }

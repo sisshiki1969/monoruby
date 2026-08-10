@@ -524,6 +524,19 @@ impl<'a> HashRef<'a> {
         self.len() == 0
     }
 
+    /// The `index`-th entry in insertion order, or `None` when out of range.
+    /// O(1) for every representation: the inline pairs and `RubyMap`'s entry
+    /// vector are both position-addressable. Used by the `__key_at` /
+    /// `__value_at` intrinsics so Ruby-level iteration can be a `while` loop
+    /// over indices instead of an `each` block.
+    pub(crate) fn entry_at(&self, index: usize) -> Option<(Value, Value)> {
+        match self.content() {
+            ContentRef::Inline(pairs) => pairs.get(index).copied(),
+            ContentRef::Map(m) => m.get_index(index).map(|(k, v)| (*k, *v)),
+            ContentRef::Ident(m) => m.get_index(index).map(|(k, v)| (k.0, *v)),
+        }
+    }
+
     pub fn is_compare_by_identity(&self) -> bool {
         if self.is_inline() {
             self.flags() & IDENT_BIT != 0
@@ -1374,6 +1387,11 @@ impl Hashmap {
 
     pub fn len(&self) -> usize {
         self.inner().len()
+    }
+
+    /// See [`HashRef::entry_at`].
+    pub(crate) fn entry_at(&self, index: usize) -> Option<(Value, Value)> {
+        self.inner().entry_at(index)
     }
 
     pub fn is_empty(&self) -> bool {
