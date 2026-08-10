@@ -41,6 +41,7 @@ Two things to know before reading:
 | [`regalloc_separation.md`](regalloc_separation.md) | EN | design record | Separating the abstract interpreter from register allocation. The largest document here; the structural groundwork the LIR work builds on. |
 | [`arch_difference.md`](arch_difference.md) | EN | reference | How the x86-64 and aarch64 backends differ, `AsmInst` by `AsmInst`. Read before touching either. |
 | [`arg_forwarding_jit.md`](arg_forwarding_jit.md) | JA | design record | JIT strategy for `def f(a, ...) g(...) end`, staged, with the deopt-safety argument. |
+| [`bop_redefinition.md`](bop_redefinition.md) | JA | design record | What licenses inlining `1 + 2`, what happens when Ruby revokes it, and why the current all-or-nothing response is both too narrow (silently wrong answers) and too blunt (24× slower, permanently). Measured against CRuby. |
 | [`handoff_record_stream.md`](handoff_record_stream.md) | EN | plan / history | Handoff note for the record-driven lowering work; a summary of `regalloc_separation.md` §12–21 as of that branch. |
 
 ## Runtime services
