@@ -4637,9 +4637,11 @@ mod tests {
             "#,
         );
         // A comparator that raises propagates the error out of the sort.
+        // Enough pairs that the sort keeps asking after the first raise, so
+        // the "an error is already pending" short-circuit is taken too.
         run_test(
             r#"
-            h = { "b" => 2, "a" => 1 }
+            h = { "d" => 4, "b" => 2, "a" => 1, "c" => 3, "e" => 5 }
             begin
               h.sort { |x, y| raise ArgumentError, "boom" }
             rescue ArgumentError => e
@@ -4651,9 +4653,13 @@ mod tests {
 
     #[test]
     fn hash_to_h_with_block() {
-        // `Hash#to_h` with a block accumulates the block's fresh return
-        // Arrays into a new Hash; a return value that is not a 2-element
-        // Array is a TypeError / ArgumentError.
+        // NOTE: this exercises the *Ruby-level* `Hash#to_h` in
+        // `monoruby/builtins/hash.rb`, which reopens `class Hash` at startup
+        // and shadows the Rust builtin registered here. (`Hash.instance_method
+        // (:to_h).source_location` is `["<internal:hash>", 11]`.) The Rust
+        // `to_h` block branch is therefore not reachable from Ruby.
+        // A block return that is not a 2-element Array is a TypeError /
+        // ArgumentError, matching CRuby.
         run_test(
             r#"
             h = { a: 1, b: 2 }
