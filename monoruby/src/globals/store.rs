@@ -1174,10 +1174,30 @@ impl Store {
         entry
     }
 
-    pub(super) fn invalidate_jit_code(&mut self) {
-        self.iseqs
-            .iter_mut()
-            .for_each(|info| info.invalidate_jit_code())
+    ///
+    /// Throw away the compiled bodies that inlined `class#name` without a
+    /// runtime guard — and only those.
+    ///
+    /// Everything else keeps its JIT code: a method that inlines `Integer#+`
+    /// is untouched when `Integer#~` is replaced, and any use of an operator
+    /// that went out as a real method call is already covered by the
+    /// class-version guard that every redefinition bumps. Returns the evicted
+    /// ids so the caller can revert their entry jumps and decide whether any
+    /// stale OSR loop body can still exist.
+    ///
+    pub(super) fn evict_jit_code_for_bop(
+        &mut self,
+        class: ClassId,
+        name: IdentId,
+    ) -> HashSet<ISeqId> {
+        let mut stale = HashSet::default();
+        for (i, info) in self.iseqs.iter_mut().enumerate() {
+            if info.depends_on_bop(class, name) {
+                info.evict_jit_code();
+                stale.insert(ISeqId::new(i));
+            }
+        }
+        stale
     }
 }
 

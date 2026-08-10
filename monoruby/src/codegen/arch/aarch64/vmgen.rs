@@ -1556,7 +1556,7 @@ impl Codegen {
     /// the operator actually redefined loses its fast path. `loop_start`
     /// still has to go, because an off-stack method's `[pc+8]` keeps a
     /// stale loop codeptr and nothing reverts OSR entries.
-    pub(in crate::codegen) fn disable_vm_loop_jit(&mut self) {
+    pub(crate) fn disable_vm_loop_jit(&mut self) {
         self.dispatch[14] = self.a64_op_loop();
     }
 }

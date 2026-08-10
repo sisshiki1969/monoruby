@@ -375,7 +375,7 @@ impl Codegen {
     /// stale loop codeptr and nothing reverts OSR entries, so `loop_start`
     /// becomes the plain advance-and-dispatch handler.
     ///
-    pub(in crate::codegen) fn disable_vm_loop_jit(&mut self) {
+    pub(crate) fn disable_vm_loop_jit(&mut self) {
         self.dispatch[14] = self.vm_loop_start_no_opt();
         self.jit.finalize();
     }

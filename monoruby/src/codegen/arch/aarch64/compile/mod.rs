@@ -945,7 +945,7 @@ impl Codegen {
                 self.jit.bcond_label(monoasm::Cond::Ne, &deopt); // set -> deopt to VM
             }
             // BOP-redefinition guard.
-            LInst::CheckBOP { deopt } => {
+            LInst::CheckBOP { deopt, version } => {
                 let flag_addr = self
                     .jit
                     .get_label_address(&self.bop_redefined_flags)
@@ -953,8 +953,10 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit,
                     mov x9, (flag_addr);
                     ldr w9, [x9];
-                    cbnz x9, deopt;   // any BOP redefined -> deopt
+                    mov x10, (version as u64);
+                    cmp x9, x10;      // version moved since compile -> deopt
                 );
+                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
             }
             // Fixnum fast-path arithmetic with an overflow deopt.
             LInst::IntegerBinOp {

@@ -217,7 +217,17 @@ pub struct ISeqInfo {
     /// each) class. Capped so transient classes evict each other and never
     /// accumulate. See `profile_self_class`.
     pub(super) jit_class_profile: Vec<(ClassId, u32)>,
+    /// Permanently un-JIT-able: the front-end bailed on this body. Distinct
+    /// from having its compiled code thrown away (see `evict_jit_code`),
+    /// which is recoverable — the body recompiles on its next warm-up.
     pub(super) jit_invalidated: bool,
+    /// The `(class, operator)` basic-op invariants the compiled bodies of
+    /// this iseq inlined without a runtime guard, unioned across self
+    /// classes. Recorded by `JitContext::assume_basic_op`; read by
+    /// `set_bop_redefine` to decide whether a redefinition invalidates this
+    /// body at all. Empty means no compiled body ever leaned on a basic op,
+    /// so no redefinition can make one stale.
+    pub(super) bop_deps: Vec<(ClassId, IdentId)>,
     ///
     /// Basic block information.
     ///
@@ -386,6 +396,7 @@ impl ISeqInfo {
             jit_guard_free_slot: HashMap::default(),
             jit_class_profile: Vec::new(),
             jit_invalidated: false,
+            bop_deps: Vec::new(),
             bb_info: BasicBlockInfo::default(),
             callsite_map: HashMap::default(),
             hint: ISeqHint::Normal,
@@ -757,6 +768,30 @@ impl ISeqInfo {
         self.jit_invalidated
     }
 
+    /// Union in the invariants a freshly compiled body leaned on.
+    pub(crate) fn add_bop_deps(&mut self, deps: Vec<(ClassId, IdentId)>) {
+        for dep in deps {
+            if !self.bop_deps.contains(&dep) {
+                self.bop_deps.push(dep);
+            }
+        }
+    }
+
+    /// Did any compiled body of this iseq inline `class#name`?
+    pub(crate) fn depends_on_bop(&self, class: ClassId, name: IdentId) -> bool {
+        self.bop_deps.contains(&(class, name))
+    }
+
+    /// Throw away this iseq's compiled code because a basic op it inlined was
+    /// redefined. Unlike [`Self::invalidate_jit_code`] this is *recoverable*:
+    /// the body is compilable again, and the recompile will route the
+    /// redefined operator through a real call while keeping every other
+    /// inline path. The recorded dependencies go with the code they described.
+    pub(crate) fn evict_jit_code(&mut self) {
+        self.bop_deps.clear();
+        self.drop_jit_code();
+    }
+
     pub(crate) fn get_jit_entry(&self, self_class: ClassId) -> Option<DestLabel> {
         if self.jit_invalidated {
             return None;
@@ -772,8 +807,17 @@ impl ISeqInfo {
             .map(|info| info.class_version_label.clone())
     }
 
+    /// Permanently give up on JIT-compiling this iseq (the front-end bailed).
     pub(crate) fn invalidate_jit_code(&mut self) {
         self.jit_invalidated = true;
+        self.drop_jit_code();
+    }
+
+    /// Detach every compiled body of this iseq so nothing can branch into it
+    /// again. Shared by the permanent [`Self::invalidate_jit_code`] and the
+    /// recoverable [`Self::evict_jit_code`]; on its own it says nothing about
+    /// whether the iseq may be compiled again.
+    fn drop_jit_code(&mut self) {
         self.jit_entry.clear();
         self.jit_class_profile.clear();
         #[cfg(target_arch = "aarch64")]

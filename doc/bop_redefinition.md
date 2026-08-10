@@ -455,7 +455,71 @@ Step 2c でちょうど削除した `_no_opt` 系と同じ構造の重複を、�
 バイト単位で同一（ページ内オフセットのみ 160 バイト移動）、core 全体スペックは
 344–345F / 218–219E で**同一バイナリでも実行ごとにこの幅で振れる**ため回帰なし。
 
-### Step 2b — JIT を invariant 単位にする（残り）
+### Step 2b — JIT を invariant 単位にする — **実装済み**
+
+Step 2c まで終えても、baseline 0.009 に対して**あらゆる**再定義が 0.030 に
+落ちていた。原因は 1 か所 — `set_bop_redefine` がプロセス内の **全 iseq** の
+JIT コードを一方向ラッチ (`jit_invalidated`) で恒久的に捨てていたこと。
+`Array#[]` を再定義しただけで `fib` の JIT が消える。
+
+**依存を記録して、該当分だけ捨てる。** JIT がガード無しに basic op を仮定して
+いるのは、整数・浮動小数の算術／比較／定数畳み込みと単項演算だけである
+（`binop_integer` / `binop_float` / `gen_cmp_*` / `FixnumNeg` ほか）。それ以外
+— メソッド呼び出しに落ちるものすべて — は**既に class-version ガードで
+守られている**（再定義は必ず class version を進める）。そこで:
+
+1. `JitContext::assume_basic_op(class, op)` を inline 経路の入口に置き、
+   - 再定義済みなら `false` を返して**その演算だけ**通常のメソッド呼び出しへ
+     降格する（`binop_type_checked`）。だから再定義後に再コンパイルしても
+     健全で、しかも**他の演算子の inline は保たれる**。
+   - まだビルトインなら `true` を返しつつ `(class, op)` を記録する。
+2. 記録は `jit_compile` → `ISeqInfo::bop_deps`（self class をまたいで union）。
+3. `set_bop_redefine` は `evict_jit_code_for_bop(class, name)` で
+   **依存している iseq だけ**を捨てる。x86 の entry 巻き戻しも同じ集合に限定。
+4. `jit_invalidated` の意味を分離した。従来はフロントエンドの bail（恒久的に
+   コンパイル不能）と「コードを捨てた」を同じフラグで表していた。前者は
+   `invalidate_jit_code`、後者は**回復可能な** `evict_jit_code` とし、捨てた
+   本体は次のウォームアップで再コンパイルされる。
+5. `check_bop_redefine` の**レベルトリガを解消**（§1.3）。`bop_eviction_pending`
+   を `set_bop_redefine` が立て、直後の `check_bop_redefine` が消費する。
+   従来は sticky フラグを読んでいたため、一度どれかを再定義したプログラムでは
+   **以後すべての `def`** が制御フレーム鎖を全走査して、既にパッチ済みの
+   return address を patch し直していた。
+6. `AsmInst::CheckBOP` を**世代比較**にした。JIT データ語を「何か再定義された」
+   フラグからカウンタに変え、コンパイル時の値を焼き込んで比較する
+   （class-version ガードと同じ形）。従来は 0 比較の sticky だったので、
+   一度でも再定義が起きるとコンパイル済みコード中の `def` 地点が永久に
+   deopt し続けた。
+
+**結果（`fib(29)` × 3、実測）:**
+
+| 条件 | Step 2c | **Step 2b** |
+| --- | ---: | ---: |
+| baseline（JIT） | 0.009 | 0.009 |
+| `Float#+` 再定義後 | 0.030 | **0.009** |
+| `Integer#~` 再定義後 | 0.032 | **0.009** |
+| `Integer#\|` 再定義後 | 0.031 | **0.009** |
+| `Integer#*` 再定義後 | 0.030 | **0.009** |
+| `Array#[]` 再定義後 | 0.031 | **0.009** |
+| （参考）`--no-jit` | 0.030 | 0.031 |
+
+**崖が消えた。** `fib` が使わない演算子の再定義は**完全に無料**になった。
+
+検証: 再定義スイープ 257 件 0 差分、alias スイープ 253 件 10（master と同数・
+同一集合）、`cargo test` 全 59 スイート 0 失敗、aarch64 クロスチェック通過。
+回帰テストは `redefining_an_operator_a_compiled_method_inlined`（ウォーム済み
+JIT コードが使っている演算子を再定義しても正しい）と
+`redefining_an_unrelated_operator_leaves_compiled_code_alone`。
+
+**残っているグローバル部分 — OSR ループ本体。** コンパイル済みループ本体の
+codeptr はバイトコード内 `[pc+8]` に埋まっており、iseq 単位で戻す口が無い。
+そのため「1 つでも stale な本体が出た場合に限り」`dispatch[14]`（`loop_start`）
+を no-opt に落とす、という従来の措置を残した。依存する iseq が 1 つも無ければ
+そのループ本体も依存していないので、この措置自体を**行わない**。完全に
+iseq 単位にするには、捨てた iseq の `LoopStart` オペランドをゼロ埋めする必要が
+ある。
+
+### Step 2b（当初の計画・記録として保存）
 
 `jit_invalidated` のグローバル一方向ラッチをやめ、「この iseq がどの
 (op, class) invariant に依存したか」を記録して該当分だけ無効化する。

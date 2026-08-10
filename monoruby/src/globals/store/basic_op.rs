@@ -127,15 +127,6 @@ pub(crate) struct BasicOpTable {
     /// true, i.e. never in a program that leaves the builtins alone, so a
     /// hash probe here costs nothing in the case that matters.
     redefined_set: HashSet<(ClassId, IdentId)>,
-    /// Whether any *Integer* pair was replaced. The VM's assembly fast
-    /// paths are fixnum-only — every one of them opens with
-    /// `guard_rdi_rsi_fixnum` / `guard_rdi_fixnum` and drops non-fixnum
-    /// operands into a Rust helper — so redefining `Float#+`, `String#==`
-    /// or `Array#[]` leaves the assembly correct as written. Only an
-    /// Integer redefinition invalidates it, and only then is the
-    /// dispatch-table swap needed. This is what keeps an unrelated
-    /// `Float#+` from costing the whole process its VM fast paths.
-    integer_redefined: bool,
 }
 
 impl BasicOpTable {
@@ -148,7 +139,6 @@ impl BasicOpTable {
             armed: false,
             redefined: false,
             redefined_set: HashSet::default(),
-            integer_redefined: false,
         }
     }
 
@@ -167,9 +157,6 @@ impl BasicOpTable {
     pub(crate) fn mark_redefined(&mut self, class_id: ClassId, name: IdentId) {
         self.redefined = true;
         self.redefined_set.insert((class_id, name));
-        if class_id == INTEGER_CLASS {
-            self.integer_redefined = true;
-        }
     }
 
     /// Whether *anything* has been replaced. The cheap gate.
@@ -181,7 +168,6 @@ impl BasicOpTable {
     pub(crate) fn redefined_pair(&self, class_id: ClassId, name: IdentId) -> bool {
         self.redefined && self.redefined_set.contains(&(class_id, name))
     }
-
 }
 
 #[cfg(test)]
@@ -365,6 +351,47 @@ mod tests {
                 "class {class}; alias __orig :{op}; def {op}; __orig; end; end; {expr}"
             ));
         }
+    }
+
+    /// Redefining an operator that a *compiled* method inlined has to reach
+    /// that method: its JIT body computed the operation with no runtime
+    /// check, so the body must be thrown away and the on-stack frames
+    /// evicted. `fib(20)` and `loopy(2000)` are both past the test-mode JIT
+    /// thresholds on their own, so the redefinition lands on warm compiled
+    /// code. `run_test_once`, not `run_test`: aliasing `+` a second time in
+    /// the same process would capture the replacement and recurse (CRuby
+    /// does the same).
+    #[test]
+    fn redefining_an_operator_a_compiled_method_inlined() {
+        run_test_once(
+            r#"
+            def fib(n) = n < 2 ? n : fib(n-1) + fib(n-2)
+            def loopy(n); s = 0; i = 0; while i < n; s = s + i; i = i + 1; end; s; end
+            res = [fib(20), loopy(2000)]
+            class Integer
+              alias __plus +
+              def +(o) = __plus(o)
+            end
+            res << fib(20) << loopy(2000)
+        "#,
+        );
+    }
+
+    /// The other half: a redefinition of an operator the compiled body never
+    /// inlined must leave that body alone. Only observable as behaviour in
+    /// that the results stay right, but the property under test is that
+    /// `evict_jit_code_for_bop` finds nothing to evict here.
+    #[test]
+    fn redefining_an_unrelated_operator_leaves_compiled_code_alone() {
+        run_test(
+            r#"
+            def fib(n) = n < 2 ? n : fib(n-1) + fib(n-2)
+            res = [fib(20)]
+            class Float; def *(o) = 0.0; end
+            class Array; def [](i) = nil; end
+            res << fib(20) << (2.0 * 3.0) << [1, 2][0]
+        "#,
+        );
     }
 
     /// A redefinition on one class must not cost the *other* classes their

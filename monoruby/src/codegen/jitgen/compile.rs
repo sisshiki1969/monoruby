@@ -525,6 +525,21 @@ impl<'a> JitContext<'a> {
                             return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                         }
                     }
+                    // A redefined `-@` / `+@` / `~` must not be inlined:
+                    // only the two arms below emit guard-free unary
+                    // arithmetic, so only they consult — and record — the
+                    // invariant. Everything else already goes out through
+                    // `call_unary_method`, which the class-version guard
+                    // protects.
+                    Some(recv_class)
+                        if matches!(
+                            (recv_class, kind),
+                            (INTEGER_CLASS, UnOpK::Neg | UnOpK::Pos | UnOpK::BitNot)
+                                | (FLOAT_CLASS, UnOpK::Neg | UnOpK::Pos)
+                        ) && !self.assume_basic_op(recv_class, kind.into()) =>
+                    {
+                        return self.call_unary_method(state, ir, src, recv_class, kind, bc_pos);
+                    }
                     Some(INTEGER_CLASS) => {
                         if let Some(src) = state.is_fixnum_literal(src) {
                             let i = src.get();

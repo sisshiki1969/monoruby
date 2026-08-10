@@ -227,7 +227,8 @@ impl Codegen {
             class_version,
             const_version,
         ) {
-            Ok((cache, specialized_info, class_version_label)) => {
+            Ok((cache, specialized_info, class_version_label, bop_deps)) => {
+                globals.store[iseq_id].add_bop_deps(bop_deps);
                 let codeptr = self.jit.get_label_address(&entry_label);
                 let (end0, end1) = self.get_address_pair();
                 let elapsed = now.elapsed();

@@ -2448,10 +2448,28 @@ impl Store {
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             codegen.set_bop_redefine(bop);
-            self.invalidate_jit_code();
-            // Revert JIT-compiled / jit-stub method entries back to `vm_entry`.
+            // Only the compiled bodies that inlined *this* `(class, operator)`
+            // with no runtime guard have gone stale. Everything the JIT reached
+            // through a real method call is already covered by the
+            // class-version guard, which every definition bumps.
+            let stale = self.evict_jit_code_for_bop(class_id, name);
+            if stale.is_empty() {
+                // Nothing inlined it, so no compiled loop body can have
+                // inlined it either — the OSR entries stay safe to take.
+                return;
+            }
+            // At least one body is stale, and an off-stack method's `[pc+8]`
+            // still holds its loop codeptr with nothing to revert it. Stop
+            // entering compiled loop bodies process-wide; making *this* per
+            // iseq means zeroing the `LoopStart` operands of the evicted
+            // bodies, which is the remaining piece of per-invariant
+            // invalidation.
+            codegen.disable_vm_loop_jit();
+            // Revert the evicted methods' entry jumps back to `vm_entry`, so
+            // the next call re-enters the interpreter and re-warms.
             // x86-only: this uses the x86 `apply_jmp_patch_address` to rewrite
-            // the entry jumps in place.
+            // the entry jumps in place. (aarch64 instead zeroes the dispatch
+            // slots, which `evict_jit_code` has already done.)
             #[cfg(target_arch = "x86_64")]
             {
                 let vm_entry = codegen.vm_entry();
@@ -2460,7 +2478,7 @@ impl Store {
                         // Skip trivial methods (ConstReturn/SelfReturn) — their
                         // wrappers don't execute bytecode and contain no BOP
                         // usage, so patching them to vm_entry would break it.
-                        if self[iseq].hint != ISeqHint::Normal {
+                        if self[iseq].hint != ISeqHint::Normal || !stale.contains(&iseq) {
                             continue;
                         }
                         let entry = codegen.jit.get_label_address(&func.entry_label());
