@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-435b8d1f.js";
+            window.path_to_searchindex_js = "searchindex-6f683319.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e1173681.js"></script>
@@ -216,7 +216,7 @@
 </tbody>
 </table>
 </div>
-<p>Debugging Cargo features: <code>gc-log</code> (stats at exit), <code>gc-debug</code> (assertions), <code>gc-stress</code> (collect on every allocation — used by <code>bin/test</code> in CI), <code>gc-verify</code> (independent re-mark verification after each minor GC).</p>
+<p>Debugging Cargo features: <code>gc-log</code> (stats at exit), <code>gc-debug</code> (assertions), <code>gc-stress</code> (force a collection at every safepoint, unconditionally — used by <code>bin/test</code>’s nextest phase on x86-64 CI), <code>gc-verify</code> (independent re-mark verification after each minor GC).</p>
 <h2 id="further-reading"><a class="header" href="#further-reading">Further reading</a></h2>
 <ul>
 <li><a href="design/gc.html"><code>doc/gc.md</code></a> — full design document (heap layout, bitmaps, aging/promotion, remembered-set self-cleaning, heap-escaped frame reclamation)</li>

@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-435b8d1f.js";
+            window.path_to_searchindex_js = "../searchindex-6f683319.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -649,7 +649,7 @@ proc/args/result/exception/joiners/pending/masks/last_status をマークする�
 <tbody>
 <tr><td><code>gc-log</code></td><td>終了時に GC 統計を出力(old 数の実 popcount 等)。</td></tr>
 <tr><td><code>gc-debug</code></td><td>GC 中の各種アサート・ダンプ。<code>old_count</code> と実 popcount の一致検証など。</td></tr>
-<tr><td><code>gc-stress</code></td><td><strong>毎回のアロケーションで GC</strong> を走らせる(<code>bin/test</code> が使用)。世代別のバリア/remembered set 漏れを最も強く炙り出す。</td></tr>
+<tr><td><code>gc-stress</code></td><td><strong>毎セーフポイントで無条件に強制 GC</strong>(実行時 <code>GC.stress</code> フラグとは独立。<code>execute_gc</code> が常に収集し、GC レーンを常時再アーム)。<code>bin/test</code> の nextest フェーズが使用(CI では x86-64 のみ)。世代別のバリア/remembered set 漏れや、Rust ローカルに保持したままの未ルート <code>Value</code> を最も強く炙り出す。</td></tr>
 <tr><td><code>gc-verify</code></td><td>マイナー GC 後に独立フル再マークで健全性検証(§6.5)。</td></tr>
 </tbody>
 </table>
