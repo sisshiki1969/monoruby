@@ -1796,7 +1796,15 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                         .invoke_method_inner(globals, next_id, enum_val, &[], None, None)
                     {
                         Ok(val) => vm.temp_array_push(val),
-                        Err(_) => break, // StopIteration — enumerator exhausted
+                        // Only exhaustion ends the pull. Anything else is
+                        // the argument's own `each` failing and must reach
+                        // the caller: swallowing it silently padded the row
+                        // with nils instead of raising, so a GC-induced
+                        // failure showed up as wrong data rather than an
+                        // error (and `[1,2].zip(o)` with a raising `o.each`
+                        // returned [[1,nil],[2,nil]] where CRuby raises).
+                        Err(err) if err.is_stop_iteration(&globals.store) => break,
+                        Err(err) => return Err(err),
                     }
                 }
                 let inner = vm.temp_pop();
@@ -5016,6 +5024,37 @@ mod tests {
         ]);
         // zip raises TypeError for non-enumerable
         run_test_error(r##"[1, 2].zip(42)"##);
+    }
+
+    #[test]
+    fn zip_propagates_each_errors() {
+        // Pulling from an `#each`-based argument stops on StopIteration —
+        // that is exhaustion — but any *other* exception is the argument's
+        // own `each` failing and must reach the caller. Swallowing it padded
+        // the row with nils and returned silently wrong data instead of
+        // raising, which also disguised an unrelated GC failure as a bad
+        // result rather than an error.
+        run_test(
+            r##"
+            o = Object.new
+            def o.each; raise "boom"; end
+            begin; [1, 2].zip(o); rescue => e; [e.class, e.message]; end
+            "##,
+        );
+        // ...including when it raises part-way through the iteration.
+        run_test(
+            r##"
+            o = Object.new
+            def o.each; yield 1; raise ArgumentError, "mid"; end
+            begin; [1, 2].zip(o); rescue => e; [e.class, e.message]; end
+            "##,
+        );
+        // NOTE: a StopIteration raised by the argument's own `each` is still
+        // mistaken for exhaustion here, because the pull goes through
+        // `Enumerator#next` and monoruby's end-of-iteration signal is the
+        // same exception. CRuby collects with `each` + `break` instead, so
+        // it propagates that too. Not asserted, so this test does not pin
+        // the divergent behaviour; tracked separately.
     }
 
     #[test]
