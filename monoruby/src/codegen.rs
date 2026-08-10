@@ -1240,15 +1240,22 @@ impl Codegen {
         unsafe { *self.const_version_addr += 1 }
     }
 
-    pub(crate) fn set_bop_redefine(&mut self) {
+    /// Record that a basic op was redefined. `swap_dispatch` asks for the
+    /// VM's dispatch table to be reverted to the `_no_opt` handlers; only
+    /// an Integer redefinition needs that, because the assembly fast paths
+    /// those handlers carry are fixnum-only (see
+    /// `Store::set_bop_redefine`).
+    pub(crate) fn set_bop_redefine(&mut self, swap_dispatch: bool) {
         let addr = self
             .jit
             .get_label_address(&self.bop_redefined_flags)
             .as_ptr() as *mut u32;
         unsafe { *addr = !0 }
-        self.remove_vm_bop_optimization();
+        if swap_dispatch {
+            self.remove_vm_bop_optimization();
+        }
         #[cfg(any(test, feature = "jit-log"))]
-        eprintln!("### basic op redefined.");
+        eprintln!("### basic op redefined. (vm dispatch swapped: {swap_dispatch})");
     }
 
     ///

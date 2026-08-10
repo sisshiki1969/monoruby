@@ -64,6 +64,14 @@ macro_rules! cmp_values {
                 rhs: Value,
                 is_func_call: bool,
             ) -> Option<Value> {
+                // Non-fixnum receivers (BigInt / Float) are answered below
+                // without a lookup — sound only while their operator is the
+                // builtin. Gated on one bool for unmodified programs.
+                if globals.store.basic_op_redefined()
+                    && globals.store.basic_op_redefined_for(lhs.class(), $op_str)
+                {
+                    return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                }
                 let b = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.$op(&rhs),
                     (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).$op(&rhs),
@@ -204,6 +212,16 @@ impl Executor {
         rhs: Value,
         is_func_call: bool,
     ) -> Result<Value> {
+        // Every arm below answers without a lookup for nil / booleans /
+        // Integer / Float / Symbol / String, so a redefined `==` on the
+        // receiver's class has to take over.
+        if globals.store.basic_op_redefined()
+            && globals
+                .store
+                .basic_op_redefined_for(lhs.class(), IdentId::_EQ)
+        {
+            return self.invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None);
+        }
         let b = match (lhs.unpack(), rhs.unpack()) {
             (RV::Nil, RV::Nil) => true,
             (RV::Nil, _) => false,
@@ -493,6 +511,13 @@ fn cmp_teq_values_impl(
     rhs: Value,
     private_ok: bool,
 ) -> Option<Value> {
+    if globals.store.basic_op_redefined()
+        && globals
+            .store
+            .basic_op_redefined_for(lhs.class(), IdentId::_TEQ)
+    {
+        return vm.invoke_method(globals, IdentId::_TEQ, private_ok, lhs, &[rhs], None, None);
+    }
     let b = match (lhs.unpack(), rhs.unpack()) {
         (RV::Nil, RV::Nil) => true,
         (RV::Nil, _) => false,
@@ -866,6 +891,13 @@ pub(crate) extern "C" fn neg_value(
     lhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    if globals.store.basic_op_redefined()
+        && globals
+            .store
+            .basic_op_redefined_for(lhs.class(), IdentId::_UMINUS)
+    {
+        return vm.invoke_method(globals, IdentId::_UMINUS, is_func_call, lhs, &[], None, None);
+    }
     let v = match lhs.unpack() {
         RV::Fixnum(lhs) => match lhs.checked_neg() {
             Some(lhs) => Value::integer(lhs),
@@ -898,6 +930,13 @@ pub(crate) extern "C" fn pos_value(
     lhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    if globals.store.basic_op_redefined()
+        && globals
+            .store
+            .basic_op_redefined_for(lhs.class(), IdentId::_UPLUS)
+    {
+        return vm.invoke_method(globals, IdentId::_UPLUS, is_func_call, lhs, &[], None, None);
+    }
     let v = match lhs.unpack() {
         RV::Fixnum(lhs) => Value::integer(lhs),
         RV::BigInt(lhs) => Value::bigint(lhs.clone()),
@@ -915,6 +954,13 @@ pub(crate) extern "C" fn not_value(
     lhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    if globals.store.basic_op_redefined()
+        && globals
+            .store
+            .basic_op_redefined_for(lhs.class(), IdentId::_NOT)
+    {
+        return vm.invoke_method(globals, IdentId::_NOT, is_func_call, lhs, &[], None, None);
+    }
     let v = match lhs.unpack() {
         RV::Fixnum(_)
         | RV::BigInt(_)
@@ -937,6 +983,13 @@ pub(crate) extern "C" fn bitnot_value(
     lhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    if globals.store.basic_op_redefined()
+        && globals
+            .store
+            .basic_op_redefined_for(lhs.class(), IdentId::_BNOT)
+    {
+        return vm.invoke_method(globals, IdentId::_BNOT, is_func_call, lhs, &[], None, None);
+    }
     let v = match lhs.unpack() {
         RV::Fixnum(lhs) => Value::integer(!lhs),
         RV::BigInt(lhs) => Value::bigint(!lhs),

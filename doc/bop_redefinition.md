@@ -298,6 +298,66 @@ C なのでディスパッチしない。
 書くことで無料で得ている性質を明示的に作る）必要がある。粒度とは独立の課題
 なので Step 2 の前提ではないが、Step 1 の帰結として記録しておく。
 
+### Step 2a — VM を (クラス) 粒度にする — **実装済み**
+
+**鍵になった観測**: VM の asm fast path は**すべて fixnum 限定**である。
+`vm_binops_opt` / `vm_cmp_opt!` / `vm_neg` … はどれも
+`guard_rdi_rsi_fixnum` / `guard_rdi_fixnum` で始まり、fixnum でないオペランドは
+必ず Rust ヘルパ（`add_values`、`cmp_lt_values`、`eq_values_vis`、`not_value`、
+`get_index` …）に落ちる。
+
+したがって:
+
+- **Integer の再定義** → asm が無効になる → ディスパッチ表の差し替えが要る。
+- **それ以外のクラス**（Float / String / Symbol / nil / true / false / Complex /
+  Array / Hash）→ **asm は書かれたとおり正しいまま**。無効になるのは Rust
+  ヘルパのそのクラス用アームだけなので、**ディスパッチ表に触る必要がない**。
+
+実装は 2 点だけ。
+
+1. `BasicOpTable` が「何が再定義されたか」を持つ（`redefined_set` と
+   `integer_redefined`）。`Store::set_bop_redefine` は **Integer が初めて
+   再定義されたときだけ** `remove_vm_bop_optimization()` を呼ぶ。
+2. ネイティブに答える Rust ヘルパが、そのアームに入る前に
+   `basic_op_redefined_for(受け手のクラス, 演算子名)` を確認する。
+   グローバル bool で門番しているので、**再定義しないプログラムの追加コストは
+   bool 1 個**（しかも呼び出し自体が既に C-ABI）。
+
+対象ヘルパ: `binop_values!`（add/sub/mul）、手書きの `div_values` /
+`rem_values` / `pow_values` / `shl_values` / `shr_values`、`cmp_values!`
+（lt/le/gt/ge）、`eq_values_vis`、`cmp_teq_values_impl`、`not_value` /
+`neg_value` / `pos_value` / `bitnot_value`、`get_index` / `set_index`。
+（`!=` は `custom_neq` が既にメソッド表を引くので変更不要。）
+
+**結果（`fib(29)` × 3、実測）:**
+
+| 条件 | Step 1 まで | **Step 2a** |
+| --- | ---: | ---: |
+| baseline（JIT） | 0.009 | 0.009 |
+| `Float#+` 再定義後 | 0.31 | **0.030** |
+| `String#==` 再定義後 | 0.31 | **0.031** |
+| `Array#[]` 再定義後 | 0.30 | **0.030** |
+| `Symbol#==` 再定義後 | 0.30 | **0.030** |
+| `Complex#*` 再定義後 | 0.31 | **0.030** |
+| （参考）`--no-jit` | 0.030 | 0.030 |
+| （参考）CRuby | 0.051 | 0.051 |
+
+**再定義後の 0.030 は `--no-jit` の 0.030 と完全に一致する。** つまり VM 側の
+劣化は完全に消え、残る 3.3 倍（0.009 → 0.030）は**まるごと JIT の
+グローバル無効化**である。これが Step 2b の対象。
+
+正しさは 257 ケースのスイープが 0 差分を維持、`cargo test` 59/59、core 全体
+スペックは 345F/218E → **344F/218E**、`--features emit-asm` は Step 1 前の
+master とバイト単位で同一のまま。
+
+### Step 2b — JIT を invariant 単位にする（残り）
+
+`jit_invalidated` のグローバル一方向ラッチをやめ、「この iseq がどの
+(op, class) invariant に依存したか」を記録して該当分だけ無効化する。
+`InlineCacheEntry` と class-version ラベルという前例がある。あわせて
+`dispatch[14]`（`loop_start`）の no-opt 化と `immediate_eviction` の
+レベルトリガ（§1.3）もここで直す。
+
 ### Step 2 — 粒度を (演算子, クラス) へ（性能）
 
 `bop_redefined_flags: u32` を **BOP ごとのワード × クラスビット**に変える

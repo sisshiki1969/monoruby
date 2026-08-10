@@ -1486,7 +1486,10 @@ pub(super) extern "C" fn get_index(
     // ops there is no `_no_opt` twin to swap in here — this helper *is* the
     // implementation — so consult the flag directly. Cheap: the enclosing
     // call is already a C-ABI call, and this is one load off `globals`.
-    if globals.store.basic_op_redefined() {
+    if globals
+        .store
+        .basic_op_redefined_for(base_classid, IdentId::_INDEX)
+    {
         return vm.invoke_method(
             globals,
             IdentId::_INDEX,
@@ -1620,7 +1623,9 @@ pub(super) extern "C" fn set_index(
     if base_classid == ARRAY_CLASS
         && let Some(idx) = index.try_fixnum()
         // See `get_index`: this branch answers `Array#[]=` without a lookup.
-        && !globals.store.basic_op_redefined()
+        && !globals
+            .store
+            .basic_op_redefined_for(base_classid, IdentId::_INDEX_ASSIGN)
     {
         class_slot.idx = INTEGER_CLASS;
         if base.is_frozen() {

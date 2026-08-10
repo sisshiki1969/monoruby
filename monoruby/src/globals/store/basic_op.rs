@@ -119,11 +119,23 @@ pub(crate) struct BasicOpTable {
     /// bootstrap would report the interpreter monkey-patching itself and
     /// disable every optimization before the user's first line runs.
     armed: bool,
-    /// Set once any pair in the table has been replaced. The dispatch-table
-    /// fast paths answer this by being swapped for their `_no_opt` twins
-    /// (`remove_vm_bop_optimization`), but the indexing helpers in
-    /// `codegen/runtime.rs` are ordinary Rust and read this flag instead.
+    /// Set once any pair in the table has been replaced — the one-test
+    /// gate every Rust-side fast path opens with, so a program that
+    /// redefines nothing pays a single bool per helper call.
     redefined: bool,
+    /// *Which* pairs were replaced. Only consulted once `redefined` is
+    /// true, i.e. never in a program that leaves the builtins alone, so a
+    /// hash probe here costs nothing in the case that matters.
+    redefined_set: HashSet<(ClassId, IdentId)>,
+    /// Whether any *Integer* pair was replaced. The VM's assembly fast
+    /// paths are fixnum-only — every one of them opens with
+    /// `guard_rdi_rsi_fixnum` / `guard_rdi_fixnum` and drops non-fixnum
+    /// operands into a Rust helper — so redefining `Float#+`, `String#==`
+    /// or `Array#[]` leaves the assembly correct as written. Only an
+    /// Integer redefinition invalidates it, and only then is the
+    /// dispatch-table swap needed. This is what keeps an unrelated
+    /// `Float#+` from costing the whole process its VM fast paths.
+    integer_redefined: bool,
 }
 
 impl BasicOpTable {
@@ -135,6 +147,8 @@ impl BasicOpTable {
                 .collect(),
             armed: false,
             redefined: false,
+            redefined_set: HashSet::default(),
+            integer_redefined: false,
         }
     }
 
@@ -149,12 +163,29 @@ impl BasicOpTable {
         self.armed && self.set.contains(&(class_id, name))
     }
 
-    pub(crate) fn mark_redefined(&mut self) {
+    /// Record that `class_id#name` was replaced.
+    pub(crate) fn mark_redefined(&mut self, class_id: ClassId, name: IdentId) {
         self.redefined = true;
+        self.redefined_set.insert((class_id, name));
+        if class_id == INTEGER_CLASS {
+            self.integer_redefined = true;
+        }
     }
 
+    /// Whether *anything* has been replaced. The cheap gate.
     pub(crate) fn redefined(&self) -> bool {
         self.redefined
+    }
+
+    /// Whether this exact pair has been replaced.
+    pub(crate) fn redefined_pair(&self, class_id: ClassId, name: IdentId) -> bool {
+        self.redefined && self.redefined_set.contains(&(class_id, name))
+    }
+
+    /// Whether the VM's fixnum assembly is still valid. See
+    /// [`Self::integer_redefined`].
+    pub(crate) fn integer_redefined(&self) -> bool {
+        self.integer_redefined
     }
 }
 
@@ -293,6 +324,27 @@ mod tests {
         run_test_once("class Integer; def !; :OVERRIDDEN; end; end; !(3)");
         run_test_once("class NilClass; def ==(o); :OVERRIDDEN; end; end; nil == nil");
         run_test_once("class Integer; def ~; :OVERRIDDEN; end; end; ~(3)");
+    }
+
+    /// A redefinition on one class must not cost the *other* classes their
+    /// fast paths. This is the property Step 2a exists for: before it, any
+    /// entry in the table tripped a process-wide fallback.
+    #[test]
+    fn redefining_one_class_leaves_the_others_alone() {
+        run_test_once(
+            r#"
+            class Float; def +(o); :OVERRIDDEN; end; end
+            # Integer arithmetic, comparison and indexing must still be the
+            # builtins, and Float#+ must be the override.
+            [1 + 2, 3 * 4, 1 < 2, [7, 8][1], ({1 => 2})[1], 1.0 + 2.0]
+            "#,
+        );
+        run_test_once(
+            r#"
+            class String; def ==(o); :OVERRIDDEN; end; end
+            [1 == 1, :a == :a, nil == nil, 1.0 == 1.0, "a" == "a"]
+            "#,
+        );
     }
 
     /// A user class is not in the table and must keep dispatching normally

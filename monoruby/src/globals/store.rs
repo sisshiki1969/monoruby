@@ -392,6 +392,14 @@ impl Store {
         self.basic_ops.redefined()
     }
 
+    /// Whether `class_id#name` — a pair in `BASIC_OP_DEFS` — has been
+    /// replaced, so the fast path that assumed it must dispatch instead.
+    /// Gated on the cheap global bool, so a program that redefines nothing
+    /// never reaches the set probe.
+    pub(crate) fn basic_op_redefined_for(&self, class_id: ClassId, name: IdentId) -> bool {
+        self.basic_ops.redefined_pair(class_id, name)
+    }
+
     #[cfg(feature = "emit-bc")]
     pub(super) fn functions(&self) -> &[FuncInfo] {
         self.functions.functions()

@@ -2191,7 +2191,7 @@ impl Store {
         // not keep answering 3. `undef_method` reaches `insert_method` via
         // `add_empty_method`, so only this path needed its own check.
         if self.basic_ops.contains(class_id, func_name) {
-            self.set_bop_redefine();
+            self.set_bop_redefine(class_id, func_name);
         }
         if self.classes[class_id].methods.remove(&func_name).is_none() {
             Err(MonorubyErr::nameerr(format!(
@@ -2428,15 +2428,25 @@ impl Store {
         // and friends have no entry of their own to displace (they are
         // inherited), yet defining one shadows a fast path all the same.
         if self.basic_ops.contains(class_id, name) {
-            self.set_bop_redefine();
+            self.set_bop_redefine(class_id, name);
         }
     }
 
-    fn set_bop_redefine(&mut self) {
-        self.basic_ops.mark_redefined();
+    fn set_bop_redefine(&mut self, class_id: ClassId, name: IdentId) {
+        let was_integer = self.basic_ops.integer_redefined();
+        self.basic_ops.mark_redefined(class_id, name);
+        // The VM's assembly fast paths are fixnum-only, so only an Integer
+        // redefinition can invalidate them; for every other class the
+        // assembly stays correct as written and the Rust helper it falls
+        // through to does the honest dispatch (it consults
+        // `redefined_pair`). Swapping the dispatch table for, say,
+        // `Float#+` would cost the whole process its integer arithmetic
+        // for nothing — the 24x cliff `doc/bop_redefinition.md` §1.5
+        // measured.
+        let swap_dispatch = self.basic_ops.integer_redefined() && !was_integer;
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
-            codegen.set_bop_redefine();
+            codegen.set_bop_redefine(swap_dispatch);
             self.invalidate_jit_code();
             // Revert JIT-compiled / jit-stub method entries back to `vm_entry`.
             // x86-only: this uses the x86 `apply_jmp_patch_address` to rewrite

@@ -186,6 +186,16 @@ macro_rules! binop_values {
                 rhs: Value,
                 is_func_call: bool,
             ) -> Option<Value> {
+                // The VM's assembly handled fixnum/fixnum before calling
+                // here; every arm below answers a *non*-fixnum receiver
+                // (BigInt / Float / Complex) without a lookup, so it is
+                // only sound while that receiver's operator is still the
+                // builtin. One bool for a program that redefines nothing.
+                if globals.store.basic_op_redefined()
+                    && globals.store.basic_op_redefined_for(lhs.class(), $op_str)
+                {
+                    return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                }
                 match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
                     (Some(lhs), Some(rhs)) => return Some((lhs.$op(rhs)).into()),
                     _ => {}
@@ -278,6 +288,13 @@ pub(crate) extern "C" fn div_values(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    // Same reasoning as the `binop_values!` arms: everything below answers
+    // a non-fixnum receiver without a lookup.
+    if globals.store.basic_op_redefined()
+        && globals.store.basic_op_redefined_for(lhs.class(), IdentId::_DIV)
+    {
+        return vm.invoke_method(globals, IdentId::_DIV, is_func_call, lhs, &[rhs], None, None);
+    }
     match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
             if rhs.check_zero_div() && !lhs.is_float() {
@@ -318,6 +335,13 @@ pub(crate) extern "C" fn rem_values(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    // Same reasoning as the `binop_values!` arms: everything below answers
+    // a non-fixnum receiver without a lookup.
+    if globals.store.basic_op_redefined()
+        && globals.store.basic_op_redefined_for(lhs.class(), IdentId::_REM)
+    {
+        return vm.invoke_method(globals, IdentId::_REM, is_func_call, lhs, &[rhs], None, None);
+    }
     match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
             // For modulo, both integer zero and float zero raise ZeroDivisionError
@@ -470,6 +494,13 @@ pub(crate) extern "C" fn pow_values(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    // Same reasoning as the `binop_values!` arms: everything below answers
+    // a non-fixnum receiver without a lookup.
+    if globals.store.basic_op_redefined()
+        && globals.store.basic_op_redefined_for(lhs.class(), IdentId::_POW)
+    {
+        return vm.invoke_method(globals, IdentId::_POW, is_func_call, lhs, &[rhs], None, None);
+    }
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => pow_ii(lhs, rhs, vm)?,
         (RV::Fixnum(lhs), RV::BigInt(rhs)) => {
@@ -616,6 +647,13 @@ pub(crate) extern "C" fn shr_values(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    // Same reasoning as the `binop_values!` arms: everything below answers
+    // a non-fixnum receiver without a lookup.
+    if globals.store.basic_op_redefined()
+        && globals.store.basic_op_redefined_for(lhs.class(), IdentId::_SHR)
+    {
+        return vm.invoke_method(globals, IdentId::_SHR, is_func_call, lhs, &[rhs], None, None);
+    }
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
             if rhs >= 0 {
@@ -688,6 +726,13 @@ pub(crate) extern "C" fn shl_values(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    // Same reasoning as the `binop_values!` arms: everything below answers
+    // a non-fixnum receiver without a lookup.
+    if globals.store.basic_op_redefined()
+        && globals.store.basic_op_redefined_for(lhs.class(), IdentId::_SHL)
+    {
+        return vm.invoke_method(globals, IdentId::_SHL, is_func_call, lhs, &[rhs], None, None);
+    }
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
             if rhs >= 0 {
