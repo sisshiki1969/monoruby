@@ -259,7 +259,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
 
     // Kernel methods (matching CRuby: these are defined on Kernel, not Object)
     globals.define_builtin_func(kernel_class, "class", class, 0);
-    globals.define_builtin_func(kernel_class, "hash", hash, 0);
+    let kernel_hash = globals.define_builtin_func(kernel_class, "hash", hash, 0);
+    globals.store.set_kernel_hash_fid(kernel_hash);
     globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
     globals.define_builtin_func(kernel_class, "dup", dup, 0);
     globals.define_builtin_func_with_kw(

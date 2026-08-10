@@ -94,6 +94,12 @@ pub struct Store {
     /// `(class, method)` pairs the VM / JIT fast paths assume — see
     /// `basic_op::BasicOpTable` and `doc/bop_redefinition.md`.
     basic_ops: basic_op::BasicOpTable,
+    /// `FuncId` of the builtin `Kernel#hash` — the identity hash every
+    /// object inherits unless it defines its own. Recorded at bootstrap so
+    /// `Value::ruby_hash` can ask "is this receiver's `hash` still that
+    /// one?" and compute the digest inline instead of dispatching. See
+    /// `doc/bop_redefinition.md`.
+    kernel_hash_fid: Option<FuncId>,
     /// ISeq info.
     pub(crate) iseqs: Vec<ISeqInfo>,
     /// class table.
@@ -249,6 +255,7 @@ impl Store {
         Self {
             functions: function::Funcs::default(),
             basic_ops: basic_op::BasicOpTable::new(),
+            kernel_hash_fid: None,
             iseqs: vec![],
             constsite_info: vec![],
             callsite_info: vec![],
@@ -388,6 +395,28 @@ impl Store {
     /// Whether any basic op has been redefined. Read by the fast paths that
     /// live in Rust rather than in the swappable dispatch table — currently
     /// `runtime::{get_index, set_index}`.
+    /// Record the builtin `Kernel#hash`. Called once, at bootstrap.
+    pub(crate) fn set_kernel_hash_fid(&mut self, fid: FuncId) {
+        self.kernel_hash_fid = Some(fid);
+    }
+
+    ///
+    /// Whether `obj` still inherits the builtin identity `hash`.
+    ///
+    /// A plain object — no `hash` of its own anywhere in its ancestry —
+    /// otherwise costs a full dispatch on *every* Hash / Set lookup, which
+    /// is the one place monoruby lost to CRuby (whose `rb_any_hash` special
+    /// cases the same thing). The method-table probe behind this is cached
+    /// on the class version, so it is a load and a compare against the
+    /// interpreter frame it replaces.
+    ///
+    pub(crate) fn has_builtin_identity_hash(&self, obj: Value) -> bool {
+        match (self.kernel_hash_fid, self.check_method(obj, IdentId::HASH)) {
+            (Some(builtin), Some(found)) => builtin == found,
+            _ => false,
+        }
+    }
+
     pub(crate) fn basic_op_redefined(&self) -> bool {
         self.basic_ops.redefined()
     }

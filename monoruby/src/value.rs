@@ -422,6 +422,23 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
                     }
                     ObjTy::RANGE => lhs.as_range().ruby_hash(state, e, g)?,
                     //ObjTy::METHOD => lhs.method().hash(state),
+                    // A plain object — one that inherits the builtin
+                    // identity `hash` — is the common case for a Hash or Set
+                    // keyed by object identity, and dispatching `#hash` for
+                    // every lookup was the one place monoruby lost to CRuby
+                    // (whose `rb_any_hash` special cases exactly this).
+                    // Reproduce `Kernel#hash` inline: same seeded digest of
+                    // `id()`, reduced the same way, so a key hashes
+                    // identically whether it came through here or through a
+                    // real `#hash` call.
+                    _ if g.store.has_builtin_identity_hash(*self) => {
+                        let mut s = crate::value::seeded_hasher();
+                        self.id().hash(&mut s);
+                        // `Value::from_hash_digest`'s reduction, then the
+                        // `RV::Fixnum` arm below — spelled out so the two
+                        // stay visibly identical.
+                        ((s.finish() as i64) >> 1).hash(state);
+                    }
                     _ => {
                         // CRuby semantics: Array#hash / Hash#hash send `#hash`
                         // to each element, and when the result is not already

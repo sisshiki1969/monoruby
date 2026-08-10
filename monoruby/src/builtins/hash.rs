@@ -2548,6 +2548,49 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 mod tests {
     use crate::tests::*;
 
+    /// A key that inherits the builtin identity `hash` skips the `#hash`
+    /// dispatch and digests `id()` inline. The digest has to be the one the
+    /// dispatch would have produced, and the fast path has to stop applying
+    /// the moment the class gains a `hash` of its own — including after the
+    /// hash already holds keys of that class.
+    #[test]
+    fn identity_hash_fast_path_agrees_with_dispatch() {
+        run_test_once(
+            r#"
+            a = Object.new; b = Object.new
+            h = { a => :a, b => :b }
+            plain = [h[a], h[b], h[Object.new]]
+
+            # A class with its own hash / eql? still keys by value.
+            class IdHashK
+              def initialize(v); @v = v; end
+              def hash; @v.hash; end
+              def eql?(o); o.is_a?(IdHashK) && o.instance_variable_get(:@v) == @v; end
+            end
+            by_value = [{ IdHashK.new(1) => :one }[IdHashK.new(1)],
+                        { IdHashK.new(1) => :one }[IdHashK.new(2)]]
+
+            # Defining `hash` later must retire the fast path for that class.
+            class IdHashLate; end
+            l = IdHashLate.new
+            before = { l => :before }[l]
+            class IdHashLate
+              def hash; 12345; end
+              def eql?(o); o.is_a?(IdHashLate); end
+            end
+            after = { IdHashLate.new => :after }[IdHashLate.new]
+
+            # Set membership and Array#hash mix the same digest.
+            require 'set'
+            s = Set.new([a, b])
+            mixed = [s.include?(a), s.include?(Object.new),
+                     [a].hash == [a].hash, [a].hash == [b].hash]
+
+            [plain, by_value, before, after, mixed]
+            "#,
+        );
+    }
+
     #[test]
     fn small_hash_linear_scan() {
         // The small-hash fast paths (rubymap's AR mode and the inline
