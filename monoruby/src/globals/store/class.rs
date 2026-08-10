@@ -2491,19 +2491,15 @@ impl Store {
             // with no runtime guard have gone stale. Everything the JIT reached
             // through a real method call is already covered by the
             // class-version guard, which every definition bumps.
+            // `evict_jit_code` also zeroes each evicted iseq's `LoopStart`
+            // operands, so its compiled OSR loop bodies stop being entered
+            // too — the loop half of the invalidation is per iseq like the
+            // method half, and an unrelated redefinition no longer costs the
+            // process its loop JIT.
             let stale = self.evict_jit_code_for_bop(class_id, name);
             if stale.is_empty() {
-                // Nothing inlined it, so no compiled loop body can have
-                // inlined it either — the OSR entries stay safe to take.
                 return;
             }
-            // At least one body is stale, and an off-stack method's `[pc+8]`
-            // still holds its loop codeptr with nothing to revert it. Stop
-            // entering compiled loop bodies process-wide; making *this* per
-            // iseq means zeroing the `LoopStart` operands of the evicted
-            // bodies, which is the remaining piece of per-invariant
-            // invalidation.
-            codegen.disable_vm_loop_jit();
             // Revert the evicted methods' entry jumps back to `vm_entry`, so
             // the next call re-enters the interpreter and re-warms.
             // x86-only: this uses the x86 `apply_jmp_patch_address` to rewrite

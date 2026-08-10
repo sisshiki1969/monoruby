@@ -790,6 +790,43 @@ impl ISeqInfo {
     pub(crate) fn evict_jit_code(&mut self) {
         self.bop_deps.clear();
         self.drop_jit_code();
+        self.clear_loop_jit_entries();
+    }
+
+    ///
+    /// Forget every compiled OSR loop body of this iseq.
+    ///
+    /// A loop body's entry address lives in the bytecode itself, in the
+    /// `LoopStart` operand at `[pc+8]`, where nothing else can reach it —
+    /// which is why a basic-op redefinition used to disable `loop_start`
+    /// process-wide rather than per iseq. Zeroing the operand puts the site
+    /// back in its "not compiled yet" state, so the next iteration
+    /// recompiles instead of branching into a body that inlined an operator
+    /// which has since been replaced.
+    ///
+    /// The operand is tri-state: `0` not compiled, `1` a sentinel meaning
+    /// the compile bailed and must never be retried, anything else the real
+    /// entry. Only the third case is cleared — resetting the sentinel would
+    /// make a bailing loop re-attempt its (failed, expensive) compile on
+    /// every threshold crossing.
+    ///
+    /// The hit counter at `[pc+0]` is deliberately left at its threshold, so
+    /// the recompile happens on the next iteration rather than after another
+    /// warm-up.
+    ///
+    fn clear_loop_jit_entries(&self) {
+        // `LoopStart`. The opcode is spelled out the same way `TraceIr::from`
+        // reads it back.
+        const LOOP_START: u8 = 14;
+        for bc in self.bytecode() {
+            if (bc.op1() >> 48) as u8 != LOOP_START {
+                continue;
+            }
+            match bc.op2() {
+                0 | 1 => {}
+                _ => BytecodePtr::from_bc(bc).write2(0),
+            }
+        }
     }
 
     pub(crate) fn get_jit_entry(&self, self_class: ClassId) -> Option<DestLabel> {
