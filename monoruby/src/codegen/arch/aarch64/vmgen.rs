@@ -1558,5 +1558,12 @@ impl Codegen {
     /// stale loop codeptr and nothing reverts OSR entries.
     pub(crate) fn disable_vm_loop_jit(&mut self) {
         self.dispatch[14] = self.a64_op_loop();
+        // Publish the freshly-emitted handler: on macOS/aarch64 this flips the
+        // MAP_JIT page back to executable and invalidates the I-cache, so the
+        // dispatch entry above can actually be jumped to. Mirrors the
+        // `self.jit.finalize()` in the x86 twin. Without it, the redefinition
+        // tests die on Apple Silicon the moment the VM reaches a `loop_start`
+        // (SIGILL: the CPU sees the page as it was before the write).
+        self.jit.finalize();
     }
 }
