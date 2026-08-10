@@ -33,6 +33,11 @@ RUBY=(ruby --yjit)
 NEXTEST_FEATURE_LIST=stress-spill-pool
 if [ "${SKIP_GC_STRESS:-0}" != "1" ]; then
   NEXTEST_FEATURE_LIST="$NEXTEST_FEATURE_LIST,gc-stress"
+  # Per-safepoint collection makes the heaviest JIT warm-up tests take minutes,
+  # so use the `gc-stress` nextest profile (a 20-min per-test cap instead of
+  # 10). Selected by env var rather than `--profile`, which `cargo llvm-cov`
+  # would consume as the *cargo* profile.
+  export NEXTEST_PROFILE=gc-stress
 fi
 NEXTEST_FEATURES=(--features "$NEXTEST_FEATURE_LIST")
 BENCH_FEATURES=(--features stress-spill-pool)

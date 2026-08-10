@@ -3484,23 +3484,29 @@ fn recompile_on_polymorphic_comparison_flip() {
     // receiver forever (the aarch64 bug where the RecompileDeopt side-exit
     // collapsed to a plain deopt). Exercises the recompile write-back on both
     // backends.
-    run_test(
+    //
+    // The warm-up loop only has to clear the test-mode JIT thresholds (5 calls
+    // / 15 loop iterations); 2000 iterations x25 runs cost 162s on the
+    // coverage-instrumented CI runner once gc-stress collects at every
+    // safepoint, so the stress build warms up with 100 instead.
+    let warm = if cfg!(feature = "gc-stress") { 100 } else { 2000 };
+    run_test(&format!(
         r#"
-        class A; def ==(o); "A==#{o}"; end; end
-        class B; def ==(o); "B==#{o}"; end; end
+        class A; def ==(o); "A==#{{o}}"; end; end
+        class B; def ==(o); "B==#{{o}}"; end; end
         def cmp(x); x == 5; end
         a = A.new; b = B.new
         res = []
         i = 0
-        while i < 2000; cmp(a); i += 1; end   # warm monomorphic (A)
+        while i < {warm}; cmp(a); i += 1; end   # warm monomorphic (A)
         j = 0
         while j < 30                           # polymorphic -> recompile to guard-free
           res << cmp(a) << cmp(b)
           j += 1
         end
         res.uniq.sort
-        "#,
-    );
+        "#
+    ));
 }
 
 #[test]
@@ -3511,19 +3517,30 @@ fn recompile_hot_method_after_class_version_bump() {
     // ClassVersionGuardFailed) rather than deopt to the interpreter for the
     // rest of the process (the aarch64 permanent-strand bug). Verify results
     // stay correct across the bump.
-    run_test(
+    //
+    // 3000 warm-up + 3000 post-bump iterations x25 runs took 373s on the
+    // coverage-instrumented CI runner under gc-stress (a collection at every
+    // safepoint). 100 iterations on each side of the bump still clears the
+    // test-mode thresholds (5 calls / 15 loop iterations) with room to spare,
+    // so the method is JIT'd before the bump and re-JIT'd after it.
+    let (warm, total) = if cfg!(feature = "gc-stress") {
+        (100, 200)
+    } else {
+        (3000, 6000)
+    };
+    run_test(&format!(
         r#"
         class Lib; def twice(n); n + n; end; end
         $lib = Lib.new
         def work(n); $lib.twice(n) + 1; end
         s = 0
         i = 0
-        while i < 3000; s += work(i); i += 1; end   # warm -> method JIT
+        while i < {warm}; s += work(i); i += 1; end   # warm -> method JIT
         class Other; def noop; end; end              # bump class version
-        while i < 6000; s += work(i); i += 1; end    # keep calling across the bump
+        while i < {total}; s += work(i); i += 1; end    # keep calling across the bump
         s
-        "#,
-    );
+        "#
+    ));
 }
 
 #[test]
@@ -3535,7 +3552,16 @@ fn eager_forwarding_into_req_only_callee() {
     // calling the runtime helper; any guard miss (keyword forwarded, wrong
     // length) still falls back to the helper and matches CRuby — including the
     // ArgumentError on an arity mismatch.
-    run_test(
+    //
+    // The loop only exists to get the four trampolines JIT-compiled, and it
+    // allocates a fresh `C` plus a forwarding rest array every iteration. Under
+    // gc-stress (a collection at every safepoint) 3000 iterations x25 runs blew
+    // past nextest's 600s timeout on the coverage-instrumented CI runner — the
+    // outputs still matched, it was just too slow. 100 iterations still clears
+    // the test-mode thresholds (5 calls / 15 loop iterations) several times
+    // over, so every trampoline is still compiled before the checks below.
+    let n = if cfg!(feature = "gc-stress") { 100 } else { 3000 };
+    run_test(&format!(
         r##"
         def a0; 42; end
         def a1(x); x * 10; end
@@ -3543,21 +3569,21 @@ fn eager_forwarding_into_req_only_callee() {
         def f0(...); a0(...); end
         def f1(...); a1(...); end
         def f5(...); a5(...); end
-        def kw_target(a, b); "#{a}/#{b}"; end
+        def kw_target(a, b); "#{{a}}/#{{b}}"; end
         def fkw(...); kw_target(...); end
-        class P; def greet(a, b); "#{a}:#{b}"; end; end
+        class P; def greet(a, b); "#{{a}}:#{{b}}"; end; end
         class C < P; def greet(...); super(...); end; end
         res = []
         i = 0
-        while i < 3000
+        while i < {n}
           f0; f1(i); f5(i, i, i, i, i); C.new.greet(i, i)
           i += 1
         end
         res << f0 << f1(9) << f5(1, 2, 3, 4, 5) << fkw(1, 2) << C.new.greet(7, 8)
         res << (begin; f5(1, 2); rescue ArgumentError; "argerr"; end)
         res
-        "##,
-    );
+        "##
+    ));
 }
 
 #[test]
@@ -3567,7 +3593,13 @@ fn jit_integer_method_with_bignum_receiver() {
     // a BigNum straight to the VM (`a64_guard_class2`) instead of the
     // miss/profile-patch chain — results must stay correct across interleaved
     // fixnum and BigNum receivers.
-    run_test(
+    //
+    // As with the neighbouring recompile tests, the fixnum warm-up loop only
+    // has to reach the test-mode JIT thresholds (5 calls / 15 loop iterations);
+    // 3000 iterations x25 runs cost 320s on the coverage-instrumented CI runner
+    // under gc-stress, so the stress build warms up with 100.
+    let warm = if cfg!(feature = "gc-stress") { 100 } else { 3000 };
+    run_test(&format!(
         r#"
         class Integer
           def dbl; self * 2; end
@@ -3575,15 +3607,15 @@ fn jit_integer_method_with_bignum_receiver() {
         end
         s = 0
         i = 0
-        while i < 3000; s += i.dbl + i.add5(3); i += 1; end
+        while i < {warm}; s += i.dbl + i.add5(3); i += 1; end
         big = 10 ** 40
         res = []
         [5, big, big + 1, 7, big * big, 9, -8, -big].each do |n|
           res << n.dbl << n.add5(100)
         end
         [s, res]
-        "#,
-    );
+        "#
+    ));
 }
 
 #[test]
