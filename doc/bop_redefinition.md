@@ -72,8 +72,26 @@ fn insert_method(&mut self, class_id: ClassId, name: IdentId, entry: MethodTable
    恒久的に差し替える**。算術・比較・単項の fixnum fast path が全て
    フルディスパッチになる。`dispatch[14]`（`loop_start`）も no-opt になるので、
    **OSR ループ JIT が二度と起動しない**。
-5. `Codegen::check_bop_redefine` → `immediate_eviction` — オンスタックの
-   フレームの return address を deopt にパッチし、戻ってきた時点で VM に落とす。
+
+以上でオフスタックのコードは片付くが、**今スタックに乗っている** JIT フレームは
+まだ古い本体を実行し続ける。その始末は `set_bop_redefine` の中ではなく、
+呼び出し元の `Executor::{add_method, add_method_with_original,
+alias_method_for_class}` が担う。メソッド表を書き換えた**後**・`method_added`
+フックを呼ぶ**前**に `Codegen::check_bop_redefine(cfp)` を通し、フラグが非 0 なら
+`immediate_eviction` が CFP 鎖を遡って各フレームの return address を deopt に
+パッチする（`patch_return_to_deopt`）。戻ってきた時点で VM に落ちる。
+`method_added` は任意の Ruby を走らせるので、その前に片付けておく必要がある。
+
+この配置には 2 つ性質がある。
+
+- **レベルトリガであってエッジトリガではない。** `check_bop_redefine` は
+  「今回の定義が basic op を潰したか」ではなく「フラグが立っているか」を見る。
+  フラグは一度立つとクリアされないので、**以後プロセス内のあらゆるメソッド定義が
+  毎回 CFP 鎖の全走査と return address パッチを行う**。実測では他の要因
+  (JIT が止まることで再コンパイル churn も消える)に埋もれて有意差は出なかったが、
+  構造としては無駄が残り続ける。
+- **経路が 3 つの funnel に限られる。** `remove_method` はここを通らない
+  (§1.4 の但し書き)。
 
 JIT コード内でのランタイム検査は `AsmInst::CheckBOP`（フラグのロード + 分岐）
 だが、発行箇所は `MethodDef` / `SingletonMethodDef` の直後のみ
@@ -110,6 +128,22 @@ Array     []        Hash  []        Symbol  ==
 > を Ruby で実装しているため、再定義が `Kernel#p` の内部を壊して
 > `ArgumentError` になる。BOP フックの欠落ではなく「ビルトインが Ruby 実装で
 > あることの露出」で、CRuby（C 実装）には無い問題。切り分けて扱うべき。
+
+**`remove_method` は検知経路そのものが無い。** 検知は
+`ClassInfoTable::insert_method`（「上書きされた古いエントリが basic op か」）に
+だけ置かれているが、`ClassInfoTable::remove_method` は `methods.remove()` を
+直接呼び、`is_basic_op` を一切見ない。結果:
+
+| 操作 | monoruby | CRuby |
+| --- | --- | --- |
+| `Integer.remove_method(:+)` → `1 + 2` | **`3`** | `NoMethodError` |
+| `Integer.undef_method(:+)` → `1 + 2` | `NoMethodError` | `NoMethodError` |
+| `Integer.alias_method(:+, :-)` → `1 + 2` | `-1` | `-1` |
+
+`undef_method` が通るのは `add_empty_method` 経由で `insert_method` を踏むため。
+CRuby は追加・削除・`prepend` のいずれでも
+`rb_vm_check_redefinition_opt_method` を引くので取りこぼさない。検知点は
+「メソッド表を変更する全経路」に置く必要がある。
 
 ### 1.5 コスト（実測）
 
@@ -198,9 +232,12 @@ CRuby には**測定できるほどの影響が無い**。monoruby の `String#+
 ### Step 1 — 網羅を閉じる（正しさ、最優先）
 
 現在インライン展開している**すべての (クラス, 演算子)** を basic op として
-登録する。既存の仕組みに乗せるだけで、粒度は変えない。
+登録する。あわせて**検知点をメソッド表の全変更経路に置く**
+（`remove_method` が素通りしている、§1.4）。既存の仕組みに乗せるだけで、
+粒度は変えない。
 
-- 効果: 21 件の誤答が解消する（`Array#size` の 1 件は §1.4 の但し書きの通り別件）。
+- 効果: 21 件の誤答と `remove_method` の穴が解消する（`Array#size` の 1 件は
+  §1.4 の但し書きの通り別件）。
 - 副作用: これまで無言で無視していた再定義が全体 deopt を起こすようになるため、
   **遅くなるケースは増える**。Step 2 とセットが望ましい。
 - それでも Step 1 単独で実施する価値はある。「速い誤答」より「遅い正答」を採る。
@@ -216,6 +253,10 @@ CRuby には**測定できるほどの影響が無い**。monoruby の `String#+
 - **JIT**: `jit_invalidated` のグローバル一方向ラッチをやめ、「この iseq が
   どの (op, class) invariant に依存したか」を記録して該当分だけ無効化する。
   `InlineCacheEntry` と class-version ラベルという前例がある。
+- **`immediate_eviction` は残す** — オンスタックのフレームを片付ける手段は
+  粒度に関係なく必要である。ただし §1.3 の 2 性質を直す: 「フラグが非 0 か」の
+  レベルトリガをやめて**マスクのビットが 0→1 に遷移したときだけ**走らせ
+  （エッジトリガ）、走査対象もその (op, class) に依存したフレームに絞る。
 - 効果: 「無関係な `Float#+` の再定義で fib が 24 倍遅くなる」が消える。
 
 ### Step 3 — refinements の基本演算（#1066）
