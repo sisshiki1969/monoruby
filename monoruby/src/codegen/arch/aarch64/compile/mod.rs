@@ -1400,18 +1400,35 @@ impl Codegen {
         );
         self.a64_gen_write_back_for_deopt(&write_back, base);
         let f = crate::executor::execute_gc as *const () as u64;
-        // Preserve the GP-alloc pool (x5-x8 = GP::R8-R11) across the call. They
-        // are AAPCS64 caller-saved and hold live pool Values. The
-        // write-back above spills them to their frame homes for GC marking, but
-        // the post-GC code keeps reading the *registers* (e.g. a pool-resident
-        // call receiver), so they must survive `execute_gc`. x86 preserves
-        // r8-r11 the same way in its `exec_gc` stub (save/restore_registers).
+        // Preserve the caller-saved halves of BOTH allocation pools across the
+        // call: the GP pool (x5-x8 = GP::R8-R11) and the FP pool (d2-d7).
+        // Both are AAPCS64 caller-saved and hold live pool values, and the
+        // write-back above only spills them to their frame homes for GC
+        // marking — the post-GC code keeps reading the *registers* (e.g. a
+        // pool-resident call receiver, or an unboxed float operand), so they
+        // must survive `execute_gc`. d8-d15 / x19-x28 are callee-saved, so the
+        // Rust callee preserves those itself.
+        //
+        // x86 preserves the equivalent registers in its `exec_gc` stub:
+        // `save_registers`/`restore_registers` cover r8-r11 *and* xmm2-xmm15.
+        // Omitting the d2-d7 half here let `execute_gc` clobber a live unboxed
+        // float, so e.g. `10.upto(Float::INFINITY)`'s enumerator saw a garbage
+        // limit and terminated immediately (#1079) — the same failure the
+        // recompile path below already guards against with the identical save.
+        //
         // The GC is mark-and-sweep (non-moving), so a heap value the write-back
         // kept alive is not relocated and restoring the raw register value is
         // correct (Fixnum immediates are trivially fine for the same reason).
         monoasm_arm64!(&mut self.jit,
-            stp x5, x6, [sp, #-16]!;
-            stp x7, x8, [sp, #-16]!;
+            sub sp, sp, #(80);
+            str d2, [sp, #(0)];
+            str d3, [sp, #(8)];
+            str d4, [sp, #(16)];
+            str d5, [sp, #(24)];
+            str d6, [sp, #(32)];
+            str d7, [sp, #(40)];
+            stp x5, x6, [sp, #(48)];
+            stp x7, x8, [sp, #(64)];
         );
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
@@ -1422,8 +1439,15 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         monoasm_arm64!(&mut self.jit,
-            ldp x7, x8, [sp], #16;
-            ldp x5, x6, [sp], #16;
+            ldr d2, [sp, #(0)];
+            ldr d3, [sp, #(8)];
+            ldr d4, [sp, #(16)];
+            ldr d5, [sp, #(24)];
+            ldr d6, [sp, #(32)];
+            ldr d7, [sp, #(40)];
+            ldp x5, x6, [sp, #(48)];
+            ldp x7, x8, [sp, #(64)];
+            add sp, sp, #(80);
         );
         monoasm_arm64!(&mut self.jit,
             cbz x0, error;             // None -> error
