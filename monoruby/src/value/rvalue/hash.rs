@@ -76,6 +76,20 @@ pub const HASH_INLINE_VALUE_OFFSET: usize = std::mem::offset_of!((Value, Value),
 pub const HASH_CONTENT_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(BoxedHash, content);
 pub const HASH_CONTENT_MAP_OFFSET: usize = HASH_CONTENT_OFFSET + std::mem::size_of::<usize>();
 
+/// `HashContent`'s discriminant: the boxed hash is identity-keyed iff the word
+/// at [`HASH_CONTENT_OFFSET`] equals this.
+pub const HASH_CONTENT_TAG_IDENT: usize = 1;
+
+/// The inline representation's identity-mode bit within the `ty_flags` byte.
+/// (The boxed form uses the `HashContent` discriminant instead.)
+pub const HASH_INLINE_IDENT_BIT: u8 = IDENT_BIT;
+
+/// The boxed default slot, addressed from the start of the `RValue`. It holds
+/// an `Option<Box<HashDefault>>`, so the word is null exactly when no default
+/// is set; otherwise it points at a discriminant followed by the payload.
+pub const HASH_DEFAULT_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(BoxedHash, default);
+pub const HASH_DEFAULT_PAYLOAD_OFFSET: usize = std::mem::size_of::<usize>();
+
 /// The entry-storage layout shared by both boxed forms.
 ///
 /// Returns `None` when the two instantiations disagree, or when
@@ -175,10 +189,20 @@ enum HashContent {
 }
 
 #[derive(Debug, Clone)]
+/// `repr(C, usize)` for the same reason as [`HashContent`]: the JIT reads the
+/// discriminant at offset 0 and the payload at [`HASH_DEFAULT_PAYLOAD_OFFSET`],
+/// and `offset_of!` cannot reach into a `repr(Rust)` enum variant. Both
+/// variants carry exactly one `Value`-shaped word (`Proc` is a newtype over
+/// `Value`), so the payload is read the same way for either tag.
+#[repr(C, usize)]
 enum HashDefault {
     Value(Value),
     Proc(Proc),
 }
+
+/// Discriminant values of [`HashDefault`], as generated code sees them.
+pub const HASH_DEFAULT_TAG_VALUE: usize = 0;
+pub const HASH_DEFAULT_TAG_PROC: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HashId(usize);
@@ -2215,5 +2239,108 @@ mod tests {
                 assert_eq!(unsafe { raw_entry_at(v, i) }, h.entry_at(i), "n={n} i={i}");
             }
         }
+    }
+
+    /// Read `compare_by_identity?` the way generated code does.
+    unsafe fn raw_compare_by_identity(v: Value) -> bool {
+        unsafe {
+            let p = v.rvalue() as *const RValue as *const u8;
+            let flags = p.add(RVALUE_OFFSET_TY + 1).read();
+            if flags & HASH_REP_MASK != HASH_REP_BOXED {
+                flags & HASH_INLINE_IDENT_BIT != 0
+            } else {
+                p.add(HASH_CONTENT_OFFSET).cast::<usize>().read() == HASH_CONTENT_TAG_IDENT
+            }
+        }
+    }
+
+    /// Read `default` (`want_proc == false`) or `default_proc` the way
+    /// generated code does. An inline hash never carries a default, and a
+    /// mismatched discriminant answers nil — exactly what the builtins do
+    /// via `unwrap_or_default`.
+    unsafe fn raw_default(v: Value, want_proc: bool) -> Value {
+        unsafe {
+            let p = v.rvalue() as *const RValue as *const u8;
+            if p.add(RVALUE_OFFSET_TY + 1).read() & HASH_REP_MASK != HASH_REP_BOXED {
+                return Value::nil();
+            }
+            let d = p.add(HASH_DEFAULT_OFFSET).cast::<*const u8>().read();
+            if d.is_null() {
+                return Value::nil();
+            }
+            let want = if want_proc {
+                HASH_DEFAULT_TAG_PROC
+            } else {
+                HASH_DEFAULT_TAG_VALUE
+            };
+            if d.cast::<usize>().read() != want {
+                return Value::nil();
+            }
+            d.add(HASH_DEFAULT_PAYLOAD_OFFSET).cast::<Value>().read()
+        }
+    }
+
+    /// The identity flag has two homes — a `ty_flags` bit while inline, the
+    /// `HashContent` discriminant once boxed — so check both sides of the
+    /// promotion against the safe API.
+    #[test]
+    fn jit_layout_matches_compare_by_identity() {
+        let mut globals = Globals::new_test();
+        let e = &mut Executor::default();
+        let g = &mut globals;
+        for ident in [false, true] {
+            for n in [0usize, 1, 3, 4, 10] {
+                let mut inner = HashmapInner::default();
+                inner.set_compare_by_identity_empty(ident).unwrap();
+                for i in 0..n {
+                    inner
+                        .insert(Value::integer(i as i64), Value::integer(i as i64), e, g)
+                        .unwrap();
+                }
+                let v = Value::hash_from_inner(inner);
+                assert_eq!(
+                    unsafe { raw_compare_by_identity(v) },
+                    v.as_hash().is_compare_by_identity(),
+                    "ident={ident} n={n}"
+                );
+            }
+        }
+    }
+
+    /// `Hash#default` / `#default_proc` read the same `Option<Box<..>>` slot
+    /// and differ only in which discriminant they accept, so both are pinned
+    /// here for the no-default and value-default cases. The default-proc case
+    /// needs a real `Proc` and is covered from Ruby
+    /// (`builtins::hash::tests::hash_default_accessors_jit`).
+    #[test]
+    fn jit_layout_matches_default() {
+        let mut globals = Globals::new_test();
+        let g = &mut globals;
+        let _ = &g;
+
+        // No default: nil from both, in either representation.
+        for n in [0usize, 4] {
+            let mut inner = HashmapInner::default();
+            let e = &mut Executor::default();
+            for i in 0..n {
+                inner
+                    .insert(Value::integer(i as i64), Value::integer(i as i64), e, g)
+                    .unwrap();
+            }
+            let v = Value::hash_from_inner(inner);
+            assert!(unsafe { raw_default(v, false) }.is_nil(), "n={n}");
+            assert!(unsafe { raw_default(v, true) }.is_nil(), "n={n}");
+        }
+
+        // Value default: `default` returns it, `default_proc` stays nil.
+        let d = Value::integer(42);
+        let inner = HashmapInner::new_with_default(RubyMap::new(), d);
+        let v = Value::hash_from_inner(inner);
+        assert_eq!(unsafe { raw_default(v, false) }, d);
+        assert_eq!(
+            unsafe { raw_default(v, false) },
+            v.as_hash().default_value().unwrap()
+        );
+        assert!(unsafe { raw_default(v, true) }.is_nil());
     }
 }

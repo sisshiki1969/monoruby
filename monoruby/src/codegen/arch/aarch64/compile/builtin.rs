@@ -211,6 +211,96 @@ impl Codegen {
         );
     }
 
+    /// `Hash#compare_by_identity?`: hash in `base`, Ruby bool into `dst`.
+    /// aarch64 twin of the x86 `gen_hash_compare_by_identity`.
+    ///
+    /// Both representations reduce to one bit — a `ty_flags` bit while inline,
+    /// and the boxed `HashContent` discriminant (0 = Map, 1 = IdentMap) — so
+    /// masking bit 0 of either answers it without a comparison.
+    ///
+    /// ### destroy
+    /// - x9
+    pub(crate) fn gen_hash_compare_by_identity(&mut self, dst: GP, base: GP) {
+        let (d, b) = (dst.a64().0, base.a64().0);
+        let inline_case = self.jit.label();
+        let tag_ready = self.jit.label();
+        let ty_flags = (RVALUE_OFFSET_TY + 1) as u32;
+        let boxed_rep = HASH_REP_BOXED as u32;
+        let ident_shift = HASH_INLINE_IDENT_BIT.trailing_zeros();
+        let content = HASH_CONTENT_OFFSET as u32;
+        monoasm_arm64!(&mut self.jit,
+            ldrb w(d), [x(b), #(ty_flags)];
+            mov x9, (HASH_REP_MASK as u64);
+            and x9, x(d), x9;
+            cmp x9, #(boxed_rep);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &inline_case);
+        monoasm_arm64!(&mut self.jit,
+            ldr x(d), [x(b), #(content)];    // 0 = Map, 1 = IdentMap
+            b tag_ready;
+        inline_case:
+            lsr x(d), x(d), #(ident_shift);
+        tag_ready:
+            // isolate bit 0, then 0/1 -> false/true (0x14 / 0x1c)
+            lsl x(d), x(d), #(63);
+            lsr x(d), x(d), #(63);
+            lsl x(d), x(d), #(3);
+            add x(d), x(d), #(FALSE_VALUE as u32);
+        );
+    }
+
+    /// `Hash#default` (`want_proc == false`) / `#default_proc`: hash in `base`,
+    /// result Value into `dst`. aarch64 twin of the x86 `gen_hash_default`.
+    ///
+    /// An inline hash never carries a default, a null slot means none is set,
+    /// and the other discriminant belongs to the sibling accessor — all three
+    /// answer `nil`, matching the builtins' `unwrap_or_default`.
+    ///
+    /// ### destroy
+    /// - x9
+    pub(crate) fn gen_hash_default(&mut self, dst: GP, base: GP, want_proc: bool) {
+        let (d, b) = (dst.a64().0, base.a64().0);
+        let nil_case = self.jit.label();
+        let exit = self.jit.label();
+        let ty_flags = (RVALUE_OFFSET_TY + 1) as u32;
+        let boxed_rep = HASH_REP_BOXED as u32;
+        let slot = HASH_DEFAULT_OFFSET as u32;
+        let payload = HASH_DEFAULT_PAYLOAD_OFFSET as u32;
+        let want_tag = (if want_proc {
+            HASH_DEFAULT_TAG_PROC
+        } else {
+            HASH_DEFAULT_TAG_VALUE
+        }) as u64;
+        // Isolate the representation bits with a shift pair rather than a
+        // mask register: `base` is still live, so `dst` must not be borrowed
+        // as scratch here.
+        let rep_bits = HASH_REP_MASK.count_ones();
+        monoasm_arm64!(&mut self.jit,
+            ldrb w9, [x(b), #(ty_flags)];
+            lsl x9, x9, #(64 - rep_bits);
+            lsr x9, x9, #(64 - rep_bits);
+            cmp x9, #(boxed_rep);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &nil_case);
+        monoasm_arm64!(&mut self.jit,
+            ldr x9, [x(b), #(slot)];         // Option<Box<HashDefault>>: null = None
+            cmp x9, #(0);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &nil_case);
+        monoasm_arm64!(&mut self.jit,
+            ldr x(d), [x9];                  // discriminant
+            cmp x(d), #(want_tag as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &nil_case);
+        monoasm_arm64!(&mut self.jit,
+            ldr x(d), [x9, #(payload)];
+            b exit;
+        nil_case:
+            mov x(d), #(NIL_VALUE);
+        exit:
+        );
+    }
+
     /// `Hash#__key_at` / `#__value_at`: hash in Rdx (x2), fixnum index in Rcx
     /// (x1), result Value in Rax (x0). aarch64 twin of the x86
     /// `gen_hash_entry_at`.

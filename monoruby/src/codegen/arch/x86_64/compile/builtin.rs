@@ -143,6 +143,84 @@ impl Codegen {
         }
     }
 
+    /// `Hash#compare_by_identity?`: hash in `base`, Ruby bool into `dst`.
+    ///
+    /// Both representations reduce to one bit, so no comparison is needed:
+    /// inline keeps it as a `ty_flags` bit, and the boxed `HashContent`
+    /// discriminant is 0 for `Map` and 1 for `IdentMap`, so masking bit 0 of
+    /// either gives the answer. `(b << 3) | FALSE_VALUE` then turns 0/1 into
+    /// `false`/`true`.
+    ///
+    /// ### destroy
+    /// - rsi
+    pub(crate) fn gen_hash_compare_by_identity(&mut self, dst: GP, base: GP) {
+        let (d, b) = (dst as u64, base as u64);
+        let inline_case = self.jit.label();
+        let tag_ready = self.jit.label();
+        let ty_flags = RVALUE_OFFSET_TY + 1;
+        let mask = HASH_REP_MASK as u64;
+        let boxed_rep = HASH_REP_BOXED as u64;
+        let ident_shift = HASH_INLINE_IDENT_BIT.trailing_zeros() as u64;
+        let content = HASH_CONTENT_OFFSET;
+        monoasm! { &mut self.jit,
+            movl R(d), [R(b) + (ty_flags)];
+            movq rsi, R(d);
+            andl rsi, (mask);
+            cmpl rsi, (boxed_rep);
+            jne  inline_case;
+            movq R(d), [R(b) + (content)];   // 0 = Map, 1 = IdentMap
+            jmp  tag_ready;
+        inline_case:
+            shrq R(d), (ident_shift);
+        tag_ready:
+            andl R(d), (1);
+            shlq R(d), 3;
+            orq  R(d), (FALSE_VALUE);
+        }
+    }
+
+    /// `Hash#default` (`want_proc == false`) / `#default_proc`: hash in `base`,
+    /// result Value into `dst`.
+    ///
+    /// An inline hash never carries a default, a null slot means none is set,
+    /// and the other discriminant belongs to the sibling accessor — all three
+    /// answer `nil`, matching the builtins' `unwrap_or_default`.
+    ///
+    /// ### destroy
+    /// - rsi
+    pub(crate) fn gen_hash_default(&mut self, dst: GP, base: GP, want_proc: bool) {
+        let (d, b) = (dst as u64, base as u64);
+        let nil_case = self.jit.label();
+        let exit = self.jit.label();
+        let ty_flags = RVALUE_OFFSET_TY + 1;
+        let mask = HASH_REP_MASK as u64;
+        let boxed_rep = HASH_REP_BOXED as u64;
+        let slot = HASH_DEFAULT_OFFSET;
+        let payload = HASH_DEFAULT_PAYLOAD_OFFSET;
+        let want_tag = if want_proc {
+            HASH_DEFAULT_TAG_PROC
+        } else {
+            HASH_DEFAULT_TAG_VALUE
+        };
+        monoasm! { &mut self.jit,
+            movl rsi, [R(b) + (ty_flags)];
+            andl rsi, (mask);
+            cmpl rsi, (boxed_rep);
+            jne  nil_case;
+            movq rsi, [R(b) + (slot)];       // Option<Box<HashDefault>>: null = None
+            testq rsi, rsi;
+            jeq  nil_case;
+            movq R(d), [rsi];                // discriminant
+            cmpq R(d), (want_tag);
+            jne  nil_case;
+            movq R(d), [rsi + (payload)];
+            jmp  exit;
+        nil_case:
+            movq R(d), (NIL_VALUE);
+        exit:
+        }
+    }
+
     /// `Hash#__key_at` / `#__value_at`: hash in rdx, fixnum index in rcx,
     /// result Value in rax.
     ///

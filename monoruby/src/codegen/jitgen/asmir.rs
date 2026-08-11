@@ -1015,6 +1015,24 @@ impl AsmIr {
         self.inst.push(AsmInst::HashLenFixnum { dst, base, layout });
     }
 
+    /// Emit `dst <- Hash#compare_by_identity?` for the hash in `base`.
+    /// Typed alternative to the out-of-line call. `dst` must differ from `base`.
+    pub(crate) fn hash_compare_by_identity(&mut self, dst: GP, base: GP) {
+        debug_assert_ne!(dst, base);
+        self.inst.push(AsmInst::HashCompareByIdentity { dst, base });
+    }
+
+    /// Emit `dst <- Hash#default` / `#default_proc` for the hash in `base`.
+    /// Typed alternative to the out-of-line call. `dst` must differ from `base`.
+    pub(crate) fn hash_default(&mut self, dst: GP, base: GP, want_proc: bool) {
+        debug_assert_ne!(dst, base);
+        self.inst.push(AsmInst::HashDefault {
+            dst,
+            base,
+            want_proc,
+        });
+    }
+
     /// Emit `Rax <- Hash#__key_at(Rcx)` / `#__value_at(Rcx)` for the hash in
     /// `Rdx`. Typed alternative to the out-of-line C-ABI call.
     pub(crate) fn hash_entry_at(&mut self, want_key: bool, layout: rubymap::EntriesLayout) {
@@ -1669,6 +1687,27 @@ pub(super) enum AsmInst {
         dst: GP,
         base: GP,
         layout: rubymap::EntriesLayout,
+    },
+    /// `dst <- Hash#compare_by_identity?` for the hash in `base`, as a Ruby bool.
+    ///
+    /// The flag has two homes: a `ty_flags` bit while the hash is inline, and
+    /// the `HashContent` discriminant once it is boxed. `dst` and `base` must
+    /// differ — `base` is still live when `dst` is first written.
+    HashCompareByIdentity {
+        dst: GP,
+        base: GP,
+    },
+    /// `dst <- Hash#default` (`want_proc == false`) or `Hash#default_proc` for
+    /// the hash in `base`.
+    ///
+    /// Both read one `Option<Box<HashDefault>>` slot and differ only in which
+    /// discriminant they accept; a null slot, the other discriminant, or an
+    /// inline hash (which never carries a default) all answer `nil`, which is
+    /// what the builtins produce via `unwrap_or_default`.
+    HashDefault {
+        dst: GP,
+        base: GP,
+        want_proc: bool,
     },
     /// `Rax <- Hash#__key_at(Rcx)` / `Hash#__value_at(Rcx)` for the hash in `Rdx`,
     /// with the index arriving as a fixnum `Value`.

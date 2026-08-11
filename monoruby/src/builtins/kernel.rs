@@ -312,7 +312,13 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "singleton_class", singleton_class, 0);
     globals.define_builtin_func(kernel_class, "to_s", to_s, 0);
     globals.define_builtin_func(kernel_class, "inspect", inspect, 0);
-    globals.define_builtin_func(kernel_class, "instance_of?", instance_of, 1);
+    globals.define_builtin_inline_func(
+        kernel_class,
+        "instance_of?",
+        instance_of,
+        inline_gen2!(kernel_instance_of),
+        1,
+    );
     globals.define_builtin_func(kernel_class, "instance_variable_defined?", iv_defined, 1);
     globals.define_builtin_func(kernel_class, "instance_variable_set", iv_set, 2);
     globals.define_builtin_func(kernel_class, "instance_variable_get", iv_get, 1);
@@ -5401,6 +5407,41 @@ fn instance_of(
     Ok(Value::bool(b))
 }
 
+/// `instance_of?` compares the receiver's *real* class — singleton and
+/// iclass links skipped — against the argument. Both sides are known at
+/// compile time whenever the argument is a class literal: the receiver-class
+/// guard upstream pins `recv_class` exactly, so the whole call folds to a
+/// constant and emits nothing at all.
+fn kernel_instance_of(
+    state: &mut AbstractState,
+    _ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo { args, dst, .. } = *callsite;
+    // Anything that is not a concrete class/module literal — including a
+    // literal of the wrong type, which must raise TypeError — falls back.
+    let Some(target) = state.is_class_or_module_literal(args) else {
+        return false;
+    };
+    // Synthetic classes (e.g. BOOL_CLASS) have no backing Module object.
+    let Some(recv_module) = store[recv_class].try_get_module() else {
+        return false;
+    };
+    let result = recv_module.get_real_class().id() == target.id();
+    if let Some(dst) = dst {
+        state.def_C(dst, Immediate::bool(result));
+    }
+    true
+}
+
 ///
 /// ### Kernel#method
 ///
@@ -7958,6 +7999,51 @@ mod tests {
         run_test_error("Complex(:x, 0)");
         run_test_error("Complex(:x, 0, exception: false)");
         run_test_error(r#"Complex("1@")"#);
+    }
+
+    /// The fold answers from the receiver's *real* class, so a singleton
+    /// (`def o.x`) must not change the result, a subclass must not count as
+    /// its parent, and a module must never match. A non-literal argument has
+    /// to keep the generic path, where a non-class argument still raises.
+    #[test]
+    fn object_instance_of_jit() {
+        run_test(
+            r##"
+            class C; end
+            class D < C; end
+            o = C.new
+            def o.only_mine; end
+
+            r = nil
+            i = 0
+            while i < 30
+              r = [o.instance_of?(C), o.instance_of?(D),
+                   D.new.instance_of?(D), D.new.instance_of?(C),
+                   1.instance_of?(Integer), 1.instance_of?(Numeric),
+                   "s".instance_of?(String), nil.instance_of?(NilClass),
+                   :s.instance_of?(Symbol), o.instance_of?(Comparable)]
+              i += 1
+            end
+            r
+            "##,
+        );
+        // Argument not known at compile time: the generic path must still
+        // answer correctly, and still raise for a non-class argument.
+        run_test(
+            r##"
+            class C; end
+            o = C.new
+            klasses = [C, String, Object]
+            r = []
+            i = 0
+            while i < 30
+              r = klasses.map { |k| o.instance_of?(k) }
+              i += 1
+            end
+            r << (begin; o.instance_of?(3); rescue TypeError; :typeerr; end)
+            r
+            "##,
+        );
     }
 
     #[test]

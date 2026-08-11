@@ -33,8 +33,22 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(HASH_CLASS, "ruby2_keywords_hash?", ruby2_keywords_hash_p, 1);
 
     globals.define_private_builtin_func_with(HASH_CLASS, "initialize", initialize, 0, 1, false);
-    globals.define_builtin_func_with(HASH_CLASS, "default", default, 0, 1, false);
-    globals.define_builtin_func(HASH_CLASS, "default_proc", default_proc, 0);
+    globals.define_builtin_inline_func_with(
+        HASH_CLASS,
+        "default",
+        default,
+        inline_gen2!(hash_default_value),
+        0,
+        1,
+        false,
+    );
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "default_proc",
+        default_proc,
+        inline_gen2!(hash_default_proc),
+        0,
+    );
     globals.define_builtin_func(HASH_CLASS, "default_proc=", default_proc_assign, 1);
     globals.define_builtin_func(HASH_CLASS, "default=", default_assign, 1);
     globals.define_builtin_funcs(HASH_CLASS, "==", &["==="], eq, 1);
@@ -124,7 +138,13 @@ pub(super) fn init(globals: &mut Globals) {
         &[],
         false,
     );
-    globals.define_builtin_func(HASH_CLASS, "compare_by_identity?", compare_by_identity_, 0);
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "compare_by_identity?",
+        compare_by_identity_,
+        inline_gen2!(hash_compare_by_identity),
+        0,
+    );
     globals.define_builtin_func_rest(HASH_CLASS, "values_at", values_at);
     globals.define_builtin_func_rest(HASH_CLASS, "dig", dig);
     globals.define_builtin_func(HASH_CLASS, "to_h", to_h, 0);
@@ -999,6 +1019,91 @@ fn entry_component(recv: Value, idx: i64, want_key: bool) -> Value {
         }
         None => Value::nil(),
     }
+}
+
+///
+/// Shared shape of the three zero-argument accessor inliners.
+///
+/// A block is rejected for all three: `compare_by_identity?` raises on one,
+/// and for the other two a block is so unusual that keeping the generic path
+/// is not worth a separate rule. `Hash#default` also takes an optional key —
+/// that form invokes the default proc, so only the zero-argument call inlines.
+///
+fn hash_accessor_callsite(store: &Store, callid: CallSiteId) -> Option<&CallSiteInfo> {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 0 || callsite.block_fid.is_some() {
+        return None;
+    }
+    Some(callsite)
+}
+
+///
+/// Inline `Hash#compare_by_identity?` as machine code.
+///
+fn hash_compare_by_identity(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let Some(callsite) = hash_accessor_callsite(store, callid) else {
+        return false;
+    };
+    let (recv, dst) = (callsite.recv, callsite.dst);
+    state.load(ir, recv, GP::Rdi);
+    ir.hash_compare_by_identity(GP::Rax, GP::Rdi);
+    state.def_rax2acc(ir, dst);
+    true
+}
+
+///
+/// Inline `Hash#default` (the zero-argument form) as machine code.
+///
+fn hash_default_value(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    hash_default_inline(state, ir, store, callid, false)
+}
+
+///
+/// Inline `Hash#default_proc` as machine code.
+///
+fn hash_default_proc(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    hash_default_inline(state, ir, store, callid, true)
+}
+
+fn hash_default_inline(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    store: &Store,
+    callid: CallSiteId,
+    want_proc: bool,
+) -> bool {
+    let Some(callsite) = hash_accessor_callsite(store, callid) else {
+        return false;
+    };
+    let (recv, dst) = (callsite.recv, callsite.dst);
+    state.load(ir, recv, GP::Rdi);
+    ir.hash_default(GP::Rax, GP::Rdi, want_proc);
+    state.def_rax2acc(ir, dst);
+    true
 }
 
 ///
@@ -5172,6 +5277,79 @@ mod tests {
               i += 1
             end
             out
+            "##,
+        );
+    }
+
+    /// The zero-argument accessors are emitted as machine code, so drive
+    /// each through a hot call site and pin every combination to CRuby.
+    /// `default` and `default_proc` read the same slot and differ only in
+    /// which discriminant they accept — the crossed cases (a value default
+    /// asked for its proc, and vice versa) are the ones that would break if
+    /// the discriminants were transposed.
+    #[test]
+    fn hash_default_accessors_jit() {
+        run_test(
+            r##"
+            def probe(h)
+              [h.default, h.default_proc.class, h.compare_by_identity?]
+            end
+
+            plain = {}
+            valued = Hash.new(7)
+            proced = Hash.new { |hash, key| hash[key] = key.to_s }
+            ident = {}
+            ident.compare_by_identity
+            big_ident = {}
+            big_ident.compare_by_identity
+            i = 0
+            while i < 10; big_ident[i.to_s] = i; i += 1; end
+            valued_big = Hash.new(:d)
+            i = 0
+            while i < 10; valued_big[i] = i; i += 1; end
+
+            out = []
+            n = 0
+            while n < 30
+              out << probe(plain)
+              out << probe(valued)
+              out << probe(proced)
+              out << probe(ident)
+              out << probe(big_ident)
+              out << probe(valued_big)
+              n += 1
+            end
+            out.uniq
+            "##,
+        );
+        // The one-argument form invokes the default proc, so it must keep
+        // using the generic path rather than the inlined reader.
+        run_test(
+            r##"
+            h = Hash.new { |hash, key| "made:#{key}" }
+            v = Hash.new(3)
+            r = []
+            i = 0
+            while i < 30
+              r = [h.default(:k), v.default(:k), h.default, v.default]
+              i += 1
+            end
+            r
+            "##,
+        );
+        // A block makes `compare_by_identity?` raise (a monoruby-specific
+        // restriction, so this is not compared against CRuby). The call site
+        // is compiled hot first, which is exactly when the inliner could
+        // wrongly swallow the block.
+        run_test_error(
+            r##"
+            h = {}
+            i = 0
+            while i < 300
+              h.compare_by_identity?
+              i += 1
+            end
+            h.compare_by_identity? { 1 }
             "##,
         );
     }
