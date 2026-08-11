@@ -38,6 +38,11 @@ RUBY=(ruby --yjit)
 # workloads quadratic-ish — a trivial 100K-allocation loop takes ~100 s — so
 # optcarrot and ruby/spec go from seconds to a long grind. A full
 # GC_STRESS=1 run is an hours-scale job, not something to sit and wait for.
+#
+# One phase is exempt: the plb2 benchmarks are skipped under GC_STRESS=1.
+# They are allocation-heavy enough that stress GC never finished them (see
+# the `plb2` phase below), and letting them run starves optcarrot and
+# ruby/spec of the job's time budget entirely.
 GC_STRESS_ON=0
 [ "${GC_STRESS:-0}" = "1" ] && GC_STRESS_ON=1
 
@@ -141,14 +146,24 @@ diff -s monoruby.log ruby.log
 #"${RUBY[@]}" benchmark/bf.rb > ruby.log
 #diff -s monoruby.log ruby.log
 
-phase "benchmarks: plb2 nqueen / sudoku"
-echo "checking plb2.."
-$MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
-"${RUBY[@]}" benchmark/plb2/nqueen.rb > ruby.log
-diff -s monoruby.log ruby.log
-$MONORUBY benchmark/plb2/sudoku.rb > monoruby.log
-"${RUBY[@]}" benchmark/plb2/sudoku.rb > ruby.log
-diff -s monoruby.log ruby.log
+# plb2 is the one phase per-safepoint collection cannot afford. nqueen runs
+# n=15 and allocates heavily, and stress GC is superlinear in live heap, so
+# the first full GC_STRESS=1 run sat here for 4h50m on both arches and was
+# killed by the job's 350-minute timeout — without ever reaching optcarrot or
+# ruby/spec, the phases the stress run exists to exercise. Skip it under
+# stress and spend that time downstream; the ordinary run still covers plb2.
+if [ "$GC_STRESS_ON" = "1" ]; then
+  phase "benchmarks: plb2 nqueen / sudoku [skipped: GC_STRESS=1]"
+else
+  phase "benchmarks: plb2 nqueen / sudoku"
+  echo "checking plb2.."
+  $MONORUBY benchmark/plb2/nqueen.rb > monoruby.log
+  "${RUBY[@]}" benchmark/plb2/nqueen.rb > ruby.log
+  diff -s monoruby.log ruby.log
+  $MONORUBY benchmark/plb2/sudoku.rb > monoruby.log
+  "${RUBY[@]}" benchmark/plb2/sudoku.rb > ruby.log
+  diff -s monoruby.log ruby.log
+fi
 #$MONORUBY benchmark/plb2/matmul.rb > monoruby.log
 #"${RUBY[@]}" benchmark/plb2/matmul.rb > ruby.log
 #diff -s monoruby.log ruby.log
