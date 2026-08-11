@@ -175,6 +175,8 @@ impl Codegen {
             | AsmInst::StringLenFixnum { .. }
             | AsmInst::HashLenFixnum { .. }
             | AsmInst::HashEntryAt { .. }
+            | AsmInst::HashCompareByIdentity { .. }
+            | AsmInst::HashDefault { .. }
             | AsmInst::IsNilToBool { .. }
             | AsmInst::NotToBool { .. }
             | AsmInst::MathSqrt { .. }

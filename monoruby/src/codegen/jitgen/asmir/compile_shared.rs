@@ -1087,6 +1087,20 @@ impl Codegen {
                     cg.gen_hash_len_fixnum(dst, base, layout);
                 });
             }
+            AsmInst::HashCompareByIdentity { dst, base } => {
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.gen_hash_compare_by_identity(dst, base);
+                });
+            }
+            AsmInst::HashDefault {
+                dst,
+                base,
+                want_proc,
+            } => {
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.gen_hash_default(dst, base, want_proc);
+                });
+            }
             AsmInst::HashEntryAt { want_key, layout } => {
                 self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
                     cg.gen_hash_entry_at(want_key, layout);
