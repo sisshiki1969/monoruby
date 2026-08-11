@@ -39,6 +39,24 @@ const R2K_BIT: u8 = 0b0000_1000;
 const ITER_MASK: u8 = 0b0011_0000;
 const ITER_SHIFT: u8 = 4;
 const ITER_MAX: u8 = 3;
+
+/// The key bits marking a tombstoned (deleted-during-iteration) entry in a
+/// boxed hash's entry vector.
+///
+/// `0b0010_0100` is not a value any live `Value` can carry: bit 0 is clear
+/// (not a Fixnum), bits 1:0 are `00` (not a Flonum), bits 2:0 are not `000`
+/// (not a heap pointer), and the low byte is not `TAG_SYMBOL` — while bit 2
+/// being set still classifies it as a *packed* value, so the GC never tries
+/// to dereference it. Entries carrying this key are dead: the index table
+/// no longer references them (`rubymap::tombstone_remove`), every iterator
+/// filters them, and the `__live_at` intrinsic reports them false. The next
+/// mutating operation outside an iteration compacts them away
+/// ([`HashRefMut::compact_if_dirty`]).
+pub const HASH_TOMBSTONE_KEY: u64 = 0b0010_0100;
+
+fn tombstone_key() -> Value {
+    Value::from_u64(HASH_TOMBSTONE_KEY)
+}
 /// The *inline* hash is identity-keyed (`compare_by_identity`).
 /// Identity probing is a pure id scan — no hashing, no Ruby code, and
 /// an id can never go stale — so an identity-keyed inline hash may hold
@@ -89,6 +107,12 @@ pub const HASH_INLINE_IDENT_BIT: u8 = IDENT_BIT;
 /// is set; otherwise it points at a discriminant followed by the payload.
 pub const HASH_DEFAULT_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(BoxedHash, default);
 pub const HASH_DEFAULT_PAYLOAD_OFFSET: usize = std::mem::size_of::<usize>();
+
+/// The boxed tombstone count (a `Cell<u32>`), addressed from the start of the
+/// `RValue`. `Hash#size` in machine code subtracts this from the raw entry
+/// length; it is zero except while a traversal that deleted keys is live (or
+/// until the next mutation compacts).
+pub const HASH_DEAD_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(BoxedHash, dead);
 
 /// The entry-storage layout shared by both boxed forms.
 ///
@@ -164,6 +188,15 @@ pub(crate) struct BoxedHash {
     /// Corresponds to CRuby's `RHASH_ITER_LEV`. A `Cell` so a traversal
     /// holding a shared borrow can still record its presence.
     iter_lev: std::cell::Cell<u32>,
+    /// Tombstoned entries currently sitting in the entry vector: a delete
+    /// while `iter_lev > 0` cannot compact (positions must stay stable
+    /// under the live traversal), so the entry stays in place with its key
+    /// overwritten by [`HASH_TOMBSTONE_KEY`] and this count goes up. The
+    /// live size is the entry count minus this; the next mutating
+    /// operation outside an iteration compacts and resets it. A `Cell`
+    /// because `Hash#delete` reaches here through the same shared-borrow
+    /// discipline as `iter_lev`.
+    dead: std::cell::Cell<u32>,
 }
 
 impl BoxedHash {
@@ -172,6 +205,7 @@ impl BoxedHash {
             content,
             default: None,
             iter_lev: std::cell::Cell::new(0),
+            dead: std::cell::Cell::new(0),
         }
     }
 }
@@ -311,6 +345,7 @@ impl HashmapInner {
                     content: HashContent::Map(Box::new(map)),
                     default: default.map(Box::new),
                     iter_lev: std::cell::Cell::new(0),
+                    dead: std::cell::Cell::new(0),
                 }),
             },
         )
@@ -584,7 +619,29 @@ impl<'a> HashRef<'a> {
         }
     }
 
+    /// Tombstoned entries currently in the boxed entry vector (zero for the
+    /// inline representation, which never tombstones — a delete during
+    /// iteration promotes to boxed first).
+    fn dead_count(&self) -> usize {
+        if self.is_inline() {
+            0
+        } else {
+            self.boxed().dead.get() as usize
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
+        match self.content() {
+            ContentRef::Inline(pairs) => pairs.len(),
+            ContentRef::Map(m) => m.len() - self.dead_count(),
+            ContentRef::Ident(m) => m.len() - self.dead_count(),
+        }
+    }
+
+    /// The raw entry-vector length, tombstones included — the exclusive
+    /// upper bound for a position-indexed walk (`__entry_count`). Equals
+    /// [`Self::len`] whenever no tombstones are outstanding.
+    pub(crate) fn entry_count(&self) -> usize {
         match self.content() {
             ContentRef::Inline(pairs) => pairs.len(),
             ContentRef::Map(m) => m.len(),
@@ -592,11 +649,28 @@ impl<'a> HashRef<'a> {
         }
     }
 
+    /// Is the `index`-th entry live — in range and not a tombstone? The
+    /// `__live_at` intrinsic; a position-indexed walk asks this before
+    /// touching `entry_at`.
+    pub(crate) fn live_at(&self, index: usize) -> bool {
+        match self.content() {
+            ContentRef::Inline(pairs) => index < pairs.len(),
+            ContentRef::Map(m) => m
+                .get_index(index)
+                .is_some_and(|(k, _)| k.id() != HASH_TOMBSTONE_KEY),
+            ContentRef::Ident(m) => m
+                .get_index(index)
+                .is_some_and(|(k, _)| k.0.id() != HASH_TOMBSTONE_KEY),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// The `index`-th entry in insertion order, or `None` when out of range.
+    /// The `index`-th entry in insertion order, or `None` when out of range
+    /// **or tombstoned** — the sentinel key must never surface as a Ruby
+    /// value, so a dead entry answers like an out-of-range one.
     /// O(1) for every representation: the inline pairs and `RubyMap`'s entry
     /// vector are both position-addressable. Used by the `__key_at` /
     /// `__value_at` intrinsics so Ruby-level iteration can be a `while` loop
@@ -604,8 +678,14 @@ impl<'a> HashRef<'a> {
     pub(crate) fn entry_at(&self, index: usize) -> Option<(Value, Value)> {
         match self.content() {
             ContentRef::Inline(pairs) => pairs.get(index).copied(),
-            ContentRef::Map(m) => m.get_index(index).map(|(k, v)| (*k, *v)),
-            ContentRef::Ident(m) => m.get_index(index).map(|(k, v)| (k.0, *v)),
+            ContentRef::Map(m) => m
+                .get_index(index)
+                .filter(|(k, _)| k.id() != HASH_TOMBSTONE_KEY)
+                .map(|(k, v)| (*k, *v)),
+            ContentRef::Ident(m) => m
+                .get_index(index)
+                .filter(|(k, _)| k.0.id() != HASH_TOMBSTONE_KEY)
+                .map(|(k, v)| (k.0, *v)),
         }
     }
 
@@ -788,11 +868,26 @@ impl<'a> HashRef<'a> {
             }
         } else {
             let b = self.boxed();
+            let mut content = b.content.clone();
+            // A copy is not being iterated, so it owes no position
+            // stability: drop any tombstones now rather than carrying the
+            // dead count over.
+            if b.dead.get() > 0 {
+                match &mut content {
+                    HashContent::Map(m) => {
+                        m.compact_tombstones(|k| k.id() == HASH_TOMBSTONE_KEY)
+                    }
+                    HashContent::IdentMap(m) => {
+                        m.compact_tombstones(|k| k.0.id() == HASH_TOMBSTONE_KEY)
+                    }
+                }
+            }
             HashBody {
                 boxed: ManuallyDrop::new(BoxedHash {
-                    content: b.content.clone(),
+                    content,
                     default: b.default.clone(),
                     iter_lev: std::cell::Cell::new(0),
+                    dead: std::cell::Cell::new(0),
                 }),
             }
         }
@@ -1069,6 +1164,7 @@ impl<'a> HashRefMut<'a> {
             content,
             default: None,
             iter_lev: std::cell::Cell::new(iter_depth),
+            dead: std::cell::Cell::new(0),
         };
         *self.body_mut() = HashBody {
             boxed: ManuallyDrop::new(boxed),
@@ -1085,6 +1181,14 @@ impl<'a> HashRefMut<'a> {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<()> {
+        // Stale tombstones must go before an insert: growing the index
+        // table re-inserts every raw bucket, which would resurrect them.
+        // (During iteration the new-key check below raises first, and an
+        // existing-key update touches no bucket positions, so tombstones
+        // can only be stale — no traversal live — when this compacts.)
+        if !self.as_ref().iter_active() {
+            self.compact_if_dirty();
+        }
         if self.as_ref().iter_active() && !self.as_ref().contains_key(k, vm, globals)? {
             return Err(MonorubyErr::runtimeerr(
                 "can't add a new key into hash during iteration",
@@ -1127,6 +1231,29 @@ impl<'a> HashRefMut<'a> {
         Ok(())
     }
 
+    /// Compact any tombstones left by a finished (or broken-out-of)
+    /// traversal. Must run before any operation that walks or rebuilds the
+    /// raw buckets as if all were live — insertion (whose index-table
+    /// growth re-inserts every bucket), `compare_by_identity`'s rebuild —
+    /// and is called from every such `&mut` entry point. Never called with
+    /// a traversal live: the callers either raise on iteration first or
+    /// take the tombstoning branch instead.
+    fn compact_if_dirty(&mut self) {
+        if self.is_inline() {
+            return;
+        }
+        let b = self.boxed_mut();
+        if b.dead.get() == 0 {
+            return;
+        }
+        debug_assert_eq!(b.iter_lev.get(), 0);
+        match &mut b.content {
+            HashContent::Map(m) => m.compact_tombstones(|k| k.id() == HASH_TOMBSTONE_KEY),
+            HashContent::IdentMap(m) => m.compact_tombstones(|k| k.0.id() == HASH_TOMBSTONE_KEY),
+        }
+        b.dead.set(0);
+    }
+
     pub fn remove(
         &mut self,
         k: Value,
@@ -1135,13 +1262,48 @@ impl<'a> HashRefMut<'a> {
     ) -> Result<Option<Value>> {
         // Removing a key during iteration is explicitly allowed — CRuby
         // behaves the same way (see ruby/spec core/hash/delete_spec.rb
-        // "allows removing a key while iterating").
+        // "allows removing a key while iterating") — but the traversal is
+        // walking the entries by position, so the entry cannot be compacted
+        // out from under it. Instead it is tombstoned in place: dropped
+        // from the index table, key overwritten with the sentinel, so the
+        // walk sees a dead slot (skipped via `__live_at`) and every
+        // position it has yet to visit stays put. CRuby semantics follow:
+        // a deleted not-yet-visited entry is not yielded, and deleting a
+        // visited (or the current) one skips nothing. The inline form
+        // cannot hold a dead slot, so it promotes to boxed first (its
+        // iteration depth migrates with it).
+        if self.as_ref().iter_active() {
+            if self.is_inline() {
+                let ident = self.as_ref().is_compare_by_identity();
+                self.promote(ident, vm, globals)?;
+            }
+            let removed = match &mut self.boxed_mut().content {
+                HashContent::Map(m) => m
+                    .tombstone_remove(&k, tombstone_key(), Value::nil(), vm, globals)?
+                    .map(|(_, _, v)| v),
+                HashContent::IdentMap(m) => m
+                    .tombstone_remove(
+                        &IdentKey(k),
+                        IdentKey(tombstone_key()),
+                        Value::nil(),
+                        vm,
+                        globals,
+                    )?
+                    .map(|(_, _, v)| v),
+            };
+            if removed.is_some() {
+                let dead = &self.boxed_mut().dead;
+                dead.set(dead.get() + 1);
+            }
+            return Ok(removed);
+        }
         if self.is_inline() {
             return Ok(match self.as_ref().inline_pos(k, vm, globals)? {
                 Some(i) => Some(self.inline_remove_at(i)),
                 None => None,
             });
         }
+        self.compact_if_dirty();
         match &mut self.boxed_mut().content {
             HashContent::Map(m) => m.shift_remove(&k, vm, globals),
             HashContent::IdentMap(m) => m.shift_remove(&IdentKey(k), vm, globals),
@@ -1179,11 +1341,13 @@ impl<'a> HashRefMut<'a> {
         } else if self.boxed_mut().default.is_some() {
             // A default keeps the hash boxed; just empty the map (the
             // default itself survives, as in CRuby: `clear` does not
-            // touch it).
+            // touch it). Any stale tombstones vanish with the entries, so
+            // the dead count resets alongside.
             match &mut self.boxed_mut().content {
                 HashContent::Map(m) => m.clear(),
                 HashContent::IdentMap(m) => m.clear(),
             }
+            self.boxed_mut().dead.set(0);
         } else {
             // Give the boxed storage back — an emptied, default-less
             // hash is small again by definition. An identity-compared
@@ -1214,12 +1378,44 @@ impl<'a> HashRefMut<'a> {
         if self.as_ref().len() == 0 {
             return Ok(None);
         }
+        if self.as_ref().iter_active() {
+            // Same discipline as `remove` during iteration: tombstone the
+            // first *live* entry so positions stay stable under the
+            // traversal.
+            if self.is_inline() {
+                let ident = self.as_ref().is_compare_by_identity();
+                self.promote(ident, vm, globals)?;
+            }
+            let first_live = (0..self.as_ref().entry_count())
+                .find(|&i| self.as_ref().live_at(i))
+                .expect("len > 0 implies a live entry");
+            let removed = match &mut self.boxed_mut().content {
+                HashContent::Map(m) => m
+                    .tombstone_index(first_live, tombstone_key(), Value::nil(), vm, globals)?,
+                HashContent::IdentMap(m) => m
+                    .tombstone_index(
+                        first_live,
+                        IdentKey(tombstone_key()),
+                        Value::nil(),
+                        vm,
+                        globals,
+                    )?
+                    .map(|(k, v)| (k.0, v)),
+            };
+            debug_assert!(removed.is_some());
+            if removed.is_some() {
+                let dead = &self.boxed_mut().dead;
+                dead.set(dead.get() + 1);
+            }
+            return Ok(removed);
+        }
         if self.is_inline() {
             // SAFETY: rep is inline; len > 0 was checked above.
             let k = unsafe { self.body_mut().inline[0].0 };
             let v = self.inline_remove_at(0);
             return Ok(Some((k, v)));
         }
+        self.compact_if_dirty();
         match &mut self.boxed_mut().content {
             HashContent::Map(m) => m
                 .shift_remove_index(0, vm, globals)
@@ -1281,6 +1477,9 @@ impl<'a> HashRefMut<'a> {
 
     pub fn compare_by_identity(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         self.as_ref().check_iter()?;
+        // The rebuild below walks the raw buckets; stale tombstones must
+        // not come along.
+        self.compact_if_dirty();
         if self.is_inline() {
             // Just flip the mode bit: the existing keys are packed
             // immediates, for which eql? and identity coincide, so the
@@ -1405,10 +1604,19 @@ pub enum Iter<'a> {
 impl Iterator for Iter<'_> {
     type Item = (Value, Value);
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Iter::Inline(pairs) => pairs.next().copied(),
-            Iter::Map(map) => map.next().map(|(k, v)| (*k, *v)),
-            Iter::IdentMap(map) => map.next().map(|(k, v)| (k.0, *v)),
+        // Tombstoned entries are dead: skip them so no caller — user-facing
+        // iteration, GC marking, `keys`/`values`, `inspect` — can observe
+        // the sentinel key.
+        loop {
+            let next = match self {
+                Iter::Inline(pairs) => pairs.next().copied(),
+                Iter::Map(map) => map.next().map(|(k, v)| (*k, *v)),
+                Iter::IdentMap(map) => map.next().map(|(k, v)| (k.0, *v)),
+            };
+            match next {
+                Some((k, _)) if k.id() == HASH_TOMBSTONE_KEY => continue,
+                other => return other,
+            }
         }
     }
 }
@@ -1483,6 +1691,16 @@ impl Hashmap {
     /// See [`HashRef::entry_at`].
     pub(crate) fn entry_at(&self, index: usize) -> Option<(Value, Value)> {
         self.inner().entry_at(index)
+    }
+
+    /// See [`HashRef::entry_count`].
+    pub(crate) fn entry_count(&self) -> usize {
+        self.inner().entry_count()
+    }
+
+    /// See [`HashRef::live_at`].
+    pub(crate) fn live_at(&self, index: usize) -> bool {
+        self.inner().live_at(index)
     }
 
     pub fn is_empty(&self) -> bool {

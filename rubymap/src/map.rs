@@ -927,6 +927,50 @@ where
         }
     }
 
+    /// Remove `key` from the index table only, leaving its entry in place
+    /// overwritten with `dead_key`/`dead_value`, so entry positions stay
+    /// stable for a traversal walking them by index. See
+    /// `IndexMapCore::tombstone_remove_full` (map/core.rs) for the
+    /// contract; compact with [`Self::compact_tombstones`] when the
+    /// traversal window closes.
+    pub fn tombstone_remove<Q>(
+        &mut self,
+        key: &Q,
+        dead_key: K,
+        dead_value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(usize, K, V)>, R>
+    where
+        Q: ?Sized + RubyHash<E, G, R> + Equivalent<K, E, G, R>,
+    {
+        if self.is_empty() {
+            return Ok(None);
+        }
+        let hash = self.hash(key, e, g)?;
+        self.core
+            .tombstone_remove_full(hash, key, dead_key, dead_value, e, g)
+    }
+
+    /// [`Self::tombstone_remove`] for a caller-chosen entry position.
+    pub fn tombstone_index(
+        &mut self,
+        index: usize,
+        dead_key: K,
+        dead_value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(K, V)>, R> {
+        self.core.tombstone_index(index, dead_key, dead_value, e, g)
+    }
+
+    /// Drop every entry whose key `is_dead` and rebuild the index table
+    /// over the survivors.
+    pub fn compact_tombstones(&mut self, is_dead: impl Fn(&K) -> bool) {
+        self.core.compact_tombstones(is_dead)
+    }
+
+
     /// Remove the key-value pair equivalent to `key` and return
     /// its value.
     ///

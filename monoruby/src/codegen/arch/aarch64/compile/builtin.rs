@@ -186,13 +186,24 @@ impl Codegen {
     ///
     /// ### destroy
     /// - x9
-    pub(crate) fn gen_hash_len_fixnum(&mut self, dst: GP, base: GP, layout: rubymap::EntriesLayout) {
+    /// `sub_dead` additionally subtracts the boxed tombstone count
+    /// (`HASH_DEAD_OFFSET`) — the live size for `Hash#size`. Without it the
+    /// raw entry-vector length is produced (`__entry_count`), the exclusive
+    /// bound for a position-indexed walk.
+    pub(crate) fn gen_hash_len_fixnum(
+        &mut self,
+        dst: GP,
+        base: GP,
+        layout: rubymap::EntriesLayout,
+        sub_dead: bool,
+    ) {
         let (d, b) = (dst.a64().0, base.a64().0);
         let tag = self.jit.label();
         let ty_flags = (RVALUE_OFFSET_TY + 1) as u32;
         let boxed_rep = HASH_REP_BOXED as u32;
         let map_ptr = HASH_CONTENT_MAP_OFFSET as u32;
         let len_off = layout.len_offset as u32;
+        let dead_off = HASH_DEAD_OFFSET as u32;
         monoasm_arm64!(&mut self.jit,
             ldrb w(d), [x(b), #(ty_flags)];
             mov x9, (HASH_REP_MASK as u64);
@@ -200,10 +211,20 @@ impl Codegen {
             cmp x(d), #(boxed_rep);
         );
         self.jit.bcond_label(monoasm::Cond::Ne, &tag);
+        if sub_dead {
+            monoasm_arm64!(&mut self.jit,
+                ldr w9, [x(b), #(dead_off)];
+            );
+        }
         monoasm_arm64!(&mut self.jit,
             ldr x(d), [x(b), #(map_ptr)];
             ldr x(d), [x(d), #(len_off)];
         );
+        if sub_dead {
+            monoasm_arm64!(&mut self.jit,
+                sub x(d), x(d), x9;
+            );
+        }
         self.jit.bind_label(tag);
         monoasm_arm64!(&mut self.jit,
             lsl x(d), x(d), #1;
@@ -331,6 +352,7 @@ impl Codegen {
         } else {
             layout.value_offset
         }) as u32;
+        let key_field = layout.key_offset as u32;
         monoasm_arm64!(&mut self.jit,
             asr x1, x1, #(1);                 // untag the index
             mov x0, #(NIL_VALUE);             // nil unless a path below overwrites it
@@ -366,7 +388,81 @@ impl Codegen {
             mul x1, x1, x9;
             ldr x9, [x4, #(ptr_off)];
             add x1, x1, x9;
+            // A tombstoned entry answers nil like an out-of-range index —
+            // the sentinel key must never surface as a Ruby value, and
+            // user code may probe any position directly.
+            ldr x3, [x1, #(key_field)];
+            mov x9, (crate::rvalue::HASH_TOMBSTONE_KEY);
+            cmp x3, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
             ldr x0, [x1, #(bucket_field)];
+        exit:
+        );
+    }
+
+    /// `Hash#__live_at`: hash in Rdx (x2), fixnum index in Rcx (x1), Ruby
+    /// bool in Rax (x0) — `true` iff the position is in range and the entry
+    /// is not a tombstone. aarch64 twin of the x86 `gen_hash_live_at`.
+    /// Total by construction, like `__key_at`.
+    ///
+    /// ### destroy
+    /// - x0 (Rax), x1 (Rcx), x3 (Rsi), x4 (Rdi), x9
+    pub(crate) fn gen_hash_live_at(&mut self, layout: rubymap::EntriesLayout) {
+        let boxed = self.jit.label();
+        let dead = self.jit.label();
+        let live = self.jit.label();
+        let exit = self.jit.label();
+        let ty_flags = (RVALUE_OFFSET_TY + 1) as u32;
+        let boxed_rep = HASH_REP_BOXED as u32;
+        let map_ptr = HASH_CONTENT_MAP_OFFSET as u32;
+        let len_off = layout.len_offset as u32;
+        let ptr_off = layout.ptr_offset as u32;
+        let bucket_size = layout.bucket_size as u64;
+        let key_off = layout.key_offset as u32;
+        monoasm_arm64!(&mut self.jit,
+            asr x1, x1, #(1);                 // untag the index
+            cmp x1, #(0);
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &dead); // negative -> false
+        monoasm_arm64!(&mut self.jit,
+            ldrb w3, [x2, #(ty_flags)];
+            mov x9, (HASH_REP_MASK as u64);
+            and x3, x3, x9;                   // representation bits
+            cmp x3, #(boxed_rep);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &boxed);
+        // Inline: the representation bits double as the length, and an
+        // inline hash never holds a tombstone — in range means live.
+        monoasm_arm64!(&mut self.jit,
+            cmp x3, x1;                       // len vs idx
+        );
+        self.jit.bcond_label(monoasm::Cond::Hi, &live); // len > idx -> live
+        monoasm_arm64!(&mut self.jit,
+            b dead;
+        boxed:
+            ldr x4, [x2, #(map_ptr)];
+            ldr x9, [x4, #(len_off)];
+            cmp x9, x1;                       // len vs idx
+        );
+        self.jit.bcond_label(monoasm::Cond::Ls, &dead);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (bucket_size);
+            mul x1, x1, x9;
+            ldr x9, [x4, #(ptr_off)];
+            add x1, x1, x9;
+            ldr x3, [x1, #(key_off)];
+            mov x9, (crate::rvalue::HASH_TOMBSTONE_KEY);
+            cmp x3, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &dead);
+        self.jit.bind_label(live);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, #(TRUE_VALUE as u32);
+            b exit;
+        dead:
+            mov x0, #(FALSE_VALUE as u32);
         exit:
         );
     }

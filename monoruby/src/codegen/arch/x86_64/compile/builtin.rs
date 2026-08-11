@@ -120,7 +120,17 @@ impl Codegen {
     /// boxed one keeps it in the entry vector. The boxed length hangs off a
     /// pointer that is only a pointer on that side of the branch, so unlike
     /// `Array#size` this cannot be a speculative load plus `cmov`.
-    pub(crate) fn gen_hash_len_fixnum(&mut self, dst: GP, base: GP, layout: rubymap::EntriesLayout) {
+    /// `sub_dead` additionally subtracts the boxed tombstone count
+    /// (`HASH_DEAD_OFFSET`) — the live size for `Hash#size`. Without it the
+    /// raw entry-vector length is produced (`__entry_count`), the exclusive
+    /// bound for a position-indexed walk. Destroys rsi when `sub_dead`.
+    pub(crate) fn gen_hash_len_fixnum(
+        &mut self,
+        dst: GP,
+        base: GP,
+        layout: rubymap::EntriesLayout,
+        sub_dead: bool,
+    ) {
         let (d, b) = (dst as u64, base as u64);
         let tag = self.jit.label();
         let ty_flags = RVALUE_OFFSET_TY + 1;
@@ -128,6 +138,7 @@ impl Codegen {
         let boxed_rep = HASH_REP_BOXED as u64;
         let map_ptr = HASH_CONTENT_MAP_OFFSET;
         let len_off = layout.len_offset;
+        let dead_off = HASH_DEAD_OFFSET;
         monoasm! { &mut self.jit,
             // The representation bits live in the low byte of ty_flags; the
             // 32-bit load stays inside the header and `andl` clears the rest.
@@ -135,8 +146,22 @@ impl Codegen {
             andl R(d), (mask);
             cmpl R(d), (boxed_rep);
             jne  tag;
+        }
+        if sub_dead {
+            monoasm! { &mut self.jit,
+                movl rsi, [R(b) + (dead_off)];
+            }
+        }
+        monoasm! { &mut self.jit,
             movq R(d), [R(b) + (map_ptr)];
             movq R(d), [R(d) + (len_off)];
+        }
+        if sub_dead {
+            monoasm! { &mut self.jit,
+                subq R(d), rsi;
+            }
+        }
+        monoasm! { &mut self.jit,
         tag:
             salq R(d), 1;
             orq  R(d), 1;
@@ -249,6 +274,7 @@ impl Codegen {
         } else {
             layout.value_offset
         };
+        let key_field = layout.key_offset;
         monoasm! { &mut self.jit,
             // nil unless one of the paths below overwrites it.
             movq rax, (NIL_VALUE);
@@ -273,7 +299,60 @@ impl Codegen {
             movq rsi, (bucket_size);
             imul rcx, rsi;
             addq rcx, [rdi + (ptr_off)];
+            // A tombstoned entry answers nil like an out-of-range index —
+            // the sentinel key must never surface as a Ruby value, and
+            // user code may probe any position directly.
+            movq rsi, [rcx + (key_field)];
+            cmpq rsi, (crate::rvalue::HASH_TOMBSTONE_KEY);
+            jeq  exit;
             movq rax, [rcx + (bucket_field)];
+        exit:
+        }
+    }
+
+    /// `Hash#__live_at`: hash in rdx, fixnum index in rcx, Ruby bool in rax —
+    /// `true` iff the position is in range and the entry is not a tombstone.
+    /// Total by construction, like `__key_at`. rsi and rdi are scratch.
+    pub(crate) fn gen_hash_live_at(&mut self, layout: rubymap::EntriesLayout) {
+        let boxed = self.jit.label();
+        let dead = self.jit.label();
+        let live = self.jit.label();
+        let exit = self.jit.label();
+        let ty_flags = RVALUE_OFFSET_TY + 1;
+        let mask = HASH_REP_MASK as u64;
+        let boxed_rep = HASH_REP_BOXED as u64;
+        let map_ptr = HASH_CONTENT_MAP_OFFSET;
+        let len_off = layout.len_offset;
+        let ptr_off = layout.ptr_offset;
+        let bucket_size = layout.bucket_size;
+        let key_off = layout.key_offset;
+        monoasm! { &mut self.jit,
+            sarq rcx, 1;                  // untag the index
+            js   dead;                    // negative → false
+            movl rsi, [rdx + (ty_flags)];
+            andl rsi, (mask);
+            cmpl rsi, (boxed_rep);
+            jeq  boxed;
+            // Inline: the representation bits double as the length, and an
+            // inline hash never holds a tombstone — in range means live.
+            cmpq rcx, rsi;
+            jb   live;
+            jmp  dead;
+        boxed:
+            movq rdi, [rdx + (map_ptr)];
+            cmpq rcx, [rdi + (len_off)];
+            jae  dead;
+            movq rsi, (bucket_size);
+            imul rcx, rsi;
+            addq rcx, [rdi + (ptr_off)];
+            movq rsi, [rcx + (key_off)];
+            cmpq rsi, (crate::rvalue::HASH_TOMBSTONE_KEY);
+            jeq  dead;
+        live:
+            movq rax, (TRUE_VALUE);
+            jmp  exit;
+        dead:
+            movq rax, (FALSE_VALUE);
         exit:
         }
     }

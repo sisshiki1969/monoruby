@@ -526,6 +526,85 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         }
     }
 
+    /// Remove `key` from the *index table only*, leaving its bucket in
+    /// place overwritten with the caller's tombstone key/value. Entry
+    /// positions therefore stay stable — nothing shifts — which is what a
+    /// traversal that is concurrently walking the entries by index needs.
+    ///
+    /// The map is promoted to indexed form first: linear lookups scan the
+    /// entry vector directly and would otherwise have to know how to skip
+    /// dead buckets. Once indexed, lookups can only reach a bucket through
+    /// `indices`, which no longer references the dead one, so neither the
+    /// tombstone key nor its stale cached hash is ever consulted. The
+    /// caller owns the other half of the bargain: while tombstones exist it
+    /// must not trigger anything that walks the raw buckets as live entries
+    /// (insertion/rehash — barred during Ruby iteration anyway — or the
+    /// plain iterators, which the caller is expected to filter).
+    ///
+    /// Returns the displaced `(index, key, value)`; the caller is expected
+    /// to compact with [`Self::compact_tombstones`] when the traversal
+    /// window closes.
+    pub(crate) fn tombstone_remove_full<Q>(
+        &mut self,
+        hash: HashValue,
+        key: &Q,
+        dead_key: K,
+        dead_value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(usize, K, V)>, R>
+    where
+        Q: ?Sized + Equivalent<K, E, G, R>,
+    {
+        self.ensure_indexed();
+        let eq = equivalent(key, &self.entries);
+        Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
+            Ok(entry) => {
+                let (index, _) = entry.remove();
+                let bucket = &mut self.entries[index];
+                let key = std::mem::replace(&mut bucket.key, dead_key);
+                let value = std::mem::replace(&mut bucket.value, dead_value);
+                Some((index, key, value))
+            }
+            Err(_) => None,
+        })
+    }
+
+    /// [`Self::tombstone_remove_full`] for a caller-chosen entry position
+    /// (`Hash#shift` tombstoning the first live entry). Same contract.
+    pub(crate) fn tombstone_index(
+        &mut self,
+        index: usize,
+        dead_key: K,
+        dead_value: V,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(K, V)>, R> {
+        if index >= self.entries.len() {
+            return Ok(None);
+        }
+        self.ensure_indexed();
+        let hash = self.entries[index].hash;
+        erase_index(&mut self.indices, hash, index, e, g)?;
+        let bucket = &mut self.entries[index];
+        let key = std::mem::replace(&mut bucket.key, dead_key);
+        let value = std::mem::replace(&mut bucket.value, dead_value);
+        Ok(Some((key, value)))
+    }
+
+    /// Drop every bucket whose key `is_dead` and rebuild the index table
+    /// over the survivors. Closes a tombstone window opened by the
+    /// `tombstone_*` methods; positions compact back to dense entry order.
+    pub(crate) fn compact_tombstones(&mut self, is_dead: impl Fn(&K) -> bool) {
+        self.entries.retain(|b| !is_dead(&b.key));
+        if !self.linear {
+            self.indices.clear();
+            self.indices
+                .reserve(self.entries.len(), get_hash(&self.entries));
+            insert_bulk_no_grow(&mut self.indices, &self.entries);
+        }
+    }
+
     /// Remove an entry by shifting all entries that follow it
     pub(crate) fn shift_remove_full<Q>(
         &mut self,

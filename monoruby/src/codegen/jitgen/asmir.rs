@@ -1010,9 +1010,30 @@ impl AsmIr {
     }
 
     /// Emit `dst <- fixnum(Hash#size)`: the fixnum-tagged entry count of the
-    /// hash receiver in `base`. Typed alternative to `inline` for `Hash#size`.
-    pub(crate) fn hash_len_fixnum(&mut self, dst: GP, base: GP, layout: rubymap::EntriesLayout) {
-        self.inst.push(AsmInst::HashLenFixnum { dst, base, layout });
+    /// hash receiver in `base`. `sub_dead` subtracts the tombstone count
+    /// (true for the user-facing `Hash#size`; false for `__entry_count`,
+    /// whose walk needs the raw entry-vector length, tombstones included).
+    /// Typed alternative to `inline`.
+    pub(crate) fn hash_len_fixnum(
+        &mut self,
+        dst: GP,
+        base: GP,
+        layout: rubymap::EntriesLayout,
+        sub_dead: bool,
+    ) {
+        self.inst.push(AsmInst::HashLenFixnum {
+            dst,
+            base,
+            layout,
+            sub_dead,
+        });
+    }
+
+    /// Emit `Rax <- Hash#__live_at(Rcx)` for the hash in `Rdx`: Ruby `true`
+    /// when the entry at that position exists and is not tombstoned. Typed
+    /// alternative to the out-of-line C-ABI call.
+    pub(crate) fn hash_live_at(&mut self, layout: rubymap::EntriesLayout) {
+        self.inst.push(AsmInst::HashLiveAt { layout });
     }
 
     /// Emit `dst <- Hash#compare_by_identity?` for the hash in `base`.
@@ -1687,6 +1708,9 @@ pub(super) enum AsmInst {
         dst: GP,
         base: GP,
         layout: rubymap::EntriesLayout,
+        /// Subtract the tombstone count: true for `Hash#size`, false for
+        /// the raw `__entry_count`.
+        sub_dead: bool,
     },
     /// Block-style single-Array auto-splat for a specialized `yield` of one
     /// value into a plain multi-parameter block: with the value in `Rdi`,
@@ -1729,6 +1753,13 @@ pub(super) enum AsmInst {
     /// intrinsics exist for need no error edge and no generic fallback.
     HashEntryAt {
         want_key: bool,
+        layout: rubymap::EntriesLayout,
+    },
+    /// `Rax <- Hash#__live_at(Rcx)` for the hash in `Rdx`, with the index
+    /// arriving as a fixnum `Value`: Ruby `true` when the position is in
+    /// range and the entry is not a tombstone, else `false`. Total by
+    /// construction, like `HashEntryAt` — no error edge, no fallback.
+    HashLiveAt {
         layout: rubymap::EntriesLayout,
     },
     /// `dst <- (src == nil) ? true : false` as a Ruby bool `Value` (`Object#nil?`).

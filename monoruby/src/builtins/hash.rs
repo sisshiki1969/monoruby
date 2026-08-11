@@ -77,6 +77,27 @@ pub(super) fn init(globals: &mut Globals) {
         inline_gen2!(hash_value_at),
         1,
     );
+    // The raw entry-vector length (tombstones included) and the per-position
+    // liveness test — with `__key_at`/`__value_at`, the parts of the
+    // Ruby-level position-indexed traversal (`Hash#each`, builtins/hash.rb)
+    // that Ruby cannot express. A delete during iteration tombstones the
+    // entry in place (positions must stay stable under the walk), so the
+    // walk bounds itself with `__entry_count` and skips dead positions via
+    // `__live_at`.
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "__entry_count",
+        entry_count,
+        inline_gen2!(hash_entry_count),
+        0,
+    );
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "__live_at",
+        live_at,
+        inline_gen2!(hash_live_at),
+        1,
+    );
     // Internals of the Ruby-level `Hash#each` (builtins/hash.rb). `each`
     // lives in Ruby so that a `h.each { .. }` call site can inline both the
     // method and the block; these three are the parts that cannot.
@@ -958,6 +979,32 @@ fn value_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 }
 
 ///
+/// ### Hash#__entry_count (internal)
+///
+/// The raw entry-vector length, tombstones included — the exclusive bound
+/// for a position-indexed walk. Equals `size` whenever no delete happened
+/// during a live traversal.
+///
+#[monoruby_builtin]
+fn entry_count(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let n = lfp.self_val().as_hash().entry_count();
+    Ok(Value::integer(n as i64))
+}
+
+///
+/// ### Hash#__live_at (internal)
+///
+/// `true` iff the `index`-th entry position exists and is not a tombstone
+/// (an entry deleted while a traversal was live). See `__entry_count`.
+///
+#[monoruby_builtin]
+fn live_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let idx = lfp.arg(0).coerce_to_i64(globals)?;
+    let live = idx >= 0 && lfp.self_val().as_hash().live_at(idx as usize);
+    Ok(Value::bool(live))
+}
+
+///
 /// ### Hash#__pairs (internal)
 ///
 /// A snapshot of the entries as `[[k, v], ...]`.
@@ -1129,8 +1176,65 @@ fn hash_size(
     };
     let dst = callsite.dst;
     state.load(ir, callsite.recv, GP::Rdi);
-    ir.hash_len_fixnum(GP::Rax, GP::Rdi, layout);
+    ir.hash_len_fixnum(GP::Rax, GP::Rdi, layout, true);
     state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
+}
+
+///
+/// Inline `Hash#__entry_count` as machine code: the raw entry-vector length,
+/// tombstones included — the exclusive bound for a position-indexed walk.
+/// Identical to `Hash#size` except that the tombstone count is not
+/// subtracted.
+///
+fn hash_entry_count(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let Some(layout) = hash_entries_layout() else {
+        return false;
+    };
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.hash_len_fixnum(GP::Rax, GP::Rdi, layout, false);
+    state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
+}
+
+///
+/// Inline `Hash#__live_at` as machine code: Ruby `true` iff the position is
+/// in range and the entry is not a tombstone. Total by construction, like
+/// `__key_at` — no call, no error edge.
+///
+fn hash_live_at(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    idx_class: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 || idx_class != Some(INTEGER_CLASS) {
+        return false;
+    }
+    let Some(layout) = hash_entries_layout() else {
+        return false;
+    };
+    state.load_fixnum(ir, callsite.args, GP::Rcx);
+    state.load(ir, callsite.recv, GP::Rdx);
+    ir.hash_live_at(layout);
+    state.def_rax2acc(ir, callsite.dst);
     true
 }
 
@@ -4930,6 +5034,48 @@ mod tests {
     /// (`->(a, b, *c)` splits, `->(a, *b)` gets the pair whole). With an
     /// overridden `each`, values pass through unrepacked: a proc auto-splats
     /// a single-array yield, a strict lambda raises on it.
+    /// Deleting during iteration follows CRuby (#1095): while a traversal
+    /// is live a delete tombstones its entry in place — the index table
+    /// drops it, the walk's positions stay stable — so a deleted
+    /// not-yet-visited entry is not yielded, deleting the current or a
+    /// visited entry skips nothing, and `size`/`keys`/`inspect`/`dup`
+    /// observed mid-walk never see the dead entry. Compaction is lazy: the
+    /// next mutation outside an iteration (or a clone) sweeps the
+    /// tombstones. Exercised on both representations — an inline hash
+    /// promotes to boxed on the first mid-iteration delete — plus identity
+    /// hashes and `shift`.
+    #[test]
+    fn hash_delete_during_iteration() {
+        run_tests(&[
+            // Not-yet-visited: skipped (boxed).
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; acc = []; h.each { |k, v| h.delete(:e) if k == :b; acc << k }; [acc, h.keys, h.size]"#,
+            // Current key: nothing skipped.
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; acc = []; h.each { |k, v| h.delete(k); acc << k }; [acc, h.keys, h.empty?]"#,
+            // Already-visited key: nothing skipped.
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; acc = []; h.each { |k, v| h.delete(:a) if k == :c; acc << k }; [acc, h.keys]"#,
+            // Everything deleted up front: only the current entry yields.
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; acc = []; h.each { |k, v| h.keys.each { |x| h.delete(x) }; acc << k }; [acc, h.keys, h.size]"#,
+            // Inline representation: promotes to boxed mid-iteration.
+            r#"h = {a:1, b:2, c:3}; acc = []; h.each { |k, v| h.delete(:b); acc << k }; [acc, h.keys, h.size]"#,
+            // Live size mid-walk, and update of an existing key stays legal.
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; acc = []; h.each { |k, v| h.delete(:e) if k == :a; acc << h.size; h[:b] = 99 }; [acc.first, h[:b]]"#,
+            // Re-adding a deleted key is adding a new key: raises.
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; (h.each { |k, v| h.delete(:e); h[:e] = 5 } rescue $!.class.to_s)"#,
+            // shift during iteration tombstones the first live entry.
+            r#"h = {a:1, b:2, c:3}; acc = []; h.each { |k, v| h.shift; acc << k }; [acc, h.keys]"#,
+            // Observers mid-window: keys/inspect/dup never see the dead entry,
+            // and the dup is independently mutable (compacted copy).
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; r = nil; h.each { |k, v| h.delete(:e) if k == :a; r = [h.keys, h.inspect, h.dup.size] if k == :b }; r"#,
+            // Identity hash: same discipline through the IdentMap path.
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6}.compare_by_identity; acc = []; h.each { |k, v| h.delete(:e); acc << k }; [acc, h.keys]"#,
+            // Break leaves tombstones; the next mutation compacts and the
+            // hash is fully usable.
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; h.each { |k, v| h.delete(:e); break }; h[:new] = 1; h.delete(:a); [h.keys, h.size]"#,
+            // to_h's block form shares the walk.
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; r = h.to_h { |k, v| h.delete(:e); [k, v] }; [r.keys, h.keys]"#,
+        ]);
+    }
+
     #[test]
     fn hash_map_pair_split_rules() {
         run_tests(&[
