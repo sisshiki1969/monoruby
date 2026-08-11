@@ -111,8 +111,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "delete", delete, 1);
     // collect/map: implemented in Ruby (builtins/hash.rb) for arity adaptation and subclass support
     globals.define_builtin_funcs(HASH_CLASS, "each", &["each_pair"], each, 0);
-    globals.define_builtin_func(HASH_CLASS, "each_key", each_key, 0);
-    globals.define_builtin_func(HASH_CLASS, "each_value", each_value, 0);
+    // each_key / each_value: implemented in Ruby (builtins/hash.rb) on the
+    // live positional walk, so a hot call site can inline both the method
+    // and the block (same reasoning as `each`).
     globals.define_builtin_funcs(HASH_CLASS, "select", &["filter"], select, 0);
     globals.define_builtin_funcs(HASH_CLASS, "select!", &["filter!"], select_, 0);
     globals.define_builtin_func(HASH_CLASS, "empty?", empty_, 0);
@@ -1434,57 +1435,6 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     for (k, v) in pairs {
         vm.invoke_block(globals, &data, &[Value::array2(k, v)])?;
     }
-    Ok(lfp.self_val())
-}
-
-///
-/// ### Hash#each_value
-///
-/// - each_value {|value| ... } -> self
-/// - each_value -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each_value.html]
-#[monoruby_builtin]
-fn each_value(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    pc: BytecodePtr,
-) -> Result<Value> {
-    let bh = match lfp.block() {
-        None => {
-            let id = IdentId::get_id("each_value");
-            return hash_to_sized_enum(vm, id, lfp, pc);
-        }
-        Some(block) => block,
-    };
-    let hash = lfp.self_val().as_hash();
-    let _iter_guard = hash.iter_guard();
-    let iter = hash.iter().map(|(_, v)| v);
-    vm.invoke_block_iter1(globals, bh, iter)?;
-    Ok(lfp.self_val())
-}
-
-///
-/// ### Hash#each_key
-///
-/// - each_key {|value| ... } -> self
-/// - each_key -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/each_key.html]
-#[monoruby_builtin]
-fn each_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let bh = match lfp.block() {
-        None => {
-            let id = IdentId::get_id("each_key");
-            return hash_to_sized_enum(vm, id, lfp, pc);
-        }
-        Some(block) => block,
-    };
-    let hash = lfp.self_val().as_hash();
-    let _iter_guard = hash.iter_guard();
-    let iter = hash.iter().map(|(k, _)| k);
-    vm.invoke_block_iter1(globals, bh, iter)?;
     Ok(lfp.self_val())
 }
 
@@ -5034,6 +4984,27 @@ mod tests {
     /// (`->(a, b, *c)` splits, `->(a, *b)` gets the pair whole). With an
     /// overridden `each`, values pass through unrepacked: a proc auto-splats
     /// a single-array yield, a strict lambda raises on it.
+    /// each_key / each_value (Ruby, builtins/hash.rb): the same live
+    /// positional walk as `each`, yielding bare keys/values. Pinned to
+    /// CRuby including the enumerator forms and deletes mid-iteration.
+    #[test]
+    fn hash_each_key_value() {
+        run_tests(&[
+            r#"acc = []; r = {a: 1, b: 2, c: 3}.each_key { |k| acc << k }; [acc, r.class]"#,
+            r#"acc = []; r = {a: 1, b: 2, c: 3}.each_value { |v| acc << v }; [acc, r.class]"#,
+            r#"e = {a: 1, b: 2}.each_key; [e.class, e.size, e.to_a]"#,
+            r#"e = {a: 1, b: 2}.each_value; [e.class, e.size, e.to_a]"#,
+            // A multi-param block sees the bare key (no pair, no splat).
+            r#"acc = []; {a: 1}.each_key { |k, v| acc << [k, v] }; acc"#,
+            // Deleting a not-yet-visited key mid-walk skips it (#1095 discipline).
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; acc = []; h.each_key { |k| h.delete(:e); acc << k }; [acc, h.keys]"#,
+            r#"h = {a:1, b:2, c:3, d:4, e:5, f:6, g:7}; acc = []; h.each_value { |v| h.delete(:e); acc << v }; [acc, h.keys]"#,
+            // Adding raises; empty hash yields nothing.
+            r#"h = {a: 1}; (h.each_key { h[:new] = 1 } rescue $!.class.to_s)"#,
+            r#"n = 0; {}.each_key { n += 1 }; n"#,
+        ]);
+    }
+
     /// Deleting during iteration follows CRuby (#1095): while a traversal
     /// is live a delete tombstones its entry in place — the index table
     /// drops it, the walk's positions stay stable — so a deleted

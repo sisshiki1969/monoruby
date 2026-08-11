@@ -1,3 +1,76 @@
+# ---------------------------------------------------------------------------
+# Pure-Ruby builtins, one file per class/module. Load order is significant:
+#  * everything up to `comparable` must not reference Comparable/Enumerable
+#    at load time (e.g. ObjectSpace::WeakMap deliberately skips its
+#    `include ::Enumerable` because the module is not defined yet);
+#  * `io_buffer` (IO::Buffer includes Comparable) loads after `comparable`;
+#  * the class files after `enumerable` may `include Enumerable`;
+#  * the spec-compat alias fixups inside each class file run when that file
+#    loads, after the natives and Ruby methods they re-point.
+# ---------------------------------------------------------------------------
+
+require_relative 'basic_object'
+require_relative 'kernel'
+require_relative 'object'
+require_relative 'class'
+require_relative 'regexp'
+require_relative 'exception'
+require_relative 'module'
+require_relative 'warning'
+require_relative 'process'
+require_relative 'file'
+require_relative 'thread'
+require_relative 'boolean'
+require_relative 'marshal'
+require_relative 'gc'
+require_relative 'object_space'
+require_relative 'io'
+require_relative 'encoding'
+
+# TOPLEVEL_BINDING is defined by the runtime (Executor::init): a Binding
+# over an empty, outer-less frame that the *main script* is then executed
+# in (Executor::exec_main_script), so it exposes exactly the main script's
+# locals — not this file's.
+
+require_relative 'comparable'
+require_relative 'io_buffer'
+require_relative 'data'
+
+require_relative 'enumerable'
+IO.include(Enumerable)
+require_relative 'arithmetic_sequence'
+require_relative 'numeric'
+require_relative 'integer'
+require_relative 'range'
+require_relative 'array'
+require_relative 'rational'
+require_relative 'complex'
+require_relative 'float'
+require_relative 'string'
+require_relative 'symbol'
+require_relative 'error'
+require_relative 'set'
+require_relative 'struct'
+require_relative 'monitor'
+require_relative 'enumerator'
+require_relative 'lazy'
+require_relative 'hash'
+require_relative 'file_stat'
+require_relative 'proc'
+require_relative 'method'
+require_relative 'dir'
+require_relative 'time'
+require_relative 'match_data'
+require_relative 'filetest'
+require_relative 'env'
+require_relative 'pathname_builtins'
+
+# RbConfig loads *after* the pure-Ruby builtins: the vendored rbconfig.rb
+# walks its CONFIG hash with `each_value` at module level, and Hash's
+# traversal methods (each/each_value/...) are defined in hash.rb rather
+# than in Rust so hot call sites can inline them. Everything in this
+# block uses only Rust-level natives (File, ENV, String), so deferring
+# it past the Ruby files loses nothing.
 require 'rbconfig'
 
 # The vendored `rbconfig.rb` (snapshotted from the build host's CRuby
@@ -179,72 +252,6 @@ RbConfig::CONFIG['sitearch']   = RUBY_PLATFORM
 RbConfig::CONFIG['target']     = "#{__host_cpu}-pc-#{__host_os}"
 RbConfig::CONFIG['host']       = "#{__host_cpu}-pc-#{__host_os}"
 
-# ---------------------------------------------------------------------------
-# Pure-Ruby builtins, one file per class/module. Load order is significant:
-#  * everything up to `comparable` must not reference Comparable/Enumerable
-#    at load time (e.g. ObjectSpace::WeakMap deliberately skips its
-#    `include ::Enumerable` because the module is not defined yet);
-#  * `io_buffer` (IO::Buffer includes Comparable) loads after `comparable`;
-#  * the class files after `enumerable` may `include Enumerable`;
-#  * the spec-compat alias fixups inside each class file run when that file
-#    loads, after the natives and Ruby methods they re-point.
-# ---------------------------------------------------------------------------
-
-require_relative 'basic_object'
-require_relative 'kernel'
-require_relative 'object'
-require_relative 'class'
-require_relative 'regexp'
-require_relative 'exception'
-require_relative 'module'
-require_relative 'warning'
-require_relative 'process'
-require_relative 'file'
-require_relative 'thread'
-require_relative 'boolean'
-require_relative 'marshal'
-require_relative 'gc'
-require_relative 'object_space'
-require_relative 'io'
-require_relative 'encoding'
-
-# TOPLEVEL_BINDING is defined by the runtime (Executor::init): a Binding
-# over an empty, outer-less frame that the *main script* is then executed
-# in (Executor::exec_main_script), so it exposes exactly the main script's
-# locals — not this file's.
-
-require_relative 'comparable'
-require_relative 'io_buffer'
-require_relative 'data'
-
-require_relative 'enumerable'
-IO.include(Enumerable)
-require_relative 'arithmetic_sequence'
-require_relative 'numeric'
-require_relative 'integer'
-require_relative 'range'
-require_relative 'array'
-require_relative 'rational'
-require_relative 'complex'
-require_relative 'float'
-require_relative 'string'
-require_relative 'symbol'
-require_relative 'error'
-require_relative 'set'
-require_relative 'struct'
-require_relative 'monitor'
-require_relative 'enumerator'
-require_relative 'lazy'
-require_relative 'hash'
-require_relative 'file_stat'
-require_relative 'proc'
-require_relative 'method'
-require_relative 'dir'
-require_relative 'time'
-require_relative 'match_data'
-require_relative 'filetest'
-require_relative 'env'
-require_relative 'pathname_builtins'
 
 # ARGF is implemented in Rust (builtins/argf.rs); only the
 # Enumerable mix-in has to wait until the module exists.

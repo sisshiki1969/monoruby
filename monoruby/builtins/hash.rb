@@ -46,6 +46,44 @@ class Hash
 
   alias each_pair each
 
+  # Hash#each_key / Hash#each_value
+  # each_key {|key| block } -> self / each_value {|value| block } -> self
+  #
+  # In Ruby for the same reason as `each`: a hot call site specializes the
+  # method and inlines the block into the yield. The traversal is the same
+  # live positional walk — a delete during the block tombstones in place,
+  # so a deleted not-yet-visited entry is skipped (CRuby) — and the
+  # iteration reference makes adding a key raise.
+  def each_key
+    return to_enum(:each_key) { size } unless block_given?
+    guard = __iter_begin
+    begin
+      i = 0
+      while i < __entry_count
+        yield __key_at(i) if __live_at(i)
+        i += 1
+      end
+    ensure
+      __iter_end(guard)
+    end
+    self
+  end
+
+  def each_value
+    return to_enum(:each_value) { size } unless block_given?
+    guard = __iter_begin
+    begin
+      i = 0
+      while i < __entry_count
+        yield __value_at(i) if __live_at(i)
+        i += 1
+      end
+    ensure
+      __iter_end(guard)
+    end
+    self
+  end
+
   # Hash#to_h
   # to_h -> self
   # to_h {|key, value| block } -> Hash
