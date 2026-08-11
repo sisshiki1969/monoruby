@@ -4922,6 +4922,63 @@ mod tests {
         ]);
     }
 
+    /// Whether Hash#map passes the [k, v] pair whole or split follows
+    /// CRuby's rb_block_pair_yield_optimizable, and procs and lambdas
+    /// differ: a proc splits whenever it can take more than one positional
+    /// (`{ |a, *b| }` splits, bare `{ |*a| }` gets the pair whole); a
+    /// lambda — Symbol procs included — only when it requires at least two
+    /// (`->(a, b, *c)` splits, `->(a, *b)` gets the pair whole). With an
+    /// overridden `each`, values pass through unrepacked: a proc auto-splats
+    /// a single-array yield, a strict lambda raises on it.
+    #[test]
+    fn hash_map_pair_split_rules() {
+        run_tests(&[
+            r#"h = {a: 1, b: 2}; h.map { |*a| a }"#,
+            r#"h = {a: 1, b: 2}; h.map(&->(*a) { a })"#,
+            r#"h = {a: 1, b: 2}; h.map { |a, *b| [a, b] }"#,
+            r#"h = {a: 1, b: 2}; h.map(&->(a, *b) { [a, b] })"#,
+            r#"h = {a: 1, b: 2}; h.map(&->(a, b, *c) { [a, b, c] })"#,
+            r#"h = {a: 1, b: 2}; h.map(&->(a, b = :d) { [a, b] })"#,
+            r#"h = {a: 1, b: 2}; h.map { |a, b = :d| [a, b] }"#,
+            r#"h = {a: 1, b: 2}; h.map(&:to_s)"#,
+            r#"h = {a: 1, b: 2}; h.map { |a, b, *c| [a, b, c] }"#,
+        ]);
+        // A singleton `each` on a plain Hash instance must take the
+        // pass-through path — `instance_of?(Hash)` cannot see it, which is
+        // why the dispatch checks `method(:each).owner`.
+        run_test_once(
+            r#"
+            hs = {a: 1, b: 2}
+            def hs.each; yield :s, :t; end
+            [hs.map { |k, v| [k, v] }, hs.map { |pair| pair }, hs.map { |*a| a }]
+            "#,
+        );
+        // Pass-through on an overridden each that yields a single array:
+        // the proc auto-splats it, the strict lambda gets it as ONE argument
+        // and raises.
+        run_test(
+            r#"
+            cls = Class.new(Hash) { def each; yield [:x, 9]; end }
+            h = cls.new
+            r1 = h.map { |k, v| [k, v] }
+            r2 = h.map { |*a| a }
+            r3 = (h.map(&->(k, v) { [k, v] }) rescue $!.class.to_s)
+            zero = Class.new(Hash) { def each; yield; end }.new.map { |*a| a }
+            [r1, r2, r3, zero]
+            "#,
+        );
+        // Subclass WITHOUT an each override still gets the fast path.
+        run_test(
+            r#"
+            cls = Class.new(Hash)
+            h = cls.new
+            h[:p] = 1
+            h[:q] = 2
+            [h.map { |k, v| [k, v] }, h.map { |pair| pair }, h.map { |*a| a }]
+            "#,
+        );
+    }
+
     #[test]
     fn hash_map_arity_and_subclass() {
         run_tests(&[
