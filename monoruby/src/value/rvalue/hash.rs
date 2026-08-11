@@ -40,23 +40,21 @@ const ITER_MASK: u8 = 0b0011_0000;
 const ITER_SHIFT: u8 = 4;
 const ITER_MAX: u8 = 3;
 
-/// The key bits marking a tombstoned (deleted-during-iteration) entry in a
-/// boxed hash's entry vector.
-///
-/// `0b0010_0100` is not a value any live `Value` can carry: bit 0 is clear
-/// (not a Fixnum), bits 1:0 are `00` (not a Flonum), bits 2:0 are not `000`
-/// (not a heap pointer), and the low byte is not `TAG_SYMBOL` — while bit 2
-/// being set still classifies it as a *packed* value, so the GC never tries
-/// to dereference it. Entries carrying this key are dead: the index table
-/// no longer references them (`rubymap::tombstone_remove`), every iterator
-/// filters them, and the `__live_at` intrinsic reports them false. The next
-/// mutating operation outside an iteration compacts them away
-/// ([`HashRefMut::compact_if_dirty`]).
-pub const HASH_TOMBSTONE_KEY: u64 = 0b0010_0100;
-
-fn tombstone_key() -> Value {
-    Value::from_u64(HASH_TOMBSTONE_KEY)
-}
+// A tombstoned (deleted-during-iteration) entry in a boxed hash's entry
+// vector carries the key `None`: the boxed maps are keyed by
+// `Option<Value>` / `Option<IdentKey>`, whose `None` occupies `Value`'s
+// niche (`Value` wraps `NonZeroU64`, so `Option<Value>` is still 8 bytes,
+// `None` is all-zero bits, and `Some(v)` is exactly `v`'s bits — all
+// language-guaranteed). Generated code therefore tests the raw key word
+// against zero, and the type system forces every Rust-side reader to
+// decide what a dead entry means — the sentinel cannot leak by omission.
+// Dead entries are unreachable through lookups (the index table drops
+// them in `rubymap::tombstone_remove`), every iterator filters them, the
+// `__live_at` intrinsic reports them false, and the next mutating
+// operation outside an iteration compacts them away
+// ([`HashRefMut::compact_if_dirty`]).
+const _: () = assert!(std::mem::size_of::<Option<Value>>() == 8);
+const _: () = assert!(std::mem::size_of::<Option<IdentKey>>() == 8);
 /// The *inline* hash is identity-keyed (`compare_by_identity`).
 /// Identity probing is a pure id scan — no hashing, no Ruby code, and
 /// an id can never go stale — so an identity-keyed inline hash may hold
@@ -124,8 +122,8 @@ pub const HASH_DEAD_OFFSET: usize = RVALUE_OFFSET_KIND + std::mem::offset_of!(Bo
 /// generated code need not branch on the discriminant.
 pub fn hash_entries_layout() -> Option<rubymap::EntriesLayout> {
     type S = std::collections::hash_map::RandomState;
-    let by_value = rubymap::entries_layout::<Value, Value, (), (), (), S>()?;
-    let by_ident = rubymap::entries_layout::<IdentKey, Value, (), (), (), S>()?;
+    let by_value = rubymap::entries_layout::<Option<Value>, Value, (), (), (), S>()?;
+    let by_ident = rubymap::entries_layout::<Option<IdentKey>, Value, (), (), (), S>()?;
     (by_value == by_ident).then_some(by_value)
 }
 
@@ -191,7 +189,7 @@ pub(crate) struct BoxedHash {
     /// Tombstoned entries currently sitting in the entry vector: a delete
     /// while `iter_lev > 0` cannot compact (positions must stay stable
     /// under the live traversal), so the entry stays in place with its key
-    /// overwritten by [`HASH_TOMBSTONE_KEY`] and this count goes up. The
+    /// overwritten by `None` and this count goes up. The
     /// live size is the entry count minus this; the next mutating
     /// operation outside an iteration compacts and resets it. A `Cell`
     /// because `Hash#delete` reaches here through the same shared-borrow
@@ -218,8 +216,8 @@ impl BoxedHash {
 /// [`hash_entries_layout`].
 #[repr(C, usize)]
 enum HashContent {
-    Map(Box<RubyMap<Value, Value>>),
-    IdentMap(Box<RubyMap<IdentKey, Value>>),
+    Map(Box<RubyMap<Option<Value>, Value>>),
+    IdentMap(Box<RubyMap<Option<IdentKey>, Value>>),
 }
 
 #[derive(Debug, Clone)]
@@ -331,7 +329,13 @@ impl HashmapInner {
             Self::from_parts(
                 REP_BOXED,
                 HashBody {
-                    boxed: ManuallyDrop::new(BoxedHash::new(HashContent::Map(Box::new(map)))),
+                    // `map_keys(Some)` re-wraps the keys into the boxed
+                    // content's `Option` representation without re-hashing
+                    // anything (entry order, stored hashes and the index
+                    // table move verbatim).
+                    boxed: ManuallyDrop::new(BoxedHash::new(HashContent::Map(Box::new(
+                        map.map_keys(Some),
+                    )))),
                 },
             )
         }
@@ -342,7 +346,7 @@ impl HashmapInner {
             REP_BOXED,
             HashBody {
                 boxed: ManuallyDrop::new(BoxedHash {
-                    content: HashContent::Map(Box::new(map)),
+                    content: HashContent::Map(Box::new(map.map_keys(Some))),
                     default: default.map(Box::new),
                     iter_lev: std::cell::Cell::new(0),
                     dead: std::cell::Cell::new(0),
@@ -482,8 +486,8 @@ fn is_inline_key(k: Value) -> bool {
 /// representation without touching the union directly.
 enum ContentRef<'a> {
     Inline(&'a [(Value, Value)]),
-    Map(&'a RubyMap<Value, Value>),
-    Ident(&'a RubyMap<IdentKey, Value>),
+    Map(&'a RubyMap<Option<Value>, Value>),
+    Ident(&'a RubyMap<Option<IdentKey>, Value>),
 }
 
 ///
@@ -655,12 +659,8 @@ impl<'a> HashRef<'a> {
     pub(crate) fn live_at(&self, index: usize) -> bool {
         match self.content() {
             ContentRef::Inline(pairs) => index < pairs.len(),
-            ContentRef::Map(m) => m
-                .get_index(index)
-                .is_some_and(|(k, _)| k.id() != HASH_TOMBSTONE_KEY),
-            ContentRef::Ident(m) => m
-                .get_index(index)
-                .is_some_and(|(k, _)| k.0.id() != HASH_TOMBSTONE_KEY),
+            ContentRef::Map(m) => m.get_index(index).is_some_and(|(k, _)| k.is_some()),
+            ContentRef::Ident(m) => m.get_index(index).is_some_and(|(k, _)| k.is_some()),
         }
     }
 
@@ -680,12 +680,10 @@ impl<'a> HashRef<'a> {
             ContentRef::Inline(pairs) => pairs.get(index).copied(),
             ContentRef::Map(m) => m
                 .get_index(index)
-                .filter(|(k, _)| k.id() != HASH_TOMBSTONE_KEY)
-                .map(|(k, v)| (*k, *v)),
+                .and_then(|(k, v)| k.map(|k| (k, *v))),
             ContentRef::Ident(m) => m
                 .get_index(index)
-                .filter(|(k, _)| k.0.id() != HASH_TOMBSTONE_KEY)
-                .map(|(k, v)| (k.0, *v)),
+                .and_then(|(k, v)| k.map(|k| (k.0, *v))),
         }
     }
 
@@ -874,12 +872,8 @@ impl<'a> HashRef<'a> {
             // dead count over.
             if b.dead.get() > 0 {
                 match &mut content {
-                    HashContent::Map(m) => {
-                        m.compact_tombstones(|k| k.id() == HASH_TOMBSTONE_KEY)
-                    }
-                    HashContent::IdentMap(m) => {
-                        m.compact_tombstones(|k| k.0.id() == HASH_TOMBSTONE_KEY)
-                    }
+                    HashContent::Map(m) => m.compact_tombstones(|k| k.is_none()),
+                    HashContent::IdentMap(m) => m.compact_tombstones(|k| k.is_none()),
                 }
             }
             HashBody {
@@ -1150,13 +1144,13 @@ impl<'a> HashRefMut<'a> {
         let content = if ident {
             let mut map = RubyMap::default();
             for (k, v) in self.as_ref().inline_pairs() {
-                map.insert(IdentKey(*k), *v, vm, globals)?;
+                map.insert(Some(IdentKey(*k)), *v, vm, globals)?;
             }
             HashContent::IdentMap(Box::new(map))
         } else {
             let mut map = RubyMap::default();
             for (k, v) in self.as_ref().inline_pairs() {
-                map.insert(*k, *v, vm, globals)?;
+                map.insert(Some(*k), *v, vm, globals)?;
             }
             HashContent::Map(Box::new(map))
         };
@@ -1214,18 +1208,18 @@ impl<'a> HashRefMut<'a> {
                 // the boxed-representation protocol.
                 self.promote(ident, vm, globals)?;
                 match &mut self.boxed_mut().content {
-                    HashContent::Map(m) => m.insert(k, v, vm, globals)?,
-                    HashContent::IdentMap(m) => m.insert(IdentKey(k), v, vm, globals)?,
+                    HashContent::Map(m) => m.insert(Some(k), v, vm, globals)?,
+                    HashContent::IdentMap(m) => m.insert(Some(IdentKey(k)), v, vm, globals)?,
                 };
             }
             return Ok(());
         }
         match &mut self.boxed_mut().content {
             HashContent::Map(m) => {
-                m.insert(k, v, vm, globals)?;
+                m.insert(Some(k), v, vm, globals)?;
             }
             HashContent::IdentMap(m) => {
-                m.insert(IdentKey(k), v, vm, globals)?;
+                m.insert(Some(IdentKey(k)), v, vm, globals)?;
             }
         }
         Ok(())
@@ -1248,8 +1242,8 @@ impl<'a> HashRefMut<'a> {
         }
         debug_assert_eq!(b.iter_lev.get(), 0);
         match &mut b.content {
-            HashContent::Map(m) => m.compact_tombstones(|k| k.id() == HASH_TOMBSTONE_KEY),
-            HashContent::IdentMap(m) => m.compact_tombstones(|k| k.0.id() == HASH_TOMBSTONE_KEY),
+            HashContent::Map(m) => m.compact_tombstones(|k| k.is_none()),
+            HashContent::IdentMap(m) => m.compact_tombstones(|k| k.is_none()),
         }
         b.dead.set(0);
     }
@@ -1279,16 +1273,10 @@ impl<'a> HashRefMut<'a> {
             }
             let removed = match &mut self.boxed_mut().content {
                 HashContent::Map(m) => m
-                    .tombstone_remove(&k, tombstone_key(), Value::nil(), vm, globals)?
+                    .tombstone_remove(&k, None, Value::nil(), vm, globals)?
                     .map(|(_, _, v)| v),
                 HashContent::IdentMap(m) => m
-                    .tombstone_remove(
-                        &IdentKey(k),
-                        IdentKey(tombstone_key()),
-                        Value::nil(),
-                        vm,
-                        globals,
-                    )?
+                    .tombstone_remove(&IdentKey(k), None, Value::nil(), vm, globals)?
                     .map(|(_, _, v)| v),
             };
             if removed.is_some() {
@@ -1391,16 +1379,11 @@ impl<'a> HashRefMut<'a> {
                 .expect("len > 0 implies a live entry");
             let removed = match &mut self.boxed_mut().content {
                 HashContent::Map(m) => m
-                    .tombstone_index(first_live, tombstone_key(), Value::nil(), vm, globals)?,
+                    .tombstone_index(first_live, None, Value::nil(), vm, globals)?
+                    .map(|(k, v)| (k.expect("first_live is a live entry"), v)),
                 HashContent::IdentMap(m) => m
-                    .tombstone_index(
-                        first_live,
-                        IdentKey(tombstone_key()),
-                        Value::nil(),
-                        vm,
-                        globals,
-                    )?
-                    .map(|(k, v)| (k.0, v)),
+                    .tombstone_index(first_live, None, Value::nil(), vm, globals)?
+                    .map(|(k, v)| (k.expect("first_live is a live entry").0, v)),
             };
             debug_assert!(removed.is_some());
             if removed.is_some() {
@@ -1416,13 +1399,15 @@ impl<'a> HashRefMut<'a> {
             return Ok(Some((k, v)));
         }
         self.compact_if_dirty();
+        // Just compacted, so entry 0 is live (`Some`) — `len > 0` was
+        // checked above.
         match &mut self.boxed_mut().content {
             HashContent::Map(m) => m
                 .shift_remove_index(0, vm, globals)
-                .map(|opt| opt.map(|(k, v)| (k, v))),
+                .map(|opt| opt.map(|(k, v)| (k.expect("compacted"), v))),
             HashContent::IdentMap(m) => m
                 .shift_remove_index(0, vm, globals)
-                .map(|opt| opt.map(|(k, v)| (k.0, v))),
+                .map(|opt| opt.map(|(k, v)| (k.expect("compacted").0, v))),
         }
     }
 
@@ -1491,7 +1476,9 @@ impl<'a> HashRefMut<'a> {
         if let HashContent::Map(m) = &self.boxed_mut().content {
             let mut new_map = RubyMap::default();
             for (k, v) in m.iter() {
-                new_map.insert(IdentKey(*k), *v, vm, globals)?;
+                // Compacted above (`compact_if_dirty`), so every key is live.
+                let Some(k) = k else { continue };
+                new_map.insert(Some(IdentKey(*k)), *v, vm, globals)?;
             }
             self.boxed_mut().content = HashContent::IdentMap(Box::new(new_map));
         }
@@ -1566,6 +1553,7 @@ impl Drop for IterGuard<'_> {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
 pub struct IdentKey(pub Value);
 
 impl Deref for IdentKey {
@@ -1595,27 +1583,64 @@ impl RubyEql<Executor, Globals, MonorubyErr> for IdentKey {
     }
 }
 
+/// Query a live (`Some`) key with a bare `Value` — a dead entry is never
+/// equal to anything, so lookups can pass the plain query straight through
+/// to the `Option`-keyed maps. (The blanket Borrow-based `Equivalent` does
+/// not apply: `Option<Value>` does not `Borrow<Value>`.)
+impl rubymap::Equivalent<Option<Value>, Executor, Globals, MonorubyErr> for Value {
+    fn equivalent(
+        &self,
+        key: &Option<Value>,
+        e: &mut Executor,
+        g: &mut Globals,
+    ) -> Result<bool> {
+        match key {
+            Some(k) => self.eql(k, e, g),
+            None => Ok(false),
+        }
+    }
+}
+
+impl rubymap::Equivalent<Option<IdentKey>, Executor, Globals, MonorubyErr> for IdentKey {
+    fn equivalent(
+        &self,
+        key: &Option<IdentKey>,
+        e: &mut Executor,
+        g: &mut Globals,
+    ) -> Result<bool> {
+        match key {
+            Some(k) => self.eql(k, e, g),
+            None => Ok(false),
+        }
+    }
+}
+
 pub enum Iter<'a> {
     Inline(std::slice::Iter<'a, (Value, Value)>),
-    Map(rubymap::map::Iter<'a, Value, Value>),
-    IdentMap(rubymap::map::Iter<'a, IdentKey, Value>),
+    Map(rubymap::map::Iter<'a, Option<Value>, Value>),
+    IdentMap(rubymap::map::Iter<'a, Option<IdentKey>, Value>),
 }
 
 impl Iterator for Iter<'_> {
     type Item = (Value, Value);
     fn next(&mut self) -> Option<Self::Item> {
-        // Tombstoned entries are dead: skip them so no caller — user-facing
-        // iteration, GC marking, `keys`/`values`, `inspect` — can observe
-        // the sentinel key.
+        // Tombstoned entries are dead (`None` keys): skip them so no caller
+        // — user-facing iteration, GC marking, `keys`/`values`, `inspect` —
+        // can observe them. The `Option` key type makes forgetting this
+        // filter a compile error rather than a leaked sentinel.
         loop {
-            let next = match self {
-                Iter::Inline(pairs) => pairs.next().copied(),
-                Iter::Map(map) => map.next().map(|(k, v)| (*k, *v)),
-                Iter::IdentMap(map) => map.next().map(|(k, v)| (k.0, *v)),
-            };
-            match next {
-                Some((k, _)) if k.id() == HASH_TOMBSTONE_KEY => continue,
-                other => return other,
+            match self {
+                Iter::Inline(pairs) => return pairs.next().copied(),
+                Iter::Map(map) => match map.next() {
+                    Some((Some(k), v)) => return Some((*k, *v)),
+                    Some((None, _)) => continue,
+                    None => return None,
+                },
+                Iter::IdentMap(map) => match map.next() {
+                    Some((Some(k), v)) => return Some((k.0, *v)),
+                    Some((None, _)) => continue,
+                    None => return None,
+                },
             }
         }
     }

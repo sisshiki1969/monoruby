@@ -10,18 +10,42 @@ pub trait RubyEql<E, G, R> {
     fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R>;
 }
 
-//impl<T, E, G, R> RubyEql<E, G, R> for Option<T>
-//where
-//    T: RubyEql<E, G, R>,
-//{
-//    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
-//        match (self, other) {
-//            (Some(a), Some(b)) => a.eql(b, e, g),
-//            (None, None) => Ok(true),
-//            _ => Ok(false),
-//        }
-//    }
-//}
+/// `Option<T>` keys: the map key type of a container whose dead
+/// (tombstoned) entries are `None`. Two `None`s are equal — inserted keys
+/// are always `Some`, so the case only arises when comparing dead slots,
+/// where identity is the sensible answer.
+impl<T, E, G, R> RubyEql<E, G, R> for Option<T>
+where
+    T: RubyEql<E, G, R>,
+{
+    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
+        match (self, other) {
+            (Some(a), Some(b)) => a.eql(b, e, g),
+            (None, None) => Ok(true),
+            _ => Ok(false),
+        }
+    }
+}
+
+impl<T, E, G, R> RubyHash<E, G, R> for Option<T>
+where
+    T: RubyHash<E, G, R>,
+{
+    fn ruby_hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
+        match self {
+            Some(v) => v.ruby_hash(state, e, g),
+            // A `None` key is a dead entry; it is never inserted (its slot
+            // was removed from the index table when it died), so the value
+            // only needs to be deterministic.
+            None => Ok(()),
+        }
+    }
+}
 
 impl<T, E, G, R> RubyEql<E, G, R> for Vec<T>
 where

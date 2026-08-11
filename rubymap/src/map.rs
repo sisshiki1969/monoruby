@@ -952,6 +952,19 @@ where
             .tombstone_remove_full(hash, key, dead_key, dead_value, e, g)
     }
 
+    /// Rebuild this map with every key passed through `f`, preserving the
+    /// stored hashes, the entry order, and the index table — no key is
+    /// re-hashed and no user code runs. Sound only when `f` preserves
+    /// hash/eql semantics; the intended use is changing the key's
+    /// *representation* (e.g. `Value` → `Option<Value>` via `Some`) rather
+    /// than its identity.
+    pub fn map_keys<K2>(self, f: impl FnMut(K) -> K2) -> RubyMap<K2, V, E, G, R, S> {
+        RubyMap {
+            core: self.core.map_keys(f),
+            hash_builder: self.hash_builder,
+        }
+    }
+
     /// [`Self::tombstone_remove`] for a caller-chosen entry position.
     pub fn tombstone_index(
         &mut self,
