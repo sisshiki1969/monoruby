@@ -160,6 +160,67 @@ impl Codegen {
     }
 
     ///
+    /// Lower `YieldArrayExpand`: block-style single-Array auto-splat with the
+    /// yielded value in `rdi`.
+    ///
+    /// When the value is an Array by ty — exactly the test the runtime's
+    /// `check_single_arg_expand` applies, so Array subclasses take the same
+    /// path — its elements fill the callee's `req_num` parameter slots
+    /// directly: nil past the end, extras dropped. The element loads are
+    /// branchy rather than `cmov`ed because a `cmov` memory operand always
+    /// reads, and an empty heap array's data pointer is dangling.
+    ///
+    /// Anything else branches to the same `jit_generic_set_arguments` call
+    /// the generic arm uses (its `#to_ary` coercion can run arbitrary Ruby),
+    /// so `rax` carries that helper's error signal; the fast path reports a
+    /// constant non-error for the shared `HandleError` that follows.
+    ///
+    /// ### destroy
+    /// - rax, rcx, rdx (+ caller-save on the slow path)
+    pub(in crate::codegen::jitgen) fn gen_yield_array_expand(
+        &mut self,
+        callid: CallSiteId,
+        fid: FuncId,
+        req_num: usize,
+        offset: usize,
+    ) {
+        let slow = self.jit.label();
+        let done = self.jit.label();
+        monoasm! { &mut self.jit,
+            testq rdi, (0b111);
+            jne  slow;
+            cmpb [rdi + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
+            jne  slow;
+            // len -> rax, data ptr -> rcx (inline vs heap storage select)
+            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+            lea  rcx, [rdi + (RVALUE_OFFSET_INLINE)];
+            cmpq rax, (ARRAY_INLINE_CAPA);
+            cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            cmovgtq rcx, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+        }
+        for i in 0..req_num {
+            let fill_nil = self.jit.label();
+            let store = self.jit.label();
+            monoasm! { &mut self.jit,
+                cmpq rax, (i as i32);
+                jle  fill_nil;
+                movq rdx, [rcx + ((8 * i) as i32)];
+                jmp  store;
+            fill_nil:
+                movq rdx, (NIL_VALUE);
+            store:
+                movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32)], rdx;
+            }
+        }
+        monoasm! { &mut self.jit,
+            movq rax, (NIL_VALUE);
+            jmp  done;
+        slow:
+        }
+        self.jit_set_arguments(callid, fid, offset);
+        self.jit.bind_label(done);
+    }
+
     /// Set up a callee method frame for send.
     ///
     /// ### destroy

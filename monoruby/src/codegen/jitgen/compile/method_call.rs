@@ -1298,6 +1298,39 @@ impl AbstractState {
             }
 
             ir.reg_add(GP::Rsp, stack_offset);
+        } else if callsite.pos_num == 1
+            && callee.single_arg_expand()
+            && callee.meta().is_simple()
+            && callee.post_num() == 0
+            && !callsite.has_splat()
+            && !callsite.has_hash_splat()
+            && !callsite.kw_may_exists()
+            && callsite.block_arg.is_none()
+        {
+            // `yield v` into a plain multi-parameter block (`h.each { |k, v| .. }`
+            // receiving one `[k, v]` pair): block-style single-Array auto-splat.
+            // `single_arg_expand` makes `is_simple_call` false, so without this
+            // arm every such yield pays the generic runtime-call binding — and
+            // this is the argument shape every `each`-style Ruby builtin yields
+            // on every element.
+            //
+            // The lowering peels the by-far-common case in line: when the value
+            // is an Array (by ty, as the runtime's `check_single_arg_expand`
+            // decides it), its elements fill the parameters directly —
+            // nil-filled past the end, extras dropped, block-style loose
+            // binding. Anything else — a non-Array (whose `#to_ary` may run
+            // arbitrary code) — branches to the same generic runtime helper the
+            // arm below uses, so semantics never depend on the fast path.
+            let req_num = callee.req_num();
+            self.write_back_recv_and_callargs(ir, callsite);
+            self.load(ir, callsite.args, GP::Rdi);
+            let error = ir.new_error(self);
+            ir.push(AsmInst::YieldArrayExpand {
+                callid,
+                callee_fid,
+                req_num,
+            });
+            ir.handle_error(error);
         } else if callsite.forwarding
             && callsite.pos_num >= 1
             && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]

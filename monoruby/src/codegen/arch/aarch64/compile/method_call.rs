@@ -498,6 +498,69 @@ impl Codegen {
         true
     }
 
+    /// Lower `YieldArrayExpand`: block-style single-Array auto-splat with the
+    /// yielded value in Rdi (x4). aarch64 twin of the x86
+    /// `gen_yield_array_expand` — see there for the semantics.
+    ///
+    /// ### destroy
+    /// - x0 (Rax), x1 (Rcx), x2 (Rdx), x9, x10 (+ caller-save on the slow path)
+    pub(in crate::codegen::jitgen) fn gen_yield_array_expand(
+        &mut self,
+        callid: CallSiteId,
+        fid: FuncId,
+        req_num: usize,
+        offset: usize,
+    ) {
+        let slow = self.jit.label();
+        let done = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (0b111u64);
+            and x9, x4, x9;
+            cmp x9, #(0);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &slow);
+        monoasm_arm64!(&mut self.jit,
+            ldrb w9, [x4, #(RVALUE_OFFSET_TY as u32)];
+            cmp x9, #(ObjTy::ARRAY.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &slow);
+        monoasm_arm64!(&mut self.jit,
+            // len -> x0, data ptr -> x1 (inline vs heap storage select)
+            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x0, #(ARRAY_INLINE_CAPA as u32);
+            csel x0, x9, x0, gt;
+            add x1, x4, #(RVALUE_OFFSET_INLINE as u32);
+            ldr x9, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            csel x1, x9, x1, gt;
+        );
+        for i in 0..req_num {
+            let fill_nil = self.jit.label();
+            let store = self.jit.label();
+            monoasm_arm64!(&mut self.jit,
+                cmp x0, #(i as u32);
+            );
+            self.jit.bcond_label(monoasm::Cond::Le, &fill_nil);
+            monoasm_arm64!(&mut self.jit,
+                ldr x2, [x1, #((8 * i) as u32)];
+                b store;
+            fill_nil:
+                mov x2, #(NIL_VALUE);
+            store:
+            );
+            // x10 <- &callee_slot(1 + i); x9 is a64_rsp_slot_addr's scratch.
+            self.a64_rsp_slot_addr(-((LFP_ARG0 + (8 * i) as i32)), 10);
+            monoasm_arm64!(&mut self.jit, str x2, [x10];);
+        }
+        monoasm_arm64!(&mut self.jit,
+            mov x0, #(NIL_VALUE);
+            b done;
+        slow:
+        );
+        self.a64_set_arguments(callid, fid, offset);
+        self.jit.bind_label(done);
+    }
+
     /// Lower the D1 source-routed `SetArgumentsForwarded` fast path (the
     /// deferred `...`-rest case). The trampoline `f`'s `...` rest `Array` was
     /// elided at frame entry, so the forwarded positionals are copied straight

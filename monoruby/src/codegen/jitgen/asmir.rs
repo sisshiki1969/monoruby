@@ -1688,6 +1688,18 @@ pub(super) enum AsmInst {
         base: GP,
         layout: rubymap::EntriesLayout,
     },
+    /// Block-style single-Array auto-splat for a specialized `yield` of one
+    /// value into a plain multi-parameter block: with the value in `Rdi`,
+    /// fill the callee frame's `req_num` parameter slots from the Array's
+    /// elements (nil past the end, extras dropped). A non-Array value takes
+    /// the generic `SetArguments` runtime call instead, inside the same
+    /// lowering, so `Rax` carries the helper's error signal either way (the
+    /// fast path reports a constant non-error).
+    YieldArrayExpand {
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        req_num: usize,
+    },
     /// `dst <- Hash#compare_by_identity?` for the hash in `base`, as a Ruby bool.
     ///
     /// The flag has two homes: a `ty_flags` bit while the hash is inline, and

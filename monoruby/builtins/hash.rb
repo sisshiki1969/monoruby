@@ -5,6 +5,45 @@ class Hash
     self
   end
 
+  # Hash#each / Hash#each_pair
+  # each {|key, value| block } -> self
+  # each -> Enumerator
+  #
+  # Written in Ruby, not Rust, so that a `h.each { .. }` call site can
+  # inline it: the JIT only specializes `FuncKind::ISeq` callees, and
+  # specializing `each` is what lets the block be inlined into the `yield`
+  # in turn. A Rust builtin can never reach that, so its block pays a full
+  # invocation per entry.
+  #
+  # The three things the Rust implementation did that a bare index loop
+  # would lose are kept:
+  #
+  #   * the pairs are snapshotted first (`__pairs`) — deleting during
+  #     iteration is allowed and shifts the entry vector, so indexing the
+  #     live hash would skip the entry after each deletion;
+  #   * an iteration reference is held across the yields, which is what
+  #     makes *adding* a key during iteration raise;
+  #   * a single `[key, value]` array is yielded, so an arity-1 block
+  #     receives the pair (CRuby's `rb_yield(rb_assoc_new(k, v))`).
+  def each
+    return to_enum(:each) { size } unless block_given?
+    pairs = __pairs
+    guard = __iter_begin
+    begin
+      i = 0
+      n = pairs.size
+      while i < n
+        yield pairs[i]
+        i += 1
+      end
+    ensure
+      __iter_end(guard)
+    end
+    self
+  end
+
+  alias each_pair each
+
   # Hash#to_h
   # to_h -> self
   # to_h {|key, value| block } -> Hash
@@ -188,20 +227,38 @@ class Hash
   def map(&blk)
     return to_enum(:map) { size } unless blk
     result = []
-    # Capture every value `each` yields. A plain Hash yields a single
-    # [k, v] pair, but a subclass may override `each` to `yield k, v` as
-    # two separate values (or `yield [k, v]` as one) — normalise both.
-    # An arity-1 block/proc sees the element as-is (the pair for a plain
-    # Hash, the first value for a two-value yield); anything else has the
-    # pair splatted, so a strict arity-2 block/Method receives k and v
-    # (matches CRuby rb_yield_values2 / the enumerable map specs).
-    each do |*vs|
-      if blk.arity == 1
-        result << blk.call(vs[0])
+    if method(:each).owner == ::Hash
+      # Own `each` — not overridden by a subclass or a singleton method —
+      # so every element is exactly one [k, v] pair, and the arity dispatch
+      # can happen once out here, leaving plain blocks in the loops. That
+      # matters for speed: a `|*vs|` rest parameter disqualifies a block
+      # from the specialized-yield fast path (simple parameter lists are
+      # bound in line by the JIT; rest params take the generic runtime
+      # binding on every element).
+      #
+      # Whether the pair is passed whole or split in two follows CRuby
+      # (each_pair_i_fast / rb_block_pair_yield_optimizable), where procs
+      # and lambdas differ: a proc is split whenever it can take more than
+      # one positional argument (`{ |a, *b| }` splits, bare `{ |*a| }`
+      # receives the pair whole), a lambda — including a Symbol proc —
+      # only when it *requires* at least two (`->(a, b, *c)` splits,
+      # `->(a, *b)` receives the pair whole).
+      ar = blk.arity
+      wide = blk.lambda? ? (ar >= 2 || ar <= -3) : (ar > 1 || ar < -1)
+      if wide
+        each { |k, v| result << yield(k, v) }
       else
-        pair = vs.size == 1 ? vs[0] : vs
-        result << blk.call(*pair)
+        each { |pair| result << yield(pair) }
       end
+    else
+      # Overridden `each`: pass whatever it yields straight through —
+      # CRuby's Enumerable#map does no repacking. A proc auto-splats a
+      # single-array yield across its parameters as any proc call would;
+      # a lambda receives it as one argument and may raise. (The previous
+      # arity-based normalization here re-split the element for every
+      # non-arity-1 block, which wrongly let `->(k, v)` accept a
+      # single-array yield and handed `{ |*a| }` the pair pre-splatted.)
+      each { |*vs| result << blk.call(*vs) }
     end
     result
   end
