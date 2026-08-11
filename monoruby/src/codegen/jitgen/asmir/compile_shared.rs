@@ -1019,6 +1019,16 @@ impl Codegen {
             }
             // Specialized `yield`: build the block frame, then branch into the
             // inlined block entry (no patch point).
+            AsmInst::YieldArrayExpand {
+                callid,
+                callee_fid,
+                req_num,
+            } => {
+                let offset = store[callee_fid].get_offset();
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.gen_yield_array_expand(callid, callee_fid, req_num, offset);
+                });
+            }
             AsmInst::SetupYieldFrame { meta, outer } => {
                 self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
                     cg.setup_yield_frame(meta, outer);

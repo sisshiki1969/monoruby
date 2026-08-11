@@ -1598,6 +1598,123 @@ fn invoker_arguments_inner(
 mod tests {
     use crate::tests::*;
 
+    /// The inlined block-style single-Array auto-splat (`YieldArrayExpand`):
+    /// a hot specialized `yield` of one value into a plain multi-parameter
+    /// block fills the parameters from the Array in machine code. Every
+    /// shape the fill has to get right is driven through one hot call site
+    /// per case and pinned to CRuby: exact length, short (nil-fill), empty
+    /// (whose heap data pointer may be dangling — the bounds check must keep
+    /// it unread), long (extras dropped), inline vs heap storage, and a
+    /// three-parameter block.
+    #[test]
+    fn yield_array_expand_jit() {
+        run_test(
+            r#"
+            def drive(a)
+              acc = []
+              a.each_with_yield { |k, v| acc << [k, v] }
+              acc
+            end
+            class Array
+              def each_with_yield
+                i = 0
+                n = size
+                while i < n
+                  yield self[i]
+                  i += 1
+                end
+                self
+              end
+            end
+            exact = [[1, 2], [:a, :b]]
+            short = [[1], []]
+            long  = [[1, 2, 3, 4]]
+            heap  = [(1..10).to_a]          # > inline capacity
+            out = []
+            n = 0
+            while n < 30
+              out = [drive(exact), drive(short), drive(long), drive(heap)]
+              n += 1
+            end
+            out
+            "#,
+        );
+        // Three parameters, same machinery.
+        run_test(
+            r#"
+            def drive3(a)
+              acc = []
+              a.each_with_yield3 { |x, y, z| acc << [x, y, z] }
+              acc
+            end
+            class Array
+              def each_with_yield3
+                i = 0
+                n = size
+                while i < n
+                  yield self[i]
+                  i += 1
+                end
+                self
+              end
+            end
+            r = nil
+            n = 0
+            while n < 30
+              r = drive3([[1, 2, 3], [1, 2], [1], [], [1, 2, 3, 4, 5]])
+              n += 1
+            end
+            r
+            "#,
+        );
+    }
+
+    /// The values the inline fast path must NOT swallow: a non-Array scalar
+    /// (first param takes it, rest nil), a `#to_ary` respondent (whose
+    /// coercion runs Ruby code), and an Array subclass (splatted directly,
+    /// `#to_ary` NOT consulted). One call site sees all of them interleaved
+    /// with plain Arrays, so the compiled fast path and its slow branch are
+    /// both exercised in a single unit.
+    #[test]
+    fn yield_array_expand_jit_slow_paths() {
+        run_test(
+            r#"
+            def drive(a)
+              acc = []
+              a.each_with_yield { |k, v| acc << [k, v] }
+              acc
+            end
+            class Array
+              def each_with_yield
+                i = 0
+                n = size
+                while i < n
+                  yield self[i]
+                  i += 1
+                end
+                self
+              end
+            end
+            class Pairish
+              def initialize(k, v); @k = k; @v = v; end
+              def to_ary; [@k, @v]; end
+            end
+            class MyArray < Array; end
+
+            sub = MyArray.new
+            sub << :s1 << :s2 << :s3
+            mixed = [[1, 2], :scalar, Pairish.new(:pk, :pv), sub, nil, 4.5]
+            out = nil
+            n = 0
+            while n < 30
+              out = drive(mixed)
+              n += 1
+            end
+            out
+            "#,
+        );
+    }
+
     #[test]
     fn lazy_forwarding() {
         // The lazy `(...)`-forwarding convention: a flat call into a pure

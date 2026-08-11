@@ -161,6 +161,7 @@ impl Codegen {
             | AsmInst::Yield { .. }
             | AsmInst::MethodRetSpecialized { .. }
             | AsmInst::BlockBreakSpecialized { .. }
+            | AsmInst::YieldArrayExpand { .. }
             | AsmInst::SetupYieldFrame { .. }
             | AsmInst::SpecializedCall { .. }
             | AsmInst::SpecializedYield { .. }
