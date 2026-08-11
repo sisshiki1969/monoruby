@@ -257,3 +257,33 @@ where
         self.eql(key.borrow())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `Option<T>` key impls used by tombstone-capable maps: `Some`
+    /// delegates, `None` equals only `None` and hashes to nothing.
+    #[test]
+    fn option_key_impls() {
+        let (e, g) = (&mut (), &mut ());
+        let some5: Option<u64> = Some(5);
+        let some7: Option<u64> = Some(7);
+        let none: Option<u64> = None;
+        assert!(RubyEql::<(), (), ()>::eql(&some5, &Some(5), e, g).unwrap());
+        assert!(!RubyEql::<(), (), ()>::eql(&some5, &some7, e, g).unwrap());
+        assert!(!RubyEql::<(), (), ()>::eql(&some5, &none, e, g).unwrap());
+        assert!(!RubyEql::<(), (), ()>::eql(&none, &some5, e, g).unwrap());
+        assert!(RubyEql::<(), (), ()>::eql(&none, &None, e, g).unwrap());
+
+        fn digest(v: &Option<u64>) -> u64 {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            RubyHash::<(), (), ()>::ruby_hash(v, &mut h, &mut (), &mut ()).unwrap();
+            std::hash::Hasher::finish(&h)
+        }
+        assert_eq!(digest(&some5), digest(&Some(5)));
+        assert_ne!(digest(&some5), digest(&some7));
+        // A None key hashes deterministically (to the hasher's initial state).
+        assert_eq!(digest(&none), digest(&None));
+    }
+}

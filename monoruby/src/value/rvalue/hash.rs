@@ -1907,6 +1907,29 @@ mod tests {
         h.flags & REP_MASK
     }
 
+    /// The query-side `Equivalent` impls over the `Option`-keyed boxed
+    /// maps: a bare query equals a live (`Some`) key iff it eqls the inner
+    /// key, and never equals a dead (`None`) one. The `None` arms are
+    /// unreachable through lookups in practice — the index table drops
+    /// dead entries — so they are pinned here directly.
+    #[test]
+    fn option_key_equivalence() {
+        use rubymap::Equivalent;
+        let mut globals = Globals::new_test();
+        let mut executor = Executor::default();
+        let (e, g) = (&mut executor, &mut globals);
+        let five = Value::integer(5);
+        assert!(five.equivalent(&Some(Value::integer(5)), e, g).unwrap());
+        assert!(!five.equivalent(&Some(Value::integer(7)), e, g).unwrap());
+        assert!(!five.equivalent(&None, e, g).unwrap());
+        let ik = IdentKey(five);
+        assert!(ik.equivalent(&Some(IdentKey(five)), e, g).unwrap());
+        assert!(!ik
+            .equivalent(&Some(IdentKey(Value::integer(7))), e, g)
+            .unwrap());
+        assert!(!ik.equivalent(&None, e, g).unwrap());
+    }
+
     #[test]
     fn hash0() {
         let mut globals = Globals::new_test();
