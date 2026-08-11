@@ -1774,42 +1774,34 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let self_ary = lfp.self_val().as_array();
     let self_len = self_ary.len();
     let each_id = IdentId::EACH;
-    let to_enum_id = IdentId::get_id("to_enum");
-    let next_id = IdentId::get_id("next");
+    let zip_pull_id = IdentId::get_id("__zip_pull");
 
     vm.with_temp_scope(|vm| {
         // Phase 1: stash each converted argument as a GC-rooted Array on the
-        // temp_stack at offsets [base..base + n_args]. This protects values
-        // pulled from enumerators (which are freshly allocated by `#next` and
-        // would otherwise be unreachable across the next Ruby callback).
+        // temp_stack at offsets [base..base + n_args].
         let base = vm.temp_len();
         for a in lfp.arg(0).as_array().iter() {
             if let Ok(ary) = a.coerce_to_array(vm, globals) {
                 vm.temp_push(ary.into());
             } else if globals.check_method(*a, each_id).is_some() {
-                let enum_val =
-                    vm.invoke_method_inner(globals, to_enum_id, *a, &[], None, None)?;
-                vm.temp_push(enum_val);
-                vm.temp_array_new(Some(self_len));
-                for _ in 0..self_len {
-                    match vm
-                        .invoke_method_inner(globals, next_id, enum_val, &[], None, None)
-                    {
-                        Ok(val) => vm.temp_array_push(val),
-                        // Only exhaustion ends the pull. Anything else is
-                        // the argument's own `each` failing and must reach
-                        // the caller: swallowing it silently padded the row
-                        // with nils instead of raising, so a GC-induced
-                        // failure showed up as wrong data rather than an
-                        // error (and `[1,2].zip(o)` with a raising `o.each`
-                        // returned [[1,nil],[2,nil]] where CRuby raises).
-                        Err(err) if err.is_stop_iteration(&globals.store) => break,
-                        Err(err) => return Err(err),
-                    }
-                }
-                let inner = vm.temp_pop();
-                vm.temp_pop(); // discard enum_val
-                vm.temp_push(inner);
+                // Collect with `each` + break (`Array#__zip_pull`,
+                // CRuby's rb_ary_zip / take_items protocol) rather than
+                // `to_enum` + `next`: no fiber in the path, and every
+                // exception the argument's `each` raises — StopIteration
+                // included — reaches the caller. An Enumerator-based
+                // pull cannot make that distinction, because a
+                // user-raised StopIteration and the enumerator's own
+                // end-of-iteration signal arrive as the same exception
+                // from `#next` (issue #1080).
+                let pulled = vm.invoke_method_inner(
+                    globals,
+                    zip_pull_id,
+                    lfp.self_val(),
+                    &[*a, Value::integer(self_len as i64)],
+                    None,
+                    None,
+                )?;
+                vm.temp_push(pulled);
             } else {
                 return Err(MonorubyErr::typeerr(format!(
                     "wrong argument type {} (must respond to :each)",
@@ -5009,12 +5001,27 @@ mod tests {
             begin; [1, 2].zip(o); rescue => e; [e.class, e.message]; end
             "##,
         );
-        // NOTE: a StopIteration raised by the argument's own `each` is still
-        // mistaken for exhaustion here, because the pull goes through
-        // `Enumerator#next` and monoruby's end-of-iteration signal is the
-        // same exception. CRuby collects with `each` + `break` instead, so
-        // it propagates that too. Not asserted, so this test does not pin
-        // the divergent behaviour; tracked separately.
+        // A StopIteration raised by the argument's own `each` propagates
+        // too: the pull collects with `each` + break (CRuby's rb_ary_zip
+        // protocol), so there is no Enumerator end-of-iteration signal to
+        // confuse it with.
+        run_test(
+            r##"
+            o = Object.new
+            def o.each; yield 1; raise StopIteration; end
+            begin; [1, 2, 3].zip(o); rescue => e; [e.class, e.message]; end
+            "##,
+        );
+        // Multi-value yields pack into an Array element, single values
+        // stay bare, and an empty self never invokes `each` at all.
+        run_tests(&[
+            r##"
+            o = Object.new
+            def o.each; yield 1, 2; yield 3; end
+            [10, 20].zip(o)
+            "##,
+            r##"[].zip(1.step)"##,
+        ]);
     }
 
     #[test]
