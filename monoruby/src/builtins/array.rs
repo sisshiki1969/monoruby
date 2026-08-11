@@ -3172,18 +3172,34 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let bh = lfp.expect_block()?;
     let elems: Vec<Value> = lfp.self_val().as_array().iter().copied().collect();
     let data = vm.get_block_data(globals, bh)?;
-    let mut res: Vec<Value> = Vec::with_capacity(elems.len());
+    // The accumulator has to be a *rooted* Ruby Array, not a Rust `Vec`:
+    // every `invoke_block` below is a safepoint, and values held only by
+    // an unrooted Vec would be swept out from under us (the gc-stress
+    // optcarrot abort).
+    vm.temp_array_new(elems.len());
+    let res = flat_map_inner(vm, globals, &data, elems);
+    let v = vm.temp_pop();
+    res?;
+    Ok(v)
+}
+
+fn flat_map_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    data: &ProcData,
+    elems: Vec<Value>,
+) -> Result<()> {
     for x in elems {
-        let r = vm.invoke_block(globals, &data, &[x])?;
+        let r = vm.invoke_block(globals, data, &[x])?;
         if let Some(a) = r.try_array_ty() {
-            res.extend(a.iter().copied());
+            vm.temp_array_extend_from_slice(&a);
         } else if globals.check_method(r, IdentId::TO_ARY).is_some() {
             // One level of `#to_ary` flattening, matching CRuby.
             let a = vm.invoke_method_inner(globals, IdentId::TO_ARY, r, &[], None, None)?;
             if let Some(arr) = a.try_array_ty() {
-                res.extend(arr.iter().copied());
+                vm.temp_array_extend_from_slice(&arr);
             } else if a.is_nil() {
-                res.push(r);
+                vm.temp_array_push(r);
             } else {
                 return Err(MonorubyErr::typeerr(format!(
                     "can't convert {} to Array ({}#to_ary gives {})",
@@ -3193,10 +3209,10 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 )));
             }
         } else {
-            res.push(r);
+            vm.temp_array_push(r);
         }
     }
-    Ok(Value::array_from_vec(res))
+    Ok(())
 }
 
 fn all_any_inner(
@@ -5118,6 +5134,26 @@ mod tests {
         [a.last(0), a.last(1), a.last(2), a.last(3), a.last(4)]
         "##,
         ]);
+    }
+
+    #[test]
+    fn flat_map_gc_safety() {
+        // Regression: the accumulator used to be an unrooted Rust `Vec`, so
+        // every value produced by the block was invisible to a GC triggered
+        // by a later iteration. Under `gc-stress` (a collection at every
+        // safepoint) the returned Array was full of freed RValues — this is
+        // the optcarrot palette build (`Palette.defacto_palette`) reduced.
+        run_test_once(
+            r##"
+        src = [[1.0, 1.0, 1.0], [1.0, 0.8, 0.81], [0.78, 0.94, 0.66], [0.79, 0.77, 0.63],
+               [0.82, 0.83, 1.12], [0.81, 0.71, 0.87], [0.68, 0.79, 0.79], [0.70, 0.70, 0.70]]
+        res = src.flat_map do |rf, gf, bf|
+          (0...64).map { |i| [(i * rf).floor, (i * gf).floor, (i * bf).floor] }
+        end
+        GC.start
+        [res.size, res.map { |a| a.sum }.sum]
+        "##,
+        );
     }
 
     #[test]

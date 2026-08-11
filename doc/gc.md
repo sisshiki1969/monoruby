@@ -425,6 +425,50 @@ proc/args/result/exception/joiners/pending/masks/last_status をマークする�
 起きないので、サスペンド中のどのスレッドのフレームも GC-complete
 (詳細は `doc/threads.md` §2・§3.4・§8)。
 
+### 8.1 ビルトインの一時値 — 素の `Vec<Value>` は**ルートではない**
+
+ルート走査は上記の列挙がすべてなので、Rust 側のローカル(`Vec<Value>`、
+`HashMap<_, Value>`、単なる `Value` 束など)は **GC からまったく見えない**。
+`vm.invoke_block` / `vm.invoke_method_inner` / `vm.invoke_proc` はいずれも
+任意の Ruby を走らせる = セーフポイントを跨ぐので、
+
+> **原則**: Ruby 呼び出しを跨いで生かしたい `Value` は、必ず `temp_stack`
+> (`temp_push` / `temp_array_new` + `temp_array_push` /
+> `temp_array_extend_from_slice` / `with_temp_scope`)に載せる。
+
+引数ベクタのように「組み立てた直後に 1 回だけ invoke へ渡す」用途は、
+その間にセーフポイントが無いので素の `Vec` で構わない。危険なのは
+**invoke をループで回しながら結果を貯めるアキュムレータ**である。
+
+`Executor` にはこの型の定型処理を安全側に閉じ込めたヘルパがある:
+
+| ヘルパ | 用途 |
+| --- | --- |
+| `invoke_block_iter1` | `each` 系(結果を捨てる) |
+| `invoke_block_iter1_rooted` | 同上。イテレート元を先に materialise してルート付けする |
+| `invoke_block_map1` | `map` 系(結果を 1 個ずつ push) |
+| `invoke_block_flat_map1` | `flat_map` 系(Array なら展開して push) |
+
+**実例(gc-stress CI の optcarrot abort)**: `Array#flat_map` は `#to_ary` 対応を足した際に
+`invoke_block_flat_map1` から素の `let mut res: Vec<Value>` に書き換えられ、
+ブロック呼び出しを跨いで貯めた要素がすべて未ルートになっていた。通常ビルドでは
+GC の閾値に届かず表面化しなかったが、`gc-stress`(毎セーフポイント収集)では
+optcarrot の `Palette.defacto_palette`(512 要素の `flat_map`)が返す Array が
+解放済み RValue で埋まり、次のマークで `DEAD RVALUE reached in mark` で abort した。
+再現は 9 行で足りる:
+
+```ruby
+src = [[1.0, 1.0, 1.0]] * 8
+res = src.flat_map { |rf, gf, bf| (0...64).map { |i| [i * rf, i * gf, i * bf] } }
+```
+
+診断のコツ: `RValue::mark` の DEAD 検出点で、(a) `Lfp::mark` 側に
+「いまマーク中のフレームの `func_id` とスロット番号」、(b) `RValue::mark` 側に
+「いま children を辿っている親 RValue」を thread-local で持たせて出力すると、
+*どのメソッドのどの一時値が壊れているか*が一発で分かる。今回は
+`func=Video#initialize(driver.rb:67) slot=2 / parent=Array(len=512)` まで出て、
+そこから `flat_map` に到達した。
+
 ---
 
 ## 9. スイープと空きページの回収
