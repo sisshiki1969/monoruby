@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6f683319.js";
+            window.path_to_searchindex_js = "searchindex-9a4b4a18.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e1173681.js"></script>
@@ -5058,6 +5058,49 @@ proc/args/result/exception/joiners/pending/masks/last_status をマークする�
 <code>main_exec</code> 経由で辿る埋め込み側所有の main Executor。切替はセーフポイントでしか
 起きないので、サスペンド中のどのスレッドのフレームも GC-complete
 (詳細は <code>doc/threads.md</code> §2・§3.4・§8)。</p>
+<h3 id="81-ビルトインの一時値--素の-vecvalue-はルートではない"><a class="header" href="#81-ビルトインの一時値--素の-vecvalue-はルートではない">8.1 ビルトインの一時値 — 素の <code>Vec&lt;Value&gt;</code> は<strong>ルートではない</strong></a></h3>
+<p>ルート走査は上記の列挙がすべてなので、Rust 側のローカル(<code>Vec&lt;Value&gt;</code>、
+<code>HashMap&lt;_, Value&gt;</code>、単なる <code>Value</code> 束など)は <strong>GC からまったく見えない</strong>。
+<code>vm.invoke_block</code> / <code>vm.invoke_method_inner</code> / <code>vm.invoke_proc</code> はいずれも
+任意の Ruby を走らせる = セーフポイントを跨ぐので、</p>
+<blockquote>
+<p><strong>原則</strong>: Ruby 呼び出しを跨いで生かしたい <code>Value</code> は、必ず <code>temp_stack</code>
+(<code>temp_push</code> / <code>temp_array_new</code> + <code>temp_array_push</code> /
+<code>temp_array_extend_from_slice</code> / <code>with_temp_scope</code>)に載せる。</p>
+</blockquote>
+<p>引数ベクタのように「組み立てた直後に 1 回だけ invoke へ渡す」用途は、
+その間にセーフポイントが無いので素の <code>Vec</code> で構わない。危険なのは
+<strong>invoke をループで回しながら結果を貯めるアキュムレータ</strong>である。</p>
+<p><code>Executor</code> にはこの型の定型処理を安全側に閉じ込めたヘルパがある:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>ヘルパ</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td><code>invoke_block_iter1</code></td><td><code>each</code> 系(結果を捨てる)</td></tr>
+<tr><td><code>invoke_block_iter1_rooted</code></td><td>同上。イテレート元を先に materialise してルート付けする</td></tr>
+<tr><td><code>invoke_block_map1</code></td><td><code>map</code> 系(結果を 1 個ずつ push)</td></tr>
+<tr><td><code>invoke_block_flat_map1</code></td><td><code>flat_map</code> 系(Array なら展開して push)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>実例(gc-stress CI の optcarrot abort)</strong>: <code>Array#flat_map</code> は <code>#to_ary</code> 対応を足した際に
+<code>invoke_block_flat_map1</code> から素の <code>let mut res: Vec&lt;Value&gt;</code> に書き換えられ、
+ブロック呼び出しを跨いで貯めた要素がすべて未ルートになっていた。通常ビルドでは
+GC の閾値に届かず表面化しなかったが、<code>gc-stress</code>(毎セーフポイント収集)では
+optcarrot の <code>Palette.defacto_palette</code>(512 要素の <code>flat_map</code>)が返す Array が
+解放済み RValue で埋まり、次のマークで <code>DEAD RVALUE reached in mark</code> で abort した。
+再現は 9 行で足りる:</p>
+<pre><code class="language-ruby">src = [[1.0, 1.0, 1.0]] * 8
+res = src.flat_map { |rf, gf, bf| (0...64).map { |i| [i * rf, i * gf, i * bf] } }
+</code></pre>
+<p>診断のコツ: <code>RValue::mark</code> の DEAD 検出点で、(a) <code>Lfp::mark</code> 側に
+「いまマーク中のフレームの <code>func_id</code> とスロット番号」、(b) <code>RValue::mark</code> 側に
+「いま children を辿っている親 RValue」を thread-local で持たせて出力すると、
+<em>どのメソッドのどの一時値が壊れているか</em>が一発で分かる。今回は
+<code>func=Video#initialize(driver.rb:67) slot=2 / parent=Array(len=512)</code> まで出て、
+そこから <code>flat_map</code> に到達した。</p>
 <hr>
 <h2 id="9-スイープと空きページの回収"><a class="header" href="#9-スイープと空きページの回収">9. スイープと空きページの回収</a></h2>
 <h3 id="スイープsweep-allocrs1269"><a class="header" href="#スイープsweep-allocrs1269">スイープ(<code>sweep</code>, <code>alloc.rs:1269</code>)</a></h3>
