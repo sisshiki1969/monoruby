@@ -15,25 +15,27 @@ class Hash
   # in turn. A Rust builtin can never reach that, so its block pays a full
   # invocation per entry.
   #
-  # The three things the Rust implementation did that a bare index loop
-  # would lose are kept:
-  #
-  #   * the pairs are snapshotted first (`__pairs`) — deleting during
-  #     iteration is allowed and shifts the entry vector, so indexing the
-  #     live hash would skip the entry after each deletion;
-  #   * an iteration reference is held across the yields, which is what
-  #     makes *adding* a key during iteration raise;
-  #   * a single `[key, value]` array is yielded, so an arity-1 block
-  #     receives the pair (CRuby's `rb_yield(rb_assoc_new(k, v))`).
+  # Deleting during iteration is allowed and follows CRuby: while the
+  # traversal is live a delete tombstones its entry in place instead of
+  # compacting, so positions stay stable, a deleted not-yet-visited entry
+  # is not yielded, and deleting the current or a visited one skips
+  # nothing. An iteration reference is held across the yields, which is
+  # what makes *adding* a key during iteration raise; a single
+  # `[key, value]` array is yielded, so an arity-1 block receives the
+  # pair (CRuby's `rb_yield(rb_assoc_new(k, v))`).
   def each
     return to_enum(:each) { size } unless block_given?
-    pairs = __pairs
     guard = __iter_begin
     begin
+      # Walk the live entry vector by position. A delete during the loop
+      # tombstones its entry in place (positions stay stable, `__live_at`
+      # turns false for it), so a deleted not-yet-visited entry is skipped
+      # and deleting the current or an already-visited one skips nothing —
+      # CRuby's semantics. `__entry_count` is the raw bound, tombstones
+      # included; *adding* a key still raises, so it cannot grow mid-loop.
       i = 0
-      n = pairs.size
-      while i < n
-        yield pairs[i]
+      while i < __entry_count
+        yield [__key_at(i), __value_at(i)] if __live_at(i)
         i += 1
       end
     ensure
@@ -69,25 +71,25 @@ class Hash
     # `each` costs two block entries per pair — `each`'s own block and then
     # this method's `yield` — where one is enough. It also lets the pair be
     # yielded as two values, which is what `to_h` does anyway (unlike `each`,
-    # whose block receives a single `[k, v]`), so no array has to be splatted
-    # back apart at the yield.
+    # whose block receives a single `[k, v]`), so no array has to be built
+    # per element at all.
     #
-    # The traversal keeps what `each` guaranteed: the pairs are snapshotted,
-    # so deleting during the block still visits every entry, and an iteration
-    # reference is held so that *adding* a key raises. `ensure` balances the
-    # reference when the block raises or breaks.
-    pairs = __pairs
+    # The traversal is the same live positional walk as `each` — deleting
+    # during the block tombstones in place, so a deleted not-yet-visited
+    # entry is skipped (CRuby) — and an iteration reference is held so that
+    # *adding* a key raises. `ensure` balances the reference when the block
+    # raises or breaks.
     guard = __iter_begin
     begin
       i = 0
-      n = pairs.size
-      while i < n
-        e = pairs[i]
-        pair = yield e[0], e[1]
-        pair = pair.to_ary if !pair.is_a?(Array) && pair.respond_to?(:to_ary)
-        raise TypeError, "wrong element type #{pair.class} (expected array)" unless pair.is_a?(Array)
-        raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})" unless pair.size == 2
-        h[pair[0]] = pair[1]
+      while i < __entry_count
+        if __live_at(i)
+          pair = yield __key_at(i), __value_at(i)
+          pair = pair.to_ary if !pair.is_a?(Array) && pair.respond_to?(:to_ary)
+          raise TypeError, "wrong element type #{pair.class} (expected array)" unless pair.is_a?(Array)
+          raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})" unless pair.size == 2
+          h[pair[0]] = pair[1]
+        end
         i += 1
       end
     ensure

@@ -1092,9 +1092,14 @@ impl Codegen {
             }
             // The hash intrinsics branch on the representation, so they are
             // emitted per arch rather than as straight-line LIR.
-            AsmInst::HashLenFixnum { dst, base, layout } => {
+            AsmInst::HashLenFixnum {
+                dst,
+                base,
+                layout,
+                sub_dead,
+            } => {
                 self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.gen_hash_len_fixnum(dst, base, layout);
+                    cg.gen_hash_len_fixnum(dst, base, layout, sub_dead);
                 });
             }
             AsmInst::HashCompareByIdentity { dst, base } => {
@@ -1114,6 +1119,11 @@ impl Codegen {
             AsmInst::HashEntryAt { want_key, layout } => {
                 self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
                     cg.gen_hash_entry_at(want_key, layout);
+                });
+            }
+            AsmInst::HashLiveAt { layout } => {
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.gen_hash_live_at(layout);
                 });
             }
             // Typed bool predicates (replace `emit_kernel_nil` / `emit_object_not`).
