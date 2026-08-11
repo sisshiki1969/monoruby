@@ -647,4 +647,22 @@ class Array
     end
     result
   end
+
+  # Pull up to +n+ leading items from +obj+ for Array#zip — CRuby's
+  # `rb_ary_zip` / `take_items` protocol: collect with `each` and stop
+  # early with a plain `break`. Unlike an `Enumerator#next` pull there is
+  # no fiber in the path, and every exception the argument's `each`
+  # raises — StopIteration included — reaches the caller instead of
+  # being mistaken for end-of-iteration (issue #1080). A multi-value
+  # yield packs into an Array, a single value stays bare, matching what
+  # `#next` used to return.
+  private def __zip_pull(obj, n)
+    buf = []
+    return buf if n == 0
+    obj.each do |*x|
+      buf << (x.size <= 1 ? x[0] : x)
+      break if buf.size >= n
+    end
+    buf
+  end
 end

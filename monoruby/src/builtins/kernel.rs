@@ -1066,7 +1066,10 @@ pub(crate) fn make_exception_error(
     }
     if let Some(klass) = a0.is_class() {
         if klass.id() == STOP_ITERATION_CLASS && msg_arg.is_none() && bt_arg.is_none() {
-            let err = MonorubyErr::stopiterationerr("".to_string());
+            // Fast path skipping the exception-object allocation; the
+            // message still defaults to the class name like
+            // `Exception#message` would.
+            let err = MonorubyErr::stopiterationerr("StopIteration".to_string());
             return apply_cause(globals, err, None, cause_kwarg);
         } else if klass.is_exception() {
             let cargs: Vec<Value> = msg_arg.into_iter().collect();
