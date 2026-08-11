@@ -63,6 +63,12 @@ pub(super) fn init(globals: &mut Globals) {
         inline_gen2!(hash_value_at),
         1,
     );
+    // Internals of the Ruby-level `Hash#each` (builtins/hash.rb). `each`
+    // lives in Ruby so that a `h.each { .. }` call site can inline both the
+    // method and the block; these three are the parts that cannot.
+    globals.define_builtin_func(HASH_CLASS, "__pairs", pairs, 0);
+    globals.define_builtin_func(HASH_CLASS, "__iter_begin", iter_begin, 0);
+    globals.define_builtin_func(HASH_CLASS, "__iter_end", iter_end, 1);
     globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "replace", replace, 1);
@@ -929,6 +935,51 @@ fn key_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn value_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let idx = lfp.arg(0).coerce_to_i64(globals)?;
     Ok(entry_component(lfp.self_val(), idx, false))
+}
+
+///
+/// ### Hash#__pairs (internal)
+///
+/// A snapshot of the entries as `[[k, v], ...]`.
+///
+/// `each` yields from this rather than indexing the live hash: deleting
+/// during iteration is explicitly allowed, and it shifts the entry vector,
+/// so an index-based traversal would skip the entry after each deletion.
+/// Snapshotting also means a key whose `#hash` no longer matches its stored
+/// slot (`Hash#rehash`, mutable keys) is still yielded.
+///
+#[monoruby_builtin]
+fn pairs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let hash = lfp.self_val().as_hash();
+    Ok(Value::array_from_iter(
+        hash.iter().map(|(k, v)| Value::array2(k, v)),
+    ))
+}
+
+///
+/// ### Hash#__iter_begin (internal)
+///
+/// Take an iteration reference, so that adding a new key while `each` is
+/// running raises the way CRuby does. Returns whether the reference was
+/// actually recorded — the inline representation saturates its two depth
+/// bits — and that answer must be handed back to `__iter_end`.
+///
+#[monoruby_builtin]
+fn iter_begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(lfp.self_val().as_hash().iter_incr()))
+}
+
+///
+/// ### Hash#__iter_end (internal)
+///
+/// Release the reference taken by `__iter_begin`, whose result must be
+/// passed back here. Called from an `ensure`, so a block that raises or
+/// breaks still balances the count.
+///
+#[monoruby_builtin]
+fn iter_end(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().as_hash().iter_decr(lfp.arg(0).as_bool());
+    Ok(Value::nil())
 }
 
 /// Shared by the builtin and the inlined C-ABI helper: a negative or
