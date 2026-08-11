@@ -5,6 +5,45 @@ class Hash
     self
   end
 
+  # Hash#each / Hash#each_pair
+  # each {|key, value| block } -> self
+  # each -> Enumerator
+  #
+  # Written in Ruby, not Rust, so that a `h.each { .. }` call site can
+  # inline it: the JIT only specializes `FuncKind::ISeq` callees, and
+  # specializing `each` is what lets the block be inlined into the `yield`
+  # in turn. A Rust builtin can never reach that, so its block pays a full
+  # invocation per entry.
+  #
+  # The three things the Rust implementation did that a bare index loop
+  # would lose are kept:
+  #
+  #   * the pairs are snapshotted first (`__pairs`) — deleting during
+  #     iteration is allowed and shifts the entry vector, so indexing the
+  #     live hash would skip the entry after each deletion;
+  #   * an iteration reference is held across the yields, which is what
+  #     makes *adding* a key during iteration raise;
+  #   * a single `[key, value]` array is yielded, so an arity-1 block
+  #     receives the pair (CRuby's `rb_yield(rb_assoc_new(k, v))`).
+  def each
+    return to_enum(:each) { size } unless block_given?
+    pairs = __pairs
+    guard = __iter_begin
+    begin
+      i = 0
+      n = pairs.size
+      while i < n
+        yield pairs[i]
+        i += 1
+      end
+    ensure
+      __iter_end(guard)
+    end
+    self
+  end
+
+  alias each_pair each
+
   # Hash#to_h
   # to_h -> self
   # to_h {|key, value| block } -> Hash
