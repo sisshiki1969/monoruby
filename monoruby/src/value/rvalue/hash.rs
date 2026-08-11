@@ -695,7 +695,19 @@ impl<'a> HashRef<'a> {
     /// tracked (outer) guards unwind, which keeps the "no new keys
     /// while iterating" rule sound for the usual LIFO guard order.
     pub fn iter_guard(&self) -> IterGuard<'a> {
-        let real = if self.is_inline() {
+        let real = self.iter_incr();
+        IterGuard { h: *self, real }
+    }
+
+    ///
+    /// Take one iteration reference, returning whether it was actually
+    /// recorded. The inline representation holds the depth in two flag
+    /// bits, so a deeply nested traversal saturates and is admitted as a
+    /// no-op — the caller must pass that answer back to [`Self::iter_decr`]
+    /// rather than assume a decrement is owed.
+    ///
+    pub fn iter_incr(&self) -> bool {
+        if self.is_inline() {
             let flags = self.flags();
             let depth = (flags & ITER_MASK) >> ITER_SHIFT;
             if depth < ITER_MAX {
@@ -712,8 +724,28 @@ impl<'a> HashRef<'a> {
             let lev = &self.boxed().iter_lev;
             lev.set(lev.get() + 1);
             true
-        };
-        IterGuard { h: *self, real }
+        }
+    }
+
+    ///
+    /// Release an iteration reference taken by [`Self::iter_incr`]. `real`
+    /// must be that call's return value.
+    ///
+    pub fn iter_decr(&self, real: bool) {
+        if !real {
+            return;
+        }
+        if self.is_inline() {
+            let flags = self.flags();
+            let depth = (flags & ITER_MASK) >> ITER_SHIFT;
+            debug_assert!(depth > 0);
+            let new = (flags & !ITER_MASK) | ((depth - 1) << ITER_SHIFT);
+            // SAFETY: see `iter_incr`.
+            unsafe { *self.flags.as_ptr() = new };
+        } else {
+            let lev = &self.boxed().iter_lev;
+            lev.set(lev.get() - 1);
+        }
     }
 
     /// A detached copy of this hash: content cloned, iteration count and
@@ -1306,20 +1338,7 @@ pub struct IterGuard<'a> {
 
 impl Drop for IterGuard<'_> {
     fn drop(&mut self) {
-        if !self.real {
-            return;
-        }
-        if self.h.is_inline() {
-            let flags = self.h.flags();
-            let depth = (flags & ITER_MASK) >> ITER_SHIFT;
-            debug_assert!(depth > 0);
-            let new = (flags & !ITER_MASK) | ((depth - 1) << ITER_SHIFT);
-            // SAFETY: see `iter_guard`.
-            unsafe { *self.h.flags.as_ptr() = new };
-        } else {
-            let lev = &self.h.boxed().iter_lev;
-            lev.set(lev.get() - 1);
-        }
+        self.h.iter_decr(self.real);
     }
 }
 
@@ -1480,6 +1499,16 @@ impl Hashmap {
 
     pub fn iter_guard(&self) -> IterGuard<'_> {
         self.inner().iter_guard()
+    }
+
+    /// See [`HashRef::iter_incr`].
+    pub fn iter_incr(&self) -> bool {
+        self.inner().iter_incr()
+    }
+
+    /// See [`HashRef::iter_decr`].
+    pub fn iter_decr(&self, real: bool) {
+        self.inner().iter_decr(real)
     }
 
     pub fn debug(&self, store: &Store) -> String {
