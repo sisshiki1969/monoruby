@@ -216,3 +216,164 @@ impl core::fmt::Display for GetDisjointMutError {
 }
 
 impl std::error::Error for GetDisjointMutError {}
+
+
+///
+/// The in-memory layout needed to read a [`RubyMap`]'s entries directly
+/// from generated machine code.
+///
+/// Every offset here is either derived from the compiler (`offset_of!`)
+/// or probed at run time — none of them is assumed. Two are genuinely
+/// counter-intuitive, and guessing either would be silent memory
+/// corruption rather than a compile error:
+///
+/// * `Bucket<K, V>` is `repr(Rust)`, and its field order depends on the
+///   niches of `K`/`V`. `Bucket<u64, u64>` lays out as hash/key/value,
+///   but `Bucket<NonZeroU64, NonZeroU64>` — the shape monoruby's `Value`
+///   actually has — lays out as key/value/hash.
+/// * `Vec`'s three words are documented as a (pointer, capacity, length)
+///   triplet "in an unspecified order". On the pinned toolchain that
+///   order is capacity, pointer, length: the data pointer is *not* first.
+///
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntriesLayout {
+    /// Offset from `&RubyMap` to the entry vector's data pointer.
+    pub ptr_offset: usize,
+    /// Offset from `&RubyMap` to the entry vector's length.
+    pub len_offset: usize,
+    /// Stride between consecutive entries.
+    pub bucket_size: usize,
+    /// Offset of the key within one entry.
+    pub key_offset: usize,
+    /// Offset of the value within one entry.
+    pub value_offset: usize,
+}
+
+///
+/// Resolve the [`EntriesLayout`] for one `RubyMap` instantiation, or
+/// `None` if the `Vec` probe cannot identify all three words
+/// unambiguously.
+///
+/// A `None` result is not a failure: the caller is expected to keep its
+/// existing out-of-line path, so an unrecognised future `Vec` layout
+/// costs performance rather than correctness.
+///
+#[allow(unsafe_code)]
+pub fn entries_layout<K, V, E, G, R, S>() -> Option<EntriesLayout> {
+    // Probe a real vector rather than trusting a field order. Capacity 8
+    // and length 0 are distinctive: no live allocation is at address 8,
+    // and a capacity of 8 cannot be mistaken for the length.
+    const PROBE_CAPA: usize = 8;
+    let v: Vec<Bucket<K, V>> = Vec::with_capacity(PROBE_CAPA);
+    let ptr = v.as_ptr() as usize;
+    if v.capacity() != PROBE_CAPA || ptr == PROBE_CAPA || ptr == 0 {
+        return None;
+    }
+    debug_assert_eq!(std::mem::size_of::<Vec<Bucket<K, V>>>(), 3 * WORD);
+    // SAFETY: `Vec` is a three-word value (pointer, capacity, length) and
+    // all three words are initialized; we only read them as integers.
+    let words: [usize; 3] = unsafe { std::ptr::read(&v as *const _ as *const [usize; 3]) };
+    let word_at = |want: usize| -> Option<usize> {
+        let mut found = None;
+        let mut i = 0;
+        while i < words.len() {
+            if words[i] == want {
+                // An ambiguous match means the probe cannot be trusted.
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(i * WORD);
+            }
+            i += 1;
+        }
+        found
+    };
+    let vec_ptr = word_at(ptr)?;
+    let vec_len = word_at(0)?;
+    let vec_capa = word_at(PROBE_CAPA)?;
+    // The three must be distinct words; anything else is unrecognised.
+    if vec_ptr == vec_len || vec_ptr == vec_capa || vec_len == vec_capa {
+        return None;
+    }
+    let entries = std::mem::offset_of!(RubyMap<K, V, E, G, R, S>, core)
+        + crate::map::core::entries_offset::<K, V, E, G, R>();
+    Some(EntriesLayout {
+        ptr_offset: entries + vec_ptr,
+        len_offset: entries + vec_len,
+        bucket_size: std::mem::size_of::<Bucket<K, V>>(),
+        key_offset: std::mem::offset_of!(Bucket<K, V>, key),
+        value_offset: std::mem::offset_of!(Bucket<K, V>, value),
+    })
+}
+
+const WORD: usize = std::mem::size_of::<usize>();
+
+#[cfg(test)]
+mod entries_layout_tests {
+    use super::*;
+    use std::collections::hash_map::RandomState;
+    use std::num::NonZeroU64;
+
+    /// Read entry `i` of `map` the way generated machine code would:
+    /// through the probed offsets only, never through the Rust API.
+    #[allow(unsafe_code)]
+    unsafe fn raw_entry<K: Copy, V: Copy>(map: *const u8, lay: &EntriesLayout, i: usize) -> (K, V) {
+        unsafe {
+            let base = map.add(lay.ptr_offset).cast::<*const u8>().read();
+            let entry = base.add(i * lay.bucket_size);
+            (
+                entry.add(lay.key_offset).cast::<K>().read(),
+                entry.add(lay.value_offset).cast::<V>().read(),
+            )
+        }
+    }
+
+    #[allow(unsafe_code)]
+    unsafe fn raw_len(map: *const u8, lay: &EntriesLayout) -> usize {
+        unsafe { map.add(lay.len_offset).cast::<usize>().read() }
+    }
+
+    /// The offsets must agree with the safe API for every entry — this is
+    /// what keeps a toolchain-driven layout change from silently becoming
+    /// wrong loads in JIT-generated code.
+    #[test]
+    #[allow(unsafe_code)]
+    fn layout_matches_the_safe_api() {
+        let lay = entries_layout::<u64, u64, (), (), (), RandomState>().unwrap();
+        let mut map: RubyMap<u64, u64> = RubyMap::new();
+        // Enough entries to take the map past the linear `ar_table` form.
+        for i in 0..64u64 {
+            map.insert(i, i * 7 + 1, &mut (), &mut ()).unwrap();
+        }
+        let p = &map as *const _ as *const u8;
+        assert_eq!(unsafe { raw_len(p, &lay) }, map.len());
+        for i in 0..map.len() {
+            let (k, v) = unsafe { raw_entry::<u64, u64>(p, &lay, i) };
+            let (ek, ev) = map.get_index(i).unwrap();
+            assert_eq!((k, v), (*ek, *ev), "entry {i}");
+        }
+    }
+
+    /// A key type carrying a niche reorders `Bucket`'s fields, so the
+    /// offsets must be read per instantiation. Hard-coding the
+    /// plain-integer layout — the intuitive hash/key/value order — would
+    /// make a `Value`-keyed map read its key out of the hash slot.
+    ///
+    /// The round-trip for the niche case is exercised against real
+    /// `Value`s in monoruby (`hash::tests::entries_layout_*`); this crate
+    /// cannot build such a map, because `NonZeroU64` does not implement
+    /// `RubyHash`/`RubyEql`.
+    #[test]
+    fn niche_carrying_keys_reorder_the_bucket() {
+        let plain = entries_layout::<u64, u64, (), (), (), RandomState>().unwrap();
+        let niche = entries_layout::<NonZeroU64, NonZeroU64, (), (), (), RandomState>().unwrap();
+        assert_eq!(plain.bucket_size, niche.bucket_size);
+        assert_ne!(
+            (plain.key_offset, plain.value_offset),
+            (niche.key_offset, niche.value_offset),
+            "expected the niche layout to differ from the plain one; if these \
+             ever agree it is the assumption behind this test that changed, \
+             and `entries_layout` is still the only safe source of offsets"
+        );
+    }
+}

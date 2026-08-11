@@ -114,6 +114,92 @@ impl Codegen {
         }
     }
 
+    /// `Hash#size`: entry count of the hash in `base`, fixnum-tagged into `dst`.
+    ///
+    /// A small hash keeps its length in the header's representation bits; a
+    /// boxed one keeps it in the entry vector. The boxed length hangs off a
+    /// pointer that is only a pointer on that side of the branch, so unlike
+    /// `Array#size` this cannot be a speculative load plus `cmov`.
+    pub(crate) fn gen_hash_len_fixnum(&mut self, dst: GP, base: GP, layout: rubymap::EntriesLayout) {
+        let (d, b) = (dst as u64, base as u64);
+        let tag = self.jit.label();
+        let ty_flags = RVALUE_OFFSET_TY + 1;
+        let mask = HASH_REP_MASK as u64;
+        let boxed_rep = HASH_REP_BOXED as u64;
+        let map_ptr = HASH_CONTENT_MAP_OFFSET;
+        let len_off = layout.len_offset;
+        monoasm! { &mut self.jit,
+            // The representation bits live in the low byte of ty_flags; the
+            // 32-bit load stays inside the header and `andl` clears the rest.
+            movl R(d), [R(b) + (ty_flags)];
+            andl R(d), (mask);
+            cmpl R(d), (boxed_rep);
+            jne  tag;
+            movq R(d), [R(b) + (map_ptr)];
+            movq R(d), [R(d) + (len_off)];
+        tag:
+            salq R(d), 1;
+            orq  R(d), 1;
+        }
+    }
+
+    /// `Hash#__key_at` / `#__value_at`: hash in rdx, fixnum index in rcx,
+    /// result Value in rax.
+    ///
+    /// Total by construction — a negative or out-of-range index answers `nil`
+    /// rather than trapping — so there is no generic fallback and no error
+    /// edge. rsi and rdi are scratch.
+    pub(crate) fn gen_hash_entry_at(&mut self, want_key: bool, layout: rubymap::EntriesLayout) {
+        let boxed = self.jit.label();
+        let exit = self.jit.label();
+        let ty_flags = RVALUE_OFFSET_TY + 1;
+        let mask = HASH_REP_MASK as u64;
+        let boxed_rep = HASH_REP_BOXED as u64;
+        let inline_field = HASH_INLINE_PAIRS_OFFSET
+            + if want_key {
+                HASH_INLINE_KEY_OFFSET
+            } else {
+                HASH_INLINE_VALUE_OFFSET
+            };
+        let stride = HASH_INLINE_PAIR_STRIDE;
+        let map_ptr = HASH_CONTENT_MAP_OFFSET;
+        let len_off = layout.len_offset;
+        let ptr_off = layout.ptr_offset;
+        let bucket_size = layout.bucket_size;
+        let bucket_field = if want_key {
+            layout.key_offset
+        } else {
+            layout.value_offset
+        };
+        monoasm! { &mut self.jit,
+            // nil unless one of the paths below overwrites it.
+            movq rax, (NIL_VALUE);
+            sarq rcx, 1;                  // untag the index
+            js   exit;                    // negative → nil, as the builtin does
+            movl rsi, [rdx + (ty_flags)];
+            andl rsi, (mask);
+            cmpl rsi, (boxed_rep);
+            jeq  boxed;
+            // Inline: the representation bits double as the length.
+            cmpq rcx, rsi;
+            jae  exit;
+            movq rsi, (stride);
+            imul rcx, rsi;
+            addq rcx, rdx;
+            movq rax, [rcx + (inline_field)];
+            jmp  exit;
+        boxed:
+            movq rdi, [rdx + (map_ptr)];
+            cmpq rcx, [rdi + (len_off)];
+            jae  exit;
+            movq rsi, (bucket_size);
+            imul rcx, rsi;
+            addq rcx, [rdi + (ptr_off)];
+            movq rax, [rcx + (bucket_field)];
+        exit:
+        }
+    }
+
     /// `Array#clone`: `array_clone_extern(recv)`. recv in rdi → rax.
     pub(crate) fn emit_array_clone(&mut self, f: u64) {
         monoasm! { &mut self.jit,

@@ -1080,6 +1080,18 @@ impl Codegen {
             AsmInst::StringLenFixnum { dst, base } => {
                 self.encode_linst(LInst::StringLenFixnum { dst, base })
             }
+            // The hash intrinsics branch on the representation, so they are
+            // emitted per arch rather than as straight-line LIR.
+            AsmInst::HashLenFixnum { dst, base, layout } => {
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.gen_hash_len_fixnum(dst, base, layout);
+                });
+            }
+            AsmInst::HashEntryAt { want_key, layout } => {
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
+                    cg.gen_hash_entry_at(want_key, layout);
+                });
+            }
             // Typed bool predicates (replace `emit_kernel_nil` / `emit_object_not`).
             AsmInst::IsNilToBool { dst, src } => {
                 self.encode_linst(LInst::IsNilToBool { dst, src })

@@ -49,6 +49,15 @@ pub(crate) struct IndexMapCore<K, V, E, G, R> {
     entries: Entries<K, V>,
 }
 
+/// Byte offset of the entry vector within [`IndexMapCore`].
+///
+/// `IndexMapCore` is `repr(Rust)`, so this must come from the compiler
+/// rather than from a hand-computed field order — the monoruby JIT bakes
+/// it into generated machine code (see [`crate::entries_layout`]).
+pub(crate) const fn entries_offset<K, V, E, G, R>() -> usize {
+    std::mem::offset_of!(IndexMapCore<K, V, E, G, R>, entries)
+}
+
 /// Mutable references to the parts of an `IndexMapCore`.
 ///
 /// When using `HashTable::find_entry`, that takes hold of `&mut indices`, so we have to borrow our

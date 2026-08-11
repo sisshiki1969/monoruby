@@ -176,6 +176,111 @@ impl Codegen {
         );
     }
 
+    /// `Hash#size`: entry count of the hash in `base`, fixnum-tagged into `dst`.
+    /// aarch64 twin of the x86 `gen_hash_len_fixnum`.
+    ///
+    /// A small hash keeps its length in the header's representation bits; a
+    /// boxed one keeps it in the entry vector, behind a pointer that is only a
+    /// pointer on that side of the branch — so unlike `Array#size` the two
+    /// lengths cannot both be loaded and `csel`ed.
+    ///
+    /// ### destroy
+    /// - x9
+    pub(crate) fn gen_hash_len_fixnum(&mut self, dst: GP, base: GP, layout: rubymap::EntriesLayout) {
+        let (d, b) = (dst.a64().0, base.a64().0);
+        let tag = self.jit.label();
+        let ty_flags = (RVALUE_OFFSET_TY + 1) as u32;
+        let boxed_rep = HASH_REP_BOXED as u32;
+        let map_ptr = HASH_CONTENT_MAP_OFFSET as u32;
+        let len_off = layout.len_offset as u32;
+        monoasm_arm64!(&mut self.jit,
+            ldrb w(d), [x(b), #(ty_flags)];
+            mov x9, (HASH_REP_MASK as u64);
+            and x(d), x(d), x9;
+            cmp x(d), #(boxed_rep);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &tag);
+        monoasm_arm64!(&mut self.jit,
+            ldr x(d), [x(b), #(map_ptr)];
+            ldr x(d), [x(d), #(len_off)];
+        );
+        self.jit.bind_label(tag);
+        monoasm_arm64!(&mut self.jit,
+            lsl x(d), x(d), #1;
+            add x(d), x(d), #1;
+        );
+    }
+
+    /// `Hash#__key_at` / `#__value_at`: hash in Rdx (x2), fixnum index in Rcx
+    /// (x1), result Value in Rax (x0). aarch64 twin of the x86
+    /// `gen_hash_entry_at`.
+    ///
+    /// Total by construction — a negative or out-of-range index answers `nil`
+    /// rather than trapping — so there is no generic fallback and no error edge.
+    ///
+    /// ### destroy
+    /// - x0 (Rax), x1 (Rcx), x3 (Rsi), x4 (Rdi), x9
+    pub(crate) fn gen_hash_entry_at(&mut self, want_key: bool, layout: rubymap::EntriesLayout) {
+        let boxed = self.jit.label();
+        let exit = self.jit.label();
+        let ty_flags = (RVALUE_OFFSET_TY + 1) as u32;
+        let boxed_rep = HASH_REP_BOXED as u32;
+        let inline_field = (HASH_INLINE_PAIRS_OFFSET
+            + if want_key {
+                HASH_INLINE_KEY_OFFSET
+            } else {
+                HASH_INLINE_VALUE_OFFSET
+            }) as u32;
+        let stride = HASH_INLINE_PAIR_STRIDE as u64;
+        let map_ptr = HASH_CONTENT_MAP_OFFSET as u32;
+        let len_off = layout.len_offset as u32;
+        let ptr_off = layout.ptr_offset as u32;
+        let bucket_size = layout.bucket_size as u64;
+        let bucket_field = (if want_key {
+            layout.key_offset
+        } else {
+            layout.value_offset
+        }) as u32;
+        monoasm_arm64!(&mut self.jit,
+            asr x1, x1, #(1);                 // untag the index
+            mov x0, #(NIL_VALUE);             // nil unless a path below overwrites it
+            cmp x1, #(0);
+        );
+        self.jit.bcond_label(monoasm::Cond::Lt, &exit); // negative -> nil
+        monoasm_arm64!(&mut self.jit,
+            ldrb w3, [x2, #(ty_flags)];
+            mov x9, (HASH_REP_MASK as u64);
+            and x3, x3, x9;                   // representation bits
+            cmp x3, #(boxed_rep);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &boxed);
+        // Inline: the representation bits double as the length.
+        monoasm_arm64!(&mut self.jit,
+            cmp x3, x1;                       // len vs idx
+        );
+        self.jit.bcond_label(monoasm::Cond::Ls, &exit); // len <= idx -> nil
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (stride);
+            mul x1, x1, x9;
+            add x1, x1, x2;
+            ldr x0, [x1, #(inline_field)];
+            b exit;
+        boxed:
+            ldr x4, [x2, #(map_ptr)];
+            ldr x9, [x4, #(len_off)];
+            cmp x9, x1;                       // len vs idx
+        );
+        self.jit.bcond_label(monoasm::Cond::Ls, &exit);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (bucket_size);
+            mul x1, x1, x9;
+            ldr x9, [x4, #(ptr_off)];
+            add x1, x1, x9;
+            ldr x0, [x1, #(bucket_field)];
+        exit:
+        );
+    }
+
     /// Inlined `Class#allocate`: `alloc_func(class_id, globals)`. The class id
     /// (a u32) and the resolved allocator pointer are embedded as constants;
     /// arg0 = class_id, arg1 = globals (GLOBALS/x20). Result Value in Rax (x0).

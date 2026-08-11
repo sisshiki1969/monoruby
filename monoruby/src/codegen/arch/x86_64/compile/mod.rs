@@ -173,6 +173,8 @@ impl Codegen {
             | AsmInst::BoolFieldToReg { .. }
             | AsmInst::ArrayLenFixnum { .. }
             | AsmInst::StringLenFixnum { .. }
+            | AsmInst::HashLenFixnum { .. }
+            | AsmInst::HashEntryAt { .. }
             | AsmInst::IsNilToBool { .. }
             | AsmInst::NotToBool { .. }
             | AsmInst::MathSqrt { .. }
