@@ -179,14 +179,28 @@ diff -s benchmark/mandel.ppm benchmark/mandel1.ppm
 diff -s benchmark/mandel.ppm benchmark/mandel2.ppm
 rm benchmark/*.ppm
 
+# Per-safepoint collection runs optcarrot at ~0.2 frames/min, so the
+# default 180 frames (`-b`) is a ~14-hour run — twice — and the first full
+# GC_STRESS=1 run of this phase sat in it for 4.6h until the job's
+# 350-minute timeout (the plb2 story again, one phase further down).
+# Shrink the run under stress instead of skipping it: 10 frames still
+# cross the JIT thresholds and the startup allocation storm that surfaced
+# the Array#flat_map unrooted-accumulator bug, and a trailing --frames
+# overrides the one baked into the -b shortcut. Both sides of the diff get
+# the same count, so the output comparison is unaffected.
+OPTCARROT_FRAMES=()
+if [ "$GC_STRESS_ON" = "1" ]; then
+  OPTCARROT_FRAMES=(--frames 10)
+fi
+
 phase "optcarrot (plain) — monoruby"
-$MONORUBY ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > monoruby.log
-"${RUBY[@]}" ../optcarrot/bin/optcarrot -b --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > ruby.log
+$MONORUBY ../optcarrot/bin/optcarrot -b "${OPTCARROT_FRAMES[@]}" --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > monoruby.log
+"${RUBY[@]}" ../optcarrot/bin/optcarrot -b "${OPTCARROT_FRAMES[@]}" --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > ruby.log
 diff -s monoruby.log ruby.log
 
 phase "optcarrot (--opt) — monoruby"
-$MONORUBY ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > monoruby.log
-"${RUBY[@]}" ../optcarrot/bin/optcarrot -b --opt --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > ruby.log
+$MONORUBY ../optcarrot/bin/optcarrot -b --opt "${OPTCARROT_FRAMES[@]}" --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > monoruby.log
+"${RUBY[@]}" ../optcarrot/bin/optcarrot -b --opt "${OPTCARROT_FRAMES[@]}" --debug ../optcarrot/examples/Lan_Master.nes | drop_last3 > ruby.log
 diff -s monoruby.log ruby.log
 rm *.log
 
