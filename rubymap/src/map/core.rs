@@ -592,6 +592,26 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         Ok(Some((key, value)))
     }
 
+    /// Rebuild this core with every key passed through `f`, preserving the
+    /// stored hashes, the entry order, and the index table (which stores
+    /// positions, not keys, so it moves verbatim). Sound only when `f`
+    /// preserves hash/eql semantics — e.g. wrapping keys in `Some`.
+    pub(crate) fn map_keys<K2>(self, mut f: impl FnMut(K) -> K2) -> IndexMapCore<K2, V, E, G, R> {
+        IndexMapCore {
+            indices: self.indices,
+            linear: self.linear,
+            entries: self
+                .entries
+                .into_iter()
+                .map(|b| Bucket {
+                    hash: b.hash,
+                    key: f(b.key),
+                    value: b.value,
+                })
+                .collect(),
+        }
+    }
+
     /// Drop every bucket whose key `is_dead` and rebuild the index table
     /// over the survivors. Closes a tombstone window opened by the
     /// `tombstone_*` methods; positions compact back to dense entry order.

@@ -389,11 +389,11 @@ impl Codegen {
             ldr x9, [x4, #(ptr_off)];
             add x1, x1, x9;
             // A tombstoned entry answers nil like an out-of-range index —
-            // the sentinel key must never surface as a Ruby value, and
-            // user code may probe any position directly.
+            // user code may probe any position directly. The boxed maps are
+            // keyed by `Option<Value>`, whose `None` sits in `Value`'s
+            // `NonZeroU64` niche: a dead key is the all-zero word.
             ldr x3, [x1, #(key_field)];
-            mov x9, (crate::rvalue::HASH_TOMBSTONE_KEY);
-            cmp x3, x9;
+            cmp x3, #(0);
         );
         self.jit.bcond_label(monoasm::Cond::Eq, &exit);
         monoasm_arm64!(&mut self.jit,
@@ -453,8 +453,7 @@ impl Codegen {
             ldr x9, [x4, #(ptr_off)];
             add x1, x1, x9;
             ldr x3, [x1, #(key_off)];
-            mov x9, (crate::rvalue::HASH_TOMBSTONE_KEY);
-            cmp x3, x9;
+            cmp x3, #(0);                 // None (dead) is the zero word
         );
         self.jit.bcond_label(monoasm::Cond::Eq, &dead);
         self.jit.bind_label(live);

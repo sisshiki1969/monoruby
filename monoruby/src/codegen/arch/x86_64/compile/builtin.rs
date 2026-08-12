@@ -300,10 +300,11 @@ impl Codegen {
             imul rcx, rsi;
             addq rcx, [rdi + (ptr_off)];
             // A tombstoned entry answers nil like an out-of-range index —
-            // the sentinel key must never surface as a Ruby value, and
-            // user code may probe any position directly.
+            // user code may probe any position directly. The boxed maps are
+            // keyed by `Option<Value>`, whose `None` sits in `Value`'s
+            // `NonZeroU64` niche: a dead key is the all-zero word.
             movq rsi, [rcx + (key_field)];
-            cmpq rsi, (crate::rvalue::HASH_TOMBSTONE_KEY);
+            testq rsi, rsi;
             jeq  exit;
             movq rax, [rcx + (bucket_field)];
         exit:
@@ -346,7 +347,7 @@ impl Codegen {
             imul rcx, rsi;
             addq rcx, [rdi + (ptr_off)];
             movq rsi, [rcx + (key_off)];
-            cmpq rsi, (crate::rvalue::HASH_TOMBSTONE_KEY);
+            testq rsi, rsi;                // None (dead) is the zero word
             jeq  dead;
         live:
             movq rax, (TRUE_VALUE);

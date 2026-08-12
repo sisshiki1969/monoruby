@@ -10,18 +10,42 @@ pub trait RubyEql<E, G, R> {
     fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R>;
 }
 
-//impl<T, E, G, R> RubyEql<E, G, R> for Option<T>
-//where
-//    T: RubyEql<E, G, R>,
-//{
-//    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
-//        match (self, other) {
-//            (Some(a), Some(b)) => a.eql(b, e, g),
-//            (None, None) => Ok(true),
-//            _ => Ok(false),
-//        }
-//    }
-//}
+/// `Option<T>` keys: the map key type of a container whose dead
+/// (tombstoned) entries are `None`. Two `None`s are equal — inserted keys
+/// are always `Some`, so the case only arises when comparing dead slots,
+/// where identity is the sensible answer.
+impl<T, E, G, R> RubyEql<E, G, R> for Option<T>
+where
+    T: RubyEql<E, G, R>,
+{
+    fn eql(&self, other: &Self, e: &mut E, g: &mut G) -> Result<bool, R> {
+        match (self, other) {
+            (Some(a), Some(b)) => a.eql(b, e, g),
+            (None, None) => Ok(true),
+            _ => Ok(false),
+        }
+    }
+}
+
+impl<T, E, G, R> RubyHash<E, G, R> for Option<T>
+where
+    T: RubyHash<E, G, R>,
+{
+    fn ruby_hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
+        match self {
+            Some(v) => v.ruby_hash(state, e, g),
+            // A `None` key is a dead entry; it is never inserted (its slot
+            // was removed from the index table when it died), so the value
+            // only needs to be deterministic.
+            None => Ok(()),
+        }
+    }
+}
 
 impl<T, E, G, R> RubyEql<E, G, R> for Vec<T>
 where
@@ -231,5 +255,35 @@ where
     #[inline]
     fn equivalent(&self, key: &K) -> bool {
         self.eql(key.borrow())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `Option<T>` key impls used by tombstone-capable maps: `Some`
+    /// delegates, `None` equals only `None` and hashes to nothing.
+    #[test]
+    fn option_key_impls() {
+        let (e, g) = (&mut (), &mut ());
+        let some5: Option<u64> = Some(5);
+        let some7: Option<u64> = Some(7);
+        let none: Option<u64> = None;
+        assert!(RubyEql::<(), (), ()>::eql(&some5, &Some(5), e, g).unwrap());
+        assert!(!RubyEql::<(), (), ()>::eql(&some5, &some7, e, g).unwrap());
+        assert!(!RubyEql::<(), (), ()>::eql(&some5, &none, e, g).unwrap());
+        assert!(!RubyEql::<(), (), ()>::eql(&none, &some5, e, g).unwrap());
+        assert!(RubyEql::<(), (), ()>::eql(&none, &None, e, g).unwrap());
+
+        fn digest(v: &Option<u64>) -> u64 {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            RubyHash::<(), (), ()>::ruby_hash(v, &mut h, &mut (), &mut ()).unwrap();
+            std::hash::Hasher::finish(&h)
+        }
+        assert_eq!(digest(&some5), digest(&Some(5)));
+        assert_ne!(digest(&some5), digest(&some7));
+        // A None key hashes deterministically (to the hasher's initial state).
+        assert_eq!(digest(&none), digest(&None));
     }
 }
