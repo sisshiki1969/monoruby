@@ -100,6 +100,8 @@ pub struct Store {
     /// one?" and compute the digest inline instead of dispatching. See
     /// `doc/bop_redefinition.md`.
     kernel_hash_fid: Option<FuncId>,
+    array_hash_fid: Option<FuncId>,
+    hash_hash_fid: Option<FuncId>,
     /// ISeq info.
     pub(crate) iseqs: Vec<ISeqInfo>,
     /// class table.
@@ -256,6 +258,8 @@ impl Store {
             functions: function::Funcs::default(),
             basic_ops: basic_op::BasicOpTable::new(),
             kernel_hash_fid: None,
+            array_hash_fid: None,
+            hash_hash_fid: None,
             iseqs: vec![],
             constsite_info: vec![],
             callsite_info: vec![],
@@ -398,6 +402,35 @@ impl Store {
     /// Record the builtin `Kernel#hash`. Called once, at bootstrap.
     pub(crate) fn set_kernel_hash_fid(&mut self, fid: FuncId) {
         self.kernel_hash_fid = Some(fid);
+    }
+
+    pub(crate) fn set_array_hash_fid(&mut self, fid: FuncId) {
+        self.array_hash_fid = Some(fid);
+    }
+
+    pub(crate) fn set_hash_hash_fid(&mut self, fid: FuncId) {
+        self.hash_hash_fid = Some(fid);
+    }
+
+    ///
+    /// Whether the Array / Hash `obj` still resolves `:hash` to its
+    /// builtin structural implementation, so the native digest may be
+    /// used without a dispatch. A singleton (mock), a subclass override,
+    /// or a monkey-patched `#hash` makes this false and the caller
+    /// dispatches instead — the mock-count specs pin exactly one `#hash`
+    /// call per probe. Like `has_builtin_identity_hash`, the probe
+    /// behind `check_method` is cached on the class version.
+    ///
+    pub(crate) fn has_builtin_container_hash(&self, obj: Value, ty: ObjTy) -> bool {
+        let builtin = match ty {
+            ObjTy::ARRAY => self.array_hash_fid,
+            ObjTy::HASH => self.hash_hash_fid,
+            _ => return false,
+        };
+        match (builtin, self.check_method(obj, IdentId::HASH)) {
+            (Some(builtin), Some(found)) => builtin == found,
+            _ => false,
+        }
     }
 
     ///

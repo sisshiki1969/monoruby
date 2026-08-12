@@ -391,15 +391,18 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
                     ObjTy::BIGNUM => lhs.as_bignum().hash(state),
                     ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
                     ObjTy::STRING => lhs.as_rstring().hash(state),
-                    // Only a *true* Array / Hash uses the native
-                    // structural hash. `Set` is `ObjTy::HASH` with class
-                    // `Set` and a Ruby-level, order-independent
-                    // `Set#hash` (and a Hash subclass may override
-                    // `#hash`); those fall through to the Ruby `#hash`
-                    // dispatch in the `_` arm so e.g. `Set[1,3]` and
-                    // `Set[3,1]` hash equal and compare as set members.
-                    ObjTy::ARRAY | ObjTy::HASH
-                        if lhs.ty() == ObjTy::ARRAY || lhs.class() == HASH_CLASS =>
+                    // The native structural hash applies only while the
+                    // object's `:hash` still resolves to the builtin
+                    // identity `Kernel#hash` (a class-version-cached
+                    // probe): a singleton/mock or monkey-patched `#hash`
+                    // on an Array or Hash key must be dispatched — the
+                    // mock-count specs pin exactly one `#hash` call per
+                    // probe. `Set` (`ObjTy::HASH` with a Ruby-level,
+                    // order-independent `Set#hash`) falls through the
+                    // same way, so e.g. `Set[1,3]` and `Set[3,1]` hash
+                    // equal and compare as set members.
+                    ty @ (ObjTy::ARRAY | ObjTy::HASH)
+                        if g.store.has_builtin_container_hash(*self, ty) =>
                     {
                         let id = self.id();
                         let is_recursive =

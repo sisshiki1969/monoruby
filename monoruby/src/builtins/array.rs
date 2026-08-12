@@ -54,7 +54,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(ARRAY_CLASS, "inspect", &["to_s"], inspect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_h", to_h, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "hash", hash, 0);
+    let array_hash = globals.define_builtin_func(ARRAY_CLASS, "hash", hash, 0);
+    globals.store.set_array_hash_fid(array_hash);
     globals.define_builtin_func(ARRAY_CLASS, "+", add, 1);
     globals.define_builtin_func(ARRAY_CLASS, "-", sub, 1);
     globals.define_builtin_func(ARRAY_CLASS, "*", mul, 1);

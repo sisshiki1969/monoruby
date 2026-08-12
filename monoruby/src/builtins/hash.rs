@@ -59,7 +59,8 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_funcs(HASH_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(HASH_CLASS, "eql?", eql, 1);
-    globals.define_builtin_func(HASH_CLASS, "hash", hash, 0);
+    let hash_hash = globals.define_builtin_func(HASH_CLASS, "hash", hash, 0);
+    globals.store.set_hash_hash_fid(hash_hash);
     globals.define_builtin_func(HASH_CLASS, "<", lt, 1);
     globals.define_builtin_func(HASH_CLASS, "<=", le, 1);
     globals.define_builtin_func(HASH_CLASS, ">", gt, 1);
