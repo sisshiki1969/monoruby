@@ -1,109 +1,8 @@
 use super::*;
+use crate::globals::prng::{
+    Mt, build_mt, digits_to_value, limited_rand, next_real, rand_int, to_le_digits,
+};
 use num::{Signed, Zero};
-
-/// Reference MT19937 (`mt19937ar`), the exact algorithm CRuby's
-/// `random.c` uses, so the generated stream is bit-identical to CRuby.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct Mt {
-    mt: [u32; 624],
-    mti: usize,
-}
-
-const MT_N: usize = 624;
-const MT_M: usize = 397;
-const MT_MATRIX_A: u32 = 0x9908_b0df;
-const MT_UPPER: u32 = 0x8000_0000;
-const MT_LOWER: u32 = 0x7fff_ffff;
-
-impl Mt {
-    fn init_genrand(seed: u32) -> Self {
-        let mut mt = [0u32; MT_N];
-        mt[0] = seed;
-        for i in 1..MT_N {
-            mt[i] = 1_812_433_253u32
-                .wrapping_mul(mt[i - 1] ^ (mt[i - 1] >> 30))
-                .wrapping_add(i as u32);
-        }
-        Self { mt, mti: MT_N }
-    }
-
-    fn new_with_key(key: &[u32]) -> Self {
-        let mut s = Self::init_genrand(19_650_218);
-        let mt = &mut s.mt;
-        let (mut i, mut j) = (1usize, 0usize);
-        let mut k = MT_N.max(key.len());
-        while k != 0 {
-            mt[i] = (mt[i]
-                ^ (mt[i - 1] ^ (mt[i - 1] >> 30)).wrapping_mul(1_664_525))
-            .wrapping_add(key[j])
-            .wrapping_add(j as u32);
-            i += 1;
-            j += 1;
-            if i >= MT_N {
-                mt[0] = mt[MT_N - 1];
-                i = 1;
-            }
-            if j >= key.len() {
-                j = 0;
-            }
-            k -= 1;
-        }
-        k = MT_N - 1;
-        while k != 0 {
-            mt[i] = (mt[i]
-                ^ (mt[i - 1] ^ (mt[i - 1] >> 30)).wrapping_mul(1_566_083_941))
-            .wrapping_sub(i as u32);
-            i += 1;
-            if i >= MT_N {
-                mt[0] = mt[MT_N - 1];
-                i = 1;
-            }
-            k -= 1;
-        }
-        mt[0] = 0x8000_0000;
-        s
-    }
-
-    fn next_u32(&mut self) -> u32 {
-        if self.mti >= MT_N {
-            let mt = &mut self.mt;
-            for kk in 0..MT_N - MT_M {
-                let y = (mt[kk] & MT_UPPER) | (mt[kk + 1] & MT_LOWER);
-                mt[kk] = mt[kk + MT_M] ^ (y >> 1) ^ if y & 1 != 0 { MT_MATRIX_A } else { 0 };
-            }
-            for kk in MT_N - MT_M..MT_N - 1 {
-                let y = (mt[kk] & MT_UPPER) | (mt[kk + 1] & MT_LOWER);
-                mt[kk] = mt[kk + MT_M - MT_N]
-                    ^ (y >> 1)
-                    ^ if y & 1 != 0 { MT_MATRIX_A } else { 0 };
-            }
-            let y = (mt[MT_N - 1] & MT_UPPER) | (mt[0] & MT_LOWER);
-            mt[MT_N - 1] = mt[MT_M - 1] ^ (y >> 1) ^ if y & 1 != 0 { MT_MATRIX_A } else { 0 };
-            self.mti = 0;
-        }
-        let mut y = self.mt[self.mti];
-        self.mti += 1;
-        y ^= y >> 11;
-        y ^= (y << 7) & 0x9d2c_5680;
-        y ^= (y << 15) & 0xefc6_0000;
-        y ^= y >> 18;
-        y
-    }
-
-    /// CRuby `rb_rand_bytes`: little-endian 32-bit chunks; a trailing
-    /// partial word still consumes a full draw.
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        let mut chunks = dest.chunks_exact_mut(4);
-        for c in &mut chunks {
-            c.copy_from_slice(&self.next_u32().to_le_bytes());
-        }
-        let rem = chunks.into_remainder();
-        if !rem.is_empty() {
-            let b = self.next_u32().to_le_bytes();
-            rem.copy_from_slice(&b[..rem.len()]);
-        }
-    }
-}
 
 //
 // Random class
@@ -141,39 +40,6 @@ fn ivar_cnt() -> IdentId {
     IdentId::get_id("/random_cnt")
 }
 
-/// Little-endian `u32` words of `|seed|` (`init_by_array` key). Zero -> `[0]`.
-fn seed_words(seed: Value) -> Vec<u32> {
-    let big = match seed.unpack() {
-        RV::Fixnum(i) => num::BigInt::from(i),
-        RV::BigInt(b) => b.clone(),
-        _ => num::BigInt::from(0),
-    };
-    let (_, bytes) = big.abs().to_bytes_le();
-    let mut words: Vec<u32> = bytes
-        .chunks(4)
-        .map(|c| {
-            let mut w = [0u8; 4];
-            w[..c.len()].copy_from_slice(c);
-            u32::from_le_bytes(w)
-        })
-        .collect();
-    if words.is_empty() {
-        words.push(0);
-    }
-    words
-}
-
-fn build_mt(seed: Value) -> Mt {
-    // CRuby `rand_init`: a single-word seed uses `init_genrand`;
-    // multi-word seeds use `init_by_array`.
-    let words = seed_words(seed);
-    if words.len() <= 1 {
-        Mt::init_genrand(words[0])
-    } else {
-        Mt::new_with_key(&words)
-    }
-}
-
 fn load_state(globals: &Globals, self_: Value) -> (Value, u64) {
     let seed = globals
         .store
@@ -193,92 +59,6 @@ fn mt_at(seed: Value, cnt: u64) -> Mt {
         mt.next_u32();
     }
     mt
-}
-
-/// CRuby `genrand_real` (53-bit, two draws).
-fn next_real(mt: &mut Mt, cnt: &mut u64) -> f64 {
-    let a = (mt.next_u32() >> 5) as f64;
-    let b = (mt.next_u32() >> 6) as f64;
-    *cnt += 2;
-    (a * 67108864.0 + b) * (1.0 / 9007199254740992.0)
-}
-
-fn make_mask(mut x: u32) -> u32 {
-    x |= x >> 1;
-    x |= x >> 2;
-    x |= x >> 4;
-    x |= x >> 8;
-    x |= x >> 16;
-    x
-}
-
-/// CRuby `limited_big_rand`: uniform integer in `[0, limit]` where
-/// `limit` is given as little-endian `u32` digits. Returns the same.
-fn limited_rand(mt: &mut Mt, cnt: &mut u64, limit: &[u32]) -> Vec<u32> {
-    let len = limit.len();
-    loop {
-        let mut mask = 0u32;
-        let mut boundary = true;
-        let mut digits = vec![0u32; len];
-        let mut retry = false;
-        for i in (0..len).rev() {
-            let lim = limit[i];
-            mask = if mask != 0 { 0xffff_ffff } else { make_mask(lim) };
-            let rnd = if mask != 0 {
-                let r = mt.next_u32() & mask;
-                *cnt += 1;
-                if boundary {
-                    if lim < r {
-                        retry = true;
-                        break;
-                    }
-                    if r < lim {
-                        boundary = false;
-                    }
-                }
-                r
-            } else {
-                0
-            };
-            digits[i] = rnd;
-        }
-        if !retry {
-            return digits;
-        }
-    }
-}
-
-/// Little-endian `u32` digits of a non-negative integer Value.
-fn to_le_digits(big: &num::BigInt) -> Vec<u32> {
-    let (_, bytes) = big.to_bytes_le();
-    let mut d: Vec<u32> = bytes
-        .chunks(4)
-        .map(|c| {
-            let mut w = [0u8; 4];
-            w[..c.len()].copy_from_slice(c);
-            u32::from_le_bytes(w)
-        })
-        .collect();
-    if d.is_empty() {
-        d.push(0);
-    }
-    d
-}
-
-fn digits_to_value(digits: &[u32]) -> Value {
-    let mut bytes = Vec::with_capacity(digits.len() * 4);
-    for w in digits {
-        bytes.extend_from_slice(&w.to_le_bytes());
-    }
-    let big = num::BigInt::from_bytes_le(num::bigint::Sign::Plus, &bytes);
-    Value::bigint(big)
-}
-
-/// `rand(max)` for an integer `max` (> 0): uniform in `[0, max)`.
-fn rand_int(mt: &mut Mt, cnt: &mut u64, max: &num::BigInt) -> Value {
-    let limit = max - 1u32;
-    let digits = limited_rand(mt, cnt, &to_le_digits(&limit));
-    digits_to_value(&digits)
 }
 
 fn random_seed_value() -> Value {
@@ -425,22 +205,9 @@ fn random_srand(
             }
         }
     };
-    // Feed the Mersenne Twister the low bits; report the exact Integer.
-    let mt_seed = match arg.unpack() {
-        RV::Fixnum(i) => i,
-        RV::BigInt(b) => {
-            use num::bigint::Sign;
-            let (sign, digits) = b.to_u64_digits();
-            let low = digits.first().copied().unwrap_or(0) as i64;
-            if sign == Sign::Minus {
-                low.wrapping_neg()
-            } else {
-                low
-            }
-        }
-        _ => unreachable!(),
-    };
-    globals.random_init_with(mt_seed, arg);
+    // Every word of the seed feeds the Mersenne Twister (CRuby
+    // rand_init); the exact Integer is reported back by the next srand.
+    globals.random_init_with(arg);
     Ok(old_seed)
 }
 
@@ -578,7 +345,7 @@ fn inst_rand_op(
 fn rand_with_arg(globals: &mut Globals, arg: Option<Value>) -> Result<Value> {
     let arg = match arg {
         Some(v) => v,
-        None => return Ok(Value::float(globals.random_gen())),
+        None => return Ok(Value::float(globals.random_float())),
     };
     if let Some(max) = arg.try_fixnum() {
         if max <= 0 {
@@ -587,8 +354,7 @@ fn rand_with_arg(globals: &mut Globals, arg: Option<Value>) -> Result<Value> {
                 max
             )));
         }
-        let f: f64 = globals.random_gen();
-        Ok(Value::integer((f * max as f64) as i64))
+        Ok(globals.random_rand_int(&num::BigInt::from(max)))
     } else if let Some(max) = arg.try_float() {
         if max < 0.0 {
             return Err(MonorubyErr::argumenterr(format!(
@@ -596,7 +362,7 @@ fn rand_with_arg(globals: &mut Globals, arg: Option<Value>) -> Result<Value> {
                 max
             )));
         }
-        let f: f64 = globals.random_gen();
+        let f = globals.random_float();
         if max == 0.0 {
             Ok(Value::float(f))
         } else {
@@ -716,12 +482,10 @@ fn random_bytes_inner(vm: &mut Executor, globals: &mut Globals, size_arg: Value)
     } else {
         size as usize
     };
-    let pack_size = (size + 7) & !7;
-    let mut v = vec![0; pack_size];
-    for chunk in v.as_chunks_mut().0 {
-        *chunk = globals.random_gen::<[u8; 8]>();
-    }
-    v.truncate(size);
+    // CRuby `rb_rand_bytes`: little-endian 32-bit words off the default
+    // PRNG, a trailing partial word consuming a full draw.
+    let mut v = vec![0; size];
+    globals.random_fill_bytes(&mut v);
     Ok(Value::bytes(v))
 }
 

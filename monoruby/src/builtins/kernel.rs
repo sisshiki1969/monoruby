@@ -1722,7 +1722,7 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // Drawn from the seeded global PRNG, so `srand(n)` makes the
     // sequence repeatable (CRuby: Kernel#rand shares Random::DEFAULT).
     let Some(arg0) = lfp.try_arg(0) else {
-        return Ok(Value::float(globals.random_gen()));
+        return Ok(Value::float(globals.random_float()));
     };
     if let Some(range) = arg0.is_range() {
         let start = range.start();
@@ -1734,8 +1734,8 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             if span <= 0 {
                 return Ok(Value::nil());
             }
-            let f: f64 = globals.random_gen();
-            return Ok(Value::integer(s + (f * span as f64) as i64));
+            let r = globals.random_ulong_limited(span as u64 - 1) as i64;
+            return Ok(Value::integer(s + r));
         }
         // Any Float endpoint makes the result a Float in [s, e).
         let to_f = |v: Value| v.try_float().or_else(|| v.try_fixnum().map(|i| i as f64));
@@ -1746,7 +1746,13 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             if e == s {
                 return Ok(Value::float(s));
             }
-            let f: f64 = globals.random_gen();
+            // an inclusive float range draws with CRuby's
+            // int_pair_to_real_inclusive mapping ([0, 1], both ends)
+            let f = if excl {
+                globals.random_float()
+            } else {
+                globals.random_float_inclusive()
+            };
             return Ok(Value::float(s + f * (e - s)));
         }
         // Generic endpoints (Time, custom numeric-ish objects): the
@@ -1764,8 +1770,7 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             let f: f64 = if span == 0.0 {
                 0.0
             } else {
-                let f: f64 = globals.random_gen();
-                f * span
+                globals.random_float() * span
             };
             return vm.invoke_method_inner(globals, plus, start, &[Value::float(f)], None, None);
         }
@@ -1786,16 +1791,23 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         if span <= 0 {
             return Ok(Value::nil());
         }
-        let f: f64 = globals.random_gen();
-        let r = (f * span as f64) as i64;
+        let r = globals.random_ulong_limited(span as u64 - 1) as i64;
         return vm.invoke_method_inner(globals, plus, start, &[Value::integer(r)], None, None);
+    }
+    // A Bignum max draws through the multi-word path (CRuby rand_int).
+    if let RV::BigInt(b) = arg0.unpack() {
+        use num::Signed;
+        let b = b.abs();
+        if !b.is_zero() {
+            return Ok(globals.random_rand_int(&b));
+        }
     }
     let i = arg0.coerce_to_int_i64(vm, globals)?;
     if !i.is_zero() {
-        let f: f64 = globals.random_gen();
-        Ok(Value::integer((f * (i.abs() as f64)) as i64))
+        let r = globals.random_ulong_limited(i.unsigned_abs() - 1) as i64;
+        Ok(Value::integer(r))
     } else {
-        Ok(Value::float(globals.random_gen()))
+        Ok(Value::float(globals.random_float()))
     }
 }
 
