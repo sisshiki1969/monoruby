@@ -176,6 +176,66 @@ impl Codegen {
         );
     }
 
+    /// `Hash#default=`: hash in Rdi (x4), new default in Rsi (x3), result
+    /// (the assigned value) in Rax (x0). aarch64 twin of the x86
+    /// `emit_hash_default_assign`; see there for the shape split. The
+    /// receiver's un-frozen-ness is already deopt-guarded by the caller.
+    pub(crate) fn emit_hash_default_assign(&mut self, f: u64) {
+        let rdi = GP::Rdi.a64().0; // x4 (hash)
+        let rsi = GP::Rsi.a64().0; // x3 (new default)
+        let no_box = self.jit.label();
+        let slow = self.jit.label();
+        let exit = self.jit.label();
+        let ty_flags = (RVALUE_OFFSET_TY + 1) as u32;
+        let boxed_rep = HASH_REP_BOXED as u32;
+        let slot = HASH_DEFAULT_OFFSET as u32;
+        let payload = HASH_DEFAULT_PAYLOAD_OFFSET as u32;
+        monoasm_arm64!(&mut self.jit,
+            ldrb w0, [x(rdi), #(ty_flags)];
+            mov x9, (HASH_REP_MASK as u64);
+            and x0, x0, x9;
+            cmp x0, #(boxed_rep);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &no_box); // inline: no default
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x(rdi), #(slot)];    // Option<Box<HashDefault>>: null = None
+            cmp x0, #(0);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &no_box);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (HASH_DEFAULT_TAG_VALUE as u64);
+            str x9, [x0];                 // discriminant := Value
+            str x(rsi), [x0, #(payload)];
+        );
+        // Write barrier: x4 (Rdi) = the hash (parent), x3 (Rsi) = the default.
+        self.emit_write_barrier(GP::Rdi, GP::Rsi);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(rsi);
+            b exit;
+        );
+        self.jit.bind_label(no_box);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (NIL_VALUE as u64);
+            cmp x(rsi), x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &slow);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, #(NIL_VALUE as u32);
+            b exit;
+        );
+        self.jit.bind_label(slow);
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x(rdi);               // recv -> arg2 [val already in x3]
+            mov x0, x19;                  // vm
+            mov x1, x20;                  // globals
+            mov x9, (f);
+            str x30, [sp, #-16]!;
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.jit.bind_label(exit);
+    }
+
     /// `Hash#size`: entry count of the hash in `base`, fixnum-tagged into `dst`.
     /// aarch64 twin of the x86 `gen_hash_len_fixnum`.
     ///
