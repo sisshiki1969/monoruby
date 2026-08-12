@@ -4294,6 +4294,50 @@ mod tests {
     /// whose mode bit lives in the header flags byte and must travel
     /// with the replacement (ruby/spec core/hash/replace_spec.rb).
     #[test]
+    /// An explicitly passed mapping goes through implicit to_hash
+    /// conversion (TypeError for nil / non-hash); an absent one returns
+    /// the Enumerator.
+    #[test]
+    fn transform_keys_argument_validation() {
+        run_tests(&[
+            "{a: 1}.transform_keys.class.to_s",
+            "{a: 1, b: 2}.transform_keys({a: :A}) { |k| k.to_s }",
+            r##"
+            conv = Object.new
+            def conv.to_hash = { a: :z }
+            {a: 1}.transform_keys(conv)
+            "##,
+            "h = {a: 1, b: 2}; h.transform_keys!({a: :A}); h",
+        ]);
+        run_test_error("{a: 1}.transform_keys(nil)");
+        run_test_error("{a: 1}.transform_keys!(nil)");
+        run_test_error("{a: 1}.transform_keys(42)");
+    }
+
+    /// A singleton / redefined #hash on an Array or Hash key is
+    /// dispatched (exactly once per probe) instead of the native
+    /// structural digest; plain container keys stay native.
+    #[test]
+    fn container_key_hash_dispatch() {
+        run_tests(&[
+            r##"
+            calls = 0
+            k = ["x"]
+            k.define_singleton_method(:hash) { calls += 1; 0 }
+            h = {}
+            h[k] = 1
+            [h[k], calls >= 2, h.size]
+            "##,
+            // a plain Hash subclass inherits Hash#hash and digests
+            // structurally, so it works as a key interchangeably
+            r##"
+            sub = Class.new(Hash)
+            k = sub[[[:a, 1]]]
+            [k.hash == {a: 1}.hash, { {a: 1} => :x }[k]]
+            "##,
+        ]);
+    }
+
     fn hash_replace_compare_by_identity() {
         run_tests(&[
             "h = { a: 1, c: 3 }; \

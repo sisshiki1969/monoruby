@@ -9374,7 +9374,97 @@ mod tests {
         ]);
     }
 
+    /// eval lexes a non-UTF-8 source in the string's own encoding
+    /// (via an injected magic comment), with line numbers unchanged.
     #[test]
+    fn eval_non_utf8_source() {
+        run_tests(&[
+            // Windows-31J source parses; the literal carries the encoding
+            // (note: a 'shift_jis'-tagged source is upgraded to
+            // Windows-31J by CRuby's parser — that alias rule is a
+            // separate, pre-existing nuance, so pin the canonical name)
+            r##"
+            src = "'\x87]'".dup.force_encoding('Windows-31J')
+            [eval(src).encoding.to_s, eval(src).bytesize]
+            "##,
+            // BINARY source with a high byte
+            r##"
+            s = eval("'\xE3'".b)
+            [s.encoding.to_s, s.bytes]
+            "##,
+            // line numbers are unshifted by the injection
+            r##"
+            src = "__LINE__".dup.force_encoding('Windows-31J')
+            [eval(src), eval("\n__LINE__".dup.force_encoding('Windows-31J')), eval("__LINE__", nil, "f", 7)]
+            "##,
+            // an explicit magic comment in the eval string wins untouched
+            r##"
+            eval("# encoding: us-ascii\n'x'.encoding.to_s")
+            "##,
+            // binding.eval takes the same path
+            r##"
+            binding.eval("'\xE3'".b).encoding.to_s
+            "##,
+        ]);
+    }
+
+    /// The seeded global PRNG draws exactly like CRuby for every
+    /// Kernel#rand shape (integer / Bignum / ranges / floats).
+    #[test]
+    fn kernel_rand_exact_streams() {
+        run_tests(&[
+            "srand(42); [rand, rand(100), rand(2**80), rand(5..10), rand(5...10)]",
+            "srand(42); [rand(1.0..2.0), rand(1.0...2.0), rand(0), rand(-7)]",
+            "srand(2**100 + 7); [rand(1000), rand]",
+            "srand(9); r1 = srand(11); [r1, rand(50)]",
+            "srand(3); Random.rand(50)",
+            "srand(3); Random.bytes(5).bytes",
+            "srand(3); Random.rand(2.5)",
+            // two-word (u64) limited draw
+            "srand(5); [rand(2**40), rand((2**35)..(2**36))]",
+            // generic endpoints: the span comes from end - start and the
+            // result round-trips through the endpoint's own #+
+            "srand(8); r = rand(Time.at(100)..Time.at(200)); [r.class.to_s, (100..200).include?(r.to_i)]",
+            // float-span generic endpoints
+            r##"
+            srand(8)
+            c = Class.new do
+              attr_reader :v
+              def initialize(v) = @v = v
+              def -(o) = @v - o.v
+              def +(f) = @v + f
+              def <=>(o) = @v <=> o.v
+            end
+            [rand(c.new(1.0)..c.new(2.0)).class.to_s]
+            "##,
+            // empty ranges give nil; float/zero shapes
+            "[rand(5..1), rand(2.0..1.0), rand(3.0...3.0), rand(2.0..2.0)]",
+            "srand(2); [rand(0), rand(-7.9.to_i), rand(1..1)]",
+        ]);
+        // the entropy-seeded path (srand with no argument) — value is
+        // nondeterministic, so only exercise it
+        run_test_no_result_check("srand; [rand, rand(10)].class");
+        run_test_no_result_check("Random.srand; Random.rand(10).class");
+    }
+
+    /// A re-raised Errno exception keeps its binary raw message.
+    #[test]
+    fn reraise_binary_errno_message() {
+        run_test(
+            r##"
+            begin
+              begin
+                File.stat("/missing\xE3E4".b)
+              rescue SystemCallError => e
+                raise e
+              end
+            rescue SystemCallError => e2
+              [e2.message.encoding.to_s, e2.message.include?("/missing\xE3E4".b)]
+            end
+            "##,
+        );
+    }
+
     fn kernel_raise_argument_matrix() {
         // The shared rb_make_exception surface: String-with-extra-arg
         // TypeError, custom backtraces (Array / single String / nil /

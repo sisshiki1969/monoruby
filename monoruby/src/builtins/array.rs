@@ -5103,6 +5103,135 @@ mod tests {
     }
 
     #[test]
+    /// Array#flatten's element probe follows CRuby's rb_check_funcall
+    /// protocol (respond_to? veto, respond_to_missing? gate, user
+    /// method_missing consult, NoMethodError re-raise rule).
+    #[test]
+    fn flatten_check_funcall_protocol() {
+        run_tests(&[
+            // plain BasicObject: no probe, not converted
+            "bo = BasicObject.new; [bo].flatten.equal?(nil); [[bo].flatten.size, [bo].flatten[0].equal?(bo)]",
+            // a user method_missing supplies to_ary
+            r##"
+            bo = BasicObject.new
+            def bo.method_missing(name, *) = [1, 2]
+            [bo].flatten
+            "##,
+            // a user respond_to? returning false vetoes even that
+            r##"
+            bo = BasicObject.new
+            def bo.method_missing(name, *) = [1, 2]
+            def bo.respond_to?(name, *) = false
+            r1 = [bo].flatten.size
+            def bo.respond_to?(name, *) = true
+            [r1, [bo].flatten]
+            "##,
+            // respond_to_missing? => false gates the missing-dispatch
+            r##"
+            o = Object.new
+            def o.respond_to_missing?(name, priv) = false
+            def o.method_missing(name, *) = [3]
+            [[o].flatten.size, [o].flatten[0].equal?(o)]
+            "##,
+            // respond_to_missing? => true + user method_missing converts
+            r##"
+            o = Object.new
+            def o.respond_to_missing?(name, priv) = true
+            def o.method_missing(name, *) = name == :to_ary ? [4, 5] : super
+            [o].flatten
+            "##,
+        ]);
+        // respond_to_missing? => true with only the default
+        // method_missing dispatches for real and raises NoMethodError
+        run_test_error(
+            r##"
+            o = Object.new
+            def o.respond_to_missing?(name, priv) = true
+            [o].flatten
+            "##,
+        );
+        // a to_ary that returns neither Array nor nil is a TypeError
+        run_test_error(
+            r##"
+            o = Object.new
+            def o.to_ary = 42
+            [o].flatten
+            "##,
+        );
+        // a to_ary returning nil means "not convertible"
+        run_test(
+            r##"
+            o = Object.new
+            def o.to_ary = nil
+            [[o].flatten.size, [o].flatten[0].equal?(o)]
+            "##,
+        );
+        // a user respond_to? => true with a real to_ary calls it
+        run_test(
+            r##"
+            o = Object.new
+            def o.respond_to?(name, *) = true
+            def o.to_ary = [7, 8]
+            [o].flatten
+            "##,
+        );
+        // a method_missing raising NoMethodError for :to_ary means
+        // "not convertible" when nothing claimed the object responds
+        run_test(
+            r##"
+            o = Object.new
+            def o.method_missing(name, *) = raise(NoMethodError.new("nope", name))
+            [[o].flatten.size, [o].flatten[0].equal?(o)]
+            "##,
+        );
+    }
+
+    /// Array.new with a block fills the receiver incrementally: break
+    /// keeps the values produced so far (and returns the break value).
+    #[test]
+    fn initialize_block_break() {
+        run_tests(&[
+            r##"
+            a = [1, 2, 3]
+            a.send(:initialize, 3) { |i| break if i == 2; i.to_s }
+            a
+            "##,
+            "Array.new(3) { break :bv }",
+            "Array.new(3) { |i| i * 2 }",
+        ]);
+    }
+
+    /// The sign of a Bignum comparator result is read natively — a
+    /// redefined Integer#<=> cannot interfere (rb_cmpint).
+    #[test]
+    fn sort_bignum_comparator() {
+        run_test(
+            r##"
+            class Integer
+              alias old_spaceship <=>
+              def <=>(other) = raise("no")
+            end
+            r = [1, 2, 5, 10, 7, -4, 12].sort { |n, m| (n - m) * (2 ** 200) }
+            class Integer
+              alias <=> old_spaceship
+            end
+            r
+            "##,
+        );
+    }
+
+    /// shuffle/sample draw from the seeded global PRNG with CRuby's
+    /// exact consumption, so srand-seeded runs match CRuby.
+    #[test]
+    fn shuffle_sample_srand() {
+        run_tests(&[
+            "srand(123); %w[a b c d e f g h i j k].shuffle",
+            "srand(123); a = (1..30).to_a; a.shuffle!; a",
+            "srand(7); [[1,2,3,4,5,6].sample, [1,2,3].sample]",
+            "%w[a b c].shuffle(random: Random.new(1))",
+        ]);
+    }
+
     fn zip_propagates_each_errors() {
         // Pulling from an `#each`-based argument stops on StopIteration —
         // that is exhaustion — but any *other* exception is the argument's

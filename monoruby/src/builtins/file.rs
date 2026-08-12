@@ -3087,6 +3087,65 @@ fn file_realdirpath(
 mod tests {
     use crate::tests::*;
 
+    /// Errno messages keep a non-UTF-8 path's exact bytes as an
+    /// ASCII-8BIT string (CRuby keeps the path's own bytes).
+    #[test]
+    fn errno_message_binary_path() {
+        run_tests(&[
+            r##"
+            begin
+              File.stat("/missing\xE3E4".b)
+            rescue SystemCallError => e
+              [e.class.to_s, e.message.encoding.to_s, e.message.include?("/missing\xE3E4".b)]
+            end
+            "##,
+            r##"
+            begin
+              File.ftype("/missing\xE3E4".b)
+            rescue SystemCallError => e
+              [e.class.to_s, e.message.encoding.to_s, e.message.include?("/missing\xE3E4".b)]
+            end
+            "##,
+            r##"
+            begin
+              File.size("/missing\xE3E4".b)
+            rescue SystemCallError => e
+              [e.message.encoding.to_s, e.message.include?("/missing\xE3E4".b)]
+            end
+            "##,
+            r##"
+            begin
+              File.mtime("/missing\xE3E4".b)
+            rescue SystemCallError => e
+              [e.message.encoding.to_s, e.message.include?("/missing\xE3E4".b)]
+            end
+            "##,
+            // File.read / File.readlink funnel the same raw-path errnos
+            r##"
+            begin
+              File.read("/missing\xE3E4".b)
+            rescue SystemCallError => e
+              [e.message.encoding.to_s, e.message.include?("/missing\xE3E4".b)]
+            end
+            "##,
+            r##"
+            begin
+              File.readlink("/missing\xE3E4".b)
+            rescue SystemCallError => e
+              [e.message.encoding.to_s, e.message.include?("/missing\xE3E4".b)]
+            end
+            "##,
+            // a plain UTF-8 path keeps the UTF-8 message
+            r##"
+            begin
+              File.stat("/missing_utf8_ぱす")
+            rescue SystemCallError => e
+              [e.message.encoding.to_s, e.message.include?("ぱす")]
+            end
+            "##,
+        ]);
+    }
+
     #[test]
     fn file_path_ops_preserve_encoding() {
         // basename/extname/split/join/path/absolute_path/expand_path
