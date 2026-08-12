@@ -136,7 +136,18 @@ class Hash
     h
   end
 
-  def transform_keys(hash = nil, &block)
+  # CRuby's rb_to_hash_type: an explicitly passed mapping — nil included —
+  # goes through implicit `to_hash` conversion and raises TypeError when it
+  # has none. Only a genuinely absent argument means "no mapping".
+  private def __to_hash_type(obj)
+    h = Hash.try_convert(obj)
+    return h if h
+    name = obj.nil? ? "nil" : obj.equal?(true) ? "true" : obj.equal?(false) ? "false" : obj.class.to_s
+    raise TypeError, "no implicit conversion of #{name} into Hash"
+  end
+
+  def transform_keys(hash = (no_arg = true; nil), &block)
+    hash = __to_hash_type(hash) unless no_arg
     return to_enum(:transform_keys) { size } unless block || hash
     h = {}
     if hash
@@ -150,7 +161,8 @@ class Hash
     h
   end
 
-  def transform_keys!(hash = nil, &block)
+  def transform_keys!(hash = (no_arg = true; nil), &block)
+    hash = __to_hash_type(hash) unless no_arg
     return to_enum(:transform_keys!) { size } unless block || hash
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     # Snapshot the original pairs up front so a new key that collides with

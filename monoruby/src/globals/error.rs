@@ -87,6 +87,12 @@ pub struct MonorubyErr {
     /// → `#exit_value` / `#reason`; for `StopIteration` the
     /// iterator return value + `"result"` → `#result`.
     pub(crate) payload: Option<(Value, &'static str)>,
+    /// The exact message bytes when they are not valid UTF-8 — e.g. an
+    /// Errno message carrying a binary path. `message` then holds the
+    /// lossy rendering for Rust-side display, while `Exception#to_s`
+    /// materializes these bytes as an ASCII-8BIT string (CRuby keeps
+    /// the path's own bytes in the message).
+    pub(crate) raw_message: Option<Vec<u8>>,
 }
 
 impl MonorubyErr {
@@ -98,6 +104,7 @@ impl MonorubyErr {
             original: None,
             explicit_cause: None,
             payload: None,
+            raw_message: None,
         }
     }
 
@@ -112,6 +119,7 @@ impl MonorubyErr {
             original: None,
             explicit_cause: None,
             payload: None,
+            raw_message: ex.raw_message.clone(),
         }
     }
 
@@ -136,6 +144,7 @@ impl MonorubyErr {
             trace: vec![(Some((loc, sourceinfo)), func_id)],
             original: None,
             explicit_cause: None,
+            raw_message: None,
             payload: None,
         }
     }
@@ -1239,21 +1248,41 @@ impl MonorubyErr {
         store: &Store,
         err: &std::io::Error,
         syscall: &str,
-        path: &str,
+        path: impl AsRef<std::ffi::OsStr>,
     ) -> MonorubyErr {
         let desc = errno_description(err);
-        let msg = format!("{} @ {} - {}", desc, syscall, path);
-        Self::from_io_err(store, err, msg)
+        let path = path.as_ref();
+        let msg = format!("{} @ {} - {}", desc, syscall, path.to_string_lossy());
+        let mut e = Self::from_io_err(store, err, msg);
+        let bytes = path.as_encoded_bytes();
+        if std::str::from_utf8(bytes).is_err() {
+            let mut raw = format!("{} @ {} - ", desc, syscall).into_bytes();
+            raw.extend_from_slice(bytes);
+            e.raw_message = Some(raw);
+        }
+        e
     }
 
     /// Create an Errno exception from a `std::io::Error` with just a path (no syscall name).
     ///
     /// Formats the message to match CRuby: `"<description> - <path>"`
     /// For example: `"No such file or directory - /path/to/file"`
-    pub(crate) fn errno_with_msg(store: &Store, err: &std::io::Error, path: &str) -> MonorubyErr {
+    pub(crate) fn errno_with_msg(
+        store: &Store,
+        err: &std::io::Error,
+        path: impl AsRef<std::ffi::OsStr>,
+    ) -> MonorubyErr {
         let desc = errno_description(err);
-        let msg = format!("{} - {}", desc, path);
-        Self::from_io_err(store, err, msg)
+        let path = path.as_ref();
+        let msg = format!("{} - {}", desc, path.to_string_lossy());
+        let mut e = Self::from_io_err(store, err, msg);
+        let bytes = path.as_encoded_bytes();
+        if std::str::from_utf8(bytes).is_err() {
+            let mut raw = format!("{} - ", desc).into_bytes();
+            raw.extend_from_slice(bytes);
+            e.raw_message = Some(raw);
+        }
+        e
     }
 
     /// Errno exception whose message is the bare strerror description

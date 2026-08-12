@@ -57,25 +57,50 @@ pub(super) fn parse_program(code: Vec<u8>, path: PathBuf) -> Result<ParseResult,
 }
 
 pub(super) fn parse_program_eval(
-    code: Vec<u8>,
+    mut code: Vec<u8>,
     path: PathBuf,
     extern_context: Option<&ExternalContext>,
-    line_offset: i64,
+    mut line_offset: i64,
     default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
+    inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
     let options = build_prism_options(extern_context, None, line_offset);
     try_prism_inner(&code, path, Some(options), None, line_offset, default_encoding, false)
 }
 
+/// CRuby lexes an eval source in the string's *own* encoding. The
+/// vendored ruby-prism wrapper does not expose
+/// `pm_options_encoding_set`, but prism honours a `# encoding:` magic
+/// comment natively, so a non-UTF-8 eval source that doesn't carry its
+/// own directive gets one injected — with the line option shifted so
+/// every reported line number stays where CRuby puts it.
+fn inject_encoding_comment(
+    code: &mut Vec<u8>,
+    default_encoding: &Option<String>,
+    line_offset: &mut i64,
+) {
+    let Some(enc) = default_encoding else { return };
+    if enc.eq_ignore_ascii_case("UTF-8") || enc.eq_ignore_ascii_case("US-ASCII") {
+        return;
+    }
+    if detect_source_encoding(code).is_some() {
+        return;
+    }
+    let header = format!("# encoding: {enc}\n");
+    code.splice(0..0, header.into_bytes());
+    *line_offset -= 1;
+}
+
 pub(super) fn parse_program_binding(
-    code: Vec<u8>,
+    mut code: Vec<u8>,
     path: PathBuf,
     context: Option<LvarCollector>,
     extern_context: Option<&ExternalContext>,
-    line_offset: i64,
+    mut line_offset: i64,
     default_encoding: Option<String>,
     main_script: bool,
 ) -> Result<ParseResult, MonorubyErr> {
+    inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
     let options = build_prism_options(extern_context, context.as_ref(), line_offset);
     try_prism_inner(
         &code,
@@ -101,7 +126,7 @@ fn build_prism_options(
     // Prism's `line` is 1-indexed. monoruby tracks an offset
     // (`lineno - 1`) at the call sites in `globals.rs`, so the
     // wire-format we want is `line_offset + 1`.
-    let line = line_offset.saturating_add(1).clamp(1, i32::MAX as i64) as i32;
+    let line = line_offset.saturating_add(1).clamp(0, i32::MAX as i64) as i32;
 
     let mut scopes: Vec<prism::Scope> = Vec::new();
 

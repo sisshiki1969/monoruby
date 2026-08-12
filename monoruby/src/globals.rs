@@ -10,7 +10,7 @@ mod dump;
 mod error;
 mod gvar;
 pub(crate) mod method;
-mod prng;
+pub(crate) mod prng;
 mod require;
 mod store;
 #[cfg(any(feature = "deopt", feature = "profile"))]
@@ -1493,28 +1493,48 @@ impl Globals {
         self.random_seed_obj
     }
 
-    /// Re-seed the global PRNG with an explicit seed: `mt_seed` feeds the
-    /// Mersenne Twister (low bits), `exact` is what the next `srand`
-    /// reports back.
-    pub(crate) fn random_init_with(&mut self, mt_seed: i64, exact: Value) {
-        self.random.init_with_seed(Some(mt_seed));
+    /// Re-seed the global PRNG with an explicit Integer seed. Every word
+    /// of the seed feeds the Mersenne Twister (CRuby `rand_init`);
+    /// `exact` is also what the next `srand` reports back.
+    pub(crate) fn random_init_with(&mut self, exact: Value) {
+        self.random.seed_value(exact);
         self.random_seed_obj = exact;
     }
 
-    //pub(crate) fn random_seed(&self) -> i32 {
-    //    self.random.seed
-    //}
-
     pub(crate) fn random_init(&mut self, seed: Option<i64>) {
-        let used = self.random.init_with_seed(seed);
-        self.random_seed_obj = Value::integer(used);
+        match seed {
+            Some(s) => self.random_init_with(Value::integer(s)),
+            None => {
+                let used = self.random.seed_entropy();
+                self.random_seed_obj = Value::integer(used);
+            }
+        }
     }
 
-    pub(crate) fn random_gen<T>(&mut self) -> T
-    where
-        rand::distr::StandardUniform: rand::prelude::Distribution<T>,
-    {
-        self.random.random()
+    /// Uniform Float in `[0, 1)` (CRuby `genrand_real`, 53-bit).
+    pub(crate) fn random_float(&mut self) -> f64 {
+        self.random.next_real()
+    }
+
+    /// Uniform Float in `[0, 1]`, both ends included (CRuby
+    /// `int_pair_to_real_inclusive` — inclusive float-range `rand`).
+    pub(crate) fn random_float_inclusive(&mut self) -> f64 {
+        self.random.next_real_inclusive()
+    }
+
+    /// Uniform integer in `[0, max]` (CRuby `rb_random_ulong_limited` —
+    /// the draw `Array#shuffle` / `#sample` and integer `rand` use).
+    pub(crate) fn random_ulong_limited(&mut self, max: u64) -> u64 {
+        self.random.ulong_limited(max)
+    }
+
+    /// `rand(max)` for a positive integer `max`: uniform in `[0, max)`.
+    pub(crate) fn random_rand_int(&mut self, max: &num::BigInt) -> Value {
+        self.random.rand_int(max)
+    }
+
+    pub(crate) fn random_fill_bytes(&mut self, dest: &mut [u8]) {
+        self.random.fill_bytes(dest)
     }
 }
 

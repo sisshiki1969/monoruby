@@ -925,7 +925,7 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 Err(MonorubyErr::errno_with_msg(
                     &globals.store,
                     &err,
-                    &old_pwd.to_string_lossy(),
+                    &old_pwd,
                 ))
             }
         }
