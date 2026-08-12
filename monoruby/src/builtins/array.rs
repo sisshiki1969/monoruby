@@ -269,7 +269,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     if lfp.try_arg(0).is_none() {
         // Array.new {} / Array#initialize {} — the block is ignored.
         if lfp.block().is_some() {
-            vm.ruby_warn(globals, "warning: given block not used")?;
+            vm.ruby_warn_caller(globals, "warning: given block not used")?;
         }
         self_val.clear();
         return Ok(self_val.into());
@@ -295,7 +295,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         }
         if let Some(inner) = from_array {
             if lfp.block().is_some() {
-                vm.ruby_warn(globals, "warning: given block not used")?;
+                vm.ruby_warn_caller(globals, "warning: given block not used")?;
             }
             *self_val = inner;
             return Ok(self_val.into());
@@ -315,11 +315,19 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
     if let Some(bh) = lfp.block() {
         if lfp.try_arg(1).is_some() {
-            vm.ruby_warn(globals, "warning: block supersedes default value argument")?;
+            vm.ruby_warn_caller(globals, "warning: block supersedes default value argument")?;
         }
-        let iter = (0..size).map(|i| Value::integer(i as i64));
-        let mut res = vm.invoke_block_map1(globals, bh, iter, size)?;
-        RValue::swap_kind(lfp.self_val().rvalue_mut(), res.rvalue_mut());
+        // Fill the receiver incrementally: a `break` in the block must
+        // leave the values produced so far in place (CRuby: `a.send(
+        // :initialize, 3) { break if i == 2; ... }` keeps ["0", "1"]),
+        // so building a detached result and swapping it in at the end
+        // would discard them.
+        self_val.clear();
+        let data = vm.get_block_data(globals, bh)?;
+        for i in 0..size {
+            let v = vm.invoke_block(globals, &data, &[Value::integer(i as i64)])?;
+            lfp.self_val().as_array().push(v);
+        }
     } else {
         let val = lfp.try_arg(1).unwrap_or_default();
         *self_val = ArrayInner::from(smallvec![val; size]);
@@ -2283,7 +2291,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // Index out of bounds
     if let Some(bh) = lfp.block() {
         if lfp.try_arg(1).is_some() {
-            vm.ruby_warn(globals, "warning: block supersedes default value argument")?;
+            vm.ruby_warn_caller(globals, "warning: block supersedes default value argument")?;
         }
         let data = vm.get_block_data(globals, bh)?;
         let val = vm.invoke_block(globals, &data, &[lfp.arg(0)])?;
@@ -4019,6 +4027,32 @@ fn pack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     rvalue::pack(vm, globals, &ary, &template, buffer)
 }
 
+/// Interpret the value `to_ary` (or `method_missing(:to_ary)`) produced.
+fn to_ary_result(v: &Value, result: Value, globals: &mut Globals) -> Result<Option<Array>> {
+    if let Some(ary) = result.try_array_ty() {
+        return Ok(Some(ary));
+    }
+    if result.is_nil() {
+        return Ok(None);
+    }
+    Err(MonorubyErr::cant_convert_error_ary(globals, *v, result))
+}
+
+/// The element-to-array probe of `Array#flatten`, following CRuby's
+/// `rb_check_funcall` protocol exactly (pinned by ruby/spec's
+/// respond_to?/respond_to_missing?/method_missing flatten examples):
+///
+/// 1. a *user-redefined* `respond_to?` gates everything — a false
+///    answer stops the conversion even when `to_ary` exists;
+/// 2. otherwise a defined `to_ary` is called;
+/// 3. with the default `respond_to?`, a *user-defined*
+///    `respond_to_missing?` gates the missing-dispatch: falsy means
+///    "not convertible" and `method_missing` is not consulted;
+/// 4. a *user-defined* `method_missing` is then consulted with
+///    `:to_ary`. A NoMethodError it raises for that name is re-raised
+///    when the object claimed to respond (CRuby check_funcall_failed:
+///    `rb_respond_to` true → re-raise) and otherwise means "not
+///    convertible".
 fn try_convert_to_array(
     v: &Value,
     vm: &mut Executor,
@@ -4027,32 +4061,95 @@ fn try_convert_to_array(
     if let Some(ary) = v.try_array_ty() {
         return Ok(Some(ary));
     }
-    // Check respond_to?(:to_ary, true) to respect respond_to_missing? protocol.
     let respond_to = IdentId::get_id("respond_to?");
-    let responds = match vm.invoke_method_inner(
+    let default_fid = |globals: &Globals, class: ClassId, name: IdentId| {
+        globals
+            .store
+            .check_method_for_class(class, name)
+            .and_then(|e| e.func_id())
+    };
+    let user_fid = |globals: &Globals, name: IdentId, class: ClassId| {
+        let fid = globals.check_method(*v, name)?;
+        (Some(fid) != default_fid(globals, class, name)).then_some(fid)
+    };
+
+    // respond: 1 = claimed to respond, 0 = refused, -1 = undetermined
+    let mut respond: i8 = -1;
+    // 1. A user-redefined respond_to? vetoes the whole probe.
+    if let Some(fid) = user_fid(globals, respond_to, OBJECT_CLASS) {
+        let responds = vm
+            .invoke_func_inner(
+                globals,
+                fid,
+                *v,
+                &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
+                None,
+                None,
+            )?
+            .as_bool();
+        if !responds {
+            return Ok(None);
+        }
+        respond = 1;
+    }
+    // 2. A defined to_ary is simply called.
+    if let Some(fid) = globals.check_method(*v, IdentId::TO_ARY) {
+        let result = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
+        return to_ary_result(v, result, globals);
+    }
+    // 3. Default respond_to?: a user-defined respond_to_missing? gates
+    //    the missing-dispatch.
+    if respond < 0
+        && let Some(fid) = user_fid(globals, IdentId::RESPOND_TO_MISSING_, OBJECT_CLASS)
+    {
+        let responds = vm
+            .invoke_func_inner(
+                globals,
+                fid,
+                *v,
+                &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
+                None,
+                None,
+            )?
+            .as_bool();
+        if !responds {
+            return Ok(None);
+        }
+        respond = 1;
+    }
+    // 4. A user-defined method_missing is consulted with :to_ary.
+    let Some(fid) = user_fid(globals, IdentId::METHOD_MISSING, BASIC_OBJECT_CLASS) else {
+        if respond > 0 {
+            // claimed to respond (respond_to_missing? => true) but only
+            // the default method_missing exists: dispatch for real so
+            // the NoMethodError propagates (pinned by the
+            // respond_to_missing? flatten spec).
+            let result = vm.invoke_method_inner(globals, IdentId::TO_ARY, *v, &[], None, None)?;
+            return to_ary_result(v, result, globals);
+        }
+        return Ok(None);
+    };
+    match vm.invoke_func_inner(
         globals,
-        respond_to,
+        fid,
         *v,
-        &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
+        &[Value::symbol(IdentId::TO_ARY)],
         None,
         None,
     ) {
-        Ok(val) => val.as_bool(),
-        // BasicObject without respond_to? and without method_missing
-        Err(_) => return Ok(None),
-    };
-    if !responds {
-        return Ok(None);
+        Ok(result) => to_ary_result(v, result, globals),
+        Err(err)
+            if respond < 0
+                && matches!(
+                    &err.kind,
+                    MonorubyErrKind::NotMethod { name, .. }
+                        if name.is_none() || *name == Some(IdentId::TO_ARY)
+                ) =>
+        {
+            Ok(None)
+        }
+        Err(err) => Err(err),
     }
-    // Call to_ary via invoke_method_inner to support method_missing.
-    let result = vm.invoke_method_inner(globals, IdentId::TO_ARY, *v, &[], None, None)?;
-    if let Some(ary) = result.try_array_ty() {
-        return Ok(Some(ary));
-    }
-    if result.is_nil() {
-        return Ok(None);
-    }
-    Err(MonorubyErr::cant_convert_error_ary(globals, *v, result))
 }
 
 fn flatten_inner(
@@ -4181,7 +4278,17 @@ fn compact_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn shuffle_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array_mut(&globals.store)?;
-    ary.shuffle(&mut rand::rng());
+    // Fisher-Yates off the seeded global PRNG with CRuby's exact draw
+    // (`RAND_UPTO` = `rb_random_ulong_limited`), so a `srand(n)`-seeded
+    // shuffle produces CRuby's sequence. The `random:` keyword form is
+    // the same loop in Ruby (`Array#shuffle`), consuming `random.rand`
+    // identically.
+    let mut i = ary.len();
+    while i > 1 {
+        i -= 1;
+        let j = globals.random_ulong_limited(i as u64) as usize;
+        ary.swap(i, j);
+    }
     Ok(lfp.self_val())
 }
 

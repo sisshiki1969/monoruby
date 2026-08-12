@@ -71,6 +71,16 @@ impl Executor {
         let i = match res.try_fixnum() {
             Some(i) => i,
             None => {
+                // A Bignum's sign is read directly, like CRuby's rb_cmpint:
+                // no method dispatch, so a redefined Integer#<=> (or #>)
+                // cannot interfere with sorting by huge differences.
+                if let RV::BigInt(b) = res.unpack() {
+                    return Ok(match b.sign() {
+                        num::bigint::Sign::Minus => std::cmp::Ordering::Less,
+                        num::bigint::Sign::NoSign => std::cmp::Ordering::Equal,
+                        num::bigint::Sign::Plus => std::cmp::Ordering::Greater,
+                    });
+                }
                 let zero = Value::integer(0);
                 let cmp =
                     self.invoke_method_inner(globals, IdentId::_CMP, res, &[zero], None, None)?;

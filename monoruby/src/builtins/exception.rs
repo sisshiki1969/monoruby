@@ -137,6 +137,7 @@ pub(super) fn init(globals: &mut Globals) {
 
     globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
+    globals.define_builtin_func(EXCEPTION_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "__raise_backtrace", raise_backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
@@ -481,6 +482,25 @@ fn message(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // CRuby's `Exception#message` is `self.to_s`, so a subclass that
     // overrides `#to_s` changes the reported message too.
     vm.invoke_method_inner(globals, IdentId::TO_S, lfp.self_val(), &[], None, None)
+}
+
+///
+/// ### Exception#to_s
+///
+/// A message whose exact bytes are not valid UTF-8 (an Errno carrying a
+/// binary path) is materialized as an ASCII-8BIT string with the
+/// original bytes, like CRuby, which keeps the path's own bytes in the
+/// message.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/to_s.html]
+#[monoruby_builtin]
+fn to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let ex = self_val.is_exception().unwrap();
+    if let Some(raw) = &ex.raw_message {
+        return Ok(Value::bytes(raw.clone()));
+    }
+    Ok(Value::string_from_str(ex.message()))
 }
 
 ///

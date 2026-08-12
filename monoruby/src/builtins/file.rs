@@ -203,7 +203,7 @@ fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 &globals.store,
                 &err,
                 "rb_sysopen",
-                &filename_str,
+                &filename,
             ));
         }
     };
@@ -238,7 +238,7 @@ fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     };
     if offset > 0 {
         std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(offset)).map_err(|err| {
-            MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_read", &filename_str)
+            MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_read", &filename)
         })?;
     }
     let mut contents = vec![];
@@ -251,7 +251,7 @@ fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             &globals.store,
             &err,
             "rb_io_read",
-            &filename_str,
+            &filename,
         ));
     }
     // A sized read that hits EOF immediately reads as nil; sized reads
@@ -326,7 +326,7 @@ fn file_binread(
                 &globals.store,
                 &err,
                 "rb_sysopen",
-                &filename_str,
+                &filename,
             ));
         }
     };
@@ -1054,7 +1054,10 @@ fn check_realpath(
                 &globals.store,
                 &err,
                 "realpath_rec",
-                &String::from_utf8_lossy(resolved),
+                {
+                    use std::os::unix::ffi::OsStrExt;
+                    std::ffi::OsStr::from_bytes(resolved)
+                },
             )
         }
     };
@@ -2006,7 +2009,7 @@ fn file_size(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         SizeSource::Path(path) => {
             let path_str = path.to_string_lossy();
             let metadata = std::fs::metadata(&path).map_err(|e| {
-                MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_size", &path_str)
+                MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_size", &path)
             })?;
             Ok(Value::integer(metadata.len() as i64))
         }
@@ -2108,7 +2111,7 @@ fn ftype(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let path = to_path(vm, globals, lfp.arg(0))?;
     let path_str = path.to_string_lossy();
     let metadata = std::fs::symlink_metadata(&path).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_ftype", &path_str)
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_ftype", &path)
     })?;
     let ft = metadata.file_type();
     let s = if ft.is_file() {
@@ -2347,7 +2350,7 @@ fn file_readlink(
     let path = to_path(vm, globals, lfp.arg(0))?;
     let path_str = path.to_string_lossy();
     let target = std::fs::read_link(&path).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_readlink", &path_str)
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_readlink", &path)
     })?;
     Ok(Value::string(conv_pathbuf(&target)))
 }
@@ -2737,10 +2740,10 @@ fn file_time_attr(
     let path = to_path(vm, globals, lfp.arg(0))?;
     let path_str = path.to_string_lossy().to_string();
     let metadata = std::fs::metadata(&path).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path_str)
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path)
     })?;
     let t = f(&metadata).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_time", &path_str)
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_time", &path)
     })?;
     system_time_to_value(vm, globals, t)
 }
@@ -2797,7 +2800,7 @@ fn file_ctime(
     let path = to_path(vm, globals, lfp.arg(0))?;
     let path_str = path.to_string_lossy().to_string();
     let metadata = std::fs::metadata(&path).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path_str)
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path)
     })?;
     let secs = metadata.ctime();
     let nsec = metadata.ctime_nsec();
@@ -2824,7 +2827,7 @@ fn file_birthtime(
     let path = to_path(vm, globals, lfp.arg(0))?;
     let path_str = path.to_string_lossy().to_string();
     let metadata = std::fs::metadata(&path).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path_str)
+        MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path)
     })?;
     match metadata.created() {
         Ok(t) => system_time_to_value(vm, globals, t),
@@ -2919,7 +2922,7 @@ fn build_stat(
     } else {
         std::fs::symlink_metadata(&path)
     }
-    .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path_str))?;
+    .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path))?;
     let stat_class = vm
         .get_qualified_constant(globals, OBJECT_CLASS, &["File", "Stat"])?
         .as_class();

@@ -2179,10 +2179,9 @@ fn env_fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let hash = lfp.self_val().as_hash();
         let s = if let Some(bh) = lfp.block() {
             if lfp.try_arg(1).is_some() {
-                let warn_id = IdentId::get_id("warn");
-                let msg =
-                    Value::string_from_str("warning: block supersedes default value argument");
-                vm.invoke_method_inner(globals, warn_id, lfp.self_val(), &[msg], None, None)?;
+                // CRuby's rb_warn: caller-location prefix, straight to
+                // $stderr (not the overridable Kernel#warn).
+                vm.ruby_warn_caller(globals, "warning: block supersedes default value argument")?;
             }
             match hash.get(key, vm, globals)? {
                 Some(v) => v,
