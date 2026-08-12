@@ -50,7 +50,13 @@ pub(super) fn init(globals: &mut Globals) {
         0,
     );
     globals.define_builtin_func(HASH_CLASS, "default_proc=", default_proc_assign, 1);
-    globals.define_builtin_func(HASH_CLASS, "default=", default_assign, 1);
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "default=",
+        default_assign,
+        inline_gen2!(hash_default_assign),
+        1,
+    );
     globals.define_builtin_funcs(HASH_CLASS, "==", &["==="], eq, 1);
     globals.define_builtin_func(HASH_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(HASH_CLASS, "hash", hash, 0);
@@ -932,6 +938,67 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             None,
         )
     }
+}
+
+/// `Hash#default=` with the frozen check already deopt-guarded by JIT code:
+/// runs the promotion / box-allocation cases the inline fast path cannot,
+/// then answers the assigned value (what `Hash#default=` returns).
+extern "C" fn hash_default_assign_extern(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    val: Value,
+) -> Option<Value> {
+    match recv.as_hash().set_defalut_value(val, vm, globals) {
+        Ok(()) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+///
+/// Inline `Hash#default=` as machine code.
+///
+/// The common shapes store in place: a boxed hash that already carries a
+/// default box gets its discriminant/payload overwritten (replacing a
+/// default proc exactly as `Hash#default=` does), and a nil assignment
+/// with no default box is a no-op. First-time non-nil defaults (box
+/// allocation, possibly inline→boxed promotion) go through the runtime
+/// call. The in-place store bypasses the builtin's frozen check, so a
+/// frozen receiver deopts to the interpreter to raise `FrozenError`.
+///
+fn hash_default_assign(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, args, recv, ..
+    } = *callsite;
+    state.load(ir, recv, GP::Rdi);
+    let deopt = ir.new_deopt(state);
+    ir.guard_frozen(deopt);
+    state.load(ir, args, GP::Rsi);
+    let using_fpr = state.get_using_fpr(ir);
+    ir.fpr_save(using_fpr);
+    ir.inline(move |r#gen, _, _, _| {
+        r#gen.emit_hash_default_assign(hash_default_assign_extern as *const () as u64)
+    });
+    ir.fpr_restore(using_fpr);
+    let error = ir.new_error(state);
+    ir.handle_error(error);
+    state.def_rax2acc(ir, dst);
+    true
 }
 
 fn hash_index(
@@ -4984,6 +5051,48 @@ mod tests {
     /// (`->(a, b, *c)` splits, `->(a, *b)` gets the pair whole). With an
     /// overridden `each`, values pass through unrepacked: a proc auto-splats
     /// a single-array yield, a strict lambda raises on it.
+    /// Inline `Hash#default=`: every shape the machine code splits on, hot
+    /// enough to compile. In-place overwrite of an existing default box
+    /// (including replacing a default *proc*, which `default=` clears),
+    /// nil assignments with and without a box (the no-box nil is an inline
+    /// no-op) on both representations, first-time defaults through the
+    /// runtime call (box allocation / inline→boxed promotion), the method's
+    /// return value, and a frozen receiver deopting to raise.
+    #[test]
+    fn hash_default_assign_inline() {
+        run_test(
+            r#"
+            def drive(n)
+              r = nil
+              n.times { r = yield }
+              r
+            end
+            res = []
+            h1 = Hash.new(0)
+            drive(30) { h1.default = 5 }
+            res << [h1.default, h1[:missing]]
+            h2 = Hash.new { |hh, k| :proc }
+            drive(30) { h2.default = 9 }
+            res << [h2.default, h2.default_proc, h2[:missing]]
+            h3 = Hash.new(3)
+            drive(30) { h3.default = nil }
+            res << [h3.default, h3[:missing]]
+            h4 = {a: 1}
+            drive(30) { h4.default = nil }
+            res << h4.default
+            h5 = {a: 1}
+            drive(30) { h5.default = 7 }
+            res << [h5.default, h5[:a], h5[:missing]]
+            h6 = {}
+            res << drive(30) { h6.send(:default=, 42) }
+            h7 = Hash.new(1)
+            h7.freeze
+            res << (drive(30) { h7.default = 2 } rescue $!.class.to_s)
+            res
+            "#,
+        );
+    }
+
     /// each_key / each_value (Ruby, builtins/hash.rb): the same live
     /// positional walk as `each`, yielding bare keys/values. Pinned to
     /// CRuby including the enumerator forms and deletes mid-iteration.

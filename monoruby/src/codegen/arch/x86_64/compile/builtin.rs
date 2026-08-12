@@ -114,6 +114,64 @@ impl Codegen {
         }
     }
 
+    /// `Hash#default=`: hash in rdi, new default in rsi, result (the assigned
+    /// value — what `Hash#default=` returns) in rax.
+    ///
+    /// In-line shapes: a boxed hash that already carries a default box gets
+    /// its discriminant/payload overwritten in place (replacing a default
+    /// proc exactly as `Hash#default=` does) plus the write barrier; a nil
+    /// assignment with no default box is a no-op (no default and a nil
+    /// default are the same observable state). Everything else — a first
+    /// non-nil default (box allocation, possibly inline→boxed promotion) —
+    /// calls `f` = `hash_default_assign_extern(vm, globals, recv, val)`,
+    /// whose error edge is the caller's trailing HandleError. The receiver's
+    /// un-frozen-ness is already deopt-guarded by the caller.
+    pub(crate) fn emit_hash_default_assign(&mut self, f: u64) {
+        let no_box = self.jit.label();
+        let slow = self.jit.label();
+        let exit = self.jit.label();
+        let ty_flags = RVALUE_OFFSET_TY + 1;
+        let mask = HASH_REP_MASK as u64;
+        let boxed_rep = HASH_REP_BOXED as u64;
+        let slot = HASH_DEFAULT_OFFSET;
+        let payload = HASH_DEFAULT_PAYLOAD_OFFSET;
+        let tag_value = HASH_DEFAULT_TAG_VALUE as u64;
+        monoasm! { &mut self.jit,
+            movl rax, [rdi + (ty_flags)];
+            andl rax, (mask);
+            cmpl rax, (boxed_rep);
+            jne  no_box;                    // inline: never carries a default
+            movq rax, [rdi + (slot)];       // Option<Box<HashDefault>>: null = None
+            testq rax, rax;
+            jeq  no_box;
+            movq [rax], (tag_value);        // discriminant := Value
+            movq [rax + (payload)], rsi;
+        }
+        // Write barrier: rdi = the hash (parent), rsi = the stored default.
+        self.emit_write_barrier_rdi(GP::Rsi);
+        monoasm! { &mut self.jit,
+            movq rax, rsi;
+            jmp  exit;
+        no_box:
+            cmpq rsi, (NIL_VALUE);
+            jne  slow;
+            movq rax, (NIL_VALUE);
+        exit:
+        }
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        slow:
+            movq rdx, rdi;                  // recv -> arg2
+            movq rcx, rsi;                  // val -> arg3
+            movq rdi, rbx;                  // vm
+            movq rsi, r12;                  // globals
+            movq rax, (f);
+            call rax;
+            jmp  exit;
+        }
+        self.jit.select_page(0);
+    }
+
     /// `Hash#size`: entry count of the hash in `base`, fixnum-tagged into `dst`.
     ///
     /// A small hash keeps its length in the header's representation bits; a
