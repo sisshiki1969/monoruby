@@ -928,7 +928,7 @@ mod tests {
             watcher = Thread.new do
               res = Thread.list.map { |th| th.backtrace.class.to_s }
             end
-            sleep 0.1
+            watcher.join
             res
             "#,
         );
@@ -977,14 +977,32 @@ mod tests {
 
     #[test]
     fn thread_sleep_interleaves_with_main() {
+        // The interleave is enforced by handshakes, not by racing two
+        // timers: the old shape (`sleep 0.05` in the thread vs `sleep
+        // 0.01` in main) flaked on loaded CI runners whenever either
+        // side overslept past the other, on the CRuby reference run as
+        // much as on monoruby. Reaching `status == "sleep"` proves the
+        // first leg ran and the thread is parked; `v << 2` lands while
+        // it sleeps (the property under test); `wakeup` resumes it
+        // deterministically.
         run_test_once(
             r#"
             v = []
-            t = Thread.new { v << 1; sleep 0.05; v << 3 }
-            sleep 0.01   # let t run its first leg
+            t = Thread.new { v << 1; sleep; v << 3 }
+            Thread.pass while t.status != "sleep"
             v << 2
+            t.wakeup
             t.join
             v
+            "#,
+        );
+        // A *timed* sleep expires on its own — no ordering asserted, so
+        // no load sensitivity: `join` waits however long the runner
+        // takes, and only the resumption is checked.
+        run_test_once(
+            r#"
+            t = Thread.new { sleep 0.01; :woke }
+            t.value
             "#,
         );
     }
