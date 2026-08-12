@@ -3023,7 +3023,7 @@ mod new_api_tests {
     }
 
     #[test]
-    fn process_fork_dispatches_through__fork() {
+    fn process_fork_dispatches_through_fork() {
         run_test_once(
             r#"
             [Process.respond_to?(:_fork), Process.respond_to?(:fork)]

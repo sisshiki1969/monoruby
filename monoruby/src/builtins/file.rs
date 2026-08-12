@@ -195,7 +195,6 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn file_read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let filename = to_path(vm, globals, lfp.arg(0))?;
-    let filename_str = filename.to_string_lossy();
     let mut file = match File::open(&filename) {
         Ok(file) => file,
         Err(err) => {
@@ -2007,7 +2006,6 @@ fn split_records(
 fn file_size(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     match size_source(vm, globals, lfp.arg(0))? {
         SizeSource::Path(path) => {
-            let path_str = path.to_string_lossy();
             let metadata = std::fs::metadata(&path).map_err(|e| {
                 MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_size", &path)
             })?;
@@ -2109,7 +2107,6 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn ftype(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::FileTypeExt;
     let path = to_path(vm, globals, lfp.arg(0))?;
-    let path_str = path.to_string_lossy();
     let metadata = std::fs::symlink_metadata(&path).map_err(|e| {
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_ftype", &path)
     })?;
@@ -2348,7 +2345,6 @@ fn file_readlink(
     _: BytecodePtr,
 ) -> Result<Value> {
     let path = to_path(vm, globals, lfp.arg(0))?;
-    let path_str = path.to_string_lossy();
     let target = std::fs::read_link(&path).map_err(|e| {
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_readlink", &path)
     })?;
@@ -2738,7 +2734,6 @@ fn file_time_attr(
     f: impl FnOnce(&std::fs::Metadata) -> std::io::Result<std::time::SystemTime>,
 ) -> Result<Value> {
     let path = to_path(vm, globals, lfp.arg(0))?;
-    let path_str = path.to_string_lossy().to_string();
     let metadata = std::fs::metadata(&path).map_err(|e| {
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path)
     })?;
@@ -2798,7 +2793,6 @@ fn file_ctime(
 ) -> Result<Value> {
     use std::os::unix::fs::MetadataExt;
     let path = to_path(vm, globals, lfp.arg(0))?;
-    let path_str = path.to_string_lossy().to_string();
     let metadata = std::fs::metadata(&path).map_err(|e| {
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path)
     })?;
@@ -2916,7 +2910,6 @@ fn build_stat(
     follow: bool,
 ) -> Result<Value> {
     let path = to_path(vm, globals, path_val)?;
-    let path_str = path.to_string_lossy().to_string();
     let metadata = if follow {
         std::fs::metadata(&path)
     } else {

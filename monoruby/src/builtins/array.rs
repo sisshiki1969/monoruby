@@ -5102,7 +5102,6 @@ mod tests {
         run_test_error(r##"[1, 2].zip(42)"##);
     }
 
-    #[test]
     /// Array#flatten's element probe follows CRuby's rb_check_funcall
     /// protocol (respond_to? veto, respond_to_missing? gate, user
     /// method_missing consult, NoMethodError re-raise rule).
@@ -5232,6 +5231,7 @@ mod tests {
         ]);
     }
 
+    #[test]
     fn zip_propagates_each_errors() {
         // Pulling from an `#each`-based argument stops on StopIteration —
         // that is exhaustion — but any *other* exception is the argument's

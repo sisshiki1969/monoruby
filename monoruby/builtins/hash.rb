@@ -146,24 +146,31 @@ class Hash
     raise TypeError, "no implicit conversion of #{name} into Hash"
   end
 
-  def transform_keys(hash = (no_arg = true; nil), &block)
+  # The block is taken with `yield`, not a captured `&block`: a `block.call`
+  # is a Proc invocation, which the JIT cannot inline into the call site,
+  # while a `yield` in a method specialized for a hot caller gets the block
+  # inlined. `block_given?` is hoisted out of the loops so the per-element
+  # path stays a plain `yield`.
+  def transform_keys(hash = (no_arg = true; nil))
     hash = __to_hash_type(hash) unless no_arg
-    return to_enum(:transform_keys) { size } unless block || hash
+    blk = block_given?
+    return to_enum(:transform_keys) { size } unless blk || hash
     h = {}
     if hash
       each do |k, v|
-        new_k = hash.key?(k) ? hash[k] : (block ? block.call(k) : k)
+        new_k = hash.key?(k) ? hash[k] : (blk ? yield(k) : k)
         h[new_k] = v
       end
     else
-      each { |k, v| h[block.call(k)] = v }
+      each { |k, v| h[yield(k)] = v }
     end
     h
   end
 
-  def transform_keys!(hash = (no_arg = true; nil), &block)
+  def transform_keys!(hash = (no_arg = true; nil))
     hash = __to_hash_type(hash) unless no_arg
-    return to_enum(:transform_keys!) { size } unless block || hash
+    blk = block_given?
+    return to_enum(:transform_keys!) { size } unless blk || hash
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     # Snapshot the original pairs up front so a new key that collides with
     # a not-yet-processed original key can't corrupt its value, and track
@@ -176,8 +183,8 @@ class Hash
     to_a.each do |k, v|
       nk = if hash&.key?(k)
         hash[k]
-      elsif block
-        block.call(k)
+      elsif blk
+        yield(k)
       else
         k
       end
@@ -188,18 +195,18 @@ class Hash
     self
   end
 
-  def transform_values(&block)
-    return to_enum(:transform_values) { size } unless block
+  def transform_values
+    return to_enum(:transform_values) { size } unless block_given?
     h = {}
     h.compare_by_identity if compare_by_identity?
-    each { |k, v| h[k] = block.call(v) }
+    each { |k, v| h[k] = yield(v) }
     h
   end
 
-  def transform_values!(&block)
-    return to_enum(:transform_values!) { size } unless block
+  def transform_values!
+    return to_enum(:transform_values!) { size } unless block_given?
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    each { |k, v| self[k] = block.call(v) }
+    each { |k, v| self[k] = yield(v) }
     self
   end
 
@@ -276,28 +283,36 @@ class Hash
     end
   end
 
-  def map(&blk)
-    return to_enum(:map) { size } unless blk
+  # No `&blk` parameter: capturing the block would allocate a Proc on every
+  # call, and — because reading a block parameter compiles to a `BlockArg`
+  # bytecode — would also bar this method from JIT specialization
+  # (`Iseq::has_block_arg`) and move its frame to the heap, which is exactly
+  # what writing `map` in Ruby is for. The one thing the block object was
+  # needed for, its shape, `__block_splits_pair?` answers off the frame.
+  def map
+    return to_enum(:map) { size } unless block_given?
     result = []
     if method(:each).owner == ::Hash
       # Own `each` — not overridden by a subclass or a singleton method —
-      # so every element is exactly one [k, v] pair, and the arity dispatch
-      # can happen once out here, leaving plain blocks in the loops. That
+      # so every element is exactly one [k, v] pair, and the block shape can
+      # be decided once out here, leaving a plain block in the loop. That
       # matters for speed: a `|*vs|` rest parameter disqualifies a block
       # from the specialized-yield fast path (simple parameter lists are
       # bound in line by the JIT; rest params take the generic runtime
       # binding on every element).
       #
-      # Whether the pair is passed whole or split in two follows CRuby
-      # (each_pair_i_fast / rb_block_pair_yield_optimizable), where procs
-      # and lambdas differ: a proc is split whenever it can take more than
-      # one positional argument (`{ |a, *b| }` splits, bare `{ |*a| }`
-      # receives the pair whole), a lambda — including a Symbol proc —
-      # only when it *requires* at least two (`->(a, b, *c)` splits,
-      # `->(a, *b)` receives the pair whole).
-      ar = blk.arity
-      wide = blk.lambda? ? (ar >= 2 || ar <= -3) : (ar > 1 || ar < -1)
-      if wide
+      # Only a *lambda* needs the pair split in two. It binds strictly, so
+      # one that requires at least two positional arguments (`->(a, b, *c)`)
+      # would raise on the whole pair, while one that does not (`->(a, *b)`,
+      # a Symbol proc) must receive it whole. A proc always takes the pair
+      # whole and auto-splats it across its own parameters when it has more
+      # than one — which reproduces CRuby's split for `{ |a, b| }` /
+      # `{ |a, *b| }` and its non-split for `{ |k| }` / `{ |*a| }` alike. So
+      # the arity half of CRuby's rule (rb_block_pair_yield_optimizable) buys
+      # nothing here: that auto-splat is what the JIT inlines
+      # (`AsmInst::YieldArrayExpand`), and splitting up front only moves the
+      # same work from the caller's block to ours.
+      if __block_splits_pair?
         each { |k, v| result << yield(k, v) }
       else
         each { |pair| result << yield(pair) }
@@ -310,7 +325,7 @@ class Hash
       # arity-based normalization here re-split the element for every
       # non-arity-1 block, which wrongly let `->(k, v)` accept a
       # single-array yield and handed `{ |*a| }` the pair pre-splatted.)
-      each { |*vs| result << blk.call(*vs) }
+      each { |*vs| result << yield(*vs) }
     end
     result
   end

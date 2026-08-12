@@ -176,6 +176,25 @@ impl Codegen {
         );
     }
 
+    /// Inlined `Hash#[]=`: `hashindex_assign(vm, globals, recv, key, val)`.
+    /// The receiver is in Rdi (x4), the key in Rsi (x3 == C arg3) and the
+    /// value in Rdx (x2); recv and val swap through x9 into arg2/arg4. Result
+    /// Value lands in Rax (x0); errors are checked by the trailing
+    /// HandleError. FP pool saved by the surrounding fpr_save/restore.
+    pub(crate) fn emit_hash_index_assign(&mut self, f: u64) {
+        monoasm_arm64!(&mut self.jit,
+            mov x9, x2;           // val
+            mov x2, x4;           // recv -> arg2   [key already in x3 == Rsi]
+            mov x4, x9;           // val -> arg4
+            mov x0, x19;          // vm
+            mov x1, x20;          // globals
+            mov x9, (f);
+            str x30, [sp, #-16]!; // save LR
+            blr x9;               // x0 = hashindex_assign(vm, globals, recv, key, val)
+            ldr x30, [sp], #16;
+        );
+    }
+
     /// `Hash#default=`: hash in Rdi (x4), new default in Rsi (x3), result
     /// (the assigned value) in Rax (x0). aarch64 twin of the x86
     /// `emit_hash_default_assign`; see there for the shape split. The

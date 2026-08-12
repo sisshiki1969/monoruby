@@ -114,6 +114,23 @@ impl Codegen {
         }
     }
 
+    /// `Hash#[]=`: `hashindex_assign(vm, globals, recv, key, val)`. recv in
+    /// rdi, key in rsi, value in rdx; the assigned value (what `Hash#[]=`
+    /// answers) in rax, errors via the trailing HandleError. The operands are
+    /// shuffled up into the C-ABI arg registers back-to-front so no scratch is
+    /// needed.
+    pub(crate) fn emit_hash_index_assign(&mut self, f: u64) {
+        monoasm! { &mut self.jit,
+            movq r8, rdx;               // val -> arg4
+            movq rcx, rsi;              // key -> arg3
+            movq rdx, rdi;              // recv -> arg2
+            movq rdi, rbx;              // vm
+            movq rsi, r12;              // globals
+            movq rax, (f);
+            call rax;
+        }
+    }
+
     /// `Hash#default=`: hash in rdi, new default in rsi, result (the assigned
     /// value — what `Hash#default=` returns) in rax.
     ///

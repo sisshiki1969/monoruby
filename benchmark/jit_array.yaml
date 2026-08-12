@@ -1,0 +1,32 @@
+prelude: |
+  a = [*(0..999)]
+benchmark:
+  array_each: |
+    5000.times do
+      a.each do |elem| end
+    end
+  array_map: |
+    5000.times do
+      a.map do |elem| elem end
+    end
+  array_map_: |
+    5000.times do
+      a.map! do |elem| elem end
+    end
+  array_each_with_index: |
+    5000.times do
+      a.each_with_index do |elem| end
+    end
+  array_new1: |
+    5000.times do
+      Array.new(5)
+    end
+  array_new2: |
+    5000.times do
+      Array.new(5) do |x| x + 1 end
+    end
+  tap: |
+    5000.times do
+      a.tap do |x| end
+    end
+loop_count: 20
