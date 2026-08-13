@@ -1,0 +1,57 @@
+prelude: |
+  h = {}
+  1000.times { |i| h[i] = i }
+benchmark:
+  hash_each: |
+    5000.times do
+      h.each do |k, v| end
+    end
+  hash_each_key: |
+    5000.times do
+      h.each_key do |k| end
+    end
+  hash_each_value: |
+    5000.times do
+      h.each_value do |v| end
+    end
+  hash_map: |
+    5000.times do
+      h.map do |k, v| v end
+    end
+  hash_flat_map: |
+    5000.times do
+      h.flat_map do |k, v| v end
+    end
+  hash_to_h: |
+    5000.times do
+      h.to_h do |k, v| [k, v] end
+    end
+  hash_transform_keys: |
+    5000.times do
+      h.transform_keys do |k| k end
+    end
+  hash_transform_values: |
+    5000.times do
+      h.transform_values do |v| v end
+    end
+  hash_transform_values_: |
+    5000.times do
+      h.transform_values! do |v| v end
+    end
+  hash_each_with_object: |
+    5000.times do
+      h.each_with_object(0) do |(k, v), obj| end
+    end
+  hash_count: |
+    5000.times do
+      h.count do |k, v| true end
+    end
+  hash_any: |
+    5000.times do
+      h.any? do |k, v| false end
+    end
+  hash_min_by: |
+    5000.times do
+      h.min_by do |k, v| v end
+    end
+loop_count: 20

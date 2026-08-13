@@ -1,7 +1,5 @@
 use super::*;
-use crate::globals::prng::{
-    Mt, build_mt, digits_to_value, limited_rand, next_real, rand_int, to_le_digits,
-};
+use crate::globals::prng::{Mt, build_mt, next_real, rand_int};
 use num::{Signed, Zero};
 
 //

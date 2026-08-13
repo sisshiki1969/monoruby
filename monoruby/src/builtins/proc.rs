@@ -85,7 +85,7 @@ pub(crate) fn make_curry_proc(
 /// Whether `proc` reports `lambda? == true` (the curry procs inherit
 /// this from the proc they were built from). A curry proc reads its own
 /// stored flag; otherwise it is derived from the body's block-style.
-fn proc_is_lambda(globals: &Globals, proc: &Proc) -> bool {
+pub(super) fn proc_is_lambda(globals: &Globals, proc: &Proc) -> bool {
     if proc.func_id() == PROC_CURRY_BODY_FUNCID {
         return proc.self_val().as_array()[3].as_bool();
     }
@@ -95,7 +95,7 @@ fn proc_is_lambda(globals: &Globals, proc: &Proc) -> bool {
 /// `Proc#arity`-equivalent for the curry-time default (mirrors
 /// `proc_arity`): a `Method#to_proc` proc reports the bound method's
 /// arity, everything else the func's arity.
-fn proc_arity_value(globals: &Globals, proc: &Proc) -> i64 {
+pub(super) fn proc_arity_value(globals: &Globals, proc: &Proc) -> i64 {
     if proc.func_id() == METHOD_TO_PROC_BODY_FUNCID
         && let Some(m) = proc.self_val().is_method()
     {

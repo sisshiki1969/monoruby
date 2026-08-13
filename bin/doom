@@ -1,1 +1,1 @@
-cargo run --features jit-log,gc-log,stress-spill-pool,gc-stress -- ../doom/bin/doom
+cargo run --release -- ../doom/bin/doom

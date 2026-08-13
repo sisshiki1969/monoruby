@@ -1,7 +1,0 @@
-#!/bin/sh
-
-cargo install --path monoruby
-monoruby -v
-monoruby ../ruby-bench/benchmarks/rubykon/benchmark/playout.rb
-ruby --yjit -v
-ruby --yjit ../ruby-bench/benchmarks/rubykon/benchmark/playout.rb

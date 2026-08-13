@@ -202,12 +202,6 @@ fn redefine_bop_offstack_osr_loop() {
     );
 }
 
-// Same, with a *folded* loop body (`7 * 7` bakes 49 at compile time with no
-// runtime trace). Historically this exact case was protected on aarch64 by a
-// compensating per-execution `CheckBOP` before every folded op; that guard is
-// now gone (the dispatch-table swap covers it method-wide), so this test pins
-// the fold variant against regressions in the swap.
-#[test]
 /// Only the loops that inlined the operator lose their compiled body. A
 /// second loop that never used it keeps running its OSR body -- when the
 /// invalidation was process-wide, one redefinition stopped the VM entering
@@ -231,6 +225,13 @@ fn redefine_bop_osr_loop_spares_unrelated_loops() {
     );
 }
 
+// Same as `redefine_bop_offstack_osr_loop`, with a *folded* loop body
+// (`7 * 7` bakes 49 at compile time with no runtime trace). Historically this
+// exact case was protected on aarch64 by a compensating per-execution
+// `CheckBOP` before every folded op; that guard is now gone (the
+// dispatch-table swap covers it method-wide), so this test pins the fold
+// variant against regressions in the swap.
+#[test]
 fn redefine_bop_offstack_osr_loop_fold() {
     run_test(
         r##"

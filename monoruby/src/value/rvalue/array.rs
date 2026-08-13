@@ -1,5 +1,4 @@
 use super::*;
-use rand::seq::SliceRandom;
 use smallvec::Drain;
 use smallvec::SmallVec;
 use smallvec::smallvec;
@@ -483,12 +482,5 @@ impl ArrayInner {
             let val = self.get(index).cloned().unwrap_or_default();
             Ok(val)
         }
-    }
-
-    pub(crate) fn shuffle<R>(&mut self, rng: &mut R)
-    where
-        R: rand::Rng + ?Sized,
-    {
-        self.0.shuffle(rng);
     }
 }

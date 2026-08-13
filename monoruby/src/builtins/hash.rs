@@ -109,9 +109,18 @@ pub(super) fn init(globals: &mut Globals) {
     // lives in Ruby so that a `h.each { .. }` call site can inline both the
     // method and the block; these three are the parts that cannot.
     globals.define_builtin_func(HASH_CLASS, "__pairs", pairs, 0);
+    // The block-shape question `Hash#map` (builtins/hash.rb) asks about its
+    // own block, answered without capturing it into a Proc.
+    globals.define_builtin_func(HASH_CLASS, "__block_splits_pair?", block_splits_pair, 0);
     globals.define_builtin_func(HASH_CLASS, "__iter_begin", iter_begin, 0);
     globals.define_builtin_func(HASH_CLASS, "__iter_end", iter_end, 1);
-    globals.define_builtin_func(HASH_CLASS, "[]=", index_assign, 2);
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "[]=",
+        index_assign,
+        inline_gen2!(hash_index_assign),
+        2,
+    );
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "replace", replace, 1);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
@@ -1002,13 +1011,24 @@ fn hash_default_assign(
     true
 }
 
+///
+/// Inline `Hash#[]` as a direct call to `hashindex`, skipping the Ruby method
+/// frame.
+///
+/// Only a receiver whose class is exactly `Hash` inlines. `Hash#[]` consults
+/// the `#default` *method* on a miss (CRuby's `rb_funcall(id_default)`), which
+/// a subclass — or a singleton — may override; `hashindex` reads the stored
+/// default directly, so for those receivers the generic path must stay in
+/// charge. A redefinition of `Hash#default` itself is covered by the class
+/// version guard emitted ahead of the inliner.
+///
 fn hash_index(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    recv_class: ClassId,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -1016,6 +1036,9 @@ fn hash_index(
         return false;
     }
     if callsite.pos_num != 1 {
+        return false;
+    }
+    if recv_class != HASH_CLASS {
         return false;
     }
     state.load(ir, callsite.args, GP::Rcx);
@@ -1028,6 +1051,120 @@ fn hash_index(
     ir.handle_error(error);
     state.def_rax2acc(ir, callsite.dst);
     true
+}
+
+///
+/// Inline `Hash#[]=` as a direct call to `hashindex_assign`, skipping the Ruby
+/// method frame.
+///
+/// Unlike `Hash#[]` this needs no `Hash`-class restriction: the builtin
+/// dispatches nothing a subclass could override — a subclass that overrides
+/// `#[]=` itself resolves to its own method, never here.
+///
+fn hash_index_assign(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 2 {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    state.load(ir, args, GP::Rsi);
+    state.load(ir, args + 1usize, GP::Rdx);
+    state.load(ir, recv, GP::Rdi);
+    let using_fpr = state.get_using_fpr(ir);
+    ir.fpr_save(using_fpr);
+    ir.inline(|r#gen, _, _, _| {
+        r#gen.emit_hash_index_assign(hashindex_assign as *const () as u64)
+    });
+    ir.fpr_restore(using_fpr);
+    let error = ir.new_error(state);
+    ir.handle_error(error);
+    state.def_rax2acc(ir, dst);
+    true
+}
+
+///
+/// ### Hash#__block_splits_pair? (internal)
+///
+/// Whether the *caller's* block must receive a `[key, value]` pair split in
+/// two rather than whole — CRuby's `rb_block_pair_yield_optimizable`, reduced
+/// to the one case where the two differ in meaning: a lambda binds strictly,
+/// so one that requires at least two positional arguments cannot take the
+/// pair whole, while one that does not (`->(a, *b)`, a Symbol proc) must. A
+/// proc auto-splats the pair across its own parameters, which makes the split
+/// unobservable there — see `Hash#map` (builtins/hash.rb).
+///
+/// The block is read where `Kernel#block_given?` reads it, off the caller's
+/// yield home, so `map` needs no `&blk` parameter. That matters beyond the
+/// Proc allocation a capture costs: reading a block parameter compiles to a
+/// `BlockArg` bytecode, which bars the whole method from JIT specialization
+/// (`Iseq::has_block_arg`) and moves its frame to the heap — exactly what
+/// writing `each` and `map` in Ruby was meant to buy back.
+///
+#[monoruby_builtin]
+fn block_splits_pair(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let Some(caller) = vm.cfp().prev() else {
+        return Ok(Value::bool(false));
+    };
+    let Some(bh) = caller.lfp().yield_home().block() else {
+        return Ok(Value::bool(false));
+    };
+    // The handler is not always a Proc — monoruby carries most block shapes
+    // unmaterialized — so each is asked in its own terms, and none of them is
+    // converted here.
+    let split = if let Some(proc) = bh.try_proc() {
+        // A materialized Proc answers as `Proc#lambda?` / `#arity` do, curry
+        // and `Method#to_proc` indirections included.
+        super::proc::proc_is_lambda(globals, &proc) && {
+            let ar = super::proc::proc_arity_value(globals, &proc);
+            ar >= 2 || ar <= -3
+        }
+    } else if let Some((fid, _)) = bh.try_proxy() {
+        // Still a proxy: a literal block, or a lambda literal written straight
+        // at the call site. It names its func, where block-style is exactly
+        // the not-a-lambda flag.
+        !globals[fid].is_block_style() && {
+            let ar = globals[fid].arity();
+            ar >= 2 || ar <= -3
+        }
+    } else if let Some(m) = bh.get().is_method() {
+        // `&method(:m)`: `Method#to_proc` is applied lazily at the yield and
+        // produces a lambda reporting the *method's* arity (`Proc#arity`).
+        let ar = if m.method_missing_name().is_some() {
+            -1
+        } else {
+            globals[m.func_id()].arity()
+        };
+        ar >= 2 || ar <= -3
+    } else {
+        // `&:sym` — a lambda of arity -2, so never split — or an object whose
+        // `#to_proc` must run to say. Resolve it the way the yield will;
+        // that resolution already happens on every yield to such a handler.
+        match vm.get_block_data(globals, bh)?.func_id() {
+            Some(fid) => {
+                !globals[fid].is_block_style() && {
+                    let ar = globals[fid].arity();
+                    ar >= 2 || ar <= -3
+                }
+            }
+            None => false,
+        }
+    };
+    Ok(Value::bool(split))
 }
 
 /// ### Hash#__key_at (internal)
@@ -1371,6 +1508,35 @@ extern "C" fn hashindex(
     let h = base.as_hash();
     match h.index(vm, globals, key) {
         Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+/// `Hash#[]=` for the shapes its inline fast path leaves alone: insertion
+/// (which may promote the representation), the boxed map, an eql?-keyed heap
+/// key, and the raising cases (frozen receiver, new key during iteration).
+/// Mirrors the `index_assign` builtin, including the fresh-String-key
+/// dup/freeze, and answers the assigned value.
+extern "C" fn hashindex_assign(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    key: Value,
+    val: Value,
+) -> Option<Value> {
+    let key = if base.as_hash().is_compare_by_identity() {
+        key
+    } else {
+        key.frozen_hash_key()
+    };
+    let res = base
+        .as_hash_mut(&globals.store)
+        .and_then(|mut h| h.insert(key, val, vm, globals));
+    match res {
+        Ok(()) => Some(val),
         Err(err) => {
             vm.set_error(err);
             None
@@ -4289,11 +4455,6 @@ mod tests {
         ]);
     }
 
-    /// `Hash#replace` transfers the compare_by_identity mode in both
-    /// directions — including for small (inline-representation) hashes,
-    /// whose mode bit lives in the header flags byte and must travel
-    /// with the replacement (ruby/spec core/hash/replace_spec.rb).
-    #[test]
     /// An explicitly passed mapping goes through implicit to_hash
     /// conversion (TypeError for nil / non-hash); an absent one returns
     /// the Enumerator.
@@ -4338,6 +4499,11 @@ mod tests {
         ]);
     }
 
+    /// `Hash#replace` transfers the compare_by_identity mode in both
+    /// directions — including for small (inline-representation) hashes,
+    /// whose mode bit lives in the header flags byte and must travel
+    /// with the replacement (ruby/spec core/hash/replace_spec.rb).
+    #[test]
     fn hash_replace_compare_by_identity() {
         run_tests(&[
             "h = { a: 1, c: 3 }; \
@@ -4686,6 +4852,144 @@ mod tests {
             h.keys[0].equal?(key)
             "#,
         ]);
+    }
+
+    /// `Hash#[]` / `#[]=` reached through their JIT inliners — a direct call
+    /// that skips the Ruby method frame — rather than through the builtin.
+    /// `drive` warms the call site past the compile threshold; the cases walk
+    /// both representations (the inline one and the boxed map a fourth key
+    /// promotes to) and the defaults only the boxed one can carry.
+    #[test]
+    fn hash_index_jit() {
+        run_test(
+            r#"
+            def drive(n)
+              r = nil
+              n.times { r = yield }
+              r
+            end
+            res = []
+            # every immediate key kind, plus hit / miss / past-the-end
+            h = {}
+            h[:a] = 1; h[1] = 2; h[nil] = 3
+            res << drive(30) { [h[:a], h[1], h[nil], h[:zz], h[2], h[true], h["s"]] }
+            # update in place keeps size and insertion order
+            res << drive(30) { h[:a] = h[:a].to_i + 1 }
+            res << [h.size, h.to_a, h[:a]]
+            # a 4th key promotes to the boxed map; both paths still answer
+            h[:d] = 4
+            res << drive(30) { [h.size, h[:d], h[:a], h[:zz]] }
+            # an empty inline hash misses everything
+            e = {}
+            res << drive(30) { [e[:a], e[0], e.size] }
+            # a default is only reachable once boxed: it must still be honoured
+            d = Hash.new(7)
+            res << drive(30) { [d[:missing], (d[:x] = 1), d[:x]] }
+            dp = Hash.new { |hh, k| hh[k] = "gen" }
+            res << drive(30) { [dp[:k], dp.size] }
+            res
+            "#,
+        );
+    }
+
+    /// Heap keys through the same inliners: a user-defined `#hash` / `#eql?`
+    /// pair must still be honoured, a fresh String key dup'd and frozen on
+    /// store and looked up by value, and an identity-keyed hash must keep
+    /// equal-but-distinct keys apart.
+    #[test]
+    fn hash_index_jit_heap_keys() {
+        run_test(
+            r#"
+            def drive(n)
+              r = nil
+              n.times { r = yield }
+              r
+            end
+            class K
+              attr_reader :n
+              def initialize(n) = @n = n
+              def hash = @n.hash
+              def eql?(o) = o.is_a?(K) && o.n == @n
+            end
+            res = []
+            c = {}
+            c[K.new(1)] = "one"
+            res << drive(30) { [c[K.new(1)], c[K.new(2)], c.size] }
+            res << drive(30) { c[K.new(1)] = "uno" }
+            res << [c.size, c[K.new(1)]]
+            # a fresh String key is dup'd and frozen on store, and looked up
+            # by value rather than by identity
+            s = {}
+            k = +"key"
+            drive(30) { s[k] = 1 }
+            k << "!"
+            res << [s.size, s["key"], s[k], s.keys.map { |x| x.frozen? }]
+            # compare_by_identity: two equal-but-distinct String keys stay apart
+            ci = {}.compare_by_identity
+            k1 = +"k"; k2 = +"k"
+            ci[k1] = 1; ci[k2] = 2
+            res << drive(30) { [ci.size, ci[k1], ci[k2], ci["k"]] }
+            res << drive(30) { ci[k1] = 10 }
+            res << [ci.size, ci[k1], ci[k2]]
+            res
+            "#,
+        );
+    }
+
+    /// The raising cases still raise through the inliner: a frozen receiver,
+    /// and adding a key during iteration — while updating an existing one is
+    /// allowed (CRuby's rule).
+    #[test]
+    fn hash_index_assign_jit_raises() {
+        run_test(
+            r#"
+            def drive(n)
+              r = nil
+              n.times { r = yield }
+              r
+            end
+            res = []
+            f = {a: 1}.freeze
+            res << drive(30) { (f[:a] = 2) rescue $!.class.to_s }
+            res << f
+            it = {a: 1, b: 2}
+            res << drive(30) { it.each { |k, v| it[k] = v }; it.to_a }
+            res << drive(30) { (it.each { it[:new] = 1 }) rescue $!.class.to_s }
+            res << it.size
+            # the assigned value is what `[]=` answers, alias included
+            res << drive(30) { ({}.send(:[]=, :k, 99)) }
+            res << drive(30) { ({a: 1}.store(:b, 2)) }
+            res
+            "#,
+        );
+    }
+
+    /// `Hash#[]` consults the `#default` *method* on a miss, so a subclass (or
+    /// a singleton) overriding it must not be answered by the inliner, whose
+    /// `hashindex` reads the stored default directly.
+    #[test]
+    fn hash_index_subclass_default() {
+        run_test(
+            r#"
+            def drive(n)
+              r = nil
+              n.times { r = yield }
+              r
+            end
+            class H < Hash
+              def default(k) = "D(#{k})"
+            end
+            res = []
+            h = H.new
+            res << drive(30) { h[:a] }
+            h[:a] = 1
+            res << drive(30) { [h[:a], h[:b]] }
+            g = {}
+            def g.default(k) = :singleton
+            res << drive(30) { g[:zz] }
+            res
+            "#,
+        );
     }
 
     #[test]
@@ -5245,6 +5549,41 @@ mod tests {
             h[:p] = 1
             h[:q] = 2
             [h.map { |k, v| [k, v] }, h.map { |pair| pair }, h.map { |*a| a }]
+            "#,
+        );
+    }
+
+    /// `Hash#map` asks `__block_splits_pair?` about a block it never captures,
+    /// so every shape a block handler can still be in when it arrives —
+    /// literal, lambda literal, Proc object, `&:sym`, `&method(:m)`, curried,
+    /// and an object that only answers `#to_proc` — has to be classified
+    /// without materializing it. A wrong answer is visible either as a wrongly
+    /// split pair or as an ArgumentError from a strict lambda.
+    #[test]
+    fn hash_map_block_handler_shapes() {
+        run_test(
+            r#"
+            h = {a: 1, b: 2}
+            def two(k, v) = [k, v]
+            def one(x) = x
+            pr2 = proc { |k, v| [k, v] }
+            la2 = ->(k, v) { [k, v] }
+            la1 = ->(a) { a }
+            res = []
+            res << h.map(&pr2)
+            res << h.map(&la2)
+            res << h.map(&la1)
+            res << h.map(&method(:two))
+            res << h.map(&method(:one))
+            res << h.map(&:itself)
+            res << h.map(&->(a, b, c = 3) { [a, b, c] })
+            res << h.map(&->((a, b)) { [a, b] })
+            res << h.map(&Class.new { def to_proc = ->(k, v) { [k, v] } }.new)
+            res << h.map(&Class.new { def to_proc = proc { |x| x } }.new)
+            # a curried lambda answers from its own stored flag; its results
+            # are Procs, whose #inspect carries an address — compare shapes.
+            res << h.map(&la2.curry[]).map { |p| [p.class.to_s, p.lambda?] }
+            res
             "#,
         );
     }

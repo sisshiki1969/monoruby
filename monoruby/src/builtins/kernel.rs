@@ -9465,6 +9465,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn kernel_raise_argument_matrix() {
         // The shared rb_make_exception surface: String-with-extra-arg
         // TypeError, custom backtraces (Array / single String / nil /
