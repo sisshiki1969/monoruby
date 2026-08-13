@@ -80,6 +80,10 @@ pub(crate) const INLINE_CAP: usize = 3;
 pub const HASH_REP_MASK: u8 = REP_MASK;
 pub const HASH_REP_BOXED: u8 = REP_BOXED;
 
+/// Max pairs the inline representation holds — the gate for the JIT's
+/// inline-allocated Hash literal fast path.
+pub const HASH_INLINE_CAP: usize = INLINE_CAP;
+
 /// The inline pair array, addressed from the start of the `RValue`.
 pub const HASH_INLINE_PAIRS_OFFSET: usize = RVALUE_OFFSET_KIND;
 pub const HASH_INLINE_PAIR_STRIDE: usize = std::mem::size_of::<(Value, Value)>();

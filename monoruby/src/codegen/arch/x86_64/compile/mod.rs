@@ -1178,8 +1178,97 @@ impl Codegen {
         len: usize,
         using_fpr: UsingFpr,
     ) -> bool {
-        self.new_hash(args, len, using_fpr);
+        if len <= HASH_INLINE_CAP && !self.alloc_free_head_addr.is_null() {
+            self.new_hash_inline(args, len, using_fpr);
+        } else {
+            self.new_hash(args, len, using_fpr);
+        }
         true
+    }
+
+    /// Inline allocation of a small (`0..=HASH_INLINE_CAP` pairs) Hash
+    /// literal: pop a recycled cell from the GC free list and initialise it
+    /// directly as an inline-representation Hash, with no runtime call.
+    ///
+    /// The fast path requires every key to be a packed immediate — for
+    /// those eql? is exactly bit equality and no `#hash` dispatch is
+    /// observable (see `is_inline_key`) — and the keys to be pairwise
+    /// distinct (a duplicate needs last-wins overwrite). Anything else
+    /// (heap keys with their `frozen_hash_key` and user-`#hash` protocol,
+    /// duplicates, an empty free list) falls back to the runtime
+    /// `gen_hash`, which the following `handle_error` already covers; on
+    /// the fast path no error is possible.
+    ///
+    /// The pairs have been written back to consecutive slots (key0, val0,
+    /// key1, …) starting at `args` (see `TraceIr::Hash`). Unused inline
+    /// pairs are written nil-nil, per the `HashBody::inline` contract that
+    /// the whole payload stays initialised. A freshly allocated young Hash
+    /// needs no write barrier and there is no GC safepoint between the
+    /// free-list pop and the field initialisation (same argument as
+    /// `new_array_inline`).
+    fn new_hash_inline(&mut self, args: SlotId, len: usize, using_fpr: UsingFpr) {
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        for i in 0..len {
+            let key = SlotId(args.0 + 2 * i as u16);
+            // Heap iff (bits & 0b111) == 0 (`Value::is_packed_value`).
+            monoasm! { &mut self.jit,
+                movq rax, [rbp - (rbp_local(key))];
+                andq rax, 0b111;
+                jz   slow;
+            }
+        }
+        for j in 1..len {
+            for i in 0..j {
+                let ki = SlotId(args.0 + 2 * i as u16);
+                let kj = SlotId(args.0 + 2 * j as u16);
+                monoasm! { &mut self.jit,
+                    movq rax, [rbp - (rbp_local(ki))];
+                    cmpq rax, [rbp - (rbp_local(kj))];
+                    jeq  slow;
+                }
+            }
+        }
+        // 8-byte object header: flag=1 (live) | ty=HASH<<16 | rep<<24 |
+        // class=HASH_CLASS<<32. The ty_flags byte (bits 24-31) carries the
+        // inline representation: rep = pair count, eql?-keyed, no live
+        // iteration, no ruby2_keywords.
+        let header: u64 = ((HASH_CLASS.u32() as u64) << 32)
+            | ((len as u64) << 24)
+            | ((ObjTy::HASH.get() as u64) << 16)
+            | 1;
+        self.emit_alloc_cell(CellHeader::Imm(header), &slow);
+        monoasm! { &mut self.jit,
+            movq [rax + (RVALUE_OFFSET_VAR)], 0;      // var_table = None
+        }
+        for i in 0..HASH_INLINE_CAP {
+            let pair = HASH_INLINE_PAIRS_OFFSET + i * HASH_INLINE_PAIR_STRIDE;
+            let key_off = (pair + HASH_INLINE_KEY_OFFSET) as i32;
+            let val_off = (pair + HASH_INLINE_VALUE_OFFSET) as i32;
+            if i < len {
+                let key = SlotId(args.0 + 2 * i as u16);
+                let val = SlotId(args.0 + 2 * i as u16 + 1);
+                monoasm! { &mut self.jit,
+                    movq rcx, [rbp - (rbp_local(key))];
+                    movq [rax + (key_off)], rcx;
+                    movq rcx, [rbp - (rbp_local(val))];
+                    movq [rax + (val_off)], rcx;
+                }
+            } else {
+                monoasm! { &mut self.jit,
+                    movq [rax + (key_off)], (NIL_VALUE);
+                    movq [rax + (val_off)], (NIL_VALUE);
+                }
+            }
+        }
+        monoasm! { &mut self.jit,
+            jmp  cont;
+        slow:
+        }
+        self.new_hash(args, len, using_fpr);
+        monoasm! { &mut self.jit,
+        cont:
+        }
     }
 
     /// rax <- min/max of the `len` values at `args`, computed in place —
