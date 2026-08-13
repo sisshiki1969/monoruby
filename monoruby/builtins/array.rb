@@ -16,57 +16,9 @@ class Array
   #     `Array.new` bypasses it, which is what `Class#new` does via
   #     `__builtin_allocate__`.
 
-  def sample(n = (no_n = true; nil), random: nil)
-    if no_n
-      return nil if empty?
-      if random
-        r = random.rand(size)
-        r = r.to_int unless r.is_a?(Integer)
-        raise RangeError, "random number too big #{r}" if r < 0 || r >= size
-        self[r]
-      else
-        self[rand(size)]
-      end
-    else
-      n = n.to_int
-      raise ArgumentError, "negative sample number" if n < 0
-      return [] if empty? || n == 0
-      n = size if n > size
-      result = self.dup
-      i = 0
-      while i < n
-        remaining = size - i
-        if random
-          r = random.rand(remaining)
-          r = r.to_int unless r.is_a?(Integer)
-          raise RangeError, "random number too big #{r}" if r < 0 || r >= remaining
-          j = i + r
-        else
-          j = i + rand(remaining)
-        end
-        result[i], result[j] = result[j], result[i]
-        i += 1
-      end
-      result[0, n]
-    end
-  end
-
-  def shuffle(random: nil)
-    result = Array.new(self)
-    if random
-      i = result.size
-      while i > 1
-        i -= 1
-        r = random.rand(i + 1)
-        r = r.to_int unless r.is_a?(Integer)
-        raise RangeError, "random number too big #{r}" if r < 0 || r > i
-        result[i], result[r] = result[r], result[i]
-      end
-      result
-    else
-      result.shuffle!
-    end
-  end
+  # NOTE: `sample`, `shuffle` and `shuffle!` are native
+  # (`builtins/array.rs`). They share one `random:` resolver and one
+  # `RAND_UPTO`, so the keyword behaves identically across all three.
 
   def each
     return self.to_enum(:each) { self.size } unless block_given?
