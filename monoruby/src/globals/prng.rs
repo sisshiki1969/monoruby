@@ -159,13 +159,24 @@ fn make_mask(mut x: u32) -> u32 {
 }
 
 /// CRuby `limited_big_rand`: uniform integer in `[0, limit]` where
-/// `limit` is given as little-endian `u32` digits. Returns the same.
-pub(crate) fn limited_rand(mt: &mut Mt, cnt: &mut u64, limit: &[u32]) -> Vec<u32> {
+/// `limit` is given as little-endian `u32` digits, written into `digits`
+/// (which must be as long as `limit`).
+///
+/// The buffer belongs to the caller so that the fixed-width callers can
+/// hand over a stack array. They draw once per shuffled or sampled
+/// element, and a `Vec` per draw put `malloc`/`free` at a third of
+/// `Array#shuffle`'s profile — several times the cost of the MT draw the
+/// allocation was wrapping.
+///
+/// A retry abandons a partially written pass, but the pass that returns
+/// assigns every index, so no stale digit can survive into the result and
+/// the buffer needs no clearing in between.
+pub(crate) fn limited_rand_into(mt: &mut Mt, cnt: &mut u64, limit: &[u32], digits: &mut [u32]) {
     let len = limit.len();
+    debug_assert_eq!(len, digits.len());
     loop {
         let mut mask = 0u32;
         let mut boundary = true;
-        let mut digits = vec![0u32; len];
         let mut retry = false;
         for i in (0..len).rev() {
             let lim = limit[i];
@@ -189,9 +200,31 @@ pub(crate) fn limited_rand(mt: &mut Mt, cnt: &mut u64, limit: &[u32]) -> Vec<u32
             digits[i] = rnd;
         }
         if !retry {
-            return digits;
+            return;
         }
     }
+}
+
+/// [`limited_rand_into`] for the variable-width (Bignum) callers, which
+/// cannot size a buffer at compile time.
+pub(crate) fn limited_rand(mt: &mut Mt, cnt: &mut u64, limit: &[u32]) -> Vec<u32> {
+    let mut digits = vec![0u32; limit.len()];
+    limited_rand_into(mt, cnt, limit, &mut digits);
+    digits
+}
+
+/// CRuby `rb_random_ulong_limited`: uniform integer in `[0, max]`, drawn
+/// from `mt` without allocating. This is the draw behind every
+/// `Array#shuffle` / `#sample` index.
+pub(crate) fn ulong_limited(mt: &mut Mt, cnt: &mut u64, max: u64) -> u64 {
+    if max == 0 {
+        return 0;
+    }
+    let limit = [(max & 0xffff_ffff) as u32, (max >> 32) as u32];
+    let len = if limit[1] == 0 { 1 } else { 2 };
+    let mut digits = [0u32; 2];
+    limited_rand_into(mt, cnt, &limit[..len], &mut digits[..len]);
+    digits[0] as u64 | ((digits[1] as u64) << 32)
 }
 
 /// Little-endian `u32` digits of a non-negative integer.
@@ -283,16 +316,10 @@ impl Prng {
 
     /// CRuby `rb_random_ulong_limited`: uniform integer in `[0, max]`.
     pub(crate) fn ulong_limited(&mut self, max: u64) -> u64 {
-        if max == 0 {
-            return 0;
-        }
+        // This generator owns a live `Mt`, so it has no draw count to
+        // keep — unlike a `Random` instance, which replays from its seed.
         let mut cnt = 0;
-        let limit = [(max & 0xffff_ffff) as u32, (max >> 32) as u32];
-        let limit: &[u32] = if limit[1] == 0 { &limit[..1] } else { &limit };
-        let digits = limited_rand(&mut self.mt, &mut cnt, limit);
-        let lo = digits.first().copied().unwrap_or(0) as u64;
-        let hi = digits.get(1).copied().unwrap_or(0) as u64;
-        lo | (hi << 32)
+        ulong_limited(&mut self.mt, &mut cnt, max)
     }
 
     /// `rand(max)` for a positive integer `max`: uniform in `[0, max)`.
