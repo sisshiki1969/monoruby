@@ -304,17 +304,20 @@ StoreIndex(133)は全て `new_callsite` + `new_callsite_map_entry` で
 - binop/cmp fast path の欠落は実質無害: fast path しか通らないサイトは
   単相で、多相サイトは必ず generic を通ってそこで検出される(最大
   1 実行遅れるだけ)。**binop/cmp は現状のまま PMC の前提を満たす**。
-- **unop は検出が完全に欠落**: `vm_save_lhs_class` は比較なし、
-  `TraceIr::UnOp` も `opcode_sub` を読まない。JIT は単相ガード+deopt
-  (`Not` は `call_unary_method`、算術 unop は class 分岐)なので、
-  `-x` の Integer/Float 交互や `!x` の nil/オブジェクト交互は `nil?` と
-  同型の deopt を起こし得る。対処: `vm_save_lhs_class` に
-  `vm_save_binary_class` と同じ比較+`opcode_sub = 1` を足す
-  (generic 側のみ、両アーキ)。
-- **Index/StoreIndex も検出なし**: クラス記録が VM 命令内でなく
-  ランタイムヘルパにあるため、検出はヘルパ側(Rust)で行い、
-  `opcode_sub` へ書き戻す pc を渡す改修になる。`x[i]` の Hash/Array
-  多相は実コードで普通に起きるので、PMC 展開の第二候補。
+- **unop の検出欠落 → 実装済み**(このブランチ): `vm_save_lhs_class` /
+  `a64_save_lhs_class` に `vm_save_binary_class` と同じ
+  「キャッシュ populated かつクラス変化 → `opcode_sub = 1`」を追加した
+  (generic 側のみ、両アーキ)。`TraceIr::UnOp` にも `_polymorphic` を
+  配線済み(JIT 消費は PMC 本実装で)。
+- **Index/StoreIndex の検出欠落 → 実装済み**(このブランチ): クラス
+  記録をランタイムヘルパから **VM 命令内の機械語へ移した**。binop と
+  同じ `[pc+8]`/`[pc+12]` レイアウトなので `vm_save_binary_class` /
+  `a64_save_binary_class` をそのまま流用でき、検出も同時に付く。
+  `get_index` / `set_index` は `ClassIdSlot` ポインタ引数(bit 0 に
+  is_func_call を折り込むハック)を廃止して素の `is_func_call` を
+  受ける形に単純化した。`TraceIr::Index` / `IndexAssign` にも
+  `_polymorphic` を配線済み。Index は binop と違い fixnum fast path を
+  持たないため、検出は全実行に効く(遅延なし)。
 
 ## 8. このブランチに含まれる実装
 

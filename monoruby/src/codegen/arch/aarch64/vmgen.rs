@@ -554,22 +554,33 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         monoasm_arm64!(&mut self.jit,
-            mov x0, x(EXEC.0);
-            mov x1, x(GLOBALS.0);
             ldrh x2, [x(PC.0), #(2)];  // base slot
-            // is_func_call = (base slot == self, slot 0): a literal `self[i]`
-            // reaches a private `#[]`; any other receiver enforces visibility.
-            cmp x2, #(0);
         );
-        self.jit.cset(X5, Cond::Eq); // x5 <- (base slot == 0)
         self.a64_slot_value(X2); // base
         monoasm_arm64!(&mut self.jit,
-            ldrh x3, [x(PC.0)];
+            mov x13, x2;               // keep base across the class save
+            ldrh x3, [x(PC.0)];        // idx slot
         );
         self.a64_slot_value(X3); // idx
         monoasm_arm64!(&mut self.jit,
-            add x4, x(PC.0), #(8);  // &cache (8-aligned)
-            orr x4, x4, x5;         // fold is_func_call into bit 0
+            mov x14, x3;               // keep idx
+        );
+        // Record (base, idx) classes into the inline cache and mark the site
+        // polymorphic on a class change — same machine-level bookkeeping as
+        // the binops, so the helper no longer needs the ClassIdSlot pointer.
+        self.a64_save_binary_class();
+        monoasm_arm64!(&mut self.jit,
+            // is_func_call = (base slot == self, slot 0): a literal `self[i]`
+            // reaches a private `#[]`; any other receiver enforces visibility.
+            ldrh x4, [x(PC.0), #(2)];
+            cmp x4, #(0);
+        );
+        self.jit.cset(X4, Cond::Eq); // x4 <- (base slot == 0)
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x13;               // base
+            mov x3, x14;               // idx
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
             mov x9, (runtime::get_index as *const () as u64);
             blr x9;
         );
@@ -583,26 +594,36 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         monoasm_arm64!(&mut self.jit,
-            mov x0, x(EXEC.0);
-            mov x1, x(GLOBALS.0);
             ldrh x2, [x(PC.0), #(2)];  // base slot
-            // is_func_call = (base slot == self, slot 0): `self[i] = v` reaches
-            // a private `#[]=`; any other receiver enforces visibility.
-            cmp x2, #(0);
         );
-        self.jit.cset(X6, Cond::Eq); // x6 <- (base slot == 0)
         self.a64_slot_value(X2); // base
         monoasm_arm64!(&mut self.jit,
-            ldrh x3, [x(PC.0)];
+            mov x13, x2;               // keep base across the class save
+            ldrh x3, [x(PC.0)];        // idx slot
         );
         self.a64_slot_value(X3); // idx
+        monoasm_arm64!(&mut self.jit,
+            mov x14, x3;               // keep idx
+        );
+        // Record (base, idx) classes and mark polymorphic on change — see
+        // `a64_op_index`.
+        self.a64_save_binary_class();
         monoasm_arm64!(&mut self.jit,
             ldrh x4, [x(PC.0), #(4)];
         );
         self.a64_slot_value(X4); // src
         monoasm_arm64!(&mut self.jit,
-            add x5, x(PC.0), #(8);  // &cache (8-aligned)
-            orr x5, x5, x6;         // fold is_func_call into bit 0
+            // is_func_call = (base slot == self, slot 0): `self[i] = v` reaches
+            // a private `#[]=`; any other receiver enforces visibility.
+            ldrh x5, [x(PC.0), #(2)];
+            cmp x5, #(0);
+        );
+        self.jit.cset(X5, Cond::Eq); // x5 <- (base slot == 0)
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x13;               // base
+            mov x3, x14;               // idx
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
             mov x9, (runtime::set_index as *const () as u64);
             blr x9;
             cbz x0, raise;
@@ -1306,16 +1327,28 @@ impl Codegen {
     /// X13 (lhs) / X14 (rhs); `get_class` reads X0 only, so X13/X14 survive.
     /// Clobbers x0/x1/x2 and x10/x11/x12 and the link register.
     /// Record the unary operand's class into the UnOp inline cache (classid1
-    /// `[PC+8]`) so the JIT can type the site. Mirrors x86 `vm_save_lhs_class`.
+    /// `[PC+8]`) so the JIT can type the site, with the same polymorphic
+    /// detection as `a64_save_binary_class`: once the cache is populated, a
+    /// class change sets `opcode_sub` = 1. Mirrors x86 `vm_save_lhs_class`.
     /// Operand is the Value in x2. NB: `get_class` clobbers x1/x2 for
     /// immediate receivers, so callers must reload the operand afterwards.
-    /// Clobbers x0/x1/x2 and the link register.
+    /// Clobbers x0/x1/x2, x10/x11 and the link register.
     pub(in crate::codegen) fn a64_save_lhs_class(&mut self) {
         let get_class = self.get_class.clone();
+        let skip = self.jit.label();
         monoasm_arm64!(&mut self.jit,
+            ldr w10, [x(PC.0), #(8)]; // old classid1 (0 = cache empty)
             mov x0, x2;
             bl get_class;             // x0 = class(operand)
             str w0, [x(PC.0), #(8)];  // classid1
+            cbz w10, skip;
+            cmp w10, w0;
+        );
+        self.jit.bcond_label(Cond::Eq, &skip);
+        monoasm_arm64!(&mut self.jit,
+            mov x11, (1);
+            strb w11, [x(PC.0), #(7)]; // opcode_sub = 1 (polymorphic)
+            skip:
         );
     }
 

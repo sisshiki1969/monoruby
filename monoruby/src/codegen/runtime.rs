@@ -1386,12 +1386,6 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send_splat(
     }
 }
 
-#[repr(C)]
-pub(super) struct ClassIdSlot {
-    base: ClassId,
-    idx: ClassId,
-}
-
 thread_local! {
     /// Cached `ClassId` of `Enumerator::ArithmeticSequence`. The
     /// class is defined in Ruby (`monoruby/builtins/enumerable.rb`)
@@ -1455,7 +1449,7 @@ pub(crate) fn is_arithmetic_sequence(globals: &Globals, v: Value) -> bool {
 ///
 /// - base: Value
 /// - index: Value
-/// - class_slot: &mut ClassIdSlot
+/// - is_func_call: non-zero for a literal `self[i]`
 ///
 /// ### out
 ///
@@ -1467,20 +1461,16 @@ pub(super) extern "C" fn get_index(
     globals: &mut Globals,
     base: Value,
     index: Value,
-    // Bit 0 carries `is_func_call`: the VM sets it when the base operand is
-    // slot 0 (a literal `self[i]`), which reaches a private `#[]`; it is clear
-    // for any other receiver, which enforces visibility. The slot lives
-    // 8-aligned in the bytecode stream, so bit 0 is free. Only consulted on
-    // the user-class fallback below — Array/Hash slice with no visibility gate.
-    class_slot: *mut ClassIdSlot,
+    // Non-zero when the base operand is slot 0 (a literal `self[i]`), which
+    // reaches a private `#[]`; zero for any other receiver, which enforces
+    // visibility. Only consulted on the user-class fallback below —
+    // Array/Hash slice with no visibility gate. The operand classes are
+    // recorded into the inline cache (with polymorphic detection) by the
+    // VM's `vm_save_binary_class` before this call, not here.
+    is_func_call: usize,
 ) -> Option<Value> {
-    let is_func_call = (class_slot as usize) & 1 != 0;
-    // SAFETY: the VM passes `&ClassIdSlot | is_func_call`; clearing bit 0
-    // restores the original 8-aligned slot pointer.
-    let class_slot = unsafe { &mut *(((class_slot as usize) & !1) as *mut ClassIdSlot) };
+    let is_func_call = is_func_call != 0;
     let base_classid = base.class();
-    class_slot.base = base_classid;
-    class_slot.idx = index.class();
     // `Array#[]` / `Hash#[]` below bypass method lookup, so they are only
     // sound while those are still the builtins. Unlike the dispatch-table
     // ops there is no `_no_opt` twin to swap in here — this helper *is* the
@@ -1609,17 +1599,14 @@ pub(super) extern "C" fn set_index(
     base: Value,
     index: Value,
     src: Value,
-    // Bit 0 carries `is_func_call` — see `get_index`. `self[i] = v` reaches a
-    // private `#[]=`; any other receiver enforces visibility.
-    class_slot: *mut ClassIdSlot,
+    // Non-zero when the base operand is slot 0 — see `get_index`.
+    // `self[i] = v` reaches a private `#[]=`; any other receiver enforces
+    // visibility. The operand classes are recorded into the inline cache by
+    // the VM's `vm_save_binary_class` before this call, not here.
+    is_func_call: usize,
 ) -> Option<Value> {
-    let is_func_call = (class_slot as usize) & 1 != 0;
-    // SAFETY: the VM passes `&ClassIdSlot | is_func_call`; clearing bit 0
-    // restores the original 8-aligned slot pointer.
-    let class_slot = unsafe { &mut *(((class_slot as usize) & !1) as *mut ClassIdSlot) };
+    let is_func_call = is_func_call != 0;
     let base_classid = base.class();
-    class_slot.base = base_classid;
-    class_slot.idx = index.class();
     if base_classid == ARRAY_CLASS
         && let Some(idx) = index.try_fixnum()
         // See `get_index`: this branch answers `Array#[]=` without a lookup.
@@ -1627,7 +1614,6 @@ pub(super) extern "C" fn set_index(
             .store
             .basic_op_redefined_for(base_classid, IdentId::_INDEX_ASSIGN)
     {
-        class_slot.idx = INTEGER_CLASS;
         if base.is_frozen() {
             vm.set_error(MonorubyErr::cant_modify_frozen(&globals.store, base));
             return None;
