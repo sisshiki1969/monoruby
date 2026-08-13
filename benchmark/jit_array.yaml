@@ -1,5 +1,7 @@
 prelude: |
   a = [*(0..999)]
+  # combination is O(n**k), so it needs its own (much smaller) receiver.
+  c = [*(0..31)]
 benchmark:
   array_each: |
     5000.times do
@@ -24,6 +26,42 @@ benchmark:
   array_new2: |
     5000.times do
       Array.new(5) do |x| x + 1 end
+    end
+  array_reverse_each: |
+    5000.times do
+      a.reverse_each do |elem| end
+    end
+  array_filter_map: |
+    5000.times do
+      a.filter_map do |elem| elem end
+    end
+  # bsearch is O(log n), so it gets a larger loop count to stay measurable.
+  array_bsearch: |
+    500000.times do
+      a.bsearch do |elem| elem >= 700 end
+    end
+  array_shuffle: |
+    5000.times do
+      a.shuffle
+    end
+  # sample without an argument is O(1); scaled up like bsearch.
+  array_sample: |
+    500000.times do
+      a.sample
+    end
+  # sample(n) takes a different branch per n: 3 hits CRuby's special
+  # cases, 500 the partial Fisher-Yates over a copy.
+  array_sample_3: |
+    200000.times do
+      a.sample(3)
+    end
+  array_sample_500: |
+    20000.times do
+      a.sample(500)
+    end
+  array_combination: |
+    5000.times do
+      c.combination(2) do |elem| end
     end
   tap: |
     5000.times do
