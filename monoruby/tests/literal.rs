@@ -306,6 +306,74 @@ fn empty_array_literal() {
 }
 
 #[test]
+fn small_hash_literal() {
+    // `{}` and 1..=3-pair literals with packed keys are inline-allocated
+    // by the JIT; every evaluation must yield a fresh, independent,
+    // unfrozen Hash with insertion order preserved.
+    run_test(
+        r#"
+        res = []
+        20.times do |i|
+            h = {}
+            h[:k] = i
+            g = {a: 1, b: i}
+            res << h << h.size << g << g.keys << g.values << g.frozen? << (h == {k: i})
+        end
+        res
+        "#,
+    );
+    // Growth past the inline capacity (promotion to the boxed map),
+    // reads on a literal-built hash, and independence of two evaluations.
+    run_test(
+        r#"
+        def m(i) = {a: i, b: 2, c: 3}
+        r = []
+        20.times do |i|
+            h = m(i)
+            x = m(-1)
+            h[:d] = 4
+            h[:e] = 5
+            r << h.size << h.keys << h[:a] << x.size << h.equal?(x)
+        end
+        r
+        "#,
+    );
+    // Runtime-duplicate keys (undetectable at bytecode-gen time) must
+    // take the fallback and keep last-wins semantics; flonum and mixed
+    // packed key kinds stay on the fast path.
+    run_test(
+        r#"
+        x = 1
+        r = []
+        20.times do |i|
+            d = {x => :a, 1 => :b, i => :c}
+            f = {1.5 => 1, 2.5 => i}
+            m = {nil => 1, true => 2, :sym => i}
+            r << d << d.size << f << m << m[true]
+        end
+        r
+        "#,
+    );
+    // Heap (String) keys fall back to the runtime path, which dups and
+    // freezes the key (`frozen_hash_key`), exactly like the interpreter.
+    // An inline-allocated `{}` must also interoperate with `default=`
+    // (which promotes to the boxed representation).
+    run_test(
+        r#"
+        r = []
+        20.times do |i|
+            s = "k#{i % 2}"
+            h = {s => i, "lit" => 1}
+            e = {}
+            e.default = i
+            r << h << h.keys.map(&:frozen?) << h[s] << e[:missing] << e.size
+        end
+        r
+        "#,
+    );
+}
+
+#[test]
 fn command_literal_frozen_argument() {
     // A non-interpolated command literal (`` `cmd` `` / `%x{...}`) passes its
     // command string to `Kernel#\`` FROZEN, matching CRuby (regardless of any
