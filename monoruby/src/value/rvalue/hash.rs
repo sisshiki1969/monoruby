@@ -1320,6 +1320,36 @@ impl<'a> HashRefMut<'a> {
         }
     }
 
+    /// Overwrite the value of the `index`-th entry in place (the
+    /// `__set_value_at` intrinsic behind `Hash#transform_values(!)`:
+    /// the key set is untouched, so no digest or probe is needed).
+    /// Out-of-range and tombstoned positions are ignored.
+    pub(crate) fn set_value_at(&mut self, index: usize, v: Value) {
+        if self.is_inline() {
+            if index < self.inline_len() {
+                // SAFETY: rep is inline; index < len.
+                unsafe { self.body_mut().inline[index].1 = v };
+            }
+            return;
+        }
+        match &mut self.boxed_mut().content {
+            HashContent::Map(m) => {
+                if let Some((k, slot)) = m.get_index_mut(index)
+                    && k.is_some()
+                {
+                    *slot = v;
+                }
+            }
+            HashContent::IdentMap(m) => {
+                if let Some((k, slot)) = m.get_index_mut(index)
+                    && k.is_some()
+                {
+                    *slot = v;
+                }
+            }
+        }
+    }
+
     /// Remove the inline pair at `i`, closing the gap (insertion order
     /// is preserved, like the boxed map's `shift_remove`).
     fn inline_remove_at(&mut self, i: usize) -> Value {
@@ -1833,6 +1863,13 @@ impl Hashmap {
         self.0.as_hashmap_inner_mut().insert(k, v, vm, globals)?;
         self.0.write_barrier_bulk();
         Ok(())
+    }
+
+    /// Positional value overwrite with the generational write barrier.
+    /// A no-op for out-of-range or tombstoned `index`.
+    pub(crate) fn set_value_at(&mut self, index: usize, v: Value) {
+        self.0.as_hashmap_inner_mut().set_value_at(index, v);
+        self.0.write_barrier(v);
     }
 
     pub fn remove(

@@ -215,33 +215,42 @@ class Hash
     self
   end
 
-  # Same shape as `transform_keys`: pre-sized result, direct positional
-  # walk, one block entry per pair.
+  # The keys don't change, so instead of inserting into a fresh hash
+  # (per-pair digest + probe), dup the table and overwrite the value
+  # slots in place — CRuby's `rb_hash_transform_values` shape. The dup
+  # carries the entries and the compare_by_identity mode but not the
+  # default or the subclass, and the walk runs over the dup (a detached
+  # copy the block can't reach), so no iteration guard is needed and
+  # every position is live.
   def transform_values
     return to_enum(:transform_values) { size } unless block_given?
-    if compare_by_identity?
-      h = {}
-      h.compare_by_identity
-    else
-      h = __new_hash_with_capacity(size)
+    h = __dup_table
+    i = 0
+    n = h.__entry_count
+    while i < n
+      h.__set_value_at(i, yield(h.__value_at(i)))
+      i += 1
     end
+    h
+  end
+
+  # The same positional overwrite on self. Here the block can mutate the
+  # receiver, so the walk takes the iteration guard (adding a key raises,
+  # a delete tombstones in place) and skips dead positions; a store to a
+  # position the block just deleted is a no-op.
+  def transform_values!
+    return to_enum(:transform_values!) { size } unless block_given?
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     guard = __iter_begin
     begin
       i = 0
       while i < __entry_count
-        h[__key_at(i)] = yield(__value_at(i)) if __live_at(i)
+        __set_value_at(i, yield(__value_at(i))) if __live_at(i)
         i += 1
       end
     ensure
       __iter_end(guard)
     end
-    h
-  end
-
-  def transform_values!
-    return to_enum(:transform_values!) { size } unless block_given?
-    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    each { |k, v| self[k] = yield(v) }
     self
   end
 

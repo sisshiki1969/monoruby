@@ -116,6 +116,12 @@ pub(super) fn init(globals: &mut Globals) {
     // allocation for the Ruby-side bulk builders (to_h / transform_*),
     // skipping the inline→boxed→indexed growth ladder.
     globals.define_builtin_func(HASH_CLASS, "__new_hash_with_capacity", new_hash_with_capacity, 1);
+    // The table copy + positional value store behind `Hash#transform_values(!)`
+    // (builtins/hash.rb): the keys never change, so the result is a dup of the
+    // table whose value slots are overwritten in place — no per-pair digest,
+    // probe, or insert.
+    globals.define_builtin_func(HASH_CLASS, "__dup_table", dup_table, 0);
+    globals.define_builtin_func(HASH_CLASS, "__set_value_at", set_value_at, 2);
     globals.define_builtin_func(HASH_CLASS, "__iter_begin", iter_begin, 0);
     globals.define_builtin_func(HASH_CLASS, "__iter_end", iter_end, 1);
     globals.define_builtin_inline_func(
@@ -1250,6 +1256,43 @@ fn new_hash_with_capacity(
 ) -> Result<Value> {
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?.max(0) as usize;
     Ok(Value::hash_with_capacity(n))
+}
+
+///
+/// ### Hash#__dup_table (internal)
+///
+/// The table copy behind `Hash#transform_values`: the entries and the
+/// compare_by_identity mode are duplicated, but — matching CRuby's
+/// `hash_dup_with_compare_by_id` — the default value/proc is not, and the
+/// copy is a plain `Hash` regardless of the receiver's class. The caller
+/// then overwrites the value slots in place via `__set_value_at`, so no
+/// key is ever re-hashed.
+///
+#[monoruby_builtin]
+fn dup_table(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut inner = lfp.self_val().as_hashmap_inner().clone_inner();
+    // clone_inner copies the default (`Hash#dup` semantics); drop it.
+    inner.as_mut().set_defalut_value(Value::nil(), vm, globals)?;
+    Ok(Value::hash_from_inner(inner))
+}
+
+///
+/// ### Hash#__set_value_at (internal)
+///
+/// Overwrite the value of the `index`-th entry in place — the positional
+/// store behind `Hash#transform_values(!)`. The key set is untouched, so
+/// no digest or probe runs; out-of-range and tombstoned positions are
+/// ignored (a delete during the walk tombstones in place). Returns the
+/// stored value.
+///
+#[monoruby_builtin]
+fn set_value_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let idx = lfp.arg(0).coerce_to_i64(globals)?;
+    let v = lfp.arg(1);
+    if idx >= 0 {
+        lfp.self_val().as_hash().set_value_at(idx as usize, v);
+    }
+    Ok(v)
 }
 
 #[monoruby_builtin]
@@ -5073,6 +5116,80 @@ mod tests {
             // Enumerator when neither a block nor a hash is given.
             r#"{a: 1}.transform_keys!.class.name"#,
         ]);
+    }
+
+    #[test]
+    fn hash_transform_values_dup_semantics() {
+        // transform_values copies the table only (CRuby's
+        // hash_dup_with_compare_by_id): no default, plain Hash class,
+        // compare_by_identity preserved, and the walk runs over the
+        // detached copy, so mutating self from the block is allowed.
+        run_tests(&[
+            // The default value / default proc is not carried over.
+            r#"h = Hash.new(99); h[:x] = 1; g = h.transform_values { |v| v + 1 }; [g, g.default, g[:missing]]"#,
+            r#"h = Hash.new { |hh, k| k.to_s }; h[:x] = 1; g = h.transform_values { |v| v }; [g.default_proc.nil?, g[:zzz]]"#,
+            // A subclass receiver yields a plain Hash.
+            r#"
+            klass = Class.new(Hash)
+            h = klass[a: 1]
+            g = h.transform_values { |v| v * 2 }
+            [g.class == Hash, g]
+            "#,
+            // compare_by_identity mode is preserved.
+            r#"
+            h = {}.compare_by_identity
+            a = "s"; b = "s"
+            h[a] = 1; h[b] = 2
+            g = h.transform_values { |v| v * 3 }
+            [g.compare_by_identity?, g.size, g.values.sort]
+            "#,
+            // A frozen receiver is fine — the result is a fresh hash.
+            r#"{x: 1}.freeze.transform_values { |v| v + 1 }"#,
+            // The block mutating self doesn't disturb the walk (it runs
+            // over the copy), and a break discards the partial result.
+            r#"h = {a: 1, b: 2, c: 3}; g = h.transform_values { |v| h.delete(:c); v * 2 }; [g, h]"#,
+            r#"h = {a: 1, b: 2}; g = h.transform_values { |v| h[:new] ||= 100; v }; [g, h]"#,
+            r#"h = {a: 1, b: 2, c: 3}; out = h.transform_values { |v| break :stopped if v == 2; v }; [out, h]"#,
+            // Boxed-and-indexed receiver.
+            r#"h = {}; 30.times { |i| h[i] = i }; g = h.transform_values { |v| v + 1 }; [g.size, g[0], g[29], g.keys == h.keys]"#,
+        ]);
+    }
+
+    #[test]
+    fn hash_transform_values_bang_in_place() {
+        run_tests(&[
+            // Returns self; keeps the default, the class, and the
+            // compare_by_identity mode (in-place overwrite).
+            r#"h = {a: 1, b: 2}; ret = h.transform_values! { |v| v * 10 }; [ret.equal?(h), h]"#,
+            r#"h = Hash.new(7); h[:x] = 1; h.transform_values! { |v| v + 1 }; [h.default, h[:x]]"#,
+            r#"
+            klass = Class.new(Hash)
+            h = klass[k: 5]
+            [h.transform_values! { |v| v * 2 }.class == klass, h[:k]]
+            "#,
+            // Deleting a not-yet-visited key from the block is allowed:
+            // the position is tombstoned and never visited.
+            r#"h = {a: 1, b: 2, c: 3}; h.transform_values! { |v| h.delete(:c) if v == 1; v * 2 }; h"#,
+            // A break leaves the partial in-place result.
+            r#"h = {a: 1, b: 2, c: 3}; h.transform_values! { |v| break if v == 2; v * 10 }; h"#,
+            // Enumerator when no block is given (frozen receiver too).
+            r#"{a: 1}.transform_values!.class.name"#,
+            r#"{}.freeze.transform_values!.is_a?(Enumerator)"#,
+        ]);
+        // Adding a new key from the block raises (iteration guard), and
+        // a frozen receiver with a block raises FrozenError.
+        run_test_error(r#"h = {a: 1, b: 2}; h.transform_values! { |v| h[:zz] = 9; v }"#);
+        run_test_error(r#"{a: 1}.freeze.transform_values! { |v| v }"#);
+        // Deleting the *current* key from the block: CRuby's outcome is
+        // representation-dependent (an ar_table resurrects the entry
+        // because the replace writes through the slot pointer; an
+        // st_table keeps it deleted), so don't compare — pin monoruby's
+        // uniform behavior: the delete wins, the store no-ops on the
+        // tombstone.
+        let v = run_test_no_result_check(
+            r#"h = {a: 1, b: 2}; h.transform_values! { |v| h.delete(:a); v * 10 }; h.inspect"#,
+        );
+        assert_eq!("{b: 20}", v.as_str());
     }
 
     #[test]
