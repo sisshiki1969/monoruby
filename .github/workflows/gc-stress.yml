@@ -163,7 +163,7 @@ jobs:
         if: inputs.scope == 'full'
         # Same pinned revisions as the automatic workflow — keep in sync.
         env:
-          SPEC_REV: baf5738ada1709afdbcf222c7609d3379b9d211d
+          SPEC_REV: 87b1631992bd00cf0c4934474766d54dad088191
           MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
         run: |
           git init ../spec
