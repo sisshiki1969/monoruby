@@ -430,6 +430,13 @@ pub(in crate::codegen) enum LInst {
         class: ClassId,
         deopt: DestLabel,
     },
+    /// Class-set guard: pass when `reg`'s runtime class is any of `classes`,
+    /// branch to `deopt` otherwise.
+    GuardClassIn {
+        reg: GP,
+        classes: Box<[ClassId]>,
+        deopt: DestLabel,
+    },
     /// Type guard: deopt unless `reg` holds an `Array`.
     GuardArrayTy {
         reg: GP,

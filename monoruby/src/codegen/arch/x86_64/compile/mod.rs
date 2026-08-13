@@ -54,6 +54,7 @@ impl Codegen {
             | AsmInst::CheckLocal(..)
             | AsmInst::OptCase { .. }
             | AsmInst::GuardClass(..)
+            | AsmInst::GuardClassIn(..)
             | AsmInst::Deopt(..)
             | AsmInst::HandleError(..)
             | AsmInst::CheckStack { .. }
@@ -595,6 +596,31 @@ impl Codegen {
             }
             // Type / class guards: deopt (jump to the side-exit) on a mismatch.
             LInst::GuardClass { reg, class, deopt } => self.guard_class(reg, class, &deopt),
+            LInst::GuardClassIn {
+                reg,
+                classes,
+                deopt,
+            } => {
+                // Membership chain built from the single-class guard: each
+                // class's check falls through on match (jump to ok) and
+                // branches to the next candidate on mismatch; the last
+                // candidate's mismatch is the real deopt.
+                let ok = self.jit.label();
+                let len = classes.len();
+                for (i, class) in classes.iter().enumerate() {
+                    if i + 1 < len {
+                        let next = self.jit.label();
+                        self.guard_class(reg, *class, &next);
+                        monoasm!( &mut self.jit,
+                            jmp ok;
+                        );
+                        self.jit.bind_label(next);
+                    } else {
+                        self.guard_class(reg, *class, &deopt);
+                    }
+                }
+                self.jit.bind_label(ok);
+            }
             LInst::GuardArrayTy { reg, deopt } => self.guard_array_ty(reg, &deopt),
             LInst::GuardFrozen { deopt } => self.guard_frozen(&deopt),
             // Constant-load base-class guard: deopt unless the accumulator equals

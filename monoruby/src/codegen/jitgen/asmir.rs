@@ -1369,6 +1369,12 @@ pub(super) enum AsmInst {
     /// - R(*reg*): Value
     ///
     GuardClass(GP, ClassId, AsmDeopt),
+    /// Class-set guard: pass when R(*reg*)'s runtime class is any of the
+    /// listed classes, deopt otherwise. For polymorphic call sites whose
+    /// observed receiver classes (PMC ∪ inline cache) all re-resolve to one
+    /// `FuncId` at compile time — the whole set shares a single target, so
+    /// one membership guard replaces the per-class deopt.
+    GuardClassIn(GP, Box<[ClassId]>, AsmDeopt),
     GuardArrayTy(GP, AsmDeopt),
     GuardCapture(AsmDeopt),
 
