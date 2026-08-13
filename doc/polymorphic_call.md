@@ -132,7 +132,7 @@ Object/Kernel から継承される述語群。`left == nil` の 885→489ms(§2
 
 コスト: 小。リスク: 生成器 flag の付け間違い。§3 の機構をそのまま使う。
 
-### 5.2 Polymorphic Inline Cache(N-way ディスパッチ)
+### 5.2 Polymorphic Inline Cache(N-way ディスパッチ)→ **採用方針。§7 の調査記録を参照**
 
 一般解。サイトごとに観測クラス列 (class, FuncId) を 2〜4 way まで持ち、
 線形比較チェーンで分岐、全ミスで deopt/再コンパイル。`BinCmp` の
@@ -140,15 +140,22 @@ Part B(`BecamePolymorphic` 再コンパイル)を method call 全般へ拡張す
 形が自然で、「初回は monomorphic でコンパイル → ミスが温まったら
 polymorphic 版へ再コンパイル」という既存のポリシーに乗る。
 
-論点:
+**方針決定(2026-08)**: VM が実行時に polymorphic を検出して
+バイトコードへ書き込む既存機構(`opcode_sub`)を土台に、
+`CallSiteInfo` に 4-way 程度の PMC を蓄積し JIT コンパイル時に利用する。
+`nil?` はこの一般機構で自然に扱える(§7.2)。`==` など二項演算子命令へ
+の適用可否は §7.3 の調査結果のとおり「検出機構は既にあり有効、
+ただしキャッシュがペア形で置き場所の追加が要る」。
 
-- **インライン生成器との併用**: way ごとに生成器を展開するか(コード
-  サイズ増)、polymorphic サイトは生成器を捨てて直接呼び出しに統一
-  するか。nil way だけ値比較特例(§3)を残す折衷が現実的。
+論点(§7 の調査で一部解決):
+
+- **インライン生成器との併用**: way ガード通過後はレシーバクラスが
+  確定するので、way ごとに生成器を適用しても ③ の unrefined-state
+  問題は起きない。ただし最小実装は「全 way が同一 FuncId のときだけ
+  生成器適用(`nil?` がこれ)、それ以外は way → 直接 FuncId 呼び出し」。
 - **abstract state**: way ごとに事後状態が異なる。合流で全 way の
   join を取る(≒ Value に落ちる)なら §5.3 の問題に帰着する。
-- 観測クラスの記録場所: 現行のインラインキャッシュは 1 エントリ。
-  deopt 側で「ガードを外したクラス」を蓄積する器が要る。
+  最小実装はチェーン全体を 1 命令として扱い、結果は Value で合流。
 
 ### 5.3 abstract state に union を持たせるか
 
@@ -180,20 +187,103 @@ refine しない state を広げるほど踏みやすくなる。選択肢:
   しない BasicObject 系レシーバ(`nil?` 呼び出しは NoMethodError に
   なるべき)で誤答する。クラスガードは第三クラスの安全網として残す。
 
-## 6. 提案する順序
+## 6. 提案する順序(§7 の方針決定で改訂)
 
-1. **§5.1 の最小一般化**(nil-safe flag + `==` / 述語群) — `== nil`
-   885→489ms の残り半分を回収。計測: §2 のマイクロベンチと
-   binarytrees。
-2. **§5.4-1 の page 二形態化の横展開** — §3.3 と同じパターンの機械的
-   適用。gc-stress full を再実行して検証。
-3. **§5.2 の PIC + BecamePolymorphic 拡張** — optcarrot 等、真に
-   多クラスなワークロードで設計・計測。§5.3(union 型)はその結果を
-   見てから判断。
+1. **VM 駆動 4-way PMC(メソッド呼び出し)** — §7.2 の実装点に沿って
+   `CallSiteInfo` に PMC を蓄積し、JIT が `_polymorphic` サイトで
+   ガードチェーンを発行する。`nil?` はこの一般機構に吸収され、§3 の
+   `GuardClassOrNil` 特例は「全 way 同一 FuncId の縮退形」として整理
+   し直す(または撤去する)。
+2. **§5.4-1 の page 二形態化の横展開** — way 分岐後のコード配置が
+   cold 側へ広がるため、PMC より先に済ませるのが安全。
+3. **二項演算子命令へのペア PMC 拡張** — §7.3。`== nil`
+   (現況 489ms vs YJIT 193ms)を計測基準にする。
 
-## 7. このブランチに含まれる実装
+## 7. 調査記録: VM 駆動 4-way PMC の実装点(2026-08)
+
+### 7.1 既存の検出機構(前提の確認)
+
+VM は **メソッド呼び出し・二項演算の両方で** polymorphic を実行時検出
+し、バイトコードの `opcode_sub` バイトに書き込む機構を既に持つ:
+
+- **メソッド呼び出し**(`vmgen/method_call.rs` slow_path):
+  インラインキャッシュ(バイトコード内の CACHED_CLASS / VERSION /
+  FUNCID、1 エントリ)が populated かつ receiver class 不一致のとき
+  `opcode_sub = 1`。直後に必ず `runtime::find_method(vm, globals,
+  callid, recv)` が呼ばれ、(class_for_ic, FuncId) を解決してキャッシュを
+  再タグ付けする。
+- **二項演算**(`vmgen.rs` `vm_save_binary_class`):
+  バイトコード内 IC に (lhs_class, rhs_class) の 1 ペアを保存し、
+  どちらかの変化を検出したら `opcode_sub = 1`。
+
+TraceIR はどちらも読み取り済みで、`BinCmp`/`BinCmpBr`/`BinOp` は
+`polymorphic` を **消費している**(単相 → ペアガード +
+recompile-on-miss(Part B)、多相 → ガードなし generic C-call +
+Eq/Ne は即値 fast path(Part C))。一方 `TraceIr::MethodCall` の
+`_polymorphic` は **未使用**(`compile.rs` で `_polymorphic: _`)。
+つまりメソッド呼び出し側は「検出はあるが JIT が利用していない」状態で、
+PMC 案はまさにこの穴を埋める。
+
+### 7.2 メソッド呼び出し側の実装点
+
+1. **記録**: `runtime::find_method` は `&mut Globals` と `CallSiteId` を
+   受けて解決結果 (cache_class, fid) を計算済みなので、ここで
+   `CallSiteInfo` に固定長 4-way の `(ClassId, FuncId)` 列を追記するのが
+   最小変更。既存の `class_for_ic`(Bool 統合)と `cacheable = false`
+   (frame-dependent super — class タグ 0 で毎回再解決)の扱いを
+   そのまま流用でき、cacheable でないサイトは PMC 対象外にマークする。
+   5 クラス目が観測されたら megamorphic フラグ(PMC 打ち切り、JIT は
+   ガードなし generic dispatch を選ぶ)。
+2. **消費**: `compile_method_call` で `_polymorphic` が真なら、単一
+   キャッシュではなく PMC を読み、way ごとの class 比較チェーンを発行:
+   - way ガード通過後はレシーバクラスが確定するので、既存の
+     monomorphic 経路(インライン生成器を含む)を way 内で再利用できる
+     余地がある。ただし最小実装は「way → FuncId 直接呼び出し、結果は
+     Value で合流」。
+   - **同一 FuncId の way は 1 経路に畳む**。`nil?` は全 way が
+     Kernel#nil? に解決されるため、畳んだ結果が §3 のガードレス値比較と
+     一致する — nil? 特例が一般機構の縮退形になる、というのがこの案の
+     利点。
+   - 全 way ミス: deopt(+ 観測が増えたら再コンパイル)か、その場で
+     generic dispatch へ落とすかは選択。Part B の単調再コンパイル
+     不変量(多相化は一方向)に合わせるなら後者。
+3. **無効化**: PMC エントリは class version guard の傘の下にある
+   (再定義で全サイト再コンパイル)ので、エントリ個別の無効化は不要。
+
+### 7.3 二項演算子命令(`==` ほか)への適用可否
+
+**有効。ただしキャッシュの形と置き場所が method call と異なる。**
+
+- 検出(`opcode_sub`)は §7.1 のとおり既にあり、多相サイトは現在
+  「ガードなし generic C-call」へ落ちている。`left == nil`
+  (left: Array/nil 二相)の実測 489ms(YJIT 193ms)の残りコストは
+  この generic C-call: Part C の即値 fast path は **両オペランドが
+  非 heap** のときだけ効くので、Array 側の呼び出しが毎回
+  `cmp_eq_values`(メソッド解決+実行)を払う。
+- binop の IC は (lhs_class, rhs_class) **ペア**で、バイトコード内の
+  8 バイト(2×u32)に 1 ペアしか置けない。4-way 化はバイトコード内では
+  無理なので、method call と同じくサイド構造に置く。置き場所の候補:
+  - binop サイトの一部は `IseqInfo::callsite_map`(bc_pos → CallSiteId)
+    で `CallSiteInfo` に到達できる(polymorphic 分岐が is_func_call
+    判定に既に使っている)。ペア PMC を `CallSiteInfo` に置くなら
+    これに乗るが、**全 binop 命令に callsite があるかは未確認**
+    (`get_callsite_id` は Option)。無いサイトには `IseqInfo` 側に
+    bc_pos キーのテーブルを足す。
+  - 記録タイミング: `vm_save_binary_class` はアセンブラ内でクラス保存
+    まで。ペア追記は set_poly 分岐(既に slow path)から Rust ヘルパを
+    呼ぶ形になる。generic C ヘルパ(`cmp_eq_values` 等)は pc を
+    受けない規約なので、記録はヘルパ側でなく VM 命令側で行う。
+- way 特化の価値: 第一段階は「ペアガード → FuncId 直接呼び出し」で
+  解決コストを消すだけでよい。第二段階として、組み込みが確定する
+  ペアには特化コードの余地がある(例: (Array, NilClass) の `==` は
+  Array#== が組み込みなら定数 false)。どちらが効くかは
+  `cmp_eq_values` の内部コスト内訳(解決 vs 本体実行)を測ってから
+  決める。
+
+## 8. このブランチに含まれる実装
 
 - `JIT: nil-tolerant receiver guard for nil? call sites` — §3.1/3.2。
+  §6-1 の一般機構が入った時点で縮退形として整理し直す予定。
 - `x86_64: make the Float-unbox guards page-tolerant` — §3.3。
 
 検証済み: フルスイート green(§3.3 修正後)、`Weird#nil?` 等の第三
