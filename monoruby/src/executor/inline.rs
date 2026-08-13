@@ -3,6 +3,12 @@ use super::*;
 #[allow(non_camel_case_types)]
 pub(crate) enum InlineFuncInfo {
     InlineGen(Box<InlineGen>),
+    /// A generator whose emitted code never consults the receiver's (or an
+    /// argument's) class — the type has no `ClassId` parameters to consult.
+    /// The JIT fires these even behind a polymorphic class-set guard, where
+    /// the other variants must be skipped (their code assumes the single
+    /// compile-time receiver class).
+    InlineGenClassIndependent(Box<InlineGenClassIndependent>),
     CFunc_F_F(unsafe extern "C" fn(f64) -> f64),
     CFunc_FF_F(extern "C" fn(f64, f64) -> f64),
 }
@@ -10,6 +16,10 @@ pub(crate) enum InlineFuncInfo {
 impl InlineFuncInfo {
     pub(crate) fn new_inline_gen(f: Box<InlineGen>) -> Self {
         InlineFuncInfo::InlineGen(f)
+    }
+
+    pub(crate) fn new_inline_gen_class_independent(f: Box<InlineGenClassIndependent>) -> Self {
+        InlineFuncInfo::InlineGenClassIndependent(f)
     }
 
     pub(crate) fn new_cfunc_f_f(f: unsafe extern "C" fn(f64) -> f64) -> Self {

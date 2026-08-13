@@ -243,8 +243,9 @@ impl<'a> JitContext<'a> {
         //
         // When the class-set guard below is taken, the receiver's class is
         // NOT statically refined (it may be any member of the set), so the
-        // inline generators — which assume a single `recv_class` receiver —
-        // must be skipped for this compile.
+        // inline generators that assume a single `recv_class` receiver must
+        // be skipped for this compile — only the class-independent ones
+        // (`InlineGenClassIndependent`) may still fire.
         let mut same_target_set_guarded = false;
         if state.class(recv) != Some(recv_class) {
             if !recompile_on_recv_miss
@@ -282,11 +283,24 @@ impl<'a> JitContext<'a> {
             }
         }
 
-        if !same_target_set_guarded
-            && callsite.block_fid.is_none()
+        if callsite.block_fid.is_none()
             && let Some(info) = self.store.inline_info.get_inline(func_id)
         {
             match info {
+                // Class-independent generators read only the receiver Value
+                // (the type carries no ClassId to consult), so they are sound
+                // even behind the class-set guard, where the receiver's class
+                // is not statically refined.
+                InlineFuncInfo::InlineGenClassIndependent(f) => {
+                    if self.inline_asm_class_independent(state, ir, f, callid) {
+                        state.unset_side_effect_guard();
+                        return Ok(CompileResult::Continue);
+                    }
+                }
+                // Every other inliner assumes the single compile-time
+                // receiver class; behind the set guard it must fall through
+                // to the ordinary (set-guarded) builtin call.
+                _ if same_target_set_guarded => {}
                 InlineFuncInfo::InlineGen(f) => {
                     if self.inline_asm(state, ir, f, callid, recv_class, arg_class) {
                         state.unset_side_effect_guard();
@@ -1055,6 +1069,27 @@ impl<'a> JitContext<'a> {
             false
         }
     }
+
+    /// [`inline_asm`](Self::inline_asm) for class-independent generators —
+    /// same save/restore protocol, minus the class arguments their type
+    /// doesn't have.
+    fn inline_asm_class_independent(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        f: impl Fn(&mut AbstractState, &mut AsmIr, &JitContext, &Store, CallSiteId) -> bool,
+        callid: CallSiteId,
+    ) -> bool {
+        let state_save = state.clone();
+        let ir_save = ir.save();
+        if f(state, ir, self, &self.store, callid) {
+            true
+        } else {
+            *state = state_save;
+            ir.restore(ir_save);
+            false
+        }
+    }
 }
 
 impl AbstractState {
@@ -1708,6 +1743,41 @@ mod tests {
               end
             end
             [c, r]
+            "#,
+        );
+    }
+
+    /// Class-independent inline generators (`InlineGenClassIndependent`)
+    /// keep firing behind the polymorphic class-set guard. Covers: `nil?` /
+    /// `frozen?` / `object_id` at a 4-class site (set guard + inline, the
+    /// receiver class statically unrefined), every representation arm of the
+    /// new `frozen?` predicate — packed values, heap Numerics (Bignum /
+    /// Rational / Complex, always frozen), a frozen string, a chilled string
+    /// literal (FROZEN bit clear → false), a mutable Array — and a receiver
+    /// class overriding `frozen?` after warmup, which must dispatch its
+    /// override (class-version bump + set-membership deopt).
+    /// `object_id` values differ from CRuby's, so only identity-stability
+    /// (`oid(v) == v.object_id`) is compared, never the raw id.
+    #[test]
+    fn polymorphic_class_independent_inline() {
+        run_test(
+            r#"
+            def fro(x) = x.frozen?
+            def oid(x) = x.object_id
+            def nl(x) = x.nil?
+            quad = [nil, "s", 1, [1]]
+            q = []
+            n = 0
+            200.times do
+              q = quad.map { |v| [fro(v), oid(v) == v.object_id] }
+              n += quad.count { |v| nl(v) }
+            end
+            all = [1, :sym, nil, true, 10**30, 1r/3, 1+2i, "chilled", "frozen".freeze, [1]]
+            res = all.map { |v| fro(v) }
+            class FrozenLiar
+              def frozen? = :nope
+            end
+            [q, n, res, fro(FrozenLiar.new)]
             "#,
         );
     }

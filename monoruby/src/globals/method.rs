@@ -518,6 +518,34 @@ impl Globals {
         self.define_builtin_inline_funcs(class_id, name, &[], address, inline_gen, arg_num)
     }
 
+    /// Like [`define_builtin_inline_func`](Self::define_builtin_inline_func),
+    /// but registers a class-independent generator (see
+    /// [`InlineGenClassIndependent`]): its code reads only the receiver
+    /// Value, so the JIT also fires it behind a polymorphic class-set guard.
+    pub(crate) fn define_builtin_inline_func_class_independent(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        inline_gen: Box<InlineGenClassIndependent>,
+        arg_num: usize,
+    ) -> FuncId {
+        let fid = self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Public,
+            arg_num,
+            arg_num,
+            false,
+            &[],
+            false,
+        );
+        let info = inline::InlineFuncInfo::new_inline_gen_class_independent(inline_gen);
+        self.store.inline_info.add_inline(fid, info);
+        fid
+    }
+
     pub(crate) fn define_builtin_inline_funcs(
         &mut self,
         class_id: ClassId,

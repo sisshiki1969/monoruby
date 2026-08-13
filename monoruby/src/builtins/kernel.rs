@@ -26,7 +26,13 @@ pub fn define_loop_mode_builtins(globals: &mut Globals) {
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
-    globals.define_builtin_inline_func(kernel_class, "nil?", nil, inline_gen2!(kernel_nil), 0);
+    globals.define_builtin_inline_func_class_independent(
+        kernel_class,
+        "nil?",
+        nil,
+        inline_gen2!(kernel_nil),
+        0,
+    );
     globals.define_builtin_inline_func(
         kernel_class,
         "!~",
@@ -293,7 +299,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         .set_default_copy_hooks(init_copy_fid, init_dup_fid, init_clone_fid);
     globals.define_builtin_funcs_rest(kernel_class, "enum_for", &["to_enum"], to_enum);
     globals.define_builtin_func_rest(kernel_class, "extend", extend);
-    globals.define_builtin_inline_func(
+    globals.define_builtin_inline_func_class_independent(
         kernel_class,
         "object_id",
         super::object::object_id,
@@ -407,14 +413,14 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
+/// Class-independent (see `InlineGenClassIndependent`): a pure Value
+/// comparison against `nil`, correct for any receiver.
 fn kernel_nil(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
-    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

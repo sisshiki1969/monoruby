@@ -12,7 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
     // BasicObject methods
 
     globals.define_private_builtin_func(BASIC_OBJECT_CLASS, "initialize", bo_initialize, 0);
-    globals.define_builtin_inline_func(
+    globals.define_builtin_inline_func_class_independent(
         BASIC_OBJECT_CLASS,
         "__id__",
         object_id,
@@ -66,7 +66,13 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
     globals.define_builtin_func(OBJECT_CLASS, "freeze", freeze, 0);
-    globals.define_builtin_func(OBJECT_CLASS, "frozen?", frozen, 0);
+    globals.define_builtin_inline_func_class_independent(
+        OBJECT_CLASS,
+        "frozen?",
+        frozen,
+        inline_gen2!(object_frozen),
+        0,
+    );
 
     globals.define_private_builtin_func_rest(
         BASIC_OBJECT_CLASS,
@@ -139,6 +145,29 @@ fn freeze(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn frozen(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().is_frozen()))
+}
+
+/// Class-independent (see `InlineGenClassIndependent`): the predicate reads
+/// the Value tag and the RValue header only — packed values are frozen,
+/// heap Numerics are frozen, everything else tests the header FROZEN bit
+/// (`emit_frozen_pred` mirrors `Value::is_frozen` exactly, chilled strings
+/// included: their FROZEN bit is clear, so they report false).
+pub(super) fn object_frozen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo { recv, dst, .. } = *callsite;
+    state.load(ir, recv, GP::Rdi);
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_frozen_pred());
+    state.def_rax2acc(ir, dst);
+    true
 }
 
 ///
@@ -377,14 +406,14 @@ pub(super) fn object_id(
     Ok(Value::integer(lfp.self_val().id() as i64))
 }
 
+/// Class-independent (see `InlineGenClassIndependent`): `Value::id()` works
+/// on the raw Value bits, correct for any receiver.
 pub(super) fn object_object_id(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
-    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
