@@ -3063,6 +3063,10 @@ impl Executor {
     ///
     /// Invoke method for *receiver* and *method*.
     ///
+    /// Funcall semantics: private methods are reachable. For a
+    /// visibility-honouring dispatch (CRuby's `rb_funcallv_public`) use
+    /// [`Self::invoke_method_inner_vis`].
+    ///
     pub(crate) fn invoke_method_inner(
         &mut self,
         globals: &mut Globals,
@@ -3072,7 +3076,25 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Result<Value> {
-        match self.find_method(globals, receiver, method, true) {
+        self.invoke_method_inner_vis(globals, method, receiver, args, bh, kw_args, true)
+    }
+
+    ///
+    /// Invoke method for *receiver* and *method*, with the call site's
+    /// func-call flag spelled out: `is_func_call = false` restricts the
+    /// lookup to public methods, as CRuby's `rb_funcallv_public` does.
+    ///
+    pub(crate) fn invoke_method_inner_vis(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        receiver: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw_args: Option<Hashmap>,
+        is_func_call: bool,
+    ) -> Result<Value> {
+        match self.find_method(globals, receiver, method, is_func_call) {
             Ok(func_id) => self.invoke_func_inner(globals, func_id, receiver, args, bh, kw_args),
             Err(original_err) => {
                 // Fall back to method_missing, matching CRuby behavior.

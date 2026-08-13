@@ -1,5 +1,5 @@
 use super::*;
-use crate::globals::prng::{Mt, build_mt, next_real, rand_int};
+use crate::globals::prng::{Mt, build_mt, next_real, rand_int, ulong_limited};
 use num::{Signed, Zero};
 
 //
@@ -57,6 +57,47 @@ fn mt_at(seed: Value, cnt: u64) -> Mt {
         mt.next_u32();
     }
     mt
+}
+
+///
+/// A multi-draw session over one `Random` instance's generator.
+///
+/// Because a `Random` persists only its seed and draw count, every
+/// single operation rebuilds the MT and replays it (`mt_at`). A caller
+/// that needs one draw per element — `Array#shuffle` — would make that
+/// replay quadratic, so it opens a session instead: the MT is built
+/// once, advanced across every draw, and the final word count written
+/// back by `finish`.
+///
+pub(super) struct RandomDraw {
+    receiver: Value,
+    mt: Mt,
+    cnt: u64,
+}
+
+impl RandomDraw {
+    pub(super) fn new(globals: &Globals, receiver: Value) -> Self {
+        let (seed, cnt) = load_state(globals, receiver);
+        Self {
+            receiver,
+            mt: mt_at(seed, cnt),
+            cnt,
+        }
+    }
+
+    /// Uniform integer in `[0, max]` — CRuby's `rb_random_ulong_limited`
+    /// drawn from this instance's generator.
+    pub(super) fn ulong_limited(&mut self, max: u64) -> u64 {
+        ulong_limited(&mut self.mt, &mut self.cnt, max)
+    }
+
+    /// Persist the advanced word count back onto the receiver.
+    pub(super) fn finish(self, globals: &mut Globals) -> Result<()> {
+        globals
+            .store
+            .set_ivar(self.receiver, ivar_cnt(), Value::integer(self.cnt as i64))?;
+        Ok(())
+    }
 }
 
 fn random_seed_value() -> Value {

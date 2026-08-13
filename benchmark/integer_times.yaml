@@ -3,15 +3,15 @@ prelude: |
 benchmark:
   integer_times: |
     5000.times do
-      100.times do end
+      100.times do |x| x end
     end
   integer_step: |
     5000.times do
-      0.step(1000, 1) do end
+      0.step(1000, 1) do |x| x end
     end
   range_each: |
     5000.times do
-      r.each do |elem| end
+      r.each do |elem| elem end
     end
   for: |
     5000.times do

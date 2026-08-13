@@ -155,6 +155,26 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ARRAY_CLASS, "compact!", compact_, 0);
     globals.define_builtin_func_with_kw(
         ARRAY_CLASS,
+        "sample",
+        sample,
+        0,
+        1,
+        false,
+        &["random"],
+        false,
+    );
+    globals.define_builtin_func_with_kw(
+        ARRAY_CLASS,
+        "shuffle",
+        shuffle,
+        0,
+        0,
+        false,
+        &["random"],
+        false,
+    );
+    globals.define_builtin_func_with_kw(
+        ARRAY_CLASS,
         "shuffle!",
         shuffle_,
         0,
@@ -4269,6 +4289,169 @@ fn compact_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     })
 }
 
+/// The generator behind CRuby's `RAND_UPTO` for one `Array#shuffle` /
+/// `#sample` call, resolved from the `random:` keyword the way
+/// `try_get_rnd` does.
+enum Rng {
+    /// The seeded global PRNG: no `random:` at all, or `random: Random`
+    /// (the class itself is CRuby's default argument, and `try_get_rnd`
+    /// maps it to the default generator).
+    Global,
+    /// A `Random` instance, subclasses included. Its generator is driven
+    /// directly rather than through `#rand` — which is what CRuby does
+    /// even when a subclass redefines `#rand`, and what keeps `Random`'s
+    /// seed-plus-count representation from replaying its MT once per draw.
+    ///
+    /// Boxed because a `RandomDraw` carries a whole Mersenne Twister
+    /// state (`[u32; 624]`). Inline it would set `size_of::<Rng>()` to
+    /// ~2.5KB, and `resolve` returns this by value on *every* `shuffle` /
+    /// `sample` call — including the overwhelmingly common `Global` one,
+    /// which would then memcpy 2.5KB of nothing per call.
+    Instance(Box<super::random::RandomDraw>),
+    /// Anything else, duck-typed through `#rand`. `nil` lands here too, so
+    /// `random: nil` raises NoMethodError as it does in CRuby — it is a
+    /// genuine argument, not a stand-in for "not given".
+    ///
+    /// This is the only variant that can re-enter Ruby, and so the only
+    /// one under which the receiver can change length mid-call.
+    Duck(Value),
+}
+
+impl Rng {
+    fn resolve(vm: &mut Executor, globals: &mut Globals, random: Option<Value>) -> Result<Self> {
+        let Some(random) = random else {
+            return Ok(Rng::Global);
+        };
+        let random_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Random"])?;
+        if random.id() == random_class.id() {
+            return Ok(Rng::Global);
+        }
+        if let Some(class) = random_class.is_class()
+            && random.is_kind_of(&globals.store, class.id())
+        {
+            return Ok(Rng::Instance(Box::new(super::random::RandomDraw::new(
+                globals, random,
+            ))));
+        }
+        Ok(Rng::Duck(random))
+    }
+
+    /// CRuby's `RAND_UPTO(max)`: a uniform integer in `[0, max)`. `max`
+    /// must be positive, as it is at every one of CRuby's draw sites.
+    fn rand_upto(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        max: usize,
+    ) -> Result<usize> {
+        debug_assert!(max > 0);
+        let limit = max as u64 - 1;
+        match self {
+            Rng::Global => Ok(globals.random_ulong_limited(limit) as usize),
+            Rng::Instance(draw) => Ok(draw.ulong_limited(limit) as usize),
+            Rng::Duck(random) => duck_rand_upto(vm, globals, *random, limit as usize),
+        }
+    }
+
+    /// True for the one variant whose draws run Ruby code.
+    fn reenters_ruby(&self) -> bool {
+        matches!(self, Rng::Duck(_))
+    }
+
+    /// Persist a `Random` instance's advanced word count. Only the
+    /// `Instance` variant carries state, and its draws cannot fail, so no
+    /// caller has to unwind this on the error path.
+    fn finish(self, globals: &mut Globals) -> Result<()> {
+        match self {
+            Rng::Instance(draw) => draw.finish(globals),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// CRuby `rb_random_ulong_limited`'s duck-typed fallback for a
+/// non-`Random` `random:` object: `random.rand(max + 1)`, `to_int`-coerced
+/// and range-checked against `[0, max]`.
+fn duck_rand_upto(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    random: Value,
+    max: usize,
+) -> Result<usize> {
+    // `rb_funcallv_public`: `Kernel#rand` is private, so a receiver that
+    // only inherits it (`random: nil`) must raise, not quietly work.
+    let v = vm.invoke_method_inner_vis(
+        globals,
+        IdentId::get_id("rand"),
+        random,
+        &[Value::integer(max as i64 + 1)],
+        None,
+        None,
+        false,
+    )?;
+    let r = v.coerce_to_int_i64(vm, globals)?;
+    if r < 0 {
+        return Err(MonorubyErr::rangeerr(format!(
+            "random number too small {r}"
+        )));
+    }
+    if r > max as i64 {
+        return Err(MonorubyErr::rangeerr(format!("random number too big {r}")));
+    }
+    Ok(r as usize)
+}
+
+/// Fisher-Yates over `ary` in place — the shared body of `Array#shuffle`
+/// and `#shuffle!`. `random` is the `random:` keyword value, absent when
+/// the caller did not pass one.
+///
+/// Draws use CRuby's exact `RAND_UPTO` (`rb_random_ulong_limited`), so an
+/// `srand(n)`-seeded shuffle reproduces CRuby's sequence. A duck-typed
+/// generator re-enters Ruby and can resize `ary` underneath us; CRuby
+/// rejects that with `modified during shuffle`, and so must we before
+/// indexing again.
+fn shuffle_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut ary: Array,
+    random: Option<Value>,
+) -> Result<()> {
+    let mut rng = Rng::resolve(vm, globals, random)?;
+    let guard_len = rng.reenters_ruby().then(|| ary.len());
+    let mut i = ary.len();
+    while i > 1 {
+        i -= 1;
+        let j = rng.rand_upto(vm, globals, i + 1)?;
+        if let Some(len) = guard_len
+            && ary.len() != len
+        {
+            return Err(MonorubyErr::runtimeerr("modified during shuffle"));
+        }
+        ary.swap(i, j);
+    }
+    rng.finish(globals)
+}
+
+///
+/// ### Array#shuffle
+///
+/// - shuffle -> Array
+/// - shuffle(random: Random) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/shuffle.html]
+#[monoruby_builtin]
+fn shuffle(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
+    let random = lfp.try_arg(0);
+    // Root the fresh copy across the `random:` object's `#rand`
+    // dispatches; unlike the receiver it is not reachable from `lfp`.
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(ary.into());
+        shuffle_inner(vm, globals, ary, random)?;
+        Ok(ary.into())
+    })
+}
+
 ///
 /// ### Array#shuffle!
 ///
@@ -4277,20 +4460,189 @@ fn compact_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/shuffle=21.html]
 #[monoruby_builtin]
-fn shuffle_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = lfp.self_val().as_array_mut(&globals.store)?;
-    // Fisher-Yates off the seeded global PRNG with CRuby's exact draw
-    // (`RAND_UPTO` = `rb_random_ulong_limited`), so a `srand(n)`-seeded
-    // shuffle produces CRuby's sequence. The `random:` keyword form is
-    // the same loop in Ruby (`Array#shuffle`), consuming `random.rand`
-    // identically.
-    let mut i = ary.len();
-    while i > 1 {
-        i -= 1;
-        let j = globals.random_ulong_limited(i as u64) as usize;
-        ary.swap(i, j);
-    }
+fn shuffle_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let ary = lfp.self_val().as_array_mut(&globals.store)?;
+    shuffle_inner(vm, globals, ary, lfp.try_arg(0))?;
     Ok(lfp.self_val())
+}
+
+/// `numberof(idx)` in CRuby's `ary_sample` — the count up to which every
+/// index is drawn in advance, and the boundary of its special cases.
+const SAMPLE_IDX_MAX: usize = 10;
+
+///
+/// ### Array#sample
+///
+/// - sample(random: Random) -> object | nil
+/// - sample(n, random: Random) -> Array
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/sample.html]
+#[monoruby_builtin]
+fn sample(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let count = lfp.try_arg(0);
+    let mut rng = Rng::resolve(vm, globals, lfp.try_arg(1))?;
+    let result = sample_inner(vm, globals, &mut rng, lfp.self_val().as_array(), count)?;
+    rng.finish(globals)?;
+    Ok(result)
+}
+
+/// CRuby's `ary_sample` (array.c), reproduced draw for draw.
+///
+/// The small-`n` cases are not shortcuts: `n` draws of `RAND_UPTO(len - i)`
+/// are consumed either way, but each case maps them onto a *different*
+/// result than the partial Fisher-Yates in the general branch, so
+/// collapsing them into one loop would silently change what `sample(2)`
+/// returns for a given seed. The order here is CRuby's, and so is the
+/// length re-read after the draws — a duck-typed `#rand` can shrink the
+/// receiver while its own indices are being rolled.
+fn sample_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    rng: &mut Rng,
+    ary: Array,
+    count: Option<Value>,
+) -> Result<Value> {
+    let len = ary.len();
+
+    // No count: one element, and no draw at all for a receiver too short
+    // to offer a choice.
+    let Some(count) = count else {
+        let i = if len < 2 {
+            0
+        } else {
+            rng.rand_upto(vm, globals, len)?
+        };
+        return Ok(ary.get(i).copied().unwrap_or_default());
+    };
+
+    let n = count.coerce_to_int_i64(vm, globals)?;
+    if n < 0 {
+        return Err(MonorubyErr::argumenterr("negative sample number"));
+    }
+    let mut n = n.min(len as i64) as usize;
+
+    let mut rnds = [0usize; SAMPLE_IDX_MAX];
+    if n <= SAMPLE_IDX_MAX {
+        for (i, rnd) in rnds.iter_mut().enumerate().take(n) {
+            *rnd = rng.rand_upto(vm, globals, len - i)?;
+        }
+    }
+    // Re-read: the draws above may have run Ruby. Indices rolled against
+    // the old length are simply void if the receiver shrank past them.
+    let shrunk = ary.len() < len;
+    let len = ary.len();
+    if shrunk && n <= SAMPLE_IDX_MAX && rnds[..n].iter().any(|&r| r >= len) {
+        return Ok(Value::array_empty());
+    }
+    n = n.min(len);
+
+    match n {
+        0 => return Ok(Value::array_empty()),
+        1 => return Ok(Value::array1(ary[rnds[0]])),
+        2 => {
+            let i = rnds[0];
+            let mut j = rnds[1];
+            if j >= i {
+                j += 1;
+            }
+            return Ok(Value::array2(ary[i], ary[j]));
+        }
+        3 => {
+            let i = rnds[0];
+            let mut j = rnds[1];
+            let mut k = rnds[2];
+            // Lift `j` and then `k` over the slots already taken, so that
+            // three draws from shrinking ranges become three distinct
+            // indices.
+            let (lo, hi) = if j >= i {
+                j += 1;
+                (i, j)
+            } else {
+                (j, i)
+            };
+            if k >= lo {
+                k += 1;
+                if k >= hi {
+                    k += 1;
+                }
+            }
+            return Ok(Array::new_from_vec(vec![ary[i], ary[j], ary[k]]).into());
+        }
+        _ => {}
+    }
+
+    // CRuby's threshold for "n is small enough relative to len that
+    // copying the whole receiver to shuffle a prefix would be wasteful".
+    let memo_threshold = if len < 2560 {
+        len / 128
+    } else if len < 5120 {
+        len / 64
+    } else if len < 10240 {
+        len / 32
+    } else {
+        len / 16
+    };
+
+    if n <= SAMPLE_IDX_MAX {
+        // 4..=10 elements: insert each draw into a sorted list of the
+        // indices already taken, lifting it over each one it meets, which
+        // turns the draws into distinct indices without touching the
+        // receiver.
+        let mut idx = [0usize; SAMPLE_IDX_MAX];
+        let mut sorted = [0usize; SAMPLE_IDX_MAX];
+        sorted[0] = rnds[0];
+        idx[0] = rnds[0];
+        for i in 1..n {
+            let mut k = rnds[i];
+            let mut j = 0;
+            while j < i && k >= sorted[j] {
+                k += 1;
+                j += 1;
+            }
+            sorted.copy_within(j..i, j + 1);
+            sorted[j] = k;
+            idx[i] = k;
+        }
+        Ok(Value::array_from_iter(idx[..n].iter().map(|&i| ary[i])))
+    } else if n <= memo_threshold / 2 {
+        // Still a small slice of a big receiver: run the same partial
+        // Fisher-Yates, but over a sparse map of the swaps instead of a
+        // full copy. `swaps[x]` is where element `x` has been moved from,
+        // so the two branches return identical results.
+        let mut swaps: HashMap<usize, usize> = HashMap::default();
+        let mut picks = Vec::with_capacity(n);
+        let mut max_idx = 0;
+        for i in 0..n {
+            let r = rng.rand_upto(vm, globals, len - i)? + i;
+            picks.push(r);
+            max_idx = max_idx.max(r);
+        }
+        // Same re-read as above, for the same reason.
+        let len = ary.len();
+        if len <= max_idx {
+            n = 0;
+        } else {
+            n = n.min(len);
+        }
+        let mut result = Vec::with_capacity(n);
+        for (i, &j) in picks.iter().enumerate().take(n) {
+            let from_i = swaps.get(&i).copied().unwrap_or(i);
+            let from_j = swaps.get(&j).copied().unwrap_or(j);
+            swaps.insert(j, from_i);
+            result.push(ary[from_j]);
+        }
+        Ok(Array::new_from_vec(result).into())
+    } else {
+        // n is a large enough fraction of len that a copy is the cheaper
+        // way: partial Fisher-Yates over a dup, truncated to n.
+        let mut result = ary.to_vec();
+        for i in 0..n {
+            let j = rng.rand_upto(vm, globals, len - i)? + i;
+            result.swap(i, j);
+        }
+        result.truncate(n);
+        Ok(Array::new_from_vec(result).into())
+    }
 }
 
 ///
@@ -5228,6 +5580,57 @@ mod tests {
             "srand(123); a = (1..30).to_a; a.shuffle!; a",
             "srand(7); [[1,2,3,4,5,6].sample, [1,2,3].sample]",
             "%w[a b c].shuffle(random: Random.new(1))",
+        ]);
+    }
+
+    /// `random:` is honoured by both `shuffle` and `shuffle!` — they share
+    /// one Fisher-Yates body, so the destructive form can no longer ignore
+    /// the keyword and silently draw from the global PRNG.
+    #[test]
+    fn shuffle_random_keyword() {
+        run_tests(&[
+            "(1..10).to_a.shuffle!(random: Random.new(1))",
+            "[(1..10).to_a.shuffle(random: Random.new(1)), (1..10).to_a.shuffle!(random: Random.new(1))]",
+            // One instance drives a whole shuffle and stays in step with
+            // its own subsequent draws.
+            "r = Random.new(42); [(1..20).to_a.shuffle(random: r), (1..20).to_a.shuffle(random: r), r.rand(100)]",
+            "r = Random.new(42); [(1..20).to_a.shuffle!(random: r), (1..20).to_a.shuffle!(random: r), r.rand(100)]",
+            // `Random` itself is CRuby's default argument: the global PRNG.
+            "srand(9); [[1,2,3,4,5].shuffle(random: Random), [1,2,3,4,5].shuffle!(random: Random)]",
+            "srand(9); [[1,2,3,4,5].shuffle, [1,2,3,4,5].shuffle!]",
+            // A `Random` subclass is drawn from directly, so a redefined
+            // `#rand` is bypassed (CRuby's `try_get_rnd`)...
+            "class R < Random; def rand(n) = 0; end; [1,2,3,4,5].shuffle(random: R.new(1))",
+            // ...while an unrelated object is duck-typed through `#rand`.
+            "class Q; def initialize; @i = 0; end; def rand(n) = (@i += 1) % n; end; [1,2,3,4,5].shuffle(random: Q.new)",
+            // `nil` is an argument, not "not given": `Kernel#rand` is
+            // private, so the public-only dispatch raises.
+            "begin; [1,2].shuffle(random: nil); rescue => e; [e.class, e.message]; end",
+            "begin; [1,2].shuffle!(random: nil); rescue => e; [e.class, e.message]; end",
+            // Out-of-range draws are rejected at both ends.
+            "o = Object.new; def o.rand(n) = 999; begin; [1,2,3].shuffle(random: o); rescue => e; [e.class, e.message]; end",
+            "o = Object.new; def o.rand(n) = -1; begin; [1,2,3].shuffle(random: o); rescue => e; [e.class, e.message]; end",
+            "o = Object.new; def o.rand(n) = 'x'; begin; [1,2,3].shuffle(random: o); rescue => e; [e.class, e.message]; end",
+            // A `#rand` that truncates to a valid index is accepted.
+            "o = Object.new; def o.rand(n) = 0.9; [1,2,3].shuffle(random: o)",
+            // Resizing self from inside `#rand` is caught; `shuffle` works
+            // on a private copy and so is unaffected.
+            r##"
+            a = [1,2,3,4,5,6,7,8]
+            o = Object.new
+            o.define_singleton_method(:rand) { |n| a.clear; 0 }
+            begin; a.shuffle!(random: o); rescue => e; [e.class, e.message]; end
+            "##,
+            r##"
+            b = [1,2,3,4,5,6,7,8]
+            o = Object.new
+            o.define_singleton_method(:rand) { |n| b.clear; 0 }
+            b.shuffle(random: o)
+            "##,
+            // Degenerate receivers never draw at all.
+            "[[].shuffle, [1].shuffle, [].shuffle!(random: Random.new(1)), [1].shuffle!(random: Random.new(1))]",
+            "begin; [1,2,3].freeze.shuffle!; rescue => e; [e.class, e.message]; end",
+            "[1,2,3].freeze.shuffle.sort",
         ]);
     }
 
@@ -7329,6 +7732,75 @@ mod tests {
         run_test_no_result_check("[1, 2, 3, 4, 5].sample(3).size");
         // sample with negative n raises error
         run_test_error("[1, 2, 3].sample(-1)");
+    }
+
+    /// `sample(n)` reproduces CRuby element for element, not merely
+    /// "n distinct elements": each of CRuby's branches maps the same draws
+    /// onto a different result, so an `srand`-seeded run pins the branch
+    /// boundaries as well as the draw sequence.
+    #[test]
+    fn sample_cruby_parity() {
+        // Every n across the special cases (0..=3), the sorted-index
+        // branch (4..=10) and the general branch, on receivers short
+        // enough that n saturates at len.
+        let mut codes = vec![];
+        for len in [0usize, 1, 2, 3, 5, 10, 11, 12, 25] {
+            for n in 0..=len + 2 {
+                codes.push(format!("srand(9876); (1..{len}).to_a.sample({n})"));
+            }
+            codes.push(format!("srand(9876); (1..{len}).to_a.sample"));
+        }
+        // The `memo_threshold` branch, and the len boundaries at which
+        // that threshold changes divisor.
+        for len in [2559usize, 2560, 5119, 5120, 10239, 10240] {
+            for n in [11usize, 20, 21, 41, 81, 161, 321] {
+                codes.push(format!("srand(31); (1..{len}).to_a.sample({n})"));
+            }
+        }
+        run_tests(&codes.iter().map(String::as_str).collect::<Vec<_>>());
+    }
+
+    /// `random:` reaches `sample` through the same resolver as `shuffle`.
+    #[test]
+    fn sample_random_keyword() {
+        run_tests(&[
+            "(1..20).to_a.sample(random: Random.new(7))",
+            "(1..20).to_a.sample(5, random: Random.new(7))",
+            // One instance drives several samples and stays in step with
+            // its own subsequent draws.
+            "r = Random.new(3); [(1..20).to_a.sample(4, random: r), (1..20).to_a.sample(4, random: r), (1..20).to_a.sample(random: r), r.rand(1000)]",
+            // `Random` itself is CRuby's default argument: the global PRNG.
+            "srand(5); [(1..20).to_a.sample(4, random: Random), (1..20).to_a.sample(random: Random)]",
+            "srand(5); [(1..20).to_a.sample(4), (1..20).to_a.sample]",
+            // A `Random` subclass is drawn from directly, bypassing a
+            // redefined `#rand`; an unrelated object is duck-typed.
+            "class R < Random; def rand(n) = 0; end; (1..20).to_a.sample(4, random: R.new(2))",
+            "class Q; def initialize; @i = 0; end; def rand(n) = (@i += 1) % n; end; [(1..20).to_a.sample(5, random: Q.new), (1..20).to_a.sample(random: Q.new)]",
+            // `nil` is an argument, not "not given".
+            "begin; [1,2].sample(random: nil); rescue => e; [e.class, e.message]; end",
+            "begin; [1,2].sample(2, random: nil); rescue => e; [e.class, e.message]; end",
+            "o = Object.new; def o.rand(n) = 999; begin; (1..20).to_a.sample(2, random: o); rescue => e; [e.class, e.message]; end",
+            "o = Object.new; def o.rand(n) = -1; begin; (1..20).to_a.sample(2, random: o); rescue => e; [e.class, e.message]; end",
+            // Shrinking self from inside `#rand` voids indices drawn
+            // against the old length rather than reading out of bounds.
+            r##"
+            b = (1..20).to_a
+            m = Object.new
+            m.define_singleton_method(:rand) { |n| b.replace([1, 2]); 0 }
+            b.sample(4, random: m)
+            "##,
+            r##"
+            c = (1..20).to_a
+            m = Object.new
+            m.define_singleton_method(:rand) { |n| c.replace((1..3).to_a); 0 }
+            c.sample(15, random: m)
+            "##,
+            // `n` is `to_int`-coerced; a subclass receiver still samples
+            // into a plain Array.
+            "class N; def to_int = 3; end; (1..20).to_a.sample(N.new).size",
+            "class C < Array; end; [C.new([1,2,3]).sample(2).class, C.new([1,2,3]).sample.class]",
+            "[1,2,3].freeze.sample(2).size",
+        ]);
     }
 
     #[test]
