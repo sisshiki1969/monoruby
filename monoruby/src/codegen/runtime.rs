@@ -68,7 +68,47 @@ pub(super) extern "C" fn find_method(
             ic_class
         }
     };
+    // Feed the call site's polymorphic method cache: this slow path runs
+    // exactly when the single-entry bytecode cache missed, so the PMC
+    // accumulates the receiver classes a polymorphic site cycles through
+    // (and one entry for a monomorphic site's first execution).
+    if let Some(f) = fid {
+        globals.store[callid].pmc.record(cache_class, None, Some(f));
+    }
     ((cache_class.u32() as u64) << 32) | fid.map_or(0, |f| f.get()) as u64
+}
+
+///
+/// Feed a pair-keyed call site's polymorphic method cache from the VM.
+///
+/// Called by `vm_save_binary_class` (both arches) — which BinOp / Cmp /
+/// Index / StoreIndex all share — on cache population and on every
+/// polymorphic transition, never on the steady-state path. The operand
+/// classes were just stored into the bytecode inline cache, so they are
+/// read back from `pc` (the *executing* instruction) instead of being
+/// passed by value.
+///
+pub(super) extern "C" fn pmc_record_binary(vm: &mut Executor, globals: &mut Globals, pc: BytecodePtr) {
+    pmc_record_from_pc(vm, globals, pc, true);
+}
+
+/// Unary twin of [`pmc_record_binary`], fed by `vm_save_lhs_class`:
+/// records the receiver class only.
+pub(super) extern "C" fn pmc_record_unary(vm: &mut Executor, globals: &mut Globals, pc: BytecodePtr) {
+    pmc_record_from_pc(vm, globals, pc, false);
+}
+
+fn pmc_record_from_pc(vm: &mut Executor, globals: &mut Globals, pc: BytecodePtr, binary: bool) {
+    let iseq_id = globals.store[vm.cfp().lfp().func_id()].as_iseq();
+    let bc_pos = globals.store[iseq_id].get_pc_index(Some(pc));
+    // Every binop/unop/cmp/Index/StoreIndex records a callsite; the lone
+    // exception (RescueTEq) never reaches the recording branches.
+    let Some(callid) = globals.store.get_callsite_id(iseq_id, bc_pos) else {
+        return;
+    };
+    let Some(recv) = pc.classid1() else { return };
+    let arg = if binary { pc.classid2() } else { None };
+    globals.store[callid].pmc.record(recv, arg, None);
 }
 
 /// CRuby's Ruby-3.4 "unused block" warning: calling a method with a

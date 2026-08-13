@@ -319,6 +319,40 @@ StoreIndex(133)は全て `new_callsite` + `new_callsite_map_entry` で
   `_polymorphic` を配線済み。Index は binop と違い fixnum fast path を
   持たないため、検出は全実行に効く(遅延なし)。
 
+### 7.5 実装済み: PMC の記録と profile ダンプ(2026-08)
+
+記録側を実装した(JIT 消費は未着手)。設計:
+
+- **格納**: `CallSiteInfo::pmc: PolyCache`(`store.rs`)。最大
+  `PMC_WAYS = 4` エントリ `(recv, Option<arg>, Option<fid>, count)` +
+  megamorphic overflow カウンタ。キー形状は
+  **MethodCall / UnOp = レシーバのみ、BinOp / Cmp / Index /
+  StoreIndex = レシーバ + 第一引数**。
+- **記録点(すべて slow path のみ、定常状態のコストゼロ)**:
+  - MethodCall: `runtime::find_method`(単一エントリキャッシュのミス時に
+    呼ばれる)で `class_for_ic` と解決済み FuncId を記録。
+    `cacheable = false`(frame-dependent super)は記録しない。
+  - BinOp / Cmp / Index / StoreIndex: `vm_save_binary_class` /
+    `a64_save_binary_class` の「初回 population」と「poly 遷移」の 2 分岐
+    から `runtime::pmc_record_binary(vm, globals, pc)` を呼ぶ。クラスは
+    直前にバイトコード IC へ書いた値を pc から読み戻すので値渡し不要。
+    callsite は `cfp → iseq → get_pc_index → callsite_map` で解決
+    (record 分岐のみのコスト)。
+  - UnOp: 同様に `vm_save_lhs_class` / `a64_save_lhs_class` から
+    `pmc_record_unary`(レシーバのみ)。
+- **ダンプ**: `--features profile` の終了時統計(`Store::show_stats`)に
+  「polymorphic method cache」節を追加。サイト数サマリ
+  (recorded / polymorphic / megamorphic)と、slow-path 観測数順の
+  多相サイト top 40 を `class(/arg)(=resolved-func) xN` 形式で表示。
+  count は **slow-path 観測数**(fast path は記録しないので呼び出し
+  総数ではない)。
+- 実測例(gem 起動込みの小スクリプト): 3,984 サイト記録・35 多相・
+  13 megamorphic。`initialize` / `__builtin_allocate__`(overflow 196)や
+  Errno 網羅の `is_a?`(overflow 130)が megamorphic として正しく
+  弁別され、`nil?` は `Array=Kernel#nil? | NilClass=Kernel#nil? | …` と
+  全 way 同一 FuncId が観測できる — §7.2 の「同一 FuncId way の畳み込み」
+  の実データがそのまま得られる。
+
 ## 8. このブランチに含まれる実装
 
 - `JIT: nil-tolerant receiver guard for nil? call sites` — §3.1/3.2。

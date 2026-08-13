@@ -514,21 +514,35 @@ impl Codegen {
     /// - rdi: Value
     ///
     /// ### destroy
-    /// - rax, r8
+    /// - rax, r8 (+ caller-saved except rdi on the record branch)
     ///
     fn vm_save_lhs_class(&mut self) {
         let get_class = self.get_class.clone();
         let skip = self.jit.label();
+        let record = self.jit.label();
         monoasm! { &mut self.jit,
             call  get_class;
             // r8 <- cached class (0 if the inline cache is empty)
             movl  r8, [r13 - 8];
             movl  [r13 - 8], rax;
             testq r8, r8;
-            jeq   skip;
+            jeq   record;      // first population: record without the flag
             cmpl  r8, rax;
             jeq   skip;
             movb  [r13 + (OPCODE_SUB)], 1;
+        record:
+            // Feed the call site's polymorphic method cache — population and
+            // transitions only, see `vm_save_binary_class`. The caller keeps
+            // the operand Value in rdi; preserve it (rax as padding).
+            pushq rdi;
+            pushq rax;
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rdx, [r13 - 16];
+            movq rax, (runtime::pmc_record_unary);
+            call rax;
+            popq rax;
+            popq rdi;
         skip:
         };
     }
@@ -541,12 +555,13 @@ impl Codegen {
     /// - rsi: Value
     ///
     /// ### destroy
-    /// - rax
+    /// - rax, r8, r9 (+ caller-saved except rdi/rsi/r15 on the record branch)
     ///
     fn vm_save_binary_class(&mut self) {
         let get_class = self.get_class.clone();
         let skip = self.jit.label();
         let set_poly = self.jit.label();
+        let record = self.jit.label();
         monoasm! { &mut self.jit,
             call  get_class;
             // r8 <- cached lhs class (0 if the inline cache is empty)
@@ -566,7 +581,7 @@ impl Codegen {
             // non-deoptimizing dispatch instead of a monomorphic
             // class guard.
             testq r8, r8;
-            jeq   skip;
+            jeq   record;      // first population: record without the flag
             cmpl  r8, [r13 - 8];
             jne   set_poly;
             cmpl  r9, [r13 - 4];
@@ -574,6 +589,25 @@ impl Codegen {
             jmp   skip;
         set_poly:
             movb  [r13 + (OPCODE_SUB)], 1;
+        record:
+            // Feed the call site's polymorphic method cache. Population and
+            // transitions only — the steady state never gets here — so the
+            // C call is off every hot path. The caller contract keeps the
+            // operand Values in rdi/rsi (and vm_index_assign's src in r15);
+            // preserve them across the call, rcx as alignment padding.
+            pushq rdi;
+            pushq rsi;
+            pushq r15;
+            pushq rcx;
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rdx, [r13 - 16];  // r13 = next instruction; the cache is ours
+            movq rax, (runtime::pmc_record_binary);
+            call rax;
+            popq rcx;
+            popq r15;
+            popq rsi;
+            popq rdi;
         skip:
         };
     }

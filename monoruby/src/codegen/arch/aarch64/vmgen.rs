@@ -1336,18 +1336,28 @@ impl Codegen {
     pub(in crate::codegen) fn a64_save_lhs_class(&mut self) {
         let get_class = self.get_class.clone();
         let skip = self.jit.label();
+        let record = self.jit.label();
         monoasm_arm64!(&mut self.jit,
             ldr w10, [x(PC.0), #(8)]; // old classid1 (0 = cache empty)
             mov x0, x2;
             bl get_class;             // x0 = class(operand)
             str w0, [x(PC.0), #(8)];  // classid1
-            cbz w10, skip;
+            cbz w10, record;          // first population: record, no flag
             cmp w10, w0;
         );
         self.jit.bcond_label(Cond::Eq, &skip);
         monoasm_arm64!(&mut self.jit,
             mov x11, (1);
             strb w11, [x(PC.0), #(7)]; // opcode_sub = 1 (polymorphic)
+            record:
+            // Feed the call site's polymorphic method cache — population and
+            // transitions only. The operand (x2) is already documented as
+            // clobbered here; callers reload it afterwards.
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x2, x(PC.0);           // the executing instruction
+            mov x9, (runtime::pmc_record_unary as *const () as u64);
+            blr x9;
             skip:
         );
     }
@@ -1356,6 +1366,7 @@ impl Codegen {
         let get_class = self.get_class.clone();
         let set_poly = self.jit.label();
         let skip = self.jit.label();
+        let record = self.jit.label();
         monoasm_arm64!(&mut self.jit,
             // Read the previously-cached operand classes before overwriting
             // them (x10 = old classid1, x12 = old classid2; 0 = cache empty),
@@ -1374,7 +1385,7 @@ impl Codegen {
             // class changed, mark the site polymorphic (opcode_sub = 1, offset
             // +7) so the JIT emits a non-deoptimizing dispatch instead of a
             // monomorphic class guard.
-            cbz w10, skip;
+            cbz w10, record;            // first population: record, no flag
             ldr w11, [x(PC.0), #(8)];
             cmp w10, w11;
         );
@@ -1389,6 +1400,17 @@ impl Codegen {
             set_poly:
             mov x11, (1);
             strb w11, [x(PC.0), #(7)];  // opcode_sub = 1 (polymorphic)
+            record:
+            // Feed the call site's polymorphic method cache — population and
+            // transitions only, never the steady state. Preserve the operand
+            // Values in x13/x14 (the caller contract) across the C call.
+            stp x13, x14, [sp, #-16]!;
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x2, x(PC.0);            // the executing instruction
+            mov x9, (runtime::pmc_record_binary as *const () as u64);
+            blr x9;
+            ldp x13, x14, [sp], #16;
             skip:
         );
     }
