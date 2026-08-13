@@ -337,14 +337,30 @@ impl Codegen {
             jnz l1;
         );
         self.float_val_to_f64(reg, dst, deopt);
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        monoasm!( &mut self.jit,
-        l1:
-            movq rdi, R(reg as _);
-            jmp deopt;
-        );
-        self.jit.select_page(0);
+        // The fixnum bailout goes to the cold page when we are emitting hot
+        // code; when this conversion itself sits in cold (page-1) code — a
+        // block whose receiver stayed polymorphic, e.g. behind a
+        // nil-tolerant guard — it is emitted in line instead, jumped over
+        // by the fall-through (same dual shape as `guard_class`'s
+        // fail-wrapper).
+        if self.jit.get_page() == 0 {
+            self.jit.select_page(1);
+            monoasm!( &mut self.jit,
+            l1:
+                movq rdi, R(reg as _);
+                jmp deopt;
+            );
+            self.jit.select_page(0);
+        } else {
+            let skip = self.jit.label();
+            monoasm!( &mut self.jit,
+                jmp skip;
+            l1:
+                movq rdi, R(reg as _);
+                jmp deopt;
+            skip:
+            );
+        }
     }
 
     /*///
@@ -433,15 +449,30 @@ impl Codegen {
         exit:
         }
 
-        assert_eq!(0, self.jit.get_page());
-        self.jit.select_page(1);
-        self.jit.bind_label(heap);
-        self.guard_rvalue(reg, FLOAT_CLASS, side_exit);
-        monoasm! {&mut self.jit,
-            movq xmm(dst), [R(r) + (RVALUE_OFFSET_KIND)];
-            jmp  exit;
+        // Heap-Float load: on the cold page when emitting hot code, in line
+        // (jumped over by the fall-through) when this conversion itself is
+        // already in cold page-1 code — same dual shape as `float_to_f64`.
+        if self.jit.get_page() == 0 {
+            self.jit.select_page(1);
+            self.jit.bind_label(heap);
+            self.guard_rvalue(reg, FLOAT_CLASS, side_exit);
+            monoasm! {&mut self.jit,
+                movq xmm(dst), [R(r) + (RVALUE_OFFSET_KIND)];
+                jmp  exit;
+            }
+            self.jit.select_page(0);
+        } else {
+            let skip = self.jit.label();
+            monoasm! {&mut self.jit,
+                jmp  skip;
+            }
+            self.jit.bind_label(heap);
+            self.guard_rvalue(reg, FLOAT_CLASS, side_exit);
+            monoasm! {&mut self.jit,
+                movq xmm(dst), [R(r) + (RVALUE_OFFSET_KIND)];
+            }
+            self.jit.bind_label(skip);
         }
-        self.jit.select_page(0);
     }
 
     ///
