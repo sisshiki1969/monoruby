@@ -103,13 +103,107 @@ impl Codegen {
         }
     }
 
-    /// `Hash#[]`: `hashindex(vm, globals, recv, key)`. recv in rdx, key in rcx.
-    /// Result Value in rax (errors via the trailing HandleError).
-    pub(crate) fn emit_hash_index(&mut self, hashindex: u64) {
+    /// `String#<<` with a Fixnum byte appended in line. A byte 0..=127
+    /// appends into any encoding (it is its own one-byte encode in every
+    /// ASCII-compatible receiver and the raw-byte append everywhere else —
+    /// exactly what the builtin does); a byte with the high bit set only
+    /// into ASCII-8BIT (other encodings multi-byte-encode or reject it). A
+    /// frozen/chilled receiver, a shared (copy-on-write) or full buffer,
+    /// and every non-Fixnum or out-of-range argument falls back to `f` =
+    /// `string_shl(vm, globals, recv, arg)`, the builtin's full semantics
+    /// (String append, `#to_str` coercion, warn-and-unchill, errors via the
+    /// trailing HandleError). Keeps the cached code-range classification
+    /// consistent with `RStringInner::extend_from_slice_checked`: an ASCII
+    /// byte preserves the cache, a high byte degrades it to Unknown.
+    ///
+    /// ### in
+    /// - rdi: receiver: String (class-guarded)
+    /// - rsi: argument: Value (unguarded)
+    ///
+    /// ### out
+    /// - rax: the receiver (`<<` returns self) / the helper's result
+    ///
+    /// ### destroy
+    /// - rax, rcx, rdx, rsi (+ caller-saved on the fallback call)
+    pub(crate) fn emit_string_shl(&mut self, f: u64) {
+        let fallback = self.jit.label();
+        let enc_ok = self.jit.label();
+        let heap = self.jit.label();
+        let stored = self.jit.label();
+        let keep_cr = self.jit.label();
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            // only a Fixnum byte inlines
+            testq rsi, 1;
+            jz   fallback;
+            // frozen (0b010) or chilled (0b100) → helper raises / warns
+            testb [rdi + (RVALUE_OFFSET_FLAG)], (0b110);
+            jnz  fallback;
+            movq rdx, rsi;
+            sarq rdx, 1;
+            // byte range 0..=255 (unsigned compare catches negatives)
+            cmpq rdx, (0xff);
+            ja   fallback;
+            cmpq rdx, (0x7f);
+            jle  enc_ok;
+            // high byte: raw append only into ASCII-8BIT (Ascii8 == 0)
+            cmpb [rdi + (crate::rvalue::STRING_TY_OFFSET)], (0);
+            jne  fallback;
+        enc_ok:
+            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+            // shared (copy-on-write) buffer → helper detaches
+            movq rcx, (crate::rvalue::STRING_SHARED_TAG);
+            cmpq rax, rcx;
+            jeq  fallback;
+            cmpq rax, (STRING_INLINE_CAP);
+            jgt  heap;
+            // inline buffer: rax is the length, STRING_INLINE_CAP the
+            // capacity; the `cmpq` above already set the full-buffer flags.
+            jeq  fallback;
+            lea  rcx, [rdi + (RVALUE_OFFSET_INLINE)];
+            movb [rcx + rax], rdx;
+            addq [rdi + (RVALUE_OFFSET_ARY_CAPA)], 1;
+            jmp  stored;
+        heap:
+            // spilled buffer: rax is the capacity, the length lives beside
+            // the pointer. A full buffer reallocates via the helper.
+            movq rcx, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            cmpq rcx, rax;
+            jge  fallback;
+            movq rax, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+            movb [rax + rcx], rdx;
+            addq [rdi + (RVALUE_OFFSET_HEAP_LEN)], 1;
+        stored:
+            cmpq rdx, (0x7f);
+            jle  keep_cr;
+            movb [rdi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::Unknown as u64);
+        keep_cr:
+            movq rax, rdi;
+        exit:
+        }
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        fallback:
+            movq rdx, rdi;
+            movq rcx, rsi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (f);
+            call rax;
+            jmp  exit;
+        }
+        self.jit.select_page(0);
+    }
+
+    /// Direct call of a two-value runtime helper `f(vm, globals, a, b)`,
+    /// skipping the Ruby method frame: `a` in rdx, `b` in rcx. Result Value
+    /// in rax (errors via the trailing HandleError). Used by the `Hash#[]`
+    /// and `String#<<` inliners.
+    pub(crate) fn emit_call_2args(&mut self, f: u64) {
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            movq rax, (hashindex);
+            movq rax, (f);
             call rax;
         }
     }

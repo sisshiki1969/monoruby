@@ -831,6 +831,12 @@ pub fn map_bytes_to_utf8(bytes: &[u8]) -> String {
 pub const STRING_CR_OFFSET: usize =
     super::RVALUE_OFFSET_KIND + std::mem::offset_of!(RStringInner, cr);
 
+/// Byte offset of the encoding tag (`ty`) from the head of an `RValue`
+/// holding a String, for the JIT's inline `String#<<`. `Encoding` is
+/// `repr(u8)`, so its first byte is the discriminant (`Ascii8` == 0).
+pub const STRING_TY_OFFSET: usize =
+    super::RVALUE_OFFSET_KIND + std::mem::offset_of!(RStringInner, ty);
+
 impl std::ops::Deref for RStringInner {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
