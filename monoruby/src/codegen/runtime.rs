@@ -83,22 +83,49 @@ pub(super) extern "C" fn find_method(
 ///
 /// Called by `vm_save_binary_class` (both arches) — which BinOp / Cmp /
 /// Index / StoreIndex all share — on cache population and on every
-/// polymorphic transition, never on the steady-state path. The operand
-/// classes were just stored into the bytecode inline cache, so they are
-/// read back from `pc` (the *executing* instruction) instead of being
-/// passed by value.
+/// polymorphic transition, never on the steady-state path. The new
+/// operand classes were just stored into the bytecode inline cache, so
+/// they are read back from `pc` (the *executing* instruction);
+/// `old_lhs`/`old_rhs` carry the pair this transition displaced (0 =
+/// the cache was empty). The displaced pair is recorded too: the fixnum
+/// fast path stamps `Integer`/`Integer` into the IC without recording,
+/// so the moment it is displaced is that pair's only chance to reach the
+/// PMC — without this, classes that pass through the ever-changing IC
+/// would be lost to it.
 ///
-pub(super) extern "C" fn pmc_record_binary(vm: &mut Executor, globals: &mut Globals, pc: BytecodePtr) {
-    pmc_record_from_pc(vm, globals, pc, true);
+pub(super) extern "C" fn pmc_record_binary(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    pc: BytecodePtr,
+    old_lhs: u32,
+    old_rhs: u32,
+) {
+    let displaced = match (ClassId::from(old_lhs), ClassId::from(old_rhs)) {
+        (Some(l), r @ Some(_)) => Some((l, r)),
+        _ => None,
+    };
+    pmc_record_from_pc(vm, globals, pc, true, displaced);
 }
 
 /// Unary twin of [`pmc_record_binary`], fed by `vm_save_lhs_class`:
-/// records the receiver class only.
-pub(super) extern "C" fn pmc_record_unary(vm: &mut Executor, globals: &mut Globals, pc: BytecodePtr) {
-    pmc_record_from_pc(vm, globals, pc, false);
+/// records the receiver class only (`old_recv` = the displaced one).
+pub(super) extern "C" fn pmc_record_unary(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    pc: BytecodePtr,
+    old_recv: u32,
+) {
+    let displaced = ClassId::from(old_recv).map(|c| (c, None));
+    pmc_record_from_pc(vm, globals, pc, false, displaced);
 }
 
-fn pmc_record_from_pc(vm: &mut Executor, globals: &mut Globals, pc: BytecodePtr, binary: bool) {
+fn pmc_record_from_pc(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    pc: BytecodePtr,
+    binary: bool,
+    displaced: Option<(ClassId, Option<ClassId>)>,
+) {
     let iseq_id = globals.store[vm.cfp().lfp().func_id()].as_iseq();
     let bc_pos = globals.store[iseq_id].get_pc_index(Some(pc));
     // Every binop/unop/cmp/Index/StoreIndex records a callsite; the lone
@@ -106,6 +133,9 @@ fn pmc_record_from_pc(vm: &mut Executor, globals: &mut Globals, pc: BytecodePtr,
     let Some(callid) = globals.store.get_callsite_id(iseq_id, bc_pos) else {
         return;
     };
+    if let Some((recv, arg)) = displaced {
+        globals.store[callid].pmc.record(recv, arg, None);
+    }
     let Some(recv) = pc.classid1() else { return };
     let arg = if binary { pc.classid2() } else { None };
     globals.store[callid].pmc.record(recv, arg, None);

@@ -533,12 +533,15 @@ impl Codegen {
         record:
             // Feed the call site's polymorphic method cache — population and
             // transitions only, see `vm_save_binary_class`. The caller keeps
-            // the operand Value in rdi; preserve it (rax as padding).
+            // the operand Value in rdi; preserve it (rax as padding). The
+            // displaced class rides along in r8 so a class the fixnum fast
+            // path stamped (without recording) is captured on displacement.
             pushq rdi;
             pushq rax;
             movq rdi, rbx;
             movq rsi, r12;
             lea  rdx, [r13 - 16];
+            movq rcx, r8;          // displaced class (0 = cache was empty)
             movq rax, (runtime::pmc_record_unary);
             call rax;
             popq rax;
@@ -594,7 +597,10 @@ impl Codegen {
             // transitions only — the steady state never gets here — so the
             // C call is off every hot path. The caller contract keeps the
             // operand Values in rdi/rsi (and vm_index_assign's src in r15);
-            // preserve them across the call, rcx as alignment padding.
+            // preserve them across the call, rcx as alignment padding. The
+            // displaced pair still sits in r8/r9 and rides along so classes
+            // the fixnum fast path stamped (without recording) are captured
+            // the moment they leave the inline cache.
             pushq rdi;
             pushq rsi;
             pushq r15;
@@ -602,6 +608,8 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             lea  rdx, [r13 - 16];  // r13 = next instruction; the cache is ours
+            movq rcx, r8;          // displaced lhs class (0 = cache was empty)
+            movq r8, r9;           // displaced rhs class
             movq rax, (runtime::pmc_record_binary);
             call rax;
             popq rcx;

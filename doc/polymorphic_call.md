@@ -334,10 +334,18 @@ StoreIndex(133)は全て `new_callsite` + `new_callsite_map_entry` で
     `cacheable = false`(frame-dependent super)は記録しない。
   - BinOp / Cmp / Index / StoreIndex: `vm_save_binary_class` /
     `a64_save_binary_class` の「初回 population」と「poly 遷移」の 2 分岐
-    から `runtime::pmc_record_binary(vm, globals, pc)` を呼ぶ。クラスは
-    直前にバイトコード IC へ書いた値を pc から読み戻すので値渡し不要。
-    callsite は `cfp → iseq → get_pc_index → callsite_map` で解決
+    から `runtime::pmc_record_binary(vm, globals, pc, old_lhs, old_rhs)`
+    を呼ぶ。新クラスは直前にバイトコード IC へ書いた値を pc から読み
+    戻し、**置き換えられた旧ペアも引数で渡して一緒に記録する**。
+    fixnum fast path(`vm_save_binary_integer`)は IC に無記録で
+    スタンプするため、displacement の瞬間がそのペアを PMC に残す唯一の
+    機会 — IC は実行とともに変化するので、これを取り逃すと IC を
+    通過したクラスが失われる。callsite は
+    `cfp → iseq → get_pc_index → callsite_map` で解決
     (record 分岐のみのコスト)。
+    なお「fast path のスタンプが一度も displace されずに終わった」
+    サイトはその 1 クラスが PMC に載らないが、IC 自体が生きている —
+    **消費側は IC の現内容と PMC の和集合を観測集合として扱う**こと。
   - UnOp: 同様に `vm_save_lhs_class` / `a64_save_lhs_class` から
     `pmc_record_unary`(レシーバのみ)。
 - **ダンプ**: `--features profile` の終了時統計(`Store::show_stats`)に

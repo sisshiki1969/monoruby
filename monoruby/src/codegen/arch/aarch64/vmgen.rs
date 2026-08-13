@@ -1352,10 +1352,13 @@ impl Codegen {
             record:
             // Feed the call site's polymorphic method cache — population and
             // transitions only. The operand (x2) is already documented as
-            // clobbered here; callers reload it afterwards.
+            // clobbered here; callers reload it afterwards. The displaced
+            // class rides along in w10 so a class the fixnum fast path
+            // stamped (without recording) is captured on displacement.
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             mov x2, x(PC.0);           // the executing instruction
+            mov x3, x10;               // displaced class (0 = empty)
             mov x9, (runtime::pmc_record_unary as *const () as u64);
             blr x9;
             skip:
@@ -1403,11 +1406,16 @@ impl Codegen {
             record:
             // Feed the call site's polymorphic method cache — population and
             // transitions only, never the steady state. Preserve the operand
-            // Values in x13/x14 (the caller contract) across the C call.
+            // Values in x13/x14 (the caller contract) across the C call. The
+            // displaced pair still sits in w10/w12 and rides along so classes
+            // the fixnum fast path stamped (without recording) are captured
+            // the moment they leave the inline cache.
             stp x13, x14, [sp, #-16]!;
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             mov x2, x(PC.0);            // the executing instruction
+            mov x3, x10;                // displaced lhs class (0 = empty)
+            mov x4, x12;                // displaced rhs class
             mov x9, (runtime::pmc_record_binary as *const () as u64);
             blr x9;
             ldp x13, x14, [sp], #16;
