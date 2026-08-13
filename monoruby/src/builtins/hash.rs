@@ -1098,7 +1098,7 @@ fn hash_get_or_key(
     state.load(ir, callsite.recv, GP::Rdx);
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
-    ir.inline(|r#gen, _, _, _| r#gen.emit_hash_index(hashgetorkey as *const () as u64));
+    ir.inline(|r#gen, _, _, _| r#gen.emit_call_2args(hashgetorkey as *const () as u64));
     ir.fpr_restore(using_fpr);
     let error = ir.new_error(state);
     ir.handle_error(error);
@@ -1631,7 +1631,7 @@ extern "C" fn hashindex(
 }
 
 /// `Hash#__get_or_key` for the JIT: same ABI as [`hashindex`], so the
-/// inliner reuses `emit_hash_index` with this address. One probe, the
+/// inliner reuses `emit_call_2args` with this address. One probe, the
 /// key itself on a miss, the default never consulted.
 extern "C" fn hashgetorkey(
     vm: &mut Executor,
