@@ -33,7 +33,8 @@ pub use rational::{RationalFloorResult, RationalInner};
 pub use regexp::{Regexp, RegexpInner};
 pub(crate) use string::pack::*;
 pub use string::{
-    CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET, map_bytes_to_utf8,
+    CharByteIter, CodeRange, Encoding, RString, RStringInner, STRING_CR_OFFSET, STRING_TY_OFFSET,
+    map_bytes_to_utf8,
 };
 pub(crate) use string::{
     STRING_SHARED_TAG, check_string_not_modified, string_snapshot, string_substring,

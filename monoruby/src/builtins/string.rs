@@ -50,7 +50,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, ">", gt, 1);
     globals.define_builtin_func(STRING_CLASS, "<=", le, 1);
     globals.define_builtin_func(STRING_CLASS, "<", lt, 1);
-    globals.define_builtin_func(STRING_CLASS, "<<", shl, 1);
+    globals.define_builtin_inline_func(STRING_CLASS, "<<", shl, inline_gen2!(string_shl_gen), 1);
     globals.define_builtin_func(STRING_CLASS, "%", rem, 1);
     globals.define_builtin_func(STRING_CLASS, "=~", match_, 1);
     globals.define_builtin_funcs_with(STRING_CLASS, "[]", &["slice"], index, 1, 2, false);
@@ -775,23 +775,32 @@ fn gt(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=3c=3c.html]
 #[monoruby_builtin]
 fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val().as_string_mut(vm, globals)?;
-    if let Some(other) = lfp.arg(0).is_rstring() {
+    shl_inner(vm, globals, lfp.self_val(), lfp.arg(0))
+}
+
+fn shl_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut recv: Value,
+    other_v: Value,
+) -> Result<Value> {
+    let mut self_ = recv.as_string_mut(vm, globals)?;
+    if let Some(other) = other_v.is_rstring() {
         self_.extend(&other, &globals.store)?;
-    } else if lfp.arg(0).try_fixnum().is_none() && lfp.arg(0).is_integer() {
+    } else if other_v.try_fixnum().is_none() && other_v.is_integer() {
         // `String#<<` / `#concat` treat any Integer as a codepoint; a
         // Bignum can never be a valid codepoint, so it is always out
         // of char range (CRuby: `RangeError "bignum out of char
         // range"`).
         return Err(MonorubyErr::rangeerr("bignum out of char range"));
-    } else if let Some(i) = lfp.arg(0).try_fixnum() {
+    } else if let Some(i) = other_v.try_fixnum() {
         let ch = match u32::try_from(i) {
             Ok(ch) => ch,
-            Err(_) => return Err(MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0))),
+            Err(_) => return Err(MonorubyErr::char_out_of_range(&globals.store, other_v)),
         };
         if self_.encoding().is_utf8_compatible() {
             let c = char::from_u32(ch)
-                .ok_or_else(|| MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0)))?;
+                .ok_or_else(|| MonorubyErr::char_out_of_range(&globals.store, other_v))?;
             let mut buf = [0u8; 4];
             let encoded = c.encode_utf8(&mut buf);
             self_.extend_from_slice_checked(encoded.as_bytes())?;
@@ -800,15 +809,71 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             if let Ok(b) = u8::try_from(ch) {
                 self_.extend_from_slice_checked(&[b])?;
             } else {
-                return Err(MonorubyErr::char_out_of_range(&globals.store, lfp.arg(0)));
+                return Err(MonorubyErr::char_out_of_range(&globals.store, other_v));
             }
         }
     } else {
-        // Try to_str coercion
-        let coerced = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+        // Try to_str coercion. `#to_str` runs Ruby code: the JIT inliner
+        // calls in frameless (receiver only in a register/caller slot), so
+        // keep the receiver rooted across the call.
+        vm.temp_push(recv);
+        let coerced = other_v.coerce_to_rstring(vm, globals);
+        vm.temp_pop();
+        let coerced = coerced?;
         self_.extend(&coerced, &globals.store)?;
     }
     Ok(self_.into())
+}
+
+/// `String#<<` for the JIT inliner: the builtin's full semantics behind a
+/// bare `f(vm, globals, recv, arg)` call, so a hot `buff << byte` /
+/// `buff << str` skips the Ruby method frame entirely.
+extern "C" fn string_shl(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    arg: Value,
+) -> Option<Value> {
+    match shl_inner(vm, globals, recv, arg) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+/// Inline `String#<<`: a Fixnum byte appended by `emit_string_shl`'s inline
+/// store; every other shape falls back — inside the emitted code, with no
+/// deopt — to a direct `string_shl` call carrying the builtin's full
+/// semantics (String append, Integer codepoint encoding, `#to_str`
+/// coercion, frozen/chilled and range errors). No receiver-class
+/// restriction is needed: a String subclass resolves to the same builtin,
+/// and error cases surface through the ordinary HandleError path.
+fn string_shl_gen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    state.load(ir, callsite.recv, GP::Rdi);
+    state.load(ir, callsite.args, GP::Rsi);
+    let using_fpr = state.get_using_fpr(ir);
+    ir.fpr_save(using_fpr);
+    ir.inline(|r#gen, _, _, _| r#gen.emit_string_shl(string_shl as *const () as u64));
+    ir.fpr_restore(using_fpr);
+    let error = ir.new_error(state);
+    ir.handle_error(error);
+    // both the inline store and the helper answer the receiver itself
+    state.def_reg2acc_class(ir, GP::Rax, callsite.dst, recv_class);
+    true
 }
 
 ///

@@ -159,19 +159,144 @@ impl Codegen {
         );
     }
 
-    /// Inlined `Hash#[]`: `hashindex(vm, globals, recv, key)`. The receiver is
-    /// already in Rdx (x2 == C arg2) and the key in Rcx (x1); move the key to
-    /// arg3 first (before x1 is overwritten by globals), then load vm/globals.
-    /// Result Value lands in Rax (x0); errors are checked by the trailing
-    /// HandleError. FP pool saved by the surrounding fpr_save/restore.
-    pub(crate) fn emit_hash_index(&mut self, hashindex: u64) {
+    /// `String#<<` with a Fixnum byte appended in line — the aarch64 twin
+    /// of x86 `emit_string_shl`. A byte 0..=127 appends into any encoding;
+    /// a byte with the high bit set only into ASCII-8BIT. A frozen/chilled
+    /// receiver, a shared (copy-on-write) or full buffer, and every
+    /// non-Fixnum or out-of-range argument falls back to `f` =
+    /// `string_shl(vm, globals, recv, arg)`, the builtin's full semantics
+    /// (errors via the trailing HandleError). Keeps the cached code-range
+    /// classification consistent with
+    /// `RStringInner::extend_from_slice_checked`.
+    ///
+    /// ### in
+    /// - Rdi (x4): receiver: String (class-guarded)
+    /// - Rsi (x3): argument: Value (unguarded)
+    ///
+    /// ### out
+    /// - Rax (x0): the receiver (`<<` returns self) / the helper's result
+    ///
+    /// ### destroy
+    /// - x0 (Rax), x1 (Rcx), x2 (Rdx), x3 (Rsi), x9
+    pub(crate) fn emit_string_shl(&mut self, f: u64) {
+        let fallback = self.jit.label();
+        let enc_ok = self.jit.label();
+        let heap = self.jit.label();
+        let stored = self.jit.label();
+        let keep_cr = self.jit.label();
+        let exit = self.jit.label();
         monoasm_arm64!(&mut self.jit,
-            mov x3, x1;           // key (Rcx) -> arg3   [recv already in x2 == Rdx]
+            // only a Fixnum byte inlines
+            mov x9, (1u64);
+            tst x3, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &fallback);
+        // frozen (0b010) or chilled (0b100) -> helper raises / warns
+        monoasm_arm64!(&mut self.jit,
+            ldrh w0, [x4, #(RVALUE_OFFSET_FLAG as u32)];
+            mov x9, (0b110u64);
+            tst x0, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+        monoasm_arm64!(&mut self.jit,
+            asr x2, x3, #(1);                                // untagged byte
+            // byte range 0..=255 (unsigned compare catches negatives)
+            cmp x2, #(0xff);
+        );
+        self.jit.bcond_label(monoasm::Cond::Hi, &fallback);
+        monoasm_arm64!(&mut self.jit,
+            cmp x2, #(0x7f);
+        );
+        self.jit.bcond_label(monoasm::Cond::Le, &enc_ok);
+        // high byte: raw append only into ASCII-8BIT (Ascii8 == 0)
+        monoasm_arm64!(&mut self.jit,
+            ldrb w0, [x4, #(crate::rvalue::STRING_TY_OFFSET as u32)];
+            cmp x0, #(0);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+        self.jit.bind_label(enc_ok);
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)]; // capa / shared tag
+            // shared (copy-on-write) buffer -> helper detaches
+            mov x9, (crate::rvalue::STRING_SHARED_TAG as u64);
+            cmp x0, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &fallback);
+        monoasm_arm64!(&mut self.jit,
+            cmp x0, #(STRING_INLINE_CAP as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Gt, &heap);
+        // inline buffer: x0 is the length, STRING_INLINE_CAP the capacity
+        self.jit.bcond_label(monoasm::Cond::Eq, &fallback); // full -> helper spills
+        monoasm_arm64!(&mut self.jit,
+            add x1, x4, #(RVALUE_OFFSET_INLINE as u32);
+            add x1, x1, x0;
+            strb w2, [x1];
+            add x0, x0, #(1);
+            str x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            b stored;
+        );
+        self.jit.bind_label(heap);
+        // spilled buffer: x0 is the capacity, the length lives beside the
+        // pointer. A full buffer reallocates via the helper.
+        monoasm_arm64!(&mut self.jit,
+            ldr x1, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            cmp x1, x0;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ge, &fallback);
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            add x0, x0, x1;
+            strb w2, [x0];
+            add x1, x1, #(1);
+            str x1, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+        );
+        self.jit.bind_label(stored);
+        // code range: an ASCII byte keeps the cache; a high byte (ASCII-8BIT
+        // by the gate above) degrades it to Unknown.
+        monoasm_arm64!(&mut self.jit,
+            cmp x2, #(0x7f);
+        );
+        self.jit.bcond_label(monoasm::Cond::Le, &keep_cr);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, #(crate::rvalue::CodeRange::Unknown as u32);
+            strb w9, [x4, #(crate::rvalue::STRING_CR_OFFSET as u32)];
+        );
+        self.jit.bind_label(keep_cr);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x4;                                      // String#<< returns self
+            b exit;
+        );
+        self.jit.bind_label(fallback);
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x4;           // recv -> arg2
+            // arg is already in x3 == C arg3
             mov x0, x19;          // vm (EXEC) -> arg0
             mov x1, x20;          // globals (GLOBALS) -> arg1
-            mov x9, (hashindex);
+            mov x9, (f);
             str x30, [sp, #-16]!; // save LR
-            blr x9;               // x0 = hashindex(vm, globals, recv, key)
+            blr x9;               // x0 = f(vm, globals, recv, arg)
+            ldr x30, [sp], #16;
+        );
+        self.jit.bind_label(exit);
+    }
+
+    /// Direct call of a two-value runtime helper `f(vm, globals, a, b)`,
+    /// skipping the Ruby method frame — the aarch64 twin of x86
+    /// `emit_call_2args`. `a` is already in Rdx (x2 == C arg2) and `b` in
+    /// Rcx (x1); move `b` to arg3 first (before x1 is overwritten by
+    /// globals), then load vm/globals. Result Value lands in Rax (x0);
+    /// errors are checked by the trailing HandleError. FP pool saved by the
+    /// surrounding fpr_save/restore. Used by the `Hash#[]` and `String#<<`
+    /// inliners.
+    pub(crate) fn emit_call_2args(&mut self, f: u64) {
+        monoasm_arm64!(&mut self.jit,
+            mov x3, x1;           // b (Rcx) -> arg3   [a already in x2 == Rdx]
+            mov x0, x19;          // vm (EXEC) -> arg0
+            mov x1, x20;          // globals (GLOBALS) -> arg1
+            mov x9, (f);
+            str x30, [sp, #-16]!; // save LR
+            blr x9;               // x0 = f(vm, globals, a, b)
             ldr x30, [sp], #16;
         );
     }

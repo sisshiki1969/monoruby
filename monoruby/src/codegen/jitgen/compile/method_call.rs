@@ -1491,6 +1491,42 @@ impl AbstractState {
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
             ir.handle_error(error);
+        } else if !callsite.forwarding
+            && callsite.pos_num >= 1
+            && callsite.splat_pos.as_slice() == [callsite.pos_num - 1]
+            && !callsite.kw_may_exists()
+            && callee.no_keyword()
+            && callee.opt_num() == 0
+            && !callee.is_rest()
+            && callee.post_num() == 0
+            && !callee.single_arg_expand()
+            && callee.req_num() + 1 >= callsite.pos_num
+        {
+            // Plain trailing-splat call `g(x.., *ary)` into a req-only
+            // callee — `item_check(*node)`-style recursion is this shape on
+            // every call. The eager `SetArgumentsForwarded` lowering fits
+            // it exactly: if at run time the splat operand is an `Array` of
+            // exactly `req_num - lead_num` elements, the leading args and
+            // the elements copy straight into the callee frame; any other
+            // length or a non-Array operand (whose bind may coerce or
+            // raise) falls back to the generic runtime inside the emitted
+            // code. No keywords exist on either side (`kw_may_exists` /
+            // `no_keyword`), so no kw-rest guard is needed, and without
+            // keyword syntax at the call site no ruby2_keywords promotion
+            // can apply. A non-forwarding splat operand is an ordinary
+            // evaluated slot, so no deferred-rest handling applies either.
+            self.write_back_recv_and_callargs(ir, callsite);
+            let error = ir.new_error(self);
+            ir.push(AsmInst::SetArgumentsForwarded {
+                callid,
+                callee_fid,
+                recv: callsite.recv,
+                args: callsite.args,
+                lead_num: callsite.pos_num - 1,
+                kwrest_guard: None,
+                deferred_src: None,
+            });
+            ir.handle_error(error);
         } else {
             // Generic path. A forwarding call here (e.g. native callee
             // such as `Array.new`'s `o.__send__(:initialize, ...)`, or
