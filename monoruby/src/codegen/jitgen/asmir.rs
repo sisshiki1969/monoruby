@@ -2041,10 +2041,11 @@ pub(super) enum AsmInst {
     },
     NewArray {
         callid: CallSiteId,
-        /// `Some((args, len))` when the literal has no splat and `1 <= len <=
-        /// ARRAY_INLINE_CAPA`, enabling the JIT inline free-list fast path
-        /// (elements live in consecutive slots starting at `args`). `None`
-        /// falls back to the runtime `gen_array` call.
+        /// `Some((args, len))` when the literal has no splat and `len <=
+        /// ARRAY_INLINE_CAPA` (0 = the empty literal `[]`), enabling the JIT
+        /// inline free-list fast path (elements live in consecutive slots
+        /// starting at `args`). `None` falls back to the runtime `gen_array`
+        /// call.
         inline: Option<(SlotId, u16)>,
         using_fpr: UsingFpr,
     },
