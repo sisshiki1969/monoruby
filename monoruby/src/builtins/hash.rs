@@ -121,6 +121,17 @@ pub(super) fn init(globals: &mut Globals) {
     // table whose value slots are overwritten in place — no per-pair digest,
     // probe, or insert.
     globals.define_builtin_func(HASH_CLASS, "__dup_table", dup_table, 0);
+    // The one-probe `map.key?(k) ? map[k] : k` behind the block-less
+    // `Hash#transform_keys(map)` walk. Inlined like `Hash#[]` (a direct
+    // call skipping the method frame), so the mapping step is a single
+    // probe with no builtin dispatch.
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "__get_or_key",
+        get_or_key,
+        inline_gen2!(hash_get_or_key),
+        1,
+    );
     globals.define_builtin_func(HASH_CLASS, "__set_value_at", set_value_at, 2);
     globals.define_builtin_func(HASH_CLASS, "__iter_begin", iter_begin, 0);
     globals.define_builtin_func(HASH_CLASS, "__iter_end", iter_end, 1);
@@ -1064,6 +1075,38 @@ fn hash_index(
 }
 
 ///
+/// Inline `Hash#__get_or_key` as a direct call to `hashgetorkey`, skipping
+/// the Ruby method frame — the same shape (and emitter) as `Hash#[]`.
+///
+fn hash_get_or_key(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    if recv_class != HASH_CLASS {
+        return false;
+    }
+    state.load(ir, callsite.args, GP::Rcx);
+    state.load(ir, callsite.recv, GP::Rdx);
+    let using_fpr = state.get_using_fpr(ir);
+    ir.fpr_save(using_fpr);
+    ir.inline(|r#gen, _, _, _| r#gen.emit_hash_index(hashgetorkey as *const () as u64));
+    ir.fpr_restore(using_fpr);
+    let error = ir.new_error(state);
+    ir.handle_error(error);
+    state.def_rax2acc(ir, callsite.dst);
+    true
+}
+
+///
 /// Inline `Hash#[]=` as a direct call to `hashindex_assign`, skipping the Ruby
 /// method frame.
 ///
@@ -1256,6 +1299,20 @@ fn new_hash_with_capacity(
 ) -> Result<Value> {
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?.max(0) as usize;
     Ok(Value::hash_with_capacity(n))
+}
+
+///
+/// ### Hash#__get_or_key (internal)
+///
+/// `self.key?(k) ? self[k] : k` in a single probe — the mapping step of
+/// `Hash#transform_keys(map)`, CRuby's `rb_hash_lookup2(map, k, k)`.
+/// Falling back to the key itself needs no sentinel, and — unlike
+/// `Hash#[]` — the receiver's default value/proc is never consulted.
+///
+#[monoruby_builtin]
+fn get_or_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let k = lfp.arg(0);
+    Ok(lfp.self_val().as_hash().get(k, vm, globals)?.unwrap_or(k))
 }
 
 ///
@@ -1566,6 +1623,24 @@ extern "C" fn hashindex(
     let h = base.as_hash();
     match h.index(vm, globals, key) {
         Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+/// `Hash#__get_or_key` for the JIT: same ABI as [`hashindex`], so the
+/// inliner reuses `emit_hash_index` with this address. One probe, the
+/// key itself on a miss, the default never consulted.
+extern "C" fn hashgetorkey(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    key: Value,
+) -> Option<Value> {
+    match base.as_hash().get(key, vm, globals) {
+        Ok(v) => Some(v.unwrap_or(key)),
         Err(err) => {
             vm.set_error(err);
             None
@@ -5115,6 +5190,40 @@ mod tests {
             r#"h = {a: 1, b: 2, c: 3, d: 4}; h.transform_keys! { |k| break if k == :c; k.succ }; h"#,
             // Enumerator when neither a block nor a hash is given.
             r#"{a: 1}.transform_keys!.class.name"#,
+        ]);
+    }
+
+    #[test]
+    fn hash_transform_keys_map_lookup() {
+        // The block-less map walk maps each key with the one-probe
+        // `__get_or_key` (CRuby's `rb_hash_lookup2(map, k, k)`).
+        run_tests(&[
+            // A nil value in the map is a hit — nil becomes the new key —
+            // so the lookup must not read it as a miss.
+            r#"{a: 1}.transform_keys({a: nil})"#,
+            // The map's default value / default proc is never consulted.
+            r#"m = Hash.new(:dd); m[:a] = :A; {a: 1, b: 2}.transform_keys(m)"#,
+            r#"
+            m = Hash.new { |mm, k| mm[k] = :gen }
+            m[:a] = :A
+            g = {a: 1, b: 2}.transform_keys(m)
+            [g, m.size]
+            "#,
+            // Warm the call site into the JIT inliner (hit, miss, and a
+            // heap key with a redefined #hash / #eql?).
+            r#"
+            class TKK
+              attr_reader :n
+              def initialize(n) = @n = n
+              def hash = @n.hash
+              def eql?(o) = o.is_a?(TKK) && o.n == @n
+            end
+            m = { :a => :A, TKK.new(1) => :one }
+            h = { :a => 1, :b => 2, TKK.new(1) => 3 }
+            r = nil
+            30.times { r = h.transform_keys(m) }
+            [r[:A], r[:b], r[:one]]
+            "#,
         ]);
     }
 

@@ -176,12 +176,12 @@ class Hash
         end
       elsif hash
         # Separate loop so the common block-less `transform_keys(map)`
-        # walk carries no per-pair block test and no yield call site.
+        # walk carries no per-pair block test and no yield call site —
+        # and maps each key with a single probe (`__get_or_key` returns
+        # the key itself on a miss, so no key?-then-[] double lookup).
         while i < __entry_count
           if __live_at(i)
-            k = __key_at(i)
-            new_k = hash.key?(k) ? hash[k] : k
-            h[new_k] = __value_at(i)
+            h[hash.__get_or_key(__key_at(i))] = __value_at(i)
           end
           i += 1
         end
