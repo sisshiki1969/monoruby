@@ -341,6 +341,28 @@ impl HashmapInner {
         }
     }
 
+    /// An empty hash pre-sized for `n` entries. `n > INLINE_CAP` builds
+    /// the boxed map with its capacity (and, past AR_MAX, its index
+    /// table) up front, so bulk fills — `Hash#to_h` / `#transform_keys`
+    /// / `#transform_values` building a result of a known size — skip
+    /// the whole inline→boxed→indexed growth ladder. `HashmapInner::new`
+    /// cannot be used for this: it converts any small (or empty) map to
+    /// the inline form, dropping the reserved capacity.
+    pub fn with_capacity(n: usize) -> Self {
+        if n <= INLINE_CAP {
+            Self::default()
+        } else {
+            Self::from_parts(
+                REP_BOXED,
+                HashBody {
+                    boxed: ManuallyDrop::new(BoxedHash::new(HashContent::Map(Box::new(
+                        RubyMap::with_capacity(n),
+                    )))),
+                },
+            )
+        }
+    }
+
     fn new_boxed_with_default(map: RubyMap<Value, Value>, default: Option<HashDefault>) -> Self {
         Self::from_parts(
             REP_BOXED,

@@ -104,7 +104,7 @@ class Hash
       end
       return h
     end
-    h = {}
+    h = __new_hash_with_capacity(size)
     # Iterate the entries here rather than through `each`. Going through
     # `each` costs two block entries per pair — `each`'s own block and then
     # this method's `yield` — where one is enough. It also lets the pair be
@@ -151,18 +151,38 @@ class Hash
   # while a `yield` in a method specialized for a hot caller gets the block
   # inlined. `block_given?` is hoisted out of the loops so the per-element
   # path stays a plain `yield`.
+  #
+  # The result hash is pre-sized to the receiver's size (CRuby's
+  # rb_hash_new_with_size) so filling it never walks the
+  # inline→boxed→indexed growth ladder, and the entries are read with the
+  # same live positional walk as `each` / `to_h` — one block entry per
+  # pair and no `[k, v]` array — with an iteration reference held so a
+  # delete during the block tombstones in place and adding a key raises.
   def transform_keys(hash = (no_arg = true; nil))
     hash = __to_hash_type(hash) unless no_arg
     blk = block_given?
     return to_enum(:transform_keys) { size } unless blk || hash
-    h = {}
-    if hash
-      each do |k, v|
-        new_k = hash.key?(k) ? hash[k] : (blk ? yield(k) : k)
-        h[new_k] = v
+    h = __new_hash_with_capacity(size)
+    guard = __iter_begin
+    begin
+      i = 0
+      if hash
+        while i < __entry_count
+          if __live_at(i)
+            k = __key_at(i)
+            new_k = hash.key?(k) ? hash[k] : (blk ? yield(k) : k)
+            h[new_k] = __value_at(i)
+          end
+          i += 1
+        end
+      else
+        while i < __entry_count
+          h[yield(__key_at(i))] = __value_at(i) if __live_at(i)
+          i += 1
+        end
       end
-    else
-      each { |k, v| h[yield(k)] = v }
+    ensure
+      __iter_end(guard)
     end
     h
   end
@@ -195,11 +215,26 @@ class Hash
     self
   end
 
+  # Same shape as `transform_keys`: pre-sized result, direct positional
+  # walk, one block entry per pair.
   def transform_values
     return to_enum(:transform_values) { size } unless block_given?
-    h = {}
-    h.compare_by_identity if compare_by_identity?
-    each { |k, v| h[k] = yield(v) }
+    if compare_by_identity?
+      h = {}
+      h.compare_by_identity
+    else
+      h = __new_hash_with_capacity(size)
+    end
+    guard = __iter_begin
+    begin
+      i = 0
+      while i < __entry_count
+        h[__key_at(i)] = yield(__value_at(i)) if __live_at(i)
+        i += 1
+      end
+    ensure
+      __iter_end(guard)
+    end
     h
   end
 

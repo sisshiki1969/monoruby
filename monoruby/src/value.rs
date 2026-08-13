@@ -1265,6 +1265,12 @@ impl Value {
         RValue::new_hash_from_inner(inner).pack()
     }
 
+    /// An empty Hash pre-sized for `n` entries (see
+    /// `HashmapInner::with_capacity`).
+    pub fn hash_with_capacity(n: usize) -> Self {
+        RValue::new_hash_from_inner(HashmapInner::with_capacity(n)).pack()
+    }
+
     pub fn hash_with_class_and_default_proc(class_id: ClassId, default_proc: Proc) -> Self {
         RValue::new_hash_with_class_and_default_proc(class_id, default_proc).pack()
     }

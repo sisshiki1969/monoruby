@@ -112,6 +112,10 @@ pub(super) fn init(globals: &mut Globals) {
     // The block-shape question `Hash#map` (builtins/hash.rb) asks about its
     // own block, answered without capturing it into a Proc.
     globals.define_builtin_func(HASH_CLASS, "__block_splits_pair?", block_splits_pair, 0);
+    // A fresh, empty Hash pre-sized for n entries — the result-hash
+    // allocation for the Ruby-side bulk builders (to_h / transform_*),
+    // skipping the inline→boxed→indexed growth ladder.
+    globals.define_builtin_func(HASH_CLASS, "__new_hash_with_capacity", new_hash_with_capacity, 1);
     globals.define_builtin_func(HASH_CLASS, "__iter_begin", iter_begin, 0);
     globals.define_builtin_func(HASH_CLASS, "__iter_end", iter_end, 1);
     globals.define_builtin_inline_func(
@@ -1237,6 +1241,17 @@ fn pairs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// actually recorded — the inline representation saturates its two depth
 /// bits — and that answer must be handed back to `__iter_end`.
 ///
+#[monoruby_builtin]
+fn new_hash_with_capacity(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?.max(0) as usize;
+    Ok(Value::hash_with_capacity(n))
+}
+
 #[monoruby_builtin]
 fn iter_begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_hash().iter_incr()))
