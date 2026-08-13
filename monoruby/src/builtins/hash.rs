@@ -112,6 +112,27 @@ pub(super) fn init(globals: &mut Globals) {
     // The block-shape question `Hash#map` (builtins/hash.rb) asks about its
     // own block, answered without capturing it into a Proc.
     globals.define_builtin_func(HASH_CLASS, "__block_splits_pair?", block_splits_pair, 0);
+    // A fresh, empty Hash pre-sized for n entries — the result-hash
+    // allocation for the Ruby-side bulk builders (to_h / transform_*),
+    // skipping the inline→boxed→indexed growth ladder.
+    globals.define_builtin_func(HASH_CLASS, "__new_hash_with_capacity", new_hash_with_capacity, 1);
+    // The table copy + positional value store behind `Hash#transform_values(!)`
+    // (builtins/hash.rb): the keys never change, so the result is a dup of the
+    // table whose value slots are overwritten in place — no per-pair digest,
+    // probe, or insert.
+    globals.define_builtin_func(HASH_CLASS, "__dup_table", dup_table, 0);
+    // The one-probe `map.key?(k) ? map[k] : k` behind the block-less
+    // `Hash#transform_keys(map)` walk. Inlined like `Hash#[]` (a direct
+    // call skipping the method frame), so the mapping step is a single
+    // probe with no builtin dispatch.
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "__get_or_key",
+        get_or_key,
+        inline_gen2!(hash_get_or_key),
+        1,
+    );
+    globals.define_builtin_func(HASH_CLASS, "__set_value_at", set_value_at, 2);
     globals.define_builtin_func(HASH_CLASS, "__iter_begin", iter_begin, 0);
     globals.define_builtin_func(HASH_CLASS, "__iter_end", iter_end, 1);
     globals.define_builtin_inline_func(
@@ -1054,6 +1075,38 @@ fn hash_index(
 }
 
 ///
+/// Inline `Hash#__get_or_key` as a direct call to `hashgetorkey`, skipping
+/// the Ruby method frame — the same shape (and emitter) as `Hash#[]`.
+///
+fn hash_get_or_key(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: ClassId,
+    _: Option<ClassId>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    if recv_class != HASH_CLASS {
+        return false;
+    }
+    state.load(ir, callsite.args, GP::Rcx);
+    state.load(ir, callsite.recv, GP::Rdx);
+    let using_fpr = state.get_using_fpr(ir);
+    ir.fpr_save(using_fpr);
+    ir.inline(|r#gen, _, _, _| r#gen.emit_hash_index(hashgetorkey as *const () as u64));
+    ir.fpr_restore(using_fpr);
+    let error = ir.new_error(state);
+    ir.handle_error(error);
+    state.def_rax2acc(ir, callsite.dst);
+    true
+}
+
+///
 /// Inline `Hash#[]=` as a direct call to `hashindex_assign`, skipping the Ruby
 /// method frame.
 ///
@@ -1237,6 +1290,68 @@ fn pairs(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// actually recorded — the inline representation saturates its two depth
 /// bits — and that answer must be handed back to `__iter_end`.
 ///
+#[monoruby_builtin]
+fn new_hash_with_capacity(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?.max(0) as usize;
+    Ok(Value::hash_with_capacity(n))
+}
+
+///
+/// ### Hash#__get_or_key (internal)
+///
+/// `self.key?(k) ? self[k] : k` in a single probe — the mapping step of
+/// `Hash#transform_keys(map)`, CRuby's `rb_hash_lookup2(map, k, k)`.
+/// Falling back to the key itself needs no sentinel, and — unlike
+/// `Hash#[]` — the receiver's default value/proc is never consulted.
+///
+#[monoruby_builtin]
+fn get_or_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let k = lfp.arg(0);
+    Ok(lfp.self_val().as_hash().get(k, vm, globals)?.unwrap_or(k))
+}
+
+///
+/// ### Hash#__dup_table (internal)
+///
+/// The table copy behind `Hash#transform_values`: the entries and the
+/// compare_by_identity mode are duplicated, but — matching CRuby's
+/// `hash_dup_with_compare_by_id` — the default value/proc is not, and the
+/// copy is a plain `Hash` regardless of the receiver's class. The caller
+/// then overwrites the value slots in place via `__set_value_at`, so no
+/// key is ever re-hashed.
+///
+#[monoruby_builtin]
+fn dup_table(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut inner = lfp.self_val().as_hashmap_inner().clone_inner();
+    // clone_inner copies the default (`Hash#dup` semantics); drop it.
+    inner.as_mut().set_defalut_value(Value::nil(), vm, globals)?;
+    Ok(Value::hash_from_inner(inner))
+}
+
+///
+/// ### Hash#__set_value_at (internal)
+///
+/// Overwrite the value of the `index`-th entry in place — the positional
+/// store behind `Hash#transform_values(!)`. The key set is untouched, so
+/// no digest or probe runs; out-of-range and tombstoned positions are
+/// ignored (a delete during the walk tombstones in place). Returns the
+/// stored value.
+///
+#[monoruby_builtin]
+fn set_value_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let idx = lfp.arg(0).coerce_to_i64(globals)?;
+    let v = lfp.arg(1);
+    if idx >= 0 {
+        lfp.self_val().as_hash().set_value_at(idx as usize, v);
+    }
+    Ok(v)
+}
+
 #[monoruby_builtin]
 fn iter_begin(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().as_hash().iter_incr()))
@@ -1508,6 +1623,24 @@ extern "C" fn hashindex(
     let h = base.as_hash();
     match h.index(vm, globals, key) {
         Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+/// `Hash#__get_or_key` for the JIT: same ABI as [`hashindex`], so the
+/// inliner reuses `emit_hash_index` with this address. One probe, the
+/// key itself on a miss, the default never consulted.
+extern "C" fn hashgetorkey(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    key: Value,
+) -> Option<Value> {
+    match base.as_hash().get(key, vm, globals) {
+        Ok(v) => Some(v.unwrap_or(key)),
         Err(err) => {
             vm.set_error(err);
             None
@@ -5058,6 +5191,227 @@ mod tests {
             // Enumerator when neither a block nor a hash is given.
             r#"{a: 1}.transform_keys!.class.name"#,
         ]);
+    }
+
+    #[test]
+    fn hash_transform_keys_map_lookup() {
+        // The block-less map walk maps each key with the one-probe
+        // `__get_or_key` (CRuby's `rb_hash_lookup2(map, k, k)`).
+        run_tests(&[
+            // A nil value in the map is a hit — nil becomes the new key —
+            // so the lookup must not read it as a miss.
+            r#"{a: 1}.transform_keys({a: nil})"#,
+            // The map's default value / default proc is never consulted.
+            r#"m = Hash.new(:dd); m[:a] = :A; {a: 1, b: 2}.transform_keys(m)"#,
+            r#"
+            m = Hash.new { |mm, k| mm[k] = :gen }
+            m[:a] = :A
+            g = {a: 1, b: 2}.transform_keys(m)
+            [g, m.size]
+            "#,
+            // Warm the call site into the JIT inliner (hit, miss, and a
+            // heap key with a redefined #hash / #eql?).
+            r#"
+            class TKK
+              attr_reader :n
+              def initialize(n) = @n = n
+              def hash = @n.hash
+              def eql?(o) = o.is_a?(TKK) && o.n == @n
+            end
+            m = { :a => :A, TKK.new(1) => :one }
+            h = { :a => 1, :b => 2, TKK.new(1) => 3 }
+            r = nil
+            30.times { r = h.transform_keys(m) }
+            [r[:A], r[:b], r[:one]]
+            "#,
+        ]);
+    }
+
+    #[test]
+    fn hash_get_or_key_fallback_paths() {
+        // A Hash-subclass map declines the `__get_or_key` inliner (the
+        // receiver-class guard) and answers through the plain builtin.
+        run_test(
+            r#"
+            def drive(n)
+              r = nil
+              n.times { r = yield }
+              r
+            end
+            klass = Class.new(Hash)
+            m = klass.new
+            m[:a] = :A
+            h = { a: 1, b: 2 }
+            drive(30) { h.transform_keys(m) }
+            "#,
+        );
+        // A heap probe key whose #hash raises surfaces the error through
+        // the warmed inline path (and through the builtin before warmup).
+        run_test_error(
+            r#"
+            class TKBadKey
+              def hash
+                raise "boom"
+              end
+            end
+            m = {}
+            9.times { |i| m[i] = i }
+            h = { TKBadKey.new => 1 }
+            r = nil
+            30.times { r = h.transform_keys(m) }
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_get_or_key_splat_call_site() {
+        // A splat call site fails the inliner's `is_simple` gate, so the
+        // warmed call answers through the plain builtin (internal method,
+        // no CRuby comparison).
+        let v = run_test_no_result_check(
+            r#"
+            m = {a: :A}
+            r = nil
+            30.times { r = m.__get_or_key(*[:a]) }
+            r.inspect
+            "#,
+        );
+        assert_eq!(":A", v.as_str());
+    }
+
+    #[test]
+    fn hash_get_or_key_inlined_error_arm() {
+        // The error arm of the *inlined* helper (`hashgetorkey`): warm the
+        // call site with good keys first — an error on the very first
+        // iteration would surface through the interpreter-tier builtin
+        // instead — then probe a boxed map (an inline receiver never
+        // digests, so it could not raise) with a key whose #hash raises.
+        run_test_error(
+            r#"
+            def gok_probe(m, k) = m.__get_or_key(k)
+            class GOKRaisingHash
+              def hash = raise("bad hash")
+            end
+            m = {}
+            9.times { |i| m[:"k#{i}"] = i }
+            r = nil
+            30.times { r = gok_probe(m, :k0) }
+            gok_probe(m, GOKRaisingHash.new)
+            "#,
+        );
+    }
+
+    #[test]
+    fn hash_transform_values_dup_semantics() {
+        // transform_values copies the table only (CRuby's
+        // hash_dup_with_compare_by_id): no default, plain Hash class,
+        // compare_by_identity preserved, and the walk runs over the
+        // detached copy, so mutating self from the block is allowed.
+        run_tests(&[
+            // The default value / default proc is not carried over.
+            r#"h = Hash.new(99); h[:x] = 1; g = h.transform_values { |v| v + 1 }; [g, g.default, g[:missing]]"#,
+            r#"h = Hash.new { |hh, k| k.to_s }; h[:x] = 1; g = h.transform_values { |v| v }; [g.default_proc.nil?, g[:zzz]]"#,
+            // A subclass receiver yields a plain Hash.
+            r#"
+            klass = Class.new(Hash)
+            h = klass[a: 1]
+            g = h.transform_values { |v| v * 2 }
+            [g.class == Hash, g]
+            "#,
+            // compare_by_identity mode is preserved.
+            r#"
+            h = {}.compare_by_identity
+            a = "s"; b = "s"
+            h[a] = 1; h[b] = 2
+            g = h.transform_values { |v| v * 3 }
+            [g.compare_by_identity?, g.size, g.values.sort]
+            "#,
+            // Boxed identity-mode receiver — the IdentMap arm of the
+            // positional store (the 2-entry case above stays inline).
+            r#"
+            h = {}.compare_by_identity
+            6.times { |i| h["k#{i}"] = i }
+            g = h.transform_values { |v| v * 2 }
+            [g.compare_by_identity?, g.size, g.values]
+            "#,
+            // A frozen receiver is fine — the result is a fresh hash.
+            r#"{x: 1}.freeze.transform_values { |v| v + 1 }"#,
+            // The block mutating self doesn't disturb the walk (it runs
+            // over the copy), and a break discards the partial result.
+            r#"h = {a: 1, b: 2, c: 3}; g = h.transform_values { |v| h.delete(:c); v * 2 }; [g, h]"#,
+            r#"h = {a: 1, b: 2}; g = h.transform_values { |v| h[:new] ||= 100; v }; [g, h]"#,
+            r#"h = {a: 1, b: 2, c: 3}; out = h.transform_values { |v| break :stopped if v == 2; v }; [out, h]"#,
+            // Boxed-and-indexed receiver.
+            r#"h = {}; 30.times { |i| h[i] = i }; g = h.transform_values { |v| v + 1 }; [g.size, g[0], g[29], g.keys == h.keys]"#,
+        ]);
+    }
+
+    #[test]
+    fn hash_transform_values_bang_in_place() {
+        run_tests(&[
+            // Returns self; keeps the default, the class, and the
+            // compare_by_identity mode (in-place overwrite).
+            r#"h = {a: 1, b: 2}; ret = h.transform_values! { |v| v * 10 }; [ret.equal?(h), h]"#,
+            r#"h = Hash.new(7); h[:x] = 1; h.transform_values! { |v| v + 1 }; [h.default, h[:x]]"#,
+            r#"
+            klass = Class.new(Hash)
+            h = klass[k: 5]
+            [h.transform_values! { |v| v * 2 }.class == klass, h[:k]]
+            "#,
+            // Deleting a not-yet-visited key from the block is allowed:
+            // the position is tombstoned and never visited.
+            r#"h = {a: 1, b: 2, c: 3}; h.transform_values! { |v| h.delete(:c) if v == 1; v * 2 }; h"#,
+            // Boxed receiver, deleting the *current* key: at this size the
+            // delete sticks in CRuby too (st_table), and the store no-ops
+            // on the tombstone.
+            r#"h = {}; 10.times { |i| h[i] = i }; h.transform_values! { |v| h.delete(0) if v == 0; v + 1 }; [h.size, h.key?(0), h[1]]"#,
+            // Boxed identity-mode receiver overwritten in place.
+            r#"h = {}.compare_by_identity; 6.times { |i| h["k#{i}"] = i }; h.transform_values! { |v| v + 1 }; [h.compare_by_identity?, h.values]"#,
+            // A break leaves the partial in-place result.
+            r#"h = {a: 1, b: 2, c: 3}; h.transform_values! { |v| break if v == 2; v * 10 }; h"#,
+            // Enumerator when no block is given (frozen receiver too).
+            r#"{a: 1}.transform_values!.class.name"#,
+            r#"{}.freeze.transform_values!.is_a?(Enumerator)"#,
+        ]);
+        // Adding a new key from the block raises (iteration guard), and
+        // a frozen receiver with a block raises FrozenError.
+        run_test_error(r#"h = {a: 1, b: 2}; h.transform_values! { |v| h[:zz] = 9; v }"#);
+        run_test_error(r#"{a: 1}.freeze.transform_values! { |v| v }"#);
+        // Deleting the *current* key from the block: CRuby's outcome is
+        // representation-dependent (an ar_table resurrects the entry
+        // because the replace writes through the slot pointer; an
+        // st_table keeps it deleted), so don't compare — pin monoruby's
+        // uniform behavior: the delete wins, the store no-ops on the
+        // tombstone.
+        let v = run_test_no_result_check(
+            r#"h = {a: 1, b: 2}; h.transform_values! { |v| h.delete(:a); v * 10 }; h.inspect"#,
+        );
+        assert_eq!("{b: 20}", v.as_str());
+    }
+
+    #[test]
+    fn hash_set_value_at_out_of_range() {
+        // Direct `__set_value_at` edges the Ruby-level walks never
+        // produce (they bound themselves with `__entry_count`):
+        // out-of-range and negative indices are ignored for both
+        // representations. Internal method, so no CRuby comparison.
+        let v = run_test_no_result_check(
+            r#"
+            h = {a: 1}
+            h.__set_value_at(5, 99)
+            h.__set_value_at(-1, 99)
+            big = {}
+            10.times { |i| big[i] = i }
+            big.__set_value_at(99, :bogus)
+            big.__set_value_at(-1, :bogus)
+            ident = {}.compare_by_identity
+            6.times { |i| ident["k#{i}"] = i }
+            ident.__set_value_at(99, :bogus)
+            [h, big.values == (0..9).to_a, ident.values == (0..5).to_a].inspect
+            "#,
+        );
+        assert_eq!("[{a: 1}, true, true]", v.as_str());
     }
 
     #[test]

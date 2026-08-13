@@ -491,6 +491,78 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         }
     }
 
+    /// [`Self::insert_full`] for a caller-computed digest and plain `==`
+    /// key equality: no `E`/`G` threading, no fallible equivalence. Only
+    /// sound when `==` agrees with the map's `RubyEql` for the probe key
+    /// (bit-comparable keys — packed `Value`s) and `hash` equals what
+    /// [`RubyMap::hash`] would produce for `key`.
+    pub(crate) fn insert_full_prehashed(
+        &mut self,
+        hash: HashValue,
+        key: K,
+        value: V,
+    ) -> (usize, Option<V>)
+    where
+        K: PartialEq,
+    {
+        if self.linear {
+            for (i, entry) in self.entries.iter().enumerate() {
+                if entry.hash == hash && entry.key == key {
+                    return (i, Some(mem::replace(&mut self.entries[i].value, value)));
+                }
+            }
+            if self.entries.len() < AR_MAX {
+                let i = self.entries.len();
+                self.push_entry(hash, key, value);
+                return (i, None);
+            }
+            self.ensure_indexed();
+        }
+        let entries = &self.entries;
+        let eq = |&i: &usize| entries[i].key == key;
+        let hasher = get_hash(&self.entries);
+        match self.indices.entry_sym(hash.get(), eq, hasher) {
+            hash_table::Entry::Occupied(entry) => {
+                let i = *entry.get();
+                (i, Some(mem::replace(&mut self.entries[i].value, value)))
+            }
+            hash_table::Entry::Vacant(entry) => {
+                let i = self.entries.len();
+                entry.insert(i);
+                self.push_entry(hash, key, value);
+                debug_assert_eq!(self.indices.len(), self.entries.len());
+                (i, None)
+            }
+        }
+    }
+
+    /// [`Self::get_index_of`] for a caller-computed digest and plain `==`
+    /// key equality (see [`Self::insert_full_prehashed`] for the soundness
+    /// conditions). The `E`/`G` refs only feed the index table's fallible
+    /// probe signature; the equality closure never touches them.
+    pub(crate) fn get_index_of_prehashed(
+        &self,
+        hash: HashValue,
+        key: &K,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<usize>, R>
+    where
+        K: PartialEq,
+    {
+        if self.linear {
+            for (i, entry) in self.entries.iter().enumerate() {
+                if entry.hash == hash && entry.key == *key {
+                    return Ok(Some(i));
+                }
+            }
+            return Ok(None);
+        }
+        let entries = &self.entries;
+        let eq = |&i: &usize, _: &mut E, _: &mut G| Ok(entries[i].key == *key);
+        Ok(self.indices.find(hash.get(), eq, e, g)?.copied())
+    }
+
     /// Same as `insert_full`, except it also replaces the key
     pub(crate) fn replace_full(
         &mut self,

@@ -424,6 +424,37 @@ where
         self.core.insert_full_sym(hash, key, value)
     }
 
+    /// Insert with a caller-computed digest and plain `==` key equality.
+    ///
+    /// Only sound when `==` agrees with the map's `RubyEql` for the probe
+    /// key (bit-comparable keys — packed `Value`s) and `hash` is exactly
+    /// what [`Self::hash`] would produce for `key` (build a hasher from
+    /// [`Self::hasher`] and feed it the same digest stream). No `E`/`G`
+    /// threading, no fallible equivalence — the vm-free twin of
+    /// [`Self::insert`].
+    pub fn insert_prehashed(&mut self, hash: usize, key: K, value: V) -> Option<V>
+    where
+        K: PartialEq,
+    {
+        self.core.insert_full_prehashed(HashValue(hash), key, value).1
+    }
+
+    /// Positional lookup with a caller-computed digest and plain `==` key
+    /// equality (see [`Self::insert_prehashed`] for the soundness
+    /// conditions).
+    pub fn get_prehashed(&self, hash: usize, key: &K, e: &mut E, g: &mut G) -> Result<Option<&V>, R>
+    where
+        K: PartialEq,
+    {
+        Ok(
+            if let Some(i) = self.core.get_index_of_prehashed(HashValue(hash), key, e, g)? {
+                Some(&self.as_entries()[i].value)
+            } else {
+                None
+            },
+        )
+    }
+
     /// Insert a key-value pair in the map at its ordered position among sorted keys.
     ///
     /// This is equivalent to finding the position with

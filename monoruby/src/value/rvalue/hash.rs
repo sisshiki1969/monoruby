@@ -140,6 +140,19 @@ pub(super) fn sanitize_dup_flags(flags: u8) -> u8 {
     flags & (REP_MASK | IDENT_BIT)
 }
 
+/// The boxed map's digest of a packed (immediate) key, computed without
+/// the vm: the same builder and the same digest stream as
+/// `RubyMap::hash(&Some(k))` (an `Option` key digests as its payload, and
+/// a packed payload digests via [`Value::ruby_hash_packed`]), so the
+/// prehashed probe and the general probe always agree on buckets.
+fn packed_digest<S: std::hash::BuildHasher>(hash_builder: &S, k: Value) -> usize {
+    use std::hash::Hasher;
+    debug_assert!(k.is_packed_value());
+    let mut h = hash_builder.build_hasher();
+    k.ruby_hash_packed(&mut h);
+    h.finish() as usize
+}
+
 /// Drop the live content of `body` according to `flags` (the RValue
 /// sweep path for HASH cells).
 ///
@@ -335,6 +348,28 @@ impl HashmapInner {
                     // table move verbatim).
                     boxed: ManuallyDrop::new(BoxedHash::new(HashContent::Map(Box::new(
                         map.map_keys(Some),
+                    )))),
+                },
+            )
+        }
+    }
+
+    /// An empty hash pre-sized for `n` entries. `n > INLINE_CAP` builds
+    /// the boxed map with its capacity (and, past AR_MAX, its index
+    /// table) up front, so bulk fills — `Hash#to_h` / `#transform_keys`
+    /// / `#transform_values` building a result of a known size — skip
+    /// the whole inline→boxed→indexed growth ladder. `HashmapInner::new`
+    /// cannot be used for this: it converts any small (or empty) map to
+    /// the inline form, dropping the reserved capacity.
+    pub fn with_capacity(n: usize) -> Self {
+        if n <= INLINE_CAP {
+            Self::default()
+        } else {
+            Self::from_parts(
+                REP_BOXED,
+                HashBody {
+                    boxed: ManuallyDrop::new(BoxedHash::new(HashContent::Map(Box::new(
+                        RubyMap::with_capacity(n),
                     )))),
                 },
             )
@@ -728,7 +763,15 @@ impl<'a> HashRef<'a> {
     pub fn get(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<Option<Value>> {
         Ok(match self.content() {
             ContentRef::Inline(pairs) => self.inline_pos(k, vm, globals)?.map(|i| pairs[i].1),
-            ContentRef::Map(m) => m.get(&k, vm, globals)?.copied(),
+            ContentRef::Map(m) => {
+                // See `HashRefMut::insert`: a packed key probes vm-free.
+                if k.is_packed_value() {
+                    let hash = packed_digest(m.hasher(), k);
+                    m.get_prehashed(hash, &Some(k), vm, globals)?.copied()
+                } else {
+                    m.get(&k, vm, globals)?.copied()
+                }
+            }
             ContentRef::Ident(m) => m.get(&IdentKey(k), vm, globals)?.copied(),
         })
     }
@@ -741,7 +784,15 @@ impl<'a> HashRef<'a> {
     ) -> Result<bool> {
         match self.content() {
             ContentRef::Inline(_) => Ok(self.inline_pos(k, vm, globals)?.is_some()),
-            ContentRef::Map(m) => m.contains_key(&k, vm, globals),
+            ContentRef::Map(m) => {
+                // See `HashRefMut::insert`: a packed key probes vm-free.
+                if k.is_packed_value() {
+                    let hash = packed_digest(m.hasher(), k);
+                    Ok(m.get_prehashed(hash, &Some(k), vm, globals)?.is_some())
+                } else {
+                    m.contains_key(&k, vm, globals)
+                }
+            }
             ContentRef::Ident(m) => m.contains_key(&IdentKey(k), vm, globals),
         }
     }
@@ -1216,7 +1267,16 @@ impl<'a> HashRefMut<'a> {
         }
         match &mut self.boxed_mut().content {
             HashContent::Map(m) => {
-                m.insert(Some(k), v, vm, globals)?;
+                if k.is_packed_value() {
+                    // A packed key's `eql?` is exactly bit equality (an
+                    // immediate is never `eql?` to a heap value, and
+                    // immediate-vs-immediate compares ids), and its digest
+                    // is vm-free — so the whole probe is vm-free.
+                    let hash = packed_digest(m.hasher(), k);
+                    m.insert_prehashed(hash, Some(k), v);
+                } else {
+                    m.insert(Some(k), v, vm, globals)?;
+                }
             }
             HashContent::IdentMap(m) => {
                 m.insert(Some(IdentKey(k)), v, vm, globals)?;
@@ -1295,6 +1355,36 @@ impl<'a> HashRefMut<'a> {
         match &mut self.boxed_mut().content {
             HashContent::Map(m) => m.shift_remove(&k, vm, globals),
             HashContent::IdentMap(m) => m.shift_remove(&IdentKey(k), vm, globals),
+        }
+    }
+
+    /// Overwrite the value of the `index`-th entry in place (the
+    /// `__set_value_at` intrinsic behind `Hash#transform_values(!)`:
+    /// the key set is untouched, so no digest or probe is needed).
+    /// Out-of-range and tombstoned positions are ignored.
+    pub(crate) fn set_value_at(&mut self, index: usize, v: Value) {
+        if self.is_inline() {
+            if index < self.inline_len() {
+                // SAFETY: rep is inline; index < len.
+                unsafe { self.body_mut().inline[index].1 = v };
+            }
+            return;
+        }
+        match &mut self.boxed_mut().content {
+            HashContent::Map(m) => {
+                if let Some((k, slot)) = m.get_index_mut(index)
+                    && k.is_some()
+                {
+                    *slot = v;
+                }
+            }
+            HashContent::IdentMap(m) => {
+                if let Some((k, slot)) = m.get_index_mut(index)
+                    && k.is_some()
+                {
+                    *slot = v;
+                }
+            }
         }
     }
 
@@ -1811,6 +1901,13 @@ impl Hashmap {
         self.0.as_hashmap_inner_mut().insert(k, v, vm, globals)?;
         self.0.write_barrier_bulk();
         Ok(())
+    }
+
+    /// Positional value overwrite with the generational write barrier.
+    /// A no-op for out-of-range or tombstoned `index`.
+    pub(crate) fn set_value_at(&mut self, index: usize, v: Value) {
+        self.0.as_hashmap_inner_mut().set_value_at(index, v);
+        self.0.write_barrier(v);
     }
 
     pub fn remove(
