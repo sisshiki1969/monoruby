@@ -5143,6 +5143,14 @@ mod tests {
             g = h.transform_values { |v| v * 3 }
             [g.compare_by_identity?, g.size, g.values.sort]
             "#,
+            // Boxed identity-mode receiver — the IdentMap arm of the
+            // positional store (the 2-entry case above stays inline).
+            r#"
+            h = {}.compare_by_identity
+            6.times { |i| h["k#{i}"] = i }
+            g = h.transform_values { |v| v * 2 }
+            [g.compare_by_identity?, g.size, g.values]
+            "#,
             // A frozen receiver is fine — the result is a fresh hash.
             r#"{x: 1}.freeze.transform_values { |v| v + 1 }"#,
             // The block mutating self doesn't disturb the walk (it runs
@@ -5170,6 +5178,12 @@ mod tests {
             // Deleting a not-yet-visited key from the block is allowed:
             // the position is tombstoned and never visited.
             r#"h = {a: 1, b: 2, c: 3}; h.transform_values! { |v| h.delete(:c) if v == 1; v * 2 }; h"#,
+            // Boxed receiver, deleting the *current* key: at this size the
+            // delete sticks in CRuby too (st_table), and the store no-ops
+            // on the tombstone.
+            r#"h = {}; 10.times { |i| h[i] = i }; h.transform_values! { |v| h.delete(0) if v == 0; v + 1 }; [h.size, h.key?(0), h[1]]"#,
+            // Boxed identity-mode receiver overwritten in place.
+            r#"h = {}.compare_by_identity; 6.times { |i| h["k#{i}"] = i }; h.transform_values! { |v| v + 1 }; [h.compare_by_identity?, h.values]"#,
             // A break leaves the partial in-place result.
             r#"h = {a: 1, b: 2, c: 3}; h.transform_values! { |v| break if v == 2; v * 10 }; h"#,
             // Enumerator when no block is given (frozen receiver too).
@@ -5190,6 +5204,30 @@ mod tests {
             r#"h = {a: 1, b: 2}; h.transform_values! { |v| h.delete(:a); v * 10 }; h.inspect"#,
         );
         assert_eq!("{b: 20}", v.as_str());
+    }
+
+    #[test]
+    fn hash_set_value_at_out_of_range() {
+        // Direct `__set_value_at` edges the Ruby-level walks never
+        // produce (they bound themselves with `__entry_count`):
+        // out-of-range and negative indices are ignored for both
+        // representations. Internal method, so no CRuby comparison.
+        let v = run_test_no_result_check(
+            r#"
+            h = {a: 1}
+            h.__set_value_at(5, 99)
+            h.__set_value_at(-1, 99)
+            big = {}
+            10.times { |i| big[i] = i }
+            big.__set_value_at(99, :bogus)
+            big.__set_value_at(-1, :bogus)
+            ident = {}.compare_by_identity
+            6.times { |i| ident["k#{i}"] = i }
+            ident.__set_value_at(99, :bogus)
+            [h, big.values == (0..9).to_a, ident.values == (0..5).to_a].inspect
+            "#,
+        );
+        assert_eq!("[{a: 1}, true, true]", v.as_str());
     }
 
     #[test]
