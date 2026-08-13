@@ -280,6 +280,42 @@ PMC 案はまさにこの穴を埋める。
   `cmp_eq_values` の内部コスト内訳(解決 vs 本体実行)を測ってから
   決める。
 
+### 7.4 検証結果: callsite 記録と poly 検出の全数確認(2026-08)
+
+**callsite 記録(`bytecodegen/encode.rs`)**: UnOp(121-124)/
+BinOp(160+)/ Cmp 両形(140-146, 150-156)/ Index(132)/
+StoreIndex(133)は全て `new_callsite` + `new_callsite_map_entry` で
+`CallSiteId` に到達できる。例外は **RescueTEq(157)のみ**(rescue 節
+マッチ専用、常にランタイムヘルパ経由で IC なし — PMC 対象外で問題ない)。
+`get_callsite_id` が `Option` なのはこの 1 命令のためで、ペア PMC を
+`CallSiteInfo` に置く設計は追加テーブルなしで成立する。
+
+**VM の poly 検出(x86_64 / aarch64 でミラーを確認)**:
+
+| 経路 | 保存 | `opcode_sub` 検出 |
+|---|---|---|
+| binop/cmp generic(`vm_generic_binop` → `vm_save_binary_class`) | ✓ | ✓ |
+| binop/cmp fixnum fast path(`vm_save_binary_integer`) | 上書きのみ | ✗(無害 — 下記) |
+| unop generic(`vm_generic_unop` → `vm_save_lhs_class`) | ✓ | **✗ 欠落** |
+| unop fixnum fast path(`vm_lhs_integer`) | 上書きのみ | ✗ |
+| Index / StoreIndex(`runtime::get_index`/`set_index` が ClassIdSlot へ無条件代入) | ✓ | **✗ 欠落** |
+| メソッド呼び出し slow path | ✓ | ✓ |
+
+- binop/cmp fast path の欠落は実質無害: fast path しか通らないサイトは
+  単相で、多相サイトは必ず generic を通ってそこで検出される(最大
+  1 実行遅れるだけ)。**binop/cmp は現状のまま PMC の前提を満たす**。
+- **unop は検出が完全に欠落**: `vm_save_lhs_class` は比較なし、
+  `TraceIr::UnOp` も `opcode_sub` を読まない。JIT は単相ガード+deopt
+  (`Not` は `call_unary_method`、算術 unop は class 分岐)なので、
+  `-x` の Integer/Float 交互や `!x` の nil/オブジェクト交互は `nil?` と
+  同型の deopt を起こし得る。対処: `vm_save_lhs_class` に
+  `vm_save_binary_class` と同じ比較+`opcode_sub = 1` を足す
+  (generic 側のみ、両アーキ)。
+- **Index/StoreIndex も検出なし**: クラス記録が VM 命令内でなく
+  ランタイムヘルパにあるため、検出はヘルパ側(Rust)で行い、
+  `opcode_sub` へ書き戻す pc を渡す改修になる。`x[i]` の Hash/Array
+  多相は実コードで普通に起きるので、PMC 展開の第二候補。
+
 ## 8. このブランチに含まれる実装
 
 - `JIT: nil-tolerant receiver guard for nil? call sites` — §3.1/3.2。
