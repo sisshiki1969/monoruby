@@ -5281,6 +5281,28 @@ mod tests {
     }
 
     #[test]
+    fn hash_get_or_key_inlined_error_arm() {
+        // The error arm of the *inlined* helper (`hashgetorkey`): warm the
+        // call site with good keys first — an error on the very first
+        // iteration would surface through the interpreter-tier builtin
+        // instead — then probe a boxed map (an inline receiver never
+        // digests, so it could not raise) with a key whose #hash raises.
+        run_test_error(
+            r#"
+            def gok_probe(m, k) = m.__get_or_key(k)
+            class GOKRaisingHash
+              def hash = raise("bad hash")
+            end
+            m = {}
+            9.times { |i| m[:"k#{i}"] = i }
+            r = nil
+            30.times { r = gok_probe(m, :k0) }
+            gok_probe(m, GOKRaisingHash.new)
+            "#,
+        );
+    }
+
+    #[test]
     fn hash_transform_values_dup_semantics() {
         // transform_values copies the table only (CRuby's
         // hash_dup_with_compare_by_id): no default, plain Hash class,
