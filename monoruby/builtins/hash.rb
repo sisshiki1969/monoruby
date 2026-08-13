@@ -160,17 +160,27 @@ class Hash
   # delete during the block tombstones in place and adding a key raises.
   def transform_keys(hash = (no_arg = true; nil))
     hash = __to_hash_type(hash) unless no_arg
-    blk = block_given?
-    return to_enum(:transform_keys) { size } unless blk || hash
+    return to_enum(:transform_keys) { size } unless block_given? || hash
     h = __new_hash_with_capacity(size)
     guard = __iter_begin
     begin
       i = 0
-      if hash
+      if hash && block_given?
         while i < __entry_count
           if __live_at(i)
             k = __key_at(i)
-            new_k = hash.key?(k) ? hash[k] : (blk ? yield(k) : k)
+            new_k = hash.key?(k) ? hash[k] : yield(k)
+            h[new_k] = __value_at(i)
+          end
+          i += 1
+        end
+      elsif hash
+        # Separate loop so the common block-less `transform_keys(map)`
+        # walk carries no per-pair block test and no yield call site.
+        while i < __entry_count
+          if __live_at(i)
+            k = __key_at(i)
+            new_k = hash.key?(k) ? hash[k] : k
             h[new_k] = __value_at(i)
           end
           i += 1
