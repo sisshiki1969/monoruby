@@ -53,7 +53,16 @@ if by == nil ...             # 同型の == バリアント
 - `== nil` が truthiness より 2.8 倍遅いのは、`==` サイトも同じ
   nil/非 nil 二相 deopt を踏んでいるからで、**未回収の最大候補**。
 
-## 3. 実装済みの第一歩: `nil?` サイトの nil 耐性ガード
+## 3. 第一歩として試作した `nil?` 専用の nil 耐性ガード(撤去済み)
+
+> **注**: この節の `GuardClassOrNil` 実装は一度ブランチに入れたが、
+> §7 の一般機構(観測クラス集合が単一 native FuncId に収束するサイトの
+> `GuardClassIn`)が `nil?` サイトも吸収するため、**PR からは撤去した**。
+> nil? は現在、集合ガード + 組み込み呼び出しとして扱われる。ガード後に
+> 値比較 1 命令へ畳む特化(このメモの元の §3 形)は、生成器の
+> nil 安全 flag(§5.1)とセットで将来の最適化として残る。§3.3 の
+> page 耐性修正だけは、集合ガードも同じ「state 未確定 → cold ブロックに
+> Float unbox」経路を踏むため**残している**。以下は設計記録。
 
 このブランチに含まれる(master 未マージ)。構成は 3 点:
 
@@ -363,9 +372,16 @@ StoreIndex(133)は全て `new_callsite` + `new_callsite_map_entry` で
 
 ## 8. このブランチに含まれる実装
 
-- `JIT: nil-tolerant receiver guard for nil? call sites` — §3.1/3.2。
-  §6-1 の一般機構が入った時点で縮退形として整理し直す予定。
 - `x86_64: make the Float-unbox guards page-tolerant` — §3.3。
+  集合ガード(下記)が受け手 state を未確定のまま残すために必要。
+- VM 検出の全命令完備(unop / Index / StoreIndex)— §7.4。
+- PMC の記録と profile ダンプ — §7.5。
+- **PMC 消費 v1**: 観測クラス集合が単一 **native** FuncId に収束する
+  method call サイトへの `GuardClassIn`(集合メンバーシップガード)+
+  通常呼び出し。FuncId は `jit_check_call` で再計算し PMC の保存値は
+  使わない。iseq ターゲットはレシーバクラス特殊化があるため対象外
+  (`polymorphic_call` テストが検出した制約)。`nil?` / `is_a?` /
+  `frozen?` 型の 4-way 多相サイトが deopt ゼロ・ほぼ単相速度になる。
 
-検証済み: フルスイート green(§3.3 修正後)、`Weird#nil?` 等の第三
-クラス・オーバーライドは CRuby と一致、binarytrees 118→100ms。
+検証済み: フルスイート green、`Weird#is_a?` 等の第三クラス・
+オーバーライドは CRuby と一致。
