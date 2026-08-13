@@ -363,10 +363,11 @@ impl<'a> JitContext<'a> {
                 state.discard(dst);
                 let using_fpr = state.get_using_fpr(ir);
                 // A no-splat literal whose length fits the array's inline
-                // storage can be allocated inline from the free list, with no
-                // runtime call. Otherwise fall back to `gen_array`.
+                // storage (including the empty literal `[]`) can be allocated
+                // inline from the free list, with no runtime call. Otherwise
+                // fall back to `gen_array`.
                 let inline = if self.store[callid].splat_pos.is_empty()
-                    && (1..=ARRAY_INLINE_CAPA).contains(&pos_num)
+                    && pos_num <= ARRAY_INLINE_CAPA
                 {
                     Some((args, pos_num as u16))
                 } else {

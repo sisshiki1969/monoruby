@@ -1604,7 +1604,7 @@ impl Codegen {
         );
     }
 
-    /// Inline allocation of a small (`1..=ARRAY_INLINE_CAPA`) no-splat array
+    /// Inline allocation of a small (`0..=ARRAY_INLINE_CAPA`) no-splat array
     /// literal: pop a recycled cell from the GC free list and initialise it
     /// directly as an inline-storage Array, falling back to the runtime
     /// `gen_array` when the free list is empty. See the x86_64
@@ -1678,12 +1678,23 @@ impl Codegen {
         true
     }
 
+    /// x0 <- Hash literal from the `len` key/value slots at `args`.
     pub(in crate::codegen::jitgen) fn emit_new_hash(
         &mut self,
         args: SlotId,
         len: usize,
         using_fpr: UsingFpr,
     ) -> bool {
+        if len <= HASH_INLINE_CAP && !self.alloc_free_head_addr.is_null() {
+            self.new_hash_inline(args, len, using_fpr);
+        } else {
+            self.new_hash_runtime(args, len, using_fpr);
+        }
+        true
+    }
+
+    /// x0 <- Hash literal via gen_hash(vm, globals, &slot[args], len).
+    fn new_hash_runtime(&mut self, args: SlotId, len: usize, using_fpr: UsingFpr) {
         let lfp = GP::R14.a64().0;
         let off = args.0 as u32 * 8 + LFP_SELF as u32;
         let f = runtime::gen_hash as *const () as u64;
@@ -1701,7 +1712,83 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
-        true
+    }
+
+    /// Inline allocation of a small (`0..=HASH_INLINE_CAP` pairs) Hash
+    /// literal: pop a recycled cell from the GC free list and initialise it
+    /// directly as an inline-representation Hash, with no runtime call.
+    /// Fast-path conditions and the correctness argument (packed distinct
+    /// keys — eql? is bit equality, no observable `#hash`; nil-nil
+    /// placeholder pairs; young object needs no write barrier; no GC
+    /// safepoint mid-build) are documented on the x86_64
+    /// `new_hash_inline`; anything else falls back to `gen_hash`.
+    fn new_hash_inline(&mut self, args: SlotId, len: usize, using_fpr: UsingFpr) {
+        let rax = GP::Rax.a64().0; // x0 (result)
+        let lfp = GP::R14.a64().0; // x22
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        if len > 0 {
+            // x9 = packed-value mask (`Value::is_packed_value`: heap iff
+            // (bits & 0b111) == 0; monoasm's `and` is register-only).
+            monoasm_arm64!(&mut self.jit,
+                mov x9, #7;
+            );
+            for i in 0..len {
+                let key = SlotId(args.0 + 2 * i as u16);
+                self.a64_frame_load(12, lfp, conv(key) as u32);
+                monoasm_arm64!(&mut self.jit,
+                    and x11, x12, x9;
+                    cbz x11, slow;
+                );
+            }
+            for j in 1..len {
+                for i in 0..j {
+                    let ki = SlotId(args.0 + 2 * i as u16);
+                    let kj = SlotId(args.0 + 2 * j as u16);
+                    self.a64_frame_load(11, lfp, conv(ki) as u32);
+                    self.a64_frame_load(12, lfp, conv(kj) as u32);
+                    monoasm_arm64!(&mut self.jit,
+                        cmp x11, x12;
+                    );
+                    self.jit.bcond_label(monoasm::Cond::Eq, &slow);
+                }
+            }
+        }
+        // 8-byte object header: flag=1 | ty=HASH<<16 | rep(len)<<24 |
+        // class=HASH_CLASS<<32 (the ty_flags byte holds the inline
+        // representation bits: pair count, eql?-keyed).
+        let header: u64 = ((HASH_CLASS.u32() as u64) << 32)
+            | ((len as u64) << 24)
+            | ((ObjTy::HASH.get() as u64) << 16)
+            | 1;
+        self.emit_alloc_cell(CellHeader::Imm(header), &slow);
+        monoasm_arm64!(&mut self.jit,
+            mov x12, #0;
+            str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
+        );
+        for i in 0..HASH_INLINE_CAP {
+            let pair = HASH_INLINE_PAIRS_OFFSET + i * HASH_INLINE_PAIR_STRIDE;
+            let key_off = (pair + HASH_INLINE_KEY_OFFSET) as u32;
+            let val_off = (pair + HASH_INLINE_VALUE_OFFSET) as u32;
+            if i < len {
+                let key = SlotId(args.0 + 2 * i as u16);
+                let val = SlotId(args.0 + 2 * i as u16 + 1);
+                self.a64_frame_load(12, lfp, conv(key) as u32);
+                self.a64_field_store(12, rax, key_off);
+                self.a64_frame_load(12, lfp, conv(val) as u32);
+                self.a64_field_store(12, rax, val_off);
+            } else {
+                monoasm_arm64!(&mut self.jit,
+                    mov x12, (NIL_VALUE as u64);
+                );
+                self.a64_field_store(12, rax, key_off);
+                self.a64_field_store(12, rax, val_off);
+            }
+        }
+        monoasm_arm64!(&mut self.jit, b cont;);
+        self.jit.bind_label(slow);
+        self.new_hash_runtime(args, len, using_fpr);
+        self.jit.bind_label(cont);
     }
 
     /// rax <- the Hash in `hash` after inserting the `len` key/value pairs

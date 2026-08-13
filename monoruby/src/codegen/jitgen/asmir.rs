@@ -2041,15 +2041,19 @@ pub(super) enum AsmInst {
     },
     NewArray {
         callid: CallSiteId,
-        /// `Some((args, len))` when the literal has no splat and `1 <= len <=
-        /// ARRAY_INLINE_CAPA`, enabling the JIT inline free-list fast path
-        /// (elements live in consecutive slots starting at `args`). `None`
-        /// falls back to the runtime `gen_array` call.
+        /// `Some((args, len))` when the literal has no splat and `len <=
+        /// ARRAY_INLINE_CAPA` (0 = the empty literal `[]`), enabling the JIT
+        /// inline free-list fast path (elements live in consecutive slots
+        /// starting at `args`). `None` falls back to the runtime `gen_array`
+        /// call.
         inline: Option<(SlotId, u16)>,
         using_fpr: UsingFpr,
     },
     ///
-    /// Create a new Hash object and store it to *rax*
+    /// Create a new Hash object and store it to *rax*. The backends
+    /// inline-allocate a literal of `0..=HASH_INLINE_CAP` pairs (guarded at
+    /// runtime on packed, pairwise-distinct keys) and fall back to the
+    /// `gen_hash` runtime call otherwise.
     ///
     NewHash(SlotId, usize, UsingFpr),
     ///
