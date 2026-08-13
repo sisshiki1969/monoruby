@@ -1673,6 +1673,45 @@ mod tests {
         );
     }
 
+    /// A megamorphic site (a fifth distinct receiver class overflows the
+    /// 4-way PMC) must NOT take the same-target set guard — the observation
+    /// set is incomplete, so `pmc_same_target_classes` rejects it and the
+    /// site keeps the ordinary single-class guard. Also exercises the PMC
+    /// overflow counter itself, and a float-typed branch behind a
+    /// polymorphic `nil?` (the receiver state stays unrefined after the set
+    /// guard, so the Float conversions downstream must still be correct).
+    #[test]
+    fn polymorphic_megamorphic_and_float() {
+        run_test(
+            r#"
+            def check(x) = x.nil?
+            def step_like(limit, by)
+              acc = 0.0
+              unless limit.nil?
+                acc += limit * 2.0
+              end
+              unless by.nil?
+                acc += by + 1.5
+              end
+              acc
+            end
+            vals = [[1, 2], nil, "s", { a: 1 }, :sym, 7, 2.5, false]
+            c = 0
+            r = 0.0
+            200.times do |i|
+              c += 1 if check(vals[i % 8])
+              case i % 4
+              when 0 then r += step_like(2.5, nil)
+              when 1 then r += step_like(nil, 3.5)
+              when 2 then r += step_like(1.5, 0.5)
+              when 3 then r += step_like(nil, nil)
+              end
+            end
+            [c, r]
+            "#,
+        );
+    }
+
     /// over-supplied optionals (the last vetoes the deferral and takes
     /// the eager helper path, raising ArgumentError like CRuby), plus a
     /// default expression with a side effect (must run only when the
