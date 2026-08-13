@@ -140,6 +140,19 @@ pub(super) fn sanitize_dup_flags(flags: u8) -> u8 {
     flags & (REP_MASK | IDENT_BIT)
 }
 
+/// The boxed map's digest of a packed (immediate) key, computed without
+/// the vm: the same builder and the same digest stream as
+/// `RubyMap::hash(&Some(k))` (an `Option` key digests as its payload, and
+/// a packed payload digests via [`Value::ruby_hash_packed`]), so the
+/// prehashed probe and the general probe always agree on buckets.
+fn packed_digest<S: std::hash::BuildHasher>(hash_builder: &S, k: Value) -> usize {
+    use std::hash::Hasher;
+    debug_assert!(k.is_packed_value());
+    let mut h = hash_builder.build_hasher();
+    k.ruby_hash_packed(&mut h);
+    h.finish() as usize
+}
+
 /// Drop the live content of `body` according to `flags` (the RValue
 /// sweep path for HASH cells).
 ///
@@ -750,7 +763,15 @@ impl<'a> HashRef<'a> {
     pub fn get(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<Option<Value>> {
         Ok(match self.content() {
             ContentRef::Inline(pairs) => self.inline_pos(k, vm, globals)?.map(|i| pairs[i].1),
-            ContentRef::Map(m) => m.get(&k, vm, globals)?.copied(),
+            ContentRef::Map(m) => {
+                // See `HashRefMut::insert`: a packed key probes vm-free.
+                if k.is_packed_value() {
+                    let hash = packed_digest(m.hasher(), k);
+                    m.get_prehashed(hash, &Some(k), vm, globals)?.copied()
+                } else {
+                    m.get(&k, vm, globals)?.copied()
+                }
+            }
             ContentRef::Ident(m) => m.get(&IdentKey(k), vm, globals)?.copied(),
         })
     }
@@ -763,7 +784,15 @@ impl<'a> HashRef<'a> {
     ) -> Result<bool> {
         match self.content() {
             ContentRef::Inline(_) => Ok(self.inline_pos(k, vm, globals)?.is_some()),
-            ContentRef::Map(m) => m.contains_key(&k, vm, globals),
+            ContentRef::Map(m) => {
+                // See `HashRefMut::insert`: a packed key probes vm-free.
+                if k.is_packed_value() {
+                    let hash = packed_digest(m.hasher(), k);
+                    Ok(m.get_prehashed(hash, &Some(k), vm, globals)?.is_some())
+                } else {
+                    m.contains_key(&k, vm, globals)
+                }
+            }
             ContentRef::Ident(m) => m.contains_key(&IdentKey(k), vm, globals),
         }
     }
@@ -1238,7 +1267,16 @@ impl<'a> HashRefMut<'a> {
         }
         match &mut self.boxed_mut().content {
             HashContent::Map(m) => {
-                m.insert(Some(k), v, vm, globals)?;
+                if k.is_packed_value() {
+                    // A packed key's `eql?` is exactly bit equality (an
+                    // immediate is never `eql?` to a heap value, and
+                    // immediate-vs-immediate compares ids), and its digest
+                    // is vm-free — so the whole probe is vm-free.
+                    let hash = packed_digest(m.hasher(), k);
+                    m.insert_prehashed(hash, Some(k), v);
+                } else {
+                    m.insert(Some(k), v, vm, globals)?;
+                }
             }
             HashContent::IdentMap(m) => {
                 m.insert(Some(IdentKey(k)), v, vm, globals)?;

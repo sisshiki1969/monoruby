@@ -5228,6 +5228,43 @@ mod tests {
     }
 
     #[test]
+    fn hash_get_or_key_fallback_paths() {
+        // A Hash-subclass map declines the `__get_or_key` inliner (the
+        // receiver-class guard) and answers through the plain builtin.
+        run_test(
+            r#"
+            def drive(n)
+              r = nil
+              n.times { r = yield }
+              r
+            end
+            klass = Class.new(Hash)
+            m = klass.new
+            m[:a] = :A
+            h = { a: 1, b: 2 }
+            drive(30) { h.transform_keys(m) }
+            "#,
+        );
+        // A heap probe key whose #hash raises surfaces the error through
+        // the warmed inline path (and through the builtin before warmup).
+        run_test_error(
+            r#"
+            class TKBadKey
+              def hash
+                raise "boom"
+              end
+            end
+            m = {}
+            9.times { |i| m[i] = i }
+            h = { TKBadKey.new => 1 }
+            r = nil
+            30.times { r = h.transform_keys(m) }
+            r
+            "#,
+        );
+    }
+
+    #[test]
     fn hash_transform_values_dup_semantics() {
         // transform_values copies the table only (CRuby's
         // hash_dup_with_compare_by_id): no default, plain Hash class,
