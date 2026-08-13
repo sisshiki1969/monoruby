@@ -123,6 +123,16 @@ impl Codegen {
                     deopt,
                 });
             }
+            // Class-set guard: any listed class passes, everything else
+            // deopts.
+            AsmInst::GuardClassIn(r, classes, deopt) => {
+                let deopt = labels[deopt].clone();
+                self.encode_linst(LInst::GuardClassIn {
+                    reg: r,
+                    classes,
+                    deopt,
+                });
+            }
             // Unconditional jump to a side-exit (deopt) label.
             AsmInst::Deopt(deopt) => self.encode_linst(LInst::Deopt {
                 deopt: labels[deopt].clone(),

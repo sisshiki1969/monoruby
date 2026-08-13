@@ -1037,6 +1037,7 @@ impl Store {
             forwarding,
             bypass_visibility,
             vcall,
+            pmc: PolyCache::default(),
         });
         id
     }
@@ -1429,6 +1430,65 @@ impl Store {
                 );
             }
         }
+
+        eprintln!();
+        let recorded = self
+            .callsite_info
+            .iter()
+            .filter(|cs| !cs.pmc.entries().is_empty())
+            .count();
+        let poly: Vec<_> = self
+            .callsite_info
+            .iter()
+            .filter(|cs| cs.pmc.is_polymorphic())
+            .collect();
+        let mega = poly.iter().filter(|cs| cs.pmc.overflow() != 0).count();
+        eprintln!(
+            "polymorphic method cache: {} sites recorded, {} polymorphic, {} megamorphic",
+            recorded,
+            poly.len(),
+            mega
+        );
+        eprintln!("polymorphic sites (top 40 by slow-path observations)");
+        eprintln!(
+            " CallId  {:20} {:10} ways [class(/arg-class)(=func) xobservations]",
+            "name", "overflow"
+        );
+        eprintln!(
+            "------------------------------------------------------------------------------------------------------------------------"
+        );
+        let mut poly = poly;
+        poly.sort_unstable_by_key(|cs| {
+            std::cmp::Reverse(cs.pmc.entries().iter().map(|e| e.count as u64).sum::<u64>())
+        });
+        for cs in poly.into_iter().take(40) {
+            let name = cs
+                .name
+                .map_or_else(|| "<super>".to_string(), |n| n.to_string());
+            let ways = cs
+                .pmc
+                .entries()
+                .iter()
+                .map(|e| {
+                    let mut s = self.debug_class_name(e.recv);
+                    if let Some(arg) = e.arg {
+                        s += &format!("/{}", self.debug_class_name(arg));
+                    }
+                    if let Some(fid) = e.fid {
+                        s += &format!("={}", self.func_description(fid));
+                    }
+                    format!("{s} x{}", e.count)
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            eprintln!(
+                "({:6}) {:20} {:10} {}",
+                cs.id.get(),
+                name,
+                cs.pmc.overflow(),
+                ways
+            );
+        }
     }
 }
 
@@ -1818,6 +1878,80 @@ impl ConstSiteInfo {
 #[repr(transparent)]
 pub struct ConstSiteId(pub u32);
 
+/// Number of ways a call site's polymorphic method cache keeps before it
+/// counts further keys as megamorphic overflow.
+pub const PMC_WAYS: usize = 4;
+
+/// One observed key of a call site's polymorphic method cache.
+#[derive(Debug, Clone)]
+pub struct PolyCacheEntry {
+    /// The receiver's class (`class_for_ic`-unified for method calls, so
+    /// `true`/`false` share a way when their method is unified).
+    pub recv: ClassId,
+    /// The first argument's class — recorded for the pair-keyed sites
+    /// (BinOp / Cmp / Index / StoreIndex), `None` for method calls and
+    /// unary operators.
+    pub arg: Option<ClassId>,
+    /// The resolved method — method-call sites only; the operator/index
+    /// sites re-resolve from the class at JIT compile time.
+    pub fid: Option<FuncId>,
+    /// How many times the slow path (re-)observed this key. Not a call
+    /// count: the fast paths never record, so steady-state monomorphic
+    /// traffic does not bump this.
+    pub count: u32,
+}
+
+/// Polymorphic method cache of a call site: the receiver(-pair) classes
+/// the VM observed on its slow paths, up to [`PMC_WAYS`] of them.
+/// Recording-only for now — the JIT does not consume it yet (see
+/// `doc/polymorphic_call.md` §7); dump it with the `profile` feature.
+#[derive(Debug, Clone, Default)]
+pub struct PolyCache {
+    entries: Vec<PolyCacheEntry>,
+    /// Recordings that arrived with a fifth distinct key: the site is
+    /// megamorphic and a consumer should give up on way dispatch.
+    overflow: u32,
+}
+
+impl PolyCache {
+    pub fn record(&mut self, recv: ClassId, arg: Option<ClassId>, fid: Option<FuncId>) {
+        for e in self.entries.iter_mut() {
+            if e.recv == recv && e.arg == arg {
+                e.count += 1;
+                if fid.is_some() {
+                    // A later resolution wins: a redefinition changed the
+                    // target while the key stayed the same.
+                    e.fid = fid;
+                }
+                return;
+            }
+        }
+        if self.entries.len() < PMC_WAYS {
+            self.entries.push(PolyCacheEntry {
+                recv,
+                arg,
+                fid,
+                count: 1,
+            });
+        } else {
+            self.overflow += 1;
+        }
+    }
+
+    pub fn entries(&self) -> &[PolyCacheEntry] {
+        &self.entries
+    }
+
+    pub fn overflow(&self) -> u32 {
+        self.overflow
+    }
+
+    /// Two or more ways (or an overflow) were observed.
+    pub fn is_polymorphic(&self) -> bool {
+        self.entries.len() >= 2 || self.overflow != 0
+    }
+}
+
 /// Infomation for a call site.
 #[derive(Debug, Clone)]
 pub struct CallSiteInfo {
@@ -1860,6 +1994,9 @@ pub struct CallSiteInfo {
     /// parens): a failed lookup raises NameError instead of
     /// NoMethodError.
     pub(crate) vcall: bool,
+    /// Polymorphic method cache — the receiver(-pair) classes the VM
+    /// observed at this site. See [`PolyCache`].
+    pub pmc: PolyCache,
 }
 
 impl CallSiteInfo {

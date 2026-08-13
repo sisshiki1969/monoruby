@@ -107,6 +107,70 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// The "polymorphic but single-target" test: collect the receiver
+    /// classes the VM observed at this call site (its polymorphic method
+    /// cache plus the current inline-cache class — the PMC alone can miss a
+    /// pair the fixnum fast path stamped and never displaced), and answer
+    /// the set when **every** class re-resolves the called name to
+    /// `func_id`. Resolution is re-computed per class with `jit_check_call`
+    /// under the already-emitted class version guard; the FuncId the PMC
+    /// recorded is deliberately not trusted (it may predate a
+    /// redefinition). A megamorphic site (PMC overflow) has an incomplete
+    /// observation set, so it never qualifies; nor does a class whose
+    /// resolution's visibility would block this call site.
+    ///
+    /// The classes are ordered most-observed-first so the emitted
+    /// membership chain tests the hottest class first.
+    ///
+    /// Restricted to **native (builtin) targets**: a shared FuncId is only
+    /// a shared *implementation* for those. An ISeq target's JIT code is
+    /// specialized on the receiver class (its internal `self` dispatch —
+    /// `def g = f` resolving `f` per subclass — is baked in), an attr
+    /// accessor's ivar slot is class-layout-dependent, and a Struct
+    /// reader's slot index is per-class, so for all of them the set's
+    /// members must not funnel into one compiled body.
+    ///
+    fn pmc_same_target_classes(
+        &mut self,
+        callid: CallSiteId,
+        recv_class: ClassId,
+        func_id: FuncId,
+    ) -> Option<Box<[ClassId]>> {
+        if !matches!(self.store[func_id].kind, FuncKind::Builtin { .. }) {
+            return None;
+        }
+        let callsite = &self.store[callid];
+        let name = callsite.name?;
+        let pmc = &callsite.pmc;
+        if pmc.overflow() != 0 {
+            return None;
+        }
+        let mut classes: Vec<(ClassId, u32)> = pmc
+            .entries()
+            .iter()
+            .map(|e| (e.recv, e.count))
+            .collect();
+        if !classes.iter().any(|(c, _)| *c == recv_class) {
+            classes.push((recv_class, 0));
+        }
+        if classes.len() < 2 {
+            // Monomorphic — the ordinary single-class guard is strictly
+            // better (it refines the state for the inliners downstream).
+            return None;
+        }
+        classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
+        let mut set = Vec::with_capacity(classes.len());
+        for (class, _) in classes {
+            let (fid, visibility) = self.jit_check_call(class, Some(name))?;
+            if fid != func_id || self.jit_visibility_blocks(callid, visibility) {
+                return None;
+            }
+            set.push(class);
+        }
+        Some(set.into_boxed_slice())
+    }
+
+    ///
     /// Compile TraceIr::MethodCall with inline method cache info.
     ///
     /// *visibility* is the resolved method's visibility, obtained together with
@@ -176,25 +240,50 @@ impl<'a> JitContext<'a> {
         self.guard_class_version(state, ir, true);
 
         // receiver class guard
+        //
+        // When the class-set guard below is taken, the receiver's class is
+        // NOT statically refined (it may be any member of the set), so the
+        // inline generators — which assume a single `recv_class` receiver —
+        // must be skipped for this compile.
+        let mut same_target_set_guarded = false;
         if state.class(recv) != Some(recv_class) {
-            // Specialized JIT recompiles via an idx, not a position;
-            // keep it on the plain deopt path (no Part B there).
-            let use_recompile = recompile_on_recv_miss
-                && !matches!(self.jit_type(), JitType::Specialized { .. });
-            let deopt = if use_recompile {
-                ir.new_recompile_deopt(
-                    state,
-                    RecompileReason::BecamePolymorphic,
-                    self.position(),
-                )
+            if !recompile_on_recv_miss
+                && let Some(classes) = self.pmc_same_target_classes(callid, recv_class, func_id)
+            {
+                // The site is polymorphic, but every receiver class the VM
+                // observed (PMC ∪ the inline cache) re-resolves — at compile
+                // time, `jit_check_call` per class, never the PMC's stored
+                // FuncId — to this very `func_id` (`Kernel#nil?`-,
+                // `Kernel#is_a?`-style sites). One membership guard over the
+                // observed set replaces the single-class guard that deopted
+                // on every off-class receiver; an unobserved class still
+                // deopts, and a redefinition recompiles via the class
+                // version guard above.
+                let deopt = ir.new_deopt(state);
+                state.load(ir, recv, GP::Rdi);
+                ir.push(AsmInst::GuardClassIn(GP::Rdi, classes, deopt));
+                same_target_set_guarded = true;
             } else {
-                ir.new_deopt(state)
-            };
-            state.load(ir, recv, GP::Rdi);
-            state.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
+                // Specialized JIT recompiles via an idx, not a position;
+                // keep it on the plain deopt path (no Part B there).
+                let use_recompile = recompile_on_recv_miss
+                    && !matches!(self.jit_type(), JitType::Specialized { .. });
+                let deopt = if use_recompile {
+                    ir.new_recompile_deopt(
+                        state,
+                        RecompileReason::BecamePolymorphic,
+                        self.position(),
+                    )
+                } else {
+                    ir.new_deopt(state)
+                };
+                state.load(ir, recv, GP::Rdi);
+                state.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
+            }
         }
 
-        if callsite.block_fid.is_none()
+        if !same_target_set_guarded
+            && callsite.block_fid.is_none()
             && let Some(info) = self.store.inline_info.get_inline(func_id)
         {
             match info {
@@ -1552,6 +1641,77 @@ mod tests {
     /// the forwarded count is statically known per specialization, so the
     /// fill layout (copied slots + None-filled optionals running their
     /// defaults) is a compile-time constant. Cover under-, exactly-, and
+    /// Polymorphic-but-single-target call sites: every observed receiver
+    /// class re-resolves the name to one FuncId (`Kernel#is_a?` /
+    /// `Kernel#frozen?`), so the JIT emits a class-set membership guard
+    /// instead of a single-class guard that would deopt on 3 of every 4
+    /// receivers. Covers: the set guard's hit path for each member class,
+    /// a third class with a *different* resolution arriving after warmup
+    /// (must deopt and dispatch its override), and nil/bool members.
+    #[test]
+    fn polymorphic_same_target() {
+        run_test(
+            r#"
+            def check(x) = x.is_a?(Integer)
+            def fro(x) = x.frozen?
+            vals = [[1, 2], nil, "s", { a: 1 }]
+            res = []
+            c = 0
+            f = 0
+            200.times do |i|
+                c += 1 if check(vals[i % 4])
+                f += 1 if fro(vals[i % 4])
+            end
+            res << c << f
+            class WeirdIsA
+              def is_a?(k) = "custom"
+            end
+            res << check(WeirdIsA.new)
+            res << check(7) << check(nil) << check(false)
+            res
+            "#,
+        );
+    }
+
+    /// A megamorphic site (a fifth distinct receiver class overflows the
+    /// 4-way PMC) must NOT take the same-target set guard — the observation
+    /// set is incomplete, so `pmc_same_target_classes` rejects it and the
+    /// site keeps the ordinary single-class guard. Also exercises the PMC
+    /// overflow counter itself, and a float-typed branch behind a
+    /// polymorphic `nil?` (the receiver state stays unrefined after the set
+    /// guard, so the Float conversions downstream must still be correct).
+    #[test]
+    fn polymorphic_megamorphic_and_float() {
+        run_test(
+            r#"
+            def check(x) = x.nil?
+            def step_like(limit, by)
+              acc = 0.0
+              unless limit.nil?
+                acc += limit * 2.0
+              end
+              unless by.nil?
+                acc += by + 1.5
+              end
+              acc
+            end
+            vals = [[1, 2], nil, "s", { a: 1 }, :sym, 7, 2.5, false]
+            c = 0
+            r = 0.0
+            200.times do |i|
+              c += 1 if check(vals[i % 8])
+              case i % 4
+              when 0 then r += step_like(2.5, nil)
+              when 1 then r += step_like(nil, 3.5)
+              when 2 then r += step_like(1.5, 0.5)
+              when 3 then r += step_like(nil, nil)
+              end
+            end
+            [c, r]
+            "#,
+        );
+    }
+
     /// over-supplied optionals (the last vetoes the deferral and takes
     /// the eager helper path, raising ArgumentError like CRuby), plus a
     /// default expression with a side effect (must run only when the

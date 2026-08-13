@@ -163,6 +163,10 @@ pub(crate) enum TraceIr {
         dst: SlotId,
         src: SlotId,
         ic: Option<ClassId>,
+        /// The VM observed operand-class variance at this site
+        /// (`opcode_sub`). Not yet consumed by the JIT — reserved for the
+        /// polymorphic-cache lowering (see `doc/polymorphic_call.md`).
+        _polymorphic: bool,
     },
 
     BinOp {
@@ -202,12 +206,17 @@ pub(crate) enum TraceIr {
         base: SlotId,
         idx: SlotId,
         class: Option<(ClassId, ClassId)>, // (base_class, idx_class)
+        /// The VM observed operand-class variance at this site
+        /// (`opcode_sub`) — see `UnOp::_polymorphic`.
+        _polymorphic: bool,
     },
     IndexAssign {
         base: SlotId,
         idx: SlotId,
         src: SlotId,
         class: Option<(ClassId, ClassId)>, // (base_class, idx_class)
+        /// See `UnOp::_polymorphic`.
+        _polymorphic: bool,
     },
     MethodCall {
         _polymorphic: bool,
@@ -570,6 +579,7 @@ impl TraceIr {
                         dst,
                         src,
                         ic: pc.classid1(),
+                        _polymorphic: pc.opcode_sub() == 1,
                     }
                 }
                 130 => TraceIr::InlineCache,
@@ -584,6 +594,7 @@ impl TraceIr {
                     } else {
                         None
                     },
+                    _polymorphic: pc.opcode_sub() == 1,
                 },
                 133 => TraceIr::IndexAssign {
                     base: SlotId::new(op2_w2),
@@ -596,6 +607,7 @@ impl TraceIr {
                     } else {
                         None
                     },
+                    _polymorphic: pc.opcode_sub() == 1,
                 },
                 140..=146 => {
                     let kind = CmpKind::from(opcode - 140);
@@ -919,6 +931,7 @@ impl TraceIr {
                 base,
                 idx,
                 class,
+                _polymorphic: _,
             } => {
                 let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
                 fmt(store, op1, class)
@@ -928,6 +941,7 @@ impl TraceIr {
                 idx,
                 src,
                 class,
+                _polymorphic: _,
             } => {
                 let op1 = format!("{:?}:.[{:?}:] = {:?}", base, idx, src,);
                 fmt(store, op1, class)
@@ -1000,6 +1014,7 @@ impl TraceIr {
                 dst,
                 src,
                 ic: src_class,
+                _polymorphic: _,
             } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
                 format!("{:36} [{}]", op1, store.debug_class_name(src_class),)

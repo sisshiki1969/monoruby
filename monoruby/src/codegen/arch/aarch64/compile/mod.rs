@@ -884,6 +884,31 @@ impl Codegen {
             LInst::GuardClass { reg, class, deopt } => {
                 self.a64_guard_class(reg, class, &deopt);
             }
+            // Class-set guard: membership chain built from the single-class
+            // guard — each class's check falls through on match (branch to
+            // ok) and moves to the next candidate on mismatch; the last
+            // candidate's mismatch is the real deopt.
+            LInst::GuardClassIn {
+                reg,
+                classes,
+                deopt,
+            } => {
+                let ok = self.jit.label();
+                let len = classes.len();
+                for (i, class) in classes.iter().enumerate() {
+                    if i + 1 < len {
+                        let next = self.jit.label();
+                        self.a64_guard_class(reg, *class, &next);
+                        monoasm_arm64!(&mut self.jit,
+                            b ok;
+                        );
+                        self.jit.bind_label(next);
+                    } else {
+                        self.a64_guard_class(reg, *class, &deopt);
+                    }
+                }
+                self.jit.bind_label(ok);
+            }
             // Type guard: deopt unless `reg` is an Array (immediate check, then
             // the RValue.ty byte).
             LInst::GuardArrayTy { reg, deopt } => {

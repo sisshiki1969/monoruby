@@ -511,7 +511,7 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
 
-            TraceIr::UnOp { kind, dst, src, ic } => {
+            TraceIr::UnOp { kind, dst, src, ic, _polymorphic: _ } => {
                 let class = if let Some(class) = state.class(src) {
                     Some(class)
                 } else {
@@ -653,12 +653,14 @@ impl<'a> JitContext<'a> {
                 base,
                 idx,
                 class: ic,
+                _polymorphic: _,
             } => return self.index(state, ir, base, idx, ic, bc_pos),
             TraceIr::IndexAssign {
                 base,
                 idx,
                 src,
                 class: ic,
+                _polymorphic: _,
             } => {
                 assert_eq!(idx.0 + 1, src.0);
                 return self.index_assign(state, ir, base, idx, src, ic, bc_pos);

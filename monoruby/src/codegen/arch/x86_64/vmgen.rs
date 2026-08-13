@@ -504,11 +504,49 @@ impl Codegen {
     /// ### out
     /// - rax: ClassId
     ///
+    ///
+    /// Save the class of the unary operand in the inline cache, with the
+    /// same polymorphic detection as `vm_save_binary_class`: once the cache
+    /// is populated, a class change marks the site polymorphic via
+    /// opcode_sub.
+    ///
+    /// ### in
+    /// - rdi: Value
+    ///
+    /// ### destroy
+    /// - rax, r8 (+ caller-saved except rdi on the record branch)
+    ///
     fn vm_save_lhs_class(&mut self) {
         let get_class = self.get_class.clone();
+        let skip = self.jit.label();
+        let record = self.jit.label();
         monoasm! { &mut self.jit,
             call  get_class;
+            // r8 <- cached class (0 if the inline cache is empty)
+            movl  r8, [r13 - 8];
             movl  [r13 - 8], rax;
+            testq r8, r8;
+            jeq   record;      // first population: record without the flag
+            cmpl  r8, rax;
+            jeq   skip;
+            movb  [r13 + (OPCODE_SUB)], 1;
+        record:
+            // Feed the call site's polymorphic method cache — population and
+            // transitions only, see `vm_save_binary_class`. The caller keeps
+            // the operand Value in rdi; preserve it (rax as padding). The
+            // displaced class rides along in r8 so a class the fixnum fast
+            // path stamped (without recording) is captured on displacement.
+            pushq rdi;
+            pushq rax;
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rdx, [r13 - 16];
+            movq rcx, r8;          // displaced class (0 = cache was empty)
+            movq rax, (runtime::pmc_record_unary);
+            call rax;
+            popq rax;
+            popq rdi;
+        skip:
         };
     }
 
@@ -520,12 +558,13 @@ impl Codegen {
     /// - rsi: Value
     ///
     /// ### destroy
-    /// - rax
+    /// - rax, r8, r9 (+ caller-saved except rdi/rsi/r15 on the record branch)
     ///
     fn vm_save_binary_class(&mut self) {
         let get_class = self.get_class.clone();
         let skip = self.jit.label();
         let set_poly = self.jit.label();
+        let record = self.jit.label();
         monoasm! { &mut self.jit,
             call  get_class;
             // r8 <- cached lhs class (0 if the inline cache is empty)
@@ -545,7 +584,7 @@ impl Codegen {
             // non-deoptimizing dispatch instead of a monomorphic
             // class guard.
             testq r8, r8;
-            jeq   skip;
+            jeq   record;      // first population: record without the flag
             cmpl  r8, [r13 - 8];
             jne   set_poly;
             cmpl  r9, [r13 - 4];
@@ -553,6 +592,30 @@ impl Codegen {
             jmp   skip;
         set_poly:
             movb  [r13 + (OPCODE_SUB)], 1;
+        record:
+            // Feed the call site's polymorphic method cache. Population and
+            // transitions only — the steady state never gets here — so the
+            // C call is off every hot path. The caller contract keeps the
+            // operand Values in rdi/rsi (and vm_index_assign's src in r15);
+            // preserve them across the call, rcx as alignment padding. The
+            // displaced pair still sits in r8/r9 and rides along so classes
+            // the fixnum fast path stamped (without recording) are captured
+            // the moment they leave the inline cache.
+            pushq rdi;
+            pushq rsi;
+            pushq r15;
+            pushq rcx;
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rdx, [r13 - 16];  // r13 = next instruction; the cache is ours
+            movq rcx, r8;          // displaced lhs class (0 = cache was empty)
+            movq r8, r9;           // displaced rhs class
+            movq rax, (runtime::pmc_record_binary);
+            call rax;
+            popq rcx;
+            popq r15;
+            popq rsi;
+            popq rdi;
         skip:
         };
     }
@@ -989,24 +1052,25 @@ impl Codegen {
     fn vm_index(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch3();
+        self.vm_get_slot_value(GP::Rdi); // base: Value
+        self.vm_get_slot_value(GP::Rsi); // idx: Value
+        // Record (base, idx) classes into the inline cache and mark the
+        // site polymorphic on a class change — same machine-level
+        // bookkeeping as the binops, so the helper no longer needs the
+        // ClassIdSlot pointer.
+        self.vm_save_binary_class();
         // is_func_call = (base slot == self, slot 0): a literal `self[i]`
         // reaches a private `#[]`; any other receiver enforces visibility.
-        // rdi still holds the base *slot* here, before it becomes a value.
-        // The bit rides in `class_slot`'s low bit (8-aligned → free).
+        // The base slot is the `:2` bytecode operand at [r13 - 14].
         monoasm! { &mut self.jit,
-            xorq rax, rax;
-            testq rdi, rdi;
-            seteq rax;     // rax <- (base slot == 0)
-        };
-        self.vm_get_slot_value(GP::Rdi);
-        self.vm_get_slot_value(GP::Rsi);
-        monoasm! { &mut self.jit,
+            movzxw rax, [r13 - 14];
+            xorq r8, r8;
+            testq rax, rax;
+            seteq r8;
             movq rdx, rdi; // base: Value
             movq rcx, rsi; // idx: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            lea  r8, [r13 - 8]; // &mut ClassIdSlot
-            orq  r8, rax;  // fold is_func_call into bit 0
             movq rax, (runtime::get_index);
             call rax;
         };
@@ -1019,25 +1083,24 @@ impl Codegen {
     fn vm_index_assign(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch3();
+        self.vm_get_slot_value(GP::R15); // src: Value
+        self.vm_get_slot_value(GP::Rdi); // base: Value
+        self.vm_get_slot_value(GP::Rsi); // idx: Value
+        // Record (base, idx) classes and mark polymorphic on change — see
+        // `vm_index`. Destroys rax/r8/r9 only; r15 (src) survives.
+        self.vm_save_binary_class();
         // is_func_call = (base slot == self, slot 0): `self[i] = v` reaches a
-        // private `#[]=`. rdi still holds the base *slot* here. The bit rides
-        // in `class_slot`'s low bit (8-aligned → free).
+        // private `#[]=`. The base slot is the `:2` operand at [r13 - 14].
         monoasm! { &mut self.jit,
-            xorq rax, rax;
-            testq rdi, rdi;
-            seteq rax;     // rax <- (base slot == 0)
-        };
-        self.vm_get_slot_value(GP::R15);
-        self.vm_get_slot_value(GP::Rdi);
-        self.vm_get_slot_value(GP::Rsi);
-        monoasm! { &mut self.jit,
+            movzxw rax, [r13 - 14];
+            xorq r9, r9;
+            testq rax, rax;
+            seteq r9;
             movq rdx, rdi; // base: Value
             movq rcx, rsi; // idx: Value
             movq r8, r15;  // src: Value
             movq rdi, rbx; // &mut Interp
             movq rsi, r12; // &mut Globals
-            lea  r9, [r13 - 8]; // &mut ClassIdSlot
-            orq  r9, rax;  // fold is_func_call into bit 0
             movq rax, (runtime::set_index);
             call rax;
         };
