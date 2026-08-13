@@ -1124,7 +1124,7 @@ impl Codegen {
         }
     }
 
-    /// Inline allocation of a small (`1..=ARRAY_INLINE_CAPA`) no-splat array
+    /// Inline allocation of a small (`0..=ARRAY_INLINE_CAPA`) no-splat array
     /// literal: pop a recycled cell from the GC free list and initialise it
     /// directly as an inline-storage Array, with no runtime call. When the
     /// free list is empty, fall back to the runtime `gen_array` (which also

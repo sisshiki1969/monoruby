@@ -270,6 +270,42 @@ fn literal_regexp_format() {
 }
 
 #[test]
+fn empty_array_literal() {
+    // `[]` is inline-allocated by the JIT (no runtime call) like other
+    // small no-splat literals. Every evaluation must yield a fresh,
+    // independent, unfrozen Array — mutations must not leak between
+    // iterations.
+    run_test(
+        r#"
+        res = []
+        20.times do |i|
+            a = []
+            a << i
+            res << a << a.size << a.class.to_s << a.frozen?
+        end
+        res
+        "#,
+    );
+    // Same via a hot method, plus identity: two evaluations are distinct
+    // objects, and the empty literal behaves like Array.new (capa = 0
+    // inline representation).
+    run_test(
+        r#"
+        def m = []
+        r = []
+        20.times do
+            a = m
+            b = m
+            r << a.equal?(b) << (a == b) << a.empty? << (a == Array.new)
+            a.push(1, 2, 3, 4, 5, 6)
+            r << a << b
+        end
+        r
+        "#,
+    );
+}
+
+#[test]
 fn command_literal_frozen_argument() {
     // A non-interpolated command literal (`` `cmd` `` / `%x{...}`) passes its
     // command string to `Kernel#\`` FROZEN, matching CRuby (regardless of any
