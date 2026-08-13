@@ -5265,6 +5265,22 @@ mod tests {
     }
 
     #[test]
+    fn hash_get_or_key_splat_call_site() {
+        // A splat call site fails the inliner's `is_simple` gate, so the
+        // warmed call answers through the plain builtin (internal method,
+        // no CRuby comparison).
+        let v = run_test_no_result_check(
+            r#"
+            m = {a: :A}
+            r = nil
+            30.times { r = m.__get_or_key(*[:a]) }
+            r.inspect
+            "#,
+        );
+        assert_eq!(":A", v.as_str());
+    }
+
+    #[test]
     fn hash_transform_values_dup_semantics() {
         // transform_values copies the table only (CRuby's
         // hash_dup_with_compare_by_id): no default, plain Hash class,
