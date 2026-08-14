@@ -80,44 +80,11 @@ else
   MONORUBY="$PWD/target/llvm-cov-target/debug/monoruby"
 fi
 
-# --- Hang diagnostics (CI flaky-hang investigation) ------------------------
-# `phase` prints a flushed, timestamped marker so a truncated or timed-out CI
-# log shows the last phase reached (this works in the normal job too: when the
-# `darwin` retry wrapper kills a hung attempt at its per-attempt cap, the last
-# `[phase ...]` line names the culprit). Under CI_HANG_DEBUG=1 a background
-# watchdog additionally samples the native + Ruby stacks of any stuck
-# `monoruby` process after HANG_DEADLINE seconds (a normal run is ~11 min),
-# then kills it so the step ends with the diagnostics as its final output.
-# Driven in a loop by .github/workflows/darwin-hang-debug.yml.
+# `phase` prints a flushed, timestamped progress marker, so a truncated or
+# timed-out CI log still shows the last phase reached.
 phase() {
   printf '[phase %s] %s\n' "$(date -u +%H:%M:%S)" "$1"
-  [ -n "${CI_HANG_DEBUG:-}" ] && printf '%s' "$1" > "$PHASE_FILE" 2>/dev/null
-  return 0
 }
-
-if [ -n "${CI_HANG_DEBUG:-}" ]; then
-  PHASE_FILE="$(mktemp 2>/dev/null || echo "/tmp/monoruby_phase.$$")"
-  HANG_DEADLINE="${HANG_DEADLINE:-1200}" # 20 min; a normal run is ~11 min
-  (
-    sleep "$HANG_DEADLINE"
-    echo "==================== HANG WATCHDOG (${HANG_DEADLINE}s) ===================="
-    echo "stuck in phase: $(cat "$PHASE_FILE" 2>/dev/null)"
-    echo "---- processes ----"
-    ps -Ao pid,ppid,etime,%cpu,rss,command | grep -Ei 'monoruby|optcarrot|nextest|[c]argo' | grep -v grep || true
-    for pid in $(pgrep -f 'monoruby' 2>/dev/null); do
-      echo "---- sample $pid (5s) ----"
-      /usr/bin/sample "$pid" 5 2>&1 | sed -n '1,150p' || true
-      echo "---- lldb backtrace $pid ----"
-      lldb --batch -p "$pid" -o 'thread backtrace all' -o detach -o quit 2>&1 | sed -n '1,200p' || true
-    done
-    echo "==================== killing stuck monoruby ===================="
-    pkill -9 -f 'monoruby' 2>/dev/null || true
-    echo "==================== watchdog done ===================="
-  ) &
-  WATCHDOG_PID=$!
-  trap 'kill "$WATCHDOG_PID" 2>/dev/null || true; rm -f "$PHASE_FILE" 2>/dev/null || true' EXIT
-fi
-# ---------------------------------------------------------------------------
 
 phase "nextest (unit + integration tests)"
 cov_clean

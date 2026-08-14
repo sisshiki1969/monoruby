@@ -1,21 +1,17 @@
 # Kill and NAME any test that hangs. After `period` a test is reported as
-# SLOW (with its name) in the live output — a heartbeat for the CI log; after
-# `terminate-after` x `period` (10 min) it is terminated and reported by name
-# instead of stalling the whole run. Background: the darwin CI runner
-# intermittently hangs / OOM-dies inside the nextest phase with no culprit
-# named (the 25-min attempt cap or the runner's death hid the test name).
-# 10 min is far above any legitimate single test, including under gc-stress
-# on the slow macOS runner, and far below the 25-min attempt cap.
+# SLOW (with its name) in the live output; after `terminate-after` x `period`
+# (10 min) it is terminated and reported by name instead of stalling the whole
+# run. 10 min is far above any legitimate single test, including on the slow
+# macOS runner, and far below either CI job's own timeout.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 10 }
 
-# The `amd64` CI job runs the suite with `gc-stress`, which collects at EVERY
-# safepoint; combined with llvm-cov instrumentation the heaviest JIT warm-up
-# tests legitimately run for several minutes, so the 10-min default cap has no
-# headroom left for the next one that grows. Give that job a 20-min cap: still
-# far below the job's own timeout, and a genuinely hung test is still named
-# rather than stalling the run. `bin/test` selects this profile via
-# NEXTEST_PROFILE when it enables `gc-stress`; unspecified keys inherit from
-# `profile.default`.
+# `gc-stress` collects at EVERY safepoint; combined with llvm-cov
+# instrumentation the heaviest JIT warm-up tests legitimately run for several
+# minutes, so the 10-min default cap has no headroom left for the next one that
+# grows. Give such a run a 20-min cap: still far below the job's own timeout,
+# and a genuinely hung test is still named rather than stalling the run.
+# `bin/test` selects this profile via NEXTEST_PROFILE when it enables
+# `gc-stress`; unspecified keys inherit from `profile.default`.
 [profile.gc-stress]
 slow-timeout = { period = "60s", terminate-after = 20 }
