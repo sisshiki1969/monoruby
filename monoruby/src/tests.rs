@@ -27,7 +27,31 @@ pub fn run_test(code: &str) {
     eprintln!("{}", wrapped);
     let mut globals = Globals::new_test();
     let interp_val = run_test_main(&mut globals, &wrapped);
-    let ruby_res = run_ruby(&mut globals, code);
+    let ruby_res = run_ruby(&mut globals, code, interp_val);
+
+    Value::assert_eq(&globals, interp_val, ruby_res);
+}
+
+/// Like [`run_test`], but always verifies against a live CRuby and never
+/// touches the snapshot oracle. Use for environment-dependent expressions
+/// (e.g. `Dir.home`, `Dir.pwd`) whose expected value varies per host, so a
+/// recorded snapshot would only be correct on the machine that recorded it.
+pub fn run_test_live(code: &str) {
+    let wrapped = format!(
+        r##"
+      __res = ({0})
+      for __i in 0..24 do
+          __res2 = ({0})
+          __assert(__res, __res2)
+      end
+      ({0})
+  "##,
+        code
+    );
+    eprintln!("{}", wrapped);
+    let mut globals = Globals::new_test();
+    let interp_val = run_test_main(&mut globals, &wrapped);
+    let ruby_res = run_ruby_live(&mut globals, code);
 
     Value::assert_eq(&globals, interp_val, ruby_res);
 }
@@ -42,7 +66,24 @@ pub fn run_test_once(code: &str) {
     eprintln!("{}", wrapped);
     let mut globals = Globals::new_test();
     let interp_val = run_test_main(&mut globals, &wrapped);
-    let ruby_res = run_ruby(&mut globals, code);
+    let ruby_res = run_ruby(&mut globals, code, interp_val);
+
+    Value::assert_eq(&globals, interp_val, ruby_res);
+}
+
+/// Like [`run_test_once`], but always verifies against a live CRuby and
+/// never touches the snapshot oracle. See [`run_test_live`].
+pub fn run_test_once_live(code: &str) {
+    let wrapped = format!(
+        r##"
+      ({0})
+  "##,
+        code
+    );
+    eprintln!("{}", wrapped);
+    let mut globals = Globals::new_test();
+    let interp_val = run_test_main(&mut globals, &wrapped);
+    let ruby_res = run_ruby_live(&mut globals, code);
 
     Value::assert_eq(&globals, interp_val, ruby_res);
 }
@@ -140,7 +181,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
     eprintln!("{}", wrapped);
     let mut globals = Globals::new_test();
     let interp_val = run_test_main(&mut globals, &wrapped);
-    let ruby_res = run_ruby(&mut globals, &format!("{prelude}\n{code}"));
+    let ruby_res = run_ruby(&mut globals, &format!("{prelude}\n{code}"), interp_val);
 
     Value::assert_eq(&globals, interp_val, ruby_res);
 }
@@ -148,7 +189,7 @@ pub fn run_test_with_prelude(code: &str, prelude: &str) {
 pub fn run_test2(code: &str) {
     let mut globals = Globals::new_test();
     let interp_val = run_test_main(&mut globals, code);
-    let ruby_res = run_ruby(&mut globals, code);
+    let ruby_res = run_ruby(&mut globals, code, interp_val);
 
     Value::assert_eq(&globals, interp_val, ruby_res);
 }
@@ -220,10 +261,26 @@ fn run_test_main(globals: &mut Globals, code: &str) -> Value {
 /// a cache miss (the fresh entry is then recorded into the oracle file), or
 /// always when `MONORUBY_TEST_ORACLE=ruby` is exported — the mode to use
 /// after a CRuby version bump to re-verify / refresh the stored snapshots.
-fn run_ruby(globals: &mut Globals, code: &str) -> Value {
+///
+/// **Heal path**: when a *cached* entry disagrees with monoruby's own result
+/// (`interp_val`), the answer is re-derived from a live CRuby before
+/// declaring failure. Environment-dependent expressions (e.g. `Dir.home`,
+/// whose value differs between the recording host and CI runners) thus
+/// degrade to the old one-spawn behavior instead of failing spuriously,
+/// while a genuine monoruby regression still fails — the live CRuby agrees
+/// with the snapshot. The healed value is deliberately **not** recorded:
+/// it is host-specific, so rewriting the entry would make the checked-in
+/// file flip-flop between hosts.
+fn run_ruby(globals: &mut Globals, code: &str, interp_val: Value) -> Value {
     let (inspect, from_cache) = oracle::expected_inspect(code, || spawn_ruby(code));
     let label = if from_cache { "ruby(oracle)" } else { "ruby" };
-    value_from_inspect(globals, &inspect, label)
+    let ruby_res = value_from_inspect(globals, &inspect, label);
+    if from_cache && !Value::test_eq(&globals.store, interp_val, ruby_res) {
+        eprintln!("oracle: snapshot mismatch — re-verifying against a live ruby");
+        let live = spawn_ruby(code);
+        return value_from_inspect(globals, &live, "ruby(live)");
+    }
+    ruby_res
 }
 
 /// Reference result for `code`, always obtained from a live CRuby process.

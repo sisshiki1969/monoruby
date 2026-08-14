@@ -445,6 +445,19 @@ file — commit it). The batched helpers (`run_tests`, `run_tests2`, and the
 binop/unop generators on top of them) always spawn a live CRuby, since their
 auto-generated code strings churn too much to snapshot.
 
+**Environment-dependent tests** must use `run_test_live` /
+`run_test_once_live`: same warmup/comparison, but always against a live
+CRuby, never the oracle. Use these whenever the expected value varies per
+host or OS — `Dir.home`/`Dir.pwd` (HOME/cwd), absolute checkout paths
+(`require`/`load` fixtures returning `__FILE__`), `~user` expansion
+(`/root` vs macOS `/var/root`), and anything comparing `Dir.pwd`/`realpath`
+results under `/tmp` (a symlink to `/private/tmp` on macOS). As a safety
+net for not-yet-identified cases, a cached entry that disagrees with
+monoruby's result is re-verified against a live CRuby before failing
+("heal": one spawn, never re-recorded) — grep test output for
+`re-verifying against a live ruby` to find tests that should be moved to
+the `_live` helpers.
+
 Modes via `MONORUBY_TEST_ORACLE`:
 
 - unset / `snapshot` (default): replay stored entries; spawn + record on miss.

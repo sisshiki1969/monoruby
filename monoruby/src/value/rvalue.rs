@@ -2257,13 +2257,11 @@ impl RValue {
                 (ObjTy::ARRAY, ObjTy::ARRAY) => {
                     let lhs = lhs.as_array();
                     let rhs = rhs.as_array();
-                    if lhs.len() != rhs.len() {
-                        return false;
-                    }
-                    lhs.iter().zip(rhs.iter()).for_each(|(lhs, rhs)| {
-                        Value::assert_eq(store, *lhs, *rhs);
-                    });
-                    true
+                    lhs.len() == rhs.len()
+                        && lhs
+                            .iter()
+                            .zip(rhs.iter())
+                            .all(|(lhs, rhs)| Value::test_eq(store, *lhs, *rhs))
                 }
                 (ObjTy::RANGE, ObjTy::RANGE) => {
                     // Compare the endpoints structurally: a heap Float
@@ -2271,21 +2269,18 @@ impl RValue {
                     // must match by value, not by object identity.
                     let l = lhs.as_range();
                     let r = rhs.as_range();
-                    Value::assert_eq(store, l.start(), r.start());
-                    Value::assert_eq(store, l.end(), r.end());
-                    l.exclude_end() == r.exclude_end()
+                    Value::test_eq(store, l.start(), r.start())
+                        && Value::test_eq(store, l.end(), r.end())
+                        && l.exclude_end() == r.exclude_end()
                 }
                 (ObjTy::HASH, ObjTy::HASH) => {
                     let lhs = lhs.as_hashmap();
                     let rhs = rhs.as_hashmap();
-                    if lhs.len() != rhs.len() {
-                        return false;
-                    }
-                    lhs.iter().zip(rhs.iter()).for_each(|(lhs, rhs)| {
-                        Value::assert_eq(store, lhs.0, rhs.0);
-                        Value::assert_eq(store, lhs.1, rhs.1);
-                    });
-                    true
+                    lhs.len() == rhs.len()
+                        && lhs.iter().zip(rhs.iter()).all(|(lhs, rhs)| {
+                            Value::test_eq(store, lhs.0, rhs.0)
+                                && Value::test_eq(store, lhs.1, rhs.1)
+                        })
                 }
                 _ => false,
             }
