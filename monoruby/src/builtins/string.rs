@@ -3285,19 +3285,28 @@ fn string_match(
 ///
 /// ### String#__strscan_match (monoruby internal)
 ///
-/// - __strscan_match(regexp, byte_pos) -> MatchData | nil
+/// - __strscan_match(regexp, byte_pos) -> Integer | Array | nil
 ///
-/// Match `regexp` against the byte suffix of self starting at
-/// `byte_pos`, backing the pure-Ruby `StringScanner`'s ASCII fast path
-/// (`stdlib/strscan.rb`). The engine sees only the suffix, so `\A` and
-/// `^` anchor at the scan position — CRuby strscan's default
-/// (`fixed_anchor: false`) semantics — and the MatchData's offsets are
-/// relative to it, exactly like the byteslice-based fallback path, but
-/// with no copy: the suffix is a borrowed view and the MatchData's
-/// haystack snapshot resolves to a zero-copy CoW substring of self
-/// (`Executor::resolve_haystack`). Out-of-range or non-char-boundary
-/// positions return nil; the caller's `ascii_only?` gate makes every
-/// in-range byte position a boundary.
+/// Allocation-lean scanning primitive backing the pure-Ruby
+/// `StringScanner` (`stdlib/strscan.rb`): match `regexp` against the
+/// byte suffix of self starting at `byte_pos` and hand back only the
+/// match registers. No MatchData is built and `$~` is NOT set — like
+/// CRuby's C strscan, which keeps its registers inside the scanner and
+/// leaves the special variables alone.
+///
+/// The engine sees only the suffix, so `\A` and `^` anchor at the scan
+/// position (CRuby strscan's default `fixed_anchor: false` semantics).
+/// Returns
+/// - nil — no match;
+/// - an Integer — the byte end of a whole-match starting at offset 0
+///   with no capture groups (the common lexer case — the value is a
+///   packed Fixnum, so a hit allocates nothing);
+/// - an Array `[b0, e0, b1, e1, …]` of byte offsets relative to
+///   `byte_pos` (nil pairs for unmatched groups) otherwise.
+///
+/// Out-of-range or non-char-boundary positions return nil; the
+/// caller's `ascii_only?` gate makes every in-range byte position a
+/// boundary.
 #[monoruby_builtin]
 fn string_strscan_match(
     vm: &mut Executor,
@@ -3316,9 +3325,32 @@ fn string_strscan_match(
     let Some(sub) = given.get(byte_pos..) else {
         return Ok(Value::nil());
     };
-    // Enable zero-copy MatchData/$~ haystack snapshots (CoW).
-    vm.set_match_haystack(self_);
-    RegexpInner::match_one(vm, globals, re, sub, lfp.block(), 0)
+    let Some(caps) = re.captures_from_pos_no_save(sub, 0)? else {
+        return Ok(Value::nil());
+    };
+    if caps.len() == 1 {
+        // Group-less pattern: a single Fixnum carries the whole
+        // register set when the match starts at the scan position
+        // (always true for the `\A`-anchored scan family).
+        let m = caps.get(0).unwrap();
+        if m.start() == 0 {
+            return Ok(Value::integer(m.end() as i64));
+        }
+    }
+    let mut spans = Vec::with_capacity(caps.len() * 2);
+    for m in caps.iter() {
+        match m {
+            Some(m) => {
+                spans.push(Value::integer(m.start() as i64));
+                spans.push(Value::integer(m.end() as i64));
+            }
+            None => {
+                spans.push(Value::nil());
+                spans.push(Value::nil());
+            }
+        }
+    }
+    Ok(Value::array_from_vec(spans))
 }
 
 ///

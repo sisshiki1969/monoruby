@@ -91,9 +91,9 @@ jobs:
     runs-on: macos-latest
     # Backstop: if a hung attempt somehow escapes the per-attempt cap on the
     # Test step below, GitHub cancels the job cleanly here (2 attempts x
-    # 35 min + setup/clone overhead) rather than letting the runner die with
+    # 50 min + setup/clone overhead) rather than letting the runner die with
     # "lost communication".
-    timeout-minutes: 95
+    timeout-minutes: 110
     env:
       CARGO_TERM_COLOR: always
       SKIP_COV: "1"
@@ -154,8 +154,11 @@ jobs:
         #     the step (last log lines + memory trajectory + any watchdog
         #     forensics). It lives on the GitHub side, so it SURVIVES runner
         #     death — the progress log of record for silent hangs.
-        #   * retry — cap each attempt at 35 min and retry once, so a clean
-        #     hang fails fast (normal pass ~11 min) and the rerun recovers;
+        #   * retry — cap each attempt at 50 min and retry once, so a clean
+        #     hang fails fast and the rerun recovers. (The cap was 35 min
+        #     when a normal pass was ~11 min; the bin-test scope has since
+        #     grown to ~34 min on this runner, and 2026-08-14 both attempts
+        #     of a healthy run timed out mid-spec — no hang, just budget.)
         #   * a background memory watchdog: watches every monoruby AND ruby
         #     process (bin/test diffs against CRuby and runs mspec) plus the
         #     system-wide free memory; fires at >3 GB per process / >4 GB
@@ -183,7 +186,7 @@ jobs:
           # well under the attempt cap.
           NEXTEST_TEST_THREADS: "2"
         with:
-          timeout_minutes: 35
+          timeout_minutes: 50
           max_attempts: 2
           command: |
             set -o pipefail

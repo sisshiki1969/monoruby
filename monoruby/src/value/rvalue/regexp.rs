@@ -1391,6 +1391,19 @@ impl RegexpInner {
         }
     }
 
+    /// `captures_from_pos` without touching `$~`/`$1..` — the raw match
+    /// for scanning primitives that must not update the special
+    /// variables (CRuby's C strscan keeps its registers to itself).
+    pub(crate) fn captures_from_pos_no_save<'a>(
+        &self,
+        given: &'a str,
+        pos: usize,
+    ) -> Result<Option<Captures<'a>>> {
+        self.regex
+            .captures_from_pos(given, pos)
+            .map_err(|err| MonorubyErr::regexerr(format!("Capture failed. {:?}", err)))
+    }
+
     /// Like `match_one` but returns only a boolean and does NOT set `$~`.
     pub(crate) fn match_pred(
         re: &RegexpInner,
