@@ -301,6 +301,27 @@ impl<'a> JitContext<'a> {
                 // receiver class; behind the set guard it must fall through
                 // to the ordinary (set-guarded) builtin call.
                 _ if same_target_set_guarded => {}
+                // Explicit-send spelling of a numeric operator (`1.+(2)`,
+                // `a.==(b)`): fire the binary generator in Value mode. The
+                // class-version and receiver guards were emitted above; the
+                // generator's own operand handling emits no duplicates (its
+                // guard decisions are state-driven, and the receiver's class
+                // was just refined). The generators emit pure register /
+                // xmm code — no C call — so no guard invalidation is needed.
+                InlineFuncInfo::InlineGenBinary(f) => {
+                    if let BinaryInlineOutcome::Done = self.inline_asm_binary(
+                        state,
+                        ir,
+                        f,
+                        callid,
+                        recv_class,
+                        arg_class,
+                        BinaryInlineMode::Value,
+                    ) {
+                        return Ok(CompileResult::Continue);
+                    }
+                    // Declined: fall through to the ordinary builtin call.
+                }
                 InlineFuncInfo::InlineGen(f) => {
                     if self.inline_asm(state, ir, f, callid, recv_class, arg_class) {
                         state.unset_side_effect_guard();
@@ -1067,6 +1088,41 @@ impl<'a> JitContext<'a> {
             *state = state_save;
             ir.restore(ir_save);
             false
+        }
+    }
+
+    /// [`inline_asm`](Self::inline_asm) for binary-operator generators —
+    /// same transactional save/restore protocol, with the firing mode passed
+    /// through and the three-way [`BinaryInlineOutcome`] returned (`Declined`
+    /// rolls back).
+    pub(super) fn inline_asm_binary(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        f: impl Fn(
+            &mut AbstractState,
+            &mut AsmIr,
+            &JitContext,
+            &Store,
+            CallSiteId,
+            ClassId,
+            Option<ClassId>,
+            BinaryInlineMode,
+        ) -> BinaryInlineOutcome,
+        callid: CallSiteId,
+        recv_class: ClassId,
+        arg_class: Option<ClassId>,
+        mode: BinaryInlineMode,
+    ) -> BinaryInlineOutcome {
+        let state_save = state.clone();
+        let ir_save = ir.save();
+        match f(state, ir, self, &self.store, callid, recv_class, arg_class, mode) {
+            BinaryInlineOutcome::Declined => {
+                *state = state_save;
+                ir.restore(ir_save);
+                BinaryInlineOutcome::Declined
+            }
+            outcome => outcome,
         }
     }
 

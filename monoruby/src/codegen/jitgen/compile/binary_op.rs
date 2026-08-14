@@ -60,6 +60,20 @@ impl<'a> JitContext<'a> {
     /// recompiled after a redefinition keeps inlining every *other* operator.
     ///
     pub(super) fn assume_basic_op(&mut self, class: ClassId, op: IdentId) -> bool {
+        if !self.basic_op_assumable(class, op) {
+            return false;
+        }
+        self.record_bop_dep(class, op);
+        true
+    }
+
+    /// The pure half of [`assume_basic_op`](Self::assume_basic_op): may the
+    /// guard-free inline implementation of `class#op` be emitted? Records
+    /// nothing — the direct-fire dispatch checks this *before* running a
+    /// generator and calls [`record_bop_dep`](Self::record_bop_dep) only when
+    /// the generator actually emitted (or folded) code, so a declined
+    /// generator leaves no spurious dependency.
+    pub(super) fn basic_op_assumable(&self, class: ClassId, op: IdentId) -> bool {
         // An ordinary redefinition binds everywhere.
         if self.store.basic_op_globally_redefined_for(class, op) {
             return false;
@@ -74,10 +88,16 @@ impl<'a> JitContext<'a> {
         {
             return false;
         }
+        true
+    }
+
+    /// Record the compiled body's dependence on the builtin `class#op`:
+    /// `set_bop_redefine` reads the recorded set back to find exactly the
+    /// bodies a later redefinition invalidates.
+    pub(super) fn record_bop_dep(&mut self, class: ClassId, op: IdentId) {
         if !self.bop_deps.contains(&(class, op)) {
             self.bop_deps.push((class, op));
         }
-        true
     }
 
     ///

@@ -85,7 +85,42 @@ enum CompileResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct JitLabel(usize);
+pub(crate) struct JitLabel(usize);
+
+///
+/// How a binary inline generator ([`crate::globals::InlineGenBinary`]) is
+/// being fired.
+///
+/// `Value` asks for the ordinary result-producing form (the callsite `dst`
+/// receives the result, possibly as a folded constant). `CmpBr` is the fused
+/// compare-and-branch form (`TraceIr::BinCmpBr`): the generator emits the
+/// comparison and a conditional branch to `dest`; the caller owns the
+/// side-branch bookkeeping.
+///
+#[derive(Clone, Copy)]
+pub(crate) enum BinaryInlineMode {
+    Value,
+    CmpBr {
+        brkind: crate::bytecodegen::inst::BrKind,
+        dest: JitLabel,
+    },
+}
+
+///
+/// What a binary inline generator did.
+///
+pub(crate) enum BinaryInlineOutcome {
+    /// Code (or a Value-mode constant fold) was emitted; state updated.
+    Done,
+    /// `CmpBr` mode only: the comparison folded to a compile-time constant
+    /// (the raw comparison result, before `brkind` is applied). No code was
+    /// emitted and the callsite dst was not touched — the caller resolves
+    /// the branch statically.
+    Folded(bool),
+    /// The generator declined; the caller rolls back and takes the ordinary
+    /// method-call path.
+    Declined,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum BranchMode {

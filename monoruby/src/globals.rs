@@ -114,6 +114,33 @@ pub(crate) type InlineGenClassIndependent = dyn Fn(
     CallSiteId,
 ) -> bool;
 
+/// Binary-operator inline generator: the JIT-inline implementation of a
+/// numeric binary operator / comparison (`Integer#+`, `Float#<`, …),
+/// registered per method and fired from two contexts:
+///
+/// - **direct-fire** from the binop/cmp bytecode dispatchers
+///   (`fire_binary_inline`), guard-free under the basic-op license
+///   (`bop_deps` + eviction on redefinition) — the hot path;
+/// - the ordinary `compile_method_call` inline switch for explicit sends
+///   (`1.+(2)`), where the class-version and receiver guards were already
+///   emitted.
+///
+/// The generator receives the receiver (lhs) class the site resolved on,
+/// the argument (rhs) class when known, and the firing mode (value-producing
+/// vs fused compare-and-branch). It emits operand guards itself only for
+/// operands not already proven (`gp_ensure` / float-load discipline), so
+/// both firing contexts get exactly the guards they need and no more.
+pub(crate) type InlineGenBinary = dyn Fn(
+    &mut jitgen::AbstractState,
+    &mut jitgen::asmir::AsmIr,
+    &crate::jitgen::JitContext,
+    &Store,
+    CallSiteId,
+    ClassId,
+    Option<ClassId>,
+    jitgen::BinaryInlineMode,
+) -> jitgen::BinaryInlineOutcome;
+
 /// Universal inline generator that always declines to inline (returns
 /// `false`), so the call site falls back to a normal method call. Used on
 /// aarch64 for builtins whose hand-written inline asm has not been ported yet:
