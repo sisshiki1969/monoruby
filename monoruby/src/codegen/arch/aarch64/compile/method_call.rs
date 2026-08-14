@@ -597,6 +597,7 @@ impl Codegen {
         lead_num: usize,
         src: SlotId,
         layout: ForwardedLayout,
+        kw_route: Option<(SlotId, Box<[Option<SlotId>]>)>,
     ) -> bool {
         // Fixed lowering temps (x9..x15 are never GP-mapped; x10 is the
         // internal scratch of `a64_frame_load/store`, so it is left free):
@@ -673,6 +674,26 @@ impl Codegen {
                     CLFP,
                     (LFP_ARG0 + 8 * (lead_num + expected_len + j) as i32) as u32,
                 );
+            }
+        }
+        // K1: routed literal keywords — copy each bound caller kw slot
+        // into the callee's kw register; 0-fill the absent optionals
+        // (their defaults run in the callee prologue, exactly as
+        // `ordinary_keyword` binds None).
+        if let Some((kw_reg_pos, route)) = &kw_route {
+            monoasm_arm64!(&mut self.jit, ldr x11, [x29];);
+            for (i, src) in route.iter().enumerate() {
+                let ofs = (LFP_SELF + 8 * (kw_reg_pos.0 as i32 + i as i32)) as u32;
+                match src {
+                    Some(slot) => {
+                        self.a64_frame_load(VAL, CALLER_FP, rbp_local(*slot) as u32);
+                        self.a64_frame_store(VAL, CLFP, ofs);
+                    }
+                    None => {
+                        monoasm_arm64!(&mut self.jit, mov x12, (0u64););
+                        self.a64_frame_store(VAL, CLFP, ofs);
+                    }
+                }
             }
         }
         true

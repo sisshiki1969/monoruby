@@ -20,6 +20,26 @@ pub(crate) struct SpecializedId(pub(super) usize);
 /// `base` is the immutable value snapshotted at frame creation. The
 /// difference is what the Loop-JIT-side rsp bump consumes.
 ///
+///
+/// D1/K1 forwarding-deferral record for a specialized pure trampoline
+/// frame (`def f(...) = g(...)`): the caller's positional window that
+/// backs `f`'s un-materialized `...` rest `Array`, plus — when the
+/// caller passes literal keywords — the caller's kw window that backs
+/// `f`'s un-materialized `**kwrest` Hash (K1).
+///
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DeferredForward {
+    /// `f`'s synthetic rest local slot.
+    pub rest_local: SlotId,
+    /// Caller-frame base of the positional source window.
+    pub src: SlotId,
+    /// Positional source count.
+    pub len: u16,
+    /// K1: `(f's **kwrest local, caller kw base, names in slot order)` —
+    /// `names[i]`'s value lives at caller slot `kw_pos + i`.
+    pub kw: Option<(SlotId, SlotId, Box<[IdentId]>)>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct FrameSizes {
     pub(super) total: usize,
@@ -1260,7 +1280,7 @@ impl<'a> JitContext<'a> {
     /// that saved caller `rbp`), `len` its positional count,
     /// `rest_local` `f`'s synthetic rest local slot.
     ///
-    pub(super) fn forward_rest_deferral(&self) -> Option<(SlotId, SlotId, u16)> {
+    pub(super) fn forward_rest_deferral(&self) -> Option<DeferredForward> {
         // D1 deferred-rest is lowered on both backends now: the side-exit
         // `forward_rest` materialize (`gen_forward_rest_materialize` /
         // `a64_gen_forward_rest_materialize`) and the `SetArgumentsForwarded`
@@ -1279,14 +1299,38 @@ impl<'a> JitContext<'a> {
             return None;
         }
         let cs = &self.store[cid];
-        if cs.kw_may_exists() || cs.block_arg.is_some() {
+        // K1: literal keywords at the caller defer alongside the rest —
+        // recorded here as (f's `**kwrest` local, the caller's kw base,
+        // the names in slot order) and either source-routed into the
+        // forwarded callee's declared kw params by the consume or vetoed
+        // as a whole (`needs_rest_array`). A `**hash` splat stays on the
+        // generic path: its keys are dynamic.
+        if !cs.hash_splat_pos.is_empty() || cs.block_arg.is_some() {
             return None;
         }
+        let kw = if cs.kw_args.is_empty() {
+            None
+        } else {
+            // `def f(...)` always declares `**kwrest`.
+            let kwrest_local = self.store[fid].kw_rest()?;
+            // kw_args maps name -> offset from kw_pos; record names in
+            // offset order so `names[i]` lives at `kw_pos + i`.
+            let mut names = vec![IdentId::get_id(""); cs.kw_args.len()];
+            for (name, i) in &cs.kw_args {
+                names[*i] = *name;
+            }
+            Some((kwrest_local, cs.kw_pos, names.into_boxed_slice()))
+        };
         // `pos_num == 0` (e.g. `NoArg.new` through the Ruby `Class#new`)
         // defers to an *empty* source range: the consume copies nothing
         // and the side-exit materialization (`create_array` with len 0)
         // rebuilds `[]` without touching the source pointer.
-        Some((rest_local, cs.args, cs.pos_num as u16))
+        Some(DeferredForward {
+            rest_local,
+            src: cs.args,
+            len: cs.pos_num as u16,
+            kw,
+        })
     }
 
     pub(super) fn position(&self) -> Option<BytecodePtr> {

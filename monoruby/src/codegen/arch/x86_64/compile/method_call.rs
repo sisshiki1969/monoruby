@@ -680,6 +680,7 @@ impl Codegen {
         recv: SlotId,
         kwrest_guard: Option<SlotId>,
         deferred_src: Option<(SlotId, u16)>,
+        kw_route: Option<(SlotId, Box<[Option<SlotId>]>)>,
     ) {
         if let Some((src, _len)) = deferred_src {
             let layout = layout.expect("a source-routed forward always carries its layout");
@@ -756,10 +757,32 @@ impl Codegen {
                     movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * (lead_num + expected_len + j)) as i32)], 0;
                 }
             }
+            // K1: routed literal keywords — copy each bound caller kw
+            // slot straight into the callee's kw register (rcx still
+            // holds the caller rbp), 0-fill the absent optionals (their
+            // defaults run in the callee prologue, exactly as
+            // `ordinary_keyword` binds None).
+            if let Some((kw_reg_pos, route)) = &kw_route {
+                for (i, src) in route.iter().enumerate() {
+                    let ofs = RSP_LOCAL_FRAME + LFP_SELF + 8 * (kw_reg_pos.0 as i32 + i as i32);
+                    match src {
+                        Some(slot) => monoasm! { &mut self.jit,
+                            movq rax, [rcx - (rbp_local(*slot))];
+                            movq [rsp - (ofs)], rax;
+                        },
+                        None => monoasm! { &mut self.jit,
+                            movq [rsp - (ofs)], 0;
+                        },
+                    }
+                }
+            }
             // No success sentinel: nothing above can fail, and the caller
-            // emits no `HandleError` for D1.
+            // emits no `HandleError` for D1/K1.
             return;
         }
+        // The eager path never routes keywords (a kw-declaring callee is
+        // only admitted with an active deferral).
+        assert!(kw_route.is_none());
         let fallback = self.jit.label();
         let heap = self.jit.label();
         let got = self.jit.label();

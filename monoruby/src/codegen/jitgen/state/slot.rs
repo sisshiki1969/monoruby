@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen::jitgen::context::DeferredForward;
 
 ///
 /// §5 stage 3c-i — the register-allocation **policy** seam.
@@ -257,8 +258,8 @@ pub(crate) struct SlotState {
     /// merge despite living in the cloned `SlotState`.
     pub(in crate::codegen::jitgen) gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile,
     local_num: usize,
-    /// D1 forwarding-rest deferral (transient annotation; see the consumers).
-    deferred_rest: Option<(SlotId, SlotId, u16)>,
+    /// D1/K1 forwarding deferral (transient annotation; see the consumers).
+    deferred_forward: Option<DeferredForward>,
     /// §27.3 Stage-2a: the loop-carried float set `L` for the enclosing loop —
     /// slots that are `F`/`Sf` at the loop back-edge (so they round-trip the
     /// loop). Populated at the loop-entry merge from the fixpoint's back-edge
@@ -297,7 +298,7 @@ impl SlotState {
             fpr_alloc: FprAllocator::new(),
             gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile::new(),
             local_num,
-            deferred_rest: None,
+            deferred_forward: None,
             loop_carried: std::collections::HashSet::new(),
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
@@ -354,8 +355,8 @@ impl SlotState {
         // spurious `C(nil)` write-back can clobber that array. The
         // annotation only routes the consumer and adds the deopt
         // materialization while live.
-        if let Some((dst, src, len)) = cc.forward_rest_deferral() {
-            ctx.deferred_rest = Some((dst, src, len));
+        if let Some(df) = cc.forward_rest_deferral() {
+            ctx.deferred_forward = Some(df);
         }
         ctx
     }
@@ -502,17 +503,17 @@ impl SlotState {
         &self,
         slot: SlotId,
     ) -> Option<(SlotId, u16)> {
-        match self.deferred_rest {
-            Some((dst, src, len)) if dst == slot => Some((src, len)),
+        match &self.deferred_forward {
+            Some(df) if df.rest_local == slot => Some((df.src, df.len)),
             _ => None,
         }
     }
 
-    /// D1: the frame's `(dst, src, len)` deferral annotation, if any.
-    /// Used by array-path forwarding consumers to veto the caller-side
-    /// `create_array` skip (`set_needs_rest_array`).
-    pub(in crate::codegen::jitgen) fn deferred_rest_tuple(&self) -> Option<(SlotId, SlotId, u16)> {
-        self.deferred_rest
+    /// D1/K1: the frame's deferral annotation, if any. Used by
+    /// forwarding consumers to source-route or to veto the caller-side
+    /// skip (`set_needs_rest_array`).
+    pub(in crate::codegen::jitgen) fn deferred_forward_info(&self) -> Option<&DeferredForward> {
+        self.deferred_forward.as_ref()
     }
 
     pub(super) fn is_used(&self, slot: SlotId) -> &IsUsed {
@@ -1362,7 +1363,27 @@ impl AbstractFrame {
     }
 
     fn wb_forward_rest(&self) -> Vec<(SlotId, SlotId, u16)> {
-        self.deferred_rest.into_iter().collect()
+        self.deferred_forward
+            .iter()
+            .map(|df| (df.rest_local, df.src, df.len))
+            .collect()
+    }
+
+    /// K1: the deferred `**kwrest` materialization entries —
+    /// `(f's kwrest local, [(name, caller slot)])`.
+    fn wb_forward_kwrest(&self) -> Vec<(SlotId, Box<[(IdentId, SlotId)]>)> {
+        self.deferred_forward
+            .iter()
+            .filter_map(|df| {
+                let (dst, kw_pos, names) = df.kw.as_ref()?;
+                let table = names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| (*name, *kw_pos + i))
+                    .collect();
+                Some((*dst, table))
+            })
+            .collect()
     }
 
     pub(super) fn get_gc_write_back(&self) -> WriteBack {
@@ -1379,7 +1400,7 @@ impl AbstractFrame {
         // registers themselves survive the collection — `exec_gc` preserves the
         // caller-saved set). Empty without the feature.
         let gp = self.gp_regfile.dirty_residents();
-        WriteBack::new(vec![], literal, void, gp, vec![])
+        WriteBack::new(vec![], literal, void, gp, vec![], vec![])
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
@@ -1390,7 +1411,14 @@ impl AbstractFrame {
         // register) so a deopt resuming in the VM reads them from their stack
         // home. Empty without the feature.
         let gp = self.gp_regfile.dirty_residents();
-        WriteBack::new(fpr, literal, vec![], gp, self.wb_forward_rest())
+        WriteBack::new(
+            fpr,
+            literal,
+            vec![],
+            gp,
+            self.wb_forward_rest(),
+            self.wb_forward_kwrest(),
+        )
     }
 
     fn fpr_swap(&mut self, l: FPReg, r: FPReg) {

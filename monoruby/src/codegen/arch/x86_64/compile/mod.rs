@@ -212,6 +212,7 @@ impl Codegen {
                 lead_num,
                 kwrest_guard,
                 deferred_src,
+                kw_route,
             } => {
                 let offset = store[callee_fid].get_offset();
                 // D1 source-routed: the whole bind is a compile-time
@@ -225,6 +226,10 @@ impl Codegen {
                     Some(l) => l.from_src,
                     None => store[callee_fid].req_num() - lead_num,
                 };
+                // K1: pair the routed caller slots with the callee's kw
+                // register base.
+                let kw_route =
+                    kw_route.map(|route| (store[callee_fid].kw_reg_pos(), route));
                 self.jit_set_arguments_forwarded(
                     callid,
                     callee_fid,
@@ -236,6 +241,7 @@ impl Codegen {
                     recv,
                     kwrest_guard,
                     deferred_src,
+                    kw_route,
                 );
             }
         }
