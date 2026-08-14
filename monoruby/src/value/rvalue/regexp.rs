@@ -1354,18 +1354,18 @@ impl RegexpInner {
         Ok((res, !is_empty))
     }
 
+    /// `byte_pos` is a byte offset into `given`, already converted from
+    /// the caller's character position and clamped to a char boundary
+    /// (see `String#match`, which does the conversion against the
+    /// subject's cached code range).
     pub(crate) fn match_one(
         vm: &mut Executor,
         globals: &mut Globals,
         re: Regexp,
         given: &str,
         block: Option<BlockHandler>,
-        char_pos: usize,
+        byte_pos: usize,
     ) -> Result<Value> {
-        let byte_pos = match given.char_indices().nth(char_pos) {
-            Some((pos, _)) => pos,
-            None => return Ok(Value::nil()),
-        };
         // Attach the Regexp to the `$~` this match is about to save, so
         // named-capture lookup (`$~[:name]`) works after `String#match`
         // (same stash `Regexp#match` sets on its own path).

@@ -102,7 +102,7 @@ class StringScanner
 
   def exist?(pattern)
     _match_forward(pattern, false, false)
-    @match ? @match.end(0) - @prev_pos + @pos : nil
+    @match ? @match.end(0) : nil
   end
 
   def peek(len)
@@ -203,24 +203,61 @@ class StringScanner
     matched.to_s
   end
 
+  # `\A`-anchored counterparts of caller patterns, built once per
+  # distinct pattern instead of on every scan. Regexp patterns are
+  # identity-keyed (a regex literal is the same object on every
+  # evaluation, so a lexer's fixed pattern set hits after the first
+  # scan); String patterns are value-keyed via their escaped form
+  # (CRuby's C strscan treats them as literal bytes). All caches are
+  # size-capped so callers that generate patterns dynamically cannot
+  # grow them without bound.
+  ANCHORED_RE = {}.compare_by_identity
+  ANCHORED_STR = {}
+  PLAIN_STR = {}
+  CACHE_LIMIT = 512
+  private_constant :ANCHORED_RE, :ANCHORED_STR, :PLAIN_STR, :CACHE_LIMIT
+
   private
 
-  def _match_at_pos(pattern, advance, return_string)
-    # CRuby's StringScanner (C extension) treats String pattern arguments as
-    # literal byte sequences (memcmp-style), not as Regexps. Convert via
-    # Regexp.escape so metacharacters in the String are matched literally.
-    pattern = Regexp.new(Regexp.escape(pattern)) if pattern.is_a?(String)
-    @prev_pos = @pos
-    rest_str = @str.byteslice(@pos..-1)
-    return nil if rest_str.nil?
+  # Both match paths hand the engine only the rest of the string, so
+  # `\A` anchors at the scan position — CRuby strscan's default
+  # (fixed_anchor: false) semantics.
+  def _anchored(pattern)
+    if pattern.is_a?(String)
+      ANCHORED_STR.clear if ANCHORED_STR.size > CACHE_LIMIT
+      ANCHORED_STR[pattern] ||= Regexp.new("\\A#{Regexp.escape(pattern)}")
+    else
+      ANCHORED_RE.clear if ANCHORED_RE.size > CACHE_LIMIT
+      ANCHORED_RE[pattern] ||= Regexp.new("\\A(?:#{pattern.source})", pattern.options)
+    end
+  end
 
-    # We need the match to be anchored at the current position, preserving original options
-    m = rest_str.match(Regexp.new("\\A(?:#{pattern.source})", pattern.options))
+  # Match `pattern` against the rest of the string. The MatchData's
+  # offsets are relative to the scan position on both paths.
+  #
+  # ASCII-only content (an O(1) check on the cached code range; byte and
+  # char offsets coincide) uses the zero-copy `__strscan_match`
+  # primitive, which matches against the byte suffix in place and
+  # snapshots the haystack as a CoW substring. Everything else copies
+  # the rest, exactly as before.
+  def _match_rest(pattern)
+    if @str.ascii_only?
+      @str.__strscan_match(pattern, @pos)
+    else
+      rest_str = @str.byteslice(@pos..-1)
+      rest_str&.match(pattern)
+    end
+  end
+
+  def _match_at_pos(pattern, advance, return_string)
+    anchored = _anchored(pattern)
+    @prev_pos = @pos
+    m = _match_rest(anchored)
     if m
       @match = m
       matched_str = m[0]
       @pos += matched_str.bytesize if advance
-      return_string ? matched_str : matched_str
+      matched_str
     else
       @match = nil
       nil
@@ -228,18 +265,15 @@ class StringScanner
   end
 
   def _match_forward(pattern, advance, return_string)
-    # CRuby's StringScanner (C extension) treats String pattern arguments as
-    # literal byte sequences (memcmp-style), not as Regexps. Convert via
-    # Regexp.escape so metacharacters in the String are matched literally.
-    pattern = Regexp.new(Regexp.escape(pattern)) if pattern.is_a?(String)
+    if pattern.is_a?(String)
+      PLAIN_STR.clear if PLAIN_STR.size > CACHE_LIMIT
+      pattern = PLAIN_STR[pattern] ||= Regexp.new(Regexp.escape(pattern))
+    end
     @prev_pos = @pos
-    rest_str = @str.byteslice(@pos..-1)
-    return nil if rest_str.nil?
-
-    m = rest_str.match(pattern)
+    m = _match_rest(pattern)
     if m
       @match = m
-      end_pos = m.end(0)
+      end_pos = m.end(0) # relative to the scan position
       if advance
         @pos += end_pos
       end
