@@ -58,47 +58,6 @@ impl Codegen {
     }
 
     /// Load a 64-bit tagged fixnum literal into Rsi (x3) for an `Integer` bit-op
-    /// whose immediate doesn't fit a 32-bit encoding.
-    pub(crate) fn emit_load_tagged_rsi(&mut self, tagged: i64) {
-        monoasm_arm64!(&mut self.jit, mov x3, (tagged as u64);); // GP::Rsi == x3
-    }
-
-    /// `Integer#|` with a tagged immediate (`(2a+1)|(2b+1)` keeps LSB=1).
-    pub(crate) fn emit_bitor_imm(&mut self, imm: i64) {
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (imm as u64);
-            orr x4, x4, x9;          // GP::Rdi == x4
-        );
-    }
-    /// `Integer#|` register-register.
-    pub(crate) fn emit_bitor_rr(&mut self) {
-        monoasm_arm64!(&mut self.jit, orr x4, x4, x3;); // Rdi==x4, Rsi==x3
-    }
-    /// `Integer#&` with a tagged immediate (`(2a+1)&(2b+1)` keeps LSB=1).
-    pub(crate) fn emit_bitand_imm(&mut self, imm: i64) {
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (imm as u64);
-            and x4, x4, x9;          // GP::Rdi == x4
-        );
-    }
-    /// `Integer#&` register-register.
-    pub(crate) fn emit_bitand_rr(&mut self) {
-        monoasm_arm64!(&mut self.jit, and x4, x4, x3;);
-    }
-    /// `Integer#^` with a tagged immediate (use `imm-1` so lhs's tag survives).
-    pub(crate) fn emit_bitxor_imm(&mut self, imm: i64) {
-        monoasm_arm64!(&mut self.jit,
-            mov x9, ((imm - 1) as u64);
-            eor x4, x4, x9;          // GP::Rdi == x4
-        );
-    }
-    /// `Integer#^` register-register (`(2a+1)^(2b+1)` clears LSB, re-tag +1).
-    pub(crate) fn emit_bitxor_rr(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            eor x4, x4, x3;          // GP::Rdi == x4, GP::Rsi == x3
-            add x4, x4, #(1);
-        );
-    }
 
     /// `n << k` / `n >> -k` with `k >= 64`: a non-zero `n` overflows (deopt);
     /// `0` shifts to `0`. lhs in Rdi (x4).

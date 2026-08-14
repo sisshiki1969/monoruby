@@ -1,11 +1,13 @@
 use num::{BigInt, FromPrimitive, ToPrimitive};
 
 use super::*;
+use crate::ast::CmpKind;
+use crate::bytecodegen::BinOpK;
 use crate::executor::Visibility;
-#[cfg(target_arch = "x86_64")]
-use jitgen::JitContext;
 #[cfg(target_arch = "aarch64")]
-use jitgen::{AbstractState, JitContext};
+use jitgen::AbstractState;
+use jitgen::trace_ir::{FBinOpInfo, FOpClass};
+use jitgen::{AbstractFrame, BinaryInlineMode, BinaryInlineOutcome, JitContext};
 
 //
 // Float class
@@ -37,23 +39,77 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         inline_gen2!(float_toi),
         0,
     );
-    globals.define_basic_op(FLOAT_CLASS, "+", add, 1);
-    globals.define_basic_op(FLOAT_CLASS, "-", sub, 1);
-    globals.define_basic_op(FLOAT_CLASS, "*", mul, 1);
-    globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "/", div, div_ff_f, 1);
+    globals.define_basic_op_inline(FLOAT_CLASS, "+", add, float_binop_gen(BinOpK::Add), 1);
+    globals.define_basic_op_inline(FLOAT_CLASS, "-", sub, float_binop_gen(BinOpK::Sub), 1);
+    globals.define_basic_op_inline(FLOAT_CLASS, "*", mul, float_binop_gen(BinOpK::Mul), 1);
+    // `/` keeps its plain-builtin entry flags (it was never a
+    // `define_basic_op` registration); the binary generator gives the
+    // operator spelling the inline `divsd` the ad-hoc float path emitted,
+    // and upgrades the explicit send from the old `CFunc_FF_F` C call.
+    globals.define_builtin_inline_binary_funcs(
+        FLOAT_CLASS,
+        "/",
+        &[],
+        div,
+        float_binop_gen(BinOpK::Div),
+        1,
+    );
     globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "%", rem, rem_ff_f, 1);
     globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "**", pow, pow_ff_f, 1);
     globals.define_builtin_func(FLOAT_CLASS, "hash", hash, 0);
     globals.define_builtin_func(FLOAT_CLASS, "div", div_floor, 1);
     globals.define_builtin_func(FLOAT_CLASS, "modulo", rem, 1);
     globals.define_builtin_func(FLOAT_CLASS, "divmod", divmod, 1);
-    globals.define_builtin_func(FLOAT_CLASS, "==", eq, 1);
-    globals.define_builtin_func(FLOAT_CLASS, "===", eq, 1);
-    globals.define_builtin_func(FLOAT_CLASS, ">=", ge, 1);
-    globals.define_builtin_func(FLOAT_CLASS, ">", gt, 1);
-    globals.define_builtin_func(FLOAT_CLASS, "<=", le, 1);
-    globals.define_builtin_func(FLOAT_CLASS, "<", lt, 1);
-    globals.define_basic_op(FLOAT_CLASS, "!=", ne, 1);
+    globals.define_builtin_inline_binary_funcs(
+        FLOAT_CLASS,
+        "==",
+        &[],
+        eq,
+        float_cmp_gen(CmpKind::Eq),
+        1,
+    );
+    // `Float#===` is a distinct FuncId (not an alias); Eq semantics.
+    globals.define_builtin_inline_binary_funcs(
+        FLOAT_CLASS,
+        "===",
+        &[],
+        eq,
+        float_cmp_gen(CmpKind::Eq),
+        1,
+    );
+    globals.define_builtin_inline_binary_funcs(
+        FLOAT_CLASS,
+        ">=",
+        &[],
+        ge,
+        float_cmp_gen(CmpKind::Ge),
+        1,
+    );
+    globals.define_builtin_inline_binary_funcs(
+        FLOAT_CLASS,
+        ">",
+        &[],
+        gt,
+        float_cmp_gen(CmpKind::Gt),
+        1,
+    );
+    globals.define_builtin_inline_binary_funcs(
+        FLOAT_CLASS,
+        "<=",
+        &[],
+        le,
+        float_cmp_gen(CmpKind::Le),
+        1,
+    );
+    globals.define_builtin_inline_binary_funcs(
+        FLOAT_CLASS,
+        "<",
+        &[],
+        lt,
+        float_cmp_gen(CmpKind::Lt),
+        1,
+    );
+    globals.define_basic_op_inline(FLOAT_CLASS, "!=", ne, float_cmp_gen(CmpKind::Ne), 1);
     globals.define_builtin_func(FLOAT_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func_with(FLOAT_CLASS, "floor", floor, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "ceil", ceil, 0, 1, false);
@@ -75,6 +131,81 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     // Float.new should raise NoMethodError (not TypeError from allocate)
     let float_meta = globals.store.get_metaclass(FLOAT_CLASS).id();
     globals.add_empty_method(float_meta, IdentId::NEW, Visibility::Undefined);
+}
+
+/// Factory for the [`InlineGenBinary`] of a Float arithmetic operator: both
+/// `Float op Float` and the mixed `Float op Integer` compute in xmm via
+/// `binop_float` (constant fold to a flonum immediate, else the fpr path).
+fn float_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
+    Box::new(
+        move |state, ir, _, store, callid, _recv_class, rhs_class, mode| {
+            let callsite = &store[callid];
+            if !callsite.is_simple() || !matches!(mode, BinaryInlineMode::Value) {
+                return BinaryInlineOutcome::Declined;
+            }
+            let rhs_fop = match rhs_class {
+                Some(INTEGER_CLASS) => FOpClass::Integer,
+                Some(FLOAT_CLASS) => FOpClass::Float,
+                _ => return BinaryInlineOutcome::Declined,
+            };
+            let CallSiteInfo {
+                dst, recv, args, ..
+            } = *callsite;
+            state.binop_float(
+                ir,
+                kind,
+                dst,
+                FBinOpInfo {
+                    lhs: recv,
+                    rhs: args,
+                    lhs_class: FOpClass::Float,
+                    rhs_class: rhs_fop,
+                },
+            );
+            BinaryInlineOutcome::Done
+        },
+    )
+}
+
+/// Factory for the [`InlineGenBinary`] of a Float comparison operator: the
+/// xmm mirror of `integer_cmp_gen` (`gen_cmp_float` in `Value` mode,
+/// `gen_cmpbr_float` fused, both-constant compares resolved to `Folded`).
+fn float_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
+    Box::new(
+        move |state, ir, _, store, callid, _recv_class, rhs_class, mode| {
+            let callsite = &store[callid];
+            if !callsite.is_simple() {
+                return BinaryInlineOutcome::Declined;
+            }
+            let rhs_fop = match rhs_class {
+                Some(INTEGER_CLASS) => FOpClass::Integer,
+                Some(FLOAT_CLASS) => FOpClass::Float,
+                _ => return BinaryInlineOutcome::Declined,
+            };
+            let CallSiteInfo {
+                dst, recv, args, ..
+            } = *callsite;
+            let info = FBinOpInfo {
+                lhs: recv,
+                rhs: args,
+                lhs_class: FOpClass::Float,
+                rhs_class: rhs_fop,
+            };
+            match mode {
+                BinaryInlineMode::Value => {
+                    state.gen_cmp_float(ir, dst, info, kind);
+                    BinaryInlineOutcome::Done
+                }
+                BinaryInlineMode::CmpBr { brkind, dest } => {
+                    if let Some((l, r)) = state.check_binary_C_f64(recv, args) {
+                        return BinaryInlineOutcome::Folded(AbstractFrame::fold_cmp(kind, l, r));
+                    }
+                    state.gen_cmpbr_float(ir, info, kind, brkind, dest);
+                    BinaryInlineOutcome::Done
+                }
+            }
+        },
+    )
 }
 
 ///
@@ -185,9 +316,6 @@ extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
     lhs.powf(rhs)
 }
 
-extern "C" fn div_ff_f(lhs: f64, rhs: f64) -> f64 {
-    lhs.ruby_div(&rhs)
-}
 
 extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
     lhs.ruby_mod(&rhs)

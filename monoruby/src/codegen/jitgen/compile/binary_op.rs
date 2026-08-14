@@ -1,7 +1,4 @@
-use num::Zero;
-
 use crate::bytecodegen::BinOpK;
-use crate::codegen::jitgen::state::Guarded;
 
 use super::*;
 

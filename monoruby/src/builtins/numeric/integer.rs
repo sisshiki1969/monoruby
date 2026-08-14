@@ -1,5 +1,8 @@
 use super::*;
-use jitgen::{AbstractState, JitContext};
+use crate::ast::CmpKind;
+use crate::bytecodegen::BinOpK;
+use jitgen::trace_ir::{FBinOpInfo, FOpClass};
+use jitgen::{AbstractFrame, AbstractState, BinaryInlineMode, BinaryInlineOutcome, JitContext};
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
 
@@ -22,10 +25,10 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         0,
     );
     globals.define_builtin_inline_func(INTEGER_CLASS, "to_f", to_f, inline_gen2!(integer_tof), 0);
-    globals.define_basic_op(INTEGER_CLASS, "+", add, 1);
-    globals.define_basic_op(INTEGER_CLASS, "-", sub, 1);
-    globals.define_basic_op(INTEGER_CLASS, "*", mul, 1);
-    globals.define_basic_op(INTEGER_CLASS, "/", div, 1);
+    globals.define_basic_op_inline(INTEGER_CLASS, "+", add, integer_binop_gen(BinOpK::Add), 1);
+    globals.define_basic_op_inline(INTEGER_CLASS, "-", sub, integer_binop_gen(BinOpK::Sub), 1);
+    globals.define_basic_op_inline(INTEGER_CLASS, "*", mul, integer_binop_gen(BinOpK::Mul), 1);
+    globals.define_basic_op_inline(INTEGER_CLASS, "/", div, integer_binop_gen(BinOpK::Div), 1);
     // `modulo` is a true alias of `%` (ruby/spec core/integer/modulo_spec.rb).
     globals.define_builtin_inline_funcs(
         INTEGER_CLASS,
@@ -36,19 +39,77 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         1,
     );
     globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, inline_gen2!(integer_pow), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "&", bitand, inline_gen2!(integer_bitand), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "|", bitor, inline_gen2!(integer_bitor), 1);
-    globals.define_builtin_inline_func(INTEGER_CLASS, "^", bitxor, inline_gen2!(integer_bitxor), 1);
+    globals.define_builtin_inline_binary_funcs(
+        INTEGER_CLASS,
+        "&",
+        &[],
+        bitand,
+        integer_binop_gen(BinOpK::BitAnd),
+        1,
+    );
+    globals.define_builtin_inline_binary_funcs(
+        INTEGER_CLASS,
+        "|",
+        &[],
+        bitor,
+        integer_binop_gen(BinOpK::BitOr),
+        1,
+    );
+    globals.define_builtin_inline_binary_funcs(
+        INTEGER_CLASS,
+        "^",
+        &[],
+        bitxor,
+        integer_binop_gen(BinOpK::BitXor),
+        1,
+    );
     globals.define_builtin_func(INTEGER_CLASS, "divmod", divmod, 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, inline_gen2!(integer_shr), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, inline_gen2!(integer_shl), 1);
     // `===` is a true alias of `==` (ruby/spec core/integer/case_compare_spec.rb).
-    globals.define_builtin_funcs(INTEGER_CLASS, "==", &["==="], eq, 1);
-    globals.define_builtin_func(INTEGER_CLASS, ">=", ge, 1);
-    globals.define_builtin_func(INTEGER_CLASS, ">", gt, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "<=", le, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "<", lt, 1);
-    globals.define_basic_op(INTEGER_CLASS, "!=", ne, 1);
+    // The alias shares the FuncId, so a `===` site fires the Eq generator —
+    // identical semantics for Integer.
+    globals.define_builtin_inline_binary_funcs(
+        INTEGER_CLASS,
+        "==",
+        &["==="],
+        eq,
+        integer_cmp_gen(CmpKind::Eq),
+        1,
+    );
+    globals.define_builtin_inline_binary_funcs(
+        INTEGER_CLASS,
+        ">=",
+        &[],
+        ge,
+        integer_cmp_gen(CmpKind::Ge),
+        1,
+    );
+    globals.define_builtin_inline_binary_funcs(
+        INTEGER_CLASS,
+        ">",
+        &[],
+        gt,
+        integer_cmp_gen(CmpKind::Gt),
+        1,
+    );
+    globals.define_builtin_inline_binary_funcs(
+        INTEGER_CLASS,
+        "<=",
+        &[],
+        le,
+        integer_cmp_gen(CmpKind::Le),
+        1,
+    );
+    globals.define_builtin_inline_binary_funcs(
+        INTEGER_CLASS,
+        "<",
+        &[],
+        lt,
+        integer_cmp_gen(CmpKind::Lt),
+        1,
+    );
+    globals.define_basic_op_inline(INTEGER_CLASS, "!=", ne, integer_cmp_gen(CmpKind::Ne), 1);
     globals.define_builtin_func(INTEGER_CLASS, "<=>", cmp, 1);
     globals.define_builtin_inline_func_with(
         INTEGER_CLASS,
@@ -1045,155 +1106,109 @@ fn integer_pow_float_rhs(
     true
 }
 
-///
-/// Common helper for inline JIT compilation of Integer#| / Integer#& / Integer#^.
-///
-/// Loads operands into registers (or detects a literal fixnum operand for
-/// immediate encoding) and emits the corresponding bitwise instruction.
-/// Returns false if rhs is not Integer or the call site is not simple,
-/// falling back to the regular method dispatch path.
-///
-/// `fold` performs the operation on two i64 fixnum values for constant
-/// folding. Bitwise ops on two i63 fixnums always produce an i63 result.
-/// `emit_imm` generates `<op>q rdi, imm` (rdi: tagged fixnum lhs, imm: tagged
-/// fixnum rhs that fits in `i32`).
-/// `emit_rr` generates `<op>q rdi, rsi` (both tagged fixnums in rdi/rsi).
-fn integer_bitop_inline(
-    state: &mut AbstractState,
-    ir: &mut AsmIr,
-    store: &Store,
-    callid: CallSiteId,
-    rhs_class: Option<ClassId>,
-    fold: impl Fn(i64, i64) -> i64,
-    emit_imm: impl Fn(&mut Codegen, i64) + Copy + 'static,
-    emit_rr: impl Fn(&mut Codegen) + Copy + 'static,
-) -> bool {
-    let callsite = &store[callid];
-    if !callsite.is_simple() {
-        return false;
-    }
-    if rhs_class != Some(INTEGER_CLASS) {
-        return false;
-    }
-    let CallSiteInfo {
-        dst, args, recv, ..
-    } = *callsite;
-
-    let lhs_lit = state.is_fixnum_literal(recv);
-    let rhs_lit = state.is_fixnum_literal(args);
-
-    if let (Some(lhs), Some(rhs)) = (lhs_lit, rhs_lit) {
-        // constant folding: both operands are concrete fixnums.
-        // Bitwise ops on two i63 values always produce an i63 result.
-        let result = fold(lhs.get(), rhs.get());
-        state.def_C(dst, Immediate::check_fixnum(result).unwrap());
-        return true;
-    }
-
-    if let Some(rhs) = rhs_lit {
-        // recv op <fixnum literal>
-        state.load(ir, recv, GP::Rdi);
-        emit_bitop_imm(ir, rhs, emit_imm, emit_rr);
-    } else if let Some(lhs) = lhs_lit {
-        // <fixnum literal> op args (commutative — swap to use immediate form)
-        state.load_fixnum(ir, args, GP::Rdi);
-        emit_bitop_imm(ir, lhs, emit_imm, emit_rr);
-    } else {
-        state.load(ir, recv, GP::Rdi);
-        state.load_fixnum(ir, args, GP::Rsi);
-        ir.inline(move |r#gen, _, _, _| emit_rr(r#gen));
-    }
-    state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
-    true
-}
-
-/// Emit a bitwise op with a literal `imm` rhs (lhs already in rdi as a tagged
-/// fixnum).
-///
-/// `imm` is converted to its tagged-fixnum `Value` form. If the tagged
-/// representation fits in `i32`, emit the immediate form directly via
-/// `emit_imm`. Otherwise load the full 64-bit tagged value into rsi and
-/// emit the register form via `emit_rr`.
-fn emit_bitop_imm(
-    ir: &mut AsmIr,
-    imm: Fixnum,
-    emit_imm: impl Fn(&mut Codegen, i64) + Copy + 'static,
-    emit_rr: impl Fn(&mut Codegen) + Copy + 'static,
-) {
-    let tagged = Value::from(imm).id() as i64;
-    if i32::try_from(tagged).is_ok() {
-        ir.inline(move |r#gen, _, _, _| emit_imm(r#gen, tagged));
-    } else {
-        ir.inline(move |r#gen, _, _, _| {
-            r#gen.emit_load_tagged_rsi(tagged);
-            emit_rr(r#gen);
-        });
-    }
-}
-
-fn integer_bitor(
-    state: &mut AbstractState,
-    ir: &mut AsmIr,
-    _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
-    _: ClassId,
-    rhs_class: Option<ClassId>,
-) -> bool {
-    integer_bitop_inline(
-        state,
-        ir,
-        store,
-        callid,
-        rhs_class,
-        |a, b| a | b,
-        |r#gen, imm| r#gen.emit_bitor_imm(imm),
-        |r#gen| r#gen.emit_bitor_rr(),
+/// Factory for the [`InlineGenBinary`] of an Integer arithmetic / bitwise
+/// operator. The generator is a thin dispatch over the state emission
+/// primitives: `Integer op Integer` takes the register-allocated fixnum path
+/// (`binop_integer`: constant fold, immediate form, GP path with overflow
+/// deopt), and the mixed pair (`1 + 2.0` — `Integer#+` with a Float
+/// argument) computes in xmm via `binop_float`, arithmetic kinds only: a
+/// bitwise op with a Float rhs declines and takes the ordinary method call
+/// (which raises `TypeError`, where the old `binop_type` collapse hit a
+/// per-arch `unreachable!`).
+fn integer_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
+    Box::new(
+        move |state, ir, _, store, callid, _recv_class, rhs_class, mode| {
+            let callsite = &store[callid];
+            if !callsite.is_simple() || !matches!(mode, BinaryInlineMode::Value) {
+                return BinaryInlineOutcome::Declined;
+            }
+            let CallSiteInfo {
+                dst, recv, args, ..
+            } = *callsite;
+            match rhs_class {
+                Some(INTEGER_CLASS) => {
+                    state.binop_integer(ir, kind, dst, recv, args);
+                    BinaryInlineOutcome::Done
+                }
+                Some(FLOAT_CLASS)
+                    if matches!(kind, BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div) =>
+                {
+                    state.binop_float(
+                        ir,
+                        kind,
+                        dst,
+                        FBinOpInfo {
+                            lhs: recv,
+                            rhs: args,
+                            lhs_class: FOpClass::Integer,
+                            rhs_class: FOpClass::Float,
+                        },
+                    );
+                    BinaryInlineOutcome::Done
+                }
+                _ => BinaryInlineOutcome::Declined,
+            }
+        },
     )
 }
 
-fn integer_bitand(
-    state: &mut AbstractState,
-    ir: &mut AsmIr,
-    _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
-    _: ClassId,
-    rhs_class: Option<ClassId>,
-) -> bool {
-    integer_bitop_inline(
-        state,
-        ir,
-        store,
-        callid,
-        rhs_class,
-        |a, b| a & b,
-        |r#gen, imm| r#gen.emit_bitand_imm(imm),
-        |r#gen| r#gen.emit_bitand_rr(),
-    )
-}
-
-fn integer_bitxor(
-    state: &mut AbstractState,
-    ir: &mut AsmIr,
-    _: &JitContext,
-    store: &Store,
-    callid: CallSiteId,
-    _: ClassId,
-    rhs_class: Option<ClassId>,
-) -> bool {
-    // XOR of two tagged fixnums (both LSB=1) yields LSB=0, so we need to
-    // restore the tag bit. For the immediate path we instead strip the tag
-    // bit from the immediate (`imm - 1`) so the result keeps lhs's tag.
-    integer_bitop_inline(
-        state,
-        ir,
-        store,
-        callid,
-        rhs_class,
-        |a, b| a ^ b,
-        |r#gen, imm| r#gen.emit_bitxor_imm(imm),
-        |r#gen| r#gen.emit_bitxor_rr(),
+/// Factory for the [`InlineGenBinary`] of an Integer comparison operator.
+/// `Value` mode produces the boolean into the callsite dst
+/// (`gen_cmp_integer` / `gen_cmp_float`); `CmpBr` mode emits the fused
+/// compare-and-branch (`gen_cmpbr_integer` / `gen_cmpbr_float`), resolving
+/// a both-operands-constant compare to `Folded` so the caller kills the
+/// branch statically.
+fn integer_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
+    Box::new(
+        move |state, ir, _, store, callid, _recv_class, rhs_class, mode| {
+            let callsite = &store[callid];
+            if !callsite.is_simple() {
+                return BinaryInlineOutcome::Declined;
+            }
+            let CallSiteInfo {
+                dst, recv, args, ..
+            } = *callsite;
+            let float_info = match rhs_class {
+                Some(INTEGER_CLASS) => None,
+                Some(FLOAT_CLASS) => Some(FBinOpInfo {
+                    lhs: recv,
+                    rhs: args,
+                    lhs_class: FOpClass::Integer,
+                    rhs_class: FOpClass::Float,
+                }),
+                _ => return BinaryInlineOutcome::Declined,
+            };
+            match mode {
+                BinaryInlineMode::Value => {
+                    match float_info {
+                        None => state.gen_cmp_integer(ir, kind, dst, recv, args),
+                        Some(info) => state.gen_cmp_float(ir, dst, info, kind),
+                    }
+                    BinaryInlineOutcome::Done
+                }
+                BinaryInlineMode::CmpBr { brkind, dest } => {
+                    match float_info {
+                        None => {
+                            if let Some((l, r)) = state.check_concrete_i64(recv, args) {
+                                return BinaryInlineOutcome::Folded(AbstractFrame::fold_cmp(
+                                    kind, l, r,
+                                ));
+                            }
+                            state.gen_cmpbr_integer(ir, kind, recv, args, brkind, dest);
+                        }
+                        Some(info) => {
+                            if let Some((l, r)) = state.check_binary_C_f64(recv, args) {
+                                return BinaryInlineOutcome::Folded(AbstractFrame::fold_cmp(
+                                    kind, l, r,
+                                ));
+                            }
+                            state.gen_cmpbr_float(ir, info, kind, brkind, dest);
+                        }
+                    }
+                    BinaryInlineOutcome::Done
+                }
+            }
+        },
     )
 }
 
