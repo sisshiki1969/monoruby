@@ -64,6 +64,10 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         1,
     );
     globals.define_builtin_func(INTEGER_CLASS, "divmod", divmod, 1);
+    globals.define_builtin_inline_unary_func(INTEGER_CLASS, "-@", super::neg, integer_neg_gen());
+    // `~` is Integer's alone — CRuby has no `Numeric#~`, so `~1.5` must be a
+    // NoMethodError rather than resolving up the ancestry.
+    globals.define_builtin_inline_unary_func(INTEGER_CLASS, "~", super::bitnot, integer_bitnot_gen());
     globals.define_builtin_inline_func(INTEGER_CLASS, ">>", shr, inline_gen2!(integer_shr), 1);
     globals.define_builtin_inline_func(INTEGER_CLASS, "<<", shl, inline_gen2!(integer_shl), 1);
     // `===` is a true alias of `==` (ruby/spec core/integer/case_compare_spec.rb).
@@ -1104,6 +1108,34 @@ fn integer_pow_float_rhs(
     ir.inline(move |r#gen, _, _, base| r#gen.gen_int_pow_if(lhs_fpr, rhs_fpr, using_fpr, base));
     state.def_reg2acc(ir, GP::Rax, dst);
     true
+}
+
+/// The inline generator for `Integer#-@` — a thin dispatch over the state
+/// emission primitive (constant fold, else guard + in-place negate with an
+/// overflow deopt).
+fn integer_neg_gen() -> Box<InlineGenUnary> {
+    Box::new(move |state, ir, _, store, callid, _recv_class| {
+        let callsite = &store[callid];
+        if !callsite.is_simple() {
+            return false;
+        }
+        let CallSiteInfo { dst, recv, .. } = *callsite;
+        state.unop_integer_neg(ir, dst, recv);
+        true
+    })
+}
+
+/// The inline generator for `Integer#~`.
+fn integer_bitnot_gen() -> Box<InlineGenUnary> {
+    Box::new(move |state, ir, _, store, callid, _recv_class| {
+        let callsite = &store[callid];
+        if !callsite.is_simple() {
+            return false;
+        }
+        let CallSiteInfo { dst, recv, .. } = *callsite;
+        state.unop_integer_bitnot(ir, dst, recv);
+        true
+    })
 }
 
 /// Factory for the [`InlineGenBinary`] of an Integer arithmetic / bitwise

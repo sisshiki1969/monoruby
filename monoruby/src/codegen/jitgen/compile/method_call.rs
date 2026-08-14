@@ -308,6 +308,14 @@ impl<'a> JitContext<'a> {
                 // guard decisions are state-driven, and the receiver's class
                 // was just refined). The generators emit pure register /
                 // xmm code — no C call — so no guard invalidation is needed.
+                // Explicit-send spelling of a numeric unary operator
+                // (`1.-@`, `x.~`): same generator, guards already emitted.
+                InlineFuncInfo::InlineGenUnary(f) => {
+                    if self.inline_asm_unary(state, ir, f, callid, recv_class) {
+                        return Ok(CompileResult::Continue);
+                    }
+                    // Declined: fall through to the ordinary builtin call.
+                }
                 InlineFuncInfo::InlineGenBinary(f) => {
                     if let BinaryInlineOutcome::Done = self.inline_asm_binary(
                         state,
@@ -1123,6 +1131,29 @@ impl<'a> JitContext<'a> {
                 BinaryInlineOutcome::Declined
             }
             outcome => outcome,
+        }
+    }
+
+    /// [`inline_asm`](Self::inline_asm) for unary-operator generators —
+    /// same transactional save/restore protocol, with the receiver class
+    /// passed through so a generator registered on a shared ancestor
+    /// (`Numeric#+@`) can decline for receivers it does not cover.
+    pub(super) fn inline_asm_unary(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        f: impl Fn(&mut AbstractState, &mut AsmIr, &JitContext, &Store, CallSiteId, ClassId) -> bool,
+        callid: CallSiteId,
+        recv_class: ClassId,
+    ) -> bool {
+        let state_save = state.clone();
+        let ir_save = ir.save();
+        if f(state, ir, self, &self.store, callid, recv_class) {
+            true
+        } else {
+            *state = state_save;
+            ir.restore(ir_save);
+            false
         }
     }
 

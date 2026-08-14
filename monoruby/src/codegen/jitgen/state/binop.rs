@@ -10,7 +10,7 @@
 
 use num::Zero;
 
-use crate::bytecodegen::BinOpK;
+use crate::bytecodegen::{BinOpK, UnOpK};
 
 use super::*;
 
@@ -692,6 +692,87 @@ impl AbstractFrame {
         (lhs, rhs, dst)
     }
 
+
+    ///
+    /// `Integer#-@`: fold a state-known fixnum (unless negating it leaves
+    /// the fixnum range), else guard the operand and negate in place —
+    /// `FixnumNeg` deopts on the `FIXNUM_MIN` overflow.
+    ///
+    pub(crate) fn unop_integer_neg(&mut self, ir: &mut AsmIr, dst: Option<SlotId>, src: SlotId) {
+        if let Some(i) = self.is_fixnum_literal(src)
+            && let Some(res) = i.get().checked_neg()
+            && let Some(res) = Immediate::check_fixnum(res)
+        {
+            self.def_C(dst, res);
+            return;
+        }
+        self.load_fixnum(ir, src, GP::Rdi);
+        let deopt = ir.new_deopt(self);
+        ir.push(AsmInst::FixnumNeg {
+            reg: GP::Rdi,
+            deopt,
+        });
+        self.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    }
+
+    ///
+    /// `Integer#~`: the complement of an i63 fixnum always fits i63, so the
+    /// fold never overflows and the register form needs no deopt beyond the
+    /// operand guard.
+    ///
+    pub(crate) fn unop_integer_bitnot(&mut self, ir: &mut AsmIr, dst: Option<SlotId>, src: SlotId) {
+        if let Some(i) = self.is_fixnum_literal(src) {
+            self.def_C(dst, Immediate::check_fixnum(!i.get()).unwrap());
+            return;
+        }
+        self.load_fixnum(ir, src, GP::Rdi);
+        ir.push(AsmInst::FixnumBitNot { reg: GP::Rdi });
+        self.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    }
+
+    ///
+    /// `Integer#+@`: the identity, but the destination still has to be
+    /// defined — and the operand still guarded, so a slot the state only
+    /// *believes* to be a fixnum is checked before `dst` is typed as one.
+    ///
+    pub(crate) fn unop_integer_pos(&mut self, ir: &mut AsmIr, dst: Option<SlotId>, src: SlotId) {
+        if let Some(i) = self.is_fixnum_literal(src) {
+            self.def_C(dst, Immediate::check_fixnum(i.get()).unwrap());
+            return;
+        }
+        self.load_fixnum(ir, src, GP::Rdi);
+        self.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+    }
+
+    ///
+    /// `Float#-@` / `Float#+@`: fold a state-known flonum when the result is
+    /// itself a flonum immediate, else copy the operand into the destination
+    /// fpr (pinned across the allocation, as everywhere else) and, for
+    /// `-@`, flip the sign bit in xmm.
+    ///
+    pub(crate) fn unop_float(
+        &mut self,
+        ir: &mut AsmIr,
+        kind: UnOpK,
+        dst: Option<SlotId>,
+        src: SlotId,
+    ) {
+        debug_assert!(matches!(kind, UnOpK::Neg | UnOpK::Pos));
+        if let Some(f) = self.is_flonum_literal(src) {
+            let res = if kind == UnOpK::Neg { -f.get() } else { f.get() };
+            if self.def_C_float(dst, res) {
+                return;
+            }
+        }
+        let fsrc = self.load_fpr(ir, src);
+        if let Some(dst) = dst {
+            self.pin_fpr(fsrc);
+            let dst = self.def_F(dst);
+            self.unpin_fpr(fsrc);
+            ir.fpr_move(fsrc, dst);
+            ir.push(AsmInst::FloatUnOp { kind, dst });
+        }
+    }
 
     /// The compile-time comparison fold shared by the primitives and the
     /// binary inline generators' `CmpBr`-mode constant resolution.

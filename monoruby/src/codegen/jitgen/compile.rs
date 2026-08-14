@@ -3,6 +3,7 @@ use crate::codegen::jitgen::state::LinkMode;
 use super::*;
 
 mod binary_op;
+mod unary_op;
 #[cfg(feature = "emit-cfg")]
 mod dump_cfg;
 mod index;
@@ -511,102 +512,14 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
 
-            TraceIr::UnOp { kind, dst, src, ic, _polymorphic: _ } => {
-                let class = if let Some(class) = state.class(src) {
-                    Some(class)
-                } else {
-                    ic
-                };
-                match class {
-                    _ if kind == UnOpK::Not => {
-                        if let Some(recv_class) = class {
-                            return self
-                                .call_unary_method(state, ir, src, recv_class, kind, bc_pos);
-                        } else {
-                            return Ok(CompileResult::Recompile(RecompileReason::NotCached));
-                        }
-                    }
-                    // A redefined `-@` / `+@` / `~` must not be inlined:
-                    // only the two arms below emit guard-free unary
-                    // arithmetic, so only they consult — and record — the
-                    // invariant. Everything else already goes out through
-                    // `call_unary_method`, which the class-version guard
-                    // protects.
-                    Some(recv_class)
-                        if matches!(
-                            (recv_class, kind),
-                            (INTEGER_CLASS, UnOpK::Neg | UnOpK::Pos | UnOpK::BitNot)
-                                | (FLOAT_CLASS, UnOpK::Neg | UnOpK::Pos)
-                        ) && !self.assume_basic_op(recv_class, kind.into()) =>
-                    {
-                        return self.call_unary_method(state, ir, src, recv_class, kind, bc_pos);
-                    }
-                    Some(INTEGER_CLASS) => {
-                        if let Some(src) = state.is_fixnum_literal(src) {
-                            let i = src.get();
-                            match kind {
-                                UnOpK::Neg => {
-                                    if let Some(res) = i.checked_neg()
-                                        && let Some(res) = Immediate::check_fixnum(res)
-                                    {
-                                        state.def_C(dst, res);
-                                        return Ok(CompileResult::Continue);
-                                    }
-                                }
-                                UnOpK::Pos => {
-                                    return Ok(CompileResult::Continue);
-                                }
-                                UnOpK::BitNot => {
-                                    // Bitwise NOT of an i63 value always fits in i63
-                                    state.def_C(dst, Immediate::check_fixnum(!i).unwrap());
-                                    return Ok(CompileResult::Continue);
-                                }
-                                UnOpK::Not => unreachable!(),
-                            };
-                        }
-                        state.load_fixnum(ir, src, GP::Rdi);
-                        match kind {
-                            UnOpK::Neg => {
-                                let deopt = ir.new_deopt(state);
-                                ir.push(AsmInst::FixnumNeg {
-                                    reg: GP::Rdi,
-                                    deopt,
-                                })
-                            }
-                            UnOpK::Pos => {}
-                            UnOpK::BitNot => {
-                                ir.push(AsmInst::FixnumBitNot { reg: GP::Rdi });
-                            }
-                            UnOpK::Not => unreachable!(),
-                        }
-                        state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
-                    }
-                    Some(FLOAT_CLASS) if kind != UnOpK::BitNot && kind != UnOpK::Not => {
-                        if let Some(f) = state.is_flonum_literal(src) {
-                            let f = f.get();
-                            let res = match kind {
-                                UnOpK::Neg => -f,
-                                UnOpK::Pos => f,
-                                UnOpK::BitNot | UnOpK::Not => unreachable!(),
-                            };
-                            if state.def_C_float(dst, res) {
-                                return Ok(CompileResult::Continue);
-                            }
-                        }
-                        let fsrc = state.load_fpr(ir, src);
-                        state.pin_fpr(fsrc);
-                        let dst = state.def_F(dst);
-                        state.unpin_fpr(fsrc);
-                        ir.fpr_move(fsrc, dst);
-                        ir.push(AsmInst::FloatUnOp { kind, dst });
-                    }
-                    Some(recv_class) => {
-                        return self.call_unary_method(state, ir, src, recv_class, kind, bc_pos);
-                    }
-                    _ => {
-                        return Ok(CompileResult::Recompile(RecompileReason::NotCached));
-                    }
-                }
+            TraceIr::UnOp {
+                kind,
+                _dst: _,
+                src,
+                ic,
+                _polymorphic: _,
+            } => {
+                return self.unary_op(state, ir, kind, src, ic, bc_pos);
             }
 
             TraceIr::BinOp {

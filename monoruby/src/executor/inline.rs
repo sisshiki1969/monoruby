@@ -14,6 +14,10 @@ pub(crate) enum InlineFuncInfo {
     /// (and from `compile_method_call` for explicit sends). See
     /// [`InlineGenBinary`].
     InlineGenBinary(Box<InlineGenBinary>),
+    /// A numeric unary operator generator, fired guard-free from the `UnOp`
+    /// dispatcher under the basic-op license (and from
+    /// `compile_method_call` for explicit sends). See [`InlineGenUnary`].
+    InlineGenUnary(Box<InlineGenUnary>),
     CFunc_F_F(unsafe extern "C" fn(f64) -> f64),
     CFunc_FF_F(extern "C" fn(f64, f64) -> f64),
 }
@@ -29,6 +33,10 @@ impl InlineFuncInfo {
 
     pub(crate) fn new_inline_gen_binary(f: Box<InlineGenBinary>) -> Self {
         InlineFuncInfo::InlineGenBinary(f)
+    }
+
+    pub(crate) fn new_inline_gen_unary(f: Box<InlineGenUnary>) -> Self {
+        InlineFuncInfo::InlineGenUnary(f)
     }
 
     pub(crate) fn new_cfunc_f_f(f: unsafe extern "C" fn(f64) -> f64) -> Self {

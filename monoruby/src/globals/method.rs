@@ -565,6 +565,33 @@ impl Globals {
         fid
     }
 
+    /// Registers a unary-operator builtin plus its generator (see
+    /// [`InlineGenUnary`]) — the unary mirror of
+    /// [`define_builtin_inline_binary_funcs`](Self::define_builtin_inline_binary_funcs).
+    pub(crate) fn define_builtin_inline_unary_func(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        inline_gen: Box<InlineGenUnary>,
+    ) -> FuncId {
+        let fid = self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Public,
+            0,
+            0,
+            false,
+            &[],
+            false,
+        );
+        self.store
+            .inline_info
+            .add_inline(fid, inline::InlineFuncInfo::new_inline_gen_unary(inline_gen));
+        fid
+    }
+
     /// Like [`define_builtin_inline_funcs`](Self::define_builtin_inline_funcs),
     /// but registers a binary-operator generator (see [`InlineGenBinary`]).
     /// The entry keeps `is_basic_op = false`, matching today's plain-builtin
