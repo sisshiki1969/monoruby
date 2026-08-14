@@ -774,6 +774,59 @@ impl AbstractFrame {
         }
     }
 
+    ///
+    /// Guard the receiver's class ahead of an inline generator, so the
+    /// generator may assume it (the direct-fire dispatchers call this before
+    /// firing, mirroring the guard `compile_method_call` emits on the
+    /// ordinary path).
+    ///
+    /// Emits nothing when the class is already proven (a constant operand, or
+    /// a slot an earlier guard already refined — so a foldable site never
+    /// materializes anything).
+    ///
+    /// Otherwise the guard is emitted **through the primitive that class's
+    /// generators use to hold the value**, so that establishing the receiver
+    /// costs nothing beyond what the generator was going to pay anyway:
+    ///
+    /// * `Integer` — `gp_ensure`, which brings the value into an
+    ///   allocator-chosen GP register and reports whether it still needs the
+    ///   fixnum guard. Guard-then-refine keeps the resident, so the
+    ///   generator's own `gp_ensure` is a pure hit: same register, no reload,
+    ///   no second guard. (Materializing into `Rdi` instead would make the
+    ///   generator reload the value into a pool register — measurably slower
+    ///   on integer-heavy code.)
+    /// * `Float` — `load_fpr`, whose guarded unbox *is* the class check; the
+    ///   generator's later `load_fpr` then finds the slot already in an fpr
+    ///   and emits nothing.
+    /// * anything else — materialize into `Rdi` and compare the class id.
+    ///
+    pub(crate) fn guard_recv_class(&mut self, ir: &mut AsmIr, slot: SlotId, class: ClassId) {
+        if self.class(slot) == Some(class) {
+            return;
+        }
+        match class {
+            INTEGER_CLASS => {
+                let (gp, needs_guard) = self.gp_ensure(ir, slot, &[]);
+                if needs_guard {
+                    let deopt = ir.new_deopt(self);
+                    ir.push(AsmInst::GuardClass(gp, INTEGER_CLASS, deopt));
+                    self.refine_S_fixnum(slot);
+                }
+            }
+            FLOAT_CLASS => {
+                self.load_fpr(ir, slot);
+            }
+            _ => {
+                // Snapshot before the guard: the side exit re-reads the
+                // operands from their stack homes, so the write-back must be
+                // the pre-guard placement.
+                let deopt = ir.new_deopt(self);
+                self.load(ir, slot, GP::Rdi);
+                self.guard_class(ir, slot, GP::Rdi, class, deopt);
+            }
+        }
+    }
+
     /// The compile-time comparison fold shared by the primitives and the
     /// binary inline generators' `CmpBr`-mode constant resolution.
     pub(crate) fn fold_cmp<T>(kind: CmpKind, lhs: T, rhs: T) -> bool
