@@ -45,6 +45,15 @@ impl<'a> JitContext<'a> {
     /// [`record_bop_dep`](Self::record_bop_dep). A generator that declines
     /// leaves no spurious dependency behind.
     pub(super) fn basic_op_assumable(&self, class: ClassId, op: IdentId) -> bool {
+        // Only a pair the redefinition machinery tracks may be assumed: an
+        // untracked pair is never marked redefined, so a guard-free inline of
+        // it would outlive its own redefinition. Every pair the numeric
+        // generators use is in the table; the index paths (`Hash#[]=`, which
+        // deliberately has no entry) rely on this check to stay on the
+        // class-version-guarded call path.
+        if !self.store.is_basic_op_pair(class, op) {
+            return false;
+        }
         // An ordinary redefinition binds everywhere.
         if self.store.basic_op_globally_redefined_for(class, op) {
             return false;

@@ -1068,7 +1068,7 @@ impl<'a> JitContext<'a> {
         })
     }
 
-    fn inline_asm(
+    pub(super) fn inline_asm(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,

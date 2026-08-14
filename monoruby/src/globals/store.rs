@@ -454,6 +454,16 @@ impl Store {
         self.basic_ops.redefined()
     }
 
+    /// Whether `class_id#name` is one of the [`BASIC_OP_DEFS`] pairs — i.e.
+    /// whether redefining it is *tracked*, so a body that inlined it
+    /// guard-free gets evicted. A pair outside the table is never marked
+    /// redefined, so a guard-free inline of it would survive a redefinition
+    /// forever; the JIT's direct-fire paths check this before recording a
+    /// dependency on one.
+    pub(crate) fn is_basic_op_pair(&self, class_id: ClassId, name: IdentId) -> bool {
+        self.basic_ops.contains(class_id, name)
+    }
+
     /// Whether `class_id#name` — a pair in `BASIC_OP_DEFS` — has been
     /// replaced, so the fast path that assumed it must dispatch instead.
     /// Gated on the cheap global bool, so a program that redefines nothing
