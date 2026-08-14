@@ -430,12 +430,29 @@ bin/test
 **Test harness** (`tests.rs`):
 
 ```rust
-run_test(code)       // runs code 25× (JIT warms up), compares result with CRuby
-run_test_once(code)  // runs code once, compares result with CRuby
-run_tests(codes)     // runs multiple expressions, compares each with CRuby
+run_test(code)       // runs code 25× (JIT warms up), compares result with the CRuby oracle
+run_test_once(code)  // runs code once, compares result with the CRuby oracle
+run_tests(codes)     // runs multiple expressions, compares each with a live CRuby
 ```
 
-All test helpers invoke CRuby via `ruby` in `PATH` and assert output equality.
+**Snapshot oracle** — the single-code helpers (`run_test`, `run_test_once`,
+`run_test2`, `run_test_with_prelude`) do **not** spawn CRuby per call.
+Expected outputs are memoized in the checked-in file
+`monoruby/tests/ruby_oracle.tsv` (`code-hash → p-output line`, key-sorted,
+flock-serialized for concurrent nextest processes); a live `ruby` in `PATH`
+is only invoked on a cache miss (the fresh entry is recorded back into the
+file — commit it). The batched helpers (`run_tests`, `run_tests2`, and the
+binop/unop generators on top of them) always spawn a live CRuby, since their
+auto-generated code strings churn too much to snapshot.
+
+Modes via `MONORUBY_TEST_ORACLE`:
+
+- unset / `snapshot` (default): replay stored entries; spawn + record on miss.
+  `rm monoruby/tests/ruby_oracle.tsv && cargo test` regenerates the file from
+  scratch (dropping orphaned entries).
+- `ruby`: always spawn CRuby and refresh stale entries in place — use this
+  after bumping the reference CRuby version to re-verify the whole suite
+  against the new Ruby.
 
 ### Cargo Features
 
@@ -608,7 +625,7 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 
 1. **Nightly only**: Attempting to build with stable Rust will fail. The toolchain is pinned in `rust-toolchain.toml`.
 2. **Architecture-specific backends**: The VM and JIT emit machine code directly per `target_arch` (`codegen/arch/{x86_64,aarch64}/`). Both backends lower the full AsmInst set; aarch64 never bails (large immediates go through scratch registers, so the `bool` "decline" return is vestigial — see `doc/arch_difference.md`). Adding/altering low-level codegen usually means touching both backends. Use `bin/test-aarch64` / `bin/setup-aarch64-cross` for the aarch64 path.
-3. **Ruby in PATH**: Tests compare output against a system `ruby` binary matching the vendored pin (`4.0.2`, see `vendor/ruby-stdlib/.ruby-version`). Ensure Ruby is installed and the binary is accessible.
+3. **Ruby in PATH**: Tests compare output against a system `ruby` binary matching the vendored pin (`4.0.2`, see `vendor/ruby-stdlib/.ruby-version`). The single-code helpers replay the checked-in snapshot oracle (`monoruby/tests/ruby_oracle.tsv`) and only spawn `ruby` on a cache miss, but the batched helpers (`run_tests` etc.) and several integration tests still invoke it directly — keep a matching Ruby installed for full-suite runs, and use `MONORUBY_TEST_ORACLE=ruby` after a version bump to refresh the oracle.
 4. **optcarrot**: The full CI test requires optcarrot cloned at `../optcarrot` relative to the repo root.
 5. **Library path**: `build.rs` does **not** invoke a host `ruby` for `$LOAD_PATH` / `RUBY_VERSION` (those come from the vendored snapshot). Host-installed *non-default* gems are discovered at run time by `src/ruby_probe.rs`, which invokes a host `ruby` once if present and caches `~/.monoruby/{library_path,gem_path}`. If no host Ruby is found, those caches stay empty and a warning is printed at startup, but the vendored stdlib still loads from the per-version install root (`~/.monoruby/v<version>/lib`).
 6. **gc-stress in tests**: `gc-stress` is **opt-in** — `export GC_STRESS=1` before `bin/test` and it applies to **every** phase (nextest *and* the benchmark binary, so optcarrot / ruby-spec are stressed too). Since the true-stress restoration this means a collection at **every safepoint**, so a `GC_STRESS=1` run of the full scope is an hours-scale job. Nothing enables it implicitly, so the automatic CI never pays it; run the manual `gc-stress` workflow instead. Tests whose loop counts exist only to reach the JIT thresholds should shrink them under `cfg!(feature = "gc-stress")` (see `tests/method_call.rs`) — otherwise they blow past nextest's per-test cap.

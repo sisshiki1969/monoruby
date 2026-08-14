@@ -1,0 +1,10 @@
+# monoruby ruby-oracle v1 — CRuby reference outputs for the run_test harness.
+# Maintenance: `rm` this file and run `cargo test` to regenerate from a live Ruby;
+# `MONORUBY_TEST_ORACLE=ruby cargo test` re-verifies/refreshes entries in place.
+09a6b149f6b260242237a6443ffcf622	Infinity..Infinity	(1.0 / 0.0)..(1.0 / 0.0)
+59a6ce8e2915130ae9576712b5a0f444	[1.0, Infinity]	[1.0, 1.0 / 0.0]
+6a746985c7bc6408f83085340479fbf6	[1.0, NaN]	[1.0, 0.0 / 0.0]
+9f1a90eeaa16fa36daa6ad13a43b2591	{a: Infinity, b: -Infinity}	{ a: 1.0 / 0.0, b: -1.0 / 0.0 }
+b9f8172cb8555b07f17ee7e3934a585e	[Infinity, -Infinity]	[Float::INFINITY, -Float::INFINITY]
+bf421e316fb7533cb8d9a80876438745	[[Infinity], {x: -Infinity}]	[[Float::INFINITY], { x: -Float::INFINITY }]
+ea07ecaa90c2d393514090eaf2eb6009	[1.0, -Infinity]	[1.0, -1.0 / 0.0]
