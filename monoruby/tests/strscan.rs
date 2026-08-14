@@ -107,6 +107,33 @@ fn strscan_repeated_scan_hot_loop() {
 }
 
 #[test]
+fn strscan_register_accessors() {
+    // The register (spans) representation must answer every accessor —
+    // named groups, negative indices, getch registers, pre/post_match in
+    // the regular-expression sense — identically to CRuby's C strscan.
+    run_test_once(
+        r#"
+        require "strscan"
+        r = []
+        s = StringScanner.new("Fri Dec 12 1975 14:39")
+        r << s.scan(/(\w+)(?<mon>\s\w+)?/) << s[0] << s[1] << s[:mon] << s["mon"] << s[-1] << s[9]
+        r << s.size << s.captures << s.matched << s.matched_size << s.pre_match << s.post_match
+        begin; s[:nope]; rescue IndexError => e; r << e.class.to_s; end
+        r << s.check_until(/\d+/) << s.pre_match << s.post_match << s.matched << s.pos
+        r << s.scan_until(/12/) << s.pre_match << s.post_match << s.pos
+        r << s.getch << s.matched << s[0] << s.matched_size
+        r << s.skip(/\s*(19)(75)\s*/) << s[1] << s[2] << s.captures << s.matched
+        s2 = StringScanner.new("a b")
+        r << s2.exist?(/b/) << s2.pos << s2.skip_until(/b/) << s2.pos
+        s3 = StringScanner.new("test")
+        r << s3.scan(/(t)(e)(x)?(s)/) << s3[3] << s3.captures << s3.values_at(0, 4, -1, 3)
+        r << s3.unscan.pos
+        r
+        "#,
+    );
+}
+
+#[test]
 fn string_match_position_boundaries() {
     // String#match clamps past-the-end positions to the end (a zero-width
     // pattern still matches there); String#match? rejects them instead.
