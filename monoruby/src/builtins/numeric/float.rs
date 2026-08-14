@@ -2,7 +2,7 @@ use num::{BigInt, FromPrimitive, ToPrimitive};
 
 use super::*;
 use crate::ast::CmpKind;
-use crate::bytecodegen::BinOpK;
+use crate::bytecodegen::{BinOpK, UnOpK};
 use crate::executor::Visibility;
 #[cfg(target_arch = "aarch64")]
 use jitgen::AbstractState;
@@ -56,6 +56,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     );
     globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "%", rem, rem_ff_f, 1);
     globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "**", pow, pow_ff_f, 1);
+    globals.define_builtin_inline_unary_func(FLOAT_CLASS, "-@", super::neg, float_neg_gen());
     globals.define_builtin_func(FLOAT_CLASS, "hash", hash, 0);
     globals.define_builtin_func(FLOAT_CLASS, "div", div_floor, 1);
     globals.define_builtin_func(FLOAT_CLASS, "modulo", rem, 1);
@@ -131,6 +132,20 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     // Float.new should raise NoMethodError (not TypeError from allocate)
     let float_meta = globals.store.get_metaclass(FLOAT_CLASS).id();
     globals.add_empty_method(float_meta, IdentId::NEW, Visibility::Undefined);
+}
+
+/// The inline generator for `Float#-@` — a thin dispatch over the xmm
+/// emission primitive (flonum fold, else sign-bit flip in xmm).
+fn float_neg_gen() -> Box<InlineGenUnary> {
+    Box::new(move |state, ir, _, store, callid, _recv_class| {
+        let callsite = &store[callid];
+        if !callsite.is_simple() {
+            return false;
+        }
+        let CallSiteInfo { dst, recv, .. } = *callsite;
+        state.unop_float(ir, UnOpK::Neg, dst, recv);
+        true
+    })
 }
 
 /// Factory for the [`InlineGenBinary`] of a Float arithmetic operator: both

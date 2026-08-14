@@ -34,28 +34,16 @@ impl<'a> JitContext<'a> {
     ///
     /// May the guard-free inline implementation of `class#op` be emitted?
     ///
-    /// It may while `class#op` is still the builtin. Answering `true` also
-    /// *records* the assumption, because the emitted code has no runtime
-    /// check of its own: `set_bop_redefine` reads the recorded set back to
-    /// find exactly the compiled bodies a later redefinition invalidates.
-    /// Answering `false` sends the operation down the ordinary method-call
-    /// path, which the class-version guard already protects — so a body
-    /// recompiled after a redefinition keeps inlining every *other* operator.
+    /// It may while `class#op` is still the builtin. Answering `false` sends
+    /// the operation down the ordinary method-call path, which the
+    /// class-version guard already protects — so a body recompiled after a
+    /// redefinition keeps inlining every *other* operator.
     ///
-    pub(super) fn assume_basic_op(&mut self, class: ClassId, op: IdentId) -> bool {
-        if !self.basic_op_assumable(class, op) {
-            return false;
-        }
-        self.record_bop_dep(class, op);
-        true
-    }
-
-    /// The pure half of [`assume_basic_op`](Self::assume_basic_op): may the
-    /// guard-free inline implementation of `class#op` be emitted? Records
-    /// nothing — the direct-fire dispatch checks this *before* running a
-    /// generator and calls [`record_bop_dep`](Self::record_bop_dep) only when
-    /// the generator actually emitted (or folded) code, so a declined
-    /// generator leaves no spurious dependency.
+    /// This is a pure check: the emitted code has no runtime check of its
+    /// own, so the assumption must also be *recorded* — but only once a
+    /// generator has actually emitted (or folded) code, via
+    /// [`record_bop_dep`](Self::record_bop_dep). A generator that declines
+    /// leaves no spurious dependency behind.
     pub(super) fn basic_op_assumable(&self, class: ClassId, op: IdentId) -> bool {
         // An ordinary redefinition binds everywhere.
         if self.store.basic_op_globally_redefined_for(class, op) {

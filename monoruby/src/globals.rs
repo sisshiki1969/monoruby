@@ -141,6 +141,26 @@ pub(crate) type InlineGenBinary = dyn Fn(
     jitgen::BinaryInlineMode,
 ) -> jitgen::BinaryInlineOutcome;
 
+/// Unary-operator inline generator: the JIT-inline implementation of a
+/// numeric unary operator (`Integer#-@`, `Float#-@`, `Integer#~`,
+/// `Numeric#+@`), the unary mirror of [`InlineGenBinary`]. Fired guard-free
+/// from the `UnOp` dispatcher (`fire_unary_inline`) under the basic-op
+/// license, and from `compile_method_call` for explicit sends (`1.-@`).
+///
+/// There is no firing mode: a unary op has no fused compare-and-branch
+/// form. The receiver class is passed because several of these methods are
+/// registered on a shared ancestor (`Numeric#+@` serves Integer, Float,
+/// Rational and Complex), so the generator must decline for the receivers
+/// its emitted code does not cover.
+pub(crate) type InlineGenUnary = dyn Fn(
+    &mut jitgen::AbstractState,
+    &mut jitgen::asmir::AsmIr,
+    &crate::jitgen::JitContext,
+    &Store,
+    CallSiteId,
+    ClassId,
+) -> bool;
+
 /// Universal inline generator that always declines to inline (returns
 /// `false`), so the call site falls back to a normal method call. Used on
 /// aarch64 for builtins whose hand-written inline asm has not been ported yet:

@@ -160,7 +160,10 @@ pub(crate) enum TraceIr {
     },
     UnOp {
         kind: UnOpK,
-        dst: SlotId,
+        /// The result slot as encoded. The generators read the destination
+        /// from the call site instead (it knows when the result is
+        /// discarded), so this is only used by the TraceIR dump.
+        _dst: SlotId,
         src: SlotId,
         ic: Option<ClassId>,
         /// The VM observed operand-class variance at this site
@@ -576,7 +579,7 @@ impl TraceIr {
                     let src = SlotId::new(op2_w2);
                     TraceIr::UnOp {
                         kind,
-                        dst,
+                        _dst: dst,
                         src,
                         ic: pc.classid1(),
                         _polymorphic: pc.opcode_sub() == 1,
@@ -1011,7 +1014,7 @@ impl TraceIr {
             }
             TraceIr::UnOp {
                 kind,
-                dst,
+                _dst: dst,
                 src,
                 ic: src_class,
                 _polymorphic: _,

@@ -1,10 +1,6 @@
 class Numeric
   include Comparable
 
-  def +@
-    self
-  end
-
   def -@
     a, b = coerce(0)
     a - b

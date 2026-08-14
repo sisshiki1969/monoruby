@@ -464,7 +464,10 @@ JIT コードを一方向ラッチ (`jit_invalidated`) で恒久的に捨てて�
 
 **依存を記録して、該当分だけ捨てる。** JIT がガード無しに basic op を仮定して
 いるのは、整数・浮動小数の算術／比較／定数畳み込みと単項演算だけである
-（`binop_integer` / `binop_float` / `gen_cmp_*` / `FixnumNeg` ほか）。それ以外
+（`state/binop.rs` の `binop_integer` / `binop_float` / `gen_cmp_*` /
+`unop_integer_*` / `unop_float` — いずれも per-method の inline 生成器から
+呼ばれ、`fire_binary_inline` / `fire_unary_inline` が license を確認・記録
+する）。それ以外
 — メソッド呼び出しに落ちるものすべて — は**既に class-version ガードで
 守られている**（再定義は必ず class version を進める）。そこで:
 

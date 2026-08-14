@@ -1,4 +1,5 @@
 use super::*;
+use crate::bytecodegen::UnOpK;
 use paste::paste;
 
 mod complex;
@@ -28,12 +29,20 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(COMPLEX_CLASS, "+", add, 1);
     globals.define_builtin_func(COMPLEX_CLASS, "-", sub, 1);
     globals.define_builtin_func(COMPLEX_CLASS, "*", mul, 1);
-    globals.define_builtin_func(INTEGER_CLASS, "-@", neg, 0);
-    globals.define_builtin_func(FLOAT_CLASS, "-@", neg, 0);
+    // `Integer#-@` / `Float#-@` are registered per class in `integer::init` /
+    // `float::init`, next to their inline generators.
+    //
     // NOTE: `Complex#-@` is defined in `complex::init` (`neg_op`), which sends
     // `-@` to each component (required for custom Numeric parts). Do not
     // override it here with the generic `neg`/`neg_value` fast path.
-    globals.define_builtin_func(NUMERIC_CLASS, "~", bitnot, 0);
+    //
+    // `Numeric#+@` (CRuby owns `+@` on Numeric for Integer and Float alike —
+    // `1.method(:+@).owner == Numeric`) is a builtin so the JIT can hang the
+    // unary inline generator on it; the generator consults the receiver class
+    // and declines for anything but Integer / Float, which keeps Rational and
+    // Complex on the builtin body. `~` belongs to Integer alone (CRuby has no
+    // `Numeric#~`), so it is registered in `integer::init`.
+    globals.define_builtin_inline_unary_func(NUMERIC_CLASS, "+@", pos, numeric_pos_gen());
     globals.define_builtin_funcs(NUMERIC_CLASS, "angle", &["arg", "phase"], angle, 0);
 }
 
@@ -141,6 +150,38 @@ macro_rules! unop {
 }
 
 unop!(neg, bitnot);
+
+///
+/// ### Numeric#+@
+///
+/// - +self -> self
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/=2b=40.html]
+#[monoruby_builtin]
+fn pos(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(lfp.self_val())
+}
+
+/// The inline generator for `Numeric#+@`. Unary plus is the identity, but
+/// only the two receiver classes whose representation the JIT models are
+/// inlined — a Rational / Complex receiver keeps the builtin call, which is
+/// why this generator consults `recv_class` (`Numeric#+@` is one shared
+/// FuncId for every Numeric).
+fn numeric_pos_gen() -> Box<InlineGenUnary> {
+    Box::new(move |state, ir, _, store, callid, recv_class| {
+        let callsite = &store[callid];
+        if !callsite.is_simple() {
+            return false;
+        }
+        let CallSiteInfo { dst, recv, .. } = *callsite;
+        match recv_class {
+            INTEGER_CLASS => state.unop_integer_pos(ir, dst, recv),
+            FLOAT_CLASS => state.unop_float(ir, UnOpK::Pos, dst, recv),
+            _ => return false,
+        }
+        true
+    })
+}
 
 ///
 /// ### Numeric#angle
