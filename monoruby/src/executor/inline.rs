@@ -9,6 +9,11 @@ pub(crate) enum InlineFuncInfo {
     /// the other variants must be skipped (their code assumes the single
     /// compile-time receiver class).
     InlineGenClassIndependent(Box<InlineGenClassIndependent>),
+    /// A numeric binary operator / comparison generator, fired guard-free
+    /// from the binop/cmp bytecode dispatchers under the basic-op license
+    /// (and from `compile_method_call` for explicit sends). See
+    /// [`InlineGenBinary`].
+    InlineGenBinary(Box<InlineGenBinary>),
     CFunc_F_F(unsafe extern "C" fn(f64) -> f64),
     CFunc_FF_F(extern "C" fn(f64, f64) -> f64),
 }
@@ -20,6 +25,10 @@ impl InlineFuncInfo {
 
     pub(crate) fn new_inline_gen_class_independent(f: Box<InlineGenClassIndependent>) -> Self {
         InlineFuncInfo::InlineGenClassIndependent(f)
+    }
+
+    pub(crate) fn new_inline_gen_binary(f: Box<InlineGenBinary>) -> Self {
+        InlineFuncInfo::InlineGenBinary(f)
     }
 
     pub(crate) fn new_cfunc_f_f(f: unsafe extern "C" fn(f64) -> f64) -> Self {

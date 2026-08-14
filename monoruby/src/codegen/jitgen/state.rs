@@ -1,5 +1,6 @@
 use super::*;
 
+mod binop;
 mod join;
 mod liveness;
 mod read_slot;

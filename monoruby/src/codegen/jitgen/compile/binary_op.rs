@@ -1,24 +1,7 @@
-use num::Zero;
-
 use crate::bytecodegen::BinOpK;
-use crate::codegen::jitgen::state::Guarded;
+use crate::executor::inline::InlineFuncInfo;
 
 use super::*;
-
-///
-/// §18 handler separation: the allocation-free **decision** a float binary op
-/// reduces to (the Layer-① result of `plan_binop_float`). `binop_float` then
-/// executes it (Layer-② allocation + emission). Holding the decision as a value —
-/// rather than branching straight into `def_C_float` / `load_binary_ret_fpr` —
-/// is what makes the type/representation choice separable from the placement.
-///
-enum FloatBinOpPlan {
-    /// Both operands are constant floats and the folded result is a flonum
-    /// immediate: a pure constant, no fpr. Carries the folded `f64`.
-    Fold(f64),
-    /// The fpr path: load operands into fpr, allocate the destination, emit.
-    FprOp,
-}
 
 impl<'a> JitContext<'a> {
     ///
@@ -60,6 +43,20 @@ impl<'a> JitContext<'a> {
     /// recompiled after a redefinition keeps inlining every *other* operator.
     ///
     pub(super) fn assume_basic_op(&mut self, class: ClassId, op: IdentId) -> bool {
+        if !self.basic_op_assumable(class, op) {
+            return false;
+        }
+        self.record_bop_dep(class, op);
+        true
+    }
+
+    /// The pure half of [`assume_basic_op`](Self::assume_basic_op): may the
+    /// guard-free inline implementation of `class#op` be emitted? Records
+    /// nothing — the direct-fire dispatch checks this *before* running a
+    /// generator and calls [`record_bop_dep`](Self::record_bop_dep) only when
+    /// the generator actually emitted (or folded) code, so a declined
+    /// generator leaves no spurious dependency.
+    pub(super) fn basic_op_assumable(&self, class: ClassId, op: IdentId) -> bool {
         // An ordinary redefinition binds everywhere.
         if self.store.basic_op_globally_redefined_for(class, op) {
             return false;
@@ -74,46 +71,73 @@ impl<'a> JitContext<'a> {
         {
             return false;
         }
-        if !self.bop_deps.contains(&(class, op)) {
-            self.bop_deps.push((class, op));
-        }
         true
     }
 
+    /// Record the compiled body's dependence on the builtin `class#op`:
+    /// `set_bop_redefine` reads the recorded set back to find exactly the
+    /// bodies a later redefinition invalidates.
+    pub(super) fn record_bop_dep(&mut self, class: ClassId, op: IdentId) {
+        if !self.bop_deps.contains(&(class, op)) {
+            self.bop_deps.push((class, op));
+        }
+    }
+
     ///
-    /// [`AbstractState::binop_type`], demoted to the method-call
-    /// classification when the operator its fast path would inline has been
-    /// replaced.
+    /// Attempt guard-free inline emission of `lhs_class#op` at this binop /
+    /// comparison site through the registered binary inline generator.
     ///
-    /// Both fast paths compute with the *receiver's* operator semantics — the
-    /// integer path for `Integer op Integer`, the fpr path for `Float op
-    /// Float` and for the mixed pairs (`1 + 2.0` is `Integer#+` with a Float
-    /// argument, and computes in xmm without ever consulting `Float#+`). So
-    /// the invariant to check, and to record, is the one belonging to `lhs`.
+    /// Returns `None` when the method doesn't resolve, has no binary
+    /// generator, the basic-op license is gone (redefinition / refinement in
+    /// scope), or the generator declined — the caller falls back to the
+    /// ordinary path. **No class-version guard and no receiver-slot guard**
+    /// are emitted: soundness comes from the recorded bop_dep (redefinition
+    /// evicts every dependent body via `set_bop_redefine`), and the operand
+    /// guards are emitted by the generator itself, only for operands not
+    /// already proven (`gp_ensure` / the float-load discipline). The dep is
+    /// recorded only when the generator emitted (`Done`) or folded
+    /// (`Folded` — a fold bakes in the builtin's semantics just the same),
+    /// so a declined generator leaves no spurious dependency.
     ///
-    fn binop_type_checked(
+    /// Visibility is deliberately not consulted, matching the ad-hoc fast
+    /// paths this replaces (the interpreter's fast paths don't consult it
+    /// either).
+    ///
+    #[allow(clippy::too_many_arguments)]
+    fn fire_binary_inline(
         &mut self,
-        state: &AbstractState,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
         op: IdentId,
         lhs: SlotId,
         rhs: SlotId,
-        ic: Option<(ClassId, ClassId)>,
-    ) -> BinaryOpType {
-        let ty = state.binop_type(lhs, rhs, ic);
-        if let BinaryOpType::Other(..) = ty {
-            return ty;
+        lhs_class: ClassId,
+        rhs_class: Option<ClassId>,
+        bc_pos: BcIndex,
+        mode: BinaryInlineMode,
+    ) -> Option<BinaryInlineOutcome> {
+        let (fid, _visibility) = self.jit_check_method(lhs_class, op)?;
+        let InlineFuncInfo::InlineGenBinary(f) = self.store.inline_info.get_inline(fid)? else {
+            return None;
+        };
+        if !self.basic_op_assumable(lhs_class, op) {
+            return None;
         }
-        let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
-        match lhs_class {
-            Some(class) if !self.assume_basic_op(class, op) => {
-                // Redefined: take the ordinary call instead, which the
-                // class-version guard protects. Every other operator in this
-                // body keeps its inline path.
-                BinaryOpType::Other(lhs_class, rhs_class)
+        // Every binop / cmp instruction carries a callsite (only RescueTEq
+        // doesn't, and that opcode never reaches these dispatchers).
+        let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
+        debug_assert_eq!(self.store[callid].recv, lhs);
+        debug_assert_eq!(self.store[callid].args, rhs);
+        debug_assert!(self.store[callid].block_fid.is_none());
+        match self.inline_asm_binary(state, ir, f, callid, lhs_class, rhs_class, mode) {
+            BinaryInlineOutcome::Declined => None,
+            outcome => {
+                self.record_bop_dep(lhs_class, op);
+                Some(outcome)
             }
-            _ => ty,
         }
     }
+
 
     pub(super) fn binary_op(
         &mut self,
@@ -128,10 +152,11 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<CompileResult> {
         match kind {
             // These ops are always compiled as method calls.
-            // The inline function registered on Integer#<< / Integer#>> /
-            // Integer#| / Integer#& / Integer#^ / Integer#** / Integer#% /
-            // Float#** / Float#% handles code generation using both-side class
-            // info from the BinOp inline cache.
+            // The InlineGen registered on Integer#<< / Integer#>> /
+            // Integer#** / Integer#% / Float#** / Float#% handles code
+            // generation using both-side class info from the BinOp inline
+            // cache (Integer#| / #& / #^ moved to the binary-generator
+            // direct-fire arm below).
             BinOpK::Shl | BinOpK::Shr | BinOpK::Exp | BinOpK::Rem => {
                 // Dispatched through `call_binary_method`. No flush here: a
                 // register-only inline (e.g. `Integer#<<`) reads its operands
@@ -146,49 +171,44 @@ impl<'a> JitContext<'a> {
                     ),
                 }
             }
-            _ => match self.binop_type_checked(state, kind.into(), lhs, rhs, ic) {
-                BinaryOpType::Integer(l, r) => {
-                    // Both the constant fold (`100 * 100` -> 10000) and the
-                    // register fast-path's inline arithmetic assume the builtin
-                    // operator with no per-op runtime guard. A basic-op
-                    // redefinition is instead handled method-wide by
-                    // `set_bop_redefine`, identically on both arches: compiled
-                    // method entries are reverted (x86 `apply_jmp_patch_address`
-                    // to `vm_entry`; aarch64 dispatch-slot zeroing in
-                    // `invalidate_jit_code`), the VM's `loop_start` handler is
-                    // swapped for the no-opt one so stale OSR loop bodies are
-                    // never re-entered, and on-stack frames deopt on return via
-                    // `immediate_eviction`'s return-address patching (both
-                    // arches; see `emit_call`). A `def` executed *inside* JIT
-                    // code is caught by the `check_bop` after
-                    // `MethodDef`/`SingletonMethodDef`.
-                    state.binop_integer(ir, kind, dst, l, r);
-                    Ok(CompileResult::Continue)
-                }
-                BinaryOpType::Float(info) => {
-                    // The fpr path computes in xmm: it never touches the GP
-                    // allocatable registers and never allocates (a flonum result
-                    // stays in an FPReg; boxing is deferred to a later write-back,
-                    // which flushes GP itself), and its deopt write-back already
-                    // re-homes the GP residents. So the residents survive a flush.
-                    // A GP-resident operand (the integer side of a mixed op) is
-                    // read straight from its register by the fpr load (see
-                    // `load_fpr_fixnum`); `dst`'s stale resident is dropped by the
-                    // result `def`.
-                    state.binop_float(ir, kind, dst, info);
-                    Ok(CompileResult::Continue)
-                }
-                BinaryOpType::Other(None, _) => {
+            _ => {
+                let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+                let Some(lhs_class) = lhs_class else {
                     // Recompiles (deopts) — its write-back re-homes the residents.
-                    Ok(self.binop_uncached(state, dst))
+                    return Ok(self.binop_uncached(state, dst));
+                };
+                // The binary inline generator (`Integer#+`'s fixnum path,
+                // `Float#+`'s xmm path, the mixed pairs) emits the constant
+                // fold or the register fast path with no per-op runtime
+                // guard. A basic-op redefinition is instead handled
+                // method-wide by `set_bop_redefine`, identically on both
+                // arches: compiled method entries are reverted (x86
+                // `apply_jmp_patch_address` to `vm_entry`; aarch64
+                // dispatch-slot zeroing in `invalidate_jit_code`), the VM's
+                // `loop_start` handler is swapped for the no-opt one so
+                // stale OSR loop bodies are never re-entered, and on-stack
+                // frames deopt on return via `immediate_eviction`'s
+                // return-address patching (both arches; see `emit_call`). A
+                // `def` executed *inside* JIT code is caught by the
+                // `check_bop` after `MethodDef`/`SingletonMethodDef`.
+                if let Some(BinaryInlineOutcome::Done) = self.fire_binary_inline(
+                    state,
+                    ir,
+                    kind.into(),
+                    lhs,
+                    rhs,
+                    lhs_class,
+                    rhs_class,
+                    bc_pos,
+                    BinaryInlineMode::Value,
+                ) {
+                    return Ok(CompileResult::Continue);
                 }
-                BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                    // Any C-ABI call flushes at its `get_using_fpr` chokepoint.
-                    self.call_binary_method(
-                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
-                    )
-                }
-            },
+                // Any C-ABI call flushes at its `get_using_fpr` chokepoint.
+                self.call_binary_method(
+                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
+                )
+            }
         }
     }
 
@@ -204,45 +224,44 @@ impl<'a> JitContext<'a> {
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        match self.binop_type_checked(state, kind.into(), lhs, rhs, ic) {
-            BinaryOpType::Integer(l, r) => {
-                state.gen_cmp_integer(ir, kind, dst, l, r);
-                Ok(CompileResult::Continue)
-            }
-            BinaryOpType::Float(info) => {
-                // The float comparison computes in xmm and stores a bool: it
-                // never touches the GP allocatable registers and never allocates,
-                // and its deopt write-back re-homes the GP residents. The
-                // residents survive; a GP-resident operand (the integer side of a
-                // mixed compare) is read straight from its register by the fpr
-                // load (see `load_fpr_fixnum`), and `dst`'s stale resident is
-                // dropped by the result `def`.
-                state.gen_cmp_float(ir, dst, info, kind);
-                Ok(CompileResult::Continue)
-            }
-            BinaryOpType::Other(None, _) => {
-                Ok(CompileResult::Recompile(RecompileReason::NotCached))
-            }
-            BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                state.flush_gp(ir);
-                if polymorphic {
-                    let is_func_call = self
-                        .store
-                        .get_callsite_id(self.iseq_id(), bc_pos)
-                        .is_some_and(|c| self.store[c].is_func_call());
-                    self.emit_generic_cmp(state, ir, kind, lhs, rhs, false, is_func_call);
-                    state.def_rax2acc(ir, dst);
-                    Ok(CompileResult::Continue)
-                } else {
-                    // Monomorphic compile (POLY not yet set). Make the
-                    // recv-class guard recompile-on-miss so the site
-                    // flips to the generic path once the VM observes
-                    // class variance (Part B).
-                    self.call_binary_method(
-                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
-                    )
-                }
-            }
+        let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+        let Some(lhs_class) = lhs_class else {
+            return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+        };
+        // The comparison generators compute in GP / xmm without touching the
+        // C ABI: the GP residents survive (a mixed compare's integer operand
+        // is read straight from its register by the fpr load), and `dst`'s
+        // stale resident is dropped by the result `def`. `TEq` resolves
+        // `===` — on Integer an alias of `==`, on Float a distinct FuncId
+        // with the Eq generator — so `case`-style compares inline too.
+        if let Some(BinaryInlineOutcome::Done) = self.fire_binary_inline(
+            state,
+            ir,
+            kind.into(),
+            lhs,
+            rhs,
+            lhs_class,
+            rhs_class,
+            bc_pos,
+            BinaryInlineMode::Value,
+        ) {
+            return Ok(CompileResult::Continue);
+        }
+        state.flush_gp(ir);
+        if polymorphic {
+            let is_func_call = self
+                .store
+                .get_callsite_id(self.iseq_id(), bc_pos)
+                .is_some_and(|c| self.store[c].is_func_call());
+            self.emit_generic_cmp(state, ir, kind, lhs, rhs, false, is_func_call);
+            state.def_rax2acc(ir, dst);
+            Ok(CompileResult::Continue)
+        } else {
+            // Monomorphic compile (POLY not yet set). Make the
+            // recv-class guard recompile-on-miss so the site
+            // flips to the generic path once the VM observes
+            // class variance (Part B).
+            self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true)
         }
     }
 
@@ -312,90 +331,98 @@ impl<'a> JitContext<'a> {
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        match state.binop_type(lhs, rhs, ic) {
-            BinaryOpType::Integer(l, r) => {
-                if let Some(result) = state.check_concrete_i64_cmpbr(l, r, kind, brkind, dest_bb) {
-                    return Ok(result);
-                }
+        let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+        let Some(lhs_class) = lhs_class else {
+            state.flush_gp(ir);
+            return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+        };
+        // Fused compare-and-branch through the binary inline generator. The
+        // fixnum form guards + compares + branches in GP registers; the
+        // float form flushes and compares in xmm (both block terminators
+        // spill dirty residents before the branch). A both-operands-constant
+        // compare comes back as `Folded` and the branch resolves statically
+        // — no code, and an orphaned `dest` label is never resolved. This
+        // path now checks the basic-op license and records the bop_dep
+        // (via `fire_binary_inline`), which the old raw-`binop_type` arm
+        // skipped: a fused `while i < n` loop compiled before a later
+        // `Integer#<` redefinition is now evicted like every other form.
+        let dest = self.label();
+        match self.fire_binary_inline(
+            state,
+            ir,
+            kind.into(),
+            lhs,
+            rhs,
+            lhs_class,
+            rhs_class,
+            bc_pos,
+            BinaryInlineMode::CmpBr { brkind, dest },
+        ) {
+            Some(BinaryInlineOutcome::Done) => {
+                // Side-branch bookkeeping stays with the caller; the state is
+                // cloned *after* emission so both successors see the operand
+                // refinements (`refine_S_fixnum`) the guards established.
                 let src_idx = bc_pos + 1;
-                let dest = self.label();
-                state.gen_cmpbr_integer(ir, kind, l, r, brkind, dest);
                 self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
-                Ok(CompileResult::Continue)
+                return Ok(CompileResult::Continue);
             }
-            BinaryOpType::Float(info) => {
-                if let Some(result) =
-                    state.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
-                {
-                    return Ok(result);
+            Some(BinaryInlineOutcome::Folded(b)) => {
+                return Ok(if b ^ (brkind == BrKind::BrIfNot) {
+                    CompileResult::Branch(dest_bb)
+                } else {
+                    CompileResult::Continue
+                });
+            }
+            Some(BinaryInlineOutcome::Declined) | None => {}
+        }
+        state.flush_gp(ir);
+        if polymorphic {
+            let is_func_call = self
+                .store
+                .get_callsite_id(self.iseq_id(), bc_pos)
+                .is_some_and(|c| self.store[c].is_func_call());
+            self.emit_generic_cmp(state, ir, kind, lhs, rhs, true, is_func_call);
+            let src_idx = bc_pos + 1;
+            self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
+            return Ok(CompileResult::Continue);
+        }
+        // Monomorphic compile (POLY not yet set): recompile
+        // on recv-class-guard miss so the site flips to the
+        // generic path once class variance is observed.
+        let res =
+            self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true)?;
+        if let CompileResult::Continue = res {
+            state.unset_class_version_guard();
+            state.unset_const_version_guard();
+            // An inline gen may have resolved the comparison to a
+            // state-known constant (e.g. `String == nil` folds to
+            // `false` under the gen's class guards, LinkMode::C on
+            // the callsite dst). The trailing branch must then be
+            // resolved statically, exactly like `TraceIr::CondBr`
+            // does — emitting a dynamic CondBr here would read a
+            // result from rax that no code ever produced.
+            let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
+            let dst = self.store[callid].dst;
+            if let Some(dst) = dst
+                && state.is_truthy(dst)
+            {
+                if brkind == BrKind::BrIf {
+                    return Ok(CompileResult::Branch(dest_bb));
                 }
-                // Block terminator: spill the GP residents to their homes before
-                // the branch. This also makes a mixed integer operand's home
-                // current for the float compare's stack read.
-                state.flush_gp(ir);
+                // BrIfNot on a truthy value: branch statically dead.
+            } else if let Some(dst) = dst
+                && state.is_falsy(dst)
+            {
+                if brkind == BrKind::BrIfNot {
+                    return Ok(CompileResult::Branch(dest_bb));
+                }
+                // BrIf on a falsy value: branch statically dead.
+            } else {
                 let src_idx = bc_pos + 1;
-                let dest = self.label();
-                let mode = state.load_binary_fpr(ir, info);
-                ir.float_cmp_br(mode, kind, brkind, dest);
-                self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
-                Ok(CompileResult::Continue)
-            }
-            BinaryOpType::Other(None, _) => {
-                state.flush_gp(ir);
-                Ok(CompileResult::Recompile(RecompileReason::NotCached))
-            }
-            BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                state.flush_gp(ir);
-                if polymorphic {
-                    let is_func_call = self
-                        .store
-                        .get_callsite_id(self.iseq_id(), bc_pos)
-                        .is_some_and(|c| self.store[c].is_func_call());
-                    self.emit_generic_cmp(state, ir, kind, lhs, rhs, true, is_func_call);
-                    let src_idx = bc_pos + 1;
-                    self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
-                    return Ok(CompileResult::Continue);
-                }
-                // Monomorphic compile (POLY not yet set): recompile
-                // on recv-class-guard miss so the site flips to the
-                // generic path once class variance is observed.
-                let res = self.call_binary_method(
-                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
-                )?;
-                if let CompileResult::Continue = res {
-                    state.unset_class_version_guard();
-                    state.unset_const_version_guard();
-                    // An inline gen may have resolved the comparison to a
-                    // state-known constant (e.g. `String == nil` folds to
-                    // `false` under the gen's class guards, LinkMode::C on
-                    // the callsite dst). The trailing branch must then be
-                    // resolved statically, exactly like `TraceIr::CondBr`
-                    // does — emitting a dynamic CondBr here would read a
-                    // result from rax that no code ever produced.
-                    let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
-                    let dst = self.store[callid].dst;
-                    if let Some(dst) = dst
-                        && state.is_truthy(dst)
-                    {
-                        if brkind == BrKind::BrIf {
-                            return Ok(CompileResult::Branch(dest_bb));
-                        }
-                        // BrIfNot on a truthy value: branch statically dead.
-                    } else if let Some(dst) = dst
-                        && state.is_falsy(dst)
-                    {
-                        if brkind == BrKind::BrIfNot {
-                            return Ok(CompileResult::Branch(dest_bb));
-                        }
-                        // BrIf on a falsy value: branch statically dead.
-                    } else {
-                        let src_idx = bc_pos + 1;
-                        self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
-                    }
-                }
-                Ok(res)
+                self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
             }
         }
+        Ok(res)
     }
 }
 
@@ -416,713 +443,6 @@ fn cmp_generic_fn(kind: CmpKind) -> crate::executor::BinaryOpFn {
         CmpKind::Gt => op::cmp_gt_values,
         CmpKind::Ge => op::cmp_ge_values,
         CmpKind::TEq => op::cmp_teq_values,
-    }
-}
-
-fn cmp<T>(kind: CmpKind, lhs: T, rhs: T) -> bool
-where
-    T: PartialEq + PartialOrd,
-{
-    match kind {
-        CmpKind::Eq | CmpKind::TEq => lhs == rhs,
-        CmpKind::Ne => lhs != rhs,
-        CmpKind::Lt => lhs < rhs,
-        CmpKind::Le => lhs <= rhs,
-        CmpKind::Gt => lhs > rhs,
-        CmpKind::Ge => lhs >= rhs,
-    }
-}
-
-impl AbstractFrame {
-    fn fold_constant_cmp<T>(&mut self, kind: CmpKind, lhs: T, rhs: T, dst: Option<SlotId>)
-    where
-        T: PartialEq + PartialOrd,
-    {
-        let b = cmp(kind, lhs, rhs);
-        self.def_C(dst, Immediate::bool(b));
-    }
-
-    fn check_concrete_i64(&self, lhs: SlotId, rhs: SlotId) -> Option<(i64, i64)> {
-        let lhs = self.is_fixnum_literal(lhs)?.get();
-        let rhs = self.is_fixnum_literal(rhs)?.get();
-        Some((lhs, rhs))
-    }
-
-    #[allow(non_snake_case)]
-    pub(super) fn check_binary_C_f64(&self, lhs: SlotId, rhs: SlotId) -> Option<(f64, f64)> {
-        let lhs = self.coerce_C_f64(lhs)?;
-        let rhs = self.coerce_C_f64(rhs)?;
-        Some((lhs, rhs))
-    }
-
-    pub(super) fn check_concrete_i64_cmpbr(
-        &mut self,
-        lhs: SlotId,
-        rhs: SlotId,
-        kind: CmpKind,
-        brkind: BrKind,
-        dest_bb: BasicBlockId,
-    ) -> Option<CompileResult> {
-        if let Some((lhs, rhs)) = self.check_concrete_i64(lhs, rhs) {
-            let b = cmp(kind, lhs, rhs) ^ (brkind == BrKind::BrIfNot);
-            return Some(if b {
-                CompileResult::Branch(dest_bb)
-            } else {
-                CompileResult::Continue
-            });
-        }
-        None
-    }
-
-    pub(super) fn check_concrete_f64_cmpbr(
-        &mut self,
-        lhs: SlotId,
-        rhs: SlotId,
-        kind: CmpKind,
-        brkind: BrKind,
-        dest_bb: BasicBlockId,
-    ) -> Option<CompileResult> {
-        if let Some((lhs, rhs)) = self.check_binary_C_f64(lhs, rhs) {
-            let b = cmp(kind, lhs, rhs) ^ (brkind == BrKind::BrIfNot);
-            return Some(if b {
-                CompileResult::Branch(dest_bb)
-            } else {
-                CompileResult::Continue
-            });
-        }
-        None
-    }
-
-    fn binop_integer_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<Immediate> {
-        match kind {
-            BinOpK::Add => {
-                if let Some(result) = lhs.checked_add(rhs) {
-                    return Immediate::check_fixnum(result);
-                }
-            }
-            BinOpK::Sub => {
-                if let Some(result) = lhs.checked_sub(rhs) {
-                    return Immediate::check_fixnum(result);
-                }
-            }
-            BinOpK::Mul => {
-                if let Some(result) = lhs.checked_mul(rhs) {
-                    return Immediate::check_fixnum(result);
-                }
-            }
-            BinOpK::Div => {
-                if rhs.is_zero() {
-                    return None;
-                }
-                return Immediate::check_fixnum(lhs.ruby_div(&rhs));
-            }
-            // Bitwise ops on two i63 fixnums always yield an i63 fixnum.
-            BinOpK::BitOr => return Immediate::check_fixnum(lhs | rhs),
-            BinOpK::BitAnd => return Immediate::check_fixnum(lhs & rhs),
-            BinOpK::BitXor => return Immediate::check_fixnum(lhs ^ rhs),
-            BinOpK::Rem | BinOpK::Exp | BinOpK::Shl | BinOpK::Shr => unreachable!(),
-        }
-        None
-    }
-
-    ///
-    /// Integer binary operations
-    ///
-    /// ### in
-    /// - rdi: lhs
-    /// - rsi: rhs
-    ///
-    /// ### out
-    /// - r15: dst
-    ///
-    fn binop_integer(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: BinOpK,
-        dst: Option<SlotId>,
-        lhs: SlotId,
-        rhs: SlotId,
-    ) {
-        if let Some((lhs, rhs)) = self.check_concrete_i64(lhs, rhs)
-            && let Some(result) = self.binop_integer_folded(kind, lhs, rhs)
-        {
-            // The fold redefines `dst` as a constant; drop any stale GP cache of
-            // it so a later op does not reuse the register's old value. Other
-            // residents stay live (the fold emits nothing and reads no slot).
-            if let Some(dst) = dst {
-                self.gp_regfile.invalidate(dst);
-            }
-            self.def_C(dst, result);
-            return;
-        };
-
-        // All four fixnum ops keep their operands and result in GP registers
-        // (the local allocator), reusing residents across consecutive ops.
-        self.binop_integer_gp(ir, kind, dst, lhs, rhs);
-    }
-
-    /// The register-allocated fixnum binop. Operands are brought into GP
-    /// registers (reusing a resident copy, else materialized to the stack home
-    /// and loaded + fixnum-guarded), the result is allocated a register (evicting
-    /// the oldest resident if full), and the op runs in registers (overflow ->
-    /// deopt). The result stays resident — its stack home is written only when
-    /// the file is flushed (before a non-binop or at the block boundary) or
-    /// re-homed by a deopt write-back.
-    ///
-    /// `Mul` and `Div` destroy the `rhs` register (Mul untags it in place; Div's
-    /// `idiv` sequence sarq's it), and `Div` produces its quotient in `rax`. So
-    /// for those two the `rhs` resident is written back to its home (if dirty and
-    /// still live) before the op and dropped from the file afterwards, and `Div`
-    /// pins both operands so the result lands in a distinct register.
-    fn binop_integer_gp(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: BinOpK,
-        dst: Option<SlotId>,
-        lhs: SlotId,
-        rhs: SlotId,
-    ) {
-        // Immediate form: `Add`/`Sub` with a compile-time fixnum constant on
-        // one side (either side for the commutative `Add`) folds the constant
-        // into the instruction's immediate operand — no register
-        // materialization, no untag adjustment (`(2a+1) ± 2k = 2(a±k)+1`),
-        // overflow detection preserved. Constant-constant was already folded
-        // by `binop_integer`.
-        if matches!(kind, BinOpK::Add | BinOpK::Sub) {
-            let var_imm = if let Some(k) = self.is_fixnum_literal(rhs) {
-                Some((lhs, k.get()))
-            } else if kind == BinOpK::Add
-                && let Some(k) = self.is_fixnum_literal(lhs)
-            {
-                Some((rhs, k.get()))
-            } else {
-                None
-            };
-            if let Some((var, k)) = var_imm
-                && let Some(imm) = k.checked_mul(2).and_then(|v| i32::try_from(v).ok())
-            {
-                self.binop_integer_imm(ir, kind, dst, var, imm);
-                return;
-            }
-        }
-        // `Mul` and `Div` destroy the `rhs` register before their overflow /
-        // divide-by-zero side-exit (Mul `sarq`s it; Div's idiv sequence too).
-        let rhs_clobbered = matches!(kind, BinOpK::Mul | BinOpK::Div);
-        // 1. Load the operands into registers (reusing a resident copy).
-        let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
-        let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
-        // Same slot on both sides (`x + x`): one guard proves both operands.
-        let rhs_guard = rhs_guard && lhs != rhs;
-        // 1b. For `Mul`/`Div`: if `rhs` is a dirty resident, write it to its home
-        //     and mark it clean *before* the deopt snapshot. The op clobbers
-        //     `rhs_gp` before the side-exit, so the snapshot must re-home `rhs`
-        //     from its (now-current) stack home, not from the dead register — a
-        //     `dirty_residents()` entry would otherwise store garbage to the slot
-        //     on deopt (e.g. the untagged divisor, an invalid `Value`). A fresh /
-        //     constant operand is already recoverable (its home is current, or it
-        //     re-materializes from `LinkMode::C`).
-        if rhs_clobbered && let Some(reg) = self.gp_regfile.dirty_reg_of(rhs) {
-            ir.reg2stack(reg, rhs);
-            self.gp_regfile.sync(rhs);
-        }
-        // Whether `lhs`'s snapshot recovery depends on `lhs_gp` surviving the
-        // op: a dirty resident is re-homed *from the register* by the deopt
-        // write-back, so an in-place Add/Sub (which clobbers the register
-        // before the overflow side-exit) must not be chosen for it — see
-        // `binop_dst_reg`. Captured before the snapshot.
-        let lhs_dirty = self.gp_regfile.dirty_reg_of(lhs).is_some();
-        // 2. Snapshot the deopt write-back *before* clearing: it must re-home the
-        //    dirty residents that are live at this op's PC — which includes a
-        //    dirty operand that is itself a dead-after temporary (a prior binop
-        //    result consumed here). The guards and the overflow check below all
-        //    side-exit to this point, where the interpreter re-reads the operands
-        //    from their stack homes, so they have to be recoverable.
-        let deopt = ir.new_deopt(self);
-        // 3. `dst` is about to be redefined: drop any stale GP cache of it (done
-        //    after the snapshot, so a `dst` that aliases a dirty operand is still
-        //    re-homed for the re-execution).
-        if let Some(dst) = dst {
-            self.gp_regfile.invalidate(dst);
-        }
-        // 4. Clear `next_sp`: every temporary the stack pointer has popped is now
-        //    dead. `next_sp` is the sp *after* this op, so the operands — already
-        //    read into registers in step 1 — are freed here too. This must run
-        //    after the load (which still reads them) and before the result
-        //    allocation (so the result can reuse a freed operand's register).
-        let next_sp = self.next_sp();
-        self.gp_regfile.free_above_sp(next_sp);
-        // 5. Choose the result register and run the op. `Add`/`Sub` compute in
-        //    the dst position; `binop_dst_reg` prefers `lhs_gp` itself (in
-        //    place, or a binding transfer from a clean live resident — no
-        //    move), falling back to a distinct register when `lhs` is dirty
-        //    (its register must survive to the side exit for the deopt
-        //    write-back). `Mul`/`Div` clobber `rhs` and (Div) produce in
-        //    `rax`, so pin both operands and take a distinct register.
-        //    `x + x` (both operands in one register) uses the tagged-order
-        //    doubling sequence, which reads the shared operand before any
-        //    untag — so it may compute in place in the shared register too.
-        let double = kind == BinOpK::Add && lhs_gp == rhs_gp;
-        let dst_gp = if rhs_clobbered {
-            let (gp, spill) = self.gp_regfile.alloc_reg(&[lhs_gp, rhs_gp]);
-            if let Some((reg, slot)) = spill {
-                ir.reg2stack(reg, slot);
-            }
-            gp
-        } else if double {
-            self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[])
-        } else {
-            self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[rhs_gp])
-        };
-        // An operand not yet proven a fixnum is only speculatively an integer,
-        // so guard it; the guard then *proves* it a fixnum, so refine its
-        // abstract type in place (keeping the resident) — a later integer op on
-        // the same slot consumes it guard-free via `is_fixnum`, resident or not.
-        if lhs_guard {
-            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
-            self.refine_S_fixnum(lhs);
-        }
-        if rhs_guard {
-            ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
-            self.refine_S_fixnum(rhs);
-        }
-        if double {
-            ir.push(AsmInst::IntegerDouble {
-                dst: dst_gp,
-                lhs: lhs_gp,
-                deopt,
-            });
-        } else {
-            ir.integer_binop_reg(kind, dst_gp, lhs_gp, rhs_gp, deopt);
-        }
-        // The op left garbage in `rhs_gp`: forget that it cached `rhs`.
-        if rhs_clobbered {
-            self.gp_regfile.invalidate(rhs);
-        }
-        if let Some(dst) = dst {
-            // Define first (this clears any stale resident of `dst` via `clear`),
-            // then bind the result register.
-            self.def_S_guarded(dst, Guarded::Fixnum);
-            self.gp_regfile.bind(dst_gp, dst, /* dirty */ true);
-        }
-    }
-
-    /// Immediate-form fixnum `Add`/`Sub`: `dst = lhs <kind> k` with the
-    /// constant folded into the instruction (see `AsmInst::IntegerBinOpImm`).
-    /// `imm` is the doubled untagged constant `2k` (i32-gated by the caller).
-    fn binop_integer_imm(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: BinOpK,
-        dst: Option<SlotId>,
-        lhs: SlotId,
-        imm: i32,
-    ) {
-        let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
-        let lhs_dirty = self.gp_regfile.dirty_reg_of(lhs).is_some();
-        let deopt = ir.new_deopt(self);
-        if let Some(dst) = dst {
-            self.gp_regfile.invalidate(dst);
-        }
-        let next_sp = self.next_sp();
-        self.gp_regfile.free_above_sp(next_sp);
-        let dst_gp = self.binop_dst_reg(ir, lhs, lhs_gp, lhs_dirty, &[]);
-        if lhs_guard {
-            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
-            self.refine_S_fixnum(lhs);
-        }
-        ir.push(AsmInst::IntegerBinOpImm {
-            kind,
-            dst: dst_gp,
-            lhs: lhs_gp,
-            imm,
-            deopt,
-        });
-        if let Some(dst) = dst {
-            self.def_S_guarded(dst, Guarded::Fixnum);
-            self.gp_regfile.bind(dst_gp, dst, /* dirty */ true);
-        }
-    }
-
-    /// Choose the result register for an `Add`/`Sub`-family op that computes
-    /// in place in the dst position.
-    ///
-    /// * `lhs` **clean** (or already unbound — a dead-after temp freed by
-    ///   `free_above_sp`, a dst-aliasing operand dropped by `invalidate`, or
-    ///   a constant's load register): compute in place in `lhs_gp`. A live
-    ///   clean resident transfers its register to the result with no data
-    ///   move (its stack home is current, so nothing is lost); the slot
-    ///   simply drops to `S`.
-    /// * `lhs` **dirty**: the deopt write-back re-homes `lhs` *from
-    ///   `lhs_gp`*, and the op would clobber that register before the
-    ///   overflow side-exit — the interpreter would then re-execute the op
-    ///   with a corrupted operand. Compute in a distinct register instead
-    ///   (the lowering's `mov dst, lhs` preserves the operand register for
-    ///   the side exit).
-    fn binop_dst_reg(
-        &mut self,
-        ir: &mut AsmIr,
-        lhs: SlotId,
-        lhs_gp: GP,
-        lhs_dirty: bool,
-        extra_pinned: &[GP],
-    ) -> GP {
-        // Never compute in place in a register that also carries another live
-        // operand (`x + x`: lhs and rhs share one register — clobbering it
-        // in place would corrupt the rhs read).
-        if !lhs_dirty && !extra_pinned.contains(&lhs_gp) {
-            if self.gp_regfile.is_free(lhs_gp) {
-                return lhs_gp;
-            }
-            if self.gp_regfile.reg_of(lhs) == Some(lhs_gp) {
-                self.gp_regfile.invalidate(lhs);
-                return lhs_gp;
-            }
-        }
-        let mut pinned = vec![lhs_gp];
-        pinned.extend_from_slice(extra_pinned);
-        let (gp, spill) = self.gp_regfile.alloc_reg(&pinned);
-        if let Some((reg, slot)) = spill {
-            ir.reg2stack(reg, slot);
-        }
-        gp
-    }
-
-    /// Bring `slot` into a GP register, reusing its resident copy when present
-    /// (no reload) and otherwise materializing it to its stack home and loading
-    /// it. The returned bool asks the caller to emit a fixnum guard; it is
-    /// decided by the slot's abstract type (`is_fixnum`), never by residency —
-    /// a reloaded slot that an earlier guard/def already proved a fixnum (e.g.
-    /// an evicted binop result) is consumed guard-free, exactly like a resident
-    /// one.
-    fn gp_ensure(&mut self, ir: &mut AsmIr, slot: SlotId, pinned: &[GP]) -> (GP, bool) {
-        if let Some(gp) = self.gp_regfile.reg_of(slot) {
-            // Reuse the resident copy. Whether it needs a fixnum class guard is
-            // the slot's abstract type, not a per-resident flag: a resident
-            // produced by an integer op is `Guarded::Fixnum` (no guard), while one
-            // produced by a `call`/`yield` result or a frozen literal is a general
-            // `Value` / heap class (`is_fixnum == false`) and must be guarded
-            // before integer use.
-            return (gp, !self.is_fixnum(slot));
-        }
-        // Compile-time fixnum constant: load the tagged immediate straight into a
-        // register, skipping the stack-home round-trip (`%1 = %2 + 1` loads `1`
-        // as `movabs gp, 0x3` rather than materializing it to a slot and reading
-        // it back). The value is a known fixnum, so it needs no guard.
-        if let Some(v) = self.fixnum_literal_value(slot) {
-            let (gp, spill) = self.gp_regfile.alloc_reg(pinned);
-            if let Some((reg, s)) = spill {
-                ir.reg2stack(reg, s);
-            }
-            ir.lit2reg(v, gp);
-            self.gp_regfile.bind(gp, slot, /* dirty */ false);
-            return (gp, false);
-        }
-        // Not resident and not a constant: put the value at its canonical stack
-        // home (a no-op for an `S` slot; materializes a boxed float), then load it.
-        self.write_back_slot(ir, slot);
-        let (gp, spill) = self.gp_regfile.alloc_reg(pinned);
-        if let Some((reg, s)) = spill {
-            ir.reg2stack(reg, s);
-        }
-        ir.stack2reg(slot, gp);
-        self.gp_regfile.bind(gp, slot, /* dirty */ false);
-        // Guard iff the slot is not already a proven fixnum — the same criterion
-        // as the resident path above. An `S(Fixnum)` slot's stack home always
-        // holds the proven-fixnum value, so reloading it (after an eviction or
-        // a flush) needs no re-guard.
-        (gp, !self.is_fixnum(slot))
-    }
-
-    /// prepare the GP register file for a float op that keeps
-    /// the residents alive (it computes in xmm without clobbering them). The op
-    /// reads its operands from their stack homes, so a GP-resident operand — the
-    /// integer side of a mixed `Integer <op> Float` — is written back to its home
-    /// and marked clean (it stays cached for a following integer op). Finally any
-    /// stale GP cache of the result slot is dropped.
-    fn binop_float_folded(&self, kind: BinOpK, lhs: f64, rhs: f64) -> Option<f64> {
-        Some(match kind {
-            BinOpK::Add => lhs + rhs,
-            BinOpK::Sub => lhs - rhs,
-            BinOpK::Mul => lhs * rhs,
-            BinOpK::Div => lhs.ruby_div(&rhs),
-            _ => return None,
-        })
-    }
-
-    ///
-    /// §18 handler separation: the **decision** half of `binop_float`, a pure
-    /// (`&self`, allocation-free) function of the operand state — the Layer-①
-    /// part. It chooses between a constant fold (both operands constant floats and
-    /// the result is a flonum immediate) and the fpr path, *without* allocating an
-    /// fpr or emitting. `binop_float` then *executes* the chosen plan (the Layer-②
-    /// allocation + emission). Separating the two is the template for un-welding
-    /// each float-op handler's type/representation decision from its
-    /// allocation+emission.
-    ///
-    fn plan_binop_float(&self, kind: BinOpK, info: FBinOpInfo) -> FloatBinOpPlan {
-        if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs)
-            && let Some(result) = self.binop_float_folded(kind, lhs, rhs)
-            && Immediate::flonum(result).is_some()
-        {
-            FloatBinOpPlan::Fold(result)
-        } else {
-            FloatBinOpPlan::FprOp
-        }
-    }
-
-    fn binop_float(&mut self, ir: &mut AsmIr, kind: BinOpK, dst: Option<SlotId>, info: FBinOpInfo) {
-        match self.plan_binop_float(kind, info) {
-            FloatBinOpPlan::Fold(result) => {
-                // `plan_binop_float` already verified `Immediate::flonum`, so this
-                // always succeeds — a pure Layer-① constant, no fpr.
-                let folded = self.def_C_float(dst, result);
-                debug_assert!(folded);
-            }
-            FloatBinOpPlan::FprOp => {
-                let (lhs, rhs, dst) = self.load_binary_ret_fpr(ir, dst, info);
-                if let Some(dst) = dst {
-                    ir.fpr_binop(kind, lhs, rhs, dst);
-                }
-            }
-        }
-    }
-
-    pub(super) fn gen_cmp_integer(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: CmpKind,
-        dst: Option<SlotId>,
-        lhs: SlotId,
-        rhs: SlotId,
-    ) {
-        if let Some((lhs, rhs)) = self.check_concrete_i64(lhs, rhs) {
-            // The fold redefines `dst`; drop any stale GP cache of it.
-            if let Some(dst) = dst {
-                self.gp_regfile.invalidate(dst);
-            }
-            self.fold_constant_cmp(kind, lhs, rhs, dst);
-            return;
-        };
-        self.gen_cmp_integer_gp(ir, kind, dst, lhs, rhs);
-    }
-
-    /// the register-allocated fixnum comparison. Operands are
-    /// brought into GP registers (reusing residents from a prior binop), guarded,
-    /// and compared in registers; the boolean result is stored to `dst`'s stack
-    /// home (a bool is never a GP resident, so the file shrinks by the operands
-    /// the stack pointer has popped and gains nothing).
-    fn gen_cmp_integer_gp(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: CmpKind,
-        dst: Option<SlotId>,
-        lhs: SlotId,
-        rhs: SlotId,
-    ) {
-        // Immediate form: a compile-time fixnum constant rhs is folded into
-        // the compare as its tagged value `2k+1` (tagged fixnums compare in
-        // the same order as their untagged values) — no register
-        // materialization. Constant-constant was folded by the caller.
-        if let Some(k) = self.is_fixnum_literal(rhs)
-            && let Some(imm) = k
-                .get()
-                .checked_mul(2)
-                .and_then(|v| v.checked_add(1))
-                .and_then(|v| i32::try_from(v).ok())
-        {
-            let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
-            let deopt = ir.new_deopt(self);
-            if let Some(dst) = dst {
-                self.gp_regfile.invalidate(dst);
-            }
-            let next_sp = self.next_sp();
-            self.gp_regfile.free_above_sp(next_sp);
-            if lhs_guard {
-                ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
-                self.refine_S_fixnum(lhs);
-            }
-            ir.push(AsmInst::IntegerCmpImm {
-                kind,
-                dst,
-                lhs: lhs_gp,
-                imm,
-            });
-            if let Some(dst) = dst {
-                self.def_S(dst);
-            }
-            return;
-        }
-        let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
-        let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
-        // Snapshot the deopt write-back before clearing (the guards side-exit to
-        // a point where the interpreter re-reads the operands from their homes).
-        let deopt = ir.new_deopt(self);
-        // The result `dst` is redefined as a bool: drop any stale GP cache of it.
-        if let Some(dst) = dst {
-            self.gp_regfile.invalidate(dst);
-        }
-        // Clear the popped operand temporaries so a following binop can reuse
-        // their registers.
-        let next_sp = self.next_sp();
-        self.gp_regfile.free_above_sp(next_sp);
-        // Guard-then-refine, as in `binop_integer_gp`: the guard proves the
-        // operand a fixnum, so record that on the slot and later integer ops
-        // consume it guard-free.
-        if lhs_guard {
-            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
-            self.refine_S_fixnum(lhs);
-        }
-        if rhs_guard {
-            ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
-            self.refine_S_fixnum(rhs);
-        }
-        ir.integer_cmp_reg(kind, dst, lhs_gp, rhs_gp);
-        if let Some(dst) = dst {
-            self.def_S(dst);
-        }
-    }
-
-    pub(super) fn gen_cmp_float(
-        &mut self,
-        ir: &mut AsmIr,
-        dst: Option<SlotId>,
-        info: FBinOpInfo,
-        kind: CmpKind,
-    ) {
-        if let Some((lhs, rhs)) = self.check_binary_C_f64(info.lhs, info.rhs) {
-            self.fold_constant_cmp(kind, lhs, rhs, dst);
-            return;
-        };
-        let binary_fpr = self.load_binary_fpr(ir, info);
-        ir.push(AsmInst::FloatCmp {
-            kind,
-            lhs: binary_fpr.0,
-            rhs: binary_fpr.1,
-        });
-        self.def_rax2acc(ir, dst);
-    }
-
-    /// The register-allocated fixnum compare + branch. Like `gen_cmp_integer_gp`,
-    /// the operands are brought into GP registers (reusing residents from a prior
-    /// binop) and fixnum-guarded. Because this terminates the basic block, the
-    /// register file is then **flushed** — every dirty resident spilled to its
-    /// stack home — *before* the conditional branch, so both successor blocks
-    /// (taken and fall-through) observe slots in their canonical homes and start
-    /// with an empty file. The operands stay in their registers for the compare.
-    pub(super) fn gen_cmpbr_integer(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: CmpKind,
-        lhs: SlotId,
-        rhs: SlotId,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-    ) {
-        // Immediate form, as in `gen_cmp_integer_gp`: fold a constant rhs
-        // into the compare as its tagged value `2k+1`.
-        if let Some(k) = self.is_fixnum_literal(rhs)
-            && let Some(imm) = k
-                .get()
-                .checked_mul(2)
-                .and_then(|v| v.checked_add(1))
-                .and_then(|v| i32::try_from(v).ok())
-        {
-            let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
-            let deopt = ir.new_deopt(self);
-            if lhs_guard {
-                ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
-                self.refine_S_fixnum(lhs);
-            }
-            self.flush_gp(ir);
-            ir.push(AsmInst::IntegerCmpBrImm {
-                kind,
-                brkind,
-                branch_dest,
-                lhs: lhs_gp,
-                imm,
-            });
-            return;
-        }
-        let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
-        let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
-        // Snapshot the deopt write-back before the flush/branch (the guards
-        // side-exit to a point where the interpreter re-reads the operands).
-        let deopt = ir.new_deopt(self);
-        // Guard-then-refine, as in `binop_integer_gp`. The refinement is
-        // recorded on the slot (not the register file), so it survives the
-        // block-terminator flush below and propagates to the successor blocks.
-        if lhs_guard {
-            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
-            self.refine_S_fixnum(lhs);
-        }
-        if rhs_guard {
-            ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
-            self.refine_S_fixnum(rhs);
-        }
-        // Block terminator: spill the dirty residents to their stack homes before
-        // the branch (the operands' registers still hold their values for the
-        // compare), leaving the file empty for both successors.
-        self.flush_gp(ir);
-        ir.integer_cmpbr_reg(kind, brkind, branch_dest, lhs_gp, rhs_gp);
-    }
-
-    pub(super) fn load_binary_fpr(&mut self, ir: &mut AsmIr, info: FBinOpInfo) -> (FPReg, FPReg) {
-        let FBinOpInfo {
-            lhs,
-            rhs,
-            lhs_class,
-            rhs_class,
-            ..
-        } = info;
-        if lhs != rhs {
-            // Loading lhs may set an `Sf` mode on its fpr. Without pinning,
-            // the next allocator call (when loading rhs) can demote that
-            // same fpr via Phase-1 of `try_alloc_fpr_demote` and hand it
-            // back as the rhs fpr — so the consumer would compare /
-            // arithmetic the value with itself. Pin lhs across the rhs
-            // load to force the allocator to pick a different physical
-            // register.
-            let lhs_fpr = self.fetch_float_assume(ir, lhs, lhs_class);
-            self.pin_fpr(lhs_fpr);
-            let rhs_fpr = self.fetch_float_assume(ir, rhs, rhs_class);
-            self.unpin_fpr(lhs_fpr);
-            (lhs_fpr, rhs_fpr)
-        } else {
-            let lhs = self.fetch_float_assume(ir, lhs, lhs_class);
-            (lhs, lhs)
-        }
-    }
-
-    pub(super) fn load_binary_ret_fpr(
-        &mut self,
-        ir: &mut AsmIr,
-        dst: Option<SlotId>,
-        info: FBinOpInfo,
-    ) -> (FPReg, FPReg, Option<FPReg>) {
-        let (lhs, rhs) = self.load_binary_fpr(ir, info);
-        // Pin both operands while allocating the destination — `def_F` calls
-        // `alloc_fpr`, which can otherwise pick `lhs` or `rhs` as the spill
-        // victim and alias dst onto an operand the consumer still needs.
-        self.pin_fpr(lhs);
-        self.pin_fpr(rhs);
-        let dst = dst.map(|dst| {
-            if dst == info.lhs {
-                self.def_F_with_fpr(dst, lhs);
-                lhs
-            } else {
-                self.def_F(dst)
-            }
-        });
-        self.unpin_fpr(rhs);
-        self.unpin_fpr(lhs);
-        (lhs, rhs, dst)
-    }
-
-    fn fetch_float_assume(&mut self, ir: &mut AsmIr, rhs: SlotId, class: FOpClass) -> FPReg {
-        match class {
-            FOpClass::Integer => self.load_fpr_fixnum(ir, rhs),
-            FOpClass::Float => self.load_fpr(ir, rhs),
-        }
     }
 }
 
@@ -1299,6 +619,153 @@ mod tests {
                 p = big + 2
                 q = big + 5
                 res << p << q << big
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn fused_cmpbr_bop_redefinition_evicts() {
+        // Regression for the license hole the generator dispatch closed: the
+        // fused compare-and-branch (`while i < n`) used to inline `Integer#<`
+        // WITHOUT recording a bop_dep, so a post-warmup redefinition left the
+        // compiled loop computing the builtin compare. Now the fused form
+        // records the dep like every other spelling and the body is evicted.
+        run_test_once(
+            r##"
+            def count(n)
+              i = 0
+              c = 0
+              while i < n
+                c += 1
+                i += 1
+              end
+              c
+            end
+            a = []
+            40.times { a << count(20) }
+            class Integer
+              def <(other) = false
+            end
+            a << count(20)
+            a
+        "##,
+        );
+    }
+
+    #[test]
+    fn explicit_send_operator_parity() {
+        // The explicit-send spelling fires the same binary generators through
+        // compile_method_call (class-version + receiver guards emitted there).
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def drive
+              res = []
+              j = 0
+              while j < 30
+                res << 1.+(2)
+                res << 5.-(2)
+                res << 3.|(5)
+                res << 4.&(6)
+                res << 7.^(3)
+                res << 2.0./(4)
+                res << 1.==(1)
+                res << 2.0.<(1)
+                res << 2.!=(2)
+                res << 3.>=(3.0)
+                res << 1.===(1)
+                res << 3.7.===(3.7)
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn mixed_numeric_pairs() {
+        // Integer-op-Float and Float-op-Integer through the generators: the
+        // arithmetic kinds compute in xmm (the old binop_type mixed collapse,
+        // now explicit per method), comparisons in both value and fused form.
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def m(a, b)
+              [a + b, a - b, a * b, a / b, a < b, a <= b, a == b, a != b, (a > b ? 1 : 0)]
+            end
+            def drive
+              res = []
+              j = 0
+              while j < 30
+                res << m(1, 2.0)
+                res << m(2.0, 1)
+                res << m(3, 4)
+                res << m(2.5, 1.5)
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn float_rhs_bitop_is_method_call() {
+        // `1.0 | 2` used to classify as a Float binop (the binop_type mixed
+        // collapse) and reach a per-arch `unreachable!` in the FloatBinOp
+        // lowering. The bitwise generators decline a Float rhs, so the site
+        // takes the ordinary method call and raises NoMethodError like CRuby.
+        run_test_once(
+            r##"
+            r = 0
+            20.times do
+              begin
+                r = 1 | 2
+                1.0 | 2
+              rescue NoMethodError
+                r += 1
+              end
+            end
+            r
+        "##,
+        );
+    }
+
+    #[test]
+    fn case_when_numeric_teq_inline() {
+        // case/when dispatches `===` on the `when` literal (the optimizable
+        // TEq form): Integer#=== is an alias of `==`, Float#=== a distinct
+        // FuncId with the Eq generator — both inline through the fused path.
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def c(x)
+              case x
+              when 1 then :a
+              when 2.5 then :b
+              when 3 then :c
+              else :d
+              end
+            end
+            def drive
+              res = []
+              j = 0
+              while j < 30
+                res << c(1)
+                res << c(2.5)
+                res << c(3)
+                res << c(:sym)
                 j = j + 1
               end
               res

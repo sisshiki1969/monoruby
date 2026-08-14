@@ -546,6 +546,58 @@ impl Globals {
         fid
     }
 
+    /// [`define_basic_op`](Self::define_basic_op) plus a binary inline
+    /// generator (see [`InlineGenBinary`]): keeps the `is_basic_op` entry
+    /// flag and registers the generator the binop/cmp JIT dispatchers fire
+    /// guard-free under the basic-op license.
+    pub(crate) fn define_basic_op_inline(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        address: BuiltinFn,
+        inline_gen: Box<InlineGenBinary>,
+        arg_num: usize,
+    ) -> FuncId {
+        let fid = self.define_basic_op(class_id, name, address, arg_num);
+        self.store
+            .inline_info
+            .add_inline(fid, inline::InlineFuncInfo::new_inline_gen_binary(inline_gen));
+        fid
+    }
+
+    /// Like [`define_builtin_inline_funcs`](Self::define_builtin_inline_funcs),
+    /// but registers a binary-operator generator (see [`InlineGenBinary`]).
+    /// The entry keeps `is_basic_op = false`, matching today's plain-builtin
+    /// registrations of the comparison operators.
+    pub(crate) fn define_builtin_inline_binary_funcs(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        alias: &[&str],
+        address: BuiltinFn,
+        inline_gen: Box<InlineGenBinary>,
+        arg_num: usize,
+    ) -> FuncId {
+        let fid = self.new_builtin_fn(
+            class_id,
+            name,
+            address,
+            Visibility::Public,
+            arg_num,
+            arg_num,
+            false,
+            &[],
+            false,
+        );
+        self.store
+            .inline_info
+            .add_inline(fid, inline::InlineFuncInfo::new_inline_gen_binary(inline_gen));
+        for alias in alias {
+            self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
+        }
+        fid
+    }
+
     pub(crate) fn define_builtin_inline_funcs(
         &mut self,
         class_id: ClassId,

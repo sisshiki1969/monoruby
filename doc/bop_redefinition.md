@@ -470,9 +470,13 @@ JIT コードを一方向ラッチ (`jit_invalidated`) で恒久的に捨てて�
 
 1. `JitContext::assume_basic_op(class, op)` を inline 経路の入口に置き、
    - 再定義済みなら `false` を返して**その演算だけ**通常のメソッド呼び出しへ
-     降格する（`binop_type_checked`）。だから再定義後に再コンパイルしても
+     降格する。だから再定義後に再コンパイルしても
      健全で、しかも**他の演算子の inline は保たれる**。
    - まだビルトインなら `true` を返しつつ `(class, op)` を記録する。
+   - （現在は binop/cmp のディスパッチが inline 生成器経由
+     （`fire_binary_inline`）になり、純検査 `basic_op_assumable` +
+     生成器成功時のみの `record_bop_dep` に分離されている。融合
+     compare-and-branch もこの経路で license を確認・記録する。）
 2. 記録は `jit_compile` → `ISeqInfo::bop_deps`（self class をまたいで union）。
 3. `set_bop_redefine` は `evict_jit_code_for_bop(class, name)` で
    **依存している iseq だけ**を捨てる。x86 の entry 巻き戻しも同じ集合に限定。
