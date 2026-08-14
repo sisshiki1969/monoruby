@@ -84,17 +84,27 @@ impl<'a> JitContext<'a> {
     /// Attempt guard-free inline emission of `lhs_class#op` at this binop /
     /// comparison site through the registered binary inline generator.
     ///
-    /// Returns `None` when the method doesn't resolve, has no binary
-    /// generator, the basic-op license is gone (redefinition / refinement in
-    /// scope), or the generator declined — the caller falls back to the
-    /// ordinary path. **No class-version guard and no receiver-slot guard**
-    /// are emitted: soundness comes from the recorded bop_dep (redefinition
-    /// evicts every dependent body via `set_bop_redefine`), and the operand
-    /// guards are emitted by the generator itself, only for operands not
-    /// already proven (`gp_ensure` / the float-load discipline). The dep is
-    /// recorded only when the generator emitted (`Done`) or folded
-    /// (`Folded` — a fold bakes in the builtin's semantics just the same),
-    /// so a declined generator leaves no spurious dependency.
+    /// The shape is the one every operator dispatcher now shares: resolve
+    /// `lhs_class#op`, **guard the receiver**, run the generator (which
+    /// dispatches on the argument class — `Integer#+` emits the fixnum path
+    /// for an Integer rhs and the xmm path for a Float one), and let anything
+    /// it declines fall back to the ordinary method call.
+    ///
+    /// Returns `None` when the method doesn't resolve, has no generator, the
+    /// basic-op license is gone (redefinition / refinement in scope, or a
+    /// pair the eviction machinery doesn't track), or the generator declined.
+    /// **No class-version guard** is emitted: soundness comes from the
+    /// recorded bop_dep (a redefinition evicts every dependent body via
+    /// `set_bop_redefine`). The dep is recorded only when the generator
+    /// emitted (`Done`) or folded (`Folded` — a fold bakes in the builtin's
+    /// semantics just the same), so a declined generator leaves no spurious
+    /// dependency.
+    ///
+    /// The receiver guard is emitted here rather than inside each generator
+    /// so that a generator may simply assume its receiver class — which is
+    /// what lets the plain [`InlineFuncInfo::InlineGen`] operators
+    /// (`Integer#% ** << >>`, whose code reads the receiver unguarded) fire
+    /// from here too.
     ///
     /// Visibility is deliberately not consulted, matching the ad-hoc fast
     /// paths this replaces (the interpreter's fast paths don't consult it
@@ -114,9 +124,15 @@ impl<'a> JitContext<'a> {
         mode: BinaryInlineMode,
     ) -> Option<BinaryInlineOutcome> {
         let (fid, _visibility) = self.jit_check_method(lhs_class, op)?;
-        let InlineFuncInfo::InlineGenBinary(f) = self.store.inline_info.get_inline(fid)? else {
+        let inline = self.store.inline_info.get_inline(fid)?;
+        if !matches!(
+            inline,
+            InlineFuncInfo::InlineGenBinary(_) | InlineFuncInfo::InlineGen(_)
+        ) {
+            // `Float#%` / `Float#**` are `CFunc_FF_F`, which the ordinary
+            // call path already lowers to an inline xmm C call.
             return None;
-        };
+        }
         if !self.basic_op_assumable(lhs_class, op) {
             return None;
         }
@@ -126,8 +142,32 @@ impl<'a> JitContext<'a> {
         debug_assert_eq!(self.store[callid].recv, lhs);
         debug_assert_eq!(self.store[callid].args, rhs);
         debug_assert!(self.store[callid].block_fid.is_none());
-        match self.inline_asm_binary(state, ir, f, callid, lhs_class, rhs_class, mode) {
-            BinaryInlineOutcome::Declined => None,
+        // The receiver guard and the generator emit as one unit: a generator
+        // that declines after the guard was emitted must leave no trace.
+        let state_save = state.clone();
+        let ir_save = ir.save();
+        state.guard_recv_class(ir, lhs, lhs_class);
+        let outcome = match self.store.inline_info.get_inline(fid).unwrap() {
+            InlineFuncInfo::InlineGenBinary(f) => {
+                self.inline_asm_binary(state, ir, f, callid, lhs_class, rhs_class, mode)
+            }
+            // The plain generators (`Integer#% ** << >>`) have no fused
+            // compare-and-branch form, so they only serve `Value` mode.
+            InlineFuncInfo::InlineGen(f) if matches!(mode, BinaryInlineMode::Value) => {
+                if self.inline_asm(state, ir, f, callid, lhs_class, rhs_class) {
+                    BinaryInlineOutcome::Done
+                } else {
+                    BinaryInlineOutcome::Declined
+                }
+            }
+            _ => BinaryInlineOutcome::Declined,
+        };
+        match outcome {
+            BinaryInlineOutcome::Declined => {
+                *state = state_save;
+                ir.restore(ir_save);
+                None
+            }
             outcome => {
                 self.record_bop_dep(lhs_class, op);
                 Some(outcome)
@@ -147,66 +187,43 @@ impl<'a> JitContext<'a> {
         ic: Option<(ClassId, ClassId)>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        match kind {
-            // These ops are always compiled as method calls.
-            // The InlineGen registered on Integer#<< / Integer#>> /
-            // Integer#** / Integer#% / Float#** / Float#% handles code
-            // generation using both-side class info from the BinOp inline
-            // cache (Integer#| / #& / #^ moved to the binary-generator
-            // direct-fire arm below).
-            BinOpK::Shl | BinOpK::Shr | BinOpK::Exp | BinOpK::Rem => {
-                // Dispatched through `call_binary_method`. No flush here: a
-                // register-only inline (e.g. `Integer#<<`) reads its operands
-                // GP-resident-aware and keeps the residents live, while any C-ABI
-                // call (a clobbering inline like `Array#<<`, or the cached
-                // method-call path) flushes them at its `get_using_fpr` chokepoint.
-                let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
-                match lhs_class {
-                    None => Ok(self.binop_uncached(state, dst)),
-                    Some(lhs_class) => self.call_binary_method(
-                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
-                    ),
-                }
-            }
-            _ => {
-                let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
-                let Some(lhs_class) = lhs_class else {
-                    // Recompiles (deopts) — its write-back re-homes the residents.
-                    return Ok(self.binop_uncached(state, dst));
-                };
-                // The binary inline generator (`Integer#+`'s fixnum path,
-                // `Float#+`'s xmm path, the mixed pairs) emits the constant
-                // fold or the register fast path with no per-op runtime
-                // guard. A basic-op redefinition is instead handled
-                // method-wide by `set_bop_redefine`, identically on both
-                // arches: compiled method entries are reverted (x86
-                // `apply_jmp_patch_address` to `vm_entry`; aarch64
-                // dispatch-slot zeroing in `invalidate_jit_code`), the VM's
-                // `loop_start` handler is swapped for the no-opt one so
-                // stale OSR loop bodies are never re-entered, and on-stack
-                // frames deopt on return via `immediate_eviction`'s
-                // return-address patching (both arches; see `emit_call`). A
-                // `def` executed *inside* JIT code is caught by the
-                // `check_bop` after `MethodDef`/`SingletonMethodDef`.
-                if let Some(BinaryInlineOutcome::Done) = self.fire_binary_inline(
-                    state,
-                    ir,
-                    kind.into(),
-                    lhs,
-                    rhs,
-                    lhs_class,
-                    rhs_class,
-                    bc_pos,
-                    BinaryInlineMode::Value,
-                ) {
-                    return Ok(CompileResult::Continue);
-                }
-                // Any C-ABI call flushes at its `get_using_fpr` chokepoint.
-                self.call_binary_method(
-                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
-                )
-            }
+        let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+        let Some(lhs_class) = lhs_class else {
+            // Recompiles (deopts) — its write-back re-homes the residents.
+            return Ok(self.binop_uncached(state, dst));
+        };
+        // One path for every operator: guard the receiver, run the generator
+        // registered on `lhs_class#op`, and fall back to the method call for
+        // whatever it declines. The generator picks its emission from the
+        // argument class — `Integer#+` computes in GP registers for an
+        // Integer rhs and in xmm for a Float one — so the Integer/Float pairs
+        // are no longer a case the dispatcher knows about.
+        //
+        // The emitted arithmetic carries no per-op check that the operator is
+        // still the builtin: a basic-op redefinition is handled method-wide
+        // by `set_bop_redefine`, identically on both arches. Compiled method
+        // entries are reverted (x86 `apply_jmp_patch_address` to `vm_entry`;
+        // aarch64 dispatch-slot zeroing in `invalidate_jit_code`), the VM's
+        // `loop_start` handler is swapped for the no-opt one so stale OSR
+        // loop bodies are never re-entered, and on-stack frames deopt on
+        // return via `immediate_eviction`'s return-address patching (see
+        // `emit_call`). A `def` executed *inside* JIT code is caught by the
+        // `check_bop` after `MethodDef`/`SingletonMethodDef`.
+        if let Some(BinaryInlineOutcome::Done) = self.fire_binary_inline(
+            state,
+            ir,
+            kind.into(),
+            lhs,
+            rhs,
+            lhs_class,
+            rhs_class,
+            bc_pos,
+            BinaryInlineMode::Value,
+        ) {
+            return Ok(CompileResult::Continue);
         }
+        // Any C-ABI call flushes at its `get_using_fpr` chokepoint.
+        self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false)
     }
 
     pub(super) fn binary_cmp(
