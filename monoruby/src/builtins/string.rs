@@ -77,6 +77,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "scan", scan, 1);
     globals.define_builtin_func_with(STRING_CLASS, "match", string_match, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "match?", string_match_, 1, 2, false);
+    globals.define_builtin_func(STRING_CLASS, "__strscan_match", string_strscan_match, 2);
     globals.define_builtin_func_with(STRING_CLASS, "index", string_index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "rindex", string_rindex, 1, 2, false);
     globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
@@ -3233,21 +3234,91 @@ fn string_match(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let pos = if let Some(arg1) = lfp.try_arg(1) {
-        match arg1.coerce_to_int_i64(vm, globals)? {
-            pos if pos >= 0 => pos as usize,
-            _ => return Ok(Value::nil()),
-        }
+    // Coerce both arguments before borrowing the subject: either
+    // coercion may run Ruby code that mutates the receiver.
+    let raw_pos = if let Some(arg1) = lfp.try_arg(1) {
+        Some(arg1.coerce_to_int_i64(vm, globals)?)
     } else {
-        0usize
+        None
     };
-    let self_ = lfp.self_val();
-    let given = self_.as_rstring_inner().regex_view()?;
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
+    let self_ = lfp.self_val();
+    let s = self_.as_rstring_inner();
+    let given = s.regex_view()?;
+    let byte_pos = match raw_pos {
+        None | Some(0) => 0,
+        Some(mut pos) => {
+            if pos < 0 {
+                // Negative positions count characters from the end;
+                // CRuby returns nil when still negative afterwards.
+                let char_len = if s.is_ascii_only() {
+                    given.len() as i64
+                } else {
+                    given.chars().count() as i64
+                };
+                pos += char_len;
+                if pos < 0 {
+                    return Ok(Value::nil());
+                }
+            }
+            // CRuby's `reg_match_pos` maps the char position with
+            // `rb_str_offset`, which clamps past-the-end positions to
+            // the string's end — a zero-width pattern still matches
+            // there (`"ab".match(/x?/, 5)` => `""`). ASCII-only content
+            // (known O(1) from the cached code range) needs no walk.
+            if s.is_ascii_only() {
+                (pos as usize).min(given.len())
+            } else {
+                given
+                    .char_indices()
+                    .nth(pos as usize)
+                    .map_or(given.len(), |(p, _)| p)
+            }
+        }
+    };
 
     // Enable zero-copy MatchData/$~ haystack snapshots (CoW).
     vm.set_match_haystack(self_);
-    RegexpInner::match_one(vm, globals, re, &given, lfp.block(), pos)
+    RegexpInner::match_one(vm, globals, re, &given, lfp.block(), byte_pos)
+}
+
+///
+/// ### String#__strscan_match (monoruby internal)
+///
+/// - __strscan_match(regexp, byte_pos) -> MatchData | nil
+///
+/// Match `regexp` against the byte suffix of self starting at
+/// `byte_pos`, backing the pure-Ruby `StringScanner`'s ASCII fast path
+/// (`stdlib/strscan.rb`). The engine sees only the suffix, so `\A` and
+/// `^` anchor at the scan position — CRuby strscan's default
+/// (`fixed_anchor: false`) semantics — and the MatchData's offsets are
+/// relative to it, exactly like the byteslice-based fallback path, but
+/// with no copy: the suffix is a borrowed view and the MatchData's
+/// haystack snapshot resolves to a zero-copy CoW substring of self
+/// (`Executor::resolve_haystack`). Out-of-range or non-char-boundary
+/// positions return nil; the caller's `ascii_only?` gate makes every
+/// in-range byte position a boundary.
+#[monoruby_builtin]
+fn string_strscan_match(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let byte_pos = match lfp.arg(1).coerce_to_int_i64(vm, globals)? {
+        pos if pos >= 0 => pos as usize,
+        _ => return Ok(Value::nil()),
+    };
+    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
+    let self_ = lfp.self_val();
+    let s = self_.as_rstring_inner();
+    let given = s.regex_view()?;
+    let Some(sub) = given.get(byte_pos..) else {
+        return Ok(Value::nil());
+    };
+    // Enable zero-copy MatchData/$~ haystack snapshots (CoW).
+    vm.set_match_haystack(self_);
+    RegexpInner::match_one(vm, globals, re, sub, lfp.block(), 0)
 }
 
 ///
@@ -3263,19 +3334,34 @@ fn string_match_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let pos = if let Some(arg1) = lfp.try_arg(1) {
-        match arg1.coerce_to_int_i64(vm, globals)? {
-            pos if pos >= 0 => pos as usize,
-            _ => return Ok(Value::nil()),
-        }
+    let raw_pos = if let Some(arg1) = lfp.try_arg(1) {
+        Some(arg1.coerce_to_int_i64(vm, globals)?)
     } else {
-        0usize
+        None
     };
-    let self_ = lfp.self_val();
-    let given = self_.as_rstring_inner().regex_view()?;
     let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
+    let self_ = lfp.self_val();
+    let s = self_.as_rstring_inner();
+    let given = s.regex_view()?;
+    let char_pos = match raw_pos {
+        None | Some(0) => 0,
+        Some(pos) => {
+            // Unlike `String#match`, `match?` rejects out-of-range
+            // positions instead of clamping (CRuby `rb_reg_match_p`),
+            // and answers false — not nil — for them.
+            let char_len = if s.is_ascii_only() {
+                given.len()
+            } else {
+                given.chars().count()
+            };
+            match conv_index(pos, char_len) {
+                Some(p) => p,
+                None => return Ok(Value::bool(false)),
+            }
+        }
+    };
 
-    let res = RegexpInner::match_pred(&re, &given, pos)?;
+    let res = RegexpInner::match_pred(&re, &given, char_pos)?;
     Ok(Value::bool(res))
 }
 
