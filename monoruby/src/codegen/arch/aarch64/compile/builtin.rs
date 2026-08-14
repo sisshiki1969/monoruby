@@ -159,6 +159,48 @@ impl Codegen {
         );
     }
 
+    /// `Object#frozen?` — the aarch64 twin of x86 `emit_frozen_pred`.
+    /// Receiver Value in Rdi (x4) → Rax (x0) = true/false Value. Mirrors
+    /// `Value::is_frozen`: packed values and heap Numerics (Bignum / Float /
+    /// Complex / Rational) are always frozen; every other heap object tests
+    /// the header FROZEN bit (bit 1). Chilled strings have that bit clear,
+    /// so they report false, exactly like the builtin.
+    ///
+    /// ### destroy
+    /// - x0 (Rax), x9
+    pub(crate) fn emit_frozen_pred(&mut self) {
+        let rdi = GP::Rdi.a64().0; // x4
+        let rax = GP::Rax.a64().0; // x0
+        let exit = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x(rax), (TRUE_VALUE as u64);
+            mov x9, (0b111u64);
+            and x9, x(rdi), x9;
+            cbnz x9, exit;                                // packed -> frozen
+            ldrb w9, [x(rdi), #(RVALUE_OFFSET_TY as u32)];
+            cmp x9, #(ObjTy::BIGNUM.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            cmp x9, #(ObjTy::FLOAT.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            cmp x9, #(ObjTy::COMPLEX.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            cmp x9, #(ObjTy::RATIONAL.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            ldrh w9, [x(rdi), #(RVALUE_OFFSET_FLAG as u32)];
+            tbnz x9, #(1), exit;                          // FROZEN bit
+            mov x(rax), (FALSE_VALUE as u64);
+        );
+        self.jit.bind_label(exit);
+    }
+
     /// `String#<<` with a Fixnum byte appended in line — the aarch64 twin
     /// of x86 `emit_string_shl`. A byte 0..=127 appends into any encoding;
     /// a byte with the high bit set only into ASCII-8BIT. A frozen/chilled

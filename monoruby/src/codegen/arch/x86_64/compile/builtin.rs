@@ -17,6 +17,36 @@ impl Codegen {
         }
     }
 
+    /// `Object#frozen?`: receiver Value in rdi → rax = true/false Value.
+    /// Mirrors `Value::is_frozen`: packed values and heap Numerics
+    /// (Bignum / Float / Complex / Rational) are always frozen; every other
+    /// heap object tests the header FROZEN bit (bit 1). Chilled strings have
+    /// that bit clear, so they report false, exactly like the builtin.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    pub(crate) fn emit_frozen_pred(&mut self) {
+        let exit = self.jit.label();
+        monoasm! { &mut self.jit,
+            movq rax, (TRUE_VALUE);
+            testq rdi, (0b111);
+            jne  exit;                                   // packed -> frozen
+            movzxb rcx, [rdi + (RVALUE_OFFSET_TY)];
+            cmpb rcx, (ObjTy::BIGNUM.get());
+            jeq  exit;
+            cmpb rcx, (ObjTy::FLOAT.get());
+            jeq  exit;
+            cmpb rcx, (ObjTy::COMPLEX.get());
+            jeq  exit;
+            cmpb rcx, (ObjTy::RATIONAL.get());
+            jeq  exit;
+            testb [rdi + (RVALUE_OFFSET_FLAG)], (0b10);  // FROZEN bit
+            jne  exit;
+            movq rax, (FALSE_VALUE);
+        exit:
+        }
+    }
+
 
     /// `String#getbyte`: receiver String in rdi, fixnum index in rsi →
     /// rax = byte tagged as a fixnum, or nil when the (negative-adjusted)

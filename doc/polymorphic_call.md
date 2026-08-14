@@ -385,3 +385,33 @@ StoreIndex(133)は全て `new_callsite` + `new_callsite_map_entry` で
 
 検証済み: フルスイート green、`Weird#is_a?` 等の第三クラス・
 オーバーライドは CRuby と一致。
+
+## 9. 実装済み: クラス非依存 inline 生成器(PMC 消費 v2、2026-08)
+
+§8 の v1 は集合ガード通過後を **builtin 呼び出し**に固定していた
+(inline 生成器は単一 `recv_class` 前提のため全面スキップ)。v2 は
+「生成コードがレシーバクラスに一切依存しない」生成器だけを型で選別し、
+集合ガードの背後でもインライン発火させる。
+
+- **契約の型強制**: `InlineGenClassIndependent`(`globals.rs`)は
+  `InlineGen` から `ClassId` / `Option<ClassId>` 引数を**持たない**
+  別型。クラスを参照したくても引数に無いので、契約違反はコンパイル
+  エラーになる。`InlineFuncInfo::InlineGenClassIndependent` variant +
+  `define_builtin_inline_func_class_independent` 登録経路を追加。
+- **dispatch**(`compile_method_call`): クラス非依存 variant は
+  `same_target_set_guarded` でも発火。他の variant(`InlineGen`、
+  Float 前提の `CFunc_*`)は従来どおり集合ガード時スキップ。
+- **対象(v2 時点)**: `Kernel#nil?`(値比較のみ)、
+  `object_id` / `__id__`(`Value::id()` のみ)、**`frozen?`(新規
+  インライン、両アーキ `emit_frozen_pred`)**。frozen? の述語は
+  `Value::is_frozen` の鏡写し: 即値→true、ヒープ Numeric
+  (Bignum/Float/Complex/Rational)→true、他は header FROZEN bit
+  (chilled 文字列は bit が落ちているので false)。
+- **対象外のまま**: `is_a?` / `instance_of?` / `respond_to?` 系は
+  静的 recv_class で畳み込む設計なので `InlineGen` のまま(多相
+  サイトでは builtin 呼び出し継続)。動的 ancestor チェック版を書けば
+  対象化できるが別段階。
+
+テスト: `polymorphic_class_independent_inline`(4-way サイトでの
+nil?/frozen?/object_id、frozen? 述語の全表現アーム、warmup 後の
+`frozen?` オーバーライドの deopt)。

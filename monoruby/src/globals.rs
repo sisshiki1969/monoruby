@@ -99,6 +99,21 @@ pub(crate) type InlineGen = dyn Fn(
     Option<ClassId>,
 ) -> bool;
 
+/// Class-independent inline generator: the emitted code depends only on the
+/// receiver's Value representation, never on a statically known receiver (or
+/// argument) class, so the JIT may fire it even behind a polymorphic
+/// class-set guard (`GuardClassIn`), where the receiver's class is not
+/// refined at compile time. The narrower signature — no `ClassId`
+/// parameters at all — enforces that contract by type: a generator that
+/// needs a class cannot be registered through this shape.
+pub(crate) type InlineGenClassIndependent = dyn Fn(
+    &mut jitgen::AbstractState,
+    &mut jitgen::asmir::AsmIr,
+    &crate::jitgen::JitContext,
+    &Store,
+    CallSiteId,
+) -> bool;
+
 /// Universal inline generator that always declines to inline (returns
 /// `false`), so the call site falls back to a normal method call. Used on
 /// aarch64 for builtins whose hand-written inline asm has not been ported yet:
