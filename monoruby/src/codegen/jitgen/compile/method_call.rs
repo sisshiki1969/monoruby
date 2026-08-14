@@ -1291,6 +1291,48 @@ impl AbstractState {
     ///
     /// Set positional and keyword arguments for callee.
     ///
+    /// K1: the per-callee-kw-param caller source slots when this frame's
+    /// deferred literal keywords statically bind to `callee`'s keyword
+    /// declaration: every passed name declared, every required name
+    /// passed, and no `**kwrest` on the callee (a leftover hash would
+    /// need building). `route[i]` feeds callee kw param `i` (at
+    /// `kw_reg_pos() + i`); `None` 0-fills an absent optional keyword so
+    /// the callee prologue runs its default.
+    fn kw_forward_route(
+        &self,
+        _callsite: &CallSiteInfo,
+        callee: &FuncInfo,
+    ) -> Option<Box<[Option<SlotId>]>> {
+        let df = self.deferred_forward_info()?;
+        if callee.kw_rest().is_some() {
+            return None;
+        }
+        let kw_names = callee.kw_names();
+        let Some((_, kw_pos, names)) = df.kw.as_ref() else {
+            // The caller passed no keywords at all: routable iff every
+            // callee keyword is optional — an all-None route 0-fills
+            // them so their defaults run. (A required keyword must
+            // raise, which only the generic path does.)
+            if (0..kw_names.len()).any(|i| callee.kw_is_required(i)) {
+                return None;
+            }
+            return Some(vec![None; kw_names.len()].into_boxed_slice());
+        };
+        if !names.iter().all(|n| kw_names.contains(n)) {
+            return None;
+        }
+        let route: Box<[Option<SlotId>]> = kw_names
+            .iter()
+            .map(|pn| names.iter().position(|n| n == pn).map(|idx| *kw_pos + idx))
+            .collect();
+        for (i, r) in route.iter().enumerate() {
+            if callee.kw_is_required(i) && r.is_none() {
+                return None;
+            }
+        }
+        Some(route)
+    }
+
     fn set_arguments(
         &mut self,
         store: &Store,
@@ -1418,7 +1460,20 @@ impl AbstractState {
             // fill kw rest param.
             if let Some(kw_rest) = callee.kw_rest() {
                 let ofs = stack_offset - (LFP_SELF + kw_rest.0 as i32 * 8);
-                self.fetch_kwrest_for_callee(ir, rest_kw, ofs);
+                if defer_rest && !rest_kw.is_empty() {
+                    // K1: the specialized trampoline body source-routed
+                    // these literal keywords straight from our slots;
+                    // store the same GC-safe `nil` the deferred rest
+                    // gets. Spill the kw window first so it is
+                    // memory-resident for the routed reads and for a
+                    // deopt-time Hash rebuild (`forward_kwrest`
+                    // write-back), exactly as the deferred rest spills
+                    // its positional window.
+                    self.write_back_range(ir, kw_pos, kw_num as u16);
+                    ir.u64torsp_offset(NIL_VALUE, ofs);
+                } else {
+                    self.fetch_kwrest_for_callee(ir, rest_kw, ofs);
+                }
             }
 
             ir.reg_add(GP::Rsp, stack_offset);
@@ -1466,7 +1521,15 @@ impl AbstractState {
             // what preserves ruby2_keywords (see `forwarded_fast_path_ok`
             // in runtime/args.rs, which this mirrors); a `...` forward
             // always carries the `**kwrest` hash-splat.
-            && (callee.no_keyword() || (callee.kw_names().is_empty() && callsite.kw_may_exists()))
+            //
+            // K1: a callee that *declares* keywords is also allowed when
+            // the frame's deferred literal keywords statically bind to
+            // that declaration (`kw_forward_route`); the deferred match
+            // below couples the routing with the rest source-routing.
+            && (callee.no_keyword()
+                || (callee.kw_names().is_empty() && callsite.kw_may_exists())
+                || (callsite.kw_may_exists()
+                    && self.kw_forward_route(callsite, callee).is_some()))
             // A block-style callee auto-splats a lone Array argument
             // (`single_arg_expand`); the direct fills below do not model
             // that, so leave those to the generic path — matching the
@@ -1492,6 +1555,24 @@ impl AbstractState {
             let args = callsite.args;
             let lead_num = callsite.pos_num - 1;
             let kwrest_guard = callsite.hash_splat_pos.first().copied();
+            // K1: the deferred literal keywords' static binding to the
+            // callee declaration (None when the frame defers no keywords
+            // or they don't bind; the arm gate only admits a
+            // kw-declaring callee in the bound case).
+            let kw_route = self.kw_forward_route(callsite, callee);
+            // A deferral carrying keywords routes them together with the
+            // rest window or not at all: the routed reads go straight to
+            // the caller frame, which is only sound while the caller-side
+            // skip (one flag covers the array and the hash) is in force.
+            // The routed keywords must come through this callsite's own
+            // `**kwrest` hash-splat slot.
+            let deferred_kw_ok =
+                match self.deferred_forward_info().and_then(|df| df.kw.as_ref()) {
+                    None => true,
+                    Some((kwrest_local, _, _)) => {
+                        kw_route.is_some() && kwrest_guard == Some(*kwrest_local)
+                    }
+                };
             // D1: if `f`'s `...` rest array was deferred at frame entry,
             // route the copy straight from the caller's source slots.
             // Only when the forwarded arity statically binds to `g`'s
@@ -1514,7 +1595,8 @@ impl AbstractState {
                         let n = lead_num + len as usize;
                         callee.req_num() <= n
                             && (callee.is_rest() || n <= callee.reqopt_num())
-                    } && kwrest_guard.is_some() =>
+                    } && kwrest_guard.is_some()
+                        && deferred_kw_ok =>
                 {
                     ir.set_deferred_rest();
                     Some((src, len))
@@ -1523,7 +1605,7 @@ impl AbstractState {
                     // Not source-routed (slot/arity/kwrest mismatch):
                     // this forwarding consume reads `f`'s rest slot as a
                     // real `Array`, so veto the caller-side skip.
-                    if self.deferred_rest_tuple().is_some() {
+                    if self.deferred_forward_info().is_some() {
                         ir.set_needs_rest_array();
                     }
                     None
@@ -1531,7 +1613,7 @@ impl AbstractState {
             };
             self.write_back_recv_and_callargs(ir, callsite);
             if deferred_src.is_some() {
-                // D1 cannot fail: the gate proved the fill layout is a
+                // D1/K1 cannot fail: the gate proved the fill layout is a
                 // compile-time constant, so the lowering has no length
                 // guard, no fallback, and no call that can raise. Emit it
                 // without an error side exit — a `HandleError` here would
@@ -1545,7 +1627,15 @@ impl AbstractState {
                     lead_num,
                     kwrest_guard,
                     deferred_src,
+                    kw_route,
                 });
+            } else if !callee.kw_names().is_empty() {
+                // K1 admitted a kw-declaring callee but the deferral did
+                // not activate: the keywords live in the real kwrest
+                // Hash, which only the generic path binds.
+                let error = ir.new_error(self);
+                ir.push(AsmInst::SetArguments { callid, callee_fid });
+                ir.handle_error(error);
             } else {
                 let error = ir.new_error(self);
                 if callee.opt_num() != 0 || callee.is_rest() || !callee.no_keyword() {
@@ -1566,6 +1656,7 @@ impl AbstractState {
                         lead_num,
                         kwrest_guard,
                         deferred_src,
+                        kw_route: None,
                     });
                 }
                 ir.handle_error(error);
@@ -1608,7 +1699,7 @@ impl AbstractState {
             // taking the generic path.
             // Array-path forwarding consume (callee with opt/post/rest):
             // it reads `f`'s rest slot as a real `Array`.
-            if self.deferred_rest_tuple().is_some() {
+            if self.deferred_forward_info().is_some() {
                 ir.set_needs_rest_array();
             }
             self.write_back_recv_and_callargs(ir, callsite);
@@ -1649,6 +1740,7 @@ impl AbstractState {
                 lead_num: callsite.pos_num - 1,
                 kwrest_guard: None,
                 deferred_src: None,
+                kw_route: None,
             });
             ir.handle_error(error);
         } else {
@@ -1657,7 +1749,7 @@ impl AbstractState {
             // a leading-arg forward like `File.read(@path, ...)`) reads
             // `f`'s rest slot as a real `Array` via the runtime
             // `jit_generic_set_arguments`, so veto the skip.
-            if callsite.forwarding && self.deferred_rest_tuple().is_some() {
+            if callsite.forwarding && self.deferred_forward_info().is_some() {
                 ir.set_needs_rest_array();
             }
             self.write_back_recv_and_callargs(ir, callsite);

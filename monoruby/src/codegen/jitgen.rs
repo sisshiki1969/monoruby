@@ -156,6 +156,13 @@ pub(crate) struct WriteBack {
     /// frame copy) reads the rest local, so the array must be built
     /// here from the source slots and stored into `dst`.
     forward_rest: Vec<(SlotId, SlotId, u16)>,
+    /// Deferred forwarding-kwrest materialization (K1). Each entry
+    /// `(dst, [(name, caller slot)])`: the `**kwrest` slot `dst` of a
+    /// forwarding-trampoline frame was *not* materialized as a Hash on
+    /// the fast path (the caller passed only literal keywords, routed
+    /// straight to the forwarded callee); a side exit rebuilds the Hash
+    /// from the caller's kw slots via `correct_rest_kw`.
+    forward_kwrest: Vec<(SlotId, Box<[(IdentId, SlotId)]>)>,
 }
 
 impl Hash for WriteBack {
@@ -182,6 +189,13 @@ impl Hash for WriteBack {
             src.hash(state);
             len.hash(state);
         }
+        for (dst, table) in &self.forward_kwrest {
+            dst.hash(state);
+            for (name, slot) in table.iter() {
+                name.hash(state);
+                slot.hash(state);
+            }
+        }
     }
 }
 
@@ -206,6 +220,9 @@ impl std::fmt::Debug for WriteBack {
         for (dst, src, len) in &self.forward_rest {
             s.push_str(&format!(" fwdrest[{:?};{}]->{:?}", src, len, dst));
         }
+        for (dst, table) in &self.forward_kwrest {
+            s.push_str(&format!(" fwdkwrest[{:?}]->{:?}", table, dst));
+        }
         write!(f, "WriteBack({})", s)
     }
 }
@@ -217,6 +234,7 @@ impl WriteBack {
         void: Vec<SlotId>,
         gp: Vec<(GP, SlotId)>,
         forward_rest: Vec<(SlotId, SlotId, u16)>,
+        forward_kwrest: Vec<(SlotId, Box<[(IdentId, SlotId)]>)>,
     ) -> Self {
         Self {
             fpr,
@@ -224,6 +242,7 @@ impl WriteBack {
             void,
             gp,
             forward_rest,
+            forward_kwrest,
         }
     }
 }
@@ -939,6 +958,37 @@ impl JitModule {
         // addressed `r14`-relative like every other deopt restore.
         for (dst, src, len) in wb.forward_rest.clone() {
             self.gen_forward_rest_materialize(dst, src, len);
+        }
+        // K1: materialize deferred `**kwrest` Hashes after the rest
+        // arrays (each helper call may allocate; every not-yet-written
+        // deferred slot still physically holds the `nil` the caller
+        // stored, so the frame stays GC-consistent throughout).
+        for (dst, table) in wb.forward_kwrest.clone() {
+            self.gen_forward_kwrest_materialize(dst, &table);
+        }
+    }
+
+    /// K1: rebuild a deferred `**kwrest` Hash from the caller's kw
+    /// slots and store it into `dst` (the trampoline's kwrest local).
+    /// Same caller addressing as `gen_forward_rest_materialize`; the
+    /// caller `Lfp` handed to `correct_rest_kw` is derived from the
+    /// saved caller rbp (`lfp == rbp - RBP_LOCAL_FRAME` in every JIT
+    /// frame).
+    fn gen_forward_kwrest_materialize(&mut self, dst: SlotId, table: &[(IdentId, SlotId)]) {
+        let data = self.const_align8();
+        for (name, slot) in table {
+            self.const_i32(name.get() as i32);
+            self.const_i32(slot.0 as i32);
+        }
+        self.const_i32(0);
+        self.const_i32(0);
+        monoasm! { self,
+            movq rsi, [rbp];
+            subq rsi, (RBP_LOCAL_FRAME);
+            lea  rdi, [rip + data];
+            movq rax, (runtime::correct_rest_kw);
+            call rax;
+            movq [r14 - (conv(dst))], rax;
         }
     }
 

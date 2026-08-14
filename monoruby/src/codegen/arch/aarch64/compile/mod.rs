@@ -370,6 +370,42 @@ impl Codegen {
         for (dst, src, len) in wb.forward_rest.clone() {
             self.a64_gen_forward_rest_materialize(dst, src, len);
         }
+        // K1: materialize deferred `**kwrest` Hashes after the rest
+        // arrays (each helper call may allocate; every not-yet-written
+        // deferred slot still physically holds the `nil` the caller
+        // stored, so the frame stays GC-consistent throughout).
+        for (dst, table) in wb.forward_kwrest.clone() {
+            self.a64_gen_forward_kwrest_materialize(dst, &table);
+        }
+    }
+
+    /// K1: rebuild a deferred `**kwrest` Hash from the caller's kw slots
+    /// for an interpreter resuming inside the trampoline frame. Twin of
+    /// x86 `gen_forward_kwrest_materialize`: the caller `Lfp` handed to
+    /// `correct_rest_kw` is derived from the caller frame pointer saved
+    /// at `[x29]` (`lfp == fp - RBP_LOCAL_FRAME` in every JIT frame).
+    fn a64_gen_forward_kwrest_materialize(&mut self, dst: SlotId, table: &[(IdentId, SlotId)]) {
+        let lfp = GP::R14.a64().0; // x22
+        let data = self.jit.const_align8();
+        for (name, slot) in table {
+            self.jit.const_i32(name.get() as i32);
+            self.jit.const_i32(slot.0 as i32);
+        }
+        self.jit.const_i32(0);
+        self.jit.const_i32(0);
+        let f = runtime::correct_rest_kw as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            ldr x1, [x29];                     // caller fp
+            mov x9, (RBP_LOCAL_FRAME as u64);
+            sub x1, x1, x9;                    // caller lfp
+            adr x0, data;                      // &table
+            str x30, [sp, #-16]!;              // save LR
+            mov x9, (f);
+            blr x9;                            // x0 = kwrest Hash
+            ldr x30, [sp], #16;                // restore LR
+            mov x12, x0;
+        );
+        self.a64_frame_store(12, lfp, conv(dst) as u32);
     }
 
     /// Rebuild a deferred `...` rest `Array` for an interpreter resuming inside
@@ -2717,6 +2753,7 @@ impl Codegen {
                 lead_num,
                 kwrest_guard,
                 deferred_src,
+                kw_route,
             } => {
                 let offset = store[callee_fid].get_offset();
                 // D1 source-routed: the whole bind is a compile-time
@@ -2725,8 +2762,12 @@ impl Codegen {
                     Some((src, len)) => {
                         let layout = store[callee_fid]
                             .forwarded_deferred_layout(lead_num, len as usize);
+                        // K1: pair the routed caller slots with the
+                        // callee's kw register base.
+                        let kw_route =
+                            kw_route.map(|route| (store[callee_fid].kw_reg_pos(), route));
                         self.a64_set_arguments_forwarded_deferred(
-                            offset, recv, args, lead_num, src, layout,
+                            offset, recv, args, lead_num, src, layout, kw_route,
                         )
                     }
                     // Eager (rest Array materialized): the callee is req-only
@@ -2735,6 +2776,10 @@ impl Codegen {
                     // fixed req count minus the leading args. Inline the
                     // array-copy fast path with a helper fallback.
                     None => {
+                        // The eager path never routes keywords (a
+                        // kw-declaring callee is only admitted with an
+                        // active deferral).
+                        assert!(kw_route.is_none());
                         let expected_len = store[callee_fid].req_num() - lead_num;
                         self.a64_set_arguments_forwarded_eager(
                             callid,

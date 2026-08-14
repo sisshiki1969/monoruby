@@ -1558,6 +1558,13 @@ pub(super) enum AsmInst {
         /// guarding `f`'s rest `Array`. No fallback (the structural gate
         /// guarantees exact arity and a nil forwarded `**kwrest`).
         deferred_src: Option<(SlotId, u16)>,
+        /// K1: per-callee-kw-param caller source slots when the
+        /// trampoline's deferred literal keywords statically bind to the
+        /// callee's declaration. `route[i]` is the caller slot feeding
+        /// callee kw param `i` (at `kw_reg_pos() + i`), or `None` for an
+        /// absent optional keyword (0-filled; the callee prologue runs
+        /// its default). Only ever `Some` together with `deferred_src`.
+        kw_route: Option<Box<[Option<SlotId>]>>,
     },
 
     ///
