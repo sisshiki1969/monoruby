@@ -3,7 +3,9 @@ use monoruby::tests::*;
 
 #[test]
 fn require() {
-    run_test(
+    // C::D is the fixture's __FILE__ (absolute checkout path): host-dependent,
+    // so verify against a live CRuby, not the oracle.
+    run_test_live(
         r#"
         require File.expand_path("a")
         C::D
@@ -25,7 +27,8 @@ fn require_bundler_resolves_host_copy() {
 
 #[test]
 fn require_relative() {
-    run_test(
+    // Host-dependent (absolute checkout path) — live CRuby.
+    run_test_live(
         r#"
         require File.expand_path("./b")
         C::D
@@ -35,7 +38,8 @@ fn require_relative() {
 
 #[test]
 fn load() {
-    run_test(
+    // Host-dependent (absolute checkout path) — live CRuby.
+    run_test_live(
         r#"
         load "b.rb"
         load "b.rb"
@@ -62,7 +66,8 @@ fn load_priv() {
 
 #[test]
 fn module_autoload() {
-    run_test(
+    // Host-dependent (absolute checkout path) — live CRuby.
+    run_test_live(
         r#"
         class C
           autoload :D, File.expand_path("j")
@@ -204,7 +209,9 @@ fn autoload_const_source_location() {
 // referenced`.
 #[test]
 fn autoload_private_constant_carries_through_load() {
-    run_test_once(
+    // autoload?(:Bar) reports the registered absolute path — host-dependent,
+    // so verify against a live CRuby, not the oracle.
+    run_test_once_live(
         r#"
         # `c.rb` defines `Foo::Bar = 20`. Register it as an autoload
         # under `Foo` and immediately mark it private. After the

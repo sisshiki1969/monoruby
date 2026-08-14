@@ -587,10 +587,14 @@ impl Value {
 }
 
 impl Value {
-    /// This function is only used for system assertion.
-    pub(crate) fn assert_eq(store: &Store, lhs: Self, rhs: Self) {
+    /// Structural equality as used by the differential test harness: bit
+    /// equality, sign/payload-insensitive NaN equality, or deep RValue
+    /// comparison. Non-panicking; [`Self::assert_eq`] builds on it, and the
+    /// snapshot-oracle heal path in `tests.rs` uses it to decide whether a
+    /// stored entry disagrees with monoruby's own result.
+    pub(crate) fn test_eq(store: &Store, lhs: Self, rhs: Self) -> bool {
         if lhs == rhs {
-            return;
+            return true;
         }
         // NaNs of any sign/payload count as equal for assertion purposes:
         // e.g. x86's 0.0/0.0 yields a negative quiet NaN while a
@@ -599,17 +603,19 @@ impl Value {
             && a.is_nan()
             && b.is_nan()
         {
-            return;
+            return true;
         }
         match (lhs.try_rvalue(), rhs.try_rvalue()) {
-            (Some(lhs), Some(rhs)) => {
-                if RValue::eq(store, lhs, rhs) {
-                    return;
-                }
-            }
-            _ => {}
+            (Some(lhs), Some(rhs)) => RValue::eq(store, lhs, rhs),
+            _ => false,
         }
-        panic!("{} != {}", lhs.inspect(store), rhs.inspect(store))
+    }
+
+    /// This function is only used for system assertion.
+    pub(crate) fn assert_eq(store: &Store, lhs: Self, rhs: Self) {
+        if !Self::test_eq(store, lhs, rhs) {
+            panic!("{} != {}", lhs.inspect(store), rhs.inspect(store))
+        }
     }
 }
 

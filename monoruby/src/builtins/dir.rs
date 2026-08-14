@@ -1216,7 +1216,8 @@ mod tests {
     fn dir_pwd_binary_names() {
         // mkdir/chdir/pwd round-trip raw non-ASCII bytes; pwd tags the
         // result UTF-8 when it decodes.
-        run_test_once(
+        // /tmp resolves through /private on macOS — live CRuby.
+        run_test_once_live(
             r##"(base="/tmp/mono_pwd_#{Process.pid}"; Dir.mkdir(base); name="#{base}/あ".dup.force_encoding(Encoding::BINARY); Dir.mkdir(name); r=Dir.chdir(name) { [Dir.pwd.encoding.name, Dir.pwd.force_encoding("binary") == name] }; Dir.rmdir(name); Dir.rmdir(base); r)"##,
         );
     }
@@ -1235,7 +1236,9 @@ mod tests {
         // Dir.home(user) via getpwnam (+ ArgumentError for an unknown user),
         // Dir.foreach's no-block Enumerator (size == nil), Dir.fchdir's tagged
         // SystemCallError message, and the trailing `**` glob == `*` behaviour.
-        run_test_once(
+        // Dir.home("root") is OS-dependent (/root on Linux, /var/root on
+        // macOS): verify against a live CRuby, not the oracle.
+        run_test_once_live(
             r##"(a=Dir.home("root"); b=(begin; Dir.home("no_such_user_zzq"); rescue => e; e.class; end); c=Dir.foreach("/").is_a?(Enumerator); d=Dir.foreach("/").size; e2=(begin; Dir.fchdir(-1); rescue => x; [x.class, x.message]; end); f=(Dir.glob("**").sort==Dir.glob("*").sort); [a,b,c,d,e2,f])"##,
         );
     }
@@ -1316,14 +1319,17 @@ mod tests {
 
     #[test]
     fn home() {
-        run_test(r#"Dir.home"#);
+        // Host-dependent value: verify against a live CRuby, not the oracle.
+        run_test_live(r#"Dir.home"#);
     }
 
     #[test]
     fn pwd() {
-        run_test(r#"Dir.pwd"#);
-        run_test(r#"Dir.getwd"#);
-        run_test(
+        // Host-dependent values (absolute cwd paths): verify against a live
+        // CRuby, not the oracle.
+        run_test_live(r#"Dir.pwd"#);
+        run_test_live(r#"Dir.getwd"#);
+        run_test_live(
             r##"
         $x = []
         $x << Dir.getwd
@@ -1501,7 +1507,8 @@ mod tests {
 
     #[test]
     fn dir_inst_chdir_with_block() {
-        run_test_once(
+        // Dir.pwd inside /tmp differs on macOS (/private/tmp) — live CRuby.
+        run_test_once_live(
             r##"
             before = Dir.pwd
             d = Dir.new("/tmp")
@@ -1530,7 +1537,8 @@ mod tests {
 
     #[test]
     fn dir_fchdir() {
-        run_test_once(
+        // Dir.pwd inside /tmp differs on macOS (/private/tmp) — live CRuby.
+        run_test_once_live(
             r##"
             before = Dir.pwd
             d = Dir.new("/tmp")

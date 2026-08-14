@@ -18,3 +18,6 @@ coverage_html
 rustc-ice-*.txt
 # nextest scratch files (TMPDIR=.tmp); the tracked .tmp/suite.log is kept
 .tmp/.tmp*
+# ruby-oracle side files (the .tsv itself is tracked)
+monoruby/tests/ruby_oracle.tsv.lock
+monoruby/tests/ruby_oracle.tsv.tmp

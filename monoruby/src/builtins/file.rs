@@ -3161,7 +3161,8 @@ mod tests {
     fn file_expand_path_slashes_and_tilde() {
         // Leading slash runs survive verbatim, interior runs squeeze,
         // ~user expands via getpwnam, mid-path ~ stays literal.
-        run_test_once(
+        // ~root is OS-dependent (/root vs /var/root) — live CRuby.
+        run_test_once_live(
             r##"[File.expand_path("////some/path"), File.expand_path("//some/path"), File.expand_path("/some////path"), File.expand_path("/a/./b/../c//d/"), File.expand_path("~root/x"), File.expand_path("/~root/a"), File.expand_path("a", "/"), File.expand_path("../../bin", "/tmp/x"), (begin; File.expand_path("~no_such_user_zzq"); rescue => e; [e.class, e.message]; end)]"##,
         );
     }
@@ -3171,7 +3172,8 @@ mod tests {
         // dir/file/../ resolves lexically (no ENOTDIR); a missing
         // intermediate component reports CRuby's realpath error message;
         // a self-referential symlink is ELOOP.
-        run_test_once(
+        // /tmp resolves through /private on macOS — live CRuby.
+        run_test_once_live(
             r##"(d="/tmp/mono_rp_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/file", ""); a=(File.realpath("#{d}/file/../")==d); b=(begin; File.realpath("/no_such_dir_zzq/x"); rescue => e; [e.class, e.message]; end); File.symlink("#{d}/self", "#{d}/self"); c=(begin; File.realpath("#{d}/self"); rescue => e; e.class; end); c2=(begin; File.realdirpath("#{d}/self"); rescue => e; e.class; end); File.unlink("#{d}/self"); File.unlink("#{d}/file"); Dir.rmdir(d); [a,b,c,c2])"##,
         );
     }
@@ -3180,7 +3182,8 @@ mod tests {
     fn file_realdirpath_dangling_symlinks() {
         // The final component may be absent; a dangling symlink resolves
         // to its (absent) target; a missing intermediate dir is ENOENT.
-        run_test_once(
+        // /tmp resolves through /private on macOS — live CRuby.
+        run_test_once_live(
             r##"(d="/tmp/mono_rdp_#{Process.pid}"; Dir.mkdir(d); a=(File.realdirpath("#{d}/missing") == "#{d}/missing"); File.symlink("#{d}/absent_file", "#{d}/link"); b=(File.realdirpath("#{d}/link") == "#{d}/absent_file"); c=(begin; File.realdirpath("#{d}/no_dir/file"); rescue => e; [e.class, e.message.sub(d, "")]; end); File.unlink("#{d}/link"); Dir.rmdir(d); [a, b, c])"##,
         );
     }
@@ -3361,9 +3364,11 @@ mod tests {
 
     #[test]
     fn expand_path() {
-        run_test(r##"File.expand_path("..")"##);
+        // ".." (cwd) and "~" (HOME) are host-dependent: verify against a
+        // live CRuby, not the oracle.
+        run_test_live(r##"File.expand_path("..")"##);
         run_test(r##"File.expand_path("..", "/tmp")"##);
-        run_test(r##"File.expand_path("~")"##);
+        run_test_live(r##"File.expand_path("~")"##);
     }
 
     #[test]
@@ -3434,11 +3439,13 @@ mod tests {
 
     #[test]
     fn realpath() {
-        run_test(r##"File.realpath(".")"##);
-        run_test(r##"File.realpath("./../../../")"##);
-        run_test(r##"File.realpath("../monoruby")"##);
-        run_test(r##"File.realpath("..", "/tmp")"##);
-        run_test(r##"File.realpath("tmp", "/")"##);
+        // All host/OS-dependent (cwd-relative, and /tmp resolves through the
+        // /private symlink on macOS): verify against a live CRuby.
+        run_test_live(r##"File.realpath(".")"##);
+        run_test_live(r##"File.realpath("./../../../")"##);
+        run_test_live(r##"File.realpath("../monoruby")"##);
+        run_test_live(r##"File.realpath("..", "/tmp")"##);
+        run_test_live(r##"File.realpath("tmp", "/")"##);
     }
 
     #[test]
