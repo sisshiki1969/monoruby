@@ -152,10 +152,11 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<CompileResult> {
         match kind {
             // These ops are always compiled as method calls.
-            // The inline function registered on Integer#<< / Integer#>> /
-            // Integer#| / Integer#& / Integer#^ / Integer#** / Integer#% /
-            // Float#** / Float#% handles code generation using both-side class
-            // info from the BinOp inline cache.
+            // The InlineGen registered on Integer#<< / Integer#>> /
+            // Integer#** / Integer#% / Float#** / Float#% handles code
+            // generation using both-side class info from the BinOp inline
+            // cache (Integer#| / #& / #^ moved to the binary-generator
+            // direct-fire arm below).
             BinOpK::Shl | BinOpK::Shr | BinOpK::Exp | BinOpK::Rem => {
                 // Dispatched through `call_binary_method`. No flush here: a
                 // register-only inline (e.g. `Integer#<<`) reads its operands
