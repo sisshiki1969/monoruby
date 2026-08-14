@@ -11,7 +11,15 @@ use std::process::Command;
 /// the install root actually points at an installed `v<version>` tree.
 fn require_json(install_root: Option<&str>) -> std::process::Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_monoruby"));
-    cmd.args(["-e", r#"require "json"; puts JSON.generate({"ok" => 1})"#]);
+    // `json` comes from the install root's `lib/`, not from a gem, so the
+    // rubygems boot — most of a spawn's startup cost — is skipped. It also
+    // keeps the bogus-root case failing on the `require` under test rather
+    // than on rubygems' own load.
+    cmd.args([
+        "--disable=gems",
+        "-e",
+        r#"require "json"; puts JSON.generate({"ok" => 1})"#,
+    ]);
     if let Some(root) = install_root {
         cmd.env("MONORUBY_INSTALL_ROOT", root);
     } else {

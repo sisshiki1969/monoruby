@@ -3237,6 +3237,10 @@ fn toplevel_return_argument_warns() {
     drop(f);
     for bin in ["ruby", env!("CARGO_BIN_EXE_monoruby")] {
         let out = std::process::Command::new(bin)
+            // The script needs no gem, and both interpreters take the
+            // flag — skipping the rubygems boot is most of a spawn's
+            // startup cost.
+            .arg("--disable=gems")
             .arg(&script)
             .output()
             .unwrap();

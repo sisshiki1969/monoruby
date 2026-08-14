@@ -8,7 +8,9 @@ use std::process::Command;
 fn run_both(script: &str) {
     let mono = Command::new(env!("CARGO_BIN_EXE_monoruby"))
         .env_remove("RUBYOPT")
-        .args(["-e", script])
+        // Same flags as the `ruby` side below: no gem is needed for these
+        // scripts, and the rubygems boot is most of a spawn's startup cost.
+        .args(["--disable=gems", "-e", script])
         .output()
         .unwrap();
     let ruby = Command::new("ruby")

@@ -344,6 +344,10 @@ fn require_removes_loaded_feature_on_failure() {
 #[test]
 fn unloadable_program_file_prints_loaderror() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
+        // The failure happens before the program file is even opened, so
+        // no gem is involved — skip the rubygems boot, which is most of a
+        // spawn's startup cost.
+        .arg("--disable=gems")
         .arg("/no/such/monoruby_program.rb")
         .output()
         .unwrap();
@@ -356,6 +360,7 @@ fn unloadable_program_file_prints_loaderror() {
 
     // A directory is not loadable either (CRuby: `Is a directory -- ...`).
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
+        .arg("--disable=gems")
         .arg("/etc")
         .output()
         .unwrap();
