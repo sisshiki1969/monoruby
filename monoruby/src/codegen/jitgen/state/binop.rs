@@ -65,43 +65,7 @@ impl AbstractFrame {
         Some((lhs, rhs))
     }
 
-    pub(in crate::codegen::jitgen) fn check_concrete_i64_cmpbr(
-        &mut self,
-        lhs: SlotId,
-        rhs: SlotId,
-        kind: CmpKind,
-        brkind: BrKind,
-        dest_bb: BasicBlockId,
-    ) -> Option<CompileResult> {
-        if let Some((lhs, rhs)) = self.check_concrete_i64(lhs, rhs) {
-            let b = cmp(kind, lhs, rhs) ^ (brkind == BrKind::BrIfNot);
-            return Some(if b {
-                CompileResult::Branch(dest_bb)
-            } else {
-                CompileResult::Continue
-            });
-        }
-        None
-    }
 
-    pub(in crate::codegen::jitgen) fn check_concrete_f64_cmpbr(
-        &mut self,
-        lhs: SlotId,
-        rhs: SlotId,
-        kind: CmpKind,
-        brkind: BrKind,
-        dest_bb: BasicBlockId,
-    ) -> Option<CompileResult> {
-        if let Some((lhs, rhs)) = self.check_binary_C_f64(lhs, rhs) {
-            let b = cmp(kind, lhs, rhs) ^ (brkind == BrKind::BrIfNot);
-            return Some(if b {
-                CompileResult::Branch(dest_bb)
-            } else {
-                CompileResult::Continue
-            });
-        }
-        None
-    }
 
     fn binop_integer_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<Immediate> {
         match kind {

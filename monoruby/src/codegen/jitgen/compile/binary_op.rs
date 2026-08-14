@@ -1,4 +1,5 @@
 use crate::bytecodegen::BinOpK;
+use crate::executor::inline::InlineFuncInfo;
 
 use super::*;
 
@@ -83,39 +84,60 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// [`AbstractState::binop_type`], demoted to the method-call
-    /// classification when the operator its fast path would inline has been
-    /// replaced.
+    /// Attempt guard-free inline emission of `lhs_class#op` at this binop /
+    /// comparison site through the registered binary inline generator.
     ///
-    /// Both fast paths compute with the *receiver's* operator semantics — the
-    /// integer path for `Integer op Integer`, the fpr path for `Float op
-    /// Float` and for the mixed pairs (`1 + 2.0` is `Integer#+` with a Float
-    /// argument, and computes in xmm without ever consulting `Float#+`). So
-    /// the invariant to check, and to record, is the one belonging to `lhs`.
+    /// Returns `None` when the method doesn't resolve, has no binary
+    /// generator, the basic-op license is gone (redefinition / refinement in
+    /// scope), or the generator declined — the caller falls back to the
+    /// ordinary path. **No class-version guard and no receiver-slot guard**
+    /// are emitted: soundness comes from the recorded bop_dep (redefinition
+    /// evicts every dependent body via `set_bop_redefine`), and the operand
+    /// guards are emitted by the generator itself, only for operands not
+    /// already proven (`gp_ensure` / the float-load discipline). The dep is
+    /// recorded only when the generator emitted (`Done`) or folded
+    /// (`Folded` — a fold bakes in the builtin's semantics just the same),
+    /// so a declined generator leaves no spurious dependency.
     ///
-    fn binop_type_checked(
+    /// Visibility is deliberately not consulted, matching the ad-hoc fast
+    /// paths this replaces (the interpreter's fast paths don't consult it
+    /// either).
+    ///
+    #[allow(clippy::too_many_arguments)]
+    fn fire_binary_inline(
         &mut self,
-        state: &AbstractState,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
         op: IdentId,
         lhs: SlotId,
         rhs: SlotId,
-        ic: Option<(ClassId, ClassId)>,
-    ) -> BinaryOpType {
-        let ty = state.binop_type(lhs, rhs, ic);
-        if let BinaryOpType::Other(..) = ty {
-            return ty;
+        lhs_class: ClassId,
+        rhs_class: Option<ClassId>,
+        bc_pos: BcIndex,
+        mode: BinaryInlineMode,
+    ) -> Option<BinaryInlineOutcome> {
+        let (fid, _visibility) = self.jit_check_method(lhs_class, op)?;
+        let InlineFuncInfo::InlineGenBinary(f) = self.store.inline_info.get_inline(fid)? else {
+            return None;
+        };
+        if !self.basic_op_assumable(lhs_class, op) {
+            return None;
         }
-        let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
-        match lhs_class {
-            Some(class) if !self.assume_basic_op(class, op) => {
-                // Redefined: take the ordinary call instead, which the
-                // class-version guard protects. Every other operator in this
-                // body keeps its inline path.
-                BinaryOpType::Other(lhs_class, rhs_class)
+        // Every binop / cmp instruction carries a callsite (only RescueTEq
+        // doesn't, and that opcode never reaches these dispatchers).
+        let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
+        debug_assert_eq!(self.store[callid].recv, lhs);
+        debug_assert_eq!(self.store[callid].args, rhs);
+        debug_assert!(self.store[callid].block_fid.is_none());
+        match self.inline_asm_binary(state, ir, f, callid, lhs_class, rhs_class, mode) {
+            BinaryInlineOutcome::Declined => None,
+            outcome => {
+                self.record_bop_dep(lhs_class, op);
+                Some(outcome)
             }
-            _ => ty,
         }
     }
+
 
     pub(super) fn binary_op(
         &mut self,
@@ -148,49 +170,44 @@ impl<'a> JitContext<'a> {
                     ),
                 }
             }
-            _ => match self.binop_type_checked(state, kind.into(), lhs, rhs, ic) {
-                BinaryOpType::Integer(l, r) => {
-                    // Both the constant fold (`100 * 100` -> 10000) and the
-                    // register fast-path's inline arithmetic assume the builtin
-                    // operator with no per-op runtime guard. A basic-op
-                    // redefinition is instead handled method-wide by
-                    // `set_bop_redefine`, identically on both arches: compiled
-                    // method entries are reverted (x86 `apply_jmp_patch_address`
-                    // to `vm_entry`; aarch64 dispatch-slot zeroing in
-                    // `invalidate_jit_code`), the VM's `loop_start` handler is
-                    // swapped for the no-opt one so stale OSR loop bodies are
-                    // never re-entered, and on-stack frames deopt on return via
-                    // `immediate_eviction`'s return-address patching (both
-                    // arches; see `emit_call`). A `def` executed *inside* JIT
-                    // code is caught by the `check_bop` after
-                    // `MethodDef`/`SingletonMethodDef`.
-                    state.binop_integer(ir, kind, dst, l, r);
-                    Ok(CompileResult::Continue)
-                }
-                BinaryOpType::Float(info) => {
-                    // The fpr path computes in xmm: it never touches the GP
-                    // allocatable registers and never allocates (a flonum result
-                    // stays in an FPReg; boxing is deferred to a later write-back,
-                    // which flushes GP itself), and its deopt write-back already
-                    // re-homes the GP residents. So the residents survive a flush.
-                    // A GP-resident operand (the integer side of a mixed op) is
-                    // read straight from its register by the fpr load (see
-                    // `load_fpr_fixnum`); `dst`'s stale resident is dropped by the
-                    // result `def`.
-                    state.binop_float(ir, kind, dst, info);
-                    Ok(CompileResult::Continue)
-                }
-                BinaryOpType::Other(None, _) => {
+            _ => {
+                let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+                let Some(lhs_class) = lhs_class else {
                     // Recompiles (deopts) — its write-back re-homes the residents.
-                    Ok(self.binop_uncached(state, dst))
+                    return Ok(self.binop_uncached(state, dst));
+                };
+                // The binary inline generator (`Integer#+`'s fixnum path,
+                // `Float#+`'s xmm path, the mixed pairs) emits the constant
+                // fold or the register fast path with no per-op runtime
+                // guard. A basic-op redefinition is instead handled
+                // method-wide by `set_bop_redefine`, identically on both
+                // arches: compiled method entries are reverted (x86
+                // `apply_jmp_patch_address` to `vm_entry`; aarch64
+                // dispatch-slot zeroing in `invalidate_jit_code`), the VM's
+                // `loop_start` handler is swapped for the no-opt one so
+                // stale OSR loop bodies are never re-entered, and on-stack
+                // frames deopt on return via `immediate_eviction`'s
+                // return-address patching (both arches; see `emit_call`). A
+                // `def` executed *inside* JIT code is caught by the
+                // `check_bop` after `MethodDef`/`SingletonMethodDef`.
+                if let Some(BinaryInlineOutcome::Done) = self.fire_binary_inline(
+                    state,
+                    ir,
+                    kind.into(),
+                    lhs,
+                    rhs,
+                    lhs_class,
+                    rhs_class,
+                    bc_pos,
+                    BinaryInlineMode::Value,
+                ) {
+                    return Ok(CompileResult::Continue);
                 }
-                BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                    // Any C-ABI call flushes at its `get_using_fpr` chokepoint.
-                    self.call_binary_method(
-                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
-                    )
-                }
-            },
+                // Any C-ABI call flushes at its `get_using_fpr` chokepoint.
+                self.call_binary_method(
+                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, false,
+                )
+            }
         }
     }
 
@@ -206,45 +223,44 @@ impl<'a> JitContext<'a> {
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        match self.binop_type_checked(state, kind.into(), lhs, rhs, ic) {
-            BinaryOpType::Integer(l, r) => {
-                state.gen_cmp_integer(ir, kind, dst, l, r);
-                Ok(CompileResult::Continue)
-            }
-            BinaryOpType::Float(info) => {
-                // The float comparison computes in xmm and stores a bool: it
-                // never touches the GP allocatable registers and never allocates,
-                // and its deopt write-back re-homes the GP residents. The
-                // residents survive; a GP-resident operand (the integer side of a
-                // mixed compare) is read straight from its register by the fpr
-                // load (see `load_fpr_fixnum`), and `dst`'s stale resident is
-                // dropped by the result `def`.
-                state.gen_cmp_float(ir, dst, info, kind);
-                Ok(CompileResult::Continue)
-            }
-            BinaryOpType::Other(None, _) => {
-                Ok(CompileResult::Recompile(RecompileReason::NotCached))
-            }
-            BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                state.flush_gp(ir);
-                if polymorphic {
-                    let is_func_call = self
-                        .store
-                        .get_callsite_id(self.iseq_id(), bc_pos)
-                        .is_some_and(|c| self.store[c].is_func_call());
-                    self.emit_generic_cmp(state, ir, kind, lhs, rhs, false, is_func_call);
-                    state.def_rax2acc(ir, dst);
-                    Ok(CompileResult::Continue)
-                } else {
-                    // Monomorphic compile (POLY not yet set). Make the
-                    // recv-class guard recompile-on-miss so the site
-                    // flips to the generic path once the VM observes
-                    // class variance (Part B).
-                    self.call_binary_method(
-                        state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
-                    )
-                }
-            }
+        let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+        let Some(lhs_class) = lhs_class else {
+            return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+        };
+        // The comparison generators compute in GP / xmm without touching the
+        // C ABI: the GP residents survive (a mixed compare's integer operand
+        // is read straight from its register by the fpr load), and `dst`'s
+        // stale resident is dropped by the result `def`. `TEq` resolves
+        // `===` — on Integer an alias of `==`, on Float a distinct FuncId
+        // with the Eq generator — so `case`-style compares inline too.
+        if let Some(BinaryInlineOutcome::Done) = self.fire_binary_inline(
+            state,
+            ir,
+            kind.into(),
+            lhs,
+            rhs,
+            lhs_class,
+            rhs_class,
+            bc_pos,
+            BinaryInlineMode::Value,
+        ) {
+            return Ok(CompileResult::Continue);
+        }
+        state.flush_gp(ir);
+        if polymorphic {
+            let is_func_call = self
+                .store
+                .get_callsite_id(self.iseq_id(), bc_pos)
+                .is_some_and(|c| self.store[c].is_func_call());
+            self.emit_generic_cmp(state, ir, kind, lhs, rhs, false, is_func_call);
+            state.def_rax2acc(ir, dst);
+            Ok(CompileResult::Continue)
+        } else {
+            // Monomorphic compile (POLY not yet set). Make the
+            // recv-class guard recompile-on-miss so the site
+            // flips to the generic path once the VM observes
+            // class variance (Part B).
+            self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true)
         }
     }
 
@@ -314,90 +330,98 @@ impl<'a> JitContext<'a> {
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        match state.binop_type(lhs, rhs, ic) {
-            BinaryOpType::Integer(l, r) => {
-                if let Some(result) = state.check_concrete_i64_cmpbr(l, r, kind, brkind, dest_bb) {
-                    return Ok(result);
-                }
+        let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+        let Some(lhs_class) = lhs_class else {
+            state.flush_gp(ir);
+            return Ok(CompileResult::Recompile(RecompileReason::NotCached));
+        };
+        // Fused compare-and-branch through the binary inline generator. The
+        // fixnum form guards + compares + branches in GP registers; the
+        // float form flushes and compares in xmm (both block terminators
+        // spill dirty residents before the branch). A both-operands-constant
+        // compare comes back as `Folded` and the branch resolves statically
+        // — no code, and an orphaned `dest` label is never resolved. This
+        // path now checks the basic-op license and records the bop_dep
+        // (via `fire_binary_inline`), which the old raw-`binop_type` arm
+        // skipped: a fused `while i < n` loop compiled before a later
+        // `Integer#<` redefinition is now evicted like every other form.
+        let dest = self.label();
+        match self.fire_binary_inline(
+            state,
+            ir,
+            kind.into(),
+            lhs,
+            rhs,
+            lhs_class,
+            rhs_class,
+            bc_pos,
+            BinaryInlineMode::CmpBr { brkind, dest },
+        ) {
+            Some(BinaryInlineOutcome::Done) => {
+                // Side-branch bookkeeping stays with the caller; the state is
+                // cloned *after* emission so both successors see the operand
+                // refinements (`refine_S_fixnum`) the guards established.
                 let src_idx = bc_pos + 1;
-                let dest = self.label();
-                state.gen_cmpbr_integer(ir, kind, l, r, brkind, dest);
                 self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
-                Ok(CompileResult::Continue)
+                return Ok(CompileResult::Continue);
             }
-            BinaryOpType::Float(info) => {
-                if let Some(result) =
-                    state.check_concrete_f64_cmpbr(lhs, rhs, kind, brkind, dest_bb)
-                {
-                    return Ok(result);
+            Some(BinaryInlineOutcome::Folded(b)) => {
+                return Ok(if b ^ (brkind == BrKind::BrIfNot) {
+                    CompileResult::Branch(dest_bb)
+                } else {
+                    CompileResult::Continue
+                });
+            }
+            Some(BinaryInlineOutcome::Declined) | None => {}
+        }
+        state.flush_gp(ir);
+        if polymorphic {
+            let is_func_call = self
+                .store
+                .get_callsite_id(self.iseq_id(), bc_pos)
+                .is_some_and(|c| self.store[c].is_func_call());
+            self.emit_generic_cmp(state, ir, kind, lhs, rhs, true, is_func_call);
+            let src_idx = bc_pos + 1;
+            self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
+            return Ok(CompileResult::Continue);
+        }
+        // Monomorphic compile (POLY not yet set): recompile
+        // on recv-class-guard miss so the site flips to the
+        // generic path once class variance is observed.
+        let res =
+            self.call_binary_method(state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true)?;
+        if let CompileResult::Continue = res {
+            state.unset_class_version_guard();
+            state.unset_const_version_guard();
+            // An inline gen may have resolved the comparison to a
+            // state-known constant (e.g. `String == nil` folds to
+            // `false` under the gen's class guards, LinkMode::C on
+            // the callsite dst). The trailing branch must then be
+            // resolved statically, exactly like `TraceIr::CondBr`
+            // does — emitting a dynamic CondBr here would read a
+            // result from rax that no code ever produced.
+            let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
+            let dst = self.store[callid].dst;
+            if let Some(dst) = dst
+                && state.is_truthy(dst)
+            {
+                if brkind == BrKind::BrIf {
+                    return Ok(CompileResult::Branch(dest_bb));
                 }
-                // Block terminator: spill the GP residents to their homes before
-                // the branch. This also makes a mixed integer operand's home
-                // current for the float compare's stack read.
-                state.flush_gp(ir);
+                // BrIfNot on a truthy value: branch statically dead.
+            } else if let Some(dst) = dst
+                && state.is_falsy(dst)
+            {
+                if brkind == BrKind::BrIfNot {
+                    return Ok(CompileResult::Branch(dest_bb));
+                }
+                // BrIf on a falsy value: branch statically dead.
+            } else {
                 let src_idx = bc_pos + 1;
-                let dest = self.label();
-                let mode = state.load_binary_fpr(ir, info);
-                ir.float_cmp_br(mode, kind, brkind, dest);
-                self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
-                Ok(CompileResult::Continue)
-            }
-            BinaryOpType::Other(None, _) => {
-                state.flush_gp(ir);
-                Ok(CompileResult::Recompile(RecompileReason::NotCached))
-            }
-            BinaryOpType::Other(Some(lhs_class), rhs_class) => {
-                state.flush_gp(ir);
-                if polymorphic {
-                    let is_func_call = self
-                        .store
-                        .get_callsite_id(self.iseq_id(), bc_pos)
-                        .is_some_and(|c| self.store[c].is_func_call());
-                    self.emit_generic_cmp(state, ir, kind, lhs, rhs, true, is_func_call);
-                    let src_idx = bc_pos + 1;
-                    self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
-                    return Ok(CompileResult::Continue);
-                }
-                // Monomorphic compile (POLY not yet set): recompile
-                // on recv-class-guard miss so the site flips to the
-                // generic path once class variance is observed.
-                let res = self.call_binary_method(
-                    state, ir, lhs, rhs, lhs_class, rhs_class, kind, bc_pos, true,
-                )?;
-                if let CompileResult::Continue = res {
-                    state.unset_class_version_guard();
-                    state.unset_const_version_guard();
-                    // An inline gen may have resolved the comparison to a
-                    // state-known constant (e.g. `String == nil` folds to
-                    // `false` under the gen's class guards, LinkMode::C on
-                    // the callsite dst). The trailing branch must then be
-                    // resolved statically, exactly like `TraceIr::CondBr`
-                    // does — emitting a dynamic CondBr here would read a
-                    // result from rax that no code ever produced.
-                    let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
-                    let dst = self.store[callid].dst;
-                    if let Some(dst) = dst
-                        && state.is_truthy(dst)
-                    {
-                        if brkind == BrKind::BrIf {
-                            return Ok(CompileResult::Branch(dest_bb));
-                        }
-                        // BrIfNot on a truthy value: branch statically dead.
-                    } else if let Some(dst) = dst
-                        && state.is_falsy(dst)
-                    {
-                        if brkind == BrKind::BrIfNot {
-                            return Ok(CompileResult::Branch(dest_bb));
-                        }
-                        // BrIf on a falsy value: branch statically dead.
-                    } else {
-                        let src_idx = bc_pos + 1;
-                        self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
-                    }
-                }
-                Ok(res)
+                self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
             }
         }
+        Ok(res)
     }
 }
 
@@ -594,6 +618,153 @@ mod tests {
                 p = big + 2
                 q = big + 5
                 res << p << q << big
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn fused_cmpbr_bop_redefinition_evicts() {
+        // Regression for the license hole the generator dispatch closed: the
+        // fused compare-and-branch (`while i < n`) used to inline `Integer#<`
+        // WITHOUT recording a bop_dep, so a post-warmup redefinition left the
+        // compiled loop computing the builtin compare. Now the fused form
+        // records the dep like every other spelling and the body is evicted.
+        run_test_once(
+            r##"
+            def count(n)
+              i = 0
+              c = 0
+              while i < n
+                c += 1
+                i += 1
+              end
+              c
+            end
+            a = []
+            40.times { a << count(20) }
+            class Integer
+              def <(other) = false
+            end
+            a << count(20)
+            a
+        "##,
+        );
+    }
+
+    #[test]
+    fn explicit_send_operator_parity() {
+        // The explicit-send spelling fires the same binary generators through
+        // compile_method_call (class-version + receiver guards emitted there).
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def drive
+              res = []
+              j = 0
+              while j < 30
+                res << 1.+(2)
+                res << 5.-(2)
+                res << 3.|(5)
+                res << 4.&(6)
+                res << 7.^(3)
+                res << 2.0./(4)
+                res << 1.==(1)
+                res << 2.0.<(1)
+                res << 2.!=(2)
+                res << 3.>=(3.0)
+                res << 1.===(1)
+                res << 3.7.===(3.7)
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn mixed_numeric_pairs() {
+        // Integer-op-Float and Float-op-Integer through the generators: the
+        // arithmetic kinds compute in xmm (the old binop_type mixed collapse,
+        // now explicit per method), comparisons in both value and fused form.
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def m(a, b)
+              [a + b, a - b, a * b, a / b, a < b, a <= b, a == b, a != b, (a > b ? 1 : 0)]
+            end
+            def drive
+              res = []
+              j = 0
+              while j < 30
+                res << m(1, 2.0)
+                res << m(2.0, 1)
+                res << m(3, 4)
+                res << m(2.5, 1.5)
+                j = j + 1
+              end
+              res
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn float_rhs_bitop_is_method_call() {
+        // `1.0 | 2` used to classify as a Float binop (the binop_type mixed
+        // collapse) and reach a per-arch `unreachable!` in the FloatBinOp
+        // lowering. The bitwise generators decline a Float rhs, so the site
+        // takes the ordinary method call and raises NoMethodError like CRuby.
+        run_test_once(
+            r##"
+            r = 0
+            20.times do
+              begin
+                r = 1 | 2
+                1.0 | 2
+              rescue NoMethodError
+                r += 1
+              end
+            end
+            r
+        "##,
+        );
+    }
+
+    #[test]
+    fn case_when_numeric_teq_inline() {
+        // case/when dispatches `===` on the `when` literal (the optimizable
+        // TEq form): Integer#=== is an alias of `==`, Float#=== a distinct
+        // FuncId with the Eq generator — both inline through the fused path.
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            def c(x)
+              case x
+              when 1 then :a
+              when 2.5 then :b
+              when 3 then :c
+              else :d
+              end
+            end
+            def drive
+              res = []
+              j = 0
+              while j < 30
+                res << c(1)
+                res << c(2.5)
+                res << c(3)
+                res << c(:sym)
                 j = j + 1
               end
               res

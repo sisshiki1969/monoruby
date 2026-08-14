@@ -1269,11 +1269,6 @@ impl<'a> JitContext<'a> {
     }
 }
 
-enum BinaryOpType {
-    Integer(SlotId, SlotId),
-    Float(FBinOpInfo),
-    Other(Option<ClassId>, Option<ClassId>),
-}
 
 impl AbstractState {
     fn binary_class(
@@ -1295,25 +1290,4 @@ impl AbstractState {
         (lhs_class, rhs_class)
     }
 
-    fn binop_type(&self, lhs: SlotId, rhs: SlotId, ic: Option<(ClassId, ClassId)>) -> BinaryOpType {
-        let (lhs_class, rhs_class) = self.binary_class(lhs, rhs, ic);
-        if let (Some(lhs_class), Some(rhs_class)) = (lhs_class, rhs_class) {
-            match (lhs_class, rhs_class) {
-                (INTEGER_CLASS, INTEGER_CLASS) => {
-                    return BinaryOpType::Integer(lhs, rhs);
-                }
-                (INTEGER_CLASS | FLOAT_CLASS, INTEGER_CLASS | FLOAT_CLASS) => {
-                    let info = FBinOpInfo {
-                        lhs,
-                        rhs,
-                        lhs_class: lhs_class.into(),
-                        rhs_class: rhs_class.into(),
-                    };
-                    return BinaryOpType::Float(info);
-                }
-                _ => {}
-            }
-        }
-        BinaryOpType::Other(lhs_class, rhs_class)
-    }
 }
