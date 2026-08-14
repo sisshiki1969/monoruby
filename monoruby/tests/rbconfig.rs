@@ -11,6 +11,10 @@ extern crate monoruby;
 // reproducible in CI (where a host Ruby is installed).
 #[test]
 fn rbconfig_prefix_falls_back_to_install_root() {
+    // One of the few spawns that deliberately keeps the rubygems boot
+    // (every other integration test passes `--disable=gems`): the
+    // regression is about what rubygems resolves `RbConfig`'s prefix to,
+    // so booting it is the point.
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
         .env("MONORUBY_GEM_PATH", "")
         .arg("-e")

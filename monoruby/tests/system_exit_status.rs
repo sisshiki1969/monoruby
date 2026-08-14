@@ -7,7 +7,9 @@ use std::process::Command;
 fn exit_code(script: &str) -> Option<i32> {
     Command::new(env!("CARGO_BIN_EXE_monoruby"))
         .env_remove("RUBYOPT")
-        .args(["-e", script])
+        // No gem is needed here, so skip the rubygems boot (see
+        // `hash_seed.rs`) — it is most of a spawn's startup cost.
+        .args(["--disable=gems", "-e", script])
         .output()
         .expect("spawn monoruby")
         .status

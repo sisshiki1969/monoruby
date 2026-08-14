@@ -22,7 +22,11 @@ const SIGUSR1: i32 = 10;
 const SIGUSR1: i32 = 30;
 
 fn monoruby() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_monoruby"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_monoruby"));
+    // No gem is needed here, so skip the rubygems boot (see
+    // `hash_seed.rs`) — it is most of a spawn's startup cost.
+    cmd.arg("--disable=gems");
+    cmd
 }
 
 /// A trapped, self-delivered SIGUSR1 runs the Ruby handler at the next

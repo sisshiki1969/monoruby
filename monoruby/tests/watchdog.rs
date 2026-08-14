@@ -9,7 +9,12 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 fn monoruby() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_monoruby"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_monoruby"));
+    // No gem is needed here, so skip the rubygems boot (see
+    // `hash_seed.rs`) — it is most of a spawn's startup cost, and the
+    // watchdog budget below is measured against wall-clock.
+    cmd.arg("--disable=gems");
+    cmd
 }
 
 /// A non-allocating infinite loop never reaches the GC poll point, so an

@@ -281,7 +281,7 @@ pub struct Executor {
     /// immediately after, on every arch and in both tiers) has it, so
     /// the location is recorded there.
     pending_const_loc: Option<(ClassId, IdentId)>,
-    /// Stack of definition sites (`file`, `line`) for the
+    /// Stack of definition sites (source, `Loc`) for the
     /// `method_added` / `singleton_method_added` / `const_added` hooks
     /// currently running.
     ///
@@ -292,7 +292,13 @@ pub struct Executor {
     /// enclosing body's own line instead. The backtrace walk consults
     /// this for the first frame whose pc it cannot resolve, which is
     /// exactly that invoker boundary.
-    hook_sites: Vec<(String, u32)>,
+    ///
+    /// The site is kept unresolved (an `Rc` clone and two `usize`s)
+    /// rather than as a formatted path and line: a site is pushed for
+    /// *every* `def` executed but is only ever read by
+    /// `caller_locations`, so resolving it eagerly charged the file/line
+    /// lookup to every definition in the program.
+    hook_sites: Vec<(SourceInfoRef, Loc)>,
     temp_stack: Vec<Value>,
     /// How the method_missing dispatch currently being set up was
     /// called. Consumed (read-and-cleared) by the default
@@ -2372,10 +2378,7 @@ impl Executor {
             .and_then(|func_id| globals.store[func_id].is_iseq())
             .map(|iseq| {
                 let info = &globals.store[iseq];
-                (
-                    crate::globals::display_path(&info.sourceinfo).into_owned(),
-                    info.sourceinfo.get_line(&info.loc) as u32,
-                )
+                (info.sourceinfo.clone(), info.loc)
             });
         let pushed = pushed.is_some_and(|site| {
             self.hook_sites.push(site);
@@ -2616,8 +2619,10 @@ impl Executor {
     }
 
     /// The definition site of the innermost `method_added`-style hook
-    /// currently running, if any. See [`Self::hook_sites`].
-    pub(crate) fn hook_site(&self) -> Option<&(String, u32)> {
+    /// currently running, if any. Unresolved: the caller turns it into a
+    /// file and a line only if the backtrace walk actually needs it. See
+    /// [`Self::hook_sites`].
+    pub(crate) fn hook_site(&self) -> Option<&(SourceInfoRef, Loc)> {
         self.hook_sites.last()
     }
 

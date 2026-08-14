@@ -10,6 +10,11 @@ fn monoruby(script: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_monoruby"))
         .env_remove("RUBYOPT")
         .env_remove("RUBYLIB")
+        // No gem is needed here, so skip the rubygems boot — the same
+        // `--disable=gems` the in-process harness (`Globals::new_test`)
+        // and the reference-CRuby spawns already run with. It is most of
+        // a spawn's startup cost.
+        .arg("--disable=gems")
         .arg("-e")
         .arg(script)
         .output()

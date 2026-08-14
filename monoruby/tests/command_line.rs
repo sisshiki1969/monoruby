@@ -12,6 +12,12 @@ fn monoruby() -> Command {
     cmd.env_remove("RUBYOPT")
         .env_remove("RUBYLIB")
         .env_remove("RUBYPATH");
+    // None of the switches under test needs a gem, so skip the rubygems
+    // boot — it is most of a spawn's startup cost, and this file spawns
+    // the binary a few dozen times. It goes in first so a test's own
+    // switches still come after it (and can still override it: the
+    // `--enable`/`--disable` parsing tests append their own).
+    cmd.arg("--disable=gems");
     cmd
 }
 

@@ -11,7 +11,12 @@ use std::io::Write;
 use std::process::Command;
 
 fn monoruby() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_monoruby"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_monoruby"));
+    // The libraries required below are local temp files, never gems, so
+    // skip the rubygems boot (see `hash_seed.rs`) — it is most of a
+    // spawn's startup cost.
+    cmd.arg("--disable=gems");
+    cmd
 }
 
 /// Write `body` to a uniquely-named file under the system temp dir and

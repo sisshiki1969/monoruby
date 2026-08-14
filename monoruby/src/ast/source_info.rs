@@ -33,6 +33,59 @@ impl Line {
     }
 }
 
+/// Byte offset of every line top in the source, ascending, so that a
+/// position → line-number answer is a binary search rather than a scan
+/// from the top of the file.
+///
+/// `line_tops[0]` is always 0, and each `'\n'` at byte *p* contributes
+/// *p + 1*; index *i* therefore holds the top of line *i + 1*. Built once
+/// per `SourceInfo`, which is immutable after construction.
+///
+/// The scan it replaces was quadratic in aggregate: [`SourceInfo::get_line`]
+/// is called once per `def` executed (`Executor::invoke_method_added`), per
+/// class body entered, and per constant store, so loading the ~10k lines of
+/// `builtins/*.rb` at every interpreter boot re-walked those files ~1200
+/// times — about 30% of startup.
+#[derive(Clone, PartialEq)]
+struct LineTops(Vec<usize>);
+
+impl LineTops {
+    fn new(code: &str) -> Self {
+        // A `'\n'` byte cannot occur inside a multi-byte UTF-8 sequence
+        // (continuation bytes are all >= 0x80), so scanning bytes finds
+        // exactly the newlines `char_indices()` would.
+        let mut tops = Vec::with_capacity(code.len() / 24 + 1);
+        tops.push(0);
+        tops.extend(
+            code.as_bytes()
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| **b == b'\n')
+                .map(|(pos, _)| pos + 1),
+        );
+        Self(tops)
+    }
+
+    /// 1-based number of the line holding byte *pos*. A `'\n'` belongs to
+    /// the line it terminates.
+    fn line_no(&self, pos: usize) -> usize {
+        self.0.partition_point(|&top| top <= pos)
+    }
+
+    /// Number of `'\n'` in the source.
+    fn newlines(&self) -> usize {
+        self.0.len() - 1
+    }
+}
+
+/// Printed as a summary: the offsets themselves are noise in the debug
+/// output of an error or an iseq, and there is one per line of the file.
+impl std::fmt::Debug for LineTops {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LineTops({} lines)", self.0.len())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceInfo {
     /// directory path of the source code.
@@ -54,6 +107,10 @@ pub struct SourceInfo {
     /// Stored verbatim as written in the source so consumers can
     /// resolve aliases through their own normaliser.
     pub source_encoding: Option<String>,
+    /// Line-start index over `code`, built at construction. Private, so
+    /// the only way to build a `SourceInfo` stays the constructors below
+    /// and the index can never disagree with `code`.
+    line_tops: LineTops,
     /// Value of the `# frozen_string_literal:` magic comment, if present
     /// (`None` = not specified → string literals are mutable, Ruby's
     /// default). When `Some(true)`, every string literal in the file is a
@@ -79,6 +136,7 @@ impl SourceInfo {
         SourceInfo {
             path: path.into(),
             absolute_path: None,
+            line_tops: LineTops::new(&code),
             code,
             line_offset: 0,
             source_encoding: None,
@@ -104,6 +162,7 @@ impl SourceInfo {
         SourceInfo {
             path: path.into(),
             absolute_path: None,
+            line_tops: LineTops::new(&code),
             code,
             line_offset,
             source_encoding: None,
@@ -126,32 +185,13 @@ impl SourceInfo {
     }
 
     pub fn get_line(&self, loc: &Loc) -> i64 {
+        // A position past the end of the source reports the *last* line
+        // rather than one past it — the shape a `Loc` synthesised at EOF
+        // (an unterminated construct) needs.
         if loc.0 >= self.code.len() {
-            return self
-                .code
-                .char_indices()
-                .filter_map(|(pos, ch)| if ch == '\n' { Some(pos) } else { None })
-                .count() as i64
-                + self.line_offset;
+            return self.line_tops.newlines() as i64 + self.line_offset;
         }
-        let mut line_top = 0;
-        self.code
-            .char_indices()
-            .filter_map(|(pos, ch)| if ch == '\n' { Some(pos) } else { None })
-            .enumerate()
-            .map(|(idx, pos)| {
-                let top = line_top;
-                line_top = pos + 1;
-                Line::new(idx + 1, top, pos)
-            })
-            .find_map(|line| {
-                if line.end >= loc.0 && line.top <= loc.0 {
-                    Some(line.line_no as i64 + self.line_offset)
-                } else {
-                    None
-                }
-            })
-            .unwrap()
+        self.line_tops.line_no(loc.0) as i64 + self.line_offset
     }
 
     /// Get file name.
@@ -257,6 +297,74 @@ impl SourceInfo {
 
 fn text_width(s: &str) -> usize {
     console::measure_text_width(s) + s.chars().filter(|c| c == &'\t').count() * 7
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The scan [`SourceInfo::get_line`] used to perform, kept as the
+    /// oracle the binary search is checked against.
+    fn get_line_by_scan(info: &SourceInfo, loc: &Loc) -> i64 {
+        if loc.0 >= info.code.len() {
+            return info
+                .code
+                .char_indices()
+                .filter_map(|(pos, ch)| if ch == '\n' { Some(pos) } else { None })
+                .count() as i64
+                + info.line_offset;
+        }
+        let mut line_top = 0;
+        info.code
+            .char_indices()
+            .filter_map(|(pos, ch)| if ch == '\n' { Some(pos) } else { None })
+            .enumerate()
+            .map(|(idx, pos)| {
+                let top = line_top;
+                line_top = pos + 1;
+                Line::new(idx + 1, top, pos)
+            })
+            .find_map(|line| {
+                if line.end >= loc.0 && line.top <= loc.0 {
+                    Some(line.line_no as i64 + info.line_offset)
+                } else {
+                    None
+                }
+            })
+            .unwrap()
+    }
+
+    /// Every byte offset of a few awkward sources — an empty file, one
+    /// with blank lines, one with multi-byte characters (a `'\n'` byte
+    /// never occurs inside a UTF-8 sequence, which is what lets the
+    /// index scan bytes), one without a trailing newline, and an eval'd
+    /// one carrying a `line_offset` — must answer exactly what the scan
+    /// answered, including one position past the end.
+    #[test]
+    fn get_line_matches_the_scan_it_replaced() {
+        for (code, line_offset) in [
+            ("", 0),
+            ("\n", 0),
+            ("\n\n\n", 0),
+            ("a", 0),
+            ("a\nbb\n\nccc\n", 0),
+            ("a\nbb\n\nccc", 0),
+            ("日本語\nと\n改行\n", 0),
+            ("# コメント\ndef f(x) = x + 1\nf(2)\n", 0),
+            ("a\nbb\nccc\n", 41),
+            ("a\nbb\nccc\n", -1),
+        ] {
+            let info = SourceInfo::new_eval("(test)", code, line_offset);
+            for pos in 0..=info.code.len() {
+                let loc = Loc(pos, pos);
+                assert_eq!(
+                    get_line_by_scan(&info, &loc),
+                    info.get_line(&loc),
+                    "code {code:?}, offset {line_offset}, pos {pos}"
+                );
+            }
+        }
+    }
 }
 
 impl SourceInfo {

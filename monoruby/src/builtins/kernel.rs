@@ -1362,10 +1362,13 @@ fn caller_frames(
                     // invoker boundary the hook was dispatched across: the
                     // definition site it carries is this frame's line.
                     .or_else(|| {
-                        hook_site.take().filter(|(file, _)| {
-                            *file == crate::globals::display_path(&info.sourceinfo)
-                        })
-                        .map(|(_, line)| line as i64)
+                        hook_site
+                            .take()
+                            .filter(|(source, _)| {
+                                crate::globals::display_path(source)
+                                    == crate::globals::display_path(&info.sourceinfo)
+                            })
+                            .map(|(source, loc)| source.get_line(&loc))
                     })
                     .unwrap_or_else(|| info.sourceinfo.get_line(&info.loc));
                 Some((info.sourceinfo.clone(), line))
