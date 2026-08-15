@@ -1602,6 +1602,7 @@ impl<T: GCBox> Allocator<T> {
     /// is still in the root set. Used only to report the ancestry the
     /// deferral cut out of the backtrace when marking reaches a dead cell.
     ///
+    #[coverage(off)] // only read from the abort path, uncoverable in-test
     pub(crate) fn mark_referrer(&self) -> Option<std::ptr::NonNull<T>> {
         self.mark_scanning
     }

@@ -814,37 +814,44 @@ impl RValue {
     }
 }
 
+///
+/// A dead object reached from a root means a stale edge somewhere in the
+/// root set — abort like the old `assert!`, but dump the object header
+/// and the mark chain first so a rare failure in CI (see issue #950)
+/// identifies the offending root path.
+///
+#[cold]
+#[coverage(off)] // crash handler: aborts the process, uncoverable in-test
+fn dead_rvalue_abort(dead: &RValue, alloc: &alloc::Allocator<RValue>) -> ! {
+    eprintln!(
+        "DEAD RVALUE reached in mark: {:p} meta={:?}",
+        dead as *const _,
+        unsafe { dead.header.meta }
+    );
+    // The immediate referrer is the `mark_children` frame right below
+    // this one in the backtrace. Print the enclosing *queue* entry too:
+    // the walk defers deep children to the mark queue, which cuts the
+    // ancestry above that entry out of the backtrace. "root set" means
+    // the walk never left the roots — the stale edge is in one of them
+    // (an unrooted temporary in a builtin, a stale frame slot), not in a
+    // deferred object.
+    match alloc.mark_referrer() {
+        // SAFETY: the entry is the live, marked cell whose children are
+        // being scanned right now.
+        Some(from) => {
+            let from = unsafe { from.as_ref() };
+            eprintln!("  scanning from: {:p} ty={:?}", from as *const _, from.ty());
+        }
+        None => eprintln!("  scanning from: root set"),
+    }
+    eprintln!("{}", std::backtrace::Backtrace::force_capture());
+    std::process::abort();
+}
+
 impl alloc::GC<RValue> for RValue {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        // A dead object reached from a root means a stale edge somewhere
-        // in the root set — abort like the old `assert!`, but dump the
-        // object header and the mark chain first so a rare failure in CI
-        // (see issue #950) identifies the offending root path.
         if !self.header.is_live() {
-            eprintln!(
-                "DEAD RVALUE reached in mark: {:p} meta={:?}",
-                self as *const _,
-                unsafe { self.header.meta }
-            );
-            // The immediate referrer is the `mark_children` frame right
-            // below this one in the backtrace. Print the enclosing
-            // *queue* entry too: the walk defers deep children to the
-            // mark queue, which cuts the ancestry above that entry out of
-            // the backtrace. "root set" means the walk never left the
-            // roots — the stale edge is in one of them (an unrooted
-            // temporary in a builtin, a stale frame slot), not in a
-            // deferred object.
-            match alloc.mark_referrer() {
-                // SAFETY: the entry is the live, marked cell whose
-                // children are being scanned right now.
-                Some(from) => {
-                    let from = unsafe { from.as_ref() };
-                    eprintln!("  scanning from: {:p} ty={:?}", from as *const _, from.ty());
-                }
-                None => eprintln!("  scanning from: root set"),
-            }
-            eprintln!("{}", std::backtrace::Backtrace::force_capture());
-            std::process::abort();
+            dead_rvalue_abort(self, alloc);
         }
         if alloc.gc_check_and_mark(self) {
             return;
