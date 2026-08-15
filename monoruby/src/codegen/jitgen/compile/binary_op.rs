@@ -1,7 +1,7 @@
 use crate::bytecodegen::BinOpK;
 use crate::executor::inline::InlineFuncInfo;
 
-use super::*;
+use super::{method_call::PMC_SET_SHARE_DIVISOR, *};
 
 ///
 /// The classes [`JitContext::opt_eq_assumable`] has to clear: every class
@@ -189,7 +189,6 @@ impl<'a> JitContext<'a> {
         }
     }
 
-
     ///
     /// May [`AsmIr::opt_eq_cmp`]'s inline fast path be emitted for *kind*?
     ///
@@ -232,6 +231,168 @@ impl<'a> JitContext<'a> {
             self.record_bop_dep(class, op);
         }
         true
+    }
+
+    ///
+    /// The receiver class a polymorphic comparison site should give its
+    /// *typed* arm: the one the VM observed here that actually has a working
+    /// generator, most observed first.
+    ///
+    /// Deliberately **not** the inline cache's class, for the same reason
+    /// [`index_inline_class`](Self::index_inline_class) is not: the cache
+    /// holds whichever class happened to arrive last, which at an alternating
+    /// site is a coin flip. rubykon's `group_id_of(id) == captured.identifier`
+    /// is the motivating shape — the lhs is an `Array` element, so `Integer`
+    /// on a hit and `NilClass` on a miss — and inlining the `NilClass` side
+    /// would leave every real comparison on the C call.
+    ///
+    /// `None` when no observed class can carry the arm, in which case the
+    /// caller keeps the ordinary (guarded, deopting) path.
+    ///
+    fn cmp_inline_class(&mut self, callid: CallSiteId, op: IdentId) -> Option<ClassId> {
+        let pmc = &self.store[callid].pmc;
+        // Two-arm dispatch only pays off where the site really alternates;
+        // one observed class is the monomorphic guard's case.
+        if pmc.entries().len() < 2 {
+            return None;
+        }
+        let observations = pmc.observations();
+        let mut classes: Vec<(ClassId, u32)> =
+            pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
+        classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
+        // The POLY bit only says the site was *ever* seen with a second
+        // class; it never clears. A site that is one hot class plus a
+        // handful of stragglers is monomorphic in every way that matters,
+        // and dispatching it is a pure loss — the hot class pays an extra
+        // branch on every execution and, worse, gives up its result's type
+        // at the merge, where a register-resident flag becomes a boxed
+        // stack slot. So require the runner-up to be a real share of the
+        // traffic, the same 1/8 the class-set guard demands of its members.
+        // (etanni measured ~2% slower before this test existed.)
+        if classes[1]
+            .1
+            .saturating_mul(PMC_SET_SHARE_DIVISOR)
+            < observations
+        {
+            return None;
+        }
+        classes.into_iter().map(|(class, _)| class).find(|&class| {
+            matches!(
+                self.jit_check_method(class, op)
+                    .and_then(|(fid, _)| self.store.inline_info.get_inline(fid)),
+                Some(InlineFuncInfo::InlineGenBinary(_))
+            )
+            // Same licence the guarded direct-fire path needs: the arm runs
+            // without a class-version guard, so a redefinition has to reach
+            // it through the recorded bop dependency.
+            && self.basic_op_assumable(class, op)
+        })
+    }
+
+    ///
+    /// Answer a polymorphic comparison site with a two-arm dispatch:
+    ///
+    /// ```text
+    ///         br_class_ne rdi, C -> slow
+    ///         <C#op inlined>
+    ///         br merge
+    ///   slow: <cmp_*_values>           (correct for *any* operand pair)
+    ///   merge:
+    /// ```
+    ///
+    /// The point is the missing third option: there is no deopt.
+    ///
+    /// Both halves of this already existed and the dispatcher had to pick
+    /// one. `fire_binary_inline` won, because it is tried first — so a
+    /// polymorphic site got a single-class guard and side-exited on every
+    /// off-class operand, which is rubykon's single largest deopt source
+    /// (1.8M side exits on one `==`). Taking `emit_generic_cmp` instead
+    /// would remove the deopt but put *every* comparison, including the hot
+    /// class's, on a C call. Neither is necessary: guard the hot class into
+    /// its inline arm and let everything else take the C call.
+    ///
+    /// Note that the arm guard is stricter than "the class matches" for
+    /// `Integer`: `guard_class` tests the fixnum tag, so a `Bignum` — class
+    /// `Integer` all the same — falls to the residual arm rather than
+    /// deopting, which is where an overflowed operand wants to go anyway.
+    ///
+    /// Returns `false` (leaving *state* and *ir* untouched) when the site
+    /// does not qualify, so the caller takes the ordinary path.
+    ///
+    #[allow(clippy::too_many_arguments)]
+    fn cmp_dispatch(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        kind: CmpKind,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        rhs: SlotId,
+        rhs_class: Option<ClassId>,
+        case_semantics: bool,
+        bc_pos: BcIndex,
+    ) -> JitResult<bool> {
+        let Some(callid) = self.store.get_callsite_id(self.iseq_id(), bc_pos) else {
+            return Ok(false);
+        };
+        let op: IdentId = kind.into();
+        let Some(inline_class) = self.cmp_inline_class(callid, op) else {
+            return Ok(false);
+        };
+        let is_func_call = self.store[callid].is_func_call();
+
+        let state_save = state.clone();
+        let ir_save = ir.save();
+        let (entry, merge) = self.declare_merge(state, ir, &[lhs, rhs], dst);
+        let slow = self.label();
+
+        // ---- arm 1: the class that can be compared inline.
+        let mut fast = entry.clone();
+        fast.load(ir, lhs, GP::Rdi);
+        ir.push(AsmInst::BrClassNe(GP::Rdi, inline_class, slow));
+        // Reaching the arm *is* the proof, so `fire_binary_inline`'s own
+        // receiver guard sees a state that already knows the class and emits
+        // nothing.
+        fast.guard_class_state(lhs, inline_class);
+        if !matches!(
+            self.fire_binary_inline(
+                &mut fast,
+                ir,
+                op,
+                lhs,
+                rhs,
+                inline_class,
+                rhs_class,
+                bc_pos,
+                BinaryInlineMode::Value,
+            ),
+            Some(BinaryInlineOutcome::Done)
+        ) {
+            // A generator that folded or declined has no arm to be; back the
+            // whole dispatch out and let the caller emit the ordinary form.
+            ir.restore(ir_save);
+            *state = state_save;
+            return Ok(false);
+        }
+        self.end_arm(fast, ir, &merge, true);
+
+        // ---- arm 2: every other operand pair, through the generic helper.
+        ir.push(AsmInst::Label(slow));
+        let mut rest = entry.clone();
+        self.emit_generic_cmp(
+            &mut rest,
+            ir,
+            kind,
+            lhs,
+            rhs,
+            case_semantics,
+            is_func_call,
+        );
+        rest.def_rax2acc(ir, dst);
+        self.end_arm(rest, ir, &merge, false);
+
+        self.bind_merge(state, ir, merge);
+        Ok(true)
     }
 
     pub(super) fn binary_op(
@@ -297,6 +458,16 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+        // A site the VM saw comparing more than one lhs class, whose lhs the
+        // abstract state cannot pin down: dispatch instead of guarding. (A
+        // proven lhs class is monomorphic by construction, whatever the VM
+        // saw at other times.)
+        if polymorphic
+            && state.class(lhs).is_none()
+            && self.cmp_dispatch(state, ir, kind, dst, lhs, rhs, rhs_class, false, bc_pos)?
+        {
+            return Ok(CompileResult::Continue);
+        }
         let Some(lhs_class) = lhs_class else {
             return Ok(CompileResult::Recompile(RecompileReason::NotCached));
         };
@@ -404,6 +575,14 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+        // No two-arm dispatch here, unlike `binary_cmp`. `CondBr` consumes
+        // the accumulator, which a merge does not preserve — the arms would
+        // have to land the flag in a slot and reload it — and the fused form
+        // is the reason this opcode exists. The polymorphic fallback below
+        // (a guard-free generic compare) already never deopts, and the
+        // fused sites are a rounding error in practice: ~24 side exits
+        // across the whole benchmark set, against 1.8M for the plain
+        // `BinCmp` the dispatch does take.
         let Some(lhs_class) = lhs_class else {
             state.flush_gp(ir);
             return Ok(CompileResult::Recompile(RecompileReason::NotCached));
@@ -522,6 +701,94 @@ fn cmp_generic_fn(kind: CmpKind) -> crate::executor::BinaryOpFn {
 mod tests {
     use crate::tests::*;
 
+    /// The shape `cmp_dispatch` exists for: an lhs that alternates between a
+    /// class with a generator and one without, which the old code answered
+    /// with a single-class guard that side-exited on every other execution
+    /// (rubykon's `group_id_of(id) == captured.identifier`, 1.8M deopts).
+    /// The inlined arm must be the *Integer* one even though the inline
+    /// cache holds whichever class arrived last.
+    #[test]
+    fn cmp_dispatch_alternating_nil_and_integer() {
+        run_test(
+            r#"
+            class T
+              def initialize = (@a = [1, 2, nil, 4])
+              def get(i) = @a[i]
+            end
+            def probe(t, i, x) = t.get(i) == x
+            t = T.new
+            res = []
+            600.times { |i| res << probe(t, i % 4, (i % 4) + 1) }
+            [res.tally.sort_by { |k, _| k.to_s }, probe(t, 2, nil), probe(t, 0, 1)]
+            "#,
+        );
+    }
+
+    /// Every comparison kind through the dispatch, not just `==`/`!=` (which
+    /// take the immediate fast path in the residual arm while the others go
+    /// straight to the generic C call).
+    #[test]
+    fn cmp_dispatch_all_kinds() {
+        run_test(
+            r#"
+            vals = [1, 2.5, 3, 4.5]
+            def lt(a, b) = a < b
+            def le(a, b) = a <= b
+            def gt(a, b) = a > b
+            def ge(a, b) = a >= b
+            def ne(a, b) = a != b
+            res = []
+            600.times do |i|
+              a = vals[i % 4]
+              res << [lt(a, 3), le(a, 3), gt(a, 3), ge(a, 3), ne(a, 3)]
+            end
+            res.uniq.sort_by(&:to_s)
+            "#,
+        );
+    }
+
+    /// The residual arm must run *any* receiver, including a user class with
+    /// its own `==`, and must raise from it exactly as the interpreter does.
+    #[test]
+    fn cmp_dispatch_residual_runs_user_code() {
+        run_test_once(
+            r#"
+            class Weird
+              def ==(other) = (other == 7 ? (raise ArgumentError, "no") : :weird)
+            end
+            def probe(a, b) = a == b
+            vals = [1, Weird.new]
+            res = []
+            600.times { |i| res << probe(vals[i % 2], 3) }
+            begin
+              probe(Weird.new, 7)
+            rescue ArgumentError => e
+              res << e.message
+            end
+            res.tally.sort_by { |k, _| k.to_s }
+            "#,
+        );
+    }
+
+    /// The inlined arm is emitted guard-free under the basic-op licence, so a
+    /// later `Integer#==` redefinition has to evict the compiled body through
+    /// the recorded bop dependency.
+    #[test]
+    fn cmp_dispatch_bop_redefinition_evicts() {
+        run_test_once(
+            r#"
+            def probe(a, b) = a == b
+            vals = [1, nil]
+            res = []
+            600.times { |i| res << probe(vals[i % 2], 1) }
+            class Integer
+              def ==(other) = :redefined
+            end
+            [res.tally.sort_by { |k, _| k.to_s }, probe(1, 1), probe(nil, 1)]
+            "#,
+        );
+    }
+
     /// `opt_eq_cmp`'s inline path answers bit-equality for every immediate,
     /// so a redefinition of any of *their* `==` has to evict the body. Before
     /// the licence check this returned the builtin's answer forever: no side
@@ -552,6 +819,23 @@ mod tests {
                 "#
             ));
         }
+    }
+
+    /// A site the VM marked polymorphic that is one hot class plus a rare
+    /// straggler stays on the monomorphic guard — the POLY bit never clears,
+    /// so without a share test every such site would pay the dispatch
+    /// forever. Correctness is identical either way; this pins the shape.
+    #[test]
+    fn cmp_dispatch_declines_effectively_monomorphic() {
+        run_test(
+            r#"
+            def probe(a, b) = a == b
+            res = []
+            probe(nil, 1)
+            2000.times { |i| res << probe(i % 3, 1) }
+            [res.tally.sort_by { |k, _| k.to_s }, probe(nil, 1), probe(1, 1)]
+            "#,
+        );
     }
 
     #[test]

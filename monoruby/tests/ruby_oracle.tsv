@@ -148,6 +148,7 @@
 0a0748b8809f0e8d7f80297870a4da1e	[200000, 0, 999]	a = []\n            200000.times { |i| a << [(i * 7919) % 1000] }\n  
 0a0f30d8ebe55e1e0abe73391dfb071f	[true, true, true, true, 2]	(o=Object.new; def o.to_path; "/tmp/mono_tp_#{Process.pid}"; end; p2=Object.new;
 0a113daaabe1d4a623096c5f5d1b9ad3	"/home/user/monoruby"	File.expand_path("..")
+0a8fcb3472ef6869da4abdbb99763b0d	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
 0aa2fa3cce375400b399c989bb80cc19	[1, 0, 0, 2, 1, 1, 3, 2, 2, 5, 3, 3, 8, 4, 4, 13, 5, 5, 21, 6, 6, 34, 7, 7, 55, 8, 8, 89, 9, 9, 144, 10, 10, 233, 11, 11, 377, 12, 12, 610, 13, 13, 987, 14, 14, 1597, 15, 15]	e = Enumerator.new do |y|\n            a = b = 1\n            loop do\n   
 0abd6eee0fea26b57419ce161524d82a	"Module"	Module.new { using Module.new }.class.to_s
 0abee4f13c81ea36178a7ea1d3967d26	true	Process.getpgid(0) == Process.getpgrp
@@ -283,6 +284,7 @@
 16ddb08d866605796e37d618c1e0275c	false	File.directory?("readme.md")
 16f5223d8b1faedaff984a44eb22a38e	["hi", MarshalUC]	class MarshalUC < String; end\n            # CRuby-produced bytes fo
 16f615066fcccc6076e47f3c46b905fc	[ArgumentError, TypeError]	h = { a: 1 }\n            [\n              (begin; h.to_h { |k, v| [1
+171a85f029945c4899e07045ea531bce	[[[false, 1333], [true, 667]], false, true]	def probe(a, b) = a == b\n            res = []\n            probe(nil
 1734b6bc40227ffa8a335598f1a5f0f2	"[package]\\nname = "	f = File.open("Cargo.toml", "r")\n            f.read(17)\n        
 17360388c4d5caa52af6a98337ba8733	[:thread, :main]	order = []\n            t = Thread.new { order << :thread }\n        
 17505ff21cc36bb3fdb48bc39ea9ddaa	"ff"	class HasToInt; def to_int; 255; end; end\n            sprintf("%x",
@@ -780,6 +782,7 @@
 43ac301501bd4f9ceee646d818f6e415	[:next, :next, :nameerror]	a = Class.new\n            b = Class.new(a)\n            c = Class.ne
 43ccf9c44caf043039162c566a3cf9bd	[4, nil, 7]	a=1\n            x=0\n            b=while a<4 do\n                a=a+
 43cf8f6733d05eaa7ee0c56b3da5cbdf	7074.1	CONST = 5.7\n            sum = 0\n            for i in 0..19 do\n     
+4414dae807897b8e6f7a80f599a5a60d	[[false, 300], ["no", 1], [:weird, 300]]	class Weird\n              def ==(other) = (other == 7 ? (raise Argu
 441632d0adc7cf1139fe425ab23da30c	true	class Integer; alias __orig :<=; def <=(o); __orig(o); end; end; 3 <= 4
 44206b9628b17b33c675e72762330bd5	[true]	io = IO.popen("cat", "r+")\n            res = [io.sync]\n            
 442cc99068d79c4d0b979f548fff9db2	[[[1, 2, 3], {}], [[], {a: 1, b: 2}], [[9], {x: 3}], [[1, 2, 3], {}], [[:rest, :*], [:keyrest, :**]]]	def target(*a, **k); [a, k]; end\n        def d_rest(*); target(*); end\n
@@ -851,6 +854,7 @@
 4806b2df31d1910107eef6e23c081f94	5	def make_counter\n          count = 0\n          inc = Proc.new { count +
 48137d524869d91770282ec59ace6ebb	"US-ASCII"	a = "abc".encode("euc-jp"); /#{a}/.encoding.to_s
 482fe57af7a0767de6479316a00ed916	6	Thread.new(1, 2, 3) { |a, b, c| a + b + c }.value
+4836745e16054f4fe09758474ae9e621	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
 4837dfdc276a86f53941ddafe66cb53b	["hello\\n", "world\\n", "foo\\n"]	path = "/tmp/monoruby_test_foreach_#{Process.pid}"\n            File
 483914fde3cb7dac282cf5c352a29b88	"aXXXX"	class C; def to_str; "bc"; end; end; o = C.new\n"abcbc".gsub(o, "XX")
 483a3a15e1c4f82869da871bda9f29e7	["caught m0", "unmatched n0", "type: class or module required for rescue clause", "caught m1", "unmatched n1", "type: class or module required for rescue clause", "caught m2", "unmatched n2", "type: class or module required for rescue clause", "caught m3", "unmatched n3", "type: class or module required for rescue clause", "caught m4", "unmatched n4", "type: class or module required for rescue clause", "caught m5", "unmatched n5", "type: class or module required for rescue clause", "caught m6", "unmatched n6", "type: class or module required for rescue clause", "caught m7", "unmatched n7", "type: class or module required for rescue clause", "caught m8", "unmatched n8", "type: class or module required for rescue clause", "caught m9", "unmatched n9", "type: class or module required for rescue clause", "caught m10", "unmatched n10", "type: class or module required for rescue clause", "caught m11", "unmatched n11", "type: class or module required for rescue clause", "caught m12", "unmatched n12", "type: class or module required for rescue clause", "caught m13", "unmatched n13", "type: class or module required for rescue clause", "caught m14", "unmatched n14", "type: class or module required for rescue clause", "caught m15", "unmatched n15", "type: class or module required for rescue clause", "caught m16", "unmatched n16", "type: class or module required for rescue clause", "caught m17", "unmatched n17", "type: class or module required for rescue clause", "caught m18", "unmatched n18", "type: class or module required for rescue clause", "caught m19", "unmatched n19", "type: class or module required for rescue clause", "caught m20", "unmatched n20", "type: class or module required for rescue clause", "caught m21", "unmatched n21", "type: class or module required for rescue clause", "caught m22", "unmatched n22", "type: class or module required for rescue clause", "caught m23", "unmatched n23", "type: class or module required for rescue clause", "caught m24", "unmatched n24", "type: class or module required for rescue clause", "caught m25", "unmatched n25", "type: class or module required for rescue clause", "caught m26", "unmatched n26", "type: class or module required for rescue clause", "caught m27", "unmatched n27", "type: class or module required for rescue clause", "caught m28", "unmatched n28", "type: class or module required for rescue clause", "caught m29", "unmatched n29", "type: class or module required for rescue clause"]	def rescue_match(exc_msg, clause)\n          begin\n            begin\n   
@@ -1181,6 +1185,7 @@
 6640768cb0201ad9cc8cdbbc1ff67cd8	42	c = Class.new\n            c.class_exec do\n              define_meth
 664f853aae1b23342a7f3f6347677439	[nil, [:r]]	$clog = []\n            def craise; $clog << :r; raise "x"; end\n    
 666756434f77a17dca0c4a9844a9e4e2	[true, true]	def foo; end\n            def bar; end\n            public :foo, :bar
+667fab9da2a05b848ddd0fd87fbd30d9	[[[false, 300], [true, 300]], :redefined, false]	def probe(a, b) = a == b\n            vals = [1, nil]\n            re
 6689fdb915718c542fa7f92d001dacc0	["inherited:B"]	$res = []\n        class A\n          def self.inherited(subclass)\n      
 66b655e81e48c32825c0aeea0b53995d	[0, 10]	f = File.open("Cargo.toml")\n            begin\n              before 
 66b92d6cfcc69793ed5cdd6b3fb7ad21	3.14	class Foo; def to_int; 2; end; end\n            3.14159.truncate(Foo
@@ -1531,6 +1536,7 @@
 8575d528e7322eae6ebb7d94d1ddbeb9	[10]	def f(r, a = ($x = 10)); 0; end\n        f(9)\n        [$x]\n        
 85931ef34cf7bdff8906a812f59a2891	[101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101, 101]	def bar\n          eval("x += 1", $b)\n        end\n            \n\n        
 85a10f866a98eda982860b346626d872	1.25	Rational(3, 4) + 0.5
+85cad4269edafba954a0e9a9a9833e33	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
 85d3118446d032c5dad2d62a7bcc2938	[true, "interrupt immediate", false]	Thread.handle_interrupt(RuntimeError => :never) do\n              cu
 85db7cb07fda771baf0fc0e15052b278	"method"	defined?(!__ENCODING__)
 85e7593e9dd66c1c5a37afa22f1b7d68	"nil"	r, w = IO.pipe\n            t = Thread.new { sleep 0.2 }\n           
@@ -1990,6 +1996,7 @@ ab535c2e7cd8b5a3fe1563c1f8eceada	["refined", "refined", true, "refined", "refine
 ab5e7b6bbbd5afe245e3a8a582cb7990	[3, 3]	def find_first(arr)\n          arr.each { |x| break x if x > 2 }\n       
 ab63839dbe29e9f17d36f1cc7849d7da	[[3, 4, 5, 6, 7, 0, 1, 2], [0, 1, 2, 3], [2, 3, 0, 1], [5, 6, 7, 0, 1, 2, 3, 4], [2, 3, 0, 1], [0, 1, 2, 3], [0, 1, 2, 3], [], [2, 3, 4, 1], [], [2, 3, 0, 1], [2, 3, 0, 1], true, FrozenError]	class Cnt; def to_int = 2; end\n        def rot0(a) = a.rotate!\n        
 ab6ac3209d2195ae9950646eb1022c17	:OVERRIDDEN	class Integer; def <<(o); :OVERRIDDEN; end; end; 3 << 4
+ab785c969ef5be187ff55eb3416a3a0f	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
 ab8885657a2a64a7b6e8875e78bb2e7b	Array	class C < Array; end\nC[1,2,3].sort.class
 ab957de646f7c725670ace2cad00bc40	1700	class C\n              def bar\n                "bar"\n              e
 ab9797f0718836e71434ef89cce1af7b	[:a]	def m(a, **nil); local_variables; end\n            m(1)\n            
@@ -2536,6 +2543,7 @@ d83209b9961e083672b237cbc756ca17	14	b = binding\n            b.eval("y = 7")\n  
 d877a4927bccad0844990bad82525907	"US-ASCII"	"hello".encode("US-ASCII").capitalize.encoding.to_s
 d879edf56856687d0b1c88dcaebb0402	["C", "M2", "M1"]	module M1\n          def f\n            $res << "M1"\n          end\n      
 d889ad006dc6737982d507f7317622e8	[10, 20, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \n[s["a
+d891f7684828b546ba97829e6e5a6cae	[[[false, 150], [true, 450]], true, true]	class T\n              def initialize = (@a = [1, 2, nil, 4])\n      
 d8b0d018647384bbab864dd283908894	[:x, :y]	D = Data.define(:x, :y)\nClass.new(D).new(1, 2).members
 d8ec5385ee072765ba7b565e51313657	[777, 777]	class Integer\n          def sub_impl(o); 777; end\n        end\n        $
 d9300c97f073adabeb7a50ccd6acbd23	0..300	a=1\n            b = for a in 0..300 do\n            end\n            
@@ -2813,6 +2821,7 @@ f053ea7381008dbc0e2209151231a4ec	4	a=3;\n        if a==1;\n          3\n        
 f06768860864e9c94d5eda4e8a2fa12d	[42, true]	module Foo\n          BAR = 42\n        end\n        def baz(x)\n          
 f090d1117e83eac6fc71416bd205423e	[[195, 169], "Windows-31J", true]	s = "\\303\\251".dup.force_encoding(Encoding::Windows_31J)\n               m = /./s
 f098937c1782ad342405a495ac2f0063	true	class Foo\n              def bar; end\n            end\n            \n\n
+f09f3eb9548625635df9c1a64f0614c9	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
 f0c50bd8de554c94bd61a098ac6b9b78	"#<data M amount=42, unit=\\"km\\">"	M = Data.define(:amount, :unit)\nM.new(42, "km").to_s
 f0e946f362739bd5f3dcdd127d2dbfe2	[:toa, :single]	class E1 < StandardError; end\n            class Custom; def to_a; [
 f12165564d922cbb529013b962e93e50	11	b = for a in 0..300 do\n                if a == 77 then break a/7 en
@@ -2885,6 +2894,7 @@ f692d7c01396875808d70ca97155bd6f	[1, 2, 3, 4, 5, 6, 7, 8]	class C < Array\n     
 f6a5ba1237d7cfc8990854f9a869a012	true	Thread.current.equal?(Thread.current)
 f6b2f5848e7295cbc532e6f89aae0054	[true, true, true, true, true]	(a=(File.method(:unlink)==File.method(:delete)); b=(File.method(:empty?)==File.m
 f6b8ba5c363ede98f3ac55cfd3ae8594	[[:keyreq, :a], [:keyreq, :b]]	def only_req_kw(a:, b:); end\n            method(:only_req_kw).param
+f6bd187bbf5507071844189b94dc4434	[[false, false, true, true, true], [false, true, false, true, false], [true, true, false, false, true]]	vals = [1, 2.5, 3, 4.5]\n            def lt(a, b) = a < b\n          
 f6cc6145b95584bf04b9e5b0c112640c	[:a, :b, :block, :x, :z]	a = 1\n        b = 2\n        def f(x, &block)\n          z = nil\n        
 f736ab01b7f73c593f6fc9713eeae554	["boom", false, "boom"]	require "tmpdir"\n        # Use a per-process unique path so parallel te
 f75daf748ad804574801fd5e35cb2793	"1/2"	Rational(0.5).to_s
