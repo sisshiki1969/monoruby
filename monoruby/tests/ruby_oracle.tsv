@@ -1328,6 +1328,7 @@
 73b5b9f7068d2f4d7eb3c69976ab650d	1	class C\n              @@x = 1\n            end\n        
 73c9dec5b896221d19b6233b9db54621	[:rescued, "caught"]	f = Fiber.new do\n              begin\n                Fiber.yield :a
 73cf450d13041a7f92cc5202727762b7	"/"	File.realpath("..", "/tmp")
+73e27e81e87093c61641bec1ab3aa95d	[[:a, 0], [:b, 1], 30, nil, 9, [:a, 1], [:b, 2], 40, :h0, 9, [:a, 2], [:b, 3], 10, :h1, 9, [:a, 3], [:b, 0], 20, nil, 9, [:a, 0], [:b, 1], 30, nil, 9, [:a, 1], [:b, 2], 40, :h0, 9, [:a, 2], [:b, 3], 10, :h1, 9, [:a, 3], [:b, 0], 20, nil, 9, [:a, 0], [:b, 1], 30, nil, 9, [:a, 1], [:b, 2], 40, :h0, 9, [:a, 2], [:b, 3], 10, :h1, 9, [:a, 3], [:b, 0], 20, nil, 9]	class Ba; def [](i) = [:a, i]; end\n            class Bb; def [](i) 
 7416b95f5e87edec12c271dfa849a210	[200, [:body, :ensure_start, :ensure]]	def baz\n              $x = []\n              $x << :body\n           
 74265315f293e83823e6e37edea00c74	[true, true, true, true, true, 1.0, 42, nil, nil]	srand(42)\n            a = rand\n            srand(42)\n            [\n
 742cf7259eae88dd4512794b3c9d16ad	[:i, :j]	def m; [1].each { |i| j = i * 2; return local_variables.sort }; end; m
@@ -2845,6 +2846,7 @@ f40ce886b72f5217bc31de73015cbb2d	[true, true]	# 'M' + length(6 ⇒ marshal_int 0
 f40d66b495e8cfc92317f5249b69ee31	[4, 8, 73, 34, 6, 97, 6, 58, 13, 101, 110, 99, 111, 100, 105, 110, 103, 34, 11, 69, 85, 67, 45, 74, 80]	Marshal.dump("a".encode("EUC-JP")).bytes
 f4101d236b633fea5a8e14b9620d27bb	false	c = Class.new do\n              def bar; end\n              undef :"#
 f417b46ed1c24ffbbc6d828e0035f712	"aXXde"	class C; def to_str; "bc"; end; end; o = C.new\n"abcde".sub(o, "XX")
+f42d6a1e9248b98021fa9c9e4500834f	[107000, TypeError]	class Io\n              def initialize(v) = (@v = v)\n              d
 f4581c269c9086996dbf942d463dfa96	:ok	obj = Object.new\n            def obj.inspect; self; end\n           
 f45a984e81852dd82ce24d6cb475566a	[[[], {}], [[1, 2], {}], [[1], {x: 3}], [[5], {y: 6}], [[], {}], [7, {}], [7, {z: 8}]]	class K; def initialize(*a, **kw); @a = a; @kw = kw; end\n          
 f45ca1bbef67b0bd784d12241e1f0ab4	[:foo, [1, 2, 3]]	class C\n          def method_missing(name, *args)\n            [name, ar

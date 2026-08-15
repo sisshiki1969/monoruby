@@ -51,6 +51,8 @@ impl Codegen {
             | AsmInst::LitToStack(..)
             | AsmInst::CondBr(..)
             | AsmInst::NilBr(..)
+            | AsmInst::Br(..)
+            | AsmInst::BrClassNe(..)
             | AsmInst::CheckLocal(..)
             | AsmInst::OptCase { .. }
             | AsmInst::GuardClass(..)
@@ -551,6 +553,8 @@ impl Codegen {
             // Signed conditional branch on the preceding `Cmp` (mirrors
             // `condbr_int`; the BrKind inversion is folded into `cond` by the
             // builder).
+            // Unconditional branch (a dispatch arm funnelling into its merge).
+            LInst::Br(target) => monoasm! { &mut self.jit, jmp target; },
             LInst::CondBr { cond, target } => match cond {
                 LCond::Eq => monoasm! { &mut self.jit, jeq target; },
                 LCond::Ne => monoasm! { &mut self.jit, jne target; },

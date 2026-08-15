@@ -867,6 +867,10 @@ impl Codegen {
             // Conditional branch on the preceding `Cmp` (mirrors
             // `bcond_label(a64_cond_for_cmp(..), dest)`; the BrKind inversion is
             // folded into `cond` by the builder).
+            // Unconditional branch (a dispatch arm funnelling into its merge).
+            LInst::Br(target) => {
+                monoasm_arm64!(&mut self.jit, b target;);
+            }
             LInst::CondBr { cond, target } => {
                 let c = match cond {
                     LCond::Eq => monoasm::Cond::Eq,

@@ -566,8 +566,8 @@ impl<'a> JitContext<'a> {
                 base,
                 idx,
                 class: ic,
-                _polymorphic: _,
-            } => return self.index(state, ir, base, idx, ic, bc_pos),
+                polymorphic,
+            } => return self.index(state, ir, base, idx, ic, polymorphic, bc_pos),
             TraceIr::IndexAssign {
                 base,
                 idx,

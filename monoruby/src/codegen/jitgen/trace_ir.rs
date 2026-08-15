@@ -210,8 +210,11 @@ pub(crate) enum TraceIr {
         idx: SlotId,
         class: Option<(ClassId, ClassId)>, // (base_class, idx_class)
         /// The VM observed operand-class variance at this site
-        /// (`opcode_sub`) — see `UnOp::_polymorphic`.
-        _polymorphic: bool,
+        /// (`opcode_sub`) — see `UnOp::_polymorphic`. Consumed by
+        /// `JitContext::index`, which answers a polymorphic site with a
+        /// two-arm dispatch instead of a class guard that would deopt on
+        /// every off-class receiver.
+        polymorphic: bool,
     },
     IndexAssign {
         base: SlotId,
@@ -597,7 +600,7 @@ impl TraceIr {
                     } else {
                         None
                     },
-                    _polymorphic: pc.opcode_sub() == 1,
+                    polymorphic: pc.opcode_sub() == 1,
                 },
                 133 => TraceIr::IndexAssign {
                     base: SlotId::new(op2_w2),
@@ -934,7 +937,7 @@ impl TraceIr {
                 base,
                 idx,
                 class,
-                _polymorphic: _,
+                polymorphic: _,
             } => {
                 let op1 = format!("{:?} = {:?}.[{:?}]", dst, base, idx);
                 fmt(store, op1, class)
