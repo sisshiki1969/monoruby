@@ -1783,6 +1783,13 @@ impl RStringInner {
         RStringInner::from(SmallVec::from_slice(slice), encoding, CodeRange::Unknown)
     }
 
+    /// O(1): take ownership of an already-built byte buffer with a
+    /// pre-computed `cr` (the caller tracked it while building — see
+    /// `concatenate_string_inner`).
+    pub(crate) fn from_vec_cr(bytes: Vec<u8>, encoding: Encoding, cr: CodeRange) -> Self {
+        RStringInner::from(SmallVec::from_vec(bytes), encoding, cr)
+    }
+
     /// O(N): build a string with the given encoding and pre-classify
     /// `cr` via `Encoding::classify`. Useful for source-byte
     /// literals (`"\xFF"`) and other long-lived inputs where the
@@ -2123,17 +2130,25 @@ impl RStringInner {
         // entire growing buffer -- turning N appends from O(N) into O(N²).
         // (See String#<< micro-bench: a 100k-iter `s << "abcde"` loop took
         // ~5.7s before this change vs 5.6ms in CRuby.)
-        let new_cr = match (self.cr.get(), other.cr.get()) {
+        // Classify the (short, new) piece rather than reading its raw
+        // `cr`: on the common equal-encoding path `compatible_encoding`
+        // never touched it, and folding an Unknown piece would degrade
+        // `self.cr` to Unknown — forcing a later full re-scan of the
+        // whole accumulated buffer (or an O(len) `size` on it). The
+        // piece scan is amortized O(total appended bytes), and its
+        // result is cached in the piece itself.
+        let new_cr = match (self.cr.get(), other.code_range()) {
             (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
             (CodeRange::SevenBit | CodeRange::Valid, CodeRange::SevenBit | CodeRange::Valid) => {
-                // compatible_encoding already verified the encodings agree,
+                // compatible_encoding already verified the encodings are
+                // compatible (equal, or the non-winning side is 7-bit),
                 // so two well-formed pieces concatenate to a well-formed
                 // whole. (Multi-byte boundaries can only collide at the
                 // junction if one side was already Broken.)
                 CodeRange::Valid
             }
-            // Either side is Broken or its cr was never computed --
-            // fall back to lazy re-classify on the next access.
+            // The accumulated side is Broken/never-computed, or the
+            // piece is Broken -- fall back to lazy re-classify.
             _ => CodeRange::Unknown,
         };
         self.owned_mut().extend_from_slice(other.as_bytes());
@@ -2508,6 +2523,22 @@ pub(crate) fn check_string_not_modified(recv: Value, expected_len: usize) -> Res
 ///
 /// The caller must guarantee `parent` is a spilled-or-shared String.
 ///
+/// Convert a heap-spilled string into a copy-on-write sharer of a
+/// hidden frozen root (a no-op for inline-stored content, an existing
+/// sharer, or a frozen string), so subsequent `clone`s of its inner are
+/// O(1) view copies. Used on string-literal templates: every
+/// per-execution `deep_copy` then shares the template's buffer — and
+/// its cached code range — instead of copying the bytes. Mutating any
+/// copy un-shares it through the ordinary CoW machinery.
+pub(crate) fn share_string_buffer(v: &mut Value) {
+    let Some(inner) = v.is_rstring_inner() else {
+        return;
+    };
+    if inner.content.is_shared() || v.is_frozen() || inner.owned_spilled() {
+        let _ = ensure_shared_root(v);
+    }
+}
+
 fn ensure_shared_root(parent: &mut Value) -> (Value, *const u8) {
     {
         let inner = parent.as_rstring_inner();

@@ -1015,7 +1015,37 @@ impl<'a> BytecodeGen<'a> {
                     self.emit_literal(r, Value::string_from_source_str("", enc));
                 }
                 for expr in nodes {
-                    self.push_expr(expr)?;
+                    // A literal fragment of an interpolation is only ever
+                    // read by the ConcatStr below — it cannot escape or be
+                    // mutated — so load the interned frozen template
+                    // directly instead of deep-copying a fresh string on
+                    // every evaluation (CRuby likewise embeds dstr
+                    // fragments as frozen strings). The template's cached
+                    // code range then feeds the concat's incremental
+                    // negotiation, so big fragments are classified once,
+                    // ever, instead of per evaluation.
+                    let loc = expr.loc;
+                    match expr.kind {
+                        NodeKind::String(s) => {
+                            let r = self.push().into();
+                            let enc = self.source_encoding();
+                            self.emit_frozen_interned(r, s.as_bytes(), enc, loc);
+                        }
+                        NodeKind::Bytes(b) => {
+                            let r = self.push().into();
+                            let enc = self.source_encoding();
+                            self.emit_frozen_interned(r, &b, enc, loc);
+                        }
+                        NodeKind::EncodedString(b, enc_name) => {
+                            let r = self.push().into();
+                            let enc = crate::value::Encoding::try_from_str(enc_name)
+                                .unwrap_or(crate::value::Encoding::Utf8);
+                            self.emit_frozen_interned(r, &b, enc, loc);
+                        }
+                        _ => {
+                            self.push_expr(expr)?;
+                        }
+                    }
                 }
                 self.temp -= len as u16;
                 let ret = if use_mode.use_val() {

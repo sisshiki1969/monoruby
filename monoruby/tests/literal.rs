@@ -374,6 +374,52 @@ fn small_hash_literal() {
 }
 
 #[test]
+fn interpolation_fragments_and_shared_literals() {
+    // Interpolation fragments are loaded as frozen interned templates
+    // (never observable), the result is a fresh mutable string with the
+    // negotiated encoding, and big string-literal templates are handed
+    // out as CoW sharers — mutation of a copy must never leak back.
+    run_test(
+        r##"
+        r = []
+        20.times do |i|
+            a = 42 + i
+            r << "x#{a}y" << "#{a}" << "#{}nil#{}" << "é#{a}ü"
+            s = "x#{a}"
+            s << "!"
+            r << s << s.frozen?
+            b = "template#{a}"
+            b2 = "template#{a}"
+            r << b.equal?(b2)
+            b << "mut"
+            r << b << b2
+            r << "é#{a}".encoding.to_s << "é#{a}".size << "é#{a}".valid_encoding?
+        end
+        r
+        "##,
+    );
+    // A large (heap-spilled) literal template: every evaluation yields
+    // an independent copy; mutating one copy leaves later copies and
+    // earlier copies untouched (copy-on-write un-share).
+    run_test(
+        r##"
+        r = []
+        copies = []
+        20.times do |i|
+            t = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            copies << t
+            t << "-#{i}"
+            r << t.bytesize
+        end
+        r << copies.map { |c| c[-3..] } << copies.uniq.size
+        big = "Z" * 100
+        r << "#{big}#{1}#{big}".size
+        r
+        "##,
+    );
+}
+
+#[test]
 fn command_literal_frozen_argument() {
     // A non-interpolated command literal (`` `cmd` `` / `%x{...}`) passes its
     // command string to `Kernel#\`` FROZEN, matching CRuby (regardless of any

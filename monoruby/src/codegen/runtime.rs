@@ -890,7 +890,7 @@ fn concatenate_string_inner(
     arg: *mut Value,
     len: usize,
 ) -> Result<Value> {
-    use crate::value::rvalue::{Encoding, RStringInner};
+    use crate::value::rvalue::{CodeRange, Encoding, RStringInner};
     // Build the result as raw bytes so invalid byte sequences in any
     // operand survive interpolation (going through a Rust `String`
     // would silently rewrite them as U+FFFD via `from_utf8_lossy`).
@@ -900,24 +900,64 @@ fn concatenate_string_inner(
     // further operand negotiates under CRuby's `compatible_encoding`
     // rules; an incompatible mix (two non-ASCII operands in different
     // encodings) raises Encoding::CompatibilityError like `<<`.
+    //
+    // The accumulated side's encoding and code range are tracked
+    // incrementally (mirroring `RStringInner::extend`'s fold), so the
+    // negotiation never wraps the growing buffer in a temporary — which
+    // used to COPY it per operand — nor re-classifies it: N segments
+    // cost O(total bytes), not O(N * total). Each operand's own code
+    // range is classified once (cached in the operand, so frozen
+    // fragment templates pay it once ever), and the fold keeps the
+    // result's `cr` precise: two well-formed sides of a successful
+    // negotiation concatenate to a well-formed whole, since the
+    // non-winning encoding's bytes are 7-bit (`Encoding::compatible`
+    // admits nothing else).
     let mut bytes: Vec<u8> = Vec::new();
     let mut enc: Option<Encoding> = None;
+    let mut cr = CodeRange::SevenBit; // classify("") — the fold identity
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
         let s_val = vm.invoke_tos(globals, v)?;
         if let Some(inner) = s_val.is_rstring_inner() {
+            let piece_enc = inner.encoding();
             enc = Some(match enc {
-                None => inner.encoding(),
-                Some(prev) => RStringInner::from_encoding(&bytes, prev)
-                    .compatible_encoding(&inner)
-                    .ok_or_else(|| {
-                        MonorubyErr::incompatible_encoding(
-                            &globals.store,
-                            prev,
-                            inner.encoding(),
-                        )
-                    })?,
+                None => piece_enc,
+                Some(prev) if prev == piece_enc => prev,
+                Some(prev) => {
+                    // Replicates `RStringInner::compatible_encoding`
+                    // with the accumulated side's tracked state.
+                    let piece_cr = inner.code_range();
+                    let accum_empty = bytes.is_empty();
+                    let piece_empty = inner.is_empty();
+                    let negotiated = if accum_empty && piece_empty {
+                        Some(prev)
+                    } else if accum_empty {
+                        if prev.is_ascii_compatible() && piece_cr == CodeRange::SevenBit {
+                            Some(prev)
+                        } else {
+                            Some(piece_enc)
+                        }
+                    } else if piece_empty {
+                        Some(prev)
+                    } else {
+                        if cr == CodeRange::Unknown {
+                            cr = prev.classify(&bytes);
+                        }
+                        Encoding::compatible(prev, cr, piece_enc, piece_cr)
+                    };
+                    negotiated.ok_or_else(|| {
+                        MonorubyErr::incompatible_encoding(&globals.store, prev, piece_enc)
+                    })?
+                }
             });
+            cr = match (cr, inner.code_range()) {
+                (CodeRange::SevenBit, CodeRange::SevenBit) => CodeRange::SevenBit,
+                (
+                    CodeRange::SevenBit | CodeRange::Valid,
+                    CodeRange::SevenBit | CodeRange::Valid,
+                ) => CodeRange::Valid,
+                _ => CodeRange::Unknown,
+            };
             bytes.extend_from_slice(inner.as_bytes());
         } else {
             // `invoke_tos` returns the user-defined `to_s` result
@@ -935,12 +975,15 @@ fn concatenate_string_inner(
                 None => Encoding::Utf8,
                 Some(prev) => prev,
             });
+            // The appended form is pure ASCII: the fold is the identity
+            // (SevenBit/Valid/Unknown all absorb a SevenBit piece).
             bytes.extend_from_slice(s.as_bytes());
         }
     }
-    Ok(Value::string_from_inner(RStringInner::from_encoding(
-        &bytes,
+    Ok(Value::string_from_inner(RStringInner::from_vec_cr(
+        bytes,
         enc.unwrap_or(Encoding::Utf8),
+        cr,
     )))
 }
 
