@@ -713,6 +713,32 @@ mod tests {
     }
 
     #[test]
+    fn gc_budget_scales_with_the_heap() {
+        // The same amount of garbage, churned once against a small live
+        // set and once against a large one. What a collection costs is
+        // set by how much is live, so the allocation it is amortised over
+        // has to grow with the heap: the big-heap run must collect
+        // *fewer* times than the small-heap one, not more. Under a fixed
+        // budget the second run collects at least as often as the first.
+        if cfg!(feature = "gc-stress") {
+            // Every safepoint collects, so `GC.count` measures the stress
+            // mode rather than the trigger policy.
+            return;
+        }
+        run_test_once(
+            r##"
+            def churn(n) = n.times { |i| [i, i] }
+            churn(50_000); GC.start
+            b = GC.count; churn(400_000); small = GC.count - b
+            keep = Array.new(1_500_000) { |i| [i] }
+            GC.start
+            b = GC.count; churn(400_000); large = GC.count - b
+            [small > 0, large < small, keep.size == 1_500_000]
+            "##,
+        );
+    }
+
+    #[test]
     fn old_generation_retires_with_its_objects() {
         // A major GC keeps the old generation across the cycle, so the
         // only place an old cell leaves `old_bits`/`old_objects` is where

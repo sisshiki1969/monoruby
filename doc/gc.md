@@ -74,7 +74,7 @@ thread_local! { pub static ALLOC: RefCell<Allocator<RValue>> }   // alloc.rs
 | `promoting` | マーク中に昇格候補を収集するか(実マーク中のみ true) |
 | `aging` | 今サイクルで生存した昇格候補(マーク後に加齢) |
 | `remembered` | remembered set(old→young 参照を持つ old オブジェクト) |
-| `pages_since_gc` | 前回の収集以降に `THRESHOLD` まで充填したページ数(8 で GC レーンを立てる) |
+| `pages_since_gc` | 前回の収集以降に `THRESHOLD` まで充填したページ数(`gc_trigger_pages()` で GC レーンを立てる。§4.1) |
 | `heap_frames` | ヒープに退避したフレームバッファの登録表(§9) |
 
 ### 2.2 アリーナとページ
@@ -120,7 +120,8 @@ mark-external 方式なので、生存中のオブジェクト内容を汚さな
    スイープされたセルの再利用。
 2. 空でなければ**現ページのバンプ割り当て**。
    - `used_in_current == THRESHOLD`(3968)に達したら `on_page_pressure()` で
-     `pages_since_gc += 1`、8 ページ目で poll ワードの GC レーンを立てる(GC を要求;§4)。
+     `pages_since_gc += 1`、`gc_trigger_pages()` に達したら poll ワードの GC レーンを
+     立てる(GC を要求;§4)。
    - `used_in_current == DATA_LEN`(4032)でページ満杯 → `free_pages` から再利用、
      なければ `new_page()` で新規ページ。新ページは `clear_old_bits()` で
      old ビットマップを 0 初期化(マイナー GC のシード整合性のため)。
@@ -151,7 +152,7 @@ VM/JIT が参照する poll ワード(`u32`、8bit×4 レーン。全体像は `
 
 | 経路 | 実装 | 操作 |
 | --- | --- | --- |
-| ページ圧力 | `on_page_pressure`(`alloc.rs`) | `pages_since_gc` が 8 に達したら `set_gc()` |
+| ページ圧力 | `on_page_pressure`(`alloc.rs`) | `pages_since_gc` が `gc_trigger_pages()`(下記)に達したら `set_gc()` |
 | malloc 圧(§8) | `request_gc_if_malloc_over` | `set_gc()` |
 | `GC.start` | `request_gc(true)` | `set_gc()` + メジャー強制 |
 | `GC.stress` | `set_stress(true)` / 各収集の末尾 | `set_gc()`(再武装) |
@@ -162,6 +163,28 @@ byte が分かれているため互いを踏み潰す競合は原理的にない
 収集の完了時は `ack_gc_request`(`alloc.rs`)が **GC レーンの byte だけ**を落とし、
 `pages_since_gc` を 0 に戻す(並行して立った他レーンは保存される)。`--no-gc` 時の
 空収集も同じ経路で要求を無効化するため、レーンが立ちっぱなしで poll が空回りすることはない。
+
+#### 収集間隔はヒープに比例する(`gc_trigger_pages`)
+
+ページ圧力の閾値は固定値ではなく、**稼働中ページ数の一定割合**:
+
+```
+gc_trigger_pages() = max(PAGES_PER_GC_TRIGGER, 稼働ページ数 / GC_HEAP_FRACTION)
+                   = max(8, pages / 16)
+```
+
+収集 1 回のコスト(ルート走査・remembered set 走査・ビットマップ走査)は**生存量**で
+決まるのに対し、固定予算はそれを一定量の確保にしか償却しない。生存量が増え続ける
+プログラムでは総 GC コストが O(生存量 × 総確保量) になってしまうため、予算をヒープに
+比例させてコレクタ/ミュータタ比を有界に保つ。
+
+- 128 ページ(32MB)未満のヒープでは `max` の下限が効き、**従来と完全に同一挙動**
+  (optcarrot・aobench・sudoku 等はページ数・収集回数・RSS すべて不変)。
+- 代償は浮遊ゴミで、ヒープの最大 1/16 が回収を先送りされる。plb2 bedcov(生存 270 万
+  オブジェクト)では マイナー 202 → 83 回、GC 時間 −35%、実行時間 −12%、RSS +23%
+  (それでも同プログラムの CRuby の RSS より小さい)。
+- 収集で全滅したページは `pages` を離れて `free_pages` に移るため、生存量が落ちた
+  ヒープは自動的に予算も縮む。
 
 ### 4.2 poll のコード生成
 

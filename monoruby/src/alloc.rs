@@ -240,10 +240,31 @@ const PAGE_LEN: usize = 64 * SIZE;
 const DATA_LEN: usize = 64 * (SIZE - 1);
 const THRESHOLD: usize = 64 * (SIZE - 2);
 
-/// Pages filling to `THRESHOLD` before the arena requests a collection
-/// (~8 pages ≈ 32K `RValue`s between GCs, matching the old `>= 8` poll
-/// band that accumulated `+1` per page).
+/// Floor for the allocation budget between collections: pages filling to
+/// `THRESHOLD` before the arena requests a collection (~8 pages ≈ 32K
+/// `RValue`s, matching the old `>= 8` poll band that accumulated `+1` per
+/// page). Small heaps use exactly this; see [`GC_HEAP_FRACTION`].
 const PAGES_PER_GC_TRIGGER: u32 = 8;
+
+/// Above `PAGES_PER_GC_TRIGGER * GC_HEAP_FRACTION` pages in service, the
+/// budget instead scales with the heap: a collection is requested once
+/// `1/GC_HEAP_FRACTION` of the pages in service have filled since the last
+/// one.
+///
+/// What a collection costs is set by how much is *live* — the root scan,
+/// the remembered-set scan and the bitmap walk are all proportional to it
+/// — while a fixed budget amortises that over a constant amount of
+/// allocation, so a program whose live set keeps growing pays
+/// O(live × total allocation). Tying the budget to the heap keeps the
+/// ratio of collector work to mutator work bounded instead.
+///
+/// The cost is floating garbage: up to a `1/GC_HEAP_FRACTION` of the heap
+/// is retained longer than it needs to be, which is what the constant
+/// trades. 1/16 measured as the knee on a large-heap workload (plb2
+/// bedcov: 202 → 83 minor GCs, GC time −32%, RSS +23% and still below
+/// CRuby's on the same program); a smaller divisor buys less and less time
+/// for steeply more memory.
+const GC_HEAP_FRACTION: u32 = 16;
 const ALLOC_SIZE: usize = PAGE_LEN * GCBOX_SIZE; // 2^18 = 256kb
 const MALLOC_THRESHOLD: usize = 256 * 1024;
 const MAX_PAGES: usize = 8192;
@@ -878,9 +899,24 @@ impl<T: GCBox> Allocator<T> {
     ///
     fn on_page_pressure(&mut self) {
         self.pages_since_gc += 1;
-        if self.pages_since_gc >= PAGES_PER_GC_TRIGGER {
+        if self.pages_since_gc >= self.gc_trigger_pages() {
             crate::poll_flag::set_gc();
         }
+    }
+
+    ///
+    /// How many pages may fill between collections: a fixed floor for
+    /// small heaps, `1/GC_HEAP_FRACTION` of the pages in service once the
+    /// heap outgrows it. See [`GC_HEAP_FRACTION`].
+    ///
+    /// Pages salvaged by a collection have left `pages` for `free_pages`,
+    /// so a heap that drops its live set shrinks its own budget back
+    /// without any extra bookkeeping.
+    ///
+    fn gc_trigger_pages(&self) -> u32 {
+        // `+1` for `current_page`, which is in service but not in `pages`.
+        let in_service = (self.pages.len() as u32).saturating_add(1);
+        PAGES_PER_GC_TRIGGER.max(in_service / GC_HEAP_FRACTION)
     }
 
     ///

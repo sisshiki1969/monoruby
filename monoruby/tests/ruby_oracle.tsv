@@ -555,6 +555,7 @@
 2e520c993c13bf6afbdcfa9de96cc277	["A", "overridden", "can't create instance of singleton class", "allocator undefined for Integer"]	class A; end\n        class B; def self.allocate; :overridden; end; end\n
 2e9e5cdf982a6b277e6559a8a489f9a7	["Process::Status", 0, true]	`echo hi`; [$?.class.to_s, $?.exitstatus, $?.success?]
 2ea8cf14ab55d43b075b91985f056e0e	42	class C\n          def bar(x); x * 2; end\n        end\n        C.new.publ
+2ed29b5af9876d57b370c87bbfaa07be	[true, true, true]	def churn(n) = n.times { |i| [i, i] }\n            churn(50_000); GC
 2ef23e171ea7c4b8e44c86a9f992d408	[true, true, true, true, true]	r, w = IO.pipe\n            w.write("x")\n            [\n             
 2eff8aa6beb24cd1e30d17ca832d901e	[ArgumentError, "ASCII incompatible encoding: UTF-16LE"]	(Regexp.union("a".encode("UTF-16LE"), "b".encode("UTF-8")); nil) rescue [$!.clas
 2f052ab414e3e11032af6e0e3daffec3	[true, false, false, true]	class D\n          def m; end\n          private def p_m; end\n        end
@@ -2155,6 +2156,7 @@ ba7058a9f888bace3485573d10433a9e	true	M = Data.define(:amount, :unit)\nm = M.new
 ba73e17b465fecb689735f04e9f7047e	[1, 2, "l1\\nl2\\n"]	path = "/tmp/mr_gvar_lines.txt"\n            File.write(path, "l1\\nl
 ba8132b4a761c3cc445f79982ea307f1	[:frozen, :frozen, 1]	klass = Class.new; klass.freeze\n            r1 = begin; klass.class
 ba8abe11f8c7c450d64cf7c0c8aaeef7	:finished	ec = Encoding::Converter.new("UTF-8", "ISO-8859-1")\n             
+ba906fabc9ac8a0dfc95e62cc80c80bd	[true, true]	big = Array.new(50000) { |i| [i] }\n            5.times { GC.start }
 baac0bfbcda44d7ed24d7aedf15dba23	["0.1e1", "0.2e1", "0.1024e4", "0.98596e1"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
 bab29f9aef949a72c454db04f4b8ae98	["10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30], "10:[20, 30, 999]", [10, 20, 30]]	def real(a, *r)\n          r << 999\n          "#{a}:#{r.inspect}"\n      
 baf2588a6b03f124f0c0206d4f3549b8	[:foo, true, [:one, :two]]	receiver = Object.new\n        begin\n          receiver.foo(:one, :two)\n
@@ -2401,6 +2403,7 @@ cdd817bbe04dcccd5789be10d0c9e391	true	module MBSpec2; end\n            name = "W
 cde7486a8ec494a41cd937151aeb8979	["global", false]	Thread.abort_on_exception = true\n            t = Thread.new { sleep
 cde8be92d24d46ac492d28d94cf6baa4	false	Float::NAN > (1 << 100)
 cdfb00531284d4111c26a83cd032ad5a	["iberico", true, true, "gouda", "stilton"]	module MM\n          class C\n            class << self\n              cla
+ce3ab0576ab0634aa202676d23eff78c	[2000, true]	parents = Array.new(2000) { [] }\n            5.times { GC.start }\n 
 ce3cb44e401aaa8cd3345ff6d95183b6	12	class Integer; alias __orig :*; def *(o); __orig(o); end; end; 3 * 4
 ce4131c8f9a4a5e155b38f61bca917e4	[[100, 2, 3, 100, 200, 70], [100, 2, 3, 100, 200, 70]]	class C\n              def f(a,(b,c),d,e:30,f:40)\n                $r
 ce62ddea72f477fdc9d5919218bb9a1c	"missing keyword: :x"	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:)
