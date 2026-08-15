@@ -2388,6 +2388,7 @@ cbef1c6c957859d39ab391994e2eec19	42	class Parent\n          INHERITED = 42\n    
 cbef5e866450bcc812bdfa2227f87d4f	[:bar, []]	class Foo\n              def method_missing(name, *args)\n           
 cbf47e030925d52d7a3859c2f64e34d6	[ArgumentError, "incompatible encodings: UTF-16LE and ISO-8859-1"]	(Regexp.union("a".encode("UTF-16LE"), "©".encode("ISO-8859-1")); nil) rescue [$!
 cc22d30b23aca65e57663f87e7e7b55c	["f", "f", "f", "g"]	class S\n          def f\n            "f"\n          end\n          def g\n 
+cc231fd5ce024b9de97b1322b82cdac6	[150000, 150000, 150000, 150000]	N = 150_000\n\n            class DeepNode\n              attr_accessor
 cc502105da56462b6875a604543b3a6c	99	module M; class N; CONST = 99; end; end\n            \nM.const_get("N
 cc663087814e38d92d69a54be85556da	"e"	class MyIdx; def to_int; 1; end; end\n            s = "hello"\n      
 cc8aebeeff87148f768f16c8f957f04b	[File, Errno::EEXIST, "hello\\nmore\\n", nil, ""]	(f="/tmp/mono_om_#{Process.pid}"; a=File.open(f, File::CREAT) { |x| x.class }; b

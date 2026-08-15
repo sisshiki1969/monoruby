@@ -834,4 +834,63 @@ mod tests {
     fn gc_profiler_raw_data_is_nil_when_disabled() {
         run_test_once("GC::Profiler.disable; GC::Profiler.raw_data");
     }
+
+    // Every link of a chain used to cost a nested `mark` →
+    // `mark_children` → `mark` frame, so a graph a few tens of thousands
+    // deep overflowed the native stack and aborted the process *inside*
+    // the collector. 150K is comfortably past where that happened (~75K
+    // on an 8MB main stack), and each shape below exercises a different
+    // `mark_children` arm.
+    //
+    // Skipped under `gc-stress`: the point of the test is the depth, and
+    // 600K allocations each forcing a full collection of a heap that
+    // never stops growing is quadratic.
+    #[test]
+    #[cfg_attr(feature = "gc-stress", ignore)]
+    fn mark_survives_deeply_nested_object_graphs() {
+        run_test_once(
+            r##"
+            N = 150_000
+
+            class DeepNode
+              attr_accessor :nxt
+              def initialize(n) = @nxt = n
+            end
+            DeepStruct = Struct.new(:nxt)
+
+            def chain_depth(head)
+              d = 0
+              while head
+                d += 1
+                head = yield(head)
+              end
+              d
+            end
+
+            depths = []
+
+            a = nil
+            N.times { a = [a] }
+            GC.start
+            depths << chain_depth(a) { |x| x[0] }
+
+            h = nil
+            N.times { h = { nxt: h } }
+            GC.start
+            depths << chain_depth(h) { |x| x[:nxt] }
+
+            o = nil
+            N.times { o = DeepNode.new(o) }
+            GC.start
+            depths << chain_depth(o) { |x| x.nxt }
+
+            s = nil
+            N.times { s = DeepStruct.new(s) }
+            GC.start
+            depths << chain_depth(s) { |x| x.nxt }
+
+            depths
+            "##,
+        );
+    }
 }
