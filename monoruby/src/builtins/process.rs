@@ -2618,15 +2618,34 @@ mod new_api_tests {
 
     #[test]
     fn process_wait_wnohang_nil() {
+        // The forked child of a multi-threaded VM can die during its
+        // startup window (fork clones only the calling thread, so a lock
+        // held elsewhere at fork time corrupts the child) — rare, but
+        // under parallel CI load it surfaced as an ESRCH flake here. The
+        // sync byte now gates the WNOHANG probe (the child has provably
+        // reached its parked sleep), and a child lost before that point
+        // is reaped and retried instead of failing the run.
         run_test_once(
             r#"
-            r, w = IO.pipe
-            pid = fork { r.close; Signal.trap("TERM") { exit! }; w << 1; w.close; sleep }
-            nh = Process.wait(pid, Process::WNOHANG)
-            w.close; r.read(1); r.close
-            Process.kill("TERM", pid)
-            reaped = Process.wait(pid)
-            [nh, reaped == pid]
+            result = nil
+            5.times do
+              r, w = IO.pipe
+              pid = fork { r.close; Signal.trap("TERM") { exit! }; w << 1; w.close; sleep }
+              w.close
+              sync = r.read(1)
+              r.close
+              if sync.nil?
+                begin; Process.wait(pid); rescue Errno::ECHILD; end
+                next
+              end
+              nh = Process.wait(pid, Process::WNOHANG)
+              next unless nh.nil? # died after sync; the probe reaped it
+              Process.kill("TERM", pid)
+              reaped = Process.wait(pid)
+              result = [nh, reaped == pid]
+              break
+            end
+            result
             "#,
         );
     }
