@@ -924,6 +924,14 @@ impl Codegen {
             LInst::GuardClass { reg, class, deopt } => {
                 self.a64_guard_class(reg, class, &deopt);
             }
+            // Dispatch arm: the miss is the next arm, not a side exit. aarch64
+            // has no `jit_class_guard_fail` stub (the profile table is fed by
+            // the x86 dispatch stub only), so guards and arms lower alike
+            // here — the ops stay distinct so the distinction survives if
+            // aarch64 grows the recorder.
+            LInst::BrClassNe { reg, class, target } => {
+                self.a64_guard_class(reg, class, &target);
+            }
             // Class-set guard: membership chain built from the single-class
             // guard — each class's check falls through on match (branch to
             // ok) and moves to the next candidate on mismatch; the last
