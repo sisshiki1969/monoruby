@@ -444,6 +444,12 @@ pub struct Allocator<T> {
     /// real mark of a GC cycle; cleared so the `gc-verify` re-mark has
     /// no promotion side effects.
     promoting: bool,
+    /// Whether the mark phase currently running belongs to a *major*
+    /// collection. A major keeps the old generation (`old_bits` is not
+    /// cleared) and marks old objects along with everything else, so it
+    /// is the only phase that has to test `old_bits` before treating a
+    /// freshly marked cell as an aging candidate.
+    major_mark: bool,
     /// Promotable objects marked (survived) this cycle. Their age is
     /// incremented in the post-mark `apply_aging` pass, and those
     /// reaching `RGENGC_OLD_AGE` are promoted there (old_bits + header
@@ -707,6 +713,7 @@ impl<T: GCBox> Allocator<T> {
             old_count: 0,
             old_major_threshold: OLD_OBJECT_FLOOR,
             promoting: false,
+            major_mark: false,
             aging: Vec::new(),
             remembered: Vec::new(),
             pages_since_gc: 0,
@@ -1226,23 +1233,32 @@ impl<T: GCBox> Allocator<T> {
             );
         }
         // Prepare the mark bitmaps:
-        // - Major: zero `mark_bits` and `old_bits`; every object becomes
-        //   a collection candidate and is re-marked from the roots.
+        // - Major: zero `mark_bits` only; every object becomes a
+        //   collection candidate and is re-marked from the roots, but
+        //   `old_bits` is *kept* — an object that was old and survives a
+        //   major stays old (see below).
         // - Minor: seed `mark_bits` from `old_bits`, so old objects start
         //   "already marked" and are skipped by mark and sweep.
-        // (Currently `old_bits` is always empty — nothing is promoted —
-        // so the two paths are equivalent. See gc.md.)
         match kind {
-            GcKind::Major => {
-                self.clear_mark();
-                self.clear_old();
-                // Every object is demoted and re-aged from scratch, so the
-                // remembered set is rebuilt by this cycle's `apply_aging`.
-                // (Demoted objects are young again — fully scanned — so
-                // their now-stale OLD/WB_ARMED header bits are
-                // harmless until re-promotion resets them.)
-                self.remembered.clear();
-            }
+            // Surviving old objects keep their generation across a major:
+            // demoting them would make the whole live old set re-age and
+            // re-promote (an `aging` entry, three header writes and a
+            // `young_child_exists` scan each), and would leave the minors
+            // right after a major scanning a heap with no old generation
+            // at all. Their `old_bits` therefore stay set here; the bits
+            // of the ones that turn out to be *dead* are cleared where
+            // their cells are actually reclaimed (`sweep` /
+            // `salvage_empty_pages`), which is also where `old_count` is
+            // decremented.
+            //
+            // Their remembered/armed classification (header OLD +
+            // WB_ARMED, mirrored by `remembered`) is preserved for the
+            // same reason: the write barrier keeps it correct for new
+            // stores, entries that lost their young children are dropped
+            // by `reclassify_remembered` below, and dead entries by
+            // `filter_remembered` — so the set stays bounded without a
+            // full-old-generation rescan.
+            GcKind::Major => self.clear_mark(),
             GcKind::Minor => self.seed_marks(),
         }
         // Skip all heap-frame bookkeeping entirely when nothing has
@@ -1256,6 +1272,7 @@ impl<T: GCBox> Allocator<T> {
         }
         // Surviving objects may be promoted during the real mark.
         self.promoting = true;
+        self.major_mark = kind == GcKind::Major;
         root.mark(self);
         // A minor GC must also reach young objects referenced only from
         // old (already-marked) objects, via the remembered set.
@@ -1263,18 +1280,14 @@ impl<T: GCBox> Allocator<T> {
             self.mark_remembered();
         }
         self.promoting = false;
+        self.major_mark = false;
         // Age this cycle's promotable survivors and promote those old
         // enough (deferred from the mark phase to avoid aliasing). Safe:
         // marking is complete.
         self.apply_aging();
-        // After a major rebuilds the old generation, re-arm the adaptive
-        // trigger relative to this baseline: major again once the old gen
-        // has grown by `OLD_GROWTH_FACTOR` (floored).
-        if kind == GcKind::Major {
-            self.old_major_threshold = (self.old_count * OLD_GROWTH_FACTOR).max(OLD_OBJECT_FLOOR);
-        }
         // The incrementally maintained `old_count` must equal the actual
-        // number of old cells (popcount of `old_bits`).
+        // number of old cells (popcount of `old_bits`). Dead old cells are
+        // still counted in both here; sweep drops them from each together.
         #[cfg(feature = "gc-debug")]
         debug_assert_eq!(self.old_count, self.old_count_popcount());
         #[cfg(feature = "gc-debug")]
@@ -1284,9 +1297,25 @@ impl<T: GCBox> Allocator<T> {
         // Drop dead entries from the remembered set before sweep frees
         // them: keep only objects still marked this cycle.
         self.filter_remembered();
+        // A major keeps the old generation, so nothing else would ever
+        // re-examine entries whose young children have since been
+        // promoted or died. Re-classify the (small) surviving set here —
+        // the minor path does the same in `mark_remembered`.
+        if kind == GcKind::Major {
+            self.reclassify_remembered();
+        }
         let mark_elapsed = clock.map(|(_, t)| t.elapsed());
         self.salvage_empty_pages();
         self.sweep();
+        // Re-arm the adaptive trigger relative to the *live* old
+        // generation: major again once it has grown by
+        // `OLD_GROWTH_FACTOR` (floored). Computed after sweep, which is
+        // where dead old cells leave `old_count`.
+        if kind == GcKind::Major {
+            self.old_major_threshold = (self.old_count * OLD_GROWTH_FACTOR).max(OLD_OBJECT_FLOOR);
+        }
+        #[cfg(feature = "gc-debug")]
+        debug_assert_eq!(self.old_count, self.old_count_popcount());
         if has_heap_frames {
             self.sweep_heap_frames();
         }
@@ -1389,8 +1418,17 @@ impl<T: GCBox> Allocator<T> {
             // ones old enough are promoted) after marking, in
             // `apply_aging`, to avoid aliasing the `&self` the mark
             // traversal holds. Already-old objects never reach here in a
-            // minor GC (they are seeded-marked and return early above).
-            if self.promoting && ptr.is_promotable() {
+            // minor GC (they are seeded-marked and return early above),
+            // but a major marks them like everything else — and they are
+            // old already, so aging them again would only re-do the
+            // promotion they have long since made. `major_mark` keeps the
+            // extra bitmap read off the minor path, where it can never
+            // find anything.
+            if self.promoting
+                && ptr.is_promotable()
+                && !(self.major_mark
+                    && unsafe { (*page_ptr).old_bits[index / 64] } & bit_mask != 0)
+            {
                 self.aging.push(p as *mut T);
             }
         }
@@ -1505,19 +1543,39 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
-    /// Clear all old-generation bitmaps (major GC demotes every object
-    /// to a collection candidate). See `doc/gc.md`.
+    /// Major GC: re-classify the surviving remembered set, dropping the
+    /// entries that no longer reference the young generation (their
+    /// children died, or were promoted by this very cycle) and arming
+    /// their barrier again.
     ///
-    fn clear_old(&mut self) {
-        unsafe {
-            self.current_page.as_mut().clear_old_bits();
-            self.pages
-                .iter_mut()
-                .for_each(|heap| heap.as_mut().clear_old_bits());
+    /// This is the major-GC counterpart of the self-cleaning built into
+    /// `mark_remembered`, and it is what keeps the set from growing
+    /// monotonically now that a major no longer rebuilds it from
+    /// scratch. Its cost is proportional to the remembered set — the
+    /// live old→young edges — not to the whole old generation, which is
+    /// exactly what the old rebuild-everything path cost.
+    ///
+    /// Must run after `apply_aging` (so this cycle's promotions are
+    /// visible) and after `filter_remembered` (so every entry is live).
+    /// Marking is complete, so every child of a live old object is live
+    /// too: reading them before sweep is sound.
+    ///
+    fn reclassify_remembered(&mut self) {
+        if self.remembered.is_empty() {
+            return;
         }
-        // Every object is demoted; `apply_aging` re-promotes the survivors
-        // this cycle and counts them back up.
-        self.old_count = 0;
+        let remembered = std::mem::take(&mut self.remembered);
+        let mut kept = Vec::with_capacity(remembered.len());
+        for ptr in remembered {
+            // SAFETY: entries are live (dead ones were just filtered out)
+            // and sweep has not run, so the cell is valid here.
+            if unsafe { ptr.as_ref().young_child_exists(self) } {
+                kept.push(ptr);
+            } else {
+                unsafe { (*ptr.as_ptr()).arm_barrier() };
+            }
+        }
+        self.remembered = kept;
     }
 
     ///
@@ -1606,6 +1664,15 @@ impl<T: GCBox> Allocator<T> {
                 // We must check from the last page, because the page can be removed during iteration.
                 if self.pages[len - i - 1].as_ref().all_dead() {
                     let mut page = self.pages.remove(len - i - 1);
+                    // Every cell here is dead, and the page leaves
+                    // `self.pages` before `sweep` runs — so this is the
+                    // only chance to retire the old-generation accounting
+                    // of the old cells that died on it. (`sweep` does the
+                    // same for dead old cells on pages that stay.)
+                    let stale_old = page.as_ref().old_count();
+                    debug_assert!(stale_old <= self.old_count);
+                    self.old_count = self.old_count.saturating_sub(stale_old);
+                    page.as_mut().clear_old_bits();
                     page.as_mut().drop_inner_cells();
                     self.free_pages.push_back(page);
                     self.total_freed_pages += 1;
@@ -1650,7 +1717,27 @@ impl<T: GCBox> Allocator<T> {
             c
         }
 
+        /// Retire the old-generation bits of the dead cells in one
+        /// bitmap word, returning how many there were.
+        ///
+        /// A dead cell goes on the free list and is handed out again as a
+        /// fresh *young* object, so its `old_bits` entry must not
+        /// survive it: a stale bit would seed-mark the reused cell in the
+        /// next minor GC, which would then never scan the new object's
+        /// children. Now that a major keeps `old_bits`, sweep is where
+        /// dead old cells leave both the bitmap and `old_count`.
+        #[inline]
+        fn retire_dead_old(old: &mut u64, live: u64) -> usize {
+            let dead_old = *old & !live;
+            if dead_old == 0 {
+                return 0;
+            }
+            *old &= live;
+            dead_old.count_ones() as usize
+        }
+
         let mut c = 0;
+        let mut demoted = 0;
         let mut anchor = T::new_invalid();
         let head = &mut ((&mut anchor) as *mut T);
         let mut log = if free_log_enabled() {
@@ -1661,9 +1748,12 @@ impl<T: GCBox> Allocator<T> {
 
         for pinfo in self.pages.iter_mut() {
             unsafe {
-                let mut ptr = pinfo.as_ref().get_first_cell();
-                for map in pinfo.as_mut().mark_bits.iter() {
-                    c += sweep_bits(64, *map, &mut ptr, head, &mut log);
+                let page = pinfo.as_mut();
+                let mut ptr = page.get_first_cell();
+                for w in 0..SIZE - 1 {
+                    let map = page.mark_bits[w];
+                    demoted += retire_dead_old(&mut page.old_bits[w], map);
+                    c += sweep_bits(64, map, &mut ptr, head, &mut log);
                 }
             }
         }
@@ -1672,16 +1762,25 @@ impl<T: GCBox> Allocator<T> {
         assert!(self.used_in_current <= DATA_LEN);
         let i = self.used_in_current / 64;
         let bit = self.used_in_current % 64;
-        let bitmap = unsafe { self.current_page.as_mut().mark_bits };
+        let page = unsafe { self.current_page.as_mut() };
 
-        for map in bitmap.iter().take(i) {
-            c += sweep_bits(64, *map, &mut ptr, head, &mut log);
+        for w in 0..i {
+            let map = page.mark_bits[w];
+            demoted += retire_dead_old(&mut page.old_bits[w], map);
+            c += sweep_bits(64, map, &mut ptr, head, &mut log);
         }
 
         if i < SIZE - 1 {
-            c += sweep_bits(bit, bitmap[i], &mut ptr, head, &mut log);
+            let map = page.mark_bits[i];
+            // Cells at or past `used_in_current` have never been handed
+            // out, so their old bits are clear and the whole-word mask is
+            // as accurate as the partial sweep below it.
+            demoted += retire_dead_old(&mut page.old_bits[i], map);
+            c += sweep_bits(bit, map, &mut ptr, head, &mut log);
         }
 
+        debug_assert!(demoted <= self.old_count);
+        self.old_count = self.old_count.saturating_sub(demoted);
         self.free = anchor.next();
         // Cells that were already on the free list are swept again (the
         // sweep is idempotent), so they appear in both counts: what this
@@ -1879,7 +1978,6 @@ impl<T: GCBox> Page<T> {
     ///
     /// Number of old-generation cells in this page (popcount of `old_bits`).
     ///
-    #[cfg(any(feature = "gc-log", feature = "gc-debug"))]
     fn old_count(&self) -> usize {
         self.old_bits.iter().map(|w| w.count_ones() as usize).sum()
     }

@@ -276,8 +276,36 @@ old_count >= old_major_threshold  ||  minors_since_major >= MAX_MINORS_PER_MAJOR
 
 | kind | 操作 |
 | --- | --- |
-| **Major** | `clear_mark()`(mark_bits=0)+ `clear_old()`(old_bits=0, `old_count=0`)+ `remembered.clear()`。全オブジェクトが収集候補に戻り、ルートから再マーク・全スイープ。 |
+| **Major** | `clear_mark()`(mark_bits=0)のみ。全オブジェクトが収集候補に戻り、ルートから再マーク・全スイープ。**`old_bits` と remembered set は保持**する(下記)。 |
 | **Minor** | `seed_marks()`。各ページで `mark_bits ← old_bits` をコピー(`seed_mark_from_old`)。old オブジェクトは**最初からマーク済み**とみなされ、再走査もスイープもされない。 |
+
+#### メジャーは old 世代を維持する
+
+メジャー GC は old を**降格しない**。old だったオブジェクトがメジャーを生き延びたら
+old のままで、remembered / armed の区別(ヘッダの OLD + WB_ARMED、および
+`remembered`)もそのまま引き継ぐ。
+
+降格していた頃は、生きている old 世代**全件**が毎メジャーで
+「`aging` への push → age 加算 → `promote_to_old` → `young_child_exists` の全子走査」
+をやり直していた(age は飽和済みなので昇格自体は同じサイクル内で完了するが、
+old 世代の参照辺をもう一度全走査するコストがそのまま乗る)。さらにメジャー直後の
+マイナーは old 世代が空の状態から始まるため、シードマークの利得も失われていた。
+
+維持に伴い、**死んだ old セルのビットを畳む場所**が変わる:
+
+- `sweep`:各ビットマップ語で `old_bits &= mark_bits` とし、落ちたビット数を
+  `old_count` から引く(`retire_dead_old`)。解放セルは free list 経由で
+  **若い**オブジェクトとして再利用されるので、古いビットが残っていると次のマイナーで
+  seed-mark され、新しいオブジェクトの子が一度も走査されない。
+- `salvage_empty_pages`:全セルが死んだページは `sweep` の前に `pages` から外れる
+  ため、ここで `old_count` を減らし `clear_old_bits()` する。
+- 適応的メジャー閾値 `old_major_threshold` の再計算は**スイープ後**に行う
+  (生きている old 世代を基準にするため)。
+
+remembered set は、マイナーの `mark_remembered` に加えて、メジャーでは
+`reclassify_remembered`(§6.4)が young の子を失った entry を落として `arm_barrier`
+する。コストは remembered set のサイズ(生きた old→young 辺)に比例し、
+old 世代全体には比例しない。
 
 ### 6.3 マークフェーズ
 
@@ -287,6 +315,9 @@ old_count >= old_major_threshold  ||  minors_since_major >= MAX_MINORS_PER_MAJOR
 3. `gc_check_and_mark`(`alloc.rs:1007`)は、初めてマークしたセルが `promoting` かつ
    `is_promotable()` なら `aging` に積む(昇格候補の収集)。ヘッダ書き換えは
    マーク走査が握る `&self` とエイリアスしないよう**マーク後に遅延**する。
+   ただし**既に old のセルは積まない**:マイナーではシードマーク済みでそもそも
+   ここに来ないが、メジャーは old も普通にマークするため `old_bits` の確認が要る
+   (`major_mark` フラグで、この余分なビットマップ読みをマイナー側に持ち込まない)。
 4. **Minor のみ** `mark_remembered()`:remembered set の各 old オブジェクトの
    *子だけ*を `mark_children` で辿る(親 old は既にシードマーク済み)。これにより
    「old からしか参照されていない young オブジェクト」に到達する。走査後、若い子が
@@ -307,6 +338,17 @@ old_count >= old_major_threshold  ||  minors_since_major >= MAX_MINORS_PER_MAJOR
   いる**(`young_child_exists`)なら remembered set に追加(バリア導入前から存在した
   old→young 辺をカバー)。young 参照が無ければ `arm_barrier` して以後の young ストアに
   備える。
+
+メジャーではこの後に `reclassify_remembered`(`filter_remembered` で死んだ entry を
+落とした後)が走る。生き残った entry のうち young の子を失ったもの
+(この収集で子が昇格した/死んだ)を set から外し `arm_barrier` する — マイナーの
+`mark_remembered` に内蔵された自己クリーニングと同じ役割で、メジャーが set を
+作り直さなくなった分をここで担保する。
+
+> **注**: 以前はメジャーが remembered set を毎回ゼロから作り直していたため、
+> 書き込みバリアの漏れがあってもメジャーごとに自己修復されていた。維持方式では
+> それが無いので、バリア契約(§7.3 の `is_promotable`)の破れはマスクされずに
+> 顕在化する。`gc-stress` + `gc-verify` で検証すること。
 
 ### 6.5 マイナー後の検証(`gc-verify` フィーチャ)
 
@@ -582,5 +624,9 @@ stderr へ出力して abort する(`alloc.rs` の `malloc_hard_limit`)。OOM �
 - 世代別の心臓部は、**3 回生存で昇格(aging)**・**適応的メジャー閾値**・
   **1 ビット高速パスの書き込みバリア + remembered set(自己クリーニング付き)**。
   マイナーは old をシードマークして young + old→young 辺だけを辿る。
+- **メジャーも old 世代を維持する**(降格して作り直さない)。old のビットと
+  remembered/armed の区別はオブジェクトと寿命を共にし、死んだ old セルの後始末は
+  スイープとページ回収が担う。old 世代が大きいほどメジャーが安くなる
+  (old 61 万で 1 回あたり 74ms → 27ms)。
 - 外部 malloc 圧・シグナル・`GC.start` も同じ poll ワード経由で同一のセーフ
   ポイント収集に集約される(レーン分割は `poll_flag.rs` / `doc/safepoint.md` §3)。
