@@ -455,6 +455,47 @@ where
         )
     }
 
+    /// [`Self::insert_prehashed`] with a caller-supplied equality
+    /// predicate in place of `==`: for keys whose `RubyEql` verdict is
+    /// computable without the vm but is not bit equality (Ruby `String`s
+    /// — content equality across distinct heap objects). `eq` must
+    /// return exactly what the map's `RubyEql` would for the probe key,
+    /// and `hash` must be exactly what [`Self::hash`] would produce for
+    /// `key`.
+    pub fn insert_prehashed_with(
+        &mut self,
+        hash: usize,
+        key: K,
+        value: V,
+        eq: impl FnMut(&K) -> bool,
+    ) -> Option<V> {
+        self.core
+            .insert_full_prehashed_with(HashValue(hash), key, value, eq)
+            .1
+    }
+
+    /// Positional lookup twin of [`Self::insert_prehashed_with`]: a
+    /// caller-computed digest probed with a caller-supplied equality
+    /// predicate (same soundness conditions).
+    pub fn get_prehashed_with(
+        &self,
+        hash: usize,
+        eq: impl FnMut(&K) -> bool,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<&V>, R> {
+        Ok(
+            if let Some(i) = self
+                .core
+                .get_index_of_prehashed_with(HashValue(hash), eq, e, g)?
+            {
+                Some(&self.as_entries()[i].value)
+            } else {
+                None
+            },
+        )
+    }
+
     /// Insert a key-value pair in the map at its ordered position among sorted keys.
     ///
     /// This is equivalent to finding the position with
