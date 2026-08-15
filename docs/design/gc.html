@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9a4b4a18.js";
+            window.path_to_searchindex_js = "../searchindex-b85aee89.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -440,11 +440,35 @@ remembered set の実体(列挙)は <code>Allocator::remembered</code>(Vec)で�
 <tr><th>kind</th><th>操作</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>Major</strong></td><td><code>clear_mark()</code>(mark_bits=0)+ <code>clear_old()</code>(old_bits=0, <code>old_count=0</code>)+ <code>remembered.clear()</code>。全オブジェクトが収集候補に戻り、ルートから再マーク・全スイープ。</td></tr>
+<tr><td><strong>Major</strong></td><td><code>clear_mark()</code>(mark_bits=0)のみ。全オブジェクトが収集候補に戻り、ルートから再マーク・全スイープ。<strong><code>old_bits</code> と remembered set は保持</strong>する(下記)。</td></tr>
 <tr><td><strong>Minor</strong></td><td><code>seed_marks()</code>。各ページで <code>mark_bits ← old_bits</code> をコピー(<code>seed_mark_from_old</code>)。old オブジェクトは<strong>最初からマーク済み</strong>とみなされ、再走査もスイープもされない。</td></tr>
 </tbody>
 </table>
 </div>
+<h4 id="メジャーは-old-世代を維持する"><a class="header" href="#メジャーは-old-世代を維持する">メジャーは old 世代を維持する</a></h4>
+<p>メジャー GC は old を<strong>降格しない</strong>。old だったオブジェクトがメジャーを生き延びたら
+old のままで、remembered / armed の区別(ヘッダの OLD + WB_ARMED、および
+<code>remembered</code>)もそのまま引き継ぐ。</p>
+<p>降格していた頃は、生きている old 世代<strong>全件</strong>が毎メジャーで
+「<code>aging</code> への push → age 加算 → <code>promote_to_old</code> → <code>young_child_exists</code> の全子走査」
+をやり直していた(age は飽和済みなので昇格自体は同じサイクル内で完了するが、
+old 世代の参照辺をもう一度全走査するコストがそのまま乗る)。さらにメジャー直後の
+マイナーは old 世代が空の状態から始まるため、シードマークの利得も失われていた。</p>
+<p>維持に伴い、<strong>死んだ old セルのビットを畳む場所</strong>が変わる:</p>
+<ul>
+<li><code>sweep</code>:各ビットマップ語で <code>old_bits &amp;= mark_bits</code> とし、落ちたビット数を
+<code>old_count</code> から引く(<code>retire_dead_old</code>)。解放セルは free list 経由で
+<strong>若い</strong>オブジェクトとして再利用されるので、古いビットが残っていると次のマイナーで
+seed-mark され、新しいオブジェクトの子が一度も走査されない。</li>
+<li><code>salvage_empty_pages</code>:全セルが死んだページは <code>sweep</code> の前に <code>pages</code> から外れる
+ため、ここで <code>old_count</code> を減らし <code>clear_old_bits()</code> する。</li>
+<li>適応的メジャー閾値 <code>old_major_threshold</code> の再計算は<strong>スイープ後</strong>に行う
+(生きている old 世代を基準にするため)。</li>
+</ul>
+<p>remembered set は、マイナーの <code>mark_remembered</code> に加えて、メジャーでは
+<code>reclassify_remembered</code>(§6.4)が young の子を失った entry を落として <code>arm_barrier</code>
+する。コストは remembered set のサイズ(生きた old→young 辺)に比例し、
+old 世代全体には比例しない。</p>
 <h3 id="63-マークフェーズ"><a class="header" href="#63-マークフェーズ">6.3 マークフェーズ</a></h3>
 <ol>
 <li><code>self.promoting = true</code> にしてから <code>root.mark(self)</code>(ルートは §8)。</li>
@@ -452,7 +476,10 @@ remembered set の実体(列挙)は <code>Allocator::remembered</code>(Vec)で�
 だった場合のみ <code>mark_children</code> で子を辿る(深さ優先)。</li>
 <li><code>gc_check_and_mark</code>(<code>alloc.rs:1007</code>)は、初めてマークしたセルが <code>promoting</code> かつ
 <code>is_promotable()</code> なら <code>aging</code> に積む(昇格候補の収集)。ヘッダ書き換えは
-マーク走査が握る <code>&amp;self</code> とエイリアスしないよう<strong>マーク後に遅延</strong>する。</li>
+マーク走査が握る <code>&amp;self</code> とエイリアスしないよう<strong>マーク後に遅延</strong>する。
+ただし<strong>既に old のセルは積まない</strong>:マイナーではシードマーク済みでそもそも
+ここに来ないが、メジャーは old も普通にマークするため <code>old_bits</code> の確認が要る
+(<code>major_mark</code> フラグで、この余分なビットマップ読みをマイナー側に持ち込まない)。</li>
 <li><strong>Minor のみ</strong> <code>mark_remembered()</code>:remembered set の各 old オブジェクトの
 <em>子だけ</em>を <code>mark_children</code> で辿る(親 old は既にシードマーク済み)。これにより
 「old からしか参照されていない young オブジェクト」に到達する。走査後、若い子が
@@ -473,6 +500,17 @@ remembered set の実体(列挙)は <code>Allocator::remembered</code>(Vec)で�
 old→young 辺をカバー)。young 参照が無ければ <code>arm_barrier</code> して以後の young ストアに
 備える。</li>
 </ul>
+<p>メジャーではこの後に <code>reclassify_remembered</code>(<code>filter_remembered</code> で死んだ entry を
+落とした後)が走る。生き残った entry のうち young の子を失ったもの
+(この収集で子が昇格した/死んだ)を set から外し <code>arm_barrier</code> する — マイナーの
+<code>mark_remembered</code> に内蔵された自己クリーニングと同じ役割で、メジャーが set を
+作り直さなくなった分をここで担保する。</p>
+<blockquote>
+<p><strong>注</strong>: 以前はメジャーが remembered set を毎回ゼロから作り直していたため、
+書き込みバリアの漏れがあってもメジャーごとに自己修復されていた。維持方式では
+それが無いので、バリア契約(§7.3 の <code>is_promotable</code>)の破れはマスクされずに
+顕在化する。<code>gc-stress</code> + <code>gc-verify</code> で検証すること。</p>
+</blockquote>
 <h3 id="65-マイナー後の検証gc-verify-フィーチャ"><a class="header" href="#65-マイナー後の検証gc-verify-フィーチャ">6.5 マイナー後の検証(<code>gc-verify</code> フィーチャ)</a></h3>
 <p>マイナー GC の後、シード無し・昇格無しでルートから全ライブグラフを独立に再マーク
 する(<code>alloc.rs:964</code>)。もしマイナーが到達可能なオブジェクトを解放していれば
@@ -715,6 +753,10 @@ stderr へ出力して abort する(<code>alloc.rs</code> の <code>malloc_hard_
 <li>世代別の心臓部は、<strong>3 回生存で昇格(aging)</strong>・<strong>適応的メジャー閾値</strong>・
 <strong>1 ビット高速パスの書き込みバリア + remembered set(自己クリーニング付き)</strong>。
 マイナーは old をシードマークして young + old→young 辺だけを辿る。</li>
+<li><strong>メジャーも old 世代を維持する</strong>(降格して作り直さない)。old のビットと
+remembered/armed の区別はオブジェクトと寿命を共にし、死んだ old セルの後始末は
+スイープとページ回収が担う。old 世代が大きいほどメジャーが安くなる
+(old 61 万で 1 回あたり 74ms → 27ms)。</li>
 <li>外部 malloc 圧・シグナル・<code>GC.start</code> も同じ poll ワード経由で同一のセーフ
 ポイント収集に集約される(レーン分割は <code>poll_flag.rs</code> / <code>doc/safepoint.md</code> §3)。</li>
 </ul>
