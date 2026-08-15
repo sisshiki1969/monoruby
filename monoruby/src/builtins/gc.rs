@@ -713,6 +713,47 @@ mod tests {
     }
 
     #[test]
+    fn old_generation_retires_with_its_objects() {
+        // A major GC keeps the old generation across the cycle, so the
+        // only place an old cell leaves `old_bits`/`old_objects` is where
+        // it is actually reclaimed (sweep, or a salvaged all-dead page).
+        // If either accounting path were missing, `old_objects` would
+        // ratchet upwards instead of following the live old set down.
+        let n = if cfg!(feature = "gc-stress") { 2_000 } else { 50_000 };
+        run_test_once(&format!(
+            r##"
+            big = Array.new({n}) {{ |i| [i] }}
+            5.times {{ GC.start }}
+            high = GC.stat(:old_objects)
+            big = nil
+            5.times {{ GC.start }}
+            low = GC.stat(:old_objects)
+            [high > {n} * 4 / 5, low + {n} * 4 / 5 < high]
+            "##
+        ));
+    }
+
+    #[test]
+    fn old_to_young_edges_survive_across_a_major() {
+        // The remembered set is no longer rebuilt from scratch by every
+        // major, so a store into an object that was old *before* that
+        // major has to be covered by the write barrier alone. Attach the
+        // young children after the majors, then collect only the young
+        // generation: each child is reachable from an old parent and
+        // nothing else.
+        let n = if cfg!(feature = "gc-stress") { 200 } else { 2_000 };
+        run_test_once(&format!(
+            r##"
+            parents = Array.new({n}) {{ [] }}
+            5.times {{ GC.start }}
+            parents.each_with_index {{ |a, i| a << "child#{{i}}" }}
+            2.times {{ GC.start(full_mark: false) }}
+            [parents.map {{ |a| a[0] }}.uniq.size, parents.all? {{ |a| a.size == 1 }}]
+            "##
+        ));
+    }
+
+    #[test]
     fn gc_garbage_collect() {
         run_test("o = Object.new; o.extend(GC); o.garbage_collect");
     }
