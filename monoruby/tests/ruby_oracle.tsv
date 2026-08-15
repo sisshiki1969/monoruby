@@ -2176,6 +2176,7 @@ bc0ccc0a16c986d29598ed69b9038ff8	[false, true, true]	h = {}\n        before = h.
 bc2025afe3d4e746f87d06a3bac3e3db	[[]]	r = []; Enumerator.new { |y| y.yield }.each { |*a| r << a }; r
 bc2e5f3b4a16256b7dc6b55712d5a785	nil	Encoding.default_internal
 bc3dddbacac3d7f8c64e3bc43ea8697d	[true, true]	class S\n        end\n        class C < S\n        end\n        c = C.new\n 
+bc4a7a2f49371fc147939e3a5a54bd45	[nil, true]	r, w = IO.pipe\n            pid = fork { r.close; Signal.trap("TERM"
 bc5ee3d6a54ec78cbbccd9f386e31604	[true, true, "test"]	class MyMod < Module\n              def initialize(name)\n           
 bc7468de3c49bfa7febfbc6e20e4709c	[4, 1170]	a = 0\n        for i in [0,1,2,3,4]\n            1.times do\n             
 bca890206e651d8b1e7121a1d6d0052d	[1, 2, 3, 4, [5, 6, 7]]	def f(x,y,a=42,b=55,*z)\n            [x,y,a,b,z]\n        end\n        \n\n 

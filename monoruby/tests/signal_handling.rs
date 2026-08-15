@@ -147,3 +147,27 @@ fn sleep_is_interrupted_by_signals() {
     assert_eq!(stdout(&out), "wake\ntrue\n");
     assert!(out.status.success());
 }
+
+#[test]
+fn bare_sleep_blocks_until_a_signal_raises() {
+    // Argument-less `sleep` with no other live green thread must block
+    // like CRuby's: a plain trap handler runs and the sleep *resumes*
+    // (CRuby sleeps straight through it), and only an interrupt that
+    // raises — here the converted SIGTERM SignalException — ends it.
+    // This arm used to return immediately, which silently un-parked
+    // every fork child that meant to sit in `sleep` until signalled.
+    let out = monoruby(
+        r##"Signal.trap("ALRM") { puts "trap" }
+           parent = Process.pid
+           pid = fork { sleep 0.2; Process.kill :ALRM, parent; sleep 0.2; Process.kill :TERM, parent }
+           begin
+             sleep
+             puts :returned_early
+           rescue SignalException => e
+             puts e.message
+           end
+           Process.wait(pid)"##,
+    );
+    assert_eq!(stdout(&out), "trap\nSIGTERM\n");
+    assert!(out.status.success());
+}
