@@ -1016,6 +1016,7 @@
 576157356419a5741dbdbde29df95789	true	GC.stat.values.all? { |v| v.is_a?(Integer) }
 57bd29081de5740463b29a1c3ee0ef00	"US-ASCII"	s = "hello".dup.force_encoding("US-ASCII")\n              s[/(ll)/
 57f002dbbc2a38d20a751f8e1d4218fe	[255, 15, 240, -1, 15, -16, 42, 0, 42, 42, -43, 244837815148286, 304366200, 244837510782086]	def or_a; 0xFF | 0x0F; end\n            def and_a; 0xFF & 0x0F; end\n
+57f22a05e8acf18b24e3a1c7b3e4f9a8	[false, :c, false, :cf, :c]	class A; end\n            class B; end\n            class C; end\n    
 5802c597582fbeab79b6c6ee6bfe6fed	[true, false]	a = ["a","b","c"]\n        \n\n            [a.include?("b"), a.include
 581a9eeda65b4118ca39d22e6e34f801	[:caught, "boom"]	class C\n              def initialize; @h = {}; end\n              de
 582de92dfc668c66f3fca99c56ea0221	9	M = Data.define(:amount, :unit)\nM.new("amount" => 1, amount: 9, unit: "m").amoun
@@ -1853,6 +1854,7 @@ a164c646ebdbe3551b16c27fa5e2aab0	5	def f; return 5; end; f
 a189356012c67f14ffd149bedd2d23b2	nil	$/ = "xyz"; r = "abcde".chomp!; $/ = "\\n"; r
 a1a984bb2edd75a78229a94547d15825	[true, true, :outer, "nil", ["NoMethodError", "RuntimeError"], "RuntimeError"]	def restore_check(log)\n          outer = StandardError.new "outer"\n    
 a1c461fb313f0da82569acd28c4ca299	[1, 3, 5, 7]	(1..7).filter(&:odd?)
+a1e955df00a16906b87178a40bfe7105	[100, 50, 250, :c, false, true, false]	class A; end\n            class B; end\n            class C; end\n    
 a204f15cf81d104e4412940bba47afbb	[[5, 5], [9, nil, 9], [nil, nil], nil, [7, 1, 7], 42, "FrozenError"]	def drive(n)\n              r = nil\n              n.times { r = yiel
 a207205e2108ee451fae4d6f0df8308a	nil	File.open("Cargo.toml") { |f| f.ungetc(100) }
 a21ceda5ef436f9167f0988b18686885	[true, true, "backtrace must be an Array of String or an Array of Thread::Backtrace::Location", true]	def probe = caller_locations\n        locs = probe\n        e = RuntimeEr
@@ -1948,6 +1950,7 @@ a93aff5f67ff2713cf29404f5b2f4a64	42	class C\n          def call_priv\n          
 a93f36f86e60d2939747b3460e0e9680	[["A", "B"], ["-", "-"], ["A", "-"], ["A", "B"]]	module SnapA\n              refine(String) { def tag;  "A"; end }\n  
 a94375bbeca8fabd095d830c8dca16dd	["Y", "Y"]	$-0 = "Y"; r = [$/, $-0]; $/ = "\\n"; r
 a966ff673f0471a0f7996609730def4c	"missing keyword: :x"	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:)
+a96f44dffe64892feff990050d690d94	[150, false, true, false, false]	class Tail1; end\n            class Tail2; end\n            class Tai
 a98bef4ea7d42ca9b3589602d2392195	[[5, 6], [0, 0], [5, 6], [1, 1], [5, 6], [2, 2], [5, 6], [3, 3], [5, 6], [4, 4], [5, 6], [5, 5], [5, 6], [6, 6], [5, 6], [7, 7], [5, 6], [8, 8], [5, 6], [9, 9], [5, 6], [10, 10], [5, 6], [11, 11], [5, 6], [12, 12], [5, 6], [13, 13], [5, 6], [14, 14], [5, 6], [15, 15], [5, 6], [16, 16], [5, 6], [17, 17], [5, 6], [18, 18], [5, 6], [19, 19], [5, 6], [20, 20], [5, 6], [21, 21], [5, 6], [22, 22], [5, 6], [23, 23], [5, 6], [24, 24], [5, 6], [25, 25], [5, 6], [26, 26], [5, 6], [27, 27], [5, 6], [28, 28], [5, 6], [29, 29]]	class N\n          attr_reader :v\n          def initialize(a: 0, b: 1) =
 a9a64f0fa64e4bb1ec264c4f7c86df8b	:OVERRIDDEN	class Integer; def *(o); :OVERRIDDEN; end; end; 3 * 4
 a9b082961457f87dd5dd3df08a2bc22e	"CAFÉ"	"Café".upcase
