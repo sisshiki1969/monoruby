@@ -871,10 +871,9 @@ impl Value {
         // is then an O(1) view clone inheriting the cached code range,
         // instead of an O(len) byte copy — ERB/heredoc-sized templates
         // pay that on every evaluation. Mutating a copy un-shares it
-        // through the ordinary CoW machinery.
-        if val.is_rstring_inner().is_some() {
-            crate::value::rvalue::share_string_buffer(&mut val);
-        }
+        // through the ordinary CoW machinery. (A non-string template —
+        // e.g. an Array or Hash literal — passes through it unchanged.)
+        crate::value::rvalue::share_string_buffer(&mut val);
         let mut v = val.deep_copy();
         // A string-literal template in a pragma-less file is marked
         // chilled; each per-execution copy inherits the mark (and,
