@@ -826,13 +826,36 @@ impl alloc::GC<RValue> for RValue {
                 self as *const _,
                 unsafe { self.header.meta }
             );
+            // The immediate referrer is the `mark_children` frame right
+            // below this one in the backtrace. Print the enclosing
+            // *queue* entry too: the walk defers deep children to the
+            // mark queue, which cuts the ancestry above that entry out of
+            // the backtrace. "root set" means the walk never left the
+            // roots — the stale edge is in one of them (an unrooted
+            // temporary in a builtin, a stale frame slot), not in a
+            // deferred object.
+            match alloc.mark_referrer() {
+                // SAFETY: the entry is the live, marked cell whose
+                // children are being scanned right now.
+                Some(from) => {
+                    let from = unsafe { from.as_ref() };
+                    eprintln!("  scanning from: {:p} ty={:?}", from as *const _, from.ty());
+                }
+                None => eprintln!("  scanning from: root set"),
+            }
             eprintln!("{}", std::backtrace::Backtrace::force_capture());
             std::process::abort();
         }
         if alloc.gc_check_and_mark(self) {
             return;
         }
-        alloc::GCBox::mark_children(self, alloc);
+        // Let the allocator decide whether to walk into `mark_children`
+        // from here or to defer it to the mark queue: past
+        // `MARK_RECURSION_LIMIT` levels the traversal goes breadth-first
+        // over that queue, so the depth of the object graph costs heap
+        // entries instead of native stack frames. See
+        // `Allocator::scan_children`.
+        alloc.scan_children(self);
     }
 }
 

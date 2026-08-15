@@ -308,6 +308,32 @@ const OLD_GROWTH_FACTOR: usize = 2;
 /// would only add overhead.
 const OLD_OBJECT_FLOOR: usize = 16384;
 
+/// How deep the mark phase may walk the object graph with plain
+/// recursion before it starts deferring children to the mark queue
+/// (`Allocator::scan_children`).
+///
+/// The traversal used to be *purely* recursive, so its stack cost was the
+/// depth of the object graph: 75K links of `a = [a]` (or a linked list,
+/// or an ivar chain) overflowed the 8MB main stack and aborted the
+/// process inside GC. Above this limit the walk switches to a
+/// breadth-first queue on the heap, which bounds the native stack at
+/// `MARK_RECURSION_LIMIT` nested `mark_children` frames — a few KB — no
+/// matter how deep the graph is. That headroom matters because a
+/// collection starts at a safepoint, on top of whatever JIT-compiled Ruby
+/// frames are already on the stack.
+///
+/// Keeping a *small* recursive prefix rather than queueing from the very
+/// first object is what makes this free: real graphs are shallow and wide,
+/// and a queue entry per marked object costs a push + a pop + 8 bytes of
+/// memory traffic. Measured on plb2 bedcov (2.7M live objects, the most
+/// mark-heavy workload here, 89 collections), mean of 13 interleaved
+/// runs: 3205 ms for the old unbounded recursion, 3225 ms (+0.6%) with
+/// this prefix, 3479 ms (+8.6%) queueing everything. 32 and 256 measured
+/// the same, so this takes the tighter stack bound.
+///
+/// Setting it to 0 makes the traversal a pure breadth-first walk.
+const MARK_RECURSION_LIMIT: u32 = 32;
+
 /// Number of collections an object must survive before it is promoted to
 /// the old generation. Aging (rather than promoting on first survival)
 /// avoids promoting short-lived objects that merely happened to be live
@@ -477,6 +503,41 @@ pub struct Allocator<T> {
     /// OLD). Deferred so the header writes never alias a `&self` held by
     /// the mark traversal.
     aging: Vec<*mut T>,
+    /// Mark-phase work list: objects whose mark bit is set but whose
+    /// children have not been scanned yet, because the walk had reached
+    /// [`MARK_RECURSION_LIMIT`] when it got to them. Popped front-to-back
+    /// by [`Allocator::drain_mark_queue`], so the deep part of the
+    /// traversal is a **breadth-first** walk driven by this queue rather
+    /// than by the native stack. See `doc/gc.md`.
+    ///
+    /// The queue holds one pointer per *marked but unscanned* object, so
+    /// it peaks below `8 bytes × live objects` against the 64-byte cells
+    /// those objects occupy — an eighth of the live heap in the worst
+    /// case (every live object queued at once), and far less in practice.
+    /// Its capacity is deliberately kept across collections: under
+    /// `gc-stress` the mark phase runs once per allocation, and re-growing
+    /// the buffer each time would dominate.
+    mark_queue: VecDeque<std::ptr::NonNull<T>>,
+    /// The object whose *deferred* scan is in progress — the entry
+    /// `drain_mark_queue` (or `mark_remembered`) is currently on — or
+    /// `None` while the walk is still in the root set.
+    ///
+    /// Forensics only, for the `DEAD RVALUE reached in mark` abort. The
+    /// immediate referrer of a dead cell is always in the backtrace (its
+    /// `mark_children` frame is what called the failing `mark`), but the
+    /// ancestry above it is cut off at the most recent queue hop, because
+    /// that ancestor is no longer a stack frame. This names it, which is
+    /// the link the deferral costs. Maintained only where objects leave
+    /// the queue — never on the recursive fast path, which is hot. See
+    /// `RValue::mark` and `doc/gc.md`.
+    mark_scanning: Option<std::ptr::NonNull<T>>,
+    /// How many `mark_children` frames the current walk is nested in.
+    /// Compared against [`MARK_RECURSION_LIMIT`] to decide between
+    /// scanning a newly marked object's children right away and deferring
+    /// them to `mark_queue`. Incremented and decremented in matched pairs
+    /// by [`Allocator::scan_children`], so it is back at zero whenever the
+    /// mark phase returns to the root walk.
+    mark_depth: u32,
     /// Generational GC: remembered set — old-generation objects that
     /// hold a reference into the young generation, recorded by the write
     /// barrier (`RValue::write_barrier`). A minor GC scans these as
@@ -736,6 +797,9 @@ impl<T: GCBox> Allocator<T> {
             promoting: false,
             major_mark: false,
             aging: Vec::new(),
+            mark_queue: VecDeque::new(),
+            mark_scanning: None,
+            mark_depth: 0,
             remembered: Vec::new(),
             pages_since_gc: 0,
             gc_enabled: true,
@@ -1309,11 +1373,17 @@ impl<T: GCBox> Allocator<T> {
         // Surviving objects may be promoted during the real mark.
         self.promoting = true;
         self.major_mark = kind == GcKind::Major;
+        // The root walk marks everything within `MARK_RECURSION_LIMIT`
+        // levels of a root and queues the rest; the drain then finishes
+        // the deep part breadth-first (see `scan_children`). Nothing may
+        // read the mark bits between the two.
         root.mark(self);
+        self.drain_mark_queue();
         // A minor GC must also reach young objects referenced only from
         // old (already-marked) objects, via the remembered set.
         if kind == GcKind::Minor {
             self.mark_remembered();
+            self.drain_mark_queue();
         }
         self.promoting = false;
         self.major_mark = false;
@@ -1364,6 +1434,7 @@ impl<T: GCBox> Allocator<T> {
         if kind == GcKind::Minor {
             self.clear_mark();
             root.mark(self);
+            self.drain_mark_queue();
         }
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
@@ -1469,6 +1540,70 @@ impl<T: GCBox> Allocator<T> {
             }
         }
         is_marked
+    }
+
+    ///
+    /// Scan the children of a freshly marked object, or defer them to the
+    /// mark queue once the walk is [`MARK_RECURSION_LIMIT`] levels deep.
+    ///
+    /// Callers (`RValue::mark`) set the mark bit with
+    /// [`Allocator::gc_check_and_mark`] and, when it was not already set,
+    /// hand the object here. Deferring is what keeps the mark phase off
+    /// the native stack: a chain of N objects (`a = [a]` N times, a linked
+    /// list, an ivar chain) used to cost N nested `mark` →
+    /// `mark_children` → `mark` frames and overflowed the 8MB main stack
+    /// at ~75K links; it now costs at most `MARK_RECURSION_LIMIT` frames
+    /// plus queue entries on the heap. See `doc/gc.md`.
+    ///
+    pub(crate) fn scan_children(&mut self, ptr: &T) {
+        if self.mark_depth < MARK_RECURSION_LIMIT {
+            self.mark_depth += 1;
+            ptr.mark_children(self);
+            self.mark_depth -= 1;
+            return;
+        }
+        // SAFETY: `ptr` is a live cell inside one of our pages (it was
+        // just marked), so the address is non-null. Nothing frees it
+        // before the queue is drained: sweep runs only after the mark
+        // phase, by which point the queue is empty.
+        self.mark_queue
+            .push_back(unsafe { std::ptr::NonNull::new_unchecked(ptr as *const T as *mut T) });
+    }
+
+    ///
+    /// Scan the children of every queued object until the queue runs dry
+    /// — the mark phase's main loop. Children reached here are marked and
+    /// either scanned inline or queued in turn (`scan_children`), so one
+    /// drain reaches everything the roots did not already cover.
+    ///
+    /// Must be called after every root-marking step and before anything
+    /// reads the mark bits (aging, `filter_remembered`, sweep).
+    ///
+    fn drain_mark_queue(&mut self) {
+        // Entries are queued precisely because the walk had run out of
+        // its stack budget; each one restarts it from zero.
+        debug_assert_eq!(self.mark_depth, 0);
+        while let Some(ptr) = self.mark_queue.pop_front() {
+            // Forensics: record the entry, so a stale edge found below
+            // can name where the walk resumed from (see `mark_scanning`).
+            self.mark_scanning = Some(ptr);
+            // SAFETY: entries are live, marked cells (see
+            // `scan_children`); `mark_children` takes `&T` while this
+            // borrows `self` mutably, and the two never alias — marking
+            // only writes the allocator's bitmaps and side tables, never
+            // the object. Same pattern as `mark_remembered`.
+            unsafe { ptr.as_ref().mark_children(self) };
+        }
+        self.mark_scanning = None;
+    }
+
+    ///
+    /// The queue entry whose scan is in progress, or `None` when the walk
+    /// is still in the root set. Used only to report the ancestry the
+    /// deferral cut out of the backtrace when marking reaches a dead cell.
+    ///
+    pub(crate) fn mark_referrer(&self) -> Option<std::ptr::NonNull<T>> {
+        self.mark_scanning
     }
 
     ///
@@ -1644,7 +1779,9 @@ impl<T: GCBox> Allocator<T> {
             // SAFETY: remembered entries are live old objects (kept
             // marked across the cycle; dead ones are dropped in
             // `filter_remembered` before sweep frees them).
+            self.mark_scanning = Some(ptr);
             unsafe { ptr.as_ref().mark_children(self) };
+            self.mark_scanning = None;
             // Self-clean: keep the entry only while it still references a
             // young object. Once all its children have themselves been
             // promoted, it no longer needs scanning — dropping it keeps
