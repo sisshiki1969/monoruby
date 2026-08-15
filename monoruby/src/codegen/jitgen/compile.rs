@@ -3,6 +3,7 @@ use crate::codegen::jitgen::state::LinkMode;
 use super::*;
 
 mod binary_op;
+mod dispatch;
 mod unary_op;
 #[cfg(feature = "emit-cfg")]
 mod dump_cfg;

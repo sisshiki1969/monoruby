@@ -181,30 +181,10 @@ impl<'a> JitContext<'a> {
         // Passed through rather than hard-coded so the residual arm's
         // visibility stays correct if that gate is ever widened.
         let is_func_call = self.store[callid].is_func_call();
-        let pc = state.pc();
         let state_save = state.clone();
         let ir_save = ir.save();
-
-        // The arms diverge, so both operands must be in their stack homes
-        // before the branch: the slow arm reads them from there, and the
-        // merge has to describe one placement for both.
-        state.write_back_slots(ir, &[base, idx]);
-        state.flush_gp(ir);
-        let entry = state.clone();
-
-        // The declared merge state. `dst` is an unknown `Value`, and either
-        // arm may have run arbitrary Ruby (`Method#call`, a user `#[]`), so
-        // none of the cached invariants survive.
-        let mut target = entry.clone();
-        if let Some(dst) = dst {
-            target.def_S(dst);
-        }
-        target.unset_class_version_guard();
-        target.unset_const_version_guard();
-        target.unset_side_effect_guard();
-
+        let (entry, merge) = self.declare_merge(state, ir, &[base, idx], dst);
         let slow = self.label();
-        let merge = self.label();
 
         // ---- arm 1: the inlinable receiver class.
         let mut fast = entry.clone();
@@ -222,8 +202,7 @@ impl<'a> JitContext<'a> {
         }
         self.record_bop_dep(inline_class, IdentId::_INDEX);
         fast.unset_side_effect_guard();
-        fast.gen_bridge(ir, target.slot_state(), pc);
-        ir.push(AsmInst::Br(merge));
+        self.end_arm(fast, ir, &merge, true);
 
         // ---- arm 2: every other receiver, through the generic helper.
         ir.push(AsmInst::Label(slow));
@@ -232,13 +211,9 @@ impl<'a> JitContext<'a> {
         ir.generic_binop(&rest, base, idx, runtime::get_index, is_func_call);
         ir.handle_error(error);
         rest.def_rax2acc(ir, dst);
-        rest.unset_class_version_guard();
-        rest.unset_const_version_guard();
-        rest.unset_side_effect_guard();
-        rest.gen_bridge(ir, target.slot_state(), pc);
+        self.end_arm(rest, ir, &merge, false);
 
-        ir.push(AsmInst::Label(merge));
-        *state = target;
+        self.bind_merge(state, ir, merge);
         Ok(true)
     }
 
