@@ -1407,6 +1407,27 @@ pub(super) enum AsmInst {
     ///
     CondBr(BrKind, JitLabel),
     NilBr(JitLabel),
+    ///
+    /// Unconditional branch to *dst*.
+    ///
+    /// Unlike [`Self::Deopt`] this targets ordinary code, so it is *not* an
+    /// `is_unconditional_terminator`: a class-dispatch arm ends with one to
+    /// funnel into the shared merge point, and the merge label that follows
+    /// is reached by fall-through from the last arm.
+    ///
+    Br(JitLabel),
+    ///
+    /// Class dispatch arm: fall through when *r*'s runtime class is *class*,
+    /// branch to *dst* otherwise.
+    ///
+    /// The same comparison [`Self::GuardClass`] emits, but the miss lands on
+    /// an ordinary label — the next arm of a class dispatch, e.g. the
+    /// polymorphic `[]` in `compile/index.rs` — rather than a side exit.
+    /// Unlike a guard it therefore proves nothing about the value on the
+    /// *branch-taken* path; the taken path's state is the caller's
+    /// business.
+    ///
+    BrClassNe(GP, ClassId, JitLabel),
     CheckLocal(JitLabel),
     CheckKwRest(SlotId),
     OptCase {
@@ -2544,6 +2565,10 @@ impl AsmInst {
 
             Self::CondBr(kind, label) => format!("condbr {:?} {:?}", kind, label),
             Self::NilBr(label) => format!("nil_br {:?}", label),
+            Self::Br(label) => format!("br {:?}", label),
+            Self::BrClassNe(gpr, class, label) => {
+                format!("br_class_ne {:?} {:?} {:?}", gpr, class, label)
+            }
             Self::CheckLocal(label) => format!("check_local {:?}", label),
             Self::OptCase {
                 max,

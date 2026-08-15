@@ -76,6 +76,147 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    ///
+    /// The receiver class a polymorphic index site should give its *inlined*
+    /// arm: the one the VM observed here that actually has a generator, most
+    /// observed first.
+    ///
+    /// Deliberately **not** the inline cache's class. optcarrot's
+    /// `@fetch[addr][addr]` is the motivating shape — `@fetch` holds the RAM
+    /// `Array` for `0x0000..0x07ff` and a `Method` for every I/O register, so
+    /// the site alternates — and its cache happens to hold `Method`, which
+    /// has no generator. Inlining "the cached class" there would leave the
+    /// Array arm (every RAM read) on the C call, which is backwards. The
+    /// other arm is a C call either way, so preferring the class that can be
+    /// inlined is unambiguous.
+    ///
+    fn index_inline_class(&mut self, callid: CallSiteId) -> Option<(ClassId, FuncId)> {
+        let callsite = &self.store[callid];
+        let name = IdentId::_INDEX;
+        let pmc = &callsite.pmc;
+        // Two-arm dispatch only pays off where the site really alternates;
+        // one observed class is the monomorphic guard's case.
+        if pmc.entries().len() < 2 {
+            return None;
+        }
+        let mut classes: Vec<(ClassId, u32)> =
+            pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
+        classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
+        for (class, _) in classes {
+            let Some((fid, visibility)) = self.jit_check_method(class, name) else {
+                continue;
+            };
+            if !matches!(
+                self.store.inline_info.get_inline(fid),
+                Some(InlineFuncInfo::InlineGen(_))
+            ) {
+                continue;
+            }
+            // Same licence the guarded direct-fire path needs: the arm runs
+            // without a class-version guard, so a redefinition has to reach
+            // it through the recorded bop dependency.
+            if !self.basic_op_assumable(class, name)
+                || self.jit_visibility_blocks(callid, visibility)
+                || self.store[fid].possibly_capture_without_block()
+            {
+                continue;
+            }
+            return Some((class, fid));
+        }
+        None
+    }
+
+    ///
+    /// Answer a polymorphic `[]` site with a two-arm dispatch:
+    ///
+    /// ```text
+    ///         br_class_ne rdi, C -> slow
+    ///         <C#[] inlined>
+    ///         br merge
+    ///   slow: <runtime::get_index>      (correct for *any* receiver)
+    ///   merge:
+    /// ```
+    ///
+    /// The point is the missing third option: there is no deopt. A class
+    /// guard has to send every off-class receiver back to the interpreter,
+    /// which is what makes optcarrot's `@fetch[addr][addr]` the single
+    /// largest deopt source in its hot loop; here the off-class receiver
+    /// takes a C call instead, and `runtime::get_index` handles it — it
+    /// re-checks the basic-op licence itself and falls back to
+    /// `invoke_method(:[])`, so `Method#[]` dispatches correctly.
+    ///
+    /// The merge needs no state join machinery, unusually: both arms leave
+    /// the element as a plain `Value` in `dst`, so the merge state can be
+    /// *declared* up front and each arm bridged to it.
+    ///
+    /// Returns `false` (leaving `state` and `ir` untouched) when the site
+    /// does not qualify, so the caller takes the ordinary path.
+    ///
+    fn index_dispatch(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        base: SlotId,
+        idx: SlotId,
+        idx_class: Option<ClassId>,
+        bc_pos: BcIndex,
+    ) -> JitResult<bool> {
+        let Some(callid) = self.store.get_callsite_id(self.iseq_id(), bc_pos) else {
+            return Ok(false);
+        };
+        if self.store[callid].block_fid.is_some() {
+            return Ok(false);
+        }
+        let Some((inline_class, fid)) = self.index_inline_class(callid) else {
+            return Ok(false);
+        };
+        let dst = self.store[callid].dst;
+        // For an index site `is_func_call` means "the base is literally
+        // `self`" (`bypass_visibility` is only ever set on the `__builtin_*`
+        // method-call spelling), which `gen_index` keeps at slot 0 so a
+        // private `#[]` stays reachable as in CRuby. It is therefore always
+        // `false` *here*: the gate below only takes sites whose receiver
+        // class the abstract state cannot pin down, and `self`'s class is
+        // seeded by `SlotState::new` for every `JitType` and never cleared.
+        // Passed through rather than hard-coded so the residual arm's
+        // visibility stays correct if that gate is ever widened.
+        let is_func_call = self.store[callid].is_func_call();
+        let state_save = state.clone();
+        let ir_save = ir.save();
+        let (entry, merge) = self.declare_merge(state, ir, &[base, idx], dst);
+        let slow = self.label();
+
+        // ---- arm 1: the inlinable receiver class.
+        let mut fast = entry.clone();
+        fast.load(ir, base, GP::Rdi);
+        ir.push(AsmInst::BrClassNe(GP::Rdi, inline_class, slow));
+        // Reaching the arm *is* the proof, so refine without a second guard.
+        fast.guard_class_state(base, inline_class);
+        let Some(InlineFuncInfo::InlineGen(f)) = self.store.inline_info.get_inline(fid) else {
+            unreachable!("index_inline_class only answers InlineGen targets")
+        };
+        if !self.inline_asm(&mut fast, ir, f, callid, inline_class, idx_class) {
+            ir.restore(ir_save);
+            *state = state_save;
+            return Ok(false);
+        }
+        self.record_bop_dep(inline_class, IdentId::_INDEX);
+        fast.unset_side_effect_guard();
+        self.end_arm(fast, ir, &merge, true);
+
+        // ---- arm 2: every other receiver, through the generic helper.
+        ir.push(AsmInst::Label(slow));
+        let mut rest = entry.clone();
+        let error = ir.new_error(&rest);
+        ir.generic_binop(&rest, base, idx, runtime::get_index, is_func_call);
+        ir.handle_error(error);
+        rest.def_rax2acc(ir, dst);
+        self.end_arm(rest, ir, &merge, false);
+
+        self.bind_merge(state, ir, merge);
+        Ok(true)
+    }
+
     pub(super) fn index(
         &mut self,
         state: &mut AbstractState,
@@ -83,9 +224,20 @@ impl<'a> JitContext<'a> {
         base: SlotId,
         idx: SlotId,
         ic: Option<(ClassId, ClassId)>,
+        polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         let (base_class, idx_class) = state.binary_class(base, idx, ic);
+        // A site the VM saw indexing more than one receiver class, whose
+        // receiver the abstract state cannot pin down: dispatch instead of
+        // guarding. (A proven receiver class is monomorphic by construction,
+        // whatever the VM saw at other times.)
+        if polymorphic
+            && state.class(base).is_none()
+            && self.index_dispatch(state, ir, base, idx, idx_class, bc_pos)?
+        {
+            return Ok(CompileResult::Continue);
+        }
         let Some(base_class) = base_class else {
             return Ok(CompileResult::Recompile(RecompileReason::NotCached));
         };
@@ -247,6 +399,70 @@ mod tests {
             res << set(h, :k, 1)
             res << h
             res
+        "##,
+        );
+    }
+
+    /// optcarrot's `@fetch[addr][addr]` shape: one `[]` site whose receiver
+    /// is an `Array` for most addresses and a `Method` for the rest, so a
+    /// class guard would deopt on every alternation. The two-arm dispatch
+    /// must answer both — and keep answering after `Array#[]` is redefined,
+    /// which the inlined arm's recorded bop dependency has to catch.
+    #[test]
+    fn index_polymorphic_array_and_method() {
+        run_test_once(
+            r##"
+            class Io
+              def initialize(v) = (@v = v)
+              def read(addr) = @v + addr
+            end
+            ram = [0, 1, 2, 3, 4, 5, 6, 7]
+            io  = Io.new(100).method(:read)
+            fetch = Array.new(16) { |i| i < 8 ? ram : io }
+            def loop_fetch(fetch, n)
+              s = 0
+              i = 0
+              while i < n
+                s += fetch[i & 15][i & 7]
+                i += 1
+              end
+              s
+            end
+            res = [loop_fetch(fetch, 2000)]
+            class Array
+              def [](i) = :redefined
+            end
+            res << (begin; loop_fetch(fetch, 16); rescue => e; e.class; end)
+            res
+        "##,
+        );
+    }
+
+    /// A polymorphic site where *neither* observed receiver has an inline
+    /// generator, and one where the receivers are heap objects with their
+    /// own `#[]` — the dispatch must decline or dispatch correctly, never
+    /// answer with the wrong body.
+    #[test]
+    fn index_polymorphic_user_classes() {
+        run_test_with_prelude(
+            r##"
+            drive
+        "##,
+            r##"
+            class Ba; def [](i) = [:a, i]; end
+            class Bb; def [](i) = [:b, i]; end
+            class Bc < Array; end
+            def get(o, i) = o[i]
+            def drive
+              vals = [Ba.new, Bb.new, [10, 20, 30, 40], { 0 => :h0, 1 => :h1 }, Bc.new(4, 9)]
+              res = []
+              j = 0
+              while j < 60
+                res << get(vals[j % 5], j % 4)
+                j += 1
+              end
+              res
+            end
         "##,
         );
     }

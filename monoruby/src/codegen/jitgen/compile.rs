@@ -3,12 +3,14 @@ use crate::codegen::jitgen::state::LinkMode;
 use super::*;
 
 mod binary_op;
+mod dispatch;
 mod unary_op;
 #[cfg(feature = "emit-cfg")]
 mod dump_cfg;
 mod index;
 mod loop_analysis;
 mod method_call;
+mod pic;
 mod variables;
 
 impl<'a> JitContext<'a> {
@@ -566,8 +568,8 @@ impl<'a> JitContext<'a> {
                 base,
                 idx,
                 class: ic,
-                _polymorphic: _,
-            } => return self.index(state, ir, base, idx, ic, bc_pos),
+                polymorphic,
+            } => return self.index(state, ir, base, idx, ic, polymorphic, bc_pos),
             TraceIr::IndexAssign {
                 base,
                 idx,

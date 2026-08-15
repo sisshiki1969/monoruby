@@ -1574,15 +1574,21 @@ pub(super) extern "C" fn get_index(
     globals: &mut Globals,
     base: Value,
     index: Value,
-    // Non-zero when the base operand is slot 0 (a literal `self[i]`), which
-    // reaches a private `#[]`; zero for any other receiver, which enforces
+    // True when the base operand is slot 0 (a literal `self[i]`), which
+    // reaches a private `#[]`; false for any other receiver, which enforces
     // visibility. Only consulted on the user-class fallback below —
     // Array/Hash slice with no visibility gate. The operand classes are
     // recorded into the inline cache (with polymorphic detection) by the
     // VM's `vm_save_binary_class` before this call, not here.
-    is_func_call: usize,
+    //
+    // The parameter is a `bool` rather than the flag word the VM's call
+    // sequence builds so that this helper's type *is* `BinaryOpFn` — that
+    // is what lets the JIT emit it through the existing `GenericBinOp`
+    // instruction as the residual arm of a polymorphic index dispatch
+    // (`compile/index.rs`). Both `vm_index` sequences already materialize
+    // the flag as 0/1, so the ABI is unchanged.
+    is_func_call: bool,
 ) -> Option<Value> {
-    let is_func_call = is_func_call != 0;
     let base_classid = base.class();
     // `Array#[]` / `Hash#[]` below bypass method lookup, so they are only
     // sound while those are still the builtins. Unlike the dispatch-table

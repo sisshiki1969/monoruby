@@ -430,6 +430,16 @@ pub(in crate::codegen) enum LInst {
         class: ClassId,
         deopt: DestLabel,
     },
+    /// Class *dispatch arm*: fall through when `reg`'s runtime class is
+    /// `class`, branch to `target` otherwise. The same comparison
+    /// `GuardClass` emits, kept separate because the miss is ordinary
+    /// control flow (the next arm) rather than a side exit — so it must not
+    /// be booked as a guard failure by the `profile` recorder.
+    BrClassNe {
+        reg: GP,
+        class: ClassId,
+        target: DestLabel,
+    },
     /// Class-set guard: pass when `reg`'s runtime class is any of `classes`,
     /// branch to `deopt` otherwise.
     GuardClassIn {

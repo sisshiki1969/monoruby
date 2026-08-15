@@ -4661,6 +4661,15 @@ pub enum RecompileReason {
     /// generic-C-call path. Monotone & one-shot: the recompiled site
     /// has no receiver-class guard, so it can never re-trigger.
     BecamePolymorphic = 4,
+    /// A body that folded a constant found the global constant version
+    /// moved. Without a recompile the fold is dead weight: the guard can
+    /// never pass again, so *every* subsequent execution deopts — one
+    /// `CONST = ...` anywhere in the program used to poison the body for
+    /// good. Recompiling re-reads the constant at the new version and
+    /// bakes that in. Counter-gated (`COUNT_DEOPT_RECOMPILE`) because,
+    /// unlike the class version, the constant version keeps moving in
+    /// programs that assign constants at run time.
+    ConstVersionGuardFailed = 5,
 }
 
 struct Root<'a, 'b> {

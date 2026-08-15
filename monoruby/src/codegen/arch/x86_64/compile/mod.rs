@@ -51,6 +51,8 @@ impl Codegen {
             | AsmInst::LitToStack(..)
             | AsmInst::CondBr(..)
             | AsmInst::NilBr(..)
+            | AsmInst::Br(..)
+            | AsmInst::BrClassNe(..)
             | AsmInst::CheckLocal(..)
             | AsmInst::OptCase { .. }
             | AsmInst::GuardClass(..)
@@ -551,6 +553,8 @@ impl Codegen {
             // Signed conditional branch on the preceding `Cmp` (mirrors
             // `condbr_int`; the BrKind inversion is folded into `cond` by the
             // builder).
+            // Unconditional branch (a dispatch arm funnelling into its merge).
+            LInst::Br(target) => monoasm! { &mut self.jit, jmp target; },
             LInst::CondBr { cond, target } => match cond {
                 LCond::Eq => monoasm! { &mut self.jit, jeq target; },
                 LCond::Ne => monoasm! { &mut self.jit, jne target; },
@@ -601,7 +605,11 @@ impl Codegen {
                 }
             }
             // Type / class guards: deopt (jump to the side-exit) on a mismatch.
-            LInst::GuardClass { reg, class, deopt } => self.guard_class(reg, class, &deopt),
+            LInst::GuardClass { reg, class, deopt } => {
+                self.guard_class_deopt(reg, class, &deopt)
+            }
+            // Dispatch arm: the miss is the next arm, not a side exit.
+            LInst::BrClassNe { reg, class, target } => self.guard_class(reg, class, &target),
             LInst::GuardClassIn {
                 reg,
                 classes,
@@ -622,7 +630,9 @@ impl Codegen {
                         );
                         self.jit.bind_label(next);
                     } else {
-                        self.guard_class(reg, *class, &deopt);
+                        // Only the last candidate's miss is the real guard
+                        // failure; the earlier ones are chain steps.
+                        self.guard_class_deopt(reg, *class, &deopt);
                     }
                 }
                 self.jit.bind_label(ok);
@@ -780,6 +790,13 @@ impl Codegen {
                     FPRegLoc::Xmm(p) => (p, None),
                     FPRegLoc::Spill(off) => (0u64, Some(off)),
                 };
+                // A float unbox is a Float class guard in all but name — it is
+                // what `guard_recv_class` emits for a `FLOAT_CLASS` receiver —
+                // and its miss paths leave the offending value in rdi, so book
+                // it alongside the `GuardClass` misses. This is the guard the
+                // mixed Integer/Float arithmetic sites fail on.
+                #[cfg(feature = "profile")]
+                let deopt = self.class_guard_fail_recorder(&deopt);
                 self.float_to_f64(src, work, &deopt);
                 if let Some(off) = spill_off {
                     monoasm!( &mut self.jit,

@@ -647,6 +647,20 @@ pub(crate) struct JitContext<'a> {
     pub(super) fused_skip: Option<BcIndex>,
 
     ///
+    /// Set while an intra-block dispatch arm is being emitted
+    /// (`compile/pic.rs`), which suppresses callee specialization.
+    ///
+    /// An arm is emitted after its predecessors are already in the
+    /// instruction stream, so it has no way to back out: a
+    /// `compile_specialized_func` that answers `CompileError` would abandon
+    /// the whole compile, and one that answers `Cease` would leave the arm
+    /// with no path to the merge. Specialization is also the wrong shape
+    /// here — a dispatch arm exists to keep the chain short, and inlining a
+    /// callee body into each of up to four arms is the opposite.
+    ///
+    in_dispatch_arm: bool,
+
+    ///
     /// Class version at compile time.
     ///
     class_version: u32,
@@ -718,6 +732,7 @@ impl<'a> JitContext<'a> {
             store,
             codegen_mode,
             fused_skip: None,
+            in_dispatch_arm: false,
             class_version,
             const_version,
             refinements,
@@ -736,6 +751,7 @@ impl<'a> JitContext<'a> {
             store: self.store,
             codegen_mode: false,
             fused_skip: None,
+            in_dispatch_arm: false,
             class_version: self.class_version,
             const_version: self.const_version,
             refinements: self.refinements,
@@ -752,6 +768,20 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn codegen_mode(&self) -> bool {
         self.codegen_mode
+    }
+
+    pub(super) fn in_dispatch_arm(&self) -> bool {
+        self.in_dispatch_arm
+    }
+
+    ///
+    /// Run *f* with the dispatch-arm flag set, restoring it afterwards.
+    ///
+    pub(super) fn with_dispatch_arm<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = std::mem::replace(&mut self.in_dispatch_arm, true);
+        let r = f(self);
+        self.in_dispatch_arm = saved;
+        r
     }
 
     pub(super) fn iseq_id(&self) -> ISeqId {

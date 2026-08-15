@@ -170,6 +170,84 @@ impl Codegen {
     }
 
     ///
+    /// Route a class-guard miss through the `profile` recorder, then on to
+    /// *deopt*.
+    ///
+    /// The dispatch stub's entry guard has always fed
+    /// `jit class guard failed stats` (`class_guard_stub` jumps to
+    /// `jit_class_guard_fail`), but an in-body guard just took its side exit,
+    /// so the table only ever showed entry misses. That made it actively
+    /// misleading: a site deopting millions of times on a receiver-class
+    /// check read as "no class guard ever failed here". Now both are counted,
+    /// against the class of the value that actually failed.
+    ///
+    /// The recorder is a C call sitting *before* the side exit's write-back,
+    /// which still reads the register file, so every caller-saved register is
+    /// preserved across it — `rax` included (`save_registers` deliberately
+    /// skips it, and the write-back may hold a value there), and `rdi` above
+    /// all, since the deopt reads it back as the reason value.
+    ///
+    /// Emitted on the cold page, and only under `profile`.
+    ///
+    #[cfg(feature = "profile")]
+    pub(super) fn class_guard_fail_recorder(&mut self, deopt: &DestLabel) -> DestLabel {
+        let entry = self.jit.label();
+        let deopt = deopt.clone();
+        let inline = self.jit.get_page() != 0;
+        let skip = self.jit.label();
+        if inline {
+            monoasm!( &mut self.jit, jmp skip; );
+        } else {
+            self.jit.select_page(1);
+        }
+        monoasm!( &mut self.jit,
+        entry:
+            subq rsp, 16;
+            movq [rsp], rax;
+        );
+        self.save_registers();
+        monoasm!( &mut self.jit,
+            movq rdx, rdi;      // the value that failed the guard
+            movq rdi, rbx;      // &mut Executor
+            movq rsi, r12;      // &mut Globals
+            movq rax, (guard_fail);
+            subq rsp, 4088;
+            call rax;
+            addq rsp, 4088;
+        );
+        self.restore_registers();
+        monoasm!( &mut self.jit,
+            movq rax, [rsp];
+            addq rsp, 16;
+            jmp deopt;
+        );
+        if inline {
+            self.jit.bind_label(skip);
+        } else {
+            self.jit.select_page(0);
+        }
+        entry
+    }
+
+    ///
+    /// [`Self::guard_class`] for a guard whose miss is a real side exit, as
+    /// opposed to a dispatch arm's miss (`LInst::BrClassNe`). Identical code
+    /// except that under `profile` the miss is recorded first — see
+    /// [`Self::class_guard_fail_recorder`].
+    ///
+    pub(crate) fn guard_class_deopt(&mut self, reg: GP, class_id: ClassId, deopt: &DestLabel) {
+        #[cfg(feature = "profile")]
+        {
+            let recorder = self.class_guard_fail_recorder(deopt);
+            self.guard_class(reg, class_id, &recorder);
+        }
+        #[cfg(not(feature = "profile"))]
+        {
+            self.guard_class(reg, class_id, deopt);
+        }
+    }
+
+    ///
     /// Class guard used in JIT dispatch stub.
     ///
     /// if *reg* is Bignum, always dispatched to VM entry.

@@ -87,6 +87,23 @@ impl Codegen {
                 let target = frame.resolve_label(&mut self.jit, dest);
                 self.encode_linst(LInst::BranchIfNil { target });
             }
+            // Unconditional branch (a dispatch arm funnelling into its merge).
+            AsmInst::Br(dest) => {
+                let target = frame.resolve_label(&mut self.jit, dest);
+                self.encode_linst(LInst::Br(target));
+            }
+            // Class dispatch arm: the same comparison a guard emits, but the
+            // miss is ordinary control flow, so it lowers through its own LIR
+            // op rather than `GuardClass` (which books a miss as a guard
+            // failure under `profile`).
+            AsmInst::BrClassNe(r, class, dest) => {
+                let target = frame.resolve_label(&mut self.jit, dest);
+                self.encode_linst(LInst::BrClassNe {
+                    reg: r,
+                    class,
+                    target,
+                });
+            }
             // Branch to dest if the local (accumulator) is already set (non-zero).
             AsmInst::CheckLocal(dest) => {
                 let target = frame.resolve_label(&mut self.jit, dest);

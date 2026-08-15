@@ -357,6 +357,7 @@
 1c55df1a2ab9f2b7ce881cce3520b3da	["File::Stat", 8, true, false, true, true, true, true, true, "file", false, 8, true, true, true, true, true]	path = "/tmp/monoruby_test_stat_#{Process.pid}_#{rand(100000)}"\n   
 1c6926fa6e1462140ee74bc77342fcc8	[nil, :nme, true]	module PrivC\n              class Sec; end\n              private_con
 1c6d7d2ee7c5c48ff5b7040293a055f2	[42, 42, 2]	module BopPlus\n              refine(Integer) { def +(o); 42; end }\n
+1c925daf4080da92af318381f15467e0	[[[:a, 100], [:b, 100], [:c, 100]], :a, :b2, :c, :d]	class Aa; def tag = :a; end\n            class Bb; def tag = :b; end
 1c979897435ff61b3d8ac16af24e1019	[3, 5, 7, nil, 7, 42, 101, :new, {a: 101, b: :new}]	res = []\n        a = 1; a += 2; res << a\n        b = nil; b ||= 5; res 
 1ca7fb21e8495566f40650238bdfc1f6	[false, true, false, true, false, true, false, true, true, false, false, true, true, true, false, true, false, false]	class C\n            include Comparable\n            attr_accessor :x\n 
 1cb0fc8d0cfb3a0a2c9e0ed0438fb68d	[true, "payload", true, true]	base = "/tmp/monoruby_test_link_#{Process.pid}_#{rand(100000)}"\n   
@@ -551,6 +552,7 @@
 2dd04b99ea4c74004cb7f6ebf42c571c	"ASCII-8BIT"	Regexp.new('([\\x00-\\xFF])', Regexp::IGNORECASE | Regexp::NOENCODING).encoding.to
 2de87dc95cc7a1a9c4edb24ea1657ff8	:nonpositive	begin; SizedQueue.new(0); rescue ArgumentError; :nonpositive; end\n 
 2e1334cbf1ce1ad1f0ead6825d8ea907	[nil, true, true, true, "", "x"]	require "io/wait"\n            r, w = IO.pipe\n            res = []\n 
+2e2f576be92d459836040d95a711ae05	[[42, 401], [99, 201]]	class Foo\n              BAR = 42\n              def get = BAR\n      
 2e419be22648471b9d426d0e2b7fe4a8	[[FrozenError, true], FrozenError]	class Foo\n              def initialize\n                @a = 1\n     
 2e520c993c13bf6afbdcfa9de96cc277	["A", "overridden", "can't create instance of singleton class", "allocator undefined for Integer"]	class A; end\n        class B; def self.allocate; :overridden; end; end\n
 2e9e5cdf982a6b277e6559a8a489f9a7	["Process::Status", 0, true]	`echo hi`; [$?.class.to_s, $?.exitstatus, $?.success?]
@@ -584,6 +586,7 @@
 3216e8a4e5532edd1d8a9a107a61cb60	"nil"	def t; end; (public).inspect
 323248fe474a5afa887e12205ed145d2	C	a = class C\n          self\n        end\n        a\n        
 3241d752b39412d4f6c02d9dd853ba08	["foo"]	class A; def a(*r); r; end; end\n            class B < A; def a(*r);
+3279027e38a42e302879e0467940338a	[[1, 100], [3, 100], [4, 100], [:attr, 150], [:plain, 150]]	class Ra\n              attr_reader :tag\n              def initializ
 3285c4fda20a8f8870e882093119ec6c	[1, 10, 20, 30]	def f(p, x:, y:, z:)\n          [p, x, y, z]\n        end\n        \n\n     
 3295f884bc7723fc9fb6dbf1936f7316	[-7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5]	def drive\n              res = []\n              j = 0\n              
 329b7b68cb4c629adc01345e10da9fbc	[false, false]	t = Thread.new { :body }\n            t.kill\n            t.join\n    
@@ -951,6 +954,7 @@
 50508f5aac8320c0afe66c4ad76cad0e	["EQ-RAW", false, "NE-RAW", true, true, false, "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW"]	class CustomEq; def ==(o); "EQ-RAW"; end; end\n        class CustomNe; d
 50630a61a4b6d776c5dc73a592df1d53	[:a, :a, [:a, :b, :c], :a, ["NameError", "implicit parameter '_1' is not defined"], ["NameError", "implicit parameter '_1' is not defined"], ["NameError", "'a' is not an implicit parameter"], ["TypeError", "1 is not a symbol nor a string"]]	def try; yield; rescue => e; [e.class.to_s, e.message.split(" for "
 506afd7190c9d45ecdef2e801c939176	:te	begin; 1.instance_eval { undef to_s }; :no; rescue TypeError; :te; end
+5078669efc5be0d889fb3ff62604139e	[5350, 1, 2]	class Ka; def v = 1; end\n            class Kb; def v = 2; end\n     
 507f32e0a72a071583d973ffea3c15c7	["Hello Dave at New York!", "Hello Gave at Hawaii!"]	Customer = Struct.new(:name, :address) do\n            def greeting\n    
 509d9bea76f0e1d8349ff37b354accf3	2	k = Class.new { define_method(:m) { [1, 2, 3].each { |x| return x i
 50a5f1523f40c371eae52d5bdb271289	[:@b]	class Foo\n              def initialize\n                @a = 1\n     
@@ -1016,6 +1020,7 @@
 576157356419a5741dbdbde29df95789	true	GC.stat.values.all? { |v| v.is_a?(Integer) }
 57bd29081de5740463b29a1c3ee0ef00	"US-ASCII"	s = "hello".dup.force_encoding("US-ASCII")\n              s[/(ll)/
 57f002dbbc2a38d20a751f8e1d4218fe	[255, 15, 240, -1, 15, -16, 42, 0, 42, 42, -43, 244837815148286, 304366200, 244837510782086]	def or_a; 0xFF | 0x0F; end\n            def and_a; 0xFF & 0x0F; end\n
+57f22a05e8acf18b24e3a1c7b3e4f9a8	[false, :c, false, :cf, :c]	class A; end\n            class B; end\n            class C; end\n    
 5802c597582fbeab79b6c6ee6bfe6fed	[true, false]	a = ["a","b","c"]\n        \n\n            [a.include?("b"), a.include
 581a9eeda65b4118ca39d22e6e34f801	[:caught, "boom"]	class C\n              def initialize; @h = {}; end\n              de
 582de92dfc668c66f3fca99c56ea0221	9	M = Data.define(:amount, :unit)\nM.new("amount" => 1, amount: 9, unit: "m").amoun
@@ -1327,6 +1332,7 @@
 73b5b9f7068d2f4d7eb3c69976ab650d	1	class C\n              @@x = 1\n            end\n        
 73c9dec5b896221d19b6233b9db54621	[:rescued, "caught"]	f = Fiber.new do\n              begin\n                Fiber.yield :a
 73cf450d13041a7f92cc5202727762b7	"/"	File.realpath("..", "/tmp")
+73e27e81e87093c61641bec1ab3aa95d	[[:a, 0], [:b, 1], 30, nil, 9, [:a, 1], [:b, 2], 40, :h0, 9, [:a, 2], [:b, 3], 10, :h1, 9, [:a, 3], [:b, 0], 20, nil, 9, [:a, 0], [:b, 1], 30, nil, 9, [:a, 1], [:b, 2], 40, :h0, 9, [:a, 2], [:b, 3], 10, :h1, 9, [:a, 3], [:b, 0], 20, nil, 9, [:a, 0], [:b, 1], 30, nil, 9, [:a, 1], [:b, 2], 40, :h0, 9, [:a, 2], [:b, 3], 10, :h1, 9, [:a, 3], [:b, 0], 20, nil, 9]	class Ba; def [](i) = [:a, i]; end\n            class Bb; def [](i) 
 7416b95f5e87edec12c271dfa849a210	[200, [:body, :ensure_start, :ensure]]	def baz\n              $x = []\n              $x << :body\n           
 74265315f293e83823e6e37edea00c74	[true, true, true, true, true, 1.0, 42, nil, nil]	srand(42)\n            a = rand\n            srand(42)\n            [\n
 742cf7259eae88dd4512794b3c9d16ad	[:i, :j]	def m; [1].each { |i| j = i * 2; return local_variables.sort }; end; m
@@ -1853,6 +1859,7 @@ a164c646ebdbe3551b16c27fa5e2aab0	5	def f; return 5; end; f
 a189356012c67f14ffd149bedd2d23b2	nil	$/ = "xyz"; r = "abcde".chomp!; $/ = "\\n"; r
 a1a984bb2edd75a78229a94547d15825	[true, true, :outer, "nil", ["NoMethodError", "RuntimeError"], "RuntimeError"]	def restore_check(log)\n          outer = StandardError.new "outer"\n    
 a1c461fb313f0da82569acd28c4ca299	[1, 3, 5, 7]	(1..7).filter(&:odd?)
+a1e955df00a16906b87178a40bfe7105	[100, 50, 250, :c, false, true, false]	class A; end\n            class B; end\n            class C; end\n    
 a204f15cf81d104e4412940bba47afbb	[[5, 5], [9, nil, 9], [nil, nil], nil, [7, 1, 7], 42, "FrozenError"]	def drive(n)\n              r = nil\n              n.times { r = yiel
 a207205e2108ee451fae4d6f0df8308a	nil	File.open("Cargo.toml") { |f| f.ungetc(100) }
 a21ceda5ef436f9167f0988b18686885	[true, true, "backtrace must be an Array of String or an Array of Thread::Backtrace::Location", true]	def probe = caller_locations\n        locs = probe\n        e = RuntimeEr
@@ -1948,6 +1955,7 @@ a93aff5f67ff2713cf29404f5b2f4a64	42	class C\n          def call_priv\n          
 a93f36f86e60d2939747b3460e0e9680	[["A", "B"], ["-", "-"], ["A", "-"], ["A", "B"]]	module SnapA\n              refine(String) { def tag;  "A"; end }\n  
 a94375bbeca8fabd095d830c8dca16dd	["Y", "Y"]	$-0 = "Y"; r = [$/, $-0]; $/ = "\\n"; r
 a966ff673f0471a0f7996609730def4c	"missing keyword: :x"	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:)
+a96f44dffe64892feff990050d690d94	[150, false, true, false, false]	class Tail1; end\n            class Tail2; end\n            class Tai
 a98bef4ea7d42ca9b3589602d2392195	[[5, 6], [0, 0], [5, 6], [1, 1], [5, 6], [2, 2], [5, 6], [3, 3], [5, 6], [4, 4], [5, 6], [5, 5], [5, 6], [6, 6], [5, 6], [7, 7], [5, 6], [8, 8], [5, 6], [9, 9], [5, 6], [10, 10], [5, 6], [11, 11], [5, 6], [12, 12], [5, 6], [13, 13], [5, 6], [14, 14], [5, 6], [15, 15], [5, 6], [16, 16], [5, 6], [17, 17], [5, 6], [18, 18], [5, 6], [19, 19], [5, 6], [20, 20], [5, 6], [21, 21], [5, 6], [22, 22], [5, 6], [23, 23], [5, 6], [24, 24], [5, 6], [25, 25], [5, 6], [26, 26], [5, 6], [27, 27], [5, 6], [28, 28], [5, 6], [29, 29]]	class N\n          attr_reader :v\n          def initialize(a: 0, b: 1) =
 a9a64f0fa64e4bb1ec264c4f7c86df8b	:OVERRIDDEN	class Integer; def *(o); :OVERRIDDEN; end; end; 3 * 4
 a9b082961457f87dd5dd3df08a2bc22e	"CAFÉ"	"Café".upcase
@@ -2217,6 +2225,7 @@ bf43e4b5ea5dc43387ed9bdbb1d33e91	["A", 49, "\\n", 65, nil, nil, "end of file rea
 bf642b858ac68f1754855ea56af9f010	["inherited"]	$res = []\n        class A\n          def self.inherited(subclass)\n      
 bf69a12e40aa6429315d6d5c29ddfe91	[0, 5, 5, 0]	f = File.open("Cargo.toml")\n            begin\n              a = f.p
 bf79cea739fcb7a0ec6546a5b4e6528a	[Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, "incompatible character encodings: UTF-16BE and US-ASCII"]	(f = ->(x) { begin; x.call; rescue => e; e.class; end }; [f.(-> { File.basename(
+bf960838169f3fd4f0850862d278a5e7	[1495, 13, 30, 7]	class Wa; def f(a, b) = a + b; end\n            class Wb; def f(a, b
 bf9d53c3fd6b4e9d4cb7eef1119ed43f	[false, nil, true, 15, nil, false]	pid = fork { sleep 5 }\n            Process.kill("TERM", pid)\n      
 bfb3c432ce87e3afc690e1a4090e98dd	1	e = [1,2,3,4,5].to_enum\n        e.next\n        
 bfb74f48cb5d72df6c677a6148c66445	[12, 12, 12, 12]	p = Proc.new {|x,y| x * y} \n        \n\n        [p.call(3,4), p.yield(3,4
@@ -2680,6 +2689,7 @@ e62defa8e78ced906f42efe00809d657	"true|TITLE|true|$$ is a read-only variable|tru
 e62e66ff0e391002ce507347414bd003	["2024", "04", "11"]	"2024-04-11" =~ /(\\d+)-(\\d+)-(\\d+)/\n            [$1, $2, $3]\n      
 e6482da349c182043f5fa0cd8447051a	[0, 0, 0, 0, true]	require "etc"\n            a = []\n            a << (Process.uid = Pr
 e6506a63c767f1ee5ca72f61264a77b7	"ababab"	"ab" * 3
+e6665fd325619df8d6decf9e59065acd	[[[:a, 300], [:nome, 1]]]	class Pa; def hidden = :a; end\n            class Pb; private def hi
 e6721b573894f02b7adbee10b796d8f8	300000	def osr_fold_sum\n          total = 0\n          i = 0\n          while i 
 e6776f2b7fcaf2ff1e06a04fbb44979f	["missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z"]	class Req\n          def initialize(a:, b: 2) = @x = [a, b]\n        end\n
 e6bd09ab564b813b9ee89a2c7bf7b3a8	["super", nil]	class A\n          def foo; end\n        end\n        class B < A\n        
@@ -2843,6 +2853,7 @@ f40ce886b72f5217bc31de73015cbb2d	[true, true]	# 'M' + length(6 ⇒ marshal_int 0
 f40d66b495e8cfc92317f5249b69ee31	[4, 8, 73, 34, 6, 97, 6, 58, 13, 101, 110, 99, 111, 100, 105, 110, 103, 34, 11, 69, 85, 67, 45, 74, 80]	Marshal.dump("a".encode("EUC-JP")).bytes
 f4101d236b633fea5a8e14b9620d27bb	false	c = Class.new do\n              def bar; end\n              undef :"#
 f417b46ed1c24ffbbc6d828e0035f712	"aXXde"	class C; def to_str; "bc"; end; end; o = C.new\n"abcde".sub(o, "XX")
+f42d6a1e9248b98021fa9c9e4500834f	[107000, TypeError]	class Io\n              def initialize(v) = (@v = v)\n              d
 f4581c269c9086996dbf942d463dfa96	:ok	obj = Object.new\n            def obj.inspect; self; end\n           
 f45a984e81852dd82ce24d6cb475566a	[[[], {}], [[1, 2], {}], [[1], {x: 3}], [[5], {y: 6}], [[], {}], [7, {}], [7, {z: 8}]]	class K; def initialize(*a, **kw); @a = a; @kw = kw; end\n          
 f45ca1bbef67b0bd784d12241e1f0ab4	[:foo, [1, 2, 3]]	class C\n          def method_missing(name, *args)\n            [name, ar

@@ -867,6 +867,10 @@ impl Codegen {
             // Conditional branch on the preceding `Cmp` (mirrors
             // `bcond_label(a64_cond_for_cmp(..), dest)`; the BrKind inversion is
             // folded into `cond` by the builder).
+            // Unconditional branch (a dispatch arm funnelling into its merge).
+            LInst::Br(target) => {
+                monoasm_arm64!(&mut self.jit, b target;);
+            }
             LInst::CondBr { cond, target } => {
                 let c = match cond {
                     LCond::Eq => monoasm::Cond::Eq,
@@ -919,6 +923,14 @@ impl Codegen {
             // Class guard: deopt unless `reg`'s runtime class matches.
             LInst::GuardClass { reg, class, deopt } => {
                 self.a64_guard_class(reg, class, &deopt);
+            }
+            // Dispatch arm: the miss is the next arm, not a side exit. aarch64
+            // has no `jit_class_guard_fail` stub (the profile table is fed by
+            // the x86 dispatch stub only), so guards and arms lower alike
+            // here — the ops stay distinct so the distinction survives if
+            // aarch64 grows the recorder.
+            LInst::BrClassNe { reg, class, target } => {
+                self.a64_guard_class(reg, class, &target);
             }
             // Class-set guard: membership chain built from the single-class
             // guard — each class's check falls through on match (branch to

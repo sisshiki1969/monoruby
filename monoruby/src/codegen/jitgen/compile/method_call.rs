@@ -8,6 +8,19 @@ use super::{
     *,
 };
 
+///
+/// Minimum share of a call site's slow-path observations a receiver class
+/// must hold to earn a slot in the `GuardClassIn` membership chain: a way
+/// below `1 / PMC_SET_SHARE_DIVISOR` of the total is treated as a rare tail
+/// and left to deopt (see [`JitContext::pmc_same_target_classes`]).
+///
+/// The chain is a linear compare sequence, so every member taxes the classes
+/// ahead of it on each dispatch; 1/8 keeps a genuinely alternating pair or
+/// quad while rejecting the "one hot class plus a handful of stragglers"
+/// shape that a way count alone cannot tell apart.
+///
+pub(super) const PMC_SET_SHARE_DIVISOR: u32 = 8;
+
 impl<'a> JitContext<'a> {
     pub(super) fn method_call(
         &mut self,
@@ -37,6 +50,14 @@ impl<'a> JitContext<'a> {
             if ambiguous {
                 return Ok(CompileResult::Deopt);
             }
+        }
+        // A site the VM saw reaching several *different* targets: dispatch on
+        // the receiver class instead of guarding it against the one class the
+        // inline cache happens to hold (see `compile/pic.rs`). Only when the
+        // class is not already proven — a proven class is monomorphic here
+        // whatever the VM observed elsewhere.
+        if recv_class.is_none() && self.compile_pic_call(state, ir, callid)? {
+            return Ok(CompileResult::Continue);
         }
         let (recv_class, func_id, visibility) = if let Some(recv_class) = recv_class {
             // the receiver class is known.
@@ -111,13 +132,31 @@ impl<'a> JitContext<'a> {
     /// classes the VM observed at this call site (its polymorphic method
     /// cache plus the current inline-cache class — the PMC alone can miss a
     /// pair the fixnum fast path stamped and never displaced), and answer
-    /// the set when **every** class re-resolves the called name to
-    /// `func_id`. Resolution is re-computed per class with `jit_check_call`
-    /// under the already-emitted class version guard; the FuncId the PMC
-    /// recorded is deliberately not trusted (it may predate a
-    /// redefinition). A megamorphic site (PMC overflow) has an incomplete
-    /// observation set, so it never qualifies; nor does a class whose
-    /// resolution's visibility would block this call site.
+    /// the subset that re-resolves the called name to `func_id`. Resolution
+    /// is re-computed per class with `jit_check_call` under the
+    /// already-emitted class version guard; the FuncId the PMC recorded is
+    /// deliberately not trusted (it may predate a redefinition).
+    ///
+    /// The set is a **subset**, not an all-or-nothing test: `GuardClassIn`
+    /// deopts on any class outside the set, so leaving a class out is always
+    /// sound and never worse than the single-class guard it replaces. Two
+    /// kinds of class are dropped rather than disqualifying the whole site:
+    ///
+    /// - one that re-resolves elsewhere (or whose resolution's visibility
+    ///   would block this call site) — it cannot share this body;
+    /// - one whose share of the site's observations is below
+    ///   `1 / PMC_SET_SHARE_DIVISOR` — a rare tail. Every member costs a
+    ///   compare on the membership chain that the hot classes pay on every
+    ///   dispatch, so a class that shows up once in a hundred misses is not
+    ///   worth the width. `recv_class` is exempt: the rest of the compile is
+    ///   arranged for it, so a set without it would deopt on the very class
+    ///   it was compiled for.
+    ///
+    /// A megamorphic site therefore qualifies now (the overflow counts
+    /// toward the denominator, so it makes the surviving ways look *less*
+    /// dominant, and the unobserved fifth-and-later classes deopt as they
+    /// always did) — the previous outright rejection left those sites with a
+    /// single-class guard, which is the worst of both.
     ///
     /// The classes are ordered most-observed-first so the emitted
     /// membership chain tests the hottest class first.
@@ -142,9 +181,7 @@ impl<'a> JitContext<'a> {
         let callsite = &self.store[callid];
         let name = callsite.name?;
         let pmc = &callsite.pmc;
-        if pmc.overflow() != 0 {
-            return None;
-        }
+        let observations = pmc.observations();
         let mut classes: Vec<(ClassId, u32)> = pmc
             .entries()
             .iter()
@@ -160,12 +197,26 @@ impl<'a> JitContext<'a> {
         }
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
         let mut set = Vec::with_capacity(classes.len());
-        for (class, _) in classes {
-            let (fid, visibility) = self.jit_check_call(class, Some(name))?;
+        for (class, count) in classes {
+            if class != recv_class
+                && count.saturating_mul(PMC_SET_SHARE_DIVISOR) < observations
+            {
+                // A rare tail: not worth a compare on the hot path.
+                continue;
+            }
+            let Some((fid, visibility)) = self.jit_check_call(class, Some(name)) else {
+                continue;
+            };
             if fid != func_id || self.jit_visibility_blocks(callid, visibility) {
-                return None;
+                continue;
             }
             set.push(class);
+        }
+        // `recv_class` resolved to `func_id` by construction, so it survives
+        // the loop; guard the invariant anyway, because a set that omits it
+        // would deopt on every receiver this compile was specialized for.
+        if set.len() < 2 || !set.contains(&recv_class) {
+            return None;
         }
         Some(set.into_boxed_slice())
     }
@@ -260,6 +311,27 @@ impl<'a> JitContext<'a> {
                 // on every off-class receiver; an unobserved class still
                 // deopts, and a redefinition recompiles via the class
                 // version guard above.
+                //
+                // Every member of the set reaches the cached `func_id`
+                // through this body, so every member needs its own
+                // inline-cache record. `update_inline_cache` re-asks the
+                // resolution question once per recorded entry when the
+                // class version moves; a member missing from the map would
+                // let a redefinition of *that* class pass the repair
+                // untouched, and the body would keep calling the target it
+                // resolved at compile time. Only `recv_class` was recorded
+                // above, so add the rest.
+                //
+                for &class in classes.iter() {
+                    if class != recv_class {
+                        self.inline_method_cache.push(InlineCacheEntry {
+                            recv_class: class,
+                            name: callsite.name,
+                            refinements: self.refinements(),
+                            func_id,
+                        });
+                    }
+                }
                 let deopt = ir.new_deopt(state);
                 state.load(ir, recv, GP::Rdi);
                 ir.push(AsmInst::GuardClassIn(GP::Rdi, classes, deopt));
@@ -540,8 +612,12 @@ impl<'a> JitContext<'a> {
                 // Method specialization (inlining a callee iseq) and block-
                 // argument inlining (`iseq_block`, which drives specialized
                 // `yield`) are both lowered on x86 and aarch64 now.
-                if ((specializable || forwarded_initialize) && self.specialize_level() < 5)
-                    || iseq_block.is_some()
+                // Inside a dispatch arm, specialization is off: the arm
+                // cannot back out of a `CompileError`, and a `Cease` return
+                // would leave it with no path to the merge.
+                if (((specializable || forwarded_initialize) && self.specialize_level() < 5)
+                    || iseq_block.is_some())
+                    && !self.in_dispatch_arm()
                 {
                     return self.specialized_iseq(
                         state,
@@ -1888,9 +1964,9 @@ mod tests {
     }
 
     /// A megamorphic site (a fifth distinct receiver class overflows the
-    /// 4-way PMC) must NOT take the same-target set guard — the observation
-    /// set is incomplete, so `pmc_same_target_classes` rejects it and the
-    /// site keeps the ordinary single-class guard. Also exercises the PMC
+    /// 4-way PMC) takes the same-target set guard over the ways it *did*
+    /// observe; the unobserved classes deopt, which is what the ordinary
+    /// single-class guard did for all of them. Also exercises the PMC
     /// overflow counter itself, and a float-typed branch behind a
     /// polymorphic `nil?` (the receiver state stays unrefined after the set
     /// guard, so the Float conversions downstream must still be correct).
@@ -1957,6 +2033,103 @@ mod tests {
               def frozen? = :nope
             end
             [q, n, res, fro(FrozenLiar.new)]
+            "#,
+        );
+    }
+
+    /// A megamorphic site whose observed receiver classes converge on one
+    /// builtin target takes the set guard over the ways the PMC kept; the
+    /// overflowed classes deopt. In one hot rotation: six classes that
+    /// converge on `Kernel#is_a?` (two of them answering `true`), one that
+    /// overrides the name — it must be kept out of the set and dispatch its
+    /// own body — and a rare receiver reached once every 131 iterations.
+    /// Then a set member gains an override after warmup, which the class
+    /// version guard must catch.
+    #[test]
+    fn polymorphic_megamorphic_same_target() {
+        run_test(
+            r#"
+            class A; end
+            class B; end
+            class C; end
+            class D; end
+            class E; end
+            class Own
+              def is_a?(k) = :own
+            end
+            def check(x) = x.is_a?(Numeric)
+            hot = [A.new, B.new, C.new, D.new, E.new, 1, 2.5, Own.new]
+            t = 0
+            o = 0
+            n = 0
+            400.times do |i|
+              case check(hot[i % 8])
+              when true then t += 1
+              when :own then o += 1
+              else n += 1
+              end
+              check(nil) if i % 131 == 0
+            end
+            res = [t, o, n]
+            class C
+              def is_a?(k) = :c
+            end
+            res << check(C.new) << check(A.new) << check(1) << check(nil)
+            res
+            "#,
+        );
+    }
+
+    /// Redefining a **member of the class-set guard other than the compiled
+    /// receiver class** must invalidate the body. The set guard lets three
+    /// classes reach one cached target, so all three are recorded in the
+    /// inline cache map; recording only `recv_class` (as the set guard first
+    /// shipped) let `update_inline_cache` confirm the stale resolution and
+    /// stamp the new class version into a body that kept calling
+    /// `Kernel#is_a?` / `Kernel#frozen?`. Covers both the ordinary
+    /// set-guarded builtin call (`is_a?`) and the class-independent inline
+    /// generator that fires behind the same guard (`frozen?`).
+    #[test]
+    fn polymorphic_set_member_redefined() {
+        run_test_once(
+            r#"
+            class A; end
+            class B; end
+            class C; end
+            def check(x) = x.is_a?(Numeric)
+            def fro(x) = x.frozen?
+            hot = [A.new, B.new, C.new]
+            300.times { |i| v = hot[i % 3]; check(v); fro(v) }
+            class C
+              def is_a?(k) = :c
+              def frozen? = :cf
+            end
+            [check(A.new), check(C.new), fro(A.new), fro(C.new), C.new.is_a?(Numeric)]
+            "#,
+        );
+    }
+
+    /// The share threshold: a site dominated by two alternating classes
+    /// plus a handful of stragglers keeps the set to the dominant pair, and
+    /// the stragglers deopt. Only correctness is asserted here — the width
+    /// of the membership chain is not observable from Ruby — so this pins
+    /// that excluding a class from the set never changes its answer.
+    #[test]
+    fn polymorphic_rare_tail() {
+        run_test(
+            r#"
+            class Tail1; end
+            class Tail2; end
+            class Tail3; end
+            def probe(x) = x.is_a?(String)
+            hot = ["a", :b]
+            tail = [Tail1.new, Tail2.new, Tail3.new]
+            t = 0
+            300.times do |i|
+              t += 1 if probe(hot[i % 2])
+              probe(tail[i % 3]) if i % 89 == 0
+            end
+            [t, probe(Tail1.new), probe("z"), probe(:z), probe(nil)]
             "#,
         );
     }

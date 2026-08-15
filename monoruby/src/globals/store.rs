@@ -1956,6 +1956,23 @@ impl PolyCache {
         self.overflow
     }
 
+    ///
+    /// Every slow-path observation this site made, the megamorphic overflow
+    /// included. A way's `count` divided by this is its **share** of the
+    /// site's misses — the signal a consumer needs to tell "two classes in
+    /// steady alternation" from "one class plus a rare tail", which the way
+    /// count alone cannot distinguish.
+    ///
+    /// Like [`PolyCacheEntry::count`] this is a miss count, not a call
+    /// count, so it says nothing about how hot the site is — only about how
+    /// the misses are distributed across the classes.
+    ///
+    pub fn observations(&self) -> u32 {
+        self.entries
+            .iter()
+            .fold(self.overflow, |acc, e| acc.saturating_add(e.count))
+    }
+
     /// Two or more ways (or an overflow) were observed.
     pub fn is_polymorphic(&self) -> bool {
         self.entries.len() >= 2 || self.overflow != 0
