@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6dfeacc5.js";
+            window.path_to_searchindex_js = "../searchindex-3ae4b096.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -492,7 +492,9 @@ old 世代全体には比例しない。</p>
 <ol>
 <li><code>self.promoting = true</code> にしてから <code>root.mark(self)</code>(ルートは §8)。</li>
 <li><code>RValue::mark</code>(<code>rvalue.rs:757</code>)は <code>gc_check_and_mark</code> でビットを立て、未マーク
-だった場合のみ <code>mark_children</code> で子を辿る(深さ優先)。</li>
+だった場合のみ <code>scan_children</code> に渡す。<code>scan_children</code> は<strong>浅いうちは
+<code>mark_children</code> を直接呼び(深さ優先)、<code>MARK_RECURSION_LIMIT</code> 段を超えたら
+マークキューに積んで打ち切る</strong>(下記「マークキュー」)。</li>
 <li><code>gc_check_and_mark</code>(<code>alloc.rs:1007</code>)は、初めてマークしたセルが <code>promoting</code> かつ
 <code>is_promotable()</code> なら <code>aging</code> に積む(昇格候補の収集)。ヘッダ書き換えは
 マーク走査が握る <code>&amp;self</code> とエイリアスしないよう<strong>マーク後に遅延</strong>する。
@@ -504,8 +506,49 @@ old 世代全体には比例しない。</p>
 「old からしか参照されていない young オブジェクト」に到達する。走査後、若い子が
 いなくなった entry は set から外して <code>arm_barrier</code>(自己クリーニング;
 <code>alloc.rs:1213</code>)。</li>
+<li>上記 1・4 の直後に <code>drain_mark_queue()</code>。キューが空になるまで、積まれた
+オブジェクトの <code>mark_children</code> を順に呼ぶ。ここで到達した子もまた
+<code>scan_children</code> を通るので、1 回の drain でグラフの残り全体に届く。
+<strong>マークビットを読む処理(加齢・<code>filter_remembered</code>・スイープ)より前に
+必ず drain されている</strong>必要がある。</li>
 <li><code>self.promoting = false</code>。</li>
 </ol>
+<h4 id="マークキューmark_queue-mark_recursion_limit"><a class="header" href="#マークキューmark_queue-mark_recursion_limit">マークキュー(<code>mark_queue</code>, <code>MARK_RECURSION_LIMIT</code>)</a></h4>
+<p>以前のマークは純粋な再帰で、スタック消費が<strong>オブジェクトグラフの深さに比例</strong>して
+いた。<code>a = [a]</code> を 7.5 万回、連結リスト、ivar チェーン、入れ子 Hash — いずれも
+8MB のメインスタックを溢れさせ、<strong>GC の最中にプロセスが abort</strong> していた
+(<code>thread 'main' has overflowed its stack</code>)。JIT の Ruby フレームが既に積まれた
+セーフポイントから収集が始まる以上、余裕は常に読めない。</p>
+<p>現在は深さが <code>MARK_RECURSION_LIMIT</code>(= 32)を超えた時点でそれ以上再帰せず、
+そのオブジェクトを <code>mark_queue</code>(<code>VecDeque</code>)に積む。深い部分の走査は
+<code>drain_mark_queue</code> による<strong>幅優先</strong>になり、ネイティブスタックの使用量は
+グラフの深さに関係なく <code>MARK_RECURSION_LIMIT</code> 段(数 KB)で頭打ちになる。
+キューの実体はヒープなので、500 万段の連結リストでも通る。</p>
+<p>浅い再帰を残しているのは純粋に性能のため。現実のグラフは浅く広く、
+キューに積むと 1 オブジェクトあたり push + pop + 8 バイトのメモリトラフィックが
+増える。plb2 bedcov(生存 270 万オブジェクト、ここで最もマークが重い負荷、
+収集 89 回)を 13 回インターリーブ実行した平均:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>段数</th><th>ネイティブスタック</th><th>bedcov GC 時間</th></tr>
+</thead>
+<tbody>
+<tr><td>無制限(旧実装)</td><td>グラフの深さに比例(7.5 万段で溢れる)</td><td>3205 ms</td></tr>
+<tr><td><code>MARK_RECURSION_LIMIT = 32</code>(現行)</td><td>32 段(数 KB)</td><td>3225 ms (+0.6%)</td></tr>
+<tr><td><code>0</code>(純粋な幅優先)</td><td>1 段</td><td>3479 ms (+8.6%)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>全部キューに積むと GC 時間 +9%</strong> 前後(測定バッチにより +6〜13%)。32 段の再帰を
+残すと旧実装と誤差の範囲に収まる。32 と 256 は同じ結果だったので、スタック上限が
+小さい方を採った。<code>0</code> にすれば純粋な幅優先になる。</p>
+<blockquote>
+<p>測定ホストの実行ごとのばらつきは ±13% 程度あり、絶対値はバッチ間で動く。
+意味があるのは同一バッチ内の対比較で、純粋な幅優先は 8 回の対すべてで
+旧実装より遅かった。FIFO を LIFO の <code>Vec</code> に替えても同じだったので、
+コストは順序ではなくワークリストそのものにある。</p>
+</blockquote>
 <h3 id="64-加齢と昇格apply_aging-allocrs1048"><a class="header" href="#64-加齢と昇格apply_aging-allocrs1048">6.4 加齢と昇格(<code>apply_aging</code>, <code>alloc.rs:1048</code>)</a></h3>
 <p>マーク完了後(生きた <code>&amp;self</code> が無い状態)に:</p>
 <ul>
@@ -666,6 +709,13 @@ res = src.flat_map { |rf, gf, bf| (0...64).map { |i| [i * rf, i * gf, i * bf] } 
 <em>どのメソッドのどの一時値が壊れているか</em>が一発で分かる。今回は
 <code>func=Video#initialize(driver.rb:67) slot=2 / parent=Array(len=512)</code> まで出て、
 そこから <code>flat_map</code> に到達した。</p>
+<p>(b) の「直接の親」は常にバックトレースに出る — 失敗した <code>mark</code> を呼んだのは
+親の <code>mark_children</code> フレームだからである。ただし §6.3 のマークキューに積まれた
+地点より<strong>上の祖先はバックトレースから切れる</strong>ので、DEAD 検出点は
+<code>scanning from: &lt;ptr&gt; ty=...</code>(<code>Allocator::mark_referrer</code>)としてその
+キュー entry を併せて出力する。<code>scanning from: root set</code> なら、走査はまだルート集合の
+中にいた — つまり壊れた辺はオブジェクトの中ではなくルート側(ビルトインの
+未ルート一時値、古いフレームスロット)にある。</p>
 <hr>
 <h2 id="9-スイープと空きページの回収"><a class="header" href="#9-スイープと空きページの回収">9. スイープと空きページの回収</a></h2>
 <h3 id="スイープsweep-allocrs1269"><a class="header" href="#スイープsweep-allocrs1269">スイープ(<code>sweep</code>, <code>alloc.rs:1269</code>)</a></h3>
@@ -776,6 +826,9 @@ stderr へ出力して abort する(<code>alloc.rs</code> の <code>malloc_hard_
 remembered/armed の区別はオブジェクトと寿命を共にし、死んだ old セルの後始末は
 スイープとページ回収が担う。old 世代が大きいほどメジャーが安くなる
 (old 61 万で 1 回あたり 74ms → 27ms)。</li>
+<li>マークの走査は<strong>深さ 32 段までは再帰、それ以降は幅優先のマークキュー</strong>
+(<code>mark_queue</code>)。ネイティブスタックの使用量はグラフの深さから切り離され、
+浅く広いという現実のグラフの形に対しては再帰の速さをそのまま保つ。</li>
 <li>外部 malloc 圧・シグナル・<code>GC.start</code> も同じ poll ワード経由で同一のセーフ
 ポイント収集に集約される(レーン分割は <code>poll_flag.rs</code> / <code>doc/safepoint.md</code> §3)。</li>
 </ul>
