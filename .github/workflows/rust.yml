@@ -155,6 +155,11 @@ jobs:
         #     cap carries ~1.5x headroom. (An earlier 35-min cap timed out
         #     healthy runs once the bin/test scope grew; do not shrink this
         #     without re-measuring a healthy pass.)
+        #     NOTE: this covers a HANG, not the runner going away. When the
+        #     runner is lost the retry action is lost with it (it runs on
+        #     that machine), which is why the second attempt never starts.
+        #     That case is recovered server-side by
+        #     .github/workflows/rerun-lost-runner.yml.
         #   * a background memory watchdog: watches every monoruby AND ruby
         #     process (bin/test diffs against CRuby and runs mspec) plus the
         #     system-wide free memory; fires at >3 GB per process / >4 GB

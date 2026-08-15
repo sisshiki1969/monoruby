@@ -1,0 +1,101 @@
+name: Rerun lost runners
+
+# The `darwin` job runs on a GitHub-hosted Apple Silicon runner that
+# intermittently *disappears* mid-`bin/test`. GitHub records it as
+#
+#   The hosted runner lost communication with the server.
+#
+# and the job's streamed logs never get uploaded (the log download 404s).
+# Six such deaths on master between 2026-08-01 and 2026-08-15; the
+# `darwin-heartbeat` check run — which survives the death — shows the
+# machine was healthy right up to the moment it went (3.7 GB free, 93 MB
+# across all monoruby processes, tests passing at 1456/3162), and then
+# both the test progress AND the independent heartbeat loop stopped in
+# the same instant. It is the runner going away, not anything under test.
+#
+# The `nick-fields/retry` wrapper around `bin/test` CANNOT recover this:
+# it runs *on* the runner, so when the runner dies the retry logic dies
+# with it (which is why the second attempt never starts, and the job just
+# fails at the per-attempt cap). Recovery has to happen server-side —
+# hence this workflow.
+#
+# It reruns the failed jobs of a `Rust` run exactly when GitHub itself
+# blamed the runner, and never otherwise: a genuine test failure carries
+# a different annotation and is left red.
+
+on:
+  workflow_run:
+    workflows: ["Rust"]
+    types: [completed]
+
+# Least privilege: rerunning jobs needs `actions: write`; reading the
+# failure annotations that gate it needs `checks: read`.
+permissions:
+  actions: write
+  checks: read
+
+jobs:
+  rerun:
+    # Only failures, and only the first attempt — the rerun below produces
+    # attempt 2, whose completion fires this workflow again, and this
+    # condition is what stops that from looping.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Rerun failed jobs if the runner was lost
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          REPO: ${{ github.repository }}
+          API: https://api.github.com
+        run: |
+          set -euo pipefail
+          api() { curl -sS --fail-with-body -H "Authorization: Bearer $GH_TOKEN" \
+                    -H "Accept: application/vnd.github+json" "$@"; }
+
+          echo "inspecting failed jobs of run $RUN_ID"
+          # `filter=latest` is the default, but be explicit: we want this
+          # attempt's jobs, not every attempt's.
+          jobs_json=$(api "$API/repos/$REPO/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100")
+
+          # A job's annotations live on its check run, not on the job.
+          failed=$(echo "$jobs_json" | jq -r '.jobs[] | select(.conclusion=="failure") | "\(.name)\t\(.check_run_url)"')
+          if [ -z "$failed" ]; then
+            echo "no failed jobs (the run may have failed before any job started) — nothing to do"
+            exit 0
+          fi
+
+          lost=""
+          while IFS=$'\t' read -r name check_url; do
+            [ -n "$check_url" ] || continue
+            msgs=$(api "$check_url/annotations" \
+                     | jq -r '.[] | select(.annotation_level=="failure") | .message' || true)
+            echo "--- $name"
+            echo "$msgs" | sed 's/^/    /'
+            # Match GitHub's own wording for a runner that went away. Kept
+            # deliberately narrow: anything else (a real test failure, a
+            # timeout, a brew install exiting 100) must stay red.
+            if echo "$msgs" | grep -qi "lost communication with the server"; then
+              lost="$lost $name"
+            fi
+          done <<< "$failed"
+
+          if [ -z "$lost" ]; then
+            echo "no runner-loss annotation — leaving the run red"
+            echo "Not rerun: the failure was not a lost runner." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "lost runner(s):$lost — rerunning failed jobs"
+          api -X POST "$API/repos/$REPO/actions/runs/$RUN_ID/rerun-failed-jobs" >/dev/null
+          {
+            echo "Rerunning failed jobs of [run $RUN_ID](${RUN_URL:-})."
+            echo
+            echo "Reason: GitHub reported \`The hosted runner lost communication with the server\` for:$lost"
+            echo
+            echo "Only this one rerun is attempted; if attempt 2 fails too, the run stays red."
+          } >> "$GITHUB_STEP_SUMMARY"
