@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b85aee89.js";
+            window.path_to_searchindex_js = "../searchindex-6dfeacc5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -251,7 +251,7 @@ GC は VM セーフポイントで同期的に実行され、並行 GC やイン
 <tr><td><code>promoting</code></td><td>マーク中に昇格候補を収集するか(実マーク中のみ true)</td></tr>
 <tr><td><code>aging</code></td><td>今サイクルで生存した昇格候補(マーク後に加齢)</td></tr>
 <tr><td><code>remembered</code></td><td>remembered set(old→young 参照を持つ old オブジェクト)</td></tr>
-<tr><td><code>pages_since_gc</code></td><td>前回の収集以降に <code>THRESHOLD</code> まで充填したページ数(8 で GC レーンを立てる)</td></tr>
+<tr><td><code>pages_since_gc</code></td><td>前回の収集以降に <code>THRESHOLD</code> まで充填したページ数(<code>gc_trigger_pages()</code> で GC レーンを立てる。§4.1)</td></tr>
 <tr><td><code>heap_frames</code></td><td>ヒープに退避したフレームバッファの登録表(§9)</td></tr>
 </tbody>
 </table>
@@ -292,7 +292,8 @@ mark-external 方式なので、生存中のオブジェクト内容を汚さな
 <li>空でなければ<strong>現ページのバンプ割り当て</strong>。
 <ul>
 <li><code>used_in_current == THRESHOLD</code>(3968)に達したら <code>on_page_pressure()</code> で
-<code>pages_since_gc += 1</code>、8 ページ目で poll ワードの GC レーンを立てる(GC を要求;§4)。</li>
+<code>pages_since_gc += 1</code>、<code>gc_trigger_pages()</code> に達したら poll ワードの GC レーンを
+立てる(GC を要求;§4)。</li>
 <li><code>used_in_current == DATA_LEN</code>(4032)でページ満杯 → <code>free_pages</code> から再利用、
 なければ <code>new_page()</code> で新規ページ。新ページは <code>clear_old_bits()</code> で
 old ビットマップを 0 初期化(マイナー GC のシード整合性のため)。</li>
@@ -322,7 +323,7 @@ old ビットマップを 0 初期化(マイナー GC のシード整合性の�
 <tr><th>経路</th><th>実装</th><th>操作</th></tr>
 </thead>
 <tbody>
-<tr><td>ページ圧力</td><td><code>on_page_pressure</code>(<code>alloc.rs</code>)</td><td><code>pages_since_gc</code> が 8 に達したら <code>set_gc()</code></td></tr>
+<tr><td>ページ圧力</td><td><code>on_page_pressure</code>(<code>alloc.rs</code>)</td><td><code>pages_since_gc</code> が <code>gc_trigger_pages()</code>(下記)に達したら <code>set_gc()</code></td></tr>
 <tr><td>malloc 圧(§8)</td><td><code>request_gc_if_malloc_over</code></td><td><code>set_gc()</code></td></tr>
 <tr><td><code>GC.start</code></td><td><code>request_gc(true)</code></td><td><code>set_gc()</code> + メジャー強制</td></tr>
 <tr><td><code>GC.stress</code></td><td><code>set_stress(true)</code> / 各収集の末尾</td><td><code>set_gc()</code>(再武装)</td></tr>
@@ -335,6 +336,24 @@ byte が分かれているため互いを踏み潰す競合は原理的にない
 収集の完了時は <code>ack_gc_request</code>(<code>alloc.rs</code>)が <strong>GC レーンの byte だけ</strong>を落とし、
 <code>pages_since_gc</code> を 0 に戻す(並行して立った他レーンは保存される)。<code>--no-gc</code> 時の
 空収集も同じ経路で要求を無効化するため、レーンが立ちっぱなしで poll が空回りすることはない。</p>
+<h4 id="収集間隔はヒープに比例するgc_trigger_pages"><a class="header" href="#収集間隔はヒープに比例するgc_trigger_pages">収集間隔はヒープに比例する(<code>gc_trigger_pages</code>)</a></h4>
+<p>ページ圧力の閾値は固定値ではなく、<strong>稼働中ページ数の一定割合</strong>:</p>
+<pre><code>gc_trigger_pages() = max(PAGES_PER_GC_TRIGGER, 稼働ページ数 / GC_HEAP_FRACTION)
+                   = max(8, pages / 16)
+</code></pre>
+<p>収集 1 回のコスト(ルート走査・remembered set 走査・ビットマップ走査)は<strong>生存量</strong>で
+決まるのに対し、固定予算はそれを一定量の確保にしか償却しない。生存量が増え続ける
+プログラムでは総 GC コストが O(生存量 × 総確保量) になってしまうため、予算をヒープに
+比例させてコレクタ/ミュータタ比を有界に保つ。</p>
+<ul>
+<li>128 ページ(32MB)未満のヒープでは <code>max</code> の下限が効き、<strong>従来と完全に同一挙動</strong>
+(optcarrot・aobench・sudoku 等はページ数・収集回数・RSS すべて不変)。</li>
+<li>代償は浮遊ゴミで、ヒープの最大 1/16 が回収を先送りされる。plb2 bedcov(生存 270 万
+オブジェクト)では マイナー 202 → 83 回、GC 時間 −35%、実行時間 −12%、RSS +23%
+(それでも同プログラムの CRuby の RSS より小さい)。</li>
+<li>収集で全滅したページは <code>pages</code> を離れて <code>free_pages</code> に移るため、生存量が落ちた
+ヒープは自動的に予算も縮む。</li>
+</ul>
 <h3 id="42-poll-のコード生成"><a class="header" href="#42-poll-のコード生成">4.2 poll のコード生成</a></h3>
 <p><code>execute_gc_inner</code>(<code>codegen/arch/x86_64/jit_module.rs:255</code>)が poll を出力:</p>
 <pre><code class="language-asm">cmpl [rip + poll_flag], 0
