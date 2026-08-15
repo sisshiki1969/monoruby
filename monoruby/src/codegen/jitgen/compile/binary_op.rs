@@ -3,6 +3,20 @@ use crate::executor::inline::InlineFuncInfo;
 
 use super::*;
 
+///
+/// The classes [`JitContext::opt_eq_assumable`] has to clear: every class
+/// whose values `opt_eq_cmp`'s inline path can decide, i.e. every immediate
+/// that is neither a heap pointer nor a flonum (both of which it sends to
+/// the generic helper).
+///
+const OPT_EQ_IMMEDIATE_CLASSES: &[ClassId] = &[
+    INTEGER_CLASS,
+    NIL_CLASS,
+    TRUE_CLASS,
+    FALSE_CLASS,
+    SYMBOL_CLASS,
+];
+
 impl<'a> JitContext<'a> {
     ///
     /// Outcome of a binary op whose operand class is unknown *and* whose
@@ -176,6 +190,50 @@ impl<'a> JitContext<'a> {
     }
 
 
+    ///
+    /// May [`AsmIr::opt_eq_cmp`]'s inline fast path be emitted for *kind*?
+    ///
+    /// That fast path answers **bit equality** whenever neither operand is a
+    /// heap object or a flonum — so it decides `==` / `!=` for every one of
+    /// `Integer` (fixnum), `nil`, `true`, `false` and `Symbol` without a
+    /// method lookup and, until this check existed, without consulting the
+    /// basic-op flag either. A `class Integer; def ==(other) = :redefined`
+    /// left a compiled `a == b` still answering `true`, and no side exit
+    /// could repair it: the class-version guard fires, the body recompiles,
+    /// and the recompiled body emits the same unconditional fast path. Only
+    /// `==`/`!=` were affected — `<`, `<=`, `>`, `>=` go straight to the
+    /// generic helper, which does consult the flag.
+    ///
+    /// So take the fast path only under the same licence the guard-free
+    /// inline generators take, for every class it decides, and record the
+    /// dependency so `set_bop_redefine` evicts this body.
+    ///
+    fn opt_eq_assumable(&mut self, kind: CmpKind) -> bool {
+        // `!=` is a tracked pair only for a few classes (`BASIC_OP_DEFS`);
+        // where it is not, the runtime helper cannot see its redefinition
+        // either, so demanding it here would only cost the fast path
+        // without closing anything. `==` is tracked for all five.
+        let eq = IdentId::_EQ;
+        let op: IdentId = kind.into();
+        let mut deps = Vec::with_capacity(OPT_EQ_IMMEDIATE_CLASSES.len() + 1);
+        for &class in OPT_EQ_IMMEDIATE_CLASSES {
+            if !self.basic_op_assumable(class, eq) {
+                return false;
+            }
+            deps.push((class, eq));
+            if op != eq && self.store.is_basic_op_pair(class, op) {
+                if !self.basic_op_assumable(class, op) {
+                    return false;
+                }
+                deps.push((class, op));
+            }
+        }
+        for (class, op) in deps {
+            self.record_bop_dep(class, op);
+        }
+        true
+    }
+
     pub(super) fn binary_op(
         &mut self,
         state: &mut AbstractState,
@@ -314,7 +372,7 @@ impl<'a> JitContext<'a> {
         // generic C-call fallback; other cmp kinds use the plain
         // generic C-call (Part 3-B).
         match kind {
-            CmpKind::Eq | CmpKind::Ne => {
+            CmpKind::Eq | CmpKind::Ne if self.opt_eq_assumable(kind) => {
                 ir.opt_eq_cmp(state, lhs, rhs, kind, cmp_generic_fn(kind), is_func_call)
             }
             CmpKind::TEq if case_semantics => {
@@ -463,6 +521,38 @@ fn cmp_generic_fn(kind: CmpKind) -> crate::executor::BinaryOpFn {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// `opt_eq_cmp`'s inline path answers bit-equality for every immediate,
+    /// so a redefinition of any of *their* `==` has to evict the body. Before
+    /// the licence check this returned the builtin's answer forever: no side
+    /// exit could repair it, because the recompiled body emitted the same
+    /// unconditional fast path. One class per run — a redefinition is global
+    /// and would mask the others.
+    #[test]
+    fn opt_eq_respects_redefinition() {
+        for (klass, recv) in [
+            ("Integer", "1"),
+            ("NilClass", "nil"),
+            ("TrueClass", "true"),
+            ("FalseClass", "false"),
+            ("Symbol", ":s"),
+        ] {
+            run_test_once(&format!(
+                r#"
+                def probe(a, b) = a == b
+                def probe_ne(a, b) = a != b
+                vals = [{recv}, 1.5]
+                res = []
+                600.times {{ |i| res << probe(vals[i % 2], {recv}) }}
+                600.times {{ |i| res << probe_ne(vals[i % 2], {recv}) }}
+                class {klass}
+                  def ==(other) = :redefined
+                end
+                [res.tally.size, probe({recv}, {recv}), probe_ne({recv}, {recv})]
+                "#
+            ));
+        }
+    }
 
     #[test]
     fn binop_overflow_deopt_dirty_operand() {
