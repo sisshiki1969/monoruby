@@ -157,6 +157,36 @@ fn packed_digest<S: std::hash::BuildHasher>(hash_builder: &S, k: Value) -> usize
     h.finish() as usize
 }
 
+/// The boxed map's digest of a String key, computed without the vm: the
+/// same builder and the same digest stream as `RubyMap::hash(&Some(k))`
+/// for an `ObjTy::STRING` payload — `Value::ruby_hash`'s STRING arm
+/// digests the byte content via `RStringInner::hash`, unconditionally (a
+/// redefined `String#hash` is never consulted for string-key bucketing)
+/// — so the prehashed probe and the general probe always agree on
+/// buckets.
+fn string_digest<S: std::hash::BuildHasher>(hash_builder: &S, s: &RStringInner) -> usize {
+    use std::hash::{Hash, Hasher};
+    let mut h = hash_builder.build_hasher();
+    s.hash(&mut h);
+    h.finish() as usize
+}
+
+/// The `eql?` verdict of a stored boxed-map key against a String probe
+/// `k` whose content is `s`, computed without the vm — `Value::eql`'s
+/// reachable arms for a String lhs: identity, then STRING×STRING byte
+/// equality; nothing else is `eql?` to a String. (The general probe
+/// could only reach its `eql?` *dispatch* arm against a non-String heap
+/// key on a full 64-bit digest collision, and the builtin
+/// `String#eql?` it resolves to returns false for any non-String
+/// argument — a redefined `String#eql?` is no more observed here than a
+/// redefined `String#hash` is at insert time.)
+fn string_key_eq(stored: &Option<Value>, k: Value, s: &RStringInner) -> bool {
+    match stored {
+        Some(sk) => sk.id() == k.id() || sk.is_rstring_inner().is_some_and(|si| si == s),
+        None => false,
+    }
+}
+
 /// Drop the live content of `body` according to `flags` (the RValue
 /// sweep path for HASH cells).
 ///
@@ -768,10 +798,16 @@ impl<'a> HashRef<'a> {
         Ok(match self.content() {
             ContentRef::Inline(pairs) => self.inline_pos(k, vm, globals)?.map(|i| pairs[i].1),
             ContentRef::Map(m) => {
-                // See `HashRefMut::insert`: a packed key probes vm-free.
+                // See `HashRefMut::insert`: a packed key probes vm-free,
+                // and so does a String key (vm-free digest and byte
+                // equality — `string_digest` / `string_key_eq`).
                 if k.is_packed_value() {
                     let hash = packed_digest(m.hasher(), k);
                     m.get_prehashed(hash, &Some(k), vm, globals)?.copied()
+                } else if let Some(s) = k.is_rstring_inner() {
+                    let hash = string_digest(m.hasher(), s);
+                    m.get_prehashed_with(hash, |ek| string_key_eq(ek, k, s), vm, globals)?
+                        .copied()
                 } else {
                     m.get(&k, vm, globals)?.copied()
                 }
@@ -789,10 +825,17 @@ impl<'a> HashRef<'a> {
         match self.content() {
             ContentRef::Inline(_) => Ok(self.inline_pos(k, vm, globals)?.is_some()),
             ContentRef::Map(m) => {
-                // See `HashRefMut::insert`: a packed key probes vm-free.
+                // See `HashRefMut::insert`: a packed key probes vm-free,
+                // and so does a String key (vm-free digest and byte
+                // equality — `string_digest` / `string_key_eq`).
                 if k.is_packed_value() {
                     let hash = packed_digest(m.hasher(), k);
                     Ok(m.get_prehashed(hash, &Some(k), vm, globals)?.is_some())
+                } else if let Some(s) = k.is_rstring_inner() {
+                    let hash = string_digest(m.hasher(), s);
+                    Ok(m
+                        .get_prehashed_with(hash, |ek| string_key_eq(ek, k, s), vm, globals)?
+                        .is_some())
                 } else {
                     m.contains_key(&k, vm, globals)
                 }
@@ -1278,6 +1321,14 @@ impl<'a> HashRefMut<'a> {
                     // is vm-free — so the whole probe is vm-free.
                     let hash = packed_digest(m.hasher(), k);
                     m.insert_prehashed(hash, Some(k), v);
+                } else if let Some(s) = k.is_rstring_inner() {
+                    // A String key's digest and `eql?` are likewise
+                    // vm-free: byte content only, dispatching neither
+                    // `String#hash` nor `String#eql?` — exactly what the
+                    // general probe does for a String key
+                    // (`string_digest` / `string_key_eq`).
+                    let hash = string_digest(m.hasher(), s);
+                    m.insert_prehashed_with(hash, Some(k), v, |ek| string_key_eq(ek, k, s));
                 } else {
                     m.insert(Some(k), v, vm, globals)?;
                 }

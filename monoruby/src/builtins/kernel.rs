@@ -3866,9 +3866,57 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             }
         }
     } else {
-        // monoruby is single-threaded; sleep without argument would block
-        // forever with no way to be interrupted. Return immediately.
-        return Ok(Value::integer(0));
+        // No other green thread can ever wake this sleeper, but a signal
+        // still can, so `sleep` must block here exactly as CRuby's
+        // argument-less form does: run any trap handler at the poll point
+        // and go back to sleep, returning only when the interrupt raises
+        // (a converted SignalException) — verified against CRuby, whose
+        // `sleep` sleeps *through* a plain trap handler.
+        //
+        // Returning immediately instead (what this arm used to do, from
+        // when monoruby had no threads and no signals) was observable: a
+        // fork child parked in `sleep` ran off the end of its block and
+        // exited at once, so a parent that meant to signal it later raced
+        // a child that was already gone. On Linux the child usually
+        // survived by accident — its pipe write leaves an fd-poller green
+        // thread live, which routes `sleep` through the scheduler arm
+        // above — but on darwin nothing kept it alive, which is why
+        // `process_wait_wnohang_nil` failed there on every run.
+        loop {
+            // Drain signals that arrived *before* (re-)entering nanosleep;
+            // their pending bit is already set, so they would not EINTR
+            // the upcoming sleep (same reasoning as the timed arm above).
+            if crate::codegen::signal_table::PENDING_SIGNALS
+                .load(std::sync::atomic::Ordering::Relaxed)
+                != 0
+                && crate::executor::execute_gc(vm, globals).is_none()
+            {
+                return Err(vm.take_error());
+            }
+            // Sleep in bounded chunks rather than one enormous interval:
+            // a signal whose handler only sets a pending bit (delivered on
+            // another OS thread, so no EINTR here) is then noticed at the
+            // next poll point within a second instead of never.
+            let ts = libc::timespec {
+                tv_sec: 1,
+                tv_nsec: 0,
+            };
+            // SAFETY: plain POSIX nanosleep on a valid timespec.
+            let r = unsafe { libc::nanosleep(&ts, std::ptr::null_mut()) };
+            if r != 0 {
+                if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                    // Not an interruption — nanosleep itself failed;
+                    // fall out rather than spin on a failing syscall.
+                    break;
+                }
+                // A signal interrupted the sleep: run the poll point. An
+                // error (converted SignalException) aborts the sleep; a
+                // trap handler runs and the sleep resumes.
+                if crate::executor::execute_gc(vm, globals).is_none() {
+                    return Err(vm.take_error());
+                }
+            }
+        }
     }
     let elapsed = now.elapsed().as_secs();
     Ok(Value::integer(elapsed as i64))
