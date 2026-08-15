@@ -374,6 +374,103 @@ fn small_hash_literal() {
 }
 
 #[test]
+fn interpolation_fragments_and_shared_literals() {
+    // Interpolation fragments are loaded as frozen interned templates
+    // (never observable), the result is a fresh mutable string with the
+    // negotiated encoding, and big string-literal templates are handed
+    // out as CoW sharers — mutation of a copy must never leak back.
+    run_test(
+        r##"
+        r = []
+        20.times do |i|
+            a = 42 + i
+            r << "x#{a}y" << "#{a}" << "#{}nil#{}" << "é#{a}ü"
+            s = "x#{a}"
+            s << "!"
+            r << s << s.frozen?
+            b = "template#{a}"
+            b2 = "template#{a}"
+            r << b.equal?(b2)
+            b << "mut"
+            r << b << b2
+            r << "é#{a}".encoding.to_s << "é#{a}".size << "é#{a}".valid_encoding?
+        end
+        r
+        "##,
+    );
+    // A large (heap-spilled) literal template: every evaluation yields
+    // an independent copy; mutating one copy leaves later copies and
+    // earlier copies untouched (copy-on-write un-share).
+    run_test(
+        r##"
+        r = []
+        copies = []
+        20.times do |i|
+            t = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            copies << t
+            t << "-#{i}"
+            r << t.bytesize
+        end
+        r << copies.map { |c| c[-3..] } << copies.uniq.size
+        big = "Z" * 100
+        r << "#{big}#{1}#{big}".size
+        r
+        "##,
+    );
+}
+
+#[test]
+fn interpolation_bytes_and_encoded_fragments() {
+    // A fragment whose escape bytes are not valid UTF-8 (`\xFF`) lowers
+    // as a byte-literal template; a `\u` escape under a non-UTF-8
+    // `# encoding:` pragma (reachable via eval) forces the fragment to
+    // UTF-8. Both must interpolate like their emit_string counterparts.
+    run_test(r##""\xFF#{1}".bytes"##);
+    run_test(r##"x = 5; "pre\xFF#{x}post".bytes"##);
+    run_test(r##""\xFF#{1}".encoding.to_s"##);
+    // The eval'd source carries its own encoding pragma; `\#{}` keeps
+    // the interpolation inside the eval'd code (the outer %Q would
+    // otherwise interpolate it first).
+    run_test(r##"eval(%Q{# encoding: ascii-8bit\nx = 7\n"\\u3042\#{x}".encoding.to_s})"##);
+    run_test(r##"eval(%Q{# encoding: ascii-8bit\nx = 7\n"\\u3042\#{x}".bytes})"##);
+}
+
+#[test]
+fn interpolation_encoding_negotiation() {
+    // Each operand of an interpolation negotiates against the
+    // accumulated buffer under CRuby's compatible_encoding rules; the
+    // accumulated side's encoding/code-range are tracked incrementally,
+    // so every branch of that replication needs exercising: empty/empty,
+    // empty accumulation vs 7-bit and vs non-ASCII pieces, an empty
+    // piece, a Broken accumulation re-classified on demand, and the
+    // incompatible-mix error.
+    run_test(r##"e = "".force_encoding("EUC-JP"); "#{""}#{e}#{"x"}".encoding.to_s"##);
+    run_test(r##"e = "あ".encode("EUC-JP"); "#{""}#{e}".encoding.to_s"##);
+    run_test(r##"e = "abc".encode("EUC-JP"); "#{""}#{e}".encoding.to_s"##);
+    run_test(r##"e = "".encode("UTF-16BE"); "abc#{e}".encoding.to_s"##);
+    run_test(
+        r##"
+        b = "\xFF"
+        e = "abc".encode("EUC-JP")
+        r = "#{b}#{e}"
+        [r.bytes, r.encoding.to_s, r.valid_encoding?]
+        "##,
+    );
+    run_test(
+        r##"
+        b = "\xFF"
+        e = "あ".encode("EUC-JP")
+        begin
+          r = "#{b}#{e}"
+          :no_raise
+        rescue Encoding::CompatibilityError
+          :raised
+        end
+        "##,
+    );
+}
+
+#[test]
 fn command_literal_frozen_argument() {
     // A non-interpolated command literal (`` `cmd` `` / `%x{...}`) passes its
     // command string to `Kernel#\`` FROZEN, matching CRuby (regardless of any
