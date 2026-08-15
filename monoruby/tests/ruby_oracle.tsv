@@ -551,6 +551,7 @@
 2dd04b99ea4c74004cb7f6ebf42c571c	"ASCII-8BIT"	Regexp.new('([\\x00-\\xFF])', Regexp::IGNORECASE | Regexp::NOENCODING).encoding.to
 2de87dc95cc7a1a9c4edb24ea1657ff8	:nonpositive	begin; SizedQueue.new(0); rescue ArgumentError; :nonpositive; end\n 
 2e1334cbf1ce1ad1f0ead6825d8ea907	[nil, true, true, true, "", "x"]	require "io/wait"\n            r, w = IO.pipe\n            res = []\n 
+2e2f576be92d459836040d95a711ae05	[[42, 401], [99, 201]]	class Foo\n              BAR = 42\n              def get = BAR\n      
 2e419be22648471b9d426d0e2b7fe4a8	[[FrozenError, true], FrozenError]	class Foo\n              def initialize\n                @a = 1\n     
 2e520c993c13bf6afbdcfa9de96cc277	["A", "overridden", "can't create instance of singleton class", "allocator undefined for Integer"]	class A; end\n        class B; def self.allocate; :overridden; end; end\n
 2e9e5cdf982a6b277e6559a8a489f9a7	["Process::Status", 0, true]	`echo hi`; [$?.class.to_s, $?.exitstatus, $?.success?]

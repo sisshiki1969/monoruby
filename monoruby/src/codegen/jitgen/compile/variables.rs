@@ -107,12 +107,63 @@ impl<'a> JitContext<'a> {
                     return Ok(CompileResult::Recompile(RecompileReason::NotCached));
                 }
             }
+            self.guard_const_version(state, ir, cache.version);
             state.load_constant(ir, dst, cache);
             state.unset_side_effect_guard();
             Ok(CompileResult::Continue)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::NotCached))
         }
+    }
+
+    ///
+    /// Constant version guard.
+    ///
+    /// The global constant version is monotonic and every folded constant is
+    /// gated on the compile-time snapshot, so one guard per trace covers them
+    /// all (`AbstractState::const_version_guard` skips the rest).
+    ///
+    /// A miss takes the **counter-gated recompile** side exit rather than a
+    /// plain deopt. That distinction is the whole point: the fold is only
+    /// valid at the snapshot version, so once the version moves the guard can
+    /// never pass again and a plain deopt fires on *every* subsequent
+    /// execution, forever — a single `CONST = ...` anywhere in the program
+    /// permanently unwinds every body that folded a constant. Recompiling
+    /// re-reads the constant at the new version. The counter
+    /// (`COUNT_DEOPT_RECOMPILE`) bounds the cost for programs that keep
+    /// assigning constants: at worst 10 deopts and one recompile per version
+    /// move, instead of one deopt per call for the rest of the run.
+    ///
+    fn guard_const_version(&self, state: &mut AbstractState, ir: &mut AsmIr, version: usize) {
+        if state.const_version_guard() {
+            return;
+        }
+        // Two shapes stay on the plain deopt. A specialized (inlined-frame)
+        // compile recompiles via an idx, not a position, so it has no
+        // recompile side exit to take — the same restriction the
+        // receiver-class guard makes in `compile_method_call`. And a *block*
+        // body must not take it either: the side exit recompiles whatever
+        // `lfp.func_id()` names, and `Codegen::recompile_method` re-enters
+        // the compiler as if that were a method — for a block frame that
+        // rebuilds the body under the wrong argument convention, which showed
+        // up as `Kernel#caller_locations`' block losing the argument it
+        // forwards to `Thread::Backtrace::Location.new`.
+        let deopt = if matches!(self.jit_type(), JitType::Specialized { .. })
+            || self.store[self.func_id()].is_block_style()
+        {
+            ir.new_deopt(state)
+        } else {
+            ir.new_recompile_deopt(
+                state,
+                RecompileReason::ConstVersionGuardFailed,
+                self.position(),
+            )
+        };
+        ir.push(AsmInst::GuardConstVersion {
+            const_version: version,
+            deopt,
+        });
+        state.set_const_version_guard();
     }
 
     pub(super) fn load_dynvar(&self, state: &AbstractState, ir: &mut AsmIr, src: DynVar) {
@@ -161,22 +212,11 @@ impl<'a> JitContext<'a> {
 
 impl AbstractState {
     fn load_constant(&mut self, ir: &mut AsmIr, dst: SlotId, cache: &ConstCache) {
-        let ConstCache { version, value, .. } = cache;
-        // The caller (`JitContext::load_constant`) has already verified
-        // `cache.version == compile-time const version`, and the global
-        // const version is monotonic, so one guard against that snapshot
-        // covers the whole trace until something that could change it
-        // executes (StoreConst, a class/method def, a non-specialized
-        // call, ...). Skip the redundant guard once emitted; see
-        // `unset_const_version_guard` call sites for what invalidates it.
-        if !self.const_version_guard() {
-            let deopt = ir.new_deopt(self);
-            ir.push(AsmInst::GuardConstVersion {
-                const_version: *version,
-                deopt,
-            });
-            self.set_const_version_guard();
-        }
+        let ConstCache { value, .. } = cache;
+        // The version guard is emitted by the caller
+        // (`JitContext::guard_const_version`), which knows the JIT type and
+        // so can pick the recompiling side exit; by here it is in place.
+        debug_assert!(self.const_version_guard());
         // Heap-allocated Float: keep the Sf optimization so subsequent
         // float ops can read the f64 from fpr without re-extracting it
         // from the RValue. Immediate flonums skip this path because
@@ -271,5 +311,43 @@ impl AbstractState {
             using_fpr,
         });
         ir.handle_error(error);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    /// A body that folded a constant must survive a later constant
+    /// assignment. The fold is only valid at the compile-time constant
+    /// version, so once the global version moves the guard can never pass
+    /// again — before the guard recompiled, one `CONST = ...` anywhere in
+    /// the program left the body deopting on *every* call for the rest of
+    /// the run. Covers a constant read after an unrelated assignment, one
+    /// whose own value is reassigned, and a namespaced read.
+    #[test]
+    fn const_fold_survives_a_later_assignment() {
+        run_test_once(
+            r##"
+            class Foo
+              BAR = 42
+              def get = BAR
+              def qux = Foo::BAR
+            end
+            f = Foo.new
+            res = []
+            200.times { res << f.get }
+            UNRELATED = 1
+            200.times { res << f.get }
+            res << f.qux
+            class Foo
+              remove_const(:BAR)
+              BAR = 99
+            end
+            200.times { res << f.get }
+            res << f.qux
+            res.tally.sort_by { |k, _| k.to_s }
+        "##,
+        );
     }
 }
