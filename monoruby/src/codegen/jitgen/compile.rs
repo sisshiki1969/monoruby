@@ -10,6 +10,7 @@ mod dump_cfg;
 mod index;
 mod loop_analysis;
 mod method_call;
+mod pic;
 mod variables;
 
 impl<'a> JitContext<'a> {

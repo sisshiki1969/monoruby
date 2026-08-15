@@ -19,7 +19,7 @@ use super::{
 /// quad while rejecting the "one hot class plus a handful of stragglers"
 /// shape that a way count alone cannot tell apart.
 ///
-const PMC_SET_SHARE_DIVISOR: u32 = 8;
+pub(super) const PMC_SET_SHARE_DIVISOR: u32 = 8;
 
 impl<'a> JitContext<'a> {
     pub(super) fn method_call(
@@ -50,6 +50,14 @@ impl<'a> JitContext<'a> {
             if ambiguous {
                 return Ok(CompileResult::Deopt);
             }
+        }
+        // A site the VM saw reaching several *different* targets: dispatch on
+        // the receiver class instead of guarding it against the one class the
+        // inline cache happens to hold (see `compile/pic.rs`). Only when the
+        // class is not already proven — a proven class is monomorphic here
+        // whatever the VM observed elsewhere.
+        if recv_class.is_none() && self.compile_pic_call(state, ir, callid)? {
+            return Ok(CompileResult::Continue);
         }
         let (recv_class, func_id, visibility) = if let Some(recv_class) = recv_class {
             // the receiver class is known.
@@ -604,8 +612,12 @@ impl<'a> JitContext<'a> {
                 // Method specialization (inlining a callee iseq) and block-
                 // argument inlining (`iseq_block`, which drives specialized
                 // `yield`) are both lowered on x86 and aarch64 now.
-                if ((specializable || forwarded_initialize) && self.specialize_level() < 5)
-                    || iseq_block.is_some()
+                // Inside a dispatch arm, specialization is off: the arm
+                // cannot back out of a `CompileError`, and a `Cease` return
+                // would leave it with no path to the merge.
+                if (((specializable || forwarded_initialize) && self.specialize_level() < 5)
+                    || iseq_block.is_some())
+                    && !self.in_dispatch_arm()
                 {
                     return self.specialized_iseq(
                         state,

@@ -357,6 +357,7 @@
 1c55df1a2ab9f2b7ce881cce3520b3da	["File::Stat", 8, true, false, true, true, true, true, true, "file", false, 8, true, true, true, true, true]	path = "/tmp/monoruby_test_stat_#{Process.pid}_#{rand(100000)}"\n   
 1c6926fa6e1462140ee74bc77342fcc8	[nil, :nme, true]	module PrivC\n              class Sec; end\n              private_con
 1c6d7d2ee7c5c48ff5b7040293a055f2	[42, 42, 2]	module BopPlus\n              refine(Integer) { def +(o); 42; end }\n
+1c925daf4080da92af318381f15467e0	[[[:a, 100], [:b, 100], [:c, 100]], :a, :b2, :c, :d]	class Aa; def tag = :a; end\n            class Bb; def tag = :b; end
 1c979897435ff61b3d8ac16af24e1019	[3, 5, 7, nil, 7, 42, 101, :new, {a: 101, b: :new}]	res = []\n        a = 1; a += 2; res << a\n        b = nil; b ||= 5; res 
 1ca7fb21e8495566f40650238bdfc1f6	[false, true, false, true, false, true, false, true, true, false, false, true, true, true, false, true, false, false]	class C\n            include Comparable\n            attr_accessor :x\n 
 1cb0fc8d0cfb3a0a2c9e0ed0438fb68d	[true, "payload", true, true]	base = "/tmp/monoruby_test_link_#{Process.pid}_#{rand(100000)}"\n   
@@ -585,6 +586,7 @@
 3216e8a4e5532edd1d8a9a107a61cb60	"nil"	def t; end; (public).inspect
 323248fe474a5afa887e12205ed145d2	C	a = class C\n          self\n        end\n        a\n        
 3241d752b39412d4f6c02d9dd853ba08	["foo"]	class A; def a(*r); r; end; end\n            class B < A; def a(*r);
+3279027e38a42e302879e0467940338a	[[1, 100], [3, 100], [4, 100], [:attr, 150], [:plain, 150]]	class Ra\n              attr_reader :tag\n              def initializ
 3285c4fda20a8f8870e882093119ec6c	[1, 10, 20, 30]	def f(p, x:, y:, z:)\n          [p, x, y, z]\n        end\n        \n\n     
 3295f884bc7723fc9fb6dbf1936f7316	[-7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5]	def drive\n              res = []\n              j = 0\n              
 329b7b68cb4c629adc01345e10da9fbc	[false, false]	t = Thread.new { :body }\n            t.kill\n            t.join\n    
@@ -952,6 +954,7 @@
 50508f5aac8320c0afe66c4ad76cad0e	["EQ-RAW", false, "NE-RAW", true, true, false, "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW", "EQ-RAW", "NE-RAW"]	class CustomEq; def ==(o); "EQ-RAW"; end; end\n        class CustomNe; d
 50630a61a4b6d776c5dc73a592df1d53	[:a, :a, [:a, :b, :c], :a, ["NameError", "implicit parameter '_1' is not defined"], ["NameError", "implicit parameter '_1' is not defined"], ["NameError", "'a' is not an implicit parameter"], ["TypeError", "1 is not a symbol nor a string"]]	def try; yield; rescue => e; [e.class.to_s, e.message.split(" for "
 506afd7190c9d45ecdef2e801c939176	:te	begin; 1.instance_eval { undef to_s }; :no; rescue TypeError; :te; end
+5078669efc5be0d889fb3ff62604139e	[5350, 1, 2]	class Ka; def v = 1; end\n            class Kb; def v = 2; end\n     
 507f32e0a72a071583d973ffea3c15c7	["Hello Dave at New York!", "Hello Gave at Hawaii!"]	Customer = Struct.new(:name, :address) do\n            def greeting\n    
 509d9bea76f0e1d8349ff37b354accf3	2	k = Class.new { define_method(:m) { [1, 2, 3].each { |x| return x i
 50a5f1523f40c371eae52d5bdb271289	[:@b]	class Foo\n              def initialize\n                @a = 1\n     
@@ -2222,6 +2225,7 @@ bf43e4b5ea5dc43387ed9bdbb1d33e91	["A", 49, "\\n", 65, nil, nil, "end of file rea
 bf642b858ac68f1754855ea56af9f010	["inherited"]	$res = []\n        class A\n          def self.inherited(subclass)\n      
 bf69a12e40aa6429315d6d5c29ddfe91	[0, 5, 5, 0]	f = File.open("Cargo.toml")\n            begin\n              a = f.p
 bf79cea739fcb7a0ec6546a5b4e6528a	[Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, "incompatible character encodings: UTF-16BE and US-ASCII"]	(f = ->(x) { begin; x.call; rescue => e; e.class; end }; [f.(-> { File.basename(
+bf960838169f3fd4f0850862d278a5e7	[1495, 13, 30, 7]	class Wa; def f(a, b) = a + b; end\n            class Wb; def f(a, b
 bf9d53c3fd6b4e9d4cb7eef1119ed43f	[false, nil, true, 15, nil, false]	pid = fork { sleep 5 }\n            Process.kill("TERM", pid)\n      
 bfb3c432ce87e3afc690e1a4090e98dd	1	e = [1,2,3,4,5].to_enum\n        e.next\n        
 bfb74f48cb5d72df6c677a6148c66445	[12, 12, 12, 12]	p = Proc.new {|x,y| x * y} \n        \n\n        [p.call(3,4), p.yield(3,4
@@ -2684,6 +2688,7 @@ e62defa8e78ced906f42efe00809d657	"true|TITLE|true|$$ is a read-only variable|tru
 e62e66ff0e391002ce507347414bd003	["2024", "04", "11"]	"2024-04-11" =~ /(\\d+)-(\\d+)-(\\d+)/\n            [$1, $2, $3]\n      
 e6482da349c182043f5fa0cd8447051a	[0, 0, 0, 0, true]	require "etc"\n            a = []\n            a << (Process.uid = Pr
 e6506a63c767f1ee5ca72f61264a77b7	"ababab"	"ab" * 3
+e6665fd325619df8d6decf9e59065acd	[[[:a, 300], [:nome, 1]]]	class Pa; def hidden = :a; end\n            class Pb; private def hi
 e6721b573894f02b7adbee10b796d8f8	300000	def osr_fold_sum\n          total = 0\n          i = 0\n          while i 
 e6776f2b7fcaf2ff1e06a04fbb44979f	["missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z", "missing keyword: :a", "unknown keyword: :z"]	class Req\n          def initialize(a:, b: 2) = @x = [a, b]\n        end\n
 e6bd09ab564b813b9ee89a2c7bf7b3a8	["super", nil]	class A\n          def foo; end\n        end\n        class B < A\n        
