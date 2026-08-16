@@ -26,7 +26,7 @@ pub fn define_loop_mode_builtins(globals: &mut Globals) {
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
-    globals.define_builtin_inline_func_class_independent(
+    globals.define_builtin_inline_func(
         kernel_class,
         "nil?",
         nil,
@@ -299,7 +299,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         .set_default_copy_hooks(init_copy_fid, init_dup_fid, init_clone_fid);
     globals.define_builtin_funcs_rest(kernel_class, "enum_for", &["to_enum"], to_enum);
     globals.define_builtin_func_rest(kernel_class, "extend", extend);
-    globals.define_builtin_inline_func_class_independent(
+    globals.define_builtin_inline_func(
         kernel_class,
         "object_id",
         super::object::object_id,
@@ -413,7 +413,8 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
-/// Class-independent (see `InlineGenClassIndependent`): a pure Value
+/// Reads only the receiver Value, so it keeps firing where the class is
+/// unproven: a pure Value
 /// comparison against `nil`, correct for any receiver.
 fn kernel_nil(
     state: &mut AbstractState,
@@ -421,6 +422,10 @@ fn kernel_nil(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
+    // The receiver Value is all this reads, so an unproven class
+    // (a multi-class dispatch arm / the class-set guard) is no obstacle.
+    _: Option<ClassId>,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -506,9 +511,14 @@ fn kernel_not_match(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: ClassId,
+    recv_class: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(recv_class) = recv_class else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() || callsite.pos_num != 1 {
         return false;
@@ -544,7 +554,7 @@ fn kernel_block_given(
     jitctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -4660,7 +4670,7 @@ pub fn object_send(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -4735,9 +4745,14 @@ fn kernel_is_a(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: ClassId,
+    recv_class: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(recv_class) = recv_class else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
@@ -5289,9 +5304,14 @@ fn object_respond_to(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: ClassId,
+    recv_class: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(recv_class) = recv_class else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
@@ -5490,9 +5510,14 @@ fn kernel_instance_of(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: ClassId,
+    recv_class: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(recv_class) = recv_class else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;

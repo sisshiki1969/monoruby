@@ -375,7 +375,7 @@ fn array_size(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -414,9 +414,14 @@ fn array_clone(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    class_id: ClassId,
+    class_id: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(class_id) = class_id else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
@@ -457,9 +462,14 @@ fn array_dup_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    class_id: ClassId,
+    class_id: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(class_id) = class_id else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
@@ -970,9 +980,14 @@ fn array_shl(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: ClassId,
+    recv_class: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(recv_class) = recv_class else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
@@ -1020,9 +1035,14 @@ fn array_rotate_(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: ClassId,
+    recv_class: Option<ClassId>,
     arg_class: Option<ClassId>,
 ) -> bool {
+    let Some(recv_class) = recv_class else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() || callsite.pos_num > 1 {
         return false;
@@ -1292,7 +1312,7 @@ fn array_index(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     idx_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -1403,7 +1423,7 @@ fn array_index_assign(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     idx_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];

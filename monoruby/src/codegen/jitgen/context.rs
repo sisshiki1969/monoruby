@@ -659,6 +659,17 @@ pub(crate) struct JitContext<'a> {
     /// callee body into each of up to four arms is the opposite.
     ///
     in_dispatch_arm: bool,
+    ///
+    /// Inside a dispatch arm whose receiver class is *not* proven: the arm
+    /// covers several classes, all resolving to the arm's target, and the
+    /// membership test that admitted them has already been emitted.
+    ///
+    /// `compile_method_call` reads this to skip its own receiver guard (the
+    /// arm's test is the guard) and to restrict itself to class-independent
+    /// inline generators, which is the same treatment the class-set guard
+    /// gets, for the same reason.
+    ///
+    in_set_guarded_arm: bool,
 
     ///
     /// Class version at compile time.
@@ -733,6 +744,7 @@ impl<'a> JitContext<'a> {
             codegen_mode,
             fused_skip: None,
             in_dispatch_arm: false,
+            in_set_guarded_arm: false,
             class_version,
             const_version,
             refinements,
@@ -752,6 +764,7 @@ impl<'a> JitContext<'a> {
             codegen_mode: false,
             fused_skip: None,
             in_dispatch_arm: false,
+            in_set_guarded_arm: false,
             class_version: self.class_version,
             const_version: self.const_version,
             refinements: self.refinements,
@@ -774,13 +787,24 @@ impl<'a> JitContext<'a> {
         self.in_dispatch_arm
     }
 
+    pub(super) fn in_set_guarded_arm(&self) -> bool {
+        self.in_set_guarded_arm
+    }
+
     ///
     /// Run *f* with the dispatch-arm flag set, restoring it afterwards.
     ///
-    pub(super) fn with_dispatch_arm<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+    ///
+    /// Run *f* inside a dispatch arm, recording whether the arm's receiver
+    /// class is proven (`set_guarded == false`) or merely known to be one of
+    /// the arm's set.
+    ///
+    pub(super) fn with_arm<R>(&mut self, set_guarded: bool, f: impl FnOnce(&mut Self) -> R) -> R {
         let saved = std::mem::replace(&mut self.in_dispatch_arm, true);
+        let saved_set = std::mem::replace(&mut self.in_set_guarded_arm, set_guarded);
         let r = f(self);
         self.in_dispatch_arm = saved;
+        self.in_set_guarded_arm = saved_set;
         r
     }
 

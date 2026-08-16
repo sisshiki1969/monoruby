@@ -57,6 +57,7 @@ impl Codegen {
             | AsmInst::OptCase { .. }
             | AsmInst::GuardClass(..)
             | AsmInst::GuardClassIn(..)
+            | AsmInst::BrClassNotIn(..)
             | AsmInst::Deopt(..)
             | AsmInst::HandleError(..)
             | AsmInst::CheckStack { .. }
@@ -610,6 +611,29 @@ impl Codegen {
             }
             // Dispatch arm: the miss is the next arm, not a side exit.
             LInst::BrClassNe { reg, class, target } => self.guard_class(reg, class, &target),
+            // Same membership chain as `GuardClassIn`, with the last
+            // candidate's miss going to the next arm instead of a side exit.
+            LInst::BrClassNotIn {
+                reg,
+                classes,
+                target,
+            } => {
+                let ok = self.jit.label();
+                let len = classes.len();
+                for (i, class) in classes.iter().enumerate() {
+                    if i + 1 < len {
+                        let next = self.jit.label();
+                        self.guard_class(reg, *class, &next);
+                        monoasm!( &mut self.jit,
+                            jmp ok;
+                        );
+                        self.jit.bind_label(next);
+                    } else {
+                        self.guard_class(reg, *class, &target);
+                    }
+                }
+                self.jit.bind_label(ok);
+            }
             LInst::GuardClassIn {
                 reg,
                 classes,

@@ -435,7 +435,7 @@ fn integer_succ(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -474,7 +474,7 @@ fn integer_tof(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -768,7 +768,7 @@ fn integer_shr(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     rhs_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -846,7 +846,7 @@ fn integer_shl(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     rhs_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -921,7 +921,7 @@ fn integer_rem(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     rhs_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -1033,7 +1033,7 @@ fn integer_pow(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     rhs_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -1262,7 +1262,7 @@ fn integer_index(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     nth_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
