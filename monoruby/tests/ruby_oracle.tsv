@@ -1152,6 +1152,7 @@
 6342f8bdbf7fb127f0fe51c760a63f08	[true, "z"]	r, w = IO.pipe\n            t = Thread.new { sleep 0.02; w.write "z"
 634c7a5e93593cc0d60ce377ffcc8f54	3	class Integer; alias __orig :>>; def >>(o); __orig(o); end; end; 48 >> 4
 636623b3d0f703dc7b71fcb417b67800	[true, false]	class ClassExecLexA; end\n            ClassExecLexA.class_exec {\n   
+63700eed1bc37e1cd39e92995ac606f2	[[1.1805916207174113e+21, 1180591620717411303425, 3.5, 5.5, 7.5], 2361183241434822606848, 7.0, 1180591620717411303425]	class T\n              def initialize = (@a = [1, 2.5, 3, 4.5, 1 << 
 63a9bd642fd895ef294a01db60ca5c2d	{amount: 42, unit: "km"}	M = Data.define(:amount, :unit)\nM.new(amount: 42, unit: "km").to_h
 63ae129d0273fad94c91f73160dc689d	422100	class Foo\n              def initialize(a, b, c); @a = a; @b = b; @c
 63b1daa2620d1e343314d1df22f4a78c	true	m = Module.new\n            m.define_method(:foo) { 42 }\n           
@@ -1286,6 +1287,7 @@
 6fb70e1ac677ec5293ce90caf3afcdf5	true	Time.utc(2000,1,1,0,0,0,500000).subsec > 0
 6fd7a2503b2b0d8020435a1135d8760a	["extended:Bar"]	$res = []\n        module Foo\n          def self.extended(base)\n        
 6ff6c6d86d977c8d2388dd6f11a63d5c	[4, 5, 7, 8]	r = []\n        10.times { |i| r << i if (i == 4)..(i == 5) or (i == 7).
+701afcadda9f90ae591de50be598f558	[[[false, 120], [true, 480]], false, true]	class T\n              def initialize = (@a = [1, 2.5, 3, 4.5, 1 << 
 701d361bd27c998921b0175898afa6dd	[]	r = []\n        10.times { |i| r << i if 4..5 }\n        r\n        
 7024bc7639e60c88c6af2fbcb7e0c1db	[true, true, true, true, :OVERRIDDEN]	class String; def ==(o); :OVERRIDDEN; end; end\n            [1 == 1,
 703349e3423321fee656c77d38481e9a	["wrong argument type Object (expected MatchData)", "wrong argument type Integer (expected MatchData)", "b", "f", "foo", true, nil, nil]	res = []\n        begin; $~ = Object.new; rescue TypeError => e; res << 

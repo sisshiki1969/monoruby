@@ -1032,6 +1032,50 @@ mod tests {
         );
     }
 
+    /// An arithmetic site the VM marks polymorphic. `TraceIr::BinOp` now
+    /// carries that bit, but `PolymorphicPolicy::Ignore` makes it inert — the
+    /// site keeps its receiver guard and deopts on a miss. Locks the result
+    /// down either way, so the eventual flip to `Dispatch` has to preserve
+    /// it: every operand pair here (Integer/Integer, Float/Integer,
+    /// Integer/Float, Float/Float, and a Bignum that overflows the fixnum
+    /// tag) must come out the same however the site is lowered.
+    #[test]
+    fn binop_polymorphic_site_operand_matrix() {
+        run_test(
+            r#"
+            class T
+              def initialize = (@a = [1, 2.5, 3, 4.5, 1 << 70])
+              def get(i) = @a[i]
+            end
+            def probe(t, i, j) = t.get(i) + t.get(j)
+            t = T.new
+            res = []
+            600.times { |n| res << probe(t, n % 5, (n + 1) % 5) }
+            [res.uniq.sort_by(&:to_s), probe(t, 4, 4), probe(t, 1, 3), probe(t, 0, 4)]
+            "#,
+        );
+    }
+
+    /// The same shape for a comparison, which *does* dispatch: the residual
+    /// arm has to handle the Bignum (`guard_class` tests the fixnum tag, so a
+    /// Bignum never reaches the inline arm) and the Float/Integer mixes.
+    #[test]
+    fn cmp_dispatch_operand_matrix() {
+        run_test(
+            r#"
+            class T
+              def initialize = (@a = [1, 2.5, 3, 4.5, 1 << 70])
+              def get(i) = @a[i]
+            end
+            def probe(t, i, j) = t.get(i) < t.get(j)
+            t = T.new
+            res = []
+            600.times { |n| res << probe(t, n % 5, (n + 1) % 5) }
+            [res.tally.sort_by { |k, _| k.to_s }, probe(t, 4, 0), probe(t, 1, 4)]
+            "#,
+        );
+    }
+
     #[test]
     fn binop_overflow_deopt_dirty_operand() {
         // Regression: an Add whose lhs is a *dirty* GP resident (a prior
