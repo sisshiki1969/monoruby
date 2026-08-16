@@ -22,6 +22,7 @@
 0142f6a78c90261818a919df5e34508a	true	define_method(:boom) { :bam }\n            Object.method_defined?(:b
 01443549f3178fa419efc8dfabeb3d03	[1, 4, 5]	class MyAry; def to_ary; [4,5]; end; end\nobj = MyAry.new\na = [1]; a.concat(obj);
 0157b6a817ac1fed2a62196ed525d722	["a.rb:1: Some runtime error (RuntimeError)\\n\\tfrom b.rb:2\\n", "Traceback (most recent call last):\\n\\t1: from b.rb:2\\na.rb:1: Some runtime error (RuntimeError)\\n", "a.rb:1: \\e[1mSome runtime error (\\e[1;4mRuntimeError\\e[m\\e[1m)\\e[m\\n\\tfrom b.rb:2\\n", "\\e[1mTraceback\\e[m (most recent call last):\\n\\t1: from b.rb:2\\na.rb:1: \\e[1mSome runtime error (\\e[1;4mRuntimeError\\e[m\\e[1m)\\e[m\\n"]	e = RuntimeError.new("Some runtime error")\n        e.set_backtrace(["a.
+015b75d45254c81989823601f22bc528	[[12, 14, 2, 4], 1180591620717411303425, 3.5]	class W\n              def initialize(v) = (@v = v)\n              de
 015d950e92f84266477f809be2d52ad7	"my_temp"	m = Module.new\n            m.set_temporary_name("my_temp")\n        
 0181411f6f14be38811bc49fd1ac2c8f	[false, true, true, false, false, false, false]	[!true, !false, !nil, !0, !"", ![], !:sym]\n        
 0198f55071323ce6b7b0f303a1e8dd25	"abc"	"abc\\n".chomp
@@ -156,6 +157,7 @@
 0ac4a1a595e5d45cfae6000f22e5b73a	:utterly_undefined_method_name	begin\n              Object.instance_method(:utterly_undefined_metho
 0adbd96399227bda6ca3f78bcce77b16	:ok	old_dep = Warning[:deprecated]\n            old_stderr = $stderr\n   
 0b006d8d0b7c3b6cbbde169c66a256f9	"hello\\n"	require "socket"\n            s = TCPServer.new("127.0.0.1", 0)\n    
+0b02d3e203d76b6ec36d970414527996	[[2.5, 4.0, 4.5, 6.0], 1.1805916207174113e+21, 1.5]	def probe(x) = x + 1.5\n            vals = [1, 2.5, 3, 4.5]\n        
 0b0604dcfa5aa2a90ccb9b55c158b24e	101	def get_binding\n              x = 100\n              binding\n       
 0b272bc1eee3862ebd5afe122f6530ac	[0, 50, "custom", true, false, false]	def check(x) = x.is_a?(Integer)\n            def fro(x) = x.frozen?\n
 0b360a7151ca4646f547e0ecffd6cf13	[true, true, true, true, true, ArgumentError, ArgumentError, TypeError, TypeError, Hash, false]	(ENV["MONO_T_ZZ"]="hi"; a=ENV["MONO_T_ZZ"].frozen?; b=ENV.method(:has_key?)==ENV
@@ -1883,6 +1885,7 @@ a2d359f2c679ed0c41cd0e8c0e78b3b5	"Xhello"	s = "hello"; s.bytesplice(0...-7, "X")
 a2d5fdfdd6933f6f7b5579a98d897e1d	["abc", "de", 1, :sys_neg_arg, :rnb_neg_arg, :sys_eof, :rnb_eof, nil]	require "stringio"\n\n            res = []\n            io = StringIO.new("abcdef")
 a2e679bc25d5bbcdcffa24d1390f7717	[true, 0, true, true, true, 0]	pid = fork { exit 0 }\n            Process.wait(pid)\n            s =
 a2fe58a4b8970857e7e6bc4daf663e90	[["UTF-8", "EUC-JP", 1, false], ["UTF-8", "EUC-JP", 1, false], ["UTF-8", "EUC-JP"], [true, "ASCII-8BIT", true], 1, [42, []]]	path = "/tmp/monoruby_test_iostate_#{Process.pid}_#{rand(100000)}"\n
+a315e27bdfdf0dfa963d5e510f6c345b	[[2, 3.5, 4, 5.5], [3.5, 5.5, 7.5], 1180591620717411303425, 1.1805916207174113e+21]	def disagree(x) = x + 1\n            def unstable(x, y) = x + y\n    
 a31930a9e915d99cf23e80f66584373b	["m0", 420, 21, "m0", 0, 4, 109, 30, 777, 5, 880, 24, "argerr", "NoMethodError", "m0", 70, 0]	class C\n          def m0; "m0"; end\n          def m1(a); a * 10; end\n  
 a32adc46f1bb4ed6ce92840c775bbf19	""	"".upcase
 a32db795d17419028fabd7b655b6becb	"bar"	class Foo\n              def bar; "bar"; end\n              alias :'b

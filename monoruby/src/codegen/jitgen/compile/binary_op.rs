@@ -90,41 +90,6 @@ impl BinaryOp {
 }
 
 ///
-/// What a site does with the VM's "more than one operand class here" bit.
-///
-/// This is the one place the arithmetic and comparison families still differ,
-/// and stating it as a policy keeps the difference to a single argument
-/// instead of three divergent function tails — flipping arithmetic over is
-/// then one word, once the merge shape below is in place.
-///
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum PolymorphicPolicy {
-    ///
-    /// Ignore it: guard the receiver class and deopt on a miss, always.
-    ///
-    /// Arithmetic's position today. Going guard-free unconditionally would
-    /// remove the deopt but put every operation — the hot class's included —
-    /// on a C call, giving up the inline numeric paths at exactly the sites
-    /// that execute most. The answer there is the two-arm dispatch
-    /// [`JitContext::binary_dispatch`] already implements for comparisons,
-    /// which first needs a merge shape that keeps a numeric result unboxed
-    /// (the `LinkMode::Sf(fpr, SfGuarded::FixnumOrFloat)` note in
-    /// `compile/dispatch.rs`) — declaring `S(Value)` at the merge would box
-    /// every arm's result and hand back the gain.
-    ///
-    Ignore,
-    ///
-    /// Honour it: try the two-arm dispatch, and fall back to the guard-free
-    /// generic helper rather than a guarded call.
-    ///
-    /// While the site is still monomorphic the guarded call recompiles on a
-    /// receiver-class miss, so it flips to this treatment as soon as class
-    /// variance shows up rather than side-exiting forever.
-    ///
-    Dispatch,
-}
-
-///
 /// How far [`JitContext::compile_binary`] got, and what the caller must still
 /// do to sink the result.
 ///
@@ -411,6 +376,47 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Did the VM only ever see one argument class at this site?
+    ///
+    /// The two-arm dispatch resolves the receiver; the argument is still
+    /// handled by a guard inside the arm. So a varying argument is a deopt
+    /// the dispatch cannot remove, and the site is better left alone.
+    ///
+    /// `None` (an argument whose class the VM did not record) counts as
+    /// variation: it is exactly the case there is no evidence for.
+    ///
+    fn pmc_arg_is_stable(&self, callid: CallSiteId) -> bool {
+        let mut args = self.store[callid]
+            .pmc
+            .entries()
+            .iter()
+            .map(|e| e.arg);
+        let Some(Some(first)) = args.next() else {
+            return false;
+        };
+        args.all(|a| a == Some(first))
+    }
+
+    ///
+    /// Would every arm of this site answer the same *kind* of value?
+    ///
+    /// A numeric operator answers a float when either operand is one, and the
+    /// arms differ only in the receiver. So they agree when the argument is a
+    /// float — every arm answers a float — or when no receiver the VM observed
+    /// is one, in which case every arm answers an integer. A site that mixes
+    /// them can only merge as `S(Value)`, boxing the float arm's result for
+    /// the next instruction to decode again.
+    ///
+    fn pmc_arms_agree_on_float(&self, callid: CallSiteId, rhs_class: Option<ClassId>) -> bool {
+        rhs_class == Some(FLOAT_CLASS)
+            || !self.store[callid]
+                .pmc
+                .entries()
+                .iter()
+                .any(|e| e.recv == FLOAT_CLASS)
+    }
+
+    ///
     /// Answer a polymorphic comparison site with a two-arm dispatch:
     ///
     /// ```text
@@ -460,6 +466,36 @@ impl<'a> JitContext<'a> {
         let Some(inline_class) = self.dispatch_inline_class(callid, op) else {
             return Ok(false);
         };
+        // The dispatch guards the *receiver*. An arithmetic arm still guards
+        // its own argument internally — `Integer#+` takes a different path for
+        // an Integer rhs than for a Float one — so at a site whose argument
+        // class varies, that inner guard keeps failing however the receiver is
+        // resolved. Dispatching such a site buys nothing and costs the extra
+        // branch plus a `dst` boxed at the merge; measured at +10% on a hot
+        // `Float + (Float | Integer)` site whose deopt count did not move.
+        //
+        // The inline cache cannot see this: it holds the last pair only, so a
+        // site with an alternating argument and one whose argument is always
+        // the same both report `rhs_class: Float`. The PMC keeps the whole
+        // distribution, so ask it.
+        //
+        // Comparisons are exempt. Their generators answer any operand pair
+        // without an inner guard, and their result is a flag that costs
+        // nothing to merge.
+        // And the arms have to agree on the *kind* of result. Numeric `op`
+        // answers a float when either operand is one, and the arms differ only
+        // in the receiver — so they agree when the argument is a float (both
+        // answer floats) or when no observed receiver is (both answer
+        // integers). When they disagree, `dst` is a float on one side and a
+        // fixnum on the other, the merge can only be `S(Value)`, and the float
+        // arm pays a box the next float instruction has to undo. That measured
+        // +62%.
+        if matches!(binop, BinaryOp::Arith(_))
+            && (!self.pmc_arg_is_stable(callid)
+                || !self.pmc_arms_agree_on_float(callid, rhs_class))
+        {
+            return Ok(false);
+        }
         let is_func_call = self.store[callid].is_func_call();
 
         let state_save = state.clone();
@@ -522,7 +558,8 @@ impl<'a> JitContext<'a> {
     /// 3. give up (deopt, or widen under loop analysis) when the receiver
     ///    class is unknown *and* uncached;
     /// 4. fire the registered inline generator for `lhs_class#op`;
-    /// 5. fall back per [`PolymorphicPolicy`].
+    /// 5. fall back: the guard-free generic helper once the VM has marked
+    ///    the site polymorphic, a guarded call while it is still monomorphic.
     ///
     /// What is genuinely per-opcode is the *sink* — a slot, or a fused
     /// branch — and that is what the caller gets back in [`BinaryLowering`]
@@ -543,17 +580,12 @@ impl<'a> JitContext<'a> {
         polymorphic: bool,
         bc_pos: BcIndex,
         mode: BinaryInlineMode,
-        policy: PolymorphicPolicy,
     ) -> JitResult<BinaryLowering> {
         // `BinCmpBr` is the case/when and rescue-matching opcode, and
         // dispatches `===` with funcall semantics; every other form is a
         // public-only call. The mode identifies the opcode, so the two need
         // not be threaded separately.
         let case_semantics = matches!(mode, BinaryInlineMode::CmpBr { .. });
-        // One reading of the VM's bit for both the dispatch and the residual,
-        // so a family cannot end up dispatching but still deopting (or the
-        // reverse) through an edit to only one of them.
-        let polymorphic = polymorphic && policy == PolymorphicPolicy::Dispatch;
         let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
 
         // ---- 2. A site the VM saw comparing more than one lhs class, whose
@@ -647,14 +679,10 @@ impl<'a> JitContext<'a> {
             self.emit_generic_binary(state, ir, binop, lhs, rhs, case_semantics, is_func_call);
             return Ok(BinaryLowering::Generic);
         }
-        // A monomorphic compile under `GenericWhenPolymorphic` makes the
-        // recv-class guard recompile on a miss, so the site flips to the
-        // generic path the moment the VM observes class variance rather than
-        // side-exiting forever.
-        let recompile_on_miss = policy == PolymorphicPolicy::Dispatch;
-        if recompile_on_miss {
-            state.flush_gp(ir);
-        }
+        // Still monomorphic: make the recv-class guard recompile on a miss, so
+        // the site flips to the treatment above the moment the VM observes
+        // class variance rather than side-exiting forever.
+        state.flush_gp(ir);
         Ok(BinaryLowering::Called(self.call_binary_method(
             state,
             ir,
@@ -664,7 +692,7 @@ impl<'a> JitContext<'a> {
             rhs_class,
             IdentId::from(binop),
             bc_pos,
-            recompile_on_miss,
+            true,
         )?))
     }
 
@@ -691,7 +719,6 @@ impl<'a> JitContext<'a> {
             polymorphic,
             bc_pos,
             BinaryInlineMode::Value,
-            PolymorphicPolicy::Ignore,
         )? {
             BinaryLowering::Emitted => Ok(CompileResult::Continue),
             BinaryLowering::Generic => {
@@ -728,7 +755,6 @@ impl<'a> JitContext<'a> {
             polymorphic,
             bc_pos,
             BinaryInlineMode::Value,
-            PolymorphicPolicy::Dispatch,
         )? {
             BinaryLowering::Emitted => Ok(CompileResult::Continue),
             BinaryLowering::Generic => {
@@ -767,7 +793,6 @@ impl<'a> JitContext<'a> {
             polymorphic,
             bc_pos,
             BinaryInlineMode::CmpBr { brkind, dest },
-            PolymorphicPolicy::Dispatch,
         )? {
             // The fused form guards + compares + branches without ever
             // materializing the flag. Side-branch bookkeeping stays here; the
@@ -892,9 +917,9 @@ mod tests {
     /// self-consistent still fails here.
     ///
     /// This also covers the arithmetic arms, which have no caller yet —
-    /// `PolymorphicPolicy::Ignore` keeps `+` off the generic path — so they
-    /// are checked from the moment they are written rather than from whenever
-    /// the flip lands.
+    /// arithmetic reaches the generic path only at a polymorphic site whose
+    /// arm is not float-valued, so the table is checked in full here rather
+    /// than only where a benchmark happens to exercise it.
     #[test]
     fn generic_fn_implements_the_operator_it_names() {
         let mut globals = Globals::new_test();
@@ -1104,12 +1129,11 @@ mod tests {
     }
 
     /// An arithmetic site the VM marks polymorphic. `TraceIr::BinOp` now
-    /// carries that bit, but `PolymorphicPolicy::Ignore` makes it inert — the
-    /// site keeps its receiver guard and deopts on a miss. Locks the result
-    /// down either way, so the eventual flip to `Dispatch` has to preserve
-    /// it: every operand pair here (Integer/Integer, Float/Integer,
-    /// Integer/Float, Float/Float, and a Bignum that overflows the fixnum
-    /// tag) must come out the same however the site is lowered.
+    /// carries that bit, and a site whose arm is not float-valued now
+    /// dispatches on it. Every operand pair here — Integer/Integer,
+    /// Float/Integer, Integer/Float, Float/Float, and a Bignum that overflows
+    /// the fixnum tag — must come out the same whichever way the site is
+    /// lowered, dispatched or guarded.
     #[test]
     fn binop_polymorphic_site_operand_matrix() {
         run_test(
@@ -1180,6 +1204,81 @@ mod tests {
              probe([false, false, true], 1),
              probe([false, false, false, true], 1),
              probe([true], nil)]
+            "#,
+        );
+    }
+
+    /// The arm the arithmetic dispatch newly makes live: a site whose
+    /// receiver alternates between `Integer` and a class with its own `+`.
+    /// The hot class inlines, and everything else takes `add_values`, which
+    /// re-dispatches the name — so the user method has to run, and raise
+    /// where it raises.
+    ///
+    /// This is the shape the dispatch is *for*. rubykon's arithmetic deopts
+    /// look similar in the profile but are not: its `Integer` guard failures
+    /// are a Bignum failing the fixnum-tag test, and the JIT does not compile
+    /// Bignum arithmetic — deopting there is the intended handling, and the
+    /// site is monomorphic anyway.
+    ///
+    /// A Bignum reaching a site that *does* dispatch is handled rather than
+    /// exited: it fails the arm's fixnum-tag guard and lands in the residual,
+    /// where `add_values` does the BigInt in C. Hence the `1 << 70` below.
+    #[test]
+    fn binop_dispatch_residual_runs_user_plus() {
+        run_test(
+            r#"
+            class W
+              def initialize(v) = (@v = v)
+              def +(o) = @v + o * 10
+            end
+            def probe(x) = x + 1
+            vals = [1, W.new(2), 3, W.new(4)]
+            res = []
+            600.times { |i| res << probe(vals[i % 4]) }
+            [res.uniq.sort_by(&:to_s), probe(1 << 70), probe(2.5)]
+            "#,
+        );
+    }
+
+    /// Two shapes the arithmetic dispatch declines, both of which still have
+    /// to answer correctly: a site whose arms disagree on the kind of result
+    /// (`Float` receiver, `Integer` argument — one arm answers a float, the
+    /// other a fixnum, so the merge could only box), and one whose argument
+    /// class varies (the arm's own argument guard would keep deopting however
+    /// the receiver is resolved).
+    #[test]
+    fn binop_float_site_keeps_its_guard() {
+        run_test(
+            r#"
+            def disagree(x) = x + 1
+            def unstable(x, y) = x + y
+            vals = [1, 2.5, 3, 4.5]
+            a = []
+            b = []
+            600.times do |i|
+              a << disagree(vals[i % 4])
+              b << unstable(vals[i % 4], vals[(i + 1) % 4])
+            end
+            [a.uniq.sort_by(&:to_s), b.uniq.sort_by(&:to_s),
+             disagree(1 << 70), unstable(2.5, 1 << 70)]
+            "#,
+        );
+    }
+
+    /// The shape the dispatch keeps: every arm answers a float, because the
+    /// argument is one, and the argument never varies. This is the case the
+    /// earlier "exclude anything involving Float" rule gave up on — it is
+    /// worth ~8% — and the receiver alternating is exactly what the dispatch
+    /// resolves.
+    #[test]
+    fn binop_float_arg_site_dispatches() {
+        run_test(
+            r#"
+            def probe(x) = x + 1.5
+            vals = [1, 2.5, 3, 4.5]
+            res = []
+            600.times { |i| res << probe(vals[i % 4]) }
+            [res.uniq.sort_by(&:to_s), probe(1 << 70), probe(-0.0)]
             "#,
         );
     }
