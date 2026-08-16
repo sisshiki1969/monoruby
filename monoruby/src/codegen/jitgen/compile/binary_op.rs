@@ -167,41 +167,6 @@ const OPT_EQ_IMMEDIATE_CLASSES: &[ClassId] = &[
 
 impl<'a> JitContext<'a> {
     ///
-    /// Outcome of a binary op whose operand class is unknown *and* whose
-    /// inline cache is empty (`Other(None, _)` / the Shl-group `None`).
-    ///
-    /// - **codegen pass**: deopt + recompile this single instruction. Only
-    ///   this path bails at runtime; the rest of the loop stays JIT-compiled,
-    ///   and once the inline cache warms the method recompiles cleanly.
-    /// - **loop-analysis pass**: do *not* abort the block. Aborting drops the
-    ///   loop's back-edge fix-point, which leaves the loop head un-widened —
-    ///   a constant `C` that cannot be reconciled with the runtime `G` value
-    ///   the real back-edge delivers, hitting the `(G, C)` `unreachable!` in
-    ///   `bridge`. Widen the result to a typeless stack value (`S`) and
-    ///   continue so the fix-point converges; the loop head is then widened
-    ///   consistently and the real (codegen) pass emits the per-instruction
-    ///   deopt above.
-    ///
-    /// In `CmpBr` mode the widening is not available: continuing past a fused
-    /// compare-and-branch would need the branch itself, and no arm emitted
-    /// one. That block ceases under loop analysis as it always has.
-    fn binop_uncached(
-        &self,
-        state: &mut AbstractState,
-        dst: Option<SlotId>,
-        mode: BinaryInlineMode,
-    ) -> CompileResult {
-        if self.codegen_mode() || matches!(mode, BinaryInlineMode::CmpBr { .. }) {
-            CompileResult::Recompile(RecompileReason::NotCached)
-        } else {
-            if let Some(dst) = dst {
-                state.def_S(dst);
-            }
-            CompileResult::Continue
-        }
-    }
-
-    ///
     /// May the guard-free inline implementation of `class#op` be emitted?
     ///
     /// It may while `class#op` is still the builtin. Answering `false` sends
@@ -611,9 +576,28 @@ impl<'a> JitContext<'a> {
             return Ok(BinaryLowering::Emitted);
         }
 
-        // ---- 3. Neither the state nor the cache knows the receiver class.
+        // ---- 3. Neither the state nor the cache knows the receiver class
+        // (`Other(None, _)`, or the Shl-group `None`). There is nothing to
+        // compile: deopt and recompile, so the block ends here.
+        //
+        // Both passes end it. In the codegen pass this is an *unconditional*
+        // deopt — `recompile_and_deopt` emits `RecompileDeopt`, which always
+        // exits to the interpreter — so the block never reaches whatever
+        // follows, including a back-edge. The loop-analysis pass has to model
+        // exactly that, and modelling it any other way is what makes the two
+        // disagree: an analysis that continued past this point would record a
+        // back-edge the codegen pass will not emit, or (worse) widen the loop
+        // head for a body that never runs.
+        //
+        // Ending the *analysis* mid-block leaves the loop with no proven
+        // back-edge, which `analyse_backedge_fixpoint` must not confuse with
+        // "this loop always exits" — see the give-up handling there. A loop
+        // whose back-edge is unreachable for want of a compilable instruction
+        // is simply not a loop this JIT can compile.
         let Some(lhs_class) = lhs_class else {
-            return Ok(BinaryLowering::Ceased(self.binop_uncached(state, dst, mode)));
+            return Ok(BinaryLowering::Ceased(CompileResult::Recompile(
+                RecompileReason::NotCached,
+            )));
         };
 
         // ---- 4. One path for every operator: guard the receiver, run the
@@ -1159,6 +1143,43 @@ mod tests {
             res = []
             600.times { |n| res << probe(t, n % 5, (n + 1) % 5) }
             [res.tally.sort_by { |k, _| k.to_s }, probe(t, 4, 0), probe(t, 1, 4)]
+            "#,
+        );
+    }
+
+    /// A loop the compiler only ever sees pass straight through, because the
+    /// one instruction in its body is uncached — `Mutex#lock`'s
+    /// `until try_lock` is the shape in the wild, and it is the reason both
+    /// passes must end the block here rather than one of them widening on.
+    ///
+    /// With both ending it, the analysis records no back-edge, so the loop
+    /// head keeps its precise pre-header types and the body compiles to a
+    /// deopt: the "loop" becomes the straight-line code it has actually been
+    /// observed to be. What this pins is the other half — that the back-edge
+    /// still works when it finally *is* taken. The deopt recompiles the
+    /// method against a now-warm cache, and the real loop has to produce the
+    /// same answers as the interpreter.
+    #[test]
+    fn uncached_body_loop_compiles_straight_then_loops() {
+        run_test(
+            r#"
+            def probe(a, obj)
+              i = 0
+              until a[i]
+                i = obj + i
+              end
+              i
+            end
+            # Warm it with the body never entered: `obj + i` stays uncached
+            # and `probe` compiles with that block as a deopt.
+            res = []
+            300.times { res << probe([true], nil) }
+            # Now take the back-edge that was never compiled.
+            [res.uniq,
+             probe([false, true], 1),
+             probe([false, false, true], 1),
+             probe([false, false, false, true], 1),
+             probe([true], nil)]
             "#,
         );
     }

@@ -63,6 +63,7 @@
 0417499cdc3487266e491725b65dcd89	[43, 42]	f = Fiber.new(storage: {life: 42}) do\n              inner = Fiber.n
 042067cf8df83644b7cd370ce04a55db	100	class C\n            class D\n              E = 1\n              def sel
 042531956d7a960e0bfee8fa3360dc99	["ASCII-8BIT", true]	begin\n              begin\n                File.stat("/missing\\xE3E4
+044076512bb7513e712f132ac825e216	[[0], 1, 2, 3, 0]	def probe(a, obj)\n              i = 0\n              until a[i]\n    
 0459d7cb4f158e142736bf52fff36347	[Hash, {x: 1}, false]	sub = Class.new(Hash)\n            o = sub.new\n            o[:x] = 1
 046110996c8a0ca3802aa257c29bd814	["class variable", true]	class DefCV\n              @@v = 1\n              def t; [defined?(@@
 04960a654db6978cf6c1b2b82065abdf	[1, 2, 3, 4, 5, 6, 7, 8]	class C < Array\n          attr_reader :a, :b, :c, :d, :e, :f, :g, :h\n  
