@@ -2414,6 +2414,62 @@ mod tests {
         );
     }
 
+    /// The expansion is not about `initialize`: **any** method whose body
+    /// is just ivar stores qualifies, and on a direct call site the
+    /// arguments are the caller's own slots rather than a `...` forward's
+    /// deferred window. That also makes the return value — the last
+    /// assignment's RHS — routinely observable, which `Class#new` discards.
+    ///
+    /// Alongside those, the four shapes that must fall through to the
+    /// ordinary call: a receiver whose layout has no inline ivar slots
+    /// (`Struct`), a body whose ivars land past the inline budget, a body
+    /// with a branch (the hoisted frozen guard needs every path to store),
+    /// and a body with no store at all.
+    #[test]
+    fn frameless_ivar_stores_direct_call() {
+        run_test(
+            r#"
+            class C
+              def set2(a, b); @a = a; @b = b; end
+              def set1(x); @x = x; end
+              def echo(x) = x
+              def call_set(...) = set2(...)
+              def maybe(a, b); @a = a if a; @b = b; end
+              def pair = [@a, @b]
+              attr_reader :x
+            end
+            # Six ivars already claim every inline slot, so this class's
+            # `@a` / `@b` live in the heap table.
+            class Heapy
+              def pre; @p0 = 0; @p1 = 0; @p2 = 0; @p3 = 0; @p4 = 0; @p5 = 0; end
+              def set2(a, b); @a = a; @b = b; end
+              def pair = [@a, @b]
+            end
+            Heapy.new.pre
+            S = Struct.new(:q) do
+              def set2(a, b); @a = a; @b = b; end
+              def pair = [@a, @b]
+            end
+            res = []
+            c = C.new
+            r = []; 100.times {|i| r << c.set2(i, i + 1) }; res << [r.last, c.pair]
+            r = []; 100.times {|i| r << c.set1(i.to_f) };   res << [r.last, c.x]
+            r = []; 100.times {|i| r << c.echo(i) };        res << r.last
+            # Through a `...` trampoline, where the result *is* read.
+            r = []; 100.times {|i| r << c.call_set(i, i * 2) }; res << [r.last, c.pair]
+            h = Heapy.new
+            r = []; 100.times {|i| r << h.set2(i, i + 1) }; res << [r.last, h.pair]
+            s = S.new(0)
+            r = []; 100.times {|i| r << s.set2(i, i + 1) }; res << [r.last, s.pair]
+            r = []; 100.times {|i| r << c.maybe(nil, i) }; res << [r.last, c.pair]
+            r = []; 100.times {|i| r << c.maybe(i, i) };   res << [r.last, c.pair]
+            d = C.new.freeze
+            res << (begin; d.set2(1, 2); rescue => e; [e.class, d.pair]; end)
+            res
+            "#,
+        );
+    }
+
     /// The same fold on a plain `def f(...) = g(...)` trampoline (not just
     /// the `Class#new` shape), and the invalidation path: once a folded
     /// callee is redefined with a body that has a side effect, the compiled

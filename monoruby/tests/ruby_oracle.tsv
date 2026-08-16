@@ -1971,6 +1971,7 @@ a966ff673f0471a0f7996609730def4c	"missing keyword: :x"	def msg; yield; "no error
 a96f44dffe64892feff990050d690d94	[150, false, true, false, false]	class Tail1; end\n            class Tail2; end\n            class Tai
 a98bef4ea7d42ca9b3589602d2392195	[[5, 6], [0, 0], [5, 6], [1, 1], [5, 6], [2, 2], [5, 6], [3, 3], [5, 6], [4, 4], [5, 6], [5, 5], [5, 6], [6, 6], [5, 6], [7, 7], [5, 6], [8, 8], [5, 6], [9, 9], [5, 6], [10, 10], [5, 6], [11, 11], [5, 6], [12, 12], [5, 6], [13, 13], [5, 6], [14, 14], [5, 6], [15, 15], [5, 6], [16, 16], [5, 6], [17, 17], [5, 6], [18, 18], [5, 6], [19, 19], [5, 6], [20, 20], [5, 6], [21, 21], [5, 6], [22, 22], [5, 6], [23, 23], [5, 6], [24, 24], [5, 6], [25, 25], [5, 6], [26, 26], [5, 6], [27, 27], [5, 6], [28, 28], [5, 6], [29, 29]]	class N\n          attr_reader :v\n          def initialize(a: 0, b: 1) =
 a9a64f0fa64e4bb1ec264c4f7c86df8b	:OVERRIDDEN	class Integer; def *(o); :OVERRIDDEN; end; end; 3 * 4
+a9ae3e391f88203fe65c9135f9075c2e	[[100, [99, 100]], [99.0, 99.0], 99, [198, [99, 198]], [100, [99, 100]], [100, [99, 100]], [99, [99, 99]], [99, [99, 99]], [FrozenError, [nil, nil]]]	class C\n              def set2(a, b); @a = a; @b = b; end\n         
 a9b082961457f87dd5dd3df08a2bc22e	"CAFÉ"	"Café".upcase
 a9cceae0d32dce8d89f28a34f27a49e1	[RuntimeError, "boom"]	o = Object.new\n            def o.each; raise "boom"; end\n          
 a9d059f319ef4e98b5696e426ac2c89b	TypeError	(Regexp.new("x").send(:initialize, "y"); nil) rescue $!.class

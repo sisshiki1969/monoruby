@@ -142,17 +142,14 @@ pub(super) fn ivar_store_body(store: &Store, iseq_id: ISeqId) -> Option<IvarStor
             // The prologue. Binding positional arguments the caller has.
             TraceIr::InitMethod(..) => {}
             TraceIr::StoreIvar(src, name, _) => {
-                if stores.len() >= MAX_STORES || ret.is_some() {
+                if stores.len() >= MAX_STORES {
                     return None;
                 }
                 stores.push((name, param_index(src)?));
             }
-            TraceIr::Ret(slot) => {
-                if ret.is_some() {
-                    return None;
-                }
-                ret = Some(param_index(slot)?);
-            }
+            // A basic block ends at its terminator, so this runs at most
+            // once and always last.
+            TraceIr::Ret(slot) => ret = Some(param_index(slot)?),
             _ => return None,
         }
     }
