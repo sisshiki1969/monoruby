@@ -893,7 +893,94 @@ impl<'a> JitContext<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::{BinaryOp, INTEGER_CLASS, IdentId};
+    use crate::bytecodegen::BinOpK;
     use crate::tests::*;
+    use crate::{Globals, Value, ast::CmpKind, executor::Executor};
+
+    /// The contract of [`BinaryOp`]: the C helper it hands out and the name it
+    /// resolves must be the *same* operator.
+    ///
+    /// Both halves are hand-written 11- and 7-arm tables, which is exactly the
+    /// shape where a copy-paste slip (`Sub => add_values`) is silent, survives
+    /// every type check, and miscompiles. Comparing the helper against a real
+    /// `invoke_method` of the name closes that: a table that is wrong but
+    /// self-consistent still fails here.
+    ///
+    /// This also covers the arithmetic arms, which have no caller yet —
+    /// `PolymorphicPolicy::Ignore` keeps `+` off the generic path — so they
+    /// are checked from the moment they are written rather than from whenever
+    /// the flip lands.
+    #[test]
+    fn generic_fn_implements_the_operator_it_names() {
+        let mut globals = Globals::new_test();
+        let mut vm = Executor::init(&mut globals, "generic_fn_test").unwrap();
+        let ops: Vec<BinaryOp> = [
+            BinOpK::Add,
+            BinOpK::Sub,
+            BinOpK::Mul,
+            BinOpK::Div,
+            BinOpK::Rem,
+            BinOpK::Exp,
+            BinOpK::BitOr,
+            BinOpK::BitAnd,
+            BinOpK::BitXor,
+            BinOpK::Shl,
+            BinOpK::Shr,
+        ]
+        .into_iter()
+        .map(BinaryOp::Arith)
+        .chain(
+            [
+                CmpKind::Eq,
+                CmpKind::Ne,
+                CmpKind::Lt,
+                CmpKind::Le,
+                CmpKind::Gt,
+                CmpKind::Ge,
+                CmpKind::TEq,
+            ]
+            .into_iter()
+            .map(BinaryOp::Cmp),
+        )
+        .collect();
+        // All three orderings are needed to pin the comparison table down: a
+        // greater-than pair alone cannot tell `<` from `<=` (both false), and
+        // an equal pair alone cannot tell `<` from `>`. Fixnums every operator
+        // here accepts, and none of them zero, so `/` and `%` are defined.
+        for (l, r) in [(6, 3), (3, 3), (3, 6)] {
+            let (lhs, rhs) = (Value::integer(l), Value::integer(r));
+            for &binop in &ops {
+                let name = IdentId::from(binop);
+                let via_helper = (binop.generic_fn())(&mut vm, &mut globals, lhs, rhs, false)
+                    .unwrap_or_else(|| panic!("{binop:?} on ({l}, {r}): helper raised"));
+                let via_send = vm
+                    .invoke_method(&mut globals, name, false, lhs, &[rhs], None, None)
+                    .unwrap_or_else(|| panic!("{binop:?} on ({l}, {r}): send raised"));
+                assert!(
+                    Value::test_eq(&globals.store, via_helper, via_send),
+                    "{binop:?} on ({l}, {r}): generic_fn gave {}, but sending {} gave {}",
+                    via_helper.inspect(&globals.store),
+                    name.get_name(),
+                    via_send.inspect(&globals.store),
+                );
+            }
+        }
+
+        // Integers alone cannot pin `TEq` down: on Integer `===` *is* an alias
+        // of `==`, so `TEq => cmp_eq_values` would pass everything above. A
+        // receiver where the two genuinely differ is what closes it — `Integer
+        // === 3` is true where `Integer == 3` is false.
+        let klass = globals.store.get_module(INTEGER_CLASS).as_val();
+        let three = Value::integer(3);
+        let teq = BinaryOp::Cmp(CmpKind::TEq);
+        let via_helper = (teq.generic_fn())(&mut vm, &mut globals, klass, three, false).unwrap();
+        assert!(
+            via_helper.as_bool(),
+            "TEq's helper answered `Integer === 3` with {}",
+            via_helper.inspect(&globals.store),
+        );
+    }
 
     /// The shape `cmp_dispatch` exists for: an lhs that alternates between a
     /// class with a generator and one without, which the old code answered
