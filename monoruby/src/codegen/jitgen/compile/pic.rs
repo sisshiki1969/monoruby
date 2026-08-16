@@ -59,12 +59,31 @@ use super::{method_call::PMC_SET_SHARE_DIVISOR, *};
 const PIC_WAYS: usize = PMC_WAYS;
 
 ///
-/// One dispatch arm: a receiver class and the target it resolves to.
+/// One dispatch arm: the target, and every observed receiver class that
+/// resolves to it.
 ///
-struct PicWay {
-    class: ClassId,
+/// Arms are keyed by `FuncId`, not by class. Classes that share a target
+/// share an arm, so a site like `Kernel#nil?` seen on four classes emits one
+/// call sequence behind a four-class membership test rather than four copies
+/// of the same sequence. It also means the arm cannot refine the receiver to
+/// a single class unless it holds exactly one — see `single_class`.
+///
+struct PicGroup {
     func_id: FuncId,
     visibility: Visibility,
+    classes: Vec<ClassId>,
+}
+
+impl PicGroup {
+    /// The class every receiver reaching this arm has, when there is only
+    /// one. `None` for a multi-class arm, which may not refine the state and
+    /// so may only fire class-independent inline generators.
+    fn single_class(&self) -> Option<ClassId> {
+        match self.classes.as_slice() {
+            [class] => Some(*class),
+            _ => None,
+        }
+    }
 }
 
 impl<'a> JitContext<'a> {
@@ -78,7 +97,7 @@ impl<'a> JitContext<'a> {
     /// unlike the class-set guard there is no single-instruction fallback to
     /// rewrite it as.
     ///
-    fn pic_ways(&mut self, callid: CallSiteId) -> Option<Vec<PicWay>> {
+    fn pic_groups(&mut self, callid: CallSiteId) -> Option<Vec<PicGroup>> {
         let callsite = &self.store[callid];
         let name = callsite.name?;
         // A block argument makes the callee able to capture the frame, and
@@ -95,9 +114,10 @@ impl<'a> JitContext<'a> {
             return None;
         }
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
-        let mut ways: Vec<PicWay> = Vec::with_capacity(classes.len());
+        let mut groups: Vec<PicGroup> = Vec::with_capacity(classes.len());
+        let mut admitted = 0usize;
         for (class, count) in classes {
-            if ways.len() == PIC_WAYS {
+            if admitted == PIC_WAYS {
                 break;
             }
             // A rare tail is not worth an arm — the classes ahead of it pay
@@ -128,23 +148,30 @@ impl<'a> JitContext<'a> {
             {
                 continue;
             }
-            ways.push(PicWay {
-                class,
-                func_id,
-                visibility,
-            });
+            admitted += 1;
+            // Fold into the arm for this target if one is already open. The
+            // groups stay in first-seen order, which is most-observed-first,
+            // so the hottest target is tested first.
+            if let Some(g) = groups.iter_mut().find(|g| g.func_id == func_id) {
+                g.classes.push(class);
+            } else {
+                groups.push(PicGroup {
+                    func_id,
+                    visibility,
+                    classes: vec![class],
+                });
+            }
         }
-        if ways.len() < 2 {
+        if admitted < 2 {
             return None;
         }
-        // All arms sharing one target is the class-set guard's case, and one
-        // membership guard over the set beats a chain of compares around
-        // duplicate call sequences.
-        let first = ways[0].func_id;
-        if ways.iter().all(|w| w.func_id == first) {
+        // One target for every class is the class-set guard's case, and one
+        // membership guard over the set beats an arm that tests the same set
+        // and then falls into the only call sequence there is.
+        if groups.len() < 2 {
             return None;
         }
-        Some(ways)
+        Some(groups)
     }
 
     ///
@@ -159,7 +186,7 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         callid: CallSiteId,
     ) -> JitResult<bool> {
-        let Some(ways) = self.pic_ways(callid) else {
+        let Some(groups) = self.pic_groups(callid) else {
             return Ok(false);
         };
         let CallSiteInfo {
@@ -187,48 +214,64 @@ impl<'a> JitContext<'a> {
         probe.load(ir, recv, GP::Rdi);
         let entry = probe;
 
+        // The chain tests each arm's class set in turn and the *last* arm's
+        // test is the deopting one, so a receiver is compared against the
+        // union exactly once. Hoisting the deopt into a separate union guard
+        // ahead of the arms reads better but compares everything twice — it
+        // measured ~16% slower.
         let mut miss: Option<JitLabel> = None;
-        for (i, way) in ways.iter().enumerate() {
-            let last = i + 1 == ways.len();
+        for (i, group) in groups.iter().enumerate() {
+            let last = i + 1 == groups.len();
             if let Some(miss) = miss.take() {
                 ir.push(AsmInst::Label(miss));
             }
             let mut arm = entry.clone();
             if last {
-                // A miss on the last arm is a class the VM never observed
-                // here: deopt, exactly as the monomorphic guard did for every
-                // off-class receiver.
-                //
-                // `guard_class` emits nothing when the state already proves
-                // the class, which would leave the arm reachable by *any*
-                // receiver that missed the ones before it. The entry state
-                // cannot prove it (the site is only tried when the receiver's
-                // class is unknown), but the arm is a miscompile if that ever
-                // stops holding, so say so.
-                debug_assert_ne!(arm.class(recv), Some(way.class));
+                // Falling out of the last arm's set is a class the VM never
+                // observed here: deopt, exactly as the monomorphic guard did
+                // for every off-class receiver.
                 let deopt = ir.new_deopt(&arm);
-                arm.guard_class(ir, recv, GP::Rdi, way.class, deopt);
+                ir.push(AsmInst::GuardClassIn(
+                    GP::Rdi,
+                    group.classes.clone().into_boxed_slice(),
+                    deopt,
+                ));
             } else {
                 let next = self.label();
-                ir.push(AsmInst::BrClassNe(GP::Rdi, way.class, next));
+                ir.push(AsmInst::BrClassNotIn(
+                    GP::Rdi,
+                    group.classes.clone().into_boxed_slice(),
+                    next,
+                ));
                 miss = Some(next);
-                // Reaching this arm *is* the proof, so refine without a
-                // second guard — which is also what lets the arm's inline
-                // generators fire.
-                arm.guard_class_state(recv, way.class);
             }
+            // Reaching an arm proves the receiver's class only when the arm
+            // holds one. A multi-class arm leaves it unrefined, so
+            // `compile_method_call` sees an unproven receiver and restricts
+            // itself to class-independent inline generators — the same
+            // treatment the class-set guard gets, for the same reason.
+            let recv_class = match group.single_class() {
+                Some(class) => {
+                    // `guard_class_state` refines without emitting a guard,
+                    // which is also what lets the arm's inline generators
+                    // fire.
+                    arm.guard_class_state(recv, class);
+                    class
+                }
+                None => group.classes[0],
+            };
             // Specialization is suppressed inside an arm (see
             // `JitContext::in_dispatch_arm`), and every other way out of
-            // `compile_method_call` was hoisted into `pic_ways`, so the arm
+            // `compile_method_call` was hoisted into `pic_groups`, so the arm
             // always lands on the merge.
-            let outcome = self.with_dispatch_arm(|this| {
+            let outcome = self.with_arm(group.single_class().is_none(), |this| {
                 this.compile_method_call(
                     &mut arm,
                     ir,
-                    way.class,
+                    recv_class,
                     None,
-                    way.func_id,
-                    way.visibility,
+                    group.func_id,
+                    group.visibility,
                     callid,
                     false,
                 )

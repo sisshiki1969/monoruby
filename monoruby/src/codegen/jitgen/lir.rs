@@ -440,6 +440,14 @@ pub(in crate::codegen) enum LInst {
         class: ClassId,
         target: DestLabel,
     },
+    /// Dispatch arm over a class set: fall through when `reg`'s runtime class
+    /// is any of `classes`, branch to `target` otherwise. The miss is control
+    /// flow (the next arm), not a side exit.
+    BrClassNotIn {
+        reg: GP,
+        classes: Box<[ClassId]>,
+        target: DestLabel,
+    },
     /// Class-set guard: pass when `reg`'s runtime class is any of `classes`,
     /// branch to `deopt` otherwise.
     GuardClassIn {

@@ -297,8 +297,13 @@ impl<'a> JitContext<'a> {
         // inline generators that assume a single `recv_class` receiver must
         // be skipped for this compile — only the class-independent ones
         // (`InlineGenClassIndependent`) may still fire.
-        let mut same_target_set_guarded = false;
-        if state.class(recv) != Some(recv_class) {
+        // A set-guarded dispatch arm has already emitted the membership test
+        // that admitted this receiver, and every class it admits resolves to
+        // `func_id`. Emitting a receiver guard here would be redundant at
+        // best and — since only one of the arm's classes is `recv_class` —
+        // would deopt the rest at worst.
+        let mut same_target_set_guarded = self.in_set_guarded_arm();
+        if !same_target_set_guarded && state.class(recv) != Some(recv_class) {
             if !recompile_on_recv_miss
                 && let Some(classes) = self.pmc_same_target_classes(callid, recv_class, func_id)
             {

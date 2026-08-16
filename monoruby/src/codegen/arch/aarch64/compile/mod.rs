@@ -936,6 +936,29 @@ impl Codegen {
             // guard — each class's check falls through on match (branch to
             // ok) and moves to the next candidate on mismatch; the last
             // candidate's mismatch is the real deopt.
+            // Same membership chain as `GuardClassIn`, with the last
+            // candidate's miss going to the next arm instead of a side exit.
+            LInst::BrClassNotIn {
+                reg,
+                classes,
+                target,
+            } => {
+                let ok = self.jit.label();
+                let len = classes.len();
+                for (i, class) in classes.iter().enumerate() {
+                    if i + 1 < len {
+                        let next = self.jit.label();
+                        self.a64_guard_class(reg, *class, &next);
+                        monoasm_arm64!(&mut self.jit,
+                            b ok;
+                        );
+                        self.jit.bind_label(next);
+                    } else {
+                        self.a64_guard_class(reg, *class, &target);
+                    }
+                }
+                self.jit.bind_label(ok);
+            }
             LInst::GuardClassIn {
                 reg,
                 classes,

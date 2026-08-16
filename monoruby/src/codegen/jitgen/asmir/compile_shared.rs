@@ -140,6 +140,16 @@ impl Codegen {
                     deopt,
                 });
             }
+            // Dispatch arm over a class set: any listed class falls through,
+            // everything else goes to the next arm.
+            AsmInst::BrClassNotIn(r, classes, dest) => {
+                let target = frame.resolve_label(&mut self.jit, dest);
+                self.encode_linst(LInst::BrClassNotIn {
+                    reg: r,
+                    classes,
+                    target,
+                });
+            }
             // Class-set guard: any listed class passes, everything else
             // deopts.
             AsmInst::GuardClassIn(r, classes, deopt) => {

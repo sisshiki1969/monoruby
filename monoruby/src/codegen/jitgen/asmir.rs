@@ -1428,6 +1428,16 @@ pub(super) enum AsmInst {
     /// business.
     ///
     BrClassNe(GP, ClassId, JitLabel),
+    ///
+    /// Dispatch arm over a *set* of classes: fall through when `GP`'s runtime
+    /// class is any of them, branch to the label otherwise.
+    ///
+    /// [`AsmInst::GuardClassIn`] with the miss sent to the next arm instead of
+    /// a side exit — the same relationship [`AsmInst::BrClassNe`] has to
+    /// `GuardClass`. A miss here is control flow, not a guard failure, so the
+    /// `profile` recorder must not book it as one.
+    ///
+    BrClassNotIn(GP, Box<[ClassId]>, JitLabel),
     CheckLocal(JitLabel),
     CheckKwRest(SlotId),
     OptCase {
@@ -2568,6 +2578,9 @@ impl AsmInst {
             Self::Br(label) => format!("br {:?}", label),
             Self::BrClassNe(gpr, class, label) => {
                 format!("br_class_ne {:?} {:?} {:?}", gpr, class, label)
+            }
+            Self::BrClassNotIn(gpr, classes, label) => {
+                format!("br_class_not_in {:?} {:?} {:?}", gpr, classes, label)
             }
             Self::CheckLocal(label) => format!("check_local {:?}", label),
             Self::OptCase {
