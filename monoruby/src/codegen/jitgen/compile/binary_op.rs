@@ -1147,6 +1147,43 @@ mod tests {
         );
     }
 
+    /// A loop the compiler only ever sees pass straight through, because the
+    /// one instruction in its body is uncached — `Mutex#lock`'s
+    /// `until try_lock` is the shape in the wild, and it is the reason both
+    /// passes must end the block here rather than one of them widening on.
+    ///
+    /// With both ending it, the analysis records no back-edge, so the loop
+    /// head keeps its precise pre-header types and the body compiles to a
+    /// deopt: the "loop" becomes the straight-line code it has actually been
+    /// observed to be. What this pins is the other half — that the back-edge
+    /// still works when it finally *is* taken. The deopt recompiles the
+    /// method against a now-warm cache, and the real loop has to produce the
+    /// same answers as the interpreter.
+    #[test]
+    fn uncached_body_loop_compiles_straight_then_loops() {
+        run_test(
+            r#"
+            def probe(a, obj)
+              i = 0
+              until a[i]
+                i = obj + i
+              end
+              i
+            end
+            # Warm it with the body never entered: `obj + i` stays uncached
+            # and `probe` compiles with that block as a deopt.
+            res = []
+            300.times { res << probe([true], nil) }
+            # Now take the back-edge that was never compiled.
+            [res.uniq,
+             probe([false, true], 1),
+             probe([false, false, true], 1),
+             probe([false, false, false, true], 1),
+             probe([true], nil)]
+            "#,
+        );
+    }
+
     #[test]
     fn binop_overflow_deopt_dirty_operand() {
         // Regression: an Add whose lhs is a *dirty* GP resident (a prior
