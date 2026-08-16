@@ -2189,6 +2189,27 @@ pub(super) enum AsmInst {
         dst: GP,
     },
     ///
+    /// Load the **caller** frame's slot *slot* into *dst*.
+    ///
+    /// The one place a compiled body legitimately reads outside its own
+    /// frame: D1 defers a `...` forward's rest `Array`, leaving the
+    /// forwarded positionals in the caller's slots (`DeferredForward::src`,
+    /// caller register numbering). `SetArgumentsForwarded` copies them into
+    /// a callee frame; this reads a single one directly, for consumers that
+    /// build no frame at all.
+    ///
+    /// Only valid where the deferral annotation is: inside a specialized
+    /// forwarding trampoline, whose caller is exactly one level up, so the
+    /// caller's frame pointer is the one saved at `[fp]`.
+    ///
+    /// #### out
+    /// - dst: Value
+    ///
+    LoadCallerSlot {
+        slot: SlotId,
+        dst: GP,
+    },
+    ///
     /// Store *src* in an instance var *ivarid* of the object *rdi*.
     ///
     /// #### in

@@ -2744,6 +2744,17 @@ impl Codegen {
             // the specialized body (rewriting its `SpecializedCall` `bl`) then
             // deopt. Mirrors x86 `guard_class_version_specialized` (no counter —
             // the recompile bakes in the new version, so it won't re-fire).
+            // `dst <- [caller_fp - rbp_local(slot)]`. The caller's frame
+            // pointer is the one saved at `[x29]` (the D1 gate guarantees
+            // exactly one level up); x11 is a free lowering temp, and
+            // `a64_frame_load` owns the offset-range handling through x10.
+            AsmInst::LoadCallerSlot { slot, dst } => {
+                let d = dst.a64().0;
+                monoasm_arm64!(&mut self.jit,
+                    ldr x11, [x29];
+                );
+                self.a64_frame_load(d, 11, rbp_local(slot) as u32);
+            }
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let global_idx = self.specialized_base + idx;
                 let deopt = labels[deopt].clone();

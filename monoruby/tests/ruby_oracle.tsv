@@ -1825,6 +1825,7 @@
 9dbc194b1b0f6de59813ff04a2e9663a	[20, 20, 100, 2, 2]	Bar = 100\n            class Foo\n              autoload :Bar, "./c"\n
 9dbef04511724f84642f3b1be7361af9	[:get_raised, :set_raised]	class D\n              def initialize() @a = {k: 1} end\n            
 9dc570781d3034551d04772d71561543	:OVERRIDDEN	class Float; def ==(o); :OVERRIDDEN; end; end; 3.0 == 4.0
+9e03dfa339ff319e0498759ad4a0f1b2	[[99, 198, 99.0], [Sub, 99], [nil, 1.5, 1180591620717411303424], 3, [:@x, :@y, :@z]]	class V\n              def initialize(x, y, z); @x = x; @y = y; @z =
 9e349938558e7f648ad2c96a5fab61e1	:NOPE	class CGetMissingNameErr; end\n            begin\n              CGetM
 9e41b878cb2cd158c0051841526faf43	:OVERRIDDEN	class Integer; def !; :OVERRIDDEN; end; end; !(3)
 9e717e788200f4da9792d264e6819b02	[[], [1], [1, 2], [nil], [[1, 2]], nil, 1, [1, 2], nil, [1, 2]]	p = []\n        o = Object.new\n        def o.each\n          yield\n      
@@ -1970,6 +1971,7 @@ a966ff673f0471a0f7996609730def4c	"missing keyword: :x"	def msg; yield; "no error
 a96f44dffe64892feff990050d690d94	[150, false, true, false, false]	class Tail1; end\n            class Tail2; end\n            class Tai
 a98bef4ea7d42ca9b3589602d2392195	[[5, 6], [0, 0], [5, 6], [1, 1], [5, 6], [2, 2], [5, 6], [3, 3], [5, 6], [4, 4], [5, 6], [5, 5], [5, 6], [6, 6], [5, 6], [7, 7], [5, 6], [8, 8], [5, 6], [9, 9], [5, 6], [10, 10], [5, 6], [11, 11], [5, 6], [12, 12], [5, 6], [13, 13], [5, 6], [14, 14], [5, 6], [15, 15], [5, 6], [16, 16], [5, 6], [17, 17], [5, 6], [18, 18], [5, 6], [19, 19], [5, 6], [20, 20], [5, 6], [21, 21], [5, 6], [22, 22], [5, 6], [23, 23], [5, 6], [24, 24], [5, 6], [25, 25], [5, 6], [26, 26], [5, 6], [27, 27], [5, 6], [28, 28], [5, 6], [29, 29]]	class N\n          attr_reader :v\n          def initialize(a: 0, b: 1) =
 a9a64f0fa64e4bb1ec264c4f7c86df8b	:OVERRIDDEN	class Integer; def *(o); :OVERRIDDEN; end; end; 3 * 4
+a9ae3e391f88203fe65c9135f9075c2e	[[100, [99, 100]], [99.0, 99.0], 99, [198, [99, 198]], [100, [99, 100]], [100, [99, 100]], [99, [99, 99]], [99, [99, 99]], [FrozenError, [nil, nil]]]	class C\n              def set2(a, b); @a = a; @b = b; end\n         
 a9b082961457f87dd5dd3df08a2bc22e	"CAFÉ"	"Café".upcase
 a9cceae0d32dce8d89f28a34f27a49e1	[RuntimeError, "boom"]	o = Object.new\n            def o.each; raise "boom"; end\n          
 a9d059f319ef4e98b5696e426ac2c89b	TypeError	(Regexp.new("x").send(:initialize, "y"); nil) rescue $!.class
@@ -2192,6 +2194,7 @@ bb5498e7dcf365fa231082e385a52382	[42, 7, :nme]	class NestOuter\n              de
 bb7dc7125b3d11eacda38a33f25683d7	["global-variable", "global-variable", "global-variable", "global-variable", "global-variable"]	[defined?($/), defined?($\\), defined?($,), defined?($;), defined?($.)]
 bb7e42a0efd2830d60846fb262b25aba	:OVERRIDDEN	class FalseClass; def ===(o); :OVERRIDDEN; end; end; false === false
 bb9bac558eea3d2782caab01dd00745b	12.1	def f(a,b)\n          a + b\n        end\n        f(5.1, 7)\n        
+bb9fe807d5884dd09dd75a4832ce674c	[[FrozenError, []], [1, 2, 3, 4, 5, 6, 7, 99], ArgumentError, ArgumentError, [101]]	class V\n              def initialize(x, y); @x = x; @y = y; end\n   
 bba413775b9fdc4e5a5520013caecba6	true	Process.getpriority(Process::PRIO_USER, 0).is_a?(Integer)
 bbb536d6446e4acae479f2a76bbc22b8	[false, true, "payload"]	base = "/tmp/monoruby_test_rename_#{Process.pid}_#{rand(100000)}"\n 
 bbf39b957f63dc57cf6be6b238e3322a	"HELLO world"	s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0..-7); s
@@ -2315,6 +2318,7 @@ c4bd1413a0e0e43d5ccb56e00501ef61	[[[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 
 c520fc850e949eb2bf64f11afc5f2940	"Foo"	module Foo; end\n        Foo.to_s\n        
 c5374e944984f6dd8304adbe5f87f4d5	[10, 20]	fiber1 = Fiber.new { true }\n            fiber2 = Fiber.new { fiber1
 c53a4d5b6fe802b427b290829cb4dc35	[5, [:a, :b, :c, :d, :e], 0, 3, false, 5, [:a, :b, :c, :d, :e], 1, 3, false, 5, [:a, :b, :c, :d, :e], 2, 3, false, 5, [:a, :b, :c, :d, :e], 3, 3, false, 5, [:a, :b, :c, :d, :e], 4, 3, false, 5, [:a, :b, :c, :d, :e], 5, 3, false, 5, [:a, :b, :c, :d, :e], 6, 3, false, 5, [:a, :b, :c, :d, :e], 7, 3, false, 5, [:a, :b, :c, :d, :e], 8, 3, false, 5, [:a, :b, :c, :d, :e], 9, 3, false, 5, [:a, :b, :c, :d, :e], 10, 3, false, 5, [:a, :b, :c, :d, :e], 11, 3, false, 5, [:a, :b, :c, :d, :e], 12, 3, false, 5, [:a, :b, :c, :d, :e], 13, 3, false, 5, [:a, :b, :c, :d, :e], 14, 3, false, 5, [:a, :b, :c, :d, :e], 15, 3, false, 5, [:a, :b, :c, :d, :e], 16, 3, false, 5, [:a, :b, :c, :d, :e], 17, 3, false, 5, [:a, :b, :c, :d, :e], 18, 3, false, 5, [:a, :b, :c, :d, :e], 19, 3, false]	def m(i) = {a: i, b: 2, c: 3}\n        r = []\n        20.times do |i|\n  
+c541a3e07294eab4a4d213c945171c7a	[[99, 198, 99.0], [Sub, 99], [99, 100, 101], [nil, 1.5, 1180591620717411303424], 3, [:@x, :@y, :@z]]	class V\n              def initialize(x, y, z); @x = x; @y = y; @z =
 c55e6248eb41c6e540c40b61f2e992ed	420	class C\n          def f\n            x = 0\n            10.times { x += y
 c56c19f790a407710bd65fa095a58592	[3, 3]	from = 1\n        to = 2\n        [(from..to ? 3 : 4), (from...to ? 3 : 4
 c57f3073a34696e272a4c621e59717cf	false	"a".index(/a/); $~.nil?
