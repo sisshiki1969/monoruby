@@ -7,6 +7,7 @@ mod dispatch;
 mod unary_op;
 #[cfg(feature = "emit-cfg")]
 mod dump_cfg;
+mod frameless;
 mod index;
 mod loop_analysis;
 mod method_call;

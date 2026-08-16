@@ -569,6 +569,55 @@ impl<'a> JitContext<'a> {
                         }
                         return Ok(CompileResult::Continue);
                     }
+                    // Frame-free expansion of the constructor idiom
+                    // (`def initialize(a, b) = (@a = a; @b = b)`): emit the
+                    // stores as the caller's own instructions instead of
+                    // pushing a frame to run three `mov`s. Same gate as the
+                    // folds above, because it needs the same thing they do —
+                    // an argument shape that binds without `ArgumentError`.
+                    if let Some(body) = frameless::ivar_store_body(&self.store, iseq) {
+                        let callee_pos = self.store[func_id].params().total_positional_args();
+                        // Where each callee parameter lives in *this* frame.
+                        // Direct call sites hand them over contiguously from
+                        // `args`; a `...` forward splits them into the lead
+                        // positionals plus the D1-deferred rest range, which
+                        // is where `Class#new`'s `__builtin_initialize__(...)`
+                        // — the shape that actually matters — lands.
+                        let arg_slots: Option<Vec<frameless::ArgSlot>> = if simple_fold {
+                            (pos_num == callee_pos).then(|| {
+                                (0..callee_pos)
+                                    .map(|i| frameless::ArgSlot::Own(args + i))
+                                    .collect()
+                            })
+                        } else {
+                            let lead_num = pos_num - 1;
+                            state
+                                .deferred_rest_src(args + lead_num)
+                                .filter(|(_, len)| lead_num + *len as usize == callee_pos)
+                                .map(|(rest, len)| {
+                                    (0..lead_num)
+                                        .map(|i| frameless::ArgSlot::Own(args + i))
+                                        .chain(
+                                            (0..len as usize)
+                                                .map(|i| frameless::ArgSlot::Caller(rest + i)),
+                                        )
+                                        .collect()
+                                })
+                        };
+                        if let Some(arg_slots) = arg_slots
+                            && self.expand_ivar_stores(
+                                state, ir, recv_class, recv, dst, &body, &arg_slots,
+                            )
+                        {
+                            if forwarded_fold {
+                                // Same reasoning as the fold above: the
+                                // expansion *is* the forwarding consume, so
+                                // keep the caller-side `create_array` skip on.
+                                ir.set_deferred_rest();
+                            }
+                            return Ok(CompileResult::Continue);
+                        }
+                    }
                 }
                 // Use `is_C_immediate` here, not `is_C`: heap-resident
                 // `LinkMode::C` (e.g. class constants newly folded by
@@ -883,6 +932,98 @@ impl<'a> JitContext<'a> {
         state.def_rax2acc(ir, dst);
         state.unset_side_effect_guard();
         CompileResult::Continue
+    }
+
+    ///
+    /// Emit a recognised constructor body ([`frameless::ivar_store_body`])
+    /// as the caller's own instructions — no frame pushed, no call made.
+    ///
+    /// `arg_slots[i]` is the caller slot supplying the callee's parameter
+    /// `i`. Returns `false` when the receiver class cannot take the stores
+    /// this way, in which case nothing has been emitted and the caller
+    /// falls through to the ordinary call.
+    ///
+    /// # Why the frozen guard is hoisted
+    ///
+    /// Storing to a frozen object must raise `FrozenError`, and the raise
+    /// has to come from a real `initialize` frame with the right backtrace
+    /// — which is exactly the frame this path does not build. So the guard
+    /// runs **before any store**, and a frozen receiver deopts to the call
+    /// instruction: the VM then performs the whole call itself and raises
+    /// properly. That is only sound while no store has happened yet, which
+    /// is why the body must be straight-line (a conditional store would
+    /// leave the guard proving something about a path that never stores).
+    ///
+    fn expand_ivar_stores(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        recv_class: ClassId,
+        recv: SlotId,
+        dst: Option<SlotId>,
+        body: &frameless::IvarStoreBody,
+        arg_slots: &[frameless::ArgSlot],
+    ) -> bool {
+        // Only `RValue`s with the object layout have inline ivar slots at a
+        // fixed offset; anything else stores through the heap table, which
+        // needs `using_fpr` bookkeeping and a possible reallocation call.
+        if !self.store[recv_class].is_object_ty_instance() {
+            return false;
+        }
+        // Resolve every slot *before* emitting anything, so a body that is
+        // only partly expandable emits nothing at all.
+        let mut plan = Vec::with_capacity(body.stores.len());
+        for &(name, param) in &body.stores {
+            // The ivar id is created by the first execution of this store,
+            // and `initialize` has necessarily run in the interpreter to get
+            // the caller this hot — so a miss here means the class reaching
+            // this site is not the one the body writes (a subclass whose own
+            // `new` has never run). Decline rather than recompile: the
+            // ordinary call is correct and this is only an optimization.
+            let Some(ivarid) = self.store[recv_class].get_ivarid(name) else {
+                return false;
+            };
+            if !ivarid.is_inline() {
+                return false;
+            }
+            plan.push((ivarid, arg_slots[param as usize]));
+        }
+        state.load(ir, recv, GP::Rdi);
+        let deopt = ir.new_deopt(state);
+        ir.guard_frozen(deopt);
+        for (ivarid, src_slot) in plan {
+            let src = match src_slot {
+                frameless::ArgSlot::Own(slot) => state.load_or_reg(ir, slot, GP::Rax),
+                frameless::ArgSlot::Caller(slot) => {
+                    ir.push(AsmInst::LoadCallerSlot {
+                        slot,
+                        dst: GP::Rax,
+                    });
+                    GP::Rax
+                }
+            };
+            // Re-materialize the base: an argument living in an FP register
+            // is boxed on the way out, and boxing is a call.
+            state.load(ir, recv, GP::Rdi);
+            ir.push(AsmInst::StoreIVarInline { src, ivarid });
+        }
+        if let Some(dst) = dst {
+            // The body returns its last assignment's RHS.
+            match arg_slots[body.ret as usize] {
+                // Copying the slot (rather than reading it back) keeps an
+                // unboxed float unboxed.
+                frameless::ArgSlot::Own(slot) => state.copy_slot(ir, slot, dst),
+                frameless::ArgSlot::Caller(slot) => {
+                    ir.push(AsmInst::LoadCallerSlot {
+                        slot,
+                        dst: GP::Rax,
+                    });
+                    state.def_rax2acc(ir, Some(dst));
+                }
+            }
+        }
+        state.unset_side_effect_guard();
+        true
     }
 
     /// JIT inline a `Struct` member reader. Receiver class is already
@@ -2180,6 +2321,94 @@ mod tests {
             res << (begin; Fold.new(1, k: 2); rescue ArgumentError => e; e.class; end)
             res << Fold.new(1) { :blk }.class
             res << $effects.size
+            res
+            "#,
+        );
+    }
+
+    /// Frame-free expansion of `def initialize(a, b) = (@a = a; @b = b)`:
+    /// the stores must land in the right slots for a plain construction, a
+    /// subclass (whose ivar table is its own), a body reached through
+    /// `send` (where `initialize`'s return value — the last RHS — is
+    /// actually observable), and values of every representation the store
+    /// has to box on the way in (nil, unboxed float, Bignum).
+    #[test]
+    fn frameless_ivar_stores() {
+        run_test(
+            r#"
+            class V
+              def initialize(x, y, z); @x = x; @y = y; @z = z; end
+              attr_reader :x, :y, :z
+            end
+            class Sub < V; end
+            # A subclass that assigns its own ivars first, so its slot
+            # numbering diverges from the superclass's: the expansion must
+            # resolve names against the *receiver's* class, not the one the
+            # body was written in.
+            class Skew < V
+              def pre; @w = 0; @z = 0; @y = 0; @x = 0; end
+            end
+            Skew.allocate.pre
+            res = []
+            r = []; 100.times {|i| v = V.new(i, i * 2, i.to_f); r << [v.x, v.y, v.z] }
+            res << r.last
+            r = []; 100.times {|i| v = Sub.new(i, i, i); r << [v.class, v.x] }
+            res << r.last
+            r = []; 100.times {|i| v = Skew.new(i, i + 1, i + 2); r << [v.x, v.y, v.z] }
+            res << r.last
+            r = []; 100.times {|i| v = V.new(nil, 1.5, 2 ** 70); r << [v.x, v.y, v.z] }
+            res << r.last
+            # `initialize` returns its last assignment's RHS.
+            r = []; 100.times {|i| o = V.allocate; r << o.send(:initialize, i, 2, 3) }
+            res << r.last
+            res << V.new(1, 2, 3).instance_variables
+            res
+            "#,
+        );
+    }
+
+    /// What the expansion must NOT swallow. The frozen guard is hoisted
+    /// ahead of every store, so a frozen receiver has to raise
+    /// `FrozenError` with **nothing written** — the deopt hands the whole
+    /// call back to the interpreter. Arity still raises, a redefinition
+    /// still takes effect, and a body just past the inline-slot budget
+    /// (more than `OBJECT_INLINE_IVAR` ivars) still runs correctly through
+    /// the ordinary call.
+    #[test]
+    fn frameless_ivar_stores_declines() {
+        run_test(
+            r#"
+            class V
+              def initialize(x, y); @x = x; @y = y; end
+              attr_reader :x, :y
+            end
+            class Wide
+              def initialize(a, b, c, d, e, f, g, h)
+                @a = a; @b = b; @c = c; @d = d; @e = e; @f = f; @g = g; @h = h
+              end
+              def all = [@a, @b, @c, @d, @e, @f, @g, @h]
+            end
+            res = []
+            r = nil
+            100.times do
+              o = V.allocate.freeze
+              begin
+                o.send(:initialize, 1, 2)
+              rescue => e
+                r = [e.class, o.instance_variables]
+              end
+            end
+            res << r
+            r = []; 100.times {|i| r << Wide.new(1, 2, 3, 4, 5, 6, 7, i).all }
+            res << r.last
+            res << (begin; V.new(1); rescue ArgumentError => e; e.class; end)
+            res << (begin; V.new(1, 2, 3); rescue ArgumentError => e; e.class; end)
+            100.times { V.new(1, 2) }
+            class V
+              def initialize(x, y); @x = x + 100; @y = y; end
+            end
+            r = []; 100.times { r << V.new(1, 2).x }
+            res << r.uniq
             res
             "#,
         );
