@@ -89,29 +89,41 @@ pub(crate) fn ruby_platform() -> &'static str {
         .unwrap_or(DEFAULT_PLATFORM)
 }
 
+/// Inline generator for an ordinary builtin.
+///
+/// # The caller's obligation
+///
+/// Firing a generator at all asserts that **whatever class the receiver turns
+/// out to have at run time, it resolves this call site's name to the method
+/// this generator implements**. That is the caller's to guarantee, and it does
+/// not depend on the parameter below: a class-set guard admits only classes it
+/// re-resolved to this method, and a dispatch arm is entered only by classes
+/// grouped under this target.
+///
+/// # What the parameter adds
+///
+/// `Some(class)` says the receiver's class is additionally *statically known*
+/// to be exactly `class`, so the generator may emit code specialized to it.
+///
+/// `None` says only that the site could not name it — a dispatch arm covering
+/// several classes, or the class-set guard. The resolution guarantee above
+/// still holds; what is missing is which class it is. A generator whose
+/// emitted code depends on that must decline (`return false`); one that reads
+/// only the receiver's Value representation (`nil?`, `frozen?`, `__id__`,
+/// `object_id`) ignores the parameter and keeps firing.
+///
+/// Keeping the receiver and argument classes on the same footing is what lets
+/// one generator shape serve both, so there is no separate
+/// "class-independent" registration to pick between — and no way to register
+/// a generator under the wrong one.
 pub(crate) type InlineGen = dyn Fn(
     &mut jitgen::AbstractState,
     &mut jitgen::asmir::AsmIr,
     &crate::jitgen::JitContext,
     &Store,
     CallSiteId,
-    ClassId,
     Option<ClassId>,
-) -> bool;
-
-/// Class-independent inline generator: the emitted code depends only on the
-/// receiver's Value representation, never on a statically known receiver (or
-/// argument) class, so the JIT may fire it even behind a polymorphic
-/// class-set guard (`GuardClassIn`), where the receiver's class is not
-/// refined at compile time. The narrower signature — no `ClassId`
-/// parameters at all — enforces that contract by type: a generator that
-/// needs a class cannot be registered through this shape.
-pub(crate) type InlineGenClassIndependent = dyn Fn(
-    &mut jitgen::AbstractState,
-    &mut jitgen::asmir::AsmIr,
-    &crate::jitgen::JitContext,
-    &Store,
-    CallSiteId,
+    Option<ClassId>,
 ) -> bool;
 
 /// Binary-operator inline generator: the JIT-inline implementation of a

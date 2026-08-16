@@ -417,7 +417,7 @@ fn string_eq_gen(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     arg_class: Option<ClassId>,
 ) -> bool {
     string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, false)
@@ -431,7 +431,7 @@ fn string_ne_gen(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     arg_class: Option<ClassId>,
 ) -> bool {
     string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, true)
@@ -857,9 +857,14 @@ fn string_shl_gen(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: ClassId,
+    recv_class: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(recv_class) = recv_class else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() || callsite.pos_num != 1 {
         return false;
@@ -4060,7 +4065,7 @@ fn string_bytesize(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -4442,7 +4447,7 @@ fn string_getbyte(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -4471,7 +4476,7 @@ fn string_setbyte(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];

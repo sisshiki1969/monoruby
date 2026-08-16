@@ -65,7 +65,7 @@ impl<'a> JitContext<'a> {
             state.load(ir, base, GP::Rdi);
             state.guard_class(ir, base, GP::Rdi, recv_class, deopt);
         }
-        if self.inline_asm(state, ir, f, callid, recv_class, idx_class) {
+        if self.inline_asm(state, ir, f, callid, Some(recv_class), idx_class) {
             self.record_bop_dep(recv_class, op);
             state.unset_side_effect_guard();
             true
@@ -195,7 +195,7 @@ impl<'a> JitContext<'a> {
         let Some(InlineFuncInfo::InlineGen(f)) = self.store.inline_info.get_inline(fid) else {
             unreachable!("index_inline_class only answers InlineGen targets")
         };
-        if !self.inline_asm(&mut fast, ir, f, callid, inline_class, idx_class) {
+        if !self.inline_asm(&mut fast, ir, f, callid, Some(inline_class), idx_class) {
             ir.restore(ir_save);
             *state = state_save;
             return Ok(false);

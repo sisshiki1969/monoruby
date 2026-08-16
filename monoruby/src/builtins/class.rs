@@ -24,9 +24,14 @@ pub(super) fn gen_class_allocate_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    self_class: ClassId,
+    self_class: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(self_class) = self_class else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;

@@ -12,7 +12,7 @@ pub(super) fn init(globals: &mut Globals) {
     // BasicObject methods
 
     globals.define_private_builtin_func(BASIC_OBJECT_CLASS, "initialize", bo_initialize, 0);
-    globals.define_builtin_inline_func_class_independent(
+    globals.define_builtin_inline_func(
         BASIC_OBJECT_CLASS,
         "__id__",
         object_id,
@@ -66,7 +66,7 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
     globals.define_builtin_func(OBJECT_CLASS, "freeze", freeze, 0);
-    globals.define_builtin_inline_func_class_independent(
+    globals.define_builtin_inline_func(
         OBJECT_CLASS,
         "frozen?",
         frozen,
@@ -147,7 +147,8 @@ fn frozen(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result
     Ok(Value::bool(lfp.self_val().is_frozen()))
 }
 
-/// Class-independent (see `InlineGenClassIndependent`): the predicate reads
+/// Reads only the receiver Value, so it keeps firing where the class is
+/// unproven: the predicate reads
 /// the Value tag and the RValue header only — packed values are frozen,
 /// heap Numerics are frozen, everything else tests the header FROZEN bit
 /// (`emit_frozen_pred` mirrors `Value::is_frozen` exactly, chilled strings
@@ -158,6 +159,10 @@ pub(super) fn object_frozen(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
+    // The receiver Value is all this reads, so an unproven class
+    // (a multi-class dispatch arm / the class-set guard) is no obstacle.
+    _: Option<ClassId>,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -334,7 +339,7 @@ fn object_not(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -406,7 +411,8 @@ pub(super) fn object_id(
     Ok(Value::integer(lfp.self_val().id() as i64))
 }
 
-/// Class-independent (see `InlineGenClassIndependent`): `Value::id()` works
+/// Reads only the receiver Value, so it keeps firing where the class is
+/// unproven: `Value::id()` works
 /// on the raw Value bits, correct for any receiver.
 pub(super) fn object_object_id(
     state: &mut AbstractState,
@@ -414,6 +420,10 @@ pub(super) fn object_object_id(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
+    // The receiver Value is all this reads, so an unproven class
+    // (a multi-class dispatch arm / the class-set guard) is no obstacle.
+    _: Option<ClassId>,
+    _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

@@ -1006,7 +1006,7 @@ fn hash_default_assign(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -1049,9 +1049,14 @@ fn hash_index(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: ClassId,
+    recv_class: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(recv_class) = recv_class else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
@@ -1084,9 +1089,14 @@ fn hash_get_or_key(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: ClassId,
+    recv_class: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
+    let Some(recv_class) = recv_class else {
+        // The call site could not prove the receiver's class (a multi-class
+        // dispatch arm / the class-set guard); this generator needs it.
+        return false;
+    };
     let callsite = &store[callid];
     if !callsite.is_simple() || callsite.pos_num != 1 {
         return false;
@@ -1120,7 +1130,7 @@ fn hash_index_assign(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -1414,7 +1424,7 @@ fn hash_compare_by_identity(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let Some(callsite) = hash_accessor_callsite(store, callid) else {
@@ -1436,7 +1446,7 @@ fn hash_default_value(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     hash_default_inline(state, ir, store, callid, false)
@@ -1451,7 +1461,7 @@ fn hash_default_proc(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     hash_default_inline(state, ir, store, callid, true)
@@ -1483,7 +1493,7 @@ fn hash_size(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -1514,7 +1524,7 @@ fn hash_entry_count(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -1542,7 +1552,7 @@ fn hash_live_at(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     idx_class: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];
@@ -1596,7 +1606,7 @@ fn hash_key_at(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     idx_class: Option<ClassId>,
 ) -> bool {
     hash_entry_at_inline(state, ir, store, callid, idx_class, true)
@@ -1608,7 +1618,7 @@ fn hash_value_at(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     idx_class: Option<ClassId>,
 ) -> bool {
     hash_entry_at_inline(state, ir, store, callid, idx_class, false)

@@ -294,9 +294,8 @@ impl<'a> JitContext<'a> {
         //
         // When the class-set guard below is taken, the receiver's class is
         // NOT statically refined (it may be any member of the set), so the
-        // inline generators that assume a single `recv_class` receiver must
-        // be skipped for this compile — only the class-independent ones
-        // (`InlineGenClassIndependent`) may still fire.
+        // generator is handed `None` and decides for itself whether it can
+        // still emit.
         // A set-guarded dispatch arm has already emitted the membership test
         // that admitted this receiver, and every class it admits resolves to
         // `func_id`. Emitting a receiver guard here would be redundant at
@@ -364,19 +363,22 @@ impl<'a> JitContext<'a> {
             && let Some(info) = self.store.inline_info.get_inline(func_id)
         {
             match info {
-                // Class-independent generators read only the receiver Value
-                // (the type carries no ClassId to consult), so they are sound
-                // even behind the class-set guard, where the receiver's class
-                // is not statically refined.
-                InlineFuncInfo::InlineGenClassIndependent(f) => {
-                    if self.inline_asm_class_independent(state, ir, f, callid) {
+                // The generator is handed the receiver class only when the
+                // site proved one: behind the class-set guard (or a
+                // multi-class dispatch arm) it gets `None` and decides for
+                // itself, which is how `nil?` / `frozen?` / `__id__` /
+                // `object_id` keep firing there while a generator that needs
+                // the class declines to the ordinary call.
+                InlineFuncInfo::InlineGen(f) => {
+                    let proven = (!same_target_set_guarded).then_some(recv_class);
+                    if self.inline_asm(state, ir, f, callid, proven, arg_class) {
                         state.unset_side_effect_guard();
                         return Ok(CompileResult::Continue);
                     }
                 }
-                // Every other inliner assumes the single compile-time
-                // receiver class; behind the set guard it must fall through
-                // to the ordinary (set-guarded) builtin call.
+                // The operator generators still take a definite receiver
+                // class, so behind the set guard they fall through to the
+                // ordinary (set-guarded) builtin call.
                 _ if same_target_set_guarded => {}
                 // Explicit-send spelling of a numeric operator (`1.+(2)`,
                 // `a.==(b)`): fire the binary generator in Value mode. The
@@ -406,12 +408,6 @@ impl<'a> JitContext<'a> {
                         return Ok(CompileResult::Continue);
                     }
                     // Declined: fall through to the ordinary builtin call.
-                }
-                InlineFuncInfo::InlineGen(f) => {
-                    if self.inline_asm(state, ir, f, callid, recv_class, arg_class) {
-                        state.unset_side_effect_guard();
-                        return Ok(CompileResult::Continue);
-                    }
                 }
                 InlineFuncInfo::CFunc_F_F(f) => {
                     let CallSiteInfo { args, dst, .. } = *callsite;
@@ -1159,11 +1155,13 @@ impl<'a> JitContext<'a> {
             &JitContext,
             &Store,
             CallSiteId,
-            ClassId,
+            Option<ClassId>,
             Option<ClassId>,
         ) -> bool,
         callid: CallSiteId,
-        recv_class: ClassId,
+        // `None` when the call site could not prove the receiver's class —
+        // see `InlineGen`.
+        recv_class: Option<ClassId>,
         arg_class: Option<ClassId>,
     ) -> bool {
         // No GP flush here: a register-only inline keeps the residents live,
@@ -1230,27 +1228,6 @@ impl<'a> JitContext<'a> {
         let state_save = state.clone();
         let ir_save = ir.save();
         if f(state, ir, self, &self.store, callid, recv_class) {
-            true
-        } else {
-            *state = state_save;
-            ir.restore(ir_save);
-            false
-        }
-    }
-
-    /// [`inline_asm`](Self::inline_asm) for class-independent generators —
-    /// same save/restore protocol, minus the class arguments their type
-    /// doesn't have.
-    fn inline_asm_class_independent(
-        &mut self,
-        state: &mut AbstractState,
-        ir: &mut AsmIr,
-        f: impl Fn(&mut AbstractState, &mut AsmIr, &JitContext, &Store, CallSiteId) -> bool,
-        callid: CallSiteId,
-    ) -> bool {
-        let state_save = state.clone();
-        let ir_save = ir.save();
-        if f(state, ir, self, &self.store, callid) {
             true
         } else {
             *state = state_save;
@@ -2007,7 +1984,7 @@ mod tests {
         );
     }
 
-    /// Class-independent inline generators (`InlineGenClassIndependent`)
+    /// A generator that reads only the receiver Value
     /// keep firing behind the polymorphic class-set guard. Covers: `nil?` /
     /// `frozen?` / `object_id` at a 4-class site (set guard + inline, the
     /// receiver class statically unrefined), every representation arm of the
@@ -2019,7 +1996,7 @@ mod tests {
     /// `object_id` values differ from CRuby's, so only identity-stability
     /// (`oid(v) == v.object_id`) is compared, never the raw id.
     #[test]
-    fn polymorphic_class_independent_inline() {
+    fn polymorphic_classless_inline() {
         run_test(
             r#"
             def fro(x) = x.frozen?

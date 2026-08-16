@@ -3,12 +3,6 @@ use super::*;
 #[allow(non_camel_case_types)]
 pub(crate) enum InlineFuncInfo {
     InlineGen(Box<InlineGen>),
-    /// A generator whose emitted code never consults the receiver's (or an
-    /// argument's) class — the type has no `ClassId` parameters to consult.
-    /// The JIT fires these even behind a polymorphic class-set guard, where
-    /// the other variants must be skipped (their code assumes the single
-    /// compile-time receiver class).
-    InlineGenClassIndependent(Box<InlineGenClassIndependent>),
     /// A numeric binary operator / comparison generator, fired guard-free
     /// from the binop/cmp bytecode dispatchers under the basic-op license
     /// (and from `compile_method_call` for explicit sends). See
@@ -25,10 +19,6 @@ pub(crate) enum InlineFuncInfo {
 impl InlineFuncInfo {
     pub(crate) fn new_inline_gen(f: Box<InlineGen>) -> Self {
         InlineFuncInfo::InlineGen(f)
-    }
-
-    pub(crate) fn new_inline_gen_class_independent(f: Box<InlineGenClassIndependent>) -> Self {
-        InlineFuncInfo::InlineGenClassIndependent(f)
     }
 
     pub(crate) fn new_inline_gen_binary(f: Box<InlineGenBinary>) -> Self {

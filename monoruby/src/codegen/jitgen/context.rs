@@ -794,10 +794,6 @@ impl<'a> JitContext<'a> {
     ///
     /// Run *f* with the dispatch-arm flag set, restoring it afterwards.
     ///
-    pub(super) fn with_dispatch_arm<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        self.with_arm(false, f)
-    }
-
     ///
     /// Run *f* inside a dispatch arm, recording whether the arm's receiver
     /// class is proven (`set_guarded == false`) or merely known to be one of

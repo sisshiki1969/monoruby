@@ -286,7 +286,7 @@ fn fiber_yield_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: ClassId,
+    _: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
     let callsite = &store[callid];

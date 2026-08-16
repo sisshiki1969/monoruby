@@ -254,7 +254,7 @@ impl<'a> JitContext<'a> {
             // The plain generators (`Integer#% ** << >>`) have no fused
             // compare-and-branch form, so they only serve `Value` mode.
             InlineFuncInfo::InlineGen(f) if matches!(mode, BinaryInlineMode::Value) => {
-                if self.inline_asm(state, ir, f, callid, lhs_class, rhs_class) {
+                if self.inline_asm(state, ir, f, callid, Some(lhs_class), rhs_class) {
                     BinaryInlineOutcome::Done
                 } else {
                     BinaryInlineOutcome::Declined
