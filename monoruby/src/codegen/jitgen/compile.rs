@@ -530,7 +530,10 @@ impl<'a> JitContext<'a> {
                 lhs,
                 rhs,
                 ic,
-            } => return self.binary_op(state, ir, kind, dst, lhs, rhs, ic, bc_pos),
+                polymorphic,
+            } => {
+                return self.binary_op(state, ir, kind, dst, lhs, rhs, ic, polymorphic, bc_pos);
+            }
             TraceIr::BinCmp {
                 kind,
                 dst,
