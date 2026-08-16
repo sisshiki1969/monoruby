@@ -178,6 +178,11 @@ pub(crate) enum TraceIr {
         lhs: SlotId,
         rhs: SlotId,
         ic: Option<(ClassId, ClassId)>,
+        /// The VM saw this site with more than one operand class. Set by the
+        /// *same* `vm_save_binary_class` that marks `BinCmp`, so it has
+        /// always been recorded here — it simply had no consumer until the
+        /// dispatchers were unified.
+        polymorphic: bool,
     },
     BinCmp {
         kind: crate::ast::CmpKind,
@@ -716,6 +721,7 @@ impl TraceIr {
                         lhs,
                         rhs,
                         ic,
+                        polymorphic: pc.opcode_sub() == 1,
                     }
                 }
 
@@ -837,9 +843,17 @@ impl TraceIr {
             lhs: SlotId,
             rhs: SlotId,
             class: impl Into<Option<(ClassId, ClassId)>>,
+            polymorphic: bool,
         ) -> String {
             let class: Option<_> = class.into();
-            let op1 = format!("{} = {:?} {} {:?}", ret_str(dst), lhs, kind, rhs);
+            let op1 = format!(
+                "{}{} = {:?} {} {:?}",
+                if polymorphic { "POLY " } else { "" },
+                ret_str(dst),
+                lhs,
+                kind,
+                rhs
+            );
             fmt(store, op1, class)
         }
 
@@ -1031,7 +1045,8 @@ impl TraceIr {
                 lhs,
                 rhs,
                 ic,
-            } => binop_fmt(store, kind, dst, lhs, rhs, ic.clone()),
+                polymorphic,
+            } => binop_fmt(store, kind, dst, lhs, rhs, ic.clone(), polymorphic),
 
             TraceIr::BinCmp {
                 kind,
