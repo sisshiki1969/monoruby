@@ -10,8 +10,10 @@ interpreter: immediate eviction — the code-patching mechanism this document
 was written against — is gone (§10). The **escalation half of step 4** — the
 per-frame switch that makes every interpreter-resuming side exit run the
 chain-deopt walk, plus the runtime entry it calls — is in place (§8.6). The
-speculation itself (the `Float` guard and the `locals_to_S` relaxation, §5
-steps 4–5) and the return-state recovery (§6) are not. §9 stays as the record
+**return-state recovery (§6) has landed** — see §6.1; it escalates a callee's
+subtree after the fact rather than through that switch, for a reason the plan
+did not anticipate. The speculation itself (the `Float` guard and the
+`locals_to_S` relaxation, §5 steps 4–5) is not built. §9 stays as the record
 of why the original lazy build was wrong.
 
 ---
@@ -201,7 +203,11 @@ per-site-handler form — §9) — see §8.
 
 ## 6. The second payoff: `frame_had_deopt`
 
-`compile/method_call.rs:1243` currently gives up all return-type inference
+**Landed** — §6.1 records what was built and where the implementation departs
+from the plan below. The rest of this section is the original argument, which
+still holds.
+
+`compile/method_call.rs:1243` gave up all return-type inference
 for any callee that *could* deopt:
 
 ```rust
@@ -242,6 +248,60 @@ Note also that `taint_for_unmodeled_rescue` (`state.rs:598`) bundles the
 `ret` downgrade with clearing `invariants.side_effect_guard`; splitting the
 deopt reason from the rescue reason means deciding both, and the
 `side_effect_guard` half needs its own written argument.
+
+### 6.1 What is implemented
+
+The gate is `compile_specialized_func`'s
+
+```rust
+let escalate = frame_had_deopt
+    && !rescue_taint
+    && return_state.as_ref().is_some_and(|s| s.ret_is_narrowed());
+```
+
+and when it holds, the callee's whole subtree is escalated
+(`context::escalate_all_side_exits`) and the return state is kept.
+
+**The escalation is retroactive, not baked in at compile time.** The plan
+above assumed the per-site flag could be decided before compiling the callee,
+since specialization compiles a body per call site. It cannot: whether
+escalating buys anything depends on the callee's *return state*, which does
+not exist until the body is compiled. `JitContext::escalate_side_exits` — the
+up-front decision point §8.5 describes — is therefore not where §6 hooks in.
+Instead `AsmIr::escalate_all_exits` flips the flag on side exits that already
+exist, and a recursive walk over `AsmInfo` reaches the same set as
+`max_virt_fpreg_id` (main stream, both bridge kinds, and nested
+`specialized_methods`). This is sound because the flag lives in the `SideExit`
+descriptor and is not lowered to machine code until `gen_machine_code`, long
+after the specialized body is built.
+
+The mechanical guarantee §6 asked for survives the change of route: emitters
+still never choose. Every side exit in the subtree is flipped by one walk, so
+a newly added emitter cannot forget to escalate — it can only fail to be
+reachable from `AsmInfo`, which would break the register allocator first.
+
+**`ret_is_narrowed` is the payoff test**, and it deliberately excludes `UD`:
+that means the callee never returns normally, so `def_rax2acc_return` emits
+`Unreachable` and there is no tag for the caller to act on.
+
+**`side_effect_guard` is still cleared** on the deopt path. Chain deopt says
+nothing about the side effects an interpreter resume would replay, so that
+half kept its taint; today it costs nothing, since its only reader
+(`ReturnState::const_folded`) is `#[allow(dead_code)]`.
+
+**An escalated subtree no longer propagates `had_deopt` to its caller.** That
+is the recovery itself: those deopts convert the whole chain, so they cannot
+invalidate a narrowed return state at any level above the site either.
+
+Measured on this branch: of the specialized compiles that would previously
+have been tainted for deopt-ability, `app_aobench` recovers 299 of 452
+(the rest have no narrowing to keep). Interleaved min/median wall-clock A/B
+puts `app_aobench` at ×0.988 and `so_mandelbrot` at ×0.984, with
+`binarytrees` / `so_nbody` / `quick_sort` / `tarai` inside noise and about
+3.4 ms added to startup. Non-interleaved runs on a shared-CPU host produced
+swings several times larger than the effect in both directions — including a
+spurious ×1.09 on `binarytrees` — so anything measured that way about this
+change should be distrusted.
 
 ## 7. Gating for the speculation itself (§5.4–5.5)
 

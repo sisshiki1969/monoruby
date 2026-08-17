@@ -2568,6 +2568,44 @@ mod tests {
         );
     }
 
+    /// `doc/chain_deopt.md` §6 — a specialized callee whose body is
+    /// deopt-able but whose return state is narrowed keeps that narrowing,
+    /// because `compile_specialized_func` escalates the subtree's side exits
+    /// to chain deopt instead of tainting the state to `Value`.
+    ///
+    /// The ctor is warmed with `Integer` arguments, so its specialized body
+    /// carries class guards (deopt-able) and returns `Class(Pt)`. Calling the
+    /// same site with `Float`s fails a guard *inside* that subtree, which is
+    /// exactly the case the escalation has to cover: the caller consumed the
+    /// narrowed tag, so it must be converted to an interpreter frame too
+    /// rather than resuming its compiled body. The nested-block round gives
+    /// the walk a deeper chain to convert.
+    #[test]
+    fn escalated_subtree_keeps_narrowed_return_state() {
+        run_test(
+            r#"
+            res = []
+            class Pt
+              def initialize(a, b)
+                @a = a * 2
+                @b = b + 1
+              end
+              def a = @a
+              def b = @b
+            end
+            sum = 0
+            100.times { |i| p = Pt.new(i, i); sum += p.a + p.b }
+            res << sum
+            q = Pt.new(1.5, 2.5)
+            res << [q.a, q.b, q.a.class]
+            acc = []
+            2.times { |i| 3.times { |j| acc << Pt.new(i + j * 0.5, 0).a } }
+            res << acc
+            res
+            "#,
+        );
+    }
+
     /// A JIT-specialized *deferred* construction that deopts mid-run. The
     /// Ruby `Class#new` trampoline defers `Foo.new`'s `...` rest (D1), so the
     /// forwarded ctor args are source-routed straight from the caller frame

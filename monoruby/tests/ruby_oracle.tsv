@@ -2771,6 +2771,7 @@ eb030791795360c8d2798e96c1b4c064	[:typeerr, :typeerr, :typeerr, :typeerr, :typee
 eb0341a3d38f4211b05aabb593c43552	true	a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_defined?(:@
 eb08522009d362d68363c6fe111130db	[0, 1, 2, 3, 4, 5, [0, 5], 100, 1, 2, 3, 4, 5, [1, 4], 100, 2, 3, 4, 5, [2, 3], 100, 3, 4, 5, [3, 2], 100, 4, 5, [4, 1], 100, 5, [5, 0], 100, 6, [6, 0], 100, 200]	def f\n                7.times { |x|\n                    $res << 7.t
 eb1a1f13d83aba6d989327edc7aca2ee	[42, 42, 42, 42, 42, 42, 42, 42, 99, 99, 99]	class A\n          attr_accessor :w\n        end\n        a = A.new\n      
+eb47426cd3b10b21f100da629f99c6b0	[14950, [3.0, 3.5, Float], [0.0, 1.0, 2.0, 2.0, 3.0, 4.0]]	res = []\n            class Pt\n              def initialize(a, b)\n  
 eb480c65027479d5c43e622f7002a48d	true	"abc".force_encoding("ISO-8859-13").encoding == Encoding::ISO_8859_13
 eb95d935f094af9857548a9bc31a9d9c	[[1, 0, 97, 0, 98, 0], :nul, :too_long, :bad_family, :not_str, "AF_UNIX", "AF_UNIX", true]	require "socket"\n            require "tmpdir"\n            res = []\n
 eb964a5d470f9976795a0f65e5e4c883	[1, [2, 3]]	def f\n            \tyield [1,2,3]\n            end\n            \n\n    
