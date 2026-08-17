@@ -1862,6 +1862,7 @@ a0d8a60091bf358a78984cd54491c359	[true, 12, true, false, false]	t = Thread.new {
 a0ed7fceb0bb6c6c16a0106636e9eb4a	"あ"	s = "hello"; s.bytesplice(0..4, "あいう", 0..2); s
 a119cef46ae9c1190d2bbd29791572a2	true	def `(cmd); cmd.frozen?; end\n        def m; `ab`; end\n        m\n       
 a11ed1527c89aa21a332303e09009bd7	true	M = Data.define(:amount, :unit)\nM.new(1, "m").with(amount: 9).frozen?
+a13a2072b2f3375c306f9f28ca558183	[3.25, 999]	$flag = false\n        def maybe_redefine\n          if $flag\n           
 a143f6cff1e98f1d5b4da11574acdd7a	true	r = nil; 3.times { r = __ENCODING__ }; r.equal?(Encoding::UTF_8)
 a145f94943dc0794a58051ca1c98752f	[false, [1, 2]]	arr = [1, 2]\n        def arr.to_a; $flag = true; super; end\n        $fl
 a14e904cc31582d611449d8caacf0884	true	"abc".force_encoding("ISO-8859-1").encoding == Encoding::ISO_8859_1
