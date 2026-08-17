@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-3ae4b096.js";
+            window.path_to_searchindex_js = "searchindex-8dd60d17.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e1173681.js"></script>
@@ -748,7 +748,7 @@ benefit. The <code>lir.rs</code> unit test uses <code>matches!</code> instead of
 <tr><td>Dispatch helpers (macro-op)</td><td><code>GenericBinOp</code>, <code>OptEqCmp</code>, <code>ArrayTEq</code>, <code>CheckKwRest</code>, <code>RestKw</code></td></tr>
 <tr><td>Definition (macro-op)</td><td><code>MethodDef</code>, <code>SingletonMethodDef</code>, <code>ClassDef</code>, <code>SingletonClassDef</code>, <code>AliasMethod</code>, <code>UndefMethod</code></td></tr>
 <tr><td>Method-prologue guards (macro-op)</td><td><code>GuardClassVersion</code>, <code>RecompileDeopt</code>, <code>CheckStack</code>, <code>ExecGc</code>, <code>Init</code>, <code>LoopJitRspBump</code></td></tr>
-<tr><td>Control flow / exceptions (macro-op)</td><td><code>Ret</code>, <code>MethodRet</code>, <code>BlockBreak</code>, <code>Raise</code>, <code>Retry</code>, <code>Redo</code>, <code>EnsureEnd</code>, <code>Yield</code>, <code>BlockArgProxy</code>, <code>BlockArg</code>, <code>ImmediateEvict</code>, <code>Deopt</code>, <code>HandleError</code>, <code>Unreachable</code></td></tr>
+<tr><td>Control flow / exceptions (macro-op)</td><td><code>Ret</code>, <code>MethodRet</code>, <code>BlockBreak</code>, <code>Raise</code>, <code>Retry</code>, <code>Redo</code>, <code>EnsureEnd</code>, <code>Yield</code>, <code>BlockArgProxy</code>, <code>BlockArg</code>, <code>ChainExit</code>, <code>Deopt</code>, <code>HandleError</code>, <code>Unreachable</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -986,12 +986,13 @@ the surrounding <code>load_fpr</code>/<code>def_F</code>).</li>
 FP/branch/call LIR primitives.</p>
 </li>
 <li>
-<p><strong>Pure patch / recompile <em>bookkeeping</em></strong> — the x86/aarch64 <em>non-coverage</em>
-asymmetry of <code>doc/arch_difference.md</code> §4. The deopt <em>handler emission</em> now
-goes through LIR (above); what stays out is the part that <strong>emits no bytes</strong>:
-<code>ImmediateEvict</code> records a <code>return_addr_table</code> patch point (zero bytes), and
-the actual return-address overwrite happens at BOP-redefinition time, not at
-compile time. The clean invariant is therefore:</p>
+<p><strong>Pure registration / recompile <em>bookkeeping</em></strong> — the x86/aarch64
+<em>non-coverage</em> asymmetry of <code>doc/arch_difference.md</code> §4. The deopt <em>handler
+emission</em> now goes through LIR (above); what stays out is the part that
+<strong>emits no bytes</strong>: <code>ChainExit</code> records a call site’s replay data in
+<code>chain_deopt_table</code> (zero bytes), and the actual frame conversion happens at
+BOP-redefinition / deopt time, not at compile time. The clean invariant is
+therefore:</p>
 </li>
 </ul>
 <blockquote>
@@ -4419,8 +4420,8 @@ aarch64 as a <em>streaming port that bails to the VM</em> on any instruction sha
 could not lower, and catalogued ~two dozen bail sites. <strong>That is no longer
 true.</strong> As of <code>#704</code> aarch64 lowers every <code>AsmInst</code> and every side exit, so it
 never bails out of JIT compilation. The sections below describe the current,
-bail-free state; §4 covers the asymmetries that <em>do</em> remain (recompilation
-strategy and eviction patching — not coverage).</p>
+bail-free state; §4 covers the asymmetry that <em>does</em> remain (recompilation
+strategy — not coverage).</p>
 </blockquote>
 <hr>
 <h2 id="1-the-big-picture-one-front-end-two-backends-coverage-symmetric"><a class="header" href="#1-the-big-picture-one-front-end-two-backends-coverage-symmetric">1. The big picture: one front-end, two backends, coverage-symmetric</a></h2>
@@ -4525,13 +4526,14 @@ there are no bail sites left; the content has been folded into §2’s “How
 aarch64 lowers what used to bail”. The remaining <em>non-bail</em> asymmetries are in
 §4.</p>
 <hr>
-<h2 id="4-remaining-asymmetry-recompilation--eviction-patching-not-coverage"><a class="header" href="#4-remaining-asymmetry-recompilation--eviction-patching-not-coverage">4. Remaining asymmetry: recompilation &amp; eviction patching (not coverage)</a></h2>
-<p>Two mechanisms still differ, both centered on <strong>patching / recompiling
-already-emitted code</strong>, and both scoped to <strong>non-specialized</strong> frames. Neither
-is a coverage gap: where x86 patches or recompiles in place, aarch64 deopts to
-the VM, which then re-JITs through the normal warm-up counters. Correctness is
-identical; only the recompile <em>strategy</em> (and thus steady-state performance
-after a class-version change or BOP redefinition) differs.</p>
+<h2 id="4-remaining-asymmetry-recompilation-strategy-not-coverage"><a class="header" href="#4-remaining-asymmetry-recompilation-strategy-not-coverage">4. Remaining asymmetry: recompilation strategy (not coverage)</a></h2>
+<p>One mechanism still differs — <strong>recompiling already-emitted code</strong> on a
+class-version miss, and only for <strong>non-specialized</strong> frames. It is not a
+coverage gap: where x86 recompiles in place, aarch64 deopts to the VM, which
+then re-JITs through the normal warm-up counters. Correctness is identical;
+only the recompile <em>strategy</em> (and thus steady-state performance after a
+class-version change) differs. §4.2 records an eviction asymmetry that no
+longer exists.</p>
 <h3 id="41-class-version-miss-recompilation"><a class="header" href="#41-class-version-miss-recompilation">4.1 Class-version-miss recompilation</a></h3>
 <ul>
 <li><strong>x86-64:</strong> <code>guard_class_version</code>
@@ -4557,32 +4559,18 @@ which rewrites the specialized body’s <code>SpecializedCall</code> <code>bl</c
 </ul>
 <p>So the gap is specifically the <strong>non-specialized method/loop class-version
 guard</strong>: x86 recompiles, aarch64 deopts.</p>
-<h3 id="42-eviction-via-return-address-patching-bop-redefinition"><a class="header" href="#42-eviction-via-return-address-patching-bop-redefinition">4.2 Eviction via return-address patching (BOP redefinition)</a></h3>
-<ul>
-<li><strong>x86-64:</strong> the regular <code>Call</code> / <code>Yield</code> records, per call site, the return
-address plus a patch point (<code>emit_call</code> → <code>set_deopt_with_return_addr</code>,
-<a href="monoruby/src/codegen/arch/x86_64/compile/mod.rs#L1285">x86_64/compile/mod.rs:1285</a>).
-On <strong>BOP (basic-op) redefinition</strong> it rewrites the live return path to
-redirect into a deopt handler — <em>without</em> recompiling.</li>
-<li><strong>aarch64:</strong> <code>a64_do_call</code>
-(<a href="monoruby/src/codegen/arch/aarch64/compile.rs#L825">aarch64/compile.rs:825</a>)
-<strong>skips</strong> the return-address patching for the regular <code>Call</code>/<code>Yield</code> —
-<em>“The eviction-on-return patching (<code>set_deopt_with_return_addr</code>) is x86-only
-(runtime branch patching), so it is skipped — class-version changes are
-caught by <code>GuardClassVersion</code> deopts instead.”</em></li>
-<li><strong>Specialized calls/yields are symmetric:</strong> aarch64 <em>does</em> implement
-return-address patching for the specialized inlined-frame path —
-<code>do_specialized_call</code>
-(<a href="monoruby/src/codegen/arch/aarch64/compile.rs#L1068">aarch64/compile.rs:1068</a>)
-records the return address via <code>set_deopt_with_return_addr</code>
-(<a href="monoruby/src/codegen/arch/aarch64/compile.rs#L2433">aarch64/compile.rs:2433</a>),
-and <code>emit_immediate_evict</code>
-(<a href="monoruby/src/codegen/arch/aarch64/compile.rs#L2416">aarch64/compile.rs:2416</a>)
-overwrites the recorded instruction on eviction.</li>
-</ul>
-<p>So the gap is specifically the <strong>non-specialized <code>Call</code>/<code>Yield</code></strong>: x86 patches
-the return path for BOP eviction, aarch64 relies on the inline class-version
-deopt.</p>
+<h3 id="42-on-stack-eviction-bop-redefinition--no-longer-asymmetric"><a class="header" href="#42-on-stack-eviction-bop-redefinition--no-longer-asymmetric">4.2 On-stack eviction (BOP redefinition) — no longer asymmetric</a></h3>
+<p>This section used to record an asymmetry: x86 recorded a return-address patch
+point at every call site and, on <strong>BOP (basic-op) redefinition</strong>, wrote a <code>jmp</code>
+into the live return path so the suspended frame deopted; aarch64 did that for
+specialized calls only, and relied on the inline class-version deopt for the
+rest.</p>
+<p>Both halves are gone. Every call/yield site on both arches now records its
+return address (<code>set_deopt_with_return_addr</code>) purely as a <em>key</em>, and BOP
+redefinition runs the arch-neutral chain-deopt walk (<code>Codegen::chain_deopt</code>),
+which converts each suspended JIT frame into an interpreter frame from the
+stack alone — no code is patched, on either arch. See <code>doc/chain_deopt.md</code>
+§10.</p>
 <hr>
 <h2 id="5-guard-logic-comparison"><a class="header" href="#5-guard-logic-comparison">5. Guard logic comparison</a></h2>
 <div class="table-wrapper">
@@ -4598,7 +4586,7 @@ deopt.</p>
 <tr><td><code>guard_capture</code></td><td>yes (<code>branch_if_captured</code>)</td><td>yes</td></tr>
 <tr><td><code>float_to_f64</code> unbox</td><td>yes (flonum / heap-Float, 0.0 sign-bit trick)</td><td>yes (mirrored)</td></tr>
 <tr><td>class-version guard</td><td>inline check <strong>+ recompile + recovery</strong> (page split, §4.1)</td><td>inline check, <strong>deopt only</strong> for non-specialized; recompile for specialized frames (§4.1)</td></tr>
-<tr><td>eviction on BOP redefinition</td><td>return-address patching for regular &amp; specialized calls (§4.2)</td><td>return-address patching for <strong>specialized</strong> calls only; regular calls rely on class-version deopt (§4.2)</td></tr>
+<tr><td>eviction on BOP redefinition</td><td>arch-neutral chain-deopt walk, no code patching (§4.2)</td><td>identical (§4.2)</td></tr>
 </tbody>
 </table>
 </div>
@@ -4663,10 +4651,10 @@ JIT-compiled steady state; the difference is the transition cost.</li>
 <p>x86-64 and aarch64 now share the entire AsmIR front-end <em>and</em> full AsmInst
 coverage — aarch64 lowers everything (large immediates via scratch
 registers), so the <code>bool</code> bail return is vestigial. The only remaining
-asymmetries are non-coverage: x86 recompiles-in-place / patches live return
-addresses for <strong>non-specialized</strong> class-version misses and BOP eviction,
-where aarch64 deopts to the VM and re-JITs (specialized frames are symmetric);
-plus the x86-only <code>guard_class2</code> BigNum-routing helper.</p>
+asymmetries are non-coverage: x86 recompiles-in-place on a <strong>non-specialized</strong>
+class-version miss where aarch64 deopts to the VM and re-JITs (specialized
+frames are symmetric); plus the x86-only <code>guard_class2</code> BigNum-routing
+helper. BOP eviction is now the same arch-neutral chain-deopt walk on both.</p>
 </blockquote>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="monoruby-の-gc--機構と実装"><a class="header" href="#monoruby-の-gc--機構と実装">monoruby の GC — 機構と実装</a></h1>

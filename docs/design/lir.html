@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-3ae4b096.js";
+            window.path_to_searchindex_js = "../searchindex-8dd60d17.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -285,7 +285,7 @@ benefit. The <code>lir.rs</code> unit test uses <code>matches!</code> instead of
 <tr><td>Dispatch helpers (macro-op)</td><td><code>GenericBinOp</code>, <code>OptEqCmp</code>, <code>ArrayTEq</code>, <code>CheckKwRest</code>, <code>RestKw</code></td></tr>
 <tr><td>Definition (macro-op)</td><td><code>MethodDef</code>, <code>SingletonMethodDef</code>, <code>ClassDef</code>, <code>SingletonClassDef</code>, <code>AliasMethod</code>, <code>UndefMethod</code></td></tr>
 <tr><td>Method-prologue guards (macro-op)</td><td><code>GuardClassVersion</code>, <code>RecompileDeopt</code>, <code>CheckStack</code>, <code>ExecGc</code>, <code>Init</code>, <code>LoopJitRspBump</code></td></tr>
-<tr><td>Control flow / exceptions (macro-op)</td><td><code>Ret</code>, <code>MethodRet</code>, <code>BlockBreak</code>, <code>Raise</code>, <code>Retry</code>, <code>Redo</code>, <code>EnsureEnd</code>, <code>Yield</code>, <code>BlockArgProxy</code>, <code>BlockArg</code>, <code>ImmediateEvict</code>, <code>Deopt</code>, <code>HandleError</code>, <code>Unreachable</code></td></tr>
+<tr><td>Control flow / exceptions (macro-op)</td><td><code>Ret</code>, <code>MethodRet</code>, <code>BlockBreak</code>, <code>Raise</code>, <code>Retry</code>, <code>Redo</code>, <code>EnsureEnd</code>, <code>Yield</code>, <code>BlockArgProxy</code>, <code>BlockArg</code>, <code>ChainExit</code>, <code>Deopt</code>, <code>HandleError</code>, <code>Unreachable</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -523,12 +523,13 @@ the surrounding <code>load_fpr</code>/<code>def_F</code>).</li>
 FP/branch/call LIR primitives.</p>
 </li>
 <li>
-<p><strong>Pure patch / recompile <em>bookkeeping</em></strong> — the x86/aarch64 <em>non-coverage</em>
-asymmetry of <code>doc/arch_difference.md</code> §4. The deopt <em>handler emission</em> now
-goes through LIR (above); what stays out is the part that <strong>emits no bytes</strong>:
-<code>ImmediateEvict</code> records a <code>return_addr_table</code> patch point (zero bytes), and
-the actual return-address overwrite happens at BOP-redefinition time, not at
-compile time. The clean invariant is therefore:</p>
+<p><strong>Pure registration / recompile <em>bookkeeping</em></strong> — the x86/aarch64
+<em>non-coverage</em> asymmetry of <code>doc/arch_difference.md</code> §4. The deopt <em>handler
+emission</em> now goes through LIR (above); what stays out is the part that
+<strong>emits no bytes</strong>: <code>ChainExit</code> records a call site’s replay data in
+<code>chain_deopt_table</code> (zero bytes), and the actual frame conversion happens at
+BOP-redefinition / deopt time, not at compile time. The clean invariant is
+therefore:</p>
 </li>
 </ul>
 <blockquote>
