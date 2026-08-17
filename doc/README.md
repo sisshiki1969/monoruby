@@ -44,6 +44,7 @@ Two things to know before reading:
 | [`polymorphic_call.md`](polymorphic_call.md) | JA | plan | Receiver-polymorphic call sites: why `x.nil?` / `x == nil` deopt on every nil receiver, the implemented nil-tolerant guard, and the design space (predicate generalization, PIC, page discipline) with measurements. |
 | [`bop_redefinition.md`](bop_redefinition.md) | JA | design record | What licenses inlining `1 + 2`, what happens when Ruby revokes it, and why the current all-or-nothing response is both too narrow (silently wrong answers) and too blunt (24× slower, permanently). Measured against CRuby. |
 | [`handoff_record_stream.md`](handoff_record_stream.md) | EN | plan / history | Handoff note for the record-driven lowering work; a summary of `regalloc_separation.md` §12–21 as of that branch. |
+| [`chain_deopt.md`](chain_deopt.md) | EN | plan | Dropping a whole suspended JIT chain back to the interpreter in one step, so a speculation broken deep inside can be undone. What the VM already provides, one attempt that fails and why, and the return-type inference the mechanism would buy back. §8 records the implemented mechanism (and where it departs from the plan); the speculation itself is still unbuilt. |
 
 ## Runtime services
 

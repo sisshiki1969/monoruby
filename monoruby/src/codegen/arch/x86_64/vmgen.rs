@@ -86,6 +86,72 @@ impl Codegen {
     }
 
     ///
+    /// Emit the shared chain-deopt post-call continuation stub
+    /// (`doc/chain_deopt.md` §9.3) — the single address every converted
+    /// frame's return-address slot points at.
+    ///
+    /// Entered by `ret` from the frame's callee: `rbp` is this frame's frame
+    /// pointer again (the callee's `leave` did that), `rax` holds the
+    /// callee's result (0 = error signal), and `rsp` points at the cont
+    /// frame — `[rsp]` the call-site pc (`ContFramePc`), `[rsp + 8]` the
+    /// per-site continuation word the chain-deopt walk stored
+    /// (`ChainReplay::cont_data`: high 32 bits `conv(dst)` or 0, low 32 bits
+    /// the byte advance to the next instruction). The frame's write-back was
+    /// already replayed at deopt time, so all that is left of the post-call
+    /// continuation is: restore the frame registers, store the result, and
+    /// resume the fetch loop — or hand the call-site pc to `entry_raise` on
+    /// the error signal (a raise or non-local exit unwinds through this stub
+    /// too, since unwinding `ret`s through the rewritten slot with 0 in
+    /// `rax`).
+    ///
+    /// The VM's own send continuation cannot serve here: it re-derives `dst`
+    /// and the resume pc from the bytecode assuming a 2-unit send, which is
+    /// wrong for the 1-unit operator sites (`BinOp` / `Index` / …) that also
+    /// dispatch through the `send` emitter — hence the pad-slot word.
+    ///
+    /// `pop_frame` (rbp-derived, so correct regardless of what the callee
+    /// left in the global registers) restores `Executor::cfp` and `r14`
+    /// before anything else; the stub itself never allocates. The `FprSave`
+    /// area above the cont frame is dead (the replay consumed it) and is
+    /// simply left below the frame, like every side exit does.
+    ///
+    pub(in crate::codegen) fn gen_chain_cont_stub(&mut self) {
+        let label = self.jit.label();
+        let fetch = self.vm_fetch();
+        let raise = self.entry_raise();
+        let error = self.jit.label();
+        let no_store = self.jit.label();
+        self.jit.bind_label(label.clone());
+        self.pop_frame();
+        monoasm! { &mut self.jit,
+            movq rdi, [rsp + 8];
+            movq r13, [rsp];
+            addq rsp, 16;
+            testq rax, rax;
+            jeq  error;
+            // Resume pc: call-site pc + per-opcode-size advance (low 32 bits;
+            // `movl` zero-extends).
+            movl rcx, rdi;
+            addq r13, rcx;
+            // conv(dst) (0 = no destination slot).
+            shrq rdi, 32;
+            testq rdi, rdi;
+            jeq  no_store;
+            negq rdi;
+            movq [r14 + rdi], rax;
+        no_store:
+            jmp  fetch;
+        // Error / non-local-exit signal: `entry_raise` subtracts one unit
+        // from r13, so hand it the call-site pc + 1 unit — the same
+        // convention as `gen_handle_error`.
+        error:
+            addq r13, 16;
+            jmp  raise;
+        };
+        self.chain_cont_stub = label;
+    }
+
+    ///
     /// Emit the VM entry and every bytecode-opcode handler, returning their
     /// entry points. The arch-neutral [`Codegen::construct_vm`] lays the
     /// returned [`VmHandlers`] into the `dispatch` table.

@@ -143,11 +143,18 @@ impl Codegen {
         if entry.is_none()
             && exit.is_none()
             && let Some((bb, deopt)) = ir.as_pure_deopt()
-            && let Some((pc, wb)) = ir.pure_deopt_target(deopt)
+            && let Some((pc, wb, chain)) = ir.pure_deopt_target(deopt)
         {
             let wb = wb.clone();
             let bb_label = frame.resolve_label(&mut self.jit, bb);
-            self.a64_gen_deopt(pc, &wb, bb_label, frame.loop_jit_spill_bytes, frame.base_stack_offset);
+            self.a64_gen_deopt(
+                pc,
+                &wb,
+                bb_label,
+                frame.loop_jit_spill_bytes,
+                frame.base_stack_offset,
+                chain,
+            );
             return;
         }
 
@@ -169,7 +176,7 @@ impl Codegen {
         {
             monoasm_arm64!(&mut self.jit, b skip;);
         }
-        let mut deopt_table: std::collections::HashMap<(BytecodePtr, WriteBack), DestLabel> =
+        let mut deopt_table: std::collections::HashMap<(BytecodePtr, WriteBack, bool), DestLabel> =
             std::collections::HashMap::new();
         // Loop-JIT entry sp-bump to undo before any exit resumes the VM.
         let bump = frame.loop_jit_spill_bytes;
@@ -196,14 +203,14 @@ impl Codegen {
                     });
                     label
                 }
-                SideExit::Deoptimize(pc, wb) => {
-                    let key = (pc, wb);
+                SideExit::Deoptimize(pc, wb, chain) => {
+                    let key = (pc, wb, chain);
                     if let Some(label) = deopt_table.get(&key) {
                         label.clone()
                     } else {
                         let label = self.jit.label();
                         lir.push(LInst::SideExit {
-                            kind: LSideExitKind::Deopt,
+                            kind: LSideExitKind::Deopt { chain: key.2 },
                             pc: key.0,
                             wb: key.1.clone(),
                             entry: label.clone(),
@@ -217,10 +224,14 @@ impl Codegen {
                 // Treat recompile-deopt as a plain deopt for now: fall back to
                 // the interpreter without the counter-gated recompile (still
                 // correct, just not yet self-optimizing).
-                SideExit::RecompileDeoptimize(pc, wb, reason, position) => {
+                SideExit::RecompileDeoptimize(pc, wb, reason, position, chain) => {
                     let label = self.jit.label();
                     lir.push(LInst::SideExit {
-                        kind: LSideExitKind::RecompileDeopt { reason, position },
+                        kind: LSideExitKind::RecompileDeopt {
+                            reason,
+                            position,
+                            chain,
+                        },
                         pc,
                         wb,
                         entry: label.clone(),
@@ -229,10 +240,10 @@ impl Codegen {
                     });
                     label
                 }
-                SideExit::Error(pc, wb) => {
+                SideExit::Error(pc, wb, chain) => {
                     let label = self.jit.label();
                     lir.push(LInst::SideExit {
-                        kind: LSideExitKind::Error,
+                        kind: LSideExitKind::Error { chain },
                         pc,
                         wb,
                         entry: label.clone(),
@@ -291,6 +302,7 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
+        chain: bool,
     ) {
         self.jit.bind_label(entry);
         // Write back FIRST, while the loop sp-bump still keeps sp below the
@@ -300,12 +312,33 @@ impl Codegen {
         // `side_exit_with_label` and doc/regalloc_separation.md §39).
         self.a64_gen_write_back_for_deopt(wb, base);
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
+        // Chain escalation (`doc/chain_deopt.md` §5 step 4): convert every
+        // suspended JIT frame in the caller chain before this frame resumes
+        // in the interpreter. After the write-back, so the frame is fully
+        // homed in the LFP for the walk.
+        if chain {
+            self.a64_call_chain_deopt();
+        }
         let pc_ptr = pc.as_ptr() as u64;
         let fetch = self.vm_fetch();
         // PC == x21.
         monoasm_arm64!(&mut self.jit,
             mov x21, (pc_ptr);
             b fetch;
+        );
+    }
+
+    /// `runtime::chain_deopt(vm)` — the escalated-side-exit walk. x19 holds
+    /// `&mut Executor`; LR is saved around the `blr` like every other runtime
+    /// call emitted into a JIT body.
+    fn a64_call_chain_deopt(&mut self) {
+        let f = runtime::chain_deopt as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            str x30, [sp, #-16]!;              // save LR (16-aligned)
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;                // restore LR
         );
     }
 
@@ -326,12 +359,20 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
+        chain: bool,
     ) {
         self.jit.bind_label(entry);
         // Write back before undoing the bump — same spill-clobber reason as
         // `a64_gen_deopt` / the x86 `side_exit_with_label` (§39).
         self.a64_gen_write_back_for_deopt(wb, base);
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
+        // Chain escalation: the raise may be rescued *inside* this frame
+        // (resuming it in the interpreter) or unwind through the suspended
+        // callers — either way they must be converted first
+        // (`doc/chain_deopt.md` §5 step 4 / §8.4).
+        if chain {
+            self.a64_call_chain_deopt();
+        }
         let pc0 = pc.as_ptr() as u64;
         let raise = self.entry_raise();
         monoasm_arm64!(&mut self.jit,
@@ -1281,8 +1322,11 @@ impl Codegen {
                 loop_jit_spill_bytes,
                 base,
             } => match kind {
-                LSideExitKind::Deopt | LSideExitKind::Evict => {
-                    self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base)
+                LSideExitKind::Deopt { chain } => {
+                    self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
+                }
+                LSideExitKind::Evict => {
+                    self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, false)
                 }
                 // A monomorphically-compiled site (e.g. a `BinCmp`) whose
                 // receiver-class guard missed because it went polymorphic.
@@ -1294,16 +1338,20 @@ impl Codegen {
                 // falls straight through while the counter is unexhausted),
                 // branching to `deopt_body` to resume in the interpreter, or to
                 // `error_body` if the recompile itself raised a FatalError.
-                LSideExitKind::RecompileDeopt { reason, position } => {
+                LSideExitKind::RecompileDeopt {
+                    reason,
+                    position,
+                    chain,
+                } => {
                     let deopt_body = self.jit.label();
                     let error_body = self.jit.label();
                     self.jit.bind_label(entry);
                     self.emit_recompile_deopt(position, &deopt_body, Some(&error_body), reason);
-                    self.a64_gen_deopt(pc, &wb, deopt_body, loop_jit_spill_bytes, base);
-                    self.a64_gen_handle_error(pc, &wb, error_body, loop_jit_spill_bytes, base);
+                    self.a64_gen_deopt(pc, &wb, deopt_body, loop_jit_spill_bytes, base, chain);
+                    self.a64_gen_handle_error(pc, &wb, error_body, loop_jit_spill_bytes, base, chain);
                 }
-                LSideExitKind::Error => {
-                    self.a64_gen_handle_error(pc, &wb, entry, loop_jit_spill_bytes, base)
+                LSideExitKind::Error { chain } => {
+                    self.a64_gen_handle_error(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
                 }
             },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the
@@ -2182,7 +2230,7 @@ impl Codegen {
 
     /// Record this position (the return continuation of a call, after the
     /// result store) as the return-address patch point for `evict`. On BOP
-    /// redefinition, `Codegen::immediate_eviction` overwrites the instruction
+    /// redefinition, `Codegen::evict_suspended_frames` overwrites the instruction
     /// here with a `B deopt` so the stale frame deopts on return instead of
     /// resuming its compiled body (whose inline integer arithmetic / folds
     /// assume the builtin op). Mirrors x86.
@@ -2202,7 +2250,7 @@ impl Codegen {
             .and_modify(|e| e.0 = Some(patch_point));
     }
 
-    /// Register a specialized call's return address so `immediate_eviction` can
+    /// Register a specialized call's return address so the eviction walk can
     /// find and patch it. Identical to the x86 helper (the tables are arch-
     /// neutral fields on `Codegen`).
     /// Store the call-site pc into the outgoing cont-frame slot

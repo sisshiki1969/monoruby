@@ -325,6 +325,237 @@ impl UsingFpr {
     }
 }
 
+///
+/// Compile-time half of a call site's chain-deopt registration
+/// (`doc/chain_deopt.md` §2/§9.3): everything the eager replay needs that is
+/// known while building `AsmIr`. The frame's spill `base` is attached at
+/// lowering time (`AsmInst::ChainExit` → [`ChainReplay`]), where
+/// `base_stack_offset` is available.
+///
+#[derive(Debug, Clone)]
+pub(crate) struct ChainExitSpec {
+    wb: WriteBack,
+    using_fpr: UsingFpr,
+    dst: Option<SlotId>,
+    pc: BytecodePtr,
+}
+
+impl ChainExitSpec {
+    ///
+    /// Capture this call site's replay data. Must be called at the point
+    /// where the outgoing frame is fully set up and `dst` has already been
+    /// discarded — i.e. next to `new_error` — so the write-back describes the
+    /// frame exactly as the post-call continuation expects to find it: every
+    /// live value homed in the LFP, `dst` still untouched (the continuation
+    /// stores it from the callee's return value).
+    ///
+    /// `using_fpr` is the call's `FprSave` set, which fixes the layout of the
+    /// save area the replay reads the pool-resident floats out of.
+    ///
+    pub(crate) fn new(
+        state: &AbstractFrame,
+        using_fpr: UsingFpr,
+        dst: Option<SlotId>,
+    ) -> Self {
+        Self {
+            wb: state.get_write_back(),
+            using_fpr,
+            dst,
+            pc: state.pc(),
+        }
+    }
+
+    pub(in crate::codegen) fn into_replay(self, base: usize) -> ChainReplay {
+        ChainReplay {
+            wb: self.wb,
+            base,
+            using_fpr: self.using_fpr,
+            dst: self.dst,
+            pc: self.pc,
+        }
+    }
+}
+
+///
+/// Runtime half of a call site's chain-deopt registration: the value of
+/// `Codegen::chain_deopt_table`, keyed by the call's return address. Carries
+/// what the eager walk needs to (a) replay the suspended caller frame's
+/// write-back from Rust and (b) hand the shared VM continuation stub its
+/// per-site post-call data (`dst`, resume-pc advance) through the cont-frame
+/// pad slot.
+///
+#[derive(Debug, Clone)]
+pub(crate) struct ChainReplay {
+    wb: WriteBack,
+    /// The caller frame's spill `base` (`base_stack_offset`), which fixes the
+    /// `[rbp/x29 - (base - 24 + 8n)]` addresses of its spilled `FPReg`s.
+    base: usize,
+    using_fpr: UsingFpr,
+    dst: Option<SlotId>,
+    /// The call-site pc.
+    pc: BytecodePtr,
+}
+
+impl ChainReplay {
+    ///
+    /// The word the walk stores into the callee frame's cont-frame pad slot
+    /// for the shared continuation stub: high 32 bits = `conv(dst)` (`0` =
+    /// no destination slot; `conv` is never 0 since `conv(SlotId(0)) ==
+    /// LFP_SELF`), low 32 bits = the byte advance from the call-site pc to
+    /// the next instruction (16 or 32 — `BytecodePtr::next` is
+    /// per-opcode-size aware, which is what makes one shared stub correct
+    /// for both 2-unit sends and 1-unit operator sites).
+    ///
+    fn cont_data(&self) -> u64 {
+        let dst = match self.dst {
+            Some(dst) => conv(dst) as u64,
+            None => 0,
+        };
+        let advance = (self.pc.next().as_ptr() as u64) - (self.pc.as_ptr() as u64);
+        (dst << 32) | advance
+    }
+
+    ///
+    /// Replay this suspended caller frame's write-back from Rust
+    /// (`doc/chain_deopt.md` §9.3): box its live floats into its local slots
+    /// and materialize any deferred rest `Array` / kwrest `Hash`, so the
+    /// frame is fully homed before the interpreter (or anything reading it
+    /// through `outer_lfp`) can see it.
+    ///
+    /// Frame layout facts this relies on (see §8 of the doc): every JIT/VM
+    /// frame has `rbp == cfp + BP_CFP`; the call's `FprSave` area lives at
+    /// `callee_rbp + 32 + 8i` (one slot per set bit of `using_fpr`, in bit
+    /// order); spilled `FPReg`s live at `caller_rbp - (base - 24 + 8n)`.
+    ///
+    /// GC safety: each slot store is a whole boxed `Value`, and every slot
+    /// holds a valid (possibly stale) `Value` throughout, so the allocations
+    /// here (boxing, `create_array`, the kwrest `Hash`) can trigger a
+    /// collection at any point.
+    ///
+    /// ### safety
+    /// `callee_cfp` must be a live control frame of the current thread's
+    /// stack whose return address is the call site this replay was
+    /// registered for, and `caller_cfp` its `prev()`.
+    ///
+    unsafe fn replay(&self, callee_cfp: Cfp, caller_cfp: Cfp) {
+        let callee_bp = callee_cfp.frame_bp();
+        let caller_bp = caller_cfp.frame_bp();
+        // The caller frame may have been moved to the heap by the callee;
+        // the cfp's LFP slot is redirected at promotion, so this reads the
+        // live copy (the emitted deopt write-back's r14 does the same).
+        let mut caller_lfp = caller_cfp.lfp();
+        for (fpr, slots) in &self.wb.fpr {
+            let f = if fpr.0 < PHYS_FPR_POOL {
+                // Pool-resident: the call's `FprSave` spilled it to the save
+                // area above the cont frame, one slot per set bit in bit
+                // order.
+                debug_assert!(self.using_fpr[fpr.0]);
+                let i = self.using_fpr[..fpr.0].count_ones();
+                // SAFETY: per the layout facts above, the save area occupies
+                // `callee_bp + 32 ..` and slot `i` belongs to `fpr`.
+                unsafe { *((callee_bp as usize + 32 + 8 * i) as *const f64) }
+            } else {
+                let off = (self.base as i64) - 24 + 8 * ((fpr.0 - PHYS_FPR_POOL) as i64);
+                // SAFETY: the caller frame is suspended on the stack, so its
+                // spill slot still holds the unboxed f64.
+                unsafe { *(((caller_bp as usize as i64) - off) as usize as *const f64) }
+            };
+            let v = Value::float(f);
+            for slot in slots {
+                // SAFETY: `slot` is a register slot of the caller frame.
+                unsafe { caller_lfp.set_register(*slot, Some(v)) };
+            }
+        }
+        for (v, slot) in &self.wb.literal {
+            // SAFETY: as above.
+            unsafe { caller_lfp.set_register(*slot, Some(*v)) };
+        }
+        for slot in &self.wb.void {
+            // SAFETY: as above.
+            unsafe { caller_lfp.set_register(*slot, Some(Value::nil())) };
+        }
+        // GP-pool residents exist only under the (unfinished) GP allocator;
+        // shipping builds never record any.
+        debug_assert!(self.wb.gp.is_empty());
+        // D1/K1 run last, so the literal loop above has already written each
+        // deferred `dst` slot (mode `C(nil)`) and the frame stays
+        // GC-consistent across the allocating helper calls. The source slots
+        // live in the frame's *dynamic caller* (the outermost,
+        // non-specialized frame), reached through the rbp the trampoline
+        // frame saved — exactly as the emitted write-back addresses them.
+        for (dst, src, len) in &self.wb.forward_rest {
+            // SAFETY: `caller_bp` is the suspended trampoline frame's rbp;
+            // `[caller_bp]` is the rbp it saved in its prologue.
+            let grand_bp = unsafe { *(caller_bp as *const u64) };
+            let src = ((grand_bp as i64 - rbp_local(*src) as i64) as usize) as *mut Value;
+            let v = runtime::create_array(src, *len as usize);
+            // SAFETY: `dst` is the trampoline frame's rest local.
+            unsafe { caller_lfp.set_register(*dst, Some(v)) };
+        }
+        for (dst, table) in &self.wb.forward_kwrest {
+            // SAFETY: as for `forward_rest`.
+            let grand_bp = unsafe { *(caller_bp as *const u64) };
+            // SAFETY: `lfp == rbp - RBP_LOCAL_FRAME` in every JIT frame.
+            let grand_lfp =
+                unsafe { Lfp::from_ptr((grand_bp as usize - RBP_LOCAL_FRAME as usize) as *mut u8) };
+            let v = runtime::kwrest_hash(table, grand_lfp);
+            // SAFETY: `dst` is the trampoline frame's kwrest local.
+            unsafe { caller_lfp.set_register(*dst, Some(v)) };
+        }
+    }
+}
+
+///
+/// One frame's worth of eager chain-deopt conversion, produced by the walks
+/// (`Codegen::chain_deopt` / `Codegen::evict_suspended_frames`) and applied
+/// by their callers *after* the `CODEGEN` borrow is released — the replay
+/// allocates (boxing, rest-`Array`/kwrest-`Hash` materialization) and so can
+/// run a GC, which must not happen while the thread-local is held.
+///
+pub(crate) struct ChainConversion {
+    callee_cfp: Cfp,
+    caller_cfp: Cfp,
+    replay: ChainReplay,
+    /// The shared VM post-call continuation stub (`gen_chain_cont_stub`).
+    stub: CodePtr,
+}
+
+impl ChainConversion {
+    pub(crate) fn new(callee_cfp: Cfp, caller_cfp: Cfp, replay: ChainReplay, stub: CodePtr) -> Self {
+        Self {
+            callee_cfp,
+            caller_cfp,
+            replay,
+            stub,
+        }
+    }
+
+    ///
+    /// Convert the suspended caller frame: replay its write-back, then hand
+    /// the callee's cont frame the per-site continuation word and point the
+    /// callee's return-address slot at the shared VM continuation stub. From
+    /// here on control never re-enters the caller's compiled body.
+    ///
+    /// ### safety
+    /// As for [`ChainReplay::replay`]; additionally the callee's `ret` must
+    /// not have run yet (it has not — the walk found the frame suspended).
+    ///
+    pub(crate) unsafe fn apply(self) {
+        let Self {
+            mut callee_cfp,
+            caller_cfp,
+            replay,
+            stub,
+        } = self;
+        // SAFETY: guaranteed by the caller.
+        unsafe {
+            replay.replay(callee_cfp, caller_cfp);
+            callee_cfp.set_cont_frame_data(replay.cont_data());
+            callee_cfp.set_return_addr(stub);
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(super) struct SpecializedCodeInfo {
@@ -1055,6 +1286,7 @@ impl Codegen {
         wb: WriteBack,
         entry: DestLabel,
         base: usize,
+        chain: bool,
     ) {
         let raise = self.entry_raise();
         assert_eq!(0, self.jit.get_page());
@@ -1063,6 +1295,18 @@ impl Codegen {
         entry:
         );
         self.gen_write_back_for_deopt(&wb, base);
+        // Chain escalation (`doc/chain_deopt.md` §5 step 4): the raise may be
+        // rescued *inside* this frame (resuming it in the interpreter) or
+        // unwind through the suspended callers — either way every suspended
+        // JIT frame above must be converted first. The write-back has run, so
+        // the frame is fully homed for the walk.
+        if chain {
+            monoasm!( &mut self.jit,
+                movq rdi, rbx;
+                movq rax, (runtime::chain_deopt);
+                call rax;
+            );
+        }
         monoasm!( &mut self.jit,
             movq r13, ((pc + 1).as_ptr());
             jmp  raise;
@@ -1083,8 +1327,9 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
+        chain: bool,
     ) {
-        self.side_exit_with_label(pc, wb, entry, false, None, loop_jit_spill_bytes, base)
+        self.side_exit_with_label(pc, wb, entry, false, None, loop_jit_spill_bytes, base, chain)
     }
 
     ///
@@ -1105,6 +1350,7 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
+        chain: bool,
     ) {
         self.side_exit_with_label(
             pc,
@@ -1114,6 +1360,7 @@ impl Codegen {
             Some((reason, position)),
             loop_jit_spill_bytes,
             base,
+            chain,
         )
     }
 
@@ -1128,7 +1375,10 @@ impl Codegen {
         loop_jit_spill_bytes: usize,
         base: usize,
     ) {
-        self.side_exit_with_label(pc, wb, entry, true, None, loop_jit_spill_bytes, base)
+        // Evict handlers are only entered through a chain-wide eviction walk,
+        // which converts (or patches) every suspended frame in one pass — no
+        // per-handler escalation needed.
+        self.side_exit_with_label(pc, wb, entry, true, None, loop_jit_spill_bytes, base, false)
     }
 
     ///
@@ -1146,6 +1396,7 @@ impl Codegen {
         recompile: Option<(RecompileReason, Option<BytecodePtr>)>,
         loop_jit_spill_bytes: usize,
         base: usize,
+        chain: bool,
     ) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -1191,6 +1442,17 @@ impl Codegen {
                 movq rsi, r12;
                 movq rdx, r13;
                 movq rax, (crate::globals::log_deoptimize);
+                call rax;
+            );
+        }
+        // Chain escalation (`doc/chain_deopt.md` §5 step 4): convert every
+        // suspended JIT frame in the caller chain before this frame resumes
+        // in the interpreter. Runs after the write-back (the frame is fully
+        // homed in the LFP) and before the recompile hook / fetch.
+        if chain {
+            monoasm!( &mut self.jit,
+                movq rdi, rbx;
+                movq rax, (runtime::chain_deopt);
                 call rax;
             );
         }

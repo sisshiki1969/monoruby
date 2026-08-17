@@ -277,19 +277,34 @@ impl LAluOp {
 /// `SideExit` cases the JIT records while building `AsmIr`.
 #[derive(Debug, Clone)]
 pub(in crate::codegen::jitgen) enum LSideExitKind {
-    /// Plain deoptimization back to the VM fetch loop.
-    Deopt,
+    /// Plain deoptimization back to the VM fetch loop. `chain` escalates the
+    /// exit to chain deopt (`doc/chain_deopt.md` §5 step 4 / §6): after the
+    /// write-back the handler calls `runtime::chain_deopt`, converting every
+    /// suspended JIT frame in the caller chain into an interpreter frame
+    /// before this frame resumes in the interpreter.
+    Deopt {
+        chain: bool,
+    },
     /// Immediate eviction (BOP redefinition) — same shape as `Deopt`, with a
-    /// distinct `cfg(deopt/profile)` log reason.
+    /// distinct `cfg(deopt/profile)` log reason. Never chain-escalated: the
+    /// handler is only entered through a chain-wide eviction walk, which has
+    /// already converted (or patched) every suspended frame in one pass.
     Evict,
     /// Deopt that, once a miss counter is exhausted, recompiles the method/loop
-    /// (x86 only; aarch64 treats it as a plain `Deopt`).
+    /// (x86 only; aarch64 treats it as a plain `Deopt`). `chain` as on `Deopt`.
     RecompileDeopt {
         reason: RecompileReason,
         position: Option<BytecodePtr>,
+        chain: bool,
     },
     /// Error handler: write back then jump to the raise/`handle_error` path.
-    Error,
+    /// `chain` as on `Deopt` — an in-frame `rescue` resumes this frame in the
+    /// interpreter, and an unwinding raise `ret`s through the (now rewritten)
+    /// return-address slots of the suspended callers (`doc/chain_deopt.md`
+    /// §8.4), so the walk must have run either way.
+    Error {
+        chain: bool,
+    },
 }
 
 /// Branch targets carry a *resolved* monoasm `DestLabel` (not the front-end
@@ -903,6 +918,12 @@ pub(in crate::codegen) enum LInst {
     },
     ImmediateEvict {
         evict: AsmEvict,
+    },
+    /// Register `evict`'s already-recorded call return address as the key for
+    /// `replay` in the runtime chain-deopt table. Emits no machine code.
+    ChainExit {
+        evict: AsmEvict,
+        replay: ChainReplay,
     },
     Init {
         info: FnInitInfo,

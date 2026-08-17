@@ -10,6 +10,46 @@ pub const PROCDATA_FUNCID: i64 = std::mem::offset_of!(ProcData, func_id) as _;
 // Runtime functions.
 //
 
+/// Escalated side exit (`doc/chain_deopt.md` §5 step 4 / §6): run the
+/// chain-deopt walk from a deopting frame, converting every suspended JIT
+/// frame in the caller chain into an interpreter frame before this frame
+/// falls back to the interpreter (or starts unwinding a raise).
+///
+/// Called from a chain-escalated side-exit handler **after** its deopt
+/// write-back, so the current frame is fully homed in the LFP. The walk
+/// itself (under the `CODEGEN` borrow) only collects the conversion plan;
+/// applying it — each suspended frame's write-back replay plus the
+/// return-address rewrite — happens after the borrow is released, because
+/// the replay allocates (boxing floats, materializing deferred rest
+/// arrays/kwrest hashes) and so can run a GC. The deopting frame's *own*
+/// return-address slot is rewritten too — that is what converts its caller
+/// once the now-interpreted frame eventually returns.
+pub(super) extern "C" fn chain_deopt(vm: &mut Executor) {
+    let cfp = vm.cfp();
+    #[cfg(any(feature = "deopt", feature = "profile"))]
+    eprintln!("### chain deopt: escalated from {:?}", cfp.lfp().func_id());
+    let plan = CODEGEN.with(|codegen| codegen.borrow_mut().chain_deopt(cfp));
+    for conversion in plan {
+        // SAFETY: every planned frame was found suspended on the current
+        // thread's control-frame chain moments ago, and nothing has run
+        // since — no frame has returned.
+        unsafe { conversion.apply() };
+    }
+}
+
+/// The `correct_rest_kw` equivalent for the chain-deopt replay
+/// (`doc/chain_deopt.md` §9.3): rebuild a deferred `**kwrest` Hash from the
+/// caller's kw slots. GC-safe because every source value sits in a scanned
+/// frame slot.
+pub(in crate::codegen) fn kwrest_hash(table: &[(IdentId, SlotId)], lfp: Lfp) -> Value {
+    let mut map = RubyMap::default();
+    for (name, slot) in table {
+        let v = lfp.register(*slot).unwrap();
+        map.insert_sym(RubySymbol::new(*name), v);
+    }
+    Value::hash(map)
+}
+
 /// Resolve the method for a call-site inline-cache miss.
 ///
 /// Returns the resolved `FuncId` in the **low 32 bits** (0 = not found /

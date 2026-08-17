@@ -14,6 +14,48 @@ mod variables;
 
 
 impl Codegen {
+    /// Emit the shared chain-deopt post-call continuation stub — twin of the
+    /// x86 `gen_chain_cont_stub` (see its doc for the contract). Entered by
+    /// `ret` from a converted frame's callee: `x29` is this frame's frame
+    /// pointer again, `x0` holds the result (0 = error signal), `sp` points
+    /// at the cont frame (`[sp]` call-site pc, `[sp + 8]` the walk's
+    /// per-site continuation word). aarch64's `entry_raise` takes the pc
+    /// unchanged in x21, so the error branch needs no `+1` adjustment.
+    pub(in crate::codegen) fn gen_chain_cont_stub(&mut self) {
+        let label = self.jit.label();
+        let fetch = self.vm_fetch();
+        let raise = self.entry_raise();
+        let error = self.jit.label();
+        let no_store = self.jit.label();
+        self.jit.bind_label(label.clone());
+        monoasm_arm64!(&mut self.jit,
+            // pop_frame: EXEC.cfp + LFP from x29 (x29-derived, so correct
+            // regardless of what the callee left in the global registers).
+            sub x10, x29, #(BP_CFP as u32);
+            str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];
+            ldr x9, [sp, #(8)];
+            ldr x(PC.0), [sp];
+            add sp, sp, #(16);
+            cbz x0, error;
+            // Resume pc: call-site pc + per-opcode-size advance (low 32 bits
+            // of the continuation word).
+            lsl x10, x9, #(32);
+            lsr x10, x10, #(32);
+            add x(PC.0), x(PC.0), x10;
+            // conv(dst) (0 = no destination slot).
+            lsr x9, x9, #(32);
+            cbz x9, no_store;
+            sub x10, x(LFP.0), x9;
+            str x0, [x10];
+        no_store:
+            b fetch;
+        error:
+            b raise;
+        );
+        self.chain_cont_stub = label;
+    }
+
     pub(in crate::codegen) fn gen_vm_handlers(&mut self) -> VmHandlers {
         self.a64_gen_entry_raise();
         self.a64_gen_stack_overflow();

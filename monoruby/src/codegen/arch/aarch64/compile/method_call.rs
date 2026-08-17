@@ -952,7 +952,7 @@ impl Codegen {
     /// Mirrors x86 `do_specialized_call`: set_lfp + push_frame, optionally bind
     /// the deopt re-entry `patch_point`, `bl entry`, then pop_frame. Returns the
     /// post-`bl` address (the return continuation); the caller records it via
-    /// `set_deopt_with_return_addr` so `immediate_eviction` can later overwrite
+    /// `set_deopt_with_return_addr` so the eviction walk (`evict_suspended_frames`) can later overwrite
     /// the continuation with a `B deopt` on BOP redefinition.
     pub(in crate::codegen::jitgen::asmir) fn do_specialized_call(
         &mut self,
@@ -1223,7 +1223,7 @@ impl Codegen {
     /// eviction: when a basic op is redefined *inside* the callee, the caller's
     /// own compiled body (inline integer arithmetic, folds) is stale the moment
     /// the callee returns, and the callee's entry guards cannot protect the
-    /// *caller*. `immediate_eviction` finds this frame's return address in
+    /// *caller*. `evict_suspended_frames` finds this frame's return address in
     /// `return_addr_table` and overwrites the recorded patch point (bound by
     /// the following `ImmediateEvict`, after the result store) with a `B evict`
     /// so the frame deopts instead of resuming stale code.

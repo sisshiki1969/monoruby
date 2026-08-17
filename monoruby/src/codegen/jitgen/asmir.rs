@@ -116,6 +116,13 @@ pub(crate) struct AsmIr {
     /// generic / native callee). Producer skips `create_array` only
     /// when `deferred_rest && !needs_rest_array`.
     needs_rest_array: bool,
+    /// Every interpreter-resuming side exit built through this IR escalates
+    /// to chain deopt (`doc/chain_deopt.md` §5 step 4 / §6): the handler runs
+    /// the chain-deopt walk after its write-back, converting every suspended
+    /// JIT frame in the caller chain before the interpreter resumes. Stamped
+    /// once from [`JitContext::escalate_side_exits`] so the side-exit
+    /// constructors are the single consultation point.
+    escalate_exits: bool,
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -151,6 +158,7 @@ impl AsmIr {
             had_deopt: false,
             deferred_rest: false,
             needs_rest_array: false,
+            escalate_exits: ctx.escalate_side_exits(),
         }
     }
 
@@ -279,11 +287,14 @@ impl AsmIr {
     /// ordinary cold-handler path. aarch64-only (see [`Self::as_pure_deopt`]).
     ///
     #[cfg(target_arch = "aarch64")]
-    pub(super) fn pure_deopt_target(&self, deopt: AsmDeopt) -> Option<(BytecodePtr, &WriteBack)> {
+    pub(super) fn pure_deopt_target(
+        &self,
+        deopt: AsmDeopt,
+    ) -> Option<(BytecodePtr, &WriteBack, bool)> {
         if self.side_exit.len() == 1
-            && let SideExit::Deoptimize(pc, wb) = &self.side_exit[deopt.0]
+            && let SideExit::Deoptimize(pc, wb, chain) = &self.side_exit[deopt.0]
         {
-            Some((*pc, wb))
+            Some((*pc, wb, *chain))
         } else {
             None
         }
@@ -325,7 +336,11 @@ impl AsmIr {
     }
 
     pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
-        let i = self.new_label(SideExit::Deoptimize(pc, state.get_write_back()));
+        let i = self.new_label(SideExit::Deoptimize(
+            pc,
+            state.get_write_back(),
+            self.escalate_exits,
+        ));
         self.had_deopt = true;
         AsmDeopt(i)
     }
@@ -363,7 +378,11 @@ impl AsmIr {
     /// reading the live `AbstractFrame`.
     ///
     pub(super) fn deopt_from_point(&mut self, point: &DeoptPoint) -> AsmDeopt {
-        let i = self.new_label(SideExit::Deoptimize(point.pc(), point.write_back().clone()));
+        let i = self.new_label(SideExit::Deoptimize(
+            point.pc(),
+            point.write_back().clone(),
+            self.escalate_exits,
+        ));
         self.had_deopt = true;
         AsmDeopt(i)
     }
@@ -390,13 +409,18 @@ impl AsmIr {
             state.get_write_back(),
             reason,
             position,
+            self.escalate_exits,
         ));
         self.had_deopt = true;
         AsmDeopt(i)
     }
 
     pub(crate) fn new_error_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmError {
-        let i = self.new_label(SideExit::Error(pc, state.get_write_back()));
+        let i = self.new_label(SideExit::Error(
+            pc,
+            state.get_write_back(),
+            self.escalate_exits,
+        ));
         AsmError(i)
     }
 
@@ -1868,6 +1892,21 @@ pub(super) enum AsmInst {
     ImmediateEvict {
         evict: AsmEvict,
     },
+    ///
+    /// Register this call site's replay data in the runtime table
+    /// (`doc/chain_deopt.md` §5 step 1 / §9.3). Emits no machine code: it
+    /// looks the call's return address up by `evict` (recorded moments
+    /// earlier by `set_deopt_with_return_addr`) and maps it to `spec`
+    /// (completed with the frame's spill `base` at lowering), so the
+    /// chain-deopt walk can replay the suspended frame's write-back from a
+    /// return-address slot alone.
+    ///
+    /// Must be emitted after the call instruction it belongs to.
+    ///
+    ChainExit {
+        evict: AsmEvict,
+        spec: Box<ChainExitSpec>,
+    },
     CheckBOP {
         deopt: AsmDeopt,
     },
@@ -2637,7 +2676,13 @@ impl AsmInst {
 #[derive(Debug)]
 pub enum SideExit {
     Evict(Option<(BytecodePtr, WriteBack)>),
-    Deoptimize(BytecodePtr, WriteBack),
+    /// The trailing `bool` is the **chain-escalation** flag
+    /// (`doc/chain_deopt.md` §5 step 4 / §6), on `Deoptimize` /
+    /// `RecompileDeoptimize` / `Error` alike: the handler calls
+    /// `runtime::chain_deopt` after its write-back, so every suspended JIT
+    /// frame in the caller chain is converted into an interpreter frame
+    /// before this frame resumes in the interpreter (or starts unwinding).
+    Deoptimize(BytecodePtr, WriteBack, bool),
     ///
     /// A deopt that, after a small number of misses, recompiles the
     /// whole method/loop with the given reason instead of falling
@@ -2646,8 +2691,14 @@ pub enum SideExit {
     /// BinCmp sites so they flip to the non-deopting polymorphic
     /// path once the VM has observed class variance (Part B).
     ///
-    RecompileDeoptimize(BytecodePtr, WriteBack, RecompileReason, Option<BytecodePtr>),
-    Error(BytecodePtr, WriteBack),
+    RecompileDeoptimize(
+        BytecodePtr,
+        WriteBack,
+        RecompileReason,
+        Option<BytecodePtr>,
+        bool,
+    ),
+    Error(BytecodePtr, WriteBack, bool),
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -2670,7 +2721,8 @@ impl Codegen {
         _fallthrough_in: bool,
     ) {
         let mut side_exits = SideExitLabels::new();
-        let mut deopt_table: HashMap<(BytecodePtr, WriteBack), DestLabel> = HashMap::default();
+        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, bool), DestLabel> =
+            HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
         let base = frame.base_stack_offset;
         // §9 (9a, first brick): reify the isolated side-exit handler block into a
@@ -2694,14 +2746,14 @@ impl Codegen {
                     });
                     label
                 }
-                SideExit::Deoptimize(pc, wb) => {
-                    let t = (pc, wb);
+                SideExit::Deoptimize(pc, wb, chain) => {
+                    let t = (pc, wb, chain);
                     if let Some(label) = deopt_table.get(&t) {
                         label.clone()
                     } else {
                         let label = self.jit.label();
                         lir.push(LInst::SideExit {
-                            kind: LSideExitKind::Deopt,
+                            kind: LSideExitKind::Deopt { chain: t.2 },
                             pc: t.0,
                             wb: t.1.clone(),
                             entry: label.clone(),
@@ -2712,10 +2764,14 @@ impl Codegen {
                         label
                     }
                 }
-                SideExit::RecompileDeoptimize(pc, wb, reason, position) => {
+                SideExit::RecompileDeoptimize(pc, wb, reason, position, chain) => {
                     let label = self.jit.label();
                     lir.push(LInst::SideExit {
-                        kind: LSideExitKind::RecompileDeopt { reason, position },
+                        kind: LSideExitKind::RecompileDeopt {
+                            reason,
+                            position,
+                            chain,
+                        },
                         pc,
                         wb,
                         entry: label.clone(),
@@ -2724,10 +2780,10 @@ impl Codegen {
                     });
                     label
                 }
-                SideExit::Error(pc, wb) => {
+                SideExit::Error(pc, wb, chain) => {
                     let label = self.jit.label();
                     lir.push(LInst::SideExit {
-                        kind: LSideExitKind::Error,
+                        kind: LSideExitKind::Error { chain },
                         pc,
                         wb,
                         entry: label.clone(),

@@ -783,6 +783,28 @@ impl<'a> JitContext<'a> {
         self.codegen_mode
     }
 
+    ///
+    /// Whether every interpreter-resuming side exit emitted for the frame
+    /// currently being compiled must **escalate to chain deopt** — i.e. run
+    /// the chain-deopt walk (converting every suspended JIT frame in the
+    /// caller chain into an interpreter frame) before falling back to the
+    /// interpreter (`doc/chain_deopt.md` §5 step 4 / §6).
+    ///
+    /// This is the "mechanical guarantee" §6 asks for: the flag is consulted
+    /// in exactly one place — [`AsmIr::new`], which stamps it onto the IR so
+    /// every side-exit constructor (`new_deopt` / `new_recompile_deopt` /
+    /// `new_error` / `deopt_from_point`) picks it up — rather than relying on
+    /// each emitter to remember.
+    ///
+    /// Today it is driven by the `chain-deopt` validation feature (escalate
+    /// everywhere, so the whole test suite exercises the deopt → walk →
+    /// chain-exit-handler cascade). When the unboxed-locals speculation (§5
+    /// step 5) lands, the per-frame speculation flag is OR'd in here.
+    ///
+    pub(super) fn escalate_side_exits(&self) -> bool {
+        cfg!(feature = "chain-deopt")
+    }
+
     pub(super) fn in_dispatch_arm(&self) -> bool {
         self.in_dispatch_arm
     }

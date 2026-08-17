@@ -104,6 +104,7 @@ impl Codegen {
             | AsmInst::MethodRet(..)
             | AsmInst::BlockBreak(..)
             | AsmInst::ImmediateEvict { .. }
+            | AsmInst::ChainExit { .. }
             | AsmInst::GuardClassVersion { .. }
             | AsmInst::ContFramePc { .. }
             | AsmInst::SetupMethodFrame { .. }
@@ -972,23 +973,27 @@ impl Codegen {
                 loop_jit_spill_bytes,
                 base,
             } => match kind {
-                LSideExitKind::Deopt => {
-                    self.gen_deopt_with_label(pc, &wb, entry, loop_jit_spill_bytes, base)
+                LSideExitKind::Deopt { chain } => {
+                    self.gen_deopt_with_label(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
                 }
                 LSideExitKind::Evict => {
                     self.gen_evict_with_label(pc, &wb, entry, loop_jit_spill_bytes, base)
                 }
-                LSideExitKind::RecompileDeopt { reason, position } => self
-                    .gen_recompile_deopt_with_label(
-                        pc,
-                        &wb,
-                        reason,
-                        position,
-                        entry,
-                        loop_jit_spill_bytes,
-                        base,
-                    ),
-                LSideExitKind::Error => self.gen_handle_error(pc, wb, entry, base),
+                LSideExitKind::RecompileDeopt {
+                    reason,
+                    position,
+                    chain,
+                } => self.gen_recompile_deopt_with_label(
+                    pc,
+                    &wb,
+                    reason,
+                    position,
+                    entry,
+                    loop_jit_spill_bytes,
+                    base,
+                    chain,
+                ),
+                LSideExitKind::Error { chain } => self.gen_handle_error(pc, wb, entry, base, chain),
             },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the
             // arch-neutral fallback, which dispatches to the per-arch `emit_*`.
