@@ -470,13 +470,16 @@ impl ChainReplay {
             // SAFETY: as above.
             unsafe { caller_lfp.set_register(*slot, Some(*v)) };
         }
-        // `void` (nil-fill of `LinkMode::V` slots) is never populated here:
-        // `WriteBack` has exactly two constructors, and only the GC-safepoint
-        // one (`get_gc_write_back`) fills `void` — `get_write_back`, which
-        // every side exit and every `ChainExitSpec` uses, hard-codes it empty.
-        // A GC write-back never reaches a chain replay, so there is nothing to
-        // nil-fill.
-        debug_assert!(self.wb.void.is_empty());
+        // `void` nil-fills `LinkMode::V` slots. `get_write_back` — the
+        // constructor every `ChainExitSpec` goes through — hard-codes it
+        // empty, so this is expected to be a no-op; it is replayed anyway
+        // rather than asserted, because the identical "only the GC write-back
+        // populates `void`" argument turned out to be false for
+        // `gen_write_back_for_deopt`, which does receive populated ones.
+        for slot in &self.wb.void {
+            // SAFETY: as above.
+            unsafe { caller_lfp.set_register(*slot, Some(Value::nil())) };
+        }
         // GP-pool residents exist only under the (unfinished) GP allocator;
         // shipping builds never record any.
         debug_assert!(self.wb.gp.is_empty());
@@ -1207,12 +1210,9 @@ impl JitModule {
         for (v, slot) in &wb.literal {
             self.literal_to_stack2(*slot, *v);
         }
-        // No `void` (nil-fill) loop: only `get_gc_write_back` ever populates
-        // that field, and a GC write-back goes through `gen_write_back`, never
-        // here — every side exit's write-back comes from `get_write_back`,
-        // which hard-codes `void` empty. Same for the chain-deopt replay
-        // (`ChainReplay::replay`).
-        debug_assert!(wb.void.is_empty());
+        for slot in &wb.void {
+            self.literal_to_stack2(*slot, Value::nil());
+        }
         for (reg, slot) in &wb.gp {
             monoasm! { &mut *self,
                 movq [r14 - (conv(*slot))], R(*reg as _);

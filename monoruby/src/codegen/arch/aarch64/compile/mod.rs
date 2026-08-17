@@ -397,10 +397,9 @@ impl Codegen {
         for (v, slot) in &wb.literal {
             self.a64_store_imm_to_slot(v.id(), *slot, lfp);
         }
-        // No `void` (nil-fill) loop — see x86 `gen_write_back_for_deopt`: only
-        // the GC write-back populates that field, and it never reaches a side
-        // exit.
-        debug_assert!(wb.void.is_empty());
+        for slot in &wb.void {
+            self.a64_store_imm_to_slot(NIL_VALUE as u64, *slot, lfp);
+        }
         for (reg, slot) in &wb.gp {
             let off = slot.0 as u32 * 8 + LFP_SELF as u32;
             self.a64_frame_store(reg.a64().0, lfp, off);
