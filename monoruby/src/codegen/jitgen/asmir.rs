@@ -61,21 +61,6 @@ pub(crate) enum ArrayIndexKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct AsmEvict(usize);
 
-///
-/// A **chain-exit** side exit: the handler a suspended JIT frame is made to
-/// `ret` into when the whole control-frame chain has to be converted from
-/// JIT frames into interpreter frames at once (`doc/chain_deopt.md`).
-///
-/// Distinct from [`AsmEvict`], which is reached by *patching the call's
-/// return continuation* and therefore runs **after** the site's result
-/// store; a chain exit is reached by *rewriting the return-address slot*
-/// and so runs **before** it — the VM's post-call continuation performs the
-/// store instead. That is why it carries its own write-back, captured at
-/// the call (post-`discard(dst)`, pre-`def`) rather than at `next_pc`.
-///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct AsmChain(usize);
-
 pub(crate) struct SideExitLabels(Vec<DestLabel>);
 
 impl SideExitLabels {
@@ -108,14 +93,6 @@ impl std::ops::Index<AsmEvict> for SideExitLabels {
     type Output = DestLabel;
 
     fn index(&self, index: AsmEvict) -> &Self::Output {
-        &self.0[index.0]
-    }
-}
-
-impl std::ops::Index<AsmChain> for SideExitLabels {
-    type Output = DestLabel;
-
-    fn index(&self, index: AsmChain) -> &Self::Output {
         &self.0[index.0]
     }
 }
@@ -356,35 +333,6 @@ impl AsmIr {
     pub(crate) fn new_evict(&mut self) -> AsmEvict {
         let i = self.new_label(SideExit::Evict(None));
         AsmEvict(i)
-    }
-
-    ///
-    /// Allocate this call site's chain-exit handler (`doc/chain_deopt.md` §2).
-    ///
-    /// Must be called at the point where the outgoing frame is fully set up
-    /// and `dst` has already been discarded — i.e. next to `new_error` — so
-    /// the captured write-back describes the frame exactly as the VM's
-    /// post-call continuation expects to find it: every live value homed in
-    /// the LFP, `dst` still untouched (the continuation's `vm_store_rdi`
-    /// writes it from the callee's return value).
-    ///
-    /// `using_fpr` is the call's `FprSave` set, which the handler needs to
-    /// reload the caller-saved FP pool registers out of the save area the
-    /// call left behind before it can write them back.
-    ///
-    pub(crate) fn new_chain_exit(
-        &mut self,
-        state: &AbstractFrame,
-        using_fpr: UsingFpr,
-        dst: Option<SlotId>,
-    ) -> AsmChain {
-        let i = self.new_label(SideExit::ChainExit(
-            state.pc(),
-            state.get_write_back(),
-            using_fpr,
-            dst,
-        ));
-        AsmChain(i)
     }
 
     pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
@@ -1945,18 +1893,19 @@ pub(super) enum AsmInst {
         evict: AsmEvict,
     },
     ///
-    /// Register this call site's chain-exit handler in the runtime table
-    /// (`doc/chain_deopt.md` §5 step 1). Emits no machine code: it looks the
-    /// call's return address up by `evict` (recorded moments earlier by
-    /// `set_deopt_with_return_addr`) and maps it to `chain`'s handler, so the
-    /// chain-deopt walk can find the handler from a suspended frame's
+    /// Register this call site's replay data in the runtime table
+    /// (`doc/chain_deopt.md` §5 step 1 / §9.3). Emits no machine code: it
+    /// looks the call's return address up by `evict` (recorded moments
+    /// earlier by `set_deopt_with_return_addr`) and maps it to `spec`
+    /// (completed with the frame's spill `base` at lowering), so the
+    /// chain-deopt walk can replay the suspended frame's write-back from a
     /// return-address slot alone.
     ///
     /// Must be emitted after the call instruction it belongs to.
     ///
     ChainExit {
         evict: AsmEvict,
-        chain: AsmChain,
+        spec: Box<ChainExitSpec>,
     },
     CheckBOP {
         deopt: AsmDeopt,
@@ -2750,17 +2699,6 @@ pub enum SideExit {
         bool,
     ),
     Error(BytecodePtr, WriteBack, bool),
-    ///
-    /// Chain-exit handler for a suspended call (`doc/chain_deopt.md`). The
-    /// `pc` is the *call-site* pc and `dst` the call's destination slot: the
-    /// handler carries its own post-call continuation (store the callee's
-    /// result into `dst`, resume the fetch loop at `pc.next()`, or on an
-    /// error/non-local-exit signal hand `pc` to `entry_raise`) because the
-    /// VM's shared send continuation assumes a 2-unit send bytecode — wrong
-    /// for the 1-unit operator sites (`BinOp` / `Index` / …) that also
-    /// dispatch through `send`.
-    ///
-    ChainExit(BytecodePtr, WriteBack, UsingFpr, Option<SlotId>),
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -2846,18 +2784,6 @@ impl Codegen {
                     let label = self.jit.label();
                     lir.push(LInst::SideExit {
                         kind: LSideExitKind::Error { chain },
-                        pc,
-                        wb,
-                        entry: label.clone(),
-                        loop_jit_spill_bytes,
-                        base,
-                    });
-                    label
-                }
-                SideExit::ChainExit(pc, wb, using_fpr, dst) => {
-                    let label = self.jit.label();
-                    lir.push(LInst::SideExit {
-                        kind: LSideExitKind::ChainExit { using_fpr, dst },
                         pc,
                         wb,
                         entry: label.clone(),

@@ -252,18 +252,6 @@ impl Codegen {
                     });
                     label
                 }
-                SideExit::ChainExit(pc, wb, using_fpr, dst) => {
-                    let label = self.jit.label();
-                    lir.push(LInst::SideExit {
-                        kind: LSideExitKind::ChainExit { using_fpr, dst },
-                        pc,
-                        wb,
-                        entry: label.clone(),
-                        loop_jit_spill_bytes: bump,
-                        base: frame.base_stack_offset,
-                    });
-                    label
-                }
                 // Evict(None) is a placeholder always overwritten with
                 // Evict(Some(..)) before codegen (mirrors x86 gen_asm's
                 // `_ => unreachable!()`).
@@ -391,107 +379,6 @@ impl Codegen {
             mov x21, (pc0);
             b raise;
         );
-    }
-
-    /// Chain-exit handler (`doc/chain_deopt.md` §2) — twin of x86
-    /// `gen_chain_exit_with_label`.
-    ///
-    /// Reached by `ret`, not by a branch from this frame's body: the
-    /// chain-deopt walk wrote this handler's address into the callee frame's
-    /// return-address slot (`[x29 + 8]`, the `stp x29, x30` LR save). On entry
-    /// `x29` is this frame's frame pointer again (the callee's epilogue did
-    /// that), `x0` holds the callee's return value, `x22` (LFP) still holds
-    /// the *callee's* LFP, and `sp` points at the cont frame with the
-    /// `emit_fpr_save` area just above it.
-    ///
-    /// So: restore this frame as the current one (the pop_frame the hijacked
-    /// `ret` skipped), reload the caller-saved FP pool out of the save area,
-    /// write back, and run the handler's own post-call continuation: store
-    /// `x0` into the call's destination slot and resume the fetch loop at the
-    /// site's next instruction, or on the error signal (`x0 == 0`) hand the
-    /// site pc to `entry_raise`. Per-site rather than the VM's shared send
-    /// continuation because that one assumes a 2-unit send bytecode — wrong
-    /// for the 1-unit operator sites that also dispatch through `send` (see
-    /// the x86 twin `gen_chain_exit_with_label`).
-    ///
-    /// The pop_frame has to come **first**, before the write-back: boxing a
-    /// float or materializing a deferred rest `Array` allocates, so a GC can
-    /// run inside the write-back, and the mark walk starts from
-    /// `Executor::cfp` — which on entry still names the callee frame that has
-    /// just been torn down.
-    ///
-    /// `x0` is stashed across the write-back (which clobbers it) in the
-    /// callee's dead frame header, keeping `sp` 16-byte aligned.
-    fn a64_gen_chain_exit(
-        &mut self,
-        wb: &WriteBack,
-        entry: DestLabel,
-        base: usize,
-        using_fpr: UsingFpr,
-        pc: BytecodePtr,
-        dst: Option<SlotId>,
-    ) {
-        let fetch = self.vm_fetch();
-        let raise = self.entry_raise();
-        let error = self.jit.label();
-        self.jit.bind_label(entry);
-        // pop_frame: EXEC.cfp + LFP from x29, exactly as `a64_do_call`'s
-        // return continuation would have done.
-        let lfp = GP::R14.a64().0;
-        monoasm_arm64!(&mut self.jit,
-            sub x10, x29, #(BP_CFP as u32);
-            str x10, [x19, #(EXECUTOR_CFP as u32)];
-            ldur x(lfp), [x29, #(-((BP_CFP + CFP_LFP) as i32))];
-        );
-        // Reload the FP pool from the save area the call left in place.
-        self.a64_fpr_reload_cont(using_fpr);
-        monoasm_arm64!(&mut self.jit,
-            sub sp, sp, #(16);
-            str x0, [sp, #(8)];
-        );
-        self.a64_gen_write_back_for_deopt(wb, base);
-        monoasm_arm64!(&mut self.jit,
-            ldr x0, [sp, #(8)];
-            // Drop the stash and the cont frame in one go — the resume pc is
-            // baked in below, so the slot is no longer needed.
-            add sp, sp, #(32);
-            cbz x0, error;
-        );
-        // Normal return: store the result and resume interpreting at the
-        // next instruction.
-        if let Some(dst) = dst {
-            self.a64_frame_store(0, lfp, conv(dst) as u32);
-        }
-        let next_pc = pc.next().as_ptr() as u64;
-        monoasm_arm64!(&mut self.jit,
-            mov x21, (next_pc);
-            b fetch;
-        );
-        // Error / non-local-exit signal: aarch64's `entry_raise` passes x21
-        // through unchanged, so hand it the call-site pc itself — the same
-        // convention as `a64_gen_handle_error`.
-        let pc0 = pc.as_ptr() as u64;
-        monoasm_arm64!(&mut self.jit,
-        error:
-            mov x21, (pc0);
-            b raise;
-        );
-    }
-
-    /// Reload the live FP pool registers from a cont-mode `emit_fpr_save` area
-    /// **without** popping it, leaving sp on the continuation frame. The
-    /// chain-exit handler's counterpart to `emit_fpr_restore`.
-    fn a64_fpr_reload_cont(&mut self, using_fpr: UsingFpr) {
-        let pad = CONTINUATION_FRAME_SIZE as u32;
-        let mut i = 0u32;
-        for (xi, b) in using_fpr.iter().enumerate() {
-            if *b {
-                let pr = xi as u32 + 2;
-                let ofs = pad + 8 * i;
-                monoasm_arm64!(&mut self.jit, ldr d(pr), [sp, #(ofs)];);
-                i += 1;
-            }
-        }
     }
 
     /// Write back live values to LFP slots for a side exit, r14(x22)-relative
@@ -1465,9 +1352,6 @@ impl Codegen {
                 }
                 LSideExitKind::Error { chain } => {
                     self.a64_gen_handle_error(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
-                }
-                LSideExitKind::ChainExit { using_fpr, dst } => {
-                    self.a64_gen_chain_exit(&wb, entry, base, using_fpr, pc, dst)
                 }
             },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the

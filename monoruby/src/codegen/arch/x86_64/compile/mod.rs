@@ -994,9 +994,6 @@ impl Codegen {
                     chain,
                 ),
                 LSideExitKind::Error { chain } => self.gen_handle_error(pc, wb, entry, base, chain),
-                LSideExitKind::ChainExit { using_fpr, dst } => {
-                    self.gen_chain_exit_with_label(&wb, entry, base, using_fpr, pc, dst)
-                }
             },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the
             // arch-neutral fallback, which dispatches to the per-arch `emit_*`.

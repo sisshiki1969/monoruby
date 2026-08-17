@@ -82,19 +82,46 @@ impl Cfp {
     ///
     /// The writer half of [`Self::return_addr`], used by chain deopt
     /// (`doc/chain_deopt.md` §5 step 3) to redirect a suspended JIT frame's
-    /// return into a chain-exit handler instead of its caller's compiled body.
+    /// return into the VM's shared post-call continuation stub instead of its
+    /// caller's compiled body.
     ///
     /// ### safety
     /// *self* must be a live control frame of the current thread's stack, and
     /// *addr* an address that is valid to return to with this frame's
-    /// register/stack state — in practice only a chain-exit handler emitted
-    /// for exactly this call site.
+    /// register/stack state — in practice only the chain-deopt continuation
+    /// stub, paired with a [`Self::set_cont_frame_data`] write.
     ///
     pub(crate) unsafe fn set_return_addr(&mut self, addr: monoasm::CodePtr) {
         unsafe {
             *(self.as_ptr() as *mut Option<monoasm::CodePtr>).add(1 + BP_CFP as usize / 8) =
                 Some(addr)
         };
+    }
+
+    ///
+    /// The machine frame pointer (`rbp`/`x29`) of the frame owning this CFP:
+    /// every frame — VM, JIT, or native wrapper — establishes
+    /// `bp == cfp + BP_CFP` in its prologue, so the address itself is the
+    /// register's value and `[bp]` is the saved caller bp.
+    ///
+    pub(crate) fn frame_bp(&self) -> *mut u64 {
+        unsafe { (self.as_ptr() as *mut u64).add(BP_CFP as usize / 8) }
+    }
+
+    ///
+    /// Write the cont-frame *pad* slot (CFP+32, the second half of the
+    /// 16-byte continuation frame whose first half is the pc slot read by
+    /// [`Self::caller_pc_slot`]). The pad is reserved by every caller
+    /// (`push_cont_frame` / the JIT's cont-mode `FprSave`) and read by
+    /// nothing on the normal return path; chain deopt stores the converted
+    /// call's per-site continuation word here for the shared stub to read
+    /// after this frame's `ret` (`doc/chain_deopt.md` §9.3).
+    ///
+    /// ### safety
+    /// *self* must be a live control frame of the current thread's stack.
+    ///
+    pub(crate) unsafe fn set_cont_frame_data(&mut self, data: u64) {
+        unsafe { *(self.as_ptr() as *mut u64).add(4) = data };
     }
 
     ///
@@ -340,6 +367,18 @@ impl Lfp {
     ///
     unsafe fn new(ptr: *mut u8) -> Self {
         Self(std::ptr::NonNull::new(ptr).unwrap())
+    }
+
+    ///
+    /// Create LFP from a raw pointer for callers outside this module (the
+    /// chain-deopt replay derives a suspended frame's LFP from its saved
+    /// frame pointer, `lfp == bp - RBP_LOCAL_FRAME`).
+    ///
+    /// ### safety
+    /// *ptr* must point at a valid local frame.
+    ///
+    pub(crate) unsafe fn from_ptr(ptr: *mut u8) -> Self {
+        unsafe { Self::new(ptr) }
     }
 
     ///

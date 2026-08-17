@@ -305,20 +305,6 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
     Error {
         chain: bool,
     },
-    /// Chain-exit handler (`doc/chain_deopt.md`): entered by `ret` — not by a
-    /// branch from the frame's own body — after the chain-deopt walk has
-    /// rewritten this call's return-address slot. It restores the caller's
-    /// frame registers (the `pop_frame` the hijacked continuation skipped),
-    /// reloads the FP pool out of the call's `FprSave` area (`using_fpr`),
-    /// writes back, and runs its own post-call continuation: store the
-    /// callee's result into `dst` and resume the fetch loop at the site's
-    /// next instruction, or on an error signal hand the site pc to
-    /// `entry_raise`. (Per-site, because the VM's shared send continuation
-    /// assumes a 2-unit send bytecode — wrong for 1-unit operator sites.)
-    ChainExit {
-        using_fpr: UsingFpr,
-        dst: Option<SlotId>,
-    },
 }
 
 /// Branch targets carry a *resolved* monoasm `DestLabel` (not the front-end
@@ -934,10 +920,10 @@ pub(in crate::codegen) enum LInst {
         evict: AsmEvict,
     },
     /// Register `evict`'s already-recorded call return address as the key for
-    /// `chain`'s chain-exit handler. Emits no machine code.
+    /// `replay` in the runtime chain-deopt table. Emits no machine code.
     ChainExit {
         evict: AsmEvict,
-        chain: DestLabel,
+        replay: ChainReplay,
     },
     Init {
         info: FnInitInfo,

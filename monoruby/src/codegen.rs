@@ -25,6 +25,7 @@ pub(crate) mod signal_table;
 mod arch;
 
 use self::jitgen::asmir::AsmEvict;
+use self::jitgen::{ChainConversion, ChainReplay};
 
 use super::*;
 use crate::bytecodegen::inst::*;
@@ -663,14 +664,22 @@ pub struct Codegen {
     /// return_addr => (patch_point, deopt)
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
-    /// `doc/chain_deopt.md` §5 step 1: a suspended call's return address =>
-    /// that call site's chain-exit handler. Keyed identically to
-    /// `return_addr_table` (§3.4), because both are looked up from a
-    /// suspended frame's return-address slot; the two differ only in what
-    /// they do with the hit — `return_addr_table` patches the frame's *code*
-    /// at the recorded continuation, this one is written *into the stack* so
+    /// `doc/chain_deopt.md` §5 step 1 / §9.3: a suspended call's return
+    /// address => the data needed to convert the suspended caller frame
+    /// eagerly (replay its write-back from Rust, hand the shared VM
+    /// continuation stub its per-site `dst`/resume data). Keyed identically
+    /// to `return_addr_table` (§3.4), because both are looked up from a
+    /// suspended frame's return-address slot; the two differ in what they do
+    /// with the hit — `return_addr_table` patches the frame's *code* at the
+    /// recorded continuation, this one drives a stack-only conversion so
     /// control leaves JIT code on `ret`.
-    chain_deopt_table: HashMap<CodePtr, DestLabel>,
+    chain_deopt_table: HashMap<CodePtr, ChainReplay>,
+    /// The shared chain-deopt post-call continuation stub
+    /// (`gen_chain_cont_stub`): the single address every converted frame's
+    /// return-address slot is pointed at. Emitted with the VM handlers, so
+    /// `check_vm_address` covers it — which is what makes an
+    /// already-converted frame skippable on a later walk.
+    chain_cont_stub: DestLabel,
     pub(crate) specialized_info: Vec<(ISeqId, ClassId, DestLabel)>,
     pub(crate) specialized_base: usize,
     vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
@@ -893,6 +902,12 @@ impl Codegen {
     ///
     pub(in crate::codegen) fn construct_vm(&mut self) {
         let h = self.gen_vm_handlers();
+        // Emitted here, inside the VM code span `vm_code_position` records, so
+        // `check_vm_address` returns true for the stub — a converted frame's
+        // rewritten return address then reads as "already interpreted" and a
+        // later walk skips it instead of replaying a stale write-back over
+        // slots the interpreter may have updated since.
+        self.gen_chain_cont_stub();
         self.dispatch[1] = h.singleton_method_def;
         self.dispatch[2] = h.method_def;
         self.dispatch[3] = h.br_inst;
@@ -1044,6 +1059,7 @@ impl Codegen {
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
             chain_deopt_table: HashMap::default(),
+            chain_cont_stub: entry_panic.clone(),
             specialized_info: Vec::new(),
             specialized_base: 0,
             vm_entry: entry_panic.clone(),
@@ -1451,12 +1467,22 @@ impl Codegen {
     /// when the definition just executed actually redefined a basic op —
     /// `set_bop_redefine` arms the flag and this consumes it.
     pub fn check_bop_redefine(cfp: Cfp) {
-        CODEGEN.with(|codegen| {
+        let plan = CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             if std::mem::replace(&mut codegen.bop_eviction_pending, false) {
-                codegen.evict_suspended_frames(cfp);
+                codegen.evict_suspended_frames(cfp)
+            } else {
+                Vec::new()
             }
         });
+        // Applied outside the CODEGEN borrow: the replay half allocates and
+        // can run a GC (see `runtime::chain_deopt`).
+        for conversion in plan {
+            // SAFETY: every planned frame was found suspended on the current
+            // thread's control-frame chain moments ago, and nothing has run
+            // since — no frame has returned.
+            unsafe { conversion.apply() };
+        }
     }
 
     /// The basic-op version: bumped by every redefinition, baked into
@@ -1476,34 +1502,35 @@ impl Codegen {
     /// continuations stale. Per-frame, the mechanism is chosen by what the
     /// call site registered:
     ///
-    /// * a **chain-exit handler** (`chain_deopt_table`) — rewrite the frame's
-    ///   return-address slot so its `ret` lands in the handler and the frame
-    ///   becomes an interpreter frame, leaving the compiled body untouched
-    ///   (`doc/chain_deopt.md` §2);
+    /// * a **chain conversion** (`chain_deopt_table`) — plan the eager
+    ///   conversion (`doc/chain_deopt.md` §2/§9.3): replay the suspended
+    ///   caller's write-back and rewrite the frame's return-address slot to
+    ///   the shared VM continuation stub, leaving the compiled body
+    ///   untouched. Returned to the caller for application outside the
+    ///   `CODEGEN` borrow (the replay allocates);
     /// * otherwise a **patch point** (`return_addr_table`) — overwrite the
     ///   call's return continuation in the *code* with a `jmp deopt`
-    ///   (immediate eviction).
+    ///   (immediate eviction), done in place.
     ///
-    /// A default build emits no chain-exit handlers, so this degenerates to
+    /// A default build registers no chain entries, so this degenerates to
     /// pure immediate eviction; under the `chain-deopt` feature every site
-    /// registers one and the walk is pure chain deopt. When the unboxed-
-    /// locals speculation (§5 step 5) lands, speculative call sites emit
-    /// chain exits per-site and the two mechanisms coexist in one chain.
+    /// registers and the walk is pure chain deopt. When the unboxed-locals
+    /// speculation (§5 step 5) lands, speculative call sites register
+    /// per-site and the two mechanisms coexist in one chain.
     ///
-    fn evict_suspended_frames(&mut self, mut cfp: Cfp) {
+    #[must_use]
+    fn evict_suspended_frames(&mut self, mut cfp: Cfp) -> Vec<ChainConversion> {
+        let stub = self.jit.get_label_address(&self.chain_cont_stub);
+        let mut plan = Vec::new();
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
             if let Some(ret) = return_addr
                 && !self.check_vm_address(ret)
             {
-                if let Some(chain) = self.chain_deopt_table.get(&ret).cloned() {
-                    let handler = self.jit.get_label_address(&chain);
+                if let Some(replay) = self.chain_deopt_table.get(&ret).cloned() {
                     #[cfg(any(feature = "deopt", feature = "profile"))]
-                    eprintln!("### bop eviction: frame return {ret:?} -> chain exit {handler:?}");
-                    // SAFETY: as in `chain_deopt` — `cfp` is a live control
-                    // frame of the current thread's stack, and `handler` was
-                    // emitted for exactly this call site.
-                    unsafe { cfp.set_return_addr(handler) };
+                    eprintln!("### bop eviction: frame return {ret:?} -> chain conversion");
+                    plan.push(ChainConversion::new(cfp, prev_cfp, replay, stub));
                 } else if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
                     let patch_point = patch_point.unwrap();
                     self.patch_return_to_deopt(patch_point, &deopt);
@@ -1512,6 +1539,7 @@ impl Codegen {
             cfp = prev_cfp;
             return_addr = unsafe { cfp.return_addr() };
         }
+        plan
     }
 
     /// Overwrite the instruction(s) at a specialized call's return continuation
@@ -1560,28 +1588,33 @@ impl Codegen {
 
     /// `LInst::ChainExit`: map this call's return address (recorded moments
     /// ago by `set_deopt_with_return_addr` under the same `evict` id) to its
-    /// chain-exit handler.
+    /// replay data.
     ///
     /// The `unwrap` is load-bearing for the same reason as
     /// `emit_immediate_evict`'s: `AsmEvict` ids restart per block while
     /// `asm_return_addr_table` is never cleared, so a producer that forgot to
     /// register its return address would silently pick up a stale same-id
-    /// entry and give an unrelated live call site the wrong handler.
-    pub(in crate::codegen) fn register_chain_exit(&mut self, evict: AsmEvict, chain: DestLabel) {
+    /// entry and give an unrelated live call site the wrong replay data.
+    pub(in crate::codegen) fn register_chain_exit(&mut self, evict: AsmEvict, replay: ChainReplay) {
         let return_addr = *self.asm_return_addr_table.get(&evict).unwrap();
-        self.chain_deopt_table.insert(return_addr, chain);
+        self.chain_deopt_table.insert(return_addr, replay);
     }
 
     ///
-    /// Convert every suspended JIT frame in *cfp*'s control-frame chain into
-    /// an interpreter frame (`doc/chain_deopt.md` §2).
+    /// Plan the conversion of every suspended JIT frame in *cfp*'s
+    /// control-frame chain into an interpreter frame (`doc/chain_deopt.md`
+    /// §2, eager form §9.3).
     ///
-    /// Each frame is left exactly where it is; only its **return-address
-    /// slot** is rewritten, to that call site's chain-exit handler. Control
-    /// therefore never re-enters a compiled body: as the innermost frame (and
-    /// then each frame in turn) returns, the `ret` lands in the handler, which
-    /// writes the frame's unboxed values back into its local slots and tails
-    /// into the VM's post-call continuation.
+    /// Each frame is left exactly where it is. Applying a planned
+    /// [`ChainConversion`] replays the suspended caller's write-back (boxing
+    /// its unboxed floats into its local slots) and rewrites the callee's
+    /// **return-address slot** to the shared VM post-call continuation stub,
+    /// with the site's `dst`/resume word in the cont-frame pad slot. Control
+    /// therefore never re-enters a compiled body: as the innermost frame
+    /// (and then each frame in turn) returns, the `ret` lands in the stub,
+    /// which stores the result and resumes the fetch loop. The plan is
+    /// returned instead of applied because the replay allocates and this
+    /// runs under the `CODEGEN` borrow (see `runtime::chain_deopt`).
     ///
     /// Unlike [`Self::evict_suspended_frames`]' return-address patching this
     /// touches no machine code, so a compiled body that is still valid for
@@ -1589,36 +1622,36 @@ impl Codegen {
     ///
     /// Frames whose return address is in VM code or an invoker are already
     /// interpreted (or are a foreign entry) and are skipped, but the walk
-    /// continues past them: a chain may alternate VM and JIT frames. A JIT
-    /// return address with no table entry is likewise skipped: for BOP
-    /// eviction the patching walk covers those sites, and for an escalated
-    /// side exit (`runtime::chain_deopt`) an unregistered site marks the
-    /// boundary of the compilation region that speculated — frames beyond it
-    /// hold no unboxed cross-frame state and may resume their compiled
-    /// bodies.
+    /// continues past them: a chain may alternate VM and JIT frames. A frame
+    /// converted by an earlier walk is skipped the same way — its rewritten
+    /// return address is the stub, a VM address — which is load-bearing: its
+    /// slots may since have been updated through `outer_lfp` by interpreted
+    /// inner frames, and a second replay would clobber them with stale
+    /// floats. A JIT return address with no table entry is likewise skipped:
+    /// for BOP eviction the patching walk covers those sites, and for an
+    /// escalated side exit (`runtime::chain_deopt`) an unregistered site
+    /// marks the boundary of the compilation region that speculated — frames
+    /// beyond it hold no unboxed cross-frame state and may resume their
+    /// compiled bodies.
     ///
-    pub(crate) fn chain_deopt(&mut self, mut cfp: Cfp) {
+    #[must_use]
+    pub(crate) fn chain_deopt(&mut self, mut cfp: Cfp) -> Vec<ChainConversion> {
+        let stub = self.jit.get_label_address(&self.chain_cont_stub);
+        let mut plan = Vec::new();
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
             if let Some(ret) = return_addr
                 && !self.check_vm_address(ret)
-                && let Some(chain) = self.chain_deopt_table.get(&ret).cloned()
+                && let Some(replay) = self.chain_deopt_table.get(&ret).cloned()
             {
-                let handler = self.jit.get_label_address(&chain);
                 #[cfg(any(feature = "deopt", feature = "profile"))]
-                eprintln!("### chain deopt: frame return {ret:?} -> chain exit {handler:?}");
-                // SAFETY: `cfp` is a live control frame of the current
-                // thread's stack (we reached it by walking `prev()` from the
-                // executor's cfp), and `handler` is a finalized code address
-                // in this JitModule. The slot we overwrite is the frame's
-                // return address, which is only read by the `ret` that ends
-                // the frame below it — and that has not run yet, or we would
-                // not have found this frame suspended.
-                unsafe { cfp.set_return_addr(handler) };
+                eprintln!("### chain deopt: frame return {ret:?} -> chain conversion");
+                plan.push(ChainConversion::new(cfp, prev_cfp, replay, stub));
             }
             cfp = prev_cfp;
             return_addr = unsafe { cfp.return_addr() };
         }
+        plan
     }
 
     /// aarch64 specialized recompile: overwrite the single 4-byte `bl entry`
