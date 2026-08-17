@@ -1,9 +1,12 @@
 # Chain deopt — handoff note
 
 **Kind:** plan. **Status:** the *mechanism* (§5 steps 1–3) is implemented and
-exercised end-to-end; the speculation it exists for (§5 steps 4–5) and the
-return-state recovery (§6) are not. §8 records what was built, and the one
-place the built thing deliberately differs from the design below.
+exercised end-to-end, and the **escalation half of step 4** — the per-frame
+switch that makes every interpreter-resuming side exit run the chain-deopt
+walk, plus the runtime entry it calls — is in place (§8.6). The speculation
+itself (the `Float` guard and the `locals_to_S` relaxation, §5 steps 4–5) and
+the return-state recovery (§6) are not. §8 records what was built, and the
+places the built thing deliberately differs from the design below.
 
 ---
 
@@ -301,41 +304,66 @@ the `FprSave` area above it. It therefore:
 5. restores `rax` and jumps to the VM's post-call continuation (which repeats
    the `pop_frame`; it is idempotent).
 
-### 8.2 The VM entry is one instruction earlier than §3.1 says
+### 8.2 The handler carries its own continuation — §3.1's shared VM entry was wrong
 
-§3.1 names `done:` as the entry to bind. `done:` sits *after*
-`vm_call`'s trailing `pop_frame`, and a hijacked `ret` skips the JIT frame's
-own `pop_frame` — so a frame resumed at `done:` would run with
-`Executor::cfp` and `r14` still pointing at the callee. The published address
-(`Codegen::vm_call_continuation`) is therefore the return address of
-`call_funcdata`'s `call`, one step earlier, so the VM's own `pop_frame` runs.
-Everything else in §3.1 holds: the sequence is entirely stack-driven, so the
-one address serves every send and yield site, on both arches
-(x86 `vm_send`, aarch64 `a64_op_send` just past its `blr`).
+§3.1 proposes tailing every handler into the VM's shared post-call
+continuation, on the grounds that the sequence is entirely stack-driven and
+carries no per-site state. That was **built first and then torn out**, for a
+reason §3.1 missed: the shared continuation re-derives the destination slot
+and the resume pc from the bytecode **assuming a 2-unit send instruction**
+(`movzxw rdi, [r13 + 4]`; `addq r13, 32`; on error `entry_raise`'s
+`r13 - 16` lands on the send's second unit, which the exception table still
+covers *for sends*). But operator call sites — `BinOp` / `Index` / …,
+**1-unit** bytecodes — dispatch through the same `send` emitter and get
+chain-exit handlers too. At such a site the shared continuation reads a
+garbage destination slot, resumes one whole instruction too far, and on a
+propagating exception looks up the exception table at the *following*
+instruction — which silently skips an `ensure` whose protected range ends at
+the operator (found by `Enumerator.new { |y| begin; y << 1; ensure; … }`
+with a raising consumer block, once every error exit escalated).
+
+So the handler now runs its **own per-site continuation** — it statically
+knows the call's `dst` slot and site pc: drop the cont frame, test the
+result; store into `dst` and resume the fetch loop at `pc.next()` (which is
+per-opcode-size correct), or on the error signal hand the *call-site* pc to
+`entry_raise` under each arch's convention (x86 `pc + 1` before the `-16`,
+aarch64 `pc` unchanged). The `Codegen::vm_call_continuation` publication has
+been removed. The cont-frame pc slot is still written at every site
+(`Kernel#caller` reads it) but the handler no longer consumes it.
+
+A hijacked `ret` still skips the JIT frame's own `pop_frame`, so the handler
+performs it first — before the write-back, whose boxing/materializing calls
+can GC, and the mark walk starts from `Executor::cfp`.
 
 ### 8.3 How it is exercised without a firing point
 
-Steps 4–5 do not exist yet, so nothing in a normal build calls
-`Codegen::chain_deopt`. The `chain-deopt` cargo feature (default-off) routes
-`check_bop_redefine` through the walk instead of `immediate_eviction`. The
-two are observationally equivalent — both convert every suspended JIT frame
-into an interpreter frame — and `tests/redefine.rs` already covers exactly
-this shape: `redefine_bop_onstack_caller` fails with the stale inlined `+`
-(8 instead of 999) if the suspended caller resumes its compiled body, so the
-test passing under the feature is a positive signal that the conversion
-happened, not just that nothing crashed.
+Steps 4–5's speculation does not exist yet, so nothing in a normal build
+calls `Codegen::chain_deopt`. Under the `chain-deopt` cargo feature
+(default-off) two things exercise it:
+
+* **BOP eviction** converts by chain instead of by patching: the walks are
+  observationally equivalent — both convert every suspended JIT frame into
+  an interpreter frame — and `tests/redefine.rs` already covers exactly this
+  shape: `redefine_bop_onstack_caller` fails with the stale inlined `+`
+  (8 instead of 999) if the suspended caller resumes its compiled body, so
+  the test passing under the feature is a positive signal that the
+  conversion happened, not just that nothing crashed.
+* **Every side exit escalates** (§8.6): each deopt / recompile-deopt / error
+  exit taken anywhere in the suite fires the walk from the deopting frame,
+  so the deopt → walk → handler-cascade path — the one the speculation will
+  actually take — is exercised at every deopt site the suite reaches, not
+  only at BOP redefinitions.
 
 What this validates: the walk, the return-address rewrite, the handler's
 frame/LFP/FP-pool restore, the write-back, and the hand-off to the VM
 continuation, across normal calls, generic yields, and specialized
 calls/yields. What it does **not** validate is the case chain deopt exists
 for — a frame whose local is *unboxed at the moment of conversion* — because
-under BOP eviction the innermost frame still deopts through its own handler
-first.
+without the `locals_to_S` relaxation no suspended frame ever holds one.
 
 The producers (`AbstractState::chain_exit`) are gated on the same feature, so
 a default build emits no chain-exit handlers at all and pays nothing. When
-step 4 lands, that gate becomes the per-site decision §6 argues for rather
+step 5 lands, that gate becomes the per-site decision §6 argues for rather
 than a build-wide switch.
 
 ### 8.4 A rewritten return-address slot is also on the unwind path
@@ -344,9 +372,10 @@ Worth knowing before building step 4, because it is not obvious: an
 exception does **not** bypass the rewritten slot. `entry_raise` with no
 in-frame handler unwinds by running the frame's ordinary epilogue and
 `ret`ing with the error signal in `rax`/`x0` — so a propagating exception
-lands in the chain-exit handler too, and the handler's tail hands it to the
-VM continuation's `vm_handle_error`, which re-raises from the now-converted
-frame at the call site. Non-local exits (`MethodReturn`, `Break`) take the
+lands in the chain-exit handler too, and the handler's error branch (§8.2)
+hands the call-site pc to `entry_raise`, which re-raises from the
+now-converted frame at the call site — running its `rescue`/`ensure` there
+or unwinding further. Non-local exits (`MethodReturn`, `Break`) take the
 same route, including `method_return_specialized`, which lands in the
 handler belonging to the *outermost* inlined call — the one whose `dst` the
 value is destined for.
@@ -356,7 +385,52 @@ a `rescue`), and it means the handler must be correct for `rax == 0`, not
 only for a normal return. It is: the write-back does not read `rax`, and the
 stash/restore preserves the zero.
 
-### 8.5 Where the code is
+### 8.5 Escalating side exits (§5 step 4's mechanism, §6's mechanical guarantee)
+
+A frame compiled under the speculation must convert its suspended callers on
+**every** path that resumes the interpreter in-frame, not just the `Float`
+guard on the offending store: once the interpreter runs any of the frame's
+bytecode it can reach an outer local through `Load/StoreDynVar`, a `binding`,
+or a capture, and would read the stale slot. §6 asks for a mechanical
+guarantee rather than review discipline, and this is it:
+
+* `JitContext::escalate_side_exits` is the single decision point. It is
+  stamped onto each `AsmIr` at construction, and **every** side-exit
+  constructor (`new_deopt` / `new_deopt_with_pc` / `deopt_from_point` /
+  `new_recompile_deopt` / `new_error`) reads it — an emitter cannot forget
+  to escalate because emitters do not choose. Today it returns
+  `cfg!(feature = "chain-deopt")`; the per-frame speculation flag ORs in
+  here when step 5 lands.
+* An escalated `Deoptimize` / `RecompileDeoptimize` / `Error` handler calls
+  `runtime::chain_deopt(vm)` **after** its write-back (the frame is fully
+  homed, and the walk itself allocates nothing) and before resuming the
+  fetch loop / entering `entry_raise`. The walk starts at the deopting
+  frame's own cfp, so its own return-address slot is rewritten too — that is
+  what converts its caller when the now-interpreted frame eventually
+  returns.
+* `Error` exits escalate because a raise can be rescued *in-frame* (an
+  interpreter resume like any deopt) or unwind through the suspended callers
+  — §8.4's path, which requires the slots to have been rewritten.
+* `Evict` handlers do **not** escalate: they are only entered through the
+  chain-wide eviction walk below, which has already converted (or patched)
+  every suspended frame in one pass.
+
+The walk stops converting where the table stops: an unregistered return
+address marks the boundary of the compilation region that speculated, and
+frames beyond it hold no unboxed cross-frame state, so they may resume their
+compiled bodies. (Under the validation feature every site registers, so the
+walk converts everything — strictly more conversion than needed, which is
+sound for the same reason BOP eviction is.)
+
+BOP eviction itself now goes through one unified walk
+(`Codegen::evict_suspended_frames`): per suspended frame it prefers the
+site's chain-exit handler (rewrite the return-address slot, leave the code
+untouched) and falls back to the recorded patch point (`jmp deopt` written
+into the code). A default build has no chain entries and degenerates to pure
+patching; the feature build is pure chain deopt; with per-site speculation
+the two coexist in one chain.
+
+### 8.6 Where the code is
 
 | Piece | Location |
 |---|---|
@@ -365,5 +439,6 @@ stash/restore preserves the zero.
 | Producers (call / specialized call / yield / specialized yield) | `AbstractState::chain_exit`, `jitgen/compile/method_call.rs` |
 | Handler emission | `gen_chain_exit_with_label` (`jitgen.rs`), `a64_gen_chain_exit` (`arch/aarch64/compile/mod.rs`) |
 | FP-pool reload without popping | `fpr_reload_cont` / `a64_fpr_reload_cont` |
-| Runtime table, VM entry, the walk | `chain_deopt_table`, `vm_call_continuation`, `register_chain_exit`, `chain_deopt` (`codegen.rs`) |
+| Runtime table, the walks | `chain_deopt_table`, `register_chain_exit`, `chain_deopt`, `evict_suspended_frames` (`codegen.rs`) |
+| Escalation switch + runtime entry | `JitContext::escalate_side_exits` (`jitgen/context.rs`), `AsmIr::escalate_exits` (`jitgen/asmir.rs`), `runtime::chain_deopt` (`codegen/runtime.rs`) |
 | Return-address writer | `Cfp::set_return_addr` (`executor/frame.rs`) |

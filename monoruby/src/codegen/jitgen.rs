@@ -1076,6 +1076,7 @@ impl Codegen {
         wb: WriteBack,
         entry: DestLabel,
         base: usize,
+        chain: bool,
     ) {
         let raise = self.entry_raise();
         assert_eq!(0, self.jit.get_page());
@@ -1084,6 +1085,18 @@ impl Codegen {
         entry:
         );
         self.gen_write_back_for_deopt(&wb, base);
+        // Chain escalation (`doc/chain_deopt.md` §5 step 4): the raise may be
+        // rescued *inside* this frame (resuming it in the interpreter) or
+        // unwind through the suspended callers — either way every suspended
+        // JIT frame above must be converted first. The write-back has run, so
+        // the frame is fully homed for the walk.
+        if chain {
+            monoasm!( &mut self.jit,
+                movq rdi, rbx;
+                movq rax, (runtime::chain_deopt);
+                call rax;
+            );
+        }
         monoasm!( &mut self.jit,
             movq r13, ((pc + 1).as_ptr());
             jmp  raise;
@@ -1104,8 +1117,9 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
+        chain: bool,
     ) {
-        self.side_exit_with_label(pc, wb, entry, false, None, loop_jit_spill_bytes, base)
+        self.side_exit_with_label(pc, wb, entry, false, None, loop_jit_spill_bytes, base, chain)
     }
 
     ///
@@ -1126,6 +1140,7 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
+        chain: bool,
     ) {
         self.side_exit_with_label(
             pc,
@@ -1135,6 +1150,7 @@ impl Codegen {
             Some((reason, position)),
             loop_jit_spill_bytes,
             base,
+            chain,
         )
     }
 
@@ -1154,10 +1170,22 @@ impl Codegen {
     ///
     /// So the handler restores the frame (`pop_frame`: `Executor::cfp` and
     /// `r14`), reloads the caller-saved FP pool out of the save area, writes
-    /// every live value back into this frame's local slots, and jumps to the
-    /// VM's post-call continuation — which pops the cont frame to recover the
-    /// resume pc, stores `rax` into the call's destination slot, and resumes
-    /// the fetch loop. From there this frame is an ordinary interpreter frame.
+    /// every live value back into this frame's local slots, and then runs its
+    /// own post-call continuation: drop the cont frame, and either store
+    /// `rax` into the call's destination slot and resume the fetch loop at
+    /// the site's next instruction, or — when `rax` carries the error signal
+    /// (an exception or non-local exit propagating out of the callee) — hand
+    /// the site pc to `entry_raise`, which runs this frame's `rescue` /
+    /// `ensure` or keeps unwinding.
+    ///
+    /// The continuation is per-site rather than the VM's shared send
+    /// continuation deliberately: that continuation re-derives the
+    /// destination slot and the resume pc from the bytecode **assuming a
+    /// 2-unit send instruction**, but operator call sites (`BinOp` / `Index`
+    /// / …, 1-unit bytecodes) dispatch through the same `send` emitter — at
+    /// such a site the shared continuation would read a garbage destination
+    /// slot, skip the following instruction on resume, and miss the
+    /// exception table on a raise (the `y << 1`-inside-`ensure` shape).
     ///
     /// The `pop_frame` has to come **first**, before the write-back: boxing a
     /// float or materializing a deferred rest `Array` allocates, so a GC can
@@ -1176,8 +1204,12 @@ impl Codegen {
         entry: DestLabel,
         base: usize,
         using_fpr: UsingFpr,
+        pc: BytecodePtr,
+        dst: Option<SlotId>,
     ) {
-        let cont = self.vm_call_continuation();
+        let fetch = self.vm_fetch();
+        let raise = self.entry_raise();
+        let error = self.jit.label();
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);
@@ -1185,9 +1217,7 @@ impl Codegen {
         // destinations are r14-relative, and any GC it triggers marks from
         // `Executor::cfp`.
         self.pop_frame();
-        // Reload the FP pool from the save area the call left in place. Loads
-        // only — rsp must stay on the cont frame for the VM continuation's
-        // `popq r13`.
+        // Reload the FP pool from the save area the call left in place.
         self.fpr_reload_cont(using_fpr);
         monoasm!( &mut self.jit,
             subq rsp, 16;
@@ -1196,9 +1226,31 @@ impl Codegen {
         self.gen_write_back_for_deopt(wb, base);
         monoasm!( &mut self.jit,
             movq rax, [rsp + 8];
-            addq rsp, 16;
-            movq rdi, (cont.as_ptr() as u64);
-            jmp  rdi;
+            // Drop the stash and the cont frame ([pc][pad]) in one go — the
+            // resume pc is baked in below, so the slot is no longer needed.
+            addq rsp, 32;
+            testq rax, rax;
+            jeq  error;
+        );
+        // Normal return: store the result and resume interpreting at the
+        // next instruction (`next` skips the 2-unit sends' cache word and
+        // leaves 1-unit operator sites at exactly the following op).
+        if let Some(dst) = dst {
+            monoasm!( &mut self.jit,
+                movq [r14 - (conv(dst))], rax;
+            );
+        }
+        monoasm!( &mut self.jit,
+            movq r13, (pc.next().as_ptr());
+            jmp  fetch;
+        );
+        // Error / non-local-exit signal: `entry_raise` subtracts one unit
+        // from r13, so hand it `pc + 1` to deliver the call-site pc — the
+        // same convention as `gen_handle_error`.
+        monoasm!( &mut self.jit,
+        error:
+            movq r13, ((pc + 1).as_ptr());
+            jmp  raise;
         );
         self.jit.select_page(0);
     }
@@ -1214,7 +1266,10 @@ impl Codegen {
         loop_jit_spill_bytes: usize,
         base: usize,
     ) {
-        self.side_exit_with_label(pc, wb, entry, true, None, loop_jit_spill_bytes, base)
+        // Evict handlers are only entered through a chain-wide eviction walk,
+        // which converts (or patches) every suspended frame in one pass — no
+        // per-handler escalation needed.
+        self.side_exit_with_label(pc, wb, entry, true, None, loop_jit_spill_bytes, base, false)
     }
 
     ///
@@ -1232,6 +1287,7 @@ impl Codegen {
         recompile: Option<(RecompileReason, Option<BytecodePtr>)>,
         loop_jit_spill_bytes: usize,
         base: usize,
+        chain: bool,
     ) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -1277,6 +1333,17 @@ impl Codegen {
                 movq rsi, r12;
                 movq rdx, r13;
                 movq rax, (crate::globals::log_deoptimize);
+                call rax;
+            );
+        }
+        // Chain escalation (`doc/chain_deopt.md` §5 step 4): convert every
+        // suspended JIT frame in the caller chain before this frame resumes
+        // in the interpreter. Runs after the write-back (the frame is fully
+        // homed in the LFP) and before the recompile hook / fetch.
+        if chain {
+            monoasm!( &mut self.jit,
+                movq rdi, rbx;
+                movq rax, (runtime::chain_deopt);
                 call rax;
             );
         }

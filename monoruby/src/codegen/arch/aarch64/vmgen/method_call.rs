@@ -167,14 +167,6 @@ impl Codegen {
             ldr x10, [x15, #(FUNCDATA_CODEPTR as u32)];
             blr x10;
         );
-        // Chain deopt tails into the frame-restoring continuation that starts
-        // here (`doc/chain_deopt.md` §3.1): the address just past the `blr`,
-        // *before* the pop_frame below — a hijacked `ret` skips the JIT
-        // frame's own pop_frame, so the sequence a converted frame resumes
-        // through has to contain one. Carries no per-site state, so this one
-        // address serves every send and yield site.
-        let call_return_addr = self.jit.get_current_address();
-        self.set_vm_call_continuation(call_return_addr);
         monoasm_arm64!(&mut self.jit,
         // pop_frame: EXEC.cfp = (X29 - BP_CFP). Mirrors x86 `lea r14,[rbp-8]`
         // — set EXEC.cfp to the *address* of this frame's CFP descriptor (set

@@ -277,28 +277,47 @@ impl LAluOp {
 /// `SideExit` cases the JIT records while building `AsmIr`.
 #[derive(Debug, Clone)]
 pub(in crate::codegen::jitgen) enum LSideExitKind {
-    /// Plain deoptimization back to the VM fetch loop.
-    Deopt,
+    /// Plain deoptimization back to the VM fetch loop. `chain` escalates the
+    /// exit to chain deopt (`doc/chain_deopt.md` §5 step 4 / §6): after the
+    /// write-back the handler calls `runtime::chain_deopt`, converting every
+    /// suspended JIT frame in the caller chain into an interpreter frame
+    /// before this frame resumes in the interpreter.
+    Deopt {
+        chain: bool,
+    },
     /// Immediate eviction (BOP redefinition) — same shape as `Deopt`, with a
-    /// distinct `cfg(deopt/profile)` log reason.
+    /// distinct `cfg(deopt/profile)` log reason. Never chain-escalated: the
+    /// handler is only entered through a chain-wide eviction walk, which has
+    /// already converted (or patched) every suspended frame in one pass.
     Evict,
     /// Deopt that, once a miss counter is exhausted, recompiles the method/loop
-    /// (x86 only; aarch64 treats it as a plain `Deopt`).
+    /// (x86 only; aarch64 treats it as a plain `Deopt`). `chain` as on `Deopt`.
     RecompileDeopt {
         reason: RecompileReason,
         position: Option<BytecodePtr>,
+        chain: bool,
     },
     /// Error handler: write back then jump to the raise/`handle_error` path.
-    Error,
+    /// `chain` as on `Deopt` — an in-frame `rescue` resumes this frame in the
+    /// interpreter, and an unwinding raise `ret`s through the (now rewritten)
+    /// return-address slots of the suspended callers (`doc/chain_deopt.md`
+    /// §8.4), so the walk must have run either way.
+    Error {
+        chain: bool,
+    },
     /// Chain-exit handler (`doc/chain_deopt.md`): entered by `ret` — not by a
     /// branch from the frame's own body — after the chain-deopt walk has
     /// rewritten this call's return-address slot. It restores the caller's
     /// frame registers (the `pop_frame` the hijacked continuation skipped),
     /// reloads the FP pool out of the call's `FprSave` area (`using_fpr`),
-    /// writes back, and tails into the VM's post-call continuation, which
-    /// stores the callee's result and resumes interpreting this frame.
+    /// writes back, and runs its own post-call continuation: store the
+    /// callee's result into `dst` and resume the fetch loop at the site's
+    /// next instruction, or on an error signal hand the site pc to
+    /// `entry_raise`. (Per-site, because the VM's shared send continuation
+    /// assumes a 2-unit send bytecode — wrong for 1-unit operator sites.)
     ChainExit {
         using_fpr: UsingFpr,
+        dst: Option<SlotId>,
     },
 }
 

@@ -973,28 +973,29 @@ impl Codegen {
                 loop_jit_spill_bytes,
                 base,
             } => match kind {
-                LSideExitKind::Deopt => {
-                    self.gen_deopt_with_label(pc, &wb, entry, loop_jit_spill_bytes, base)
+                LSideExitKind::Deopt { chain } => {
+                    self.gen_deopt_with_label(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
                 }
                 LSideExitKind::Evict => {
                     self.gen_evict_with_label(pc, &wb, entry, loop_jit_spill_bytes, base)
                 }
-                LSideExitKind::RecompileDeopt { reason, position } => self
-                    .gen_recompile_deopt_with_label(
-                        pc,
-                        &wb,
-                        reason,
-                        position,
-                        entry,
-                        loop_jit_spill_bytes,
-                        base,
-                    ),
-                LSideExitKind::Error => self.gen_handle_error(pc, wb, entry, base),
-                // The chain exit needs no `pc`: it tails into the VM's
-                // post-call continuation, which reads the resume pc off the
-                // stack (`doc/chain_deopt.md` §3.1).
-                LSideExitKind::ChainExit { using_fpr } => {
-                    self.gen_chain_exit_with_label(&wb, entry, base, using_fpr)
+                LSideExitKind::RecompileDeopt {
+                    reason,
+                    position,
+                    chain,
+                } => self.gen_recompile_deopt_with_label(
+                    pc,
+                    &wb,
+                    reason,
+                    position,
+                    entry,
+                    loop_jit_spill_bytes,
+                    base,
+                    chain,
+                ),
+                LSideExitKind::Error { chain } => self.gen_handle_error(pc, wb, entry, base, chain),
+                LSideExitKind::ChainExit { using_fpr, dst } => {
+                    self.gen_chain_exit_with_label(&wb, entry, base, using_fpr, pc, dst)
                 }
             },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the

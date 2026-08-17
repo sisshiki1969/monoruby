@@ -486,7 +486,7 @@ Modes via `MONORUBY_TEST_ORACLE`:
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
 | `dump-require`      | Log `require`/`load` file resolution                                   |
-| `chain-deopt`       | Emit per-call-site chain-exit handlers and route on-stack (BOP) eviction through the chain-deopt walk instead of return-continuation patching — the validation switch for `doc/chain_deopt.md`'s mechanism |
+| `chain-deopt`       | Emit per-call-site chain-exit handlers and escalate every deopt / error side exit through the chain-deopt walk (BOP eviction converts by chain instead of patching too) — the validation switch for `doc/chain_deopt.md`'s mechanism |
 
 The JIT is always compiled in regardless of features; it is disabled at runtime
 with the `--no-jit` flag. The old `jit`/`jit_x86` build cfgs and the `no-jit`

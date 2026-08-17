@@ -830,7 +830,7 @@ impl<'a> JitContext<'a> {
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
         ir.push(AsmInst::SpecializedYield { entry, evict });
-        state.chain_exit(ir, evict, using_fpr);
+        state.chain_exit(ir, evict, using_fpr, dst);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         let res = state.def_rax2acc_return(ir, dst, return_state);
@@ -1436,7 +1436,7 @@ impl AbstractState {
             evict,
             pc: self.pc(),
         });
-        self.chain_exit(ir, evict, using_fpr);
+        self.chain_exit(ir, evict, using_fpr, dst);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         // When a capture guard follows (the callee may `move_frame_to_heap`,
@@ -1501,7 +1501,7 @@ impl AbstractState {
             patch_point,
             evict,
         });
-        self.chain_exit(ir, evict, using_fpr);
+        self.chain_exit(ir, evict, using_fpr, store[callid].dst);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         self.unset_side_effect_guard();
@@ -1539,7 +1539,7 @@ impl AbstractState {
             error,
             evict,
         });
-        self.chain_exit(ir, evict, using_fpr);
+        self.chain_exit(ir, evict, using_fpr, dst);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         // A yielded block can capture this frame; home the result via the LFP
@@ -1572,9 +1572,9 @@ impl AbstractState {
     /// `chain-deopt` feature. When the speculation lands, this becomes the
     /// per-site decision §6 argues for rather than a build-wide switch.
     ///
-    fn chain_exit(&self, ir: &mut AsmIr, evict: AsmEvict, using_fpr: UsingFpr) {
+    fn chain_exit(&self, ir: &mut AsmIr, evict: AsmEvict, using_fpr: UsingFpr, dst: Option<SlotId>) {
         if cfg!(feature = "chain-deopt") {
-            let chain = ir.new_chain_exit(self, using_fpr);
+            let chain = ir.new_chain_exit(self, using_fpr, dst);
             ir.push(AsmInst::ChainExit { evict, chain });
         }
     }

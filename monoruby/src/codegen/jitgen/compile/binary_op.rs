@@ -648,7 +648,7 @@ impl<'a> JitContext<'a> {
         // aarch64 dispatch-slot zeroing in `invalidate_jit_code`), the VM's
         // `loop_start` handler is swapped for the no-opt one so stale OSR
         // loop bodies are never re-entered, and on-stack frames deopt on
-        // return via `immediate_eviction`'s return-address patching (see
+        // return via the eviction walk's return-address patching (see
         // `emit_call`). A `def` executed *inside* JIT code is caught by the
         // `check_bop` after `MethodDef`/`SingletonMethodDef`.
         match self.fire_binary_inline(

@@ -10,6 +10,24 @@ pub const PROCDATA_FUNCID: i64 = std::mem::offset_of!(ProcData, func_id) as _;
 // Runtime functions.
 //
 
+/// Escalated side exit (`doc/chain_deopt.md` §5 step 4 / §6): run the
+/// chain-deopt walk from a deopting frame, converting every suspended JIT
+/// frame in the caller chain into an interpreter frame before this frame
+/// falls back to the interpreter (or starts unwinding a raise).
+///
+/// Called from a chain-escalated side-exit handler **after** its deopt
+/// write-back, so the current frame is fully homed in the LFP; the walk
+/// itself only rewrites return-address slots on the stack (no allocation),
+/// so no GC can run inside it. The deopting frame's *own* return-address
+/// slot is rewritten too — that is what converts its caller once the
+/// now-interpreted frame eventually returns.
+pub(super) extern "C" fn chain_deopt(vm: &mut Executor) {
+    let cfp = vm.cfp();
+    #[cfg(any(feature = "deopt", feature = "profile"))]
+    eprintln!("### chain deopt: escalated from {:?}", cfp.lfp().func_id());
+    CODEGEN.with(|codegen| codegen.borrow_mut().chain_deopt(cfp));
+}
+
 /// Resolve the method for a call-site inline-cache miss.
 ///
 /// Returns the resolved `FuncId` in the **low 32 bits** (0 = not found /
