@@ -661,18 +661,17 @@ pub struct Codegen {
 
     compilation_unit: Vec<CompilationUnitInfo>,
 
-    /// return_addr => (patch_point, deopt)
-    return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
+    /// A call site's `AsmEvict` id => the return address of its call
+    /// instruction, recorded by `set_deopt_with_return_addr` at emission.
+    /// The id is how `AsmInst::ChainExit` — pushed after the call, when the
+    /// address itself is no longer at hand — names the site it belongs to.
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
     /// `doc/chain_deopt.md` §5 step 1 / §9.3: a suspended call's return
     /// address => the data needed to convert the suspended caller frame
     /// eagerly (replay its write-back from Rust, hand the shared VM
-    /// continuation stub its per-site `dst`/resume data). Keyed identically
-    /// to `return_addr_table` (§3.4), because both are looked up from a
-    /// suspended frame's return-address slot; the two differ in what they do
-    /// with the hit — `return_addr_table` patches the frame's *code* at the
-    /// recorded continuation, this one drives a stack-only conversion so
-    /// control leaves JIT code on `ret`.
+    /// continuation stub its per-site `dst`/resume data). Keyed by the
+    /// return-address slot of a suspended frame (§3.4), which is all the
+    /// walk has to go on.
     chain_deopt_table: HashMap<CodePtr, ChainReplay>,
     /// The shared chain-deopt post-call continuation stub
     /// (`gen_chain_cont_stub`): the single address every converted frame's
@@ -1056,7 +1055,6 @@ impl Codegen {
             alloc_used_addr: std::ptr::null_mut(),
             alloc_page_addr: std::ptr::null_mut(),
             compilation_unit: Vec::new(),
-            return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
             chain_deopt_table: HashMap::default(),
             chain_cont_stub: entry_panic.clone(),
@@ -1470,7 +1468,7 @@ impl Codegen {
         let plan = CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             if std::mem::replace(&mut codegen.bop_eviction_pending, false) {
-                codegen.evict_suspended_frames(cfp)
+                codegen.chain_deopt(cfp)
             } else {
                 Vec::new()
             }
@@ -1496,102 +1494,11 @@ impl Codegen {
         unsafe { *addr }
     }
 
-    ///
-    /// Convert (or arrange to deopt) every suspended JIT frame in *cfp*'s
-    /// control-frame chain, after a basic-op redefinition made their compiled
-    /// continuations stale. Per-frame, the mechanism is chosen by what the
-    /// call site registered:
-    ///
-    /// * a **chain conversion** (`chain_deopt_table`) — plan the eager
-    ///   conversion (`doc/chain_deopt.md` §2/§9.3): replay the suspended
-    ///   caller's write-back and rewrite the frame's return-address slot to
-    ///   the shared VM continuation stub, leaving the compiled body
-    ///   untouched. Returned to the caller for application outside the
-    ///   `CODEGEN` borrow (the replay allocates);
-    /// * otherwise a **patch point** (`return_addr_table`) — overwrite the
-    ///   call's return continuation in the *code* with a `jmp deopt`
-    ///   (immediate eviction), done in place.
-    ///
-    /// A default build registers no chain entries, so this degenerates to
-    /// pure immediate eviction; under the `chain-deopt` feature every site
-    /// registers and the walk is pure chain deopt. When the unboxed-locals
-    /// speculation (§5 step 5) lands, speculative call sites register
-    /// per-site and the two mechanisms coexist in one chain.
-    ///
-    #[must_use]
-    fn evict_suspended_frames(&mut self, mut cfp: Cfp) -> Vec<ChainConversion> {
-        let stub = self.jit.get_label_address(&self.chain_cont_stub);
-        let mut plan = Vec::new();
-        let mut return_addr = unsafe { cfp.return_addr() };
-        while let Some(prev_cfp) = cfp.prev() {
-            if let Some(ret) = return_addr
-                && !self.check_vm_address(ret)
-            {
-                if let Some(replay) = self.chain_deopt_table.get(&ret).cloned() {
-                    #[cfg(any(feature = "deopt", feature = "profile"))]
-                    eprintln!("### bop eviction: frame return {ret:?} -> chain conversion");
-                    plan.push(ChainConversion::new(cfp, prev_cfp, replay, stub));
-                } else if let Some((patch_point, deopt)) = self.get_deopt_with_return_addr(ret) {
-                    let patch_point = patch_point.unwrap();
-                    self.patch_return_to_deopt(patch_point, &deopt);
-                }
-            }
-            cfp = prev_cfp;
-            return_addr = unsafe { cfp.return_addr() };
-        }
-        plan
-    }
-
-    /// Overwrite the instruction(s) at a specialized call's return continuation
-    /// (`patch_point`) so the now-stale frame deopts when control returns to it.
-    /// x86 has a coherent I-cache and RWX pages, so it just writes the
-    /// `jmp deopt` in place.
-    #[cfg(target_arch = "x86_64")]
-    fn patch_return_to_deopt(&mut self, patch_point: CodePtr, deopt: &DestLabel) {
-        self.jit.apply_jmp_patch_address(patch_point, deopt);
-        unsafe { patch_point.as_ptr().write(0xe9) };
-    }
-
-    /// aarch64 twin: overwrite the single 4-byte instruction at `patch_point`
-    /// with an unconditional `B deopt` (`0x14000000 | imm26`). Unlike x86 this
-    /// must (a) make the page writable and (b) synchronize the I-cache, since
-    /// AArch64 does not keep I/D caches coherent across self-modifying code —
-    /// `set_writable`/`set_executable` handle both (the latter invalidates the
-    /// I-cache; both are no-ops on Linux's RWX pages except that invalidation).
-    #[cfg(target_arch = "aarch64")]
-    fn patch_return_to_deopt(&mut self, patch_point: CodePtr, deopt: &DestLabel) {
-        self.jit.set_writable();
-        let dest = self.jit.get_label_address(deopt);
-        // Byte displacement from the patch point to the deopt handler; both are
-        // 4-byte aligned, so imm26 = disp / 4 (B's range is ±128 MiB). In the
-        // intended use the evict handler sits in the same compilation unit as
-        // the call site, so the distance is tiny — assert the range so an
-        // out-of-range pair (a table-corruption symptom) panics instead of
-        // silently branching to a masked wrong target.
-        let disp = dest - patch_point;
-        debug_assert!(
-            (-(1i64 << 27)..(1i64 << 27)).contains(&(disp as i64)),
-            "patch_return_to_deopt: B displacement out of imm26 range: {disp:#x}"
-        );
-        let imm26 = ((disp >> 2) as u32) & 0x03ff_ffff;
-        let word = 0x1400_0000u32 | imm26;
-        unsafe { (patch_point.as_ptr() as *mut u32).write(word) };
-        self.jit.set_executable();
-    }
-
-    fn get_deopt_with_return_addr(
-        &self,
-        return_addr: CodePtr,
-    ) -> Option<(Option<CodePtr>, DestLabel)> {
-        self.return_addr_table.get(&return_addr).cloned()
-    }
-
     /// `LInst::ChainExit`: map this call's return address (recorded moments
     /// ago by `set_deopt_with_return_addr` under the same `evict` id) to its
     /// replay data.
     ///
-    /// The `unwrap` is load-bearing for the same reason as
-    /// `emit_immediate_evict`'s: `AsmEvict` ids restart per block while
+    /// The `unwrap` is load-bearing: `AsmEvict` ids restart per block while
     /// `asm_return_addr_table` is never cleared, so a producer that forgot to
     /// register its return address would silently pick up a stale same-id
     /// entry and give an unrelated live call site the wrong replay data.
@@ -1605,6 +1512,16 @@ impl Codegen {
     /// control-frame chain into an interpreter frame (`doc/chain_deopt.md`
     /// §2, eager form §9.3).
     ///
+    /// This is the **only** way an on-stack JIT frame is dropped to the
+    /// interpreter, and it serves both callers: an escalated side exit
+    /// (`runtime::chain_deopt`), and a basic-op redefinition that made every
+    /// suspended compiled continuation stale (`Self::check_bop_redefine`).
+    /// The two used to differ — BOP eviction additionally patched a `jmp
+    /// deopt` into the *code* at the call's return continuation for sites
+    /// with no chain entry — but registration is now unconditional, so that
+    /// fallback covered nothing the walk does not, and self-modifying code
+    /// has left the picture entirely.
+    ///
     /// Each frame is left exactly where it is. Applying a planned
     /// [`ChainConversion`] replays the suspended caller's write-back (boxing
     /// its unboxed floats into its local slots) and rewrites the callee's
@@ -1612,13 +1529,11 @@ impl Codegen {
     /// with the site's `dst`/resume word in the cont-frame pad slot. Control
     /// therefore never re-enters a compiled body: as the innermost frame
     /// (and then each frame in turn) returns, the `ret` lands in the stub,
-    /// which stores the result and resumes the fetch loop. The plan is
-    /// returned instead of applied because the replay allocates and this
-    /// runs under the `CODEGEN` borrow (see `runtime::chain_deopt`).
-    ///
-    /// Unlike [`Self::evict_suspended_frames`]' return-address patching this
-    /// touches no machine code, so a compiled body that is still valid for
-    /// *future* invocations survives.
+    /// which stores the result and resumes the fetch loop. Because no machine
+    /// code is touched, a compiled body that is still valid for *future*
+    /// invocations survives. The plan is returned instead of applied because
+    /// the replay allocates and this runs under the `CODEGEN` borrow (see
+    /// `runtime::chain_deopt`).
     ///
     /// Frames whose return address is in VM code or an invoker are already
     /// interpreted (or are a foreign entry) and are skipped, but the walk
@@ -1628,11 +1543,9 @@ impl Codegen {
     /// slots may since have been updated through `outer_lfp` by interpreted
     /// inner frames, and a second replay would clobber them with stale
     /// floats. A JIT return address with no table entry is likewise skipped:
-    /// for BOP eviction the patching walk covers those sites, and for an
-    /// escalated side exit (`runtime::chain_deopt`) an unregistered site
-    /// marks the boundary of the compilation region that speculated — frames
-    /// beyond it hold no unboxed cross-frame state and may resume their
-    /// compiled bodies.
+    /// every JIT call/yield site registers, so what remains is a frame
+    /// entered by something that is not a compiled call site, and it holds
+    /// no cross-frame state this walk is responsible for.
     ///
     #[must_use]
     pub(crate) fn chain_deopt(&mut self, mut cfp: Cfp) -> Vec<ChainConversion> {
@@ -1640,8 +1553,14 @@ impl Codegen {
         let mut plan = Vec::new();
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
-            if let Some(ret) = return_addr
-                && !self.check_vm_address(ret)
+            // A frame with a previous control frame was entered by a
+            // `call`/`bl`, so its return-address slot holds a real address.
+            // `None` means the CFP chain or the frame layout is corrupt;
+            // skipping the frame would silently leave it running a compiled
+            // body this walk has just decided must not run, so abort loudly
+            // instead (as the pre-chain-deopt eviction walk always did).
+            let ret = return_addr.expect("suspended control frame has a null return address");
+            if !self.check_vm_address(ret)
                 && let Some(replay) = self.chain_deopt_table.get(&ret).cloned()
             {
                 #[cfg(any(feature = "deopt", feature = "profile"))]
@@ -1657,11 +1576,10 @@ impl Codegen {
     /// aarch64 specialized recompile: overwrite the single 4-byte `bl entry`
     /// instruction at `patch_point` (the `SpecializedCall` site, bound just
     /// before the `bl` in `do_specialized_call`) so it now branches into
-    /// the freshly compiled body at `entry`. The twin of
-    /// [`Self::patch_return_to_deopt`] but writing a `BL` (`0x9400_0000 |
-    /// imm26`) instead of a `B`: same ±128 MiB range and the same
-    /// writable / I-cache-synchronize dance (AArch64 has no I/D coherence for
-    /// self-modifying code). The new `bl` keeps the same return continuation
+    /// the freshly compiled body at `entry`. Writes a `BL` (`0x9400_0000 |
+    /// imm26`) with a ±128 MiB range, under the writable / I-cache-synchronize
+    /// dance AArch64 requires for self-modifying code (it keeps no I/D
+    /// coherence). The new `bl` keeps the same return continuation
     /// (the next instruction), so the post-call frame teardown is unchanged.
     #[cfg(target_arch = "aarch64")]
     fn patch_call_to_entry(&mut self, patch_point: CodePtr, entry: &DestLabel) {

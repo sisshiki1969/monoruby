@@ -916,9 +916,6 @@ pub(in crate::codegen) enum LInst {
     BlockBreak {
         pc: BytecodePtr,
     },
-    ImmediateEvict {
-        evict: AsmEvict,
-    },
     /// Register `evict`'s already-recorded call return address as the key for
     /// `replay` in the runtime chain-deopt table. Emits no machine code.
     ChainExit {
@@ -974,7 +971,6 @@ pub(in crate::codegen) enum LInst {
         simple: bool,
         error: DestLabel,
         evict: AsmEvict,
-        evict_label: DestLabel,
     },
     Unreachable,
     RestKw {
@@ -1068,7 +1064,6 @@ pub(in crate::codegen) enum LInst {
         /// `jit_entry` directly) and for uncompiled/unknown-class callees.
         jit_slot: Option<u64>,
         evict: AsmEvict,
-        evict_label: DestLabel,
     },
     /// A cold side-exit (deopt) handler block: bind `entry`, undo any loop-JIT
     /// sp bump, write `wb` back to the LFP, then resume the VM / unwind. The

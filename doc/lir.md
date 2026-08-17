@@ -112,7 +112,7 @@ benefit. The `lir.rs` unit test uses `matches!` instead of `==`.
 | Dispatch helpers (macro-op) | `GenericBinOp`, `OptEqCmp`, `ArrayTEq`, `CheckKwRest`, `RestKw` |
 | Definition (macro-op) | `MethodDef`, `SingletonMethodDef`, `ClassDef`, `SingletonClassDef`, `AliasMethod`, `UndefMethod` |
 | Method-prologue guards (macro-op) | `GuardClassVersion`, `RecompileDeopt`, `CheckStack`, `ExecGc`, `Init`, `LoopJitRspBump` |
-| Control flow / exceptions (macro-op) | `Ret`, `MethodRet`, `BlockBreak`, `Raise`, `Retry`, `Redo`, `EnsureEnd`, `Yield`, `BlockArgProxy`, `BlockArg`, `ImmediateEvict`, `Deopt`, `HandleError`, `Unreachable` |
+| Control flow / exceptions (macro-op) | `Ret`, `MethodRet`, `BlockBreak`, `Raise`, `Retry`, `Redo`, `EnsureEnd`, `Yield`, `BlockArgProxy`, `BlockArg`, `ChainExit`, `Deopt`, `HandleError`, `Unreachable` |
 
 `Lir` is a thin `Vec<LInst>` builder used where a multi-instruction sequence is
 convenient.
@@ -346,12 +346,13 @@ The remaining things handled **directly** (not through `encode_linst`):
   `send`, `fiddle`, the remaining integer shift/division guards, `object_id`
   (a runtime call). Several would still benefit from a couple of generic
   FP/branch/call LIR primitives.
-- **Pure patch / recompile *bookkeeping*** — the x86/aarch64 *non-coverage*
-  asymmetry of `doc/arch_difference.md` §4. The deopt *handler emission* now
-  goes through LIR (above); what stays out is the part that **emits no bytes**:
-  `ImmediateEvict` records a `return_addr_table` patch point (zero bytes), and
-  the actual return-address overwrite happens at BOP-redefinition time, not at
-  compile time. The clean invariant is therefore:
+- **Pure registration / recompile *bookkeeping*** — the x86/aarch64
+  *non-coverage* asymmetry of `doc/arch_difference.md` §4. The deopt *handler
+  emission* now goes through LIR (above); what stays out is the part that
+  **emits no bytes**: `ChainExit` records a call site's replay data in
+  `chain_deopt_table` (zero bytes), and the actual frame conversion happens at
+  BOP-redefinition / deopt time, not at compile time. The clean invariant is
+  therefore:
 
 > `encode_linst` is the single seam for byte **emission**; zero-byte
 > code-position metadata / runtime patch bookkeeping is *not* emission and stays

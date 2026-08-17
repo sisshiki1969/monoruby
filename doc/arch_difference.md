@@ -19,8 +19,8 @@ aarch64 port (`#704`) and the chunked-literal frame-size fix (`#709`).
 > could not lower, and catalogued ~two dozen bail sites. **That is no longer
 > true.** As of `#704` aarch64 lowers every `AsmInst` and every side exit, so it
 > never bails out of JIT compilation. The sections below describe the current,
-> bail-free state; §4 covers the asymmetries that *do* remain (recompilation
-> strategy and eviction patching — not coverage).
+> bail-free state; §4 covers the asymmetry that *does* remain (recompilation
+> strategy — not coverage).
 
 ---
 
@@ -138,14 +138,15 @@ aarch64 lowers what used to bail". The remaining *non-bail* asymmetries are in
 
 ---
 
-## 4. Remaining asymmetry: recompilation & eviction patching (not coverage)
+## 4. Remaining asymmetry: recompilation strategy (not coverage)
 
-Two mechanisms still differ, both centered on **patching / recompiling
-already-emitted code**, and both scoped to **non-specialized** frames. Neither
-is a coverage gap: where x86 patches or recompiles in place, aarch64 deopts to
-the VM, which then re-JITs through the normal warm-up counters. Correctness is
-identical; only the recompile *strategy* (and thus steady-state performance
-after a class-version change or BOP redefinition) differs.
+One mechanism still differs — **recompiling already-emitted code** on a
+class-version miss, and only for **non-specialized** frames. It is not a
+coverage gap: where x86 recompiles in place, aarch64 deopts to the VM, which
+then re-JITs through the normal warm-up counters. Correctness is identical;
+only the recompile *strategy* (and thus steady-state performance after a
+class-version change) differs. §4.2 records an eviction asymmetry that no
+longer exists.
 
 ### 4.1 Class-version-miss recompilation
 
@@ -173,32 +174,20 @@ after a class-version change or BOP redefinition) differs.
 So the gap is specifically the **non-specialized method/loop class-version
 guard**: x86 recompiles, aarch64 deopts.
 
-### 4.2 Eviction via return-address patching (BOP redefinition)
+### 4.2 On-stack eviction (BOP redefinition) — no longer asymmetric
 
-- **x86-64:** the regular `Call` / `Yield` records, per call site, the return
-  address plus a patch point (`emit_call` → `set_deopt_with_return_addr`,
-  [x86_64/compile/mod.rs:1285](../monoruby/src/codegen/arch/x86_64/compile/mod.rs#L1285)).
-  On **BOP (basic-op) redefinition** it rewrites the live return path to
-  redirect into a deopt handler — *without* recompiling.
-- **aarch64:** `a64_do_call`
-  ([aarch64/compile.rs:825](../monoruby/src/codegen/arch/aarch64/compile.rs#L825))
-  **skips** the return-address patching for the regular `Call`/`Yield` —
-  *"The eviction-on-return patching (`set_deopt_with_return_addr`) is x86-only
-  (runtime branch patching), so it is skipped — class-version changes are
-  caught by `GuardClassVersion` deopts instead."*
-- **Specialized calls/yields are symmetric:** aarch64 *does* implement
-  return-address patching for the specialized inlined-frame path —
-  `do_specialized_call`
-  ([aarch64/compile.rs:1068](../monoruby/src/codegen/arch/aarch64/compile.rs#L1068))
-  records the return address via `set_deopt_with_return_addr`
-  ([aarch64/compile.rs:2433](../monoruby/src/codegen/arch/aarch64/compile.rs#L2433)),
-  and `emit_immediate_evict`
-  ([aarch64/compile.rs:2416](../monoruby/src/codegen/arch/aarch64/compile.rs#L2416))
-  overwrites the recorded instruction on eviction.
+This section used to record an asymmetry: x86 recorded a return-address patch
+point at every call site and, on **BOP (basic-op) redefinition**, wrote a `jmp`
+into the live return path so the suspended frame deopted; aarch64 did that for
+specialized calls only, and relied on the inline class-version deopt for the
+rest.
 
-So the gap is specifically the **non-specialized `Call`/`Yield`**: x86 patches
-the return path for BOP eviction, aarch64 relies on the inline class-version
-deopt.
+Both halves are gone. Every call/yield site on both arches now records its
+return address (`set_deopt_with_return_addr`) purely as a *key*, and BOP
+redefinition runs the arch-neutral chain-deopt walk (`Codegen::chain_deopt`),
+which converts each suspended JIT frame into an interpreter frame from the
+stack alone — no code is patched, on either arch. See `doc/chain_deopt.md`
+§10.
 
 ---
 
@@ -213,7 +202,7 @@ deopt.
 | `guard_capture`               | yes (`branch_if_captured`)                                       | yes                                                                    |
 | `float_to_f64` unbox          | yes (flonum / heap-Float, 0.0 sign-bit trick)                    | yes (mirrored)                                                         |
 | class-version guard           | inline check **+ recompile + recovery** (page split, §4.1)       | inline check, **deopt only** for non-specialized; recompile for specialized frames (§4.1) |
-| eviction on BOP redefinition  | return-address patching for regular & specialized calls (§4.2)  | return-address patching for **specialized** calls only; regular calls rely on class-version deopt (§4.2) |
+| eviction on BOP redefinition  | arch-neutral chain-deopt walk, no code patching (§4.2)          | identical (§4.2)                                                        |
 
 Both `a64_guard_class` and `a64_guard_rvalue` always emit (they return a `bool`
 for symmetry with x86, but never return `false` — every `ClassId` is handled,
@@ -278,7 +267,7 @@ identically to `Slot`.
 > x86-64 and aarch64 now share the entire AsmIR front-end *and* full AsmInst
 > coverage — aarch64 lowers everything (large immediates via scratch
 > registers), so the `bool` bail return is vestigial. The only remaining
-> asymmetries are non-coverage: x86 recompiles-in-place / patches live return
-> addresses for **non-specialized** class-version misses and BOP eviction,
-> where aarch64 deopts to the VM and re-JITs (specialized frames are symmetric);
-> plus the x86-only `guard_class2` BigNum-routing helper.
+> asymmetries are non-coverage: x86 recompiles-in-place on a **non-specialized**
+> class-version miss where aarch64 deopts to the VM and re-JITs (specialized
+> frames are symmetric); plus the x86-only `guard_class2` BigNum-routing
+> helper. BOP eviction is now the same arch-neutral chain-deopt walk on both.

@@ -470,6 +470,12 @@ impl ChainReplay {
             // SAFETY: as above.
             unsafe { caller_lfp.set_register(*slot, Some(*v)) };
         }
+        // `void` nil-fills `LinkMode::V` slots. `get_write_back` — the
+        // constructor every `ChainExitSpec` goes through — hard-codes it
+        // empty, so this is expected to be a no-op; it is replayed anyway
+        // rather than asserted, because the identical "only the GC write-back
+        // populates `void`" argument turned out to be false for
+        // `gen_write_back_for_deopt`, which does receive populated ones.
         for slot in &self.wb.void {
             // SAFETY: as above.
             unsafe { caller_lfp.set_register(*slot, Some(Value::nil())) };
@@ -506,9 +512,9 @@ impl ChainReplay {
 }
 
 ///
-/// One frame's worth of eager chain-deopt conversion, produced by the walks
-/// (`Codegen::chain_deopt` / `Codegen::evict_suspended_frames`) and applied
-/// by their callers *after* the `CODEGEN` borrow is released — the replay
+/// One frame's worth of eager chain-deopt conversion, produced by the walk
+/// (`Codegen::chain_deopt`) and applied by its callers *after* the
+/// `CODEGEN` borrow is released — the replay
 /// allocates (boxing, rest-`Array`/kwrest-`Hash` materialization) and so can
 /// run a GC, which must not happen while the thread-local is held.
 ///

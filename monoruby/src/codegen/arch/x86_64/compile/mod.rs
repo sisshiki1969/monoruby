@@ -103,7 +103,6 @@ impl Codegen {
             | AsmInst::Ret
             | AsmInst::MethodRet(..)
             | AsmInst::BlockBreak(..)
-            | AsmInst::ImmediateEvict { .. }
             | AsmInst::ChainExit { .. }
             | AsmInst::GuardClassVersion { .. }
             | AsmInst::ContFramePc { .. }
@@ -1523,15 +1522,11 @@ impl Codegen {
         }
     }
 
-    pub(super) fn set_deopt_with_return_addr(
-        &mut self,
-        return_addr: CodePtr,
-        evict: AsmEvict,
-        evict_label: &DestLabel,
-    ) {
+    /// Record `return_addr` — the address the callee will `ret` to — under
+    /// this call site's `evict` id, so the `AsmInst::ChainExit` pushed just
+    /// after the call can key its replay data by it (`register_chain_exit`).
+    pub(super) fn set_deopt_with_return_addr(&mut self, return_addr: CodePtr, evict: AsmEvict) {
         self.asm_return_addr_table.insert(evict, return_addr);
-        self.return_addr_table
-            .insert(return_addr, (None, evict_label.clone()));
     }
 
     ///
@@ -1950,15 +1945,6 @@ impl Codegen {
             lea  rax, [rip + jump_table];
             jmp  [rax + rdi * 8];
         };
-    }
-
-    /// Record this position as the return-address patch point for `evict`.
-    pub(in crate::codegen::jitgen) fn emit_immediate_evict(&mut self, evict: AsmEvict) {
-        let patch_point = self.jit.get_current_address();
-        let return_addr = self.asm_return_addr_table.get(&evict).unwrap();
-        self.return_addr_table
-            .entry(*return_addr)
-            .and_modify(|e| e.0 = Some(patch_point));
     }
 
     /// Inline-cache class-version guard: deopt if the global class version moved
@@ -2512,10 +2498,9 @@ impl Codegen {
         simple: bool,
         error: &DestLabel,
         evict: AsmEvict,
-        evict_label: &DestLabel,
     ) -> bool {
         let return_addr = self.gen_yield(callid, simple, error);
-        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
+        self.set_deopt_with_return_addr(return_addr, evict);
         true
     }
 

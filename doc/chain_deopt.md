@@ -4,12 +4,15 @@
 exercised end-to-end **in its eager form** — the walk replays every suspended
 frame's write-back at deopt time and points its return-address slot at one
 shared VM continuation stub (§9.3's conversion has landed; §8 describes the
-implementation). The **escalation half of step 4** — the per-frame switch
-that makes every interpreter-resuming side exit run the chain-deopt walk,
-plus the runtime entry it calls — is in place (§8.6). The speculation itself
-(the `Float` guard and the `locals_to_S` relaxation, §5 steps 4–5) and the
-return-state recovery (§6) are not. §9 stays as the record of why the
-original lazy build was wrong.
+implementation). Registration is unconditional in every build, and chain
+conversion is now the **only** way an on-stack JIT frame is dropped to the
+interpreter: immediate eviction — the code-patching mechanism this document
+was written against — is gone (§10). The **escalation half of step 4** — the
+per-frame switch that makes every interpreter-resuming side exit run the
+chain-deopt walk, plus the runtime entry it calls — is in place (§8.6). The
+speculation itself (the `Float` guard and the `locals_to_S` relaxation, §5
+steps 4–5) and the return-state recovery (§6) are not. §9 stays as the record
+of why the original lazy build was wrong.
 
 ---
 
@@ -67,10 +70,11 @@ suspended chain from JIT frames into interpreter frames:
 
 Control then never re-enters JIT code: each `ret` lands in the interpreter.
 
-This is **not** what `Codegen::immediate_eviction` does. That one writes a
+This is **not** what `Codegen::immediate_eviction` did. That one wrote a
 `jmp deopt` into the *code* at the call's return continuation, so control
-returns into JIT code and deopts one instruction later. Chain deopt does not
-touch code and does not return into JIT code at all.
+returned into JIT code and deopted one instruction later. Chain deopt does not
+touch code and does not return into JIT code at all — which is why it could
+replace immediate eviction outright rather than sit beside it (§10).
 
 ## 3. What was verified in the source
 
@@ -153,10 +157,10 @@ The instruction order at a specialized call is:
 ```
 call callee            <- the return address points here
 <result-store code emitted by def_rax2acc_return>
-patch_point            <- where immediate_eviction writes its jmp
+patch_point            <- where immediate_eviction wrote its jmp
 ```
 
-and `compile/method_call.rs:835` fixes the contract:
+and `compile/method_call.rs:835` fixed the contract:
 
 ```rust
 let res = state.def_rax2acc_return(ir, dst, return_state);  // emits the result store
@@ -168,9 +172,12 @@ so the handler assumes that store has already run. Entering it directly by
 `ret` skips the store, the callee's return value never reaches its slot, and
 garbage propagates.
 
-`immediate_eviction` patches at `patch_point` — *after* the result store —
+`immediate_eviction` patched at `patch_point` — *after* the result store —
 precisely for this reason. Chain deopt sidesteps the whole issue by
-targeting the VM entry (§3.1), where `vm_store_rdi` does the store.
+targeting the VM entry (§3.1), where `vm_store_rdi` does the store. (The
+argument is preserved because it is the reason the *stub*, not the frame's
+own `Evict` handler, is the conversion target; the patching mechanism it
+describes no longer exists — §10.)
 
 ## 5. Order of work
 
@@ -184,6 +191,7 @@ per-site-handler form — §9) — see §8.
    `return_addr()` at `frame.rs:76`), then walk the CFP chain applying 1 and
    2. Model the loop on `immediate_eviction`, which already skips VM frames
    via `check_vm_address` and handles recursion by visiting every frame.
+   (The chain walk has since *become* that loop — §10.)
 4. **Firing point**: the `Float` guard on a block's `StoreDynVar` into an
    outer unboxed local. Write back *before* performing the offending store,
    or the write-back overwrites it.
@@ -298,10 +306,9 @@ slots always hold whole, valid (possibly stale) `Value`s, and the GC scans
 them as such, so the replay may allocate at any point.
 
 Because the replay allocates, it must not run under the `CODEGEN` borrow:
-the walks (`Codegen::chain_deopt`, `Codegen::evict_suspended_frames`) only
-**collect** a `Vec<ChainConversion>` plan; the callers
-(`runtime::chain_deopt`, `Codegen::check_bop_redefine`) apply it after the
-borrow is released. Write-back order within one frame is fixed (deferred
+the walk (`Codegen::chain_deopt`) only **collects** a `Vec<ChainConversion>`
+plan; the callers (`runtime::chain_deopt`, `Codegen::check_bop_redefine`)
+apply it after the borrow is released. Write-back order within one frame is fixed (deferred
 materialization last); frames are applied in walk order, which is sound
 because the replays touch disjoint frames (rest/kwrest sources are raw
 slots, valid regardless of conversion order).
@@ -356,22 +363,21 @@ consumed the save area).
 
 ### 8.3 How it is exercised without a firing point
 
-Steps 4–5's speculation does not exist yet, so nothing in a normal build
-calls `Codegen::chain_deopt`. Under the `chain-deopt` cargo feature
-(default-off) two things exercise it:
+Steps 4–5's speculation does not exist yet, so the `Float` guard that will
+fire the walk does not either. Two things exercise it meanwhile:
 
-* **BOP eviction** converts by chain instead of by patching: the walks are
-  observationally equivalent — both convert every suspended JIT frame into
-  an interpreter frame — and `tests/redefine.rs` already covers exactly this
-  shape: `redefine_bop_onstack_caller` fails with the stale inlined `+`
-  (8 instead of 999) if the suspended caller resumes its compiled body, so
-  the test passing under the feature is a positive signal that the
-  conversion happened, not just that nothing crashed.
-* **Every side exit escalates** (§8.6): each deopt / recompile-deopt / error
-  exit taken anywhere in the suite fires the walk from the deopting frame,
-  so the deopt → replay → stub-return path — the one the speculation will
-  actually take — is exercised at every deopt site the suite reaches, not
-  only at BOP redefinitions.
+* **BOP eviction**, in *every* build: it is now the walk's only production
+  caller, so `tests/redefine.rs` covers the mechanism unconditionally.
+  `redefine_bop_onstack_caller` fails with the stale inlined `+` (8 instead
+  of 999) if the suspended caller resumes its compiled body, so the test
+  passing is a positive signal that the conversion happened, not just that
+  nothing crashed.
+* **Every side exit escalates** (§8.6), under the `chain-deopt` cargo
+  feature (default-off): each deopt / recompile-deopt / error exit taken
+  anywhere in the suite fires the walk from the deopting frame, so the
+  deopt → replay → stub-return path — the one the speculation will actually
+  take — is exercised at every deopt site the suite reaches, not only at BOP
+  redefinitions.
 
 What this validates: the walk, the eager replay, the return-address rewrite,
 the stub's frame/LFP restore and result/raise hand-off, across normal calls,
@@ -380,10 +386,11 @@ is the case chain deopt exists for — a frame whose local is *unboxed at the
 moment of conversion* — because without the `locals_to_S` relaxation no
 suspended frame ever holds one.
 
-The producers (`AbstractState::chain_exit`) are gated on the same feature, so
-a default build registers no chain entries at all and pays nothing. When
-step 5 lands, that gate becomes the per-site decision §6 argues for rather
-than a build-wide switch.
+The producers (`AbstractState::chain_exit`) are **not** gated: every call and
+yield site registers in every build, because with immediate eviction gone a
+site the table does not know is a site BOP eviction cannot convert (§10).
+The metadata cost is accepted. When step 5 lands, the per-site decision §6
+argues for rides on top of unconditional registration, not instead of it.
 
 ### 8.4 A rewritten return-address slot is also on the unwind path
 
@@ -431,28 +438,21 @@ guarantee rather than review discipline, and this is it:
 * `Error` exits escalate because a raise can be rescued *in-frame* (an
   interpreter resume like any deopt) or unwind through the suspended callers
   — §8.4's path, which requires the slots to have been rewritten.
-* `Evict` handlers do **not** escalate: they are only entered through the
-  chain-wide eviction walk below, which has already converted (or patched)
-  every suspended frame in one pass.
+* `Evict` handlers do **not** escalate — and are in fact no longer entered
+  at all: immediate eviction was their only entry (§10). The side-exit slot
+  survives because `AsmEvict` is the id under which a call site's return
+  address is recorded for `chain_exit`.
 
-The walk stops converting where the table stops: an unregistered return
-address marks the boundary of the compilation region that speculated, and
-frames beyond it hold no unboxed cross-frame state, so they may resume their
-compiled bodies. (Under the validation feature every site registers, so the
-walk converts everything — strictly more conversion than needed, which is
-sound for the same reason BOP eviction is.) A frame converted by an earlier
-walk is skipped the same way a VM frame is — its rewritten return address
-*is* a VM address (the stub) — which is load-bearing: interpreted inner
-frames may have updated its slots through `outer_lfp` since, and a second
-replay would clobber them with stale floats.
+Every JIT call/yield site registers, so the walk converts every suspended
+JIT frame it reaches — strictly more conversion than the speculation will
+need, which is sound for the same reason BOP eviction is. A frame converted
+by an earlier walk is skipped the same way a VM frame is — its rewritten
+return address *is* a VM address (the stub) — which is load-bearing:
+interpreted inner frames may have updated its slots through `outer_lfp`
+since, and a second replay would clobber them with stale floats.
 
-BOP eviction itself now goes through one unified walk
-(`Codegen::evict_suspended_frames`): per suspended frame it prefers the
-chain conversion (replay + return-address rewrite, leaving the code
-untouched) and falls back to the recorded patch point (`jmp deopt` written
-into the code). A default build has no chain entries and degenerates to pure
-patching; the feature build is pure chain deopt; with per-site speculation
-the two coexist in one chain.
+BOP eviction goes through the same walk (`Codegen::chain_deopt`) as an
+escalated side exit; there is one CFP walk and one conversion mechanism.
 
 ### 8.6 Where the code is
 
@@ -464,7 +464,7 @@ the two coexist in one chain.
 | Producers (call / specialized call / yield / specialized yield) | `AbstractState::chain_exit`, `jitgen/compile/method_call.rs` |
 | Shared continuation stub | `gen_chain_cont_stub` (`arch/x86_64/vmgen.rs`, `arch/aarch64/vmgen.rs`), address in `Codegen::chain_cont_stub` |
 | `kwrest_hash` (the `correct_rest_kw` equivalent for the replay) | `codegen/runtime.rs` |
-| Runtime table, the walks | `chain_deopt_table`, `register_chain_exit`, `chain_deopt`, `evict_suspended_frames` (`codegen.rs`) |
+| Runtime table, the walk | `chain_deopt_table`, `register_chain_exit`, `chain_deopt` (`codegen.rs`) |
 | Escalation switch + runtime entry | `JitContext::escalate_side_exits` (`jitgen/context.rs`), `AsmIr::escalate_exits` (`jitgen/asmir.rs`), `runtime::chain_deopt` (`codegen/runtime.rs`) |
 | Frame writers/readers | `Cfp::set_return_addr`, `Cfp::set_cont_frame_data`, `Cfp::frame_bp` (`executor/frame.rs`) |
 
@@ -475,9 +475,9 @@ form; this section records what that form did, why it was unsound to build
 the speculation on, and the conversion plan — which has since landed (§8
 describes the eager implementation). §9.1–9.2 describe the *former* build.
 
-### 9.1 What the built mechanism actually does
+### 9.1 What the built mechanism actually did
 
-`Codegen::chain_deopt` (`codegen.rs`) rewrites each suspended frame's
+`Codegen::chain_deopt` (`codegen.rs`) rewrote each suspended frame's
 return-address slot to that site's chain-exit handler — **and nothing
 else**. The frame's write-back runs only when control returns to it: the
 innermost frame `ret`s, lands in the handler, the handler writes that one
@@ -543,3 +543,48 @@ state, unwind interaction — not evidence that lazy write-back was sound.
 
 Ordering: this preceded §5 steps 4–5, as required. The `locals_to_S`
 relaxation is now unblocked.
+
+## 10. Immediate eviction is gone
+
+**Landed.** Chain conversion is the only mechanism that drops an on-stack JIT
+frame to the interpreter.
+
+Immediate eviction existed because a basic-op redefinition inside a callee
+makes the *caller's* already-compiled continuation stale — its inlined integer
+arithmetic and constant folds assume the builtin op — and the callee's entry
+guards cannot protect a frame that is already suspended. With no way to
+convert a suspended frame, the only lever was the code itself: record each
+call's return continuation as a patch point and, on redefinition, overwrite it
+with a `jmp`/`B` to that site's `Evict` handler, so the frame deopted one
+instruction after it resumed.
+
+Chain conversion subsumes that completely — it drops the same frames to the
+interpreter, from the stack rather than from the code — with three things the
+patching form could not offer:
+
+* a compiled body still valid for *future* invocations survives, because no
+  machine code is rewritten;
+* on aarch64 it removes a self-modifying-code path, with its
+  writable/I-cache-invalidate dance around every patched word (the remaining
+  SMC users are `patch_call_to_entry` and the recompilation patch points, which
+  are unrelated);
+* it is the mechanism the unboxed-locals speculation needs anyway, so there is
+  one walk to reason about instead of two that must agree.
+
+The single precondition was that **every** call and yield site register a
+`chain_deopt_table` entry, since an unregistered site is one the walk leaves
+running its stale body. §8.3's feature gate on `AbstractState::chain_exit` was
+therefore removed; every build pays the metadata.
+
+Removed with it: `Codegen::patch_return_to_deopt` (both arches),
+`get_deopt_with_return_addr` and the `return_addr_table` it read,
+`emit_immediate_evict` (both arches), and `AsmInst::ImmediateEvict` /
+`LInst::ImmediateEvict` with their dispatch arms. `asm_return_addr_table`
+stays — it is how `AsmInst::ChainExit`, pushed after the call when the return
+address is no longer at hand, names the site it belongs to. `AsmEvict` and
+`SideExit::Evict` stay for the same reason, though nothing branches to an
+`Evict` handler any more; retiring that emission is a separate cleanup.
+
+`Codegen::evict_suspended_frames` and `Codegen::chain_deopt` were the same CFP
+walk once the patch fallback was gone, and are now one function
+(`chain_deopt`), used by both `check_bop_redefine` and `runtime::chain_deopt`.

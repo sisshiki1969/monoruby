@@ -499,16 +499,13 @@ impl Codegen {
                     base: frame.base_stack_offset,
                 });
             }
-            // Method return / eviction family. `Ret` tears down the frame and
-            // returns; `MethodRet` sets the resume PC then returns through the
+            // Method return family. `Ret` tears down the frame and returns;
+            // `MethodRet` sets the resume PC then returns through the
             // method-return path; `BlockBreak` does the same through the
-            // block-break path (a non-local `break` out of a block);
-            // `ImmediateEvict` records a return-address patch point on x86 (a
-            // no-op on aarch64, which can't patch them).
+            // block-break path (a non-local `break` out of a block).
             AsmInst::Ret => self.encode_linst(LInst::Ret),
             AsmInst::MethodRet(pc) => self.encode_linst(LInst::MethodRet { pc }),
             AsmInst::BlockBreak(pc) => self.encode_linst(LInst::BlockBreak { pc }),
-            AsmInst::ImmediateEvict { evict } => self.encode_linst(LInst::ImmediateEvict { evict }),
             // Emits nothing; registers this call's return address -> replay
             // data so `Codegen::chain_deopt` can convert a frame suspended
             // here from its return-address slot alone (`doc/chain_deopt.md`
@@ -592,7 +589,6 @@ impl Codegen {
                 evict,
                 pc,
             } => {
-                let evict_label = labels[evict].clone();
                 let callee = &store[callee_fid];
                 let is_iseq = callee.is_iseq();
                 let (_, codeptr, callee_pc) = callee.get_data();
@@ -618,7 +614,6 @@ impl Codegen {
                     jit_entry,
                     jit_slot,
                     evict,
-                    evict_label,
                 });
             }
             // Method prologue: establish fp/lr, reserve the local frame, nil-fill
@@ -1008,17 +1003,16 @@ impl Codegen {
                 loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
             }),
             // Generic `yield` (block target resolved at runtime). aarch64 builds
-            // the block frame and calls the funcdata indirectly; the x86-only
-            // return-address eviction patch is applied by the x86 emit_yield.
+            // the block frame and calls the funcdata indirectly; both arches
+            // record the block call's return address under `evict` for the
+            // following `ChainExit`.
             AsmInst::Yield { callid, simple, error, evict } => {
-                let evict_label = labels[evict].clone();
                 let error = labels[error].clone();
                 self.encode_linst(LInst::Yield {
                     callid,
                     simple,
                     error,
                     evict,
-                    evict_label,
                 });
             }
             // ---- Specialized inlined-frame family ------------------------------
@@ -1046,10 +1040,11 @@ impl Codegen {
                     cg.store_dyn_var_specialized(off, dst, src);
                 });
             }
-            // Direct call into an inlined method entry; the return-address patch
-            // point is recorded for BOP-redefinition eviction. Labels are
-            // resolved now (frame); the call + patch run at drain time, where
-            // `do_specialized_call`'s return address is the correct position.
+            // Direct call into an inlined method entry; the return address is
+            // recorded under `evict` so the following `ChainExit` can register
+            // this site. Labels are resolved now (frame); the call runs at drain
+            // time, where `do_specialized_call`'s return address is the correct
+            // position.
             AsmInst::SpecializedCall {
                 entry,
                 patch_point,
@@ -1058,9 +1053,9 @@ impl Codegen {
                 let patch_point =
                     patch_point.map(|label| frame.resolve_label(&mut self.jit, label));
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, labels, _| {
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
                     let return_addr = cg.do_specialized_call(entry_label, patch_point);
-                    cg.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+                    cg.set_deopt_with_return_addr(return_addr, evict);
                 });
             }
             // Specialized `yield`: build the block frame, then branch into the
@@ -1082,9 +1077,9 @@ impl Codegen {
             }
             AsmInst::SpecializedYield { entry, evict } => {
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, labels, _| {
+                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
                     let return_addr = cg.do_specialized_call(entry_label, None);
-                    cg.set_deopt_with_return_addr(return_addr, evict, &labels[evict]);
+                    cg.set_deopt_with_return_addr(return_addr, evict);
                 });
             }
             // Inlined builtin method body: lower to `LInst::Inline`, the
@@ -1518,9 +1513,6 @@ impl Codegen {
             LInst::BlockBreak { pc } => {
                 self.emit_block_break(pc);
             }
-            LInst::ImmediateEvict { evict } => {
-                self.emit_immediate_evict(evict);
-            }
             LInst::ChainExit { evict, replay } => {
                 self.register_chain_exit(evict, replay);
             }
@@ -1554,8 +1546,8 @@ impl Codegen {
             LInst::EnsureEnd { loop_jit_spill_bytes } => {
                 self.emit_ensure_end(loop_jit_spill_bytes);
             }
-            LInst::Yield { callid, simple, error, evict, evict_label } => {
-                self.emit_yield(callid, simple, &error, evict, &evict_label);
+            LInst::Yield { callid, simple, error, evict } => {
+                self.emit_yield(callid, simple, &error, evict);
             }
             LInst::Unreachable => {
                 self.emit_unreachable();
@@ -1653,7 +1645,6 @@ impl Codegen {
                 jit_entry,
                 jit_slot,
                 evict,
-                evict_label,
             } => {
                 self.emit_call(
                     codeptr,
@@ -1663,7 +1654,6 @@ impl Codegen {
                     jit_entry,
                     jit_slot,
                     evict,
-                    &evict_label,
                 );
             }
             other => unreachable!("encode_linst_macro: unexpected {other:?}"),

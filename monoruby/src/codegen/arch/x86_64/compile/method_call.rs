@@ -293,8 +293,9 @@ impl Codegen {
         };
     }
 
-    /// The call itself: enter the callee and record a return-address deopt
-    /// patch point for `evict`. Store/frame-dependent target info is pre-resolved
+    /// The call itself: enter the callee and record the return address under
+    /// `evict`, so the following `ChainExit` can register this site for chain
+    /// deopt. Store/frame-dependent target info is pre-resolved
     /// by the dispatcher (codeptr / is_iseq / pcs / JIT entry), so this is
     /// store-free.
     pub(in crate::codegen::jitgen) fn emit_call(
@@ -307,7 +308,6 @@ impl Codegen {
         // aarch64 guard-free dispatch slot; x86 dispatches via `jit_entry`.
         _jit_slot: Option<u64>,
         evict: AsmEvict,
-        evict_label: &DestLabel,
     ) {
         self.set_lfp();
         self.push_frame();
@@ -338,7 +338,7 @@ impl Codegen {
         let return_addr = self.jit.get_current_address();
 
         self.pop_frame();
-        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
+        self.set_deopt_with_return_addr(return_addr, evict);
     }
 
     pub(in crate::codegen::jitgen) fn do_specialized_call(
