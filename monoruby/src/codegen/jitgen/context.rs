@@ -89,6 +89,32 @@ pub(super) fn max_virt_fpreg_id(asm_info: &AsmInfo) -> Option<usize> {
     max
 }
 
+///
+/// Walk every `AsmIr` reachable from `asm_info` (main inst stream, inline /
+/// outline bridges, and recursively the `specialized_methods`) and escalate
+/// its interpreter-resuming side exits to chain deopt.
+///
+/// This is the subtree half of `doc/chain_deopt.md` §6: a call site that keeps
+/// a narrowed return state needs **every** deopt below it — not just the ones
+/// in the callee's own body, but those in anything the callee inlined in turn —
+/// to convert the caller chain before the interpreter resumes. The recursion
+/// mirrors [`max_virt_fpreg_id`], which reaches the same set.
+///
+pub(super) fn escalate_all_side_exits(asm_info: &mut AsmInfo) {
+    for (_, ir) in asm_info.iter_ir_mut() {
+        ir.escalate_all_exits();
+    }
+    for (ir, _, _) in asm_info.iter_outline_bridges_mut() {
+        ir.escalate_all_exits();
+    }
+    for (ir, _) in asm_info.iter_inline_bridges_mut() {
+        ir.escalate_all_exits();
+    }
+    for SpecializeInfo { info, .. } in asm_info.iter_specialized_methods_mut() {
+        escalate_all_side_exits(info);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum JitType {
     /// JIT for method / block.
@@ -800,6 +826,12 @@ impl<'a> JitContext<'a> {
     /// everywhere, so the whole test suite exercises the deopt → walk →
     /// chain-exit-handler cascade). When the unboxed-locals speculation (§5
     /// step 5) lands, the per-frame speculation flag is OR'd in here.
+    ///
+    /// This is the *up-front* decision only. §6's return-state recovery cannot
+    /// be taken here — whether escalating a specialized callee buys anything
+    /// is not known until its return state exists — so it escalates after the
+    /// fact instead, via [`escalate_all_side_exits`]. Both routes end at the
+    /// same flag in the `SideExit` descriptor.
     ///
     pub(super) fn escalate_side_exits(&self) -> bool {
         cfg!(feature = "chain-deopt")

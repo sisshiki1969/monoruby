@@ -176,6 +176,35 @@ impl AsmIr {
         self.had_deopt
     }
 
+    ///
+    /// Retroactively mark every interpreter-resuming side exit already built
+    /// through this IR as chain-escalating, and escalate any built later.
+    ///
+    /// [`JitContext::escalate_side_exits`] is the *up-front* decision, taken
+    /// before a frame is compiled. `compile_specialized_func` needs the
+    /// opposite order: it only knows whether escalation buys anything once the
+    /// callee's return state is in hand (`doc/chain_deopt.md` §6 — escalate
+    /// only where the caller actually consumes a narrowed return state, so
+    /// ordinary deopts keep paying a per-frame exit rather than a chain walk).
+    /// Flipping after the fact is sound because the flag lives in the
+    /// `SideExit` descriptor, which is not lowered to machine code until
+    /// `gen_machine_code` runs — long after the specialized body is compiled.
+    ///
+    pub(super) fn escalate_all_exits(&mut self) {
+        self.escalate_exits = true;
+        for side_exit in &mut self.side_exit {
+            match side_exit {
+                SideExit::Deoptimize(_, _, escalate)
+                | SideExit::RecompileDeoptimize(_, _, _, _, escalate)
+                | SideExit::Error(_, _, escalate) => *escalate = true,
+                // `Evict` never resumes the interpreter in-frame — it is only
+                // the id under which a call site's return address is recorded
+                // (`doc/chain_deopt.md` §8.5).
+                SideExit::Evict(_) => {}
+            }
+        }
+    }
+
     pub(super) fn deferred_rest(&self) -> bool {
         self.deferred_rest
     }

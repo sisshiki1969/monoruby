@@ -383,9 +383,12 @@ impl AbstractFrame {
                     return CompileResult::Cease;
                 }
                 // Reaching this arm means `compile_specialized_func`
-                // confirmed the callee's body is genuinely deopt-free
-                // (and has no rescue/ensure). Speculative `Const`
-                // returns are tainted to `Value` upstream by
+                // confirmed the callee has no rescue/ensure, and that its
+                // body is either genuinely deopt-free or has had every
+                // deopt below it escalated to chain deopt (so a failed
+                // speculation converts *this* frame too and the fold is
+                // never acted on — `doc/chain_deopt.md` §6). Otherwise the
+                // speculative `Const` is tainted to `Value` upstream by
                 // `taint_for_unmodeled_rescue`, so what arrives here is
                 // a true compile-time constant — safe to fold into the
                 // caller's abstract state. (No machine store happens, so
@@ -598,6 +601,17 @@ impl ReturnState {
     pub(in crate::codegen::jitgen) fn taint_for_unmodeled_rescue(&mut self) {
         self.ret = ReturnValue::Value;
         self.invariants.side_effect_guard = false;
+    }
+
+    /// Whether the inferred return value says more than "some `Value`" — i.e.
+    /// whether the caller's `def_rax2acc_return` gets to const-fold the result
+    /// or store it under a class guard rather than as an opaque `Value`.
+    ///
+    /// `UD` is deliberately excluded: it means the callee never returns
+    /// normally, so there is no tag for the caller to act on, and nothing to
+    /// buy by escalating this subtree's side exits (`doc/chain_deopt.md` §6).
+    pub(in crate::codegen::jitgen) fn ret_is_narrowed(&self) -> bool {
+        matches!(self.ret, ReturnValue::Const(_) | ReturnValue::Class(_))
     }
 
     fn return_class(&self) -> Option<ClassId> {

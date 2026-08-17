@@ -1232,7 +1232,10 @@ impl<'a> JitContext<'a> {
         //
         // 1. `has_exception_handler`: the BB graph doesn't include
         //    rescue/ensure successors, so the computed return state
-        //    only reflects the happy path. See issue #405.
+        //    only reflects the happy path. See issue #405. This one is
+        //    *not* recoverable by chain deopt: an exception raised and
+        //    rescued inside the callee returns normally with no deopt
+        //    at all, so no walk ever fires.
         //
         // 2. `frame_had_deopt`: any deopt-able side exit emitted
         //    during this iseq's compile means the runtime can resume
@@ -1241,9 +1244,34 @@ impl<'a> JitContext<'a> {
         //    speculation predicted (e.g. `Array#assoc`'s block doing
         //    `return elem` after the recv-class guard fails). See
         //    PR #505.
+        //
+        // Chain deopt buys (2) back (`doc/chain_deopt.md` §6): if every
+        // deopt in this subtree converts the caller chain to interpreter
+        // frames on its way out, the caller's compiled code — the only
+        // thing that would act on the narrowed tag — never resumes. So
+        // instead of tainting, escalate the subtree and keep the tag.
+        //
+        // The escalation is paid for per site, not blanket: a chain walk
+        // is much more expensive than a per-frame deopt, and throws away
+        // the caller's compiled execution too, so it is only worth it
+        // where the caller actually gets something (a `Const` to fold or
+        // a `Class` to guard on) in return.
+        let rescue_taint = self.store[iseq_id].has_exception_handler();
+        let escalate = frame_had_deopt
+            && !rescue_taint
+            && return_state.as_ref().is_some_and(|s| s.ret_is_narrowed());
+        if escalate {
+            context::escalate_all_side_exits(&mut frame.asm_info);
+        }
         let return_state = return_state.map(|mut s| {
-            if self.store[iseq_id].has_exception_handler() || frame_had_deopt {
+            if rescue_taint || (frame_had_deopt && !escalate) {
                 s.taint_for_unmodeled_rescue();
+            } else if frame_had_deopt {
+                // The `ret` half is recovered above; the `side_effect_guard`
+                // half is not. Chain deopt says nothing about the side
+                // effects an interpreter resume would replay, and that half
+                // wants its own argument (`doc/chain_deopt.md` §6).
+                s.unset_side_effect_guard();
             }
             s
         });
@@ -1276,7 +1304,11 @@ impl<'a> JitContext<'a> {
         // return-state taint check needs to see it. We are always
         // inside the caller's frame here (specialized_compile pushed
         // and popped the sub-frame internally).
-        if frame_had_deopt {
+        //
+        // An escalated subtree is exempt: its deopts convert the whole
+        // caller chain, so they can no longer invalidate a narrowed
+        // return state anywhere above us either.
+        if frame_had_deopt && !escalate {
             self.current_frame_mut().had_deopt = true;
         }
         Ok(SpecializedCompileResult {
