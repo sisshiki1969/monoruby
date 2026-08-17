@@ -5,8 +5,15 @@ exercised end-to-end, and the **escalation half of step 4** — the per-frame
 switch that makes every interpreter-resuming side exit run the chain-deopt
 walk, plus the runtime entry it calls — is in place (§8.6). The speculation
 itself (the `Float` guard and the `locals_to_S` relaxation, §5 steps 4–5) and
-the return-state recovery (§6) are not. §8 records what was built, and the
-places the built thing deliberately differs from the design below.
+the return-state recovery (§6) are not. §8 records what was built.
+
+**⚠ Before starting §5 step 5, read §9.** The built mechanism writes the
+suspended frames back **lazily** (each frame converts as its `ret` reaches
+its chain-exit handler). That deviates from the intended design — the walk
+is supposed to write every frame back **eagerly**, at deopt time — and the
+deviation is masked only for as long as `locals_to_S` still boxes every
+local before a block call. The speculation removes exactly that masking, so
+the lazy form must be converted to eager *first*.
 
 ---
 
@@ -442,3 +449,70 @@ the two coexist in one chain.
 | Runtime table, the walks | `chain_deopt_table`, `register_chain_exit`, `chain_deopt`, `evict_suspended_frames` (`codegen.rs`) |
 | Escalation switch + runtime entry | `JitContext::escalate_side_exits` (`jitgen/context.rs`), `AsmIr::escalate_exits` (`jitgen/asmir.rs`), `runtime::chain_deopt` (`codegen/runtime.rs`) |
 | Return-address writer | `Cfp::set_return_addr` (`executor/frame.rs`) |
+
+## 9. The lazy write-back is a deviation — make it eager before step 5
+
+### 9.1 What the built mechanism actually does
+
+`Codegen::chain_deopt` (`codegen.rs`) rewrites each suspended frame's
+return-address slot to that site's chain-exit handler — **and nothing
+else**. The frame's write-back runs only when control returns to it: the
+innermost frame `ret`s, lands in the handler, the handler writes that one
+frame back and tails into the VM continuation; then the next frame out, and
+so on. Only the frame that *raised* the deopt is written back eagerly (by
+its own escalated side exit, before it calls `runtime::chain_deopt`).
+
+So immediately after a deopt in `A → B → C` at `C`:
+
+| frame | local slots |
+|---|---|
+| C | correct (its own side exit wrote them) |
+| B, A | **stale** — write-back deferred to their `ret`s |
+
+### 9.2 Why that is wrong, and why nothing catches it today
+
+The intended design (§2) is that the walk converts the whole chain at deopt
+time: **all** frames written back, return addresses pointed at the **VM's
+shared post-call continuation** — control never re-enters JIT code, and no
+per-site handler exists at all. (Note the tension in the built form: a
+per-site handler is only reachable *because* the return address points at
+it rather than at the VM — the lazy write-back and the per-site handlers
+are two faces of the same deviation.)
+
+The soundness gap: once `C` is running in the interpreter, anything that
+reads an outer frame's locals through `outer_lfp` — a block body touching
+`A`'s variables, `binding`, a backtrace with argument values — reads `A`'s
+**slots**, which still hold whatever was there before `A`'s floats were
+promoted to `LinkMode::F`. Today this cannot be observed solely because
+`locals_to_S` boxes every local into its slot before *every* block-passing
+call, so every frame on an `outer` chain happens to have correct slots.
+§5 step 5 removes exactly that guarantee; the lazy form breaks the moment
+it lands.
+
+The `chain-deopt` feature suite (3203/3203 green) is therefore a regression
+base for the *conversion machinery* — stack rewriting, `ret`-entry handler
+state, unwind interaction — not evidence that lazy write-back is sound.
+
+### 9.3 The conversion
+
+1. Extend the walk to replay each suspended frame's write-back **during**
+   `chain_deopt`, then point its return address at the shared VM entry
+   (§3.1 / §8.2's corrected form of it).
+2. The replay needs, per return address: the `WriteBack`, the frame's spill
+   `base`, and the site's `UsingFpr` save-area layout. §8.1 already
+   recorded the layout facts: pool registers live `rsp`-relative at the
+   call (`callee_rbp + 32 + 8i`, one slot per set bit of `UsingFpr`, bit
+   order); spilled `FPReg`s (`>= PHYS_FPR_POOL`) are `base`-relative.
+   `forward_rest` / `forward_kwrest` can call the existing `create_array` /
+   `correct_rest_kw` from Rust — GC-safe because every source value is in a
+   scanned frame slot.
+3. Remove the per-site chain-exit handlers and the `DestLabel` table —
+   `chain_deopt_table` maps `return_addr` to the replay data instead.
+   This also deletes the §8.2/§8.4 complexity (handler continuations, the
+   unwind-path interaction) that existed only to serve `ret`-entry.
+4. Re-run the `chain-deopt` feature suite; it must stay green through the
+   conversion.
+
+Ordering: this precedes §5 steps 4–5. The firing point (step 4's guard) can
+land together with it, but the `locals_to_S` relaxation must not land before
+it.
