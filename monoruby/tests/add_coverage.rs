@@ -1417,10 +1417,10 @@ fn caller_lines_through_specialized_jit_calls() {
 
 #[test]
 fn caller_lines_survive_specialized_frame_eviction() {
-    // Redefining a basic op from inside the callee evicts the
-    // suspended specialized caller frames (immediate_eviction): the
-    // deopt path must lazily write the recorded call-site pc into the
-    // cont-frame slot, so caller() lines stay correct afterwards.
+    // Redefining a basic op from inside the callee converts the
+    // suspended specialized caller frames (`Codegen::chain_deopt`): the
+    // recorded call-site pc in the cont-frame slot must survive, so
+    // caller() lines stay correct afterwards.
     run_test(
         r##"
         class CLSE_Probe; end

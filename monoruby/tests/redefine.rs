@@ -93,7 +93,7 @@ fn redefine_test4() {
 // The pre-existing `redefine_test*` above only redefine `Integer#*` and use
 // `100 * 100`, a compile-time **fold**, while the redefining `class Integer`
 // body runs *inside* the warm-up loop (on-stack) — so they were satisfied on
-// aarch64 by the fold-only `CheckBOP` guard + on-stack `immediate_eviction`,
+// aarch64 by the fold-only `CheckBOP` guard + the on-stack conversion walk,
 // and never exercised the **non-fold** inline integer add of an off-stack
 // method. That path carries no per-op guard on either arch, so correctness
 // relies entirely on `set_bop_redefine` reverting every compiled method to the
@@ -255,8 +255,8 @@ fn redefine_bop_offstack_osr_loop_fold() {
 
 // Regression (bug C): an ON-STACK caller must not resume its stale compiled
 // body after a callee redefines a basic op. Two aarch64 gaps conspired here:
-// (1) `emit_call` did not register normal calls' return addresses, so
-// `immediate_eviction` could not patch the caller's return continuation
+// (1) `emit_call` did not register normal calls' return addresses, so the
+// on-stack walk could not reach the caller's suspended frame
 // (x86 registers every call); (2) arch-neutral: the `check_bop_redefine`
 // eviction ran *before* the store mutation (and only on the `def` path), so
 // the very definition that set the BOP flags never triggered it — it only ran
@@ -301,9 +301,9 @@ fn redefine_bop_onstack_caller() {
 // so it also checks the frame really stopped running its compiled body: a
 // resumed fold answers 7, an interpreter answers 999.
 //
-// Both on-stack mechanisms go through this: `immediate_eviction`'s
-// return-continuation patch and, under the `chain-deopt` feature, the
-// chain-exit handler's FP-pool reload (`doc/chain_deopt.md` §8).
+// This goes through the chain-deopt walk's eager replay, which boxes the
+// suspended frame's FP-pool resident out of the call's `FprSave` area
+// (`doc/chain_deopt.md` §8.1).
 #[test]
 fn redefine_bop_onstack_caller_float_local() {
     run_test(
@@ -329,16 +329,237 @@ fn redefine_bop_onstack_caller_float_local() {
     );
 }
 
+// The suspended caller holds MORE live floats than the FP register pool has
+// registers, so its write-back has to source them from two different homes:
+// the pool residents out of the call's `FprSave` area (indexed by set-bit
+// position in the site's `UsingFpr`) and the overflow out of the frame's
+// `base`-relative spill slots. Under `stress-spill-pool` the pool is two
+// registers, so five live products guarantee both homes are populated. The
+// results are `Float#-`, which the `Integer#+` redefinition leaves alone, so
+// a float taken from the wrong home reads as a wrong number rather than a
+// crash; the trailing `3 + 4` is the fold that pins the frame to the
+// interpreter (a resumed compiled body answers 7).
+//
+// Those two homes are the two arms of `ChainReplay::replay`'s `fpr` loop
+// (`doc/chain_deopt.md` §8.1), which every build now runs — the eviction walk
+// is the chain-deopt walk.
+#[test]
+fn redefine_bop_onstack_caller_float_spill() {
+    run_test(
+        r##"
+        $flag = false
+        def fmaybe
+          Integer.class_eval("def +(o); 999; end") if $flag
+          nil
+        end
+        def float_spill(a)
+          p1 = a * 1.5
+          p2 = a * 2.5
+          p3 = a * 3.5
+          p4 = a * 4.5
+          p5 = a * 5.5
+          fmaybe
+          [p1 - p2, p3 - p4, p5 - p1, 3 + 4]
+        end
+        100.times { float_spill(2.0) }
+        $flag = true
+        float_spill(2.0)
+        "##,
+    );
+}
+
+// The suspended frame is a specialized `(...)`-forwarding trampoline whose
+// rest `Array` — and, in the second snippet, whose `**kwrest` `Hash` — is
+// still DEFERRED at the call it is suspended at, so the eviction has to
+// materialize both out of argument slots living in the trampoline's *dynamic
+// caller* frame rather than its own.
+//
+// The redefining call is reached through `*_driver` rather than from the
+// warm-up loop directly: the deferral is a specialization-only decision
+// (`forward_rest_deferral` requires `is_specialized()`), so the trampoline has
+// to be entered from JIT-compiled code — entered from the VM it runs its root
+// body, where nothing is deferred. The second `*_target(...)` consume is what
+// makes a wrong materialization visible: the interpreter builds that call's
+// arguments out of the slots the eviction just wrote, so `y` diverges from `x`
+// if they were sourced wrongly.
+#[test]
+fn redefine_bop_onstack_forwarding_trampoline() {
+    run_test(
+        r##"
+        $flag = false
+        def fwd_target(a, b)
+          Integer.class_eval("def +(o); 999; end") if $flag
+          a + b
+        end
+        def fwd_wrap(...)
+          x = fwd_target(...)
+          y = fwd_target(...)
+          [x, y, 3 + 4]
+        end
+        def fwd_driver
+          fwd_wrap(5, 3)
+        end
+        100.times { fwd_driver }
+        $flag = true
+        fwd_driver
+        "##,
+    );
+    run_test(
+        r##"
+        $flag = false
+        def kw_target(a, k: 0, j: 0)
+          Integer.class_eval("def +(o); 999; end") if $flag
+          [a, k, j]
+        end
+        def kw_wrap(...)
+          x = kw_target(...)
+          y = kw_target(...)
+          [x, y, 3 + 4]
+        end
+        def kw_driver
+          kw_wrap(5, k: 7, j: 9)
+        end
+        100.times { kw_driver }
+        $flag = true
+        kw_driver
+        "##,
+    );
+}
+
+// `Class#new` is the trampoline that carries a deferred `**kwrest` in
+// practice: the literal keywords at `KwNode.new(a: 1, b: 2)` are source-routed
+// straight into `initialize`'s declared parameters, so `new`'s own `**kwrest`
+// is still deferred while `initialize` runs. Redefining the basic op there
+// suspends `new` with that deferral outstanding, and the frame below it is a
+// SPECIALIZED call rather than the ordinary send the snippets above suspend
+// at.
+#[test]
+fn redefine_bop_onstack_new_trampoline_kwrest() {
+    run_test(
+        r##"
+        $flag = false
+        class KwNode
+          attr_reader :v
+          def initialize(a: 0, b: 0, c: 0)
+            Integer.class_eval("def +(o); 999; end") if $flag
+            @v = [a, b, c]
+          end
+        end
+        def kwnode_driver
+          [KwNode.new(a: 1, b: 2).v, 3 + 4]
+        end
+        100.times { kwnode_driver }
+        $flag = true
+        kwnode_driver
+        "##,
+    );
+}
+
+// TWO suspended JIT frames below the redefining one instead of one, so the
+// eviction walk has to carry a chain rather than a single frame, and the two
+// call-site shapes are mixed: `lvl2` is suspended at a call whose result is
+// discarded (no destination slot), `lvl1` at one whose result feeds a local.
+// Each frame carries its own post-call fold, so a frame that resumed its
+// compiled body contributes a stale 2 / 7 / 11 and its position in the result
+// array names which one it was.
+#[test]
+fn redefine_bop_onstack_multi_frame_chain() {
+    run_test(
+        r##"
+        $flag = false
+        def lvl3
+          Integer.class_eval("def +(o); 999; end") if $flag
+          nil
+        end
+        def lvl2
+          lvl3
+          [1 + 1, 3 + 4]
+        end
+        def lvl1
+          r = lvl2
+          r << (5 + 6)
+        end
+        100.times { lvl1 }
+        $flag = true
+        lvl1
+        "##,
+    );
+}
+
+// The suspended call site is an OPERATOR (`r + 5`, a 1-unit `BinOp` bytecode)
+// rather than a 2-unit send — it reaches the generic `send` emitter because
+// the receiver is neither `Integer` nor `Float`. A post-call continuation that
+// assumed the send's size would advance the resume pc one whole instruction
+// too far (`doc/chain_deopt.md` §8.2 is the record of what that costs), so the
+// trailing `3 + 4` is the instruction the frame must resume AT.
+#[test]
+fn redefine_bop_onstack_operator_site() {
+    run_test(
+        r##"
+        $flag = false
+        class OpRedef
+          def +(o)
+            Integer.class_eval("def +(o); 999; end") if $flag
+            o * 2
+          end
+        end
+        def op_caller(r)
+          v = r + 5
+          [v, 3 + 4]
+        end
+        o = OpRedef.new
+        100.times { op_caller(o) }
+        $flag = true
+        op_caller(o)
+        "##,
+    );
+}
+
+// The redefining callee RAISES instead of returning, so control leaves the
+// suspended frames by unwinding: `mid_frame` never resumes at all and
+// `outer_frame` resumes in its `rescue`. Both were evicted while suspended, so
+// this pins the eviction against the unwind path (`doc/chain_deopt.md` §8.4)
+// as well as the ordinary return path every other case here takes.
+#[test]
+fn redefine_bop_onstack_unwind_through_suspended() {
+    run_test(
+        r##"
+        $flag = false
+        def raiser
+          if $flag
+            Integer.class_eval("def +(o); 999; end")
+            raise "boom"
+          end
+          nil
+        end
+        def mid_frame
+          raiser
+          [1 + 1, 2 + 2]
+        end
+        def outer_frame
+          begin
+            mid_frame
+          rescue => e
+            [e.message, 3 + 4]
+          end
+        end
+        100.times { outer_frame }
+        $flag = true
+        outer_frame
+        "##,
+    );
+}
+
 // Same on-stack scenario reached through a GENERIC `yield` instead of a method
 // call: the yielded block redefines the basic op, and the yielding frame must
 // deopt on resume instead of running its stale compiled continuation. On
 // aarch64, `emit_yield` historically ignored its `evict` (only method calls /
 // specialized calls registered return addresses) — which both left
-// yield-suspended frames un-evictable AND broke `emit_immediate_evict`'s
+// yield-suspended frames unconvertible AND broke `register_chain_exit`'s
 // same-block-registration invariant (AsmEvict ids restart per block; a generic
-// yield's `ImmediateEvict` would read a stale same-id entry from an earlier
-// block's call and hijack that unrelated call site's patch point). The fix
-// registers the yield's block-call return address exactly like x86.
+// yield's `ChainExit` would read a stale same-id entry from an earlier
+// block's call and give that unrelated call site the wrong replay data). The
+// fix registers the yield's block-call return address exactly like x86.
 #[test]
 fn redefine_bop_onstack_yield() {
     run_test(

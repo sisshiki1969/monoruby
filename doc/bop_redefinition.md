@@ -83,8 +83,12 @@ fn insert_method(&mut self, class_id: ClassId, name: IdentId, entry: MethodTable
 呼び出し元の `Executor::{add_method, add_method_with_original,
 alias_method_for_class}` が担う。メソッド表を書き換えた**後**・`method_added`
 フックを呼ぶ**前**に `Codegen::check_bop_redefine(cfp)` を通し、フラグが非 0 なら
-`immediate_eviction` が CFP 鎖を遡って各フレームの return address を deopt に
-パッチする（`patch_return_to_deopt`）。戻ってきた時点で VM に落ちる。
+`Codegen::chain_deopt` が CFP 鎖を遡って各サスペンド中フレームを
+インタプリタフレームへ**変換**する（write-back の replay ＋ return address を
+共有 VM continuation stub に書き換え。`doc/chain_deopt.md` §10 を参照）。
+戻ってきた時点で VM に落ちる。かつてはコードそのものに `jmp deopt` を
+書き込む `immediate_eviction` がこれを担っていたが、chain deopt が完全に
+置き換えたので自己書き換えコードは無くなった。
 `method_added` は任意の Ruby を走らせるので、その前に片付けておく必要がある。
 
 この配置には 2 つ性質がある。
@@ -92,7 +96,7 @@ alias_method_for_class}` が担う。メソッド表を書き換えた**後**・
 - **レベルトリガであってエッジトリガではない。** `check_bop_redefine` は
   「今回の定義が basic op を潰したか」ではなく「フラグが立っているか」を見る。
   フラグは一度立つとクリアされないので、**以後プロセス内のあらゆるメソッド定義が
-  毎回 CFP 鎖の全走査と return address パッチを行う**。実測では他の要因
+  毎回 CFP 鎖の全走査とフレーム変換を行う**。実測では他の要因
   (JIT が止まることで再コンパイル churn も消える)に埋もれて有意差は出なかったが、
   構造としては無駄が残り続ける。
 - **経路が 3 つの funnel に限られる。** `remove_method` はここを通らない
@@ -555,8 +559,8 @@ Step 2b の時点では、stale な本体が 1 つでも出ると `dispatch[14]`
 `jit_invalidated` のグローバル一方向ラッチをやめ、「この iseq がどの
 (op, class) invariant に依存したか」を記録して該当分だけ無効化する。
 `InlineCacheEntry` と class-version ラベルという前例がある。あわせて
-`dispatch[14]`（`loop_start`）の no-opt 化と `immediate_eviction` の
-レベルトリガ（§1.3）もここで直す。
+`dispatch[14]`（`loop_start`）の no-opt 化とオンスタック始末
+（現 `chain_deopt`）のレベルトリガ（§1.3）もここで直す。
 
 ### Step 2 — 粒度を (演算子, クラス) へ（性能）
 
@@ -569,8 +573,8 @@ Step 2b の時点では、stale な本体が 1 つでも出ると `dispatch[14]`
 - **JIT**: `jit_invalidated` のグローバル一方向ラッチをやめ、「この iseq が
   どの (op, class) invariant に依存したか」を記録して該当分だけ無効化する。
   `InlineCacheEntry` と class-version ラベルという前例がある。
-- **`immediate_eviction` は残す** — オンスタックのフレームを片付ける手段は
-  粒度に関係なく必要である。ただし §1.3 の 2 性質を直す: 「フラグが非 0 か」の
+- **オンスタック始末（現 `chain_deopt`）は残す** — オンスタックのフレームを
+  片付ける手段は粒度に関係なく必要である。ただし §1.3 の 2 性質を直す: 「フラグが非 0 か」の
   レベルトリガをやめて**マスクのビットが 0→1 に遷移したときだけ**走らせ
   （エッジトリガ）、走査対象もその (op, class) に依存したフレームに絞る。
 - 効果: 「無関係な `Float#+` の再定義で fib が 24 倍遅くなる」が消える。

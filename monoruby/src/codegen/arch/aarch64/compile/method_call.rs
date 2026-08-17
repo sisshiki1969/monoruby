@@ -950,10 +950,11 @@ impl Codegen {
     /// `SpecializedCall` / `SpecializedYield`: a direct branch-with-link into
     /// an inlined method/block entry already emitted in this code buffer.
     /// Mirrors x86 `do_specialized_call`: set_lfp + push_frame, optionally bind
-    /// the deopt re-entry `patch_point`, `bl entry`, then pop_frame. Returns the
-    /// post-`bl` address (the return continuation); the caller records it via
-    /// `set_deopt_with_return_addr` so the eviction walk (`evict_suspended_frames`) can later overwrite
-    /// the continuation with a `B deopt` on BOP redefinition.
+    /// the recompile re-entry `patch_point`, `bl entry`, then pop_frame. Returns
+    /// the post-`bl` address (the return continuation); the caller records it via
+    /// `set_deopt_with_return_addr` so the chain-deopt walk (`Codegen::chain_deopt`)
+    /// can find this site's replay data from a suspended frame's return-address
+    /// slot.
     pub(in crate::codegen::jitgen::asmir) fn do_specialized_call(
         &mut self,
         entry: DestLabel,
@@ -1084,15 +1085,15 @@ impl Codegen {
         );
     }
 
+    /// Record `return_addr` — the address the callee will `ret` to — under
+    /// this call site's `evict` id, so the `AsmInst::ChainExit` pushed just
+    /// after the call can key its replay data by it (`register_chain_exit`).
     pub(in crate::codegen::jitgen::asmir) fn set_deopt_with_return_addr(
         &mut self,
         return_addr: CodePtr,
         evict: AsmEvict,
-        evict_label: &DestLabel,
     ) {
         self.asm_return_addr_table.insert(evict, return_addr);
-        self.return_addr_table
-            .insert(return_addr, (None, evict_label.clone()));
     }
 
     /// Write the callee frame's meta/outer/block fields before a call.
@@ -1219,14 +1220,13 @@ impl Codegen {
     /// re-guard (see `a64_do_call`); otherwise it calls the wrapper `codeptr`
     /// as before.
     ///
-    /// Like x86, the call's return address is registered for BOP-redefinition
-    /// eviction: when a basic op is redefined *inside* the callee, the caller's
-    /// own compiled body (inline integer arithmetic, folds) is stale the moment
-    /// the callee returns, and the callee's entry guards cannot protect the
-    /// *caller*. `evict_suspended_frames` finds this frame's return address in
-    /// `return_addr_table` and overwrites the recorded patch point (bound by
-    /// the following `ImmediateEvict`, after the result store) with a `B evict`
-    /// so the frame deopts instead of resuming stale code.
+    /// Like x86, the call's return address is recorded under `evict` for the
+    /// following `ChainExit`: when a basic op is redefined *inside* the callee,
+    /// the caller's own compiled body (inline integer arithmetic, folds) is
+    /// stale the moment the callee returns, and the callee's entry guards
+    /// cannot protect the *caller*. `Codegen::chain_deopt` finds this frame's
+    /// return address in `chain_deopt_table` and converts the frame to an
+    /// interpreter frame instead of letting it resume stale code.
     pub(in crate::codegen::jitgen) fn emit_call(
         &mut self,
         codeptr: CodePtr,
@@ -1236,11 +1236,10 @@ impl Codegen {
         _jit_entry: Option<DestLabel>,
         jit_slot: Option<u64>,
         evict: AsmEvict,
-        evict_label: &DestLabel,
     ) {
         let return_addr =
             self.a64_do_call(codeptr, is_iseq, callee_pc, call_site_bc_ptr, jit_slot);
-        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
+        self.set_deopt_with_return_addr(return_addr, evict);
     }
 
     /// Keyword-rest fixup: if the `slot` is nil, replace it with a fresh empty
@@ -1274,23 +1273,23 @@ impl Codegen {
     /// via `get_yield_data`). Mirrors x86 `gen_yield`: fetch the block's
     /// ProcData, build the callee block frame, massage arguments, then call the
     /// block's funcdata indirectly. Like every other machine-level call, the
-    /// block call's return address is registered for BOP-redefinition eviction
-    /// (see `emit_call`) — a yielded block can redefine a basic op, and the
-    /// yielding frame must then deopt on resume instead of running its stale
-    /// compiled continuation. Registering here also keeps the
-    /// `emit_immediate_evict` invariant that every `ImmediateEvict`'s evict id
-    /// was registered by its own site in the same block (AsmEvict ids restart
-    /// per block, so an unregistered producer would read a stale same-id entry
-    /// from `asm_return_addr_table` and hijack an unrelated site's patch
-    /// point). `error` catches a missing block, an argument error, or a callee
-    /// raise. Bails on an out-of-range callee-frame offset.
+    /// block call's return address is recorded under `evict` for the following
+    /// `ChainExit` (see `emit_call`) — a yielded block can redefine a basic op,
+    /// and the yielding frame must then be converted to an interpreter frame
+    /// instead of resuming its stale compiled continuation. Registering here
+    /// also keeps the `register_chain_exit` invariant that every `ChainExit`'s
+    /// evict id was registered by its own site in the same block (AsmEvict ids
+    /// restart per block, so an unregistered producer would read a stale
+    /// same-id entry from `asm_return_addr_table` and give an unrelated live
+    /// call site the wrong replay data). `error` catches a missing block, an
+    /// argument error, or a callee raise. Bails on an out-of-range
+    /// callee-frame offset.
     pub(in crate::codegen::jitgen) fn emit_yield(
         &mut self,
         callid: CallSiteId,
         simple: bool,
         error: &DestLabel,
         evict: AsmEvict,
-        evict_label: &DestLabel,
     ) -> bool {
         // Closely mirrors the proven VM `a64_op_yield`. x25/x26 are callee-saved
         // and used by neither the JIT global set (x19-x23) nor JIT'd code, so
@@ -1382,7 +1381,7 @@ impl Codegen {
             sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
             ldr x22, [x10];
         );
-        self.set_deopt_with_return_addr(return_addr, evict, evict_label);
+        self.set_deopt_with_return_addr(return_addr, evict);
         true
     }
 

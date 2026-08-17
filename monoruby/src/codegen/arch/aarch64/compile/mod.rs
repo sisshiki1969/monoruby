@@ -397,9 +397,10 @@ impl Codegen {
         for (v, slot) in &wb.literal {
             self.a64_store_imm_to_slot(v.id(), *slot, lfp);
         }
-        for slot in &wb.void {
-            self.a64_store_imm_to_slot(NIL_VALUE as u64, *slot, lfp);
-        }
+        // No `void` (nil-fill) loop — see x86 `gen_write_back_for_deopt`: only
+        // the GC write-back populates that field, and it never reaches a side
+        // exit.
+        debug_assert!(wb.void.is_empty());
         for (reg, slot) in &wb.gp {
             let off = slot.0 as u32 * 8 + LFP_SELF as u32;
             self.a64_frame_store(reg.a64().0, lfp, off);
@@ -2228,31 +2229,6 @@ impl Codegen {
         self.a64_block_break(pc);
     }
 
-    /// Record this position (the return continuation of a call, after the
-    /// result store) as the return-address patch point for `evict`. On BOP
-    /// redefinition, `Codegen::evict_suspended_frames` overwrites the instruction
-    /// here with a `B deopt` so the stale frame deopts on return instead of
-    /// resuming its compiled body (whose inline integer arithmetic / folds
-    /// assume the builtin op). Mirrors x86.
-    pub(in crate::codegen::jitgen) fn emit_immediate_evict(&mut self, evict: AsmEvict) {
-        // Every `ImmediateEvict` producer (normal call, generic yield,
-        // specialized call/yield) registers its own return address in the same
-        // block, so the id ALWAYS resolves to the fresh same-block entry.
-        // `unwrap` (x86 parity) is load-bearing: AsmEvict ids restart per
-        // block and `asm_return_addr_table` is never cleared, so a producer
-        // that forgot to register would otherwise silently read a stale
-        // same-id entry from an earlier block and repoint an unrelated live
-        // call site's patch point — a miscompile. Panic loudly instead.
-        let return_addr = *self.asm_return_addr_table.get(&evict).unwrap();
-        let patch_point = self.jit.get_current_address();
-        self.return_addr_table
-            .entry(return_addr)
-            .and_modify(|e| e.0 = Some(patch_point));
-    }
-
-    /// Register a specialized call's return address so the eviction walk can
-    /// find and patch it. Identical to the x86 helper (the tables are arch-
-    /// neutral fields on `Codegen`).
     /// Store the call-site pc into the outgoing cont-frame slot
     /// (`[sp]` = the callee frame's CFP+24). The 16-byte region was
     /// reserved by the preceding cont-mode `FprSave`, whose fp saves

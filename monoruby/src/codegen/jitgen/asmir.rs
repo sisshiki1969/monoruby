@@ -1885,14 +1885,6 @@ pub(super) enum AsmInst {
         using_fpr: UsingFpr,
     },
     ///
-    /// Imnmediate eviction.
-    ///
-    /// When BOPs are re-defined, this palce will be overwritten by the code causes deoptimization.
-    ///
-    ImmediateEvict {
-        evict: AsmEvict,
-    },
-    ///
     /// Register this call site's replay data in the runtime table
     /// (`doc/chain_deopt.md` §5 step 1 / §9.3). Emits no machine code: it
     /// looks the call's return address up by `evict` (recorded moments

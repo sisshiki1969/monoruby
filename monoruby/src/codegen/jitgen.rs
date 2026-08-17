@@ -470,10 +470,13 @@ impl ChainReplay {
             // SAFETY: as above.
             unsafe { caller_lfp.set_register(*slot, Some(*v)) };
         }
-        for slot in &self.wb.void {
-            // SAFETY: as above.
-            unsafe { caller_lfp.set_register(*slot, Some(Value::nil())) };
-        }
+        // `void` (nil-fill of `LinkMode::V` slots) is never populated here:
+        // `WriteBack` has exactly two constructors, and only the GC-safepoint
+        // one (`get_gc_write_back`) fills `void` — `get_write_back`, which
+        // every side exit and every `ChainExitSpec` uses, hard-codes it empty.
+        // A GC write-back never reaches a chain replay, so there is nothing to
+        // nil-fill.
+        debug_assert!(self.wb.void.is_empty());
         // GP-pool residents exist only under the (unfinished) GP allocator;
         // shipping builds never record any.
         debug_assert!(self.wb.gp.is_empty());
@@ -506,9 +509,9 @@ impl ChainReplay {
 }
 
 ///
-/// One frame's worth of eager chain-deopt conversion, produced by the walks
-/// (`Codegen::chain_deopt` / `Codegen::evict_suspended_frames`) and applied
-/// by their callers *after* the `CODEGEN` borrow is released — the replay
+/// One frame's worth of eager chain-deopt conversion, produced by the walk
+/// (`Codegen::chain_deopt`) and applied by its callers *after* the
+/// `CODEGEN` borrow is released — the replay
 /// allocates (boxing, rest-`Array`/kwrest-`Hash` materialization) and so can
 /// run a GC, which must not happen while the thread-local is held.
 ///
@@ -1204,9 +1207,12 @@ impl JitModule {
         for (v, slot) in &wb.literal {
             self.literal_to_stack2(*slot, *v);
         }
-        for slot in &wb.void {
-            self.literal_to_stack2(*slot, Value::nil());
-        }
+        // No `void` (nil-fill) loop: only `get_gc_write_back` ever populates
+        // that field, and a GC write-back goes through `gen_write_back`, never
+        // here — every side exit's write-back comes from `get_write_back`,
+        // which hard-codes `void` empty. Same for the chain-deopt replay
+        // (`ChainReplay::replay`).
+        debug_assert!(wb.void.is_empty());
         for (reg, slot) in &wb.gp {
             monoasm! { &mut *self,
                 movq [r14 - (conv(*slot))], R(*reg as _);

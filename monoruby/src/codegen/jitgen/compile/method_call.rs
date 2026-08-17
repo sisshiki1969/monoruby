@@ -1567,21 +1567,33 @@ impl AbstractState {
     /// state the post-call continuation expects (it stores the result into
     /// `dst` itself).
     ///
-    /// Nothing fires the walk in a default build yet (§5 steps 4-5 are
-    /// unimplemented), so registration is compiled in only under the
-    /// `chain-deopt` feature. When the speculation lands, this becomes the
-    /// per-site decision §6 argues for rather than a build-wide switch.
+    /// Registration is unconditional: chain conversion is now the *only* way
+    /// an on-stack JIT frame is dropped to the interpreter, so every call and
+    /// yield site must be convertible from its return address alone. A site
+    /// the table does not know is a site the walk has to leave running its
+    /// compiled body — which was tolerable only while immediate eviction
+    /// existed as a fallback. When the speculation (§5 step 5) lands, the
+    /// per-site decision §6 argues for rides on top of this, not instead
+    /// of it.
     ///
     fn chain_exit(&self, ir: &mut AsmIr, evict: AsmEvict, using_fpr: UsingFpr, dst: Option<SlotId>) {
-        if cfg!(feature = "chain-deopt") {
-            let spec = Box::new(ChainExitSpec::new(self, using_fpr, dst));
-            ir.push(AsmInst::ChainExit { evict, spec });
-        }
+        let spec = Box::new(ChainExitSpec::new(self, using_fpr, dst));
+        ir.push(AsmInst::ChainExit { evict, spec });
     }
 
+    /// Post-call bookkeeping: fill in the `Evict` side-exit slot this site
+    /// reserved, and re-arm the capture guard.
+    ///
+    /// The name is historical. The `Evict` handler used to be *entered* by
+    /// immediate eviction, which overwrote this site's return continuation
+    /// with a `jmp` to it; that mechanism is gone (chain conversion is the
+    /// only way a suspended frame is dropped to the interpreter), so nothing
+    /// branches to the handler any more. The slot is still filled because
+    /// `AsmEvict` is the id under which `chain_exit` finds this call's
+    /// return address, and `gen_asm` requires every reserved slot to carry a
+    /// write-back.
     fn immediate_evict(&mut self, ir: &mut AsmIr, evict: AsmEvict) {
         let next_pc = self.pc().next();
-        ir.push(AsmInst::ImmediateEvict { evict });
         ir[evict] = SideExit::Evict(Some((next_pc, self.get_write_back())));
         if !self.no_capture_guard() {
             let deopt = ir.new_deopt_with_pc(self, next_pc);
