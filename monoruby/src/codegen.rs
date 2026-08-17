@@ -663,6 +663,25 @@ pub struct Codegen {
     /// return_addr => (patch_point, deopt)
     return_addr_table: HashMap<CodePtr, (Option<CodePtr>, DestLabel)>,
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
+    /// `doc/chain_deopt.md` §5 step 1: a suspended call's return address =>
+    /// that call site's chain-exit handler. Keyed identically to
+    /// `return_addr_table` (§3.4), because both are looked up from a
+    /// suspended frame's return-address slot; the two differ only in what
+    /// they do with the hit — `return_addr_table` patches the frame's *code*
+    /// at the recorded continuation, this one is written *into the stack* so
+    /// control leaves JIT code on `ret`.
+    chain_deopt_table: HashMap<CodePtr, DestLabel>,
+    /// The VM's shared post-call continuation, i.e. the address a chain-exit
+    /// handler tails into (`doc/chain_deopt.md` §3.1). It carries no
+    /// per-site state: it recovers the suspended pc from the cont-frame slot
+    /// on the stack, re-derives the destination slot from the bytecode there,
+    /// stores the callee's result and resumes the fetch loop — so one address
+    /// serves every call and yield site.
+    ///
+    /// This is the position *just past* the VM send's `call`, before its
+    /// `pop_frame`; the handler performs the `pop_frame` itself, since the
+    /// hijacked `ret` skips the JIT frame's own.
+    vm_call_continuation: Option<CodePtr>,
     pub(crate) specialized_info: Vec<(ISeqId, ClassId, DestLabel)>,
     pub(crate) specialized_base: usize,
     vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
@@ -1035,6 +1054,8 @@ impl Codegen {
             compilation_unit: Vec::new(),
             return_addr_table: HashMap::default(),
             asm_return_addr_table: HashMap::default(),
+            chain_deopt_table: HashMap::default(),
+            vm_call_continuation: None,
             specialized_info: Vec::new(),
             specialized_base: 0,
             vm_entry: entry_panic.clone(),
@@ -1445,7 +1466,11 @@ impl Codegen {
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             if std::mem::replace(&mut codegen.bop_eviction_pending, false) {
-                codegen.immediate_eviction(cfp);
+                if cfg!(feature = "chain-deopt") {
+                    codegen.chain_deopt(cfp);
+                } else {
+                    codegen.immediate_eviction(cfp);
+                }
             }
         });
     }
@@ -1518,6 +1543,83 @@ impl Codegen {
         return_addr: CodePtr,
     ) -> Option<(Option<CodePtr>, DestLabel)> {
         self.return_addr_table.get(&return_addr).cloned()
+    }
+
+    /// The address of the VM's shared post-call continuation
+    /// (`vm_call_continuation`). Panics if the VM has not been constructed —
+    /// a chain-exit handler can only be emitted after `construct_vm`, which
+    /// happens in `Codegen::new`, so a `None` here is a construction-order
+    /// bug, not a runtime condition.
+    pub(in crate::codegen) fn vm_call_continuation(&self) -> CodePtr {
+        self.vm_call_continuation
+            .expect("vm_call_continuation: VM code has not been generated yet")
+    }
+
+    /// Record the VM's post-call continuation. Called once per VM
+    /// construction, from the first `send` handler generated: every call and
+    /// yield handler shares the same stack-driven sequence, so the first one
+    /// is as good as any (`doc/chain_deopt.md` §3.1).
+    pub(in crate::codegen) fn set_vm_call_continuation(&mut self, addr: CodePtr) {
+        self.vm_call_continuation.get_or_insert(addr);
+    }
+
+    /// `LInst::ChainExit`: map this call's return address (recorded moments
+    /// ago by `set_deopt_with_return_addr` under the same `evict` id) to its
+    /// chain-exit handler.
+    ///
+    /// The `unwrap` is load-bearing for the same reason as
+    /// `emit_immediate_evict`'s: `AsmEvict` ids restart per block while
+    /// `asm_return_addr_table` is never cleared, so a producer that forgot to
+    /// register its return address would silently pick up a stale same-id
+    /// entry and give an unrelated live call site the wrong handler.
+    pub(in crate::codegen) fn register_chain_exit(&mut self, evict: AsmEvict, chain: DestLabel) {
+        let return_addr = *self.asm_return_addr_table.get(&evict).unwrap();
+        self.chain_deopt_table.insert(return_addr, chain);
+    }
+
+    ///
+    /// Convert every suspended JIT frame in *cfp*'s control-frame chain into
+    /// an interpreter frame (`doc/chain_deopt.md` §2).
+    ///
+    /// Each frame is left exactly where it is; only its **return-address
+    /// slot** is rewritten, to that call site's chain-exit handler. Control
+    /// therefore never re-enters a compiled body: as the innermost frame (and
+    /// then each frame in turn) returns, the `ret` lands in the handler, which
+    /// writes the frame's unboxed values back into its local slots and tails
+    /// into the VM's post-call continuation.
+    ///
+    /// Unlike [`Self::immediate_eviction`] this touches no machine code, so a
+    /// compiled body that is still valid for *future* invocations survives.
+    ///
+    /// Frames whose return address is in VM code or an invoker are already
+    /// interpreted (or are a foreign entry) and are skipped, but the walk
+    /// continues past them: a chain may alternate VM and JIT frames. A JIT
+    /// return address with no table entry is likewise skipped — the dispatch
+    /// paths that do not register one (the invokers) cannot be resumed
+    /// through the VM's send continuation anyway.
+    ///
+    pub(crate) fn chain_deopt(&mut self, mut cfp: Cfp) {
+        let mut return_addr = unsafe { cfp.return_addr() };
+        while let Some(prev_cfp) = cfp.prev() {
+            if let Some(ret) = return_addr
+                && !self.check_vm_address(ret)
+                && let Some(chain) = self.chain_deopt_table.get(&ret).cloned()
+            {
+                let handler = self.jit.get_label_address(&chain);
+                #[cfg(any(feature = "deopt", feature = "profile"))]
+                eprintln!("### chain deopt: frame return {ret:?} -> chain exit {handler:?}");
+                // SAFETY: `cfp` is a live control frame of the current
+                // thread's stack (we reached it by walking `prev()` from the
+                // executor's cfp), and `handler` is a finalized code address
+                // in this JitModule. The slot we overwrite is the frame's
+                // return address, which is only read by the `ret` that ends
+                // the frame below it — and that has not run yet, or we would
+                // not have found this frame suspended.
+                unsafe { cfp.set_return_addr(handler) };
+            }
+            cfp = prev_cfp;
+            return_addr = unsafe { cfp.return_addr() };
+        }
     }
 
     /// aarch64 specialized recompile: overwrite the single 4-byte `bl entry`

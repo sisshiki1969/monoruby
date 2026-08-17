@@ -77,7 +77,13 @@ impl Codegen {
         };
         self.get_func_data();
         self.set_method_outer();
-        self.vm_call(is_simple);
+        let call_return_addr = self.vm_call(is_simple);
+        // Chain deopt tails into this frame-restoring continuation
+        // (`doc/chain_deopt.md` §3.1). It is the address just past the
+        // `call`, *before* `vm_call`'s trailing `pop_frame` — a hijacked
+        // `ret` skips the JIT frame's own `pop_frame`, so the sequence a
+        // converted frame resumes through has to contain one.
+        self.set_vm_call_continuation(call_return_addr);
         monoasm! { &mut self.jit,
         done:
         };
@@ -190,11 +196,15 @@ impl Codegen {
     /// - r13: pc
     /// - r15: &FuncData
     ///
+    /// Returns the call's return address — the position of the trailing
+    /// `pop_frame`, which chain deopt publishes as the VM's post-call
+    /// continuation (`doc/chain_deopt.md` §3.1).
+    ///
     fn vm_call(
         &mut self,
         // The call site has no keyword arguments, no splat arguments, no hash splat arguments, and no block argument.
         is_simple: bool,
-    ) {
+    ) -> CodePtr {
         monoasm! { &mut self.jit,
             // set meta
             movq rax, [r15 + (FUNCDATA_META)];
@@ -255,7 +265,7 @@ impl Codegen {
             self.generic_handle_arguments(runtime::vm_handle_arguments);
             self.vm_handle_error();
         }
-        self.call_funcdata();
+        self.call_funcdata()
     }
 
     ///

@@ -727,6 +727,27 @@ impl JitModule {
     }
 
     ///
+    /// Reload the live FP pool registers from a cont-mode save area
+    /// **without** popping it, leaving rsp on the continuation frame.
+    ///
+    /// Used by the chain-exit handler (`gen_chain_exit_with_label`), which
+    /// needs the pool registers back to write them out but must leave the
+    /// cont frame in place for the VM continuation's `popq r13`.
+    ///
+    pub(crate) fn fpr_reload_cont(&mut self, using_fpr: UsingFpr) {
+        let pad = CONTINUATION_FRAME_SIZE as i32;
+        let mut i = 0;
+        for (x, b) in using_fpr.iter().enumerate() {
+            if *b {
+                monoasm!( &mut self.jit,
+                    movq xmm(x as u64 + 2), [rsp + (pad + 8 * i)];
+                );
+                i += 1;
+            }
+        }
+    }
+
+    ///
     /// Restore floating point registers in use.
     ///
     fn fpr_restore_with_cont(&mut self, using_fpr: UsingFpr, cont: bool) {
@@ -1115,6 +1136,71 @@ impl Codegen {
             loop_jit_spill_bytes,
             base,
         )
+    }
+
+    ///
+    /// Emit this call site's **chain-exit** handler (`doc/chain_deopt.md` §2).
+    ///
+    /// Entered by `ret`, not by a branch from this frame's body: the
+    /// chain-deopt walk has written this handler's address into the callee
+    /// frame's return-address slot. On entry, therefore,
+    ///
+    /// - `rbp` is this frame's frame pointer again (the callee's `leave` did
+    ///   that), but `r14` still holds the *callee's* LFP,
+    /// - `rax` holds the callee's return value,
+    /// - `rsp` is where the call left it: pointing at the cont frame, with the
+    ///   `FprSave` area (`using_fpr`) just above it, exactly as the normal
+    ///   return continuation would find it.
+    ///
+    /// So the handler restores the frame (`pop_frame`: `Executor::cfp` and
+    /// `r14`), reloads the caller-saved FP pool out of the save area, writes
+    /// every live value back into this frame's local slots, and jumps to the
+    /// VM's post-call continuation — which pops the cont frame to recover the
+    /// resume pc, stores `rax` into the call's destination slot, and resumes
+    /// the fetch loop. From there this frame is an ordinary interpreter frame.
+    ///
+    /// The `pop_frame` has to come **first**, before the write-back: boxing a
+    /// float or materializing a deferred rest `Array` allocates, so a GC can
+    /// run inside the write-back, and the mark walk starts from
+    /// `Executor::cfp` — which on entry still names the callee frame that has
+    /// just been torn down. (The VM continuation repeats the `pop_frame`;
+    /// it is idempotent.)
+    ///
+    /// `rax` is stashed across the write-back (which destroys it) in the
+    /// callee's dead frame header, keeping `rsp` 16-byte aligned for the
+    /// boxing calls the write-back makes.
+    ///
+    pub(in crate::codegen) fn gen_chain_exit_with_label(
+        &mut self,
+        wb: &WriteBack,
+        entry: DestLabel,
+        base: usize,
+        using_fpr: UsingFpr,
+    ) {
+        let cont = self.vm_call_continuation();
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        self.jit.bind_label(entry);
+        // Restore this frame as the current one: the write-back's
+        // destinations are r14-relative, and any GC it triggers marks from
+        // `Executor::cfp`.
+        self.pop_frame();
+        // Reload the FP pool from the save area the call left in place. Loads
+        // only — rsp must stay on the cont frame for the VM continuation's
+        // `popq r13`.
+        self.fpr_reload_cont(using_fpr);
+        monoasm!( &mut self.jit,
+            subq rsp, 16;
+            movq [rsp + 8], rax;
+        );
+        self.gen_write_back_for_deopt(wb, base);
+        monoasm!( &mut self.jit,
+            movq rax, [rsp + 8];
+            addq rsp, 16;
+            movq rdi, (cont.as_ptr() as u64);
+            jmp  rdi;
+        );
+        self.jit.select_page(0);
     }
 
     ///

@@ -104,6 +104,7 @@ impl Codegen {
             | AsmInst::MethodRet(..)
             | AsmInst::BlockBreak(..)
             | AsmInst::ImmediateEvict { .. }
+            | AsmInst::ChainExit { .. }
             | AsmInst::GuardClassVersion { .. }
             | AsmInst::ContFramePc { .. }
             | AsmInst::SetupMethodFrame { .. }
@@ -989,6 +990,12 @@ impl Codegen {
                         base,
                     ),
                 LSideExitKind::Error => self.gen_handle_error(pc, wb, entry, base),
+                // The chain exit needs no `pc`: it tails into the VM's
+                // post-call continuation, which reads the resume pc off the
+                // stack (`doc/chain_deopt.md` §3.1).
+                LSideExitKind::ChainExit { using_fpr } => {
+                    self.gen_chain_exit_with_label(&wb, entry, base, using_fpr)
+                }
             },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the
             // arch-neutral fallback, which dispatches to the per-arch `emit_*`.

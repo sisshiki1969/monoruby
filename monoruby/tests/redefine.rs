@@ -292,6 +292,43 @@ fn redefine_bop_onstack_caller() {
     );
 }
 
+// The on-stack caller case with an unboxed `Float` local live across the call.
+// `acc` stays FPR-resident through `maybe_redefine` (no block at the call site,
+// so nothing demotes it), so converting the suspended frame has to box it out
+// of its FP home and into the local slot before the interpreter resumes —
+// exercising the float half of the eviction write-back, which the integer-only
+// cases above never reach. The trailing `3 + 4` is constant-folded by the JIT,
+// so it also checks the frame really stopped running its compiled body: a
+// resumed fold answers 7, an interpreter answers 999.
+//
+// Both on-stack mechanisms go through this: `immediate_eviction`'s
+// return-continuation patch and, under the `chain-deopt` feature, the
+// chain-exit handler's FP-pool reload (`doc/chain_deopt.md` §8).
+#[test]
+fn redefine_bop_onstack_caller_float_local() {
+    run_test(
+        r##"
+        $flag = false
+        def maybe_redefine
+          if $flag
+            Integer.class_eval("def +(o); 999; end")
+          end
+          nil
+        end
+        def float_carrier(a)
+          acc = 0.0
+          acc = acc + a * 1.5
+          maybe_redefine
+          acc = acc + 0.25
+          [acc, 3 + 4]
+        end
+        100.times { float_carrier(2.0) }
+        $flag = true
+        float_carrier(2.0)
+        "##,
+    );
+}
+
 // Same on-stack scenario reached through a GENERIC `yield` instead of a method
 // call: the yielded block redefines the basic op, and the yielding frame must
 // deopt on resume instead of running its stale compiled continuation. On

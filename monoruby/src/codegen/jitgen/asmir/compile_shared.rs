@@ -509,6 +509,13 @@ impl Codegen {
             AsmInst::MethodRet(pc) => self.encode_linst(LInst::MethodRet { pc }),
             AsmInst::BlockBreak(pc) => self.encode_linst(LInst::BlockBreak { pc }),
             AsmInst::ImmediateEvict { evict } => self.encode_linst(LInst::ImmediateEvict { evict }),
+            // Emits nothing; registers this call's return address -> chain-exit
+            // handler so `Codegen::chain_deopt` can find the handler from a
+            // suspended frame's return-address slot (`doc/chain_deopt.md` §3.4).
+            AsmInst::ChainExit { evict, chain } => {
+                let chain = labels[chain].clone();
+                self.encode_linst(LInst::ChainExit { evict, chain });
+            }
             // Method-call prologue: class-version guard, callee frame fields,
             // argument massage. (aarch64 SetArguments bails on a not-yet-ported
             // argument shape, hence the bool result; the guard ignores the x86
@@ -1511,6 +1518,9 @@ impl Codegen {
             }
             LInst::ImmediateEvict { evict } => {
                 self.emit_immediate_evict(evict);
+            }
+            LInst::ChainExit { evict, chain } => {
+                self.register_chain_exit(evict, chain);
             }
             LInst::Init { info, prologue_offset } => {
                 self.emit_init(info, prologue_offset);

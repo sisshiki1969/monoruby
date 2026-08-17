@@ -78,6 +78,26 @@ impl Cfp {
     }
 
     ///
+    /// Overwrite the machine return address this frame will `ret` to.
+    ///
+    /// The writer half of [`Self::return_addr`], used by chain deopt
+    /// (`doc/chain_deopt.md` §5 step 3) to redirect a suspended JIT frame's
+    /// return into a chain-exit handler instead of its caller's compiled body.
+    ///
+    /// ### safety
+    /// *self* must be a live control frame of the current thread's stack, and
+    /// *addr* an address that is valid to return to with this frame's
+    /// register/stack state — in practice only a chain-exit handler emitted
+    /// for exactly this call site.
+    ///
+    pub(crate) unsafe fn set_return_addr(&mut self, addr: monoasm::CodePtr) {
+        unsafe {
+            *(self.as_ptr() as *mut Option<monoasm::CodePtr>).add(1 + BP_CFP as usize / 8) =
+                Some(addr)
+        };
+    }
+
+    ///
     /// The caller's suspended *pc*, read from the cont-frame slot the
     /// caller wrote just before calling into this frame (CFP+24: the
     /// VM's `push_cont_frame` `pushq r13`, the JIT's equivalent store,

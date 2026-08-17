@@ -830,6 +830,7 @@ impl<'a> JitContext<'a> {
         let meta = self.store[callee_fid].meta();
         ir.push(AsmInst::SetupYieldFrame { meta, outer });
         ir.push(AsmInst::SpecializedYield { entry, evict });
+        state.chain_exit(ir, evict, using_fpr);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         let res = state.def_rax2acc_return(ir, dst, return_state);
@@ -1435,6 +1436,7 @@ impl AbstractState {
             evict,
             pc: self.pc(),
         });
+        self.chain_exit(ir, evict, using_fpr);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         // When a capture guard follows (the callee may `move_frame_to_heap`,
@@ -1499,6 +1501,7 @@ impl AbstractState {
             patch_point,
             evict,
         });
+        self.chain_exit(ir, evict, using_fpr);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         self.unset_side_effect_guard();
@@ -1536,6 +1539,7 @@ impl AbstractState {
             error,
             evict,
         });
+        self.chain_exit(ir, evict, using_fpr);
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         // A yielded block can capture this frame; home the result via the LFP
@@ -1550,6 +1554,29 @@ impl AbstractState {
         self.unset_class_version_guard();
         self.unset_const_version_guard();
         self.unset_side_effect_guard();
+    }
+
+    ///
+    /// Give this call site a chain-exit handler (`doc/chain_deopt.md` §2), so
+    /// a chain deopt can convert a frame suspended here into an interpreter
+    /// frame by rewriting the callee's return-address slot.
+    ///
+    /// Call this immediately after the site's call instruction: the write-back
+    /// is read off the live state, which must still be the post-`discard(dst)`
+    /// state the VM's post-call continuation expects (it stores the result
+    /// into `dst` itself).
+    ///
+    /// Emitting the handler costs cold code roughly the size of the site's
+    /// `Evict` handler, and nothing fires the walk in a default build yet
+    /// (§5 steps 4-5 are unimplemented), so it is compiled in only under the
+    /// `chain-deopt` feature. When the speculation lands, this becomes the
+    /// per-site decision §6 argues for rather than a build-wide switch.
+    ///
+    fn chain_exit(&self, ir: &mut AsmIr, evict: AsmEvict, using_fpr: UsingFpr) {
+        if cfg!(feature = "chain-deopt") {
+            let chain = ir.new_chain_exit(self, using_fpr);
+            ir.push(AsmInst::ChainExit { evict, chain });
+        }
     }
 
     fn immediate_evict(&mut self, ir: &mut AsmIr, evict: AsmEvict) {
