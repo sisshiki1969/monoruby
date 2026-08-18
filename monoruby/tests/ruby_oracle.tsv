@@ -127,6 +127,7 @@
 082f54363bbaa6f37b522a29ab6c1e74	true	f = File.new("Cargo.toml", "r")\n            result = f.read(10).is_
 082ffdcafa629eb9c1ce2f11988484e1	[0, "A1", 2, "A1\\n", "A2\\n", "B1\\n", "B1\\n", "no stream to tell", "no stream to seek", "no stream to rewind", "no stream", "closed stream"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
 08380397571bab4325905bd08954dab7	5	f = ->{ _1 }; f.call(5)
+083db1f95ec292a71bf0a7fef7d619a6	[72, [:b, 42, 70, true, 60], 70]	x = 10\n        define_method(:bm_const) { :b }\n        define_method(:b
 086bebb78a0ca379f395d0e5f49578e9	2500	a=1;\n            b=while a<2500 do\n                a=a+1\n          
 08996866cb8b785802b6b9956c01496d	true	Process.getrlimit("CORE").is_a?(Array) && Process.getrlimit("CORE").size == 2
 08afdef663fa588e146ea15e587897fc	[false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], [], false, true, true, true, [1, 2, 3, 4, 5, 6], []]	def m = []\n        r = []\n        20.times do\n            a = m\n       
@@ -872,6 +873,7 @@
 4837dfdc276a86f53941ddafe66cb53b	["hello\\n", "world\\n", "foo\\n"]	path = "/tmp/monoruby_test_foreach_#{Process.pid}"\n            File
 483914fde3cb7dac282cf5c352a29b88	"aXXXX"	class C; def to_str; "bc"; end; end; o = C.new\n"abcbc".gsub(o, "XX")
 483a3a15e1c4f82869da871bda9f29e7	["caught m0", "unmatched n0", "type: class or module required for rescue clause", "caught m1", "unmatched n1", "type: class or module required for rescue clause", "caught m2", "unmatched n2", "type: class or module required for rescue clause", "caught m3", "unmatched n3", "type: class or module required for rescue clause", "caught m4", "unmatched n4", "type: class or module required for rescue clause", "caught m5", "unmatched n5", "type: class or module required for rescue clause", "caught m6", "unmatched n6", "type: class or module required for rescue clause", "caught m7", "unmatched n7", "type: class or module required for rescue clause", "caught m8", "unmatched n8", "type: class or module required for rescue clause", "caught m9", "unmatched n9", "type: class or module required for rescue clause", "caught m10", "unmatched n10", "type: class or module required for rescue clause", "caught m11", "unmatched n11", "type: class or module required for rescue clause", "caught m12", "unmatched n12", "type: class or module required for rescue clause", "caught m13", "unmatched n13", "type: class or module required for rescue clause", "caught m14", "unmatched n14", "type: class or module required for rescue clause", "caught m15", "unmatched n15", "type: class or module required for rescue clause", "caught m16", "unmatched n16", "type: class or module required for rescue clause", "caught m17", "unmatched n17", "type: class or module required for rescue clause", "caught m18", "unmatched n18", "type: class or module required for rescue clause", "caught m19", "unmatched n19", "type: class or module required for rescue clause", "caught m20", "unmatched n20", "type: class or module required for rescue clause", "caught m21", "unmatched n21", "type: class or module required for rescue clause", "caught m22", "unmatched n22", "type: class or module required for rescue clause", "caught m23", "unmatched n23", "type: class or module required for rescue clause", "caught m24", "unmatched n24", "type: class or module required for rescue clause", "caught m25", "unmatched n25", "type: class or module required for rescue clause", "caught m26", "unmatched n26", "type: class or module required for rescue clause", "caught m27", "unmatched n27", "type: class or module required for rescue clause", "caught m28", "unmatched n28", "type: class or module required for rescue clause", "caught m29", "unmatched n29", "type: class or module required for rescue clause"]	def rescue_match(exc_msg, clause)\n          begin\n            begin\n   
+4850aa38b4aa83df137ed34237099305	[5]	def bh_each2\n          yield\n          yield\n          :not_reached\n   
 48550372bab4ca5a49be495f7a3ccff8	[true, true, false]	root = Fiber.current\n            inner = nil\n            f = Fiber.
 485bfcadd99bf357e22c80c24adff41d	[true, true, true, true, true]	cri = Struct.new(:value) do\n              def to_int; value; end\n  
 486696700c00f3fb37eb234c9c60f677	["only a", false]	a = Object.new\n            b = Object.new\n            a.define_sing
@@ -986,6 +988,7 @@
 51be01e0d292ac0d9c77567390f1d11f	["Bbar", "B[239, 191, 189]", "Bdbar", "Btbar", Encoding::UndefinedConversionError, [ArgumentError, "too big fallback string"], TypeError, Encoding::UndefinedConversionError]	(r=[]; r << "B�".encode(Encoding::US_ASCII, fallback: { "�" => "bar" }); r << "B
 51bf1bd2c44ca7c76c217e78a6007ece	[true, 3]	a = ARGF.class.new('/dev/zero')\n            [a.read(100) == "\\0" * 
 522c4f8c40e029c9a06a958415c5bba8	["append_features:C"]	$res = []\n        module M\n          def self.append_features(base)\n   
+525e307d40d5e0bc7aa36e1ace713254	[:small, 7, :big]	class BmR\n          define_method(:pick) { |n| return :small if n < 10;
 52737290d47684f2e53ee7646498dbeb	[1, 2, 1, 2, 1, 2, 2, 1, 2, 1, 2]	class S\n              def g\n                f\n              end\n   
 52c715d3341e07f64b568be422ce7c17	true	h = {}\n            h[:self] = h\n            g = Marshal.load(Marsha
 52cc02c8a048877c5eedd646aa6690e1	["US-ASCII", "UTF-8", "EUC-JP", "US-ASCII", "UTF-8", "US-ASCII", "UTF-8", "UTF-8"]	[ /abc/, /abc/u, /abc/e, /\\u{61}/, /\\u{3042}/,\n                Regexp.new("abc")
@@ -1607,6 +1610,7 @@
 88461a469aef4d8d3db4456b16e10a19	[25, 750.0]	def check(x) = x.nil?\n            def step_like(limit, by)\n        
 8853b8884228122ac56519cd2ee8b71c	[:fiber_1, :fiber_2]	f1 = Fiber.new { :fiber_1 }\n            f2 = Fiber.new { f1.transfe
 885b49a51181fdd9a665649f5d6afb97	[1, 2, 3, 4]	class C; def to_ary; [3, 4]; end; end; o = C.new\n[1, 2] + o
+885c5c5cd9175193870499b63f8d37c1	[:shared]	blk = proc { :shared }\n        class BmShared; end\n        BmShared.sen
 889ef2d076f0c4bf33ee8cb138f1383a	[:a, "b"]	module M\n              def a; 1; end\n              def b; 2; end\n  
 88b402e7fdaa8b2f9583d10a43b30b83	[true, false, true, false, true]	class C\n          def pub_method; end\n          private\n          def p
 88b74eaedd70ab6521c45c598a99a423	:OVERRIDDEN	class Float; def <=(o); :OVERRIDDEN; end; end; 3.0 <= 4.0
@@ -2258,6 +2262,7 @@ bd9f54fa26238d51503216b560dcfe9d	"M:C"	module M\n          def foo\n            
 bde4f5647e4c5f426e0b6b9de2ad09ab	[[], [:it], [:_1, :_2, :_3], [:it], [], [], []]	[\n              binding.implicit_parameters,\n              proc { i
 bde9a54a7762ba3fd118c904ccaac5c2	[:rescued]	def boom; raise "no"; end\n            def test; [1].map { begin; bo
 bdea9d1c4693119e7bb516fdfdf9210c	:done	r = false\n            t = Thread.new do\n              f = Fiber.new
+bdfa28547cf5ef01241032493e046505	[:old, :new]	class BmRedef\n          define_method(:tag) { :old }\n        end\n      
 be095b38571f7deb19f1b1d863acabf4	true	GC.stat(:count).is_a?(Integer)
 be1808a6727b8d3bac7af6a899237547	1	class C; define_method(:m) { |a,| a }; end\n            C.new.method
 be32db402f76154708fa32e248c791d9	[[:a, :c, nil, true, false], [1, 3, 4, 5, 6, nil], [:int, :float], [:x, :dflt], [:hit, "miss2"], [:one, nil, :int], [30, 110, [1, 2, 3]], [30, nil, 5], [:nan, nil]]	r = []\n            h = { 1 => :a, 5 => :b, 9 => :c }\n            r 
@@ -2460,6 +2465,7 @@ cc663087814e38d92d69a54be85556da	"e"	class MyIdx; def to_int; 1; end; end\n     
 cc8aebeeff87148f768f16c8f957f04b	[File, Errno::EEXIST, "hello\\nmore\\n", nil, ""]	(f="/tmp/mono_om_#{Process.pid}"; a=File.open(f, File::CREAT) { |x| x.class }; b
 cca80bdce242e79abc49108091469b12	3	module MShip\n              class Widget\n                attr_reader
 ccd878c1f1810dfef13a53d1e1a05fb8	:te	begin; :sym.instance_eval { alias :foo :to_s }; :no; rescue TypeError; :te; end
+ccdd40701f9797edf931ec9bb16c3abf	[:alpha, 1.5, :beta, 2.5]	class PmF\n          def tag = :alpha\n          def rate = 1.5\n        e
 ccee79e211a63a6f8408eaaa13a6aee9	[{a: 1}, [1, {a: 1}], {}, "no implicit conversion of Object into Hash", "can't convert Object to Hash (Object#to_hash gives Integer)"]	def f(**o) = o\n            def g(a, **o) = [a, o]\n            m = O
 cd29ece16f52c170d36a353d72be8fb8	[1, 2, [3, 4, 5, 6, 7]]	def f(x,y,*z)\n            [x,y,z]\n        end\n        \n\n        f(1,2,3
 cd2df73dc4bb642c9c1db8166dee2691	true	t = File.birthtime("Cargo.toml") rescue :unsupported\n            t 

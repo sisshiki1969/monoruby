@@ -8,7 +8,19 @@ impl Codegen {
         self.jit.bind_label(entry.clone());
         match &globals.store[fid].kind {
             FuncKind::ISeq(iseq) => {
-                match globals.store[*iseq].hint {
+                // Consume the trivial-body hint only for real methods: a
+                // BLOCK's wrapper is reached by iterator invokers whose
+                // native loops rely on the block's entry safepoint poll —
+                // fast-returning would make `Thread#kill` unable to reach
+                // a `loop {}` spinner. (Block hints exist for the
+                // define_method proc-method fold, which elides the call
+                // inside a JIT caller that has its own polls.)
+                let hint = if globals.store[fid].is_not_block() {
+                    globals.store[*iseq].hint
+                } else {
+                    ISeqHint::Normal
+                };
+                match hint {
                     ISeqHint::ConstReturn(imm) => {
                         // Trivial method: return constant immediately without
                         // frame creation or bytecode execution.

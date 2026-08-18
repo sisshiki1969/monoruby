@@ -533,7 +533,71 @@ impl<'a> JitContext<'a> {
                 return Ok(self.struct_slot_writer(state, ir, callid, slot_index, inline));
             }
             FuncKind::Builtin { .. } => (func_id, None),
-            FuncKind::Proc(proc) => (proc.func_id(), proc.outer_lfp()),
+            FuncKind::Proc(proc) => {
+                // A `define_method` proc-method. Its body is a real iseq,
+                // so give a monomorphic site the same treatment as a plain
+                // method — hint folding and specialization — with the two
+                // bmethod extras at the frame: the definition-time outer
+                // LFP (baked into `SetupMethodFrame`, exactly like the
+                // generic path below and the wrapper) and the proc-method
+                // meta bit (pre-set on the block's static Meta at
+                // `define_method` time — see `Meta::set_proc_method`).
+                // Everything params-driven (`is_simple_call`,
+                // `from_caller`, `set_arguments`) runs on the block fid,
+                // whose ParamsInfo is the entry's verbatim copy; the
+                // block-style `single_arg_expand` only makes the simple
+                // gate *more* conservative, never lenient, so arity
+                // semantics stay with the generic path. Sites that pass a
+                // block stay generic: a block flowing into a bmethod body
+                // meets `yield` resolution the specialized compile does
+                // not model for proc-method frames.
+                let block_iseq = self.store[proc.func_id()].is_iseq();
+                if let Some(iseq) = block_iseq
+                    && !self.in_dispatch_arm()
+                    && block_fid.is_none()
+                    && callsite.block_arg.is_none()
+                    && self.store.is_simple_call(proc.func_id(), callid)
+                {
+                    debug_assert!(spec_set.is_none());
+                    if self.store[proc.func_id()].no_keyword() && !callsite.kw_may_exists() {
+                        // The same trivial-body folds as the ISeq arm: a
+                        // body that returns a constant (or self) observes
+                        // neither its outer environment nor its receiver,
+                        // so eliding the call skips the bmethod frame
+                        // setup entirely. Soundness rides on the site's
+                        // class-version guard: re-`define_method` is a
+                        // method (re)definition and bumps the version.
+                        match self.store[iseq].hint {
+                            ISeqHint::ConstReturn(v) => {
+                                state.def_C(dst, v);
+                                return Ok(CompileResult::Continue);
+                            }
+                            ISeqHint::SelfReturn => {
+                                if let Some(dst) = dst {
+                                    state.copy_slot(ir, callsite.recv, dst);
+                                }
+                                return Ok(CompileResult::Continue);
+                            }
+                            ISeqHint::Normal => {}
+                        }
+                    }
+                    if self.specialize_level() < 5 {
+                        return self.specialized_iseq(
+                            state,
+                            ir,
+                            callid,
+                            recv_class,
+                            proc.func_id(),
+                            iseq,
+                            true,
+                            None,
+                            false,
+                            Some(proc.outer_lfp()),
+                        );
+                    }
+                }
+                (proc.func_id(), proc.outer_lfp())
+            }
             FuncKind::ISeq(iseq) => {
                 // Check ISeq hint for trivial methods. Only fold when the
                 // call site's argument shape would actually dispatch
@@ -710,6 +774,7 @@ impl<'a> JitContext<'a> {
                         specializable,
                         spec_set,
                         spec_qualified,
+                        None,
                     );
                 }
                 debug_assert!(spec_set.is_none());
@@ -881,6 +946,7 @@ impl<'a> JitContext<'a> {
             args_info,
             Some(outer),
             callid,
+            false,
         )?;
         // Stack check only: the specialized block body compiles its own
         // `InitMethod` entry poll, so no call-site GC poll is needed.
@@ -1182,6 +1248,12 @@ impl<'a> JitContext<'a> {
         specializable: bool,
         mut spec_set: Option<Vec<(SlotId, crate::codegen::FPReg)>>,
         spec_qualified: bool,
+        // `Some` marks a define_method proc-method callee: the
+        // definition-time outer LFP to bake into `SetupMethodFrame`
+        // (`None` inside the option is impossible to distinguish from a
+        // plain method here, so the whole option is the bmethod marker —
+        // a bmethod defined at toplevel still carries its outer).
+        bmethod_outer: Option<Option<Lfp>>,
     ) -> JitResult<CompileResult> {
         let dst = self.store[callid].dst;
         let args_info = if specializable {
@@ -1215,6 +1287,7 @@ impl<'a> JitContext<'a> {
             args_info.clone(),
             None,
             callid,
+            bmethod_outer.is_some(),
         )?;
         if spec_set.is_some() && self.end_float_speculation() {
             release_speculation_pins(state, &mut spec_set);
@@ -1228,6 +1301,7 @@ impl<'a> JitContext<'a> {
                 args_info,
                 None,
                 callid,
+                bmethod_outer.is_some(),
             )?;
         }
         // A qualified site whose subtree compiled without a single
@@ -1269,6 +1343,7 @@ impl<'a> JitContext<'a> {
             evict,
             deferred_rest,
             needs_rest_array,
+            bmethod_outer,
         );
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
@@ -1337,8 +1412,20 @@ impl<'a> JitContext<'a> {
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
+        bmethod: bool,
     ) -> JitResult<SpecializedCompileResult> {
-        let frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
+        let mut frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
+        if bmethod {
+            // A define_method proc-method body: semantically a METHOD
+            // frame even though its iseq is a block — `return` targets
+            // this frame itself (lambda-style), and `Lfp::outermost`
+            // stops here. Marking it not-a-block makes
+            // `current_method_frame` resolve `return` to this frame, so
+            // `MethodRet` compiles to the empty-chain static teardown (a
+            // plain epilogue) and the value joins the caller's return
+            // context like an ordinary specialized return.
+            frame.set_bmethod_home();
+        }
 
         let mut frame = self.specialized_compile(state, callid, frame)?;
         // we must unset no_capture_guard for all state frames if no_capture_guard of the current frame became false.
@@ -1610,6 +1697,7 @@ impl AbstractState {
         evict: AsmEvict,
         deferred_rest: bool,
         needs_rest_array: bool,
+        bmethod_outer: Option<Option<Lfp>>,
     ) {
         // D1: skip the caller-side `create_array` only when at least
         // one forwarding consume was source-routed AND no forwarding
@@ -1630,10 +1718,12 @@ impl AbstractState {
         self.clear_above_next_sp();
         let error = ir.new_error(self);
         let meta = store[callee_fid].meta();
+        // A bmethod frame gets its definition-time outer LFP; the
+        // proc-method meta bit is already static on the block's Meta.
         ir.push(AsmInst::SetupMethodFrame {
             meta,
             callid,
-            outer_lfp: None,
+            outer_lfp: bmethod_outer.flatten(),
         });
         ir.push(AsmInst::SpecializedCall {
             entry: inlined_entry,

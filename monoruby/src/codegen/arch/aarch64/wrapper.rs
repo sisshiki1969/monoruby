@@ -18,7 +18,14 @@ impl Codegen {
             entry:
         );
         match &globals.store[fid].kind {
-            FuncKind::ISeq(iseq) => match globals.store[*iseq].hint {
+            // The hint is consumed only for real methods — a block's
+            // wrapper must keep its entry safepoint poll (see the x86
+            // twin's comment).
+            FuncKind::ISeq(iseq) => match if globals.store[fid].is_not_block() {
+                globals.store[*iseq].hint
+            } else {
+                ISeqHint::Normal
+            } {
                 // Trivial methods: return the constant / self immediately with
                 // no frame creation or bytecode execution (mirrors x86
                 // `gen_wrapper`). Reached from the VM tier, invokers

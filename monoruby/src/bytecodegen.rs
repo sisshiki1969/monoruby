@@ -793,8 +793,17 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn hint(&self, ast: &Node) -> Option<ISeqHint> {
-        // Detect trivial methods: no params, no blocks, single-expression body.
-        if let NodeKind::Begin {
+        // Detect trivial bodies: single trivial expression. In a METHOD a
+        // top-level `return expr` is the same trivial body; anywhere
+        // `return` escapes the frame (a block, a `class << obj` body —
+        // see `return_escapes`) it is a non-local method return and must
+        // never fold, so the unwrap below is gated on it. Block bodies
+        // also arrive without the `Begin` wrapper when they carry no
+        // rescue/ensure, so match the bare shapes too — this is what lets
+        // a `define_method(:m) { :sym }` proc-method fold at its call
+        // sites just like `def m = :sym` does.
+        let return_escapes = self.return_escapes();
+        let kind = if let NodeKind::Begin {
             body,
             rescue,
             else_: None,
@@ -802,26 +811,38 @@ impl<'a> BytecodeGen<'a> {
         } = &ast.kind
             && rescue.is_empty()
         {
-            let kind = match &body.kind {
+            match &body.kind {
                 NodeKind::CompStmt(nodes) if nodes.len() == 0 => {
                     // def foo; end
                     return Some(ISeqHint::ConstReturn(Immediate::nil()));
                 }
-                NodeKind::Return(box ret) => {
+                NodeKind::Return(box ret) if !return_escapes => {
                     // def foo; return expr; end
                     &ret.kind
                 }
                 kind => kind,
-            };
+            }
+        } else {
+            match &ast.kind {
+                NodeKind::CompStmt(nodes) if nodes.len() == 0 => {
+                    return Some(ISeqHint::ConstReturn(Immediate::nil()));
+                }
+                NodeKind::CompStmt(nodes) if nodes.len() == 1 => &nodes[0].kind,
+                kind => kind,
+            }
+        };
+        {
             match kind {
                 NodeKind::Nil => Some(ISeqHint::ConstReturn(Immediate::nil())),
                 NodeKind::Bool(b) => Some(ISeqHint::ConstReturn(Immediate::bool(*b))),
                 NodeKind::Integer(i) => Immediate::check_fixnum(*i).map(ISeqHint::ConstReturn),
+                NodeKind::Symbol(name) => Some(ISeqHint::ConstReturn(Immediate::symbol(
+                    IdentId::get_id(name),
+                ))),
+                NodeKind::Float(f) => Immediate::flonum(*f).map(ISeqHint::ConstReturn),
                 NodeKind::SelfValue => Some(ISeqHint::SelfReturn),
                 _ => None,
             }
-        } else {
-            None
         }
     }
 
