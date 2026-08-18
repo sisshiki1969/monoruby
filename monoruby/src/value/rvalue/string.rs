@@ -1357,6 +1357,18 @@ impl RStringInner {
         }
     }
 
+    /// Detach a shared (copy-on-write) string from its root so its buffer
+    /// can be written in place. No-op on an owned string. The JIT's inline
+    /// byte-store fast paths (`emit_string_setbyte`) call this through
+    /// `runtime::str_detach` instead of deopting: `s.dup; s.setbyte(..)` is
+    /// a chronic shape, and with side-exit escalation unconditional every
+    /// deopt would walk and convert the whole caller chain. Copies bytes
+    /// with a plain malloc — never allocates a `Value` and never polls, so
+    /// no GC can run under the call.
+    pub(crate) fn detach(&mut self) {
+        self.uniquify();
+    }
+
     pub fn encoding(&self) -> Encoding {
         self.ty
     }

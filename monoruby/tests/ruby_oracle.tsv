@@ -1613,6 +1613,7 @@
 88d4180cc8261b799934c513e7ea401c	13	def f(a,b)\n          a + b\n        end\n        f(5,7)\n        f(4,9)\n  
 88f8e9f112097e82f8a521e470848673	["<1>", "'x'"]	module AncInner\n              refine(Integer) { def wrap; "<#{to_s}
 88fba5d2266fa4ee0bba24a92af6c067	[[], 1]	->((*a, b)) { [a, b] }.call([1])
+898daf8bc776af90627957e0256ba48d	[0, 0, 0, 0, 0, 0, 0, 0, 0, 76, 31, 0, 78, 6, 0, 31, 27, 28, 14, 78, 20, 84, 5, 0, 26, 15, 0, 25, 6, 84, 29, 83, 11, 9, 85, 25, 83, 6, 9, 27, 24, 69, 13, 27, 29]	def bxor!(a, b)\n          l = a.bytesize\n          lb = b.bytesize\n    
 89a90f1ae033d44d7cd236ed88be4129	:bar	class Foo\n              def bar; end\n            end\n            \n\n
 89c218222121411715e9cbdc51498eb5	[21, 28, 35, 42, 49, 56, 63, 70, 77, 84, 91, 98, 105, 112, 119, 126, 133, 140, 147, 154, 161, 168, 175, 182, 189, 196, 203, 210, 217, 224]	def g(a, b, c, d, e, f, g) = [a, b, c, d, e, f, g].sum\n        def f(..
 89cc804a9b06b07941ab2d5dd4a30fc8	true	def `(cmd); $g = cmd.frozen?; end\n        `ab`\n        $g\n        
@@ -2548,6 +2549,7 @@ d4b11df043d7e94411357a9fb1a4b7b9	true	"hello".index(/z/); $~.nil?
 d4b1bfe9eda9533ed079348cdba23ae4	"abcaあ"	"あ".rjust(5, "abc")
 d4e0ae9c56a69c0c332580eb22172e11	[[1, 2, 0], 999]	$flag = false\n        class KwNode\n          attr_reader :v\n          d
 d506260ac377e92b5498fb8e6ec73750	true	GC.stat(nil).is_a?(Hash)
+d51949e16f4c8e33f4baabff8fb4b4dc	[[72, 104, 104], [73, 104, 104]]	src = "hello world"\n        out = []\n        20.times do |k|\n          
 d52efc39591dfa6b41cc1b74f647a5cf	["ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError", "ArgumentError"]	def g(a, b) = a + b\n        def f(...) = g(10, 20, 30, ...)\n        \n\n 
 d55e1c488a964698d1d9d4f121c8d95c	[["UTF-8", nil, nil, nil], ["ISO-8859-1", "nil"], ["ISO-8859-1", "UTF-8"], ["ISO-8859-1", "UTF-8"], ["UTF-8", "ISO-8859-1"], "nil", "ISO-8859-1", "ISO-8859-1", :tohash_ok, :blockresult, [true, true], [true, true], :inner_close_ok, [MrbPipeSub, MrbPipeSub], [:init, :init], [MrbPipeSub2, MrbPipeSub2], "through\\n"]	r = []\n            IO.pipe { |a, b| r << [a.external_encoding&.to_s
 d56f2419ff718092d450e601c3289b76	[nil, "a\\nb"]	$/ = nil; s = "a\\nb"; r = [s.chomp!, s]; $/ = "\\n"; r
@@ -2788,6 +2790,7 @@ e9d4802e950b78158c8e4240b64d6772	["127.0.0.1", true, true, :neg, true, true, :no
 e9dc5cc83c580492d481d015d537e291	["global-variable", nil, nil, nil, nil, "global-variable", "global-variable", "global-variable", "global-variable"]	[defined?($~), defined?($&), defined?($'), defined?($`),\n          
 e9e35f041d04e6d4499450a91957eaa7	5	class C\n              CONST = 1\n              def f\n               
 e9ed3c91c241cacff421ec62d7907898	"!"	$\\ = "!"; r = $\\; $\\ = nil; r
+e9f926668828584ed6da3a112bc1d4b5	["abcdZf", FrozenError, IndexError, "index 5 out of string", false, 5]	r = []\n        20.times do\n          s = "abcdef".dup\n          s.setby
 ea07ecaa90c2d393514090eaf2eb6009	[1.0, -Infinity]	[1.0, -1.0 / 0.0]
 ea4e91b1bfa0887ef9ecf7398be00cf1	[:direct, :forwarded, :mapped, :enum, :hash, :sorted, :ewo, [1]]	res = []\n        res << [1,2].each { break :direct }\n        def fwd(&b
 ea543154e9094ead8bd5a8628be70621	false	File.file?("README.md")
