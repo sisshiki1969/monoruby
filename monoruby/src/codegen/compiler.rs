@@ -399,10 +399,21 @@ impl Codegen {
         pc: BytecodePtr,
         is_recompile: Option<RecompileReason>,
     ) -> Option<()> {
-        let entry_label = self.jit.label();
         let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
+        self.compile_partial_by_id(globals, iseq_id, self_class, pc, is_recompile)
+    }
+
+    fn compile_partial_by_id(
+        &mut self,
+        globals: &mut Globals,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        pc: BytecodePtr,
+        is_recompile: Option<RecompileReason>,
+    ) -> Option<()> {
+        let entry_label = self.jit.label();
         let class_version = self.class_version();
 
         let ret = if self
@@ -457,31 +468,10 @@ impl Codegen {
         );
         match position {
             None => self.recompile_method_by_id(globals, iseq_id, self_class, reason),
+            // Loop root: recompile from the loop head and re-point the
+            // loop-entry word at it, exactly as a plain loop recompile does.
             Some(pc) => {
-                // Loop root: mirror `compile_partial` — recompile from the
-                // loop head and re-point the loop-entry word at it.
-                let entry_label = self.jit.label();
-                let class_version = self.class_version();
-                let ret = if self
-                    .compile(
-                        globals,
-                        iseq_id,
-                        self_class,
-                        Some(pc),
-                        entry_label.clone(),
-                        class_version,
-                        Some(reason),
-                    )
-                    .is_some()
-                {
-                    let codeptr = self.jit.get_label_address(&entry_label);
-                    pc.write2(codeptr.as_ptr() as u64);
-                    Some(())
-                } else {
-                    None
-                };
-                self.jit.finalize();
-                ret
+                self.compile_partial_by_id(globals, iseq_id, self_class, pc, Some(reason))
             }
         }
     }
