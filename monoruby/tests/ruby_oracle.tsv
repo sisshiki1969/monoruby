@@ -534,6 +534,7 @@
 2ad1b1687928056c2f074002bf5523c8	[[[nil, 0]], [[:v, 0]], [[[1, 2], 0]]]	[Enumerator.new { |y| y.yield },\n                Enumerator.new { |y| y.yield :v
 2ad3ffaba8b53027f23c93b8ea311b97	"M"	module M\n              def f\n                "M"\n              end\n
 2aec6243e92acfe749099144a72533e1	:OVERRIDDEN	class Complex; def !; :OVERRIDDEN; end; end; !(Complex(1,2))
+2aee02d861669a9bd6794f71c30d99b6	[[nil, nil, nil, nil, nil], [:v, :v], AIMyArr, [7, 7]]	class AIMyArr < Array; end\n        class Integer\n          def to_ary =
 2b00bd85431dd7a80fc36e28c6bd4ea3	["Enumerator", [], 3, :stopped]	e = loop\n            cnt = 0\n            got = nil\n            e.ea
 2b1ef887a1e8d69589f89bda76a9ed0e	[[164, 162], "EUC-JP", [164, 164]]	File.binwrite("/tmp/mr_gc.txt", [164, 162, 164, 164].pack("C*"))\n  
 2b2a7a697be91f73a6f3e7632ad995c1	["yes", "no"]	class TrueClass; def label713; "yes"; end; end\n        class FalseClass
@@ -1483,6 +1484,7 @@
 7eb0d4817551a97def8fe2bf1a9f7035	[[0, 2, 4, 6], 106]	class FwdA\n          attr_reader :a\n          def initialize(n)\n       
 7f230ec5e7c81dcb14df9d04bf7eb5df	"raised"	class BadInt\n                  def to_int; "not an integer"; en
 7f2bcf2ec173056f353c8989fad11530	["A==5", "B==5"]	class A; def ==(o); "A==#{o}"; end; end\n        class B; def ==(o); "B=
+7f31a0877dd67722a0d7d14c5b74abb0	[[], ["warning: given block not used"], ["warning: block supersedes default value argument"], ["warning: block supersedes default value argument"], [], []]	require 'stringio'\n        def capw\n          $stderr = StringIO.new\n  
 7f39046674eb2565ca621a342f701cae	[true, true, true]	M = Data.define(:amount, :unit)\n\n            a = M.allocate\n            a.send(:
 7f48ec6081718c6875731cb8393d7b9c	["echo hello", true]	def `(cmd); [cmd, cmd.frozen?]; end\n        %x{echo hello}\n        
 7f684c2506ac66a75606077c90b5924f	"US-ASCII"	s = "hello".encode("US-ASCII")\n              s.upcase!\n          
@@ -2919,6 +2921,7 @@ f600c4b6bccc1d5883d6b763a2dd876b	[4, "ka"]	f = File.open("Cargo.toml")\n        
 f603e3f7573b653274804205c0c9c888	["US-ASCII"]	s = "ab12cd34".dup.force_encoding("US-ASCII")\n              s.sca
 f62113ff8d7e91bafa61a23fc88a57ff	[[:req, :a]]	class C; define_method(:m) { |a,| a }; end\n            C.new.method
 f635d2b04e7d853cebc06ba31f5c8a82	20	class C; def to_int; 1; end; end; o = C.new\n[10, 20, 30][o]
+f642a2f41f870a29780f497378032b77	["negative array size", "negative array size", "no implicit conversion of String into Integer", TypeError]	r = []\n        begin; Array.new(-1); rescue ArgumentError => e; r << e.
 f65b176caaf8d76c616a0ef5ed8857e9	[1, 1000, 2, 1001, 3, 1002, 5, 1003, 8, 1004, 13, 1005, 21, 1006, 34, 1007, 55, 1008, 89, 1009, nil]	fib = Enumerator.new do |y|\n                a = b = 1\n             
 f666332b734a470db3c29c7d1c1fcbda	true	require "json"\n            s = "tab\\there\\nnewline\\r\\nand\\\\backslas
 f677948e40b8cdfc7bd01fe6eddf352e	[true, false, false]	File.open("Cargo.toml") do |f|\n              before = f.autoclose?\n
@@ -2997,6 +3000,7 @@ fbb6a99a9e767f50065c0f1b714f7960	["RuntimeError", "boom", false]	f = Fiber.new {
 fbfbbb9d05ea7dc5ddb91d5f6aa274ad	"EUC-JP"	e = "あ".encode("EUC-JP"); "#{""}#{e}".encoding.to_s
 fc2292041cacaef7aa439e177107ed46	[42, 90, 15, "1/2", "7:8", "argerr"]	def a0; 42; end\n        def a1(x); x * 10; end\n        def a5(a, b, c, 
 fc22a4cd64bea4559dace662cad4cc26	[[1, 2]]	r = []; Enumerator.new { |y| y.yield 1, 2 }.each { |*a| r << a }; r
+fc3371eaceedc6a0fdff24c1dffa8f49	[[], [nil, nil, nil], [:x, :x, :x], [0, 2, 4], [1, 2, 3], [4, 5], [nil, nil], [nil, nil]]	o = Object.new\n        def o.to_ary = [4, 5]\n        # to_ary returning
 fc3d5bf1ce71d212ebacaaf185815390	["RuntimeError", "parent 42", "parent 5"]	parent = Class.new { def m(a) = "parent #{a}" }\n        res = []\n      
 fc49adcb727ee87209fa4da1d578751d	["a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_"]	res = []\n        require "strscan"\n        20.times do\n            s = 
 fc66d3daba82671e0fb10c0ef2627879	16	def fn(x) x*2 end; a=42; c=b=a+7; d=b-a; e=b*d; d=f=fn(e); f=d/a
