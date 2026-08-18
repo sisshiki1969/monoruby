@@ -1392,10 +1392,12 @@ impl<'a> JitContext<'a> {
             );
         }
         let entry = self.label();
+        let speculated = self.under_armed_speculation();
         self.specialized_methods_push(context::SpecializeInfo {
             entry,
             info: frame.asm_info,
             patch_point,
+            speculated,
         });
         // Propagate the deopt fact one level up: if this inlined
         // sub-iseq could deopt, the caller's compiled body also

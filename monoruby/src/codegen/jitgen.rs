@@ -680,6 +680,7 @@ impl Codegen {
             entry_label,
             0,
             class_version_label.clone(),
+            (iseq_id, self_class, position),
         );
         #[cfg(feature = "shadow-placement")]
         if let Some(fp) = crate::codegen::placement_shadow::take() {
@@ -714,20 +715,25 @@ impl Codegen {
         entry_label: DestLabel,
         level: usize,
         class_version: DestLabel,
+        root: (ISeqId, ClassId, Option<BytecodePtr>),
     ) {
         for context::SpecializeInfo {
             entry: specialized_entry,
             info: specialized_info,
             patch_point,
+            speculated,
         } in std::mem::take(&mut frame.specialized_methods)
         {
             if !frame.is_specialized() {
                 let patch_point = frame.resolve_label(&mut self.jit, patch_point.unwrap());
-                self.specialized_info.push((
-                    specialized_info.iseq_id,
-                    specialized_info.self_class,
+                self.specialized_info.push(SpecializedPatchEntry {
+                    iseq_id: specialized_info.iseq_id,
+                    self_class: specialized_info.self_class,
                     patch_point,
-                ));
+                    // A body compiled under the root's armed speculation
+                    // recompiles by rebuilding the root unit (#1140).
+                    speculated_root: speculated.then_some(root),
+                });
             }
             let entry = frame.resolve_label(&mut self.jit, specialized_entry);
             self.gen_machine_code(
@@ -736,6 +742,7 @@ impl Codegen {
                 entry,
                 level + 1,
                 class_version.clone(),
+                root,
             );
         }
 

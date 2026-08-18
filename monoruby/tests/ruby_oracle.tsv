@@ -1369,6 +1369,7 @@
 74afcdf5e655c49c966530c2b4d35e9d	["MStructB", :sym, [1, 2, 3]]	MStructB = Struct.new(:x, :y)\n            \n\n            s = MStruct
 74bb6f6237a0e70304325c88a24a0534	true	GC::Profiler.result.is_a?(String)
 74be49a029541ccb41607ba5dd9a427a	42	class C\n          def baz; yield + 1; end\n        end\n        C.new.pub
+74c9ca753e538eea7e693d67aa41652a	166800.0	class SpecRecompile1140\n          K = 1.25\n          def calc(n, use_k)
 74cf022318a40b13e77e2acc43ae4547	:hit	o = Object.new\n            def o.to_str; "alias_target"; end\n      
 74d160ca2f28d23fa20aea5de491f015	ArgumentError	(GC.config(implementation: "x") rescue $!.class)
 74d59ca8be05bd356579126c02ff2443	[1, 2, 3, 4, [], 5, 6, 10, 20, {z: 99}, 42]	def f(req1, req2, opt1=0, opt2=0, *rest, post1, post2, a:, b:, **kw, &b

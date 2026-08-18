@@ -156,3 +156,42 @@ fn speculated_local_read_after_exception_in_block() {
         "#,
     );
 }
+
+#[test]
+fn speculated_specialized_recompile_rebuilds_root() {
+    // #1140: a specialized callee compiled under an armed speculation must
+    // not be replaced by a standalone (unspeculated) recompile — the
+    // patched body would read the caller's kept-F locals through boxed LFP
+    // slots the speculating caller never writes (observed as nil in doom's
+    // renderer). The recompile request rebuilds the root unit instead.
+    //
+    // The shape drives that path: `calc` compiles with the speculated
+    // `(0...n).each` subtree while `K`'s constant cache is fresh; the
+    // const_set moves the global const version, so the compiled subtree's
+    // folded `K` deopts, and the post-bump phases exercise the specialized
+    // recompile pressure against the still-speculating caller.
+    run_test_once(
+        r#"
+        class SpecRecompile1140
+          K = 1.25
+          def calc(n, use_k)
+            a = 1.5
+            b = 2.5
+            acc = 0.0
+            (0...n).each do |x|
+              acc += a * x + b
+              acc += K if use_k
+            end
+            acc
+          end
+        end
+        r = SpecRecompile1140.new
+        s = 0.0
+        60.times { s += r.calc(30, true) }
+        Object.const_set(:BUMP1140, 1)
+        40.times { s += r.calc(30, false) }
+        120.times { s += r.calc(30, true) }
+        s.round(6)
+        "#,
+    );
+}
