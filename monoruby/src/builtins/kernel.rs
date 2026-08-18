@@ -214,6 +214,10 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         unregister_finalizer,
         1,
     );
+    // CRuby-style `rb_warn` for Ruby-implemented builtins: prefixes the
+    // nearest non-internal Ruby caller's "file:line: " (internal
+    // `builtins/` frames are transparent, like CRuby's C frames).
+    globals.define_private_builtin_func(kernel_class, "__warn_caller", warn_caller, 1);
     globals.define_builtin_module_func_with_kw(
         kernel_class,
         "warn",
@@ -5065,6 +5069,19 @@ fn unregister_finalizer(
     let id = obj.id();
     globals.finalizers.retain(|(k, _)| *k != id);
     Ok(obj)
+}
+
+/// ### Kernel#__warn_caller (private)
+///
+/// `rb_warn` for Ruby-implemented builtins: emits `msg` prefixed with
+/// the nearest non-internal Ruby caller's `"file:line: "`, so a warning
+/// raised inside a `builtins/` method attributes to the user's call
+/// site exactly like its C counterpart in CRuby.
+#[monoruby_builtin]
+fn warn_caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let msg = lfp.arg(0).expect_string(&globals.store)?;
+    vm.ruby_warn_caller(globals, &msg)?;
+    Ok(Value::nil())
 }
 
 /// ### Kernel#define_singleton_method

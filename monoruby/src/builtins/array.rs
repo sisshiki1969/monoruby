@@ -22,7 +22,17 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_rest(ARRAY_CLASS, "[]", array_class_bracket);
     globals.define_builtin_class_func(ARRAY_CLASS, "try_convert", array_try_convert, 1);
     globals.store[ARRAY_CLASS].set_alloc_func(array_alloc_func);
-    globals.define_private_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
+    // NOTE: no native `Array#initialize` either — the definition lives in
+    // builtins/array.rb (JIT-specialized argument binding). Nothing in the
+    // startup sequence constructs an Array with arguments before array.rb
+    // loads (verified empirically: an instrumented native fallback was
+    // never reached across startup, rubygems loading, and the full test
+    // suite), and a future pre-load `Array.new(n)` fails loudly through
+    // `Object#initialize`'s arity check rather than silently diverging.
+    // Native legs of the Ruby `initialize` (private, `__`-prefixed).
+    globals.define_private_builtin_func(ARRAY_CLASS, "__init_fill", init_fill, 2);
+    globals.define_private_builtin_func(ARRAY_CLASS, "__init_from", init_from, 1);
+    globals.define_private_builtin_func(ARRAY_CLASS, "__size_to_int", size_to_int, 1);
     globals.define_builtin_inline_funcs(
         ARRAY_CLASS,
         "size",
@@ -250,81 +260,69 @@ fn array_try_convert(
 }
 
 ///
-/// ### Array#initialize
+/// ### Array#__init_fill (private)
 ///
-/// - new(size = 0, val = nil) -> Array
-/// - new(ary) -> Array
-/// - new(size) {|index| ... } -> Array
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
+/// Native leg of the Ruby `Array#initialize` (builtins/array.rb): resets
+/// the receiver to `n` copies of `val`. `n` is already an Integer (the
+/// Ruby side coerces before calling); negative and oversized sizes raise
+/// here so the checks live in one place.
 #[monoruby_builtin]
-fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn init_fill(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val().as_array_mut(&globals.store)?;
-    if lfp.try_arg(0).is_none() {
-        // Array.new {} / Array#initialize {} — the block is ignored.
-        if lfp.block().is_some() {
-            vm.ruby_warn_caller(globals, "warning: given block not used")?;
-        }
-        self_val.clear();
-        return Ok(self_val.into());
-    }
-    if lfp.try_arg(1).is_none() {
-        // Single argument: if it's an Array (or to_ary-able to one),
-        // use it as initial contents. CRuby silently ignores a block
-        // here (`Array.new([1]) { }` — no "given block not used"; the
-        // warning fires only in the zero-argument form).
-        let arg = lfp.arg(0);
-        let mut from_array: Option<ArrayInner> = None;
-        if arg.is_array_ty() {
-            from_array = Some((*arg.as_array()).clone());
-        } else {
-            let to_ary = IdentId::TO_ARY;
-            if let Some(func_id) = globals.check_method(arg, to_ary) {
-                let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
-                if result.is_array_ty() {
-                    from_array = Some((*result.as_array()).clone());
-                } else if !result.is_nil() {
-                    return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
-                }
-            }
-        }
-        if let Some(inner) = from_array {
-            *self_val = inner;
-            return Ok(self_val.into());
-        }
-    }
-    // Use coerce_to_int to call to_int on the size argument
-    let size = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let size = lfp.arg(0).expect_integer(&globals.store)?;
     if size < 0 {
         return Err(MonorubyErr::negative_array_size());
     }
     let size = size as usize;
-    // Guard against unreasonably large sizes that would cause capacity overflow.
-    // CRuby also limits array size; we use a practical limit here.
     const MAX_ARRAY_SIZE: usize = 1 << 30; // ~1 billion elements
     if size > MAX_ARRAY_SIZE {
         return Err(MonorubyErr::argumenterr(format!("array size too big")));
     }
-    if let Some(bh) = lfp.block() {
-        if lfp.try_arg(1).is_some() {
-            vm.ruby_warn_caller(globals, "warning: block supersedes default value argument")?;
-        }
-        // Fill the receiver incrementally: a `break` in the block must
-        // leave the values produced so far in place (CRuby: `a.send(
-        // :initialize, 3) { break if i == 2; ... }` keeps ["0", "1"]),
-        // so building a detached result and swapping it in at the end
-        // would discard them.
-        self_val.clear();
-        let data = vm.get_block_data(globals, bh)?;
-        for i in 0..size {
-            let v = vm.invoke_block(globals, &data, &[Value::integer(i as i64)])?;
-            lfp.self_val().as_array().push(v);
+    let val = lfp.arg(1);
+    *self_val = ArrayInner::from(smallvec![val; size]);
+    Ok(self_val.into())
+}
+
+///
+/// ### Array#__init_from (private)
+///
+/// Native leg of the Ruby `Array#initialize`: the single-argument
+/// contents path. An Array (or an object whose `#to_ary` yields one)
+/// replaces the receiver's contents and returns self; a missing or
+/// nil-returning `#to_ary` returns nil so the caller falls through to
+/// the size path; any other `#to_ary` result raises TypeError.
+#[monoruby_builtin]
+fn init_from(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let arg = lfp.arg(0);
+    let from_array: ArrayInner = if arg.is_array_ty() {
+        (*arg.as_array()).clone()
+    } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_ARY) {
+        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+        if result.is_array_ty() {
+            (*result.as_array()).clone()
+        } else if result.is_nil() {
+            return Ok(Value::nil());
+        } else {
+            return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
         }
     } else {
-        let val = lfp.try_arg(1).unwrap_or_default();
-        *self_val = ArrayInner::from(smallvec![val; size]);
-    }
+        return Ok(Value::nil());
+    };
+    let mut self_val = lfp.self_val().as_array_mut(&globals.store)?;
+    *self_val = from_array;
     Ok(self_val.into())
+}
+
+///
+/// ### Array#__size_to_int (private)
+///
+/// Native leg of the Ruby `Array#initialize`: implicit `#to_int`
+/// coercion of a non-Integer size argument, with CRuby's error messages
+/// ("no implicit conversion of X into Integer").
+#[monoruby_builtin]
+fn size_to_int(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    Ok(Value::integer(n))
 }
 
 ///

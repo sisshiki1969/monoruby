@@ -20,6 +20,64 @@ class Array
   # (`builtins/array.rs`). They share one `random:` resolver and one
   # `RAND_UPTO`, so the keyword behaves identically across all three.
 
+  # Array#initialize
+  # new(size = 0, val = nil) / new(ary) / new(size) {|index| ... }
+  #
+  # In Ruby so a hot `Array.new` site gets JIT-specialized argument
+  # binding and, for the block form, an inlined `yield` per element
+  # (the native version paid a native->Ruby block invocation each).
+  # The heavy legs stay native: `__init_fill` (bulk fill + size
+  # checks), `__init_from` (the `#to_ary` contents protocol),
+  # and `__size_to_int` (implicit
+  # `#to_int` coercion). This is the only definition — nothing in the
+  # startup sequence constructs an Array with arguments before this
+  # file loads, so no native fallback exists.
+  #
+  # The `#to_ary` probe is gated on the argument NOT being an Integer,
+  # mirroring CRuby's `!FIXNUM_P` fast path in `rb_ary_initialize`:
+  # defining `Integer#to_ary` never hijacks `Array.new(5)`. (For a
+  # Bignum CRuby would still probe; monoruby's Integer is one class,
+  # so a Bignum skips the probe too — `#to_int` then rejects it.)
+  private def initialize(size = (no_size = true; nil), val = (no_val = true; nil))
+    if no_size
+      __init_fill(0, nil)
+      # CRuby: rb_warning — emitted only when $VERBOSE is true (-w/-W).
+      __warn_caller "warning: given block not used" if block_given? && $VERBOSE
+      return self
+    end
+    if size.is_a?(Integer)
+      n = size
+    else
+      if no_val
+        r = __init_from(size)
+        return r if r
+      end
+      n = __size_to_int(size)
+    end
+    raise ArgumentError, "negative array size" if n < 0
+    if block_given?
+      # CRuby: rb_warn — shown at the default warning level, silent
+      # only under -W0 ($VERBOSE == nil).
+      unless no_val || $VERBOSE.nil?
+        __warn_caller "warning: block supersedes default value argument"
+      end
+      # `yield` here specializes against the literal block at the
+      # user's `Array.new { .. }` site: `resolve_given_block` follows
+      # the `Class#new` forwarding chain, so each element is an inlined
+      # block call. Incremental push keeps CRuby's partial-contents
+      # semantics when the block `break`s.
+      __init_fill(0, nil)
+      i = 0
+      while i < n
+        self << yield(i)
+        i += 1
+      end
+      return self
+    end
+    __init_fill(n, val)
+    self
+  end
+
   def each
     return self.to_enum(:each) { self.size } unless block_given?
     i = 0
