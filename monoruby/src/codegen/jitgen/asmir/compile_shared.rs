@@ -1040,6 +1040,25 @@ impl Codegen {
                     cg.store_dyn_var_specialized(off, dst, src);
                 });
             }
+            // Speculated-unboxed outer local (doc/chain_deopt.md §5 step 5):
+            // a raw f64 move against the speculating frame's FP save/spill
+            // area at a pre-resolved frame-chain offset.
+            AsmInst::LoadDynVarSpeculatedF { offset, disp, dst } => {
+                self.encode_linst(LInst::LoadDynVarSpecF {
+                    offset: offset.unwrap_concrete(),
+                    disp,
+                    dst,
+                    base: frame.base_stack_offset,
+                })
+            }
+            AsmInst::StoreDynVarSpeculatedF { offset, disp, src } => {
+                self.encode_linst(LInst::StoreDynVarSpecF {
+                    offset: offset.unwrap_concrete(),
+                    disp,
+                    src,
+                    base: frame.base_stack_offset,
+                })
+            }
             // Direct call into an inlined method entry; the return address is
             // recorded under `evict` so the following `ChainExit` can register
             // this site. Labels are resolved now (frame); the call runs at drain

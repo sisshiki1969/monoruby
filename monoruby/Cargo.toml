@@ -66,14 +66,6 @@ phys-table = []
 phys-loop-aware = []
 emit-cfg = ["dump-bc", "dump-traceir"]
 dump-require = []
-# doc/chain_deopt.md: route on-stack eviction through the chain-deopt walk
-# (rewrite each suspended frame's return-address slot to its chain-exit
-# handler) instead of `immediate_eviction`'s return-continuation code patch.
-# The two are observationally equivalent — both convert every suspended JIT
-# frame into an interpreter frame — so this is how the chain-deopt mechanism
-# is exercised end-to-end before the speculation that will fire it (§5 steps
-# 4-5) exists. Default-off; a validation switch, not a shipping path.
-chain-deopt = []
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }

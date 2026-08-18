@@ -312,6 +312,12 @@ impl std::ops::DerefMut for UsingFpr {
     }
 }
 
+impl Default for UsingFpr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UsingFpr {
     fn new() -> Self {
         Self {

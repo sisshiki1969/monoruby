@@ -86,6 +86,7 @@
 05f9f4947bb616ee98f8b5b527a50fb4	[["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], ["constant", 10, "constant"], ["constant", 11, "constant"], :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, :a, :b, [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], [100, "constant"], [101, "constant"], true, :q, :q, :q, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]	$r = []\n        TOPC9 = :top\n        # defined?(CONST) resolves through
 0600c545eb8ea8eab3868af35cea60cf	[0, 0, 10, 0]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
 061bdd061f147a5d9f44958903cc9221	"hi\\n"	require "open3"; Open3.capture2("echo", "hi").first
+0631f6304fce006defdd49a51a8efa19	4.0	def exc(n)\n          acc = 0.0\n          begin\n            n.times do |
 0639fd7a5d2bbe9305ea95f45248e727	[[nil], [:v], [[1, 2]]]	[Enumerator.new { |y| y.yield },\n                Enumerator.new { |y| y.yield :v
 0645bcf03de3613af42e57886acd5057	"ClassKwOuter::ClassKwInner"	class ClassKwOuter\n              class ClassKwInner; end\n          
 066265d0228305a399c4298d3fde2292	[[0, 1, 2, 3, 4], true, nil]	q = Queue.new\n            prod = Thread.new { 5.times { |i| q.push 
@@ -523,6 +524,7 @@
 2a054f41f0ebb76b11549882f920add6	[]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.val
 2a2b86ebb2efff59c7eaeba003dc98fc	["abc", "XYZ", "def"]	"abcXYZdef" =~ /XYZ/\n            [$`, $&, $']\n            
 2a2c02a8e1eb184cff179aa37a7afd2c	[[1, 2, 5, 4], A]	class A < Array\n        end\n        \n\n        a = A.new([1,2,3])\n      
+2a2cecca7ae69941c6256b13bc8f0f0a	[2.0, 4.0, 6.0, 3.0, 5.0, 7.0]	def kill_int(n)\n          acc = 0.0\n          hits = []\n          n.tim
 2a331dfdc06006cb6c2d9fb1b276af51	[false, false, true, true, true, true]	[Kernel.private_instance_methods(false).include?(:chop),\n          
 2a3de9772e2bbde8e6d892268ebbd6b6	:m	[1, 2].each.with_object(:m) { |v, m| }
 2a5869ecfcebdbb2da9022b23ccf267d	["constant", true, [:C]]	$res = []\n        parent = Class.new do\n          def self.inherited(su
@@ -1064,6 +1066,7 @@
 5a5d7ffbe02389d8d6a83efb9a7937c6	[0, 2, 3, 3, true, 4]	File.open("Cargo.toml") do |f|\n              a = f.lineno\n         
 5a735dfa86fec86676f6e6204efc5ceb	"UTF-8"	"abc".reverse.encoding.to_s
 5a8e5757dd64b417433416b14e098c89	-2	class C; define_method(:m) { |a, *| a }; end\n            C.new.meth
+5aa2446f1aac6500e421882c7a6c2c76	[4633.776677988511, 1.5, 5691.4790284806795, 3.5]	def multi(n)\n          a = 0.5\n          b = 1.5\n          c = 2.5\n    
 5ab18a8afa5b4ef499cdca6770a28a63	["MyStr", "hi"]	class MyStr < String; end\n            r = Marshal.load(Marshal.dump
 5ab18cd50f5e88dfaffed040fa6b1cd0	42	class C; def to_int; "1"; end; def to_i; 42; end; end; o = C.new\nInteger(o)
 5acf233119e091dcf9d1cca93f311388	[true, true, true, true, false]	ENV["MONORUBY_ENV_TEST_HK"] = "1"\n            r = [\n              E
@@ -1323,6 +1326,7 @@
 711aa5cc92164813c06e40b326f626bd	["Bonjour", "Bonjour", "Bonjour", "Guten Tag"]	class F\n          def hello\n            "Bonjour"\n          end\n       
 712dca9ea514253684ee241cb0842ccb	7	def f(a)\n          a\n        end\n        f(7)\n        
 7147936003db8a32b07eb1bb5089096f	[[:it, :j]]	def m; [1].map { |it| j = it; local_variables.sort }; end; m
+716b4dbaef364450a9132d2ead310c72	1440.0	def occl(nphi, ntheta)\n          eps = 0.5\n          occlusion = 0.0\n  
 719d10e6b19ee956599a34926b2812c4	[[0, "SystemExit"], [0, "SystemExit"], [7, "SystemExit"], [0, "msg"], [0, "SystemExit"], [1, "SystemExit"], [0, "SystemExit"], [3, "x"], [0, "y"], [2, "SystemExit"]]	[\n              [SystemExit.new.status, SystemExit.new.message],\n  
 71a91bb93ad21f17fda2dab2d2720ef2	"foo12"	class Foo\n              def foo(x, y)\n                "foo" + x.to_
 71b94208b971bf119d6f24e1a29ca23a	[1, 2, 3]	class Foo\n              def to_proc\n                Proc.new {|v| $
@@ -1886,6 +1890,7 @@ a14e904cc31582d611449d8caacf0884	true	"abc".force_encoding("ISO-8859-1").encodin
 a158e5fc1d4c5a682510d00791a34f7b	[true, false]	m = Module.new do\n              module_function\n              def t
 a161e71f31bf14603b9f94a476644366	[:a, :a]	-> { a = it; binding.local_variable_set(:it, :b); [a, it] }.call(:a)
 a164c646ebdbe3551b16c27fa5e2aab0	5	def f; return 5; end; f
+a17f4a8a2beeb2a7e6652eb0c268a320	6.0	def kill_dyn(n, vals)\n          acc = 0.0\n          n.times do |i|\n    
 a189356012c67f14ffd149bedd2d23b2	nil	$/ = "xyz"; r = "abcde".chomp!; $/ = "\\n"; r
 a19474330777374fd8e9f255dc6aec66	11340	def e\n          10.times do\n            $x += yield\n          end\n     
 a1a984bb2edd75a78229a94547d15825	[true, true, :outer, "nil", ["NoMethodError", "RuntimeError"], "RuntimeError"]	def restore_check(log)\n          outer = StandardError.new "outer"\n    
@@ -1898,6 +1903,7 @@ a2258a3c861ffb257f7a53cf3eb62746	[10, 20, 30]	S = Struct.new(:a, :b, :c)\n      
 a228de78f3361a64902cd2242ba752da	[true, true, false]	class Foo\n              def bar; 1; end\n              alias_method 
 a2359d988b1e9852b116a4aa588e8ad7	99	module M; class N; CONST = 99; end; end\n            \nM.const_get(":
 a249ec32f6d93a75cfac3be0d217bf1d	[49, 50, 51]	s = +""\n            s.append_as_bytes(0x131, 0x232, 0x333)\n        
+a2748c8fb6484710144b4a02733f485a	105.0	def cap(n)\n          acc = 0.0\n          saved = nil\n          n.times 
 a283f7c1c01ed5e8343b5c0c337ff2cc	[[1, 5, 6, nil, nil], [1, 5, 6, 2, nil], [1, 5, 6, 2, 3], [1, 2, 6, 3, 4], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5], [1, 2, 3, [4], 5, 6], [1, 5, 6, [], 2, 3]]	def t(a) yield a end\n        \n\n        [\n          t([1])             {
 a295425f2386f7b487cea440a10accb4	99	class C\n              def initialize(&blk)\n                @v = blk
 a2a0991ecb4019b7303f2bad37c2c02f	[true, true, 7]	c = Class.new { attr :foo, true }\n            i = c.new\n           

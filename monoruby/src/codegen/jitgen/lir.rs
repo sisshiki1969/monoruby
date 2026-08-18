@@ -685,6 +685,24 @@ pub(in crate::codegen) enum LInst {
         using_fpr: UsingFpr,
         base: usize,
     },
+    /// fpr(dst) = the f64 at `[rbp/x29 + offset + disp]` — a
+    /// speculated-unboxed outer local's home in the speculating frame's FP
+    /// save/spill area (doc/chain_deopt.md §5 step 5). `offset` is the
+    /// pre-resolved frame-chain distance, `disp` the in-frame displacement.
+    LoadDynVarSpecF {
+        offset: usize,
+        disp: i32,
+        dst: FPReg,
+        base: usize,
+    },
+    /// The f64 at `[rbp/x29 + offset + disp]` = fpr(src) — the store half
+    /// of [`LInst::LoadDynVarSpecF`].
+    StoreDynVarSpecF {
+        offset: usize,
+        disp: i32,
+        src: FPReg,
+        base: usize,
+    },
     // ---- macro-ops -----------------------------------------------------------
     // Irreducible per-arch sequences (mostly runtime-call shapes). The encoder
     // delegates to the existing per-arch `emit_*` helper via the arch-neutral

@@ -8,10 +8,19 @@ implementation). Registration is unconditional in every build, and chain
 conversion is now the **only** way an on-stack JIT frame is dropped to the
 interpreter: immediate eviction — the code-patching mechanism this document
 was written against — is gone (§10). The **escalation half of step 4** — the
-per-frame switch that makes every interpreter-resuming side exit run the
-chain-deopt walk, plus the runtime entry it calls — is in place (§8.6). The
-speculation itself (the `Float` guard and the `locals_to_S` relaxation, §5
-steps 4–5) and the return-state recovery (§6) are not. §9 stays as the record
+switch that makes every interpreter-resuming side exit run the
+chain-deopt walk, plus the runtime entry it calls — is in place and **on by
+default in every build** (§8.5; the former `chain-deopt` validation feature
+is gone). **The speculation itself (§5 steps 4–5) is implemented** — see
+§11 for what shipped: qualifying block-passing specialized call sites keep
+pure-`F` (and Float-literal) locals unboxed across the call, specialized
+blocks in the subtree read/write them in the speculating frame's FP
+save/spill area (`Load/StoreDynVarSpeculatedF`), a non-Float store
+compiles to `load_fpr`'s Float guard whose escalated deopt converts the
+chain *before* the offending store, and a compile-time-known non-Float
+store (or any capture-capable construct in the subtree) poisons the
+attempt, which recompiles unspeculated. The return-state recovery (§6) is
+not implemented. §9 stays as the record
 of why the original lazy build was wrong.
 
 ---
@@ -372,12 +381,13 @@ fire the walk does not either. Two things exercise it meanwhile:
   of 999) if the suspended caller resumes its compiled body, so the test
   passing is a positive signal that the conversion happened, not just that
   nothing crashed.
-* **Every side exit escalates** (§8.6), under the `chain-deopt` cargo
-  feature (default-off): each deopt / recompile-deopt / error exit taken
-  anywhere in the suite fires the walk from the deopting frame, so the
-  deopt → replay → stub-return path — the one the speculation will actually
-  take — is exercised at every deopt site the suite reaches, not only at BOP
-  redefinitions.
+* **Every side exit escalates** (§8.6), unconditionally in every build
+  (formerly the default-off `chain-deopt` cargo feature; promoted to the
+  default after measurement — see §8.5): each deopt / recompile-deopt /
+  error exit taken anywhere in the suite fires the walk from the deopting
+  frame, so the deopt → replay → stub-return path — the one the speculation
+  will actually take — is exercised at every deopt site the suite reaches,
+  not only at BOP redefinitions.
 
 What this validates: the walk, the eager replay, the return-address rewrite,
 the stub's frame/LFP restore and result/raise hand-off, across normal calls,
@@ -424,9 +434,15 @@ guarantee rather than review discipline, and this is it:
   stamped onto each `AsmIr` at construction, and **every** side-exit
   constructor (`new_deopt` / `new_deopt_with_pc` / `deopt_from_point` /
   `new_recompile_deopt` / `new_error`) reads it — an emitter cannot forget
-  to escalate because emitters do not choose. Today it returns
-  `cfg!(feature = "chain-deopt")`; the per-frame speculation flag ORs in
-  here when step 5 lands.
+  to escalate because emitters do not choose. It returns `true`
+  unconditionally: A/B measurement of blanket escalation (full suite,
+  benchmark set, optcarrot) put the walk at ~160ns per escalation and
+  ≤1.6% wall-clock even on bedcov's 1.8M-escalation worst case, every
+  other benchmark inside noise — cheap enough that §6's per-site gating is
+  unnecessary for the escalation itself, and blanket escalation is exactly
+  the invariant the speculation needs (a speculated frame's callers
+  convert on *every* interpreter resume below it, not only on the Float
+  guard).
 * An escalated `Deoptimize` / `RecompileDeoptimize` / `Error` handler calls
   `runtime::chain_deopt(vm)` **after** its write-back (the frame is fully
   homed) and before resuming the fetch loop / entering `entry_raise`. The
@@ -588,3 +604,63 @@ address is no longer at hand, names the site it belongs to. `AsmEvict` and
 `Codegen::evict_suspended_frames` and `Codegen::chain_deopt` were the same CFP
 walk once the patch fallback was gone, and are now one function
 (`chain_deopt`), used by both `check_bop_redefine` and `runtime::chain_deopt`.
+
+## 11. The speculation as shipped (§5 steps 4–5)
+
+**Scope** (§7, enforced by `float_speculation_qualifies` +
+poison hooks): a block-passing call site whose callee is a plain iseq and
+whose literal block is an iseq with no capture surface
+(`possibly_capture_without_block` / `has_block_arg` false), compiled
+outside a dispatch arm. Everything subtler is caught during the subtree
+compile by the poison hooks — a generic block-passing call, a generic
+yield, a block-handler materialization (`BlockArgProxy` / `BlockArg`), or
+a no-capture invalidation reaching the speculating frame — and flips the
+site to an unspeculated recompile.
+
+**Step 5 — the relaxation.** At a qualifying site,
+`locals_to_S_keep_F` demotes every local *except* pure-`F` ones and
+Float literals (`occlusion = 0.0` is materialized to `F`); the kept set
+is armed on the frame (`begin_float_speculation`) for the duration of
+the specialized-subtree compile. The unboxed local's canonical home
+during the call is memory the machinery already maintains:
+
+* pool-resident `F` → the call's cont-mode save slot
+  (`[callee_rbp + 32 + 8·rank]`, rank = the register's ascending-bit
+  rank in the site's `UsingFpr` — the exact layout `emit_fpr_save`
+  writes and `ChainReplay` §8.1 reads);
+* spilled `F` → its own `[rbp - (base - 24 + 8n)]` spill slot.
+
+A specialized block resolving `Load/StoreDynVar` against an armed outer
+frame (`speculated_dynvar`) compiles a single f64 move at
+`[rbp + Σ frame-sizes + disp]` — the same late-resolved
+`DynVarOffset::Hint` chain the boxed specialized access uses. After the
+call nothing needs fixing: `fpr_restore_cont` reloads pool registers
+from the (possibly block-updated) save slots, a spilled local reads its
+own slot, and the site's `ChainReplay` boxes from exactly the locations
+the block writes.
+
+**Step 4 — the Float guard.** A store's source must *be* a Float, not
+coerce to one: a proven-Float source stores its f64 directly; a
+Float-guarded stack source goes through `load_fpr`'s guard + unbox,
+whose (escalated, §8.5) deopt converts the whole chain before the
+offending store runs — the interpreter then re-executes the store
+against the boxed frame. A statically non-Float source poisons the
+attempt instead (`speculated_store_src` returns `None`): the store
+would fail every execution, so the site recompiles unspeculated.
+
+**Nesting.** A qualified site whose subtree compiles without a single
+capture-relevant event (`JitContext::capture_events` snapshot) keeps
+the caller's no-capture invariant instead of running the blanket
+post-call unset — which is what lets an enclosing frame's speculation
+survive an inner qualified block call (`nphi.times { ntheta.times {
+occlusion += … } }`, the motivating aobench shape, speculates through
+both levels).
+
+**Pinning.** The kept pool floats are `pin_fpr`-ed from the demote
+point to the end of the site emission so an allocation in between
+cannot spill one out of the save slot the compiled block addresses.
+
+**Poisoned retry.** The first (speculated) subtree compile is discarded
+wholesale on poison — its specialized bodies are emitted but never
+referenced — and the site recompiles the subtree against the
+post-`locals_to_S` state under a fresh patch point.

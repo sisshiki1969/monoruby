@@ -491,6 +491,33 @@ pub(super) struct JitStackFrame {
     /// `deferred_rest`; producer skips `create_array` only when
     /// `deferred_rest && !needs_rest_array`.
     pub(super) needs_rest_array: bool,
+
+    ///
+    /// Unboxed-locals speculation (`doc/chain_deopt.md` §5 steps 4–5):
+    /// non-empty exactly while this frame's qualifying block-passing
+    /// call site compiles its specialized subtree. Each entry is a
+    /// pure-`F` local kept unboxed across the call; a specialized block
+    /// in the subtree reads and writes it in this frame's FP save/spill
+    /// area (`Load/StoreDynVarSpeculatedF`) instead of the LFP slot.
+    ///
+    pub(super) speculated_floats: Vec<(SlotId, crate::codegen::FPReg)>,
+    ///
+    /// The site's `UsingFpr` snapshot, taken when the speculation set was
+    /// pinned. Pool-resident speculated floats live in the call's
+    /// cont-mode save area; a pool register's save-slot index is its
+    /// bit's rank in this snapshot (ascending bit order — the layout
+    /// `emit_fpr_save` writes and `ChainReplay` reads).
+    ///
+    pub(super) speculated_using_fpr: UsingFpr,
+    ///
+    /// Set when the speculated subtree compiled something that could
+    /// capture this frame or route a speculated slot onto the boxed
+    /// path (generic block-passing call, generic yield, block-handler
+    /// materialization, a no-capture invalidation reaching this frame).
+    /// The site then discards the subtree and recompiles it without
+    /// speculation.
+    ///
+    pub(super) speculation_poisoned: bool,
 }
 
 impl std::fmt::Debug for JitStackFrame {
@@ -579,6 +606,9 @@ impl JitStackFrame {
             had_deopt: false,
             deferred_rest: false,
             needs_rest_array: false,
+            speculated_floats: vec![],
+            speculated_using_fpr: UsingFpr::default(),
+            speculation_poisoned: false,
         }
     }
 
@@ -604,6 +634,9 @@ impl JitStackFrame {
             had_deopt: self.had_deopt,
             deferred_rest: self.deferred_rest,
             needs_rest_array: self.needs_rest_array,
+            speculated_floats: self.speculated_floats.clone(),
+            speculated_using_fpr: self.speculated_using_fpr,
+            speculation_poisoned: self.speculation_poisoned,
         }
     }
 
@@ -645,6 +678,12 @@ pub(crate) struct JitContext<'a> {
     /// bytecode position whose work was already emitted by its
     /// predecessor, to be skipped by `compile_instruction`.
     pub(super) fused_skip: Option<BcIndex>,
+
+    ///
+    /// Monotone count of capture-relevant compile events — see
+    /// [`Self::capture_events`].
+    ///
+    capture_events: usize,
 
     ///
     /// Set while an intra-block dispatch arm is being emitted
@@ -743,6 +782,7 @@ impl<'a> JitContext<'a> {
             store,
             codegen_mode,
             fused_skip: None,
+            capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
             class_version,
@@ -763,6 +803,7 @@ impl<'a> JitContext<'a> {
             store: self.store,
             codegen_mode: false,
             fused_skip: None,
+            capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
             class_version: self.class_version,
@@ -796,13 +837,16 @@ impl<'a> JitContext<'a> {
     /// `new_error` / `deopt_from_point`) picks it up — rather than relying on
     /// each emitter to remember.
     ///
-    /// Today it is driven by the `chain-deopt` validation feature (escalate
-    /// everywhere, so the whole test suite exercises the deopt → walk →
-    /// chain-exit-handler cascade). When the unboxed-locals speculation (§5
-    /// step 5) lands, the per-frame speculation flag is OR'd in here.
+    /// Escalation is unconditional: measurement (the former `chain-deopt`
+    /// validation feature, run across the full suite and benchmark set)
+    /// put the walk at ~160ns per escalation and ≤1.6% wall-clock even on
+    /// bedcov's 1.8M-deopt worst case, while blanket escalation is exactly
+    /// the precondition the unboxed-locals speculation (§5 step 5) needs —
+    /// a frame holding an unboxed local must convert its callers on every
+    /// interpreter resume, not only on the Float guard.
     ///
     pub(super) fn escalate_side_exits(&self) -> bool {
-        cfg!(feature = "chain-deopt")
+        true
     }
 
     pub(super) fn in_dispatch_arm(&self) -> bool {
@@ -1157,20 +1201,147 @@ impl<'a> JitContext<'a> {
     /// Unset frame capture guard in the outer `JitFrame`s.
     ///
     pub(super) fn unset_outer_no_capture_guard(&mut self) {
+        self.capture_events += 1;
         let mut i = self.stack_frame.len() - 1;
         loop {
             let frame = &mut self.stack_frame[i];
             if let Some(outer) = frame.outer {
                 i -= outer;
-                self.stack_frame[i]
+                let frame = &mut self.stack_frame[i];
+                frame
                     .abstract_state
                     .as_mut()
                     .unwrap()
                     .unset_no_capture_guard();
+                // A possible capture reaching a frame with unboxed
+                // speculated locals kills the speculation: a heapified
+                // copy of the frame would carry stale LFP slots for
+                // them (doc/chain_deopt.md §7).
+                if !frame.speculated_floats.is_empty() {
+                    frame.speculation_poisoned = true;
+                }
             } else {
                 return;
             }
         }
+    }
+
+    // ===== Unboxed-locals speculation (doc/chain_deopt.md §5 steps 4–5) =====
+
+    ///
+    /// Arm the speculation on the current frame for the duration of one
+    /// qualifying block-passing call's specialized-subtree compile.
+    ///
+    pub(super) fn begin_float_speculation(
+        &mut self,
+        set: Vec<(SlotId, crate::codegen::FPReg)>,
+        using_fpr: UsingFpr,
+    ) {
+        let frame = self.current_frame_mut();
+        debug_assert!(frame.speculated_floats.is_empty());
+        frame.speculated_floats = set;
+        frame.speculated_using_fpr = using_fpr;
+        frame.speculation_poisoned = false;
+    }
+
+    ///
+    /// Disarm the current frame's speculation; returns whether the subtree
+    /// poisoned it (in which case the site recompiles without the set).
+    ///
+    pub(super) fn end_float_speculation(&mut self) -> bool {
+        let frame = self.current_frame_mut();
+        frame.speculated_floats = vec![];
+        std::mem::replace(&mut frame.speculation_poisoned, false)
+    }
+
+    ///
+    /// Poison every armed speculation on the stack. Called from the few
+    /// compile paths that can hand a block (and with it a reference chain
+    /// to a speculating frame) to code the speculation cannot see through:
+    /// a generic block-passing call, a generic yield, and block-handler
+    /// materialization (`BlockArgProxy` / `BlockArg`). Conservative: the
+    /// block involved may be unrelated to any speculating frame, but these
+    /// paths are precisely the ones the qualifying gate assumes absent, so
+    /// hitting one at all means the subtree is not the shape we speculated
+    /// on.
+    ///
+    /// Also bumps the capture-event counter, which qualified block-passing
+    /// sites use to decide whether their compiled subtree stayed clean
+    /// (see `specialized_iseq`'s no-capture-unset decision).
+    ///
+    pub(super) fn poison_float_speculations(&mut self) {
+        self.capture_events += 1;
+        for frame in self.stack_frame.iter_mut() {
+            if !frame.speculated_floats.is_empty() {
+                frame.speculation_poisoned = true;
+            }
+        }
+    }
+
+    ///
+    /// Monotone count of capture-relevant compile events (poison hooks and
+    /// no-capture invalidations). A qualified block-passing site snapshots
+    /// it around its subtree compile: unchanged ⇒ nothing in the subtree
+    /// can capture this frame ⇒ the site keeps the no-capture invariant
+    /// (and an enclosing speculation survives the site).
+    ///
+    pub(super) fn capture_events(&self) -> usize {
+        self.capture_events
+    }
+
+    ///
+    /// Resolve a dynvar access `(outer, reg)` from the current (block)
+    /// frame against an armed speculation: `Some((offset, disp))` when the
+    /// target local is speculated-unboxed and the access can compile as a
+    /// direct f64 move at `[rbp + offset + disp]` (offset a late-resolved
+    /// [`DynVarOffset`] hint, disp a compile-time byte displacement).
+    ///
+    /// A speculated slot whose fast path cannot be taken (capture no
+    /// longer excluded) poisons the speculation and returns `None`; the
+    /// generic instruction the caller then emits is sound only because the
+    /// site discards this subtree and recompiles unspeculated.
+    ///
+    pub(super) fn speculated_dynvar(
+        &mut self,
+        state: &AbstractState,
+        outer: usize,
+        reg: SlotId,
+    ) -> Option<(super::asmir::DynVarOffset, i32)> {
+        use crate::codegen::PHYS_FPR_POOL;
+        let pos = self.outer_pos(outer)?;
+        let (_, fpr) = self.stack_frame[pos]
+            .speculated_floats
+            .iter()
+            .find(|(s, _)| *s == reg)
+            .copied()?;
+        if state.outer_no_capture_guard(outer) != Some(true) {
+            self.stack_frame[pos].speculation_poisoned = true;
+            return None;
+        }
+        let end = self.stack_frame.len() - 1;
+        let (chain_start, disp) = if fpr.0 < PHYS_FPR_POOL {
+            // Pool-resident: the call's cont-mode save area, addressed off
+            // the *callee* frame's rbp (`[callee_rbp + 32 + 8i]`, §8.1 of
+            // doc/chain_deopt.md); `i` is the register's rank in the
+            // site's UsingFpr snapshot (ascending bit order).
+            let using = &self.stack_frame[pos].speculated_using_fpr;
+            debug_assert!(using[fpr.0]);
+            let rank = (0..fpr.0).filter(|&b| using[b]).count();
+            (pos + 1, 32 + 8 * rank as i32)
+        } else {
+            // Spilled: the speculating frame's own f64 spill slot,
+            // `[rbp - (base - 24 + 8n)]` (`PhysMap::apply_base`).
+            let n = (fpr.0 - PHYS_FPR_POOL) as i32;
+            let base = self.stack_frame[pos].base_stack_offset as i32;
+            (pos, -(base - 24 + 8 * n))
+        };
+        let chain = &self.stack_frame[chain_start..end];
+        let ids = chain.iter().map(|f| f.specialized_id).collect();
+        let extra = chain
+            .iter()
+            .map(|f| f.stack_offset - f.base_stack_offset)
+            .sum();
+        Some((super::asmir::DynVarOffset::Hint { ids, extra }, disp))
     }
 
     fn check_exception_handler(&self, begin: usize, end: usize) -> bool {
@@ -1263,6 +1434,8 @@ impl<'a> JitContext<'a> {
         match inst {
             AsmInst::LoadDynVarSpecialized { offset, .. }
             | AsmInst::StoreDynVarSpecialized { offset, .. }
+            | AsmInst::LoadDynVarSpeculatedF { offset, .. }
+            | AsmInst::StoreDynVarSpeculatedF { offset, .. }
             | AsmInst::MethodRetSpecialized {
                 rbp_offset: offset, ..
             }

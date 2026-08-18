@@ -478,12 +478,46 @@ impl<'a> JitContext<'a> {
             TraceIr::LoadDynVar(dst, src) => {
                 state.flush_gp(ir);
                 assert!(!dst.is_self());
-                self.load_dynvar(state, ir, src);
-                state.def_rax2acc(ir, dst);
+                // Speculated-unboxed outer local (doc/chain_deopt.md §5
+                // step 5): read the f64 straight from the speculating
+                // frame's FP save/spill area and keep it unboxed here.
+                if let Some((offset, disp)) = self.speculated_dynvar(state, src.outer, src.reg) {
+                    let f = state.def_F(dst);
+                    ir.push(AsmInst::LoadDynVarSpeculatedF {
+                        offset,
+                        disp,
+                        dst: f,
+                    });
+                } else {
+                    self.load_dynvar(state, ir, src);
+                    state.def_rax2acc(ir, dst);
+                }
             }
             TraceIr::StoreDynVar(dst, src) => {
                 state.flush_gp(ir);
-                self.store_dynvar(state, ir, dst, src);
+                if let Some((offset, disp)) = self.speculated_dynvar(state, dst.outer, dst.reg) {
+                    // Step 4's Float guard: the store may only put a Float
+                    // into the speculated slot. A proven-Float source
+                    // stores its f64 directly; a Float-guarded slot goes
+                    // through `load_fpr`'s guard + unbox, whose (escalated)
+                    // deopt converts the chain *before* the offending
+                    // store runs — the interpreter then re-executes this
+                    // bytecode against the boxed frame. A source that is
+                    // statically not a Float kills the speculation for
+                    // good: poison and recompile the subtree unspeculated.
+                    if let Some(f) = state.speculated_store_src(ir, src) {
+                        ir.push(AsmInst::StoreDynVarSpeculatedF {
+                            offset,
+                            disp,
+                            src: f,
+                        });
+                    } else {
+                        self.poison_float_speculations();
+                        self.store_dynvar(state, ir, dst, src);
+                    }
+                } else {
+                    self.store_dynvar(state, ir, dst, src);
+                }
                 state.unset_side_effect_guard();
             }
             TraceIr::BlockArgProxy(ret, outer) => {
@@ -503,12 +537,19 @@ impl<'a> JitContext<'a> {
                 {
                     state.def_C(ret, Value::nil());
                 } else {
+                    // A live block-handler proxy can flow anywhere (be
+                    // called generically, become a Proc): opaque to the
+                    // unboxed-locals speculation.
+                    self.poison_float_speculations();
                     state.def_S(ret);
                     ir.block_arg_proxy(ret, outer);
                 }
             }
             TraceIr::BlockArg(ret, outer) => {
                 state.flush_gp(ir);
+                // Materializes the block into a Proc — captures the frame
+                // chain; opaque to the unboxed-locals speculation.
+                self.poison_float_speculations();
                 state.def_S(ret);
                 ir.block_arg(state, ret, outer, pc);
                 state.unset_side_effect_guard();
@@ -595,6 +636,9 @@ impl<'a> JitContext<'a> {
                 {
                     return self.compile_yield_specialized(state, ir, callid, &block_info, iseq);
                 }
+                // A generic yield runs the chain's block against LFP slots —
+                // opaque to the unboxed-locals speculation.
+                self.poison_float_speculations();
                 state.compile_yield(ir, &self.store, callid);
             }
             TraceIr::InlineCache => {}

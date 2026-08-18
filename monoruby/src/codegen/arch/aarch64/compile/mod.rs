@@ -1313,6 +1313,30 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
                 self.a64_fpr_save(dst, 0, base); // result d0 -> dst
             }
+            // Speculated-unboxed outer local (doc/chain_deopt.md §5 step 5):
+            // one f64 move against the speculating frame's FP save/spill
+            // area at `[x29 + offset + disp]`. The frame-chain offset can
+            // exceed the ldr/str immediate range, so materialize it through
+            // the x10 scratch like `load_dyn_var_specialized`; d0 is the f64
+            // scratch (dead outside FP calls, like the CFunc lowerings).
+            LInst::LoadDynVarSpecF { offset, disp, dst, base } => {
+                let e = offset as i64 + disp as i64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, (e as u64);
+                    add x10, x29, x10;
+                    ldr d0, [x10];
+                );
+                self.a64_fpr_save(dst, 0, base);
+            }
+            LInst::StoreDynVarSpecF { offset, disp, src, base } => {
+                let e = offset as i64 + disp as i64;
+                self.a64_fpr_load(src, 0, base);
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, (e as u64);
+                    add x10, x29, x10;
+                    str d0, [x10];
+                );
+            }
             // Cold side-exit handler blocks. Deopt / Evict re-enter the VM.
             LInst::SideExit {
                 kind,

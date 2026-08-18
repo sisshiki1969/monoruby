@@ -282,9 +282,35 @@ impl<'a> JitContext<'a> {
         {
             return Err(CompileError);
         }
-        // We must write back all local vars to the stack and set the state to LinkMode::S when they are possibly accessed or captured from inner blocks.
+        // We must write back all local vars to the stack and set the state to
+        // LinkMode::S when they are possibly accessed or captured from inner
+        // blocks — EXCEPT at a site qualifying for the unboxed-locals
+        // speculation (doc/chain_deopt.md §5 step 5): there the pure-`F`
+        // locals stay unboxed and the specialized blocks in the subtree
+        // access them in this frame's FP save/spill area. Qualification
+        // guarantees the site either reaches `specialized_iseq` (which arms
+        // the speculation around the subtree compile) or folds the call away
+        // entirely (no invocation — nothing observes the locals).
+        let mut spec_set = None;
+        let mut spec_qualified = false;
         if callsite.block_fid.is_some() {
-            state.locals_to_S(ir);
+            if self.float_speculation_qualifies(callsite, func_id) {
+                spec_qualified = true;
+                let set = state.locals_to_S_keep_F(ir);
+                if !set.is_empty() {
+                    // Keep the pool-resident speculated floats where the
+                    // site's UsingFpr snapshot will find them: a spill
+                    // between here and the call emission would silently
+                    // move a local out of the save-area slot the compiled
+                    // block addresses.
+                    for (_, x) in &set {
+                        state.pin_fpr(*x);
+                    }
+                    spec_set = Some(set);
+                }
+            } else {
+                state.locals_to_S(ir);
+            }
         }
 
         // class version guard
@@ -557,6 +583,9 @@ impl<'a> JitContext<'a> {
                         ISeqHint::Normal => false,
                     };
                     if folded {
+                        // Call elided — the kept-unboxed locals were never
+                        // observable; just drop the speculation pins.
+                        release_speculation_pins(state, &mut spec_set);
                         if forwarded_fold {
                             // Eliding the call *is* the forwarding consume:
                             // no one reads the rest `Array`, so keep the
@@ -609,6 +638,8 @@ impl<'a> JitContext<'a> {
                                 state, ir, recv_class, recv, dst, &body, &arg_slots,
                             )
                         {
+                            // Frame-free expansion — same as the fold above.
+                            release_speculation_pins(state, &mut spec_set);
                             if forwarded_fold {
                                 // Same reasoning as the fold above: the
                                 // expansion *is* the forwarding consume, so
@@ -677,8 +708,11 @@ impl<'a> JitContext<'a> {
                         func_id,
                         iseq,
                         specializable,
+                        spec_set,
+                        spec_qualified,
                     );
                 }
+                debug_assert!(spec_set.is_none());
                 (func_id, None)
             }
         };
@@ -687,9 +721,45 @@ impl<'a> JitContext<'a> {
             state.unset_no_capture_guard(self);
         }
 
+        // A generic dispatch that passes a block hands a handler to code
+        // the unboxed-locals speculation cannot see through (the callee —
+        // a builtin iterator, a proc, a super target — may run the block
+        // generically, i.e. against LFP slots, or materialize it): poison
+        // every armed speculation so its site recompiles unspeculated.
+        if block_fid.is_some() || self.store[callid].block_arg.is_some() {
+            self.poison_float_speculations();
+        }
+
         state.send(ir, &self.store, callid, fid, recv_class, outer_lfp);
 
         Ok(CompileResult::Continue)
+    }
+
+    ///
+    /// §7 gating (doc/chain_deopt.md) for the unboxed-locals speculation at
+    /// a block-passing call site: the callee is a plain iseq — so the site
+    /// provably reaches `specialized_iseq` (which arms the speculation) or
+    /// folds the call away (no invocation observes the locals) — and the
+    /// literal block is an iseq that can capture neither its own frame nor,
+    /// through the outer chain, this one. Everything subtler (a nested
+    /// generic block-passing call, a proxy materialization, a no-capture
+    /// invalidation) is caught by the poison hooks during the subtree
+    /// compile and triggers the unspeculated recompile.
+    ///
+    fn float_speculation_qualifies(&self, callsite: &CallSiteInfo, func_id: FuncId) -> bool {
+        if self.in_dispatch_arm() {
+            return false;
+        }
+        let Some(bfid) = callsite.block_fid else {
+            return false;
+        };
+        if !matches!(self.store[func_id].kind, FuncKind::ISeq(_)) {
+            return false;
+        }
+        let Some(biseq) = self.store[bfid].is_iseq() else {
+            return false;
+        };
+        !self.store[bfid].possibly_capture_without_block() && !self.store[biseq].has_block_arg()
     }
 
     ///
@@ -1110,6 +1180,8 @@ impl<'a> JitContext<'a> {
         fid: FuncId,
         iseq: ISeqId,
         specializable: bool,
+        mut spec_set: Option<Vec<(SlotId, crate::codegen::FPReg)>>,
+        spec_qualified: bool,
     ) -> JitResult<CompileResult> {
         let dst = self.store[callid].dst;
         let args_info = if specializable {
@@ -1122,20 +1194,51 @@ impl<'a> JitContext<'a> {
         } else {
             Some(self.label())
         };
+        // Unboxed-locals speculation (doc/chain_deopt.md §5 steps 4–5):
+        // arm the caller's kept-`F` set around the subtree compile so the
+        // specialized blocks inside route their accesses to those locals
+        // through this frame's FP save/spill area. If the subtree turns
+        // out to contain something the speculation cannot see through
+        // (poison), discard it, box the kept locals after all, and
+        // recompile the subtree unspeculated — the orphaned first attempt
+        // is emitted but never referenced.
+        if let Some(set) = &spec_set {
+            self.begin_float_speculation(set.clone(), state.using_fpr_offset());
+        }
+        let capture_events0 = self.capture_events();
+        let mut used_patch_point = patch_point;
+        let mut compiled = self.compile_specialized_func(
+            state,
+            iseq,
+            recv_class,
+            used_patch_point,
+            args_info.clone(),
+            None,
+            callid,
+        )?;
+        if spec_set.is_some() && self.end_float_speculation() {
+            release_speculation_pins(state, &mut spec_set);
+            state.locals_to_S(ir);
+            used_patch_point = patch_point.map(|_| self.label());
+            compiled = self.compile_specialized_func(
+                state,
+                iseq,
+                recv_class,
+                used_patch_point,
+                args_info,
+                None,
+                callid,
+            )?;
+        }
+        // A qualified site whose subtree compiled without a single
+        // capture-relevant event provably cannot capture this frame.
+        let clean_speculation = spec_qualified && self.capture_events() == capture_events0;
         let SpecializedCompileResult {
             entry,
             return_state,
             deferred_rest,
             needs_rest_array,
-        } = self.compile_specialized_func(
-            state,
-            iseq,
-            recv_class,
-            patch_point,
-            args_info,
-            None,
-            callid,
-        )?;
+        } = compiled;
         // The call site passes a block literal: if the callee heapifies
         // its *own* frame during the call (`Proc.new` / `lambda` /
         // `binding`), `materialize_escaped_block_handlers` turns the
@@ -1144,7 +1247,15 @@ impl<'a> JitContext<'a> {
         // generic-send rule (see `compile_method_call`): drop the
         // no-capture invariant so the result store below goes via the
         // LFP and `immediate_evict` emits a capture guard.
-        if self.store[callid].block_fid.is_some() {
+        //
+        // A *cleanly speculated* subtree is the exception: its gating and
+        // poison hooks proved no path in the subtree can materialize a
+        // block handler (a generic block-passing site, a generic yield, or
+        // a proxy materialization would have poisoned it), so the
+        // invariant survives — which is also what lets an enclosing
+        // frame's own speculation nest across this site instead of being
+        // poisoned by the blanket unset.
+        if self.store[callid].block_fid.is_some() && !clean_speculation {
             state.unset_no_capture_guard(self);
         }
         let evict = ir.new_evict();
@@ -1154,14 +1265,30 @@ impl<'a> JitContext<'a> {
             callid,
             fid,
             entry,
-            patch_point,
+            used_patch_point,
             evict,
             deferred_rest,
             needs_rest_array,
         );
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
+        release_speculation_pins(state, &mut spec_set);
         return Ok(res);
+    }
+}
+
+///
+/// Drop the fpr pins that held a speculation set's pool floats in place
+/// (see the arming site in `compile_method_call`). Idempotent via `take`.
+///
+fn release_speculation_pins(
+    state: &mut AbstractState,
+    spec_set: &mut Option<Vec<(SlotId, crate::codegen::FPReg)>>,
+) {
+    if let Some(set) = spec_set.take() {
+        for (_, x) in set {
+            state.unpin_fpr(x);
+        }
     }
 }
 

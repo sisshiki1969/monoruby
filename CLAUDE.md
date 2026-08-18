@@ -486,7 +486,11 @@ Modes via `MONORUBY_TEST_ORACLE`:
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
 | `dump-require`      | Log `require`/`load` file resolution                                   |
-| `chain-deopt`       | Emit per-call-site chain-exit handlers and escalate every deopt / error side exit through the chain-deopt walk (BOP eviction converts by chain instead of patching too) — the validation switch for `doc/chain_deopt.md`'s mechanism |
+
+Chain deopt (`doc/chain_deopt.md`) is always on: every deopt / error side
+exit escalates through the chain-deopt walk, and BOP eviction converts
+suspended frames by chain. The former `chain-deopt` validation feature is
+gone — escalation is unconditional in every build.
 
 The JIT is always compiled in regardless of features; it is disabled at runtime
 with the `--no-jit` flag. The old `jit`/`jit_x86` build cfgs and the `no-jit`
