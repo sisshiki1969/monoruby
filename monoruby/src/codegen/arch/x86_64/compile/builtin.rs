@@ -80,8 +80,13 @@ impl Codegen {
     /// `String#setbyte`: receiver String in rdi, fixnum index in rsi, fixnum
     /// byte value in rdx. Deopts when the receiver is frozen or chilled
     /// (interpreter raises / warns) or the index is out of range
-    /// (interpreter raises IndexError). Keeps the cached code-range
-    /// classification consistent with `RStringInner::set_byte`.
+    /// (interpreter raises IndexError). A shared (copy-on-write) receiver is
+    /// detached in place via `runtime::str_detach` and retried — NOT deopted:
+    /// `s = lit.dup; s.setbyte(..)` makes the shared miss chronic (once per
+    /// dup'd string), and with side-exit escalation unconditional each deopt
+    /// walks and converts the whole caller chain (the ruby-xor regression).
+    /// Keeps the cached code-range classification consistent with
+    /// `RStringInner::set_byte`.
     ///
     /// ### destroy
     /// - rax, rcx, rdx, rsi
@@ -89,6 +94,9 @@ impl Codegen {
         let exit = self.jit.label();
         let set_unknown = self.jit.label();
         let pos_idx = self.jit.label();
+        let reload = self.jit.label();
+        let shared = self.jit.label();
+        let done = self.jit.label();
         monoasm! { &mut self.jit,
             // frozen (0b010) or chilled (0b100) → deopt
             movzxw rax, [rdi + (RVALUE_OFFSET_FLAG)];
@@ -96,16 +104,17 @@ impl Codegen {
             jne  deopt;
             sarq rsi, 1;
             sarq rdx, 1;
+        reload:
             // rax = len, rcx = data ptr (inline vs heap storage select)
             movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
             // Shared (copy-on-write) string: the buffer is aliased by
-            // other sharers and must not be written in place — deopt to
-            // the interpreter, which detaches via `owned_mut`.
+            // other sharers and must not be written in place — detach it
+            // (out of line below) and retry.
             // (rcx is free here until the `lea` below, so use it for the
             // tag scratch rather than r8 — r8-r11 are the allocatable pool.)
             movq rcx, (crate::rvalue::STRING_SHARED_TAG);
             cmpq rax, rcx;
-            jeq  deopt;
+            jeq  shared;
             lea  rcx, [rdi + (RVALUE_OFFSET_INLINE)];
             cmpq rax, (STRING_INLINE_CAP);
             cmovgtq rax, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
@@ -130,6 +139,23 @@ impl Codegen {
         set_unknown:
             movb [rdi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::Unknown as u64);
         exit:
+            jmp  done;
+        shared:
+        }
+        // Out-of-line detach-and-retry: `str_detach` copies the viewed
+        // bytes into a fresh owned buffer (plain malloc, no Value
+        // allocation, no GC), after which the reload takes the owned path.
+        // rdi (recv) / rsi (untagged idx) / rdx (untagged byte) survive in
+        // the save area.
+        self.jit.save_registers();
+        monoasm! { &mut self.jit,
+            movq rax, (crate::codegen::runtime::str_detach as *const u8);
+            call rax;
+        }
+        self.jit.restore_registers();
+        monoasm! { &mut self.jit,
+            jmp  reload;
+        done:
         }
     }
 

@@ -37,6 +37,14 @@ pub(super) extern "C" fn chain_deopt(vm: &mut Executor) {
     }
 }
 
+/// Detach a shared (copy-on-write) String receiver so the JIT's inline
+/// byte-store fast path can write its buffer in place instead of deopting
+/// (see `RStringInner::detach`). Infallible; copies with a plain malloc, so
+/// it never allocates a `Value` and never runs a GC.
+pub(in crate::codegen) extern "C" fn str_detach(mut v: Value) {
+    v.as_rstring_inner_mut().detach();
+}
+
 /// The `correct_rest_kw` equivalent for the chain-deopt replay
 /// (`doc/chain_deopt.md` §9.3): rebuild a deferred `**kwrest` Hash from the
 /// caller's kw slots. GC-safe because every source value sits in a scanned

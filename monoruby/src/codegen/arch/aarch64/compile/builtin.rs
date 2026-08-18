@@ -1033,16 +1033,23 @@ impl Codegen {
 
     /// `String#setbyte`: receiver String in Rdi (x4), fixnum index in Rsi (x3),
     /// fixnum byte value in Rdx (x2). Deopts when the receiver is frozen or
-    /// chilled, copy-on-write shared, or the index is out of range (the
-    /// interpreter raises / warns there). Keeps the cached code-range
-    /// classification consistent with `RStringInner::set_byte`. aarch64 twin of
-    /// x86 `emit_string_setbyte`.
+    /// chilled, or the index is out of range (the interpreter raises / warns
+    /// there). A shared (copy-on-write) receiver is detached in place via
+    /// `runtime::str_detach` and retried — NOT deopted: `s = lit.dup;
+    /// s.setbyte(..)` makes the shared miss chronic, and with side-exit
+    /// escalation unconditional each deopt walks and converts the whole
+    /// caller chain (the ruby-xor regression). Keeps the cached code-range
+    /// classification consistent with `RStringInner::set_byte`. aarch64 twin
+    /// of x86 `emit_string_setbyte`.
     ///
     /// ### destroy
     /// - x0 (Rax), x1 (Rcx), x3 (Rsi), x9
     pub(crate) fn emit_string_setbyte(&mut self, deopt: &DestLabel) {
         let exit = self.jit.label();
         let set_unknown = self.jit.label();
+        let reload = self.jit.label();
+        let shared = self.jit.label();
+        let done = self.jit.label();
         let deopt = deopt.clone();
         // frozen (0b010) or chilled (0b100) -> deopt
         monoasm_arm64!(&mut self.jit,
@@ -1054,12 +1061,13 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             asr x3, x3, #(1);                                // untag index
             asr x2, x2, #(1);                                // untag byte value
+        reload:
             ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)]; // capa / shared tag
-            // shared (copy-on-write) buffer -> deopt (interpreter detaches)
+            // shared (copy-on-write) buffer -> detach out of line and retry
             mov x9, (crate::rvalue::STRING_SHARED_TAG as u64);
             cmp x0, x9;
         );
-        self.jit.bcond_label(monoasm::Cond::Eq, &deopt);
+        self.jit.bcond_label(monoasm::Cond::Eq, &shared);
         monoasm_arm64!(&mut self.jit,
             // len -> x0, data ptr -> x1 (inline vs heap select)
             ldr x9, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
@@ -1096,6 +1104,46 @@ impl Codegen {
             strb w9, [x4, #(crate::rvalue::STRING_CR_OFFSET as u32)];
         );
         self.jit.bind_label(exit);
+        monoasm_arm64!(&mut self.jit,
+            b done;
+        );
+        // Out-of-line detach-and-retry: `str_detach(recv)` copies the viewed
+        // bytes into a fresh owned buffer (plain malloc, no Value allocation,
+        // no GC). The caller-saved d2-d7 FP pool, x5-x8 GP pool and the live
+        // temps x2 (byte) / x3 (idx) / x4 (recv) are saved around the call
+        // (the save-frame shape mirrors `a64_call_recompile`).
+        self.jit.bind_label(shared);
+        monoasm_arm64!(&mut self.jit,
+            sub sp, sp, #(112);
+            str d2, [sp, #(0)];
+            str d3, [sp, #(8)];
+            str d4, [sp, #(16)];
+            str d5, [sp, #(24)];
+            str d6, [sp, #(32)];
+            str d7, [sp, #(40)];
+            stp x2, x3, [sp, #(48)];
+            stp x4, x5, [sp, #(64)];
+            stp x6, x7, [sp, #(80)];
+            str x8, [sp, #(96)];
+            mov x0, x4;                   // recv
+            str x30, [sp, #-16]!;
+            mov x9, (crate::codegen::runtime::str_detach as *const () as u64);
+            blr x9;
+            ldr x30, [sp], #16;
+            ldr d2, [sp, #(0)];
+            ldr d3, [sp, #(8)];
+            ldr d4, [sp, #(16)];
+            ldr d5, [sp, #(24)];
+            ldr d6, [sp, #(32)];
+            ldr d7, [sp, #(40)];
+            ldp x2, x3, [sp, #(48)];
+            ldp x4, x5, [sp, #(64)];
+            ldp x6, x7, [sp, #(80)];
+            ldr x8, [sp, #(96)];
+            add sp, sp, #(112);
+            b reload;
+        );
+        self.jit.bind_label(done);
     }
 
     /// `Fiddle.___read` integer load: untag the pointer in Rdi (x4), deopt on
