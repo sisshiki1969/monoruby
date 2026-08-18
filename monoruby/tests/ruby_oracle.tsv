@@ -614,6 +614,7 @@
 33428047f1f658e115c637013b4660d7	[["initial", nil], ["after-match", "zzz"], ["creator-after-resume", "oo"]]	"foo" =~ /(o+)/\n            r = []\n            f = Fiber.new do\n   
 33a37997020cb2a326855e1801974373	"hello\\n"	r, w = IO.pipe\n            t = Thread.new { r.gets }\n            Th
 33b5711e09e6c160215318c1fd17224f	["no error", 5]	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:)
+33c649868370c10930670813040a0f1c	[45.0, 30.0]	class RS3\n          def half(v) = v * 0.5\n          def sum(arr)\n      
 33cbc86f31c1e6a7eb6adf5738c1d3eb	[true, 7, 8]	o = Object.new\n        def o.to_a; $flag = true; [7, 8]; end\n        $f
 33cc5f4be417d616ecd8eb208e890c90	[3, 3, 4]	def f(x, y = x, z = y + 1); [x, y, z]; end; f(3)
 33cd8b36724499dce5c02aaf1ed6ba18	nil	$LOAD_PATH.resolve_feature_path("zzzz")
@@ -955,6 +956,7 @@
 4e47ffc76fe153dc81662e78c3766e5f	[4, 8, 101, 58, 9, 77, 69, 120, 116, 91, 6, 105, 14]	module MExt; end\n            a = [9]\n            a.extend(MExt)\n   
 4e65c1f861f9096dda31e1a54a334c3c	[Hash, 99, 99]	sub = Class.new(Hash)\n            o = sub.new(99)\n            o[:x]
 4e78c9407fe210294bad93265e6fe237	"Class"	"mutable-str".dup.singleton_class.class.to_s
+4e8da0b5e2010b485853959988c37a10	[5.0]	class RS2\n          def initialize = (@objs = [1.5, 2.5, 3.5])\n        
 4e91589759e06abf5967280f353d07c5	[9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError", 9, "ArgumentError"]	def g(a, b, c) = yield(a + b + c)\n        def f(...) = g(1, ...)\n      
 4e9bfbcee73c693e57ccc4d38d0dfa34	["x", "y"]	base = "/tmp/monoruby_dir_eachchild_#{Process.pid}_#{rand(100000)}"
 4ebe3f743c44083475b01a20ac7c38bc	false	binding.local_variable_defined?(:_10)
@@ -2712,6 +2714,7 @@ e30802fc039d0a7dafc2afa6978a2fd8	[true, true]	stop = false\n            t = Thre
 e3153e08936de555d02588b7435ba4c8	nil	begin\n              raise "err"\n            rescue\n            end\n
 e358ab5ec7cd3f4599432855b55c2865	[[:ensure_ran], "reraised"]	$log = []\n            def m\n              raise "orig"\n            
 e383349a267c6ca9fda59d2f6df0e56c	[81, true]	require "stringio"\n            old = $stderr\n            begin\n    
+e39fd220262a3610b4d7b6874ada52af	[2.5, 3.0]	class RS1\n          def initialize = (@flag = true)\n          attr_writ
 e3d5014354546675123f59bdf2d1daca	104	Const=4\n            Const+=100\n            a = Const\n        \n\n    
 e3dc251c39edf8fca9953b41f0868749	"self"	begin\n              Fiber.current.raise "self"\n            rescue =
 e403909aa1128050ff094c7e45c920db	["1234567890", "12345", "45678", "ASCII-8BIT", "", "ASCII-8BIT", nil, "67890", "1234567890", "ISO-8859-1", "EUC-JP", "US-ASCII", "UTF-8"]	File.write("/tmp/mr_cr.txt", "1234567890")\n            r = []\n     

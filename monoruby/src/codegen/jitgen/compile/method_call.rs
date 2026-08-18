@@ -1354,22 +1354,32 @@ impl<'a> JitContext<'a> {
         let frame_had_deopt = frame.had_deopt;
         let frame_deferred_rest = frame.deferred_rest;
         let frame_needs_rest_array = frame.needs_rest_array;
-        // Two unmodeled-path conditions taint the return state so the
-        // caller doesn't propagate a speculative `Const` past us:
+        // `has_exception_handler` taints the return state so the caller
+        // doesn't propagate a speculative `Const` past us: the BB graph
+        // doesn't include rescue/ensure successors, so the computed
+        // return state only reflects the happy path — and an `ensure`
+        // runs on the happy path too, without any side exit in between.
+        // See issue #405.
         //
-        // 1. `has_exception_handler`: the BB graph doesn't include
-        //    rescue/ensure successors, so the computed return state
-        //    only reflects the happy path. See issue #405.
-        //
-        // 2. `frame_had_deopt`: any deopt-able side exit emitted
-        //    during this iseq's compile means the runtime can resume
-        //    in the interpreter from the deopt PC and produce a
-        //    different rax than the abstract interpreter's
-        //    speculation predicted (e.g. `Array#assoc`'s block doing
-        //    `return elem` after the recv-class guard fails). See
-        //    PR #505.
+        // `frame_had_deopt` used to taint as well (a deopt-able side
+        // exit means the runtime can resume in the interpreter from the
+        // deopt PC and produce a different rax than the abstract
+        // interpreter predicted — e.g. `Array#assoc`'s block doing
+        // `return elem` after the recv-class guard fails, PR #505).
+        // With side-exit escalation unconditional (doc/chain_deopt.md
+        // §8.6) that widening is no longer needed: every deopt or error
+        // exit taken anywhere under this call walks the chain and
+        // converts the caller — its return-address slot is rewritten to
+        // the VM continuation stub, so the compiled continuation that
+        // consumed this return state never runs on a deopt path. The
+        // continuation executes only when the callee completed on the
+        // compiled happy path, which is exactly what the abstract
+        // return state describes. This is sound because every call and
+        // yield site registers for chain conversion unconditionally
+        // (`chain_exit`; the walk skips unregistered return addresses,
+        // so registration is load-bearing here).
         let return_state = return_state.map(|mut s| {
-            if self.store[iseq_id].has_exception_handler() || frame_had_deopt {
+            if self.store[iseq_id].has_exception_handler() {
                 s.taint_for_unmodeled_rescue();
             }
             s
