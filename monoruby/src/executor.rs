@@ -3693,7 +3693,23 @@ impl Executor {
         globals: &mut Globals,
         bh: BlockHandler,
     ) -> Result<ProcData> {
-        if let Some((outer, fid)) = self.resolve_block_target(globals, self.cfp(), bh) {
+        self.get_block_data_at(globals, bh, self.cfp())
+    }
+
+    /// Like [`Self::get_block_data`], but resolves a `BlockArgProxy`'s
+    /// frame-relative depth against `cfp` instead of the current frame.
+    /// For native helpers that read a block handler out of their
+    /// *caller's* frame: the proxy depth is relative to the frame the
+    /// handler was read from, so it must be resolved from there —
+    /// resolving from the deeper native frame lands one frame short and
+    /// mis-targets `break` (LocalJumpError in the wrong frame).
+    pub(crate) fn get_block_data_at(
+        &mut self,
+        globals: &mut Globals,
+        bh: BlockHandler,
+        cfp: Cfp,
+    ) -> Result<ProcData> {
+        if let Some((outer, fid)) = self.resolve_block_target(globals, cfp, bh) {
             // outer is left un-moved: ProcData is transient and the
             // dispatch runs immediately, so the on-stack frame (for
             // proxy) is still live.

@@ -72,6 +72,7 @@
 04cd443314c532007660c17ebab3d577	[-4, 1, 2, 5, 7, 10, 12]	class Integer\n              alias old_spaceship <=>\n              d
 050ae4a7c397fbd32b0bd2bb968461d6	[[:a, 0], [:a, 1], [:a, 2], [:b, 0], [:b, 1], [:b, 2]]	log = []\n            t1 = Thread.new { 3.times { |i| log << [:a, i]
 051c6c1a4febd93666a6dd7af8fec314	true	Class.new.method_defined?(:hash)\n            
+052141b09b61ede8409ccea5658c7508	[true, true]	minor = GC.stat(:minor_gc_count)\n            GC.start(full_mark: fa
 0529c3b994259a346f88054c03aff90d	[[Encoding::InvalidByteSequenceError, "\\"\\\\xF1\\" followed by \\"a\\" on UTF-8"], [:invalid_byte_sequence, "UTF-8", "ISO-8859-1", "\\xF1", "a"], Encoding::InvalidByteSequenceError, Encoding::UndefinedConversionError, true, "", [Encoding::InvalidByteSequenceError, "incomplete \\"\\\\xA4\\" on EUC-JP"], [:incomplete_input, "EUC-JP", "UTF-8", "\\xA4", ""], [["US-ASCII", "UTF-8"]], [["US-ASCII", "UTF-8"], ["UTF-8", "Big5"]], "crlf_newline", "crlf_newline", nil]	(t=lambda{|&b| begin; b.call; rescue Exception => e; [e.class, e.message]; end};
 055f890657b797cbf39b10ff47a602e6	"hello"	class Bar\n              class_variable_set(:@@val, "hello")\n       
 059105186c8c7fcaa5b946c1c71b007a	"hello\\n"	r, w = IO.pipe\n            t = Thread.new { r.gets }\n            w.
@@ -161,6 +162,7 @@
 0b0604dcfa5aa2a90ccb9b55c158b24e	101	def get_binding\n              x = 100\n              binding\n       
 0b272bc1eee3862ebd5afe122f6530ac	[0, 50, "custom", true, false, false]	def check(x) = x.is_a?(Integer)\n            def fro(x) = x.frozen?\n
 0b360a7151ca4646f547e0ecffd6cf13	[true, true, true, true, true, ArgumentError, ArgumentError, TypeError, TypeError, Hash, false]	(ENV["MONO_T_ZZ"]="hi"; a=ENV["MONO_T_ZZ"].frozen?; b=ENV.method(:has_key?)==ENV
+0b45e95b3c2f86584c9598881d58fac9	[42, 90, 15, "1/2", "7:8", "argerr"]	def a0; 42; end\n        def a1(x); x * 10; end\n        def a5(a, b, c, 
 0b56e400524c40599f5741f2c015962d	7	class Foo\n              def method_missing(name, *args)\n           
 0b645df6fa816084c17746fbb8754151	-4	class Integer; alias __orig :~; def ~; __orig; end; end; ~(3)
 0b67f0becaeeca974d1e74004df4c680	[[:x], [1, :y]]	class C\n                 def initialize; @log = []; end\n                 def []=
@@ -532,6 +534,7 @@
 2ad1b1687928056c2f074002bf5523c8	[[[nil, 0]], [[:v, 0]], [[[1, 2], 0]]]	[Enumerator.new { |y| y.yield },\n                Enumerator.new { |y| y.yield :v
 2ad3ffaba8b53027f23c93b8ea311b97	"M"	module M\n              def f\n                "M"\n              end\n
 2aec6243e92acfe749099144a72533e1	:OVERRIDDEN	class Complex; def !; :OVERRIDDEN; end; end; !(Complex(1,2))
+2aee02d861669a9bd6794f71c30d99b6	[[nil, nil, nil, nil, nil], [:v, :v], AIMyArr, [7, 7]]	class AIMyArr < Array; end\n        class Integer\n          def to_ary =
 2b00bd85431dd7a80fc36e28c6bd4ea3	["Enumerator", [], 3, :stopped]	e = loop\n            cnt = 0\n            got = nil\n            e.ea
 2b1ef887a1e8d69589f89bda76a9ed0e	[[164, 162], "EUC-JP", [164, 164]]	File.binwrite("/tmp/mr_gc.txt", [164, 162, 164, 164].pack("C*"))\n  
 2b2a7a697be91f73a6f3e7632ad995c1	["yes", "no"]	class TrueClass; def label713; "yes"; end; end\n        class FalseClass
@@ -568,6 +571,7 @@
 2f052ab414e3e11032af6e0e3daffec3	[true, false, false, true]	class D\n          def m; end\n          private def p_m; end\n        end
 2f0605cfae48d77d3b5b40e6d74bd47b	[[10, 20, 30, 40, 50, 60, 70, 80], [1, 2, 3, 4, 5, 6, 7, 8]]	class S\n                def initialize\n                    @a = 10\n
 2f28cfe17983ddaaf399e013958b9c70	[(3+0i), (8+2i)]	Complex(8,2).coerce(3)
+2f2df713f5356f6ae95e9f0fc66d86ed	[:early, 3]	class FwdB\n          def initialize(n)\n            @v = []\n            
 2f31e2e40ca23f0bd3d0fadfac86b959	[1001.0, 1002.0, 1003.0, 1030.0, 1010.0, 1020.0, 1200.0, 1300.0, 1100.0]	class C\n              def initialize\n                @a = 1\n       
 2f3c934c9f013395202064f7b669614d	["b", "nil"]	r = begin\n              begin\n                raise "a"\n           
 2f922c304c94e10148d4493f457eb26e	:OVERRIDDEN	class Integer; def |(o); :OVERRIDDEN; end; end; 3 | 4
@@ -953,6 +957,7 @@
 4e9bfbcee73c693e57ccc4d38d0dfa34	["x", "y"]	base = "/tmp/monoruby_dir_eachchild_#{Process.pid}_#{rand(100000)}"
 4ebe3f743c44083475b01a20ac7c38bc	false	binding.local_variable_defined?(:_10)
 4edbac695b5ed45b538971de1ca0ed2c	[true, true, true, false]	f = File.open("Cargo.toml")\n            begin\n              [f.binm
+4edf4d45c190ed9014d06dda3424cfb3	[200, true]	parents = Array.new(200) { [] }\n            5.times { GC.start }\n  
 4ef654f58c91b7b93cc8ea7d3a1d2da8	[false, false, false, true, false]	class MEqStrTrue; def to_str; "x"; end; def ==(o); true; end; end\n 
 4f93aca4bf1af1b5c4055cb5ae6b15f5	[nil, false]	t = Thread.new { sleep }\n            r = t.join(0.05)\n            t
 4fa66bde865d8b29ac7a73525c13a9c4	true	path = "/tmp/monoruby_io_dc_#{Process.pid}_#{rand(100000)}"\n       
@@ -1000,6 +1005,7 @@
 54cec27c16a23055cb1af1f7bd0ee7f2	[nil, nil, nil, nil, 1, true, false, false, 1, :blocking]	res = []\n            res << Fiber.scheduler\n            res << Fibe
 54d6779b200cfac2264d1b13551e56a4	[10, 999]	$flag = false\n        class OpRedef\n          def +(o)\n            Inte
 54d92cf0264334597de6d135e289a10d	[[:block, 1], [:proc, 2], [:block, 2], true, [:block, 3], 1, :fired, :argerr]	res = []\n            trace_var(:$tv_spec) { |v| res << [:block, v] 
+54fdd2cc3d02bd64d61ab84f56fff772	[[7, 8, 9], :inner_broke]	class FwdG\n          attr_reader :a\n          def initialize(n)\n       
 550657b209502598ac09bdd6794b2088	[Encoding::CompatibilityError, "5!", ArgumentError]	[ (begin; format("hello %s".encode("utf-8"), "world".encode("UTF-16LE")); rescue
 55124e846ccfc03a163c2cfdf4d72203	:raised	class E\n              def initialize() @a = {k: 1} end\n            
 553588ca0ab5030b1fb038e8bcdbc8f5	"Bar"	class Bar; end\n        Bar.to_s\n        
@@ -1036,6 +1042,7 @@
 581a9eeda65b4118ca39d22e6e34f801	[:caught, "boom"]	class C\n              def initialize; @h = {}; end\n              de
 582de92dfc668c66f3fca99c56ea0221	9	M = Data.define(:amount, :unit)\nM.new("amount" => 1, amount: 9, unit: "m").amoun
 58330bef80223af992dc7623e3ec3084	[312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3]]	def g(x, y, z)\n          x, y, z = z, x, y\n          x * 100 + y * 10 +
+58536fdabdc310d1d4cdf2be1346caa2	[:broke, :b, ["0", "1", "2"]]	r1 = Array.new(4) { |i| break :broke if i == 2; i }\n        a = [9]\n   
 58661de46a8dc941342a4319c35b9c90	1	obj = Object.new\n            def obj.infinite?; nil; end\n          
 586ab40f2dfcbd13d521be385c9a6b38	[2, 2]	[[1, 2].each.with_index.size, [1, 2].each.with_object(:m).size]
 586c6036c606500ee67ef673b7e6ef50	:foo	obj = Object.new\n            obj.define_singleton_method(:foo) { 42
@@ -1135,6 +1142,7 @@
 60e7801250bb0dce26c76cbfe1c94612	[1, 2, 3, 4, false, false, true, false, true, false]	o = Object.new\n            def o.foo = 1\n            m = Module.new
 60fa84926456bf38e08b292f42e6048b	[true, false, true]	parent = Class.new do\n              protected; def parent_pro; end\n
 61004613ce868620a7ea63f5833c5be8	[100, 200]	def f(&p)\n            g(&p)\n        end\n                \n        def g(
+610be275fcd8db9f9253050ade7d323a	["m0", 420, 21, "m0", 0, 4, 109, 30, 777, 5, 880, 24, "argerr", "NoMethodError", "m0", 70, 0]	class C\n          def m0; "m0"; end\n          def m1(a); a * 10; end\n  
 610beb27fdef4abad74c027625346d0e	"I:#<Integer:0xADDR>"	class Integer; def to_s; "I:" + super; end; end\n                5.to_s.sub(/0x[0
 610cff7c16d66dbb480b5af49ae1652c	"hello"	m = Module.new\n        m.module_eval do\n          def hello; "hello"; e
 61163d4d16d5c6f9c2f86809889cf976	[[:v]]	r = []; Enumerator.new { |y| y.yield :v }.each { |*a| r << a }; r
@@ -1455,6 +1463,7 @@
 7d4fb0ea252c3834303824e7d9f4f7c8	false	arr = [1, 2]; x = *arr; x.equal?(arr)
 7d566060f439422030b6a00d4ff60ee1	true	Integer.instance_method(:inspect) == Integer.instance_method(:to_s)
 7d6854cd651142049c443c4e92d72f00	50	x = 10\n        eval("x * 5")\n        
+7d735c813693382a1b0336954d0c89f2	40000	class Lib; def twice(n); n + n; end; end\n        $lib = Lib.new\n       
 7d8b0536aa2c8c96c141de63562053a8	[16, 8]	f = proc { |x| x * x }; g = proc { |x| x + x }; [(f << g).call(2), (g << f).call
 7dbf766e4faeae2f9ef65b162d2a7f4b	["no 0", "match 1", "no 2", "NoMethodError"]	klass = Class.new do\n          def ===(o); o == 1; end\n          privat
 7dcb621c6c844f83fc03a82810bbf155	"US-ASCII"	"abc".dup.force_encoding("US-ASCII").gsub("b", "x").encoding.to_s
@@ -1473,7 +1482,10 @@
 7e7c0b1b6e6693f9e664b1a54dbde111	0	m = Object.new\n        def m.==(x); true; end\n        m <=> Object.new\n
 7e7e4d6aef6bf7266adf4b085dc59d23	[:one, :two]	rec = []\n        one = proc { |&arg| arg.call(:one) if arg }\n        tw
 7e96f5f901b2f6fae7a6ccede1e6bf9c	[true, "a b c"]	s1 = "a b c"\n            s2 = s1.dup\n            ok = false\n       
+7eb0d4817551a97def8fe2bf1a9f7035	[[0, 2, 4, 6], 106]	class FwdA\n          attr_reader :a\n          def initialize(n)\n       
 7f230ec5e7c81dcb14df9d04bf7eb5df	"raised"	class BadInt\n                  def to_int; "not an integer"; en
+7f2bcf2ec173056f353c8989fad11530	["A==5", "B==5"]	class A; def ==(o); "A==#{o}"; end; end\n        class B; def ==(o); "B=
+7f31a0877dd67722a0d7d14c5b74abb0	[[], ["warning: given block not used"], ["warning: block supersedes default value argument"], ["warning: block supersedes default value argument"], [], []]	require 'stringio'\n        def capw\n          $stderr = StringIO.new\n  
 7f39046674eb2565ca621a342f701cae	[true, true, true]	M = Data.define(:amount, :unit)\n\n            a = M.allocate\n            a.send(:
 7f48ec6081718c6875731cb8393d7b9c	["echo hello", true]	def `(cmd); [cmd, cmd.frozen?]; end\n        %x{echo hello}\n        
 7f684c2506ac66a75606077c90b5924f	"US-ASCII"	s = "hello".encode("US-ASCII")\n              s.upcase!\n          
@@ -1840,6 +1852,7 @@
 9ea00fe4a9f13b4cabf05e28e6571f87	[1, 0, "nil", "nil", -1]	class MCmpNeg; def <=>(other); -1; end; end\n            class MCmpZ
 9eb98c1b5f6e2d631b2b51c04acc62e5	"m::N"	m = Module.new\n            m::N = Module.new\n            m::N.name 
 9ec21f255b64bf6cee16e04bbbaa7ae3	[[:C1, :C2, :S1], [:C1, :C2]]	class S\n              S1 = 100\n            end\n            class C 
+9ee5793f09dedfe9c6cd4714aaad32b5	[15150, [10, 105, 20000000000000000000000000000000000000000, 10000000000000000000000000000000000000100, 20000000000000000000000000000000000000002, 10000000000000000000000000000000000000101, 14, 107, 200000000000000000000000000000000000000000000000000000000000000000000000000000000, 100000000000000000000000000000000000000000000000000000000000000000000000000000100, 18, 109, -16, 92, -20000000000000000000000000000000000000000, -9999999999999999999999999999999999999900]]	class Integer\n          def dbl; self * 2; end\n          def add5(x); s
 9eeb8d867dcde677d9837c5ba30e2c40	[:yes, "NoMethodError", false]	module EscA\n              refine(String) { def only_here; :yes; end
 9f0c968145034ea2d742ba8456a2e243	["Scheduler must implement #block", "Scheduler must implement #unblock", "Scheduler must implement #kernel_sleep", "Scheduler must implement #io_wait", true, nil]	required = [:block, :unblock, :kernel_sleep, :io_wait]\n            
 9f1a90eeaa16fa36daa6ad13a43b2591	{a: Infinity, b: -Infinity}	{ a: 1.0 / 0.0, b: -1.0 / 0.0 }
@@ -1874,6 +1887,7 @@ a158e5fc1d4c5a682510d00791a34f7b	[true, false]	m = Module.new do\n              
 a161e71f31bf14603b9f94a476644366	[:a, :a]	-> { a = it; binding.local_variable_set(:it, :b); [a, it] }.call(:a)
 a164c646ebdbe3551b16c27fa5e2aab0	5	def f; return 5; end; f
 a189356012c67f14ffd149bedd2d23b2	nil	$/ = "xyz"; r = "abcde".chomp!; $/ = "\\n"; r
+a19474330777374fd8e9f255dc6aec66	11340	def e\n          10.times do\n            $x += yield\n          end\n     
 a1a984bb2edd75a78229a94547d15825	[true, true, :outer, "nil", ["NoMethodError", "RuntimeError"], "RuntimeError"]	def restore_check(log)\n          outer = StandardError.new "outer"\n    
 a1c461fb313f0da82569acd28c4ca299	[1, 3, 5, 7]	(1..7).filter(&:odd?)
 a1e955df00a16906b87178a40bfe7105	[100, 50, 250, :c, false, true, false]	class A; end\n            class B; end\n            class C; end\n    
@@ -2203,6 +2217,7 @@ bb9bac558eea3d2782caab01dd00745b	12.1	def f(a,b)\n          a + b\n        end\n
 bb9fe807d5884dd09dd75a4832ce674c	[[FrozenError, []], [1, 2, 3, 4, 5, 6, 7, 99], ArgumentError, ArgumentError, [101]]	class V\n              def initialize(x, y); @x = x; @y = y; end\n   
 bba413775b9fdc4e5a5520013caecba6	true	Process.getpriority(Process::PRIO_USER, 0).is_a?(Integer)
 bbb536d6446e4acae479f2a76bbc22b8	[false, true, "payload"]	base = "/tmp/monoruby_test_rename_#{Process.pid}_#{rand(100000)}"\n 
+bbc6b60d27eb5cad82b53e233df0c6e8	280	class Object\n          def tag = 7\n        end\n        \n\n        res = 
 bbf39b957f63dc57cf6be6b238e3322a	"HELLO world"	s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0..-7); s
 bc0ccc0a16c986d29598ed69b9038ff8	[false, true, true]	h = {}\n        before = h.compare_by_identity?\n        ret = h.compare_
 bc2025afe3d4e746f87d06a3bac3e3db	[[]]	r = []; Enumerator.new { |y| y.yield }.each { |*a| r << a }; r
@@ -2246,6 +2261,7 @@ bf421e316fb7533cb8d9a80876438745	[[Infinity], {x: -Infinity}]	[[Float::INFINITY]
 bf43e4b5ea5dc43387ed9bdbb1d33e91	["A", 49, "\\n", 65, nil, nil, "end of file reached", [65, 49, 10, 65, 50, 10, 66, 49, 10, 66, 50, 10], ["A", "1", "\\n", "A", "2", "\\n"], [65, 49, 10, 65, 50, 10], [65, 49, 10], "Enumerator"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
 bf642b858ac68f1754855ea56af9f010	["inherited"]	$res = []\n        class A\n          def self.inherited(subclass)\n      
 bf69a12e40aa6429315d6d5c29ddfe91	[0, 5, 5, 0]	f = File.open("Cargo.toml")\n            begin\n              a = f.p
+bf79a4cee2d36dbbb5a38944e22e53c1	[true, true]	big = Array.new(2000) { |i| [i] }\n            5.times { GC.start }\n
 bf79cea739fcb7a0ec6546a5b4e6528a	[Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, "incompatible character encodings: UTF-16BE and US-ASCII"]	(f = ->(x) { begin; x.call; rescue => e; e.class; end }; [f.(-> { File.basename(
 bf960838169f3fd4f0850862d278a5e7	[1495, 13, 30, 7]	class Wa; def f(a, b) = a + b; end\n            class Wb; def f(a, b
 bf9d53c3fd6b4e9d4cb7eef1119ed43f	[false, nil, true, 15, nil, false]	pid = fork { sleep 5 }\n            Process.kill("TERM", pid)\n      
@@ -2274,6 +2290,7 @@ c0bd20c1f72134f81f9605cb0369bad4	["hello", "helloworld", "helloworld"]	path = "/
 c0ccecf51a28d34a9407d29cd759ff8a	[:f, :f]	class C; def f; 1; end; end\n            \n\n            m = C.new.met
 c0d486ae823c1add3b9717cbf806e267	54	[2, 3, 4, 5].inject(0) {|result, item| result + item ** 2 }
 c0ddaa891fb7a63e6690683fe1ec0f3d	[["a"], ["abc"], ["1"]]	[/\\p{Word}/.match("a").to_a, /\\p{Alpha}+/.match("abc").to_a, /\\p{^L}/.match("1")
+c0f28d6a8eec92ebb24ada71d093ae08	[:from_proc, :nope]	class FwdH\n          def check = block_given? ? yield : :nope\n        e
 c0f4d9f562f9dd0bd39e836e62a9886e	[:rescued]	def boom; raise "no"; end\n            def test; [1].map { begin; bo
 c1115c20142acf811917f45366cfe9fe	[:intercepted, true]	module PcMiss\n              X = 1\n              private_constant :X
 c156933e6602c868faaa2ed9b64aa3db	"4.0nil"	def f\n          if $a\n            a = 1.0\n            b = 1.0\n         
@@ -2508,6 +2525,7 @@ d38a6188952e22ee5c8f4c60ce1a5ac1	true	require "json"\n            original = {"k
 d38e6fd95270224ae4681f1f484197db	[:none, :none, :low, :mid, :low, :mid, :low, :mid, :high, :high, :high, :high, :none, :none]	def bucket(n)\n          case n\n          when 10, 12, 14 then :low\n    
 d3acb7d398b9ef1fed07541b51646641	[1, :a]	module M2; C = nil; end\n        x = 0\n        (x += 1; M2)::C ||= :a\n  
 d3b6f86401efda2e8d91b23f0ee0fc74	false	m = Module.new do\n              eval "module_function"\n            
+d40dff035e2e78ff7e2a3d2f72e21eeb	[true, true]	GC.config(rgengc_allow_full_mark: false)\n            begin\n        
 d41d12b7a01731a69b781898eb370912	[3, [:gt, :lt, :gt, :lt]]	class C\n              attr_reader :calls\n              def initiali
 d4217108da72ed932f312a232db996af	["method", nil, "method", "method", nil, nil]	module DefM1; end\n            class DefR\n              def respond_
 d4340baf53f6574d84b54cdb783df9b8	2	$x = 0\n            begin\n              $x += 1\n              raise 
@@ -2736,6 +2754,7 @@ e7ca5b8d05bd3556a711daf23dfd10c6	nil	r, _w = IO.pipe\n            r.wait(IO::REA
 e7ea0100557a89543a11511853510192	[{"alpha" => 3, "beta" => 2}, 3, 2, nil, true, false, 2]	h = {}\n        h["alpha"] = 1\n        h["beta"] = 2\n        h["alpha" +
 e832c1ba769618395a505bd13bd3d3b7	"hi"	mod = Module.new do\n          def greet; "hi"; end\n        end\n        
 e841964d3dcfd7149202c80802373ee4	"Encoding::CompatibilityError"	(Regexp.new("".dup.force_encoding("US-ASCII"), Regexp::FIXEDENCODING) =~ "\\303\\2
+e845d4c714ee9e6cae44891a1b737bc6	[10, 11, 12]	class FwdD\n          attr_reader :a\n          def initialize(n)\n       
 e84e2a6f452bc8149fdee15dda638246	4	r = 0\n            20.times do\n              begin\n                r
 e8629d85bee1ecd0620fc7812cf440d4	"myfile.rb:42:"	b = binding\n            begin\n              b.eval("missing_method"
 e8663c97e820ca6aa3b720c87c95f4ff	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"	r, w = IO.pipe\n            t = Thread.new { r.read }\n            w.
@@ -2904,6 +2923,7 @@ f600c4b6bccc1d5883d6b763a2dd876b	[4, "ka"]	f = File.open("Cargo.toml")\n        
 f603e3f7573b653274804205c0c9c888	["US-ASCII"]	s = "ab12cd34".dup.force_encoding("US-ASCII")\n              s.sca
 f62113ff8d7e91bafa61a23fc88a57ff	[[:req, :a]]	class C; define_method(:m) { |a,| a }; end\n            C.new.method
 f635d2b04e7d853cebc06ba31f5c8a82	20	class C; def to_int; 1; end; end; o = C.new\n[10, 20, 30][o]
+f642a2f41f870a29780f497378032b77	["negative array size", "negative array size", "no implicit conversion of String into Integer", TypeError]	r = []\n        begin; Array.new(-1); rescue ArgumentError => e; r << e.
 f65b176caaf8d76c616a0ef5ed8857e9	[1, 1000, 2, 1001, 3, 1002, 5, 1003, 8, 1004, 13, 1005, 21, 1006, 34, 1007, 55, 1008, 89, 1009, nil]	fib = Enumerator.new do |y|\n                a = b = 1\n             
 f666332b734a470db3c29c7d1c1fcbda	true	require "json"\n            s = "tab\\there\\nnewline\\r\\nand\\\\backslas
 f677948e40b8cdfc7bd01fe6eddf352e	[true, false, false]	File.open("Cargo.toml") do |f|\n              before = f.autoclose?\n
@@ -2914,6 +2934,7 @@ f6b2f5848e7295cbc532e6f89aae0054	[true, true, true, true, true]	(a=(File.method(
 f6b8ba5c363ede98f3ac55cfd3ae8594	[[:keyreq, :a], [:keyreq, :b]]	def only_req_kw(a:, b:); end\n            method(:only_req_kw).param
 f6bd187bbf5507071844189b94dc4434	[[false, false, true, true, true], [false, true, false, true, false], [true, true, false, false, true]]	vals = [1, 2.5, 3, 4.5]\n            def lt(a, b) = a < b\n          
 f6cc6145b95584bf04b9e5b0c112640c	[:a, :b, :block, :x, :z]	a = 1\n        b = 2\n        def f(x, &block)\n          z = nil\n        
+f6cef84e94a43a487f077dc59578c5a8	[:blk, :none]	class FwdC\n          attr_reader :tag\n          def initialize\n        
 f736ab01b7f73c593f6fc9713eeae554	["boom", false, "boom"]	require "tmpdir"\n        # Use a per-process unique path so parallel te
 f75daf748ad804574801fd5e35cb2793	"1/2"	Rational(0.5).to_s
 f764ebb9096219e5a3a63fbfc98f2cbf	[1, {m: 2}]	def fwd(&b); b.call(1, m: 2); end; fwd { |*a| a }
@@ -2981,6 +3002,7 @@ fbb6a99a9e767f50065c0f1b714f7960	["RuntimeError", "boom", false]	f = Fiber.new {
 fbfbbb9d05ea7dc5ddb91d5f6aa274ad	"EUC-JP"	e = "あ".encode("EUC-JP"); "#{""}#{e}".encoding.to_s
 fc2292041cacaef7aa439e177107ed46	[42, 90, 15, "1/2", "7:8", "argerr"]	def a0; 42; end\n        def a1(x); x * 10; end\n        def a5(a, b, c, 
 fc22a4cd64bea4559dace662cad4cc26	[[1, 2]]	r = []; Enumerator.new { |y| y.yield 1, 2 }.each { |*a| r << a }; r
+fc3371eaceedc6a0fdff24c1dffa8f49	[[], [nil, nil, nil], [:x, :x, :x], [0, 2, 4], [1, 2, 3], [4, 5], [nil, nil], [nil, nil]]	o = Object.new\n        def o.to_ary = [4, 5]\n        # to_ary returning
 fc3d5bf1ce71d212ebacaaf185815390	["RuntimeError", "parent 42", "parent 5"]	parent = Class.new { def m(a) = "parent #{a}" }\n        res = []\n      
 fc49adcb727ee87209fa4da1d578751d	["a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_", "a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_a1_b2_c3_"]	res = []\n        require "strscan"\n        20.times do\n            s = 
 fc66d3daba82671e0fb10c0ef2627879	16	def fn(x) x*2 end; a=42; c=b=a+7; d=b-a; e=b*d; d=f=fn(e); f=d/a
@@ -3001,6 +3023,7 @@ fd67bec60fd8f1e0e4e27bcd0a3675a3	[100, 200]	def f(&p)\n            g(&p)\n      
 fde9c01977b03195091b314bb13afc2f	true	old_stderr = $stderr\n            captured = String.new\n            
 fe1d12a770bcd49e6528c05052a7fe89	[[42], [7]]	$log = []\n            def g(x) = 42\n            def f(...) = g(...)
 fe35ca4f16663c5f99f379b4c63b25e1	:echild	pid = spawn("true")\n            Process.detach(pid).join\n          
+fe48e250f2d1d71755bfa84d1802acfa	[[0, 5, 10], :hop_broke]	class FwdE\n          attr_reader :a\n          def initialize(n)\n       
 fe6f90f2c79933a3f1d357d607b6b6fa	[true, true, true, "007"]	(a=Kernel.instance_method(:format)==Kernel.instance_method(:sprintf); b=Kernel.m
 fefd9e3b7d143c7b4ef7f710db1241da	"<STDOUT>"	$stdout.path
 ff6ed5a6bc5556996f38110444ed4f1b	1	class Integer; alias __orig :%; def %(o); __orig(o); end; end; 13 % 4

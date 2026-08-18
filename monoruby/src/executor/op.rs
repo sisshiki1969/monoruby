@@ -715,9 +715,15 @@ impl Executor {
     pub(crate) fn nearest_caller_location(&self, store: &Store) -> Option<String> {
         // Walk callers via each inner frame's saved call-site pc, exactly
         // like `Kernel#caller` / `complete_backtrace_for_rescue`, skipping
-        // native frames until the first Ruby (iseq) caller.
+        // native frames until the first Ruby (iseq) caller. Iseq frames
+        // from the interpreter's own `builtins/` tree (svar-transparent,
+        // e.g. the Ruby `Class#new` trampoline) are skipped too: CRuby
+        // implements those methods in C, so its warnings attribute to the
+        // user frame beneath them. They are only a fallback when no
+        // non-internal Ruby caller exists (bootstrap code).
         let mut inner_cfp = self.cfp();
         let mut cfp = inner_cfp.prev()?;
+        let mut internal_fallback: Option<String> = None;
         loop {
             let func_id = cfp.lfp().func_id();
             if let Some(iseq_id) = store[func_id].is_iseq() {
@@ -735,14 +741,23 @@ impl Executor {
                         info.loc
                     }
                 };
-                return Some(format!(
+                let location = format!(
                     "{}:{}",
                     info.sourceinfo.file_name(),
                     info.sourceinfo.get_line(&loc)
-                ));
+                );
+                if !store[func_id].meta().is_svar_transparent() {
+                    return Some(location);
+                }
+                if internal_fallback.is_none() {
+                    internal_fallback = Some(location);
+                }
             }
             inner_cfp = cfp;
-            cfp = cfp.prev()?;
+            match cfp.prev() {
+                Some(prev) => cfp = prev,
+                None => return internal_fallback,
+            }
         }
     }
 
