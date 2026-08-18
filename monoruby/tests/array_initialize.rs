@@ -63,6 +63,15 @@ fn array_new_subclass_and_integer_to_ary_gate() {
 }
 
 #[test]
+fn init_fill_guards_against_send_bypass() {
+    // `send` bypasses privacy, so __init_fill's own size guards are
+    // load-bearing even though the Ruby initialize checks first: a raw
+    // negative or absurd size must raise, not allocate.
+    run_test_error("[].send(:__init_fill, -1, nil)");
+    run_test_error("[].send(:__init_fill, 1 << 40, nil)");
+}
+
+#[test]
 fn array_new_warning_levels() {
     // "given block not used" is rb_warning (verbose-only); "block
     // supersedes default value argument" is rb_warn (default level,

@@ -143,3 +143,51 @@ fn forwarded_block_double_hop() {
         "#,
     );
 }
+
+#[test]
+fn explicit_block_arg_stays_dynamic() {
+    // A caller passing `&proc` is a dynamic block: the chain resolution
+    // must bail (no fold, generic yield) and still run correctly.
+    run_test(
+        r#"
+        class FwdH
+          def check = block_given? ? yield : :nope
+        end
+        pr = proc { :from_proc }
+        o = FwdH.new
+        r = nil
+        30.times { r = [o.check(&pr), o.check] }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn forwarded_block_from_inner_block_frame() {
+    // The `(...)` forward sits inside a block within the forwarding
+    // method, so resolving the chain must hop the block frame's outer
+    // link back to its method frame before continuing upward.
+    run_test(
+        r#"
+        class FwdG
+          attr_reader :a
+          def initialize(n)
+            @a = []
+            i = 0
+            while i < n
+              @a << yield(i)
+              i += 1
+            end
+          end
+        end
+        def wrap_via_block(...)
+          r = nil
+          1.times { r = FwdG.new(...) }
+          r
+        end
+        z = 7
+        [wrap_via_block(3) { |i| i + z }.a,
+         wrap_via_block(4) { |i| break :inner_broke if i == 1; i }]
+        "#,
+    );
+}

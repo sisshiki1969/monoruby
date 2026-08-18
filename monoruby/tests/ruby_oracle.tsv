@@ -1005,6 +1005,7 @@
 54cec27c16a23055cb1af1f7bd0ee7f2	[nil, nil, nil, nil, 1, true, false, false, 1, :blocking]	res = []\n            res << Fiber.scheduler\n            res << Fibe
 54d6779b200cfac2264d1b13551e56a4	[10, 999]	$flag = false\n        class OpRedef\n          def +(o)\n            Inte
 54d92cf0264334597de6d135e289a10d	[[:block, 1], [:proc, 2], [:block, 2], true, [:block, 3], 1, :fired, :argerr]	res = []\n            trace_var(:$tv_spec) { |v| res << [:block, v] 
+54fdd2cc3d02bd64d61ab84f56fff772	[[7, 8, 9], :inner_broke]	class FwdG\n          attr_reader :a\n          def initialize(n)\n       
 550657b209502598ac09bdd6794b2088	[Encoding::CompatibilityError, "5!", ArgumentError]	[ (begin; format("hello %s".encode("utf-8"), "world".encode("UTF-16LE")); rescue
 55124e846ccfc03a163c2cfdf4d72203	:raised	class E\n              def initialize() @a = {k: 1} end\n            
 553588ca0ab5030b1fb038e8bcdbc8f5	"Bar"	class Bar; end\n        Bar.to_s\n        
@@ -2289,6 +2290,7 @@ c0bd20c1f72134f81f9605cb0369bad4	["hello", "helloworld", "helloworld"]	path = "/
 c0ccecf51a28d34a9407d29cd759ff8a	[:f, :f]	class C; def f; 1; end; end\n            \n\n            m = C.new.met
 c0d486ae823c1add3b9717cbf806e267	54	[2, 3, 4, 5].inject(0) {|result, item| result + item ** 2 }
 c0ddaa891fb7a63e6690683fe1ec0f3d	[["a"], ["abc"], ["1"]]	[/\\p{Word}/.match("a").to_a, /\\p{Alpha}+/.match("abc").to_a, /\\p{^L}/.match("1")
+c0f28d6a8eec92ebb24ada71d093ae08	[:from_proc, :nope]	class FwdH\n          def check = block_given? ? yield : :nope\n        e
 c0f4d9f562f9dd0bd39e836e62a9886e	[:rescued]	def boom; raise "no"; end\n            def test; [1].map { begin; bo
 c1115c20142acf811917f45366cfe9fe	[:intercepted, true]	module PcMiss\n              X = 1\n              private_constant :X
 c156933e6602c868faaa2ed9b64aa3db	"4.0nil"	def f\n          if $a\n            a = 1.0\n            b = 1.0\n         
