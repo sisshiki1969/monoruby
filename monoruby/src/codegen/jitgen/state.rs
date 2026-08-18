@@ -538,6 +538,39 @@ impl AbstractFrame {
             self.to_S_unguarded(ir, i);
         }
     }
+
+    ///
+    /// The unboxed-locals speculation's relaxation of [`Self::locals_to_S`]
+    /// (`doc/chain_deopt.md` §5 step 5): at a qualifying block-passing call
+    /// site, pure-`F` locals stay unboxed — the specialized block reads and
+    /// writes them in this frame's FP save/spill area — and only the rest
+    /// demote to `LinkMode::S`. Returns the kept set (slot, virtual fpr);
+    /// empty means nothing was speculated and the site behaved exactly like
+    /// `locals_to_S`.
+    ///
+    /// `Sf` locals demote too: their boxed slot copy is already paid for,
+    /// and keeping the read-only fpr view would go stale the moment the
+    /// block stores through the slot.
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn locals_to_S_keep_F(&mut self, ir: &mut AsmIr) -> Vec<(SlotId, FPReg)> {
+        let mut kept = Vec::new();
+        for i in self.locals() {
+            match self.mode(i) {
+                LinkMode::F(x) => kept.push((i, x)),
+                // A Float literal (`occlusion = 0.0` right before the
+                // loop) is the common seed of the speculated shape:
+                // materialize it as `F` (no guard — `FprLoad::FromF64`)
+                // and keep it unboxed too.
+                LinkMode::C(v) if v.is_float() => {
+                    let x = self.load_fpr(ir, i);
+                    kept.push((i, x));
+                }
+                _ => self.to_S_unguarded(ir, i),
+            }
+        }
+        kept
+    }
 }
 
 #[derive(Debug, Clone)]

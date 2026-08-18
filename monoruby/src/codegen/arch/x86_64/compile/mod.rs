@@ -171,6 +171,8 @@ impl Codegen {
             | AsmInst::SpecializedYield { .. }
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
+            | AsmInst::LoadDynVarSpeculatedF { .. }
+            | AsmInst::StoreDynVarSpeculatedF { .. }
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
             | AsmInst::ArrayIndexAssign { .. }
@@ -941,6 +943,34 @@ impl Codegen {
                 );
                 self.fpr_restore(using_fpr);
                 self.store_fpr_into_xmm(dst, base);
+            }
+            // Speculated-unboxed outer local (doc/chain_deopt.md §5 step 5):
+            // one f64 move against the speculating frame's FP save/spill
+            // area, `[rbp + offset + disp]` (offset pre-resolved by the
+            // DynVarOffset pass), through the xmm0 scratch.
+            LInst::LoadDynVarSpecF {
+                offset,
+                disp,
+                dst,
+                base,
+            } => {
+                let off = offset as i32 + disp;
+                monoasm!( &mut self.jit,
+                    movq xmm0, [rbp + (off)];
+                );
+                self.store_fpr_into_xmm(dst, base);
+            }
+            LInst::StoreDynVarSpecF {
+                offset,
+                disp,
+                src,
+                base,
+            } => {
+                let off = offset as i32 + disp;
+                self.load_fpr_into_xmm0(src, base);
+                monoasm!( &mut self.jit,
+                    movq [rbp + (off)], xmm0;
+                );
             }
             LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
             // BOP-redefinition guard: outline the deopt path (page 1) so the hot
