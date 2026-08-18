@@ -1534,6 +1534,7 @@
 82abda467be3a95b2f6d81fbf7dfb3da	"a:a b:{x: 100, y: 200}"	def f(a, b)\n          "a:#{a} b:#{b}"\n        end\n        \n\n        f("
 82afafb55f0b808c4e046dd1d983831d	["ASCII-8BIT", "US-ASCII", "US-ASCII"]	[/\\xc2\\xa1/n.encoding.to_s, /abc/n.encoding.to_s, /\\x7f/n.encoding.to_s]
 82c9966b62ff6ac43f8a7ad749c3fa16	1	p = proc {\n          a = 10\n        }\n        a = 1\n        p.call\n    
+82d2886da2e2f69f6d67c227ed1596b4	[ArgumentError, "array size too big", ArgumentError, "array size too big", ArgumentError, "array size too big", RangeError, "bignum too big to convert into 'long'", RangeError, "bignum too big to convert into 'long'", RangeError, "bignum too big to convert into 'long'", ArgumentError, "negative array size"]	r = []\n        begin; Array.new(4611686018427387904); rescue => e; r <<
 82e2b73c1395323ecb44d17bc3a32421	Complex	8.0.quo(Complex(2, 1)).class
 82ea00d4003b7161aa2102e05ff69c66	3	"わたし".byteindex("た")
 82ff14b74e3eca76717b9af689a3898e	[:foo, [1, 2, 3, 4]]	class C\n          def method_missing(name, *args)\n            [name, ar
@@ -2190,6 +2191,7 @@ b9a7a07ccfa8e547bb15218d8ea8a606	:ok	c = Class.new do\n              def foo; :f
 b9a8e93ca294ef22a9d91b72fa37855f	"gen"	(Enumerator.new { |y| raise "gen" }.each { }) rescue $!.message
 b9e4a202e801d221011f287254121bb3	"Errno::EPIPE"	r, w = IO.pipe\n            r.close\n            begin\n              
 b9ee309e3978ec232bdf774078592539	["5", 2]	def apply(x, &b); b.call(x); end\n              [apply(5, &:to_s),
+b9f46a17568e8a1c5a68e9ffc4416520	[ArgumentError, "array size too big", ArgumentError, "array size too big", RangeError, RangeError, "bignum too big to convert into 'long'"]	r = []\n        begin; Array.new(4611686018427387904); rescue => e; r <<
 b9f8172cb8555b07f17ee7e3934a585e	[Infinity, -Infinity]	[Float::INFINITY, -Float::INFINITY]
 ba003b37b9cb4190b13068e285fa5a72	[[0, "fresh"], [0, "other"]]	require "stringio"\n\n            res = []\n            a = StringIO.new("orig")\n  
 ba14940825be38e026fae59620419fd4	42	class A\n          private\n          def secret\n            42\n         

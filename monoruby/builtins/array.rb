@@ -37,7 +37,9 @@ class Array
   # mirroring CRuby's `!FIXNUM_P` fast path in `rb_ary_initialize`:
   # defining `Integer#to_ary` never hijacks `Array.new(5)`. (For a
   # Bignum CRuby would still probe; monoruby's Integer is one class,
-  # so a Bignum skips the probe too — `#to_int` then rejects it.)
+  # so a Bignum skips the probe too — `__init_fill`'s size checks then
+  # reject it: ArgumentError within the i64 range, RangeError beyond,
+  # matching CRuby's NUM2LONG + "array size too big" order.)
   private def initialize(size = (no_size = true; nil), val = (no_val = true; nil))
     if no_size
       __init_fill(0, nil)
@@ -54,7 +56,12 @@ class Array
       end
       n = __size_to_int(size)
     end
-    raise ArgumentError, "negative array size" if n < 0
+    if n < 0
+      # CRuby's NUM2LONG runs before its negative check, so a negative
+      # Bignum below the `long` range is a RangeError, not ArgumentError.
+      raise RangeError, "bignum too big to convert into 'long'" if n < -9223372036854775808
+      raise ArgumentError, "negative array size"
+    end
     if block_given?
       # CRuby: rb_warn — shown at the default warning level, silent
       # only under -W0 ($VERBOSE == nil).
@@ -66,6 +73,12 @@ class Array
       # the `Class#new` forwarding chain, so each element is an inlined
       # block call. Incremental push keeps CRuby's partial-contents
       # semantics when the block `break`s.
+      # CRuby checks the size before running the block; mirror the
+      # native cap (MAX_ARRAY_SIZE in __init_fill) and `long` range.
+      if n > 1073741824
+        raise RangeError, "bignum too big to convert into 'long'" if n > 9223372036854775807
+        raise ArgumentError, "array size too big"
+      end
       __init_fill(0, nil)
       i = 0
       while i < n

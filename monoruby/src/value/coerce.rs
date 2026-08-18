@@ -96,7 +96,7 @@ impl Value {
                 }
             }
             RV::BigInt(_) => Err(MonorubyErr::rangeerr(
-                "bignum too big to convert into `long'",
+                "bignum too big to convert into 'long'",
             )),
             _ => Err(MonorubyErr::no_implicit_conversion(
                 store,
@@ -131,7 +131,7 @@ impl Value {
             RV::BigInt(b) => {
                 return b
                     .to_i64()
-                    .ok_or_else(|| MonorubyErr::rangeerr("bignum too big to convert into `long'"));
+                    .ok_or_else(|| MonorubyErr::rangeerr("bignum too big to convert into 'long'"));
             }
             _ => unreachable!(),
         };
