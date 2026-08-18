@@ -267,9 +267,12 @@ fn array_try_convert(
 /// Ruby side coerces before calling); negative and oversized sizes raise
 /// here so the checks live in one place.
 #[monoruby_builtin]
-fn init_fill(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn init_fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val().as_array_mut(&globals.store)?;
-    let size = lfp.arg(0).expect_integer(&globals.store)?;
+    // A Bignum size must reach the size checks, not raise TypeError:
+    // CRuby gives fixnum_max+1 (fits in `long`) ArgumentError "array size
+    // too big" and only raises RangeError past the `long` range.
+    let size = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if size < 0 {
         return Err(MonorubyErr::negative_array_size());
     }

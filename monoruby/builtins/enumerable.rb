@@ -656,7 +656,7 @@ module Enumerable
     # CRuby converts the count with NUM2LONG; a Bignum that does not
     # fit in a C long raises RangeError.
     if n > 0x7fff_ffff_ffff_ffff
-      raise RangeError, "bignum too big to convert into `long'"
+      raise RangeError, "bignum too big to convert into 'long'"
     end
     res = []
     return res if n == 0

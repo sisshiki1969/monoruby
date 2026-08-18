@@ -107,3 +107,25 @@ fn array_new_warning_levels() {
         "#,
     );
 }
+
+#[test]
+fn array_new_oversized() {
+    // Regression: a Bignum size must hit the size checks, not TypeError
+    // (fixnum_max + 1 = 2**62 is the same Fixnum boundary as CRuby's).
+    // Within i64 it is ArgumentError "array size too big"; past the i64
+    // range NUM2LONG order wins: RangeError, even for negative sizes and
+    // before the block-form loop runs.
+    run_test(
+        r#"
+        r = []
+        begin; Array.new(4611686018427387904); rescue => e; r << e.class << e.message; end
+        begin; Array.new(4611686018427387904, :x); rescue => e; r << e.class << e.message; end
+        begin; Array.new(4611686018427387904) { 1 }; rescue => e; r << e.class << e.message; end
+        begin; Array.new(2 ** 100); rescue => e; r << e.class << e.message; end
+        begin; Array.new(2 ** 100) { 1 }; rescue => e; r << e.class << e.message; end
+        begin; Array.new(-(2 ** 100)); rescue => e; r << e.class << e.message; end
+        begin; Array.new(-4611686018427387905); rescue => e; r << e.class << e.message; end
+        r
+        "#,
+    );
+}
