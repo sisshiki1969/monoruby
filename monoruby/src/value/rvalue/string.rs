@@ -1345,6 +1345,14 @@ impl RStringInner {
         unsafe { &mut self.content.owned }
     }
 
+    /// Detach a shared string from its root in place — `uniquify` for
+    /// callers outside this module (the JIT's inline `String#<<` calls
+    /// this through `runtime::str_detach` and retries its append on the
+    /// now-owned buffer instead of deopting). A no-op on an owned string.
+    pub(crate) fn detach(&mut self) {
+        self.uniquify();
+    }
+
     /// Detach a shared string from its root by copying the viewed
     /// bytes into a fresh owned buffer (the "write" half of
     /// copy-on-write).
@@ -1355,18 +1363,6 @@ impl RStringInner {
             // Drop has nothing to release for it.
             self.content = StringContent::from_owned(owned);
         }
-    }
-
-    /// Detach a shared (copy-on-write) string from its root so its buffer
-    /// can be written in place. No-op on an owned string. The JIT's inline
-    /// byte-store fast paths (`emit_string_setbyte`) call this through
-    /// `runtime::str_detach` instead of deopting: `s.dup; s.setbyte(..)` is
-    /// a chronic shape, and with side-exit escalation unconditional every
-    /// deopt would walk and convert the whole caller chain. Copies bytes
-    /// with a plain malloc — never allocates a `Value` and never polls, so
-    /// no GC can run under the call.
-    pub(crate) fn detach(&mut self) {
-        self.uniquify();
     }
 
     pub fn encoding(&self) -> Encoding {

@@ -621,6 +621,24 @@ pub(crate) enum InlineAlloc {
 }
 
 ///
+/// Which `String#<<` argument shapes `emit_string_shl` inlines at a given
+/// call site. Decided by `string_shl_gen` from the abstract state's proof
+/// of the argument class: a proven Integer / String argument emits only its
+/// own fast path, an unproven one gets both (the shapes are discriminated
+/// at run time from the value's tag / object type anyway, so the hint only
+/// trims dead code).
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StringShlHint {
+    /// Emit only the Fixnum byte-append fast path.
+    Fixnum,
+    /// Emit only the String-append fast path.
+    Str,
+    /// Emit both fast paths (the Fixnum tag test dispatches).
+    Both,
+}
+
+///
 /// Where an inline allocation's 8-byte object header comes from.
 ///
 #[derive(Debug, Clone, Copy)]

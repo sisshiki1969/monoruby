@@ -160,15 +160,22 @@ impl Codegen {
         self.jit.bind_label(exit);
     }
 
-    /// `String#<<` with a Fixnum byte appended in line — the aarch64 twin
-    /// of x86 `emit_string_shl`. A byte 0..=127 appends into any encoding;
-    /// a byte with the high bit set only into ASCII-8BIT. A frozen/chilled
-    /// receiver, a shared (copy-on-write) or full buffer, and every
-    /// non-Fixnum or out-of-range argument falls back to `f` =
-    /// `string_shl(vm, globals, recv, arg)`, the builtin's full semantics
-    /// (errors via the trailing HandleError). Keeps the cached code-range
-    /// classification consistent with
-    /// `RStringInner::extend_from_slice_checked`.
+    /// `String#<<` with the two hot argument shapes appended in line — the
+    /// aarch64 twin of x86 `emit_string_shl`; see there for the full path
+    /// catalogue. `hint` (the generator's argument-class proof) trims the
+    /// unused path. Fixnum: a byte 0..=127 appends into any encoding; a
+    /// byte with the high bit set only into ASCII-8BIT. String: a heap
+    /// String argument whose (payload-free) encoding equals the receiver's
+    /// — or resolves to it under `Encoding.compatible?` (both
+    /// ASCII-compatible, the piece cached SevenBit, the receiver cached
+    /// SevenBit/Valid) — is byte-copied into spare capacity, with the
+    /// code-range fold of
+    /// `RStringInner::extend`; a shared receiver is detached in place by
+    /// `detach` = `str_detach(recv)` and the append retried. Everything
+    /// else — frozen/chilled receiver, non-Fixnum/non-String argument,
+    /// out-of-range byte, encoding mismatch, insufficient capacity — falls
+    /// back to `f` = `string_shl(vm, globals, recv, arg)`, the builtin's
+    /// full semantics (errors via the trailing HandleError).
     ///
     /// ### in
     /// - Rdi (x4): receiver: String (class-guarded)
@@ -178,96 +185,304 @@ impl Codegen {
     /// - Rax (x0): the receiver (`<<` returns self) / the helper's result
     ///
     /// ### destroy
-    /// - x0 (Rax), x1 (Rcx), x2 (Rdx), x3 (Rsi), x9
-    pub(crate) fn emit_string_shl(&mut self, f: u64) {
+    /// - x0-x2 (Rax/Rcx/Rdx), x5-x8 (the GP pool, flushed by the
+    ///   generator's `get_using_fpr`), x9-x11
+    pub(crate) fn emit_string_shl(&mut self, f: u64, detach: u64, hint: StringShlHint) {
         let fallback = self.jit.label();
-        let enc_ok = self.jit.label();
-        let heap = self.jit.label();
-        let stored = self.jit.label();
-        let keep_cr = self.jit.label();
         let exit = self.jit.label();
-        monoasm_arm64!(&mut self.jit,
-            // only a Fixnum byte inlines
-            mov x9, (1u64);
-            tst x3, x9;
-        );
-        self.jit.bcond_label(monoasm::Cond::Eq, &fallback);
-        // frozen (0b010) or chilled (0b100) -> helper raises / warns
-        monoasm_arm64!(&mut self.jit,
-            ldrh w0, [x4, #(RVALUE_OFFSET_FLAG as u32)];
-            mov x9, (0b110u64);
-            tst x0, x9;
-        );
-        self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
-        monoasm_arm64!(&mut self.jit,
-            asr x2, x3, #(1);                                // untagged byte
-            // byte range 0..=255 (unsigned compare catches negatives)
-            cmp x2, #(0xff);
-        );
-        self.jit.bcond_label(monoasm::Cond::Hi, &fallback);
-        monoasm_arm64!(&mut self.jit,
-            cmp x2, #(0x7f);
-        );
-        self.jit.bcond_label(monoasm::Cond::Le, &enc_ok);
-        // high byte: raw append only into ASCII-8BIT (Ascii8 == 0)
-        monoasm_arm64!(&mut self.jit,
-            ldrb w0, [x4, #(crate::rvalue::STRING_TY_OFFSET as u32)];
-            cmp x0, #(0);
-        );
-        self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
-        self.jit.bind_label(enc_ok);
-        monoasm_arm64!(&mut self.jit,
-            ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)]; // capa / shared tag
-            // shared (copy-on-write) buffer -> helper detaches
-            mov x9, (crate::rvalue::STRING_SHARED_TAG as u64);
-            cmp x0, x9;
-        );
-        self.jit.bcond_label(monoasm::Cond::Eq, &fallback);
-        monoasm_arm64!(&mut self.jit,
-            cmp x0, #(STRING_INLINE_CAP as u32);
-        );
-        self.jit.bcond_label(monoasm::Cond::Gt, &heap);
-        // inline buffer: x0 is the length, STRING_INLINE_CAP the capacity
-        self.jit.bcond_label(monoasm::Cond::Eq, &fallback); // full -> helper spills
-        monoasm_arm64!(&mut self.jit,
-            add x1, x4, #(RVALUE_OFFSET_INLINE as u32);
-            add x1, x1, x0;
-            strb w2, [x1];
-            add x0, x0, #(1);
-            str x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
-            b stored;
-        );
-        self.jit.bind_label(heap);
-        // spilled buffer: x0 is the capacity, the length lives beside the
-        // pointer. A full buffer reallocates via the helper.
-        monoasm_arm64!(&mut self.jit,
-            ldr x1, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
-            cmp x1, x0;
-        );
-        self.jit.bcond_label(monoasm::Cond::Ge, &fallback);
-        monoasm_arm64!(&mut self.jit,
-            ldr x0, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
-            add x0, x0, x1;
-            strb w2, [x0];
-            add x1, x1, #(1);
-            str x1, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
-        );
-        self.jit.bind_label(stored);
-        // code range: an ASCII byte keeps the cache; a high byte (ASCII-8BIT
-        // by the gate above) degrades it to Unknown.
-        monoasm_arm64!(&mut self.jit,
-            cmp x2, #(0x7f);
-        );
-        self.jit.bcond_label(monoasm::Cond::Le, &keep_cr);
-        monoasm_arm64!(&mut self.jit,
-            mov x9, #(crate::rvalue::CodeRange::Unknown as u32);
-            strb w9, [x4, #(crate::rvalue::STRING_CR_OFFSET as u32)];
-        );
-        self.jit.bind_label(keep_cr);
-        monoasm_arm64!(&mut self.jit,
-            mov x0, x4;                                      // String#<< returns self
-            b exit;
-        );
+        let str_entry = self.jit.label();
+        // where the Fixnum tag test goes when the argument is not a Fixnum
+        let not_fixnum = if hint == StringShlHint::Both {
+            str_entry.clone()
+        } else {
+            fallback.clone()
+        };
+        if hint != StringShlHint::Str {
+            let enc_ok = self.jit.label();
+            let heap = self.jit.label();
+            let stored = self.jit.label();
+            let keep_cr = self.jit.label();
+            monoasm_arm64!(&mut self.jit,
+                // only a Fixnum byte inlines here
+                mov x9, (1u64);
+                tst x3, x9;
+            );
+            self.jit.bcond_label(monoasm::Cond::Eq, &not_fixnum);
+            // frozen (0b010) or chilled (0b100) -> helper raises / warns
+            monoasm_arm64!(&mut self.jit,
+                ldrh w0, [x4, #(RVALUE_OFFSET_FLAG as u32)];
+                mov x9, (0b110u64);
+                tst x0, x9;
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+            monoasm_arm64!(&mut self.jit,
+                asr x2, x3, #(1);                                // untagged byte
+                // byte range 0..=255 (unsigned compare catches negatives)
+                cmp x2, #(0xff);
+            );
+            self.jit.bcond_label(monoasm::Cond::Hi, &fallback);
+            monoasm_arm64!(&mut self.jit,
+                cmp x2, #(0x7f);
+            );
+            self.jit.bcond_label(monoasm::Cond::Le, &enc_ok);
+            // high byte: raw append only into ASCII-8BIT (Ascii8 == 0)
+            monoasm_arm64!(&mut self.jit,
+                ldrb w0, [x4, #(crate::rvalue::STRING_TY_OFFSET as u32)];
+                cmp x0, #(0);
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+            self.jit.bind_label(enc_ok);
+            monoasm_arm64!(&mut self.jit,
+                ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)]; // capa / shared tag
+                // shared (copy-on-write) buffer -> helper detaches
+                mov x9, (crate::rvalue::STRING_SHARED_TAG as u64);
+                cmp x0, x9;
+            );
+            self.jit.bcond_label(monoasm::Cond::Eq, &fallback);
+            monoasm_arm64!(&mut self.jit,
+                cmp x0, #(STRING_INLINE_CAP as u32);
+            );
+            self.jit.bcond_label(monoasm::Cond::Gt, &heap);
+            // inline buffer: x0 is the length, STRING_INLINE_CAP the capacity
+            self.jit.bcond_label(monoasm::Cond::Eq, &fallback); // full -> helper spills
+            monoasm_arm64!(&mut self.jit,
+                add x1, x4, #(RVALUE_OFFSET_INLINE as u32);
+                add x1, x1, x0;
+                strb w2, [x1];
+                add x0, x0, #(1);
+                str x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+                b stored;
+            );
+            self.jit.bind_label(heap);
+            // spilled buffer: x0 is the capacity, the length lives beside the
+            // pointer. A full buffer reallocates via the helper.
+            monoasm_arm64!(&mut self.jit,
+                ldr x1, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+                cmp x1, x0;
+            );
+            self.jit.bcond_label(monoasm::Cond::Ge, &fallback);
+            monoasm_arm64!(&mut self.jit,
+                ldr x0, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+                add x0, x0, x1;
+                strb w2, [x0];
+                add x1, x1, #(1);
+                str x1, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            );
+            self.jit.bind_label(stored);
+            // code range: an ASCII byte keeps the cache; a high byte (ASCII-8BIT
+            // by the gate above) degrades it to Unknown.
+            monoasm_arm64!(&mut self.jit,
+                cmp x2, #(0x7f);
+            );
+            self.jit.bcond_label(monoasm::Cond::Le, &keep_cr);
+            monoasm_arm64!(&mut self.jit,
+                mov x9, #(crate::rvalue::CodeRange::Unknown as u32);
+                strb w9, [x4, #(crate::rvalue::STRING_CR_OFFSET as u32)];
+            );
+            self.jit.bind_label(keep_cr);
+            monoasm_arm64!(&mut self.jit,
+                mov x0, x4;                                      // String#<< returns self
+                b exit;
+            );
+        }
+        if hint != StringShlHint::Fixnum {
+            let retry = self.jit.label();
+            let detach_path = self.jit.label();
+            let recv_ready = self.jit.label();
+            let arg_ready = self.jit.label();
+            let copy_loop = self.jit.label();
+            let copy_done = self.jit.label();
+            let set_valid = self.jit.label();
+            let set_unknown = self.jit.label();
+            let done = self.jit.label();
+            self.jit.bind_label(str_entry);
+            // only a heap String argument inlines here
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (0b111u64);
+                tst x3, x9;
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+            monoasm_arm64!(&mut self.jit,
+                ldrb w9, [x3, #(RVALUE_OFFSET_TY as u32)];
+                cmp x9, #(ObjTy::STRING.get() as u32);
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+            // frozen (0b010) or chilled (0b100) -> helper raises / warns
+            monoasm_arm64!(&mut self.jit,
+                ldrh w9, [x4, #(RVALUE_OFFSET_FLAG as u32)];
+                mov x10, (0b110u64);
+                tst x9, x10;
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+            // Payload-free encodings only: discriminants 0..=6
+            // (Ascii8..Utf32Be) carry no payload byte, so one byte is the
+            // whole `Encoding`; payload-carrying / exotic encodings
+            // (Iso8859(n), Sjis(n), …) go to the helper's full
+            // negotiation. Equal encodings pass outright; a *mismatched*
+            // pair still appends in place when both are ASCII-compatible
+            // (0..=2: Ascii8/Utf8/UsAscii), the piece is cached SevenBit,
+            // and the receiver is cached SevenBit or Valid —
+            // `Encoding.compatible?` then answers the receiver's encoding
+            // (rule 1 when the receiver is 7-bit, rule 2 when only the
+            // piece is), so the tag stays put and the fold below is
+            // unchanged. Everything else — including a piece whose cr is
+            // merely *uncached* — falls back; the helper classifies and
+            // caches the piece's cr, so a repeated piece inlines from its
+            // second append on.
+            let enc_mixed = self.jit.label();
+            monoasm_arm64!(&mut self.jit,
+                ldrb w9, [x4, #(crate::rvalue::STRING_TY_OFFSET as u32)];
+                ldrb w10, [x3, #(crate::rvalue::STRING_TY_OFFSET as u32)];
+                cmp x9, x10;
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &enc_mixed);
+            monoasm_arm64!(&mut self.jit,
+                cmp x9, #(6);
+            );
+            self.jit.bcond_label(monoasm::Cond::Gt, &fallback);
+            monoasm_arm64!(&mut self.jit,
+                b retry;
+            );
+            self.jit.bind_label(enc_mixed);
+            monoasm_arm64!(&mut self.jit,
+                cmp x9, #(2);
+            );
+            self.jit.bcond_label(monoasm::Cond::Gt, &fallback);
+            monoasm_arm64!(&mut self.jit,
+                cmp x10, #(2);
+            );
+            self.jit.bcond_label(monoasm::Cond::Gt, &fallback);
+            monoasm_arm64!(&mut self.jit,
+                ldrb w9, [x3, #(crate::rvalue::STRING_CR_OFFSET as u32)];
+                cmp x9, #(crate::rvalue::CodeRange::SevenBit as u32);
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &fallback);
+            monoasm_arm64!(&mut self.jit,
+                ldrb w9, [x4, #(crate::rvalue::STRING_CR_OFFSET as u32)];
+                sub x9, x9, #(1);   // SevenBit->0, Valid->1; Unknown wraps, Broken->2
+                cmp x9, #(1);
+            );
+            self.jit.bcond_label(monoasm::Cond::Hi, &fallback);
+            self.jit.bind_label(retry.clone());
+            monoasm_arm64!(&mut self.jit,
+                ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)]; // capa / shared tag
+                // shared (copy-on-write) receiver: detach out of line, retry
+                mov x9, (crate::rvalue::STRING_SHARED_TAG as u64);
+                cmp x0, x9;
+            );
+            self.jit.bcond_label(monoasm::Cond::Eq, &detach_path);
+            // x1 = recv len, x2 = recv capacity, x5 = recv data,
+            // x6 = recv length-slot address (inline vs heap select)
+            monoasm_arm64!(&mut self.jit,
+                mov x1, x0;
+                mov x2, (STRING_INLINE_CAP as u64);
+                add x5, x4, #(RVALUE_OFFSET_INLINE as u32);
+                add x6, x4, #(RVALUE_OFFSET_ARY_CAPA as u32);
+                cmp x0, #(STRING_INLINE_CAP as u32);
+            );
+            self.jit.bcond_label(monoasm::Cond::Le, &recv_ready);
+            monoasm_arm64!(&mut self.jit,
+                mov x2, x0;
+                ldr x1, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+                ldr x5, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+                add x6, x4, #(RVALUE_OFFSET_HEAP_LEN as u32);
+            );
+            self.jit.bind_label(recv_ready);
+            // x7 = arg len, x8 = arg data. A *shared* argument reads fine:
+            // its tag (isize::MAX) routes it onto the heap side, where
+            // SharedContent's ptr/len overlay the spilled fields.
+            monoasm_arm64!(&mut self.jit,
+                ldr x0, [x3, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+                mov x7, x0;
+                add x8, x3, #(RVALUE_OFFSET_INLINE as u32);
+                cmp x0, #(STRING_INLINE_CAP as u32);
+            );
+            self.jit.bcond_label(monoasm::Cond::Le, &arg_ready);
+            monoasm_arm64!(&mut self.jit,
+                ldr x7, [x3, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+                ldr x8, [x3, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+            );
+            self.jit.bind_label(arg_ready);
+            // capacity check: growth is the helper's job
+            monoasm_arm64!(&mut self.jit,
+                add x0, x1, x7;                                  // new length
+                cmp x0, x2;
+            );
+            self.jit.bcond_label(monoasm::Cond::Gt, &fallback);
+            // copy arg's bytes to recv_data + recv_len. Even for `s << s`
+            // the ranges cannot overlap: the source is [0, len) and the
+            // destination [len, 2*len).
+            monoasm_arm64!(&mut self.jit,
+                add x5, x5, x1;                                  // dst cursor base
+                mov x9, (0u64);
+            );
+            self.jit.bind_label(copy_loop.clone());
+            monoasm_arm64!(&mut self.jit,
+                cmp x9, x7;
+            );
+            self.jit.bcond_label(monoasm::Cond::Ge, &copy_done);
+            monoasm_arm64!(&mut self.jit,
+                add x10, x8, x9;
+                ldrb w11, [x10];
+                add x10, x5, x9;
+                strb w11, [x10];
+                add x9, x9, #(1);
+                b copy_loop;
+            );
+            self.jit.bind_label(copy_done);
+            // bump the stored length (the capa slot doubles as the length
+            // while inline; x6 points at the right slot)
+            monoasm_arm64!(&mut self.jit,
+                str x0, [x6];
+                // code-range fold, exactly `RStringInner::extend`:
+                // SevenBit+SevenBit keeps SevenBit, both {SevenBit, Valid}
+                // -> Valid, anything else -> Unknown.
+                ldrb w9, [x4, #(crate::rvalue::STRING_CR_OFFSET as u32)];
+                ldrb w10, [x3, #(crate::rvalue::STRING_CR_OFFSET as u32)];
+                sub x9, x9, #(1);   // SevenBit->0, Valid->1; Unknown wraps, Broken->2
+                cmp x9, #(1);
+            );
+            self.jit.bcond_label(monoasm::Cond::Hi, &set_unknown);
+            monoasm_arm64!(&mut self.jit,
+                sub x10, x10, #(1);
+                cmp x10, #(1);
+            );
+            self.jit.bcond_label(monoasm::Cond::Hi, &set_unknown);
+            monoasm_arm64!(&mut self.jit,
+                orr x9, x9, x10;
+                // both SevenBit: the cache is already correct
+                cbz x9, done;
+                mov x9, #(crate::rvalue::CodeRange::Valid as u32);
+                b set_valid;
+            );
+            self.jit.bind_label(set_unknown);
+            monoasm_arm64!(&mut self.jit,
+                mov x9, #(crate::rvalue::CodeRange::Unknown as u32);
+            );
+            self.jit.bind_label(set_valid);
+            monoasm_arm64!(&mut self.jit,
+                strb w9, [x4, #(crate::rvalue::STRING_CR_OFFSET as u32)];
+            );
+            self.jit.bind_label(done);
+            monoasm_arm64!(&mut self.jit,
+                mov x0, x4;                                      // String#<< returns self
+                b exit;
+            );
+            self.jit.bind_label(detach_path);
+            // str_detach(recv): copy the shared view into an owned buffer
+            // in place. Infallible, GC-free, answers nothing; recv/arg are
+            // caller-saved, so keep them across the call.
+            monoasm_arm64!(&mut self.jit,
+                stp x3, x4, [sp, #(-16)]!;
+                str x30, [sp, #-16]!;    // save LR
+                mov x0, x4;
+                mov x9, (detach);
+                blr x9;
+                ldr x30, [sp], #16;
+                ldp x3, x4, [sp], #(16);
+                b retry;
+            );
+        }
         self.jit.bind_label(fallback);
         monoasm_arm64!(&mut self.jit,
             mov x2, x4;           // recv -> arg2
