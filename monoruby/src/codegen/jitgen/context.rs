@@ -796,13 +796,16 @@ impl<'a> JitContext<'a> {
     /// `new_error` / `deopt_from_point`) picks it up — rather than relying on
     /// each emitter to remember.
     ///
-    /// Today it is driven by the `chain-deopt` validation feature (escalate
-    /// everywhere, so the whole test suite exercises the deopt → walk →
-    /// chain-exit-handler cascade). When the unboxed-locals speculation (§5
-    /// step 5) lands, the per-frame speculation flag is OR'd in here.
+    /// Escalation is unconditional: measurement (the former `chain-deopt`
+    /// validation feature, run across the full suite and benchmark set)
+    /// put the walk at ~160ns per escalation and ≤1.6% wall-clock even on
+    /// bedcov's 1.8M-deopt worst case, while blanket escalation is exactly
+    /// the precondition the unboxed-locals speculation (§5 step 5) needs —
+    /// a frame holding an unboxed local must convert its callers on every
+    /// interpreter resume, not only on the Float guard.
     ///
     pub(super) fn escalate_side_exits(&self) -> bool {
-        cfg!(feature = "chain-deopt")
+        true
     }
 
     pub(super) fn in_dispatch_arm(&self) -> bool {

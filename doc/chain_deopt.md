@@ -8,8 +8,10 @@ implementation). Registration is unconditional in every build, and chain
 conversion is now the **only** way an on-stack JIT frame is dropped to the
 interpreter: immediate eviction — the code-patching mechanism this document
 was written against — is gone (§10). The **escalation half of step 4** — the
-per-frame switch that makes every interpreter-resuming side exit run the
-chain-deopt walk, plus the runtime entry it calls — is in place (§8.6). The
+switch that makes every interpreter-resuming side exit run the
+chain-deopt walk, plus the runtime entry it calls — is in place and **on by
+default in every build** (§8.5; the former `chain-deopt` validation feature
+is gone). The
 speculation itself (the `Float` guard and the `locals_to_S` relaxation, §5
 steps 4–5) and the return-state recovery (§6) are not. §9 stays as the record
 of why the original lazy build was wrong.
@@ -372,12 +374,13 @@ fire the walk does not either. Two things exercise it meanwhile:
   of 999) if the suspended caller resumes its compiled body, so the test
   passing is a positive signal that the conversion happened, not just that
   nothing crashed.
-* **Every side exit escalates** (§8.6), under the `chain-deopt` cargo
-  feature (default-off): each deopt / recompile-deopt / error exit taken
-  anywhere in the suite fires the walk from the deopting frame, so the
-  deopt → replay → stub-return path — the one the speculation will actually
-  take — is exercised at every deopt site the suite reaches, not only at BOP
-  redefinitions.
+* **Every side exit escalates** (§8.6), unconditionally in every build
+  (formerly the default-off `chain-deopt` cargo feature; promoted to the
+  default after measurement — see §8.5): each deopt / recompile-deopt /
+  error exit taken anywhere in the suite fires the walk from the deopting
+  frame, so the deopt → replay → stub-return path — the one the speculation
+  will actually take — is exercised at every deopt site the suite reaches,
+  not only at BOP redefinitions.
 
 What this validates: the walk, the eager replay, the return-address rewrite,
 the stub's frame/LFP restore and result/raise hand-off, across normal calls,
@@ -424,9 +427,15 @@ guarantee rather than review discipline, and this is it:
   stamped onto each `AsmIr` at construction, and **every** side-exit
   constructor (`new_deopt` / `new_deopt_with_pc` / `deopt_from_point` /
   `new_recompile_deopt` / `new_error`) reads it — an emitter cannot forget
-  to escalate because emitters do not choose. Today it returns
-  `cfg!(feature = "chain-deopt")`; the per-frame speculation flag ORs in
-  here when step 5 lands.
+  to escalate because emitters do not choose. It returns `true`
+  unconditionally: A/B measurement of blanket escalation (full suite,
+  benchmark set, optcarrot) put the walk at ~160ns per escalation and
+  ≤1.6% wall-clock even on bedcov's 1.8M-escalation worst case, every
+  other benchmark inside noise — cheap enough that §6's per-site gating is
+  unnecessary for the escalation itself, and blanket escalation is exactly
+  the invariant the speculation needs (a speculated frame's callers
+  convert on *every* interpreter resume below it, not only on the Float
+  guard).
 * An escalated `Deoptimize` / `RecompileDeoptimize` / `Error` handler calls
   `runtime::chain_deopt(vm)` **after** its write-back (the frame is fully
   homed) and before resuming the fetch loop / entering `entry_raise`. The
