@@ -107,6 +107,10 @@ pub(super) struct SpecializeInfo {
     pub(super) entry: JitLabel,
     pub(super) info: AsmInfo,
     pub(super) patch_point: Option<JitLabel>,
+    /// The subtree was compiled while an enclosing frame's unboxed-Float
+    /// speculation was armed, so its body addresses that frame's FP
+    /// save/spill slots and must never be recompiled standalone (#1140).
+    pub(super) speculated: bool,
 }
 
 ///
@@ -1287,6 +1291,19 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn capture_events(&self) -> usize {
         self.capture_events
+    }
+
+    ///
+    /// Whether any frame on the compile stack currently has an armed
+    /// unboxed-Float speculation. Sampled when a specialized subtree is
+    /// recorded (`compile_specialized_func`): a subtree compiled under an
+    /// armed speculation reads the arming frame's FP save/spill area and
+    /// must not be recompiled standalone (#1140).
+    ///
+    pub(super) fn under_armed_speculation(&self) -> bool {
+        self.stack_frame
+            .iter()
+            .any(|f| !f.speculated_floats.is_empty())
     }
 
     ///

@@ -289,7 +289,6 @@ impl Codegen {
         }
     }
 
-    #[cfg(target_arch = "x86_64")]
     fn recompile_method(
         &mut self,
         globals: &mut Globals,
@@ -299,6 +298,17 @@ impl Codegen {
         let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
+        self.recompile_method_by_id(globals, iseq_id, self_class, reason)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn recompile_method_by_id(
+        &mut self,
+        globals: &mut Globals,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        reason: RecompileReason,
+    ) -> Option<()> {
         let jit_entry = self.jit.label();
         let class_version = self.class_version();
         let (cache, _) = self.compile_method(
@@ -321,7 +331,7 @@ impl Codegen {
             #[cfg(feature = "jit-log")]
             eprintln!(
                 "[JIT] recompilation skipped for invalidated method: {:?}",
-                globals.store[func_id].name()
+                globals.store[globals.store[iseq_id].func_id()].name()
             );
             return None;
         }
@@ -334,15 +344,13 @@ impl Codegen {
     /// patching). Bails (leaving the old code) if the slot is unknown or the
     /// method was JIT-invalidated.
     #[cfg(target_arch = "aarch64")]
-    fn recompile_method(
+    fn recompile_method_by_id(
         &mut self,
         globals: &mut Globals,
-        lfp: Lfp,
+        iseq_id: ISeqId,
+        self_class: ClassId,
         reason: RecompileReason,
     ) -> Option<()> {
-        let self_class = lfp.self_val().class();
-        let func_id = lfp.func_id();
-        let iseq_id = globals.store[func_id].as_iseq();
         if globals.store[iseq_id].jit_invalidated() {
             return None;
         }
@@ -424,6 +432,60 @@ impl Codegen {
         ret
     }
 
+    ///
+    /// A specialized body compiled under an armed unboxed-Float speculation
+    /// must not be replaced standalone: its dynvar accesses address the FP
+    /// save/spill slots of the root body that armed the speculation, and a
+    /// context-free recompile would read the caller's speculated locals
+    /// through never-written LFP slots (issue #1140). Rebuild the whole root
+    /// compilation unit instead — the fresh root re-specializes (and
+    /// re-arms) under the inline caches that triggered the recompile, and
+    /// takes over via its own entry patch; the old root body stays
+    /// internally consistent for frames already running it.
+    ///
+    fn recompile_speculated_root(
+        &mut self,
+        globals: &mut Globals,
+        root: (ISeqId, ClassId, Option<BytecodePtr>),
+        reason: RecompileReason,
+    ) -> Option<()> {
+        let (iseq_id, self_class, position) = root;
+        #[cfg(feature = "jit-log")]
+        eprintln!(
+            "[JIT] speculated specialized entry: rebuilding root {:?} pos={:?} ({:?})",
+            iseq_id, position, reason
+        );
+        match position {
+            None => self.recompile_method_by_id(globals, iseq_id, self_class, reason),
+            Some(pc) => {
+                // Loop root: mirror `compile_partial` — recompile from the
+                // loop head and re-point the loop-entry word at it.
+                let entry_label = self.jit.label();
+                let class_version = self.class_version();
+                let ret = if self
+                    .compile(
+                        globals,
+                        iseq_id,
+                        self_class,
+                        Some(pc),
+                        entry_label.clone(),
+                        class_version,
+                        Some(reason),
+                    )
+                    .is_some()
+                {
+                    let codeptr = self.jit.get_label_address(&entry_label);
+                    pc.write2(codeptr.as_ptr() as u64);
+                    Some(())
+                } else {
+                    None
+                };
+                self.jit.finalize();
+                ret
+            }
+        }
+    }
+
     #[cfg(target_arch = "x86_64")]
     fn recompile_specialized(
         &mut self,
@@ -431,7 +493,15 @@ impl Codegen {
         idx: usize,
         reason: RecompileReason,
     ) -> Option<()> {
-        let (iseq_id, self_class, patch_point) = self.specialized_info[idx].clone();
+        let SpecializedPatchEntry {
+            iseq_id,
+            self_class,
+            patch_point,
+            speculated_root,
+        } = self.specialized_info[idx].clone();
+        if let Some(root) = speculated_root {
+            return self.recompile_speculated_root(globals, root, reason);
+        }
 
         let entry = self.jit.label();
         let class_version = self.class_version();
@@ -462,7 +532,15 @@ impl Codegen {
         idx: usize,
         reason: RecompileReason,
     ) -> Option<()> {
-        let (iseq_id, self_class, patch_point) = self.specialized_info[idx].clone();
+        let SpecializedPatchEntry {
+            iseq_id,
+            self_class,
+            patch_point,
+            speculated_root,
+        } = self.specialized_info[idx].clone();
+        if let Some(root) = speculated_root {
+            return self.recompile_speculated_root(globals, root, reason);
+        }
         let entry = self.jit.label();
         let class_version = self.class_version();
         let compiled = self

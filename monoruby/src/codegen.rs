@@ -638,6 +638,26 @@ pub(crate) enum CellHeader {
 }
 
 ///
+/// A patchable top-level specialized-callee body: the target of a
+/// `RecompileDeoptSpecialized` / `GuardClassVersionSpecialized` recompile
+/// request (`Codegen::recompile_specialized`).
+///
+#[derive(Clone)]
+pub(crate) struct SpecializedPatchEntry {
+    pub(crate) iseq_id: ISeqId,
+    pub(crate) self_class: ClassId,
+    pub(crate) patch_point: DestLabel,
+    /// `Some((root_iseq, root_class, root_position))` when this body was
+    /// compiled under an armed unboxed-Float speculation of its root frame
+    /// (doc/chain_deopt.md §11): its dynvar accesses address the root's FP
+    /// save/spill slots, which only exist in the root body that armed them.
+    /// Such a body must never be replaced by a standalone compile (issue
+    /// #1140) — a recompile request rebuilds the whole root compilation
+    /// unit instead, re-arming the speculation under fresh inline caches.
+    pub(crate) speculated_root: Option<(ISeqId, ClassId, Option<BytecodePtr>)>,
+}
+
+///
 /// Machine code generator
 ///
 pub struct Codegen {
@@ -679,7 +699,7 @@ pub struct Codegen {
     /// `check_vm_address` covers it — which is what makes an
     /// already-converted frame skippable on a later walk.
     chain_cont_stub: DestLabel,
-    pub(crate) specialized_info: Vec<(ISeqId, ClassId, DestLabel)>,
+    pub(crate) specialized_info: Vec<SpecializedPatchEntry>,
     pub(crate) specialized_base: usize,
     vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
     vm_entry: DestLabel,
