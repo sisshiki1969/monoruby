@@ -1005,12 +1005,77 @@ impl<'a> JitContext<'a> {
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
-        let caller = self.method_caller_pos()?;
-        let callid = self.stack_frame[caller].callid?;
-        let block_fid = self.store[callid].block_fid?;
-        let self_class = self.stack_frame[caller].self_class;
-        let outer = self.stack_frame.len() - 1 - caller;
-        Some(JitBlockInfo::new(block_fid, self_class, outer))
+        self.resolve_given_block().flatten()
+    }
+
+    ///
+    /// Resolve the block effectively given to the current method,
+    /// following block-forwarding caller call sites.
+    ///
+    /// The immediate method caller's call site may not pass a literal
+    /// block yet still provably determine one: a `(...)` forwarding call
+    /// (`def f(...) = g(...)` — e.g. `Class#new` driving
+    /// `__builtin_initialize__`) passes its own method's incoming block
+    /// onward, so the effective block is whatever *that* method was
+    /// given, one specialization level up. Walking the chain lets a
+    /// `yield` inside e.g. `Array#initialize` specialize against the
+    /// literal block written at the user's `Array.new { .. }` site, and
+    /// lets `block_given?` / the block-param proxy constant-fold when no
+    /// block exists anywhere up the chain.
+    ///
+    /// The returned `JitBlockInfo::outer` is the specialization-stack
+    /// distance from the current frame to the frame that owns the block
+    /// literal — the same distance `setup_yield_frame` hops on the
+    /// runtime CFP chain (specialized calls push real frames, so the two
+    /// stacks coincide), and the lexical-home distance for `break` /
+    /// non-local `return` bookkeeping.
+    ///
+    /// - `Some(Some(info))`: a literal block, `info.outer` frames up.
+    /// - `Some(None)`: provably no block.
+    /// - `None`: statically unknown (unspecialized root frame, or an
+    ///   explicit `&blk` argument somewhere in the chain).
+    ///
+    pub(crate) fn resolve_given_block(&self) -> Option<Option<JitBlockInfo>> {
+        // The frame whose incoming block `yield` / `block_given?` / the
+        // block-param proxy refer to: the current *method* frame.
+        let offset = self.current_method_frame()?.1;
+        let mut method_pos = self.stack_frame.len().checked_sub(1 + offset)?;
+        loop {
+            let caller = method_pos.checked_sub(1)?;
+            let callid = self.stack_frame[caller].callid?;
+            let callsite = &self.store[callid];
+            if let Some(block_fid) = callsite.block_fid {
+                let self_class = self.stack_frame[caller].self_class;
+                let outer = self.stack_frame.len() - 1 - caller;
+                return Some(Some(JitBlockInfo::new(block_fid, self_class, outer)));
+            }
+            if callsite.block_arg.is_none() {
+                return Some(None);
+            }
+            // A dynamic block argument. Only the `(...)` forwarding
+            // shape provably passes the enclosing method's own block
+            // onward; an explicit `&blk` stays unknown.
+            if !callsite.forwarding {
+                return None;
+            }
+            // The forwarded block belongs to the method lexically
+            // enclosing the forwarding call site: hop the caller
+            // frame's outer links up to its method frame and resolve
+            // that method's own block.
+            let mut pos = caller;
+            while let Some(o) = self.stack_frame[pos].outer {
+                pos = pos.checked_sub(o)?;
+            }
+            method_pos = pos;
+        }
+    }
+
+    ///
+    /// `Some(given?)` when [`Self::resolve_given_block`] statically
+    /// determines whether a block was given; `None` when unknown.
+    ///
+    pub(crate) fn resolve_block_given(&self) -> Option<bool> {
+        self.resolve_given_block().map(|b| b.is_some())
     }
 
     pub(crate) fn method_caller_callsite(&self) -> Option<CallSiteId> {

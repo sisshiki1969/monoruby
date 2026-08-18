@@ -488,19 +488,18 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::BlockArgProxy(ret, outer) => {
                 state.flush_gp(ir);
-                // When this frame is specialized for a caller call site
-                // that passes no block (no literal block and no `&blk`),
-                // the forwarded `&block` of `...` is provably nil at
-                // compile time. Fold the proxy to a constant `nil`
-                // instead of materializing it every call (`outer == 0`:
-                // the proxy refers to this frame's own block param). A
-                // deopt resumes the interpreter, which re-runs this
-                // `BlockArgProxy` bytecode and computes the same nil.
+                // When the caller chain provably passes no block —
+                // including through `(...)` block-forwarding sites
+                // (`resolve_given_block` walks them) — the forwarded
+                // `&block` of `...` is nil at compile time. Fold the
+                // proxy to a constant `nil` instead of materializing it
+                // every call (`outer == 0`: the proxy refers to this
+                // frame's own block param). A deopt resumes the
+                // interpreter, which re-runs this `BlockArgProxy`
+                // bytecode and computes the same nil.
                 if outer == 0
                     && self.is_specialized()
-                    && let Some(cid) = self.method_caller_callsite()
-                    && self.store[cid].block_fid.is_none()
-                    && self.store[cid].block_arg.is_none()
+                    && let Some(None) = self.resolve_given_block()
                 {
                     state.def_C(ret, Value::nil());
                 } else {

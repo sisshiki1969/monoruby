@@ -566,9 +566,10 @@ fn kernel_block_given(
         return false;
     }
     let dst = callsite.dst;
-    if let Some(callid) = jitctx.method_caller_callsite()
-        && let Some(b) = store[callid].block_given()
-    {
+    // `resolve_block_given` follows `(...)` block-forwarding caller
+    // sites (e.g. `Class#new` → `initialize`), so the fold also fires
+    // for methods reached through a forwarding trampoline.
+    if let Some(b) = jitctx.resolve_block_given() {
         if let Some(dst) = dst {
             state.def_C(dst, Immediate::bool(b));
         }

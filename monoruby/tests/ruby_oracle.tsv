@@ -570,6 +570,7 @@
 2f052ab414e3e11032af6e0e3daffec3	[true, false, false, true]	class D\n          def m; end\n          private def p_m; end\n        end
 2f0605cfae48d77d3b5b40e6d74bd47b	[[10, 20, 30, 40, 50, 60, 70, 80], [1, 2, 3, 4, 5, 6, 7, 8]]	class S\n                def initialize\n                    @a = 10\n
 2f28cfe17983ddaaf399e013958b9c70	[(3+0i), (8+2i)]	Complex(8,2).coerce(3)
+2f2df713f5356f6ae95e9f0fc66d86ed	[:early, 3]	class FwdB\n          def initialize(n)\n            @v = []\n            
 2f31e2e40ca23f0bd3d0fadfac86b959	[1001.0, 1002.0, 1003.0, 1030.0, 1010.0, 1020.0, 1200.0, 1300.0, 1100.0]	class C\n              def initialize\n                @a = 1\n       
 2f3c934c9f013395202064f7b669614d	["b", "nil"]	r = begin\n              begin\n                raise "a"\n           
 2f922c304c94e10148d4493f457eb26e	:OVERRIDDEN	class Integer; def |(o); :OVERRIDDEN; end; end; 3 | 4
@@ -1039,6 +1040,7 @@
 581a9eeda65b4118ca39d22e6e34f801	[:caught, "boom"]	class C\n              def initialize; @h = {}; end\n              de
 582de92dfc668c66f3fca99c56ea0221	9	M = Data.define(:amount, :unit)\nM.new("amount" => 1, amount: 9, unit: "m").amoun
 58330bef80223af992dc7623e3ec3084	[312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3]]	def g(x, y, z)\n          x, y, z = z, x, y\n          x * 100 + y * 10 +
+58536fdabdc310d1d4cdf2be1346caa2	[:broke, :b, ["0", "1", "2"]]	r1 = Array.new(4) { |i| break :broke if i == 2; i }\n        a = [9]\n   
 58661de46a8dc941342a4319c35b9c90	1	obj = Object.new\n            def obj.infinite?; nil; end\n          
 586ab40f2dfcbd13d521be385c9a6b38	[2, 2]	[[1, 2].each.with_index.size, [1, 2].each.with_object(:m).size]
 586c6036c606500ee67ef673b7e6ef50	:foo	obj = Object.new\n            obj.define_singleton_method(:foo) { 42
@@ -1478,6 +1480,7 @@
 7e7c0b1b6e6693f9e664b1a54dbde111	0	m = Object.new\n        def m.==(x); true; end\n        m <=> Object.new\n
 7e7e4d6aef6bf7266adf4b085dc59d23	[:one, :two]	rec = []\n        one = proc { |&arg| arg.call(:one) if arg }\n        tw
 7e96f5f901b2f6fae7a6ccede1e6bf9c	[true, "a b c"]	s1 = "a b c"\n            s2 = s1.dup\n            ok = false\n       
+7eb0d4817551a97def8fe2bf1a9f7035	[[0, 2, 4, 6], 106]	class FwdA\n          attr_reader :a\n          def initialize(n)\n       
 7f230ec5e7c81dcb14df9d04bf7eb5df	"raised"	class BadInt\n                  def to_int; "not an integer"; en
 7f2bcf2ec173056f353c8989fad11530	["A==5", "B==5"]	class A; def ==(o); "A==#{o}"; end; end\n        class B; def ==(o); "B=
 7f39046674eb2565ca621a342f701cae	[true, true, true]	M = Data.define(:amount, :unit)\n\n            a = M.allocate\n            a.send(:
@@ -2747,6 +2750,7 @@ e7ca5b8d05bd3556a711daf23dfd10c6	nil	r, _w = IO.pipe\n            r.wait(IO::REA
 e7ea0100557a89543a11511853510192	[{"alpha" => 3, "beta" => 2}, 3, 2, nil, true, false, 2]	h = {}\n        h["alpha"] = 1\n        h["beta"] = 2\n        h["alpha" +
 e832c1ba769618395a505bd13bd3d3b7	"hi"	mod = Module.new do\n          def greet; "hi"; end\n        end\n        
 e841964d3dcfd7149202c80802373ee4	"Encoding::CompatibilityError"	(Regexp.new("".dup.force_encoding("US-ASCII"), Regexp::FIXEDENCODING) =~ "\\303\\2
+e845d4c714ee9e6cae44891a1b737bc6	[10, 11, 12]	class FwdD\n          attr_reader :a\n          def initialize(n)\n       
 e84e2a6f452bc8149fdee15dda638246	4	r = 0\n            20.times do\n              begin\n                r
 e8629d85bee1ecd0620fc7812cf440d4	"myfile.rb:42:"	b = binding\n            begin\n              b.eval("missing_method"
 e8663c97e820ca6aa3b720c87c95f4ff	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"	r, w = IO.pipe\n            t = Thread.new { r.read }\n            w.
@@ -2925,6 +2929,7 @@ f6b2f5848e7295cbc532e6f89aae0054	[true, true, true, true, true]	(a=(File.method(
 f6b8ba5c363ede98f3ac55cfd3ae8594	[[:keyreq, :a], [:keyreq, :b]]	def only_req_kw(a:, b:); end\n            method(:only_req_kw).param
 f6bd187bbf5507071844189b94dc4434	[[false, false, true, true, true], [false, true, false, true, false], [true, true, false, false, true]]	vals = [1, 2.5, 3, 4.5]\n            def lt(a, b) = a < b\n          
 f6cc6145b95584bf04b9e5b0c112640c	[:a, :b, :block, :x, :z]	a = 1\n        b = 2\n        def f(x, &block)\n          z = nil\n        
+f6cef84e94a43a487f077dc59578c5a8	[:blk, :none]	class FwdC\n          attr_reader :tag\n          def initialize\n        
 f736ab01b7f73c593f6fc9713eeae554	["boom", false, "boom"]	require "tmpdir"\n        # Use a per-process unique path so parallel te
 f75daf748ad804574801fd5e35cb2793	"1/2"	Rational(0.5).to_s
 f764ebb9096219e5a3a63fbfc98f2cbf	[1, {m: 2}]	def fwd(&b); b.call(1, m: 2); end; fwd { |*a| a }
@@ -3012,6 +3017,7 @@ fd67bec60fd8f1e0e4e27bcd0a3675a3	[100, 200]	def f(&p)\n            g(&p)\n      
 fde9c01977b03195091b314bb13afc2f	true	old_stderr = $stderr\n            captured = String.new\n            
 fe1d12a770bcd49e6528c05052a7fe89	[[42], [7]]	$log = []\n            def g(x) = 42\n            def f(...) = g(...)
 fe35ca4f16663c5f99f379b4c63b25e1	:echild	pid = spawn("true")\n            Process.detach(pid).join\n          
+fe48e250f2d1d71755bfa84d1802acfa	[[0, 5, 10], :hop_broke]	class FwdE\n          attr_reader :a\n          def initialize(n)\n       
 fe6f90f2c79933a3f1d357d607b6b6fa	[true, true, true, "007"]	(a=Kernel.instance_method(:format)==Kernel.instance_method(:sprintf); b=Kernel.m
 fefd9e3b7d143c7b4ef7f710db1241da	"<STDOUT>"	$stdout.path
 ff6ed5a6bc5556996f38110444ed4f1b	1	class Integer; alias __orig :%; def %(o); __orig(o); end; end; 13 % 4
