@@ -167,6 +167,7 @@
 0b56e400524c40599f5741f2c015962d	7	class Foo\n              def method_missing(name, *args)\n           
 0b645df6fa816084c17746fbb8754151	-4	class Integer; alias __orig :~; def ~; __orig; end; end; ~(3)
 0b67f0becaeeca974d1e74004df4c680	[[:x], [1, :y]]	class C\n                 def initialize; @log = []; end\n                 def []=
+0b6f7cc39b8a933c537afbbde31e4c61	[0, 198, 9900]	def nlr_a\n          yield\n        end\n        def nlr_b\n          nlr_a
 0b7609ef6d4ba5f8e723f231492ce8ea	1	class Zero\n              def >(other); false; end\n              def
 0b78ccf3ab6dd1487dc5bdd4f2490140	"aa"	eval("/a+?+/").match("aa")[0]
 0b7e162d3ff4a550f0e6444dc364f2ba	2178309	fib = Fiber.new do\n                a = b = 1\n                loop d
@@ -174,6 +175,7 @@
 0b867e98052ada5dace0aa91d09d9e98	[true, 0, 1000000, "nil", true, false, true, true, 600, 1000]	class A\n          def flag; true; end\n          def zero; 0; end\n      
 0b897273d98e1e69054efed30d8f0fba	-3	class Integer; alias __orig :-@; def -@; __orig; end; end; -(3)
 0ba27141d5913d3fcc8fa69294a2eb77	:OVERRIDDEN	class Float; def +(o); :OVERRIDDEN; end; end; 3.0 + 4.0
+0ba62bc6f73f4679b163d6f86e8d40ee	[250, 50]	$nlr_log2 = 0\n        def nlr_y2\n          yield\n        end\n        de
 0bda13f36ccde82b031cc2a78bf9fcbd	["AB", "CD"]	def `(cmd); cmd.upcase; end\n        [`ab`, `cd`]\n        
 0be41d9bd7e1cc54941270e279653ac8	true	class StrPlusSub < String; end; (StrPlusSub.new("a") + "b").instance_of?(String)
 0beb46074e1eb509fdd14935b30258dd	[1, 2, 3]	a = [1, 2, 3]\n            a.shuffle\n            a\n            
@@ -1821,6 +1823,7 @@
 9b61bcda595469dd25e2e58381c1be05	["first", true, true]	begin\n          raise "x"\n        rescue => e\n          e.backtrace.uns
 9b647520e61fd7b3680dcbb7c919469b	[true, true, "Windows-1250", [228, 224], "Windows-1251", "abc"]	(a=(Encoding::CP1251 == Encoding::Windows_1251); b=(Encoding::CP437 == Encoding:
 9b8994e2e94d4a2a2b7af7119922b89c	[[195], "Windows-31J", [], [169]]	m = /./s.match("\\303\\251".dup.force_encoding(Encoding::Windows_31J))\n           
+9b8ade67bac5e3b7bdf9490af877bbc4	200	def nlr_foo\n          yield\n        end\n        def nlr_bar\n          n
 9bcad6e1f55d1f4c7fc6bfeb8c9bbe56	[2, 18000, 3]	m = Object.new; def m.to_str; "feb"; end\n            s = Object.new
 9bd107237f282e1e13d6e5732b44b57d	"#<struct M::N a=1, b=2>"	module M\n              N = Struct.new(:a, :b)\n            end\n     
 9bd770147e93a1552f5dd2b6ee5aafab	:OVERRIDDEN	class Symbol; def ==(o); :OVERRIDDEN; end; end; :a == :b
@@ -1861,6 +1864,7 @@
 9ea00fe4a9f13b4cabf05e28e6571f87	[1, 0, "nil", "nil", -1]	class MCmpNeg; def <=>(other); -1; end; end\n            class MCmpZ
 9eb98c1b5f6e2d631b2b51c04acc62e5	"m::N"	m = Module.new\n            m::N = Module.new\n            m::N.name 
 9ec21f255b64bf6cee16e04bbbaa7ae3	[[:C1, :C2, :S1], [:C1, :C2]]	class S\n              S1 = 100\n            end\n            class C 
+9ed470f69b7adeaf9e790c17d1dcce76	[150, 199, :absent]	def nlr_y3\n          yield\n        end\n        def find_it(n)\n         
 9ee5793f09dedfe9c6cd4714aaad32b5	[15150, [10, 105, 20000000000000000000000000000000000000000, 10000000000000000000000000000000000000100, 20000000000000000000000000000000000000002, 10000000000000000000000000000000000000101, 14, 107, 200000000000000000000000000000000000000000000000000000000000000000000000000000000, 100000000000000000000000000000000000000000000000000000000000000000000000000000100, 18, 109, -16, 92, -20000000000000000000000000000000000000000, -9999999999999999999999999999999999999900]]	class Integer\n          def dbl; self * 2; end\n          def add5(x); s
 9eeb8d867dcde677d9837c5ba30e2c40	[:yes, "NoMethodError", false]	module EscA\n              refine(String) { def only_here; :yes; end
 9f0c968145034ea2d742ba8456a2e243	["Scheduler must implement #block", "Scheduler must implement #unblock", "Scheduler must implement #kernel_sleep", "Scheduler must implement #io_wait", true, nil]	required = [:block, :unblock, :kernel_sleep, :io_wait]\n            
@@ -2114,6 +2118,7 @@ b2795cc1ad41c83216d600a75460cd44	[nil, false, 19, nil, nil, 12, 17, :again, 18]	
 b2795d944c1781663b943914a7470a30	:OVERRIDDEN	class Integer; def -@; :OVERRIDDEN; end; end; -(3)
 b289172cd420abd93cd3d2aa0cec0079	["handler-ran", 0]	r, w = IO.pipe\n            pid = fork do\n              r.close\n    
 b29dca01dfe62ecc7a28c6ee542bc4af	[true, false, true, true, true, false, true, 42]	h = Hash.ruby2_keywords_hash(a: 1)\n        res = [Hash.ruby2_keywords_h
+b2a13b68902e5e530165d4399ed89c18	[1.5, 42, "s", :none]	def nlr_y\n          yield\n        end\n        def pick(k)\n          nlr
 b2d38391b3ffe286d499d5b0f8b8425c	[12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345]	def g = 12345\n        def f(...) = g(...)\n        \n\n        $r = []\n   
 b2d8d3b6539361a8364045da7cfbfa9e	false	a=Object.new; a.instance_variable_set("@i", 42); a.instance_variable_defined?(:@
 b2ec3518315b390f605929160559793b	6	eval("1 + 2 + 3")\n        
@@ -2681,6 +2686,7 @@ dfc42a777c7f83e4c7bf0de522556f8b	[ArgumentError, "boom"]	h = { "d" => 4, "b" => 
 e025a42ea6959b901cc28694e25f35a9	true	Random.srand(42)\n        results = 10.times.map { Random.rand }\n       
 e04102db31563efacf03513f5ddbcdd6	{"MONORUBY_ENV_TEST_SL1" => "x", "MONORUBY_ENV_TEST_SL2" => "y"}	ENV["MONORUBY_ENV_TEST_SL1"] = "x"\n            ENV["MONORUBY_ENV_TE
 e0430993ff49221b4ff142a12a2d9ee6	[1, [:gt, :lt, :gt, :lt]]	class C\n              attr_reader :calls\n              def initiali
+e051ec7a15469fca9105c948f78c2f26	[[:v], 50]	$nlr_log = []\n        def nlr_mid\n          yield\n        ensure\n      
 e093793f4006c99f09965c6fde38e86b	42	class Foo\n          def initialize\n            @x = 42\n          end\n  
 e09c62f66a3c3f3ed8999368ae421637	[true, [Errno::ENOENT, "No such file or directory @ rb_check_realpath_internal - /no_such_dir_zzq/x"], Errno::ELOOP, Errno::ELOOP]	(d="/tmp/mono_rp_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/file", ""); a=(
 e0aaed5b5073da72fc373f05fb574de1	true	S = Struct.new(:a, :b)\n            \n\n            S.new(1, 2).hash !

@@ -1502,8 +1502,23 @@ impl<'a> JitContext<'a> {
         // Method specialization is lowered on both arches now, so the caller
         // chain is encoded for `MethodRetSpecialized` on aarch64 too. (Block
         // inlining stays x86-only — see `iter_caller_specialized_ids`.)
-        let caller = self.method_caller_pos()?;
-        let begin = caller + 1;
+        //
+        // The chain starts at the HOME method frame itself, so the home may
+        // sit anywhere in the unit — including the compile root. The
+        // teardown (`method_return_specialized`: `lea rbp += Σ; leave; ret`)
+        // only needs the frames between the current frame and the home; the
+        // final `ret` returns from the home to its *dynamic* caller, whose
+        // post-call frame pop is rbp-derived and therefore correct no matter
+        // how many inlined frames were flown over. Requiring the home's
+        // caller to be in-unit (the previous form) sent every root-homed
+        // non-local return down the runtime `err_method_return` unwind —
+        // which, with side-exit escalation unconditional, ran a chain-deopt
+        // walk per `return` (the `throw` benchmark: one walk per call).
+        let home = {
+            let (_, dist) = self.current_method_frame()?;
+            self.stack_frame.len() - 1 - dist
+        };
+        let begin = home;
         let end = self.stack_frame.len() - 1;
         if self.check_exception_handler(begin, end) {
             return None;
