@@ -554,6 +554,15 @@ impl Clone for JitStackFrame {
 }
 
 impl JitStackFrame {
+    ///
+    /// Mark this frame as a define_method proc-method body: `return`
+    /// targets the frame itself (lambda-style) and `current_method_frame`
+    /// must stop here, exactly as for a real method frame.
+    ///
+    pub(super) fn set_bmethod_home(&mut self) {
+        self.is_not_block = true;
+    }
+
     pub(super) fn new(
         store: &Store,
         jit_type: JitType,
