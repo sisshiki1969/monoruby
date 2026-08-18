@@ -13,18 +13,14 @@ use std::cmp::Ordering;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Array", ARRAY_CLASS, ObjTy::ARRAY);
-    globals.define_builtin_class_func_with(ARRAY_CLASS, "new", new, 0, 0, true);
+    // NOTE: no native `Array.new` — it inherits the Ruby `Class#new`
+    // trampoline (startup.rb: `__builtin_allocate__` + forwarded
+    // `__builtin_initialize__`), which reaches `Array#initialize` through
+    // the specialized inline path. The old native override invoked
+    // `initialize` through the generic `invoke_method_inner`, paying a
+    // global method-cache lookup per construction.
     globals.define_builtin_class_func_rest(ARRAY_CLASS, "[]", array_class_bracket);
     globals.define_builtin_class_func(ARRAY_CLASS, "try_convert", array_try_convert, 1);
-    //globals.define_builtin_class_inline_func_with(
-    //    ARRAY_CLASS,
-    //    "new",
-    //    new,
-    //    inline_gen!(super::class::gen_class_new(allocate_array)),
-    //    0,
-    //    0,
-    //    true,
-    //);
     globals.store[ARRAY_CLASS].set_alloc_func(array_alloc_func);
     globals.define_private_builtin_func_with(ARRAY_CLASS, "initialize", initialize, 0, 2, false);
     globals.define_builtin_inline_funcs(
@@ -198,29 +194,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_funcs(ARRAY_CLASS, "replace", &["initialize_copy"], replace, 1);
 }
 
-///
-/// ### Array.new
-///
-/// - new(size = 0, val = nil) -> Array
-/// - new(ary) -> Array
-/// - new(size) {|index| ... } -> Array
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/s/new.html]
-#[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class = lfp.self_val().as_class_id();
-    let obj = Value::array_empty_with_class(class);
-    vm.invoke_method_inner(
-        globals,
-        IdentId::INITIALIZE,
-        obj,
-        &lfp.arg(0).as_array(),
-        lfp.block(),
-        None,
-    )?;
-    Ok(obj)
-}
-
 /// Allocator for `Array` and its subclasses.
 pub(crate) extern "C" fn array_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
     Value::array_empty_with_class(class_id)
@@ -297,8 +270,9 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
     if lfp.try_arg(1).is_none() {
         // Single argument: if it's an Array (or to_ary-able to one),
-        // use it as initial contents. CRuby warns when a block is
-        // given here because the block is ignored.
+        // use it as initial contents. CRuby silently ignores a block
+        // here (`Array.new([1]) { }` — no "given block not used"; the
+        // warning fires only in the zero-argument form).
         let arg = lfp.arg(0);
         let mut from_array: Option<ArrayInner> = None;
         if arg.is_array_ty() {
@@ -315,9 +289,6 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             }
         }
         if let Some(inner) = from_array {
-            if lfp.block().is_some() {
-                vm.ruby_warn_caller(globals, "warning: given block not used")?;
-            }
             *self_val = inner;
             return Ok(self_val.into());
         }
