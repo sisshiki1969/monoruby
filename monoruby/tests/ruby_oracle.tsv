@@ -43,6 +43,7 @@
 029c362ef9c620f171fc24ead7134c52	[["alpha\\n", "beta\\n", "gamma\\n"], nil]	path = "/tmp/monoruby_io_gets_#{Process.pid}_#{rand(100000)}"\n     
 029c3ebe189781d0b649df411808dfee	[[[:a, 1], 0], [[:b, 2], 1]]	r = []; ({a: 1, b: 2}).each.with_index { |v, i| r << [v, i] }; r
 02a7d510f273964ead93e757431a554c	[3, 2, 1]	base = Class.new { def foo(ary); ary << 1; end }\n            child 
+02b9efd8d2189aaacb0d22c54cae5e92	[2000, 0, 999]	a = []\n            2000.times { |i| a << [(i * 7919) % 1000] }\n    
 02c396b429bf65fdf9a120d44cc103f5	true	src = Module.new { def t1; end }\n            m = Module.new do\n    
 02c6f5d297eadcc0a5026d7c20a2e18c	["a", {b: "b"}]	T = Struct.new(:a, :b)\n            \n\n            s = T.new("a", b: 
 02cb9b2aa7a2eb9ebb2690e1cb412b25	200000	io = IO.popen("sleep 0.05; cat > /dev/null", "w")\n            t = T
@@ -405,6 +406,7 @@
 1f223478d7394c50d8d61e0f574f55b5	[[[50, 2, 3], {e: 70, f: 80, g: 90}]]	class C\n          def f(*rest, **kw)\n            $res << [rest, kw]\n   
 1f22844ce32fd2036c65263ce0b9319d	1	x = "Z"; (/#{x}/i =~ "qzq")
 1f3121c4382667758c3988faab82811f	"US-ASCII"	"abcc".dup.force_encoding("US-ASCII").tr_s("c", "X").encoding.to_s
+1fa3e3a0998c480c3b2134908102a18f	999000	a = Array.new(2000) { |i| [i % 1000] }\n            1000.times { [1]
 1fc8a8365c050aced75377b0f9dca4f7	true	$LOAD_PATH.class == Array\n            
 1fd67713bd348911ab844e4987b761b1	[10000, 42]	a = [100 * 100]\n        class Integer\n          def *(other)\n          
 1fe144dc2e4422f0e8bc7cfdb2825361	["\\n", nil, nil, nil, 0]	[$/, $\\, $,, $;, $.]
@@ -1059,6 +1061,7 @@
 582de92dfc668c66f3fca99c56ea0221	9	M = Data.define(:amount, :unit)\nM.new("amount" => 1, amount: 9, unit: "m").amoun
 58330bef80223af992dc7623e3ec3084	[312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3], 312, [1, 2, 3]]	def g(x, y, z)\n          x, y, z = z, x, y\n          x * 100 + y * 10 +
 58536fdabdc310d1d4cdf2be1346caa2	[:broke, :b, ["0", "1", "2"]]	r1 = Array.new(4) { |i| break :broke if i == 2; i }\n        a = [9]\n   
+585f197f00dd5b3733ac8eba28e6e47d	[199, "v199"]	class P\n          attr_accessor :x, :y\n        end\n        p = P.new\n  
 58661de46a8dc941342a4319c35b9c90	1	obj = Object.new\n            def obj.infinite?; nil; end\n          
 586ab40f2dfcbd13d521be385c9a6b38	[2, 2]	[[1, 2].each.with_index.size, [1, 2].each.with_object(:m).size]
 586c6036c606500ee67ef673b7e6ef50	:foo	obj = Object.new\n            obj.define_singleton_method(:foo) { 42
@@ -1340,6 +1343,7 @@
 710af167780333af253a35d1dc8b0346	[20008, "head", "tail", 20000]	path = "/tmp/mr_buf_big.txt"\n            f = File.open(path, "w")\n 
 711aa5cc92164813c06e40b326f626bd	["Bonjour", "Bonjour", "Bonjour", "Guten Tag"]	class F\n          def hello\n            "Bonjour"\n          end\n       
 712dca9ea514253684ee241cb0842ccb	7	def f(a)\n          a\n        end\n        f(7)\n        
+71330c857c9c2f5e5dac1dd122e8905a	[199, 199, 199, "h199", :sym]	class P\n          def fill(i)\n            @a0 = i; @a1 = i; @a2 = i; @a
 7147936003db8a32b07eb1bb5089096f	[[:it, :j]]	def m; [1].map { |it| j = it; local_variables.sort }; end; m
 716b4dbaef364450a9132d2ead310c72	1440.0	def occl(nphi, ntheta)\n          eps = 0.5\n          occlusion = 0.0\n  
 719d10e6b19ee956599a34926b2812c4	[[0, "SystemExit"], [0, "SystemExit"], [7, "SystemExit"], [0, "msg"], [0, "SystemExit"], [1, "SystemExit"], [0, "SystemExit"], [3, "x"], [0, "y"], [2, "SystemExit"]]	[\n              [SystemExit.new.status, SystemExit.new.message],\n  
@@ -1397,6 +1401,7 @@
 75aa5279b9de5e0524d3833ce166ea1c	:assigned	class Object\n          def self.const_missing(c); c; end\n        end\n  
 75b113d3b79894812ec54346427be988	[[255], [233], [128], [65], [128], [RangeError, "256 out of char range"], [RangeError, "256 out of char range"], [RangeError, "1286 out of char range"], [65], [177], [130, 160], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [65], [142, 177], [164, 162], [143, 161, 161], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [130, 160], [164, 162], "A", ""]	def c(enc, v)\n              begin\n                ("%c".dup.force_e
 75c57885787c3754c814298944519355	:value	klass = Class.new do\n              def m\n                yield\n    
+75cb534912fc07e0b60c93c82c4f37f9	["s199", [199, 200]]	class P\n          attr_reader :a, :b\n          def fill(i)\n            
 763b67d3ef3e1c8ffe7d61ecae99e06f	"/home/user/monoruby/monoruby/a.rb"	require File.expand_path("./b")\n        C::D\n        
 7679a579d835ee8b69befeae2cee0a2b	"Z"	class MyInt\n                  def to_int; 90; end\n             
 76816dc27924ee3f477d020204e7cbd2	:ok	old_stderr = $stderr\n            captured = String.new\n            
@@ -1519,6 +1524,7 @@
 7fde780ffabe4bf9d5cdf993a4ba165d	["main", "main", true, true, "main", true, false]	c = self.clone\n            [\n              to_s, inspect,\n         
 7fe6acbcc38e6d331c6b562b26a7766b	true	"abc".force_encoding("ISO-8859-2").encoding == Encoding::ISO_8859_2
 7ff29e4f8d290ec73b7f9a83c58fdd4d	[ArgumentError, "ASCII incompatible encoding: UTF-16LE"]	(Regexp.union(Regexp.new("a".encode("UTF-16LE")), Regexp.new("b".encode("UTF-8")
+802afed6b72de3b24ee1a133b61d9447	["s199"]	class P\n          attr_reader :v\n          def put(x)\n            @v = 
 8043ee50b7e295aec19dfea005b5d206	"US-ASCII"	"abc".encode("US-ASCII").reverse.encoding.to_s
 804b1557848b61bcf447552cac485286	:ok	c = Class.new\n            c.freeze\n            begin\n              
 804bf123f4d6e236bd9c3800e5582083	1	Inner = Struct.new(:b)\n        Outer = Struct.new(:a)\n        o = Outer
@@ -1607,6 +1613,7 @@
 87b703ef2494b2ac663477f4127d842a	0	obj = Object.new\n            def obj.infinite?; 1; end\n            
 87b8d29ec9e5e3a888103c75087c2a9a	:OVERRIDDEN	class Float; def >(o); :OVERRIDDEN; end; end; 3.0 > 4.0
 87c45ead14ca906b6a7e5c0e5c10bbd4	:ok	old_dep = Warning[:deprecated]\n            old_stderr = $stderr\n   
+87d8e8c8d31c6396ee8a587d83b5902b	[199, :sym, nil, false]	class P\n          attr_reader :a, :b, :c, :d\n          def fill(i)\n    
 87e3c706132a5ebc1a248cc7d38c661a	[1, "m"]	M = Data.define(:amount, :unit)\nM.new(1, "m").deconstruct
 87f49526ab8a8379c1cb4b2bf34acccd	["US-ASCII", "UTF-8", "UTF-8"]	(a=format('%s'.encode(Encoding::US_ASCII), 'foobar').encoding.name; b=format('%s
 88136a75e44955e0b880a37966cf907a	[7, 11, [:v, :w]]	c = class A\n          def f(x,y)\n            @v = x\n            @w = y\n
@@ -2181,6 +2188,7 @@ b641fbd5ebdf00e1aed645d54b50f668	[[100, 400]]	class C\n          def f(a, b)\n  
 b665e7999873f7c9a5bf25c8c8c1ffeb	42	klass = Struct.new(nil, :a)\n            klass.new(42).a\n           
 b6799d38502adf59ced438f5fcef43f4	["pp", ["Socket", "Socket"], "qq", true, "Socket", "zz"]	require "socket"\n            res = []\n            x, y = Socket.pai
 b680671714a43502907fe153774b1c85	true	GC.config(nil) == GC.config
+b69cddbeefe2b001d970e7193e2038e0	[1.99e+302, "Float"]	class P\n          attr_reader :f\n          def put(x)\n            @f = 
 b69f2239bbc4e9cae5e303c2918e8843	33	class D\n              attr_accessor :val\n            end\n          
 b6aca556c6399f547ba3bb3ac5005179	10	def foo(&b)\n          b\n        end\n        \n\n        foo { |x| x * 2 }
 b6ba588f2d7306ef117e4e3c470a4b66	true	res = nil\n            k = Class.new { |c| res = c }\n            res
@@ -2588,6 +2596,7 @@ d5eb36d331547e68e65b5e236315bb2c	false	File.exist?("../LICENCE-MIT")
 d5ec889974c38262d62062c5b088a2ff	"ASCII-8BIT"	"abc".b.reverse.encoding.to_s
 d5f2b019270b0aa4e77071d07cc78f9c	"secret"	class Foo\n          private\n          def secret; "secret"; end\n       
 d6091e4e156deac18f133b8aca6d3e2a	[[103, 111, 111, 100, 32, 100, 97, 121, 32, 128], "UTF-8", false, [103, 111, 111, 100, 32, 100, 97, 121, 32, 128], false, [103, 111, 111, 100, 32, 100, 97, 121, 32, 128], false]	a = sprintf("good day %{invalid}", invalid: "\\x80")\n            b =
+d645a11530555bae2d4983500a78983b	498500.0	def f(n)\n          x = 0.0\n          i = 0\n          while i < n\n      
 d66a6a23a3ed91b71d300b263592de36	[[1, 3], [2, 4]]	o = Object.new\n               def o.to_int; 3; end\n               r = []; [1, 2]
 d66e832dd58d8b0895c00647a07051e9	"ab"	r, w = IO.pipe\n            w.write("ab")\n            out = r.sysrea
 d68149041b7bd9d31e303f70e9b68d9e	[true, false, true, false, "closed stream"]	require 'fcntl'\n            require 'io/nonblock'\n            res =

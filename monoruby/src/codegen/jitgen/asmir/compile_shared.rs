@@ -676,7 +676,7 @@ impl Codegen {
             }
             // Inline ivar store: `self.@ivar = src` at a fixed field offset on
             // the receiver (rdi), followed by the GC write barrier.
-            AsmInst::StoreIVarInline { src, ivarid } => {
+            AsmInst::StoreIVarInline { src, ivarid, wb } => {
                 let disp = RVALUE_OFFSET_KIND as i32 + ivarid.get() as i32 * 8;
                 self.encode_linst(LInst::Store {
                     src,
@@ -685,10 +685,14 @@ impl Codegen {
                         disp,
                     },
                 });
-                self.encode_linst(LInst::WriteBarrier {
-                    parent: GP::Rdi,
-                    value: src,
-                });
+                // A stored value the abstract state proves immediate needs
+                // no barrier (the barrier itself would skip on its tag test).
+                if wb {
+                    self.encode_linst(LInst::WriteBarrier {
+                        parent: GP::Rdi,
+                        value: src,
+                    });
+                }
             }
             // Inline struct-member load: `r15 <- self.@slot` at a fixed field
             // offset on the receiver (rdi). Lowered to a field load whose
@@ -825,6 +829,7 @@ impl Codegen {
                 src,
                 ivarid,
                 is_object_ty,
+                wb,
             } => {
                 let ivar = ivarid.get() as i32;
                 let idx = if is_object_ty {
@@ -853,10 +858,12 @@ impl Codegen {
                         disp: idx * 8,
                     },
                 });
-                self.encode_linst(LInst::WriteBarrier {
-                    parent: GP::Rdi,
-                    value: src,
-                });
+                if wb {
+                    self.encode_linst(LInst::WriteBarrier {
+                        parent: GP::Rdi,
+                        value: src,
+                    });
+                }
             }
             // Store into a heap-spilled ivar of another object (bounds-checked;
             // grows the table via a runtime call on miss). aarch64 bails on an
@@ -866,11 +873,13 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
                 using_fpr,
+                wb,
             } => self.encode_linst(LInst::StoreIVarHeap {
                 src,
                 ivarid,
                 is_object_ty,
                 using_fpr,
+                wb,
             }),
             // Load a heap-spilled instance variable (bounds-checked unless self),
             // substituting nil for an out-of-range / unset slot.
@@ -1393,8 +1402,9 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
                 using_fpr,
+                wb,
             } => {
-                self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_fpr);
+                self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_fpr, wb);
             }
             LInst::StoreConstant { id, using_fpr, error } => {
                 self.emit_store_constant(id, using_fpr, &error);

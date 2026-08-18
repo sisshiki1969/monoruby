@@ -40,20 +40,6 @@ mod method_call;
 mod variables;
 
 
-///
-/// Generational GC write barrier slow path, called from JIT inline stores.
-///
-/// The inline fast path has already verified that `parent` is old, not yet
-/// remembered, and that the stored child is a heap object; this records
-/// `parent` in the remembered set. See `doc/gc.md`.
-///
-extern "C" fn jit_write_barrier(parent: *mut RValue) {
-    // SAFETY: `parent` is the live `&RValue` the store wrote into. The
-    // inline fast path has already checked it is `wb_armed` with a heap
-    // child, so `write_barrier_bulk` records it in the remembered set.
-    unsafe { (*parent).write_barrier_bulk() };
-}
-
 /// Signed aarch64 condition for a fixnum comparison. `BrIf` gives the
 /// "taken-when-true" condition; `BrIfNot` gives its inverse (so a CmpBr lands
 /// on the fall-through case). TEq behaves like Eq for integers.

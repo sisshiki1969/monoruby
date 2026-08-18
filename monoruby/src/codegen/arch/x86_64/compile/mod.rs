@@ -2568,8 +2568,9 @@ impl Codegen {
         ivarid: IvarId,
         is_object_ty: bool,
         using_fpr: UsingFpr,
+        wb: bool,
     ) -> bool {
-        self.store_ivar_heap(src, ivarid, is_object_ty, using_fpr);
+        self.store_ivar_heap(src, ivarid, is_object_ty, using_fpr, wb);
         true
     }
 }

@@ -131,6 +131,7 @@ impl JitModule {
         let exec_gc = jit.label();
         let f64_to_val = jit.label();
         let stack_overflow = jit.label();
+        let write_barrier = jit.label();
 
         // TODO(aarch64): emit the real entry stubs (raise/fetch_and_dispatch/
         // panic/f64_to_val/gc). For now trap so the module links + constructs.
@@ -152,6 +153,7 @@ impl JitModule {
             f64_to_val,
             vm_stack_overflow: stack_overflow,
             entry_panic,
+            write_barrier,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
             bop_redefined_flags,
             bop_flags,

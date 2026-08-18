@@ -484,6 +484,25 @@ pub struct JitModule {
     ///
     entry_panic: DestLabel,
     ///
+    /// Shared out-of-line half of the generational-GC write barrier: save
+    /// the caller-saved registers, call `jit_module::jit_write_barrier`,
+    /// restore, and return. Reached from every JIT inline store whose
+    /// fast-path tests (parent armed + heap child) fail, so the per-site
+    /// footprint is one call instead of the full save/call/restore blob.
+    ///
+    /// #### in (x86-64)
+    /// - rdi: parent &RValue
+    ///
+    /// #### in (aarch64)
+    /// - x9: parent &RValue; the *site* preserves its own live LR around
+    ///   the `bl` (`str/ldr x30`), the stub only preserves the `bl`-written
+    ///   return address across its inner call.
+    ///
+    /// #### destroy
+    /// - nothing (fully transparent)
+    ///
+    write_barrier: DestLabel,
+    ///
     /// Raise StackOverFlow error.
     ///
     /// #### in
