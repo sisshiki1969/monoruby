@@ -3038,14 +3038,18 @@ impl Executor {
                             .func_id()
                             .map(|fid| globals.store[fid].owner_class())
                             .unwrap_or(&[]);
-                        let allowed = if owners.is_empty() {
-                            let recv_class = recv.real_class(&globals.store).id();
-                            caller_self.is_kind_of(&globals.store, recv_class)
-                        } else {
-                            owners
-                                .iter()
-                                .any(|c| caller_self.is_kind_of(&globals.store, *c))
-                        };
+                        // Every definition path records an owner
+                        // (`add_method_inner`), so the receiver-class
+                        // fallback is a defensive last resort for exotic
+                        // ownerless entries, folded into the deny path.
+                        let allowed = owners
+                            .iter()
+                            .any(|c| caller_self.is_kind_of(&globals.store, *c))
+                            || (owners.is_empty()
+                                && caller_self.is_kind_of(
+                                    &globals.store,
+                                    recv.real_class(&globals.store).id(),
+                                ));
                         if !allowed {
                             return Err(MonorubyErr::protected_method_called(
                                 globals, func_name, recv,
