@@ -159,18 +159,45 @@ impl Codegen {
         }
     }
 
-    /// `String#<<` with a Fixnum byte appended in line. A byte 0..=127
-    /// appends into any encoding (it is its own one-byte encode in every
-    /// ASCII-compatible receiver and the raw-byte append everywhere else —
-    /// exactly what the builtin does); a byte with the high bit set only
-    /// into ASCII-8BIT (other encodings multi-byte-encode or reject it). A
-    /// frozen/chilled receiver, a shared (copy-on-write) or full buffer,
-    /// and every non-Fixnum or out-of-range argument falls back to `f` =
-    /// `string_shl(vm, globals, recv, arg)`, the builtin's full semantics
-    /// (String append, `#to_str` coercion, warn-and-unchill, errors via the
-    /// trailing HandleError). Keeps the cached code-range classification
-    /// consistent with `RStringInner::extend_from_slice_checked`: an ASCII
-    /// byte preserves the cache, a high byte degrades it to Unknown.
+    /// `String#<<` with the two hot argument shapes appended in line,
+    /// selected per call site by `hint` (`string_shl_gen`'s proof of the
+    /// argument class; `Both` emits both paths with the Fixnum tag test
+    /// dispatching).
+    ///
+    /// **Fixnum byte**: a byte 0..=127 appends into any encoding (it is its
+    /// own one-byte encode in every ASCII-compatible receiver and the
+    /// raw-byte append everywhere else — exactly what the builtin does); a
+    /// byte with the high bit set only into ASCII-8BIT (other encodings
+    /// multi-byte-encode or reject it). Keeps the cached code-range
+    /// classification consistent with
+    /// `RStringInner::extend_from_slice_checked`: an ASCII byte preserves
+    /// the cache, a high byte degrades it to Unknown.
+    ///
+    /// **String argument** (compatible encoding + capacity available): a
+    /// heap String argument whose encoding tag equals the receiver's —
+    /// restricted to the payload-free `Encoding` discriminants 0..=6
+    /// (Ascii8..Utf32Be), where one byte is the whole value — or whose
+    /// mismatched pairing `Encoding.compatible?` resolves to the receiver's
+    /// encoding anyway (both ASCII-compatible, the piece cached SevenBit,
+    /// the receiver cached SevenBit/Valid — the erubi buffer shape) is
+    /// byte-copied straight into the receiver's spare capacity, and the
+    /// cached code range is folded exactly as `RStringInner::extend` does
+    /// (SevenBit+SevenBit keeps SevenBit, both ∈ {SevenBit, Valid} →
+    /// Valid, anything else → Unknown). A shared (copy-on-write) receiver
+    /// is detached in place by
+    /// `detach` = `str_detach(recv)` (infallible, GC-free) and the append
+    /// retried — sharing is a per-`dup` event, not a reason to leave the
+    /// fast path for good. The *argument* may be shared: its `ptr`/`len`
+    /// overlay the spilled SmallVec fields, so the heap-side loads read it
+    /// correctly.
+    ///
+    /// Everything else — frozen/chilled receiver, non-Fixnum/non-String
+    /// argument, byte out of range, encoding mismatch or a payload-carrying
+    /// encoding, insufficient capacity (growth is a normal recurring event,
+    /// so it must *not* deopt) — falls back to `f` = `string_shl(vm,
+    /// globals, recv, arg)`, the builtin's full semantics (encoding
+    /// negotiation, `#to_str` coercion, warn-and-unchill, errors via the
+    /// trailing HandleError).
     ///
     /// ### in
     /// - rdi: receiver: String (class-guarded)
@@ -180,64 +207,220 @@ impl Codegen {
     /// - rax: the receiver (`<<` returns self) / the helper's result
     ///
     /// ### destroy
-    /// - rax, rcx, rdx, rsi (+ caller-saved on the fallback call)
-    pub(crate) fn emit_string_shl(&mut self, f: u64) {
+    /// - rax, rcx, rdx, r8-r11 (+ caller-saved on the fallback call; the
+    ///   GP pool was flushed by the generator's `get_using_fpr`)
+    pub(crate) fn emit_string_shl(&mut self, f: u64, detach: u64, hint: StringShlHint) {
         let fallback = self.jit.label();
-        let enc_ok = self.jit.label();
-        let heap = self.jit.label();
-        let stored = self.jit.label();
-        let keep_cr = self.jit.label();
         let exit = self.jit.label();
-        monoasm! { &mut self.jit,
-            // only a Fixnum byte inlines
-            testq rsi, 1;
-            jz   fallback;
-            // frozen (0b010) or chilled (0b100) → helper raises / warns
-            testb [rdi + (RVALUE_OFFSET_FLAG)], (0b110);
-            jnz  fallback;
-            movq rdx, rsi;
-            sarq rdx, 1;
-            // byte range 0..=255 (unsigned compare catches negatives)
-            cmpq rdx, (0xff);
-            ja   fallback;
-            cmpq rdx, (0x7f);
-            jle  enc_ok;
-            // high byte: raw append only into ASCII-8BIT (Ascii8 == 0)
-            cmpb [rdi + (crate::rvalue::STRING_TY_OFFSET)], (0);
-            jne  fallback;
-        enc_ok:
-            movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
-            // shared (copy-on-write) buffer → helper detaches
-            movq rcx, (crate::rvalue::STRING_SHARED_TAG);
-            cmpq rax, rcx;
-            jeq  fallback;
-            cmpq rax, (STRING_INLINE_CAP);
-            jgt  heap;
-            // inline buffer: rax is the length, STRING_INLINE_CAP the
-            // capacity; the `cmpq` above already set the full-buffer flags.
-            jeq  fallback;
-            lea  rcx, [rdi + (RVALUE_OFFSET_INLINE)];
-            movb [rcx + rax], rdx;
-            addq [rdi + (RVALUE_OFFSET_ARY_CAPA)], 1;
-            jmp  stored;
-        heap:
-            // spilled buffer: rax is the capacity, the length lives beside
-            // the pointer. A full buffer reallocates via the helper.
-            movq rcx, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
-            cmpq rcx, rax;
-            jge  fallback;
-            movq rax, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
-            movb [rax + rcx], rdx;
-            addq [rdi + (RVALUE_OFFSET_HEAP_LEN)], 1;
-        stored:
-            cmpq rdx, (0x7f);
-            jle  keep_cr;
-            movb [rdi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::Unknown as u64);
-        keep_cr:
-            movq rax, rdi;
-        exit:
+        let str_entry = self.jit.label();
+        // where the Fixnum tag test goes when the argument is not a Fixnum
+        let not_fixnum = if hint == StringShlHint::Both {
+            str_entry.clone()
+        } else {
+            fallback.clone()
+        };
+        if hint != StringShlHint::Str {
+            let enc_ok = self.jit.label();
+            let heap = self.jit.label();
+            let stored = self.jit.label();
+            let keep_cr = self.jit.label();
+            monoasm! { &mut self.jit,
+                // only a Fixnum byte inlines here
+                testq rsi, 1;
+                jz   not_fixnum;
+                // frozen (0b010) or chilled (0b100) → helper raises / warns
+                testb [rdi + (RVALUE_OFFSET_FLAG)], (0b110);
+                jnz  fallback;
+                movq rdx, rsi;
+                sarq rdx, 1;
+                // byte range 0..=255 (unsigned compare catches negatives)
+                cmpq rdx, (0xff);
+                ja   fallback;
+                cmpq rdx, (0x7f);
+                jle  enc_ok;
+                // high byte: raw append only into ASCII-8BIT (Ascii8 == 0)
+                cmpb [rdi + (crate::rvalue::STRING_TY_OFFSET)], (0);
+                jne  fallback;
+            enc_ok:
+                movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                // shared (copy-on-write) buffer → helper detaches
+                movq rcx, (crate::rvalue::STRING_SHARED_TAG);
+                cmpq rax, rcx;
+                jeq  fallback;
+                cmpq rax, (STRING_INLINE_CAP);
+                jgt  heap;
+                // inline buffer: rax is the length, STRING_INLINE_CAP the
+                // capacity; the `cmpq` above already set the full-buffer flags.
+                jeq  fallback;
+                lea  rcx, [rdi + (RVALUE_OFFSET_INLINE)];
+                movb [rcx + rax], rdx;
+                addq [rdi + (RVALUE_OFFSET_ARY_CAPA)], 1;
+                jmp  stored;
+            heap:
+                // spilled buffer: rax is the capacity, the length lives beside
+                // the pointer. A full buffer reallocates via the helper.
+                movq rcx, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+                cmpq rcx, rax;
+                jge  fallback;
+                movq rax, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+                movb [rax + rcx], rdx;
+                addq [rdi + (RVALUE_OFFSET_HEAP_LEN)], 1;
+            stored:
+                cmpq rdx, (0x7f);
+                jle  keep_cr;
+                movb [rdi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::Unknown as u64);
+            keep_cr:
+                movq rax, rdi;
+                jmp  exit;
+            }
+        }
+        let retry = self.jit.label();
+        let detach_path = self.jit.label();
+        if hint != StringShlHint::Fixnum {
+            let enc_mixed = self.jit.label();
+            let recv_ready = self.jit.label();
+            let arg_ready = self.jit.label();
+            let copy_loop = self.jit.label();
+            let copy_done = self.jit.label();
+            let set_valid = self.jit.label();
+            let set_unknown = self.jit.label();
+            self.jit.bind_label(str_entry);
+            monoasm! { &mut self.jit,
+                // only a heap String argument inlines here
+                testq rsi, (0b111);
+                jnz  fallback;
+                cmpb [rsi + (RVALUE_OFFSET_TY)], (ObjTy::STRING.get());
+                jne  fallback;
+                // frozen (0b010) or chilled (0b100) → helper raises / warns
+                testb [rdi + (RVALUE_OFFSET_FLAG)], (0b110);
+                jnz  fallback;
+                // Payload-free encodings only: discriminants 0..=6
+                // (Ascii8..Utf32Be) carry no payload byte, so one byte is
+                // the whole `Encoding`; payload-carrying / exotic
+                // encodings (Iso8859(n), Sjis(n), …) go to the helper's
+                // full negotiation. Equal encodings pass outright; a
+                // *mismatched* pair still appends in place when both are
+                // ASCII-compatible (0..=2: Ascii8/Utf8/UsAscii), the
+                // piece is cached SevenBit, and the receiver is cached
+                // SevenBit or Valid — `Encoding.compatible?` then answers
+                // the receiver's encoding (rule 1 when the receiver is
+                // 7-bit, rule 2 when only the piece is), so the tag stays
+                // put and the fold below is unchanged. Everything else —
+                // including a piece whose cr is merely *uncached* — falls
+                // back; the helper classifies and caches the piece's cr,
+                // so a repeated piece inlines from its second append on.
+                movzxb rax, [rdi + (crate::rvalue::STRING_TY_OFFSET)];
+                movzxb rcx, [rsi + (crate::rvalue::STRING_TY_OFFSET)];
+                cmpq rax, rcx;
+                jne  enc_mixed;
+                cmpq rax, (6);
+                jgt  fallback;
+                jmp  retry;
+            enc_mixed:
+                cmpq rax, (2);
+                jgt  fallback;
+                cmpq rcx, (2);
+                jgt  fallback;
+                cmpb [rsi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::SevenBit as u64);
+                jne  fallback;
+                movzxb rdx, [rdi + (crate::rvalue::STRING_CR_OFFSET)];
+                subq rdx, 1;    // SevenBit→0, Valid→1; Unknown wraps, Broken→2
+                cmpq rdx, 1;
+                ja   fallback;
+            retry:
+                movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                // shared (copy-on-write) receiver: detach out of line, retry
+                movq rcx, (crate::rvalue::STRING_SHARED_TAG);
+                cmpq rax, rcx;
+                jeq  detach_path;
+                // rcx = recv len, rdx = recv capacity, r8 = recv data,
+                // r9 = recv length-slot address (inline vs heap select)
+                movq rcx, rax;
+                movq rdx, (STRING_INLINE_CAP);
+                lea  r8, [rdi + (RVALUE_OFFSET_INLINE)];
+                lea  r9, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+                cmpq rax, (STRING_INLINE_CAP);
+                jle  recv_ready;
+                movq rdx, rax;
+                movq rcx, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+                movq r8, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+                lea  r9, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            recv_ready:
+                // r10 = arg len, r11 = arg data. A *shared* argument reads
+                // fine: its tag (isize::MAX) routes it onto the heap side,
+                // where SharedContent's ptr/len overlay the spilled fields.
+                movq rax, [rsi + (RVALUE_OFFSET_ARY_CAPA)];
+                movq r10, rax;
+                lea  r11, [rsi + (RVALUE_OFFSET_INLINE)];
+                cmpq rax, (STRING_INLINE_CAP);
+                jle  arg_ready;
+                movq r10, [rsi + (RVALUE_OFFSET_HEAP_LEN)];
+                movq r11, [rsi + (RVALUE_OFFSET_HEAP_PTR)];
+            arg_ready:
+                // capacity check: growth is the helper's job
+                movq rax, rcx;
+                addq rax, r10;
+                cmpq rax, rdx;
+                jgt  fallback;
+                // copy arg's bytes to recv_data + recv_len. Even for
+                // `s << s` the ranges cannot overlap: the source is
+                // [0, len) and the destination [len, 2*len).
+                addq r8, rcx;
+                xorq rcx, rcx;
+            copy_loop:
+                cmpq rcx, r10;
+                jge  copy_done;
+                movzxb rdx, [r11 + rcx];
+                movb [r8 + rcx], rdx;
+                addq rcx, 1;
+                jmp  copy_loop;
+            copy_done:
+                // bump the stored length (the capa slot doubles as the
+                // length while inline; r9 points at the right slot)
+                movq [r9], rax;
+                // code-range fold, exactly `RStringInner::extend`:
+                // SevenBit+SevenBit keeps SevenBit, both {SevenBit, Valid}
+                // → Valid, anything else (Unknown/Broken either side) →
+                // Unknown.
+                movzxb rcx, [rdi + (crate::rvalue::STRING_CR_OFFSET)];
+                movzxb rdx, [rsi + (crate::rvalue::STRING_CR_OFFSET)];
+                subq rcx, 1;    // SevenBit→0, Valid→1; Unknown wraps, Broken→2
+                cmpq rcx, 1;
+                ja   set_unknown;
+                subq rdx, 1;
+                cmpq rdx, 1;
+                ja   set_unknown;
+                orq  rcx, rdx;
+                jnz  set_valid;
+                // both SevenBit: the cache is already correct
+                movq rax, rdi;
+                jmp  exit;
+            set_valid:
+                movb [rdi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::Valid as u64);
+                movq rax, rdi;
+                jmp  exit;
+            set_unknown:
+                movb [rdi + (crate::rvalue::STRING_CR_OFFSET)], (CodeRange::Unknown as u64);
+                movq rax, rdi;
+                jmp  exit;
+            }
         }
         self.jit.select_page(1);
+        if hint != StringShlHint::Fixnum {
+            monoasm! { &mut self.jit,
+            detach_path:
+                // str_detach(recv): copy the shared view into an owned
+                // buffer in place. Infallible, GC-free, answers nothing;
+                // recv/arg are caller-saved, so keep them across the call.
+                pushq rdi;
+                pushq rsi;
+                movq rax, (detach);
+                call rax;
+                popq rsi;
+                popq rdi;
+                jmp  retry;
+            }
+        }
         monoasm! { &mut self.jit,
         fallback:
             movq rdx, rdi;
@@ -249,6 +432,7 @@ impl Codegen {
             jmp  exit;
         }
         self.jit.select_page(0);
+        self.jit.bind_label(exit);
     }
 
     /// Direct call of a two-value runtime helper `f(vm, globals, a, b)`,

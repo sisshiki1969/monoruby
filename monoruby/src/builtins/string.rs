@@ -273,7 +273,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn string_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let inner = match lfp.try_arg(0) {
+    let mut inner = match lfp.try_arg(0) {
         Some(string) => {
             // Preserve the source string's encoding by going through
             // `coerce_to_rstring` and cloning the inner.
@@ -284,6 +284,15 @@ fn string_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             RStringInner::from_encoding(b"", Encoding::Ascii8)
         }
     };
+    // `encoding:` forces the new string's encoding — exactly
+    // `force_encoding` on the fresh copy, overriding a source string's
+    // (CRuby semantics). `capacity:` (try_arg(2)) is a pure allocation
+    // hint with no observable semantics; it is currently accepted and
+    // ignored.
+    if let Some(enc_v) = lfp.try_arg(1) {
+        let enc = super::encoding::value_to_encoding(vm, globals, enc_v)?;
+        inner.set_encoding(enc);
+    }
     let obj = Value::string_from_inner_with_class(inner, class);
     // For a subclass, run its `initialize` so user-defined side effects
     // (e.g. `self.extend`) take effect, matching `Class#new` semantics.
@@ -787,7 +796,17 @@ fn shl_inner(
 ) -> Result<Value> {
     let mut self_ = recv.as_string_mut(vm, globals)?;
     if let Some(other) = other_v.is_rstring() {
-        self_.extend(&other, &globals.store)?;
+        if recv.id() == other_v.id() {
+            // `s << s`: the argument aliases the receiver, so `extend`
+            // would read the source bytes through a pointer its own
+            // reallocation just freed. Snapshot the inner first (an
+            // O(len) byte copy for an owned buffer, O(1) for a sharer)
+            // and append the snapshot.
+            let snapshot = (*other).clone();
+            self_.extend(&snapshot, &globals.store)?;
+        } else {
+            self_.extend(&other, &globals.store)?;
+        }
     } else if other_v.try_fixnum().is_none() && other_v.is_integer() {
         // `String#<<` / `#concat` treat any Integer as a codepoint; a
         // Bignum can never be a valid codepoint, so it is always out
@@ -844,13 +863,18 @@ extern "C" fn string_shl(
     }
 }
 
-/// Inline `String#<<`: a Fixnum byte appended by `emit_string_shl`'s inline
-/// store; every other shape falls back — inside the emitted code, with no
-/// deopt — to a direct `string_shl` call carrying the builtin's full
-/// semantics (String append, Integer codepoint encoding, `#to_str`
-/// coercion, frozen/chilled and range errors). No receiver-class
-/// restriction is needed: a String subclass resolves to the same builtin,
-/// and error cases surface through the ordinary HandleError path.
+/// Inline `String#<<`: a Fixnum byte or a same-encoding String argument
+/// appended by `emit_string_shl`'s inline stores (the argument-class proof,
+/// when the abstract state has one, trims the unused path); every other
+/// shape falls back — inside the emitted code, with no deopt — to a direct
+/// `string_shl` call carrying the builtin's full semantics (encoding
+/// negotiation, Integer codepoint encoding, `#to_str` coercion,
+/// frozen/chilled and range errors, buffer growth). A shared (copy-on-write)
+/// receiver is detached in place via `runtime::str_detach` and the String
+/// append retried, so `dup`ed receivers stay on the fast path. No
+/// receiver-class restriction is needed: a String subclass resolves to the
+/// same builtin, and error cases surface through the ordinary HandleError
+/// path.
 fn string_shl_gen(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -858,7 +882,7 @@ fn string_shl_gen(
     store: &Store,
     callid: CallSiteId,
     recv_class: Option<ClassId>,
-    _: Option<ClassId>,
+    arg_class: Option<ClassId>,
 ) -> bool {
     let Some(recv_class) = recv_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -869,11 +893,22 @@ fn string_shl_gen(
     if !callsite.is_simple() || callsite.pos_num != 1 {
         return false;
     }
+    let hint = match arg_class {
+        Some(INTEGER_CLASS) => crate::codegen::StringShlHint::Fixnum,
+        Some(STRING_CLASS) => crate::codegen::StringShlHint::Str,
+        _ => crate::codegen::StringShlHint::Both,
+    };
     state.load(ir, callsite.recv, GP::Rdi);
     state.load(ir, callsite.args, GP::Rsi);
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
-    ir.inline(|r#gen, _, _, _| r#gen.emit_string_shl(string_shl as *const () as u64));
+    ir.inline(move |r#gen, _, _, _| {
+        r#gen.emit_string_shl(
+            string_shl as *const () as u64,
+            crate::codegen::runtime::str_detach as *const () as u64,
+            hint,
+        )
+    });
     ir.fpr_restore(using_fpr);
     let error = ir.new_error(state);
     ir.handle_error(error);

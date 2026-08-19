@@ -1773,19 +1773,30 @@ pub(super) fn force_encoding(
     _: BytecodePtr,
 ) -> Result<Value> {
     lfp.self_val().ensure_string_mutable(vm, globals)?;
-    let arg0 = lfp.arg(0);
-    let enc = if let Some(s) = arg0.is_str() {
-        Encoding::try_from_str(s)?
+    let enc = value_to_encoding(vm, globals, lfp.arg(0))?;
+    lfp.self_val().as_rstring_inner_mut().set_encoding(enc);
+    Ok(lfp.self_val())
+}
+
+/// Resolve an encoding operand — an `Encoding` object, a String name, or
+/// anything `#to_str`-coercible — to a monoruby `Encoding` (the argument
+/// convention shared by `String#force_encoding` and
+/// `String.new(encoding:)`).
+pub(super) fn value_to_encoding(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg0: Value,
+) -> Result<Encoding> {
+    if let Some(s) = arg0.is_str() {
+        Encoding::try_from_str(s)
     } else if arg0.class() == encoding_class(globals) {
         let s = globals.store.get_ivar(arg0, IdentId::_ENCODING).unwrap();
-        Encoding::try_from_str(s.as_str())?
+        Encoding::try_from_str(s.as_str())
     } else {
         // Try to_str coercion
         let s = arg0.coerce_to_string(vm, globals)?;
-        Encoding::try_from_str(&s)?
-    };
-    lfp.self_val().as_rstring_inner_mut().set_encoding(enc);
-    Ok(lfp.self_val())
+        Encoding::try_from_str(&s)
+    }
 }
 
 ///

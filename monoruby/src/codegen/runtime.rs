@@ -41,7 +41,7 @@ pub(super) extern "C" fn chain_deopt(vm: &mut Executor) {
 /// byte-store fast path can write its buffer in place instead of deopting
 /// (see `RStringInner::detach`). Infallible; copies with a plain malloc, so
 /// it never allocates a `Value` and never runs a GC.
-pub(in crate::codegen) extern "C" fn str_detach(mut v: Value) {
+pub(crate) extern "C" fn str_detach(mut v: Value) {
     v.as_rstring_inner_mut().detach();
 }
 
