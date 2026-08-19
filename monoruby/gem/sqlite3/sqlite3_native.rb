@@ -519,10 +519,13 @@ module SQLite3
     end
 
     def reset!
-      return if @closed
+      return self if @closed
       FFIBridge.sqlite3_reset(@stmt)
       FFIBridge.sqlite3_clear_bindings(@stmt)
       @done = false
+      # The C extension returns self; ActiveRecord's statement pool chains
+      # off the return value (`stmt.reset!` then reuse).
+      self
     end
 
     def bind_param(index, value)

@@ -16,6 +16,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(klass, "new_seed", new_seed, 0);
     globals.define_private_builtin_func_with(klass, "initialize", random_init_m, 0, 1, false);
     globals.define_builtin_func_with(klass, "rand", rand, 0, 1, false);
+    // CRuby defines `Random::Formatter#random_number` in C (random.c) and the
+    // stdlib `random/formatter` builds its helpers on it; binding it here on
+    // the instance side (the class side is bound above) keeps the vendored
+    // formatter working for `Random.new.alphanumeric` etc. The Formatter
+    // module wiring itself lives in `builtins/random.rb`.
+    globals.define_builtin_func_with(klass, "random_number", rand, 0, 1, false);
     globals.define_builtin_func(klass, "bytes", instance_bytes, 1);
     globals.define_builtin_func(klass, "seed", inst_seed, 0);
     globals.define_private_builtin_func(klass, "state", inst_state, 0);

@@ -3013,10 +3013,40 @@ impl Executor {
                             ));
                         }
                     }
-                    Visibility::Protected => {
+                    Visibility::Protected if !is_func_call => {
+                        // An FCALL (implicit receiver, and every internal
+                        // rb_funcall-style invocation such as the `inherited`
+                        // / `const_added` hooks) bypasses the protected check
+                        // exactly as it bypasses the private one — CRuby's
+                        // rb_funcallv dispatches with FCALL, which skips both.
+                        //
+                        // For receiver-qualified calls, CRuby permits a
+                        // protected call when the caller's self is_a? the
+                        // method's DEFINING class/module
+                        // (vm_call_method_each_type:
+                        // rb_obj_is_kind_of(cfp->self, me->defined_class)) —
+                        // not the receiver's class. The two diverge between
+                        // sibling subclasses (a Base-defined protected method
+                        // called on an A from inside a B must be allowed) and
+                        // for module-defined protected methods, where the
+                        // receiver's class check rejected calls CRuby accepts
+                        // (ActiveRecord::Calculations#aggregate_column called
+                        // across Relation subclasses). Fall back to the
+                        // receiver-class rule when no owner is recorded.
                         let caller_self = self.cfp().lfp().self_val();
-                        let recv_class = recv.real_class(&globals.store).id();
-                        if !caller_self.is_kind_of(&globals.store, recv_class) {
+                        let owners = entry
+                            .func_id()
+                            .map(|fid| globals.store[fid].owner_class())
+                            .unwrap_or(&[]);
+                        // Every definition path records an owner
+                        // (`add_method_inner`), so `owners` is only empty for
+                        // a func-id-less placeholder entry — which cannot be
+                        // called anyway (the match below reports it as method
+                        // not found); denying it here is fine.
+                        let allowed = owners
+                            .iter()
+                            .any(|c| caller_self.is_kind_of(&globals.store, *c));
+                        if !allowed {
                             return Err(MonorubyErr::protected_method_called(
                                 globals, func_name, recv,
                             ));

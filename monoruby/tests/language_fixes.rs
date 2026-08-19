@@ -775,6 +775,72 @@ fn accessor_called_with_wrong_arity_does_not_abort_jit() {
 }
 
 #[test]
+fn random_formatter_wiring() {
+    // CRuby wires the (initially method-less) Random::Formatter module into
+    // Random at boot; requiring `random/formatter` (directly or via
+    // securerandom) fills it in. Seeded output must match CRuby bit-for-bit
+    // (same MT stream through the same vendored `choose`).
+    run_test_once(
+        r#"
+        before = Random.respond_to?(:alphanumeric)
+        require "random/formatter"
+        res = [before,
+               Random.ancestors.include?(Random::Formatter),
+               Random.new(42).alphanumeric(12),
+               Random.new(7).hex(8),
+               Random.new(1).base64(6),
+               Random.alphanumeric(8).size]
+        require "securerandom"
+        res << SecureRandom.alphanumeric(9).size
+        res << SecureRandom.random_number(100).between?(0, 99)
+        res << (SecureRandom.random_number.is_a?(Float))
+        res << SecureRandom.uuid.size
+        res
+        "#,
+    );
+    // OpenSSL stub: the Cipher error class ActiveRecord::Encryption rescues.
+    run_test_once(
+        r#"
+        require "openssl"
+        [OpenSSL::Cipher::CipherError < OpenSSL::OpenSSLError,
+         OpenSSL::Cipher::CipherError < StandardError]
+        "#,
+    );
+}
+
+#[test]
+fn protected_call_checks_defining_class_not_receiver_class() {
+    // CRuby permits a receiver-qualified protected call when the caller's
+    // self is_a? the method's DEFINING class/module — not the receiver's
+    // class. Sibling subclasses and module-defined protected methods are
+    // where the two rules diverge (ActiveRecord::Calculations'
+    // `aggregate_column` is called across Relation subclasses this way).
+    run_test_once(
+        r#"
+        class ProtBase
+          protected def prot; :ok; end
+        end
+        class ProtA < ProtBase; end
+        class ProtB < ProtBase
+          def call_on(other) = other.prot
+        end
+        module ProtM
+          protected def mprot; :mod_ok; end
+        end
+        class ProtC; include ProtM; end
+        class ProtD
+          include ProtM
+          def call_on(other) = other.mprot
+        end
+        res = [ProtB.new.call_on(ProtA.new), ProtD.new.call_on(ProtC.new)]
+        res << (begin; ProtA.new.prot; rescue NoMethodError => e; e.class.to_s; end)
+        res << (begin; Object.new.instance_eval { ProtA.new.prot }; rescue NoMethodError => e; e.class.to_s; end)
+        res
+        "#,
+    );
+}
+
+#[test]
 fn const_reassignment_reaches_specialized_bodies() {
     // A constant folded into a JIT-specialized (inlined) callee must observe
     // a later reassignment: the const-version guard in the specialized body

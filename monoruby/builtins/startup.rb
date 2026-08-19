@@ -38,6 +38,7 @@ require_relative 'data'
 
 require_relative 'enumerable'
 IO.include(Enumerable)
+require_relative 'random'
 require_relative 'arithmetic_sequence'
 require_relative 'numeric'
 require_relative 'integer'
