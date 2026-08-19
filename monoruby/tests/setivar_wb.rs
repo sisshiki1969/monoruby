@@ -235,3 +235,111 @@ fn setivar_float_value_keeps_barrier() {
         "##,
     );
 }
+
+#[test]
+fn setivar_frozen_fold_interleaved_arithmetic() {
+    // ④-b extension: the unfrozen proof survives inline Integer/Float
+    // arithmetic between the stores (pure fast paths, no Ruby dispatch),
+    // so only the first store of the run guards. A `freeze` reached
+    // through a call still invalidates it and raises at the next store.
+    run_test(
+        r##"
+        class P
+          attr_reader :a, :b, :c
+          def fill(i)
+            @a = i * 2
+            @b = i + 1
+            @c = i - 3
+          end
+          def maybe_freeze(x) = (freeze if x)
+          def fill2(i, x)
+            @a = i * 2
+            maybe_freeze(x)
+            @b = i + 1
+          end
+        end
+        r = []
+        25.times { p = P.new; p.fill(7); r << [p.a, p.b, p.c] }
+        p = P.new
+        begin
+          p.fill2(5, true)
+        rescue FrozenError
+          r << [:raised, p.a, p.b]
+        end
+        r.uniq
+        "##,
+    );
+}
+
+#[test]
+fn attr_writer_frozen_fold() {
+    // ④-b extension: consecutive attr_writer calls on the same receiver
+    // slot guard the frozen bit once; the fold must not survive a
+    // receiver reassignment (the slot's proof dies with its old value),
+    // so writing through a rebound name that now holds a frozen object
+    // raises.
+    run_test(
+        r##"
+        class P
+          attr_accessor :x, :y, :z
+        end
+        def fill(o, i)
+          o.x = i
+          o.y = i + 1
+          o.z = "s#{i}"     # heap value: barrier kept, fold still applies
+          [o.x, o.y, o.z]
+        end
+        r = []
+        25.times { r << fill(P.new, 4) }
+        r.uniq
+        "##,
+    );
+    run_test(
+        r##"
+        class P
+          attr_accessor :x, :y
+        end
+        def swap_fill(o, f, i)
+          o.x = i
+          o = f          # reassignment kills o's proof
+          o.y = i        # must guard again -> raises on the frozen f
+        end
+        r = []
+        25.times { swap_fill(P.new, P.new, 1) }
+        f = P.new.freeze
+        begin
+          swap_fill(P.new, f, 2)
+        rescue FrozenError
+          r << :raised
+        end
+        r.uniq
+        "##,
+    );
+    // Mov transfers the proof: `t = o` after o's guard lets `t.y=` fold —
+    // same object, still correct; and self-ivar stores share the same
+    // proof set with attr_writer on the self slot.
+    run_test(
+        r##"
+        class P
+          attr_accessor :x, :y
+          def fill_self(i)
+            @x = i
+            self.y = i + 1   # self slot already proven by the @x store
+            [x, y]
+          end
+        end
+        def alias_fill(o, i)
+          o.x = i
+          t = o
+          t.y = i + 1
+          [o.x, o.y]
+        end
+        r = []
+        25.times do
+          r << alias_fill(P.new, 3)
+          r << P.new.fill_self(9)
+        end
+        r.uniq
+        "##,
+    );
+}

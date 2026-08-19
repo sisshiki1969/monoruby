@@ -662,7 +662,20 @@ impl<'a> JitContext<'a> {
             bc_pos,
             mode,
         ) {
-            Some(BinaryInlineOutcome::Done) => return Ok(BinaryLowering::Emitted),
+            Some(BinaryInlineOutcome::Done) => {
+                // ④-b: the Integer/Float inline lowerings are pure
+                // arithmetic — overflow promotes via a Rust helper, guards
+                // and errors exit the trace, nothing dispatches Ruby code —
+                // so the unfrozen-slot proofs survive them. Other classes'
+                // inline generators are not audited for that; drop the
+                // proofs there.
+                if (lhs_class == INTEGER_CLASS || lhs_class == FLOAT_CLASS)
+                    && (rhs_class == Some(INTEGER_CLASS) || rhs_class == Some(FLOAT_CLASS))
+                {
+                    self.restore_unfrozen(dst);
+                }
+                return Ok(BinaryLowering::Emitted);
+            }
             Some(BinaryInlineOutcome::Folded(b)) => return Ok(BinaryLowering::Folded(b)),
             Some(BinaryInlineOutcome::Declined) | None => {}
         }

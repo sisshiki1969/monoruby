@@ -64,6 +64,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         kind: UnOpK,
+        dst: SlotId,
         src: SlotId,
         ic: Option<ClassId>,
         bc_pos: BcIndex,
@@ -72,6 +73,11 @@ impl<'a> JitContext<'a> {
             return Ok(CompileResult::Recompile(RecompileReason::NotCached));
         };
         if self.fire_unary_inline(state, ir, kind.into(), src, recv_class, bc_pos) {
+            // ④-b: the Integer/Float inline unaries are pure arithmetic
+            // (guards exit the trace) — the unfrozen-slot proofs survive.
+            if recv_class == INTEGER_CLASS || recv_class == FLOAT_CLASS {
+                self.restore_unfrozen(Some(dst));
+            }
             return Ok(CompileResult::Continue);
         }
         self.call_unary_method(state, ir, src, recv_class, kind, bc_pos)

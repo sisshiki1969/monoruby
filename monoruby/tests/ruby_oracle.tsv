@@ -764,6 +764,7 @@
 3fcbc9935b035dee352be56a30398754	"world"	IO.popen("echo world") { |io| io.read.chomp }\n            
 3fef9f42692341177896868638c71b46	[["v1", "v2"], [nil, nil, "new"]]	ENV["MONORUBY_ENV_TEST_MN1"] = "v1"\n            ENV["MONORUBY_ENV_T
 3ff02e23d910a4fb58eb4a1180f7d75c	"\\\\u{61}"	Regexp.new(/\\u{61}/).source
+3ffc6d3898225981a488b8b1ab517d61	[[3, 4], [9, 10]]	class P\n          attr_accessor :x, :y\n          def fill_self(i)\n     
 401bf8ea7b3aa33ac1a060658f9ee0cf	[true, true, true, "Class", "Class", "Class", false, true, true, "#<Class:#<Class:MCA>>", true]	class MCA; end\n        class MCH < MCA; end\n        module MCM; end\n   
 402369e00b302b22068e6c528d3bde64	103	$a = 100\n$a.succ.succ.succ
 406d83cba60c86c7a187e07617fbd024	:p	parent = Class.new { def foo; :p; end }\n            child  = Class.
@@ -1436,6 +1437,7 @@
 7862b5af18cc17717c5063cd4c3df41d	[10, 3, "nil", 9]	x = 10\n        [1, 2, 3].each { |i; x| x = i * 100 }\n        a = nil\n  
 788c3b7f7d26d8ce64421732d85d9f4f	[9, 8, [7, 6], [5, 4], 3, 2, 2, 1, {}, nil]	f = ->(a, b = 1, *c, (*d, (e)), f: 2, g:, h:, **k, &l) do\n          [a,
 78a9147b5bb75312ad6a700a83ce8209	["can't create instance of singleton class", "can't create instance of singleton class", "ok", true]	o = Object.new\n        msgs = []\n        begin; o.singleton_class.new; 
+78d0e78fc74998266ad2fd179077428d	[[4, 5, "s4"]]	class P\n          attr_accessor :x, :y, :z\n        end\n        def fill
 78d7ea39e2bafbf7649c9fc6b54bb309	[90300, 50, 50, [6, 6], [8, 8]]	class Base\n          def helper(x); x.succ; end\n          def m(v); [he
 7933b76f3fbc5da321278e1298f09b68	"1/2"	0.5.to_r.to_s
 79444ab999b1bb6218ce359077c8b24d	true	$LOADED_FEATURES.class == Array\n            
@@ -1910,6 +1912,7 @@ a0c8c214c743f932e1377fb1194651a2	["US", true, "bar"]	class US < String; end\n   
 a0ca30adffd4c4596c95a3912134c5cd	2	0.5.to_r.denominator
 a0d8a60091bf358a78984cd54491c359	[true, 12, true, false, false]	t = Thread.new { 3 * 4 }\n            [t.is_a?(Thread), t.value, t.j
 a0ed7fceb0bb6c6c16a0106636e9eb4a	"あ"	s = "hello"; s.bytesplice(0..4, "あいう", 0..2); s
+a0edb82d021a16c867f58024ff7e30c9	[:raised]	class P\n          attr_accessor :x, :y\n        end\n        def swap_fil
 a119cef46ae9c1190d2bbd29791572a2	true	def `(cmd); cmd.frozen?; end\n        def m; `ab`; end\n        m\n       
 a11ed1527c89aa21a332303e09009bd7	true	M = Data.define(:amount, :unit)\nM.new(1, "m").with(amount: 9).frozen?
 a13a2072b2f3375c306f9f28ca558183	[3.25, 999]	$flag = false\n        def maybe_redefine\n          if $flag\n           
@@ -2451,6 +2454,7 @@ c921f6a9c5e6eeda528ca1e442fc5581	[[1, 2, {}], [7, nil, {x: 5}], "wrong number of
 c92be7c8455335ce95725c16875fb8ea	[[1, 2], [1, nil], 5, "struct size differs"]	S = Struct.new(:a, :b)\n            K = Struct.new(:x, keyword_init:
 c951489b07a2c303c3b2a936741436aa	{1 => :amount, "m" => :unit}	M = Data.define(:amount, :unit)\nM.new(1, "m").to_h { |k, v| [v, k] }
 c95e82b12f56d193f726165a2ea36520	[nil, -42, -42.4242]	[[].min, [1,2,-42].min, [-42.4242, 100, 999999999999999999999999999
+c95fe51889dd083eb7d2bacd53fdc2c2	[[14, 8, 4], [:raised, 10, nil]]	class P\n          attr_reader :a, :b, :c\n          def fill(i)\n        
 c9680cb53fc0f3d06760b4803a4f62c9	50.0	[2.7800000000000002, 5.0, 2.5, 4.44, 3.89, 3.89, 4.44, 7.78, 5.0, 2.780000000000
 c97c02f0ab73d588d9ec5c3a5febdc77	[true, true, true, true]	require 'stringio'\n            orig = $stderr\n            $stderr =
 c9a3be96b3cae2aa0ba5aaa77abb03fb	[1, true]	path = "/tmp/monoruby_test_chown_#{Process.pid}_#{rand(100000)}"\n  

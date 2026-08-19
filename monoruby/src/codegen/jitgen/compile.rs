@@ -62,6 +62,12 @@ impl<'a> JitContext<'a> {
 
         self.backedge_branches();
 
+        // ④-b: a (possibly nested, specialized) compile is done — its
+        // frame's unfrozen-slot proofs must not leak into the enclosing
+        // compile's slots.
+        self.unfrozen_slots.clear();
+        self.instr_unfrozen.clear();
+
         #[cfg(feature = "emit-cfg")]
         dump_cfg::dump_cfg(&self.store, self.iseq_id(), bb_begin, bb_end);
 
@@ -70,10 +76,10 @@ impl<'a> JitContext<'a> {
 
     fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> JitResult<AsmIr> {
         let mut ir = AsmIr::new(self);
-        // The "self not frozen" proof is a straight-line fact: a merge makes
+        // The unfrozen-slot proofs are straight-line facts: a merge makes
         // no promise about every incoming path, and a loop head's safepoint
-        // is a preemption point where another thread can `freeze` self.
-        self.self_unfrozen = false;
+        // is a preemption point where another thread can `freeze` an object.
+        self.unfrozen_slots.clear();
 
         let mut state = match self.incoming_context(bbid, false)? {
             Some(bb) => bb,
@@ -279,24 +285,16 @@ impl<'a> JitContext<'a> {
         let pc = self.get_pc(bc_pos);
         state.set_pc(pc);
         let trace_ir = TraceIr::from_pc(pc, self.store);
-        // ④-b: the "self not frozen" proof survives only across instructions
+        // ④-b: the unfrozen-slot proofs survive only across instructions
         // that provably execute no Ruby code and reach no safepoint — either
-        // could freeze self (a callee via `self.freeze`, a safepoint via
+        // could freeze an object (a callee via `freeze`, a safepoint via
         // green-thread preemption into a thread that freezes it). Take the
-        // flag here; the whitelist below carries it forward, the `StoreIvar`
-        // arm consumes it (skipping the redundant guard) and re-sets it
-        // after its own guard/store. Everything else drops it.
-        let self_unfrozen = std::mem::take(&mut self.self_unfrozen);
-        if matches!(
-            trace_ir,
-            // Pure register/stack/memory ops: literal materialization
-            // (immediates fold into the abstract state; heap literals load a
-            // pointer into a pool register), slot copies, and ivar *loads*
-            // (memory reads into a pool register).
-            TraceIr::FrozenLiteral(..) | TraceIr::Mov(..) | TraceIr::LoadIvar(..)
-        ) {
-            self.self_unfrozen = self_unfrozen;
-        }
+        // set here; arms that compiled a transparent lowering publish it
+        // back via `restore_unfrozen` (minus the slot they redefine), the
+        // ivar-store arms consume it (skipping a redundant frozen guard)
+        // and re-prove their receiver. Every other arm drops it.
+        self.instr_unfrozen.clear();
+        std::mem::swap(&mut self.instr_unfrozen, &mut self.unfrozen_slots);
         #[cfg(feature = "jit-debug")]
         if let Some(fmt) = TraceIr::format(self.store, self.iseq_id(), pc) {
             eprintln!("{fmt}");
@@ -373,12 +371,18 @@ impl<'a> JitContext<'a> {
                     // rather than through rax to the stack home (see `def_lit2gp`).
                     state.def_lit2gp(ir, dst, val);
                 }
+                // Pure register/stack work.
+                self.restore_unfrozen(Some(dst));
             }
             TraceIr::Literal(dst, val) => {
                 state.discard(dst);
                 let using_fpr = state.get_using_fpr(ir);
                 ir.deep_copy_lit(using_fpr, val);
                 state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
+                // The deep copy (inline or `value_deep_copy`) is pure Rust —
+                // structural copy + allocation, no Ruby dispatch, no
+                // safepoint.
+                self.restore_unfrozen(Some(dst));
             }
             TraceIr::Array { dst, callid } => {
                 if self.try_fuse_array_minmax(state, ir, bc_pos, dst, callid) {
@@ -461,6 +465,8 @@ impl<'a> JitContext<'a> {
                         assert_eq!(ivarid, cached_ivarid);
                     }
                     self.load_ivar(state, ir, dst, self_class, ivarid);
+                    // Memory reads into a pool register: transparent.
+                    self.restore_unfrozen(Some(dst));
                 } else {
                     return Ok(CompileResult::Recompile(RecompileReason::IvarIdNotFound));
                 }
@@ -473,10 +479,14 @@ impl<'a> JitContext<'a> {
                     {
                         assert_eq!(ivarid, cached_ivarid);
                     }
-                    self.store_ivar(state, ir, src, self_class, ivarid, self_unfrozen);
-                    // The guard (or the carried proof) just established that
-                    // self is not frozen at this point of the path.
-                    self.self_unfrozen = true;
+                    let frozen_checked = self.instr_unfrozen_contains(SlotId::self_());
+                    self.store_ivar(state, ir, src, self_class, ivarid, frozen_checked);
+                    // The store itself runs no Ruby code (the heap-table
+                    // grow path is a Rust call), so the other proofs
+                    // survive; the guard (or the carried proof) just
+                    // established that self is not frozen here.
+                    self.restore_unfrozen(None);
+                    self.prove_unfrozen(SlotId::self_());
                     state.unset_side_effect_guard();
                 } else {
                     return Ok(CompileResult::Recompile(RecompileReason::IvarIdNotFound));
@@ -517,6 +527,8 @@ impl<'a> JitContext<'a> {
                     self.load_dynvar(state, ir, src);
                     state.def_rax2acc(ir, dst);
                 }
+                // LFP-chain walk + loads: transparent.
+                self.restore_unfrozen(Some(dst));
             }
             TraceIr::StoreDynVar(dst, src) => {
                 state.flush_gp(ir);
@@ -544,6 +556,10 @@ impl<'a> JitContext<'a> {
                     self.store_dynvar(state, ir, dst, src);
                 }
                 state.unset_side_effect_guard();
+                // Writes an *outer*-frame slot (the Float-guard miss is a
+                // trace exit); this frame's slots and their proofs are
+                // untouched.
+                self.restore_unfrozen(None);
             }
             TraceIr::BlockArgProxy(ret, outer) => {
                 state.flush_gp(ir);
@@ -582,12 +598,12 @@ impl<'a> JitContext<'a> {
 
             TraceIr::UnOp {
                 kind,
-                _dst: _,
+                _dst: dst,
                 src,
                 ic,
                 _polymorphic: _,
             } => {
-                return self.unary_op(state, ir, kind, src, ic, bc_pos);
+                return self.unary_op(state, ir, kind, dst, src, ic, bc_pos);
             }
 
             TraceIr::BinOp {
@@ -666,7 +682,11 @@ impl<'a> JitContext<'a> {
                 self.poison_float_speculations();
                 state.compile_yield(ir, &self.store, callid);
             }
-            TraceIr::InlineCache => {}
+            TraceIr::InlineCache => {
+                // The operand-carrier word of a two-word instruction: emits
+                // nothing, so the ④-b proofs pass straight through.
+                self.restore_unfrozen(None);
+            }
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 state.flush_gp(ir);
@@ -702,6 +722,13 @@ impl<'a> JitContext<'a> {
             TraceIr::Mov(dst, src) => {
                 state.flush_gp(ir);
                 state.copy_slot(ir, src, dst);
+                // Pure copy; dst now holds src's object, so src's proof
+                // transfers to it.
+                let src_proven = self.instr_unfrozen_contains(src);
+                self.restore_unfrozen(Some(dst));
+                if src_proven {
+                    self.prove_unfrozen(dst);
+                }
             }
             TraceIr::ConcatStr(dst, arg, len) => {
                 state.flush_gp(ir);
