@@ -3013,10 +3013,17 @@ impl Executor {
                             ));
                         }
                     }
-                    Visibility::Protected => {
-                        // CRuby permits a receiver-qualified protected call
-                        // when the caller's self is_a? the method's DEFINING
-                        // class/module (vm_call_method_each_type:
+                    Visibility::Protected if !is_func_call => {
+                        // An FCALL (implicit receiver, and every internal
+                        // rb_funcall-style invocation such as the `inherited`
+                        // / `const_added` hooks) bypasses the protected check
+                        // exactly as it bypasses the private one — CRuby's
+                        // rb_funcallv dispatches with FCALL, which skips both.
+                        //
+                        // For receiver-qualified calls, CRuby permits a
+                        // protected call when the caller's self is_a? the
+                        // method's DEFINING class/module
+                        // (vm_call_method_each_type:
                         // rb_obj_is_kind_of(cfp->self, me->defined_class)) —
                         // not the receiver's class. The two diverge between
                         // sibling subclasses (a Base-defined protected method
