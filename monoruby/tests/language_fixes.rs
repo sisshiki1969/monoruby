@@ -700,3 +700,31 @@ fn module_def_in_class_eval_block_uses_def_site_lexical_scope() {
         "#,
     );
 }
+
+#[test]
+fn accessor_called_with_wrong_arity_does_not_abort_jit() {
+    // A callsite that resolves to an attr_reader/attr_writer but does not
+    // have the canonical accessor shape (extra argument, block, ...) is a
+    // legal program that raises ArgumentError (or ignores the block) at
+    // runtime. The JIT's inline accessor lowering used to assert on the
+    // shape and abort the whole process once the site got hot
+    // (ActiveRecord's method_missing machinery probes accessor-named
+    // methods with arguments). Warm the sites past the JIT threshold.
+    run_test_once(
+        r#"
+        class AccArity
+          attr_reader :x
+          attr_writer :y
+          def initialize = @x = 7
+        end
+        a = AccArity.new
+        r = []
+        30.times do
+          r << (a.x(1) rescue :argerr)
+          r << (a.x { :blk })
+          r << (a.send(:y=, 1, 2) rescue :argerr2)
+        end
+        r.uniq
+        "#,
+    );
+}

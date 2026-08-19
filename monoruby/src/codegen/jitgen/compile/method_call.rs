@@ -518,18 +518,47 @@ impl<'a> JitContext<'a> {
             block_fid,
             ..
         } = *callsite;
+        // Whether the callsite has the canonical shape the inline
+        // accessor lowerings (attr/Struct readers and writers) assume:
+        // exactly `expected_pos` statically-known positional arguments
+        // and nothing else. A *legal* Ruby program can still call an
+        // accessor with extra arguments, keywords, a splat, or a block
+        // (raising ArgumentError — or ignoring the block — at runtime);
+        // such sites must side-exit to the VM, which implements those
+        // semantics, rather than trip the lowering's asserts and abort
+        // the whole compile (found via ActiveRecord, whose method_missing
+        // machinery probes attr_reader-named methods with arguments).
+        let accessor_shape = |callsite: &CallSiteInfo, expected_pos: usize| {
+            callsite.pos_num == expected_pos
+                && callsite.splat_pos.is_empty()
+                && !callsite.kw_may_exists()
+                && callsite.block_fid.is_none()
+                && callsite.block_arg.is_none()
+        };
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let (fid, outer_lfp) = match self.store[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
+                if !accessor_shape(callsite, 0) {
+                    return Ok(CompileResult::Deopt);
+                }
                 return Ok(self.attr_reader(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::AttrWriter { ivar_name } => {
+                if !accessor_shape(callsite, 1) {
+                    return Ok(CompileResult::Deopt);
+                }
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::StructReader { slot_index, inline } => {
+                if !accessor_shape(callsite, 0) {
+                    return Ok(CompileResult::Deopt);
+                }
                 return Ok(self.struct_slot_reader(state, ir, callid, slot_index, inline));
             }
             FuncKind::StructWriter { slot_index, inline } => {
+                if !accessor_shape(callsite, 1) {
+                    return Ok(CompileResult::Deopt);
+                }
                 return Ok(self.struct_slot_writer(state, ir, callid, slot_index, inline));
             }
             FuncKind::Builtin { .. } => (func_id, None),
