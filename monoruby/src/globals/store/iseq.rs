@@ -829,6 +829,11 @@ impl ISeqInfo {
         }
     }
 
+    #[cfg(feature = "jit-log")]
+    pub(crate) fn jit_entry_classes(&self) -> Vec<ClassId> {
+        self.jit_entry.keys().copied().collect()
+    }
+
     pub(crate) fn get_jit_entry(&self, self_class: ClassId) -> Option<DestLabel> {
         if self.jit_invalidated {
             return None;
