@@ -240,13 +240,17 @@ impl Codegen {
                 {
                     if self.startup_flag {
                         eprintln!(
-                            "{} {} {position:?} ({} bytes, {} bytes) {elapsed:?}",
+                            "{} {} {position:?} ({} bytes, {} bytes) [wm0:{:?}-{:?} wm1:{:?}-{:?}] {elapsed:?}",
                             globals
                                 .store
                                 .func_description(globals.store[iseq_id].func_id()),
                             globals.store.debug_class_name(self_class),
                             span.0.1,
-                            span.1.1
+                            span.1.1,
+                            start0,
+                            end0,
+                            start1,
+                            end1
                         );
                         eprintln!("{}", specialized_info.format(&globals.store));
                     }
