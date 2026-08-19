@@ -632,3 +632,71 @@ fn dot_called_operator_with_dots_forwarding() {
         "#,
     );
 }
+
+#[test]
+fn main_context_stack_budget_allows_deep_recursion() {
+    // The primary context's Ruby-frame stack budget is 1 MiB (formerly
+    // 64 KiB, which ActiveRecord's require chain outgrew — the nested
+    // Kernel#require frames alone overflowed it). ~2000 nested frames
+    // must complete like CRuby. Fiber / green-thread contexts keep their
+    // own 64 KiB budget (bounded by their 256 KiB stack allocations).
+    run_test_once("def __deep(n) = n == 0 ? 0 : 1 + __deep(n - 1); __deep(2000)");
+    // Runaway recursion must still be caught by the stack guard (the
+    // exact depth differs from CRuby, so no differential comparison).
+    run_test_error("def __inf(n) = __inf(n + 1); __inf(0)");
+}
+
+#[test]
+fn module_def_in_class_eval_block_uses_def_site_lexical_scope() {
+    // A `module X; end` inside a block run via `class_eval(&blk)` defines
+    // X under the *block's* lexical scope, regardless of what class body
+    // the class_eval call itself is executing under. Regression: when the
+    // include ran inside another class body (ActiveRecord::Base including
+    // SignedId, whose Concern `included do ... end` block defines a module
+    // and prepends it two lines later), the runtime class-context stack
+    // leaked the outer body's cref through the block boundary, landing the
+    // constant on the receiver where the following lexical reference could
+    // not see it.
+    run_test_once(
+        r#"
+        module CrefMixin
+          BLK = proc do
+            module DefinedInBlock
+              def hello = :hi
+            end
+            singleton_class.prepend DefinedInBlock
+          end
+          def self.append_features(base)
+            super
+            base.class_eval(&BLK)
+          end
+        end
+        class CrefTop; end
+        CrefTop.include(CrefMixin)
+        r = [CrefTop.hello, CrefMixin.const_defined?(:DefinedInBlock, false),
+             CrefTop.const_defined?(:DefinedInBlock, false)]
+        CrefMixin.send(:remove_const, :DefinedInBlock)
+        class CrefBody
+          include CrefMixin
+        end
+        r + [CrefBody.hello, CrefMixin.const_defined?(:DefinedInBlock, false),
+             CrefBody.const_defined?(:DefinedInBlock, false)]
+        "#,
+    );
+    // Constant assignment in a class_eval'd block follows the same rule
+    // (the classic "use const_set if you mean the receiver" gotcha).
+    run_test_once(
+        r#"
+        class CaRecv; end
+        module CaHome
+          BLK = proc { CONST_IN_BLOCK = 42 }
+        end
+        class CaOuter
+          CaRecv.class_eval(&CaHome::BLK)
+        end
+        [CaHome.const_defined?(:CONST_IN_BLOCK, false),
+         CaRecv.const_defined?(:CONST_IN_BLOCK, false),
+         CaOuter.const_defined?(:CONST_IN_BLOCK, false)]
+        "#,
+    );
+}

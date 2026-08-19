@@ -530,6 +530,7 @@
 29c1437316aed84311f490aa6a4532d1	["C", "B", "A", "M3", "M2", "M1"]	module M1; end\n        module M2\n          include M1\n        end\n     
 2a04e0b26f5843b7982d5765e50f29cf	[[:c1, :c2], [:c1, :c2]]	class S\n              def s; end\n            end\n            class 
 2a054f41f0ebb76b11549882f920add6	[]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.val
+2a25d512f1f2e7b492c0615e3eebe7e4	[:hi, true, false, :hi, true, false]	module CrefMixin\n          BLK = proc do\n            module DefinedInBl
 2a2b86ebb2efff59c7eaeba003dc98fc	["abc", "XYZ", "def"]	"abcXYZdef" =~ /XYZ/\n            [$`, $&, $']\n            
 2a2c02a8e1eb184cff179aa37a7afd2c	[[1, 2, 5, 4], A]	class A < Array\n        end\n        \n\n        a = A.new([1,2,3])\n      
 2a2cecca7ae69941c6256b13bc8f0f0a	[2.0, 4.0, 6.0, 3.0, 5.0, 7.0]	def kill_int(n)\n          acc = 0.0\n          hits = []\n          n.tim
@@ -791,6 +792,7 @@
 423a27c97cfa628fc4d17c0da8f6bb0a	[true, "hi"]	class ReSubB < Regexp; end; r = ReSubB.new("hi"); [r.is_a?(ReSubB), r.source]
 4253be14d49d0c5b2ccb81f0dcb1bbe4	[1, 2, 1, 2, 1, 2]	class C; def to_int; 3; end; end; o = C.new\n[1, 2] * o
 42636ead6d6f845d215efab6f85556c8	[ArgumentError, "mid"]	o = Object.new\n            def o.each; yield 1; raise ArgumentError
+4275f26c470c052644fed1d14d2bba17	2000	def __deep(n) = n == 0 ? 0 : 1 + __deep(n - 1); __deep(2000)
 429a7a3919eafaa9c1bebe8facc7d257	[3, :forked, true]	a = Thread.start(1, 2) { |x, y| x + y }.value\n            b = Threa
 429bbb68c8becef2c91b3b88c39ec1b9	0.75	class Float; alias __orig :/; def /(o); __orig(o); end; end; 3.0 / 4.0
 42b5a41ba81c93ef56cb842bd0de353a	[4, 5, 6, 7, 8, 9]	r = []\n        10.times { |i| r << i if (i == 4)...(i == 4) }\n        r
@@ -1082,6 +1084,7 @@
 59a6ce8e2915130ae9576712b5a0f444	[1.0, Infinity]	[1.0, 1.0 / 0.0]
 59b430ac9ae86f562aec95304e3961db	[:FOO]	$res = []\n            class C\n              def self.const_added(na
 5a20645aebc0d88e162feb3d416ba777	3	class Integer; alias __orig :/; def /(o); __orig(o); end; end; 12 / 4
+5a33fd783a7b98bc5a5ed1d31a52649b	[[1, 2, 3, 4], 1, [1, 3]]	class Wrap\n          def initialize(a) = @a = a\n          def +(...)\n  
 5a5d7ffbe02389d8d6a83efb9a7937c6	[0, 2, 3, 3, true, 4]	File.open("Cargo.toml") do |f|\n              a = f.lineno\n         
 5a735dfa86fec86676f6e6204efc5ceb	"UTF-8"	"abc".reverse.encoding.to_s
 5a8e5757dd64b417433416b14e098c89	-2	class C; define_method(:m) { |a, *| a }; end\n            C.new.meth
@@ -1380,6 +1383,7 @@
 73c9dec5b896221d19b6233b9db54621	[:rescued, "caught"]	f = Fiber.new do\n              begin\n                Fiber.yield :a
 73cf450d13041a7f92cc5202727762b7	"/"	File.realpath("..", "/tmp")
 73e27e81e87093c61641bec1ab3aa95d	[[:a, 0], [:b, 1], 30, nil, 9, [:a, 1], [:b, 2], 40, :h0, 9, [:a, 2], [:b, 3], 10, :h1, 9, [:a, 3], [:b, 0], 20, nil, 9, [:a, 0], [:b, 1], 30, nil, 9, [:a, 1], [:b, 2], 40, :h0, 9, [:a, 2], [:b, 3], 10, :h1, 9, [:a, 3], [:b, 0], 20, nil, 9, [:a, 0], [:b, 1], 30, nil, 9, [:a, 1], [:b, 2], 40, :h0, 9, [:a, 2], [:b, 3], 10, :h1, 9, [:a, 3], [:b, 0], 20, nil, 9]	class Ba; def [](i) = [:a, i]; end\n            class Bb; def [](i) 
+740f2927c51791b1cce95ad716cea114	[[], [[], :blk]]	class ZpBase\n          def q(*a) = a\n          def r(*a) = [a, block_gi
 7416b95f5e87edec12c271dfa849a210	[200, [:body, :ensure_start, :ensure]]	def baz\n              $x = []\n              $x << :body\n           
 74265315f293e83823e6e37edea00c74	[true, true, true, true, true, 1.0, 42, nil, nil]	srand(42)\n            a = rand\n            srand(42)\n            [\n
 742cf7259eae88dd4512794b3c9d16ad	[:i, :j]	def m; [1].each { |i| j = i * 2; return local_variables.sort }; end; m
@@ -1893,6 +1897,7 @@
 9f1a90eeaa16fa36daa6ad13a43b2591	{a: Infinity, b: -Infinity}	{ a: 1.0 / 0.0, b: -1.0 / 0.0 }
 9f2e97978468dcf092100b2198ed8c1d	"nil"	BasicObject.superclass.inspect
 9f3f4db8aedc09ee1c6c04fdd3f70da9	[0, 1, 1, 1, 2, 2, 3, -1, -1, -1, -2, -3]	def a; end\n            def b(x); end\n            def c(x:); end\n   
+9f5ec1e537398c2211743b4aa0577b0d	[[[1, 2], {x: 3}, 99], 42]	class ZsBase\n          def m(*a, **k, &b)\n            [a, k, b ? b.call
 9f5f309834433f1fe01c04dcbc116a24	[[["a", 1], ["b", 2], ["c", 3]], [["c", 3], ["b", 2], ["a", 1]], [["b", 2], ["a", 1], ["c", 3]]]	h = { "b" => 2, "a" => 1, "c" => 3 }\n            [\n              h.
 9f902ab91833e894590a7b4ce20857b3	"UTF-16LE"	Regexp.union("a".encode("UTF-16LE")).encoding.to_s
 9f9544ba61d7f96d5ef6fd821c8d171a	"Encoding::CompatibilityError"	(/x/ === "y".encode("UTF-16LE"); nil) rescue $!.class.name
@@ -1900,6 +1905,7 @@
 9fbc0e313a58ac0a436184f469d5653a	99	def bar\n              1\n            rescue\n              2\n        
 9fe32a360db73178af9915a14b3eb234	"MIT License\\n\\nCopyright (c) 2022 monochrome\\n\\nPermission is hereby granted, free of charge, to any person obtaining a copy\\nof this software and associated documentation files (the \\"Software\\"), to deal\\nin the Software without restriction, including without limitation the rights\\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\\ncopies of the Software, and to permit persons to whom the Software is\\nfurnished to do so, subject to the following conditions:\\n\\nThe above copyright notice and this permission notice shall be included in all\\ncopies or substantial portions of the Software.\\n\\nTHE SOFTWARE IS PROVIDED \\"AS IS\\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\\nSOFTWARE.\\n"	File.binread("../LICENSE-MIT")
 9ff357f1f7deff5df58394308a09e60d	[nil]	r = []\n            Enumerator.new { |y| r << y.yield(1) }.to_a\n    
+a00f258ecf0624f5c3d92003e2dd08b5	[true, false, false]	class CaRecv; end\n        module CaHome\n          BLK = proc { CONST_IN
 a020918817615145edd613c059e9d86c	"baz"	obj = Object.new\n            obj.define_singleton_method("bar") { "
 a0259347c2c9aaca8d0fb2ab3172334f	[(3+4i), (1+2i)]	Complex(1,2).coerce(Complex(3,4))
 a025ebc9c10902ee0c976c9724d84b2e	"US-ASCII"	"abcabc".dup.force_encoding("US-ASCII").delete("b").encoding.to_s

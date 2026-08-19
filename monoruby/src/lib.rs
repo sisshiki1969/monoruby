@@ -90,7 +90,19 @@ pub use id_table::{IdentId, IdentName};
 use monoruby_attr::*;
 
 const STRING_INLINE_CAP: usize = 32;
-const MAX_STACK_SIZE: usize = 64 * 1024; // 256 KiB
+/// Ruby-frame stack budget for the *primary* executor context, which runs
+/// on the host thread's native stack (process main thread: 8 MiB; Rust
+/// test-harness worker threads: 2 MiB). 1 MiB matches CRuby's default VM
+/// stack size and is deep enough for real-world require chains
+/// (ActiveRecord's boot nests far beyond the old 64 KiB budget); the
+/// enclosing native stack still leaves ≥1 MiB of headroom for the Rust
+/// frames of builtins running beneath the deepest Ruby frame.
+const MAIN_STACK_SIZE: usize = 1024 * 1024;
+/// Ruby-frame stack budget for fiber / green-thread contexts, whose stacks
+/// are fixed 256 KiB allocations (`FIBER_STACK_SIZE` / `THREAD_STACK_SIZE`)
+/// with a guard page at the bottom: a 64 KiB Ruby budget leaves ~192 KiB of
+/// Rust headroom below the limit before the guard page can be hit.
+const FIBER_STACK_BUDGET: usize = 64 * 1024;
 const CONTINUATION_FRAME_SIZE: usize = 16;
 
 type RubyMap<K, V> = rubymap::RubyMap<K, V, Executor, Globals, MonorubyErr>;
