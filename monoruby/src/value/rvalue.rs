@@ -1830,13 +1830,6 @@ impl RValue {
         }
     }
 
-    pub(super) fn new_string_with_class(s: &str, class_id: ClassId) -> Self {
-        RValue {
-            header: Header::new(class_id, ObjTy::STRING),
-            kind: ObjKind::string_from_str(s),
-            var_table: None,
-        }
-    }
 
     pub(super) fn new_string_from_inner(inner: RStringInner) -> Self {
         RValue {
@@ -2056,19 +2049,6 @@ impl RValue {
     pub(super) fn new_range(start: Value, end: Value, exclude_end: bool) -> Self {
         RValue {
             header: Header::new(RANGE_CLASS, ObjTy::RANGE),
-            kind: ObjKind::range(start, end, exclude_end),
-            var_table: None,
-        }
-    }
-
-    pub(super) fn new_range_with_class(
-        start: Value,
-        end: Value,
-        exclude_end: bool,
-        class_id: ClassId,
-    ) -> Self {
-        RValue {
-            header: Header::new(class_id, ObjTy::RANGE),
             kind: ObjKind::range(start, end, exclude_end),
             var_table: None,
         }

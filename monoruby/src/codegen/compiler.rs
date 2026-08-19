@@ -309,6 +309,28 @@ impl Codegen {
         self_class: ClassId,
         reason: RecompileReason,
     ) -> Option<()> {
+        // Bail *before* compiling when there is no patch point to install
+        // into — after a BOP eviction, or when the method only ever ran as a
+        // specialized child of some root (its own `jit_entry` map was never
+        // populated). Compiling first and then discarding used to livelock:
+        // the stale body kept requesting a whole recompile on every call,
+        // each one paying a full compile + `finalize` over the ever-growing
+        // relocation table, only to be thrown away (mirrors the aarch64
+        // variant, which has always early-outed on an unknown slot).
+        let patch_point = match globals.store[iseq_id].get_jit_entry(self_class) {
+            Some(patch_point) => patch_point,
+            None => {
+                #[cfg(feature = "jit-log")]
+                eprintln!(
+                    "[JIT] recompilation skipped for invalidated method: {:?} (jit_invalidated={}, entry_classes={:?}, wanted={:?})",
+                    globals.store[globals.store[iseq_id].func_id()].name(),
+                    globals.store[iseq_id].jit_invalidated(),
+                    globals.store[iseq_id].jit_entry_classes(),
+                    self_class,
+                );
+                return None;
+            }
+        };
         let jit_entry = self.jit.label();
         let class_version = self.class_version();
         let (cache, _) = self.compile_method(
@@ -319,22 +341,9 @@ impl Codegen {
             class_version,
             Some(reason),
         )?;
-        // get_jit_code() must not be None.
-        // After BOP redefinition occurs, recompilation in invalidated methods cause None.
-        if let Some(patch_point) = globals.store[iseq_id].get_jit_entry(self_class) {
-            globals.store[iseq_id].set_cache_map(self_class, cache);
-            let patch_point = self.jit.get_label_address(&patch_point);
-            self.jit.apply_jmp_patch_address(patch_point, &jit_entry);
-        } else {
-            // JIT entry was invalidated (e.g. by BOP redefinition).
-            // The compiled code is discarded; execution falls back to the VM interpreter.
-            #[cfg(feature = "jit-log")]
-            eprintln!(
-                "[JIT] recompilation skipped for invalidated method: {:?}",
-                globals.store[globals.store[iseq_id].func_id()].name()
-            );
-            return None;
-        }
+        globals.store[iseq_id].set_cache_map(self_class, cache);
+        let patch_point = self.jit.get_label_address(&patch_point);
+        self.jit.apply_jmp_patch_address(patch_point, &jit_entry);
         Some(())
     }
 

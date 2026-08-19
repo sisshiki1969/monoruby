@@ -287,10 +287,6 @@ impl ModuleInner {
         self.superclass.map(|m| m.0)
     }
 
-    pub fn superclass_id(&self) -> Option<ClassId> {
-        self.superclass.map(|m| m.id())
-    }
-
     pub fn class_type(&self) -> &ModuleType {
         &self.class_type
     }
