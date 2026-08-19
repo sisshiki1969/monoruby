@@ -562,3 +562,299 @@ fn binary_source_bytes_survive_load_and_eval() {
         "##,
     );
 }
+
+#[test]
+fn zsuper_with_literal_block_forwards_arguments() {
+    // `super { ... }` (no argument list) must forward the enclosing
+    // method's positional and keyword arguments implicitly and only
+    // override the block — the shape ActiveRecord's
+    // Migration::Current#create_table relies on. Regression: the
+    // literal block used to demote the call to an explicit-args super
+    // with an empty argument list.
+    run_test_once(
+        r#"
+        class ZsBase
+          def m(*a, **k, &b)
+            [a, k, b ? b.call : nil]
+          end
+          def n(x) = yield(x)
+        end
+        class ZsSub < ZsBase
+          def m(*a, **k)
+            super { 99 }
+          end
+          def n(x)
+            super { |v| v * 2 }
+          end
+        end
+        [ZsSub.new.m(1, 2, x: 3), ZsSub.new.n(21)]
+        "#,
+    );
+    // `super()` — explicit empty parens — is distinct: it passes NO
+    // arguments (with or without a block).
+    run_test_once(
+        r#"
+        class ZpBase
+          def q(*a) = a
+          def r(*a) = [a, block_given? ? yield : nil]
+        end
+        class ZpSub < ZpBase
+          def q(x) = super()
+          def r(x) = super() { :blk }
+        end
+        [ZpSub.new.q(5), ZpSub.new.r(6)]
+        "#,
+    );
+}
+
+#[test]
+fn dot_called_operator_with_dots_forwarding() {
+    // `recv.+(...)` / `recv.[](...)` — an explicit dot call of an
+    // operator method whose arguments are `...`-forwarded (the shape
+    // ActiveSupport's `delegate :+, to: :records` generates). The empty
+    // static argument list used to make the parser treat `.+` as unary
+    // `+@` (and `.[]` as a zero-element Index), losing the forwarded
+    // arguments.
+    run_test_once(
+        r#"
+        class Wrap
+          def initialize(a) = @a = a
+          def +(...)
+            @a.+(...)
+          end
+          def [](...)
+            @a.[](...)
+          end
+          def -(other) = @a - other
+        end
+        w = Wrap.new([1, 2, 3])
+        [w + [4], w[0], w - [2]]
+        "#,
+    );
+}
+
+#[test]
+fn main_context_stack_budget_allows_deep_recursion() {
+    // The primary context's Ruby-frame stack budget is 1 MiB (formerly
+    // 64 KiB, which ActiveRecord's require chain outgrew — the nested
+    // Kernel#require frames alone overflowed it). ~2000 nested frames
+    // must complete like CRuby. Fiber / green-thread contexts keep their
+    // own 64 KiB budget (bounded by their 256 KiB stack allocations).
+    run_test_once("def __deep(n) = n == 0 ? 0 : 1 + __deep(n - 1); __deep(2000)");
+    // Runaway recursion must still be caught by the stack guard (the
+    // exact depth differs from CRuby, so no differential comparison).
+    run_test_error("def __inf(n) = __inf(n + 1); __inf(0)");
+}
+
+#[test]
+fn module_def_in_class_eval_block_uses_def_site_lexical_scope() {
+    // A `module X; end` inside a block run via `class_eval(&blk)` defines
+    // X under the *block's* lexical scope, regardless of what class body
+    // the class_eval call itself is executing under. Regression: when the
+    // include ran inside another class body (ActiveRecord::Base including
+    // SignedId, whose Concern `included do ... end` block defines a module
+    // and prepends it two lines later), the runtime class-context stack
+    // leaked the outer body's cref through the block boundary, landing the
+    // constant on the receiver where the following lexical reference could
+    // not see it.
+    run_test_once(
+        r#"
+        module CrefMixin
+          BLK = proc do
+            module DefinedInBlock
+              def hello = :hi
+            end
+            singleton_class.prepend DefinedInBlock
+          end
+          def self.append_features(base)
+            super
+            base.class_eval(&BLK)
+          end
+        end
+        class CrefTop; end
+        CrefTop.include(CrefMixin)
+        r = [CrefTop.hello, CrefMixin.const_defined?(:DefinedInBlock, false),
+             CrefTop.const_defined?(:DefinedInBlock, false)]
+        CrefMixin.send(:remove_const, :DefinedInBlock)
+        class CrefBody
+          include CrefMixin
+        end
+        r + [CrefBody.hello, CrefMixin.const_defined?(:DefinedInBlock, false),
+             CrefBody.const_defined?(:DefinedInBlock, false)]
+        "#,
+    );
+    // Constant assignment in a class_eval'd block follows the same rule
+    // (the classic "use const_set if you mean the receiver" gotcha).
+    run_test_once(
+        r#"
+        class CaRecv; end
+        module CaHome
+          BLK = proc { CONST_IN_BLOCK = 42 }
+        end
+        class CaOuter
+          CaRecv.class_eval(&CaHome::BLK)
+        end
+        [CaHome.const_defined?(:CONST_IN_BLOCK, false),
+         CaRecv.const_defined?(:CONST_IN_BLOCK, false),
+         CaOuter.const_defined?(:CONST_IN_BLOCK, false)]
+        "#,
+    );
+}
+
+#[test]
+fn accessor_called_with_wrong_arity_does_not_abort_jit() {
+    // A callsite that resolves to an attr_reader/attr_writer but does not
+    // have the canonical accessor shape (extra argument, block, ...) is a
+    // legal program that raises ArgumentError (or ignores the block) at
+    // runtime. The JIT's inline accessor lowering used to assert on the
+    // shape and abort the whole process once the site got hot
+    // (ActiveRecord's method_missing machinery probes accessor-named
+    // methods with arguments). Warm the sites past the JIT threshold.
+    run_test_once(
+        r#"
+        class AccArity
+          attr_reader :x
+          attr_writer :y
+          def initialize = @x = 7
+        end
+        a = AccArity.new
+        r = []
+        30.times do
+          r << (a.x(1) rescue :argerr)
+          r << (a.x { :blk })
+          r << (a.send(:y=, 1, 2) rescue :argerr2)
+        end
+        r.uniq
+        "#,
+    );
+    // Cover every guard arm through the shape that actually reaches the
+    // JIT's FuncKind dispatch (and originally tripped the asserts in
+    // ActiveRecord): a *polymorphic* callsite inside a hot method, where
+    // one receiver class resolves the name to a plain method (keeping the
+    // site cached and compiling) and the other to an attr/Struct accessor
+    // whose callsite shape is non-canonical. Writer names cannot be
+    // direct-called with extra shapes, so those go through aliases.
+    run_test_once(
+        r#"
+        class PolyPlain
+          def m(x) = x + 10
+          def mb(&b) = :plain_mb
+          def wm(*a) = a.size
+          def sg(x) = x - 1
+          def sw(*a) = :plain_sw
+        end
+        class PolyAcc
+          attr_reader :m, :mb
+          attr_writer :w
+          alias wm w=
+          def initialize
+            @m = 7
+            @mb = 8
+          end
+        end
+        struct_cls = Struct.new(:sg) do
+          alias sw sg=
+        end
+        objs = [PolyPlain.new, PolyAcc.new, PolyPlain.new, struct_cls.new(5)]
+        def drive(o)
+          pr = proc { :block_arg }
+          r = []
+          r << (o.m(1) rescue :reader_arity) if o.respond_to?(:m)
+          r << (o.mb { :blk }) if o.respond_to?(:mb)
+          r << (o.mb(&pr)) if o.respond_to?(:mb)
+          r << (o.wm(1, 2) rescue :writer_arity) if o.respond_to?(:wm)
+          r << (o.sg(3) rescue :struct_reader_arity) if o.respond_to?(:sg)
+          r << (o.sw(4) { :blk } rescue :struct_writer_block) if o.respond_to?(:sw)
+          r
+        end
+        out = []
+        40.times { |i| out << drive(objs[i % objs.size]) }
+        out.uniq
+        "#,
+    );
+}
+
+#[test]
+fn end_block_registers_at_exit() {
+    // `END { ... }` desugars through an `at_exit` registration (the
+    // ArgList::with_block constructor path). The block runs at process
+    // exit, after the harness's final `p`, so the compared value is
+    // unaffected.
+    run_test_once("END { }; :done");
+}
+
+#[test]
+fn builtin_subclass_initialize_hash_time_range() {
+    // Hash.new / Time.new / Range.new route through the generic
+    // `Class#new`, so subclass-overridden `initialize` — including keyword
+    // parameters — is dispatched. Previously Hash/Time rejected the
+    // keywords at their builtin `new` boundary, and Range silently folded
+    // the keyword hash into the third positional slot (the `exclude_end`
+    // flag), yielding `1...5` instead of `1..5`.
+    run_test_once(
+        r#"
+        class KwHash < Hash
+          attr_reader :opt
+          def initialize(opt: nil)
+            super()
+            @opt = opt
+          end
+        end
+        class KwRange < Range
+          attr_reader :opt
+          def initialize(a, b, opt: nil)
+            super(a, b)
+            @opt = opt
+          end
+        end
+        class KwTime < Time
+          attr_reader :opt
+          def initialize(opt: nil)
+            super(2020, 1, 2, 3, 4, 5, "+00:00")
+            @opt = opt
+          end
+        end
+        h = KwHash.new(opt: 1)
+        r = KwRange.new(1, 5, opt: 2)
+        t = KwTime.new(opt: 3)
+        [h.opt, h.class.name, r, r.opt, r.to_a, t.year, t.utc_offset, t.opt]
+        "#,
+    );
+}
+
+#[test]
+fn range_new_semantics_via_class_new() {
+    // Direct Range instances come out frozen; subclass instances don't.
+    // A second `initialize` raises NameError (unfrozen subclass) or
+    // FrozenError (frozen direct instance); incomparable endpoints raise
+    // ArgumentError; `allocate` + `initialize` matches `Range.new`.
+    run_test_once(
+        r#"
+        sub = Class.new(Range)
+        errs = []
+        begin; sub.new(1, 2).send(:initialize, 3, 4); rescue => e; errs << [e.class.to_s, e.message]; end
+        begin; Range.new(1, 2).send(:initialize, 3, 4); rescue => e; errs << e.class.to_s; end
+        begin; Range.new(1, Object.new); rescue => e; errs << e.class.to_s; end
+        alloc = Range.allocate
+        alloc.send(:initialize, 5, 6)
+        [Range.new(1, 2), Range.new(1, 2).frozen?, Range.new(1, 2, true),
+         sub.new(1, 2).frozen?, (1..2).frozen?, alloc, alloc.frozen?] + errs
+        "#,
+    );
+    // Hash defaults / default procs / capacity: still work through the
+    // Class#new route.
+    run_test_once(
+        r#"
+        [Hash.new(9)[:missing], Hash.new { |h, k| "d-#{k}" }[:k],
+         Hash.new(capacity: 8), Class.new(Hash).new(7).default]
+        "#,
+    );
+    // Time.new positional forms (offset-explicit, so the expectation is
+    // timezone-independent) still work through the Class#new route.
+    run_test_once(
+        r#"
+        t = Time.new(2020, 1, 2, 3, 4, 5, "+09:00")
+        [t.year, t.month, t.day, t.hour, t.utc_offset, Time.new(2020, 1, 1, in: "+09:00").utc_offset]
+        "#,
+    );
+}

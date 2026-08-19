@@ -10,10 +10,15 @@ use chrono::{
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Time", TIME_CLASS, ObjTy::TIME);
-    globals.define_builtin_class_func_with_kw(
+    // No class-level `new` here: `Time.new` resolves to the generic
+    // `Class#new` (builtins/class.rb) — allocate via `time_alloc_func`,
+    // then dispatch `#initialize`. Routing through the one true dispatch
+    // path keeps subclass-overridden `initialize` (positional *and*
+    // keyword arguments) working.
+    globals.define_private_builtin_func_with_kw(
         TIME_CLASS,
-        "new",
-        time_now,
+        "initialize",
+        time_initialize,
         0,
         7,
         false,
@@ -819,9 +824,59 @@ fn round_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/s/new.html]
 #[monoruby_builtin]
 fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // `Time.new`/`Time.now` called on a subclass must return an
-    // instance of that subclass.
+    // `Time.now` called on a subclass must return an instance of that
+    // subclass. (`Time.new` routes through `Class#new` → `#initialize`.)
     let cls = lfp.self_val().as_class().id();
+    time_build(vm, globals, lfp, lfp.self_val(), cls)
+}
+
+///
+/// ### Time#initialize
+///
+/// - initialize(year = nil, ..., in: nil, precision: ...) -> self
+///
+/// Private hook called by `Class#new`; same argument handling as the old
+/// `Time.new` builtin (shared `time_build`), writing the computed time
+/// into the allocated receiver. Divergence from CRuby (documented):
+/// `Time.allocate` is a valid epoch time rather than an "uninitialized
+/// Time" that raises TypeError, and re-initializing is permitted.
+///
+#[monoruby_builtin]
+fn time_initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    self_.ensure_not_frozen(&globals.store)?;
+    let cls = self_.real_class(&globals.store).id();
+    // `.find_timezone` (used to resolve String zones) is a class-level
+    // hook: look it up on the receiver's class.
+    let class_val = globals.store[cls].get_module().as_val();
+    let built = time_build(vm, globals, lfp, class_val, cls)?;
+    *self_.as_time_mut() = built.as_time().clone();
+    // The timezone-object path (`Time.new(..., tz)` where tz responds to
+    // `local_to_utc`) stores the zone object on the built value's
+    // ZONE_IVAR — carry it over to the real receiver.
+    if let Some(zone) = globals.store.get_ivar(built, IdentId::get_id(ZONE_IVAR)) {
+        globals.store.set_ivar(self_, IdentId::get_id(ZONE_IVAR), zone)?;
+    }
+    Ok(self_)
+}
+
+/// Shared argument handling of `Time.now` and `Time#initialize` (the old
+/// `Time.new`): builds a classed Time value from the call frame's
+/// positional slots 0-6 plus the `in:` (slot 7) / `precision:` (slot 8)
+/// keywords. `tz_lookup` is the object whose `.find_timezone` resolves
+/// String timezones (the Time class or subclass).
+fn time_build(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    tz_lookup: Value,
+    cls: ClassId,
+) -> Result<Value> {
     // The `in:` keyword (slot 7) gives the UTC offset for both
     // `Time.now(in:)` and `Time.new(y, …, in:)`.
     let in_arg = lfp.try_arg(7).filter(|v| !v.is_nil());
@@ -887,7 +942,7 @@ fn time_now(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 // class's `.find_timezone`, if defined, to a timezone object.
                 Err(e) => {
                     if off_arg.is_str().is_some()
-                        && let Some(tz) = find_timezone(vm, globals, lfp.self_val(), off_arg)?
+                        && let Some(tz) = find_timezone(vm, globals, tz_lookup, off_arg)?
                         && let Some(t) = time_new_with_timezone(vm, globals, naive, tz, cls)?
                     {
                         return Ok(t);

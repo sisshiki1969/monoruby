@@ -592,12 +592,12 @@ impl JitModule {
         unsafe { std::mem::transmute_copy(&codeptr.as_ptr()) }
     }
     pub(in crate::codegen) fn init_stack_limit(&mut self) -> extern "C" fn(&mut Executor) -> *const u8 {
-        // executor.stack_limit = sp - MAX_STACK_SIZE (= 65536 = 16 << 12).
+        // executor.stack_limit = sp - MAIN_STACK_SIZE (= 1 MiB = 256 << 12).
         // x0 = &mut Executor (AAPCS64 arg0).
         let codeptr = self.jit.get_current_address();
         monoasm_arm64!(&mut self.jit,
             mov x10, sp;
-            sub x10, x10, #16, lsl #12; // 16 << 12 = 65536
+            sub x10, x10, #256, lsl #12; // 256 << 12 = 1048576
             str x10, [x0, #(EXECUTOR_STACK_LIMIT as u32)];
             ret;
         // SAFETY: codeptr is an `extern "C" fn(&mut Executor) -> *const u8`.

@@ -328,6 +328,12 @@ pub struct ArgList {
     pub delegate_block: bool,
     /// has splat argument
     pub splat: bool,
+    /// zsuper (`super` without an argument list) that carries a literal
+    /// block (`super { ... }`). The enclosing method's arguments must
+    /// still be forwarded implicitly — only the block is overridden.
+    /// Distinguishes it from `super() { ... }`, which passes *no*
+    /// arguments and otherwise produces an identical ArgList.
+    pub zsuper: bool,
 }
 
 impl ArgList {
@@ -351,20 +357,10 @@ impl ArgList {
             forwarding: false,
             delegate_block: false,
             splat: false,
+            zsuper: false,
         }
     }
 
-    pub(crate) fn with_block(block: Box<Node>) -> Self {
-        ArgList {
-            args: vec![],
-            kw_args: vec![],
-            hash_splat: vec![],
-            block: Some(block),
-            forwarding: false,
-            delegate_block: false,
-            splat: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

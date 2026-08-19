@@ -23,6 +23,15 @@ impl<'a> BytecodeGen<'a> {
         loc: Loc,
     ) -> Result<CallSite> {
         if let Some(mut arglist) = arglist {
+            // `super { ... }` — zsuper carrying a literal block: the
+            // enclosing method's arguments are still forwarded
+            // implicitly; only the block is overridden. (Distinct from
+            // `super() { ... }`, which passes no arguments and takes the
+            // explicit-arguments path below.)
+            if arglist.zsuper {
+                let block = arglist.block.take().map(|b| *b);
+                return self.handle_super_forward(block, dst, loc);
+            }
             // `super(args)` with no explicit block still forwards the
             // calling method's block, exactly like zsuper — only a
             // literal block or an explicit `&blk` / `&nil` argument
@@ -32,7 +41,7 @@ impl<'a> BytecodeGen<'a> {
             }
             self.handle_arguments(arglist, None, BcReg::Self_, dst, loc)
         } else {
-            Ok(self.handle_super_forward(dst, loc))
+            self.handle_super_forward(None, dst, loc)
         }
     }
 
@@ -146,7 +155,16 @@ impl<'a> BytecodeGen<'a> {
         ))
     }
 
-    fn handle_super_forward(&mut self, dst: Option<BcReg>, loc: Loc) -> CallSite {
+    /// Build the zsuper callsite: forward the enclosing method's
+    /// positional/keyword parameters. `block` is a literal block attached
+    /// to the parenless form (`super { ... }`), which overrides the
+    /// otherwise-forwarded caller block.
+    fn handle_super_forward(
+        &mut self,
+        block: Option<Node>,
+        dst: Option<BcReg>,
+        loc: Loc,
+    ) -> Result<CallSite> {
         let (_, mother_args, outer) = self.mother.clone();
         let pos_len = mother_args.total_positional_args();
         let splat_pos = if let Some(rest_pos) = mother_args.is_rest() {
@@ -202,21 +220,33 @@ impl<'a> BytecodeGen<'a> {
             })
         };
 
-        let block = self.push().into();
-        self.emit_block_forward(block, outer, loc);
+        let (block_fid, block_arg) = if let Some(block) = block {
+            // Literal block on a parenless super: it replaces the
+            // caller's block. The prism bridge only routes a typed
+            // `BlockNode` here (a `&expr` block-argument goes through the
+            // regular SuperNode path), which lowers to `NodeKind::Lambda`,
+            // so `block_arg` always yields a compiled block fid and never
+            // materializes a block-argument slot.
+            let block_fid = self.block_arg(block, loc)?;
+            (block_fid, None)
+        } else {
+            let block = self.push().into();
+            self.emit_block_forward(block, outer, loc);
+            (None, Some(block))
+        };
 
-        CallSite::new(
+        Ok(CallSite::new(
             None,
             pos_len,
             kw,
             splat_pos,
-            None,
-            Some(block),
+            block_fid,
+            block_arg,
             pos_start,
             BcReg::Self_,
             dst,
             true,
-        )
+        ))
     }
 
     ///

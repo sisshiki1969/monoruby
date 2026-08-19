@@ -16,23 +16,29 @@ pub(super) fn init(globals: &mut Globals) {
     // `initialize` to take any arity, and the plain-`Hash` arity check
     // (0..1) lives there. (The previous `Effect::CAPTURE` flag was never
     // consumed anywhere, so dropping it changes no behavior.)
-    globals.define_builtin_class_func_with_kw(
-        HASH_CLASS,
-        "new",
-        new,
-        0,
-        0,
-        true,
-        &["capacity"],
-        false,
-    );
+    // No class-level `new` here: `Hash.new` resolves to the generic
+    // `Class#new` (builtins/class.rb) — allocate via `hash_alloc_func`,
+    // then dispatch `#initialize`. Routing through the one true dispatch
+    // path keeps subclass-overridden `initialize` (positional *and*
+    // keyword arguments) working.
     globals.store[HASH_CLASS].set_alloc_func(hash_alloc_func);
     globals.define_builtin_class_func_rest(HASH_CLASS, "[]", hash_bracket);
     globals.define_builtin_class_func(HASH_CLASS, "try_convert", try_convert, 1);
     globals.define_builtin_class_func(HASH_CLASS, "ruby2_keywords_hash", ruby2_keywords_hash, 1);
     globals.define_builtin_class_func(HASH_CLASS, "ruby2_keywords_hash?", ruby2_keywords_hash_p, 1);
 
-    globals.define_private_builtin_func_with(HASH_CLASS, "initialize", initialize, 0, 1, false);
+    // `capacity:` (kw slot `try_arg(1)`) is a pure allocation hint with no
+    // observable semantics; it is accepted and ignored.
+    globals.define_private_builtin_func_with_kw(
+        HASH_CLASS,
+        "initialize",
+        initialize,
+        0,
+        1,
+        false,
+        &["capacity"],
+        false,
+    );
     globals.define_builtin_inline_func_with(
         HASH_CLASS,
         "default",
@@ -259,36 +265,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_singleton_func(env, "replace", env_replace, 1);
     globals.define_builtin_singleton_func_with(env, "values_at", env_values_at, 0, 0, true);
     globals.define_builtin_singleton_func_with(env, "slice", env_slice, 0, 0, true);
-}
-
-///
-/// ### Hash.new
-///
-/// - new(ifnone = nil) -> Hash
-/// - new {|hash, key| ... } -> Hash
-///
-/// Allocates a fresh Hash and forwards `*args` and `&block` to
-/// `#initialize`, matching `Class#new` semantics. The default value /
-/// default proc / arg validation all live in `Hash#initialize` (Ruby).
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Hash/s/new.html]
-#[monoruby_builtin]
-fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class = lfp.self_val().as_class_id();
-    let obj = Value::hash_with_class_and_default(class, Value::nil());
-    // Forward the positional args verbatim to `#initialize` (arity is
-    // validated there, so a subclass can override it). The `capacity:`
-    // keyword is bound by the registration and ignored; unknown keywords
-    // are already rejected before we get here.
-    vm.invoke_method_inner(
-        globals,
-        IdentId::INITIALIZE,
-        obj,
-        &lfp.arg(0).as_array(),
-        lfp.block(),
-        None,
-    )?;
-    Ok(obj)
 }
 
 ///

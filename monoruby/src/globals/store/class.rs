@@ -923,7 +923,13 @@ impl ClassInfoTable {
             {
                 return class;
             }
-            let super_singleton = match original_obj.superclass_id() {
+            // Walk to the *real* superclass, skipping include-generated
+            // iclasses: a lazily created metaclass (first demanded after
+            // `include` ran, e.g. a builtin class with no class-level
+            // methods) would otherwise chain to the *module's* metaclass
+            // (`S(Range) → S(Enumerable) → … Module`), cutting `Class`'s
+            // methods — `inherited`, `allocate`, … — out of the lookup.
+            let super_singleton = match original_obj.get_real_superclass().map(|m| m.id()) {
                 Some(id) => self.get_metaclass(id),
                 None => self.get_module(CLASS_CLASS),
             };

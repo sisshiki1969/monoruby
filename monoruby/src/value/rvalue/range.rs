@@ -43,12 +43,39 @@ impl RubyHash<Executor, Globals, MonorubyErr> for RangeInner {
 }
 
 impl RangeInner {
+    /// `exclude_end` sentinel for a `Range.allocate`d, not-yet-initialized
+    /// range. Only `Range#initialize` consults it (to reject a second
+    /// initialize per CRuby); every other reader treats it as truthy,
+    /// so an uninitialized range degrades to `nil...nil` instead of
+    /// CRuby's per-method TypeError.
+    pub const UNINITIALIZED: u32 = 2;
+
     pub fn new(start: Value, end: Value, exclude_end: bool) -> Self {
         RangeInner {
             start,
             end,
             exclude_end: if exclude_end { 1 } else { 0 },
         }
+    }
+
+    pub fn new_uninit() -> Self {
+        RangeInner {
+            start: Value::nil(),
+            end: Value::nil(),
+            exclude_end: Self::UNINITIALIZED,
+        }
+    }
+
+    pub fn is_initialized(&self) -> bool {
+        self.exclude_end != Self::UNINITIALIZED
+    }
+
+    /// Fill in the fields from `Range#initialize`. Write barriers are the
+    /// caller's responsibility (it holds the owning `Value`).
+    pub fn initialize(&mut self, start: Value, end: Value, exclude_end: bool) {
+        self.start = start;
+        self.end = end;
+        self.exclude_end = if exclude_end { 1 } else { 0 };
     }
 
     pub fn start(&self) -> Value {

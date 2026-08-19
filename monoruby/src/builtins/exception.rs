@@ -7,16 +7,14 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     let exception_class =
         globals.define_builtin_class_under_obj("Exception", EXCEPTION_CLASS, ObjTy::EXCEPTION);
-    globals.define_builtin_class_funcs_with(
-        EXCEPTION_CLASS,
-        "new",
-        &["exception"],
-        exception_new,
-        0,
-        0,
-        true,
-    );
-
+    // No class-level `new` here: `Exception.new` resolves to the generic
+    // `Class#new` (builtins/class.rb) — allocate via `exception_alloc_func`
+    // (which seeds the message with the class name), then dispatch
+    // `#initialize`. Routing through the one true dispatch path keeps
+    // subclass-overridden `initialize` (positional *and* keyword
+    // arguments) working, e.g. ActiveRecord::StatementInvalid's
+    // `initialize(message, sql:, binds:, connection_pool:)`. The
+    // `Exception.exception` alias is defined in builtins/exception.rb.
     globals.store[EXCEPTION_CLASS].set_alloc_func(exception_alloc_func);
 
     let standarderr = globals.define_class("StandardError", exception_class, OBJECT_CLASS);
@@ -100,21 +98,25 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(NAME_ERROR_CLASS, "name", nameerr_name, 0);
     // `NameError#receiver` (inherited by NoMethodError).
     globals.define_builtin_func(NAME_ERROR_CLASS, "receiver", exc_receiver, 0);
-    globals.define_builtin_func_with(
+    globals.define_builtin_func_with_kw(
         NAME_ERROR_CLASS,
         "initialize",
         nameerr_initialize,
         0,
         3,
         false,
+        &["receiver"],
+        false,
     );
     globals.define_builtin_exception_class("NoMethodError", NO_METHOD_ERROR_CLASS, nameerr);
-    globals.define_builtin_func_with(
+    globals.define_builtin_func_with_kw(
         NO_METHOD_ERROR_CLASS,
         "initialize",
         nomethoderr_initialize,
         0,
         4,
+        false,
+        &["receiver"],
         false,
     );
     globals.define_builtin_func(NO_METHOD_ERROR_CLASS, "args", nomethoderr_args, 0);
@@ -135,7 +137,19 @@ pub(super) fn init(globals: &mut Globals) {
         standarderr,
     );
 
-    globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 2, false);
+    // `receiver:` / `key:` keywords: CRuby scopes these to FrozenError /
+    // KeyError, which in monoruby share this base initializer; accepting
+    // them here preserves the pre-Class#new-routing tolerance.
+    globals.define_builtin_func_with_kw(
+        EXCEPTION_CLASS,
+        "initialize",
+        initialize,
+        0,
+        2,
+        false,
+        &["receiver", "key"],
+        false,
+    );
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
@@ -308,6 +322,12 @@ fn nameerr_initialize(
     {
         store_exception_kwargs(vm, globals, self_, kwargs)?;
     }
+    // Real `receiver:` keyword (slot 3) — the `Class#new` dispatch path.
+    if let Some(v) = lfp.try_arg(3)
+        && !v.is_nil()
+    {
+        globals.store.set_ivar(self_, IdentId::get_id("/receiver"), v)?;
+    }
     Ok(Value::nil())
 }
 
@@ -350,6 +370,12 @@ fn nomethoderr_initialize(
             store_exception_kwargs(vm, globals, self_, kwargs)?;
         }
     }
+    // Real `receiver:` keyword (slot 4) — the `Class#new` dispatch path.
+    if let Some(v) = lfp.try_arg(4)
+        && !v.is_nil()
+    {
+        globals.store.set_ivar(self_, IdentId::get_id("/receiver"), v)?;
+    }
     Ok(Value::nil())
 }
 
@@ -374,39 +400,6 @@ fn nomethoderr_args(
 pub(crate) extern "C" fn exception_alloc_func(class_id: ClassId, globals: &mut Globals) -> Value {
     let name = class_id.get_name(globals);
     Value::new_exception_from_with_class(name, class_id, class_id)
-}
-
-///
-/// ### Exception.exception
-///
-/// - new(error_message = nil) -> Exception
-/// - exception(error_message = nil) -> Exception
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
-#[monoruby_builtin]
-fn exception_new(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let class_id = lfp.self_val().expect_class(globals)?.id();
-    // Seed the message with the class name (CRuby's default when the
-    // mesg field is never assigned): a subclass `initialize` that
-    // doesn't call super must still report `klass.to_s` from
-    // `#message`.
-    let obj = Value::new_exception_from(class_id.get_name(globals), class_id);
-
-    vm.invoke_method_inner(
-        globals,
-        IdentId::INITIALIZE,
-        obj,
-        &lfp.arg(0).as_array(),
-        lfp.block(),
-        None,
-    )?;
-
-    Ok(obj)
 }
 
 ///
@@ -446,6 +439,20 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         globals.store.get_class_name(class_id)
     };
     self_.is_exception_mut().unwrap().set_message(message);
+    // Real keyword arguments (`receiver:` at slot 2, `key:` at slot 3) —
+    // the path taken since `Exception.new` routes through `Class#new`'s
+    // full dispatch. The positional-hash arms above remain for internal
+    // Rust-side callers that flatten keywords into the argument array.
+    if let Some(v) = lfp.try_arg(2)
+        && !v.is_nil()
+    {
+        globals.store.set_ivar(self_, IdentId::get_id("/receiver"), v)?;
+    }
+    if let Some(v) = lfp.try_arg(3)
+        && !v.is_nil()
+    {
+        globals.store.set_ivar(self_, IdentId::get_id("/key"), v)?;
+    }
     Ok(Value::nil())
 }
 
@@ -1365,6 +1372,43 @@ mod tests {
     /// `e.exception("new")` is created via #dup so subclass-defined
     /// instance variables (here `@val`) are preserved without
     /// re-running #initialize.
+    #[test]
+    fn exception_subclass_initialize_with_keywords() {
+        // `Exception.new` routes through the generic `Class#new`, so a
+        // subclass-overridden `initialize` — including keyword
+        // parameters — must be dispatched (the shape of Rails'
+        // `StatementInvalid.new(message, sql:, binds:, connection_pool:)`).
+        run_test_once(
+            r#"
+            class KwErr < StandardError
+              attr_reader :extra
+              def initialize(msg = nil, extra: nil)
+                super(msg)
+                @extra = extra
+              end
+            end
+            e = KwErr.new("boom", extra: 1)
+            [e.message, e.extra, e.class.name, KwErr.new.message]
+            "#,
+        );
+        // `Exception.exception` stays an alias of `.new`, inherited by
+        // subclasses through the singleton-class chain.
+        run_test_once(
+            r#"
+            [Exception.exception("z").class.name, RuntimeError.exception.message,
+             ArgumentError.exception("m").message]
+            "#,
+        );
+        // Real keyword arguments on the builtin initializers.
+        run_test_once(
+            r#"
+            k = KeyError.new("m", receiver: :r, key: :k)
+            n = NameError.new("m", :nm, receiver: 42)
+            [k.message, k.receiver, k.key, n.message, n.name, n.receiver]
+            "#,
+        );
+    }
+
     #[test]
     fn exception_method_preserves_subclass_ivars() {
         run_test(

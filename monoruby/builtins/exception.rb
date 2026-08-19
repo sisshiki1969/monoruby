@@ -14,6 +14,15 @@ class NoMatchingPatternKeyError < NoMatchingPatternError
 end
 
 class Exception
+  class << self
+    # `Exception.exception(...)` is an alias of `.new`, inherited by every
+    # exception subclass through the singleton-class chain. Defined here
+    # (rather than as a Rust class func) so it rides the generic
+    # `Class#new` dispatch path, which honors subclass-overridden
+    # `initialize` including keyword arguments.
+    def exception(...) = new(...)
+  end
+
   def backtrace_locations
     # Locations come from the raise-time capture, independent of any
     # string backtrace installed via #set_backtrace (CRuby: after

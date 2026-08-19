@@ -14,16 +14,12 @@ use jitgen::{AbstractState, JitContext};
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("String", STRING_CLASS, ObjTy::STRING);
-    globals.define_builtin_class_func_with_kw(
-        STRING_CLASS,
-        "new",
-        string_new,
-        0,
-        1,
-        false,
-        &["encoding", "capacity"],
-        false,
-    );
+    // No class-level `new` here: `String.new` resolves to the generic
+    // `Class#new` (builtins/class.rb) — allocate via `string_alloc_func`,
+    // then dispatch `#initialize`. Routing through the one true dispatch
+    // path keeps subclass-overridden `initialize` (positional *and*
+    // keyword arguments) working, e.g. Arel::Nodes::SqlLiteral's
+    // `initialize(string, retryable: false)`.
     globals.store[STRING_CLASS].set_alloc_func(string_alloc_func);
     globals.define_builtin_class_func(STRING_CLASS, "try_convert", string_try_convert, 1);
     globals.define_builtin_func(STRING_CLASS, "+", add, 1);
@@ -158,7 +154,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "replace", replace, 1);
     globals.define_builtin_func(STRING_CLASS, "reverse", reverse, 0);
     globals.define_builtin_func(STRING_CLASS, "reverse!", reverse_, 0);
-    globals.define_private_builtin_func_with(STRING_CLASS, "initialize", initialize, 0, 1, false);
+    globals.define_private_builtin_func_with_kw(
+        STRING_CLASS,
+        "initialize",
+        initialize,
+        0,
+        1,
+        false,
+        &["encoding", "capacity"],
+        false,
+    );
     globals.define_builtin_func(STRING_CLASS, "chars", chars, 0);
     globals.define_builtin_func(STRING_CLASS, "each_char", each_char, 0);
     globals.define_builtin_func(STRING_CLASS, "grapheme_clusters", grapheme_clusters, 0);
@@ -262,56 +267,13 @@ pub(super) fn init(globals: &mut Globals) {
     super::encoding::init_encoding(globals);
 }
 
-///
-/// ### String.new
-///
-/// - new(string = "") -> String
-/// - [NOT SUPPORTED] new(string = "", encoding) -> String
-/// - [NOT SUPPORTED] new(string = "", encoding, capacity) -> String
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/String/s/new.html]
-#[monoruby_builtin]
-fn string_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class = lfp.self_val().as_class_id();
-    let mut inner = match lfp.try_arg(0) {
-        Some(string) => {
-            // Preserve the source string's encoding by going through
-            // `coerce_to_rstring` and cloning the inner.
-            (*string.coerce_to_rstring(vm, globals)?).clone()
-        }
-        None => {
-            // CRuby's `String.new` (no arg) returns a binary string.
-            RStringInner::from_encoding(b"", Encoding::Ascii8)
-        }
-    };
-    // `encoding:` forces the new string's encoding — exactly
-    // `force_encoding` on the fresh copy, overriding a source string's
-    // (CRuby semantics). `capacity:` (try_arg(2)) is a pure allocation
-    // hint with no observable semantics; it is currently accepted and
-    // ignored.
-    if let Some(enc_v) = lfp.try_arg(1) {
-        let enc = super::encoding::value_to_encoding(vm, globals, enc_v)?;
-        inner.set_encoding(enc);
-    }
-    let obj = Value::string_from_inner_with_class(inner, class);
-    // For a subclass, run its `initialize` so user-defined side effects
-    // (e.g. `self.extend`) take effect, matching `Class#new` semantics.
-    // Plain `String.new` keeps the fast direct construction above.
-    if class != STRING_CLASS {
-        let arg = lfp.try_arg(0);
-        let args: &[Value] = match &arg {
-            Some(v) => std::slice::from_ref(v),
-            None => &[],
-        };
-        vm.invoke_method_inner(globals, IdentId::INITIALIZE, obj, args, lfp.block(), None)?;
-    }
-    Ok(obj)
-}
-
 /// Allocator for `String` and its subclasses. Installed on `STRING_CLASS`'s
 /// `ClassInfo.alloc_func`; invoked by `Class#new` and `Class#allocate`.
+/// Produces an empty ASCII-8BIT string (CRuby: `String.allocate.encoding`
+/// is binary, and bare `String.new` inherits that default because
+/// `#initialize` without a source argument leaves self untouched).
 pub(crate) extern "C" fn string_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
-    Value::string_with_class("", class_id)
+    Value::string_from_inner_with_class(RStringInner::from_encoding(b"", Encoding::Ascii8), class_id)
 }
 
 ///
@@ -7380,14 +7342,31 @@ fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// - initialize(other) -> self
 ///
 /// Private; called by `Class#new` and `BasicObject#send(:initialize, ...)`.
-/// With no argument, returns self unchanged. With one argument, replaces
-/// self's bytes with the bytes of `other`.
+/// With no argument, returns self unchanged (the allocator already produced
+/// an empty ASCII-8BIT string, so bare `String.new` keeps CRuby's binary
+/// default). With a source string, replaces self's bytes *and* encoding
+/// with the source's. `encoding:` then forces the encoding — exactly
+/// `force_encoding` on the fresh copy, overriding the source's (CRuby
+/// semantics). `capacity:` (kw slot `try_arg(2)`) is a pure allocation
+/// hint with no observable semantics; it is accepted and ignored.
 #[monoruby_builtin]
 fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let enc_arg = match lfp.try_arg(1) {
+        Some(v) if !v.is_nil() => Some(v),
+        _ => None,
+    };
     if let Some(other) = lfp.try_arg(0) {
         lfp.self_val().ensure_string_mutable(vm, globals)?;
-        let s = other.coerce_to_string(vm, globals)?;
-        lfp.self_val().replace_str(&s);
+        // Go through `coerce_to_rstring` and clone the inner so the
+        // source string's encoding is preserved.
+        let inner = (*other.coerce_to_rstring(vm, globals)?).clone();
+        lfp.self_val().replace_with_inner(inner);
+    } else if enc_arg.is_some() {
+        lfp.self_val().ensure_string_mutable(vm, globals)?;
+    }
+    if let Some(enc_v) = enc_arg {
+        let enc = super::encoding::value_to_encoding(vm, globals, enc_v)?;
+        lfp.self_val().as_rstring_inner_mut().set_encoding(enc);
     }
     Ok(lfp.self_val())
 }
@@ -11799,7 +11778,36 @@ mod tests {
             r##"String.new.encoding.name"##,
             // With an argument, the source encoding is preserved.
             r##"String.new("abc").encoding.name"##,
+            // `String.allocate` is also binary (String.new inherits the
+            // allocator's default because no-arg #initialize is a no-op).
+            r##"String.allocate.encoding.name"##,
+            // `encoding:` forces the encoding of the fresh copy.
+            r##"String.new("abc", encoding: "EUC-JP").encoding.name"##,
+            r##"String.new(encoding: "UTF-8").encoding.name"##,
+            // `capacity:` is accepted (pure allocation hint).
+            r##"String.new("abc", capacity: 100)"##,
         ]);
+    }
+
+    #[test]
+    fn string_subclass_initialize_with_keywords() {
+        // `String.new` routes through the generic `Class#new`, so a
+        // subclass-overridden `initialize` — including keyword
+        // parameters — must be dispatched (the Arel::Nodes::SqlLiteral
+        // shape: `initialize(string, retryable: false)`).
+        run_test_once(
+            r##"
+        class KwStr < String
+          attr_reader :opt
+          def initialize(s, opt: :none)
+            super(s)
+            @opt = opt
+          end
+        end
+        s = KwStr.new("abc", opt: 42)
+        [s, s.class.name, s.opt, s.encoding.name]
+        "##,
+        );
     }
 
     #[test]

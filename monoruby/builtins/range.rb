@@ -956,24 +956,11 @@ class Range
 
   public
 
-  # Private initializer. The actual Range value is built by the Rust
-  # `Range.new` constructor (or by literal/marshal); this stub exists
-  # so spec hooks like `Range.allocate.send(:initialize, …)` see a
-  # method and to enforce CRuby's argument count, frozen-receiver, and
-  # comparability checks. We don't mutate the underlying RangeInner
-  # here — `Range.new` already populates it.
-  private def initialize(*args)
-    raise FrozenError, "can't modify frozen Range: #{inspect}" if frozen?
-    if args.length < 2 || args.length > 3
-      raise ArgumentError, "wrong number of arguments (given #{args.length}, expected 2..3)"
-    end
-    a, b = args[0], args[1]
-    unless a.nil? || b.nil?
-      cmp = (a <=> b) rescue nil
-      raise ArgumentError, "bad value for range" if cmp.nil?
-    end
-    nil
-  end
+  # NOTE: `Range#initialize` is the Rust builtin (`range_initialize` in
+  # builtins/range.rs): `Range.new` routes through the generic `Class#new`
+  # (allocate + initialize), which really populates the RangeInner,
+  # enforces the argument/comparability checks, rejects a second
+  # initialize, and freezes direct Range instances.
 
   # Override the Rust `to_a` so endpoints that lack a fast path (e.g.
   # Symbol ranges, Float ranges, beginless) get routed through `each`,

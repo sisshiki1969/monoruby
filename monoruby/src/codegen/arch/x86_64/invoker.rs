@@ -7,7 +7,7 @@ impl JitModule {
         let codeptr = self.jit.get_current_address();
         monoasm! { &mut self.jit,
             movq rax, rsp;
-            subq rax, (MAX_STACK_SIZE);
+            subq rax, (MAIN_STACK_SIZE);
             movq [rdi + (EXECUTOR_STACK_LIMIT)], rax;
             ret;
         }

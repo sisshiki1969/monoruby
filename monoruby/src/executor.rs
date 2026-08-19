@@ -584,7 +584,8 @@ impl Executor {
     }
 
     ///
-    /// Set stack limit to (rsp - MAX_STACK_SIZE).
+    /// Set stack limit to (rsp - MAIN_STACK_SIZE) for the primary context
+    /// running on the host thread's native stack.
     ///
     pub fn init_stack_limit(&mut self, globals: &Globals) {
         let invoker = globals.invokers.init_stack_limit;
@@ -592,12 +593,15 @@ impl Executor {
     }
 
     ///
-    /// Set stack limit to (*rsp* - MAX_STACK_SIZE).
+    /// Set stack limit to (*rsp* - FIBER_STACK_BUDGET). Used for fiber /
+    /// green-thread contexts, whose 256 KiB stack allocations bound the
+    /// budget; the primary context gets the much larger MAIN_STACK_SIZE
+    /// via the `init_stack_limit` invoker.
     ///
     pub fn set_stack_limit(&mut self, rsp: *mut u8) {
-        // SAFETY: rsp is a valid stack pointer, and subtracting MAX_STACK_SIZE
+        // SAFETY: rsp is a valid stack pointer, and subtracting FIBER_STACK_BUDGET
         // stays within the allocated stack region.
-        let stack_limit = unsafe { rsp.sub(MAX_STACK_SIZE) };
+        let stack_limit = unsafe { rsp.sub(FIBER_STACK_BUDGET) };
         self.stack_limit = stack_limit as usize;
     }
 
@@ -1425,11 +1429,24 @@ impl Executor {
         // not descend into the enclosing require's frame because that
         // would leak the requirer's lexical scope into the loaded
         // file.
+        //
+        // The walk stops at the first *runtime* (non-lexical) cref — a
+        // `class_eval` / `class_exec` / `instance_eval` block push.
+        // Entries beneath it belong to the *caller's* execution (e.g.
+        // the `class Base` body that a Concern's `included do ... end`
+        // block runs under via `base.class_eval(&block)`), and a block
+        // boundary must not leak them into the block's definitions:
+        // `module Foo; end` there defines under the block's *def-site*
+        // lexical scope (CRuby's cref chain), which the fall-through
+        // below computes from the executing iseq. (A runtime cref that
+        // is itself the innermost entry never wins here by design —
+        // only `def` retargets to it.)
         if let Some(crefs) = self.lexical_class.last() {
             for cref in crefs.iter().rev() {
-                if cref.is_lexical
-                    && let DefinitionContext::Class(class_id) = cref.context
-                {
+                if !cref.is_lexical {
+                    break;
+                }
+                if let DefinitionContext::Class(class_id) = cref.context {
                     return class_id;
                 }
             }
