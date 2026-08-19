@@ -562,3 +562,73 @@ fn binary_source_bytes_survive_load_and_eval() {
         "##,
     );
 }
+
+#[test]
+fn zsuper_with_literal_block_forwards_arguments() {
+    // `super { ... }` (no argument list) must forward the enclosing
+    // method's positional and keyword arguments implicitly and only
+    // override the block — the shape ActiveRecord's
+    // Migration::Current#create_table relies on. Regression: the
+    // literal block used to demote the call to an explicit-args super
+    // with an empty argument list.
+    run_test_once(
+        r#"
+        class ZsBase
+          def m(*a, **k, &b)
+            [a, k, b ? b.call : nil]
+          end
+          def n(x) = yield(x)
+        end
+        class ZsSub < ZsBase
+          def m(*a, **k)
+            super { 99 }
+          end
+          def n(x)
+            super { |v| v * 2 }
+          end
+        end
+        [ZsSub.new.m(1, 2, x: 3), ZsSub.new.n(21)]
+        "#,
+    );
+    // `super()` — explicit empty parens — is distinct: it passes NO
+    // arguments (with or without a block).
+    run_test_once(
+        r#"
+        class ZpBase
+          def q(*a) = a
+          def r(*a) = [a, block_given? ? yield : nil]
+        end
+        class ZpSub < ZpBase
+          def q(x) = super()
+          def r(x) = super() { :blk }
+        end
+        [ZpSub.new.q(5), ZpSub.new.r(6)]
+        "#,
+    );
+}
+
+#[test]
+fn dot_called_operator_with_dots_forwarding() {
+    // `recv.+(...)` / `recv.[](...)` — an explicit dot call of an
+    // operator method whose arguments are `...`-forwarded (the shape
+    // ActiveSupport's `delegate :+, to: :records` generates). The empty
+    // static argument list used to make the parser treat `.+` as unary
+    // `+@` (and `.[]` as a zero-element Index), losing the forwarded
+    // arguments.
+    run_test_once(
+        r#"
+        class Wrap
+          def initialize(a) = @a = a
+          def +(...)
+            @a.+(...)
+          end
+          def [](...)
+            @a.[](...)
+          end
+          def -(other) = @a - other
+        end
+        w = Wrap.new([1, 2, 3])
+        [w + [4], w[0], w - [2]]
+        "#,
+    );
+}
