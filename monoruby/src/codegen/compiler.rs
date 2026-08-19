@@ -277,6 +277,30 @@ impl Codegen {
             Err(_) => {
                 if position.is_none() {
                     globals.store[iseq_id].invalidate_jit_code();
+                    // The permanent give-up dropped every jit_entry, but on
+                    // x86 the wrapper's entry jump may still point at the old
+                    // class-guard chain (a whole-compile for one self class
+                    // can bail after others compiled fine — `Class#new` bails
+                    // this way, since its `(...)` forward is only compilable
+                    // specialized). Left as-is, every call re-enters the
+                    // stale body, fails its version guard, requests a
+                    // recompile that `recompile_method_by_id` must skip, and
+                    // deopts — per call, forever. Revert the entry to
+                    // `vm_entry` so the method just interprets (mirrors the
+                    // BOP-evict revert in `invalidate_bop_fast_paths`; the
+                    // aarch64 twin already zeroes its dispatch slots in
+                    // `invalidate_jit_code`). Trivial hints never point their
+                    // entry at compiled bytecode — skip them, as the BOP
+                    // revert does.
+                    #[cfg(target_arch = "x86_64")]
+                    if globals.store[iseq_id].hint == ISeqHint::Normal {
+                        let func_id = globals.store[iseq_id].func_id();
+                        let entry = self
+                            .jit
+                            .get_label_address(&globals.store[func_id].entry_label());
+                        let vm_entry = self.vm_entry();
+                        self.jit.apply_jmp_patch_address(entry, &vm_entry);
+                    }
                 }
                 #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
                 if self.startup_flag {

@@ -1218,7 +1218,7 @@ impl FuncInfo {
         self.ext.owner.push(class);
     }
 
-    pub(super) fn entry_label(&self) -> DestLabel {
+    pub(crate) fn entry_label(&self) -> DestLabel {
         self.ext.entry.clone().unwrap()
     }
 
