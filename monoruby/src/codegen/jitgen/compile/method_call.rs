@@ -1022,6 +1022,8 @@ impl<'a> JitContext<'a> {
             }
         }
         state.def_reg2acc(ir, GP::R15, dst);
+        // ④-b: the inlined reader is pure loads — transparent.
+        self.restore_unfrozen(dst);
         CompileResult::Continue
     }
 
@@ -1051,8 +1053,12 @@ impl<'a> JitContext<'a> {
             return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
         };
         state.load(ir, recv, GP::Rdi);
-        let deopt = ir.new_deopt(state);
-        ir.guard_frozen(deopt);
+        // ④-b: skip the frozen guard when an earlier ivar store on this
+        // straight-line path already proved this receiver slot unfrozen.
+        if !self.instr_unfrozen_contains(recv) {
+            let deopt = ir.new_deopt(state);
+            ir.guard_frozen(deopt);
+        }
         // A provably-immediate stored value needs no GC write barrier.
         let wb = !state.is_guarded_immediate(args);
         let src = state.load_or_reg(ir, args, GP::Rax);
@@ -1071,6 +1077,14 @@ impl<'a> JitContext<'a> {
         }
         state.def_rax2acc(ir, dst);
         state.unset_side_effect_guard();
+        // The inlined writer runs no Ruby code (the heap-table grow path
+        // is a Rust call), so the other proofs survive and the receiver is
+        // now proven unfrozen — unless the call's dst redefined that very
+        // slot with the stored value.
+        self.restore_unfrozen(dst);
+        if dst != Some(recv) {
+            self.prove_unfrozen(recv);
+        }
         CompileResult::Continue
     }
 

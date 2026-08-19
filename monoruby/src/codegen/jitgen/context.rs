@@ -692,16 +692,26 @@ pub(crate) struct JitContext<'a> {
     /// predecessor, to be skipped by `compile_instruction`.
     pub(super) fused_skip: Option<BcIndex>,
 
-    /// "self is proven not frozen on the current path": set right after a
-    /// `StoreIvar` emitted its frozen guard, and consumed by the next
-    /// `StoreIvar` to skip the redundant re-check. Only sound while nothing
-    /// in between can freeze `self`, so `compile_instruction` clears it on
-    /// every instruction except a whitelist of ops that provably run no
-    /// Ruby code and reach no safepoint (a green-thread preemption could
-    /// let another thread call `freeze`), and `compile_basic_block` clears
-    /// it at BB entry (merges and loop heads make no path promise, and the
-    /// loop-head safepoint is a preemption point).
-    pub(super) self_unfrozen: bool,
+    /// "the object in this slot is proven not frozen on the current path"
+    /// (④-b): `SlotId::self_()` after a `StoreIvar` guard, an attr_writer
+    /// receiver after its guard. Consumed by the next self-ivar store /
+    /// attr_writer on the same object slot to skip the redundant re-check.
+    /// Only sound while nothing in between can freeze the object or
+    /// redefine the slot, so `compile_instruction` takes the set into
+    /// [`Self::instr_unfrozen`] on every instruction and only arms that
+    /// compiled a provably-transparent lowering — no Ruby code, no
+    /// safepoint (a green-thread preemption could let another thread call
+    /// `freeze`) — restore it (minus any slot they redefine).
+    /// `compile_basic_block` clears it at BB entry (merges and loop heads
+    /// make no path promise, and the loop-head safepoint is a preemption
+    /// point), and `traceir_to_asmir` clears it when a (possibly nested,
+    /// specialized) compile finishes, so callee-frame proofs never leak
+    /// into the caller.
+    pub(super) unfrozen_slots: Vec<SlotId>,
+    /// The proof set taken at the head of the instruction currently being
+    /// compiled (see [`Self::unfrozen_slots`]). Read via
+    /// `instr_unfrozen_contains`, published back via `restore_unfrozen`.
+    pub(super) instr_unfrozen: Vec<SlotId>,
 
     ///
     /// Monotone count of capture-relevant compile events — see
@@ -806,7 +816,8 @@ impl<'a> JitContext<'a> {
             store,
             codegen_mode,
             fused_skip: None,
-            self_unfrozen: false,
+            unfrozen_slots: Vec::new(),
+            instr_unfrozen: Vec::new(),
             capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
@@ -828,7 +839,8 @@ impl<'a> JitContext<'a> {
             store: self.store,
             codegen_mode: false,
             fused_skip: None,
-            self_unfrozen: false,
+            unfrozen_slots: Vec::new(),
+            instr_unfrozen: Vec::new(),
             capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
@@ -877,6 +889,44 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn in_dispatch_arm(&self) -> bool {
         self.in_dispatch_arm
+    }
+
+    /// ④-b: is *slot* in the unfrozen-proof set taken at the head of the
+    /// current instruction?
+    pub(super) fn instr_unfrozen_contains(&self, slot: SlotId) -> bool {
+        self.instr_unfrozen.contains(&slot)
+    }
+
+    /// ④-b: the current instruction compiled to a provably-transparent
+    /// lowering (no Ruby code, no safepoint) — publish the instruction-head
+    /// proof set back, minus the slot the instruction redefined (its value
+    /// changed, so any proof about the old value is void).
+    ///
+    /// Inside a dispatch / class-set-guarded arm the set stays empty: the
+    /// arms merge afterwards, and a proof holding on one arm's path says
+    /// nothing about its siblings.
+    pub(super) fn restore_unfrozen(&mut self, redefined: Option<SlotId>) {
+        if self.in_dispatch_arm || self.in_set_guarded_arm {
+            self.instr_unfrozen.clear();
+            return;
+        }
+        let mut set = std::mem::take(&mut self.instr_unfrozen);
+        if let Some(d) = redefined {
+            set.retain(|&s| s != d);
+        }
+        self.unfrozen_slots = set;
+    }
+
+    /// ④-b: record that the current path just guarded (or re-proved) the
+    /// frozen bit of the object in *slot*. No-op inside dispatch /
+    /// set-guarded arms (see `restore_unfrozen`).
+    pub(super) fn prove_unfrozen(&mut self, slot: SlotId) {
+        if self.in_dispatch_arm || self.in_set_guarded_arm {
+            return;
+        }
+        if !self.unfrozen_slots.contains(&slot) {
+            self.unfrozen_slots.push(slot);
+        }
     }
 
     pub(super) fn in_set_guarded_arm(&self) -> bool {
