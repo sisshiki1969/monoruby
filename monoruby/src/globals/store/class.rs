@@ -2560,18 +2560,37 @@ impl Store {
         let iseq = &self[iseq_id];
         let Some(cache_map) = iseq.get_cache_map(self_class) else {
             // JIT entry was invalidated (e.g. by BOP redefinition). Fall back to recompile.
+            #[cfg(feature = "jit-log")]
+            {
+                let n = crate::codegen::jit_stats::SALVAGE_FAIL_NO_ENTRY
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if n % 8192 == 0 {
+                    eprintln!(
+                        "[JIT] salvage-noentry sample: {} self_class={:?} invalidated={}",
+                        self.func_description(func_id),
+                        self_class,
+                        iseq.jit_invalidated(),
+                    );
+                }
+            }
             return false;
         };
         for entry in cache_map {
             let func_id =
                 self.check_method_for_name(lfp, entry.recv_class, entry.name, entry.refinements);
             if func_id != Some(entry.func_id) {
+                #[cfg(feature = "jit-log")]
+                crate::codegen::jit_stats::bump(
+                    &crate::codegen::jit_stats::SALVAGE_FAIL_RESOLUTION_CHANGED,
+                );
                 return false;
             }
         }
         let Some(version_label) = self[iseq_id].get_jit_class_version(lfp.self_val().class())
         else {
             // JIT entry was invalidated between cache_map check and here.
+            #[cfg(feature = "jit-log")]
+            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_FAIL_NO_ENTRY);
             return false;
         };
         CODEGEN.with(|codegen| {

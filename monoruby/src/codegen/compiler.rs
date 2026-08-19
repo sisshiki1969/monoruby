@@ -277,6 +277,30 @@ impl Codegen {
             Err(_) => {
                 if position.is_none() {
                     globals.store[iseq_id].invalidate_jit_code();
+                    // The permanent give-up dropped every jit_entry, but on
+                    // x86 the wrapper's entry jump may still point at the old
+                    // class-guard chain (a whole-compile for one self class
+                    // can bail after others compiled fine — `Class#new` bails
+                    // this way, since its `(...)` forward is only compilable
+                    // specialized). Left as-is, every call re-enters the
+                    // stale body, fails its version guard, requests a
+                    // recompile that `recompile_method_by_id` must skip, and
+                    // deopts — per call, forever. Revert the entry to
+                    // `vm_entry` so the method just interprets (mirrors the
+                    // BOP-evict revert in `invalidate_bop_fast_paths`; the
+                    // aarch64 twin already zeroes its dispatch slots in
+                    // `invalidate_jit_code`). Trivial hints never point their
+                    // entry at compiled bytecode — skip them, as the BOP
+                    // revert does.
+                    #[cfg(target_arch = "x86_64")]
+                    if globals.store[iseq_id].hint == ISeqHint::Normal {
+                        let func_id = globals.store[iseq_id].func_id();
+                        let entry = self
+                            .jit
+                            .get_label_address(&globals.store[func_id].entry_label());
+                        let vm_entry = self.vm_entry();
+                        self.jit.apply_jmp_patch_address(entry, &vm_entry);
+                    }
                 }
                 #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
                 if self.startup_flag {
@@ -309,6 +333,16 @@ impl Codegen {
         self_class: ClassId,
         reason: RecompileReason,
     ) -> Option<()> {
+        #[cfg(feature = "jit-log")]
+        crate::codegen::jit_stats::bump(match reason {
+            RecompileReason::ClassVersionGuardFailed => {
+                &crate::codegen::jit_stats::RECOMPILE_METHOD_CLASS_VER
+            }
+            RecompileReason::ConstVersionGuardFailed => {
+                &crate::codegen::jit_stats::RECOMPILE_METHOD_CONST_VER
+            }
+            _ => &crate::codegen::jit_stats::RECOMPILE_METHOD_OTHER,
+        });
         // Bail *before* compiling when there is no patch point to install
         // into — after a BOP eviction, or when the method only ever ran as a
         // specialized child of some root (its own `jit_entry` map was never
@@ -320,6 +354,10 @@ impl Codegen {
         let patch_point = match globals.store[iseq_id].get_jit_entry(self_class) {
             Some(patch_point) => patch_point,
             None => {
+                #[cfg(feature = "jit-log")]
+                crate::codegen::jit_stats::bump(
+                    &crate::codegen::jit_stats::RECOMPILE_METHOD_SKIPPED,
+                );
                 #[cfg(feature = "jit-log")]
                 eprintln!(
                     "[JIT] recompilation skipped for invalidated method: {:?} (jit_invalidated={}, entry_classes={:?}, wanted={:?})",
@@ -424,6 +462,18 @@ impl Codegen {
     ) -> Option<()> {
         let entry_label = self.jit.label();
         let class_version = self.class_version();
+        #[cfg(feature = "jit-log")]
+        if let Some(reason) = is_recompile {
+            crate::codegen::jit_stats::bump(match reason {
+                RecompileReason::ClassVersionGuardFailed => {
+                    &crate::codegen::jit_stats::RECOMPILE_LOOP_CLASS_VER
+                }
+                RecompileReason::ConstVersionGuardFailed => {
+                    &crate::codegen::jit_stats::RECOMPILE_LOOP_CONST_VER
+                }
+                _ => &crate::codegen::jit_stats::RECOMPILE_LOOP_OTHER,
+            });
+        }
 
         let ret = if self
             .compile(
@@ -498,6 +548,23 @@ impl Codegen {
             patch_point,
             speculated_root,
         } = self.specialized_info[idx].clone();
+        #[cfg(feature = "jit-log")]
+        eprintln!(
+            "[JIT] recompile_specialized idx={idx} iseq={:?} ({:?}) speculated={}",
+            globals.store[iseq_id].name(),
+            reason,
+            speculated_root.is_some(),
+        );
+        #[cfg(feature = "jit-log")]
+        crate::codegen::jit_stats::bump(match reason {
+            RecompileReason::ClassVersionGuardFailed => {
+                &crate::codegen::jit_stats::RECOMPILE_SPEC_CLASS_VER
+            }
+            RecompileReason::ConstVersionGuardFailed => {
+                &crate::codegen::jit_stats::RECOMPILE_SPEC_CONST_VER
+            }
+            _ => &crate::codegen::jit_stats::RECOMPILE_SPEC_OTHER,
+        });
         if let Some(root) = speculated_root {
             return self.recompile_speculated_root(globals, root, reason);
         }
@@ -752,7 +819,11 @@ extern "C" fn jit_recompile_method_with_recovery(
     lfp: Lfp,
     reason: RecompileReason,
 ) -> u64 {
+    #[cfg(feature = "jit-log")]
+    crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::RECOVERY_ATTEMPT);
     if globals.store.update_inline_cache(lfp) {
+        #[cfg(feature = "jit-log")]
+        crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_OK);
         return 1;
     };
     //    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

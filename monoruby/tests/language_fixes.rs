@@ -775,6 +775,33 @@ fn accessor_called_with_wrong_arity_does_not_abort_jit() {
 }
 
 #[test]
+fn const_reassignment_reaches_specialized_bodies() {
+    // A constant folded into a JIT-specialized (inlined) callee must observe
+    // a later reassignment: the const-version guard in the specialized body
+    // recompiles the entry via its idx (GuardConstVersionSpecialized) and
+    // side-exits, so the next call folds the new value.
+    run_test_once(
+        r#"
+        SPECIALIZED_CONST_K = 7
+        def specialized_const_callee
+          SPECIALIZED_CONST_K * 2
+        end
+        def specialized_const_driver
+          s = 0
+          30.times { s += specialized_const_callee }
+          s
+        end
+        a = specialized_const_driver
+        Object.send(:remove_const, :SPECIALIZED_CONST_K)
+        SPECIALIZED_CONST_K = 40
+        b = specialized_const_driver
+        c = specialized_const_driver
+        [a, b, c]
+        "#,
+    );
+}
+
+#[test]
 fn end_block_registers_at_exit() {
     // `END { ... }` desugars through an `at_exit` registration (the
     // ArgList::with_block constructor path). The block runs at process

@@ -176,6 +176,7 @@ impl Globals {
                 "elapsed JIT compile time: {:?}",
                 CODEGEN.with(|codegen| codegen.borrow().jit_compile_time)
             );
+            crate::codegen::jit_stats::dump();
         }
     }
 }
@@ -222,7 +223,11 @@ pub(crate) extern "C" fn log_deoptimize(
                 | TraceIr::LoadIvar(..)         // inline ivar cache miss
                 | TraceIr::StoreIvar(..) => {
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt}", bc_pos);
+                    if let Some(v) = reason {
+                        eprintln!("    [{:05}] {fmt} caused by {}", bc_pos, v.debug(&globals.store));
+                    } else {
+                        eprintln!("    [{:05}] {fmt}", bc_pos);
+                    }
                 },
                 _ => if let Some(v) = reason {
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);

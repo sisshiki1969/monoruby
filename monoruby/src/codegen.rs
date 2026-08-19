@@ -1349,6 +1349,8 @@ impl Codegen {
 
     pub(crate) fn class_version_inc(&self) {
         unsafe { *self.class_version_addr += 1 }
+        #[cfg(feature = "jit-log")]
+        jit_stats::bump(&jit_stats::CLASS_VER_INC);
     }
 
     pub(crate) fn const_version(&self) -> u64 {
@@ -1357,6 +1359,8 @@ impl Codegen {
 
     pub(crate) fn const_version_inc(&self) {
         unsafe { *self.const_version_addr += 1 }
+        #[cfg(feature = "jit-log")]
+        jit_stats::bump(&jit_stats::CONST_VER_INC);
     }
 
     /// Record that a basic op was redefined. `bop` names the VM assembly
@@ -1894,5 +1898,55 @@ mod tests {
                 assert_eq!(Value::float(f).try_float(), func(f).try_float());
             }
         }
+    }
+}
+
+/// Temporary investigation counters (jit-log only): how often the two global
+/// version words move, and how the class-version guard's recovery path fares.
+#[cfg(feature = "jit-log")]
+pub(crate) mod jit_stats {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    pub static CLASS_VER_INC: AtomicUsize = AtomicUsize::new(0);
+    pub static CONST_VER_INC: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOVERY_ATTEMPT: AtomicUsize = AtomicUsize::new(0);
+    pub static SALVAGE_OK: AtomicUsize = AtomicUsize::new(0);
+    pub static SALVAGE_FAIL_NO_ENTRY: AtomicUsize = AtomicUsize::new(0);
+    pub static SALVAGE_FAIL_RESOLUTION_CHANGED: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOMPILE_METHOD_CLASS_VER: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOMPILE_METHOD_CONST_VER: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOMPILE_METHOD_OTHER: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOMPILE_METHOD_SKIPPED: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOMPILE_LOOP_CLASS_VER: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOMPILE_LOOP_CONST_VER: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOMPILE_LOOP_OTHER: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOMPILE_SPEC_CLASS_VER: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOMPILE_SPEC_CONST_VER: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOMPILE_SPEC_OTHER: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn bump(c: &AtomicUsize) {
+        c.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn dump() {
+        let g = |c: &AtomicUsize| c.load(Ordering::Relaxed);
+        eprintln!();
+        eprintln!("version / salvage stats:");
+        eprintln!("  class_version incs:                {}", g(&CLASS_VER_INC));
+        eprintln!("  const_version incs:                {}", g(&CONST_VER_INC));
+        eprintln!("  recovery attempts (class guard):   {}", g(&RECOVERY_ATTEMPT));
+        eprintln!("    salvaged (re-resolution ok):     {}", g(&SALVAGE_OK));
+        eprintln!("    fail: resolution changed:        {}", g(&SALVAGE_FAIL_RESOLUTION_CHANGED));
+        eprintln!("    fail: no cache/entry:            {}", g(&SALVAGE_FAIL_NO_ENTRY));
+        eprintln!("  whole recompiles  class-ver:       {}", g(&RECOMPILE_METHOD_CLASS_VER));
+        eprintln!("  whole recompiles  const-ver:       {}", g(&RECOMPILE_METHOD_CONST_VER));
+        eprintln!("  whole recompiles  other:           {}", g(&RECOMPILE_METHOD_OTHER));
+        eprintln!("  whole recompiles  skipped(noinst): {}", g(&RECOMPILE_METHOD_SKIPPED));
+        eprintln!("  loop  recompiles  class-ver:       {}", g(&RECOMPILE_LOOP_CLASS_VER));
+        eprintln!("  loop  recompiles  const-ver:       {}", g(&RECOMPILE_LOOP_CONST_VER));
+        eprintln!("  loop  recompiles  other:           {}", g(&RECOMPILE_LOOP_OTHER));
+        eprintln!("  spec  recompiles  class-ver:       {}", g(&RECOMPILE_SPEC_CLASS_VER));
+        eprintln!("  spec  recompiles  const-ver:       {}", g(&RECOMPILE_SPEC_CONST_VER));
+        eprintln!("  spec  recompiles  other:           {}", g(&RECOMPILE_SPEC_OTHER));
     }
 }
