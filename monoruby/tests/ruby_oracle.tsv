@@ -890,6 +890,7 @@
 48550372bab4ca5a49be495f7a3ccff8	[true, true, false]	root = Fiber.current\n            inner = nil\n            f = Fiber.
 485bfcadd99bf357e22c80c24adff41d	[true, true, true, true, true]	cri = Struct.new(:value) do\n              def to_int; value; end\n  
 486696700c00f3fb37eb234c9c60f677	["only a", false]	a = Object.new\n            b = Object.new\n            a.define_sing
+487f802f860555f259d6419e41494d11	[[11, :plain_mb, 2, 2, :plain_sw], [:reader_arity, 8, :writer_arity], [:struct_reader_arity, 4]]	class PolyPlain\n          def m(x) = x + 10\n          def mb(&b) = :pla
 48839ffd49795e527baeb89db20cb2c2	["2020-12-25T00:56:17+00:00", "2020-12-25T00:56:17.123456789+09:00", 10800, 0, 18000, 500000000, 0, "2020-01-01T00:00:00+00:00", "2020-03-04T00:00:00+00:00"]	[Time.new("2020-12-25 00:56:17").iso8601,\n             Time.new("20
 488d47c4b605cf5749a29b8563730981	"a1b2 c3!"	"A1B2 C3!".downcase
 48ca330894fd5c945a0e50a26d1600c7	["ab!!", "cd"]	r, w = IO.pipe\n            t = Thread.new { r.gets("!!") }\n        
@@ -1803,6 +1804,7 @@
 96e3694435312b4930df7a7be3c47ef2	[[nil, nil, 5, nil, nil, nil, nil, nil, nil, nil, 4], A]	class A < Array\n        end\n        \n\n        a = A.new(10)\n        a <
 96fd9678f0dfe97f7c36c920dd7add18	[123456789, 123456789, 123456000, 123456000, 123000000, 500000]	[Time.at(0, 123456789, :nanosecond).nsec, Time.at(0, 123456789, :nsec).nsec, Tim
 970a7c81313ab20891884b7ce441755a	false	c = Class.new do\n              def m; 1; end\n              undef :"
+9728f004848dcccd6ba56d23d00eddc4	[[11, :plain_mb, :plain_mb, 2, 2, :plain_sw], [:reader_arity, 8, 8, :writer_arity], [:struct_reader_arity, 4]]	class PolyPlain\n          def m(x) = x + 10\n          def mb(&b) = :pla
 972f0dda9403b085a3a271026cdf1d04	[true, 7]	S = Struct.new(:x, keyword_init: 1)\n            \n\n            s = S
 974291e66576b4792c6134bc16187092	{amount: 42, unit: "km"}	M = Data.define(:amount, :unit)\nM.new(42, "km").to_h
 975f29740a52c016b0753267cdbbe847	["r", "", "r", "r", "r", "", nil, nil]	str0 = "bar"\n[str0[2,1], str0[2,0], str0[2,100], str0[-1,1], str0[-1,2], str0[3,

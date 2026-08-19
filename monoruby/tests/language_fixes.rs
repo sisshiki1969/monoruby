@@ -727,32 +727,49 @@ fn accessor_called_with_wrong_arity_does_not_abort_jit() {
         r.uniq
         "#,
     );
-    // Cover the whole guard: reader with a splat, and — via aliases, since
-    // writer names can't be direct-called with extra shapes — attr/Struct
-    // writers with a block and a Struct reader with an argument, all warmed
-    // past the JIT threshold at direct (inline-cache) callsites.
+    // Cover every guard arm through the shape that actually reaches the
+    // JIT's FuncKind dispatch (and originally tripped the asserts in
+    // ActiveRecord): a *polymorphic* callsite inside a hot method, where
+    // one receiver class resolves the name to a plain method (keeping the
+    // site cached and compiling) and the other to an attr/Struct accessor
+    // whose callsite shape is non-canonical. Writer names cannot be
+    // direct-called with extra shapes, so those go through aliases.
     run_test_once(
         r#"
-        class AccCov
-          attr_reader :x
-          attr_writer :y
-          alias wset y=
-          def initialize = @x = 1
+        class PolyPlain
+          def m(x) = x + 10
+          def mb(&b) = :plain_mb
+          def wm(*a) = a.size
+          def sg(x) = x - 1
+          def sw(*a) = :plain_sw
         end
-        st_cls = Struct.new(:a) do
-          alias sget a
-          alias sset a=
+        class PolyAcc
+          attr_reader :m, :mb
+          attr_writer :w
+          alias wm w=
+          def initialize
+            @m = 7
+            @mb = 8
+          end
         end
-        a = AccCov.new
-        s = st_cls.new(5)
-        r = []
-        30.times do
-          r << (a.x(*[1]) rescue :reader_splat)
-          r << a.wset(2) { :blk }
-          r << (s.sget(1) rescue :struct_reader_arg)
-          r << s.sset(3) { :blk }
+        struct_cls = Struct.new(:sg) do
+          alias sw sg=
         end
-        [r.uniq, s.a]
+        objs = [PolyPlain.new, PolyAcc.new, PolyPlain.new, struct_cls.new(5)]
+        def drive(o)
+          pr = proc { :block_arg }
+          r = []
+          r << (o.m(1) rescue :reader_arity) if o.respond_to?(:m)
+          r << (o.mb { :blk }) if o.respond_to?(:mb)
+          r << (o.mb(&pr)) if o.respond_to?(:mb)
+          r << (o.wm(1, 2) rescue :writer_arity) if o.respond_to?(:wm)
+          r << (o.sg(3) rescue :struct_reader_arity) if o.respond_to?(:sg)
+          r << (o.sw(4) { :blk } rescue :struct_writer_block) if o.respond_to?(:sw)
+          r
+        end
+        out = []
+        40.times { |i| out << drive(objs[i % objs.size]) }
+        out.uniq
         "#,
     );
 }

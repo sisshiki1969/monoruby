@@ -518,47 +518,30 @@ impl<'a> JitContext<'a> {
             block_fid,
             ..
         } = *callsite;
-        // Whether the callsite has the canonical shape the inline
-        // accessor lowerings (attr/Struct readers and writers) assume:
-        // exactly `expected_pos` statically-known positional arguments
-        // and nothing else. A *legal* Ruby program can still call an
-        // accessor with extra arguments, keywords, a splat, or a block
-        // (raising ArgumentError — or ignoring the block — at runtime);
-        // such sites must side-exit to the VM, which implements those
-        // semantics, rather than trip the lowering's asserts and abort
+        // A *legal* Ruby program can call an attr/Struct accessor with
+        // extra arguments, keywords, a splat, or a block (raising
+        // ArgumentError — or ignoring the block — at runtime); such sites
+        // must side-exit to the VM, which implements those semantics,
+        // rather than trip the inline lowerings' shape asserts and abort
         // the whole compile (found via ActiveRecord, whose method_missing
         // machinery probes attr_reader-named methods with arguments).
-        let accessor_shape = |callsite: &CallSiteInfo, expected_pos: usize| {
-            callsite.pos_num == expected_pos
-                && callsite.splat_pos.is_empty()
-                && !callsite.kw_may_exists()
-                && callsite.block_fid.is_none()
-                && callsite.block_arg.is_none()
-        };
+        // Polymorphic sites never get here with such a target: `pic_groups`
+        // drops it with the same check.
+        if !self.accessor_shape_ok(callid, func_id) {
+            return Ok(CompileResult::Deopt);
+        }
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let (fid, outer_lfp) = match self.store[func_id].kind {
             FuncKind::AttrReader { ivar_name } => {
-                if !accessor_shape(callsite, 0) {
-                    return Ok(CompileResult::Deopt);
-                }
                 return Ok(self.attr_reader(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::AttrWriter { ivar_name } => {
-                if !accessor_shape(callsite, 1) {
-                    return Ok(CompileResult::Deopt);
-                }
                 return Ok(self.attr_writer(state, ir, callid, recv_class, ivar_name));
             }
             FuncKind::StructReader { slot_index, inline } => {
-                if !accessor_shape(callsite, 0) {
-                    return Ok(CompileResult::Deopt);
-                }
                 return Ok(self.struct_slot_reader(state, ir, callid, slot_index, inline));
             }
             FuncKind::StructWriter { slot_index, inline } => {
-                if !accessor_shape(callsite, 1) {
-                    return Ok(CompileResult::Deopt);
-                }
                 return Ok(self.struct_slot_writer(state, ir, callid, slot_index, inline));
             }
             FuncKind::Builtin { .. } => (func_id, None),
@@ -1001,6 +984,25 @@ impl<'a> JitContext<'a> {
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
         Ok(res)
+    }
+
+    /// Whether `callid` has the canonical shape for `func_id` when the
+    /// latter is an attr/Struct accessor — the precondition of the inline
+    /// accessor lowerings below: exactly the accessor's positional arity,
+    /// statically known (no splat), and no keywords or block. Non-accessor
+    /// targets are always ok.
+    pub(super) fn accessor_shape_ok(&self, callid: CallSiteId, func_id: FuncId) -> bool {
+        let expected_pos = match self.store[func_id].kind {
+            FuncKind::AttrReader { .. } | FuncKind::StructReader { .. } => 0,
+            FuncKind::AttrWriter { .. } | FuncKind::StructWriter { .. } => 1,
+            _ => return true,
+        };
+        let callsite = &self.store[callid];
+        callsite.pos_num == expected_pos
+            && callsite.splat_pos.is_empty()
+            && !callsite.kw_may_exists()
+            && callsite.block_fid.is_none()
+            && callsite.block_arg.is_none()
     }
 
     fn attr_reader(

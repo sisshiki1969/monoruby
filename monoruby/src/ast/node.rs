@@ -361,18 +361,6 @@ impl ArgList {
         }
     }
 
-    pub(crate) fn with_block(block: Box<Node>) -> Self {
-        ArgList {
-            args: vec![],
-            kw_args: vec![],
-            hash_splat: vec![],
-            block: Some(block),
-            forwarding: false,
-            delegate_block: false,
-            splat: false,
-            zsuper: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

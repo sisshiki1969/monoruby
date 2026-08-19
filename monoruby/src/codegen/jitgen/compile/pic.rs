@@ -148,6 +148,15 @@ impl<'a> JitContext<'a> {
             {
                 continue;
             }
+            // An attr/Struct accessor target whose callsite shape is
+            // non-canonical (extra arguments, keywords, a splat — a block
+            // is already excluded site-wide above) answers `Deopt` in
+            // `compile_method_call`, which must not fire mid-chain: drop
+            // the class like the other ineligible shapes, so it falls past
+            // the arms and deopts.
+            if !self.accessor_shape_ok(callid, func_id) {
+                continue;
+            }
             admitted += 1;
             // Fold into the arm for this target if one is already open. The
             // groups stay in first-seen order, which is most-observed-first,
