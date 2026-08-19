@@ -156,6 +156,61 @@ fn setivar_unproven_value_keeps_barrier() {
 }
 
 #[test]
+fn setivar_frozen_check_folding() {
+    // ④-b: only the first store of a straight-line run guards the frozen
+    // bit; any instruction that can run Ruby code (here: a method call
+    // that may `freeze` self) invalidates the proof, so the next store
+    // guards again. Freezing self mid-method must raise exactly at the
+    // first store after the freeze — the stores before it stick.
+    run_test(
+        r##"
+        class P
+          attr_reader :a, :b, :c
+          def maybe_freeze(x)
+            freeze if x
+          end
+          def fill(i, x)
+            @a = i          # guards (run head)
+            @b = i          # folded: nothing between can freeze self
+            maybe_freeze(x) # call: proof dropped
+            @c = i          # guards again; raises when x
+          end
+        end
+        r = []
+        25.times { p = P.new; p.fill(1, false); r << [p.a, p.b, p.c] }
+        p = P.new
+        begin
+          p.fill(2, true)
+        rescue FrozenError
+          r << [:raised, p.a, p.b, p.c]
+        end
+        r.uniq
+        "##,
+    );
+    // A frozen receiver must still raise on the *first* store of a folded
+    // run (the fold never removes the leading guard).
+    run_test(
+        r##"
+        class Q
+          def fill(i)
+            @a = i
+            @b = i
+          end
+        end
+        r = []
+        25.times { r << Q.new.fill(3) }
+        q = Q.new.freeze
+        begin
+          q.fill(4)
+        rescue FrozenError
+          r << :first_store_raises
+        end
+        r.uniq
+        "##,
+    );
+}
+
+#[test]
 fn setivar_float_value_keeps_barrier() {
     // Guarded::Float is not proof of an immediate: a non-flonum f64 boxes
     // to a heap Float RValue on the way into the ivar.

@@ -1047,6 +1047,7 @@
 56c66dbccb073aee6589ec1565f0bc4a	[true, true, :from_m]	m = Module.new { def hello; :from_m; end }\n            c = Class.ne
 56d2acea00f86435c09eba201d394a6a	"US-ASCII"	"abc".encode("US-ASCII").ljust(5).encoding.to_s
 56e7e0addb979c7b45676dd416029bbd	false	c = Class.new do\n              def foo; 'x'; end\n              unde
+57024289682840701834a7ec11214795	[[1, 1, 1], [:raised, 2, 2, nil]]	class P\n          attr_reader :a, :b, :c\n          def maybe_freeze(x)\n
 570b040bdaffa1b8418ad19df9963b51	["/home/user", "file.txt"]	File.split("/home/user/file.txt")
 572b1d6bee4d9881bea673d3703255a2	"Kernel"	Object.instance_method(:respond_to_missing?).owner.to_s
 572b883c230b4f69d4b415b30b19b9c2	1	pid = fork { sleep 5 }\n            count = Process.kill(0, pid)\n   
@@ -1996,6 +1997,7 @@ a6cd1aa39f1855a925c68ee19f8abd1f	["global-variable", nil, "$! not set", true, ["
 a6d1396f813ed5a286b235897f532cc9	420	class Foo\n          def **(other)\n            other * 10\n          end\n
 a6e76941b428102c2ba4a628d8639080	1000	S = Struct.new(:counter)\n            \n\n            s = S.new(0)\n   
 a6f799b2f3bd4b9cbb9608e44dd52dbc	true	Process.warmup
+a6ffb30dedbdb58fc281fe6682f6497c	[3, :first_store_raises]	class Q\n          def fill(i)\n            @a = i\n            @b = i\n   
 a71e54a7d566380aaed8baaea63868be	99	def make_proc\n          Proc.new { yield }\n        end\n        def get_
 a7bbd186c86ac3ce9091503517f8a4c7	[true, true, false]	class Foo\n              def bar; 1; end\n              alias_method 
 a7d85b5b4b74fdccaa32b812610588e7	true	d = +"foo"\n            h = Hash.new(d)\n            h[:any].equal?(d

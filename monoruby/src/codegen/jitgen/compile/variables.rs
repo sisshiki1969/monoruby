@@ -33,6 +33,10 @@ impl<'a> JitContext<'a> {
         state.bind_gp_resident(gp, dst);
     }
 
+    /// `frozen_checked`: an earlier `StoreIvar` on this straight-line path
+    /// already guarded self's frozen bit and nothing since could have frozen
+    /// it (see `compile_instruction`'s ④-b whitelist), so the guard here is
+    /// redundant and skipped.
     pub(super) fn store_ivar(
         &mut self,
         state: &mut AbstractState,
@@ -40,14 +44,17 @@ impl<'a> JitContext<'a> {
         src: SlotId,
         self_class: ClassId,
         ivarid: IvarId,
+        frozen_checked: bool,
     ) {
         assert!(!self_class.is_always_frozen());
         // A provably-immediate stored value needs no GC write barrier.
         let wb = !state.is_guarded_immediate(src);
         let src = state.load_or_reg(ir, src, GP::Rax);
         ir.self2reg(GP::Rdi);
-        let deopt = ir.new_deopt(state);
-        ir.guard_frozen(deopt);
+        if !frozen_checked {
+            let deopt = ir.new_deopt(state);
+            ir.guard_frozen(deopt);
+        }
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::StoreIVarInline { src, ivarid, wb });

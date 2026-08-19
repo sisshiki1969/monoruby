@@ -70,6 +70,10 @@ impl<'a> JitContext<'a> {
 
     fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> JitResult<AsmIr> {
         let mut ir = AsmIr::new(self);
+        // The "self not frozen" proof is a straight-line fact: a merge makes
+        // no promise about every incoming path, and a loop head's safepoint
+        // is a preemption point where another thread can `freeze` self.
+        self.self_unfrozen = false;
 
         let mut state = match self.incoming_context(bbid, false)? {
             Some(bb) => bb,
@@ -275,6 +279,24 @@ impl<'a> JitContext<'a> {
         let pc = self.get_pc(bc_pos);
         state.set_pc(pc);
         let trace_ir = TraceIr::from_pc(pc, self.store);
+        // ④-b: the "self not frozen" proof survives only across instructions
+        // that provably execute no Ruby code and reach no safepoint — either
+        // could freeze self (a callee via `self.freeze`, a safepoint via
+        // green-thread preemption into a thread that freezes it). Take the
+        // flag here; the whitelist below carries it forward, the `StoreIvar`
+        // arm consumes it (skipping the redundant guard) and re-sets it
+        // after its own guard/store. Everything else drops it.
+        let self_unfrozen = std::mem::take(&mut self.self_unfrozen);
+        if matches!(
+            trace_ir,
+            // Pure register/stack/memory ops: literal materialization
+            // (immediates fold into the abstract state; heap literals load a
+            // pointer into a pool register), slot copies, and ivar *loads*
+            // (memory reads into a pool register).
+            TraceIr::FrozenLiteral(..) | TraceIr::Mov(..) | TraceIr::LoadIvar(..)
+        ) {
+            self.self_unfrozen = self_unfrozen;
+        }
         #[cfg(feature = "jit-debug")]
         if let Some(fmt) = TraceIr::format(self.store, self.iseq_id(), pc) {
             eprintln!("{fmt}");
@@ -451,7 +473,10 @@ impl<'a> JitContext<'a> {
                     {
                         assert_eq!(ivarid, cached_ivarid);
                     }
-                    self.store_ivar(state, ir, src, self_class, ivarid);
+                    self.store_ivar(state, ir, src, self_class, ivarid, self_unfrozen);
+                    // The guard (or the carried proof) just established that
+                    // self is not frozen at this point of the path.
+                    self.self_unfrozen = true;
                     state.unset_side_effect_guard();
                 } else {
                     return Ok(CompileResult::Recompile(RecompileReason::IvarIdNotFound));
