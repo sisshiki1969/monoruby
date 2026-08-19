@@ -7,8 +7,22 @@ use jitgen::{AbstractState, JitContext};
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Range", RANGE_CLASS, ObjTy::RANGE);
-    globals.define_builtin_class_func_with(RANGE_CLASS, "new", range_new, 2, 3, false);
+    // No class-level `new` here: `Range.new` resolves to the generic
+    // `Class#new` (builtins/class.rb) — allocate via `range_alloc_func`,
+    // then dispatch `#initialize`. Routing through the one true dispatch
+    // path keeps subclass-overridden `initialize` (positional *and*
+    // keyword arguments) working; the old direct `Range.new` builtin
+    // flattened subclass keywords into the third positional slot, where
+    // they were silently taken as the `exclude_end` flag.
     globals.store[RANGE_CLASS].set_alloc_func(range_alloc_func);
+    globals.define_private_builtin_func_with(
+        RANGE_CLASS,
+        "initialize",
+        range_initialize,
+        2,
+        3,
+        false,
+    );
     globals.define_builtin_inline_func(RANGE_CLASS, "begin", begin, inline_gen2!(range_begin), 0);
     globals.define_builtin_func_with(RANGE_CLASS, "first", first, 0, 1, false);
     globals.define_builtin_inline_func(RANGE_CLASS, "end", end, inline_gen2!(range_end), 0);
@@ -39,41 +53,56 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 ///
-/// ### Range.new
+/// ### Range#initialize
 ///
-/// - new(first, last, exclude_end = false) -> Range
+/// - initialize(first, last, exclude_end = false) -> self
+///
+/// Private hook called by `Class#new`. Explicit `Range.new` is strict:
+/// CRuby probes `first <=> last` once, propagates any raised exception,
+/// and turns a `nil` result into `ArgumentError`. Range *literals* are
+/// more lax (see `gen_range`) so monoruby's incomplete user-type
+/// comparators don't reject hand-written ranges. Per CRuby, a second
+/// `initialize` raises (FrozenError on a frozen direct instance,
+/// NameError otherwise), and direct `Range` instances come out frozen
+/// while subclass instances stay mutable.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Range/s/new.html]
 #[monoruby_builtin]
-fn range_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn range_initialize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut self_ = lfp.self_val();
+    if self_.as_range().is_initialized() {
+        self_.ensure_not_frozen(&globals.store)?;
+        return Err(MonorubyErr::nameerr("'initialize' called twice"));
+    }
     let exclude_end = lfp.try_arg(2).map(|v| v.as_bool()).unwrap_or(false);
-    let class_id = lfp.self_val().as_class_id();
     let start = lfp.arg(0);
     let end = lfp.arg(1);
-    // Explicit `Range.new` is strict: CRuby probes `start <=> end` once,
-    // propagates any raised exception, and turns a `nil` result into
-    // `ArgumentError`. We do the same. Range *literals* are more lax
-    // (see `gen_range`) so monoruby's incomplete user-type comparators
-    // don't reject hand-written ranges.
     if !start.is_nil() && !end.is_nil() {
         let cmp = vm.compare_values_inner(globals, start, end)?;
         if cmp.is_none() {
             return Err(MonorubyErr::argumenterr("bad value for range"));
         }
     }
-    if class_id != RANGE_CLASS {
-        // Subclass of Range: build directly with the subclass's class id
-        // and leave it unfrozen (CRuby only freezes direct Range
-        // instances).
-        Ok(Value::range_with_class(start, end, exclude_end, class_id))
-    } else {
-        Ok(Value::range(start, end, exclude_end))
+    self_.as_range_mut().initialize(start, end, exclude_end);
+    self_.write_barrier(start);
+    self_.write_barrier(end);
+    if self_.class() == RANGE_CLASS {
+        // CRuby freezes direct Range instances (literal, Range.new,
+        // allocate+initialize); subclass instances stay unfrozen.
+        self_.set_frozen();
     }
+    Ok(self_)
 }
 
-/// Allocator for `Range` and its subclasses.
+/// Allocator for `Range` and its subclasses. The result carries the
+/// "uninitialized" sentinel so `Range#initialize` can reject a second call.
 pub(crate) extern "C" fn range_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
-    Value::range_with_class(Value::nil(), Value::nil(), false, class_id)
+    Value::range_uninit_with_class(class_id)
 }
 
 ///

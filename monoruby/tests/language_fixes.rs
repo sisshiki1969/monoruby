@@ -728,3 +728,79 @@ fn accessor_called_with_wrong_arity_does_not_abort_jit() {
         "#,
     );
 }
+
+#[test]
+fn builtin_subclass_initialize_hash_time_range() {
+    // Hash.new / Time.new / Range.new route through the generic
+    // `Class#new`, so subclass-overridden `initialize` — including keyword
+    // parameters — is dispatched. Previously Hash/Time rejected the
+    // keywords at their builtin `new` boundary, and Range silently folded
+    // the keyword hash into the third positional slot (the `exclude_end`
+    // flag), yielding `1...5` instead of `1..5`.
+    run_test_once(
+        r#"
+        class KwHash < Hash
+          attr_reader :opt
+          def initialize(opt: nil)
+            super()
+            @opt = opt
+          end
+        end
+        class KwRange < Range
+          attr_reader :opt
+          def initialize(a, b, opt: nil)
+            super(a, b)
+            @opt = opt
+          end
+        end
+        class KwTime < Time
+          attr_reader :opt
+          def initialize(opt: nil)
+            super(2020, 1, 2, 3, 4, 5, "+00:00")
+            @opt = opt
+          end
+        end
+        h = KwHash.new(opt: 1)
+        r = KwRange.new(1, 5, opt: 2)
+        t = KwTime.new(opt: 3)
+        [h.opt, h.class.name, r, r.opt, r.to_a, t.year, t.utc_offset, t.opt]
+        "#,
+    );
+}
+
+#[test]
+fn range_new_semantics_via_class_new() {
+    // Direct Range instances come out frozen; subclass instances don't.
+    // A second `initialize` raises NameError (unfrozen subclass) or
+    // FrozenError (frozen direct instance); incomparable endpoints raise
+    // ArgumentError; `allocate` + `initialize` matches `Range.new`.
+    run_test_once(
+        r#"
+        sub = Class.new(Range)
+        errs = []
+        begin; sub.new(1, 2).send(:initialize, 3, 4); rescue => e; errs << [e.class.to_s, e.message]; end
+        begin; Range.new(1, 2).send(:initialize, 3, 4); rescue => e; errs << e.class.to_s; end
+        begin; Range.new(1, Object.new); rescue => e; errs << e.class.to_s; end
+        alloc = Range.allocate
+        alloc.send(:initialize, 5, 6)
+        [Range.new(1, 2), Range.new(1, 2).frozen?, Range.new(1, 2, true),
+         sub.new(1, 2).frozen?, (1..2).frozen?, alloc, alloc.frozen?] + errs
+        "#,
+    );
+    // Hash defaults / default procs / capacity: still work through the
+    // Class#new route.
+    run_test_once(
+        r#"
+        [Hash.new(9)[:missing], Hash.new { |h, k| "d-#{k}" }[:k],
+         Hash.new(capacity: 8), Class.new(Hash).new(7).default]
+        "#,
+    );
+    // Time.new positional forms (offset-explicit, so the expectation is
+    // timezone-independent) still work through the Class#new route.
+    run_test_once(
+        r#"
+        t = Time.new(2020, 1, 2, 3, 4, 5, "+09:00")
+        [t.year, t.month, t.day, t.hour, t.utc_offset, Time.new(2020, 1, 1, in: "+09:00").utc_offset]
+        "#,
+    );
+}

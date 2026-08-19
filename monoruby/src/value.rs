@@ -1376,6 +1376,12 @@ impl Value {
         RValue::new_range_with_class(start, end, exclude_end, class_id).pack()
     }
 
+    /// A `Range.allocate`d, not-yet-initialized range: `Range#initialize`
+    /// fills it in (and rejects a second call per CRuby).
+    pub fn range_uninit_with_class(class_id: ClassId) -> Self {
+        RValue::new_range_uninit_with_class(class_id).pack()
+    }
+
     pub fn new_exception(err: MonorubyErr) -> Self {
         RValue::new_exception(err).pack()
     }
@@ -2983,6 +2989,12 @@ impl Value {
         assert_eq!(ObjTy::RANGE, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains a range.
         unsafe { self.rvalue().as_range() }
+    }
+
+    pub(crate) fn as_range_mut(&mut self) -> &mut RangeInner {
+        assert_eq!(ObjTy::RANGE, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains a range.
+        unsafe { self.rvalue_mut().as_range_mut() }
     }
 
     #[allow(dead_code)]

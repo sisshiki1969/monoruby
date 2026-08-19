@@ -1169,6 +1169,7 @@
 60e12b0996506a089ca690904fc7428d	["1-2-3", "1-2-3", "1+2+3", "", "1-2-3"]	$, = "-"; r = [[1,2,3].join, [1,2,3].join(nil), [1,2,3].join("+"), [].join,\n    
 60e7801250bb0dce26c76cbfe1c94612	[1, 2, 3, 4, false, false, true, false, true, false]	o = Object.new\n            def o.foo = 1\n            m = Module.new
 60fa84926456bf38e08b292f42e6048b	[true, false, true]	parent = Class.new do\n              protected; def parent_pro; end\n
+60fba8f11f422d913f9063b5a6042917	[1, "KwHash", 1..5, 2, [1, 2, 3, 4, 5], 2020, 0, 3]	class KwHash < Hash\n          attr_reader :opt\n          def initialize
 61004613ce868620a7ea63f5833c5be8	[100, 200]	def f(&p)\n            g(&p)\n        end\n                \n        def g(
 610be275fcd8db9f9253050ade7d323a	["m0", 420, 21, "m0", 0, 4, 109, 30, 777, 5, 880, 24, "argerr", "NoMethodError", "m0", 70, 0]	class C\n          def m0; "m0"; end\n          def m1(a); a * 10; end\n  
 610beb27fdef4abad74c027625346d0e	"I:#<Integer:0xADDR>"	class Integer; def to_s; "I:" + super; end; end\n                5.to_s.sub(/0x[0
@@ -1196,6 +1197,7 @@
 634c7a5e93593cc0d60ce377ffcc8f54	3	class Integer; alias __orig :>>; def >>(o); __orig(o); end; end; 48 >> 4
 636623b3d0f703dc7b71fcb417b67800	[true, false]	class ClassExecLexA; end\n            ClassExecLexA.class_exec {\n   
 63700eed1bc37e1cd39e92995ac606f2	[[1.1805916207174113e+21, 1180591620717411303425, 3.5, 5.5, 7.5], 2361183241434822606848, 7.0, 1180591620717411303425]	class T\n              def initialize = (@a = [1, 2.5, 3, 4.5, 1 << 
+6377913f14aa78b7b4e9f356bfb1e184	[1..2, true, 1...2, false, true, 5..6, true, ["NameError", "'initialize' called twice"], "FrozenError", "ArgumentError"]	sub = Class.new(Range)\n        errs = []\n        begin; sub.new(1, 2).s
 63a9bd642fd895ef294a01db60ca5c2d	{amount: 42, unit: "km"}	M = Data.define(:amount, :unit)\nM.new(amount: 42, unit: "km").to_h
 63ae129d0273fad94c91f73160dc689d	422100	class Foo\n              def initialize(a, b, c); @a = a; @b = b; @c
 63b1daa2620d1e343314d1df22f4a78c	true	m = Module.new\n            m.define_method(:foo) { 42 }\n           
@@ -1316,6 +1318,7 @@
 6e7aebe2556be39faee23d7b63bd31d6	[false, false, false, false, false]	S = Struct.new(:a, :b, :c)\n            \n\n            s = S.new(1, 2
 6eadac74beac0aa21a211ec67fcdc95d	["0.514e1", "0.114e1", "0.628e1", "0.45e1", "0.7e1", "0.3e0"]	require "rubygems"\n        require "bigdecimal"\n        a = BigDecimal(
 6ec1acc4c17516bb23420e702e9103d2	[:done, true, 64]	def make_enum\n              Enumerator.new { |y| sleep 0.05; y << :
+6ee39a1116ff8eda1d78eddc45c1b5a3	[2020, 1, 2, 3, 32400, 32400]	t = Time.new(2020, 1, 2, 3, 4, 5, "+09:00")\n        [t.year, t.month, t
 6ee8709f21799482d6bff0182f48702d	"/\\n"	r, w = IO.pipe\n            Process.wait Process.spawn("pwd", chdir:
 6ef053c1cbcdce8316676a2978cf3fe7	A::B::C	class A\n            class B\n                class C\n                end
 6ef397ad6cceaf2ba157bceaa2004a48	true	r, _w = IO.pipe\n            r.wait(:r, 0).nil?\n            
@@ -2445,6 +2448,7 @@ c7eb3c942c1a7e00adfa5acdd395b7c7	"bar"	class Foo\n              def bar; "bar"; 
 c7fb69f1af1e10ae1e5ae2528ed35951	42	class Foo\n          BAR = 42\n        end\n        \n\n        some = Foo.n
 c7fcb26d3c719c7adab1775ac5cda0b5	[true, true, true]	[\n              Errno::EWOULDBLOCK.equal?(Errno::EAGAIN),\n         
 c801c5a63980ff11f7bd7eff3602884d	[1, 2]	class C; define_method(:m) { |a,| a }; end\n            C.new.m([1, 
+c80f12b350088baa62d5e93a36913b7f	[9, "d-k", {}, 7]	[Hash.new(9)[:missing], Hash.new { |h, k| "d-#{k}" }[:k],\n         Hash
 c816041bde5459f3245045930373570e	[[nil, nil], ["a.rb:1:in 'x'"], nil]	err = RuntimeError.new\n        before = [err.backtrace, err.backtrace_l
 c816fde3644e3aa0561e323a872662ca	[true, true, true, false]	[/abc/u, /abc/e, /abc/s, /abc/].map { |r| (r.options & Regexp::FIXEDENCODING) !=
 c82a457d317d4f5cad984d9f01f914c0	["boom (RuntimeError)", "unhandled exception", "ArgumentError", "\\e[1mx (\\e[1;4mRuntimeError\\e[m\\e[1m)\\e[m", "\\e[1mbad (\\e[1;4mArgumentError\\e[m\\e[1m)\\e[m", "a (RuntimeError)\\nb", "m", "\\e[1;4munhandled exception\\e[m", "z (ArgumentError)"]	[RuntimeError.new("boom").detailed_message,\n             RuntimeErr

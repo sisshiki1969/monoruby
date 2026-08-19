@@ -332,6 +332,12 @@ impl ObjKind {
         }
     }
 
+    fn range_uninit() -> Self {
+        Self {
+            range: ManuallyDrop::new(RangeInner::new_uninit()),
+        }
+    }
+
     fn exception(err: MonorubyErr) -> Self {
         Self {
             exception: ManuallyDrop::new(Box::new(ExceptionInner::new(err))),
@@ -2068,6 +2074,16 @@ impl RValue {
         }
     }
 
+    /// A `Range.allocate`d, not-yet-initialized range (`Range#initialize`
+    /// fills it in and rejects a second call).
+    pub(super) fn new_range_uninit_with_class(class_id: ClassId) -> Self {
+        RValue {
+            header: Header::new(class_id, ObjTy::RANGE),
+            kind: ObjKind::range_uninit(),
+            var_table: None,
+        }
+    }
+
     pub(super) fn new_proc(block_data: ProcInner) -> Self {
         RValue {
             header: Header::new(PROC_CLASS, ObjTy::PROC),
@@ -2406,6 +2422,10 @@ impl RValue {
 
     pub(super) unsafe fn as_range(&self) -> &RangeInner {
         unsafe { &self.kind.range }
+    }
+
+    pub(super) unsafe fn as_range_mut(&mut self) -> &mut RangeInner {
+        unsafe { &mut self.kind.range }
     }
 
     pub(super) unsafe fn as_exception(&self) -> &ExceptionInner {
