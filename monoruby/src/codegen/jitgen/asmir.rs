@@ -2089,6 +2089,21 @@ pub(super) enum AsmInst {
         const_version: usize,
         deopt: AsmDeopt,
     },
+    ///
+    /// Constant-version guard inside a specialized (inlined-frame) body: on a
+    /// version move, recompile this specialized entry via its `idx` (re-pointing
+    /// the caller's patch point at the fresh body), then side-exit. The whole /
+    /// loop shapes instead recompile through their `RecompileDeoptimize` side
+    /// exit — see `guard_const_version` in `jitgen/compile/variables.rs`.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    GuardConstVersionSpecialized {
+        const_version: usize,
+        idx: usize,
+        deopt: AsmDeopt,
+    },
     StoreConstant {
         id: ConstSiteId,
         using_fpr: UsingFpr,

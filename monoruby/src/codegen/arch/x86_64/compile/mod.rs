@@ -217,6 +217,18 @@ impl Codegen {
                     deopt,
                 );
             }
+            AsmInst::GuardConstVersionSpecialized {
+                const_version,
+                idx,
+                deopt,
+            } => {
+                let deopt = &labels[deopt];
+                self.guard_const_version_specialized(
+                    const_version,
+                    self.specialized_base + idx,
+                    deopt,
+                );
+            }
             AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {
                 let deopt = &labels[deopt];
                 self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx, reason)

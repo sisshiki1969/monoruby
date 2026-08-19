@@ -148,19 +148,35 @@ impl<'a> JitContext<'a> {
         if state.const_version_guard() {
             return;
         }
-        // Two shapes stay on the plain deopt. A specialized (inlined-frame)
-        // compile recompiles via an idx, not a position, so it has no
-        // recompile side exit to take — the same restriction the
-        // receiver-class guard makes in `compile_method_call`. And a *block*
-        // body must not take it either: the side exit recompiles whatever
-        // `lfp.func_id()` names, and `Codegen::recompile_method` re-enters
-        // the compiler as if that were a method — for a block frame that
-        // rebuilds the body under the wrong argument convention, which showed
-        // up as `Kernel#caller_locations`' block losing the argument it
-        // forwards to `Thread::Backtrace::Location.new`.
-        let deopt = if matches!(self.jit_type(), JitType::Specialized { .. })
-            || self.store[self.func_id()].is_block_style()
-        {
+        // Every shape gets a healing side exit. A specialized (inlined-frame)
+        // compile recompiles via its idx — the same route the class-version
+        // guard takes (`GuardClassVersionSpecialized`) — re-pointing the
+        // caller's patch point at a body folded against the new version.
+        // Leaving it on a plain deopt used to strand every specialized body
+        // compiled before a constant assignment: the folded constant's guard
+        // failed on *every* call for the rest of the run (the ruby-bench
+        // activerecord workload logged 78k such deopts in `Array#initialize`
+        // alone). A *block* ROOT stays on the plain deopt: the whole-method
+        // side exit recompiles whatever `lfp.func_id()` names, and
+        // `Codegen::recompile_method` re-enters the compiler as if that were
+        // a method — for a block frame that rebuilds the body under the wrong
+        // argument convention, which showed up as `Kernel#caller_locations`'
+        // block losing the argument it forwards to
+        // `Thread::Backtrace::Location.new`. (A block compiled *specialized*
+        // takes the idx route above, exactly as its class-version guard
+        // already does.)
+        if let JitType::Specialized { idx, .. } = self.jit_type() {
+            let idx = *idx;
+            let deopt = ir.new_deopt(state);
+            ir.push(AsmInst::GuardConstVersionSpecialized {
+                const_version: version,
+                idx,
+                deopt,
+            });
+            state.set_const_version_guard();
+            return;
+        }
+        let deopt = if self.store[self.func_id()].is_block_style() {
             ir.new_deopt(state)
         } else {
             ir.new_recompile_deopt(

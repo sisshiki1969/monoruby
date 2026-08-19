@@ -10,7 +10,7 @@ impl Codegen {
         }
     }
 
-    fn version_guard_fail(&mut self, deopt: &DestLabel) {
+    pub(super) fn version_guard_fail(&mut self, deopt: &DestLabel) {
         monoasm! { &mut self.jit,
             movq rdi, (Value::symbol_from_str("__version_guard").id());
             jmp  deopt;

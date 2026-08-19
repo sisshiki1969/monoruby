@@ -2838,6 +2838,38 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit, b deopt;);
                 self.jit.bind_label(done);
             }
+            // Constant-version twin of GuardClassVersionSpecialized: on a
+            // version move, recompile this specialized entry (re-folding the
+            // constants at the new version), then deopt.
+            AsmInst::GuardConstVersionSpecialized {
+                const_version,
+                idx,
+                deopt,
+            } => {
+                let global_idx = self.specialized_base + idx;
+                let deopt = labels[deopt].clone();
+                let miss = self.jit.label();
+                let done = self.jit.label();
+                let gv_addr = self
+                    .jit
+                    .get_label_address(&self.const_version_label())
+                    .as_ptr() as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (gv_addr);
+                    ldr x9, [x9];
+                    mov x10, (const_version as u64);
+                    cmp x9, x10;
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &miss); // mismatch -> miss
+                monoasm_arm64!(&mut self.jit, b done;); // match -> continue
+                self.jit.bind_label(miss.clone());
+                self.a64_call_recompile_specialized(
+                    global_idx,
+                    RecompileReason::ConstVersionGuardFailed,
+                );
+                monoasm_arm64!(&mut self.jit, b deopt;);
+                self.jit.bind_label(done);
+            }
             // Counter-gated specialized recompile-or-deopt point (mirrors x86
             // `recompile_and_deopt_specialized`).
             AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {

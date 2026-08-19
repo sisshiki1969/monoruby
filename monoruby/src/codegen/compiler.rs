@@ -498,6 +498,13 @@ impl Codegen {
             patch_point,
             speculated_root,
         } = self.specialized_info[idx].clone();
+        #[cfg(feature = "jit-log")]
+        eprintln!(
+            "[JIT] recompile_specialized idx={idx} iseq={:?} ({:?}) speculated={}",
+            globals.store[iseq_id].name(),
+            reason,
+            speculated_root.is_some(),
+        );
         if let Some(root) = speculated_root {
             return self.recompile_speculated_root(globals, root, reason);
         }

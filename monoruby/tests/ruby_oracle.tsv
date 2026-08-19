@@ -2166,6 +2166,7 @@ b2581c86d8fd4f38392d54c50df9db10	[5, 2, "hABlo", 2, "hABzz", "not opened for wri
 b2795cc1ad41c83216d600a75460cd44	[nil, false, 19, nil, nil, 12, 17, :again, 18]	h = {}\n        20.times { |i| h["k#{i}"] = i }\n        h.delete("k3")\n 
 b2795d944c1781663b943914a7470a30	:OVERRIDDEN	class Integer; def -@; :OVERRIDDEN; end; end; -(3)
 b289172cd420abd93cd3d2aa0cec0079	["handler-ran", 0]	r, w = IO.pipe\n            pid = fork do\n              r.close\n    
+b29d598259eea11e931b8fa6d90cc331	[420, 2400, 2400]	SPECIALIZED_CONST_K = 7\n        def specialized_const_callee\n          
 b29dca01dfe62ecc7a28c6ee542bc4af	[true, false, true, true, true, false, true, 42]	h = Hash.ruby2_keywords_hash(a: 1)\n        res = [Hash.ruby2_keywords_h
 b2a13b68902e5e530165d4399ed89c18	[1.5, 42, "s", :none]	def nlr_y\n          yield\n        end\n        def pick(k)\n          nlr
 b2d38391b3ffe286d499d5b0f8b8425c	[12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345, 12345]	def g = 12345\n        def f(...) = g(...)\n        \n\n        $r = []\n   
