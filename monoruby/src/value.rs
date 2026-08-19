@@ -1126,9 +1126,6 @@ impl Value {
         RValue::new_string_scanned(s).pack()
     }
 
-    pub fn string_with_class(s: &str, class_id: ClassId) -> Self {
-        RValue::new_string_with_class(s, class_id).pack()
-    }
 
     pub fn bytes(s: Vec<u8>) -> Self {
         RValue::new_bytes(s).pack()
@@ -1363,21 +1360,10 @@ impl Value {
         RValue::new_arithmetic_sequence(begin, end, step, exclude_end).pack()
     }
 
-    pub fn range_with_class(
-        start: Value,
-        end: Value,
-        exclude_end: bool,
-        class_id: ClassId,
-    ) -> Self {
-        // Not frozen: this constructor is used by `Range.allocate` and by
-        // the allocator for `Range` subclasses. CRuby only freezes direct
-        // `Range` instances (literal, `Range.new`, marshal load) — those
-        // go through `Value::range`.
-        RValue::new_range_with_class(start, end, exclude_end, class_id).pack()
-    }
-
     /// A `Range.allocate`d, not-yet-initialized range: `Range#initialize`
-    /// fills it in (and rejects a second call per CRuby).
+    /// fills it in (and rejects a second call per CRuby). Not frozen —
+    /// CRuby only freezes direct `Range` instances, which `#initialize`
+    /// handles after populating the fields.
     pub fn range_uninit_with_class(class_id: ClassId) -> Self {
         RValue::new_range_uninit_with_class(class_id).pack()
     }

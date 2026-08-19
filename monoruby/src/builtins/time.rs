@@ -3399,6 +3399,27 @@ mod tests {
     }
 
     #[test]
+    fn frozen_time_reinitialize_raises() {
+        // Documented divergence from CRuby (which raises TypeError for any
+        // re-initialize): monoruby permits re-initializing a Time, but a
+        // *frozen* receiver still fails with FrozenError. Pinned as a
+        // monoruby-only expectation.
+        let v = run_test_no_result_check(
+            r#"
+            t = Time.new(2020, 1, 1, 0, 0, 0, "+00:00")
+            t.freeze
+            begin
+              t.send(:initialize)
+              "no_error"
+            rescue FrozenError
+              "frozen_error"
+            end
+            "#,
+        );
+        assert_eq!("frozen_error", v.as_str());
+    }
+
+    #[test]
     fn time_new_with() {
         run_tests(&[
             // `Time.new` previously ignored its arguments and returned the

@@ -251,6 +251,7 @@
 121e42097ec2d1d15351f0bc5ecc27d5	5.955087954701154e+22	r = 0.0\n        for i in 0..50\n          f = i * 1.1; g = i * 0.9; h = 
 123a397b90ab67e4ccd83ca59fc29237	2	def f(a = ($x = 2)); nil; end\n        f\n        $x\n        
 1244f1881c878c3dc6d1b1caed0b9f68	:jit	def base2; yield :s; end\n        def relay2; base2 { |s| yield(s) }; en
+12a9e585ad7e62c7384adb2ddbbe2374	["m", :r, :k, "m", :nm, 42, :frozen_recv, :meth, [1, 2], :nm_recv]	k = KeyError.new("m", receiver: :r, key: :k)\n            n = NameEr
 12ac69d0e3d7829ff39cbbddc61b3277	["elefant", 4]	S = Struct.new(:name, :legs, keyword_init: true)\n            \n\n    
 12b1a598797e50c460f3d7646ca37481	[:y]	class B\n              def x; end\n            end\n            class 
 12cd2297f4d6ac25a476739a253c9292	["RUBZ", "RUBZ", 7, 8, false, true, 7]	class C\n              def succ(s); s.succ; end\n              def po
@@ -1852,6 +1853,7 @@
 9b02a82f966d4d820be0698417d35987	[5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5, 5, 2.5, -5, -6, -2.5]	def drive\n              res = []\n              j = 0\n              
 9b1676026ef1fc1fd87a66af89a92bd5	[A, Array]	class A < Array\n        end\n        [A, A.superclass]\n        
 9b1c7db19e056adb0f3971b0c50b245c	[21]	class C\n          def g(&)\n            $res << yield(7)\n          end\n\n
+9b1d43f83036f78ea55a849753f35cc4	["Exception", "top", "NotImplementedError", "todo"]	a = (begin; raise Exception, "top"; rescue Exception => e; [e.class
 9b1dae5be5d8cbce138449b60606501e	"RUBZ"	succ = proc { |s| s.succ }; upcase = proc { |s| s.upcase }; (succ >> upcase).cal
 9b2b571524ea1228fd5b6b7d00cef540	:OVERRIDDEN	class Complex; def +(o); :OVERRIDDEN; end; end; Complex(1,2) + Complex(3,4)
 9b54107b18369e699d5c69bc43d74fac	[]	def boom; raise "no"; end\n            def test; [1].select { begin;

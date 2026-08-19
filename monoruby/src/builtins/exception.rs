@@ -316,13 +316,7 @@ fn nameerr_initialize(
                 .set_ivar(self_, IdentId::_NAME, name)?;
         }
     }
-    // Trailing keyword hash (`receiver:`).
-    if let Some(kwargs) = lfp.try_arg(2)
-        && kwargs.try_hash_ty().is_some()
-    {
-        store_exception_kwargs(vm, globals, self_, kwargs)?;
-    }
-    // Real `receiver:` keyword (slot 3) — the `Class#new` dispatch path.
+    // `receiver:` keyword (slot 3).
     if let Some(v) = lfp.try_arg(3)
         && !v.is_nil()
     {
@@ -362,15 +356,7 @@ fn nomethoderr_initialize(
             .store
             .set_ivar(self_, IdentId::get_id("/args"), args)?;
     }
-    // The keyword hash (`receiver:`) lands in the last given slot.
-    for i in 2..4 {
-        if let Some(kwargs) = lfp.try_arg(i)
-            && kwargs.try_hash_ty().is_some()
-        {
-            store_exception_kwargs(vm, globals, self_, kwargs)?;
-        }
-    }
-    // Real `receiver:` keyword (slot 4) — the `Class#new` dispatch path.
+    // `receiver:` keyword (slot 4).
     if let Some(v) = lfp.try_arg(4)
         && !v.is_nil()
     {
@@ -415,25 +401,13 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let message = if let Some(msg) = lfp.try_arg(0)
         && !msg.is_nil()
     {
-        if msg.try_hash_ty().is_some() {
-            // Keyword arguments hash passed as positional arg; use default message.
-            store_exception_kwargs(vm, globals, self_, msg)?;
-            globals.store.get_class_name(class_id)
+        if msg.is_rstring().is_some() {
+            msg.coerce_to_string(vm, globals)?
         } else {
-            // Check if there's a keyword hash as second arg
-            if let Some(kwargs) = lfp.try_arg(1) {
-                if kwargs.try_hash_ty().is_some() {
-                    store_exception_kwargs(vm, globals, self_, kwargs)?;
-                }
-            }
-            if msg.is_rstring().is_some() {
-                msg.coerce_to_string(vm, globals)?
-            } else {
-                // CRuby accepts any message object and stringifies it
-                // via #to_s (`Exception#to_s calls #to_s on the message`).
-                let s = vm.invoke_method_inner(globals, IdentId::TO_S, msg, &[], None, None)?;
-                s.coerce_to_string(vm, globals)?
-            }
+            // CRuby accepts any message object and stringifies it
+            // via #to_s (`Exception#to_s calls #to_s on the message`).
+            let s = vm.invoke_method_inner(globals, IdentId::TO_S, msg, &[], None, None)?;
+            s.coerce_to_string(vm, globals)?
         }
     } else {
         globals.store.get_class_name(class_id)
@@ -454,27 +428,6 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         globals.store.set_ivar(self_, IdentId::get_id("/key"), v)?;
     }
     Ok(Value::nil())
-}
-
-/// Store keyword arguments (receiver:, key:) from a Hash into exception ivars.
-fn store_exception_kwargs(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    self_: Value,
-    kwargs: Value,
-) -> Result<()> {
-    let hash = kwargs.as_hash();
-    let recv_key = Value::symbol_from_str("receiver");
-    if let Ok(Some(v)) = hash.get(recv_key, vm, globals) {
-        globals
-            .store
-            .set_ivar(self_, IdentId::get_id("/receiver"), v)?;
-    }
-    let key_key = Value::symbol_from_str("key");
-    if let Ok(Some(v)) = hash.get(key_key, vm, globals) {
-        globals.store.set_ivar(self_, IdentId::get_id("/key"), v)?;
-    }
-    Ok(())
 }
 
 ///
@@ -1404,7 +1357,19 @@ mod tests {
             r#"
             k = KeyError.new("m", receiver: :r, key: :k)
             n = NameError.new("m", :nm, receiver: 42)
-            [k.message, k.receiver, k.key, n.message, n.name, n.receiver]
+            f = FrozenError.new("m", receiver: :frozen_recv)
+            nm = NoMethodError.new("m", :meth, [1, 2], receiver: :nm_recv)
+            [k.message, k.receiver, k.key, n.message, n.name, n.receiver,
+             f.receiver, nm.name, nm.args, nm.receiver]
+            "#,
+        );
+        // Error-kind → Ruby-class mapping arms for the base Exception and
+        // NotImplementedError.
+        run_test_once(
+            r#"
+            a = (begin; raise Exception, "top"; rescue Exception => e; [e.class.to_s, e.message]; end)
+            b = (begin; raise NotImplementedError, "todo"; rescue NotImplementedError => e; [e.class.to_s, e.message]; end)
+            a + b
             "#,
         );
     }
