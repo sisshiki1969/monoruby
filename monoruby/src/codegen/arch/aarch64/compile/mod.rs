@@ -1687,13 +1687,60 @@ impl Codegen {
     /// - x9, x11, x12
     pub(crate) fn emit_alloc_cell(&mut self, header: CellHeader, slow: &DestLabel) {
         let rax = GP::Rax.a64().0; // x0 (result)
+        // The cell acquisition itself (free-list pop / bump) lives in the
+        // shared `alloc_cell` stub; only the null test and the per-site
+        // header write are laid inline. The site's live x30 is preserved
+        // around the `bl` (same convention as the write-barrier stub).
+        let alloc_cell = self.alloc_cell.clone();
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            bl alloc_cell;
+            ldr x30, [sp], #16;
+        );
+        // alloc-flag / new-page territory: hand back to the runtime.
+        let slow = slow.clone();
+        monoasm_arm64!(&mut self.jit,
+            cbz x(rax), slow;
+        );
+        match header {
+            CellHeader::Imm(h) => monoasm_arm64!(&mut self.jit,
+                mov x11, (h);
+            ),
+            CellHeader::NewbornOf(src) => {
+                // Keep class/type (the upper 48 bits) and the non-GC flags.
+                let mask: u64 = !0xffffu64 | NEWBORN_FLAG_MASK as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x11, (src);
+                    ldr x11, [x11];
+                    mov x12, (mask);
+                    and x11, x11, x12;
+                );
+            }
+        }
+        monoasm_arm64!(&mut self.jit,
+            str x11, [x(rax)];         // header (offset 0); overwrites the free link
+        );
+    }
+
+    /// Bind the shared `alloc_cell` stub (see the field doc in
+    /// `codegen.rs`): `Allocator::alloc`'s two fast paths — free-list pop,
+    /// else bump — returning the fresh cell in x0, or 0 when the runtime
+    /// must take over. No inner call, so the `bl`-written x30 carries the
+    /// return address to `ret`. Emitted at the end of `Codegen::new`, after
+    /// the allocator addresses are captured. aarch64 twin of the x86_64
+    /// stub.
+    pub(in crate::codegen) fn gen_alloc_cell_stub(&mut self) {
+        let rax = GP::Rax.a64().0; // x0 (result)
+        let label = self.alloc_cell.clone();
         let free_head = self.alloc_free_head_addr as u64;
         let free_count = self.alloc_free_count_addr as u64;
         let total = self.alloc_total_addr as u64;
         let used = self.alloc_used_addr as u64;
         let page = self.alloc_page_addr as u64;
         let bump = self.jit.label();
+        let fail = self.jit.label();
         let done = self.jit.label();
+        self.jit.bind_label(label);
         monoasm_arm64!(&mut self.jit,
             mov x9, (free_head);
             ldr x(rax), [x9];          // rax = free-list head (cell ptr, or 0 = None)
@@ -1714,7 +1761,7 @@ impl Codegen {
             cmp x12, x11;
         );
         // alloc-flag / new-page territory: hand back to the runtime.
-        self.jit.bcond_label(monoasm::Cond::Hs, slow);
+        self.jit.bcond_label(monoasm::Cond::Hs, &fail);
         monoasm_arm64!(&mut self.jit,
             mov x11, (page);
             ldr x(rax), [x11];         // rax = current page
@@ -1737,24 +1784,12 @@ impl Codegen {
             ldr x12, [x9];
             add x12, x12, #1;
             str x12, [x9];
+            ret;
         );
-        match header {
-            CellHeader::Imm(h) => monoasm_arm64!(&mut self.jit,
-                mov x11, (h);
-            ),
-            CellHeader::NewbornOf(src) => {
-                // Keep class/type (the upper 48 bits) and the non-GC flags.
-                let mask: u64 = !0xffffu64 | NEWBORN_FLAG_MASK as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x11, (src);
-                    ldr x11, [x11];
-                    mov x12, (mask);
-                    and x11, x11, x12;
-                );
-            }
-        }
+        self.jit.bind_label(fail);
         monoasm_arm64!(&mut self.jit,
-            str x11, [x(rax)];         // header (offset 0); overwrites the free link
+            mov x(rax), (0);
+            ret;
         );
     }
 

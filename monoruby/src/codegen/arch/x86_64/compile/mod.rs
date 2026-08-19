@@ -1185,43 +1185,14 @@ impl Codegen {
     /// #### destroy
     /// - rdi, rcx
     pub(crate) fn emit_alloc_cell(&mut self, header: CellHeader, slow: &DestLabel) {
-        let free_head = self.alloc_free_head_addr as u64;
-        let free_count = self.alloc_free_count_addr as u64;
-        let total = self.alloc_total_addr as u64;
-        let used = self.alloc_used_addr as u64;
-        let page = self.alloc_page_addr as u64;
-        let bump = self.jit.label();
-        let done = self.jit.label();
+        // The cell acquisition itself (free-list pop / bump) lives in the
+        // shared `alloc_cell` stub; only the null test and the per-site
+        // header write are laid inline.
+        let alloc_cell = self.alloc_cell.clone();
         monoasm! { &mut self.jit,
-            movq rdi, (free_head);
-            movq rax, [rdi];          // rax = free-list head (cell ptr, or 0 = None)
+            call alloc_cell;
             testq rax, rax;
-            jz   bump;
-            movq rcx, [rax];          // rcx = (*cell).header.next (free link @ offset 0)
-            movq [rdi], rcx;          // free = next
-            movq rdi, (free_count);
-            subq [rdi], 1;
-            jmp  done;
-        bump:
-            movq rdi, (used);
-            movq rcx, [rdi];          // rcx = used_in_current
-            cmpq rcx, (BUMP_INLINE_LIMIT);
-            jae  slow;                // alloc-flag / new-page territory
-            movq rax, (page);
-            movq rax, [rax];          // rax = current page
-            shlq rcx, (CELL_SIZE_SHIFT);
-            addq rax, rcx;            // + used_in_current * CELL_SIZE
-        }
-        if PAGE_DATA_OFFSET != 0 {
-            monoasm! { &mut self.jit,
-                addq rax, (PAGE_DATA_OFFSET);
-            }
-        }
-        monoasm! { &mut self.jit,
-            addq [rdi], 1;            // used_in_current += 1
-        done:
-            movq rdi, (total);
-            addq [rdi], 1;
+            jz   slow;                // alloc-flag / new-page territory
         }
         match header {
             CellHeader::Imm(h) => monoasm! { &mut self.jit,
@@ -1240,6 +1211,59 @@ impl Codegen {
         }
         monoasm! { &mut self.jit,
             movq [rax + (RVALUE_OFFSET_FLAG)], rdi;   // header (offset 0); overwrites the free link
+        }
+    }
+
+    /// Bind the shared `alloc_cell` stub (see the field doc in
+    /// `codegen.rs`): `Allocator::alloc`'s two fast paths — free-list pop,
+    /// else bump — returning the fresh cell in rax, or 0 when the runtime
+    /// must take over. Emitted at the end of `Codegen::new`, after the
+    /// allocator addresses are captured.
+    pub(in crate::codegen) fn gen_alloc_cell_stub(&mut self) {
+        let label = self.alloc_cell.clone();
+        let free_head = self.alloc_free_head_addr as u64;
+        let free_count = self.alloc_free_count_addr as u64;
+        let total = self.alloc_total_addr as u64;
+        let used = self.alloc_used_addr as u64;
+        let page = self.alloc_page_addr as u64;
+        let bump = self.jit.label();
+        let fail = self.jit.label();
+        let done = self.jit.label();
+        monoasm! { &mut self.jit,
+        label:
+            movq rdi, (free_head);
+            movq rax, [rdi];          // rax = free-list head (cell ptr, or 0 = None)
+            testq rax, rax;
+            jz   bump;
+            movq rcx, [rax];          // rcx = (*cell).header.next (free link @ offset 0)
+            movq [rdi], rcx;          // free = next
+            movq rdi, (free_count);
+            subq [rdi], 1;
+            jmp  done;
+        bump:
+            movq rdi, (used);
+            movq rcx, [rdi];          // rcx = used_in_current
+            cmpq rcx, (BUMP_INLINE_LIMIT);
+            jae  fail;                // alloc-flag / new-page territory
+            movq rax, (page);
+            movq rax, [rax];          // rax = current page
+            shlq rcx, (CELL_SIZE_SHIFT);
+            addq rax, rcx;            // + used_in_current * CELL_SIZE
+        }
+        if PAGE_DATA_OFFSET != 0 {
+            monoasm! { &mut self.jit,
+                addq rax, (PAGE_DATA_OFFSET);
+            }
+        }
+        monoasm! { &mut self.jit,
+            addq [rdi], 1;            // used_in_current += 1
+        done:
+            movq rdi, (total);
+            addq [rdi], 1;
+            ret;
+        fail:
+            xorq rax, rax;
+            ret;
         }
     }
 
