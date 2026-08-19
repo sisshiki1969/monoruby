@@ -77,8 +77,9 @@ impl Codegen {
         ivarid: IvarId,
         is_object_ty: bool,
         using: UsingFpr,
+        wb: bool,
     ) {
-        self.store_ivar_heap_inner(src, ivarid, is_object_ty, Some(using));
+        self.store_ivar_heap_inner(src, ivarid, is_object_ty, Some(using), wb);
     }
 
     ///
@@ -98,6 +99,7 @@ impl Codegen {
         ivarid: IvarId,
         is_object_ty: bool,
         using: Option<UsingFpr>,
+        wb: bool,
     ) {
         let exit = self.jit.label();
         let generic = if let Some(using) = using {
@@ -122,9 +124,12 @@ impl Codegen {
             movq [rdx + (idx as i32 * 8)], R(src as _);
         }
         // Fast-path store: emit the write barrier (rdi still holds the
-        // parent &RValue). The generic path below goes through `set_ivar`,
-        // which already barriers, so it jumps straight to `exit`.
-        self.emit_write_barrier_rdi(src);
+        // parent &RValue) unless the stored value is provably immediate.
+        // The generic path below goes through `set_ivar`, which already
+        // barriers, so it jumps straight to `exit`.
+        if wb {
+            self.emit_write_barrier_rdi(src);
+        }
         monoasm! { &mut self.jit,
         exit:
         }
@@ -170,20 +175,6 @@ impl Codegen {
     }
 }
 
-///
-/// Generational GC write barrier slow path, called from JIT inline stores.
-///
-/// The inline fast path has already verified that `parent` is old, not yet
-/// remembered, and that the stored child is a heap object; this records
-/// `parent` in the remembered set. See `doc/gc.md`.
-///
-extern "C" fn jit_write_barrier(parent: *mut RValue) {
-    // SAFETY: `parent` is the live `&RValue` the store wrote into. The
-    // inline fast path has already checked it is `wb_armed` with a heap
-    // child, so `write_barrier_bulk` records it in the remembered set.
-    unsafe { (*parent).write_barrier_bulk() };
-}
-
 impl Codegen {
     ///
     /// Emit the generational GC write barrier after a JIT inline store
@@ -192,13 +183,15 @@ impl Codegen {
     ///
     /// Fast path — a young parent (the common case), an already-remembered
     /// parent, or an immediate child — is three flag/immediate tests with
-    /// no scratch register and no allocator access. The rare slow path
+    /// no scratch register and no allocator access. The rare slow path is a
+    /// single call into the shared `JitModule::write_barrier` stub, which
     /// saves *all* caller-saved registers (so it is fully transparent to
     /// the surrounding code, needing no liveness information) and calls
-    /// `jit_write_barrier`. See `doc/gc.md`.
+    /// `jit_module::jit_write_barrier`. See `doc/gc.md`.
     ///
     pub(super) fn emit_write_barrier_rdi(&mut self, child: GP) {
         let skip = self.jit.label();
+        let wb = self.write_barrier.clone();
         monoasm! { &mut self.jit,
             // barrier armed?  (WB_ARMED = flag bit 6 = old & not remembered)
             // Young objects and already-remembered old objects both have it
@@ -208,17 +201,8 @@ impl Codegen {
             // child immediate?  (heap pointers have the low 3 bits clear)
             testq R(child as _), 0b111;
             jnz  skip;
-        }
-        // Slow path: rdi already holds the parent (the call's argument).
-        self.save_registers();
-        monoasm! { &mut self.jit,
-            movq [rsp + 176], rax;          // save rax (save_registers skips it)
-            movq rax, (jit_write_barrier);
-            call rax;
-            movq rax, [rsp + 176];
-        }
-        self.restore_registers();
-        monoasm! { &mut self.jit,
+            // Slow path: rdi already holds the parent (the stub's argument).
+            call wb;
         skip:
         }
     }
@@ -232,19 +216,11 @@ impl Codegen {
     ///
     pub(super) fn emit_write_barrier_bulk_rdi(&mut self) {
         let skip = self.jit.label();
+        let wb = self.write_barrier.clone();
         monoasm! { &mut self.jit,
             testb [rdi + (RVALUE_OFFSET_FLAG as i32)], 0x40;
             jz   skip;
-        }
-        self.save_registers();
-        monoasm! { &mut self.jit,
-            movq [rsp + 176], rax;          // save rax (save_registers skips it)
-            movq rax, (jit_write_barrier);
-            call rax;
-            movq rax, [rsp + 176];
-        }
-        self.restore_registers();
-        monoasm! { &mut self.jit,
+            call wb;
         skip:
         }
     }

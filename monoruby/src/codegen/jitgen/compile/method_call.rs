@@ -1053,17 +1053,20 @@ impl<'a> JitContext<'a> {
         state.load(ir, recv, GP::Rdi);
         let deopt = ir.new_deopt(state);
         ir.guard_frozen(deopt);
+        // A provably-immediate stored value needs no GC write barrier.
+        let wb = !state.is_guarded_immediate(args);
         let src = state.load_or_reg(ir, args, GP::Rax);
         let is_object_ty = self.store[recv_class].is_object_ty_instance();
         let using_fpr = state.get_using_fpr(ir);
         if is_object_ty && ivarid.is_inline() {
-            ir.push(AsmInst::StoreIVarInline { src, ivarid })
+            ir.push(AsmInst::StoreIVarInline { src, ivarid, wb })
         } else {
             ir.push(AsmInst::StoreIVarHeap {
                 src,
                 ivarid,
                 using_fpr,
                 is_object_ty,
+                wb,
             });
         }
         state.def_rax2acc(ir, dst);
@@ -1129,20 +1132,26 @@ impl<'a> JitContext<'a> {
         let deopt = ir.new_deopt(state);
         ir.guard_frozen(deopt);
         for (ivarid, src_slot) in plan {
-            let src = match src_slot {
-                frameless::ArgSlot::Own(slot) => state.load_or_reg(ir, slot, GP::Rax),
+            // A caller-frame slot has no abstract-state proof here, so it
+            // keeps the barrier; an own slot elides it when the state
+            // proves the value immediate.
+            let (src, wb) = match src_slot {
+                frameless::ArgSlot::Own(slot) => (
+                    state.load_or_reg(ir, slot, GP::Rax),
+                    !state.is_guarded_immediate(slot),
+                ),
                 frameless::ArgSlot::Caller(slot) => {
                     ir.push(AsmInst::LoadCallerSlot {
                         slot,
                         dst: GP::Rax,
                     });
-                    GP::Rax
+                    (GP::Rax, true)
                 }
             };
             // Re-materialize the base: an argument living in an FP register
             // is boxed on the way out, and boxing is a call.
             state.load(ir, recv, GP::Rdi);
-            ir.push(AsmInst::StoreIVarInline { src, ivarid });
+            ir.push(AsmInst::StoreIVarInline { src, ivarid, wb });
         }
         if let Some(dst) = dst {
             // The body returns its last assignment's RHS.

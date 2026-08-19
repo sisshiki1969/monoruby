@@ -30,6 +30,7 @@ impl JitModule {
         let exec_gc = jit.label();
         let f64_to_val = jit.label();
         let stack_overflow = jit.label();
+        let write_barrier = jit.label();
 
         // dispatch table.
         let entry_unimpl = jit.get_current_address();
@@ -53,6 +54,7 @@ impl JitModule {
             f64_to_val,
             vm_stack_overflow: stack_overflow,
             entry_panic,
+            write_barrier,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
             bop_redefined_flags,
             bop_flags,
@@ -137,6 +139,27 @@ impl JitModule {
         self.restore_registers();
         monoasm! { &mut self.jit,
             addq rsp, 1032;
+            ret;
+        }
+
+        // The write barrier's shared out-of-line half (see the field doc in
+        // `codegen.rs`): parent in rdi, preserves every register. The
+        // leading `pushq rax` both saves rax (`save_registers` skips it)
+        // and keeps the inner C call's stack alignment identical to the
+        // former inline blob (ret-addr + push = 16 bytes).
+        let label = self.write_barrier.clone();
+        monoasm! { &mut self.jit,
+        label:
+            pushq rax;
+        }
+        self.save_registers();
+        monoasm! { &mut self.jit,
+            movq rax, (crate::codegen::jit_module::jit_write_barrier);
+            call rax;
+        }
+        self.restore_registers();
+        monoasm! { &mut self.jit,
+            popq rax;
             ret;
         }
     }

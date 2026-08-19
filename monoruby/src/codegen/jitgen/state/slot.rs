@@ -450,6 +450,33 @@ impl SlotState {
         self.mode(slot).guarded()
     }
 
+    /// True when the value in *slot* is proven to be an immediate (non-heap)
+    /// at run time, so the generational-GC write barrier for storing it into
+    /// a heap object can be elided.
+    ///
+    /// `Guarded::Float` is deliberately **not** immediate: the guard also
+    /// covers heap `Float` RValues, and an unboxed (`F`/`Sf`) float is boxed
+    /// on the way to the store — a non-flonum-representable f64 boxes to a
+    /// heap allocation. `Guarded::Class(INTEGER_CLASS)` never occurs (Fixnum
+    /// has its own variant and a Bignum stays `Guarded::Value`), and
+    /// `BOOL_CLASS` is the IC class both boolean literals collapse to.
+    pub(in crate::codegen::jitgen) fn is_guarded_immediate(&self, slot: SlotId) -> bool {
+        if let LinkMode::C(v) = self.mode(slot) {
+            return v.is_packed_value();
+        }
+        match self.guarded(slot) {
+            Guarded::Fixnum => true,
+            Guarded::Float | Guarded::Value => false,
+            Guarded::Class(c) => {
+                c == NIL_CLASS
+                    || c == TRUE_CLASS
+                    || c == FALSE_CLASS
+                    || c == BOOL_CLASS
+                    || c == SYMBOL_CLASS
+            }
+        }
+    }
+
     /// True when *slot*'s abstract type is exactly `Float` — the allocation-free
     /// (Layer-①) signal the L2-1 loop-entry float adoption policy reads in place
     /// of the analysis-pass placement (`mode == F`). See doc §16.

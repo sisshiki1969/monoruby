@@ -723,6 +723,9 @@ pub(in crate::codegen) enum LInst {
         ivarid: IvarId,
         is_object_ty: bool,
         using_fpr: UsingFpr,
+        /// Emit the GC write barrier on the fast-path store (the cold
+        /// `set_ivar` call barriers internally either way).
+        wb: bool,
     },
     // Variable access (gvar/cvar via runtime call; dynvar walks the LFP chain).
     StoreConstant {

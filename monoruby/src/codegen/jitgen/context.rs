@@ -692,6 +692,17 @@ pub(crate) struct JitContext<'a> {
     /// predecessor, to be skipped by `compile_instruction`.
     pub(super) fused_skip: Option<BcIndex>,
 
+    /// "self is proven not frozen on the current path": set right after a
+    /// `StoreIvar` emitted its frozen guard, and consumed by the next
+    /// `StoreIvar` to skip the redundant re-check. Only sound while nothing
+    /// in between can freeze `self`, so `compile_instruction` clears it on
+    /// every instruction except a whitelist of ops that provably run no
+    /// Ruby code and reach no safepoint (a green-thread preemption could
+    /// let another thread call `freeze`), and `compile_basic_block` clears
+    /// it at BB entry (merges and loop heads make no path promise, and the
+    /// loop-head safepoint is a preemption point).
+    pub(super) self_unfrozen: bool,
+
     ///
     /// Monotone count of capture-relevant compile events — see
     /// [`Self::capture_events`].
@@ -795,6 +806,7 @@ impl<'a> JitContext<'a> {
             store,
             codegen_mode,
             fused_skip: None,
+            self_unfrozen: false,
             capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
@@ -816,6 +828,7 @@ impl<'a> JitContext<'a> {
             store: self.store,
             codegen_mode: false,
             fused_skip: None,
+            self_unfrozen: false,
             capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,

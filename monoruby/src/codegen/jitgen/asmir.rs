@@ -2254,6 +2254,10 @@ pub(super) enum AsmInst {
         ivarid: IvarId,
         is_object_ty: bool,
         using_fpr: UsingFpr,
+        /// Emit the GC write barrier after the store. `false` when the
+        /// abstract state proves the stored value immediate
+        /// (`AbstractState::is_guarded_immediate`).
+        wb: bool,
     },
     ///
     /// Store *src* in an instance var *ivarid* of the object *rdi*.
@@ -2268,6 +2272,8 @@ pub(super) enum AsmInst {
         src: GP,
         ivarid: IvarId,
         is_object_ty: bool,
+        /// See [`AsmInst::StoreIVarHeap::wb`].
+        wb: bool,
     },
     ///
     /// Store *src* in ivar embedded to RValue `rdi`. (only for object type)
@@ -2278,6 +2284,8 @@ pub(super) enum AsmInst {
     StoreIVarInline {
         src: GP,
         ivarid: IvarId,
+        /// See [`AsmInst::StoreIVarHeap::wb`].
+        wb: bool,
     },
     ///
     /// Load slot `slot_index` of a `Struct` subclass instance whose

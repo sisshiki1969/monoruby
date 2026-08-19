@@ -484,6 +484,25 @@ pub struct JitModule {
     ///
     entry_panic: DestLabel,
     ///
+    /// Shared out-of-line half of the generational-GC write barrier: save
+    /// the caller-saved registers, call `jit_module::jit_write_barrier`,
+    /// restore, and return. Reached from every JIT inline store whose
+    /// fast-path tests (parent armed + heap child) fail, so the per-site
+    /// footprint is one call instead of the full save/call/restore blob.
+    ///
+    /// #### in (x86-64)
+    /// - rdi: parent &RValue
+    ///
+    /// #### in (aarch64)
+    /// - x9: parent &RValue; the *site* preserves its own live LR around
+    ///   the `bl` (`str/ldr x30`), the stub only preserves the `bl`-written
+    ///   return address across its inner call.
+    ///
+    /// #### destroy
+    /// - nothing (fully transparent)
+    ///
+    write_barrier: DestLabel,
+    ///
     /// Raise StackOverFlow error.
     ///
     /// #### in
@@ -717,6 +736,26 @@ pub struct Codegen {
     /// `check_vm_address` covers it — which is what makes an
     /// already-converted frame skippable on a later walk.
     chain_cont_stub: DestLabel,
+    ///
+    /// Shared inline GC-cell allocation stub (`gen_alloc_cell_stub`),
+    /// mirroring `Allocator::alloc`'s two fast paths: pop a recycled cell
+    /// from the free list, else bump-allocate out of the current page.
+    /// Every inline constructor (array/hash literals, literal deep copies,
+    /// `Class#allocate`) calls this instead of carrying the ~20-instruction
+    /// body per site; the site tests the result and writes the type header
+    /// itself. Bound at the end of `Codegen::new`, *after* the allocator
+    /// addresses are captured (the stub bakes them in).
+    ///
+    /// #### out
+    /// - rax / x0: the fresh cell (header still the free link / garbage),
+    ///   or 0 when the runtime must take over (`BUMP_INLINE_LIMIT`:
+    ///   alloc-flag / new-page territory).
+    ///
+    /// #### destroy
+    /// - x86-64: rdi, rcx; aarch64: x9, x11, x12 (the site preserves its
+    ///   live x30 around the `bl`).
+    ///
+    alloc_cell: DestLabel,
     pub(crate) specialized_info: Vec<SpecializedPatchEntry>,
     pub(crate) specialized_base: usize,
     vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
@@ -1096,6 +1135,7 @@ impl Codegen {
             asm_return_addr_table: HashMap::default(),
             chain_deopt_table: HashMap::default(),
             chain_cont_stub: entry_panic.clone(),
+            alloc_cell: entry_panic.clone(),
             specialized_info: Vec::new(),
             specialized_base: 0,
             vm_entry: entry_panic.clone(),
@@ -1175,6 +1215,11 @@ impl Codegen {
             codegen.alloc_used_addr = alloc.used_in_current_addr();
             codegen.alloc_page_addr = alloc.current_page_addr();
         });
+        // The shared cell-allocation stub bakes those addresses in, so it
+        // can only be emitted now.
+        codegen.alloc_cell = codegen.jit.label();
+        codegen.gen_alloc_cell_stub();
+        codegen.jit.finalize();
 
         codegen
     }
