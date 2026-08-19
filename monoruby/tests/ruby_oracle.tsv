@@ -1309,6 +1309,7 @@
 6d02db687943a63ad711b5395a933b96	"str"	class C; def to_s; "s"; end; def to_str; "str"; end; end\n[C.new].join
 6d4221cf12759db4700deb70a10b88df	["can't modify frozen Class: #<Class:#<Class:0xX>>", "can't modify frozen Object: #<Object:0xX>"]	res = []\n        c = Class.new\n        sc = c.singleton_class\n        s
 6d4635412b101da73e8aca3b2253868a	nil	m = Module.new\n            m.set_temporary_name("temp")\n           
+6d824bfa55f3dea9e0838ce24c5e5937	[false, true, "SyWMkJRvgNMi", "aff08813c4e4323a", "JfTBauuA", 8, 9, true, true, 36]	before = Random.respond_to?(:alphanumeric)\n        require "random/form
 6d8c9772db1244467ff1535ac1b91921	[["w", "a", "w", "a"], ["w", "a", "w", "a"], ["abc"], "a"]	a = "wawa".to_enum(:scan, /./).map { $& }\n            b = []\n      
 6d8d3f9c41b7635a18fc38f965811324	[:outer_ensure, :swallowed, nil, [:inner_begin, :inner_ensure, :outer_ensure, :before_return]]	$pad = []\n        def f\n          begin\n            begin\n             
 6dad723dff6c0a9e98e242d72b120002	["hello world\\nsecond\\n", "ASCII-8BIT", "ASCII-8BIT", "ISO-8859-1", "ISO-8859-1", ["ISO-8859-1", "ISO-8859-1"]]	File.write("/tmp/mr_rd.txt", "hello world\\nsecond\\n")\n            r
@@ -2150,6 +2151,7 @@ b017ead69b837578afee4295eb840ed7	"#<Class:Time>"	Time.singleton_class.to_s
 b041b0aaea8a7d40b26a35b251c0f897	[[:req, :a], [:nokey]]	def m(a, **nil); end\n            method(:m).parameters\n            
 b06f00715b283fa26e9acda37466978d	[1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub]	class MyArray < Array\n              def [](i) = :sub\n            en
 b07897e1515470c5f367e6c838cd3ca3	true	h = {a: 1}.compare_by_identity\n            Marshal.load(Marshal.dum
+b127614a38e6a826e83df4733ad1c138	[true, true]	require "openssl"\n        [OpenSSL::Cipher::CipherError < OpenSSL::Open
 b13eb772180c210a5c10579da6ea6cfb	true	a = []\n            a << a\n            b = Marshal.load(Marshal.dump
 b15052c5abbd93a1a9004be3b57beb9c	[:foo, :bar]	$res = []\n            obj = Object.new\n            def obj.singleto
 b18169111f27cd344540accc05f616fe	nil	File.open("Cargo.toml") { |f| IO.new(f.fileno, autoclose: false).path }

@@ -66,6 +66,10 @@ module OpenSSL
   end
 
   module Cipher
+    # Raised by the real extension on encrypt/decrypt failures; referenced
+    # by rescue clauses (e.g. ActiveRecord::Encryption::Encryptor).
+    CipherError = Class.new(OpenSSLError)
+
     class Cipher
       def initialize(*); end
       def encrypt; self; end
