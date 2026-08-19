@@ -3014,9 +3014,32 @@ impl Executor {
                         }
                     }
                     Visibility::Protected => {
+                        // CRuby permits a receiver-qualified protected call
+                        // when the caller's self is_a? the method's DEFINING
+                        // class/module (vm_call_method_each_type:
+                        // rb_obj_is_kind_of(cfp->self, me->defined_class)) —
+                        // not the receiver's class. The two diverge between
+                        // sibling subclasses (a Base-defined protected method
+                        // called on an A from inside a B must be allowed) and
+                        // for module-defined protected methods, where the
+                        // receiver's class check rejected calls CRuby accepts
+                        // (ActiveRecord::Calculations#aggregate_column called
+                        // across Relation subclasses). Fall back to the
+                        // receiver-class rule when no owner is recorded.
                         let caller_self = self.cfp().lfp().self_val();
-                        let recv_class = recv.real_class(&globals.store).id();
-                        if !caller_self.is_kind_of(&globals.store, recv_class) {
+                        let owners = entry
+                            .func_id()
+                            .map(|fid| globals.store[fid].owner_class())
+                            .unwrap_or(&[]);
+                        let allowed = if owners.is_empty() {
+                            let recv_class = recv.real_class(&globals.store).id();
+                            caller_self.is_kind_of(&globals.store, recv_class)
+                        } else {
+                            owners
+                                .iter()
+                                .any(|c| caller_self.is_kind_of(&globals.store, *c))
+                        };
+                        if !allowed {
                             return Err(MonorubyErr::protected_method_called(
                                 globals, func_name, recv,
                             ));
