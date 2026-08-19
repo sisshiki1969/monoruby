@@ -176,6 +176,7 @@ impl Globals {
                 "elapsed JIT compile time: {:?}",
                 CODEGEN.with(|codegen| codegen.borrow().jit_compile_time)
             );
+            crate::codegen::jit_stats::dump();
         }
     }
 }
