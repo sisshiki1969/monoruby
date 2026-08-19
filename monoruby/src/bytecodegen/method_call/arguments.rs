@@ -222,16 +222,13 @@ impl<'a> BytecodeGen<'a> {
 
         let (block_fid, block_arg) = if let Some(block) = block {
             // Literal block on a parenless super: it replaces the
-            // caller's block (same handling as an explicit call-site
-            // block in `handle_no_forward`).
-            let block_arg = self.sp().into();
+            // caller's block. The prism bridge only routes a typed
+            // `BlockNode` here (a `&expr` block-argument goes through the
+            // regular SuperNode path), which lowers to `NodeKind::Lambda`,
+            // so `block_arg` always yields a compiled block fid and never
+            // materializes a block-argument slot.
             let block_fid = self.block_arg(block, loc)?;
-            let block_arg = if block_arg == self.sp().into() {
-                None
-            } else {
-                Some(block_arg)
-            };
-            (block_fid, block_arg)
+            (block_fid, None)
         } else {
             let block = self.push().into();
             self.emit_block_forward(block, outer, loc);

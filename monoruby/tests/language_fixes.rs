@@ -727,6 +727,43 @@ fn accessor_called_with_wrong_arity_does_not_abort_jit() {
         r.uniq
         "#,
     );
+    // Cover the whole guard: reader with a splat, and — via aliases, since
+    // writer names can't be direct-called with extra shapes — attr/Struct
+    // writers with a block and a Struct reader with an argument, all warmed
+    // past the JIT threshold at direct (inline-cache) callsites.
+    run_test_once(
+        r#"
+        class AccCov
+          attr_reader :x
+          attr_writer :y
+          alias wset y=
+          def initialize = @x = 1
+        end
+        st_cls = Struct.new(:a) do
+          alias sget a
+          alias sset a=
+        end
+        a = AccCov.new
+        s = st_cls.new(5)
+        r = []
+        30.times do
+          r << (a.x(*[1]) rescue :reader_splat)
+          r << a.wset(2) { :blk }
+          r << (s.sget(1) rescue :struct_reader_arg)
+          r << s.sset(3) { :blk }
+        end
+        [r.uniq, s.a]
+        "#,
+    );
+}
+
+#[test]
+fn end_block_registers_at_exit() {
+    // `END { ... }` desugars through an `at_exit` registration (the
+    // ArgList::with_block constructor path). The block runs at process
+    // exit, after the harness's final `p`, so the compared value is
+    // unaffected.
+    run_test_once("END { }; :done");
 }
 
 #[test]

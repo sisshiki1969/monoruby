@@ -1300,6 +1300,7 @@
 6bab7203c03f2793f901298b3357f169	true	"abc".force_encoding("ISO-8859-5").encoding == Encoding::ISO_8859_5
 6bc256a131cd947b4c256d4afa639789	["y", Encoding::ConverterNotFoundError, Encoding::ConverterNotFoundError, [254, 255, 0, 97, 0, 10, 0, 98], "UTF-16", [[254, 255, 0, 97, 0, 10, 0, 98]], true, Encoding::ConverterNotFoundError]	(a="\\x79".dup.force_encoding(Encoding::BINARY).encode(Encoding::Emacs_Mule); b=(
 6c331f471496111694ecb08afb04cab9	[1, 2, 3]	v = []\n            t = Thread.new { v << 1; sleep; v << 3 }\n       
+6c8169ed67889ab883af159b5e32ee14	[[:reader_splat, 2, :struct_reader_arg, 3], 3]	class AccCov\n          attr_reader :x\n          attr_writer :y\n        
 6c858418f8d579a73265ea125ceceeeb	1.5	class C; def to_f; 1.5; end; end; o = C.new\nFloat(o)
 6c891eca2cb89ba2ef5d9d75c6d8f60f	[20, 20]	def m\n              binding\n            end\n            b1 = m\n    
 6c8f517d749d2dbedcad192eb4098b30	42	module Foo\n                def self.bar; 42; end\n                pr
@@ -1895,6 +1896,7 @@
 9e8641f7edcf9595f649c4f9ac976649	"Complex"	3.14ri.class.to_s
 9e9adfb2fab4bb39897074fa058521e3	"Module#using is not permitted in methods"	mod = Module.new do\n              def self.foo\n                usin
 9ea00fe4a9f13b4cabf05e28e6571f87	[1, 0, "nil", "nil", -1]	class MCmpNeg; def <=>(other); -1; end; end\n            class MCmpZ
+9eb8b6ae56715eb169a709857b6176e9	:done	END { }; :done
 9eb98c1b5f6e2d631b2b51c04acc62e5	"m::N"	m = Module.new\n            m::N = Module.new\n            m::N.name 
 9ec21f255b64bf6cee16e04bbbaa7ae3	[[:C1, :C2, :S1], [:C1, :C2]]	class S\n              S1 = 100\n            end\n            class C 
 9ed470f69b7adeaf9e790c17d1dcce76	[150, 199, :absent]	def nlr_y3\n          yield\n        end\n        def find_it(n)\n         
