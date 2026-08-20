@@ -232,13 +232,16 @@ pub(crate) extern "C" fn log_deoptimize(
                 _ => if let Some(v) = reason {
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
                     // `pc=` joins this line to the `### deopt-create:` line that
-                    // emitted the exit (temporary P0 instrumentation): the cause
-                    // column only shows rdi, which most guards never load.
+                    // emitted the exit, and `self=` names the deopting frame's
+                    // receiver — read from the LFP, so unlike the rdi-based
+                    // cause column it survives the write-back's register
+                    // clobbering (temporary P0 instrumentation).
                     eprintln!(
-                        "    [{:05}] {fmt} caused by {} pc={:?}",
+                        "    [{:05}] {fmt} caused by {} pc={:?} self={}",
                         bc_pos,
                         v.debug(&globals.store),
-                        pc.as_ptr()
+                        pc.as_ptr(),
+                        vm.cfp().lfp().self_val().debug(&globals.store)
                     );
                 } else {
                     eprint!("<-- non-traced branch in <{}> {:?}.", name, func_id);
