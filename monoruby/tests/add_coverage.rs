@@ -1583,3 +1583,94 @@ fn super_skips_visibility_shadow_entries() {
         "##,
     );
 }
+
+//
+// Const-version salvage on loop (OSR) units: a constant folded inside a
+// JIT'd loop body whose guard then fails routes through
+// `jit_recompile_loop` → `salvage_const(.., Some(index))` →
+// `get_loop_const_map_mut` (the whole-method twin is exercised by the many
+// existing tests that fold constants in plain hot methods).
+//
+
+// Tier-1 fast path: per-iteration constant definitions touch only
+// *unrelated* names, so every loop-unit guard failure re-validates via the
+// per-name epochs and the folded code survives untouched.
+#[test]
+fn loop_const_salvage_unrelated_names() {
+    run_test(
+        r##"
+        LCS_K1 = 42
+        def lcs_hot1
+          s = 0
+          i = 0
+          while i < 30
+            s += LCS_K1
+            i += 1
+          end
+          s
+        end
+        r = 0
+        5.times do |i|
+          r += lcs_hot1
+          Object.const_set("LCS_A_#{i}", 1)
+        end
+        r
+        "##,
+    );
+}
+
+// Tier-2 value re-check: the folded name itself is reassigned each round
+// with the *same* value, so the salvage proves the fold still exact against
+// the VM cache (or defers once while the cache is stale) instead of
+// recompiling.
+#[test]
+fn loop_const_salvage_same_value() {
+    run_test(
+        r##"
+        LCS_K2 = 7
+        def lcs_hot2
+          s = 0
+          i = 0
+          while i < 30
+            s += LCS_K2
+            i += 1
+          end
+          s
+        end
+        r = 0
+        5.times do
+          r += lcs_hot2
+          Object.const_set(:LCS_K2, 7)
+        end
+        r
+        "##,
+    );
+}
+
+// Correctness backstop: the folded constant genuinely changes value each
+// round — the salvage must *fail* and the recompiled loop must observe every
+// new value.
+#[test]
+fn loop_const_salvage_value_change() {
+    run_test(
+        r##"
+        Object.const_set(:LCS_K3, 0)
+        def lcs_hot3
+          s = 0
+          i = 0
+          while i < 30
+            s += LCS_K3
+            i += 1
+          end
+          s
+        end
+        r = []
+        5.times do |i|
+          r << lcs_hot3
+          Object.const_set(:LCS_K3, i + 1)
+        end
+        Object.const_set(:LCS_K3, 0)
+        r
+        "##,
+    );
+}
