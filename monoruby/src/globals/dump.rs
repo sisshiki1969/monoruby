@@ -231,19 +231,7 @@ pub(crate) extern "C" fn log_deoptimize(
                 },
                 _ => if let Some(v) = reason {
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
-                    // `pc=` joins this line to the `### deopt-create:` line that
-                    // emitted the exit, and `self=` names the deopting frame's
-                    // receiver — read from the LFP, so unlike the rdi-based
-                    // cause column it survives the write-back's register
-                    // clobbering (temporary P0 instrumentation).
-                    eprintln!(
-                        "    [{:05}] {fmt} caused by {} pc={:?} self={} selfbits={:#x}",
-                        bc_pos,
-                        v.debug(&globals.store),
-                        pc.as_ptr(),
-                        vm.cfp().lfp().self_val().debug(&globals.store),
-                        vm.cfp().lfp().self_val().id()
-                    );
+                    eprintln!("    [{:05}] {fmt} caused by {}", bc_pos, v.debug(&globals.store));
                 } else {
                     eprint!("<-- non-traced branch in <{}> {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt}", bc_pos);
@@ -251,20 +239,4 @@ pub(crate) extern "C" fn log_deoptimize(
             }
         }
     }
-}
-
-/// Temporary P0 instrumentation (`deopt` builds): called from the
-/// `GuardConstBaseClass` miss path with the actual compared register and the
-/// baked cell, before the deopt write-back can clobber anything.
-#[cfg(feature = "deopt")]
-pub(crate) extern "C" fn log_identity_miss(actual: u64, expected: u64) {
-    eprintln!("### id-miss: rax={actual:#x} expected={expected:#x}");
-}
-
-/// Temporary P0 instrumentation (`deopt` builds): called from the specialized
-/// class-version guard's miss path with the global version, the unit's cached
-/// cell, and the specialized index — before salvage/recompile runs.
-#[cfg(feature = "deopt")]
-pub(crate) extern "C" fn log_version_miss(global: u64, cached: u64, idx: u64) {
-    eprintln!("### ver-miss: global={global} cached={cached} idx={idx}");
 }

@@ -337,16 +337,6 @@ impl AsmIr {
 
     #[cfg_attr(feature = "deopt", track_caller)]
     pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
-        // Temporary P0 instrumentation: name the *emitter* of every plain
-        // deopt exit, keyed by the pc the runtime log also reports. The
-        // runtime cause column only shows rdi, which most guards never load,
-        // so it cannot tell one guard from another.
-        #[cfg(feature = "deopt")]
-        eprintln!(
-            "### deopt-create: pc={:?} by {}",
-            pc.as_ptr(),
-            std::panic::Location::caller()
-        );
         let i = self.new_label(SideExit::Deoptimize(
             pc,
             state.get_write_back(),
