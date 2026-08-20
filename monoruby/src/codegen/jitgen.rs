@@ -1490,6 +1490,18 @@ impl Codegen {
                 monoasm!( &mut self.jit,
                     movq rcx, (Value::symbol_from_str("__immediate_evict").id());
                 );
+            } else if let Some((_, target)) = &recompile {
+                // Temporary P0 instrumentation: name the counter-gated
+                // recompile exits so the deopt census can tell them from
+                // plain guards (rdi is not a meaningful cause here).
+                let tag = match target {
+                    RecompileTarget::Whole(None) => "__recompile_exit_method",
+                    RecompileTarget::Whole(Some(_)) => "__recompile_exit_loop",
+                    RecompileTarget::Specialized(_) => "__recompile_exit_spec",
+                };
+                monoasm!( &mut self.jit,
+                    movq rcx, (Value::symbol_from_str(tag).id());
+                );
             } else {
                 monoasm!( &mut self.jit,
                     movq rcx, rdi; // the Value which caused this deopt.
