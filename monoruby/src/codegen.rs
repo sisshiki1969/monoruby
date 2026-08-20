@@ -714,6 +714,17 @@ pub(crate) struct SpecializedPatchEntry {
     /// owner's records no longer name — a "successful" owner salvage would
     /// patch words this body never reads, deopting it on every call forever.
     pub(crate) owner: Option<(ISeqId, ClassId, Option<BytecodePtr>)>,
+    /// The class-version word this entry's compiled body actually reads —
+    /// the owning root compilation's cell (one `const_i32` per root compile,
+    /// shared by the root and all its specialized children). The owner
+    /// record's label (`JitInfo::class_version_label`) is written only by
+    /// the *first* `compile_patch` of the (iseq, class) pair, so after a
+    /// whole-method recompile it names the first compile's cell while the
+    /// live body reads a fresh one; a salvage that patched only the record's
+    /// label would then "heal" a word this body never reads, deopting it on
+    /// every call forever (observed as 74.9k/run `Class#new` deopts in the
+    /// activerecord workload). `salvage_specialized` stamps this word too.
+    pub(crate) class_version_label: DestLabel,
 }
 
 ///

@@ -27,10 +27,6 @@ pub(super) fn gen_class_allocate_inline(
     self_class: Option<ClassId>,
     _: Option<ClassId>,
 ) -> bool {
-    // TEMP EXPERIMENT: disable the identity-guarded inline allocate.
-    if std::env::var_os("MONORUBY_NO_INLINE_ALLOC").is_some() {
-        return false;
-    }
     let Some(self_class) = self_class else {
         // The call site could not prove the receiver's class (a multi-class
         // dispatch arm / the class-set guard); this generator needs it.
