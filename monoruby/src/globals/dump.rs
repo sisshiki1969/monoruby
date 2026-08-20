@@ -252,3 +252,11 @@ pub(crate) extern "C" fn log_deoptimize(
         }
     }
 }
+
+/// Temporary P0 instrumentation (`deopt` builds): called from the
+/// `GuardConstBaseClass` miss path with the actual compared register and the
+/// baked cell, before the deopt write-back can clobber anything.
+#[cfg(feature = "deopt")]
+pub(crate) extern "C" fn log_identity_miss(actual: u64, expected: u64) {
+    eprintln!("### id-miss: rax={actual:#x} expected={expected:#x}");
+}

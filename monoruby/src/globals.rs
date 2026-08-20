@@ -15,6 +15,8 @@ mod require;
 mod store;
 #[cfg(any(feature = "deopt", feature = "profile"))]
 pub(crate) use dump::log_deoptimize;
+#[cfg(feature = "deopt")]
+pub(crate) use dump::log_identity_miss;
 pub use error::*;
 pub use gvar::*;
 use prng::*;
