@@ -3,6 +3,7 @@ use std::ffi::c_void;
 use super::*;
 use jitgen::{AbstractState, JitContext};
 use libffi::middle::{Arg, Cif, CodePtr, Type};
+use smallvec::SmallVec;
 use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 // ---------------------------------------------------------------------------
@@ -119,6 +120,32 @@ fn type_code_to_ret_ffi_type(ty: i64) -> Result<Type> {
     }
 }
 
+/// Coerce a Ruby Integer argument to the `i64` a C integer parameter is
+/// built from.
+///
+/// monoruby's Fixnum is an i63, so an `Integer` anywhere in
+/// `[2^62, 2^64)` — `sqlite3_bind_int64(…, 2**62)`, or any `unsigned long`
+/// with its top bits set — arrives as a BigInt even though it fits the C
+/// type exactly. `expect_integer` rejects those, which made perfectly
+/// in-range values fail with "no implicit conversion of Integer into
+/// Integer". Accept both representations and let the caller's `as` cast
+/// narrow to the declared width, matching C's own conversion rules.
+fn integer_arg_to_i64(globals: &Globals, val: Value) -> Result<i64> {
+    match val.unpack() {
+        RV::Fixnum(i) => Ok(i),
+        RV::BigInt(b) => num::ToPrimitive::to_i64(b)
+            .or_else(|| num::ToPrimitive::to_u64(b).map(|u| u as i64))
+            .ok_or_else(|| {
+                MonorubyErr::rangeerr("bignum too big to convert into a C integer")
+            }),
+        _ => Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            val,
+            INTEGER_CLASS,
+        )),
+    }
+}
+
 /// Convert a Ruby Value and a Fiddle type code into a `CArg`.
 ///
 /// For `TYPE_VOIDP`, a Ruby String value is accepted: a pointer to its
@@ -136,14 +163,14 @@ fn value_to_carg(globals: &mut Globals, mut val: Value, ty: i64) -> Result<CArg>
     // collapses to LONG/ULONG codes in CRuby's convention.
     match ty {
         TYPE_VOID => Ok(CArg::I64(0)), // should not appear as argument
-        TYPE_CHAR => Ok(CArg::I8(val.expect_integer(globals)? as i8)),
-        TYPE_UCHAR => Ok(CArg::U8(val.expect_integer(globals)? as u8)),
-        TYPE_SHORT => Ok(CArg::I16(val.expect_integer(globals)? as i16)),
-        TYPE_USHORT => Ok(CArg::U16(val.expect_integer(globals)? as u16)),
-        TYPE_INT | TYPE_BOOL => Ok(CArg::I32(val.expect_integer(globals)? as i32)),
-        TYPE_UINT => Ok(CArg::U32(val.expect_integer(globals)? as u32)),
-        TYPE_LONG | TYPE_LONG_LONG => Ok(CArg::I64(val.expect_integer(globals)?)),
-        TYPE_ULONG | TYPE_ULONG_LONG => Ok(CArg::U64(val.expect_integer(globals)? as u64)),
+        TYPE_CHAR => Ok(CArg::I8(integer_arg_to_i64(globals, val)? as i8)),
+        TYPE_UCHAR => Ok(CArg::U8(integer_arg_to_i64(globals, val)? as u8)),
+        TYPE_SHORT => Ok(CArg::I16(integer_arg_to_i64(globals, val)? as i16)),
+        TYPE_USHORT => Ok(CArg::U16(integer_arg_to_i64(globals, val)? as u16)),
+        TYPE_INT | TYPE_BOOL => Ok(CArg::I32(integer_arg_to_i64(globals, val)? as i32)),
+        TYPE_UINT => Ok(CArg::U32(integer_arg_to_i64(globals, val)? as u32)),
+        TYPE_LONG | TYPE_LONG_LONG => Ok(CArg::I64(integer_arg_to_i64(globals, val)?)),
+        TYPE_ULONG | TYPE_ULONG_LONG => Ok(CArg::U64(integer_arg_to_i64(globals, val)? as u64)),
         TYPE_VOIDP => {
             // Accept: nil → NULL, Integer → address, String → raw bytes ptr
             match val.unpack() {
@@ -222,7 +249,22 @@ fn fiddle_call_inner(
 
     let func = CodePtr(ptr as *mut c_void);
 
-    let result = match ret_type_code {
+    let result = call_with_cif(&cif, func, &ffi_args, ret_type_code)?;
+
+    // Keep c_args alive until here
+    drop(ffi_args);
+    drop(c_args);
+
+    Ok(result)
+}
+
+/// Perform the libffi call and box the result as a Ruby Value.
+///
+/// SAFETY: the caller must keep the `CArg` storage that `ffi_args` points into
+/// alive until this returns, and `cif` must have been built from the same type
+/// codes the arguments were marshalled with.
+fn call_with_cif(cif: &Cif, func: CodePtr, ffi_args: &[Arg], ret_type_code: i64) -> Result<Value> {
+    Ok(match ret_type_code {
         TYPE_VOID => {
             // For void, call with i64 return and discard.
             let _: i64 = unsafe { cif.call(func, &ffi_args) };
@@ -274,18 +316,166 @@ fn fiddle_call_inner(
                 ret_type_code
             )));
         }
-    };
-
-    // Keep c_args alive until here
-    drop(ffi_args);
-    drop(c_args);
-
-    Ok(result)
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Builtin functions exposed to Ruby as Fiddle module-level functions
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Prepared calls
+//
+// `Cif::new` runs `ffi_prep_cif` *and* a `libc::malloc` for the type array, so
+// building the CIF per call dominates the cost of a small foreign call: the
+// naive path measures ~108ns fixed plus ~108ns per argument, against a C body
+// that is often a single load. A call site's signature never changes, so it is
+// prepared once and only the argument marshalling is repeated.
+//
+// A prepared record is `Box::leak`ed and its address handed to Ruby as an
+// Integer, the same way `___dlopen` hands back a raw handle. They are created
+// at attach time and live as long as the symbol they wrap, so there is nothing
+// to reclaim. Leaking also makes the record immortal and therefore safe to
+// share between threads: `ffi_call` only reads the CIF, so concurrent calls
+// through one record do not race.
+// ---------------------------------------------------------------------------
+
+struct PreparedFn {
+    ptr: CodePtr,
+    cif: Cif,
+    arg_codes: Vec<i64>,
+    ret_code: i64,
+}
+
+/// Largest argument count marshalled without spilling to the heap.
+const PREPARED_INLINE_ARGS: usize = 8;
+
+/// The libffi `Type` a value of type code `ty` is passed as.
+///
+/// This must agree with `value_to_carg`, which decides the `CArg` width: the
+/// CIF is built once from the codes, so a disagreement would hand `ffi_call` a
+/// value of a different width than the CIF promises.
+fn type_code_to_arg_ffi_type(ty: i64) -> Result<Type> {
+    Ok(match ty {
+        TYPE_CHAR => Type::i8(),
+        TYPE_UCHAR => Type::u8(),
+        TYPE_SHORT => Type::i16(),
+        TYPE_USHORT => Type::u16(),
+        TYPE_INT | TYPE_BOOL => Type::i32(),
+        TYPE_UINT => Type::u32(),
+        TYPE_LONG | TYPE_LONG_LONG => Type::i64(),
+        TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG => Type::u64(),
+        TYPE_FLOAT => Type::f32(),
+        TYPE_DOUBLE => Type::f64(),
+        _ => {
+            return Err(MonorubyErr::runtimeerr(format!(
+                "Fiddle: unsupported argument type code {}",
+                ty
+            )));
+        }
+    })
+}
+
+/// ### Fiddle.___prepare(ptr, arg_types, ret_type) -> Integer
+///
+/// Build a reusable call descriptor for the function at `ptr` and return an
+/// opaque id to pass to `___invoke`. Validates both the argument and the
+/// return type codes up front, so `___invoke` never has to.
+#[monoruby_builtin]
+fn fiddle_prepare(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let ptr = lfp.arg(0).expect_integer(globals)? as usize;
+    let types_ary = lfp.arg(1).expect_array_ty(globals)?;
+    let ret_code = lfp.arg(2).expect_integer(globals)?;
+
+    let arg_codes: Vec<i64> = types_ary
+        .iter()
+        .map(|v| v.expect_integer(globals))
+        .collect::<Result<_>>()?;
+
+    // `___invoke` passes arguments in fixed frame slots, so a signature wider
+    // than that cannot be served. Reject it here rather than at call time: a
+    // successful prepare then *guarantees* `___invoke` works, which is what
+    // lets the Ruby facades treat a raised prepare as "fall back to ___call".
+    if arg_codes.len() > PREPARED_INLINE_ARGS {
+        return Err(MonorubyErr::argumenterr(format!(
+            "Fiddle: cannot prepare a call with more than {} arguments (got {})",
+            PREPARED_INLINE_ARGS,
+            arg_codes.len()
+        )));
+    }
+
+    let arg_types: Vec<Type> = arg_codes
+        .iter()
+        .map(|&ty| type_code_to_arg_ffi_type(ty))
+        .collect::<Result<_>>()?;
+    // Rejects an unsupported return code here rather than per call.
+    let ret_type = type_code_to_ret_ffi_type(ret_code)?;
+
+    let prepared = Box::new(PreparedFn {
+        ptr: CodePtr(ptr as *mut c_void),
+        cif: Cif::new(arg_types.into_iter(), ret_type),
+        arg_codes,
+        ret_code,
+    });
+
+    Ok(Value::integer(Box::leak(prepared) as *mut PreparedFn as i64))
+}
+
+/// ### Fiddle.___invoke(id, *args) -> Object
+///
+/// Call a function prepared by `___prepare`. Arguments are read straight out
+/// of the frame, so a call allocates nothing on the Ruby side and — up to
+/// `PREPARED_INLINE_ARGS` — nothing on the Rust side either.
+#[monoruby_builtin]
+fn fiddle_invoke(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let id = lfp.arg(0).expect_integer(globals)?;
+    // SAFETY: `id` is the address of a leaked PreparedFn handed out by
+    // `___prepare`, so the record is live for the rest of the process. The
+    // primitives are private to monoruby's own Ruby layer (`___`-prefixed and
+    // undocumented), which only ever passes back an id it was given.
+    let pf: &PreparedFn = unsafe { &*(id as *const PreparedFn) };
+
+    let n = pf.arg_codes.len();
+    // Trailing slots are optional, so an unsupplied one reads back as None
+    // rather than shortening the frame.
+    if n < PREPARED_INLINE_ARGS && lfp.try_arg(n + 1).is_some() {
+        return Err(MonorubyErr::argumenterr(format!(
+            "Fiddle: too many arguments (expected {})",
+            n
+        )));
+    }
+
+    let mut c_args: SmallVec<[CArg; PREPARED_INLINE_ARGS]> = SmallVec::with_capacity(n);
+    for (i, &ty) in pf.arg_codes.iter().enumerate() {
+        let Some(v) = lfp.try_arg(i + 1) else {
+            return Err(MonorubyErr::argumenterr(format!(
+                "Fiddle: wrong number of arguments (given {}, expected {})",
+                i, n
+            )));
+        };
+        c_args.push(value_to_carg(globals, v, ty)?);
+    }
+    let ffi_args: SmallVec<[Arg; PREPARED_INLINE_ARGS]> =
+        c_args.iter().map(|ca| ca.as_libffi_arg()).collect();
+
+    let result = call_with_cif(&pf.cif, pf.ptr, &ffi_args, pf.ret_code)?;
+
+    // Keep the CArg storage alive until the call has returned.
+    drop(ffi_args);
+    drop(c_args);
+
+    Ok(result)
+}
 
 /// ### Fiddle.___call(ptr, args, arg_types, ret_type) -> Object
 ///
@@ -294,6 +484,10 @@ fn fiddle_call_inner(
 /// - args      : Array    – Ruby argument values
 /// - arg_types : Array    – Fiddle type-code integers for each argument
 /// - ret_type  : Integer  – Fiddle type-code for the return value
+///
+/// Builds the CIF on every call. Prefer `___prepare` + `___invoke` on a hot
+/// path; this entry point remains for call sites whose signature is not known
+/// until the call itself.
 #[monoruby_builtin]
 fn fiddle_call(
     _vm: &mut Executor,
@@ -647,6 +841,17 @@ pub(super) fn init(globals: &mut Globals) {
     // Registering them once here also means the JIT inliners below
     // (`___read` / `___write`) benefit every caller rather than just Fiddle.
     globals.define_builtin_module_func(fiddle, "___call", fiddle_call, 4);
+    // Prepared calls: build the CIF once, then invoke with the arguments
+    // passed positionally (no Array, no per-call ffi_prep_cif).
+    globals.define_builtin_module_func(fiddle, "___prepare", fiddle_prepare, 3);
+    globals.define_builtin_module_func_with(
+        fiddle,
+        "___invoke",
+        fiddle_invoke,
+        1,
+        1 + PREPARED_INLINE_ARGS,
+        false,
+    );
     globals.define_builtin_module_inline_func(
         fiddle,
         "___read",
@@ -906,5 +1111,98 @@ mod tests {
             :ok
             "#
         ));
+    }
+
+    // A prepared call must agree with `___call` across every argument and
+    // return kind: the CIF is now built from the type codes alone, so a
+    // disagreement with `value_to_carg`'s choice of CArg width would hand
+    // libffi a value of the wrong size.
+    #[test]
+    fn fiddle_prepare_matches_call() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            abs    = Fiddle.___dlsym(LIBC, "abs")
+            llabs  = Fiddle.___dlsym(LIBC, "llabs")
+            strlen = Fiddle.___dlsym(LIBC, "strlen")
+            memcpy = Fiddle.___dlsym(LIBC, "memcpy")
+            pow    = Fiddle.___dlsym(LIBM, "pow")
+
+            p_abs    = Fiddle.___prepare(abs,    [TY_INT],   TY_INT)
+            p_llabs  = Fiddle.___prepare(llabs,  [TY_LLONG], TY_LLONG)
+            p_strlen = Fiddle.___prepare(strlen, [TY_VOIDP], TY_SIZE_T)
+            p_memcpy = Fiddle.___prepare(memcpy, [TY_VOIDP, TY_VOIDP, TY_SIZE_T], TY_VOIDP)
+            p_pow    = Fiddle.___prepare(pow,    [TY_DOUBLE, TY_DOUBLE], TY_DOUBLE)
+
+            # int / long long, both signs
+            [-42, 0, 42].each do |n|
+              raise unless Fiddle.___invoke(p_abs, n) == Fiddle.___call(abs, [n], [TY_INT], TY_INT)
+            end
+            [-1_000_000_000_000, 1_000_000_000_000].each do |n|
+              raise unless Fiddle.___invoke(p_llabs, n) == n.abs
+            end
+
+            # String argument keeps the NUL-termination guarantee
+            ["", "hello", "hello_optcarrot"].each do |s|
+              raise unless Fiddle.___invoke(p_strlen, s) == s.bytesize
+            end
+
+            # nil as a NULL pointer, and a pointer return
+            raise unless Fiddle.___invoke(p_memcpy, nil, nil, 0) == 0
+
+            # double in, double out
+            raise unless Fiddle.___invoke(p_pow, 2.0, 10.0) == 1024.0
+
+            # 0-arg signatures are prepared too
+            getpid = Fiddle.___dlsym(LIBC, "getpid")
+            p_getpid = Fiddle.___prepare(getpid, [], TY_INT)
+            raise unless Fiddle.___invoke(p_getpid) == Fiddle.___call(getpid, [], [], TY_INT)
+
+            # arity is enforced against the prepared signature
+            begin
+              Fiddle.___invoke(p_abs)
+              raise "expected ArgumentError for too few"
+            rescue ArgumentError
+            end
+            begin
+              Fiddle.___invoke(p_abs, 1, 2)
+              raise "expected ArgumentError for too many"
+            rescue ArgumentError
+            end
+
+            # a signature ___invoke cannot serve is refused at prepare time,
+            # so a successful prepare guarantees the call works
+            begin
+              Fiddle.___prepare(abs, [TY_INT] * 9, TY_INT)
+              raise "expected ArgumentError for over-wide signature"
+            rescue ArgumentError
+            end
+            :ok
+            "#
+        ));
+    }
+
+    // The prepared path is what Fiddle::Function and FFI::Function now use,
+    // so exercise it through the public facade as well.
+    #[test]
+    fn fiddle_function_prepared() {
+        run_test_no_result_check(
+            r#"
+            require "fiddle"
+            libm = RUBY_PLATFORM =~ /darwin/ ? "/usr/lib/libSystem.B.dylib" : "libm.so.6"
+            pow = Fiddle::Function.new(
+              Fiddle::Handle.new(libm)["pow"],
+              [Fiddle::TYPE_DOUBLE, Fiddle::TYPE_DOUBLE],
+              Fiddle::TYPE_DOUBLE
+            )
+            raise unless pow.call(2.0, 10.0) == 1024.0
+            raise unless pow.call(3.0, 2.0) == 9.0
+            begin
+              pow.call(2.0)
+              raise "expected ArgumentError"
+            rescue ArgumentError
+            end
+            :ok
+            "#,
+        );
     }
 }

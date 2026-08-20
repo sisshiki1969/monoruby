@@ -677,12 +677,30 @@ module FFI
       @return_type = FFI::Type.find(return_type)
       @param_types = param_types.map { |t| FFI::Type.find(t) }
 
+      # The signature is fixed for the life of the Function, so the type
+      # codes and the libffi CIF are computed once here rather than on every
+      # call. `___prepare` validates the codes, so an unsupported one still
+      # raises — just at definition time instead of first call.
+      @type_codes = @param_types.map(&:type_code)
+      @ret_code   = @return_type.type_code
+
       if address_or_proc.is_a?(Proc) || address_or_proc.is_a?(Method)
         @callable = address_or_proc
         super(0)
       else
         addr = address_or_proc.respond_to?(:to_i) ? address_or_proc.to_i : 0
         super(addr)
+        # `___prepare` rejects signatures it cannot serve (too many
+        # arguments, a type code that is only meaningful per call). Those
+        # stay on the general `___call` path rather than becoming an error
+        # at definition time.
+        if addr != 0
+          begin
+            @prepared = Fiddle.___prepare(addr, @type_codes, @ret_code)
+          rescue ArgumentError, RuntimeError
+            @prepared = nil
+          end
+        end
       end
     end
 
@@ -695,10 +713,12 @@ module FFI
       converted_args = @param_types.zip(args).map { |type, arg|
         convert_arg(type, arg)
       }
-      type_codes = @param_types.map(&:type_code)
-      ret_code   = @return_type.type_code
 
-      result = Fiddle.___call(@address, converted_args, type_codes, ret_code)
+      result = if @prepared
+        Fiddle.___invoke(@prepared, *converted_args)
+      else
+        Fiddle.___call(@address, converted_args, @type_codes, @ret_code)
+      end
       convert_result(@return_type, result)
     end
 

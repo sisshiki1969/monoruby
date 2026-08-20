@@ -314,6 +314,17 @@ module Fiddle
       @ptr            = ptr.respond_to?(:to_i) ? ptr.to_i : Integer(ptr)
       @argument_types = args_type.map { |t| resolve_type(t) }
       @return_type    = resolve_type(ret_type)
+      # The signature is fixed, so build the libffi CIF once instead of on
+      # every call. `___prepare` raises for a signature `___invoke` cannot
+      # serve (too many arguments, an unsupported type code); those keep
+      # using the general `___call` path.
+      if @ptr != 0
+        begin
+          @prepared = Fiddle.___prepare(@ptr, @argument_types, @return_type)
+        rescue ArgumentError, RuntimeError
+          @prepared = nil
+        end
+      end
     end
 
     def call(*args)
@@ -321,7 +332,11 @@ module Fiddle
         raise ArgumentError,
           "wrong number of arguments (given #{args.length}, expected #{@argument_types.length})"
       end
-      Fiddle.___call(@ptr, args, @argument_types, @return_type)
+      if @prepared
+        Fiddle.___invoke(@prepared, *args)
+      else
+        Fiddle.___call(@ptr, args, @argument_types, @return_type)
+      end
     end
 
     def arity
