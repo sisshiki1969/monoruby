@@ -693,6 +693,81 @@ impl Codegen {
             // the cached base class.
             LInst::GuardConstBaseClass { base_class, deopt } => {
                 let cached_base_class = self.jit.const_i64(base_class.id() as _);
+                // Temporary P0 instrumentation: on a miss, log the *actual*
+                // rax and the baked cell before the deopt write-back can
+                // clobber anything — the only way to see what this compare
+                // really tested (the activerecord run fails it 74.8k times
+                // with frame-self bits equal to the baked bits, which should
+                // be impossible). Registers the write-back reads (GP pool
+                // r8-r11, FPR pool xmm0-15, rax/rcx/rdx/rsi/rdi) are saved
+                // around the C call.
+                #[cfg(feature = "deopt")]
+                {
+                    let ok = self.jit.label();
+                    monoasm! { &mut self.jit,
+                        cmpq rax, [rip + cached_base_class];
+                        jeq  ok;
+                        subq rsp, 256;
+                        movq [rsp], rax;
+                        movq [rsp + 8], rcx;
+                        movq [rsp + 16], rdx;
+                        movq [rsp + 24], rsi;
+                        movq [rsp + 32], rdi;
+                        movq [rsp + 40], r8;
+                        movq [rsp + 48], r9;
+                        movq [rsp + 56], r10;
+                        movq [rsp + 64], r11;
+                        movq [rsp + 80], xmm0;
+                        movq [rsp + 88], xmm1;
+                        movq [rsp + 96], xmm2;
+                        movq [rsp + 104], xmm3;
+                        movq [rsp + 112], xmm4;
+                        movq [rsp + 120], xmm5;
+                        movq [rsp + 128], xmm6;
+                        movq [rsp + 136], xmm7;
+                        movq [rsp + 144], xmm8;
+                        movq [rsp + 152], xmm9;
+                        movq [rsp + 160], xmm10;
+                        movq [rsp + 168], xmm11;
+                        movq [rsp + 176], xmm12;
+                        movq [rsp + 184], xmm13;
+                        movq [rsp + 192], xmm14;
+                        movq [rsp + 200], xmm15;
+                        movq rdi, rax;
+                        movq rsi, [rip + cached_base_class];
+                        movq rax, (crate::globals::log_identity_miss);
+                        call rax;
+                        movq rax, [rsp];
+                        movq rcx, [rsp + 8];
+                        movq rdx, [rsp + 16];
+                        movq rsi, [rsp + 24];
+                        movq rdi, [rsp + 32];
+                        movq r8, [rsp + 40];
+                        movq r9, [rsp + 48];
+                        movq r10, [rsp + 56];
+                        movq r11, [rsp + 64];
+                        movq xmm0, [rsp + 80];
+                        movq xmm1, [rsp + 88];
+                        movq xmm2, [rsp + 96];
+                        movq xmm3, [rsp + 104];
+                        movq xmm4, [rsp + 112];
+                        movq xmm5, [rsp + 120];
+                        movq xmm6, [rsp + 128];
+                        movq xmm7, [rsp + 136];
+                        movq xmm8, [rsp + 144];
+                        movq xmm9, [rsp + 152];
+                        movq xmm10, [rsp + 160];
+                        movq xmm11, [rsp + 168];
+                        movq xmm12, [rsp + 176];
+                        movq xmm13, [rsp + 184];
+                        movq xmm14, [rsp + 192];
+                        movq xmm15, [rsp + 200];
+                        addq rsp, 256;
+                        jmp  deopt;
+                    ok:
+                    }
+                }
+                #[cfg(not(feature = "deopt"))]
                 monoasm! { &mut self.jit,
                     cmpq rax, [rip + cached_base_class];
                     jne  deopt;

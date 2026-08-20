@@ -772,6 +772,7 @@ impl Codegen {
                     // recompiles by rebuilding the root unit (#1140).
                     speculated_root: speculated.then_some(root),
                     owner: Some(root),
+                    class_version_label: class_version.clone(),
                 });
             }
             let entry = frame.resolve_label(&mut self.jit, specialized_entry);

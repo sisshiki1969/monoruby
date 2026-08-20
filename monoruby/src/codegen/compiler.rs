@@ -559,7 +559,7 @@ impl Codegen {
             self_class,
             patch_point,
             speculated_root,
-            owner: _,
+            ..
         } = self.specialized_info[idx].clone();
         #[cfg(feature = "jit-log")]
         eprintln!(
@@ -619,7 +619,7 @@ impl Codegen {
             self_class,
             patch_point,
             speculated_root,
-            owner: _,
+            ..
         } = self.specialized_info[idx].clone();
         if let Some(root) = speculated_root {
             return self.recompile_speculated_root(globals, root, reason);
@@ -708,9 +708,20 @@ fn salvage_specialized(globals: &mut Globals, idx: usize, reason: RecompileReaso
             if let Some(version_label) = salvaged {
                 let version = Globals::class_version();
                 CODEGEN.with(|codegen| {
-                    codegen
-                        .borrow_mut()
-                        .set_class_version(version, &version_label);
+                    let mut codegen = codegen.borrow_mut();
+                    // The failing body reads its *own* unit's version word
+                    // (`SpecializedPatchEntry::class_version_label`), which
+                    // the owner record's label stops naming after the first
+                    // whole-method recompile of the pair (the record label
+                    // is written only by the initial `compile_patch`).
+                    // Stamping only the record's label would then leave the
+                    // live body's word stale and it would deopt on every
+                    // call forever. Stamp both: the record's word (what
+                    // future lookups re-validate against) and the word the
+                    // failing guard actually compared.
+                    let own = codegen.specialized_info[idx].class_version_label.clone();
+                    codegen.set_class_version(version, &version_label);
+                    codegen.set_class_version(version, &own);
                 });
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_OK_SPEC);
