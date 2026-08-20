@@ -1,39 +1,81 @@
-# sqlite3_native.rb – monoruby FFI replacement for sqlite3_native.so
+# sqlite3_native.rb – monoruby replacement for sqlite3_native.so
 #
 # When monoruby encounters require "sqlite3/X.Y/sqlite3_native" (a .so),
 # it redirects to ~/.monoruby/sqlite3_native.rb (this file via build.rs copy).
-# This implements the native C extension methods using FFI calls to libsqlite3.
+# This implements the native C extension methods by calling libsqlite3
+# through monoruby's shared native-call primitives (`Fiddle.___dlopen` /
+# `___call` / `___read_string` / …, registered in src/builtins/fiddle.rs).
+#
+# Deliberately *not* built on the `ffi` gem. The gem's C extension is
+# replaced by monoruby (gem/ffi_c.rb), but `FFI::Library` — i.e.
+# `ffi_lib` / `attach_function`, which this bridge would need — lives in
+# the gem's pure-Ruby half, so an FFI-based bridge only works on a host
+# that has the ffi gem installed. Fiddle ships with monoruby itself, so
+# this bridge is self-contained.
+#
+# Going straight to the primitives is also the faster route: an
+# `attach_function` call reaches C via FFI::Function#call, which on *every*
+# invocation does `param_types.zip(args).map { convert_arg }` plus
+# `param_types.map(&:type_code)` (three throw-away arrays and a Type object
+# per argument) and wraps every returned pointer in an FFI::Pointer. The
+# stubs generated below pass a single argument array and a frozen,
+# pre-computed signature array to `Fiddle.___call`, and keep pointers as
+# plain Integer addresses.
 
-# Load FFI. monoruby has built-in FFI support via ~/.monoruby/ffi_c.rb
-# combined with the ffi gem's Ruby files. Bundler may block 'require "ffi"'
-# if ffi is not in the bundle, so we find and add the ffi gem path directly.
-unless defined?(FFI::Library)
-  # Ensure the ffi gem's lib dir is in $LOAD_PATH (Bundler may have removed it)
-  unless $LOAD_PATH.any? { |p| p.include?("/ffi-") }
-    gem_dir = (defined?(Gem) && Gem.default_dir) ? Gem.default_dir : nil
-    if gem_dir
-      ffi_lib = Dir.glob(File.join(gem_dir, "gems", "ffi-*", "lib")).max
-      $LOAD_PATH.unshift(ffi_lib) if ffi_lib
-    end
-  end
-  require "ffi"
-end
-
-# Pre-define ForkSafety to prevent fork_safety.rb from loading weakref/delegate
-# which uses `def !` syntax not yet supported by monoruby's parser.
-module SQLite3
-  module ForkSafety
-    def self.hook!; end
-    def self.track(db); end
-    def self.discard; end
-    def self.suppress_warnings!; end
-  end
-end
+require "fiddle"
 
 module SQLite3
+  # =========================================================================
+  # FFIBridge – libsqlite3 entry points
+  #
+  # Pointers are plain Integer addresses throughout (0 = NULL); `:string`
+  # returns are decoded to a Ruby String, or nil for NULL.
+  # =========================================================================
   module FFIBridge
-    extend FFI::Library
-    ffi_lib "libsqlite3.so.0"
+    # Fiddle type codes (src/builtins/fiddle.rs). `:string` is a char* —
+    # as an argument it is VOIDP (a Ruby String hands over its own NUL
+    # terminated buffer), as a return value it is decoded below.
+    TYPE_CODES = {
+      void:    Fiddle::Types::VOID,
+      pointer: Fiddle::Types::VOIDP,
+      string:  Fiddle::Types::VOIDP,
+      int:     Fiddle::Types::INT,
+      int64:   Fiddle::Types::LONG_LONG,
+      double:  Fiddle::Types::DOUBLE,
+    }.freeze
+
+    # libsqlite3.so.0 on Linux, libsqlite3.dylib on macOS. Try the
+    # versioned name first: a bare `libsqlite3.so` only exists when the
+    # -dev package is installed.
+    LIB = begin
+      handle = nil
+      ["libsqlite3.so.0", "libsqlite3.so", "libsqlite3.dylib"].each do |name|
+        begin
+          handle = Fiddle::Handle.new(name)
+          break
+        rescue Fiddle::DLError
+          next
+        end
+      end
+      handle or raise LoadError, "could not load libsqlite3"
+    end
+
+    # Define `FFIBridge.<name>` as a fixed-arity stub that calls the C
+    # function directly. The symbol address is baked into the generated
+    # source as an integer literal and the argument signature is hoisted
+    # into a frozen constant, so a call allocates only the argument array.
+    def self.attach_function(name, argtypes, rettype)
+      addr = LIB[name.to_s]
+      sig  = argtypes.map { |t| TYPE_CODES.fetch(t) }.freeze
+      const_set("SIG_#{name}", sig)
+
+      params = (0...argtypes.size).map { |i| "a#{i}" }.join(", ")
+      call   = "Fiddle.___call(#{addr}, [#{params}], SIG_#{name}, #{TYPE_CODES.fetch(rettype)})"
+      # `___read_string` maps NULL to nil, matching FFI's `:string`.
+      body   = rettype == :string ? "Fiddle.___read_string(#{call})" : call
+
+      module_eval("def self.#{name}(#{params})\n  #{body}\nend", __FILE__, __LINE__)
+    end
 
     # --- Core database functions ---
     attach_function :sqlite3_libversion, [], :string
@@ -52,14 +94,14 @@ module SQLite3
     attach_function :sqlite3_db_filename, [:pointer, :string], :string
     attach_function :sqlite3_threadsafe, [], :int
 
-    # --- Prepared statement functions ---
+    # --- Statement functions ---
     attach_function :sqlite3_prepare_v2, [:pointer, :pointer, :int, :pointer, :pointer], :int
     attach_function :sqlite3_step, [:pointer], :int
     attach_function :sqlite3_finalize, [:pointer], :int
     attach_function :sqlite3_reset, [:pointer], :int
     attach_function :sqlite3_clear_bindings, [:pointer], :int
 
-    # --- Column functions ---
+    # --- Column accessors ---
     attach_function :sqlite3_column_count, [:pointer], :int
     attach_function :sqlite3_column_name, [:pointer, :int], :string
     attach_function :sqlite3_column_decltype, [:pointer, :int], :string
@@ -70,7 +112,7 @@ module SQLite3
     attach_function :sqlite3_column_blob, [:pointer, :int], :pointer
     attach_function :sqlite3_column_bytes, [:pointer, :int], :int
 
-    # --- Bind functions ---
+    # --- Parameter binding ---
     attach_function :sqlite3_bind_parameter_count, [:pointer], :int
     attach_function :sqlite3_bind_parameter_index, [:pointer, :string], :int
     attach_function :sqlite3_bind_null, [:pointer, :int], :int
@@ -83,10 +125,7 @@ module SQLite3
     attach_function :sqlite3_get_autocommit, [:pointer], :int
     attach_function :sqlite3_stmt_status, [:pointer, :int, :int], :int
 
-    # sqlite3_create_function_v2
-    attach_function :sqlite3_create_function_v2, [
-      :pointer, :string, :int, :int, :pointer, :pointer, :pointer, :pointer, :pointer
-    ], :int
+    # --- SQL function results / values ---
     attach_function :sqlite3_result_null, [:pointer], :void
     attach_function :sqlite3_result_int64, [:pointer, :int64], :void
     attach_function :sqlite3_result_double, [:pointer, :double], :void
@@ -100,7 +139,7 @@ module SQLite3
     attach_function :sqlite3_user_data, [:pointer], :pointer
 
     # SQLITE_TRANSIENT (-1 cast to pointer) tells sqlite3 to make its own copy
-    SQLITE_TRANSIENT = FFI::Pointer.new(-1)
+    SQLITE_TRANSIENT = -1
 
     SQLITE_OK   = 0
     SQLITE_ROW  = 100
@@ -115,6 +154,41 @@ module SQLite3
     SQLITE_STMTSTATUS_RUN           = 6
     SQLITE_STMTSTATUS_FILTER_MISS   = 7
     SQLITE_STMTSTATUS_FILTER_HIT    = 8
+
+    # --- Native memory helpers (Fiddle has no FFI::MemoryPointer) --------
+
+    # Allocate `size` zeroed bytes and return the address.
+    def self.malloc(size)
+      addr = Fiddle.___malloc(size, true)
+      raise NoMemoryError, "sqlite3 bridge: malloc(#{size}) failed" if addr == 0
+      addr
+    end
+
+    # Allocate a NUL-terminated copy of `str` in native memory.
+    #
+    # Passing a Ruby String straight to a `:pointer` parameter would hand
+    # sqlite3 the String's own buffer; a private copy is needed wherever
+    # the address itself has to stay meaningful after the call (the
+    # `prepare` tail pointer) or where two connections must not share one
+    # buffer (monoruby deduplicates frozen string literals, so every
+    # `":memory:"` in a program is the same object).
+    def self.strdup(str)
+      addr = malloc(str.bytesize + 1)
+      Fiddle.___write_bytes(addr, str)
+      addr
+    end
+
+    # 8-byte out-parameter slot; yields its address and reads back the
+    # pointer the callee stored there.
+    def self.out_ptr
+      addr = malloc(8)
+      begin
+        yield addr
+        Fiddle.___read(addr, Fiddle::Types::VOIDP)
+      ensure
+        Fiddle.___free(addr)
+      end
+    end
   end
 
   # Version information
@@ -174,32 +248,36 @@ module SQLite3
   # =========================================================================
   class Database
     def open_v2(filename, mode, zvfs)
-      ptr = FFI::MemoryPointer.new(:pointer)
-      # Allocate a unique C buffer for the filename to prevent sqlite3's
-      # shared cache from confusing connections when monoruby deduplicates
-      # frozen string literals (all ":memory:" share the same buffer).
-      @_fname_buf = FFI::MemoryPointer.new(:char, filename.bytesize + 1)
-      @_fname_buf.write_string_length(filename, filename.bytesize)
-      rc = FFIBridge.sqlite3_open_v2(@_fname_buf, ptr, mode, nil)
-      @db = ptr.read_pointer
+      # Give sqlite3 a private copy of the filename: monoruby deduplicates
+      # frozen string literals, so every ":memory:" in a program is one
+      # object and two connections would otherwise share a buffer.
+      @_fname_buf = FFIBridge.strdup(filename)
+      rc = nil
+      @db = FFIBridge.out_ptr do |ptr|
+        rc = FFIBridge.sqlite3_open_v2(@_fname_buf, ptr, mode, nil)
+      end
       if rc != FFIBridge::SQLITE_OK
-        msg = @db.null? ? "out of memory" : FFIBridge.sqlite3_errmsg(@db)
-        FFIBridge.sqlite3_close(@db) unless @db.null?
+        msg = @db == 0 ? "out of memory" : FFIBridge.sqlite3_errmsg(@db)
+        FFIBridge.sqlite3_close(@db) unless @db == 0
         raise SQLite3::Exception, msg
       end
       @closed = false
     end
 
     def open16(filename)
-      ptr = FFI::MemoryPointer.new(:pointer)
       encoded = filename.encode("UTF-16LE")
-      buf = FFI::MemoryPointer.new(:char, encoded.bytesize + 2)
-      buf.put_bytes(0, encoded)
-      rc = FFIBridge.sqlite3_open16(buf, ptr)
-      @db = ptr.read_pointer
+      # UTF-16 needs a two-byte terminator, so strdup's single NUL is not
+      # enough — allocate (and zero) the extra byte explicitly.
+      buf = FFIBridge.malloc(encoded.bytesize + 2)
+      Fiddle.___write_bytes(buf, encoded)
+      rc = nil
+      @db = FFIBridge.out_ptr do |ptr|
+        rc = FFIBridge.sqlite3_open16(buf, ptr)
+      end
+      Fiddle.___free(buf)
       if rc != FFIBridge::SQLITE_OK
-        msg = @db.null? ? "out of memory" : FFIBridge.sqlite3_errmsg(@db)
-        FFIBridge.sqlite3_close(@db) unless @db.null?
+        msg = @db == 0 ? "out of memory" : FFIBridge.sqlite3_errmsg(@db)
+        FFIBridge.sqlite3_close(@db) unless @db == 0
         raise SQLite3::Exception, msg
       end
       @closed = false
@@ -294,12 +372,17 @@ module SQLite3
       rows = []
       remaining = sql.strip
       until remaining.empty?
-        stmt_ptr = FFI::MemoryPointer.new(:pointer)
-        tail_ptr = FFI::MemoryPointer.new(:pointer)
-        rc = FFIBridge.sqlite3_prepare_v2(@db, remaining, remaining.bytesize, stmt_ptr, tail_ptr)
-        check_error(rc)
-        stmt = stmt_ptr.read_pointer
-        if stmt.null?
+        # `remaining` is passed as a :pointer, so sqlite3 sees the Ruby
+        # String's own buffer and the tail pointer points back into it —
+        # valid as long as `remaining` is still referenced here.
+        tail = 0
+        stmt = FFIBridge.out_ptr do |stmt_ptr|
+          tail = FFIBridge.out_ptr do |tail_ptr|
+            rc = FFIBridge.sqlite3_prepare_v2(@db, remaining, remaining.bytesize, stmt_ptr, tail_ptr)
+            check_error(rc)
+          end
+        end
+        if stmt == 0
           break
         end
         begin
@@ -311,41 +394,25 @@ module SQLite3
         ensure
           FFIBridge.sqlite3_finalize(stmt)
         end
-        tail = tail_ptr.read_pointer
-        if tail.null? || tail.address == 0
+        if tail == 0
           break
         end
-        remaining = (tail.read_string_to_null).strip
+        remaining = Fiddle.___read_string(tail).strip
       end
       rows
     end
 
     # define_function_with_flags – used by create_function
+    #
+    # Registering a user-defined SQL function means handing sqlite3 a C
+    # function pointer that calls back into Ruby. That needs a native
+    # closure (an executable trampoline), which monoruby does not generate
+    # yet — neither Fiddle::Closure nor FFI::Function.new(&block) produces
+    # a real callable address. Raise rather than register a NULL xFunc and
+    # let sqlite3 report SQLITE_MISUSE.
     def define_function_with_flags(name, flags, &block)
-      # Store the block so it won't be GC'd
-      @functions ||= {}
-      @functions[name] = block
-
-      # Create a C callback for the xFunc
-      xfunc = FFI::Function.new(:void, [:pointer, :int, :pointer]) do |ctx, argc, argv_ptr|
-        args = []
-        argc.times do |i|
-          val_ptr = (argv_ptr + i * FFI::Pointer.size).read_pointer
-          args << ffi_value_to_ruby(val_ptr)
-        end
-        begin
-          result = block.call(*args)
-          ffi_set_result(ctx, result)
-        rescue => e
-          FFIBridge.sqlite3_result_null(ctx)
-        end
-      end
-      SQLite3._register_callback("func:#{name}", xfunc)
-
-      rc = FFIBridge.sqlite3_create_function_v2(
-        @db, name, -1, flags, nil, xfunc, nil, nil, nil
-      )
-      check_error(rc)
+      raise SQLite3::Exception,
+        "create_function is not supported by monoruby's sqlite3 bridge (native callbacks are not implemented)"
     end
 
     def define_aggregator2(klass, name)
@@ -366,12 +433,12 @@ module SQLite3
     end
 
     def exec_batch_internal(sql)
-      errmsg_ptr = FFI::MemoryPointer.new(:pointer)
-      rc = FFIBridge.sqlite3_exec(@db, sql, nil, nil, errmsg_ptr)
+      rc = nil
+      err = FFIBridge.out_ptr do |errmsg_ptr|
+        rc = FFIBridge.sqlite3_exec(@db, sql, nil, nil, errmsg_ptr)
+      end
       if rc != FFIBridge::SQLITE_OK
-        err = errmsg_ptr.read_pointer
-        msg = err.null? ? "unknown error" : err.read_string
-        raise SQLite3::Exception, msg
+        raise SQLite3::Exception, Fiddle.___read_string(err) || "unknown error"
       end
     end
 
@@ -396,7 +463,7 @@ module SQLite3
       when 4 # BLOB
         len = FFIBridge.sqlite3_column_bytes(stmt, i)
         ptr = FFIBridge.sqlite3_column_blob(stmt, i)
-        ptr.null? ? nil : SQLite3::Blob.new(ptr.read_bytes(len))
+        ptr == 0 ? nil : SQLite3::Blob.new(Fiddle.___read_bytes(ptr, len))
       when 5 # NULL
         nil
       else
@@ -404,6 +471,9 @@ module SQLite3
       end
     end
 
+    # Value marshalling for user-defined SQL functions. Unreachable until
+    # native closures exist (see define_function_with_flags), but kept as
+    # the other half of that feature.
     def ffi_value_to_ruby(val_ptr)
       type = FFIBridge.sqlite3_value_type(val_ptr)
       case type
@@ -416,7 +486,7 @@ module SQLite3
       when 4 # BLOB
         len = FFIBridge.sqlite3_value_bytes(val_ptr)
         ptr = FFIBridge.sqlite3_value_blob(val_ptr)
-        ptr.null? ? nil : SQLite3::Blob.new(ptr.read_bytes(len))
+        ptr == 0 ? nil : SQLite3::Blob.new(Fiddle.___read_bytes(ptr, len))
       when 5 # NULL
         nil
       else
@@ -459,33 +529,39 @@ module SQLite3
 
     def prepare(db, sql)
       @db_ptr = db._db_ptr
-      stmt_ptr = FFI::MemoryPointer.new(:pointer)
-      tail_ptr = FFI::MemoryPointer.new(:pointer)
-      # Copy the SQL into a MemoryPointer so we can compute the remainder
-      # via pointer arithmetic (the tail pointer will point into this buffer).
-      sql_buf = FFI::MemoryPointer.new(:char, sql.bytesize + 1)
-      sql_buf.write_string_length(sql, sql.bytesize)
-      rc = FFIBridge.sqlite3_prepare_v2(@db_ptr, sql_buf, sql.bytesize, stmt_ptr, tail_ptr)
-      if rc != FFIBridge::SQLITE_OK
-        msg = FFIBridge.sqlite3_errmsg(@db_ptr)
-        raise SQLite3::Exception, msg
-      end
-      @stmt = stmt_ptr.read_pointer
-      @closed = @stmt.null?
-      @done = false
+      # Copy the SQL into native memory so the remainder can be computed by
+      # pointer arithmetic (sqlite3 points the tail into this buffer), and
+      # so the address stays stable regardless of what the Ruby String does.
+      sql_buf = FFIBridge.strdup(sql)
+      rc = nil
+      tail = 0
+      begin
+        @stmt = FFIBridge.out_ptr do |stmt_ptr|
+          tail = FFIBridge.out_ptr do |tail_ptr|
+            rc = FFIBridge.sqlite3_prepare_v2(@db_ptr, sql_buf, sql.bytesize, stmt_ptr, tail_ptr)
+          end
+        end
+        if rc != FFIBridge::SQLITE_OK
+          msg = FFIBridge.sqlite3_errmsg(@db_ptr)
+          raise SQLite3::Exception, msg
+        end
+        @closed = @stmt == 0
+        @done = false
 
-      # Calculate remainder (unparsed trailing SQL)
-      # The tail pointer points into sql_buf. Compute offset to find remainder.
-      tail = tail_ptr.read_pointer
-      if tail.null? || tail.address == 0
-        ""
-      else
-        offset = tail.address - sql_buf.address
-        if offset >= sql.bytesize
+        # Calculate remainder (unparsed trailing SQL) from the tail offset.
+        if tail == 0
           ""
         else
-          sql.byteslice(offset..-1) || ""
+          offset = tail - sql_buf
+          if offset >= sql.bytesize
+            ""
+          else
+            sql.byteslice(offset..-1) || ""
+          end
         end
+      ensure
+        # sqlite3_prepare_v2 keeps its own copy of the SQL text.
+        Fiddle.___free(sql_buf)
       end
     end
 
@@ -637,7 +713,7 @@ module SQLite3
       when 4 # BLOB
         len = FFIBridge.sqlite3_column_bytes(@stmt, i)
         ptr = FFIBridge.sqlite3_column_blob(@stmt, i)
-        ptr.null? ? nil : SQLite3::Blob.new(ptr.read_bytes(len))
+        ptr == 0 ? nil : SQLite3::Blob.new(Fiddle.___read_bytes(ptr, len))
       when 5 # NULL
         nil
       else

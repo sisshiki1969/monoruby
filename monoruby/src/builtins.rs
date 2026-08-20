@@ -15,7 +15,6 @@ mod encoding_tests;
 pub(crate) mod enumerator;
 mod exception;
 mod false_class;
-mod ffi;
 mod fiber;
 mod fiddle;
 mod file;
@@ -130,7 +129,6 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     argf::init(globals);
     socket::init(globals);
     fiddle::init(globals);
-    ffi::init(globals);
     marshal::init(globals);
     math::init(globals);
     process::init(globals);
