@@ -610,6 +610,7 @@
 3216e8a4e5532edd1d8a9a107a61cb60	"nil"	def t; end; (public).inspect
 323248fe474a5afa887e12205ed145d2	C	a = class C\n          self\n        end\n        a\n        
 3241d752b39412d4f6c02d9dd853ba08	["foo"]	class A; def a(*r); r; end; end\n            class B < A; def a(*r);
+3264d96fa4dfb35b3aea4883fe7dbebb	[0, 30, 60, 90, 120]	Object.const_set(:LCS_K3, 0)\n        def lcs_hot3\n          s = 0\n     
 3279027e38a42e302879e0467940338a	[[1, 100], [3, 100], [4, 100], [:attr, 150], [:plain, 150]]	class Ra\n              attr_reader :tag\n              def initializ
 3285c4fda20a8f8870e882093119ec6c	[1, 10, 20, 30]	def f(p, x:, y:, z:)\n          [p, x, y, z]\n        end\n        \n\n     
 3295f884bc7723fc9fb6dbf1936f7316	[-7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5, -7, 7, -8, -1.5, 1.5]	def drive\n              res = []\n              j = 0\n              
@@ -1654,6 +1655,7 @@
 88d4180cc8261b799934c513e7ea401c	13	def f(a,b)\n          a + b\n        end\n        f(5,7)\n        f(4,9)\n  
 88f8e9f112097e82f8a521e470848673	["<1>", "'x'"]	module AncInner\n              refine(Integer) { def wrap; "<#{to_s}
 88fba5d2266fa4ee0bba24a92af6c067	[[], 1]	->((*a, b)) { [a, b] }.call([1])
+8933c621a2a4cce4cee3e798523d76cd	1050	LCS_K2 = 7\n        def lcs_hot2\n          s = 0\n          i = 0\n       
 898daf8bc776af90627957e0256ba48d	[0, 0, 0, 0, 0, 0, 0, 0, 0, 76, 31, 0, 78, 6, 0, 31, 27, 28, 14, 78, 20, 84, 5, 0, 26, 15, 0, 25, 6, 84, 29, 83, 11, 9, 85, 25, 83, 6, 9, 27, 24, 69, 13, 27, 29]	def bxor!(a, b)\n          l = a.bytesize\n          lb = b.bytesize\n    
 89a90f1ae033d44d7cd236ed88be4129	:bar	class Foo\n              def bar; end\n            end\n            \n\n
 89c218222121411715e9cbdc51498eb5	[21, 28, 35, 42, 49, 56, 63, 70, 77, 84, 91, 98, 105, 112, 119, 126, 133, 140, 147, 154, 161, 168, 175, 182, 189, 196, 203, 210, 217, 224]	def g(a, b, c, d, e, f, g) = [a, b, c, d, e, f, g].sum\n        def f(..
@@ -2002,6 +2004,7 @@ a55b98e9b8eb1d3f7e509f6d3ac592c0	"missing keyword: :x"	def msg; yield; "no error
 a5b4244b815843859e162c8ca4f4db2a	[4, 8, 67, 58, 10, 77, 121, 65, 114, 114, 91, 7, 105, 6, 105, 7]	class MyArr < Array; end\n            Marshal.dump(MyArr.new([1, 2])
 a5d8327abff55336ba0aca5e5b3d3676	[[:r0, []], [:r0, [1, 2, 3]], [:r1, 1, []], [:r1, 1, [2, 3]], [:ro, 1, :dy, []], [:ro, 1, 2, []], [:ro, 1, 2, [3, 4]], [:rk, [], {}], [:rk, [1, 2], {}], [:ro, :L, :dy, []], [:ro, :L, 1, [2, 3]], "wrong number of arguments (given 0, expected 1+)", [1, 2, 3], [1, 2]]	def r0(*a) = [:r0, a]\n            def r1(x, *a) = [:r1, x, a]\n     
 a5d96ad6d6abcfbe7ebc92d3c098653f	:no_raise	begin\n          eval("x=1; y=2; x..y if x")\n          :no_raise\n       
+a5e8a1abbd22d21896ec370b765bf2fb	6300	LCS_K1 = 42\n        def lcs_hot1\n          s = 0\n          i = 0\n      
 a5ea42a5d2799be99e3f391567c82039	nil	class C; end\nArray.try_convert(C.new)
 a5ed14348511ba792e4c20ead35820a6	[:undefined_local_or_method, true]	begin\n          undefined_local_or_method\n        rescue NameError => e
 a5f3bf74322a39a42bd747ced6b91e31	[48, "ISO-8859-1", true]	def iso_app(s, t, n)\n          i = 0\n          while i < n\n            

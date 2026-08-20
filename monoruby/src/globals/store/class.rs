@@ -2639,6 +2639,130 @@ impl Store {
         version_label
     }
 
+    /// Two-tier const-version salvage of a compilation unit (whole-method
+    /// when `loop_index` is `None`, the loop unit at that `LoopStart`
+    /// otherwise). Returns the unit's const-version snapshot word for the
+    /// caller to patch to the current global version, a deferral, or a
+    /// recompile request — see [`ConstSalvage`].
+    ///
+    /// Tier 1 — per-name epochs: if none of the names the unit folded were
+    /// touched since compilation (and the wildcard didn't move), no fold can
+    /// have changed; the whole unit validates without a single lookup.
+    ///
+    /// Tier 2 — value re-check: a site whose name *was* touched is compared
+    /// against its VM inline cache. If a cache refreshed at the current
+    /// version equals the fold, the assignment wrote the same value and the
+    /// code is still exact. A still-stale cache defers (bounded) so the
+    /// deopted execution can refresh it; a diverging cache recompiles.
+    ///
+    /// On success the record's epoch snapshots are refreshed in place so the
+    /// next failure diffs against *this* validation point.
+    pub(crate) fn salvage_const_unit(
+        &mut self,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        loop_index: Option<crate::bytecodegen::BcIndex>,
+    ) -> ConstSalvage {
+        let current_version = Globals::const_version();
+        let current_wildcard = crate::globals::const_epoch::wildcard();
+        let map_slot = match loop_index {
+            None => self[iseq_id].get_const_map_mut(self_class),
+            Some(index) => self[iseq_id].get_loop_const_map_mut(self_class, index),
+        };
+        let Some(map_slot) = map_slot else {
+            #[cfg(feature = "jit-log")]
+            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_FAIL_NO_ENTRY);
+            return ConstSalvage::Recompile;
+        };
+        // Take the record out: validation reads other parts of the store
+        // (the sites' VM caches), which a live borrow of the map would block.
+        let mut map = std::mem::take(map_slot);
+        let mut outcome = self.salvage_const_map(&mut map, current_version, current_wildcard);
+        match outcome {
+            ConstSalvage::Healed(_) => map.stale_defers = 0,
+            // Let the deopt run the site in the VM (refreshing its cache)
+            // and retry on the next miss — but bounded: a fold whose site
+            // the deopted execution never reaches would defer forever.
+            ConstSalvage::Defer => {
+                if map.stale_defers >= 3 {
+                    outcome = ConstSalvage::Recompile;
+                } else {
+                    map.stale_defers += 1;
+                }
+            }
+            ConstSalvage::Recompile => {}
+        }
+        // Put the (possibly refreshed) record back even on failure — the
+        // recompile that follows replaces it wholesale anyway.
+        if let Some(map_slot) = match loop_index {
+            None => self[iseq_id].get_const_map_mut(self_class),
+            Some(index) => self[iseq_id].get_loop_const_map_mut(self_class, index),
+        } {
+            *map_slot = map;
+        }
+        outcome
+    }
+
+    fn salvage_const_map(
+        &self,
+        map: &mut ConstSalvageMap,
+        current_version: u64,
+        current_wildcard: u64,
+    ) -> ConstSalvage {
+        use crate::globals::const_epoch;
+        let Some(word) = map.version_word.clone() else {
+            // The unit folded no constants — no const guard exists, so a
+            // const-version failure cannot have come from it (stale record).
+            return ConstSalvage::Recompile;
+        };
+        let wildcard_moved = map.wildcard != current_wildcard;
+        let moved: Vec<IdentId> = map
+            .name_epochs
+            .iter()
+            .filter(|(n, e)| const_epoch::name_epoch(*n) != *e)
+            .map(|(n, _)| *n)
+            .collect();
+        for site in &mut map.sites {
+            let suspect = wildcard_moved || site.names.iter().any(|n| moved.contains(n));
+            if !suspect {
+                continue;
+            }
+            // Tier 2: only a VM cache already refreshed at the current
+            // version can prove the fold still exact.
+            let stale = match &self[site.id].cache {
+                None => true,
+                Some(cur) if cur.version as u64 != current_version => true,
+                Some(_) => false,
+            };
+            if stale {
+                #[cfg(feature = "jit-log")]
+                crate::codegen::jit_stats::bump(
+                    &crate::codegen::jit_stats::CONST_SALVAGE_FAIL_STALE,
+                );
+                return ConstSalvage::Defer;
+            }
+            let cur = self[site.id].cache.as_ref().unwrap();
+            if cur.value != site.cache.value
+                || cur.base_class != site.cache.base_class
+                || cur.self_class != site.cache.self_class
+            {
+                #[cfg(feature = "jit-log")]
+                crate::codegen::jit_stats::bump(
+                    &crate::codegen::jit_stats::CONST_SALVAGE_FAIL_CHANGED,
+                );
+                return ConstSalvage::Recompile;
+            }
+            #[cfg(feature = "jit-log")]
+            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::CONST_SALVAGE_VALUECMP);
+            site.cache = cur.clone();
+        }
+        for (n, e) in &mut map.name_epochs {
+            *e = const_epoch::name_epoch(*n);
+        }
+        map.wildcard = current_wildcard;
+        ConstSalvage::Healed(word)
+    }
+
     /// The loop (OSR) twin of [`Self::salvage_method_unit`], keyed by the
     /// loop's `(self_class, LoopStart index)` — see
     /// [`crate::globals::ISeqInfo::loop_jit_info`]. As there, the caller

@@ -487,9 +487,12 @@ pub(in crate::codegen) enum LInst {
         deopt: DestLabel,
     },
     /// Constant-load guard: deopt if the global constant version moved away from
-    /// `const_version` since compilation.
+    /// the unit's snapshot word since compilation. `recompile` mirrors
+    /// `AsmInst::GuardConstVersion`: `Some(position)` routes a miss through
+    /// the salvaging recompile entry first; `None` is a plain deopt.
     GuardConstVersion {
         const_version: usize,
+        recompile: Option<Option<BytecodePtr>>,
         deopt: DestLabel,
     },
     /// Block-passing side-effect guard: deopt if the current frame was captured

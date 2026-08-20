@@ -196,10 +196,11 @@ impl Codegen {
             }
             // Constant version guard: deopt if the global constant version moved
             // since compilation.
-            AsmInst::GuardConstVersion { const_version, deopt } => {
+            AsmInst::GuardConstVersion { const_version, recompile, deopt } => {
                 let deopt = labels[deopt].clone();
                 self.encode_linst(LInst::GuardConstVersion {
                     const_version,
+                    recompile,
                     deopt,
                 });
             }

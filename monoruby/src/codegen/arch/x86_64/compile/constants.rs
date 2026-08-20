@@ -19,17 +19,51 @@ impl Codegen {
     ///
     /// Guard for constant version.
     ///
+    /// The snapshot side of the compare is the unit's shared patchable word
+    /// (`Codegen::unit_const_version`), so a successful const salvage can
+    /// re-validate every guard in the unit with one store.
+    ///
+    /// With `recompile = Some(position)` a miss first calls the salvaging
+    /// recompile entry (whole method / the loop at `position`) and then
+    /// deopts — the class-version guard's shape. `None` is a plain deopt.
+    ///
     /// ### destroy
     /// - rax
     ///
-    pub(super) fn guard_const_version(&mut self, cached_version: usize, deopt: &DestLabel) {
-        let cached_const_version = self.jit.data_i64(cached_version as _);
+    pub(super) fn guard_const_version(
+        &mut self,
+        recompile: Option<Option<BytecodePtr>>,
+        deopt: &DestLabel,
+    ) {
+        let cached_const_version = self
+            .unit_const_version
+            .clone()
+            .expect("const guard emitted outside a constant-folding unit");
         let global_const_version = self.const_version_label();
+        let Some(position) = recompile else {
+            monoasm! { &mut self.jit,
+                movq rax, [rip + global_const_version];
+                cmpq rax, [rip + cached_const_version];
+                jne  deopt;
+            }
+            return;
+        };
+        assert_eq!(0, self.jit.get_page());
+        let fail = self.jit.label();
         monoasm! { &mut self.jit,
             movq rax, [rip + global_const_version];
             cmpq rax, [rip + cached_const_version];
-            jne  deopt;
+            jne  fail;
         }
+        self.jit.select_page(1);
+        self.gen_recompile(
+            position,
+            fail,
+            RecompileReason::ConstVersionGuardFailed,
+            None,
+        );
+        self.version_guard_fail(deopt);
+        self.jit.select_page(0);
     }
 
     ///
@@ -45,13 +79,16 @@ impl Codegen {
     ///
     pub(super) fn guard_const_version_specialized(
         &mut self,
-        cached_version: usize,
+        _cached_version: usize,
         idx: usize,
         deopt: &DestLabel,
     ) {
         assert_eq!(0, self.jit.get_page());
         let fail = self.jit.label();
-        let cached_const_version = self.jit.data_i64(cached_version as _);
+        let cached_const_version = self
+            .unit_const_version
+            .clone()
+            .expect("const guard emitted outside a constant-folding unit");
         let global_const_version = self.const_version_label();
         monoasm! { &mut self.jit,
             movq rax, [rip + global_const_version];

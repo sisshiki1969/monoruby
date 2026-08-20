@@ -2087,6 +2087,12 @@ pub(super) enum AsmInst {
     ///
     GuardConstVersion {
         const_version: usize,
+        /// `Some(position)` — on a miss, call the (salvaging) recompile entry
+        /// for the unit (`None` = whole method, `Some(pc)` = the loop at that
+        /// pc) before falling into `deopt`, exactly like the class-version
+        /// guard. `None` — plain deopt (block-style roots, whose whole-method
+        /// recompile entry would rebuild the wrong frame shape).
+        recompile: Option<Option<BytecodePtr>>,
         deopt: AsmDeopt,
     },
     ///

@@ -120,6 +120,19 @@ impl<'a> JitContext<'a> {
             self.guard_const_version(state, ir, cache.version);
             state.load_constant(ir, dst, cache);
             state.unset_side_effect_guard();
+            // Record the fold for const-version salvage: the cache tuple the
+            // emitted code now relies on, and every name whose redefinition
+            // could change this site's resolution (qualifiers included).
+            {
+                let site = &self.store[id];
+                let mut names = site.prefix.clone();
+                names.push(site.name);
+                self.const_fold_cache.push(ConstFoldSite {
+                    id,
+                    cache: cache.clone(),
+                    names,
+                });
+            }
             Ok(CompileResult::Continue)
         } else {
             Ok(CompileResult::Recompile(RecompileReason::NotCached))
@@ -176,17 +189,24 @@ impl<'a> JitContext<'a> {
             state.set_const_version_guard();
             return;
         }
-        let deopt = if self.store[self.func_id()].is_block_style() {
-            ir.new_deopt(state)
+        // Non-block roots route a miss through the (salvaging) recompile
+        // entry *unconditionally* — mirroring the class-version guard's
+        // shape rather than the old counter-gated `RecompileDeoptimize`
+        // side exit. The one-shot counter was tuned for expensive
+        // recompiles; with const salvage the entry is cheap, and gating it
+        // meant the second version move after a successful salvage would
+        // strand the body in the interpreter forever (the counter never
+        // re-arms). Block roots keep the plain deopt: their whole-method
+        // recompile entry would rebuild the wrong frame shape (see above).
+        let recompile = if self.store[self.func_id()].is_block_style() {
+            None
         } else {
-            ir.new_recompile_deopt(
-                state,
-                RecompileReason::ConstVersionGuardFailed,
-                RecompileTarget::Whole(self.position()),
-            )
+            Some(self.position())
         };
+        let deopt = ir.new_deopt(state);
         ir.push(AsmInst::GuardConstVersion {
             const_version: version,
+            recompile,
             deopt,
         });
         state.set_const_version_guard();

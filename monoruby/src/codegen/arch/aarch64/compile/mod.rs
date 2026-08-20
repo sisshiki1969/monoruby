@@ -1038,18 +1038,47 @@ impl Codegen {
                 self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
             }
             // Constant-load version guard.
-            LInst::GuardConstVersion { const_version, deopt } => {
+            // The snapshot side is the unit's shared patchable word
+            // (`Codegen::unit_const_version`), so a successful const salvage
+            // re-validates every guard in the unit with one store (mirrors
+            // x86). With `recompile = Some(position)` a miss first calls the
+            // salvaging recompile entry and then deopts (the class-version
+            // guard's shape); `None` plain-deopts.
+            LInst::GuardConstVersion { const_version: _, recompile, deopt } => {
                 let gv_addr = self
                     .jit
                     .get_label_address(&self.const_version_label())
                     .as_ptr() as u64;
+                let unit_word = self
+                    .unit_const_version
+                    .clone()
+                    .expect("const guard emitted outside a constant-folding unit");
+                let unit_addr = self.jit.get_label_address(&unit_word).as_ptr() as u64;
                 monoasm_arm64!(&mut self.jit,
                     mov x9, (gv_addr);
                     ldr x9, [x9];
-                    mov x10, (const_version as u64);
+                    mov x10, (unit_addr);
+                    ldr x10, [x10];
                     cmp x9, x10;
                 );
-                self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+                match recompile {
+                    None => {
+                        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
+                    }
+                    Some(position) => {
+                        let miss = self.jit.label();
+                        let done = self.jit.label();
+                        self.jit.bcond_label(monoasm::Cond::Ne, &miss);
+                        monoasm_arm64!(&mut self.jit, b done;);
+                        self.jit.bind_label(miss);
+                        self.a64_call_recompile(
+                            position,
+                            RecompileReason::ConstVersionGuardFailed,
+                        );
+                        monoasm_arm64!(&mut self.jit, b deopt;);
+                        self.jit.bind_label(done);
+                    }
+                }
             }
             // Block-passing side-effect guard: deopt if the frame was captured
             // or invalidated.
@@ -2283,11 +2312,12 @@ impl Codegen {
     }
 
     /// Inline-cache class-version guard: deopt if the global class version moved
-    /// since compilation. aarch64 has no recompiler, so the x86 recompile params
-    /// (`class_version`/`position`/`with_recovery`) are unused here.
+    /// since compilation (compared against the unit's patchable snapshot word,
+    /// so a salvage can heal the unit in place). x86's `with_recovery`
+    /// (resume-in-place) is still not ported — a salvaged miss deopts once.
     pub(in crate::codegen::jitgen) fn emit_guard_class_version(
         &mut self,
-        _class_version: DestLabel,
+        class_version: DestLabel,
         position: Option<BytecodePtr>,
         _with_recovery: bool,
         deopt: DestLabel,
@@ -2309,7 +2339,7 @@ impl Codegen {
         // propagates the fatal (matching the specialized twin).
         let miss = self.jit.label();
         let done = self.jit.label();
-        self.a64_guard_class_version(&miss); // version mismatch -> miss
+        self.a64_guard_class_version(&class_version, &miss); // version mismatch -> miss
         monoasm_arm64!(&mut self.jit, b done;); // match -> continue in JIT
         self.jit.bind_label(miss);
         self.a64_call_recompile(position, RecompileReason::ClassVersionGuardFailed);
@@ -2769,7 +2799,7 @@ impl Codegen {
         _frame: &mut AsmInfo,
         labels: &SideExitLabels,
         inst: AsmInst,
-        _class_version: DestLabel,
+        class_version: DestLabel,
     ) -> bool {
         // The specialized (inlined-frame) AsmInst family is lowered here; every
         // other variant is handled by the shared `compile_asmir` dispatcher.
@@ -2796,7 +2826,7 @@ impl Codegen {
                 let deopt = labels[deopt].clone();
                 let miss = self.jit.label();
                 let done = self.jit.label();
-                self.a64_guard_class_version(&miss); // mismatch -> miss
+                self.a64_guard_class_version(&class_version, &miss); // mismatch -> miss
                 monoasm_arm64!(&mut self.jit, b done;); // match -> continue
                 self.jit.bind_label(miss.clone());
                 self.a64_call_recompile_specialized(
@@ -2810,7 +2840,7 @@ impl Codegen {
             // version move, recompile this specialized entry (re-folding the
             // constants at the new version), then deopt.
             AsmInst::GuardConstVersionSpecialized {
-                const_version,
+                const_version: _,
                 idx,
                 deopt,
             } => {
@@ -2822,10 +2852,16 @@ impl Codegen {
                     .jit
                     .get_label_address(&self.const_version_label())
                     .as_ptr() as u64;
+                let unit_word = self
+                    .unit_const_version
+                    .clone()
+                    .expect("const guard emitted outside a constant-folding unit");
+                let unit_addr = self.jit.get_label_address(&unit_word).as_ptr() as u64;
                 monoasm_arm64!(&mut self.jit,
                     mov x9, (gv_addr);
                     ldr x9, [x9];
-                    mov x10, (const_version as u64);
+                    mov x10, (unit_addr);
+                    ldr x10, [x10];
                     cmp x9, x10;
                 );
                 self.jit.bcond_label(monoasm::Cond::Ne, &miss); // mismatch -> miss

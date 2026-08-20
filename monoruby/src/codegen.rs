@@ -558,6 +558,16 @@ impl JitModule {
         unsafe { *p = version };
     }
 
+    /// Patch a compilation unit's const-version snapshot word (see
+    /// `Codegen::unit_const_version`) to *version*, re-validating every
+    /// `GuardConstVersion` in the unit after a successful const salvage.
+    pub fn set_const_version(&mut self, version: u64, label: &DestLabel) {
+        let p = self.jit.get_label_address(label).as_ptr() as *mut u64;
+        // SAFETY: the label names an 8-byte data word emitted by
+        // `jit_compile` in the JIT data area, which stays writable.
+        unsafe { *p = version };
+    }
+
     #[cfg(feature = "perf")]
     pub(crate) fn perf_write(info: (CodePtr, usize, CodePtr, usize), desc: &str) {
         use std::io::Write;
@@ -698,7 +708,12 @@ pub(crate) struct SpecializedPatchEntry {
     /// covers them all, so a child's class-version guard failure can be
     /// salvaged by re-validating the owner unit (`salvage_method_unit` /
     /// `salvage_loop_unit`) instead of recompiling this body.
-    pub(crate) owner: (ISeqId, ClassId, Option<BytecodePtr>),
+    ///
+    /// Cleared (`None`) when the body is *individually* recompiled: the
+    /// fresh compile reads its own freshly-created version words, which the
+    /// owner's records no longer name — a "successful" owner salvage would
+    /// patch words this body never reads, deopting it on every call forever.
+    pub(crate) owner: Option<(ISeqId, ClassId, Option<BytecodePtr>)>,
 }
 
 ///
@@ -765,6 +780,13 @@ pub struct Codegen {
     alloc_cell: DestLabel,
     pub(crate) specialized_info: Vec<SpecializedPatchEntry>,
     pub(crate) specialized_base: usize,
+    /// The const-version snapshot word of the unit currently being compiled:
+    /// every `GuardConstVersion` / `GuardConstVersionSpecialized` lowered for
+    /// the unit compares the global const counter against this one word
+    /// (compilation is atomic at one const version). Set by `jit_compile`
+    /// for the duration of the unit's machine-code generation; `None`
+    /// outside a compilation.
+    pub(in crate::codegen) unit_const_version: Option<DestLabel>,
     vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
     vm_entry: DestLabel,
     vm_fetch: DestLabel,
@@ -1145,6 +1167,7 @@ impl Codegen {
             alloc_cell: entry_panic.clone(),
             specialized_info: Vec::new(),
             specialized_base: 0,
+            unit_const_version: None,
             vm_entry: entry_panic.clone(),
             vm_code_position: (None, 0, None, 0),
             vm_fetch: entry_panic.clone(),
@@ -1934,6 +1957,11 @@ pub(crate) mod jit_stats {
     pub static RECOMPILE_SPEC_CLASS_VER: AtomicUsize = AtomicUsize::new(0);
     pub static RECOMPILE_SPEC_CONST_VER: AtomicUsize = AtomicUsize::new(0);
     pub static RECOMPILE_SPEC_OTHER: AtomicUsize = AtomicUsize::new(0);
+    pub static CONST_RECOVERY_ATTEMPT: AtomicUsize = AtomicUsize::new(0);
+    pub static CONST_SALVAGE_OK: AtomicUsize = AtomicUsize::new(0);
+    pub static CONST_SALVAGE_VALUECMP: AtomicUsize = AtomicUsize::new(0);
+    pub static CONST_SALVAGE_FAIL_STALE: AtomicUsize = AtomicUsize::new(0);
+    pub static CONST_SALVAGE_FAIL_CHANGED: AtomicUsize = AtomicUsize::new(0);
 
     pub fn bump(c: &AtomicUsize) {
         c.fetch_add(1, Ordering::Relaxed);
@@ -1953,6 +1981,11 @@ pub(crate) mod jit_stats {
         eprintln!("    salvaged (re-resolution ok):     {}", g(&SALVAGE_OK_SPEC));
         eprintln!("    fail: resolution changed:        {}", g(&SALVAGE_FAIL_RESOLUTION_CHANGED));
         eprintln!("    fail: no cache/entry:            {}", g(&SALVAGE_FAIL_NO_ENTRY));
+        eprintln!("  recovery attempts (const guard):   {}", g(&CONST_RECOVERY_ATTEMPT));
+        eprintln!("    salvaged:                        {}", g(&CONST_SALVAGE_OK));
+        eprintln!("    value-compared sites:            {}", g(&CONST_SALVAGE_VALUECMP));
+        eprintln!("    fail: cache stale:               {}", g(&CONST_SALVAGE_FAIL_STALE));
+        eprintln!("    fail: value changed:             {}", g(&CONST_SALVAGE_FAIL_CHANGED));
         eprintln!("  whole recompiles  class-ver:       {}", g(&RECOMPILE_METHOD_CLASS_VER));
         eprintln!("  whole recompiles  const-ver:       {}", g(&RECOMPILE_METHOD_CONST_VER));
         eprintln!("  whole recompiles  other:           {}", g(&RECOMPILE_METHOD_OTHER));
