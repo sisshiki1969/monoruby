@@ -4488,7 +4488,10 @@ fn string_setbyte(
     state.load_fixnum(ir, args, GP::Rsi);
     state.load_fixnum(ir, args + 1usize, GP::Rdx);
     let deopt = ir.new_deopt(state);
-    ir.inline(move |r#gen, _, labels, _| { let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi)); r#gen.emit_string_setbyte(&d) });
+    ir.inline(move |r#gen, _, labels, _| {
+        let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
+        r#gen.emit_string_setbyte(&d)
+    });
     if dst.is_some() {
         // setbyte returns its value argument (a fixnum after the guard above)
         state.load(ir, args + 1usize, GP::Rax);
