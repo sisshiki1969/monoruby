@@ -179,10 +179,21 @@ impl Codegen {
         };
         self.fetch_and_dispatch();
 
+        // Bind unconditionally: this label is the class-guard chain's miss
+        // exit (`class_guard_stub` → `gen_compile_patch`'s `no_compile_exit`).
+        // It used to be bound only inside the `profile` block below, so in
+        // ordinary builds every `jne jit_class_guard_fail` kept its zeroed
+        // rel32 placeholder (monoasm's `fill_relocs` silently retains
+        // relocations of never-bound labels) — a no-op branch. The chain's
+        // miss then fell through into `jit_profile_patch` on every walk,
+        // double-sampling the receiver class past `PROFILE_THRESHOLD` and
+        // force-compiling a specialization for *every* class that ever
+        // missed: 16k `Object#should` bodies (~300MB) in ruby/spec's
+        // concurrent-subclasses example alone.
         let jit_class_guard_fail = self.jit.label();
+        self.jit.bind_label(jit_class_guard_fail.clone());
         #[cfg(feature = "profile")]
         monoasm! { &mut self.jit,
-        jit_class_guard_fail:
             movq rdx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
