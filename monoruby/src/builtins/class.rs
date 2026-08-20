@@ -66,6 +66,12 @@ pub(super) fn gen_class_allocate_inline(
     // the code compiled for `Foo.new` and allocate a `Foo` instead of
     // raising TypeError. Deopt on mismatch: the interpreter's native
     // `allocate` then does the raising.
+    // Temporary P0 instrumentation: park the receiver in rdi too, so the
+    // deopt log's cause column names the class object that arrived instead
+    // of the baked one (this guard is the single largest deopt source in the
+    // activerecord workload and the cause column is otherwise blind).
+    #[cfg(feature = "deopt")]
+    state.load(ir, recv, GP::Rdi);
     state.load(ir, recv, GP::Rax);
     let deopt = ir.new_deopt(state);
     ir.guard_value_identity(self_module.as_val(), deopt);
