@@ -266,7 +266,7 @@ impl<'a> JitContext<'a> {
             idx_class,
             IdentId::_INDEX,
             bc_pos,
-            false,
+            RecvMissMode::Plain,
         )
     }
 

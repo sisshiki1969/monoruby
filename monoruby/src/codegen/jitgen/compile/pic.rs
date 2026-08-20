@@ -47,7 +47,10 @@
 //! ever saw take one class, is monomorphic and rightly keeps its single
 //! guard.
 
-use super::{method_call::PMC_SET_SHARE_DIVISOR, *};
+use super::{
+    method_call::{RecvMissMode, PMC_SET_SHARE_DIVISOR},
+    *,
+};
 
 ///
 /// Maximum number of dispatch arms.
@@ -282,7 +285,7 @@ impl<'a> JitContext<'a> {
                     group.func_id,
                     group.visibility,
                     callid,
-                    false,
+                    RecvMissMode::Plain,
                 )
             })?;
             debug_assert!(matches!(outcome, CompileResult::Continue));
@@ -382,6 +385,50 @@ mod tests {
               res << probe(vals[i % 2])
               res << sizer(sized[i % 3])
             end
+            res.tally.sort_by { |k, _| k.to_s }
+            "#,
+        );
+    }
+
+    /// A site that goes polymorphic only *after* the JIT compiled it
+    /// monomorphic: the first hot phase sees one class, so the compile
+    /// guards that class alone; the second phase alternates two. The
+    /// receiver guard's `Learn` exit (see `RecvMissMode`) must recompile the
+    /// body — whose fresh compile sees both classes in the PMC and builds
+    /// the dispatch chain — instead of deopting on every `Lb` forever.
+    #[test]
+    fn pic_late_polymorphism_heals() {
+        run_test(
+            r#"
+            class La; def tag = :a; end
+            class Lb; def tag = :b; end
+            def probe(x) = x.tag
+            res = []
+            50.times { res << probe(La.new) }
+            vals = [La.new, Lb.new]
+            100.times { |i| res << probe(vals[i % 2]) }
+            res.tally.sort_by { |k, _| k.to_s }
+            "#,
+        );
+    }
+
+    /// The same late-variance shape inside a *specialized* (inlined) body:
+    /// `inner` is inlined into `outer`, so the receiver guard that misses
+    /// lives in a specialized compile — the heal must go through
+    /// `RecompileTarget::Specialized` (re-pointing the caller's patch point),
+    /// not the whole-method route.
+    #[test]
+    fn pic_late_polymorphism_heals_specialized() {
+        run_test(
+            r#"
+            class Sa; def tag = :sa; end
+            class Sb; def tag = :sb; end
+            def inner(x) = x.tag
+            def outer(x) = inner(x)
+            res = []
+            50.times { res << outer(Sa.new) }
+            vals = [Sa.new, Sb.new]
+            100.times { |i| res << outer(vals[i % 2]) }
             res.tally.sort_by { |k, _| k.to_s }
             "#,
         );

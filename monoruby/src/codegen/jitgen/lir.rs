@@ -290,11 +290,12 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
     /// handler is only entered through a chain-wide eviction walk, which has
     /// already converted (or patched) every suspended frame in one pass.
     Evict,
-    /// Deopt that, once a miss counter is exhausted, recompiles the method/loop
-    /// (x86 only; aarch64 treats it as a plain `Deopt`). `chain` as on `Deopt`.
+    /// Deopt that, once a miss counter is exhausted, recompiles `target`
+    /// (the whole method/loop, or one specialized entry). `chain` as on
+    /// `Deopt`.
     RecompileDeopt {
         reason: RecompileReason,
-        position: Option<BytecodePtr>,
+        target: RecompileTarget,
         chain: bool,
     },
     /// Error handler: write back then jump to the raise/`handle_error` path.
