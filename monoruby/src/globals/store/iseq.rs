@@ -854,13 +854,24 @@ impl ISeqInfo {
             .map(|info| &info.inline_cache_map)
     }
 
-    pub(crate) fn set_cache_map(
+    /// Replace the whole-method unit's salvage record for `self_class` with
+    /// the freshly compiled body's: its inline caches, its const folds, and
+    /// — critically — the class-version word *this* body reads.
+    ///
+    /// The version label must be refreshed on every republish. A salvage
+    /// stamps the label found here (`get_jit_class_version`), so a record
+    /// still naming a superseded compile's cell would "heal" a word no live
+    /// body reads: the guard fails again on the very next call, forever.
+    /// (The loop twin, `set_loop_jit_info`, has always replaced all three.)
+    pub(crate) fn set_salvage_record(
         &mut self,
         self_class: ClassId,
+        class_version_label: DestLabel,
         cache: Vec<InlineCacheEntry>,
         const_map: ConstSalvageMap,
     ) {
         self.jit_entry.get_mut(&self_class).map(|info| {
+            info.class_version_label = class_version_label;
             info.inline_cache_map = cache;
             info.const_map = const_map;
         });

@@ -375,7 +375,7 @@ impl Codegen {
         };
         let jit_entry = self.jit.label();
         let class_version = self.class_version();
-        let (cache, _, const_map) = self.compile_method(
+        let (cache, class_version_label, const_map) = self.compile_method(
             globals,
             iseq_id,
             self_class,
@@ -383,7 +383,18 @@ impl Codegen {
             class_version,
             Some(reason),
         )?;
-        globals.store[iseq_id].set_cache_map(self_class, cache, const_map);
+        // Refresh the salvage record — including the version word this fresh
+        // body reads. Leaving the previous compile's label in place made
+        // every later salvage stamp a word no live body reads, so the guard
+        // failed again on the next call (270k steady-state misses per
+        // activerecord run, and the ones whose exit had no recovery path
+        // deopted every time).
+        globals.store[iseq_id].set_salvage_record(
+            self_class,
+            class_version_label,
+            cache,
+            const_map,
+        );
         let patch_point = self.jit.get_label_address(&patch_point);
         self.jit.apply_jmp_patch_address(patch_point, &jit_entry);
         Some(())
@@ -416,13 +427,19 @@ impl Codegen {
             class_version,
             Some(reason),
         );
-        let Some((cache, _, const_map)) = compiled else {
+        let Some((cache, class_version_label, const_map)) = compiled else {
             self.jit.finalize();
             return None;
         };
         // Refresh the salvage record so later guard failures re-validate
-        // against what *this* body folded (mirrors the x86 variant).
-        globals.store[iseq_id].set_cache_map(self_class, cache, const_map);
+        // against what *this* body folded, and against the version word it
+        // actually reads (mirrors the x86 variant).
+        globals.store[iseq_id].set_salvage_record(
+            self_class,
+            class_version_label,
+            cache,
+            const_map,
+        );
         let guard = self.a64_gen_class_guard_stub(self_class, &jit_entry);
         self.jit.finalize();
         let guard_addr = self.jit.get_label_address(&guard).as_ptr() as u64;
