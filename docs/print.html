@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4501ffd3.js";
+            window.path_to_searchindex_js = "searchindex-98753dd6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e1173681.js"></script>
@@ -8748,6 +8748,12 @@ tag が妥当（既知の制限）か、退行として修正すべきかのレ�
 <li><strong>fiddle support</strong> (Feb 2026) — Ruby bindings to C libraries</li>
 <li><strong>ffi support</strong> (Feb 2026) — compatibility with the <code>ffi</code> gem</li>
 <li><strong>SQLite3 FFI bridge</strong> (#160, Mar 2026) — support for the <code>sqlite3</code> gem</li>
+<li><strong>one shared native-call primitive set</strong> (Aug 2026) — <code>Fiddle.___dlopen</code> /
+<code>___call</code> / <code>___read</code> / <code>___write</code> / … (<code>src/builtins/fiddle.rs</code>) are now the
+single place C is reached from. <code>gem/ffi_c.rb</code> calls them instead of a
+duplicate registration under <code>FFI</code> (which also gains the JIT inliners for
+<code>___read</code> / <code>___write</code>), and the <code>sqlite3</code> bridge calls them directly rather
+than through <code>FFI::Library</code>, so it no longer needs the host <code>ffi</code> gem.</li>
 </ul>
 <h3 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h3>
 <ul>
