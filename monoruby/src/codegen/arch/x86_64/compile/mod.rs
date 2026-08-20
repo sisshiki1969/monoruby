@@ -1022,13 +1022,13 @@ impl Codegen {
                 }
                 LSideExitKind::RecompileDeopt {
                     reason,
-                    position,
+                    target,
                     chain,
                 } => self.gen_recompile_deopt_with_label(
                     pc,
                     &wb,
                     reason,
-                    position,
+                    target,
                     entry,
                     loop_jit_spill_bytes,
                     base,
@@ -2052,14 +2052,19 @@ impl Codegen {
     /// cache warms.
     pub(in crate::codegen::jitgen) fn emit_recompile_deopt(
         &mut self,
-        position: Option<BytecodePtr>,
+        target: RecompileTarget,
         deopt: &DestLabel,
         // x86 recompiles in place (no extern-boundary panic surfaced here), so
         // the aarch64-only error side-exit is unused.
         _error: Option<&DestLabel>,
         reason: RecompileReason,
     ) {
-        self.recompile_and_deopt(position, deopt, reason);
+        match target {
+            RecompileTarget::Whole(position) => self.recompile_and_deopt(position, deopt, reason),
+            RecompileTarget::Specialized(idx) => {
+                self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx, reason)
+            }
+        }
     }
 
     /// Method prologue. Always succeeds on x86 (the bool result mirrors the

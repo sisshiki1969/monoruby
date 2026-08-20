@@ -1366,7 +1366,7 @@ impl Codegen {
         pc: BytecodePtr,
         wb: &WriteBack,
         reason: RecompileReason,
-        position: Option<BytecodePtr>,
+        target: RecompileTarget,
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
@@ -1377,7 +1377,7 @@ impl Codegen {
             wb,
             entry,
             false,
-            Some((reason, position)),
+            Some((reason, target)),
             loop_jit_spill_bytes,
             base,
             chain,
@@ -1413,7 +1413,7 @@ impl Codegen {
         wb: &WriteBack,
         entry: DestLabel,
         _is_evict: bool,
-        recompile: Option<(RecompileReason, Option<BytecodePtr>)>,
+        recompile: Option<(RecompileReason, RecompileTarget)>,
         loop_jit_spill_bytes: usize,
         base: usize,
         chain: bool,
@@ -1483,17 +1483,29 @@ impl Codegen {
         // the generic op a few times first (so the VM has set the
         // site's POLY bit) before we recompile; once exhausted it
         // never recompiles again (monotone / one-shot).
-        if let Some((reason, position)) = recompile {
+        if let Some((reason, target)) = recompile {
             let recompile_lbl = self.jit.label();
             let skip = self.jit.label();
-            let counter = self.jit.data_i32(COUNT_DEOPT_RECOMPILE);
+            let counter = self.jit.data_i32(match target {
+                RecompileTarget::Whole(_) => COUNT_DEOPT_RECOMPILE,
+                RecompileTarget::Specialized(_) => COUNT_DEOPT_RECOMPILE_SPECIALIZED,
+            });
             monoasm!( &mut self.jit,
                 cmpl [rip + counter], 0;
                 jle  skip;
                 subl [rip + counter], 1;
                 jne  skip;
             );
-            self.gen_recompile(position, recompile_lbl, reason, None);
+            match target {
+                RecompileTarget::Whole(position) => {
+                    self.gen_recompile(position, recompile_lbl, reason, None)
+                }
+                RecompileTarget::Specialized(idx) => self.gen_recompile_specialized(
+                    self.specialized_base + idx,
+                    recompile_lbl,
+                    reason,
+                ),
+            }
             monoasm!( &mut self.jit,
             skip:
             );

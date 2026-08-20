@@ -21,6 +21,32 @@ use super::{
 ///
 pub(super) const PMC_SET_SHARE_DIVISOR: u32 = 8;
 
+///
+/// What a monomorphic receiver-class guard does when it misses.
+///
+/// The escape hatch from "compiled monomorphic before the VM saw class
+/// variance, deopts on every off-class receiver forever": a counter-gated
+/// recompile whose fresh body — compiled against the PMC as it stands *then*
+/// — takes the polymorphic path (class-set guard or PIC) instead.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::codegen) enum RecvMissMode {
+    /// Plain deopt. Used where the polymorphic paths were already tried at
+    /// this compile (PIC dispatch arms, `#[]`/`#[]=` index sites) or are
+    /// structurally unavailable.
+    Plain,
+    /// Part B (BinCmp): always a recompiling exit, and the class-set guard is
+    /// *not* attempted at compile time — `binary_dispatch` is the polymorphic
+    /// treatment these sites flip to on recompile.
+    PartB,
+    /// General sends: recompiling exit while the PMC is still monomorphic
+    /// (the flip has never had a chance); plain deopt once the PMC shows
+    /// variance the polymorphic gates already declined — a recompile would
+    /// reproduce this very body, so the ratchet stops there (no
+    /// recompile-per-N-misses livelock).
+    Learn,
+}
+
 impl<'a> JitContext<'a> {
     pub(super) fn method_call(
         &mut self,
@@ -123,7 +149,14 @@ impl<'a> JitContext<'a> {
             }
         };
         self.compile_method_call(
-            state, ir, recv_class, arg_class, func_id, visibility, callid, false,
+            state,
+            ir,
+            recv_class,
+            arg_class,
+            func_id,
+            visibility,
+            callid,
+            RecvMissMode::Learn,
         )
     }
 
@@ -238,11 +271,9 @@ impl<'a> JitContext<'a> {
         func_id: FuncId,
         visibility: Visibility,
         callid: CallSiteId,
-        // When the receiver-class guard misses, recompile (so the
-        // site flips to the non-deopting polymorphic path) instead
-        // of plain-deopting forever. Only set for monomorphic-
-        // compiled BinCmp sites, which have such a path (Part B).
-        recompile_on_recv_miss: bool,
+        // What the receiver-class guard does on a miss — see
+        // `RecvMissMode`.
+        recv_miss: RecvMissMode,
     ) -> JitResult<CompileResult> {
         // CRuby method visibility. This is the single dispatch choke point for
         // operators (`#[]`, `#[]=`, arithmetic / comparison / unary) and for
@@ -329,7 +360,7 @@ impl<'a> JitContext<'a> {
         // would deopt the rest at worst.
         let mut same_target_set_guarded = self.in_set_guarded_arm();
         if !same_target_set_guarded && state.class(recv) != Some(recv_class) {
-            if !recompile_on_recv_miss
+            if recv_miss != RecvMissMode::PartB
                 && let Some(classes) = self.pmc_same_target_classes(callid, recv_class, func_id)
             {
                 // The site is polymorphic, but every receiver class the VM
@@ -367,16 +398,49 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::GuardClassIn(GP::Rdi, classes, deopt));
                 same_target_set_guarded = true;
             } else {
-                // Specialized JIT recompiles via an idx, not a position;
-                // keep it on the plain deopt path (no Part B there).
-                let use_recompile = recompile_on_recv_miss
-                    && !matches!(self.jit_type(), JitType::Specialized { .. });
-                let deopt = if use_recompile {
-                    ir.new_recompile_deopt(
-                        state,
-                        RecompileReason::BecamePolymorphic,
-                        self.position(),
-                    )
+                let use_recompile = match recv_miss {
+                    RecvMissMode::PartB => true,
+                    // While the PMC holds fewer than two classes the site has
+                    // never had a shot at the polymorphic paths (both the
+                    // class-set guard above and the PIC in `method_call` need
+                    // two observed classes), so a miss is new information:
+                    // recompile once the counter drains — the VM re-execution
+                    // behind each deopt feeds the PMC (`find_method`'s slow
+                    // path), so the fresh compile sees the variance. With two
+                    // or more classes already recorded, those paths were tried
+                    // at *this* compile and declined; a recompile would
+                    // reproduce this very body, so deopt plainly (ratchet —
+                    // no recompile-per-N-misses livelock).
+                    RecvMissMode::Learn => self.store[callid].pmc.entries().len() < 2,
+                    RecvMissMode::Plain => false,
+                };
+                // A block ROOT cannot take a whole-recompile: the side exit
+                // recompiles whatever `lfp.func_id()` names as if it were a
+                // method, which rebuilds a block body under the wrong argument
+                // convention (see `guard_const_version`, which learned this
+                // the hard way). Loop JITs (position = Some) and specialized
+                // block bodies (idx route) recompile fine.
+                let target = if use_recompile {
+                    match self.jit_type() {
+                        JitType::Specialized { idx, .. } => {
+                            Some(RecompileTarget::Specialized(*idx))
+                        }
+                        _ => {
+                            let position = self.position();
+                            if position.is_none()
+                                && self.store[self.func_id()].is_block_style()
+                            {
+                                None
+                            } else {
+                                Some(RecompileTarget::Whole(position))
+                            }
+                        }
+                    }
+                } else {
+                    None
+                };
+                let deopt = if let Some(target) = target {
+                    ir.new_recompile_deopt(state, RecompileReason::BecamePolymorphic, target)
                 } else {
                     ir.new_deopt(state)
                 };

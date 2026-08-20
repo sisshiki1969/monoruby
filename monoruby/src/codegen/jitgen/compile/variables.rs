@@ -182,7 +182,7 @@ impl<'a> JitContext<'a> {
             ir.new_recompile_deopt(
                 state,
                 RecompileReason::ConstVersionGuardFailed,
-                self.position(),
+                RecompileTarget::Whole(self.position()),
             )
         };
         ir.push(AsmInst::GuardConstVersion {

@@ -207,15 +207,12 @@ impl Codegen {
                         label
                     }
                 }
-                // Treat recompile-deopt as a plain deopt for now: fall back to
-                // the interpreter without the counter-gated recompile (still
-                // correct, just not yet self-optimizing).
-                SideExit::RecompileDeoptimize(pc, wb, reason, position, chain) => {
+                SideExit::RecompileDeoptimize(pc, wb, reason, target, chain) => {
                     let label = self.jit.label();
                     lir.push(LInst::SideExit {
                         kind: LSideExitKind::RecompileDeopt {
                             reason,
-                            position,
+                            target,
                             chain,
                         },
                         pc,
@@ -1350,13 +1347,13 @@ impl Codegen {
                 // `error_body` if the recompile itself raised a FatalError.
                 LSideExitKind::RecompileDeopt {
                     reason,
-                    position,
+                    target,
                     chain,
                 } => {
                     let deopt_body = self.jit.label();
                     let error_body = self.jit.label();
                     self.jit.bind_label(entry);
-                    self.emit_recompile_deopt(position, &deopt_body, Some(&error_body), reason);
+                    self.emit_recompile_deopt(target, &deopt_body, Some(&error_body), reason);
                     self.a64_gen_deopt(pc, &wb, deopt_body, loop_jit_spill_bytes, base, chain);
                     self.a64_gen_handle_error(pc, &wb, error_body, loop_jit_spill_bytes, base, chain);
                 }
@@ -2321,13 +2318,14 @@ impl Codegen {
     }
 
     /// Recompile-or-deopt point. Counter-gates a one-shot recompile, then falls
-    /// through to the deopt side exit. For a whole-method recompile (`position`
-    /// = None) it calls `jit_recompile_method`; for a loop-JIT recompile point
-    /// (`position` = Some loop-pc) it calls `jit_recompile_loop`. Mirrors x86
-    /// `recompile_and_deopt` / `jit_recompile_loop`.
+    /// through to the deopt side exit. A `Whole` target calls
+    /// `jit_recompile_method` (`position` = None) / `jit_recompile_loop`
+    /// (`position` = Some loop-pc); a `Specialized` target calls
+    /// `jit_recompile_specialized` on its `specialized_info` slot. Mirrors x86
+    /// `side_exit_with_label`'s recompile arm.
     pub(in crate::codegen::jitgen) fn emit_recompile_deopt(
         &mut self,
-        position: Option<BytecodePtr>,
+        target: RecompileTarget,
         deopt: &DestLabel,
         error: Option<&DestLabel>,
         reason: RecompileReason,
@@ -2335,16 +2333,15 @@ impl Codegen {
         let deopt = deopt.clone();
         // Counter-gated one-shot recompile, then fall through to the deopt side
         // exit (which undoes any loop sp-bump, writes back live values, and
-        // re-enters the VM). x19-x23 are AAPCS64 callee-saved so the C call
-        // preserves them, and the deopt does the value write-back; the
-        // caller-saved d2-d7 FP pool *and* the caller-saved GP pool (x5-x8 =
-        // R8-R11) are saved around the call because that write-back reads both
-        // (d8-d15 / x19-x28 are callee-saved). Omitting the x5-x8 save let the
-        // recompile call clobber a GP resident (e.g. a `def_rax2gp` call result
-        // parked in x5) so the following deopt write-back spilled garbage to its
-        // stack home — `require "set"`/`"bigdecimal"` corruption; cf. the twin
-        // save in `a64_gen_exec_gc`.
-        let counter = Box::into_raw(Box::new(COUNT_DEOPT_RECOMPILE)) as u64;
+        // re-enters the VM). The call helpers (`a64_call_recompile`,
+        // `a64_call_recompile_specialized`) save the caller-saved d2-d7 FP pool
+        // and x5-x8 GP pool (R8-R11) around the C call because the deopt
+        // write-back that follows reads both (d8-d15 / x19-x28 are
+        // callee-saved).
+        let counter = Box::into_raw(Box::new(match target {
+            RecompileTarget::Whole(_) => COUNT_DEOPT_RECOMPILE,
+            RecompileTarget::Specialized(_) => COUNT_DEOPT_RECOMPILE_SPECIALIZED,
+        })) as u64;
         monoasm_arm64!(&mut self.jit,
             mov x9, (counter);
             ldr w11, [x9];
@@ -2355,59 +2352,30 @@ impl Codegen {
             sub w11, w11, #1;
             str w11, [x9];
             cbnz w11, deopt;                 // not yet exhausted -> just deopt
-            // counter hit 0: recompile once, then deopt.
-            sub sp, sp, #(80);
-            str d2, [sp, #(0)];
-            str d3, [sp, #(8)];
-            str d4, [sp, #(16)];
-            str d5, [sp, #(24)];
-            str d6, [sp, #(32)];
-            str d7, [sp, #(40)];
-            stp x5, x6, [sp, #(48)];         // GP pool (R8-R11), read by the deopt write-back
-            stp x7, x8, [sp, #(64)];
-            mov x0, x19;                     // vm (Executor)
-            mov x1, x20;                     // globals
-            mov x2, x22;                     // lfp
         );
-        // Select the recompiler + set up its trailing args. Both take
-        // (vm, globals, lfp, ...) above; the loop variant adds the loop pc.
-        let f = if let Some(pc) = position {
-            let pc_ptr = pc.as_ptr() as u64;
-            monoasm_arm64!(&mut self.jit,
-                mov x3, (pc_ptr);            // loop pc
-                mov x4, (reason as u64);
-            );
-            crate::codegen::compiler::jit_recompile_loop as *const () as u64
-        } else {
-            monoasm_arm64!(&mut self.jit,
-                mov x3, (reason as u64);
-            );
-            crate::codegen::compiler::jit_recompile_method as *const () as u64
-        };
-        monoasm_arm64!(&mut self.jit,
-            str x30, [sp, #-16]!;
-            mov x9, (f);
-            blr x9;                          // -> Option<Value>: None (x0=0) = panic
-            ldr x30, [sp], #16;
-            ldr d2, [sp, #(0)];
-            ldr d3, [sp, #(8)];
-            ldr d4, [sp, #(16)];
-            ldr d5, [sp, #(24)];
-            ldr d6, [sp, #(32)];
-            ldr d7, [sp, #(40)];
-            ldp x5, x6, [sp, #(48)];
-            ldp x7, x8, [sp, #(64)];
-            add sp, sp, #(80);
-        );
-        // Check the compiler's return value: the recompiler caught a panic, set
-        // a Ruby `FatalError`, and returned None (x0 = 0). Branch to the error
-        // side-exit (write-back + raise via entry_raise) instead of resuming the
-        // interpreter. On success (x0 != 0) just deopt.
-        if let Some(error) = error {
-            let error = error.clone();
-            monoasm_arm64!(&mut self.jit,
-                cbz x0, error;
-            );
+        // counter hit 0: recompile once, then deopt.
+        match target {
+            RecompileTarget::Whole(position) => {
+                self.a64_call_recompile(position, reason);
+                // Check the compiler's return value: the recompiler caught a
+                // panic, set a Ruby `FatalError`, and returned None (x0 = 0).
+                // Branch to the error side-exit (write-back + raise via
+                // entry_raise) instead of resuming the interpreter. On success
+                // (x0 != 0) just deopt.
+                if let Some(error) = error {
+                    let error = error.clone();
+                    monoasm_arm64!(&mut self.jit,
+                        cbz x0, error;
+                    );
+                }
+            }
+            RecompileTarget::Specialized(idx) => {
+                // `jit_recompile_specialized` returns nothing (it catches its
+                // own panics and just leaves the old body installed), so there
+                // is no error branch — mirrors the
+                // `AsmInst::RecompileDeoptSpecialized` lowering.
+                self.a64_call_recompile_specialized(self.specialized_base + idx, reason);
+            }
         }
         monoasm_arm64!(&mut self.jit,
             b deopt;

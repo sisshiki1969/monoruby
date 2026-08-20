@@ -2,6 +2,8 @@ use crate::codegen::jitgen::state::LinkMode;
 
 use super::*;
 
+pub(in crate::codegen) use method_call::RecvMissMode;
+
 mod binary_op;
 mod dispatch;
 mod unary_op;
@@ -1090,7 +1092,14 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].recv, recv);
             assert_eq!(self.store[callid].pos_num, 0);
             self.compile_method_call(
-                state, ir, recv_class, None, func_id, visibility, callid, false,
+                state,
+                ir,
+                recv_class,
+                None,
+                func_id,
+                visibility,
+                callid,
+                RecvMissMode::Plain,
             )
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
@@ -1107,7 +1116,7 @@ impl<'a> JitContext<'a> {
         rhs_class: Option<ClassId>,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
-        recompile_on_recv_miss: bool,
+        recv_miss: RecvMissMode,
     ) -> JitResult<CompileResult> {
         if let Some((fid, visibility)) = self.jit_check_method(lhs_class, name.into()) {
             let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
@@ -1115,14 +1124,7 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].args, rhs);
             assert_eq!(self.store[callid].pos_num, 1);
             self.compile_method_call(
-                state,
-                ir,
-                lhs_class,
-                rhs_class,
-                fid,
-                visibility,
-                callid,
-                recompile_on_recv_miss,
+                state, ir, lhs_class, rhs_class, fid, visibility, callid, recv_miss,
             )
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
@@ -1148,7 +1150,14 @@ impl<'a> JitContext<'a> {
             assert_eq!(self.store[callid].args + 1usize, src);
             assert_eq!(self.store[callid].pos_num, 2);
             self.compile_method_call(
-                state, ir, recv_class, idx_class, fid, visibility, callid, false,
+                state,
+                ir,
+                recv_class,
+                idx_class,
+                fid,
+                visibility,
+                callid,
+                RecvMissMode::Plain,
             )
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))

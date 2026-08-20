@@ -705,7 +705,7 @@ impl<'a> JitContext<'a> {
             rhs_class,
             IdentId::from(binop),
             bc_pos,
-            true,
+            RecvMissMode::PartB,
         )?))
     }
 

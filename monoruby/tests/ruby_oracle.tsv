@@ -590,6 +590,7 @@
 2f3c934c9f013395202064f7b669614d	["b", "nil"]	r = begin\n              begin\n                raise "a"\n           
 2f922c304c94e10148d4493f457eb26e	:OVERRIDDEN	class Integer; def |(o); :OVERRIDDEN; end; end; 3 | 4
 2f9cea09fc9016f79e2054e732f21dea	42	class C; def to_int; 42; end; end; o = C.new\nInteger(o)
+2fdfe913dc96ddd87614afdfb1ae9f18	[[:a, 100], [:b, 50]]	class La; def tag = :a; end\n            class Lb; def tag = :b; end
 2ff8cc9459e03d11d492cea61ad183f7	["/home", "user"]	File.split("/home/user/")
 2ffa5525ad2d35c4035401aa68c3c27a	["bb", "bbXX", ["", 0], "bbcc", "ii", "ArgumentError", ["keep", "keep"]]	base = "/tmp/monoruby_test_reopenm_#{Process.pid}_#{rand(100000)}"\n
 30007480deee79e634682a5970c862f6	[true, true, false, "hello"]	m = Module.new do\n              def hi; "hello"; end\n              
@@ -1541,6 +1542,7 @@
 7fd970408fef4686f9a03d7219e2c592	[false, :arg_error, :arg_error, :arg_error, :arg_error]	class N\n            include Comparable\n            attr_accessor :x\n 
 7fde780ffabe4bf9d5cdf993a4ba165d	["main", "main", true, true, "main", true, false]	c = self.clone\n            [\n              to_s, inspect,\n         
 7fe6acbcc38e6d331c6b562b26a7766b	true	"abc".force_encoding("ISO-8859-2").encoding == Encoding::ISO_8859_2
+7ff094dc5234c9caf5899a3d37c42266	[[:sa, 100], [:sb, 50]]	class Sa; def tag = :sa; end\n            class Sb; def tag = :sb; e
 7ff29e4f8d290ec73b7f9a83c58fdd4d	[ArgumentError, "ASCII incompatible encoding: UTF-16LE"]	(Regexp.union(Regexp.new("a".encode("UTF-16LE")), Regexp.new("b".encode("UTF-8")
 802afed6b72de3b24ee1a133b61d9447	["s199"]	class P\n          attr_reader :v\n          def put(x)\n            @v = 
 8043ee50b7e295aec19dfea005b5d206	"US-ASCII"	"abc".encode("US-ASCII").reverse.encoding.to_s

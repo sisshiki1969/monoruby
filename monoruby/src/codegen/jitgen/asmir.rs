@@ -388,27 +388,27 @@ impl AsmIr {
     }
 
     ///
-    /// Like `new_deopt`, but the side exit recompiles the method/loop
-    /// after a few misses (reason *reason*) before continuing to fall
-    /// back to the interpreter. Used for the receiver-class guard of
-    /// monomorphic-compiled BinCmp sites (Part B).
+    /// Like `new_deopt`, but the side exit recompiles *target* after a
+    /// few misses (reason *reason*) before continuing to fall back to
+    /// the interpreter. Used for the receiver-class guard of
+    /// monomorphic-compiled sends: BinCmp sites (Part B) and general
+    /// method calls whose PMC has not yet observed class variance.
     ///
-    /// *position* is the JIT entry position (`None` for a full
-    /// method/block JIT, `Some(loop-header pc)` for a loop JIT) — the
-    /// recompile target, NOT the deopt site `pc`.
+    /// *target* names what to recompile — the enclosing method/loop or
+    /// the enclosing specialized entry — NOT the deopt site `pc`.
     ///
     pub(crate) fn new_recompile_deopt(
         &mut self,
         state: &AbstractFrame,
         reason: RecompileReason,
-        position: Option<BytecodePtr>,
+        target: RecompileTarget,
     ) -> AsmDeopt {
         let pc = state.pc();
         let i = self.new_label(SideExit::RecompileDeoptimize(
             pc,
             state.get_write_back(),
             reason,
-            position,
+            target,
             self.escalate_exits,
         ));
         self.had_deopt = true;
@@ -2720,20 +2720,38 @@ pub enum SideExit {
     Deoptimize(BytecodePtr, WriteBack, bool),
     ///
     /// A deopt that, after a small number of misses, recompiles the
-    /// whole method/loop with the given reason instead of falling
-    /// back to the interpreter forever. Used as the
-    /// receiver-class-guard miss target for monomorphic-compiled
-    /// BinCmp sites so they flip to the non-deopting polymorphic
-    /// path once the VM has observed class variance (Part B).
+    /// target (whole method/loop, or one specialized entry) with the
+    /// given reason instead of falling back to the interpreter
+    /// forever. Used as the receiver-class-guard miss target for
+    /// monomorphic-compiled sends — BinCmp sites (Part B) and general
+    /// method calls whose PMC has not yet observed class variance — so
+    /// they flip to the non-deopting polymorphic path (class-set guard
+    /// or PIC) once the VM has recorded a second receiver class.
     ///
     RecompileDeoptimize(
         BytecodePtr,
         WriteBack,
         RecompileReason,
-        Option<BytecodePtr>,
+        RecompileTarget,
         bool,
     ),
     Error(BytecodePtr, WriteBack, bool),
+}
+
+///
+/// What a `RecompileDeoptimize` side exit recompiles once its miss counter
+/// is exhausted.
+///
+/// A whole-method / loop JIT recompiles by position (`None` = method entry,
+/// `Some(pc)` = loop header); a specialized entry recompiles through its
+/// `specialized_info` slot (the *relative* index this compile assigned —
+/// the emitter adds `specialized_base`), which re-points the caller's patch
+/// point at the fresh body.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum RecompileTarget {
+    Whole(Option<BytecodePtr>),
+    Specialized(usize),
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -2799,12 +2817,12 @@ impl Codegen {
                         label
                     }
                 }
-                SideExit::RecompileDeoptimize(pc, wb, reason, position, chain) => {
+                SideExit::RecompileDeoptimize(pc, wb, reason, target, chain) => {
                     let label = self.jit.label();
                     lir.push(LInst::SideExit {
                         kind: LSideExitKind::RecompileDeopt {
                             reason,
-                            position,
+                            target,
                             chain,
                         },
                         pc,

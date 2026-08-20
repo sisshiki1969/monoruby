@@ -1598,7 +1598,15 @@ impl Codegen {
                 error,
                 reason,
             } => {
-                self.emit_recompile_deopt(position, &deopt, error.as_ref(), reason);
+                // Main-body recompile point (`AsmInst::RecompileDeopt`): always
+                // a whole-method/loop target — the specialized main-body twin
+                // is `AsmInst::RecompileDeoptSpecialized`.
+                self.emit_recompile_deopt(
+                    RecompileTarget::Whole(position),
+                    &deopt,
+                    error.as_ref(),
+                    reason,
+                );
             }
             LInst::ClassDef {
                 base,
