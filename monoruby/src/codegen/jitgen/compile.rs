@@ -1183,6 +1183,22 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         reason: RecompileReason,
     ) {
+        // Temporary P0 instrumentation: this exit ENDS the block — the body
+        // stops at this instruction and, once the counter drains, every
+        // execution deopts here forever. The runtime cause column cannot name
+        // it (`dec_counter` zeroes rdi, so it logs as `UNDEFINED`), so report
+        // it at compile time instead.
+        #[cfg(feature = "deopt")]
+        eprintln!(
+            "### give-up: {:?} [{:?}] {:?} in <{}> self_class:{}",
+            reason,
+            self.store[self.iseq_id()].get_pc_index(Some(state.pc())),
+            self.jit_type(),
+            self.store[self.func_id()]
+                .name()
+                .map_or_else(|| "?".to_string(), |n| n.to_string()),
+            self.store.debug_class_name(self.self_class()),
+        );
         let deopt = ir.new_deopt(state);
         match self.jit_type() {
             JitType::Specialized { idx, .. } => ir.push(AsmInst::RecompileDeoptSpecialized {
