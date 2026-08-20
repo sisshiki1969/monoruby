@@ -554,14 +554,6 @@ pub struct Allocator<T> {
     pages_since_gc: u32,
     /// Flag whether GC is enabled or not.
     pub gc_enabled: bool,
-    /// Registry of promoted heap frames (`Box<[u64]>` buffers that
-    /// `move_frame_to_heap` / `heap_frame` previously leaked via
-    /// `Box::into_raw`). Keyed by the LFP address. Reclaimed by
-    /// `sweep_heap_frames` after the mark phase: a frame must stay
-    /// unmarked for two consecutive GC cycles before its buffer is
-    /// freed (a one-cycle grace covering the promote→root-store
-    /// window).
-    heap_frames: std::collections::HashMap<usize, FrameRec, AddrHashBuilder>,
     /// Use-after-free forensics (enabled by `MONORUBY_GC_FREE_LOG=1`):
     /// ring buffer of `(address, total_gc_counter, kind, was_old)` for
     /// every slot the sweep frees. When a stale-object assertion fires
@@ -712,57 +704,6 @@ pub(crate) fn tracked_addr() -> Option<usize> {
     })
 }
 
-/// Fast hasher for the heap-frame registry. Keys are LFP addresses
-/// (8-byte-aligned `usize`s). The default SipHash is far too slow for
-/// a table that is inserted into on every frame promotion and probed
-/// on every heap-frame mark — under `gc-stress` that is once per
-/// allocation, so SipHash there dominates the whole run. A single
-/// Fibonacci-hash multiply spreads the aligned addresses well enough
-/// for the Swiss table.
-#[derive(Default, Clone, Copy)]
-struct AddrHasher(u64);
-
-impl std::hash::Hasher for AddrHasher {
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0
-    }
-    #[inline]
-    fn write(&mut self, bytes: &[u8]) {
-        // Only ever used with `usize` keys (`write_usize`); this path
-        // is unreachable but kept total for safety.
-        for &b in bytes {
-            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0100_0000_01b3);
-        }
-    }
-    #[inline]
-    fn write_usize(&mut self, i: usize) {
-        self.0 = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    }
-}
-
-#[derive(Default, Clone, Copy)]
-struct AddrHashBuilder;
-
-impl std::hash::BuildHasher for AddrHashBuilder {
-    type Hasher = AddrHasher;
-    #[inline]
-    fn build_hasher(&self) -> AddrHasher {
-        AddrHasher(0)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct FrameRec {
-    /// Base pointer of the original `Box<[u64]>` allocation.
-    base: *mut u64,
-    /// Length of that slice in `u64` units.
-    len: usize,
-    marked: bool,
-    /// Consecutive GC cycles seen unmarked.
-    unmarked_age: u8,
-}
-
 impl<T: GCBox> Allocator<T> {
     pub(crate) fn new() -> Self {
         assert_eq!(64, GCBOX_SIZE);
@@ -803,7 +744,6 @@ impl<T: GCBox> Allocator<T> {
             remembered: Vec::new(),
             pages_since_gc: 0,
             gc_enabled: true,
-            heap_frames: std::collections::HashMap::default(),
             free_log: Vec::new(),
             free_log_pos: 0,
             current_kind: 0,
@@ -828,75 +768,9 @@ impl<T: GCBox> Allocator<T> {
         }
     }
 
-    /// Register a promoted heap frame so the GC can reclaim its
-    /// `Box<[u64]>` buffer once it becomes unreachable.
-    pub(crate) fn register_heap_frame(&mut self, lfp_addr: usize, base: *mut u64, len: usize) {
-        self.heap_frames.insert(
-            lfp_addr,
-            FrameRec {
-                base,
-                len,
-                // A freshly promoted frame is conceptually live until
-                // proven otherwise; start marked so the very next GC
-                // (before it is necessarily root-reachable) never frees
-                // it.
-                marked: true,
-                unmarked_age: 0,
-            },
-        );
-    }
 
-    /// Mark a heap frame reached during the GC mark phase. Returns
-    /// `true` if it was already marked this cycle (caller then stops
-    /// recursing — the outer chain is a DAG). Unknown addresses (a
-    /// frame whose registration was skipped) return `false` and are
-    /// never reclaimed.
-    pub(crate) fn mark_heap_frame(&mut self, lfp_addr: usize) -> bool {
-        match self.heap_frames.get_mut(&lfp_addr) {
-            Some(rec) => {
-                let was = rec.marked;
-                rec.marked = true;
-                was
-            }
-            None => false,
-        }
-    }
 
-    fn clear_frame_marks(&mut self) {
-        for rec in self.heap_frames.values_mut() {
-            rec.marked = false;
-        }
-    }
 
-    /// Free the `Box<[u64]>` of every heap frame that has stayed
-    /// unmarked for two consecutive GC cycles.
-    fn sweep_heap_frames(&mut self) {
-        // Single pass, no per-GC scratch allocation: `retain` ages
-        // every entry and frees + drops the ones unreachable for two
-        // consecutive cycles in place. Avoiding the old `Vec<usize>`
-        // matters because under `gc-stress` this runs once per
-        // allocation.
-        self.heap_frames.retain(|_, rec| {
-            if rec.marked {
-                rec.unmarked_age = 0;
-                return true;
-            }
-            rec.unmarked_age = rec.unmarked_age.saturating_add(1);
-            if rec.unmarked_age < 2 {
-                return true;
-            }
-            // SAFETY: `base`/`len` are exactly the raw parts of the
-            // original `Box<[u64]>` (recorded at promotion); the
-            // frame has been unreachable for two GC cycles, so no
-            // live `Lfp` aliases it.
-            unsafe {
-                drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-                    rec.base, rec.len,
-                )));
-            }
-            false
-        });
-    }
 
     fn new_page(&mut self) -> PageRef<T> {
         let ptr = unsafe { (self.head_page.as_ptr() as *mut u8).add(ALLOC_SIZE) } as _;
@@ -1361,15 +1235,6 @@ impl<T: GCBox> Allocator<T> {
             GcKind::Major => self.clear_mark(),
             GcKind::Minor => self.seed_marks(),
         }
-        // Skip all heap-frame bookkeeping entirely when nothing has
-        // been promoted. The common case (optcarrot and most
-        // benchmarks promote few or no frames) then pays exactly zero
-        // — important under `gc-stress`, where `gc()` runs once per
-        // allocation.
-        let has_heap_frames = !self.heap_frames.is_empty();
-        if has_heap_frames {
-            self.clear_frame_marks();
-        }
         // Surviving objects may be promoted during the real mark.
         self.promoting = true;
         self.major_mark = kind == GcKind::Major;
@@ -1422,9 +1287,6 @@ impl<T: GCBox> Allocator<T> {
         }
         #[cfg(feature = "gc-debug")]
         debug_assert_eq!(self.old_count, self.old_count_popcount());
-        if has_heap_frames {
-            self.sweep_heap_frames();
-        }
         // gc-verify: after a minor GC, independently re-mark the whole
         // live graph from the roots (no seeding, no promotion). If the
         // minor GC freed anything still reachable — a missed write

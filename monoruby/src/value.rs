@@ -1356,6 +1356,12 @@ impl Value {
         RValue::new_argf(class_id, inner).pack()
     }
 
+    /// GC wrapper for a promoted heap frame's `Box<[u64]>` buffer
+    /// (`ObjTy::FRAME`, internal only — see `Lfp::move_frame_to_heap`).
+    pub(crate) fn new_frame(base: *mut u64, len: usize) -> Self {
+        RValue::new_frame(base, len).pack()
+    }
+
     pub fn arithmetic_sequence(begin: Value, end: Value, step: Value, exclude_end: bool) -> Self {
         RValue::new_arithmetic_sequence(begin, end, step, exclude_end).pack()
     }
