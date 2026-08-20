@@ -1674,3 +1674,40 @@ fn loop_const_salvage_value_change() {
         "##,
     );
 }
+
+//
+// Regression test for the class-guard chain's miss exit
+// (`jit_class_guard_fail`): with the exit branch healthy, a receiver class
+// used only once walks the compiled chain, misses, and runs interpreted —
+// the warm-up profile samples it at most once and evicts it, so no
+// specialization is compiled for it. When the exit label was left unbound
+// (a zeroed rel32 = no-op branch), every miss fell through into the
+// profiler, double-sampled the class past PROFILE_THRESHOLD, and
+// force-compiled one body per class — ~16k `Object#should` bodies in
+// ruby/spec's concurrent-subclasses example. The single-use-class parade
+// here is long enough to also drive the profile's FIFO eviction.
+//
+#[test]
+fn megamorphic_receiver_gate() {
+    run_test(
+        r##"
+        class Object
+          def cgf_probe
+            a = [1, 2]
+            s = 0
+            a.each { |x| s += x }
+            s
+          end
+        end
+        r = 0
+        # Warm several receiver classes so the method compiles and the
+        # class-guard chain (with its miss stub) exists.
+        [1, :a, "s", 1.2, [], {}, nil, true].each { |o| 30.times { r += o.cgf_probe } }
+        # A parade of single-use receiver classes: each walks the chain,
+        # misses, and must exit to the interpreter.
+        sup = Class.new
+        200.times { r += Class.new(sup).cgf_probe }
+        r
+        "##,
+    );
+}
