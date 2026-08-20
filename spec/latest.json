@@ -1,1 +1,1 @@
-{"schemaVersion":1,"label":"ruby/spec core","message":"97.47%","color":"blue","timestamp":"2026-08-20T05:00:09Z","commit":"02567e2","branch":"master","examples":23012,"pass":22430,"failures":361,"errors":221}
+{"schemaVersion":1,"label":"ruby/spec core","message":"97.48%","color":"blue","timestamp":"2026-08-20T06:31:21Z","commit":"57b645a","branch":"master","examples":23012,"pass":22431,"failures":360,"errors":221}
