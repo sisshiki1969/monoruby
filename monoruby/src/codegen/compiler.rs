@@ -479,20 +479,21 @@ impl Codegen {
             });
         }
 
-        let ret = if self
-            .compile(
-                globals,
-                iseq_id,
-                self_class,
-                Some(pc),
-                entry_label.clone(),
-                class_version,
-                is_recompile,
-            )
-            .is_some()
-        {
+        let ret = if let Some((cache, version_label)) = self.compile(
+            globals,
+            iseq_id,
+            self_class,
+            Some(pc),
+            entry_label.clone(),
+            class_version,
+            is_recompile,
+        ) {
             let codeptr = self.jit.get_label_address(&entry_label);
             pc.write2(codeptr.as_ptr() as u64);
+            // Record the unit's salvage info so a later class-version guard
+            // failure can re-validate and patch instead of recompiling.
+            let index = globals.store[iseq_id].get_pc_index(Some(pc));
+            globals.store[iseq_id].set_loop_jit_info(self_class, index, version_label, cache);
             Some(())
         } else {
             None
@@ -551,6 +552,7 @@ impl Codegen {
             self_class,
             patch_point,
             speculated_root,
+            owner: _,
         } = self.specialized_info[idx].clone();
         #[cfg(feature = "jit-log")]
         eprintln!(
@@ -607,6 +609,7 @@ impl Codegen {
             self_class,
             patch_point,
             speculated_root,
+            owner: _,
         } = self.specialized_info[idx].clone();
         if let Some(root) = speculated_root {
             return self.recompile_speculated_root(globals, root, reason);
@@ -646,11 +649,57 @@ extern "C" fn jit_recompile_specialized(
     idx: usize,
     reason: RecompileReason,
 ) {
+    if salvage_specialized(globals, idx, reason) {
+        return;
+    }
     CODEGEN.with(|codegen| {
         codegen
             .borrow_mut()
             .recompile_specialized(globals, idx, reason);
     });
+}
+
+/// ④: before recompiling a specialized body whose class-version guard failed,
+/// try to salvage the *owning* compilation unit (all of its guards read the
+/// same version word). On success nothing is recompiled; the current
+/// invocation deopts to the VM once and the healed code passes its guards
+/// from the next call on.
+///
+/// This runs *outside* the CODEGEN borrow that `recompile_specialized` takes:
+/// the salvage validation re-resolves methods through caches that read
+/// `Globals::class_version()`, which borrows the same thread-local.
+fn salvage_specialized(globals: &mut Globals, idx: usize, reason: RecompileReason) -> bool {
+    if !matches!(reason, RecompileReason::ClassVersionGuardFailed) {
+        return false;
+    }
+    #[cfg(feature = "jit-log")]
+    crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::RECOVERY_ATTEMPT_SPEC);
+    let (owner_iseq, owner_class, owner_pos) =
+        CODEGEN.with(|codegen| codegen.borrow().specialized_info[idx].owner);
+    let salvaged = match owner_pos {
+        None => globals
+            .store
+            .salvage_method_unit(owner_iseq, owner_class, None),
+        Some(pc) => {
+            let index = globals.store[owner_iseq].get_pc_index(Some(pc));
+            globals
+                .store
+                .salvage_loop_unit(owner_iseq, owner_class, index, None)
+        }
+    };
+    if let Some(version_label) = salvaged {
+        let version = Globals::class_version();
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .set_class_version(version, &version_label);
+        });
+        #[cfg(feature = "jit-log")]
+        crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_OK_SPEC);
+        true
+    } else {
+        false
+    }
 }
 
 /// aarch64 specialized recompile entry, called from the
@@ -668,6 +717,9 @@ pub(in crate::codegen) extern "C" fn jit_recompile_specialized(
     idx: usize,
     reason: RecompileReason,
 ) {
+    if salvage_specialized(globals, idx, reason) {
+        return;
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         CODEGEN.with(|codegen| {
             codegen
@@ -800,6 +852,9 @@ pub(in crate::codegen) extern "C" fn jit_recompile_loop(
     pc: BytecodePtr,
     reason: RecompileReason,
 ) -> Option<Value> {
+    if salvage_loop(globals, lfp, pc, reason) {
+        return Some(Value::nil());
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         CODEGEN.with(|codegen| {
             codegen
@@ -884,7 +939,49 @@ extern "C" fn jit_recompile_loop(
     pc: BytecodePtr,
     reason: RecompileReason,
 ) {
+    if salvage_loop(globals, lfp, pc, reason) {
+        return;
+    }
     compile_loop(globals, lfp, pc, Some(reason));
+}
+
+/// ④: before recompiling a loop body whose class-version guard failed,
+/// try to salvage it — re-resolve the unit's cached callees and, when
+/// nothing changed, patch its version word. The current invocation still
+/// deopts to the VM once; the healed body passes its guard from the next
+/// iteration on. `lfp` is the loop's own frame, so `super` sites re-resolve
+/// soundly.
+fn salvage_loop(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr, reason: RecompileReason) -> bool {
+    if !matches!(reason, RecompileReason::ClassVersionGuardFailed) {
+        return false;
+    }
+    #[cfg(feature = "jit-log")]
+    crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::RECOVERY_ATTEMPT_LOOP);
+    let self_class = lfp.self_val().class();
+    let func_id = lfp.func_id();
+    let iseq_id = globals.store[func_id].as_iseq();
+    let index = globals.store[iseq_id].get_pc_index(Some(pc));
+    if let Some(version_label) = globals
+        .store
+        .salvage_loop_unit(iseq_id, self_class, index, Some(lfp))
+    {
+        // Patch here rather than inside the salvage helper: this entry point
+        // is called *outside* any CODEGEN borrow, but the helper is shared
+        // with `recompile_specialized`, which runs inside one. Read the
+        // version before the mutable borrow — it borrows the same
+        // thread-local.
+        let version = Globals::class_version();
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .set_class_version(version, &version_label);
+        });
+        #[cfg(feature = "jit-log")]
+        crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_OK_LOOP);
+        true
+    } else {
+        false
+    }
 }
 
 fn compile_loop(

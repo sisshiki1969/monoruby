@@ -2532,7 +2532,7 @@ impl Store {
 
     fn check_method_for_name(
         &self,
-        lfp: Lfp,
+        lfp: Option<Lfp>,
         recv_class: ClassId,
         name: Option<IdentId>,
         refinements: RefinementSetId,
@@ -2546,17 +2546,61 @@ impl Store {
                 .map(|entry| entry.func_id())
                 .flatten()
         } else {
-            let func_id = lfp.method_func_id();
+            // A `super` site re-resolves relative to the *executing frame of
+            // the owning unit*. Without that frame (a salvage triggered from
+            // an inlined specialized child, whose own lfp is not the
+            // owner's) there is no sound answer — return None so the
+            // comparison fails and the salvage falls back to a recompile.
+            let func_id = lfp?.method_func_id();
             let name = self[func_id].name().unwrap();
             self.check_super(recv_class, func_id, name)
         }
     }
 
     pub(crate) fn update_inline_cache(&mut self, lfp: Lfp) -> bool {
-        let class_version = Globals::class_version();
         let func_id = lfp.func_id();
         let self_class = lfp.self_val().class();
         let iseq_id = self[func_id].as_iseq();
+        if let Some(version_label) = self.salvage_method_unit(iseq_id, self_class, Some(lfp)) {
+            // Read the version *before* taking the mutable borrow below —
+            // `Globals::class_version` borrows the same thread-local.
+            let version = Globals::class_version();
+            CODEGEN.with(|codegen| {
+                codegen
+                    .borrow_mut()
+                    .set_class_version(version, &version_label);
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Try to *salvage* the whole-method compilation unit keyed by
+    /// `(iseq_id, self_class)` after its class-version guard failed:
+    /// re-resolve every inline-cached callee of the unit (the map covers the
+    /// root body *and* all its inlined specialized children — they were
+    /// collected into one `inline_method_cache` per compilation), and when
+    /// every resolution is unchanged, return the unit's shared class-version
+    /// label for the caller to patch with the current global version instead
+    /// of recompiling. Returns `None` when the unit must be recompiled.
+    ///
+    /// The *caller* writes the version word (`Codegen::set_class_version`)
+    /// because callers differ in how they may touch `CODEGEN`: a call from
+    /// inside a `Codegen` method already holds the thread-local's mutable
+    /// borrow, so borrowing it again here would panic.
+    ///
+    /// `lfp` is the executing frame of the owning unit when available; it is
+    /// only consulted for `super` re-resolution (see
+    /// [`Self::check_method_for_name`]). A salvage triggered from an inlined
+    /// specialized child passes `None`, so units containing a cached `super`
+    /// site conservatively fall back to a recompile there.
+    pub(crate) fn salvage_method_unit(
+        &mut self,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        lfp: Option<Lfp>,
+    ) -> Option<DestLabel> {
         let iseq = &self[iseq_id];
         let Some(cache_map) = iseq.get_cache_map(self_class) else {
             // JIT entry was invalidated (e.g. by BOP redefinition). Fall back to recompile.
@@ -2567,13 +2611,13 @@ impl Store {
                 if n % 8192 == 0 {
                     eprintln!(
                         "[JIT] salvage-noentry sample: {} self_class={:?} invalidated={}",
-                        self.func_description(func_id),
+                        self.func_description(self[iseq_id].func_id()),
                         self_class,
                         iseq.jit_invalidated(),
                     );
                 }
             }
-            return false;
+            return None;
         };
         for entry in cache_map {
             let func_id =
@@ -2583,23 +2627,51 @@ impl Store {
                 crate::codegen::jit_stats::bump(
                     &crate::codegen::jit_stats::SALVAGE_FAIL_RESOLUTION_CHANGED,
                 );
-                return false;
+                return None;
             }
         }
-        let Some(version_label) = self[iseq_id].get_jit_class_version(lfp.self_val().class())
-        else {
+        let version_label = self[iseq_id].get_jit_class_version(self_class);
+        #[cfg(feature = "jit-log")]
+        if version_label.is_none() {
             // JIT entry was invalidated between cache_map check and here.
+            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_FAIL_NO_ENTRY);
+        }
+        version_label
+    }
+
+    /// The loop (OSR) twin of [`Self::salvage_method_unit`], keyed by the
+    /// loop's `(self_class, LoopStart index)` — see
+    /// [`crate::globals::ISeqInfo::loop_jit_info`]. As there, the caller
+    /// patches the returned label.
+    pub(crate) fn salvage_loop_unit(
+        &mut self,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        index: crate::bytecodegen::BcIndex,
+        lfp: Option<Lfp>,
+    ) -> Option<DestLabel> {
+        let Some(info) = self[iseq_id].get_loop_jit_info(self_class, index) else {
             #[cfg(feature = "jit-log")]
             crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_FAIL_NO_ENTRY);
-            return false;
+            return None;
         };
-        CODEGEN.with(|codegen| {
-            codegen
-                .borrow_mut()
-                .set_class_version(class_version, &version_label);
-        });
-
-        true
+        let version_label = info.class_version_label.clone();
+        let cache_map = &self[iseq_id]
+            .get_loop_jit_info(self_class, index)
+            .unwrap()
+            .inline_cache_map;
+        for entry in cache_map {
+            let func_id =
+                self.check_method_for_name(lfp, entry.recv_class, entry.name, entry.refinements);
+            if func_id != Some(entry.func_id) {
+                #[cfg(feature = "jit-log")]
+                crate::codegen::jit_stats::bump(
+                    &crate::codegen::jit_stats::SALVAGE_FAIL_RESOLUTION_CHANGED,
+                );
+                return None;
+            }
+        }
+        Some(version_label)
     }
 
     ///
