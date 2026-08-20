@@ -58,8 +58,12 @@ impl Codegen {
         // of recompiling. On aarch64 dispatch goes through `jit_slot`, so the
         // `jit_entry` table exists purely as this record — a republish for the
         // same class simply replaces it.
-        globals.store[iseq_id].add_jit_code(self_class, jit_entry.clone(), class_version_label);
-        globals.store[iseq_id].set_cache_map(self_class, cache, const_map);
+        globals.store[iseq_id].add_jit_code(
+            self_class,
+            jit_entry.clone(),
+            class_version_label.clone(),
+        );
+        globals.store[iseq_id].set_salvage_record(self_class, class_version_label, cache, const_map);
         // Front the compiled `jit_entry` with a self-class guard. The JIT body
         // assumes `self == self_class`, but a single per-method slot is shared
         // by every receiver class of an inherited method — so publishing the
@@ -141,8 +145,11 @@ impl Codegen {
             let patch_point = self.jit.label();
             let guard = self.jit.label();
             self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
-            let old_entry =
-                globals.store[iseq_id].add_jit_code(self_class, patch_point, class_version_label);
+            let old_entry = globals.store[iseq_id].add_jit_code(
+                self_class,
+                patch_point,
+                class_version_label.clone(),
+            );
             if let Some(_) = old_entry {
                 globals.store[iseq_id].dump_jit_enntry();
                 panic!(
@@ -151,7 +158,12 @@ impl Codegen {
                     globals.store[iseq_id].name()
                 );
             }
-            globals.store[iseq_id].set_cache_map(self_class, cache, const_map);
+            globals.store[iseq_id].set_salvage_record(
+                self_class,
+                class_version_label,
+                cache,
+                const_map,
+            );
             self.jit.apply_jmp_patch_address(entry, &guard);
             self.jit.finalize();
             Some(())
