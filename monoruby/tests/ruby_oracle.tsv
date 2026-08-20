@@ -283,6 +283,7 @@
 15da316533ccb78f7d7f0508db3a1421	[789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789, 789]	def g(a, b, c) = a * 100 + b * 10 + c\n        def f(...) = g(7, 8, 9, .
 15f147302ae38efd304fc2637a1918d3	["Foo", 1, 2]	class Foo\n              attr_accessor :x, :y\n              def init
 15f8efdf56e50c197d2957085d4fc34f	[true, true, -65536, -2, [1, 2], true, :ts_err, :rtp_err, :frozen_err, true, true, true, true, true, true, true]	nan = 0.0 / 0.0\n            inf = 1.0 / 0.0\n            to_ary_nil 
+16230a3957c6e03b4477391cf1f6923e	[[:wa, 1000], [:wb, 1000], [:wc, 1000]]	class Wbase; def val = @v; end\n            class Wa < Wbase; def in
 16306cca3195a660ca2a70f2fe2de20c	:OVERRIDDEN	class Integer; def <=(o); :OVERRIDDEN; end; end; 3 <= 4
 16367eeef19311ae409181e79f860e76	[3, 12, true, 8, 2, :OVERRIDDEN]	class Float; def +(o); :OVERRIDDEN; end; end\n            # Integer 
 16466a31d783d5117c875050d939771e	["#<data M2 amount=42, unit=#<data M2:...>>", "#<data M2 amount=1, unit=#<data M2 amount=2, unit=\\"m\\">>"]	M2 = Data.define(:amount, :unit)\n            a = M2.allocate\n      
@@ -1692,6 +1693,7 @@
 8c83bb3ecc9ac2c1e06a16d061103347	Array	class C < Array; end\n(C[1,2,2] & [2,3]).class
 8c8d2f17496ea5fcffabf17deeb83042	["a", "b"]	base = "/tmp/monoruby_dir_eachinst_#{Process.pid}_#{rand(100000)}"\n
 8cccb4747cfdbfa71bed00dbdaf949ab	[["RuntimeError", "TypeError"], ["RuntimeError", nil], "TypeError", ["RuntimeError", nil], "ArgumentError"]	def t; yield; rescue Exception => e; [e.class.to_s, (e.cause && e.c
+8cf4538ff9dc5775c6aa04d3c95d1924	[[:pa, 1000], [:pb, 1000], [:pc, 1000]]	class Vbase; def val = @v; end\n            class Va < Vbase; def in
 8cf61f75f99a0e9c53f3bf071168dad0	[:foo]	class P\n              def foo; end\n              def bar; end\n     
 8d0d1f75a100d8c5b699b633c2b00f08	[64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, ["Z-0", "Z-1", "Z-2", "Z-3", "Z-4", "Z-5", "Z-6", "Z-7", "Z-8", "Z-9", "-10", "-11", "-12", "-13", "-14", "-15", "-16", "-17", "-18", "-19"], 20, 201]	r = []\n        copies = []\n        20.times do |i|\n            t = "abc
 8d2889917a7f7f98ff652806d0833021	[195]	"\\xC3".dup.force_encoding("UTF-8").reverse.bytes
