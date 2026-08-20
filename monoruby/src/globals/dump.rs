@@ -231,7 +231,15 @@ pub(crate) extern "C" fn log_deoptimize(
                 },
                 _ => if let Some(v) = reason {
                     eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt} caused by {}", bc_pos, v.debug(&globals.store));
+                    // `pc=` joins this line to the `### deopt-create:` line that
+                    // emitted the exit (temporary P0 instrumentation): the cause
+                    // column only shows rdi, which most guards never load.
+                    eprintln!(
+                        "    [{:05}] {fmt} caused by {} pc={:?}",
+                        bc_pos,
+                        v.debug(&globals.store),
+                        pc.as_ptr()
+                    );
                 } else {
                     eprint!("<-- non-traced branch in <{}> {:?}.", name, func_id);
                     eprintln!("    [{:05}] {fmt}", bc_pos);
