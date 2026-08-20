@@ -9,21 +9,41 @@ pub(crate) static FRAME_PROMOTIONS: std::sync::atomic::AtomicU64 =
 pub(crate) static FRAME_LEAK_BYTES: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
-/// Bump the promotion counters and hand the `Box<[u64]>` raw parts to
-/// the GC frame registry. Registration uses `try_borrow_mut` so it is
-/// a safe no-op (the frame simply stays un-reclaimed, as before) if
-/// the allocator is already borrowed — promotion never runs during a
-/// GC cycle, so this is purely defensive.
+/// Wrap frame contents (`locals.., SELF, BLOCK, SVAR, META, OUTER` in
+/// ascending memory order) into a heap buffer owned by an
+/// `ObjTy::FRAME` arena wrapper, and return the frame's LFP.
+///
+/// The buffer gets one extra trailing word holding the wrapper's
+/// `Value` bits: `Lfp::mark` follows it (at `lfp + 8`, one past
+/// LFP_OUTER) to mark the wrapper through the ordinary page bitmap,
+/// and the ordinary sweep reclaims the buffer via the wrapper's
+/// `free()` once the frame is unreachable — no side table.
+///
+/// Wrapper allocation uses `try_borrow_mut` so this is a safe fallback
+/// (the trailing word stays 0 and the frame is simply never reclaimed,
+/// as the old registry-skip path behaved) if the allocator is already
+/// borrowed — promotion never runs during a GC cycle, so this is
+/// purely defensive.
 #[inline]
-fn register_promoted_frame(lfp_addr: usize, base: *mut u64, len_u64: usize) {
+fn wrap_promoted_frame(mut contents: Vec<u64>) -> Lfp {
     use std::sync::atomic::Ordering::Relaxed;
     FRAME_PROMOTIONS.fetch_add(1, Relaxed);
-    FRAME_LEAK_BYTES.fetch_add((len_u64 * 8) as u64, Relaxed);
-    let _ = alloc::ALLOC.try_with(|a| {
-        if let Ok(mut g) = a.try_borrow_mut() {
-            g.register_heap_frame(lfp_addr, base, len_u64);
-        }
-    });
+    FRAME_LEAK_BYTES.fetch_add((contents.len() * 8) as u64, Relaxed);
+    contents.push(0); // the wrapper back-pointer slot
+    let v: Box<[u64]> = contents.into_boxed_slice();
+    let len = v.len();
+    let base = Box::into_raw(v) as *mut u64;
+    let allocatable = alloc::ALLOC
+        .try_with(|a| a.try_borrow_mut().is_ok())
+        .unwrap_or(false);
+    if allocatable {
+        let wrapper = Value::new_frame(base, len);
+        // SAFETY: `base` points at the freshly leaked `len`-word buffer.
+        unsafe { *base.add(len - 1) = wrapper.id() };
+    }
+    // SAFETY: the buffer outlives this call (leaked above); LFP_OUTER is
+    // the word below the back-pointer slot.
+    unsafe { Lfp::from_heap_buffer(base, len) }
 }
 
 /// `(count, bytes)` of heap frames promoted so far (diagnostics).
@@ -329,12 +349,36 @@ impl std::cmp::PartialOrd<Cfp> for Lfp {
 
 impl alloc::GC<RValue> for Lfp {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        // A reachable heap frame: record it live this cycle. If it was
-        // already marked, the outer chain below it has been walked too
-        // (DAG) — stop to keep marking O(n) and cycle-safe.
-        if !self.on_stack() && alloc.mark_heap_frame(self.0.as_ptr() as usize) {
-            return;
+        // A reachable heap frame: mark its `ObjTy::FRAME` wrapper via the
+        // back-pointer word at `lfp + 8` (one past LFP_OUTER, the top of
+        // the promoted buffer). The page bitmap both records the frame
+        // live this cycle and cuts off re-walks (the outer chain is a
+        // DAG — marking stays O(n) and cycle-safe); the wrapper's
+        // `mark_children` walks the contents below. A zero word is a
+        // frame whose wrapper allocation was skipped (allocator
+        // unavailable at promotion — purely defensive): walk it directly;
+        // it is never reclaimed, as before.
+        if !self.on_stack() {
+            // SAFETY: every heap frame is a `wrap_promoted_frame` buffer,
+            // whose back-pointer slot sits at `lfp + 8`.
+            let wrapper: Option<Value> =
+                unsafe { *((self.0.as_ptr() as usize + 8) as *const Option<Value>) };
+            if let Some(wrapper) = wrapper {
+                wrapper.mark(alloc);
+                return;
+            }
         }
+        self.mark_contents(alloc);
+    }
+}
+
+impl Lfp {
+    /// Walk this frame's contents (registers, block, svar slot, outer
+    /// chain). Called for on-stack frames directly, and for promoted
+    /// frames from their wrapper's `mark_children` — the wrapper's page
+    /// bitmap has already de-duplicated the visit.
+    pub(crate) fn mark_contents(&self, alloc: &mut alloc::Allocator<RValue>) {
+        use alloc::GC;
         let meta = self.meta();
         for r in meta.regs() {
             if let Some(v) = self.register(r) {
@@ -367,6 +411,18 @@ impl Lfp {
     ///
     unsafe fn new(ptr: *mut u8) -> Self {
         Self(std::ptr::NonNull::new(ptr).unwrap())
+    }
+
+    ///
+    /// The LFP of a promoted heap-frame buffer (`base`/`len` as recorded
+    /// by `wrap_promoted_frame`: the top word is the wrapper
+    /// back-pointer, LFP_OUTER sits below it).
+    ///
+    /// ### safety
+    /// `base` must point at a live `len`-word promoted-frame buffer.
+    ///
+    pub(crate) unsafe fn from_heap_buffer(base: *mut u64, len: usize) -> Self {
+        unsafe { Self::new((base as usize + (len - 1) * 8 - 8) as _) }
     }
 
     ///
@@ -627,17 +683,13 @@ impl Lfp {
             // `frame_bytes` is always a multiple of 8 (LFP_SELF plus
             // 8*reg_num), so copy the frame as a `Box<[u64]>` — uniform
             // with `heap_frame`/`dummy_*` so the GC can reclaim every
-            // promoted buffer with one `Box::from_raw(*mut [u64])`.
+            // promoted buffer through its `ObjTy::FRAME` wrapper.
             let n = len / 8;
             let src = std::slice::from_raw_parts(
                 (self.0.as_ptr() as usize + 8 - len) as *const u64,
                 n,
             );
-            let v: Box<[u64]> = src.to_vec().into_boxed_slice();
-            let base = Box::into_raw(v) as *mut u64;
-            let lfp_addr = base as usize + len - 8;
-            register_promoted_frame(lfp_addr, base, n);
-            let mut heap_lfp = Lfp::new(lfp_addr as _);
+            let mut heap_lfp = wrap_promoted_frame(src.to_vec());
             heap_lfp.meta_mut().set_on_heap();
             cfp.set_lfp(heap_lfp);
             // Mark the stack slot as a tombstone so any future reader
@@ -670,17 +722,9 @@ impl Lfp {
         v.push(0); //               -> LFP_SVAR (unused; zero sentinel)
         v.push(meta.get()); //      -> LFP_META
         v.push(0); //               -> LFP_OUTER (no outer)
-        let v = v.into_boxed_slice();
-        let n = v.len();
-        let len = n * 8;
-        unsafe {
-            let base = Box::into_raw(v) as *mut u64;
-            let lfp_addr = base as usize + len - 8;
-            register_promoted_frame(lfp_addr, base, n);
-            let heap_lfp = Lfp::new(lfp_addr as _);
-            assert!(!heap_lfp.on_stack());
-            heap_lfp
-        }
+        let heap_lfp = wrap_promoted_frame(v);
+        assert!(!heap_lfp.on_stack());
+        heap_lfp
     }
 
     pub fn dummy_heap_frame_with_self(self_val: Value) -> Self {
@@ -688,7 +732,7 @@ impl Lfp {
         // svar, meta, outer) with zero locals. Over-allocated with
         // padding so the LFP layout stays self-consistent with the
         // header size (LFP_SELF).
-        let v: Box<[u64]> = vec![
+        let v: Vec<u64> = vec![
             0,                  // padding (matches the historical extra slot)
             0,                  // padding
             self_val.id(),      // LFP_SELF
@@ -696,20 +740,12 @@ impl Lfp {
             0,                  // LFP_SVAR
             0,                  // LFP_META — set via `set_reg_num` below
             0,                  // LFP_OUTER
-        ]
-        .into_boxed_slice();
-        let n = v.len();
-        let len = n * 8;
-        unsafe {
-            let base = Box::into_raw(v) as *mut u64;
-            let lfp_addr = base as usize + len - 8;
-            register_promoted_frame(lfp_addr, base, n);
-            let mut heap_lfp = Lfp::new(lfp_addr as _);
-            heap_lfp.meta_mut().set_on_heap();
-            heap_lfp.meta_mut().set_reg_num(1);
-            assert!(!heap_lfp.on_stack());
-            heap_lfp
-        }
+        ];
+        let mut heap_lfp = wrap_promoted_frame(v);
+        heap_lfp.meta_mut().set_on_heap();
+        heap_lfp.meta_mut().set_reg_num(1);
+        assert!(!heap_lfp.on_stack());
+        heap_lfp
     }
 
     ///

@@ -140,6 +140,7 @@ impl std::fmt::Debug for ObjTy {
                 26 => "IO_BUFFER",
                 27 => "THREAD",
                 28 => "ARGF",
+                29 => "FRAME",
                 _ => return write!(f, "INVALID({ty})"),
             }
         )
@@ -181,6 +182,12 @@ impl ObjTy {
     pub const IO_BUFFER: Self = Self(std::num::NonZeroU8::new(26).unwrap());
     pub const THREAD: Self = Self(std::num::NonZeroU8::new(27).unwrap());
     pub const ARGF: Self = Self(std::num::NonZeroU8::new(28).unwrap());
+    /// GC wrapper for a promoted heap frame's raw `Box<[u64]>` buffer.
+    /// Internal only — never exposed to Ruby. Deliberately NOT in
+    /// `is_promotable`: frames are mutated without a write barrier
+    /// (dynvar stores), so like Proc/Binding/Fiber they stay young and
+    /// are re-walked on every minor GC.
+    pub const FRAME: Self = Self(std::num::NonZeroU8::new(29).unwrap());
 }
 
 #[repr(C)]
@@ -226,6 +233,36 @@ pub union ObjKind {
     /// Boxed: keeps the walk state (queue, stream, encodings, in-place
     /// bookkeeping) off the fixed-size RValue cell.
     argf: ManuallyDrop<Box<ArgfInner>>,
+    /// Raw parts of a promoted heap frame's buffer (see `FrameInner`).
+    frame: FrameInner,
+}
+
+/// The payload of an `ObjTy::FRAME` wrapper: the raw parts of the
+/// `Box<[u64]>` buffer holding a promoted heap frame (see
+/// `Lfp::move_frame_to_heap`). The wrapper gives the buffer a place in
+/// the arena — a mark bit in the page bitmap and reclamation by the
+/// ordinary sweep — replacing the old side-table
+/// (`Allocator::heap_frames`). The buffer's LAST word holds this
+/// wrapper's `Value` bits (the back-pointer `Lfp::mark` follows), and
+/// the frame's LFP sits one word below it, so `lfp = base + (len-1)*8
+/// - 8`.
+#[derive(Clone, Copy)]
+pub(crate) struct FrameInner {
+    /// Base pointer of the original `Box<[u64]>` allocation.
+    base: *mut u64,
+    /// Total length in `u64` words, INCLUDING the trailing back-pointer
+    /// word.
+    len: usize,
+}
+
+impl FrameInner {
+    /// The LFP of the frame this wrapper owns.
+    fn lfp(&self) -> Lfp {
+        // top word = back-pointer; LFP_OUTER is the word below it.
+        // SAFETY: the wrapper owns the buffer; it is live for the
+        // wrapper's lifetime.
+        unsafe { Lfp::from_heap_buffer(self.base, self.len) }
+    }
 }
 
 impl ObjKind {
@@ -499,6 +536,12 @@ impl ObjKind {
     fn argf(inner: ArgfInner) -> Self {
         Self {
             argf: ManuallyDrop::new(Box::new(inner)),
+        }
+    }
+
+    fn frame(base: *mut u64, len: usize) -> Self {
+        Self {
+            frame: FrameInner { base, len },
         }
     }
 
@@ -907,6 +950,16 @@ impl alloc::GCBox for RValue {
                 ObjTy::IO => ManuallyDrop::drop(&mut self.kind.io),
                 ObjTy::IO_BUFFER => ManuallyDrop::drop(&mut self.kind.io_buffer),
                 ObjTy::ARGF => ManuallyDrop::drop(&mut self.kind.argf),
+                // SAFETY: `base`/`len` are exactly the raw parts of the
+                // original `Box<[u64]>` (recorded at promotion); this
+                // wrapper is unreachable, and the frame's only owner is
+                // the wrapper, so no live `Lfp` aliases the buffer.
+                ObjTy::FRAME => {
+                    let f = self.kind.frame;
+                    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                        f.base, f.len,
+                    )));
+                }
                 ObjTy::RATIONAL => ManuallyDrop::drop(&mut self.kind.rational),
                 ObjTy::STRUCT => ManuallyDrop::drop(&mut self.kind.struct_inner),
                 ObjTy::MATCHDATA => ManuallyDrop::drop(&mut self.kind.matchdata),
@@ -998,6 +1051,10 @@ impl alloc::GCBox for RValue {
                 ObjTy::ARITHMETIC_SEQUENCE => self.as_arithmetic_sequence().mark(alloc),
                 ObjTy::IO_BUFFER => self.as_io_buffer().mark(alloc),
                 ObjTy::ARGF => self.as_argf().mark(alloc),
+                // Walk the promoted frame's contents (registers, block,
+                // svar, outer chain). Reaching the wrapper twice in one
+                // cycle is cut off by the page bitmap before this runs.
+                ObjTy::FRAME => self.kind.frame.lfp().mark_contents(alloc),
                 _ => unreachable!("mark {:016x} {:?}", self.id(), self.ty()),
             }
         }
@@ -2213,6 +2270,16 @@ impl RValue {
         RValue {
             header: Header::new(class_id, ObjTy::ARGF),
             kind: ObjKind::argf(inner),
+            var_table: None,
+        }
+    }
+
+    /// GC wrapper for a promoted heap frame (never exposed to Ruby;
+    /// the class id is a placeholder — nothing dispatches on it).
+    pub(super) fn new_frame(base: *mut u64, len: usize) -> Self {
+        RValue {
+            header: Header::new(OBJECT_CLASS, ObjTy::FRAME),
+            kind: ObjKind::frame(base, len),
             var_table: None,
         }
     }
