@@ -3,6 +3,7 @@ use std::ffi::c_void;
 use super::*;
 use jitgen::{AbstractState, JitContext};
 use libffi::middle::{Arg, Cif, CodePtr, Type};
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 // ---------------------------------------------------------------------------
 // Fiddle type codes  (must match stdlib/fiddle.rb and gem/ffi_c.rb)
@@ -460,7 +461,8 @@ fn fiddle_read_inline(
         ReadKind::F64 => {
             let fret = state.def_F(dst);
             ir.inline(move |r#gen, _, labels, base| {
-                r#gen.emit_fiddle_read_f64(fret, &labels[deopt], base);
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
+                r#gen.emit_fiddle_read_f64(fret, &d, base);
             });
         }
         _ => {
@@ -475,7 +477,8 @@ fn fiddle_read_inline(
                 ReadKind::F64 => unreachable!(),
             };
             ir.inline(move |r#gen, _, labels, _| {
-                r#gen.emit_fiddle_read_int(width, signed, &labels[deopt]);
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
+                r#gen.emit_fiddle_read_int(width, signed, &d);
             });
             state.def_reg2acc_fixnum(ir, GP::Rax, dst);
         }
@@ -525,7 +528,8 @@ fn fiddle_write_inline(
             let xsrc = state.load_fpr(ir, val_slot);
             let deopt = ir.new_deopt(state);
             ir.inline(move |r#gen, _, labels, base| {
-                r#gen.emit_fiddle_write_f64(xsrc, &labels[deopt], base);
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
+                r#gen.emit_fiddle_write_f64(xsrc, &d, base);
             });
         }
         _ => {
@@ -538,7 +542,8 @@ fn fiddle_write_inline(
                 WriteKind::F64 => unreachable!(),
             };
             ir.inline(move |r#gen, _, labels, _| {
-                r#gen.emit_fiddle_write_int(width, &labels[deopt]);
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
+                r#gen.emit_fiddle_write_int(width, &d);
             });
         }
     }

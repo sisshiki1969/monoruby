@@ -163,6 +163,12 @@ pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
 pub(crate) const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
 pub(crate) const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
 pub(crate) const EXECUTOR_STACK_LIMIT: i64 = std::mem::offset_of!(Executor, stack_limit) as _;
+/// Scratch words a deopt trampoline fills in before branching to its
+/// (deduplicated) handler — see `codegen::jitgen::deopt_log`.
+#[cfg(feature = "deopt")]
+pub(crate) const EXECUTOR_DEOPT_CAUSE: i64 = std::mem::offset_of!(Executor, deopt_cause_bits) as _;
+#[cfg(feature = "deopt")]
+pub(crate) const EXECUTOR_DEOPT_SITE: i64 = std::mem::offset_of!(Executor, deopt_site) as _;
 
 ///
 /// Bytecode interpreter.
@@ -193,6 +199,22 @@ pub struct Executor {
     rsp_save: Option<std::ptr::NonNull<u8>>,
     parent_fiber: Option<std::ptr::NonNull<Executor>>,
     stack_limit: usize,
+    /// Raw bits of the operand the deopting guard was looking at, stored
+    /// by its trampoline before the write-back can clobber the register.
+    ///
+    /// Deliberately a `u64` and not a `Value`: a `DeoptCause::Raw` or
+    /// `Float` cause puts non-`Value` bits here, and the GC must never
+    /// trace this word — nothing may stay alive merely because a dead
+    /// guard once looked at it. Reading it is safe because the log runs
+    /// before the write-back, hence before any collection.
+    #[cfg(feature = "deopt")]
+    deopt_cause_bits: u64,
+    /// Index into the trampoline registry, identifying *which* branch
+    /// entered the handler. `u32::MAX` means "no trampoline ran" — a
+    /// handler entered some other way (an evict resumed through a patched
+    /// return address) reports an unknown site rather than a stale one.
+    #[cfg(feature = "deopt")]
+    deopt_site: u32,
     /// lexical class stack.
     lexical_class: Vec<Vec<Cref>>,
     /// Default method visibility for the top level (and any context
@@ -391,6 +413,10 @@ impl std::default::Default for Executor {
             rsp_save: None,
             parent_fiber: None,
             stack_limit: 0,
+            #[cfg(feature = "deopt")]
+            deopt_cause_bits: 0,
+            #[cfg(feature = "deopt")]
+            deopt_site: u32::MAX,
             lexical_class: vec![vec![]],
             toplevel_visibility: Visibility::Private,
             sp_match_regex: None,
@@ -500,6 +526,17 @@ impl alloc::GC<RValue> for Executor {
 }
 
 impl Executor {
+    ///
+    /// Take the trampoline record left by the deopt branch that is running
+    /// now, clearing it so a later handler entered without a trampoline
+    /// cannot pick up this one's identity.
+    ///
+    #[cfg(feature = "deopt")]
+    pub(crate) fn take_deopt_site(&mut self) -> Option<(u32, u64)> {
+        let id = std::mem::replace(&mut self.deopt_site, u32::MAX);
+        (id != u32::MAX).then_some((id, self.deopt_cause_bits))
+    }
+
     pub fn init(globals: &mut Globals, program_name: &str) -> Result<Self> {
         let program_name = Value::string_from_str(program_name);
         globals.set_gvar(IdentId::get_id("$0"), program_name);

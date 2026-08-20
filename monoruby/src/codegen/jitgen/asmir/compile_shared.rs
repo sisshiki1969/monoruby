@@ -12,6 +12,7 @@
 //! forwarded to the per-arch `compile_asmir_arch`. Coverage of the shared match
 //! grows one instruction family at a time; see `doc/arch_difference.md`.
 
+use crate::codegen::jitgen::deopt_log::{self, DeoptCause};
 use super::*;
 use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg};
 
@@ -133,7 +134,7 @@ impl Codegen {
             }
             // Type guard: deopt if `r`'s runtime class is not `class`.
             AsmInst::GuardClass(r, class, deopt) => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(r));
                 self.encode_linst(LInst::GuardClass {
                     reg: r,
                     class,
@@ -153,7 +154,7 @@ impl Codegen {
             // Class-set guard: any listed class passes, everything else
             // deopts.
             AsmInst::GuardClassIn(r, classes, deopt) => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(r));
                 self.encode_linst(LInst::GuardClassIn {
                     reg: r,
                     classes,
@@ -161,9 +162,13 @@ impl Codegen {
                 });
             }
             // Unconditional jump to a side-exit (deopt) label.
-            AsmInst::Deopt(deopt) => self.encode_linst(LInst::Deopt {
-                deopt: labels[deopt].clone(),
-            }),
+            AsmInst::Deopt(deopt) => {
+                // Hoisted out of the struct literal: `deopt_label` takes
+                // `&mut self`, which cannot be borrowed inside one.
+                let deopt =
+                    self.deopt_label(labels, deopt, DeoptCause::Static("unconditional deopt"));
+                self.encode_linst(LInst::Deopt { deopt })
+            }
             // Branch to the error handler if the preceding runtime call failed
             // (returned a null/None result in the accumulator).
             AsmInst::HandleError(error) => self.encode_linst(LInst::HandleError {
@@ -191,13 +196,17 @@ impl Codegen {
             // Constant base-class guard: deopt if the constant's base class (in
             // the accumulator) is not the cached one.
             AsmInst::GuardConstBaseClass { base_class, deopt } => {
-                let deopt = labels[deopt].clone();
+                // The compare is against a `Value` baked at compile time;
+                // logging both sides is what turns "this guard missed" into
+                // a statement that can be checked.
+                let deopt =
+                    self.deopt_label(labels, deopt, DeoptCause::ValueVsBaked(GP::Rax, base_class));
                 self.encode_linst(LInst::GuardConstBaseClass { base_class, deopt });
             }
             // Constant version guard: deopt if the global constant version moved
             // since compilation.
             AsmInst::GuardConstVersion { const_version, recompile, deopt } => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("const version"));
                 self.encode_linst(LInst::GuardConstVersion {
                     const_version,
                     recompile,
@@ -285,7 +294,7 @@ impl Codegen {
                 base: frame.base_stack_offset,
             }),
             AsmInst::FloatToFpr(reg, x, deopt) => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(reg));
                 self.encode_linst(LInst::FloatToFpr {
                     src: reg,
                     dst: x,
@@ -317,7 +326,11 @@ impl Codegen {
                 rhs,
                 deopt,
             } => {
-                let deopt = labels[deopt].clone();
+                // Every edge into this exit sets rdi first: the overflow and
+                // divide-by-zero paths each stamp their own marker symbol
+                // there (`arch/x86_64/compile/binary_op.rs`), so the cause
+                // distinguishes the two without splitting the instruction.
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
                 if matches!(kind, BinOpK::Div) {
                     self.encode_linst(LInst::IntegerBinOp {
                         kind,
@@ -347,7 +360,7 @@ impl Codegen {
             // Fixnum doubling (`x + x`): move the shared operand into `dst`
             // when they differ, then the tagged-order add/sub sequence.
             AsmInst::IntegerDouble { dst, lhs, deopt } => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
                 if dst != lhs {
                     self.encode_linst(LInst::Mov {
                         dst: dst.into(),
@@ -365,7 +378,7 @@ impl Codegen {
                 imm,
                 deopt,
             } => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
                 if dst != lhs {
                     self.encode_linst(LInst::Mov {
                         dst: dst.into(),
@@ -525,7 +538,7 @@ impl Codegen {
                 with_recovery,
                 deopt,
             } => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("class version"));
                 self.encode_linst(LInst::GuardClassVersion {
                     class_version,
                     position,
@@ -560,7 +573,8 @@ impl Codegen {
             }
             // Basic-operator-redefinition guard: deopt if any BOP was redefined.
             AsmInst::CheckBOP { deopt } => {
-                let deopt = labels[deopt].clone();
+                let deopt =
+                    self.deopt_label(labels, deopt, DeoptCause::Static("basic op redefined"));
                 let version = self.bop_redefine_version();
                 self.encode_linst(LInst::CheckBOP { deopt, version });
             }
@@ -575,9 +589,15 @@ impl Codegen {
                 reason,
             } => {
                 let error = error.map(|e| labels[e].clone());
+                // Hoisted out of the struct literal: `deopt_label` needs
+                // `&mut self`, which cannot be borrowed inside one. The
+                // counter-gated recompile stub zeroes rdi before falling
+                // through, so there is no operand to report here.
+                let deopt =
+                    self.deopt_label(labels, deopt, DeoptCause::Static("recompile counter"));
                 self.encode_linst(LInst::RecompileDeopt {
                     position,
-                    deopt: labels[deopt].clone(),
+                    deopt,
                     error,
                     reason,
                 });
@@ -652,18 +672,18 @@ impl Codegen {
             // Fixnum unary ops on the tagged value. Negate deopts on i63
             // overflow (e.g. -i63::MIN); bitwise-not cannot overflow.
             AsmInst::FixnumNeg { reg, deopt } => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(reg));
                 self.encode_linst(LInst::FixnumNeg { reg, deopt });
             }
             AsmInst::FixnumBitNot { reg } => self.encode_linst(LInst::FixnumBitNot { reg }),
             // Type guards: deopt unless `reg` is an Array / the receiver in rdi
             // is unfrozen.
             AsmInst::GuardArrayTy(reg, deopt) => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(reg));
                 self.encode_linst(LInst::GuardArrayTy { reg, deopt });
             }
             AsmInst::GuardFrozen { deopt } => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
                 self.encode_linst(LInst::GuardFrozen { deopt });
             }
             // Inline instance-variable / struct-member access on the receiver in
@@ -812,7 +832,7 @@ impl Codegen {
             // Side-effect guard for block-passing calls: deopt if the frame was
             // captured/promoted.
             AsmInst::GuardCapture(deopt) => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("frame captured"));
                 self.encode_linst(LInst::GuardCapture { deopt });
             }
             // `&block` forwarding: proxy the block handler, or materialize it
@@ -1213,7 +1233,8 @@ impl Codegen {
             // `Math.sqrt` (replaces the `emit_math_sqrt` closure). Resolve the
             // deopt label and pass the frame base, like the guard family.
             AsmInst::MathSqrt { fsrc, fret, deopt } => {
-                let deopt = labels[deopt].clone();
+                let deopt =
+                    self.deopt_label(labels, deopt, DeoptCause::Static("Math.sqrt: not a float"));
                 self.encode_linst(LInst::MathSqrt {
                     fsrc,
                     fret,
@@ -1223,7 +1244,7 @@ impl Codegen {
             }
             // `Integer#succ` (replaces `emit_integer_succ`): resolve the deopt.
             AsmInst::IntegerSucc { reg, deopt } => {
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(reg));
                 self.encode_linst(LInst::IntegerSucc { reg, deopt });
             }
             // `Kernel#block_given?` (replaces `emit_block_given`).
@@ -1300,6 +1321,54 @@ impl Codegen {
             }
         }
         true
+    }
+
+    ///
+    /// Resolve the deopt handler a guard should branch to.
+    ///
+    /// **This is the only way to reach a deopt handler from a JIT body**, and
+    /// it demands a [`DeoptCause`] — the caller is the one place that knows
+    /// which register (if any) still holds a meaningful operand on every
+    /// edge into the branch. `SideExitLabels` deliberately has no
+    /// `Index<AsmDeopt>` impl, so a new guard cannot skip the question.
+    ///
+    /// In normal builds this is the bare handler label and the `cause`
+    /// argument is discarded, so not one byte of emitted code changes. Under
+    /// `deopt` on x86-64 it returns a per-branch trampoline that records the
+    /// cause and the branch identity before jumping on to the (still
+    /// deduplicated) handler — see [`crate::codegen::jitgen::deopt_log`].
+    ///
+    #[cfg_attr(feature = "deopt", track_caller)]
+    #[cfg_attr(not(feature = "deopt"), inline)]
+    pub(crate) fn deopt_label(
+        &mut self,
+        labels: &SideExitLabels,
+        idx: AsmDeopt,
+        cause: DeoptCause,
+    ) -> DestLabel {
+        #[cfg(all(feature = "deopt", target_arch = "x86_64"))]
+        {
+            let (exit_id, created_at) = labels.deopt_meta(idx);
+            let site = deopt_log::register_site(deopt_log::DeoptSite {
+                lowered_at: std::panic::Location::caller(),
+                created_at,
+                cause,
+            });
+            let _ = exit_id;
+            let entry = self.jit.label();
+            self.encode_linst(LInst::DeoptTrampoline {
+                entry: entry.clone(),
+                deopt: labels.raw_deopt(idx).clone(),
+                cause,
+                site,
+            });
+            return entry;
+        }
+        #[cfg(not(all(feature = "deopt", target_arch = "x86_64")))]
+        {
+            let _ = cause;
+            labels.raw_deopt(idx).clone()
+        }
     }
 
     ///

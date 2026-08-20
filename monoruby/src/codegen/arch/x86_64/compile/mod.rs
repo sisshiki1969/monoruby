@@ -13,6 +13,7 @@ mod variables;
 use super::compile_shared::{extend_ivar, unreachable};
 use crate::alloc::{BUMP_INLINE_LIMIT, CELL_SIZE_SHIFT, PAGE_DATA_OFFSET};
 use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind};
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 /// Resolve a LIR register operand to its x86 register number. The scratch
 /// pointer is `rdx`.
@@ -210,7 +211,7 @@ impl Codegen {
                 }
             }
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
-                let deopt = &labels[deopt];
+                let deopt = &self.deopt_label(labels, deopt, DeoptCause::Static("class version (specialized)"));
                 self.guard_class_version_specialized(
                     class_version,
                     self.specialized_base + idx,
@@ -222,7 +223,7 @@ impl Codegen {
                 idx,
                 deopt,
             } => {
-                let deopt = &labels[deopt];
+                let deopt = &self.deopt_label(labels, deopt, DeoptCause::Static("const version (specialized)"));
                 self.guard_const_version_specialized(
                     const_version,
                     self.specialized_base + idx,
@@ -230,7 +231,7 @@ impl Codegen {
                 );
             }
             AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {
-                let deopt = &labels[deopt];
+                let deopt = &self.deopt_label(labels, deopt, DeoptCause::Static("recompile counter (specialized)"));
                 self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx, reason)
             }
             AsmInst::SetArgumentsForwarded {
@@ -1007,6 +1008,54 @@ impl Codegen {
             }
             // Cold side-exit (deopt) handler blocks. Dispatch on the kind to the
             // existing x86 handler emitters (defined in `jitgen.rs`).
+            // Per-branch deopt trampoline (see `jitgen::deopt_log`). rbx is
+            // `&mut Executor` for the whole body, so recording the cause
+            // needs no scratch register, no stack traffic, and — crucially
+            // for a guard that has just done its compare — no instruction
+            // that touches the flags.
+            #[cfg(all(feature = "deopt", target_arch = "x86_64"))]
+            LInst::DeoptTrampoline {
+                entry,
+                deopt,
+                cause,
+                site,
+            } => {
+                use crate::codegen::jitgen::deopt_log::DeoptCause;
+                // Page discipline mirrors `class_guard_fail_recorder`: from
+                // the hot page, park the stub on the cold one; when already
+                // emitting cold (bridge blocks), jump over it in place.
+                let inline = self.jit.get_page() != 0;
+                let skip = self.jit.label();
+                if inline {
+                    monoasm!( &mut self.jit, jmp skip; );
+                } else {
+                    self.jit.select_page(1);
+                }
+                self.jit.bind_label(entry);
+                match cause {
+                    DeoptCause::Value(r) | DeoptCause::ValueVsBaked(r, _) | DeoptCause::Raw(r) => {
+                        monoasm!( &mut self.jit,
+                            movq [rbx + (EXECUTOR_DEOPT_CAUSE)], R(r as u64);
+                        );
+                    }
+                    DeoptCause::Static(_) => {
+                        // No operand: zero the word so a previous branch's
+                        // value cannot be mistaken for this one's.
+                        monoasm!( &mut self.jit,
+                            movq [rbx + (EXECUTOR_DEOPT_CAUSE)], 0;
+                        );
+                    }
+                }
+                monoasm!( &mut self.jit,
+                    movl [rbx + (EXECUTOR_DEOPT_SITE)], (site as i32);
+                    jmp  deopt;
+                );
+                if inline {
+                    self.jit.bind_label(skip);
+                } else {
+                    self.jit.select_page(0);
+                }
+            }
             LInst::SideExit {
                 kind,
                 pc,
@@ -1014,13 +1063,28 @@ impl Codegen {
                 entry,
                 loop_jit_spill_bytes,
                 base,
+                #[cfg(feature = "deopt")]
+                exit_id,
             } => match kind {
-                LSideExitKind::Deopt { chain } => {
-                    self.gen_deopt_with_label(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
-                }
-                LSideExitKind::Evict => {
-                    self.gen_evict_with_label(pc, &wb, entry, loop_jit_spill_bytes, base)
-                }
+                LSideExitKind::Deopt { chain } => self.gen_deopt_with_label(
+                    pc,
+                    &wb,
+                    entry,
+                    loop_jit_spill_bytes,
+                    base,
+                    chain,
+                    #[cfg(feature = "deopt")]
+                    exit_id,
+                ),
+                LSideExitKind::Evict => self.gen_evict_with_label(
+                    pc,
+                    &wb,
+                    entry,
+                    loop_jit_spill_bytes,
+                    base,
+                    #[cfg(feature = "deopt")]
+                    exit_id,
+                ),
                 LSideExitKind::RecompileDeopt {
                     reason,
                     target,
@@ -1034,6 +1098,8 @@ impl Codegen {
                     loop_jit_spill_bytes,
                     base,
                     chain,
+                    #[cfg(feature = "deopt")]
+                    exit_id,
                 ),
                 LSideExitKind::Error { chain } => self.gen_handle_error(pc, wb, entry, base, chain),
             },
