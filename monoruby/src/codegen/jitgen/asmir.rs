@@ -1673,7 +1673,18 @@ pub(super) enum AsmInst {
     ///
     Call {
         callee_fid: FuncId,
-        recv_class: ClassId,
+        /// The receiver class this call site *proved* (class-version +
+        /// single-class receiver guard precede the call) — the precondition
+        /// for dispatching straight to that class's JIT body, skipping the
+        /// wrapper's `self.class` re-guard. `None` when the site only
+        /// narrowed the receiver to a *set* (a `GuardClassIn` class-set
+        /// guard, a multi-class PIC dispatch arm): the call must then go
+        /// through the callee's wrapper entry, which re-dispatches on the
+        /// actual class at runtime. Baking one member's body in would run
+        /// it for every other member — observed as `nil` ivar reads when
+        /// two subclasses with different ivar layouts shared an inherited
+        /// method behind one dispatch arm.
+        recv_class: Option<ClassId>,
         evict: AsmEvict,
         pc: BytecodePtr,
     },
