@@ -772,6 +772,13 @@ pub(crate) struct JitContext<'a> {
     pub(crate) inline_method_cache: Vec<InlineCacheEntry>,
 
     ///
+    /// Every constant this compilation folded (root body and inlined
+    /// specialized children alike), recorded for const-version salvage —
+    /// see [`crate::globals::ConstSalvageMap`].
+    ///
+    pub(crate) const_fold_cache: Vec<ConstFoldSite>,
+
+    ///
     /// The `(class, operator)` basic-op invariants this body inlined *without*
     /// a runtime guard — integer/float arithmetic, comparisons, and constant
     /// folds. The emitted code is correct only while each of them is still the
@@ -825,6 +832,7 @@ impl<'a> JitContext<'a> {
             const_version,
             refinements,
             inline_method_cache: vec![],
+            const_fold_cache: vec![],
             bop_deps: vec![],
             stack_frame,
             next_specialized_id: 0,
@@ -848,6 +856,7 @@ impl<'a> JitContext<'a> {
             const_version: self.const_version,
             refinements: self.refinements,
             inline_method_cache: vec![],
+            const_fold_cache: vec![],
             bop_deps: vec![],
             stack_frame,
             // The cloned context emits AsmIr only for analysis (it is

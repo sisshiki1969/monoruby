@@ -699,10 +699,11 @@ impl Codegen {
                 }
             }
             LInst::GuardConstVersion {
-                const_version,
+                const_version: _,
+                recompile,
                 deopt,
             } => {
-                self.guard_const_version(const_version, &deopt);
+                self.guard_const_version(recompile, &deopt);
             }
             // Fixnum fast-path arithmetic with an overflow deopt.
             LInst::IntegerBinOp {

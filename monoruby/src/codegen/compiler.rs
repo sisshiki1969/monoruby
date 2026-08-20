@@ -12,7 +12,7 @@ impl Codegen {
         jit_entry: DestLabel,
         class_version: u32,
         is_recompile: Option<RecompileReason>,
-    ) -> Option<(Vec<InlineCacheEntry>, DestLabel)> {
+    ) -> Option<(Vec<InlineCacheEntry>, DestLabel, ConstSalvageMap)> {
         self.compile(
             globals,
             iseq_id,
@@ -159,7 +159,7 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         _is_recompile: Option<RecompileReason>,
-    ) -> Option<(Vec<InlineCacheEntry>, DestLabel)> {
+    ) -> Option<(Vec<InlineCacheEntry>, DestLabel, ConstSalvageMap)> {
         if position.is_none() && globals.store[iseq_id].jit_invalidated() {
             return None;
         }
@@ -227,7 +227,7 @@ impl Codegen {
             class_version,
             const_version,
         ) {
-            Ok((cache, specialized_info, class_version_label, bop_deps)) => {
+            Ok((cache, specialized_info, class_version_label, bop_deps, const_map)) => {
                 globals.store[iseq_id].add_bop_deps(bop_deps);
                 let codeptr = self.jit.get_label_address(&entry_label);
                 let (end0, end1) = self.get_address_pair();
@@ -276,7 +276,7 @@ impl Codegen {
                     self.jit.select_page(0);
                 }
 
-                Some((cache, class_version_label))
+                Some((cache, class_version_label, const_map))
             }
             Err(_) => {
                 if position.is_none() {
@@ -375,7 +375,7 @@ impl Codegen {
         };
         let jit_entry = self.jit.label();
         let class_version = self.class_version();
-        let (cache, _) = self.compile_method(
+        let (cache, _, const_map) = self.compile_method(
             globals,
             iseq_id,
             self_class,
@@ -383,7 +383,7 @@ impl Codegen {
             class_version,
             Some(reason),
         )?;
-        globals.store[iseq_id].set_cache_map(self_class, cache);
+        globals.store[iseq_id].set_cache_map(self_class, cache, const_map);
         let patch_point = self.jit.get_label_address(&patch_point);
         self.jit.apply_jmp_patch_address(patch_point, &jit_entry);
         Some(())
@@ -408,20 +408,21 @@ impl Codegen {
         let slot = globals.store[iseq_id].get_jit_slot(self_class)?;
         let jit_entry = self.jit.label();
         let class_version = self.class_version();
-        let compiled = self
-            .compile_method(
-                globals,
-                iseq_id,
-                self_class,
-                jit_entry.clone(),
-                class_version,
-                Some(reason),
-            )
-            .is_some();
-        if !compiled {
+        let compiled = self.compile_method(
+            globals,
+            iseq_id,
+            self_class,
+            jit_entry.clone(),
+            class_version,
+            Some(reason),
+        );
+        let Some((cache, _, const_map)) = compiled else {
             self.jit.finalize();
             return None;
-        }
+        };
+        // Refresh the salvage record so later guard failures re-validate
+        // against what *this* body folded (mirrors the x86 variant).
+        globals.store[iseq_id].set_cache_map(self_class, cache, const_map);
         let guard = self.a64_gen_class_guard_stub(self_class, &jit_entry);
         self.jit.finalize();
         let guard_addr = self.jit.get_label_address(&guard).as_ptr() as u64;
@@ -479,7 +480,7 @@ impl Codegen {
             });
         }
 
-        let ret = if let Some((cache, version_label)) = self.compile(
+        let ret = if let Some((cache, version_label, const_map)) = self.compile(
             globals,
             iseq_id,
             self_class,
@@ -493,7 +494,13 @@ impl Codegen {
             // Record the unit's salvage info so a later class-version guard
             // failure can re-validate and patch instead of recompiling.
             let index = globals.store[iseq_id].get_pc_index(Some(pc));
-            globals.store[iseq_id].set_loop_jit_info(self_class, index, version_label, cache);
+            globals.store[iseq_id].set_loop_jit_info(
+                self_class,
+                index,
+                version_label,
+                cache,
+                const_map,
+            );
             Some(())
         } else {
             None
@@ -589,6 +596,9 @@ impl Codegen {
 
         let patch_point = self.jit.get_label_address(&patch_point);
         self.jit.apply_jmp_patch_address(patch_point, &entry);
+        // The fresh body reads its own version words; the owner's salvage
+        // records no longer cover it (see `SpecializedPatchEntry::owner`).
+        self.specialized_info[idx].owner = None;
         Some(())
     }
 
@@ -635,6 +645,9 @@ impl Codegen {
         }
         let patch_point = self.jit.get_label_address(&patch_point);
         self.patch_call_to_entry(patch_point, &entry);
+        // The fresh body reads its own version words; the owner's salvage
+        // records no longer cover it (see `SpecializedPatchEntry::owner`).
+        self.specialized_info[idx].owner = None;
         Some(())
     }
 }
@@ -669,37 +682,99 @@ extern "C" fn jit_recompile_specialized(
 /// the salvage validation re-resolves methods through caches that read
 /// `Globals::class_version()`, which borrows the same thread-local.
 fn salvage_specialized(globals: &mut Globals, idx: usize, reason: RecompileReason) -> bool {
-    if !matches!(reason, RecompileReason::ClassVersionGuardFailed) {
+    // `owner: None` means this body was individually recompiled: it reads
+    // its own version words, which no owner record names — fall through to
+    // the recompile.
+    let Some((owner_iseq, owner_class, owner_pos)) =
+        CODEGEN.with(|codegen| codegen.borrow().specialized_info[idx].owner)
+    else {
+        return false;
+    };
+    match reason {
+        RecompileReason::ClassVersionGuardFailed => {
+            #[cfg(feature = "jit-log")]
+            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::RECOVERY_ATTEMPT_SPEC);
+            let salvaged = match owner_pos {
+                None => globals
+                    .store
+                    .salvage_method_unit(owner_iseq, owner_class, None),
+                Some(pc) => {
+                    let index = globals.store[owner_iseq].get_pc_index(Some(pc));
+                    globals
+                        .store
+                        .salvage_loop_unit(owner_iseq, owner_class, index, None)
+                }
+            };
+            if let Some(version_label) = salvaged {
+                let version = Globals::class_version();
+                CODEGEN.with(|codegen| {
+                    codegen
+                        .borrow_mut()
+                        .set_class_version(version, &version_label);
+                });
+                #[cfg(feature = "jit-log")]
+                crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_OK_SPEC);
+                true
+            } else {
+                false
+            }
+        }
+        RecompileReason::ConstVersionGuardFailed => {
+            let loop_index = owner_pos.map(|pc| globals.store[owner_iseq].get_pc_index(Some(pc)));
+            salvage_const(globals, owner_iseq, owner_class, loop_index)
+        }
+        _ => false,
+    }
+}
+
+/// Two-tier const-version salvage of the unit `(iseq_id, self_class[,
+/// loop_index])` — validation in `Store::salvage_const_unit`, word patch
+/// here. Like the class-version twin this runs *outside* the CODEGEN borrow
+/// (`Globals::const_version` reads the same thread-local). On success (or a
+/// bounded stale deferral) the current invocation deopts to the VM once and
+/// the salvage retries or the healed unit passes its guards from the next
+/// execution on.
+fn salvage_const(
+    globals: &mut Globals,
+    iseq_id: ISeqId,
+    self_class: ClassId,
+    loop_index: Option<crate::bytecodegen::BcIndex>,
+) -> bool {
+    #[cfg(feature = "jit-log")]
+    crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::CONST_RECOVERY_ATTEMPT);
+    match globals
+        .store
+        .salvage_const_unit(iseq_id, self_class, loop_index)
+    {
+        ConstSalvage::Healed(word) => {
+            let version = Globals::const_version();
+            CODEGEN.with(|codegen| {
+                codegen.borrow_mut().set_const_version(version, &word);
+            });
+            #[cfg(feature = "jit-log")]
+            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::CONST_SALVAGE_OK);
+            true
+        }
+        // Skip the recompile but leave the guard failing: this invocation
+        // deopts to the VM, whose execution refreshes the suspect site's
+        // cache, and the next miss retries the salvage.
+        ConstSalvage::Defer => true,
+        ConstSalvage::Recompile => false,
+    }
+}
+
+/// Whole-method const salvage entry: on a `GuardConstVersion` failure, try
+/// the two-tier validation for the frame's unit before recompiling. Unlike
+/// the class-version guard (whose x86 recovery resumes in place), a const
+/// salvage lets this invocation deopt to the VM once; the healed unit
+/// passes its guard from the next call.
+fn salvage_method_const(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) -> bool {
+    if !matches!(reason, RecompileReason::ConstVersionGuardFailed) {
         return false;
     }
-    #[cfg(feature = "jit-log")]
-    crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::RECOVERY_ATTEMPT_SPEC);
-    let (owner_iseq, owner_class, owner_pos) =
-        CODEGEN.with(|codegen| codegen.borrow().specialized_info[idx].owner);
-    let salvaged = match owner_pos {
-        None => globals
-            .store
-            .salvage_method_unit(owner_iseq, owner_class, None),
-        Some(pc) => {
-            let index = globals.store[owner_iseq].get_pc_index(Some(pc));
-            globals
-                .store
-                .salvage_loop_unit(owner_iseq, owner_class, index, None)
-        }
-    };
-    if let Some(version_label) = salvaged {
-        let version = Globals::class_version();
-        CODEGEN.with(|codegen| {
-            codegen
-                .borrow_mut()
-                .set_class_version(version, &version_label);
-        });
-        #[cfg(feature = "jit-log")]
-        crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_OK_SPEC);
-        true
-    } else {
-        false
-    }
+    let self_class = lfp.self_val().class();
+    let iseq_id = globals.store[lfp.func_id()].as_iseq();
+    salvage_const(globals, iseq_id, self_class, None)
 }
 
 /// aarch64 specialized recompile entry, called from the
@@ -789,6 +864,9 @@ pub(in crate::codegen) extern "C" fn jit_profile_patch(
 
 #[cfg(target_arch = "x86_64")]
 extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: RecompileReason) {
+    if salvage_method_const(globals, lfp, reason) {
+        return;
+    }
     //let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     CODEGEN.with(|codegen| {
         codegen.borrow_mut().recompile_method(globals, lfp, reason);
@@ -819,6 +897,22 @@ pub(in crate::codegen) extern "C" fn jit_recompile_method(
     lfp: Lfp,
     reason: RecompileReason,
 ) -> Option<Value> {
+    // Salvage first (the per-unit version words are patchable on aarch64
+    // too): a successful validation heals the unit in place — this
+    // invocation deopts to the VM once and the guards pass from the next
+    // call on, skipping the full recompile below.
+    if matches!(reason, RecompileReason::ClassVersionGuardFailed) {
+        #[cfg(feature = "jit-log")]
+        crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::RECOVERY_ATTEMPT);
+        if globals.store.update_inline_cache(lfp) {
+            #[cfg(feature = "jit-log")]
+            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_OK);
+            return Some(Value::nil());
+        }
+    }
+    if salvage_method_const(globals, lfp, reason) {
+        return Some(Value::nil());
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         CODEGEN.with(|codegen| {
             codegen.borrow_mut().recompile_method(globals, lfp, reason);
@@ -952,15 +1046,18 @@ extern "C" fn jit_recompile_loop(
 /// iteration on. `lfp` is the loop's own frame, so `super` sites re-resolve
 /// soundly.
 fn salvage_loop(globals: &mut Globals, lfp: Lfp, pc: BytecodePtr, reason: RecompileReason) -> bool {
+    let self_class = lfp.self_val().class();
+    let func_id = lfp.func_id();
+    let iseq_id = globals.store[func_id].as_iseq();
+    let index = globals.store[iseq_id].get_pc_index(Some(pc));
+    if matches!(reason, RecompileReason::ConstVersionGuardFailed) {
+        return salvage_const(globals, iseq_id, self_class, Some(index));
+    }
     if !matches!(reason, RecompileReason::ClassVersionGuardFailed) {
         return false;
     }
     #[cfg(feature = "jit-log")]
     crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::RECOVERY_ATTEMPT_LOOP);
-    let self_class = lfp.self_val().class();
-    let func_id = lfp.func_id();
-    let iseq_id = globals.store[func_id].as_iseq();
-    let index = globals.store[iseq_id].get_pc_index(Some(pc));
     if let Some(version_label) = globals
         .store
         .salvage_loop_unit(iseq_id, self_class, index, Some(lfp))

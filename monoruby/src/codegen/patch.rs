@@ -47,13 +47,19 @@ impl Codegen {
         let jit_entry = self.jit.label();
         // `jit_entry` is bound by `gen_machine_code` (even on the bail path)
         // so it always resolves at `finalize`.
-        let compiled = self
-            .compile_method(globals, iseq_id, self_class, jit_entry.clone(), class_version, None)
-            .is_some();
-        if !compiled {
+        let compiled =
+            self.compile_method(globals, iseq_id, self_class, jit_entry.clone(), class_version, None);
+        let Some((cache, class_version_label, const_map)) = compiled else {
             self.jit.finalize();
             return None;
-        }
+        };
+        // Register the unit's salvage record (inline caches, version word,
+        // const folds) so class/const guard failures can re-validate instead
+        // of recompiling. On aarch64 dispatch goes through `jit_slot`, so the
+        // `jit_entry` table exists purely as this record — a republish for the
+        // same class simply replaces it.
+        globals.store[iseq_id].add_jit_code(self_class, jit_entry.clone(), class_version_label);
+        globals.store[iseq_id].set_cache_map(self_class, cache, const_map);
         // Front the compiled `jit_entry` with a self-class guard. The JIT body
         // assumes `self == self_class`, but a single per-method slot is shared
         // by every receiver class of an inherited method — so publishing the
@@ -124,7 +130,7 @@ impl Codegen {
             self.jit.finalize();
             return None;
         }
-        if let Some((cache, class_version_label)) = self.compile_method(
+        if let Some((cache, class_version_label, const_map)) = self.compile_method(
             globals,
             iseq_id,
             self_class,
@@ -145,7 +151,7 @@ impl Codegen {
                     globals.store[iseq_id].name()
                 );
             }
-            globals.store[iseq_id].set_cache_map(self_class, cache);
+            globals.store[iseq_id].set_cache_map(self_class, cache, const_map);
             self.jit.apply_jmp_patch_address(entry, &guard);
             self.jit.finalize();
             Some(())

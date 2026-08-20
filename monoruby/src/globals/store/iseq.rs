@@ -90,6 +90,7 @@ pub struct JitInfo {
     pub entry: DestLabel,
     pub class_version_label: DestLabel,
     pub inline_cache_map: Vec<InlineCacheEntry>,
+    pub const_map: ConstSalvageMap,
 }
 
 /// The salvage-relevant half of a loop (OSR) compilation unit — see
@@ -99,6 +100,79 @@ pub struct JitInfo {
 pub struct LoopJitInfo {
     pub class_version_label: DestLabel,
     pub inline_cache_map: Vec<InlineCacheEntry>,
+    pub const_map: ConstSalvageMap,
+}
+
+/// One constant the JIT folded at compile time: the site it came from, the
+/// full cache tuple the fold relied on, and the names whose redefinition
+/// could change the site's resolution (the final name plus every path
+/// qualifier). See [`ConstSalvageMap`].
+#[derive(Debug, Clone)]
+pub struct ConstFoldSite {
+    pub id: ConstSiteId,
+    pub cache: ConstCache,
+    pub names: Vec<IdentId>,
+}
+
+/// The constant-fold half of a compilation unit's salvage record.
+///
+/// A `GuardConstVersion` failure only says "some constant event happened
+/// somewhere"; this record lets the recompile entry prove the unit's folds
+/// are still exact and *sync* the unit instead:
+///
+/// 1. **Per-name fast path** — every event that bumps the global const
+///    version also bumps a per-name epoch ([`crate::globals::const_epoch`]).
+///    If none of the folded names' epochs moved (and the wildcard didn't),
+///    no fold can have changed: patch `version_word` to the current global
+///    version and keep the code.
+/// 2. **Value re-check** — for a site whose name *was* touched, compare the
+///    fold against the site's VM inline cache: the deopted executions that
+///    precede a salvage retry re-run the site in the VM, refreshing its
+///    cache at the current version. If the refreshed tuple matches the
+///    fold, the assignment wrote the same value — sync as above. Otherwise
+///    recompile.
+///
+/// `version_word` is the unit's single patchable snapshot word: every
+/// `GuardConstVersion` / `GuardConstVersionSpecialized` in the unit
+/// (children included — one compilation is atomic at one const version)
+/// compares the global counter against it.
+#[derive(Debug, Clone, Default)]
+pub struct ConstSalvageMap {
+    /// Deduped folded names with their per-name epochs at compile time.
+    pub name_epochs: Vec<(IdentId, u64)>,
+    /// Wildcard epoch at compile time (bumped by nameless events:
+    /// `include`/`prepend`).
+    pub wildcard: u64,
+    pub sites: Vec<ConstFoldSite>,
+    /// The unit's const-version snapshot word, `None` when the unit folded
+    /// no constants (no guard emitted, nothing to salvage).
+    pub version_word: Option<DestLabel>,
+    /// Consecutive tier-2 *stale* deferrals (the suspect site's VM cache had
+    /// not yet been refreshed at the current version, so the salvage asked
+    /// for a plain deopt to let the VM re-run the site). Bounded so a fold
+    /// whose site never re-executes in the interpreter can't defer forever;
+    /// reset on every successful salvage.
+    pub stale_defers: u8,
+}
+
+/// Outcome of a const-version salvage attempt (see
+/// [`crate::globals::store::Store::salvage_const_unit`]).
+pub enum ConstSalvage {
+    /// Every fold validated — patch this word to the current version.
+    Healed(DestLabel),
+    /// A suspect site's VM cache is not yet refreshed: deopt this invocation
+    /// to the VM (which re-runs the site) and retry on the next miss.
+    Defer,
+    /// A fold's value changed (or deferral ran out) — recompile.
+    Recompile,
+}
+
+impl alloc::GC<RValue> for ConstSalvageMap {
+    fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
+        for site in &self.sites {
+            site.cache.mark(alloc);
+        }
+    }
 }
 
 ///
@@ -374,6 +448,14 @@ impl std::fmt::Debug for ISeqInfo {
 impl alloc::GC<RValue> for ISeqInfo {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.literals.iter().for_each(|v| v.mark(alloc));
+        // The salvage records snapshot folded constant Values; they must stay
+        // alive as long as the compiled code that baked them in.
+        self.jit_entry
+            .values()
+            .for_each(|info| info.const_map.mark(alloc));
+        self.loop_jit_info
+            .values()
+            .for_each(|info| info.const_map.mark(alloc));
     }
 }
 
@@ -712,6 +794,7 @@ impl ISeqInfo {
                 entry,
                 class_version_label,
                 inline_cache_map: Vec::new(),
+                const_map: ConstSalvageMap::default(),
             },
         )
     }
@@ -775,10 +858,41 @@ impl ISeqInfo {
         &mut self,
         self_class: ClassId,
         cache: Vec<InlineCacheEntry>,
+        const_map: ConstSalvageMap,
     ) {
+        self.jit_entry.get_mut(&self_class).map(|info| {
+            info.inline_cache_map = cache;
+            info.const_map = const_map;
+        });
+    }
+
+    /// The const-fold salvage record of the whole-method unit for
+    /// `self_class`, mutable so a successful salvage can refresh its
+    /// epoch snapshots in place. `None` once invalidated.
+    pub(crate) fn get_const_map_mut(
+        &mut self,
+        self_class: ClassId,
+    ) -> Option<&mut ConstSalvageMap> {
+        if self.jit_invalidated {
+            return None;
+        }
         self.jit_entry
             .get_mut(&self_class)
-            .map(|info| info.inline_cache_map = cache);
+            .map(|info| &mut info.const_map)
+    }
+
+    /// The loop twin of [`Self::get_const_map_mut`].
+    pub(crate) fn get_loop_const_map_mut(
+        &mut self,
+        self_class: ClassId,
+        index: BcIndex,
+    ) -> Option<&mut ConstSalvageMap> {
+        if self.jit_invalidated {
+            return None;
+        }
+        self.loop_jit_info
+            .get_mut(&(self_class, index))
+            .map(|info| &mut info.const_map)
     }
 
     pub(crate) fn jit_invalidated(&self) -> bool {
@@ -874,12 +988,14 @@ impl ISeqInfo {
         index: BcIndex,
         class_version_label: DestLabel,
         inline_cache_map: Vec<InlineCacheEntry>,
+        const_map: ConstSalvageMap,
     ) {
         self.loop_jit_info.insert(
             (self_class, index),
             LoopJitInfo {
                 class_version_label,
                 inline_cache_map,
+                const_map,
             },
         );
     }

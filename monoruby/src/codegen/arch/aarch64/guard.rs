@@ -114,19 +114,27 @@ impl Codegen {
     }
 
     /// Class-version guard: branch to `fail` if the global class version no
-    /// longer matches the version this method was compiled against. The cached
-    /// version is baked in as an immediate (compilation is atomic at a fixed
-    /// version). Unlike x86 we do not recompile on miss yet — just deopt.
-    pub(in crate::codegen) fn a64_guard_class_version(&mut self, fail: &DestLabel) {
+    /// longer matches the *unit's snapshot word* — the patchable per-unit
+    /// `class_version_label` created by `jit_compile`. Reading the word
+    /// (rather than baking the version as an immediate, as this used to)
+    /// lets a successful salvage re-validate the unit's code in place by
+    /// storing the current version into the word (`set_class_version`),
+    /// exactly like x86's `check_version`.
+    pub(in crate::codegen) fn a64_guard_class_version(
+        &mut self,
+        unit_word: &DestLabel,
+        fail: &DestLabel,
+    ) {
         let gv_addr = self
             .jit
             .get_label_address(&self.class_version_label())
             .as_ptr() as u64;
-        let cached = self.class_version();
+        let unit_addr = self.jit.get_label_address(unit_word).as_ptr() as u64;
         monoasm_arm64!(&mut self.jit,
             mov x9, (gv_addr);
             ldr w9, [x9];
-            mov x10, (cached as u64);
+            mov x10, (unit_addr);
+            ldr w10, [x10];
             cmp x9, x10;
         );
         self.jit.bcond_label(monoasm::Cond::Ne, fail);

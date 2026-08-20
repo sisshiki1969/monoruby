@@ -628,6 +628,7 @@ impl Codegen {
         SpecializedCodeInfo,
         DestLabel,
         Vec<(ClassId, IdentId)>,
+        ConstSalvageMap,
     )> {
         let jit_type = if let Some(pos) = position {
             JitType::Loop(pos)
@@ -657,6 +658,7 @@ impl Codegen {
         ctx.resolve_dyn_var_offsets(&mut frame.asm_info);
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
+        let const_folds = std::mem::take(&mut ctx.const_fold_cache);
         // The basic-op invariants this body inlined without a runtime guard.
         // Handed back so the iseq can remember what a later redefinition
         // would actually invalidate (see `JitContext::assume_basic_op`).
@@ -669,6 +671,18 @@ impl Codegen {
         // fall back to the interpreter).
         self.jit.finalize();
         let class_version_label = self.jit.const_i32(class_version as _);
+        // The unit's single const-version snapshot word: only materialized
+        // when the body folded a constant (otherwise no const guard exists
+        // and there is nothing to patch). All const guards in the unit —
+        // children included — read this one word.
+        let const_version_label = (!const_folds.is_empty())
+            .then(|| self.jit.const_i64(const_version as _));
+        self.unit_const_version = const_version_label.clone();
+        // Bind the fresh snapshot words now: the aarch64 lowering bakes their
+        // *addresses* into the guard sequences as immediates, so the labels
+        // must be resolved before `gen_machine_code` runs (x86 reads them
+        // rip-relative and doesn't care).
+        self.jit.finalize();
         // Stage-1 placement shadow (§24): bracket the whole ③ emission (the
         // `gen_machine_code` driver recurses into inlined callees, so one
         // begin/take pair captures the entire compilation unit's FP placement).
@@ -698,7 +712,31 @@ impl Codegen {
         // emission (e.g. the class-guard stub).
         #[cfg(target_arch = "x86_64")]
         self.jit.finalize();
-        Ok((inline_cache, specialized_info, class_version_label, bop_deps))
+        self.unit_const_version = None;
+        // Snapshot the involved names' epochs *at compile time*; a later
+        // guard failure compares against these to prove the folds unchanged.
+        let mut name_epochs: Vec<(IdentId, u64)> = vec![];
+        for site in &const_folds {
+            for &name in &site.names {
+                if !name_epochs.iter().any(|(n, _)| *n == name) {
+                    name_epochs.push((name, crate::globals::const_epoch::name_epoch(name)));
+                }
+            }
+        }
+        let const_map = ConstSalvageMap {
+            name_epochs,
+            wildcard: crate::globals::const_epoch::wildcard(),
+            sites: const_folds,
+            version_word: const_version_label,
+            stale_defers: 0,
+        };
+        Ok((
+            inline_cache,
+            specialized_info,
+            class_version_label,
+            bop_deps,
+            const_map,
+        ))
     }
 }
 
@@ -733,7 +771,7 @@ impl Codegen {
                     // A body compiled under the root's armed speculation
                     // recompiles by rebuilding the root unit (#1140).
                     speculated_root: speculated.then_some(root),
-                    owner: root,
+                    owner: Some(root),
                 });
             }
             let entry = frame.resolve_label(&mut self.jit, specialized_entry);

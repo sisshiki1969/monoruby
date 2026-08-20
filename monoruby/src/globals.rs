@@ -1482,18 +1482,69 @@ impl Globals {
     /// being assigned — for example after `Module#include` /
     /// `Module#prepend` adds a new iclass to a class chain that earlier
     /// callers have already resolved against.
+    ///
+    /// This entry point has no constant *name* to attribute the change to,
+    /// so it also bumps the per-name table's wildcard epoch — every unit's
+    /// const salvage fast path is invalidated (see [`const_epoch`]).
     pub(crate) fn const_version_inc() {
+        const_epoch::bump_wildcard();
         CODEGEN.with(|codegen| codegen.borrow_mut().const_version_inc());
     }
 
+    pub(crate) fn const_version() -> u64 {
+        CODEGEN.with(|codegen| codegen.borrow().const_version())
+    }
+
     pub fn set_constant(&mut self, class_id: ClassId, name: IdentId, val: Value) {
+        const_epoch::bump_name(name);
         CODEGEN.with(|codegen| codegen.borrow_mut().const_version_inc());
         self.store.set_constant(class_id, name, val);
     }
 
     pub fn remove_constant(&mut self, class_id: ClassId, name: IdentId) -> Option<Value> {
+        const_epoch::bump_name(name);
         CODEGEN.with(|codegen| codegen.borrow_mut().const_version_inc());
         self[class_id].remove_constant(name)
+    }
+}
+
+/// Per-name epochs for constant-cache salvage.
+///
+/// The global const version (a single counter read by every compiled
+/// `GuardConstVersion`) moves on *any* constant event anywhere, so a guard
+/// failure says nothing about whether the constants a unit actually folded
+/// changed. This table refines that: every event that bumps the global
+/// version also bumps the epoch of the constant *name* it touched (or the
+/// wildcard, when the event has no single name — `include`/`prepend`).
+/// A salvage attempt can then prove "none of the names this unit folded
+/// were touched" without re-resolving anything.
+///
+/// Thread-local like `CODEGEN`: each interpreter thread (one per test) has
+/// its own table, mirroring the global version counter it refines.
+pub(crate) mod const_epoch {
+    use crate::IdentId;
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+
+    thread_local! {
+        static WILDCARD: Cell<u64> = const { Cell::new(0) };
+        static NAMES: RefCell<HashMap<IdentId, u64>> = RefCell::new(HashMap::new());
+    }
+
+    pub(crate) fn bump_name(name: IdentId) {
+        NAMES.with_borrow_mut(|m| *m.entry(name).or_insert(0) += 1);
+    }
+
+    pub(crate) fn bump_wildcard() {
+        WILDCARD.with(|w| w.set(w.get() + 1));
+    }
+
+    pub(crate) fn name_epoch(name: IdentId) -> u64 {
+        NAMES.with_borrow(|m| m.get(&name).copied().unwrap_or(0))
+    }
+
+    pub(crate) fn wildcard() -> u64 {
+        WILDCARD.with(|w| w.get())
     }
 }
 
