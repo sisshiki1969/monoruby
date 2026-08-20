@@ -295,8 +295,17 @@ ActiveRecord のライフサイクルフック基盤。
 
 ### 5.1 SQLite3 バインディング
 
-FFI (`ffi` gem + monoruby ネイティブ FFI) 経由で `libsqlite3.so.0` を呼び出す実装済み
-(`monoruby/gem/sqlite3/sqlite3_native.rb`, 645行)。`Fiddle` ではなく `FFI::Library` を採用。
+monoruby 共通のネイティブ呼び出しプリミティブ (`Fiddle.___dlopen` / `___call` /
+`___read_string` …、`src/builtins/fiddle.rs` で登録) 経由で `libsqlite3.so.0` を
+直接呼び出す実装済み (`monoruby/gem/sqlite3/sqlite3_native.rb`)。
+
+当初は `FFI::Library` (`ffi_lib` / `attach_function`) を採用していたが、これは
+ffi gem の **純 Ruby 側** にあるため、ホストに ffi gem が入っていない環境では
+ブリッジ全体が読み込めなかった (bench CI の activerecord 失敗要因)。Fiddle は
+monoruby 自身が同梱するため、現在のブリッジは自己完結している。
+副次効果として、`FFI::Function#call` が毎回行っていた `zip`/`map` による引数変換と
+`FFI::Pointer` の生成が無くなり、ポインタは素の Integer アドレスのまま扱われる
+(ローカル計測で select 系 2.5s → 0.32s、point クエリ 670ms → 110ms)。
 
 - [x] `sqlite3_open_v2`, `sqlite3_close`
 - [x] `sqlite3_prepare_v2`, `sqlite3_step`, `sqlite3_finalize`, `sqlite3_reset`
@@ -307,10 +316,10 @@ FFI (`ffi` gem + monoruby ネイティブ FFI) 経由で `libsqlite3.so.0` を�
 
 ### 5.2 sqlite3 gem 互換レイヤー
 
-CRuby `sqlite3` gem の `sqlite3_native.so` を上記 FFI ブリッジで差し替える方針で実装済み。
+CRuby `sqlite3` gem の `sqlite3_native.so` を上記 Fiddle ブリッジで差し替える方針で実装済み。
 gem 側の Ruby 実装 (`SQLite3::Database` / `Statement` / `ResultSet`) がそのまま動作する想定。
 
-- [x] `SQLite3::Database.new(path)` (FFI 経由の open)
+- [x] `SQLite3::Database.new(path)` (Fiddle 経由の open)
 - [x] `SQLite3::Database#execute(sql, params)` 相当
 - [x] `SQLite3::Database#prepare(sql)` / `Statement#step` / `columns`
 - [~] `SQLite3::ForkSafety` はスタブ (fork 非対応のため)
@@ -318,10 +327,12 @@ gem 側の Ruby 実装 (`SQLite3::Database` / `Statement` / `ResultSet`) がそ�
 
 ### 5.3 Fiddle::Closure の実装
 
-SQLite3 のコールバック機能に必要。**未実装** (`stdlib/fiddle.rb:357` で
-`NotImplementedError: Fiddle::Closure is not yet supported` を送出)。
-ただし SQLite3 バインディングは FFI gem 側のコールバック機構を利用するため、
-Closure が無くても基本 CRUD は動作する。
+SQLite3 のユーザー定義 SQL 関数 (`create_function`) に必要。**未実装**
+(`stdlib/fiddle.rb` のスタブが `NotImplementedError` を送出)。
+ffi gem 側の `FFI::Function.new(&block)` も monoruby では実体のあるコード
+ポインタを作れない (アドレス 0 を返す) ため、どちらの経路でもコールバックは
+動かない。ネイティブクロージャ (実行可能トランポリンの生成) が入るまでは
+`define_function_with_flags` が明示的に例外を送出する。基本 CRUD には不要。
 
 - [ ] `Fiddle::Closure` / `Fiddle::Closure::BlockCaller`
 - [ ] コールバック関数ポインタの生成
@@ -481,8 +492,8 @@ User.includes(:posts).all
 
 - **フェーズ 1 (言語機能)**: 約 65% 完了。Object/Module/Kernel・Enumerable・例外クラスは概ね実装済み。残タスクは主に **Hash 拡張 (transform_keys/values, slice, except)**、`String#pack`/`squeeze`、`Kernel#caller_locations` / `at_exit`、`Errno::*` の網羅。
 - **フェーズ 2 (標準ライブラリ)**: 約 55%。JSON・StringIO・Monitor に加え **Set はネイティブでほぼ全メソッド実装済み** (builtins/set.rs)。Date はスタブ止まり。**Logger / URI / SecureRandom は未着手**。
-- **フェーズ 5.1/5.2 (SQLite3)**: **大部分実装済み**。FFI gem 経由で `libsqlite3.so.0` に接続し、`sqlite3_native.so` を Ruby で代替 (`monoruby/gem/sqlite3/sqlite3_native.rb`)。open/close/prepare/step/bind/column/exec 系は網羅。残るは ActiveRecord 経由での結合検証。
-- **フェーズ 5.3 Fiddle::Closure**: 未実装 (`stdlib/fiddle.rb` でスタブが `NotImplementedError`)。ただし SQLite3 は FFI gem のコールバック機構を使うため、現状でも動作する見込み。
+- **フェーズ 5.1/5.2 (SQLite3)**: **大部分実装済み**。Fiddle プリミティブ経由で `libsqlite3.so.0` に接続し、`sqlite3_native.so` を Ruby で代替 (`monoruby/gem/sqlite3/sqlite3_native.rb`)。open/close/prepare/step/bind/column/exec 系は網羅。ホスト側 gem への依存は sqlite3 gem の純 Ruby 部分のみ (ffi gem は不要)。
+- **フェーズ 5.3 Fiddle::Closure**: 未実装 (`stdlib/fiddle.rb` でスタブが `NotImplementedError`)。`create_function` (ユーザー定義 SQL 関数) のみが影響を受け、基本 CRUD は動作する。
 - **フェーズ 3, 4, 6 (ActiveSupport/ActiveModel/ActiveRecord)**: 未着手。
 
 ### 次に着手すべき短期タスク (優先度順)

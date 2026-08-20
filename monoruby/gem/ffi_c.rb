@@ -2,12 +2,20 @@
 #
 # When monoruby finds ffi_c.so in the load path it loads this file instead.
 # This file defines all Ruby-visible classes / constants that ffi_c.so would
-# have provided, using builtin primitives registered directly on the FFI module
-# by the Rust backend (src/builtins/ffi.rs).
+# have provided, on top of monoruby's shared native-call primitives
+# (`Fiddle.___call` / `___read` / `___write` / `___dlopen` / …, registered by
+# the Rust backend in src/builtins/fiddle.rs).
+#
+# Those primitives are deliberately shared with `Fiddle` rather than
+# duplicated under `FFI`: there is one implementation to keep correct, and
+# the JIT inliners for `___read` / `___write` — which only ever existed on
+# the Fiddle registrations — now apply to the FFI path too.
 #
 # The pure-Ruby files shipped with the ffi gem
 # (lib/ffi/*.rb – library.rb, struct.rb, pointer.rb, …) are loaded afterwards
 # and add further methods to these base classes.
+
+require "fiddle"
 
 module FFI
   # VERSION is set by the ffi gem's lib/ffi/version.rb
@@ -46,6 +54,24 @@ module FFI
   # doesn't expose one, but FFI's `:bool` argument routes through Fiddle.
   TYPE_BOOL       =  9
 
+  # SIZEOF_* for x86-64 Linux. ffi_c.so does not actually export these
+  # (they are a Fiddle convention), but monoruby has always defined them
+  # under FFI, so keep them for compatibility.
+  SIZEOF_VOIDP     = 8
+  SIZEOF_CHAR      = 1
+  SIZEOF_SHORT     = 2
+  SIZEOF_INT       = 4
+  SIZEOF_LONG      = 8
+  SIZEOF_LONG_LONG = 8
+  SIZEOF_FLOAT     = 4
+  SIZEOF_DOUBLE    = 8
+  SIZEOF_BOOL      = 4
+  SIZEOF_INTPTR_T  = 8
+  SIZEOF_UINTPTR_T = 8
+  SIZEOF_PTRDIFF_T = 8
+  SIZEOF_SIZE_T    = 8
+  SIZEOF_SSIZE_T   = 8
+
   # =========================================================================
   # FFI::Platform – minimal constants needed before the gem's platform.rb
   # The gem's lib/ffi/platform.rb will add/override additional constants.
@@ -78,7 +104,7 @@ module FFI
 
     # Subclass used for every built-in primitive type
     class Builtin < Type
-      # type_code: integer constant used when calling FFI.___call
+      # type_code: integer constant used when calling Fiddle.___call
       attr_reader :type_code
 
       def initialize(name, size, alignment, type_code)
@@ -253,18 +279,18 @@ module FFI
 
     # ---- typed readers ----
 
-    def get_int8(offset);    FFI.___read(@address + offset, TYPE_CHAR);       end
-    def get_uint8(offset);   FFI.___read(@address + offset, TYPE_UCHAR);      end
-    def get_int16(offset);   FFI.___read(@address + offset, TYPE_SHORT);      end
-    def get_uint16(offset);  FFI.___read(@address + offset, TYPE_USHORT);     end
-    def get_int32(offset);   FFI.___read(@address + offset, TYPE_INT);        end
-    def get_uint32(offset);  FFI.___read(@address + offset, TYPE_UINT);       end
-    def get_int64(offset);   FFI.___read(@address + offset, TYPE_LONG_LONG);  end
-    def get_uint64(offset);  FFI.___read(@address + offset, TYPE_ULONG_LONG); end
-    def get_float32(offset); FFI.___read(@address + offset, TYPE_FLOAT);      end
-    def get_float64(offset); FFI.___read(@address + offset, TYPE_DOUBLE);     end
-    def get_long(offset);    FFI.___read(@address + offset, TYPE_LONG);       end
-    def get_ulong(offset);   FFI.___read(@address + offset, TYPE_ULONG);      end
+    def get_int8(offset);    Fiddle.___read(@address + offset, TYPE_CHAR);       end
+    def get_uint8(offset);   Fiddle.___read(@address + offset, TYPE_UCHAR);      end
+    def get_int16(offset);   Fiddle.___read(@address + offset, TYPE_SHORT);      end
+    def get_uint16(offset);  Fiddle.___read(@address + offset, TYPE_USHORT);     end
+    def get_int32(offset);   Fiddle.___read(@address + offset, TYPE_INT);        end
+    def get_uint32(offset);  Fiddle.___read(@address + offset, TYPE_UINT);       end
+    def get_int64(offset);   Fiddle.___read(@address + offset, TYPE_LONG_LONG);  end
+    def get_uint64(offset);  Fiddle.___read(@address + offset, TYPE_ULONG_LONG); end
+    def get_float32(offset); Fiddle.___read(@address + offset, TYPE_FLOAT);      end
+    def get_float64(offset); Fiddle.___read(@address + offset, TYPE_DOUBLE);     end
+    def get_long(offset);    Fiddle.___read(@address + offset, TYPE_LONG);       end
+    def get_ulong(offset);   Fiddle.___read(@address + offset, TYPE_ULONG);      end
 
     alias get_int    get_int32
     alias get_uint   get_uint32
@@ -274,36 +300,36 @@ module FFI
     alias get_uchar  get_uint8
 
     def get_pointer(offset)
-      addr = FFI.___read(@address + offset, TYPE_VOIDP)
+      addr = Fiddle.___read(@address + offset, TYPE_VOIDP)
       FFI::Pointer.new(addr)
     end
 
     def get_string(offset, length = nil)
       if length
-        FFI.___read_bytes(@address + offset, length)
+        Fiddle.___read_bytes(@address + offset, length)
       else
-        FFI.___read_string(@address + offset)
+        Fiddle.___read_string(@address + offset)
       end
     end
 
     def get_bytes(offset, length)
-      FFI.___read_bytes(@address + offset, length)
+      Fiddle.___read_bytes(@address + offset, length)
     end
 
     # ---- typed writers ----
 
-    def put_int8(offset, v);    FFI.___write(@address + offset, TYPE_CHAR,       v); end
-    def put_uint8(offset, v);   FFI.___write(@address + offset, TYPE_UCHAR,      v); end
-    def put_int16(offset, v);   FFI.___write(@address + offset, TYPE_SHORT,      v); end
-    def put_uint16(offset, v);  FFI.___write(@address + offset, TYPE_USHORT,     v); end
-    def put_int32(offset, v);   FFI.___write(@address + offset, TYPE_INT,        v); end
-    def put_uint32(offset, v);  FFI.___write(@address + offset, TYPE_UINT,       v); end
-    def put_int64(offset, v);   FFI.___write(@address + offset, TYPE_LONG_LONG,  v); end
-    def put_uint64(offset, v);  FFI.___write(@address + offset, TYPE_ULONG_LONG, v); end
-    def put_float32(offset, v); FFI.___write(@address + offset, TYPE_FLOAT,      v); end
-    def put_float64(offset, v); FFI.___write(@address + offset, TYPE_DOUBLE,     v); end
-    def put_long(offset, v);    FFI.___write(@address + offset, TYPE_LONG,       v); end
-    def put_ulong(offset, v);   FFI.___write(@address + offset, TYPE_ULONG,      v); end
+    def put_int8(offset, v);    Fiddle.___write(@address + offset, TYPE_CHAR,       v); end
+    def put_uint8(offset, v);   Fiddle.___write(@address + offset, TYPE_UCHAR,      v); end
+    def put_int16(offset, v);   Fiddle.___write(@address + offset, TYPE_SHORT,      v); end
+    def put_uint16(offset, v);  Fiddle.___write(@address + offset, TYPE_USHORT,     v); end
+    def put_int32(offset, v);   Fiddle.___write(@address + offset, TYPE_INT,        v); end
+    def put_uint32(offset, v);  Fiddle.___write(@address + offset, TYPE_UINT,       v); end
+    def put_int64(offset, v);   Fiddle.___write(@address + offset, TYPE_LONG_LONG,  v); end
+    def put_uint64(offset, v);  Fiddle.___write(@address + offset, TYPE_ULONG_LONG, v); end
+    def put_float32(offset, v); Fiddle.___write(@address + offset, TYPE_FLOAT,      v); end
+    def put_float64(offset, v); Fiddle.___write(@address + offset, TYPE_DOUBLE,     v); end
+    def put_long(offset, v);    Fiddle.___write(@address + offset, TYPE_LONG,       v); end
+    def put_ulong(offset, v);   Fiddle.___write(@address + offset, TYPE_ULONG,      v); end
 
     alias put_int    put_int32
     alias put_uint   put_uint32
@@ -313,17 +339,17 @@ module FFI
     alias put_uchar  put_uint8
 
     def put_pointer(offset, ptr)
-      FFI.___write(@address + offset, TYPE_VOIDP, ptr.to_i)
+      Fiddle.___write(@address + offset, TYPE_VOIDP, ptr.to_i)
     end
 
     def put_bytes(offset, str, start = 0, length = str.bytesize - start)
       # Slice by bytes, not characters: callers (e.g. SDL_LockSurface +
       # blob upload) pass binary data that may not be valid UTF-8.
-      FFI.___write_bytes(@address + offset, str.byteslice(start, length))
+      Fiddle.___write_bytes(@address + offset, str.byteslice(start, length))
     end
 
     def put_string(offset, str)
-      FFI.___write_bytes(@address + offset, str + "\x00")
+      Fiddle.___write_bytes(@address + offset, str + "\x00")
     end
 
     # ---- plural reads (arrays) ----
@@ -519,7 +545,7 @@ module FFI
     def autorelease=(flag); end  # stub – managed externally
 
     def free
-      FFI.___free(@address)
+      Fiddle.___free(@address)
       @address = 0
     end
 
@@ -548,7 +574,7 @@ module FFI
                    1
                  end
       total = elem_size * count
-      addr = FFI.___malloc(total, true)
+      addr = Fiddle.___malloc(total, true)
       raise NoMemoryError, "FFI::MemoryPointer malloc(#{total}) failed" if addr == 0
       super(addr)
       @size = total
@@ -570,7 +596,7 @@ module FFI
     end
 
     def free
-      FFI.___free(@address) if @address != 0
+      Fiddle.___free(@address) if @address != 0
       @address = 0
     end
 
@@ -601,7 +627,7 @@ module FFI
 
     def initialize(name, flags)
       @name   = name
-      @handle = FFI.___dlopen(name, flags)
+      @handle = Fiddle.___dlopen(name, flags)
       if @handle.nil? || @handle == 0
         raise LoadError, "Could not open library '#{name}'"
       end
@@ -609,7 +635,7 @@ module FFI
 
     # Returns an FFI::DynamicLibrary::Symbol or nil
     def find_function(name)
-      ptr = FFI.___dlsym(@handle, name.to_s)
+      ptr = Fiddle.___dlsym(@handle, name.to_s)
       return nil if ptr.nil? || ptr == 0
       Symbol.new(name.to_s, ptr)
     end
@@ -672,7 +698,7 @@ module FFI
       type_codes = @param_types.map(&:type_code)
       ret_code   = @return_type.type_code
 
-      result = FFI.___call(@address, converted_args, type_codes, ret_code)
+      result = Fiddle.___call(@address, converted_args, type_codes, ret_code)
       convert_result(@return_type, result)
     end
 
@@ -724,7 +750,7 @@ module FFI
         nil
       elsif type.equal?(FFI::Type::STRING)
         return nil if result.nil? || result == 0
-        FFI.___read_string(result)
+        Fiddle.___read_string(result)
       elsif type.equal?(FFI::Type::POINTER)
         FFI::Pointer.new(result.to_i)
       else
@@ -747,7 +773,7 @@ module FFI
       all_types = (@param_types + param_types.map { |t| FFI::Type.find(t) })
       type_codes = all_types.map(&:type_code)
       ret_code   = @return_type.type_code
-      FFI.___call(@func, args, type_codes, ret_code)
+      Fiddle.___call(@func, args, type_codes, ret_code)
     end
 
     def call(*args)
@@ -892,7 +918,7 @@ module FFI
         obj = allocate
         if args.empty?
           # allocate fresh memory
-          addr = FFI.___malloc(size, true)
+          addr = Fiddle.___malloc(size, true)
           raise NoMemoryError, "FFI::Struct malloc(#{size}) failed" if addr == 0
           obj.address = addr
           obj.size    = size
@@ -941,7 +967,7 @@ module FFI
 
     def free
       if @owned && @address != 0
-        FFI.___free(@address)
+        Fiddle.___free(@address)
         @address = 0
       end
     end
@@ -967,9 +993,9 @@ module FFI
         elem  = type.elem_type
         ecode = elem.type_code
         esize = elem.size
-        Array.new(type.length) { |i| FFI.___read(addr + i * esize, ecode) }
+        Array.new(type.length) { |i| Fiddle.___read(addr + i * esize, ecode) }
       else
-        FFI.___read(addr, type.type_code)
+        Fiddle.___read(addr, type.type_code)
       end
     end
 
@@ -984,14 +1010,14 @@ module FFI
           raise TypeError,
             "wrong value type (expected #{type.struct_class})"
         end
-        FFI.___write_bytes(addr, FFI.___read_bytes(value.address, type.size))
+        Fiddle.___write_bytes(addr, Fiddle.___read_bytes(value.address, type.size))
       when FFI::Type::Array
         ary = value.to_ary
         elem  = type.elem_type
         ecode = elem.type_code
         esize = elem.size
         ary.first(type.length).each_with_index do |v, i|
-          FFI.___write(addr + i * esize, ecode, v)
+          Fiddle.___write(addr + i * esize, ecode, v)
         end
       else
         if value.nil? && type.type_code == FFI::TYPE_VOIDP
@@ -1001,7 +1027,7 @@ module FFI
         elsif value.respond_to?(:to_ptr)
           value = value.to_ptr.address
         end
-        FFI.___write(addr, type.type_code, value)
+        Fiddle.___write(addr, type.type_code, value)
       end
     end
   end

@@ -633,7 +633,14 @@ fn fiddle_free(
 pub(super) fn init(globals: &mut Globals) {
     let fiddle = globals.define_toplevel_module("Fiddle").id();
 
-    // Low-level primitives used by startup/fiddle.rb and startup/ffi_c.rb
+    // Low-level primitives used by stdlib/fiddle.rb and gem/ffi_c.rb.
+    //
+    // This is *the* shared native-call API of monoruby: `Fiddle` owns the
+    // primitives, and every higher-level facade (Fiddle's own Ruby classes,
+    // FFI in gem/ffi_c.rb, and the FFI-free bridges such as
+    // gem/sqlite3/sqlite3_native.rb) is a thin Ruby layer on top of it.
+    // Registering them once here also means the JIT inliners below
+    // (`___read` / `___write`) benefit every caller rather than just Fiddle.
     globals.define_builtin_module_func(fiddle, "___call", fiddle_call, 4);
     globals.define_builtin_module_inline_func(
         fiddle,
@@ -653,6 +660,13 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(fiddle, "___read_bytes", fiddle_read_bytes, 2);
     globals.define_builtin_module_func(fiddle, "___write_bytes", fiddle_write_bytes, 2);
     globals.define_builtin_module_func(fiddle, "___free", fiddle_free, 1);
+
+    // dlopen / dlsym / malloc (implementations live in kernel.rs, but they
+    // belong to the same primitive set, so expose them here too — a facade
+    // then needs no namespace other than `Fiddle`).
+    globals.define_builtin_module_func_with(fiddle, "___dlopen", kernel::dlopen, 1, 2, false);
+    globals.define_builtin_module_func(fiddle, "___dlsym", kernel::dlsym, 2);
+    globals.define_builtin_module_func_with(fiddle, "___malloc", kernel::malloc, 1, 2, false);
 
     // SIZEOF constants for x86-64 Linux
     for (name, size) in [
@@ -681,8 +695,8 @@ mod tests {
 
     // The harness's reference Ruby runs with `--disable-gem`, so the
     // ffi gem is unavailable to compare against. These tests instead
-    // drive the low-level builtins registered in `ffi.rs`
-    // (`FFI.___dlopen`/`___dlsym`/`___call`/`___read`/`___write`/…) and
+    // drive the shared low-level primitives registered in `init` above
+    // (`Fiddle.___dlopen`/`___dlsym`/`___call`/`___read`/`___write`/…) and
     // embed their own `raise` assertions — a misbehaving primitive
     // surfaces as a monoruby-side exception and fails the test.
     //
@@ -705,8 +719,8 @@ mod tests {
           when /darwin/ then ["/usr/lib/libSystem.B.dylib", "/usr/lib/libSystem.B.dylib"]
           else               ["libc.so.6", "libm.so.6"]
         end
-        LIBC = FFI.___dlopen(__libc)
-        LIBM = FFI.___dlopen(__libm) || FFI.___dlopen(__libc)
+        LIBC = Fiddle.___dlopen(__libc)
+        LIBM = Fiddle.___dlopen(__libm) || Fiddle.___dlopen(__libc)
     "#;
 
     // Regression for https://github.com/sisshiki1969/monoruby/pull/337:
@@ -719,8 +733,8 @@ mod tests {
     fn fiddle_string_is_nul_terminated() {
         run_test_no_result_check(&format!(
             r#"{TYPE_PRELUDE}
-            strlen = FFI.___dlsym(LIBC, "strlen")
-            call = ->(s) {{ FFI.___call(strlen, [s], [TY_VOIDP], TY_SIZE_T) }}
+            strlen = Fiddle.___dlsym(LIBC, "strlen")
+            call = ->(s) {{ Fiddle.___call(strlen, [s], [TY_VOIDP], TY_SIZE_T) }}
             raise unless call.call("")               == 0
             raise unless call.call("hello")          == 5
             raise unless call.call("hello_optcarrot") == 15
@@ -745,8 +759,8 @@ mod tests {
     fn fiddle_two_string_args() {
         run_test_no_result_check(&format!(
             r#"{TYPE_PRELUDE}
-            strcmp = FFI.___dlsym(LIBC, "strcmp")
-            call = ->(a, b) {{ FFI.___call(strcmp, [a, b], [TY_VOIDP, TY_VOIDP], TY_INT) }}
+            strcmp = Fiddle.___dlsym(LIBC, "strcmp")
+            call = ->(a, b) {{ Fiddle.___call(strcmp, [a, b], [TY_VOIDP, TY_VOIDP], TY_INT) }}
             raise unless call.call("abc", "abc") == 0
             raise unless call.call("abc", "abd")  < 0
             raise unless call.call("abd", "abc")  > 0
@@ -763,12 +777,12 @@ mod tests {
     fn fiddle_integer_roundtrip() {
         run_test_no_result_check(&format!(
             r#"{TYPE_PRELUDE}
-            abs   = FFI.___dlsym(LIBC, "abs")
-            llabs = FFI.___dlsym(LIBC, "llabs")
-            raise unless FFI.___call(abs,   [-42], [TY_INT],   TY_INT)   == 42
-            raise unless FFI.___call(abs,   [ 42], [TY_INT],   TY_INT)   == 42
-            raise unless FFI.___call(llabs, [-1_000_000_000_000], [TY_LLONG], TY_LLONG) == 1_000_000_000_000
-            raise unless FFI.___call(llabs, [ 1_000_000_000_000], [TY_LLONG], TY_LLONG) == 1_000_000_000_000
+            abs   = Fiddle.___dlsym(LIBC, "abs")
+            llabs = Fiddle.___dlsym(LIBC, "llabs")
+            raise unless Fiddle.___call(abs,   [-42], [TY_INT],   TY_INT)   == 42
+            raise unless Fiddle.___call(abs,   [ 42], [TY_INT],   TY_INT)   == 42
+            raise unless Fiddle.___call(llabs, [-1_000_000_000_000], [TY_LLONG], TY_LLONG) == 1_000_000_000_000
+            raise unless Fiddle.___call(llabs, [ 1_000_000_000_000], [TY_LLONG], TY_LLONG) == 1_000_000_000_000
             :ok
             "#
         ));
@@ -779,12 +793,12 @@ mod tests {
     fn fiddle_double_args() {
         run_test_no_result_check(&format!(
             r#"{TYPE_PRELUDE}
-            sqrt  = FFI.___dlsym(LIBM, "sqrt")
-            floor = FFI.___dlsym(LIBM, "floor")
-            raise unless FFI.___call(sqrt,  [0.0], [TY_DOUBLE], TY_DOUBLE) == 0.0
-            raise unless (FFI.___call(sqrt, [2.0], [TY_DOUBLE], TY_DOUBLE) - Math.sqrt(2.0)).abs < 1e-12
-            raise unless FFI.___call(floor, [3.7],  [TY_DOUBLE], TY_DOUBLE) == 3.0
-            raise unless FFI.___call(floor, [-0.5], [TY_DOUBLE], TY_DOUBLE) == -1.0
+            sqrt  = Fiddle.___dlsym(LIBM, "sqrt")
+            floor = Fiddle.___dlsym(LIBM, "floor")
+            raise unless Fiddle.___call(sqrt,  [0.0], [TY_DOUBLE], TY_DOUBLE) == 0.0
+            raise unless (Fiddle.___call(sqrt, [2.0], [TY_DOUBLE], TY_DOUBLE) - Math.sqrt(2.0)).abs < 1e-12
+            raise unless Fiddle.___call(floor, [3.7],  [TY_DOUBLE], TY_DOUBLE) == 3.0
+            raise unless Fiddle.___call(floor, [-0.5], [TY_DOUBLE], TY_DOUBLE) == -1.0
             :ok
             "#
         ));
@@ -797,15 +811,15 @@ mod tests {
     fn fiddle_read_write_roundtrip() {
         run_test_no_result_check(&format!(
             r#"{TYPE_PRELUDE}
-            ptr = FFI.___malloc(16)
+            ptr = Fiddle.___malloc(16)
             raise "malloc returned NULL" if ptr == 0
             begin
-              FFI.___write(ptr, TY_INT, 0x41424344)
-              raise unless FFI.___read(ptr, TY_INT) == 0x41424344
-              FFI.___write(ptr, TY_DOUBLE, 3.14)
-              raise unless FFI.___read(ptr, TY_DOUBLE) == 3.14
+              Fiddle.___write(ptr, TY_INT, 0x41424344)
+              raise unless Fiddle.___read(ptr, TY_INT) == 0x41424344
+              Fiddle.___write(ptr, TY_DOUBLE, 3.14)
+              raise unless Fiddle.___read(ptr, TY_DOUBLE) == 3.14
             ensure
-              FFI.___free(ptr)
+              Fiddle.___free(ptr)
             end
             :ok
             "#
@@ -820,14 +834,14 @@ mod tests {
     fn fiddle_read_string_and_bytes() {
         run_test_no_result_check(&format!(
             r#"{TYPE_PRELUDE}
-            ptr = FFI.___malloc(32)
+            ptr = Fiddle.___malloc(32)
             raise if ptr == 0
             begin
-              FFI.___write_bytes(ptr, "hello\0world\0junk")
-              raise unless FFI.___read_string(ptr)    == "hello"
-              raise unless FFI.___read_bytes(ptr, 11) == "hello\0world"
+              Fiddle.___write_bytes(ptr, "hello\0world\0junk")
+              raise unless Fiddle.___read_string(ptr)    == "hello"
+              raise unless Fiddle.___read_bytes(ptr, 11) == "hello\0world"
             ensure
-              FFI.___free(ptr)
+              Fiddle.___free(ptr)
             end
             :ok
             "#
@@ -847,7 +861,7 @@ mod tests {
             TY_SHORT  = 3
             TY_USHORT = -3
             TY_UINT   = -4
-            ptr = FFI.___malloc(16)
+            ptr = Fiddle.___malloc(16)
             raise "malloc returned NULL" if ptr == 0
             begin
               200.times do
@@ -867,7 +881,7 @@ mod tests {
                 raise unless Fiddle.___read(ptr, TY_DOUBLE) == 3.14
               end
             ensure
-              FFI.___free(ptr)
+              Fiddle.___free(ptr)
             end
             :ok
             "#
@@ -881,8 +895,8 @@ mod tests {
     fn fiddle_null_pointer_arg() {
         run_test_no_result_check(&format!(
             r#"{TYPE_PRELUDE}
-            memcpy = FFI.___dlsym(LIBC, "memcpy")
-            res = FFI.___call(memcpy, [nil, nil, 0], [TY_VOIDP, TY_VOIDP, TY_SIZE_T], TY_VOIDP)
+            memcpy = Fiddle.___dlsym(LIBC, "memcpy")
+            res = Fiddle.___call(memcpy, [nil, nil, 0], [TY_VOIDP, TY_VOIDP, TY_SIZE_T], TY_VOIDP)
             raise unless res == 0
             :ok
             "#

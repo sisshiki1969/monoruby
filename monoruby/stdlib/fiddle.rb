@@ -1,9 +1,13 @@
 # Fiddle - Foreign Function Interface for Ruby
 #
 # This implementation mirrors CRuby's Fiddle standard library.
-# Low-level primitives (___call, ___read, ___write, etc.) are provided
-# by the Rust builtin module in src/builtins/fiddle.rs.
-# dlopen / dlsym / malloc are still delegated to Kernel.___dlopen etc.
+# Low-level primitives (___dlopen, ___dlsym, ___call, ___read, ___write,
+# ___malloc, ___free, …) are provided by the Rust builtin module in
+# src/builtins/fiddle.rs. That primitive set is monoruby's single shared
+# native-call API: gem/ffi_c.rb and the FFI-free bridges (for instance
+# gem/sqlite3/sqlite3_native.rb) call exactly the same functions, so there
+# is one implementation to keep correct and one place that carries the JIT
+# inliners for ___read / ___write.
 #
 # TYPE_* constants are defined at the top level of Fiddle below,
 # mirrored from Fiddle::Types via const_set.
@@ -264,14 +268,14 @@ module Fiddle
 
     def initialize(library = nil, flags = RTLD_LAZY)
       @library = library
-      @handle  = Kernel.___dlopen(library, flags)
+      @handle  = Fiddle.___dlopen(library, flags)
       if @handle.nil? || @handle == 0
         raise Fiddle::DLError, "dlopen failed: #{library.inspect}"
       end
     end
 
     def [](name)
-      ptr = Kernel.___dlsym(@handle, name.to_s)
+      ptr = Fiddle.___dlsym(@handle, name.to_s)
       if ptr.nil? || ptr == 0
         raise Fiddle::DLError, "unknown symbol \"#{name}\""
       end
@@ -280,7 +284,7 @@ module Fiddle
     alias sym []
 
     def sym?(name)
-      ptr = Kernel.___dlsym(@handle, name.to_s)
+      ptr = Fiddle.___dlsym(@handle, name.to_s)
       (ptr.nil? || ptr == 0) ? nil : ptr
     end
 
@@ -408,7 +412,7 @@ module Fiddle
   end
 
   def self.malloc(size)
-    ptr = Kernel.___malloc(size, true)
+    ptr = Fiddle.___malloc(size, true)
     raise Fiddle::DLError, "malloc(#{size}) failed" if ptr == 0
     ptr
   end
