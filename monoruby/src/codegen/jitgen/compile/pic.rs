@@ -101,20 +101,39 @@ impl<'a> JitContext<'a> {
     /// rewrite it as.
     ///
     fn pic_groups(&mut self, callid: CallSiteId) -> Option<Vec<PicGroup>> {
+        // Temporary diagnosis (logging builds only): name every refusal, so a
+        // polymorphic site that stays on the deopting mono guard can be
+        // attributed to the exact gate that turned it away.
+        macro_rules! refuse {
+            ($why:literal) => {{
+                #[cfg(feature = "deopt")]
+                eprintln!(
+                    "### pic refuse [{}] {}",
+                    $why,
+                    self.store[callid].name.map_or_else(
+                        || "?".to_string(),
+                        |n| format!("{:?}", n)
+                    )
+                );
+                return None;
+            }};
+        }
         let callsite = &self.store[callid];
-        let name = callsite.name?;
+        let Some(name) = callsite.name else {
+            refuse!("no-name")
+        };
         // A block argument makes the callee able to capture the frame, and
         // `locals_to_S` inside one arm would describe a frame layout the other
         // arms do not share.
         if callsite.block_fid.is_some() {
-            return None;
+            refuse!("block-fid")
         }
         let pmc = &callsite.pmc;
         let observations = pmc.observations();
         let mut classes: Vec<(ClassId, u32)> =
             pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
         if classes.len() < 2 {
-            return None;
+            refuse!("pmc-mono")
         }
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
         let mut groups: Vec<PicGroup> = Vec::with_capacity(classes.len());
@@ -139,16 +158,22 @@ impl<'a> JitContext<'a> {
             // not be allowed to fire mid-chain, where there is nothing to
             // back out to.
             let Some((func_id, visibility)) = self.jit_check_call(class, Some(name)) else {
+                #[cfg(feature = "deopt")]
+                eprintln!("### pic drop [no-resolve] {:?} class={:?}", name, class);
                 continue;
             };
             if self.jit_visibility_blocks(callid, visibility)
                 || self.store[func_id].possibly_capture_without_block()
             {
+                #[cfg(feature = "deopt")]
+                eprintln!("### pic drop [vis/capture] {:?} class={:?}", name, class);
                 continue;
             }
             if let Some(iseq) = self.store[func_id].is_iseq()
                 && self.store[iseq].has_block_arg()
             {
+                #[cfg(feature = "deopt")]
+                eprintln!("### pic drop [callee-block-arg] {:?} class={:?}", name, class);
                 continue;
             }
             // An attr/Struct accessor target whose callsite shape is
@@ -175,13 +200,13 @@ impl<'a> JitContext<'a> {
             }
         }
         if admitted < 2 {
-            return None;
+            refuse!("admitted<2")
         }
         // One target for every class is the class-set guard's case, and one
         // membership guard over the set beats an arm that tests the same set
         // and then falls into the only call sequence there is.
         if groups.len() < 2 {
-            return None;
+            refuse!("single-target")
         }
         Some(groups)
     }
