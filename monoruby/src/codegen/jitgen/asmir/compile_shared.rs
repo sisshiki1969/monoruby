@@ -593,18 +593,25 @@ impl Codegen {
                 let callee = &store[callee_fid];
                 let is_iseq = callee.is_iseq();
                 let (_, codeptr, callee_pc) = callee.get_data();
+                // Class-keyed direct-entry lookups are only sound when the
+                // call site *proved* a single receiver class (`recv_class`
+                // is `Some`) — a set-guarded site must go through the
+                // wrapper (`codeptr`), which re-dispatches at runtime. See
+                // the field's doc on `AsmInst::Call`.
                 // x86 JIT-entry lookup (aarch64 ignores it; the lookup is a
                 // side-effect-free table read, so pre-resolving here is safe).
-                let jit_entry = is_iseq.and_then(|iseq| store[iseq].get_jit_entry(recv_class));
+                let jit_entry = recv_class
+                    .and_then(|rc| is_iseq.and_then(|iseq| store[iseq].get_jit_entry(rc)));
                 // aarch64 guard-free dispatch-slot lookup (x86 ignores it).
-                // `recv_class` is statically established at this call site
-                // (class-version + receiver guards precede every AsmInst::Call),
-                // which is exactly the precondition for skipping the wrapper's
-                // `self.class` re-guard — same soundness argument as x86's
-                // direct `call jit_entry`.
+                // A `Some` recv_class is statically established at this call
+                // site (class-version + single-class receiver guard precede
+                // it), which is exactly the precondition for skipping the
+                // wrapper's `self.class` re-guard — same soundness argument
+                // as x86's direct `call jit_entry`.
                 #[cfg(target_arch = "aarch64")]
-                let jit_slot =
-                    is_iseq.and_then(|iseq| store[iseq].get_jit_guard_free_slot(recv_class));
+                let jit_slot = recv_class.and_then(|rc| {
+                    is_iseq.and_then(|iseq| store[iseq].get_jit_guard_free_slot(rc))
+                });
                 #[cfg(not(target_arch = "aarch64"))]
                 let jit_slot = None;
                 self.encode_linst(LInst::Call {

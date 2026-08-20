@@ -202,6 +202,31 @@ impl<'a> JitContext<'a> {
     /// reader's slot index is per-class, so for all of them the set's
     /// members must not funnel into one compiled body.
     ///
+    ///
+    /// The recompile target a receiver-class-guard `Learn` exit uses for
+    /// this compilation unit, or `None` when no sound one exists.
+    ///
+    /// A block ROOT cannot take a whole-recompile: the side exit recompiles
+    /// whatever `lfp.func_id()` names as if it were a method, which rebuilds
+    /// a block body under the wrong argument convention (see
+    /// `guard_const_version`, which learned this the hard way). Loop JITs
+    /// (position = Some) and specialized block bodies (idx route) recompile
+    /// fine.
+    ///
+    pub(super) fn recv_miss_recompile_target(&self) -> Option<RecompileTarget> {
+        match self.jit_type() {
+            JitType::Specialized { idx, .. } => Some(RecompileTarget::Specialized(*idx)),
+            _ => {
+                let position = self.position();
+                if position.is_none() && self.store[self.func_id()].is_block_style() {
+                    None
+                } else {
+                    Some(RecompileTarget::Whole(position))
+                }
+            }
+        }
+    }
+
     fn pmc_same_target_classes(
         &mut self,
         callid: CallSiteId,
@@ -414,32 +439,9 @@ impl<'a> JitContext<'a> {
                     RecvMissMode::Learn => self.store[callid].pmc.entries().len() < 2,
                     RecvMissMode::Plain => false,
                 };
-                // A block ROOT cannot take a whole-recompile: the side exit
-                // recompiles whatever `lfp.func_id()` names as if it were a
-                // method, which rebuilds a block body under the wrong argument
-                // convention (see `guard_const_version`, which learned this
-                // the hard way). Loop JITs (position = Some) and specialized
-                // block bodies (idx route) recompile fine.
-                let target = if use_recompile {
-                    match self.jit_type() {
-                        JitType::Specialized { idx, .. } => {
-                            Some(RecompileTarget::Specialized(*idx))
-                        }
-                        _ => {
-                            let position = self.position();
-                            if position.is_none()
-                                && self.store[self.func_id()].is_block_style()
-                            {
-                                None
-                            } else {
-                                Some(RecompileTarget::Whole(position))
-                            }
-                        }
-                    }
-                } else {
-                    None
-                };
-                let deopt = if let Some(target) = target {
+                let deopt = if let Some(target) =
+                    use_recompile.then(|| self.recv_miss_recompile_target()).flatten()
+                {
                     ir.new_recompile_deopt(state, RecompileReason::BecamePolymorphic, target)
                 } else {
                     ir.new_deopt(state)
@@ -871,7 +873,12 @@ impl<'a> JitContext<'a> {
             self.poison_float_speculations();
         }
 
-        state.send(ir, &self.store, callid, fid, recv_class, outer_lfp);
+        // Behind a class-set guard (or a multi-class dispatch arm) the
+        // receiver is only narrowed to a set, so the call may not bake in
+        // `recv_class`'s JIT body — hand `None` so the lowering dispatches
+        // through the callee's wrapper (see `AsmInst::Call::recv_class`).
+        let proven_recv_class = (!same_target_set_guarded).then_some(recv_class);
+        state.send(ir, &self.store, callid, fid, proven_recv_class, outer_lfp);
 
         Ok(CompileResult::Continue)
     }
@@ -1738,7 +1745,10 @@ impl AbstractState {
         store: &Store,
         callid: CallSiteId,
         callee_fid: FuncId,
-        recv_class: ClassId,
+        // `Some` only when the site proved this exact receiver class — the
+        // licence for the class-keyed direct-entry dispatch. See
+        // `AsmInst::Call::recv_class`.
+        recv_class: Option<ClassId>,
         outer_lfp: Option<Lfp>,
     ) {
         let evict = ir.new_evict();
