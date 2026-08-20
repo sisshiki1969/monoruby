@@ -8,6 +8,7 @@ use crate::executor::Visibility;
 use jitgen::AbstractState;
 use jitgen::trace_ir::{FBinOpInfo, FOpClass};
 use jitgen::{AbstractFrame, BinaryInlineMode, BinaryInlineOutcome, JitContext};
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 //
 // Float class
@@ -354,7 +355,10 @@ fn float_toi(
     let deopt = ir.new_deopt(state);
     if let Some(dst) = dst {
         ir.inline(move |r#gen, _, labels, base| {
-            r#gen.emit_float_to_int(fsrc, &labels[deopt], base)
+            {
+            let d = r#gen.deopt_label(labels, deopt, DeoptCause::Static("float out of integer range"));
+            r#gen.emit_float_to_int(fsrc, &d, base)
+        }
         });
         state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     }

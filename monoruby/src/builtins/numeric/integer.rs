@@ -5,6 +5,7 @@ use jitgen::trace_ir::{FBinOpInfo, FOpClass};
 use jitgen::{AbstractFrame, AbstractState, BinaryInlineMode, BinaryInlineOutcome, JitContext};
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 //
 // Integer class
@@ -803,19 +804,28 @@ fn integer_shr(
             if k < 64 {
                 let deopt = ir.new_deopt(state);
                 ir.inline(move |r#gen, _, labels, _| {
-                    r#gen.gen_shl_rhs_imm(k as u8, &labels[deopt])
+                    {
+                        let d = r#gen.deopt_label(labels, deopt, DeoptCause::Static("shift overflow"));
+                        r#gen.gen_shl_rhs_imm(k as u8, &d)
+                    }
                 });
             } else {
                 // shift too large for inline: only 0 stays 0, else deopt.
                 let deopt = ir.new_deopt(state);
-                ir.inline(move |r#gen, _, labels, _| shl_overflow_zero(r#gen, &labels[deopt]));
+                ir.inline(move |r#gen, _, labels, _| {
+                    let d = r#gen.deopt_label(labels, deopt, DeoptCause::Static("shift overflow"));
+                    shl_overflow_zero(r#gen, &d)
+                });
             }
         }
     } else {
         // Variable shift amount.
         state.load_fixnum(ir, args, GP::Rcx);
         let deopt = ir.new_deopt(state);
-        ir.inline(move |r#gen, _, labels, _| r#gen.gen_shr(&labels[deopt]));
+        ir.inline(move |r#gen, _, labels, _| {
+            let d = r#gen.deopt_label(labels, deopt, DeoptCause::Static("shift overflow"));
+            r#gen.gen_shr(&d)
+        });
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
@@ -875,7 +885,10 @@ fn integer_shl(
         if rhs >= 0 && rhs < 64 {
             // n << k (0 <= k < 64): left shift
             let deopt = ir.new_deopt(state);
-            ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_rhs_imm(rhs as u8, &labels[deopt]));
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Static("shift overflow"));
+                r#gen.gen_shl_rhs_imm(rhs as u8, &d)
+            });
         } else if rhs < 0 {
             // n << -k: equivalent to n >> k
             let k = (-rhs) as u64;
@@ -883,7 +896,10 @@ fn integer_shl(
         } else {
             // rhs >= 64: non-zero lhs overflows (deopt); 0 stays 0.
             let deopt = ir.new_deopt(state);
-            ir.inline(move |r#gen, _, labels, _| shl_overflow_zero(r#gen, &labels[deopt]));
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Static("shift overflow"));
+                shl_overflow_zero(r#gen, &d)
+            });
         }
     } else {
         // Variable shift amount.
@@ -894,9 +910,15 @@ fn integer_shl(
         // compile-time constant, so the runtime shift-back overflow check
         // folds to a single constant compare.
         if let Some(lhs) = state.is_fixnum_literal(recv) {
-            ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl_lhs_imm(lhs.get(), &labels[deopt]));
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Static("shift overflow"));
+                r#gen.gen_shl_lhs_imm(lhs.get(), &d)
+            });
         } else {
-            ir.inline(move |r#gen, _, labels, _| r#gen.gen_shl(&labels[deopt]));
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(labels, deopt, DeoptCause::Static("shift overflow"));
+                r#gen.gen_shl(&d)
+            });
         }
     }
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
@@ -978,7 +1000,10 @@ fn integer_rem_int_rhs(
     state.load_fixnum(ir, recv, GP::Rdi);
     state.load_fixnum(ir, args, GP::Rsi);
     let deopt = ir.new_deopt(state);
-    ir.inline(move |r#gen, _, labels, _| r#gen.gen_int_rem(&labels[deopt]));
+    ir.inline(move |r#gen, _, labels, _| {
+        let d = r#gen.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
+        r#gen.gen_int_rem(&d)
+    });
     state.def_reg2acc_fixnum(ir, GP::Rax, dst);
     true
 }

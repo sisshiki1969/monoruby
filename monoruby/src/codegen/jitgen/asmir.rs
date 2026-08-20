@@ -2,6 +2,7 @@ use crate::bytecodegen::BinOpK;
 // Only the x86-gated `gen_asm` driver uses these directly; the aarch64 driver
 // lives in `arch/aarch64/compile.rs` with its own imports.
 #[cfg(target_arch = "x86_64")]
+use crate::codegen::jitgen::deopt_log;
 use crate::codegen::jitgen::lir::{LInst, LSideExitKind, Lir};
 
 use super::*;
@@ -61,23 +62,64 @@ pub(crate) enum ArrayIndexKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct AsmEvict(usize);
 
-pub(crate) struct SideExitLabels(Vec<DestLabel>);
+pub(crate) struct SideExitLabels {
+    labels: Vec<DestLabel>,
+    /// Parallel to `labels`: the exit-registry id of each handler, and the
+    /// emitter that created the exit. Several entries may name the same
+    /// handler (deopt exits are deduplicated), which is exactly why a
+    /// branch cannot be identified from here alone — see
+    /// [`Codegen::deopt_label`].
+    #[cfg(feature = "deopt")]
+    exit_id: Vec<u32>,
+    #[cfg(feature = "deopt")]
+    created_at: Vec<Option<&'static std::panic::Location<'static>>>,
+}
 
 impl SideExitLabels {
     fn new() -> Self {
-        Self(vec![])
+        Self {
+            labels: vec![],
+            #[cfg(feature = "deopt")]
+            exit_id: vec![],
+            #[cfg(feature = "deopt")]
+            created_at: vec![],
+        }
     }
 
-    fn push(&mut self, label: DestLabel) {
-        self.0.push(label);
+    fn push(
+        &mut self,
+        label: DestLabel,
+        #[cfg(feature = "deopt")] exit_id: u32,
+        #[cfg(feature = "deopt")] created_at: Option<&'static std::panic::Location<'static>>,
+    ) {
+        self.labels.push(label);
+        #[cfg(feature = "deopt")]
+        {
+            self.exit_id.push(exit_id);
+            self.created_at.push(created_at);
+        }
     }
-}
 
-impl std::ops::Index<AsmDeopt> for SideExitLabels {
-    type Output = DestLabel;
+    ///
+    /// The raw handler label for a deopt index.
+    ///
+    /// Private on purpose: everything in the JIT body reaches a deopt
+    /// handler through [`Codegen::deopt_label`], which under `deopt`
+    /// interposes a trampoline that records *which* branch was taken.
+    /// There is deliberately no `Index<AsmDeopt>` impl — its absence is
+    /// what makes a new guard fail to compile until it declares a
+    /// [`DeoptCause`].
+    ///
+    pub(crate) fn raw_deopt(&self, index: AsmDeopt) -> &DestLabel {
+        &self.labels[index.0]
+    }
 
-    fn index(&self, index: AsmDeopt) -> &Self::Output {
-        &self.0[index.0]
+    #[cfg(feature = "deopt")]
+    pub(crate) fn deopt_meta(
+        &self,
+        index: AsmDeopt,
+    ) -> (u32, Option<&'static std::panic::Location<'static>>) {
+        (self.exit_id[index.0], self.created_at[index.0])
     }
 }
 
@@ -85,7 +127,7 @@ impl std::ops::Index<AsmError> for SideExitLabels {
     type Output = DestLabel;
 
     fn index(&self, index: AsmError) -> &Self::Output {
-        &self.0[index.0]
+        &self.labels[index.0]
     }
 }
 
@@ -93,7 +135,7 @@ impl std::ops::Index<AsmEvict> for SideExitLabels {
     type Output = DestLabel;
 
     fn index(&self, index: AsmEvict) -> &Self::Output {
-        &self.0[index.0]
+        &self.labels[index.0]
     }
 }
 
@@ -102,6 +144,11 @@ pub(crate) struct AsmIr {
     codegen_mode: bool,
     inst: Vec<AsmInst>,
     side_exit: Vec<SideExit>,
+    /// Parallel to `side_exit`: where each exit was created, captured by
+    /// the `#[track_caller]` constructors. Kept in lockstep with
+    /// `side_exit` (including on `restore`) so an index is valid for both.
+    #[cfg(feature = "deopt")]
+    created_at: Vec<Option<&'static std::panic::Location<'static>>>,
     /// Set when this IR has emitted at least one deopt-able side exit
     /// (via [`Self::new_deopt`] / [`Self::new_deopt_with_pc`]). Read by
     /// the enclosing frame to taint any `ReturnValue::Const` it would
@@ -141,9 +188,12 @@ impl std::ops::IndexMut<AsmEvict> for AsmIr {
 
 // private interface
 impl AsmIr {
+    #[cfg_attr(feature = "deopt", track_caller)]
     fn new_label(&mut self, side_exit: SideExit) -> usize {
         let label = self.side_exit.len();
         self.side_exit.push(side_exit);
+        #[cfg(feature = "deopt")]
+        self.created_at.push(Some(std::panic::Location::caller()));
         label
     }
 }
@@ -155,6 +205,8 @@ impl AsmIr {
             codegen_mode: ctx.codegen_mode(),
             inst: vec![],
             side_exit: vec![],
+            #[cfg(feature = "deopt")]
+            created_at: vec![],
             had_deopt: false,
             deferred_rest: false,
             needs_rest_array: false,
@@ -324,6 +376,8 @@ impl AsmIr {
     ) {
         self.inst.truncate(inst);
         self.side_exit.truncate(side_exit);
+        #[cfg(feature = "deopt")]
+        self.created_at.truncate(side_exit);
         self.codegen_mode = codegen_mode;
         self.had_deopt = had_deopt;
         self.deferred_rest = deferred_rest;
@@ -337,16 +391,6 @@ impl AsmIr {
 
     #[cfg_attr(feature = "deopt", track_caller)]
     pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
-        // Temporary P0 instrumentation: name the *emitter* of every plain
-        // deopt exit, keyed by the pc the runtime log also reports. The
-        // runtime cause column only shows rdi, which most guards never load,
-        // so it cannot tell one guard from another.
-        #[cfg(feature = "deopt")]
-        eprintln!(
-            "### deopt-create: pc={:?} by {}",
-            pc.as_ptr(),
-            std::panic::Location::caller()
-        );
         let i = self.new_label(SideExit::Deoptimize(
             pc,
             state.get_write_back(),
@@ -389,6 +433,7 @@ impl AsmIr {
     /// `new_deopt`, but driven by the recorded `(pc, write_back)` rather than
     /// reading the live `AbstractFrame`.
     ///
+    #[cfg_attr(feature = "deopt", track_caller)]
     pub(super) fn deopt_from_point(&mut self, point: &DeoptPoint) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(
             point.pc(),
@@ -409,6 +454,7 @@ impl AsmIr {
     /// *target* names what to recompile — the enclosing method/loop or
     /// the enclosing specialized entry — NOT the deopt site `pc`.
     ///
+    #[cfg_attr(feature = "deopt", track_caller)]
     pub(crate) fn new_recompile_deopt(
         &mut self,
         state: &AbstractFrame,
@@ -2803,6 +2849,10 @@ impl Codegen {
         _fallthrough_in: bool,
     ) {
         let mut side_exits = SideExitLabels::new();
+        #[cfg(feature = "deopt")]
+        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, bool), (DestLabel, u32)> =
+            HashMap::default();
+        #[cfg(not(feature = "deopt"))]
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack, bool), DestLabel> =
             HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
@@ -2814,10 +2864,20 @@ impl Codegen {
         // the main body can reference them. This is the seam the future
         // physical-allocation pass slots into (between buffering and the drain).
         let mut lir = Lir::new();
+        #[cfg(feature = "deopt")]
+        let mut created_at_iter = ir.created_at.into_iter();
         for side_exit in ir.side_exit {
+            #[cfg(feature = "deopt")]
+            let created_at = created_at_iter.next().flatten();
+            #[cfg(feature = "deopt")]
+            let mut exit_id = u32::MAX;
             let label = match side_exit {
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
+                    #[cfg(feature = "deopt")]
+                    {
+                        exit_id = deopt_log::register_exit(deopt_log::DeoptExit::Evict);
+                    }
                     lir.push(LInst::SideExit {
                         kind: LSideExitKind::Evict,
                         pc,
@@ -2825,15 +2885,31 @@ impl Codegen {
                         entry: label.clone(),
                         loop_jit_spill_bytes,
                         base,
+                        #[cfg(feature = "deopt")]
+                        exit_id,
                     });
                     label
                 }
                 SideExit::Deoptimize(pc, wb, chain) => {
                     let t = (pc, wb, chain);
-                    if let Some(label) = deopt_table.get(&t) {
-                        label.clone()
+                    if let Some(entry) = deopt_table.get(&t) {
+                        #[cfg(feature = "deopt")]
+                        {
+                            exit_id = entry.1;
+                        }
+                        #[cfg(feature = "deopt")]
+                        let label = entry.0.clone();
+                        #[cfg(not(feature = "deopt"))]
+                        let label = entry.clone();
+                        label
                     } else {
                         let label = self.jit.label();
+                        #[cfg(feature = "deopt")]
+                        {
+                            exit_id = deopt_log::register_exit(deopt_log::DeoptExit::Deopt {
+                                chain: t.2,
+                            });
+                        }
                         lir.push(LInst::SideExit {
                             kind: LSideExitKind::Deopt { chain: t.2 },
                             pc: t.0,
@@ -2841,13 +2917,25 @@ impl Codegen {
                             entry: label.clone(),
                             loop_jit_spill_bytes,
                             base,
+                            #[cfg(feature = "deopt")]
+                            exit_id,
                         });
+                        #[cfg(feature = "deopt")]
+                        deopt_table.insert(t, (label.clone(), exit_id));
+                        #[cfg(not(feature = "deopt"))]
                         deopt_table.insert(t, label.clone());
                         label
                     }
                 }
                 SideExit::RecompileDeoptimize(pc, wb, reason, target, chain) => {
                     let label = self.jit.label();
+                    #[cfg(feature = "deopt")]
+                    {
+                        exit_id = deopt_log::register_exit(deopt_log::DeoptExit::Recompile {
+                            reason,
+                            chain,
+                        });
+                    }
                     lir.push(LInst::SideExit {
                         kind: LSideExitKind::RecompileDeopt {
                             reason,
@@ -2859,6 +2947,8 @@ impl Codegen {
                         entry: label.clone(),
                         loop_jit_spill_bytes,
                         base,
+                        #[cfg(feature = "deopt")]
+                        exit_id,
                     });
                     label
                 }
@@ -2871,12 +2961,20 @@ impl Codegen {
                         entry: label.clone(),
                         loop_jit_spill_bytes,
                         base,
+                        #[cfg(feature = "deopt")]
+                        exit_id,
                     });
                     label
                 }
                 _ => unreachable!("unexpected {side_exit:?}"),
             };
-            side_exits.push(label);
+            side_exits.push(
+                label,
+                #[cfg(feature = "deopt")]
+                exit_id,
+                #[cfg(feature = "deopt")]
+                created_at,
+            );
         }
         for inst in lir.into_insts() {
             self.encode_linst(inst);

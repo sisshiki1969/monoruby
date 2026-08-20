@@ -13,6 +13,7 @@ mod variables;
 use super::compile_shared::{extend_ivar, unreachable};
 use crate::alloc::{BUMP_INLINE_LIMIT, CELL_SIZE_SHIFT, PAGE_DATA_OFFSET};
 use crate::codegen::jitgen::lir::{LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind};
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 /// Resolve a LIR register operand to its x86 register number. The scratch
 /// pointer is `rdx`.
@@ -210,7 +211,7 @@ impl Codegen {
                 }
             }
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
-                let deopt = &labels[deopt];
+                let deopt = &self.deopt_label(labels, deopt, DeoptCause::Static("class version (specialized)"));
                 self.guard_class_version_specialized(
                     class_version,
                     self.specialized_base + idx,
@@ -222,7 +223,7 @@ impl Codegen {
                 idx,
                 deopt,
             } => {
-                let deopt = &labels[deopt];
+                let deopt = &self.deopt_label(labels, deopt, DeoptCause::Static("const version (specialized)"));
                 self.guard_const_version_specialized(
                     const_version,
                     self.specialized_base + idx,
@@ -230,7 +231,7 @@ impl Codegen {
                 );
             }
             AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {
-                let deopt = &labels[deopt];
+                let deopt = &self.deopt_label(labels, deopt, DeoptCause::Static("recompile counter (specialized)"));
                 self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx, reason)
             }
             AsmInst::SetArgumentsForwarded {
@@ -693,81 +694,6 @@ impl Codegen {
             // the cached base class.
             LInst::GuardConstBaseClass { base_class, deopt } => {
                 let cached_base_class = self.jit.const_i64(base_class.id() as _);
-                // Temporary P0 instrumentation: on a miss, log the *actual*
-                // rax and the baked cell before the deopt write-back can
-                // clobber anything — the only way to see what this compare
-                // really tested (the activerecord run fails it 74.8k times
-                // with frame-self bits equal to the baked bits, which should
-                // be impossible). Registers the write-back reads (GP pool
-                // r8-r11, FPR pool xmm0-15, rax/rcx/rdx/rsi/rdi) are saved
-                // around the C call.
-                #[cfg(feature = "deopt")]
-                {
-                    let ok = self.jit.label();
-                    monoasm! { &mut self.jit,
-                        cmpq rax, [rip + cached_base_class];
-                        jeq  ok;
-                        subq rsp, 256;
-                        movq [rsp], rax;
-                        movq [rsp + 8], rcx;
-                        movq [rsp + 16], rdx;
-                        movq [rsp + 24], rsi;
-                        movq [rsp + 32], rdi;
-                        movq [rsp + 40], r8;
-                        movq [rsp + 48], r9;
-                        movq [rsp + 56], r10;
-                        movq [rsp + 64], r11;
-                        movq [rsp + 80], xmm0;
-                        movq [rsp + 88], xmm1;
-                        movq [rsp + 96], xmm2;
-                        movq [rsp + 104], xmm3;
-                        movq [rsp + 112], xmm4;
-                        movq [rsp + 120], xmm5;
-                        movq [rsp + 128], xmm6;
-                        movq [rsp + 136], xmm7;
-                        movq [rsp + 144], xmm8;
-                        movq [rsp + 152], xmm9;
-                        movq [rsp + 160], xmm10;
-                        movq [rsp + 168], xmm11;
-                        movq [rsp + 176], xmm12;
-                        movq [rsp + 184], xmm13;
-                        movq [rsp + 192], xmm14;
-                        movq [rsp + 200], xmm15;
-                        movq rdi, rax;
-                        movq rsi, [rip + cached_base_class];
-                        movq rax, (crate::globals::log_identity_miss);
-                        call rax;
-                        movq rax, [rsp];
-                        movq rcx, [rsp + 8];
-                        movq rdx, [rsp + 16];
-                        movq rsi, [rsp + 24];
-                        movq rdi, [rsp + 32];
-                        movq r8, [rsp + 40];
-                        movq r9, [rsp + 48];
-                        movq r10, [rsp + 56];
-                        movq r11, [rsp + 64];
-                        movq xmm0, [rsp + 80];
-                        movq xmm1, [rsp + 88];
-                        movq xmm2, [rsp + 96];
-                        movq xmm3, [rsp + 104];
-                        movq xmm4, [rsp + 112];
-                        movq xmm5, [rsp + 120];
-                        movq xmm6, [rsp + 128];
-                        movq xmm7, [rsp + 136];
-                        movq xmm8, [rsp + 144];
-                        movq xmm9, [rsp + 152];
-                        movq xmm10, [rsp + 160];
-                        movq xmm11, [rsp + 168];
-                        movq xmm12, [rsp + 176];
-                        movq xmm13, [rsp + 184];
-                        movq xmm14, [rsp + 192];
-                        movq xmm15, [rsp + 200];
-                        addq rsp, 256;
-                        jmp  deopt;
-                    ok:
-                    }
-                }
-                #[cfg(not(feature = "deopt"))]
                 monoasm! { &mut self.jit,
                     cmpq rax, [rip + cached_base_class];
                     jne  deopt;
@@ -1082,6 +1008,54 @@ impl Codegen {
             }
             // Cold side-exit (deopt) handler blocks. Dispatch on the kind to the
             // existing x86 handler emitters (defined in `jitgen.rs`).
+            // Per-branch deopt trampoline (see `jitgen::deopt_log`). rbx is
+            // `&mut Executor` for the whole body, so recording the cause
+            // needs no scratch register, no stack traffic, and — crucially
+            // for a guard that has just done its compare — no instruction
+            // that touches the flags.
+            #[cfg(all(feature = "deopt", target_arch = "x86_64"))]
+            LInst::DeoptTrampoline {
+                entry,
+                deopt,
+                cause,
+                site,
+            } => {
+                use crate::codegen::jitgen::deopt_log::DeoptCause;
+                // Page discipline mirrors `class_guard_fail_recorder`: from
+                // the hot page, park the stub on the cold one; when already
+                // emitting cold (bridge blocks), jump over it in place.
+                let inline = self.jit.get_page() != 0;
+                let skip = self.jit.label();
+                if inline {
+                    monoasm!( &mut self.jit, jmp skip; );
+                } else {
+                    self.jit.select_page(1);
+                }
+                self.jit.bind_label(entry);
+                match cause {
+                    DeoptCause::Value(r) | DeoptCause::ValueVsBaked(r, _) | DeoptCause::Raw(r) => {
+                        monoasm!( &mut self.jit,
+                            movq [rbx + (EXECUTOR_DEOPT_CAUSE)], R(r as u64);
+                        );
+                    }
+                    DeoptCause::Static(_) => {
+                        // No operand: zero the word so a previous branch's
+                        // value cannot be mistaken for this one's.
+                        monoasm!( &mut self.jit,
+                            movq [rbx + (EXECUTOR_DEOPT_CAUSE)], 0;
+                        );
+                    }
+                }
+                monoasm!( &mut self.jit,
+                    movl [rbx + (EXECUTOR_DEOPT_SITE)], (site as i32);
+                    jmp  deopt;
+                );
+                if inline {
+                    self.jit.bind_label(skip);
+                } else {
+                    self.jit.select_page(0);
+                }
+            }
             LInst::SideExit {
                 kind,
                 pc,
@@ -1089,13 +1063,28 @@ impl Codegen {
                 entry,
                 loop_jit_spill_bytes,
                 base,
+                #[cfg(feature = "deopt")]
+                exit_id,
             } => match kind {
-                LSideExitKind::Deopt { chain } => {
-                    self.gen_deopt_with_label(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
-                }
-                LSideExitKind::Evict => {
-                    self.gen_evict_with_label(pc, &wb, entry, loop_jit_spill_bytes, base)
-                }
+                LSideExitKind::Deopt { chain } => self.gen_deopt_with_label(
+                    pc,
+                    &wb,
+                    entry,
+                    loop_jit_spill_bytes,
+                    base,
+                    chain,
+                    #[cfg(feature = "deopt")]
+                    exit_id,
+                ),
+                LSideExitKind::Evict => self.gen_evict_with_label(
+                    pc,
+                    &wb,
+                    entry,
+                    loop_jit_spill_bytes,
+                    base,
+                    #[cfg(feature = "deopt")]
+                    exit_id,
+                ),
                 LSideExitKind::RecompileDeopt {
                     reason,
                     target,
@@ -1109,6 +1098,8 @@ impl Codegen {
                     loop_jit_spill_bytes,
                     base,
                     chain,
+                    #[cfg(feature = "deopt")]
+                    exit_id,
                 ),
                 LSideExitKind::Error { chain } => self.gen_handle_error(pc, wb, entry, base, chain),
             },

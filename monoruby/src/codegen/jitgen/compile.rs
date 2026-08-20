@@ -146,16 +146,6 @@ impl<'a> JitContext<'a> {
                     // all — every execution deopts here for the rest of the
                     // run, and the runtime cause column cannot name it (rdi
                     // is not loaded, so it logs as `UNDEFINED`).
-                    #[cfg(feature = "deopt")]
-                    eprintln!(
-                        "### give-up-deopt: [{:?}] {:?} in <{}> self_class:{}",
-                        self.store[self.iseq_id()].get_pc_index(Some(state.pc())),
-                        self.jit_type(),
-                        self.store[self.func_id()]
-                            .name()
-                            .map_or_else(|| "?".to_string(), |n| n.to_string()),
-                        self.store.debug_class_name(self.self_class()),
-                    );
                     self.new_return(ReturnState::default());
                     ir.deopt(&mut state);
                     return Ok(ir);
@@ -1203,17 +1193,6 @@ impl<'a> JitContext<'a> {
         // execution deopts here forever. The runtime cause column cannot name
         // it (`dec_counter` zeroes rdi, so it logs as `UNDEFINED`), so report
         // it at compile time instead.
-        #[cfg(feature = "deopt")]
-        eprintln!(
-            "### give-up: {:?} [{:?}] {:?} in <{}> self_class:{}",
-            reason,
-            self.store[self.iseq_id()].get_pc_index(Some(state.pc())),
-            self.jit_type(),
-            self.store[self.func_id()]
-                .name()
-                .map_or_else(|| "?".to_string(), |n| n.to_string()),
-            self.store.debug_class_name(self.self_class()),
-        );
         let deopt = ir.new_deopt(state);
         match self.jit_type() {
             JitType::Specialized { idx, .. } => ir.push(AsmInst::RecompileDeoptSpecialized {

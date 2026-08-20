@@ -186,7 +186,11 @@ pub(crate) extern "C" fn log_deoptimize(
     vm: &mut Executor,
     globals: &mut Globals,
     pc: BytecodePtr,
-    #[cfg(feature = "deopt")] reason: Option<Value>,
+    // `exit_id`: registry id of the handler that is running, baked into the
+    // call as an immediate — so the reported exit kind cannot disagree with
+    // the code that produced it. (The branch *into* the handler is
+    // identified separately, by the trampoline record this reads from `vm`.)
+    #[cfg(feature = "deopt")] exit_id: u32,
 ) {
     use crate::jitgen::trace_ir::*;
     let func_id = vm.cfp().lfp().func_id();
@@ -215,56 +219,82 @@ pub(crate) extern "C" fn log_deoptimize(
         }
         #[cfg(feature = "deopt")]
         {
+            use crate::codegen::jitgen::deopt_log;
             let name = globals.store.func_description(func_id);
             let fmt = TraceIr::format(&globals.store, iseq_id, pc).unwrap_or_default();
-            match trace_ir {
-                TraceIr::LoadConst(..)          // inline constant cache miss
-                | TraceIr::ClassDef { .. }      // error in class def (illegal superclass etc.)
-                | TraceIr::LoadIvar(..)         // inline ivar cache miss
-                | TraceIr::StoreIvar(..) => {
-                    eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
-                    if let Some(v) = reason {
-                        eprintln!("    [{:05}] {fmt} caused by {}", bc_pos, v.debug(&globals.store));
-                    } else {
-                        eprintln!("    [{:05}] {fmt}", bc_pos);
+            let exit = deopt_log::exit(exit_id);
+            let site = vm.take_deopt_site();
+
+            eprintln!("<-- deopt occurs in <{name}> {func_id:?}.");
+            eprintln!(
+                "      [{bc_pos:05}] {fmt}   exit: {}",
+                match &exit {
+                    Some(e) => e.to_string(),
+                    None => "unknown".to_string(),
+                }
+            );
+            match site.and_then(|(id, bits)| deopt_log::site(id).map(|s| (s, bits))) {
+                Some((s, bits)) => {
+                    eprintln!("      guard: {}", s.lowered_at);
+                    if let Some(created) = s.created_at {
+                        eprintln!("      exit emitted by: {created}");
                     }
-                },
-                _ => if let Some(v) = reason {
-                    eprint!("<-- deopt occurs in <{}> {:?}.", name, func_id);
-                    // `pc=` joins this line to the `### deopt-create:` line that
-                    // emitted the exit, and `self=` names the deopting frame's
-                    // receiver — read from the LFP, so unlike the rdi-based
-                    // cause column it survives the write-back's register
-                    // clobbering (temporary P0 instrumentation).
-                    eprintln!(
-                        "    [{:05}] {fmt} caused by {} pc={:?} self={} selfbits={:#x}",
-                        bc_pos,
-                        v.debug(&globals.store),
-                        pc.as_ptr(),
-                        vm.cfp().lfp().self_val().debug(&globals.store),
-                        vm.cfp().lfp().self_val().id()
-                    );
-                } else {
-                    eprint!("<-- non-traced branch in <{}> {:?}.", name, func_id);
-                    eprintln!("    [{:05}] {fmt}", bc_pos);
-                },
+                    eprintln!("      cause: {}", render_cause(globals, s.cause, bits));
+                }
+                // Reached without a trampoline — an evict resumed through a
+                // patched return address, say. Report that honestly instead
+                // of attributing a stale record to this deopt.
+                None => eprintln!("      guard: unknown (handler entered without a trampoline)"),
             }
         }
     }
 }
 
-/// Temporary P0 instrumentation (`deopt` builds): called from the
-/// `GuardConstBaseClass` miss path with the actual compared register and the
-/// baked cell, before the deopt write-back can clobber anything.
+///
+/// Render the operand a guard recorded, given what its lowering site
+/// declared it to be.
+///
+/// A `Value` cause is only decoded once its bits look like one; a guard
+/// that fires on corrupt input must not turn the log into a crash.
+///
 #[cfg(feature = "deopt")]
-pub(crate) extern "C" fn log_identity_miss(actual: u64, expected: u64) {
-    eprintln!("### id-miss: rax={actual:#x} expected={expected:#x}");
-}
-
-/// Temporary P0 instrumentation (`deopt` builds): called from the specialized
-/// class-version guard's miss path with the global version, the unit's cached
-/// cell, and the specialized index — before salvage/recompile runs.
-#[cfg(feature = "deopt")]
-pub(crate) extern "C" fn log_version_miss(global: u64, cached: u64, idx: u64) {
-    eprintln!("### ver-miss: global={global} cached={cached} idx={idx}");
+fn render_cause(
+    globals: &Globals,
+    cause: crate::codegen::jitgen::deopt_log::DeoptCause,
+    bits: u64,
+) -> String {
+    use crate::codegen::jitgen::deopt_log::DeoptCause;
+    let decode = |bits: u64| -> String {
+        match std::num::NonZeroU64::new(bits) {
+            None => format!("<null> (bits={bits:#x})"),
+            Some(_) => {
+                let v = unsafe { std::mem::transmute::<u64, Value>(bits) };
+                match v.debug_check(&globals.store) {
+                    Some(s) => format!("{s} (bits={bits:#x})"),
+                    None => format!("<not a Value> (bits={bits:#x})"),
+                }
+            }
+        }
+    };
+    match cause {
+        DeoptCause::Value(r) => format!("{r:?} = {}", decode(bits)),
+        DeoptCause::ValueVsBaked(r, expected) => {
+            let mut s = format!(
+                "{r:?} = {}, expected {} (bits={:#x})",
+                decode(bits),
+                expected.debug(&globals.store),
+                expected.id()
+            );
+            // A guard that missed on bits equal to what it compares against
+            // is a contradiction — the kind that cost four wrong hypotheses
+            // before this log could state it. Say so loudly rather than
+            // printing two identical values and leaving it to the reader.
+            if bits == expected.id() {
+                s.push_str("  !!! guard reported a miss on equal bits");
+            }
+            s
+        }
+        DeoptCause::Raw(r) => format!("{r:?} = {bits:#x} (raw)"),
+        DeoptCause::Static(what) => what.to_string(),
+    }
 }

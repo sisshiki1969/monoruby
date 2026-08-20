@@ -1102,6 +1102,23 @@ pub(in crate::codegen) enum LInst {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
+        /// Registry id of this handler, baked into the log call so the
+        /// reported exit kind cannot disagree with the code that runs.
+        #[cfg(feature = "deopt")]
+        exit_id: u32,
+    },
+    /// A per-branch deopt trampoline (`deopt` builds, x86-64 only).
+    ///
+    /// Records what the guard was looking at and which branch fired, then
+    /// jumps to the shared handler. Emitted on the cold page; see
+    /// [`crate::codegen::jitgen::deopt_log`] for why the identity cannot
+    /// live on the handler instead.
+    #[cfg(all(feature = "deopt", target_arch = "x86_64"))]
+    DeoptTrampoline {
+        entry: DestLabel,
+        deopt: DestLabel,
+        cause: crate::codegen::jitgen::deopt_log::DeoptCause,
+        site: u32,
     },
     /// (§9 9a) Ordering pseudo-op: select the hot (0) / cold (1) emission page.
     /// Emits no machine code of its own; reproduces `self.jit.select_page(n)` at

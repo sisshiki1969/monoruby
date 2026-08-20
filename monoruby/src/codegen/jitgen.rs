@@ -28,6 +28,7 @@ pub mod asmir;
 mod compile;
 mod context;
 mod definition;
+pub(crate) mod deopt_log;
 #[allow(dead_code)]
 mod gp_alloc;
 #[cfg(target_arch = "x86_64")]
@@ -1387,8 +1388,20 @@ impl Codegen {
         loop_jit_spill_bytes: usize,
         base: usize,
         chain: bool,
+        #[cfg(feature = "deopt")] exit_id: u32,
     ) {
-        self.side_exit_with_label(pc, wb, entry, false, None, loop_jit_spill_bytes, base, chain)
+        self.side_exit_with_label(
+            pc,
+            wb,
+            entry,
+            false,
+            None,
+            loop_jit_spill_bytes,
+            base,
+            chain,
+            #[cfg(feature = "deopt")]
+            exit_id,
+        )
     }
 
     ///
@@ -1410,6 +1423,7 @@ impl Codegen {
         loop_jit_spill_bytes: usize,
         base: usize,
         chain: bool,
+        #[cfg(feature = "deopt")] exit_id: u32,
     ) {
         self.side_exit_with_label(
             pc,
@@ -1420,6 +1434,8 @@ impl Codegen {
             loop_jit_spill_bytes,
             base,
             chain,
+            #[cfg(feature = "deopt")]
+            exit_id,
         )
     }
 
@@ -1433,11 +1449,23 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
+        #[cfg(feature = "deopt")] exit_id: u32,
     ) {
         // Evict handlers are only entered through a chain-wide eviction walk,
         // which converts (or patches) every suspended frame in one pass — no
         // per-handler escalation needed.
-        self.side_exit_with_label(pc, wb, entry, true, None, loop_jit_spill_bytes, base, false)
+        self.side_exit_with_label(
+            pc,
+            wb,
+            entry,
+            true,
+            None,
+            loop_jit_spill_bytes,
+            base,
+            false,
+            #[cfg(feature = "deopt")]
+            exit_id,
+        )
     }
 
     ///
@@ -1456,6 +1484,7 @@ impl Codegen {
         loop_jit_spill_bytes: usize,
         base: usize,
         chain: bool,
+        #[cfg(feature = "deopt")] exit_id: u32,
     ) {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -1485,33 +1514,27 @@ impl Codegen {
             movq r13, (pc.as_ptr());
         );
 
+        // The call site keeps its original position — after the write-back,
+        // with nothing live in registers and the VM re-entry next. What the
+        // guard was looking at no longer has to survive in a register to be
+        // reported: its trampoline copied it into the `Executor` *before*
+        // the write-back ran (see `jitgen::deopt_log`), which is what makes
+        // the reported cause trustworthy now. Under `profile` alone the call
+        // is byte-for-byte what it always was.
         #[cfg(any(feature = "deopt", feature = "profile"))]
         {
-            if _is_evict {
-                monoasm!( &mut self.jit,
-                    movq rcx, (Value::symbol_from_str("__immediate_evict").id());
-                );
-            } else if let Some((_, target)) = &recompile {
-                // Temporary P0 instrumentation: name the counter-gated
-                // recompile exits so the deopt census can tell them from
-                // plain guards (rdi is not a meaningful cause here).
-                let tag = match target {
-                    RecompileTarget::Whole(None) => "__recompile_exit_method",
-                    RecompileTarget::Whole(Some(_)) => "__recompile_exit_loop",
-                    RecompileTarget::Specialized(_) => "__recompile_exit_spec",
-                };
-                monoasm!( &mut self.jit,
-                    movq rcx, (Value::symbol_from_str(tag).id());
-                );
-            } else {
-                monoasm!( &mut self.jit,
-                    movq rcx, rdi; // the Value which caused this deopt.
-                );
-            }
+            let _ = _is_evict;
+            let _ = &recompile;
             monoasm!( &mut self.jit,
                 movq rdi, rbx;
                 movq rsi, r12;
                 movq rdx, r13;
+            );
+            #[cfg(feature = "deopt")]
+            monoasm!( &mut self.jit,
+                movl rcx, (exit_id);
+            );
+            monoasm!( &mut self.jit,
                 movq rax, (crate::globals::log_deoptimize);
                 call rax;
             );

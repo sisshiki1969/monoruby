@@ -28,6 +28,7 @@ fn a64_lreg(r: LReg) -> u32 {
     }
 }
 use monoasm_macro::monoasm_arm64;
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 mod binary_op;
 mod builtin;
@@ -162,6 +163,12 @@ impl Codegen {
         {
             monoasm_arm64!(&mut self.jit, b skip;);
         }
+        #[cfg(feature = "deopt")]
+        let mut deopt_table: std::collections::HashMap<
+            (BytecodePtr, WriteBack, bool),
+            (DestLabel, u32),
+        > = std::collections::HashMap::new();
+        #[cfg(not(feature = "deopt"))]
         let mut deopt_table: std::collections::HashMap<(BytecodePtr, WriteBack, bool), DestLabel> =
             std::collections::HashMap::new();
         // Loop-JIT entry sp-bump to undo before any exit resumes the VM.
@@ -173,12 +180,24 @@ impl Codegen {
         // and is byte-identical. Labels are still created eagerly for the body to
         // reference; the drain is the seam the future phys-alloc pass slots into.
         let mut lir = Lir::new();
+        #[cfg(feature = "deopt")]
+        let mut created_at_iter = ir.created_at.into_iter();
         for side_exit in ir.side_exit {
+            #[cfg(feature = "deopt")]
+            let created_at = created_at_iter.next().flatten();
+            #[cfg(feature = "deopt")]
+            let mut exit_id = u32::MAX;
             let label = match side_exit {
                 // Eviction falls back to the interpreter like a deopt (the
                 // `__immediate_evict` logging is `cfg(deopt/profile)`-only).
                 SideExit::Evict(Some((pc, wb))) => {
                     let label = self.jit.label();
+                    #[cfg(feature = "deopt")]
+                    {
+                        exit_id = crate::codegen::jitgen::deopt_log::register_exit(
+                            crate::codegen::jitgen::deopt_log::DeoptExit::Evict,
+                        );
+                    }
                     lir.push(LInst::SideExit {
                         kind: LSideExitKind::Evict,
                         pc,
@@ -186,15 +205,31 @@ impl Codegen {
                         entry: label.clone(),
                         loop_jit_spill_bytes: bump,
                         base: frame.base_stack_offset,
+                        #[cfg(feature = "deopt")]
+                        exit_id,
                     });
                     label
                 }
                 SideExit::Deoptimize(pc, wb, chain) => {
                     let key = (pc, wb, chain);
-                    if let Some(label) = deopt_table.get(&key) {
-                        label.clone()
+                    if let Some(entry) = deopt_table.get(&key) {
+                        #[cfg(feature = "deopt")]
+                        {
+                            exit_id = entry.1;
+                        }
+                        #[cfg(feature = "deopt")]
+                        let label = entry.0.clone();
+                        #[cfg(not(feature = "deopt"))]
+                        let label = entry.clone();
+                        label
                     } else {
                         let label = self.jit.label();
+                        #[cfg(feature = "deopt")]
+                        {
+                            exit_id = crate::codegen::jitgen::deopt_log::register_exit(
+                                crate::codegen::jitgen::deopt_log::DeoptExit::Deopt { chain: key.2 },
+                            );
+                        }
                         lir.push(LInst::SideExit {
                             kind: LSideExitKind::Deopt { chain: key.2 },
                             pc: key.0,
@@ -202,13 +237,24 @@ impl Codegen {
                             entry: label.clone(),
                             loop_jit_spill_bytes: bump,
                             base: frame.base_stack_offset,
+                            #[cfg(feature = "deopt")]
+                            exit_id,
                         });
+                        #[cfg(feature = "deopt")]
+                        deopt_table.insert(key, (label.clone(), exit_id));
+                        #[cfg(not(feature = "deopt"))]
                         deopt_table.insert(key, label.clone());
                         label
                     }
                 }
                 SideExit::RecompileDeoptimize(pc, wb, reason, target, chain) => {
                     let label = self.jit.label();
+                    #[cfg(feature = "deopt")]
+                    {
+                        exit_id = crate::codegen::jitgen::deopt_log::register_exit(
+                            crate::codegen::jitgen::deopt_log::DeoptExit::Recompile { reason, chain },
+                        );
+                    }
                     lir.push(LInst::SideExit {
                         kind: LSideExitKind::RecompileDeopt {
                             reason,
@@ -220,6 +266,8 @@ impl Codegen {
                         entry: label.clone(),
                         loop_jit_spill_bytes: bump,
                         base: frame.base_stack_offset,
+                        #[cfg(feature = "deopt")]
+                        exit_id,
                     });
                     label
                 }
@@ -232,6 +280,8 @@ impl Codegen {
                         entry: label.clone(),
                         loop_jit_spill_bytes: bump,
                         base: frame.base_stack_offset,
+                        #[cfg(feature = "deopt")]
+                        exit_id,
                     });
                     label
                 }
@@ -240,7 +290,13 @@ impl Codegen {
                 // `_ => unreachable!()`).
                 _ => unreachable!("unexpected {side_exit:?}"),
             };
-            labels.push(label);
+            labels.push(
+                label,
+                #[cfg(feature = "deopt")]
+                exit_id,
+                #[cfg(feature = "deopt")]
+                created_at,
+            );
         }
         for inst in lir.into_insts() {
             self.encode_linst(inst);
@@ -1357,6 +1413,10 @@ impl Codegen {
                 entry,
                 loop_jit_spill_bytes,
                 base,
+                // aarch64 handlers do not call `log_deoptimize` (they never
+                // have), so the exit id is recorded but unused here.
+                #[cfg(feature = "deopt")]
+                    exit_id: _,
             } => match kind {
                 LSideExitKind::Deopt { chain } => {
                     self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
@@ -2823,7 +2883,7 @@ impl Codegen {
             }
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let global_idx = self.specialized_base + idx;
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("class version (specialized)"));
                 let miss = self.jit.label();
                 let done = self.jit.label();
                 self.a64_guard_class_version(&class_version, &miss); // mismatch -> miss
@@ -2845,7 +2905,7 @@ impl Codegen {
                 deopt,
             } => {
                 let global_idx = self.specialized_base + idx;
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("const version (specialized)"));
                 let miss = self.jit.label();
                 let done = self.jit.label();
                 let gv_addr = self
@@ -2878,7 +2938,7 @@ impl Codegen {
             // `recompile_and_deopt_specialized`).
             AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {
                 let global_idx = self.specialized_base + idx;
-                let deopt = labels[deopt].clone();
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("recompile counter (specialized)"));
                 let counter =
                     Box::into_raw(Box::new(COUNT_DEOPT_RECOMPILE_SPECIALIZED)) as u64;
                 monoasm_arm64!(&mut self.jit,

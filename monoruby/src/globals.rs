@@ -15,10 +15,6 @@ mod require;
 mod store;
 #[cfg(any(feature = "deopt", feature = "profile"))]
 pub(crate) use dump::log_deoptimize;
-#[cfg(feature = "deopt")]
-pub(crate) use dump::log_identity_miss;
-#[cfg(feature = "deopt")]
-pub(crate) use dump::log_version_miss;
 pub use error::*;
 pub use gvar::*;
 use prng::*;
@@ -1472,16 +1468,7 @@ impl Globals {
         });
     }
 
-    #[cfg_attr(feature = "deopt", track_caller)]
     pub(crate) fn class_version_inc() {
-        // Temporary P0 instrumentation: name every bump site. The steady
-        // phase of the activerecord workload keeps failing class-version
-        // guards (74.9k deopts at Class#new alone, 1.13M salvage passes),
-        // so something bumps the version each iteration; the definition
-        // hooks (method_added & co.) all report zero, so the bumper is on
-        // a path they cannot see.
-        #[cfg(feature = "deopt")]
-        eprintln!("### class-ver-inc by {}", std::panic::Location::caller());
         CODEGEN.with(|codegen| codegen.borrow_mut().class_version_inc());
     }
 
