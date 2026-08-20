@@ -260,3 +260,11 @@ pub(crate) extern "C" fn log_deoptimize(
 pub(crate) extern "C" fn log_identity_miss(actual: u64, expected: u64) {
     eprintln!("### id-miss: rax={actual:#x} expected={expected:#x}");
 }
+
+/// Temporary P0 instrumentation (`deopt` builds): called from the specialized
+/// class-version guard's miss path with the global version, the unit's cached
+/// cell, and the specialized index — before salvage/recompile runs.
+#[cfg(feature = "deopt")]
+pub(crate) extern "C" fn log_version_miss(global: u64, cached: u64, idx: u64) {
+    eprintln!("### ver-miss: global={global} cached={cached} idx={idx}");
+}

@@ -17,6 +17,8 @@ mod store;
 pub(crate) use dump::log_deoptimize;
 #[cfg(feature = "deopt")]
 pub(crate) use dump::log_identity_miss;
+#[cfg(feature = "deopt")]
+pub(crate) use dump::log_version_miss;
 pub use error::*;
 pub use gvar::*;
 use prng::*;
