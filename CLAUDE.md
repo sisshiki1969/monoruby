@@ -285,10 +285,23 @@ equivalent fixed register assignment in `codegen/arch/aarch64/`):
 **Deoptimization** falls back to the interpreter when:
 
 1. A type guard fails (type changed at runtime)
-2. Class version mismatch (class was modified)
-3. BOP (basic-op) redefinition
+2. Class version mismatch (a method was defined/removed/re-scoped anywhere)
+3. Const version mismatch (a constant was assigned/removed anywhere)
+4. BOP (basic-op) redefinition
 
-**Recompilation** reasons: `NotCached`, `MethodNotFound`, `IvarIdNotFound`.
+**Recompilation** reasons (`RecompileReason`, `executor.rs`): `NotCached`,
+`MethodNotFound`, `IvarIdNotFound`, `ClassVersionGuardFailed`,
+`BecamePolymorphic`, `ConstVersionGuardFailed`.
+
+**Salvage** — a version-guard failure usually does *not* recompile. Both
+version counters are global, so any `def` or `X = 1` anywhere moves them;
+each compilation unit therefore records what it actually assumed (its
+resolved call sites, its folded constants) and re-validates on a miss. If
+every assumption still holds, the unit's patchable version word is stamped
+with the current version and the code stands. Only a genuine change
+recompiles — on a ruby/spec `core` run this is ~320 recompiles instead of
+~107,000. See `doc/jit_invalidation.md`; BOP redefinition is *not* repaired
+this way (it evicts, see `doc/bop_redefinition.md`).
 
 ### Built-in Methods (`builtins/`)
 
