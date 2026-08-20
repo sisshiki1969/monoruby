@@ -92,6 +92,15 @@ pub struct JitInfo {
     pub inline_cache_map: Vec<InlineCacheEntry>,
 }
 
+/// The salvage-relevant half of a loop (OSR) compilation unit — see
+/// [`ISeqInfo::loop_jit_info`]. Loops need no `entry` label here: the entry
+/// address lives in the `LoopStart` operand itself.
+#[derive(Debug, Clone)]
+pub struct LoopJitInfo {
+    pub class_version_label: DestLabel,
+    pub inline_cache_map: Vec<InlineCacheEntry>,
+}
+
 ///
 /// Hint for ISeq optimization.
 /// When an ISeq is detected as a trivial method during bytecode compilation,
@@ -190,6 +199,13 @@ pub struct ISeqInfo {
     /// JIT code info for each class of *self*.
     ///
     pub(super) jit_entry: HashMap<ClassId, JitInfo>,
+    /// Per-loop (OSR) compilation units, keyed by `(self_class, LoopStart
+    /// index)`: the inline-cache map and shared class-version word of the
+    /// last installed loop body, so a class-version guard failure can be
+    /// *salvaged* (re-resolve, patch the word) exactly like a whole-method
+    /// unit. Dropped together with the code it describes
+    /// (`drop_jit_code`).
+    pub(super) loop_jit_info: HashMap<(ClassId, BcIndex), LoopJitInfo>,
     /// aarch64 only: per-self-class address of the indirect-dispatch slot
     /// (the wrapper's / a class-guard chain link's heap word). Recorded at
     /// `compile_patch` so the recompiler can overwrite the slot in place
@@ -390,6 +406,7 @@ impl ISeqInfo {
             lexical_context: vec![],
             sourceinfo,
             jit_entry: HashMap::default(),
+            loop_jit_info: HashMap::default(),
             #[cfg(target_arch = "aarch64")]
             jit_slot: HashMap::default(),
             #[cfg(target_arch = "aarch64")]
@@ -849,6 +866,35 @@ impl ISeqInfo {
             .map(|info| info.class_version_label.clone())
     }
 
+    /// Record the salvage info of a freshly installed loop body (replacing
+    /// any previous body's for the same `(self_class, LoopStart)` site).
+    pub(crate) fn set_loop_jit_info(
+        &mut self,
+        self_class: ClassId,
+        index: BcIndex,
+        class_version_label: DestLabel,
+        inline_cache_map: Vec<InlineCacheEntry>,
+    ) {
+        self.loop_jit_info.insert(
+            (self_class, index),
+            LoopJitInfo {
+                class_version_label,
+                inline_cache_map,
+            },
+        );
+    }
+
+    pub(crate) fn get_loop_jit_info(
+        &self,
+        self_class: ClassId,
+        index: BcIndex,
+    ) -> Option<&LoopJitInfo> {
+        if self.jit_invalidated {
+            return None;
+        }
+        self.loop_jit_info.get(&(self_class, index))
+    }
+
     /// Permanently give up on JIT-compiling this iseq (the front-end bailed).
     pub(crate) fn invalidate_jit_code(&mut self) {
         self.jit_invalidated = true;
@@ -861,6 +907,7 @@ impl ISeqInfo {
     /// whether the iseq may be compiled again.
     fn drop_jit_code(&mut self) {
         self.jit_entry.clear();
+        self.loop_jit_info.clear();
         self.jit_class_profile.clear();
         #[cfg(target_arch = "aarch64")]
         {

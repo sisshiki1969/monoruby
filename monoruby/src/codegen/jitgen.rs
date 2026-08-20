@@ -733,6 +733,7 @@ impl Codegen {
                     // A body compiled under the root's armed speculation
                     // recompiles by rebuilding the root unit (#1140).
                     speculated_root: speculated.then_some(root),
+                    owner: root,
                 });
             }
             let entry = frame.resolve_label(&mut self.jit, specialized_entry);

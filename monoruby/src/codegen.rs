@@ -692,6 +692,13 @@ pub(crate) struct SpecializedPatchEntry {
     /// #1140) — a recompile request rebuilds the whole root compilation
     /// unit instead, re-arming the speculation under fresh inline caches.
     pub(crate) speculated_root: Option<(ISeqId, ClassId, Option<BytecodePtr>)>,
+    /// The compilation unit this body was installed under (its root). All
+    /// guards of one compilation — the root's and every inlined child's —
+    /// read the *same* class-version word, and the unit's inline-cache map
+    /// covers them all, so a child's class-version guard failure can be
+    /// salvaged by re-validating the owner unit (`salvage_method_unit` /
+    /// `salvage_loop_unit`) instead of recompiling this body.
+    pub(crate) owner: (ISeqId, ClassId, Option<BytecodePtr>),
 }
 
 ///
@@ -1911,6 +1918,10 @@ pub(crate) mod jit_stats {
     pub static CONST_VER_INC: AtomicUsize = AtomicUsize::new(0);
     pub static RECOVERY_ATTEMPT: AtomicUsize = AtomicUsize::new(0);
     pub static SALVAGE_OK: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOVERY_ATTEMPT_LOOP: AtomicUsize = AtomicUsize::new(0);
+    pub static SALVAGE_OK_LOOP: AtomicUsize = AtomicUsize::new(0);
+    pub static RECOVERY_ATTEMPT_SPEC: AtomicUsize = AtomicUsize::new(0);
+    pub static SALVAGE_OK_SPEC: AtomicUsize = AtomicUsize::new(0);
     pub static SALVAGE_FAIL_NO_ENTRY: AtomicUsize = AtomicUsize::new(0);
     pub static SALVAGE_FAIL_RESOLUTION_CHANGED: AtomicUsize = AtomicUsize::new(0);
     pub static RECOMPILE_METHOD_CLASS_VER: AtomicUsize = AtomicUsize::new(0);
@@ -1936,6 +1947,10 @@ pub(crate) mod jit_stats {
         eprintln!("  const_version incs:                {}", g(&CONST_VER_INC));
         eprintln!("  recovery attempts (class guard):   {}", g(&RECOVERY_ATTEMPT));
         eprintln!("    salvaged (re-resolution ok):     {}", g(&SALVAGE_OK));
+        eprintln!("  recovery attempts (loop guard):    {}", g(&RECOVERY_ATTEMPT_LOOP));
+        eprintln!("    salvaged (re-resolution ok):     {}", g(&SALVAGE_OK_LOOP));
+        eprintln!("  recovery attempts (spec guard):    {}", g(&RECOVERY_ATTEMPT_SPEC));
+        eprintln!("    salvaged (re-resolution ok):     {}", g(&SALVAGE_OK_SPEC));
         eprintln!("    fail: resolution changed:        {}", g(&SALVAGE_FAIL_RESOLUTION_CHANGED));
         eprintln!("    fail: no cache/entry:            {}", g(&SALVAGE_FAIL_NO_ENTRY));
         eprintln!("  whole recompiles  class-ver:       {}", g(&RECOMPILE_METHOD_CLASS_VER));
