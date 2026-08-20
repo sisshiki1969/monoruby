@@ -70,12 +70,19 @@ pub(super) fn gen_class_allocate_inline(
     // the code compiled for `Foo.new` and allocate a `Foo` instead of
     // raising TypeError. Deopt on mismatch: the interpreter's native
     // `allocate` then does the raising.
-    // Temporary P0 instrumentation: park the receiver in rdi too, so the
-    // deopt log's cause column names the class object that arrived instead
-    // of the baked one (this guard is the single largest deopt source in the
-    // activerecord workload and the cause column is otherwise blind).
+    // Temporary P0 instrumentation: record the exact Value bits this compile
+    // bakes into the identity guard, so a failing run can be joined against
+    // the runtime `self=` line bit-for-bit (74.8k activerecord deopts fire
+    // with self == Array — the class the guard supposedly baked — so either
+    // the baked bits are non-canonical or the wrong body is entered).
     #[cfg(feature = "deopt")]
-    state.load(ir, recv, GP::Rdi);
+    eprintln!(
+        "### alloc-inline: baked={} bits={:#x} for self_class={} inline={}",
+        store.debug_class_name(class_id),
+        self_module.as_val().id(),
+        store.debug_class_name(self_class),
+        store[class_id].alloc_func().is_some(),
+    );
     state.load(ir, recv, GP::Rax);
     let deopt = ir.new_deopt(state);
     ir.guard_value_identity(self_module.as_val(), deopt);

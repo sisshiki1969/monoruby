@@ -237,11 +237,12 @@ pub(crate) extern "C" fn log_deoptimize(
                     // cause column it survives the write-back's register
                     // clobbering (temporary P0 instrumentation).
                     eprintln!(
-                        "    [{:05}] {fmt} caused by {} pc={:?} self={}",
+                        "    [{:05}] {fmt} caused by {} pc={:?} self={} selfbits={:#x}",
                         bc_pos,
                         v.debug(&globals.store),
                         pc.as_ptr(),
-                        vm.cfp().lfp().self_val().debug(&globals.store)
+                        vm.cfp().lfp().self_val().debug(&globals.store),
+                        vm.cfp().lfp().self_val().id()
                     );
                 } else {
                     eprint!("<-- non-traced branch in <{}> {:?}.", name, func_id);
