@@ -20,6 +20,10 @@ require "fiddle"
 module FFI
   # VERSION is set by the ffi gem's lib/ffi/version.rb
 
+  # `Fiddle.___prepare` flags (kept in sync with src/builtins/fiddle.rs).
+  PREPARE_RETURN_STRING = 1
+  PREPARE_BLOCKING      = 2
+
   # =========================================================================
   # Type codes – integer constants matching the Rust backend
   # (src/builtins/fiddle.rs). They follow CRuby's Fiddle convention so that
@@ -696,9 +700,22 @@ module FFI
         # at definition time.
         if addr != 0
           begin
-            @prepared = Fiddle.___prepare(addr, @type_codes, @ret_code)
+            # Fold a `:string` return into the descriptor so the char*-to-
+            # String copy happens inside the same builtin as the call.
+            @returns_string = @return_type.equal?(FFI::Type::STRING)
+            flags = @returns_string ? PREPARE_RETURN_STRING : 0
+            # `attach_function ..., blocking: true` -- run the call on a worker
+            # thread and park this green thread, so a C function that blocks in
+            # the kernel does not freeze every other thread. Costs tens of
+            # microseconds per call, so it is the binding's decision, never a
+            # default.
+            flags |= PREPARE_BLOCKING if options[:blocking]
+            @prepared = Fiddle.___prepare(addr, @type_codes, @ret_code, flags)
           rescue ArgumentError, RuntimeError
+            # The `___call` fallback hands back the raw pointer, so the
+            # string conversion goes back to `convert_result`.
             @prepared = nil
+            @returns_string = false
           end
         end
       end
@@ -719,6 +736,8 @@ module FFI
       else
         Fiddle.___call(@address, converted_args, @type_codes, @ret_code)
       end
+      # A prepared `:string` call has already produced the String (or nil).
+      return result if @returns_string
       convert_result(@return_type, result)
     end
 
@@ -726,17 +745,16 @@ module FFI
       @param_types.length
     end
 
+    # Convert one argument by position. `convert_arg` is private and keyed by
+    # type; an attached stub is generated code living in another module, so it
+    # needs a public entry point for the cases it does not inline itself.
+    def __convert_arg(i, arg)
+      convert_arg(@param_types[i], arg)
+    end
+
     def attach(mod, mname)
       mname = mname.to_sym
-      mod.module_eval <<-code, __FILE__, __LINE__
-        def self.#{mname}(*args)
-          @ffi_functions[#{mname.inspect}].call(*args)
-        end
-
-        def #{mname}(*args)
-          self.class.instance_variable_get(:@ffi_functions)[#{mname.inspect}].call(*args)
-        end
-      code
+      mod.module_eval(stub_source(mname), __FILE__, __LINE__)
       self
     end
 
@@ -745,6 +763,92 @@ module FFI
     end
 
     private
+
+    # Source for the two stubs `attach` installs.
+    #
+    # `#call` has to be generic: it splats the arguments into an Array, looks
+    # the Function up in a Hash, zips the parameter types against the
+    # arguments and maps a block over the pairs, then splats a second time
+    # into `___invoke`. That is four-plus allocations before any C code runs,
+    # and it measured ~7.6x the cost of making the same call positionally.
+    #
+    # None of that is needed once the Function exists: the arity, the
+    # prepared descriptor id and the return type are all fixed from here on,
+    # so they are baked into the generated source. Argument conversion keeps
+    # its full generality, but the cases that do not need the Function object
+    # are inlined, which is what keeps an ordinary numeric or pointer
+    # argument free of both the Hash lookup and any allocation.
+    #
+    # Signatures `___prepare` could not serve keep the old generic stub.
+    def stub_source(mname)
+      return generic_stub_source(mname) unless @prepared
+
+      params = (0...@param_types.length).map { |i| "a#{i}" }
+      sig    = params.join(", ")
+      lookup = "@ffi_functions[#{mname.inspect}]"
+      inst   = "self.class.instance_variable_get(:@ffi_functions)[#{mname.inspect}]"
+
+      <<-code
+        def self.#{mname}(#{sig})
+          #{body_source(params, lookup)}
+        end
+
+        def #{mname}(#{sig})
+          #{body_source(params, inst)}
+        end
+      code
+    end
+
+    def generic_stub_source(mname)
+      <<-code
+        def self.#{mname}(*args)
+          @ffi_functions[#{mname.inspect}].call(*args)
+        end
+
+        def #{mname}(*args)
+          self.class.instance_variable_get(:@ffi_functions)[#{mname.inspect}].call(*args)
+        end
+      code
+    end
+
+    # The call expression plus whatever the return type needs done to it.
+    # Which branch applies is settled at attach time, so the stub carries only
+    # the one conversion it actually needs.
+    def body_source(params, fn_expr)
+      args = params.each_with_index.map { |p, i| arg_source(@param_types[i], p, fn_expr, i) }
+      call = "Fiddle.___invoke(#{@prepared}#{args.empty? ? "" : ", #{args.join(", ")}"})"
+
+      if @return_type.equal?(FFI::Type::VOID)
+        "#{call}\n          nil"
+      elsif @returns_string
+        # The descriptor was prepared to return the String itself.
+        call
+      elsif @return_type.equal?(FFI::Type::POINTER)
+        "FFI::Pointer.new(#{call})"
+      else
+        call
+      end
+    end
+
+    # One argument, inlined as far as the type allows.
+    #
+    # A Mapped type has a user-supplied `to_native` and must always go
+    # through `convert_arg`. Everything else is a short chain of predicates
+    # that mirrors `convert_arg` exactly, in the same order, falling back to
+    # it only for the duck-typed `to_ptr` case.
+    def arg_source(type, p, fn_expr, i)
+      slow = "#{fn_expr}.__convert_arg(#{i}, #{p})"
+      if type.is_a?(FFI::Type::Mapped)
+        slow
+      elsif type.equal?(FFI::Type::STRING)
+        # `convert_arg` tests nil before it tests the STRING type, so nil
+        # becomes NULL rather than the string "".
+        "(#{p}.nil? ? 0 : #{p}.is_a?(String) ? #{p} : #{p}.to_s)"
+      else
+        "(#{p}.is_a?(Numeric) ? #{p} : #{p}.nil? ? 0 : " \
+          "#{p}.is_a?(FFI::Pointer) ? #{p}.address : #{slow})"
+      end
+    end
 
     def convert_arg(type, arg)
       if type.is_a?(FFI::Type::Mapped)

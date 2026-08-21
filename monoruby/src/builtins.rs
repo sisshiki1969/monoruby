@@ -16,7 +16,7 @@ pub(crate) mod enumerator;
 mod exception;
 mod false_class;
 mod fiber;
-mod fiddle;
+pub(crate) mod fiddle;
 mod file;
 mod fnmatch;
 mod gc;

@@ -439,11 +439,23 @@ poll(2) で readiness を待てるもの(ソケット等)はスケジューラ�
 **待つべき fd を持たないカーネルブロッキング syscall** はグリーンスレッドの単一 OS
 スレッドをそのままブロックしてしまう。これらだけを別の短命 OS スレッドへ逃がす。
 
-- **オフロード対象は 2 つだけ**(`NativeOp`):
+- **オフロード対象**(`NativeOp`):
   - `flock(2)` のブロッキング取得(`File#flock`)。`LOCK_NB` / `LOCK_UN` は
     カーネルでブロックしないのでインライン実行。
   - **FIFO** に対するブロッキング `open(2)`(相手が開くまでブロックする)。事前に
     `stat` して FIFO のときだけオフロードし、それ以外の open はインライン。
+  - **blocking 指定された FFI 呼び出し**(`NativeOp::Ffi`)。上 2 つと違い走るのは
+    Ruby プログラムが選んだ任意の C なので、「生データのみ」の規律は fiddle 側で
+    担保する: `FfiWorkerCall` は不死の descriptor のアドレスとマーシャル済み C 引数
+    だけを持ち、`run` は Ruby ヒープに触れない。ワーカーは生の 64bit 結果を返し、
+    インタプリタ側スレッドが `bits_to_value` で box する。
+    - **opt-in**: `Fiddle.___prepare` の flags(`2 = BLOCKING`)で宣言する。
+      FFI では `attach_function ..., blocking: true`、sqlite3 ブリッジでは
+      `attach_function ..., blocking: true`。
+    - **本当にブロックする関数だけに付ける**。オフロード往復は idle 時で 60〜110µs
+      (thread spawn + park/wake)。CPU 密な green thread がいると再開はタイムスライス
+      1 回分待たされる。**行単位で呼ばれる関数に付けてはならない**
+      (`sqlite3_step` を blocking にすると 2000 行の SELECT が ~2ms → ~200ms になる)。
 - **プールではない**: `submit` は操作ごとに `std::thread::spawn` で**専用の短命 OS
   スレッドを 1 本**生やし、syscall が返ったら終了する(ワーカー数・キュー・再利用なし)。
 - **ワーカーは Ruby ヒープにも VM のスレッドローカルにも触れない**。`NativeOp` は生 fd /
@@ -469,8 +481,13 @@ poll(2) で readiness を待てるもの(ソケット等)はスケジューラ�
 3. `Thread#priority` は保存のみ(スケジューリングに影響しない)。`native_thread_id` は
    実 tid ではなくオブジェクト単位トークン。`ThreadGroup` / `fork` との相互作用、
    `Thread.ignore_deadlock` の実効(検出器の停止)は未実装。
-4. ネイティブオフロード(§9)は flock / FIFO open のみ。`fcntl(F_SETLKW)` 等、他の
-   カーネルブロッキング操作は未対応(将来 `NativeOp` を増やす余地)。
+4. ネイティブオフロード(§9)は flock / FIFO open / blocking 指定の FFI 呼び出しのみ。
+   `fcntl(F_SETLKW)` 等、他のカーネルブロッキング操作は未対応(将来 `NativeOp` を
+   増やす余地)。また `submit` が操作ごとに thread spawn する(プールではない)ため
+   往復が 60〜110µs かかり、頻繁に呼ばれる関数はオフロードできない。実例として
+   `sqlite3_step` は busy_timeout 待ちで長時間ブロックしうるが行単位で呼ばれるため
+   blocking にしておらず、その待ちは今も他の green thread を止める。真のワーカー
+   プール化がこの制約を外す前提になる。
 5. 真の並列化は別の話(Ractor 型の分離が現アーキテクチャ —
    OS スレッドごとの ALLOC / CODEGEN / SCHEDULER — と整合的)。
 

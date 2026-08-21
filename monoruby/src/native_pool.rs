@@ -38,6 +38,14 @@ pub(crate) enum NativeOp {
     /// Blocking `open(2)` — used for FIFOs, whose open blocks until the
     /// peer end appears.
     Open { path: std::ffi::CString, flags: i32, mode: u32 },
+    /// A foreign call the binding declared blocking (`attach_function ...,
+    /// blocking: true`). Unlike the two syscalls above, what runs here is
+    /// arbitrary C chosen by the Ruby program, so the raw-data discipline is
+    /// enforced on the fiddle side: `FfiWorkerCall` carries only the address
+    /// of an immortal descriptor and already-marshalled C arguments, and its
+    /// `run` never touches the Ruby heap. `ret` is the raw 64-bit result,
+    /// which the waiter boxes; `errno` is unused.
+    Ffi(crate::builtins::fiddle::FfiWorkerCall),
 }
 
 pub(crate) struct Completion {
@@ -164,6 +172,9 @@ fn run_op(op: &NativeOp) -> (i64, i32) {
                 return (-1, errno);
             }
         },
+        // No EINTR loop: the foreign function owns its own restart policy,
+        // and retrying an arbitrary C call would not generally be safe.
+        NativeOp::Ffi(call) => (call.run(), 0),
     }
 }
 

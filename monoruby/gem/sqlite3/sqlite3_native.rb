@@ -33,6 +33,10 @@ module SQLite3
   # returns are decoded to a Ruby String, or nil for NULL.
   # =========================================================================
   module FFIBridge
+    # `Fiddle.___prepare` flags (kept in sync with src/builtins/fiddle.rs).
+    PREPARE_RETURN_STRING = 1
+    PREPARE_BLOCKING      = 2
+
     # Fiddle type codes (src/builtins/fiddle.rs). `:string` is a char* —
     # as an argument it is VOIDP (a Ruby String hands over its own NUL
     # terminated buffer), as a return value it is decoded below.
@@ -70,29 +74,41 @@ module SQLite3
     # bodies do. The resulting descriptor id is baked into the generated
     # source as an integer literal, and arguments are passed positionally, so
     # a call allocates nothing at all.
-    def self.attach_function(name, argtypes, rettype)
+    #
+    # `blocking: true` runs the call on a worker thread and parks the calling
+    # green thread, so a C function that blocks in the kernel does not freeze
+    # every other thread on this interpreter.
+    #
+    # It costs tens of microseconds per call (a thread spawn plus a scheduler
+    # park/wake), so it belongs only on functions that can genuinely block for
+    # a long time -- never on a per-row one. See the notes at the call sites.
+    def self.attach_function(name, argtypes, rettype, blocking: false)
       addr = LIB[name.to_s]
       sig  = argtypes.map { |t| TYPE_CODES.fetch(t) }
-      id   = Fiddle.___prepare(addr, sig, TYPE_CODES.fetch(rettype))
+      # A `:string` return is folded into the prepared descriptor, so the C
+      # call and the char*-to-String copy happen in one builtin rather than
+      # two. NULL still maps to nil, matching FFI's `:string`.
+      flags = 0
+      flags |= PREPARE_RETURN_STRING if rettype == :string
+      flags |= PREPARE_BLOCKING      if blocking
+      id   = Fiddle.___prepare(addr, sig, TYPE_CODES.fetch(rettype), flags)
 
       params = (0...argtypes.size).map { |i| "a#{i}" }.join(", ")
-      call   = "Fiddle.___invoke(#{id}#{params.empty? ? "" : ", #{params}"})"
-      # `___read_string` maps NULL to nil, matching FFI's `:string`.
-      body   = rettype == :string ? "Fiddle.___read_string(#{call})" : call
+      body   = "Fiddle.___invoke(#{id}#{params.empty? ? "" : ", #{params}"})"
 
       module_eval("def self.#{name}(#{params})\n  #{body}\nend", __FILE__, __LINE__)
     end
 
     # --- Core database functions ---
     attach_function :sqlite3_libversion, [], :string
-    attach_function :sqlite3_open_v2, [:pointer, :pointer, :int, :pointer], :int
-    attach_function :sqlite3_open16, [:pointer, :pointer], :int
-    attach_function :sqlite3_close, [:pointer], :int
+    attach_function :sqlite3_open_v2, [:pointer, :pointer, :int, :pointer], :int, blocking: true
+    attach_function :sqlite3_open16, [:pointer, :pointer], :int, blocking: true
+    attach_function :sqlite3_close, [:pointer], :int, blocking: true
     attach_function :sqlite3_errmsg, [:pointer], :string
     attach_function :sqlite3_errcode, [:pointer], :int
     attach_function :sqlite3_extended_result_codes, [:pointer, :int], :int
     attach_function :sqlite3_busy_timeout, [:pointer, :int], :int
-    attach_function :sqlite3_exec, [:pointer, :string, :pointer, :pointer, :pointer], :int
+    attach_function :sqlite3_exec, [:pointer, :string, :pointer, :pointer, :pointer], :int, blocking: true
     attach_function :sqlite3_last_insert_rowid, [:pointer], :int64
     attach_function :sqlite3_changes, [:pointer], :int
     attach_function :sqlite3_total_changes, [:pointer], :int
@@ -102,6 +118,13 @@ module SQLite3
 
     # --- Statement functions ---
     attach_function :sqlite3_prepare_v2, [:pointer, :pointer, :int, :pointer, :pointer], :int
+    # Deliberately NOT `blocking: true`. `sqlite3_step` is the one function
+    # here that can genuinely block for a long time -- with a busy_timeout set
+    # it waits for another process to release the write lock -- but it is also
+    # called once per result row. Offloading costs tens of microseconds, which
+    # would turn a 2000-row SELECT from ~2ms into ~200ms. Until the offload is
+    # cheap enough (a real worker pool) or the busy case can be told apart from
+    # the per-row case, a long busy-wait here still stalls other green threads.
     attach_function :sqlite3_step, [:pointer], :int
     attach_function :sqlite3_finalize, [:pointer], :int
     attach_function :sqlite3_reset, [:pointer], :int
