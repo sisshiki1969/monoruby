@@ -78,6 +78,18 @@ impl std::fmt::Display for IdentName {
 #[repr(transparent)]
 pub struct IdentId(NonZeroU32);
 
+// `special_gvar_name` indexes SPECIAL_GVARS by id offset; pin the pairing.
+const _: () = {
+    let mut i = 0;
+    while i < IdentId::SPECIAL_GVARS.len() {
+        assert!(
+            IdentId::SPECIAL_GVARS[i].1.0.get()
+                == IdentId::GVAR_CHILD_STATUS.0.get() + i as u32
+        );
+        i += 1;
+    }
+};
+
 impl std::default::Default for IdentId {
     fn default() -> Self {
         Self(NonZeroU32::new(1u32).unwrap())
@@ -274,10 +286,41 @@ impl IdentId {
     pub const GVAR_PROGRAM_NAME0: IdentId = id!(94); // $0
     pub const GVAR_PROGRAM_NAME: IdentId = id!(95); // $PROGRAM_NAME
 
+    /// Name ↔ id pairing for the block above — the single source of truth:
+    /// `IdentifierTable::new` interns from it, and [`Self::special_gvar_name`]
+    /// reads a name back without materializing a String. Order must follow
+    /// the ids (checked by the const assertion below).
+    pub(crate) const SPECIAL_GVARS: [(&'static str, IdentId); 16] = [
+        ("$?", Self::GVAR_CHILD_STATUS),
+        ("$<", Self::GVAR_ARGF),
+        ("$FILENAME", Self::GVAR_FILENAME),
+        ("$/", Self::GVAR_IRS),
+        ("$-0", Self::GVAR_IRS_ALIAS),
+        ("$\\", Self::GVAR_ORS),
+        ("$,", Self::GVAR_OFS),
+        ("$;", Self::GVAR_FS),
+        ("$.", Self::GVAR_LINENO),
+        ("$stdout", Self::GVAR_STDOUT),
+        ("$stderr", Self::GVAR_STDERR),
+        ("$VERBOSE", Self::GVAR_VERBOSE),
+        ("$-v", Self::GVAR_VERBOSE_V),
+        ("$-w", Self::GVAR_VERBOSE_W),
+        ("$0", Self::GVAR_PROGRAM_NAME0),
+        ("$PROGRAM_NAME", Self::GVAR_PROGRAM_NAME),
+    ];
+
     /// Whether this id names one of the special globals above.
     pub(crate) fn is_special_gvar(self) -> bool {
         (Self::GVAR_CHILD_STATUS.0.get()..=Self::GVAR_PROGRAM_NAME.0.get())
             .contains(&self.0.get())
+    }
+
+    /// The name of a special global, as a static str — the ids are
+    /// consecutive, so this is an array index off the block's base.
+    /// Callers must have checked [`Self::is_special_gvar`].
+    pub(crate) fn special_gvar_name(self) -> &'static str {
+        debug_assert!(self.is_special_gvar());
+        Self::SPECIAL_GVARS[(self.0.get() - Self::GVAR_CHILD_STATUS.0.get()) as usize].0
     }
 }
 
@@ -501,22 +544,9 @@ impl IdentifierTable {
         table.set_id("initialize_clone", IdentId::INITIALIZE_CLONE);
         table.set_id("initialize_dup", IdentId::INITIALIZE_DUP);
         table.set_id("respond_to_missing?", IdentId::RESPOND_TO_MISSING_);
-        table.set_id("$?", IdentId::GVAR_CHILD_STATUS);
-        table.set_id("$<", IdentId::GVAR_ARGF);
-        table.set_id("$FILENAME", IdentId::GVAR_FILENAME);
-        table.set_id("$/", IdentId::GVAR_IRS);
-        table.set_id("$-0", IdentId::GVAR_IRS_ALIAS);
-        table.set_id("$\\", IdentId::GVAR_ORS);
-        table.set_id("$,", IdentId::GVAR_OFS);
-        table.set_id("$;", IdentId::GVAR_FS);
-        table.set_id("$.", IdentId::GVAR_LINENO);
-        table.set_id("$stdout", IdentId::GVAR_STDOUT);
-        table.set_id("$stderr", IdentId::GVAR_STDERR);
-        table.set_id("$VERBOSE", IdentId::GVAR_VERBOSE);
-        table.set_id("$-v", IdentId::GVAR_VERBOSE_V);
-        table.set_id("$-w", IdentId::GVAR_VERBOSE_W);
-        table.set_id("$0", IdentId::GVAR_PROGRAM_NAME0);
-        table.set_id("$PROGRAM_NAME", IdentId::GVAR_PROGRAM_NAME);
+        for (name, id) in IdentId::SPECIAL_GVARS {
+            table.set_id(name, id);
+        }
         table
     }
 

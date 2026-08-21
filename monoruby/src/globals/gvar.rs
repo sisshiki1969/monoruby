@@ -546,7 +546,10 @@ fn write_special_check(
         return Ok(val);
     }
 
-    let n = name.get_name();
+    // Each arm knows exactly which names it matches, so the display name
+    // comes from the preset table as a &'static str — no String is built
+    // even on the special path.
+    let n = name.special_gvar_name();
     match name {
         // Read-only variables backed by plain storage: `$?` is updated
         // from Rust via `set_simple` (which bypasses this check), the
@@ -570,14 +573,14 @@ fn write_special_check(
             if !val.is_nil() && val.is_rstring_inner().is_none() {
                 return Err(MonorubyErr::typeerr(format!("value of {n} must be String")));
             }
-            warn_deprecated_separator(vm, globals, &n, val);
-            frozen_string_or_nil(&n, val)
+            warn_deprecated_separator(vm, globals, n, val);
+            frozen_string_or_nil(n, val)
         }
         // Output record / field separators: String or nil, stored
         // as-is (CRuby does not copy these).
         IdentId::GVAR_ORS | IdentId::GVAR_OFS => {
             if val.is_nil() || val.is_rstring().is_some() {
-                warn_deprecated_separator(vm, globals, &n, val);
+                warn_deprecated_separator(vm, globals, n, val);
                 Ok(val)
             } else {
                 Err(MonorubyErr::typeerr(format!(
@@ -588,7 +591,7 @@ fn write_special_check(
         // The input field separator additionally accepts a Regexp.
         IdentId::GVAR_FS => {
             if val.is_nil() || val.is_rstring().is_some() || val.is_regex().is_some() {
-                warn_deprecated_separator(vm, globals, &n, val);
+                warn_deprecated_separator(vm, globals, n, val);
                 Ok(val)
             } else {
                 Err(MonorubyErr::typeerr(format!(
