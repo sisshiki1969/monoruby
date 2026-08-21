@@ -436,7 +436,24 @@ impl<'a> JitContext<'a> {
                     // at *this* compile and declined; a recompile would
                     // reproduce this very body, so deopt plainly (ratchet —
                     // no recompile-per-N-misses livelock).
-                    RecvMissMode::Learn => self.store[callid].pmc.entries().len() < 2,
+                    // The PMC counts *classes*, so it cannot see a miss that
+                    // splits one class by representation: `guard_class` for
+                    // `Integer` is a Fixnum-immediate tag test, and a heap
+                    // Integer (BigInt) carries the same `ClassId` and fails
+                    // it. The PMC therefore stays at one entry, the ratchet
+                    // below never engages, and every recompile re-emits the
+                    // identical tag test. `ActiveModel::Type::Integer#
+                    // out_of_range?` compares against `1 << 63` — always a
+                    // BigInt, so its guard can never pass — and recompiled
+                    // 8,756 times over 40 activerecord iterations, a third
+                    // of all JIT compile time. A recompile provably cannot
+                    // help there, so deopt plainly. (`Float` needs no such
+                    // exclusion: its guard already admits both the flonum
+                    // and the heap representation.)
+                    RecvMissMode::Learn => {
+                        recv_class != INTEGER_CLASS
+                            && self.store[callid].pmc.entries().len() < 2
+                    }
                     RecvMissMode::Plain => false,
                 };
                 let deopt = if let Some(target) =
