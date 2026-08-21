@@ -4,7 +4,8 @@
 # it redirects to ~/.monoruby/sqlite3_native.rb (this file via build.rs copy).
 # This implements the native C extension methods by calling libsqlite3
 # through monoruby's shared native-call primitives (`Fiddle.___dlopen` /
-# `___call` / `___read_string` / …, registered in src/builtins/fiddle.rs).
+# `___prepare` / `___invoke` / `___read_string` / …, registered in
+# src/builtins/fiddle.rs).
 #
 # Deliberately *not* built on the `ffi` gem. The gem's C extension is
 # replaced by monoruby (gem/ffi_c.rb), but `FFI::Library` — i.e.
@@ -13,13 +14,13 @@
 # that has the ffi gem installed. Fiddle ships with monoruby itself, so
 # this bridge is self-contained.
 #
-# Going straight to the primitives is also the faster route: an
-# `attach_function` call reaches C via FFI::Function#call, which on *every*
-# invocation does `param_types.zip(args).map { convert_arg }` plus
-# `param_types.map(&:type_code)` (three throw-away arrays and a Type object
-# per argument) and wraps every returned pointer in an FFI::Pointer. The
-# stubs generated below pass a single argument array and a frozen,
-# pre-computed signature array to `Fiddle.___call`, and keep pointers as
+# Going straight to the primitives is also the faster route. Reaching C via
+# FFI::Function#call costs, on *every* invocation, a
+# `param_types.zip(args).map { convert_arg }` plus a
+# `param_types.map(&:type_code)` — three throw-away arrays and a Type object
+# per argument — and wraps every returned pointer in an FFI::Pointer. The
+# stubs generated below prepare the libffi CIF once at attach time and then
+# pass arguments positionally, so a call allocates nothing, and pointers stay
 # plain Integer addresses.
 
 require "fiddle"
@@ -61,16 +62,21 @@ module SQLite3
     end
 
     # Define `FFIBridge.<name>` as a fixed-arity stub that calls the C
-    # function directly. The symbol address is baked into the generated
-    # source as an integer literal and the argument signature is hoisted
-    # into a frozen constant, so a call allocates only the argument array.
+    # function directly.
+    #
+    # The signature is fixed at attach time, so the libffi CIF is built once
+    # by `___prepare` and reused; `___call` would instead run `ffi_prep_cif`
+    # plus a malloc on every call, which costs more than most of these C
+    # bodies do. The resulting descriptor id is baked into the generated
+    # source as an integer literal, and arguments are passed positionally, so
+    # a call allocates nothing at all.
     def self.attach_function(name, argtypes, rettype)
       addr = LIB[name.to_s]
-      sig  = argtypes.map { |t| TYPE_CODES.fetch(t) }.freeze
-      const_set("SIG_#{name}", sig)
+      sig  = argtypes.map { |t| TYPE_CODES.fetch(t) }
+      id   = Fiddle.___prepare(addr, sig, TYPE_CODES.fetch(rettype))
 
       params = (0...argtypes.size).map { |i| "a#{i}" }.join(", ")
-      call   = "Fiddle.___call(#{addr}, [#{params}], SIG_#{name}, #{TYPE_CODES.fetch(rettype)})"
+      call   = "Fiddle.___invoke(#{id}#{params.empty? ? "" : ", #{params}"})"
       # `___read_string` maps NULL to nil, matching FFI's `:string`.
       body   = rettype == :string ? "Fiddle.___read_string(#{call})" : call
 
@@ -144,6 +150,47 @@ module SQLite3
     SQLITE_OK   = 0
     SQLITE_ROW  = 100
     SQLITE_DONE = 101
+
+    # Primary result code (low 8 bits) -> the gem's exception subclass, as the
+    # C extension's `sqlite3_ruby_exception` maps them. Callers rescue these by
+    # name — ActiveRecord turns SQLite3::ConstraintException into
+    # RecordNotUnique — so raising the base SQLite3::Exception for everything
+    # silently breaks that dispatch.
+    ERROR_CLASSES = {
+      1  => "SQLException",         # SQLITE_ERROR
+      2  => "InternalException",
+      3  => "PermissionException",
+      4  => "AbortException",
+      5  => "BusyException",
+      6  => "LockedException",
+      7  => "MemoryException",
+      8  => "ReadOnlyException",
+      9  => "InterruptException",
+      10 => "IOException",
+      11 => "CorruptException",
+      12 => "NotFoundException",
+      13 => "FullException",
+      14 => "CantOpenException",
+      15 => "ProtocolException",
+      16 => "EmptyException",
+      17 => "SchemaChangedException",
+      18 => "TooBigException",
+      19 => "ConstraintException",
+      20 => "MismatchException",
+      21 => "MisuseException",
+      23 => "AuthorizationException",
+      25 => "RangeException",
+      26 => "NotADatabaseException",
+    }.freeze
+
+    # sqlite3 returns extended codes (e.g. 1555 = SQLITE_CONSTRAINT_PRIMARYKEY)
+    # once extended result codes are on; the primary code is the low 8 bits.
+    # The subclasses are defined by the gem's errors.rb, which is loaded before
+    # this file, but fall back to the base class if one is missing.
+    def self.exception_class(code)
+      name = ERROR_CLASSES[code & 0xff]
+      (name && SQLite3.const_defined?(name)) ? SQLite3.const_get(name) : SQLite3::Exception
+    end
 
     # Statement status counters
     SQLITE_STMTSTATUS_FULLSCAN_STEP = 1
@@ -259,7 +306,7 @@ module SQLite3
       if rc != FFIBridge::SQLITE_OK
         msg = @db == 0 ? "out of memory" : FFIBridge.sqlite3_errmsg(@db)
         FFIBridge.sqlite3_close(@db) unless @db == 0
-        raise SQLite3::Exception, msg
+        raise FFIBridge.exception_class(rc), msg
       end
       @closed = false
     end
@@ -278,7 +325,7 @@ module SQLite3
       if rc != FFIBridge::SQLITE_OK
         msg = @db == 0 ? "out of memory" : FFIBridge.sqlite3_errmsg(@db)
         FFIBridge.sqlite3_close(@db) unless @db == 0
-        raise SQLite3::Exception, msg
+        raise FFIBridge.exception_class(rc), msg
       end
       @closed = false
     end
@@ -429,7 +476,7 @@ module SQLite3
     def check_error(rc)
       return if rc == FFIBridge::SQLITE_OK || rc == FFIBridge::SQLITE_ROW || rc == FFIBridge::SQLITE_DONE
       msg = FFIBridge.sqlite3_errmsg(@db)
-      raise SQLite3::Exception, msg
+      raise FFIBridge.exception_class(rc), msg
     end
 
     def exec_batch_internal(sql)
@@ -438,7 +485,7 @@ module SQLite3
         rc = FFIBridge.sqlite3_exec(@db, sql, nil, nil, errmsg_ptr)
       end
       if rc != FFIBridge::SQLITE_OK
-        raise SQLite3::Exception, Fiddle.___read_string(err) || "unknown error"
+        raise FFIBridge.exception_class(rc), Fiddle.___read_string(err) || "unknown error"
       end
     end
 
@@ -543,7 +590,7 @@ module SQLite3
         end
         if rc != FFIBridge::SQLITE_OK
           msg = FFIBridge.sqlite3_errmsg(@db_ptr)
-          raise SQLite3::Exception, msg
+          raise FFIBridge.exception_class(rc), msg
         end
         @closed = @stmt == 0
         @done = false
@@ -586,7 +633,7 @@ module SQLite3
         nil
       else
         msg = FFIBridge.sqlite3_errmsg(@db_ptr)
-        raise SQLite3::Exception, msg
+        raise FFIBridge.exception_class(rc), msg
       end
     end
 
@@ -614,7 +661,7 @@ module SQLite3
       rc = bind_value(index, value)
       if rc != FFIBridge::SQLITE_OK
         msg = FFIBridge.sqlite3_errmsg(@db_ptr)
-        raise SQLite3::Exception, msg
+        raise FFIBridge.exception_class(rc), msg
       end
     end
 
