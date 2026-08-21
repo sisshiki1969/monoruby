@@ -293,12 +293,38 @@ fn render_cause(
                     }
                 }
             };
-            format!(
-                "{r:?} = {}, class {} but guard expected {}",
-                decode(bits),
-                actual,
-                globals.store.debug_class_name(expected)
-            )
+            let want = globals.store.debug_class_name(expected);
+            // `GuardClass` on `Integer` / `Float` is a *representation* test,
+            // not a class test: it checks the Fixnum tag (`testq r, 0b001`)
+            // or the Flonum tag, so a heap-allocated Integer (BigInt) or
+            // Float misses it while `Value::class()` still answers `Integer`
+            // / `Float`. Rendered naively that reads "class Integer but
+            // guard expected Integer" — a contradiction, and exactly the
+            // kind of line that sends an investigation down a wrong path.
+            // Say what the guard actually tested instead.
+            if actual == want {
+                let boxed = match expected {
+                    INTEGER_CLASS => Some("an immediate Fixnum, but this is a heap Integer (BigInt)"),
+                    FLOAT_CLASS => Some("an immediate Flonum, but this is a heap Float"),
+                    _ => None,
+                };
+                match boxed {
+                    Some(what) => format!("{r:?} = {}, guard tests for {what}", decode(bits)),
+                    // Same display name, no known representation split: name
+                    // the ids so the reader can see they really do differ.
+                    None => format!(
+                        "{r:?} = {}, class {want} ({:?}) but guard expected {want} ({:?})",
+                        decode(bits),
+                        unsafe { std::mem::transmute::<u64, Value>(bits) }.class(),
+                        expected
+                    ),
+                }
+            } else {
+                format!(
+                    "{r:?} = {}, class {actual} but guard expected {want}",
+                    decode(bits)
+                )
+            }
         }
         DeoptCause::ValueVsBaked(r, expected) => {
             let mut s = format!(
