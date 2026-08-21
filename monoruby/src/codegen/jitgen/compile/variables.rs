@@ -1,5 +1,6 @@
 use super::*;
 use crate::codegen::jitgen::state::Guarded;
+use crate::codegen::jitgen::lir::ConstMiss;
 
 impl<'a> JitContext<'a> {
     pub(super) fn load_ivar(
@@ -196,17 +197,28 @@ impl<'a> JitContext<'a> {
         // recompiles; with const salvage the entry is cheap, and gating it
         // meant the second version move after a successful salvage would
         // strand the body in the interpreter forever (the counter never
-        // re-arms). Block roots keep the plain deopt: their whole-method
-        // recompile entry would rebuild the wrong frame shape (see above).
-        let recompile = if self.store[self.func_id()].is_block_style() {
-            None
+        // re-arms).
+        //
+        // Block roots cannot take that entry — their whole-method recompile
+        // would rebuild the wrong frame shape (see above) — but they can
+        // still salvage, which only re-validates the recorded folds and
+        // re-stamps the unit's version word. They used to take a bare deopt
+        // instead, and that never healed: the global const version does not
+        // move back, so one `X = ...` anywhere left every affected block
+        // failing its guard on every later call for the rest of the run.
+        // On the activerecord benchmark that was 69% of all const-version
+        // deopts (59,278 of 85,818 over two iterations), concentrated in a
+        // handful of blocks — `ActiveRecord::Result#indexed_rows`'s block
+        // alone accounted for 31,400 of them.
+        let miss = if self.store[self.func_id()].is_block_style() {
+            ConstMiss::Salvage
         } else {
-            Some(self.position())
+            ConstMiss::Recompile(self.position())
         };
         let deopt = ir.new_deopt(state);
         ir.push(AsmInst::GuardConstVersion {
             const_version: version,
-            recompile,
+            miss,
             deopt,
         });
         state.set_const_version_guard();

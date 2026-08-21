@@ -112,6 +112,41 @@ impl Codegen {
         }
     }
 
+    ///
+    /// Salvage-only miss handler for a constant-version guard: re-validate the
+    /// unit's folded constants and, if they all still hold, re-stamp its
+    /// version word. Never recompiles.
+    ///
+    /// This is what a block-style root gets. Its whole-method recompile entry
+    /// would rebuild the wrong frame shape, so it used to take a bare deopt
+    /// with no healing at all — and since the global const version never moves
+    /// back, such a unit then failed its guard on *every* later call, for the
+    /// rest of the process. Salvage reads the unit's recorded folds, compares
+    /// them against the live constants and writes one word; it builds no
+    /// frame, so the reason block roots cannot recompile does not apply.
+    ///
+    /// ### in
+    /// - r12: &mut Globals
+    /// - r14: Lfp
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    #[cfg(target_arch = "x86_64")]
+    pub(super) fn gen_salvage_const(&mut self, label: DestLabel) {
+        self.jit.bind_label(label);
+        monoasm!( &mut self.jit,
+            movq rdi, r12;
+            movq rsi, r14;
+        );
+        self.save_registers();
+        monoasm!( &mut self.jit,
+            movq rax, (jit_salvage_const);
+            call rax;
+        );
+        self.restore_registers();
+    }
+
     #[cfg(target_arch = "x86_64")]
     pub(super) fn gen_recompile_specialized(
         &mut self,
@@ -888,6 +923,19 @@ pub(in crate::codegen) extern "C" fn jit_profile_patch(
         // x86); the stub passes its own counter's address.
         unsafe { *counter_addr = COUNT_START_COMPILE };
     }
+}
+
+/// Salvage-only entry for a constant-version guard miss (`ConstMiss::Salvage`).
+///
+/// [`salvage_method_const`] without the recompile fallback: on success the
+/// unit's version word is re-stamped and its guard passes again from the next
+/// call; on failure this invocation deopts and the next miss retries. Either
+/// way the caller falls through to its deopt, so there is nothing to report.
+///
+/// Both backends call this one entry: unlike the recompile entries it neither
+/// emits code nor touches a frame, so it needs no per-arch variant.
+pub(in crate::codegen) extern "C" fn jit_salvage_const(globals: &mut Globals, lfp: Lfp) {
+    salvage_method_const(globals, lfp, RecompileReason::ConstVersionGuardFailed);
 }
 
 #[cfg(target_arch = "x86_64")]

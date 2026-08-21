@@ -315,6 +315,30 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
 /// escape hatch wraps a `Box<dyn FnOnce>` generator (see `InlineProcedure`),
 /// which is move-only. `LInst`s are produced, encoded once, and dropped, so a
 /// clone is never needed.
+///
+/// What a [`LInst::GuardConstVersion`] miss does on its way to the deopt.
+///
+/// Both arms deopt in the end — the difference is what they try first, and
+/// the distinction matters because a unit whose miss does *nothing* first is
+/// stuck: the global const version never moves back, so its guard fails on
+/// every subsequent call, forever. Block roots used to be exactly that.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::codegen) enum ConstMiss {
+    /// Call the salvaging recompile entry for the unit (`None` = whole
+    /// method, `Some(pc)` = the loop at that pc). Re-validates the folds and
+    /// re-stamps the version word; recompiles only if that fails.
+    Recompile(Option<BytecodePtr>),
+    /// Re-validate the folds and re-stamp the version word, and stop there.
+    ///
+    /// For block-style roots, whose whole-method recompile entry would
+    /// rebuild the wrong frame shape — which is why they took a bare deopt
+    /// before, and so never healed. Salvage touches no frame: it reads the
+    /// unit's recorded folds, compares them against the live constants, and
+    /// writes one word. So the objection to recompiling does not reach it.
+    Salvage,
+}
+
 #[derive(Debug)]
 pub(in crate::codegen) enum LInst {
     /// `dst <- src`. A no-op when `src == dst` (the encoder elides it).
@@ -487,12 +511,11 @@ pub(in crate::codegen) enum LInst {
         deopt: DestLabel,
     },
     /// Constant-load guard: deopt if the global constant version moved away from
-    /// the unit's snapshot word since compilation. `recompile` mirrors
-    /// `AsmInst::GuardConstVersion`: `Some(position)` routes a miss through
-    /// the salvaging recompile entry first; `None` is a plain deopt.
+    /// the unit's snapshot word since compilation. `miss` mirrors
+    /// `AsmInst::GuardConstVersion` — see [`ConstMiss`].
     GuardConstVersion {
         const_version: usize,
-        recompile: Option<Option<BytecodePtr>>,
+        miss: ConstMiss,
         deopt: DestLabel,
     },
     /// Block-passing side-effect guard: deopt if the current frame was captured

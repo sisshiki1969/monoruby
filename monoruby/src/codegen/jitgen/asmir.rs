@@ -6,6 +6,7 @@ use crate::codegen::jitgen::deopt_log;
 use crate::codegen::jitgen::lir::{LInst, LSideExitKind, Lir};
 
 use super::*;
+use crate::codegen::jitgen::lir::ConstMiss;
 
 // AsmIR→machine-code lowering. The per-arch backend (`compile`) provides the
 // emission primitives + `compile_asmir_arch`; the arch-neutral dispatcher
@@ -2156,12 +2157,8 @@ pub(super) enum AsmInst {
     ///
     GuardConstVersion {
         const_version: usize,
-        /// `Some(position)` — on a miss, call the (salvaging) recompile entry
-        /// for the unit (`None` = whole method, `Some(pc)` = the loop at that
-        /// pc) before falling into `deopt`, exactly like the class-version
-        /// guard. `None` — plain deopt (block-style roots, whose whole-method
-        /// recompile entry would rebuild the wrong frame shape).
-        recompile: Option<Option<BytecodePtr>>,
+        /// What the miss tries before deopting — see [`ConstMiss`].
+        miss: ConstMiss,
         deopt: AsmDeopt,
     },
     ///
