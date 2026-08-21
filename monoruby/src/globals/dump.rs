@@ -278,6 +278,54 @@ fn render_cause(
     };
     match cause {
         DeoptCause::Value(r) => format!("{r:?} = {}", decode(bits)),
+        DeoptCause::ClassGuard(r, expected) => {
+            // Name the class the value actually has, not just the value:
+            // "expected FFI::MemoryPointer, got FFI::Pointer" is the whole
+            // diagnosis for a monomorphic guard that a sibling class walks
+            // into, and reading it off the rendered object is guesswork.
+            let actual = match std::num::NonZeroU64::new(bits) {
+                None => "<null>".to_string(),
+                Some(_) => {
+                    let v = unsafe { std::mem::transmute::<u64, Value>(bits) };
+                    match v.debug_check(&globals.store) {
+                        Some(_) => globals.store.debug_class_name(v.class()),
+                        None => "<not a Value>".to_string(),
+                    }
+                }
+            };
+            let want = globals.store.debug_class_name(expected);
+            // `GuardClass` on `Integer` / `Float` is a *representation* test,
+            // not a class test: it checks the Fixnum tag (`testq r, 0b001`)
+            // or the Flonum tag, so a heap-allocated Integer (BigInt) or
+            // Float misses it while `Value::class()` still answers `Integer`
+            // / `Float`. Rendered naively that reads "class Integer but
+            // guard expected Integer" — a contradiction, and exactly the
+            // kind of line that sends an investigation down a wrong path.
+            // Say what the guard actually tested instead.
+            if actual == want {
+                let boxed = match expected {
+                    INTEGER_CLASS => Some("an immediate Fixnum, but this is a heap Integer (BigInt)"),
+                    FLOAT_CLASS => Some("an immediate Flonum, but this is a heap Float"),
+                    _ => None,
+                };
+                match boxed {
+                    Some(what) => format!("{r:?} = {}, guard tests for {what}", decode(bits)),
+                    // Same display name, no known representation split: name
+                    // the ids so the reader can see they really do differ.
+                    None => format!(
+                        "{r:?} = {}, class {want} ({:?}) but guard expected {want} ({:?})",
+                        decode(bits),
+                        unsafe { std::mem::transmute::<u64, Value>(bits) }.class(),
+                        expected
+                    ),
+                }
+            } else {
+                format!(
+                    "{r:?} = {}, class {actual} but guard expected {want}",
+                    decode(bits)
+                )
+            }
+        }
         DeoptCause::ValueVsBaked(r, expected) => {
             let mut s = format!(
                 "{r:?} = {}, expected {} (bits={:#x})",

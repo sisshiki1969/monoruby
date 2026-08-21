@@ -134,7 +134,7 @@ impl Codegen {
             }
             // Type guard: deopt if `r`'s runtime class is not `class`.
             AsmInst::GuardClass(r, class, deopt) => {
-                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(r));
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::ClassGuard(r, class));
                 self.encode_linst(LInst::GuardClass {
                     reg: r,
                     class,

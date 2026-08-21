@@ -65,6 +65,11 @@ use super::*;
 pub(crate) enum DeoptCause {
     /// A Ruby `Value` lives in this GP register at the branch.
     Value(GP),
+    /// A Ruby `Value` in this GP register whose *class* the guard tested
+    /// against the one baked in at compile time. Both halves matter: a
+    /// class guard's story is "expected X, got a Y", and the expected half
+    /// is not recoverable from the operand alone.
+    ClassGuard(GP, ClassId),
     /// A Ruby `Value` in this GP register, which the guard compared
     /// against a `Value` baked into the code at compile time.
     ValueVsBaked(GP, crate::Value),

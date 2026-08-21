@@ -1033,7 +1033,10 @@ impl Codegen {
                 }
                 self.jit.bind_label(entry);
                 match cause {
-                    DeoptCause::Value(r) | DeoptCause::ValueVsBaked(r, _) | DeoptCause::Raw(r) => {
+                    DeoptCause::Value(r)
+                    | DeoptCause::ClassGuard(r, _)
+                    | DeoptCause::ValueVsBaked(r, _)
+                    | DeoptCause::Raw(r) => {
                         monoasm!( &mut self.jit,
                             movq [rbx + (EXECUTOR_DEOPT_CAUSE)], R(r as u64);
                         );
