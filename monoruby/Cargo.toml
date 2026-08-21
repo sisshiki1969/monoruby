@@ -40,7 +40,16 @@ gc-verify = []
 # code paths (LoadSpill / StoreSpill, spill-aware AsmInst lowerings,
 # 16-byte spill-region alignment).
 stress-spill-pool = []
-profile = ["dump-bc", "dump-traceir"]
+# Counters only: `profile` needs `TraceIr::format` for its deopt-site table,
+# not the bytecode dumps `dump-bc` brings.
+profile = ["dump-traceir"]
+# Trace every chain-deopt escalation to stderr. Opt-in, and deliberately not
+# implied by `deopt` / `profile`: escalation is a per-side-exit runtime
+# operation rather than a per-deopt event, and it fires hundreds of thousands
+# of times per activerecord iteration. Logging it unconditionally in `deopt`
+# builds wrote 160 MB of stderr in five iterations and made those builds 7x
+# slower than release, hiding the very costs a measurement build should show.
+chain-deopt-log = []
 perf = []
 # §5 Layer-② extraction: stage-1 *placement shadow*. Records, in emission order,
 # every physical FP placement that ③ commits (one entry per `PhysMap::resolve`),

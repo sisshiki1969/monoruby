@@ -697,3 +697,72 @@ fn guard_free_dispatch_across_recompile() {
         "##,
     );
 }
+
+///
+/// A block that folds a constant must keep working after the global constant
+/// version moves — and must go on working, call after call.
+///
+/// A block-style root cannot take the salvaging *recompile* entry (its
+/// whole-method entry would rebuild the wrong frame shape), so its
+/// constant-version guard used to be a bare deopt with no healing at all.
+/// Since the global version never moves back, a single unrelated constant
+/// assignment left such a block failing its guard on every later call for the
+/// rest of the process — 69% of all constant-version deopts on the
+/// activerecord benchmark. The guard now calls the salvage-only entry, which
+/// re-validates the folds and re-stamps the unit's version word without
+/// touching a frame.
+///
+/// The answer was always right (a deopt is only slow, not wrong), so what
+/// this pins is the new runtime entry itself: it runs on a block frame, with
+/// that frame's `self`, and must find the unit's record and survive doing so.
+///
+#[test]
+fn const_version_block_root_heals() {
+    run_test_once(
+        r##"
+        LIMIT = 10
+        def sum_under
+          total = 0
+          (1..30).each { |x| total += x if x < LIMIT }
+          total
+        end
+        res = []
+        # Warm the block past the JIT thresholds, so it is compiled with
+        # LIMIT folded and the unit's constant-version word stamped.
+        200.times { res << sum_under }
+        # Move the global constant version out from under it.
+        OTHER = 1
+        200.times { res << sum_under }
+        # ...and again, to catch a heal that only works once.
+        ANOTHER = 2
+        200.times { res << sum_under }
+        [res.uniq, OTHER, ANOTHER]
+        "##,
+    );
+}
+
+///
+/// The same shape with the constant read inside a nested block, so the
+/// salvage entry is reached from a frame whose `self` comes from an outer
+/// block rather than the method.
+///
+#[test]
+fn const_version_nested_block_root_heals() {
+    run_test_once(
+        r##"
+        FACTOR = 3
+        def scaled
+          out = []
+          (1..5).each do |a|
+            (1..5).each { |b| out << a * b * FACTOR }
+          end
+          out.sum
+        end
+        res = []
+        200.times { res << scaled }
+        BUMP1 = :x
+        200.times { res << scaled }
+        [res.uniq, BUMP1]
+        "##,
+    );
+}

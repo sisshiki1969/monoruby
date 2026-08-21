@@ -26,7 +26,7 @@ pub const PROCDATA_FUNCID: i64 = std::mem::offset_of!(ProcData, func_id) as _;
 /// once the now-interpreted frame eventually returns.
 pub(super) extern "C" fn chain_deopt(vm: &mut Executor) {
     let cfp = vm.cfp();
-    #[cfg(any(feature = "deopt", feature = "profile"))]
+    #[cfg(feature = "chain-deopt-log")]
     eprintln!("### chain deopt: escalated from {:?}", cfp.lfp().func_id());
     let plan = CODEGEN.with(|codegen| codegen.borrow_mut().chain_deopt(cfp));
     for conversion in plan {

@@ -1691,7 +1691,7 @@ impl Codegen {
             if !self.check_vm_address(ret)
                 && let Some(replay) = self.chain_deopt_table.get(&ret).cloned()
             {
-                #[cfg(any(feature = "deopt", feature = "profile"))]
+                #[cfg(feature = "chain-deopt-log")]
                 eprintln!("### chain deopt: frame return {ret:?} -> chain conversion");
                 plan.push(ChainConversion::new(cfp, prev_cfp, replay, stub));
             }

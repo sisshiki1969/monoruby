@@ -29,6 +29,7 @@ fn a64_lreg(r: LReg) -> u32 {
 }
 use monoasm_macro::monoasm_arm64;
 use crate::codegen::jitgen::deopt_log::DeoptCause;
+use crate::codegen::jitgen::lir::ConstMiss;
 
 mod binary_op;
 mod builtin;
@@ -1097,10 +1098,14 @@ impl Codegen {
             // The snapshot side is the unit's shared patchable word
             // (`Codegen::unit_const_version`), so a successful const salvage
             // re-validates every guard in the unit with one store (mirrors
-            // x86). With `recompile = Some(position)` a miss first calls the
-            // salvaging recompile entry and then deopts (the class-version
-            // guard's shape); `None` plain-deopts.
-            LInst::GuardConstVersion { const_version: _, recompile, deopt } => {
+            // x86). A miss always deopts; `miss` says what it tries first —
+            // the salvaging recompile entry (the class-version guard's shape)
+            // or, for a block root, salvage alone.
+            LInst::GuardConstVersion {
+                const_version: _,
+                miss,
+                deopt,
+            } => {
                 let gv_addr = self
                     .jit
                     .get_label_address(&self.const_version_label())
@@ -1117,23 +1122,21 @@ impl Codegen {
                     ldr x10, [x10];
                     cmp x9, x10;
                 );
-                match recompile {
-                    None => {
-                        self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
-                    }
-                    Some(position) => {
-                        let miss = self.jit.label();
-                        let done = self.jit.label();
-                        self.jit.bcond_label(monoasm::Cond::Ne, &miss);
-                        monoasm_arm64!(&mut self.jit, b done;);
-                        self.jit.bind_label(miss);
-                        self.a64_call_recompile(
+                {
+                    let miss_label = self.jit.label();
+                    let done = self.jit.label();
+                    self.jit.bcond_label(monoasm::Cond::Ne, &miss_label);
+                    monoasm_arm64!(&mut self.jit, b done;);
+                    self.jit.bind_label(miss_label);
+                    match miss {
+                        ConstMiss::Recompile(position) => self.a64_call_recompile(
                             position,
                             RecompileReason::ConstVersionGuardFailed,
-                        );
-                        monoasm_arm64!(&mut self.jit, b deopt;);
-                        self.jit.bind_label(done);
+                        ),
+                        ConstMiss::Salvage => self.a64_call_salvage_const(),
                     }
+                    monoasm_arm64!(&mut self.jit, b deopt;);
+                    self.jit.bind_label(done);
                 }
             }
             // Block-passing side-effect guard: deopt if the frame was captured

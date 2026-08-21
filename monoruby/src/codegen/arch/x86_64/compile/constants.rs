@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen::jitgen::lir::ConstMiss;
 
 impl Codegen {
     pub(super) fn store_constant(&mut self, id: ConstSiteId, using_fpr: UsingFpr) {
@@ -23,31 +24,21 @@ impl Codegen {
     /// (`Codegen::unit_const_version`), so a successful const salvage can
     /// re-validate every guard in the unit with one store.
     ///
-    /// With `recompile = Some(position)` a miss first calls the salvaging
-    /// recompile entry (whole method / the loop at `position`) and then
-    /// deopts — the class-version guard's shape. `None` is a plain deopt.
+    /// A miss always ends at `deopt`; `miss` says what it tries on the way.
+    /// `Recompile(position)` calls the salvaging recompile entry (whole
+    /// method / the loop at `position`) — the class-version guard's shape.
+    /// `Salvage` calls the salvage-only entry, which re-validates the unit's
+    /// folds and re-stamps its version word without touching any frame.
     ///
     /// ### destroy
     /// - rax
     ///
-    pub(super) fn guard_const_version(
-        &mut self,
-        recompile: Option<Option<BytecodePtr>>,
-        deopt: &DestLabel,
-    ) {
+    pub(super) fn guard_const_version(&mut self, miss: ConstMiss, deopt: &DestLabel) {
         let cached_const_version = self
             .unit_const_version
             .clone()
             .expect("const guard emitted outside a constant-folding unit");
         let global_const_version = self.const_version_label();
-        let Some(position) = recompile else {
-            monoasm! { &mut self.jit,
-                movq rax, [rip + global_const_version];
-                cmpq rax, [rip + cached_const_version];
-                jne  deopt;
-            }
-            return;
-        };
         assert_eq!(0, self.jit.get_page());
         let fail = self.jit.label();
         monoasm! { &mut self.jit,
@@ -56,12 +47,15 @@ impl Codegen {
             jne  fail;
         }
         self.jit.select_page(1);
-        self.gen_recompile(
-            position,
-            fail,
-            RecompileReason::ConstVersionGuardFailed,
-            None,
-        );
+        match miss {
+            ConstMiss::Recompile(position) => self.gen_recompile(
+                position,
+                fail,
+                RecompileReason::ConstVersionGuardFailed,
+                None,
+            ),
+            ConstMiss::Salvage => self.gen_salvage_const(fail),
+        }
         self.version_guard_fail(deopt);
         self.jit.select_page(0);
     }

@@ -1,5 +1,6 @@
 use super::*;
 use monoasm_macro::monoasm_arm64;
+use crate::codegen::jitgen::lir::ConstMiss;
 
 // ---- Object#send inline symbol cache (aarch64 twin of the x86_64 copy in
 // arch/x86_64/compile/method_call.rs; the two files are arch-selected so the
@@ -1168,6 +1169,46 @@ impl Codegen {
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;                       // -> Option<Value>: None (x0 == 0) = panic
+            ldr x30, [sp], #16;
+            ldr d2, [sp, #(0)];
+            ldr d3, [sp, #(8)];
+            ldr d4, [sp, #(16)];
+            ldr d5, [sp, #(24)];
+            ldr d6, [sp, #(32)];
+            ldr d7, [sp, #(40)];
+            ldp x5, x6, [sp, #(48)];
+            ldp x7, x8, [sp, #(64)];
+            add sp, sp, #(80);
+        );
+    }
+
+    ///
+    /// Salvage-only miss handler for a constant-version guard
+    /// (`ConstMiss::Salvage`) — the aarch64 counterpart of
+    /// `Codegen::gen_salvage_const`. Re-validates the unit's folded constants
+    /// and re-stamps its version word; never recompiles, so a block root can
+    /// heal without its whole-method entry rebuilding the wrong frame shape.
+    ///
+    /// Saves the same registers as `a64_call_recompile`: the deopt write-back
+    /// that follows reads the FP pool (d2-d7) and the GP pool (x5-x8).
+    ///
+    pub(super) fn a64_call_salvage_const(&mut self) {
+        let f = crate::codegen::compiler::jit_salvage_const as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            sub sp, sp, #(80);
+            str d2, [sp, #(0)];
+            str d3, [sp, #(8)];
+            str d4, [sp, #(16)];
+            str d5, [sp, #(24)];
+            str d6, [sp, #(32)];
+            str d7, [sp, #(40)];
+            stp x5, x6, [sp, #(48)];
+            stp x7, x8, [sp, #(64)];
+            mov x0, x20;                  // globals
+            mov x1, x22;                  // lfp
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
             ldr x30, [sp], #16;
             ldr d2, [sp, #(0)];
             ldr d3, [sp, #(8)];
