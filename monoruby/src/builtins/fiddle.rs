@@ -1181,6 +1181,101 @@ mod tests {
         ));
     }
 
+    // Every argument type code must map to an libffi type. Preparing is pure
+    // — it only builds the CIF — so each code can be checked without needing
+    // a C function that actually has that signature.
+    #[test]
+    fn fiddle_prepare_accepts_every_arg_type_code() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            TY_UCHAR  = -2
+            TY_SHORT  =  3
+            TY_USHORT = -3
+            TY_UINT   = -4
+            TY_LONG   =  5
+            TY_ULONG  = -5
+            TY_ULLONG = -6
+            TY_CHAR   =  2
+            TY_FLOAT  =  7
+            TY_BOOL   =  9
+            abs = Fiddle.___dlsym(LIBC, "abs")
+
+            codes = [TY_CHAR, TY_UCHAR, TY_SHORT, TY_USHORT, TY_INT, TY_UINT,
+                     TY_LONG, TY_LLONG, TY_ULONG, TY_ULLONG, TY_VOIDP,
+                     TY_FLOAT, TY_DOUBLE, TY_BOOL]
+            codes.each do |c|
+              raise "prepare failed for #{{c}}" unless Fiddle.___prepare(abs, [c], TY_INT) != 0
+            end
+            # every return code is validated up front too
+            (codes + [0]).each do |c|
+              raise "prepare failed for ret #{{c}}" unless Fiddle.___prepare(abs, [], c) != 0
+            end
+
+            # TYPE_VOID is not a legal *argument*, and unknown codes are refused
+            [0, 99, -99].each do |bad|
+              begin
+                Fiddle.___prepare(abs, [bad], TY_INT)
+                raise "expected an error for arg code #{{bad}}"
+              rescue RuntimeError
+              end
+            end
+            [99, -99].each do |bad|
+              begin
+                Fiddle.___prepare(abs, [], bad)
+                raise "expected an error for ret code #{{bad}}"
+              rescue RuntimeError
+              end
+            end
+            :ok
+            "#
+        ));
+    }
+
+    // monoruby's Fixnum is an i63, so a C integer argument arrives as either a
+    // Fixnum or a BigInt depending only on magnitude. Both must convert, and
+    // anything that genuinely does not fit — or is not an Integer at all —
+    // must raise rather than pass a garbage value to C.
+    #[test]
+    fn fiddle_integer_arg_conversion() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            abs   = Fiddle.___dlsym(LIBC, "abs")
+            llabs = Fiddle.___dlsym(LIBC, "llabs")
+            p_abs   = Fiddle.___prepare(abs,   [TY_INT],   TY_INT)
+            p_llabs = Fiddle.___prepare(llabs, [TY_LLONG], TY_LLONG)
+
+            # Fixnum, and a BigInt that fits i64 (2**62 is already a BigInt here)
+            raise unless Fiddle.___invoke(p_llabs, -5) == 5
+            raise unless Fiddle.___invoke(p_llabs, 2**62) == 2**62
+            raise unless Fiddle.___invoke(p_llabs, 9223372036854775807) == 9223372036854775807
+
+            # A BigInt in [2**63, 2**64) is a valid unsigned 64-bit value; it
+            # reaches C with the same bit pattern, so `int` truncation gives -1.
+            raise unless Fiddle.___invoke(p_abs, 18446744073709551615) == 1
+
+            # Genuinely out of range for any C integer
+            begin
+              Fiddle.___invoke(p_llabs, 2**80)
+              raise "expected RangeError"
+            rescue RangeError
+            end
+
+            # Not an Integer at all
+            begin
+              Fiddle.___invoke(p_abs, "nope")
+              raise "expected TypeError"
+            rescue TypeError
+            end
+            begin
+              Fiddle.___call(abs, [nil], [TY_INT], TY_INT)
+              raise "expected TypeError"
+            rescue TypeError
+            end
+            :ok
+            "#
+        ));
+    }
+
     // The prepared path is what Fiddle::Function and FFI::Function now use,
     // so exercise it through the public facade as well.
     #[test]
