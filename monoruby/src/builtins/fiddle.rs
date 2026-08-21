@@ -345,6 +345,26 @@ struct PreparedFn {
     cif: Cif,
     arg_codes: Vec<i64>,
     ret_code: i64,
+    /// Return the `char *` result as a Ruby String rather than an address.
+    ///
+    /// A `:string` return is a pointer as far as libffi is concerned, so
+    /// without this the Ruby layer has to follow every call with a second
+    /// `___read_string` — two builtin round trips where one would do, on
+    /// exactly the calls that are already the most common in a real binding
+    /// (`sqlite3_column_text`, `sqlite3_column_name`, `sqlite3_errmsg`).
+    ret_as_string: bool,
+}
+
+/// Build a Ruby String from a C `char *`, mapping NULL to nil.
+///
+/// SAFETY: `ptr` must be either 0 or a NUL-terminated C string that stays
+/// valid for the duration of the copy.
+unsafe fn cstr_to_value(ptr: u64) -> Value {
+    if ptr == 0 {
+        return Value::nil();
+    }
+    let s = unsafe { std::ffi::CStr::from_ptr(ptr as *const libc::c_char) };
+    Value::string_from_vec(s.to_bytes().to_vec())
 }
 
 /// Largest argument count marshalled without spilling to the heap.
@@ -391,6 +411,15 @@ fn fiddle_prepare(
     let ptr = lfp.arg(0).expect_integer(globals)? as usize;
     let types_ary = lfp.arg(1).expect_array_ty(globals)?;
     let ret_code = lfp.arg(2).expect_integer(globals)?;
+    let ret_as_string = lfp.try_arg(3).map(|v| v.as_bool()).unwrap_or(false);
+    // Only a pointer return can be read back as a string, and both facades
+    // spell `:string` as VOIDP. Refusing anything else here keeps `___invoke`
+    // from having to decide what a "string" of some other width would mean.
+    if ret_as_string && ret_code != TYPE_VOIDP {
+        return Err(MonorubyErr::argumenterr(
+            "Fiddle: a string return requires the VOIDP return type code",
+        ));
+    }
 
     let arg_codes: Vec<i64> = types_ary
         .iter()
@@ -421,6 +450,7 @@ fn fiddle_prepare(
         cif: Cif::new(arg_types.into_iter(), ret_type),
         arg_codes,
         ret_code,
+        ret_as_string,
     });
 
     Ok(Value::integer(Box::leak(prepared) as *mut PreparedFn as i64))
@@ -468,7 +498,18 @@ fn fiddle_invoke(
     let ffi_args: SmallVec<[Arg; PREPARED_INLINE_ARGS]> =
         c_args.iter().map(|ca| ca.as_libffi_arg()).collect();
 
-    let result = call_with_cif(&pf.cif, pf.ptr, &ffi_args, pf.ret_code)?;
+    // A `:string` return is dispatched here rather than through
+    // `call_with_cif` so the pointer never has to be boxed as an Integer and
+    // handed back to Ruby just to be passed straight into `___read_string`.
+    let result = if pf.ret_as_string {
+        // SAFETY: same contract as `call_with_cif` — `c_args` is still alive,
+        // and `ret_as_string` was only accepted for a VOIDP return, so the
+        // CIF really does return a pointer.
+        let p: u64 = unsafe { pf.cif.call(pf.ptr, &ffi_args) };
+        unsafe { cstr_to_value(p) }
+    } else {
+        call_with_cif(&pf.cif, pf.ptr, &ffi_args, pf.ret_code)?
+    };
 
     // Keep the CArg storage alive until the call has returned.
     drop(ffi_args);
@@ -757,12 +798,10 @@ fn fiddle_read_string(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let ptr = lfp.arg(0).expect_integer(globals)? as usize;
-    if ptr == 0 {
-        return Ok(Value::nil());
-    }
-    let s = unsafe { std::ffi::CStr::from_ptr(ptr as *const libc::c_char) };
-    Ok(Value::string_from_vec(s.to_bytes().to_vec()))
+    let ptr = lfp.arg(0).expect_integer(globals)? as u64;
+    // SAFETY: the caller passes an address it obtained from C and vouches
+    // that it points at a live NUL-terminated string.
+    Ok(unsafe { cstr_to_value(ptr) })
 }
 
 /// ### Fiddle.___read_bytes(ptr, len) -> String
@@ -843,7 +882,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(fiddle, "___call", fiddle_call, 4);
     // Prepared calls: build the CIF once, then invoke with the arguments
     // passed positionally (no Array, no per-call ffi_prep_cif).
-    globals.define_builtin_module_func(fiddle, "___prepare", fiddle_prepare, 3);
+    globals.define_builtin_module_func_with(fiddle, "___prepare", fiddle_prepare, 3, 4, false);
     globals.define_builtin_module_func_with(
         fiddle,
         "___invoke",
@@ -1271,6 +1310,48 @@ mod tests {
               raise "expected TypeError"
             rescue TypeError
             end
+            :ok
+            "#
+        ));
+    }
+
+    // A `:string` return is folded into the prepared descriptor so that one
+    // builtin performs both the call and the char*-to-String copy. What it
+    // produces has to be indistinguishable from the two-call form it
+    // replaces, NULL included.
+    #[test]
+    fn fiddle_prepared_string_return() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            getenv = Fiddle.___dlsym(LIBC, "getenv")
+            two = Fiddle.___prepare(getenv, [TY_VOIDP], TY_VOIDP)
+            one = Fiddle.___prepare(getenv, [TY_VOIDP], TY_VOIDP, true)
+
+            # A variable that exists: the same String either way. (Compared
+            # against the two-call form rather than a literal, so the test
+            # does not depend on what the environment actually holds.)
+            a = Fiddle.___read_string(Fiddle.___invoke(two, "PATH"))
+            b = Fiddle.___invoke(one, "PATH")
+            raise "fused result differs" unless a == b
+            raise "not a String" unless b.is_a?(String)
+            raise "unexpectedly empty" if b.empty?
+
+            # A variable that does not exist: NULL becomes nil on both paths.
+            miss = "MONORUBY_NO_SUCH_ENV_VAR_XYZZY"
+            raise "two-call NULL" unless Fiddle.___read_string(Fiddle.___invoke(two, miss)).nil?
+            raise "fused NULL" unless Fiddle.___invoke(one, miss).nil?
+
+            # The flag only means something for a pointer return.
+            begin
+              Fiddle.___prepare(getenv, [TY_VOIDP], TY_INT, true)
+              raise "expected an ArgumentError"
+            rescue ArgumentError
+            end
+
+            # Passing false explicitly is the three-argument behaviour: the
+            # raw address comes back, not a String.
+            three = Fiddle.___prepare(getenv, [TY_VOIDP], TY_VOIDP, false)
+            raise "explicit false" unless Fiddle.___invoke(three, "PATH").is_a?(Integer)
             :ok
             "#
         ));

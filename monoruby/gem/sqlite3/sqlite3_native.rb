@@ -73,12 +73,13 @@ module SQLite3
     def self.attach_function(name, argtypes, rettype)
       addr = LIB[name.to_s]
       sig  = argtypes.map { |t| TYPE_CODES.fetch(t) }
-      id   = Fiddle.___prepare(addr, sig, TYPE_CODES.fetch(rettype))
+      # A `:string` return is folded into the prepared descriptor, so the C
+      # call and the char*-to-String copy happen in one builtin rather than
+      # two. NULL still maps to nil, matching FFI's `:string`.
+      id   = Fiddle.___prepare(addr, sig, TYPE_CODES.fetch(rettype), rettype == :string)
 
       params = (0...argtypes.size).map { |i| "a#{i}" }.join(", ")
-      call   = "Fiddle.___invoke(#{id}#{params.empty? ? "" : ", #{params}"})"
-      # `___read_string` maps NULL to nil, matching FFI's `:string`.
-      body   = rettype == :string ? "Fiddle.___read_string(#{call})" : call
+      body   = "Fiddle.___invoke(#{id}#{params.empty? ? "" : ", #{params}"})"
 
       module_eval("def self.#{name}(#{params})\n  #{body}\nend", __FILE__, __LINE__)
     end
