@@ -249,7 +249,10 @@ fn fiddle_call_inner(
 
     let func = CodePtr(ptr as *mut c_void);
 
-    let result = call_with_cif(&cif, func, &ffi_args, ret_type_code)?;
+    // SAFETY: `c_args` outlives the call below, and `cif` was built from the
+    // same type codes the arguments were marshalled with.
+    // `___call` has no descriptor, so no string-return folding.
+    let result = unsafe { call_with_cif(&cif, func, &ffi_args, ret_type_code, false)? };
 
     // Keep c_args alive until here
     drop(ffi_args);
@@ -258,58 +261,38 @@ fn fiddle_call_inner(
     Ok(result)
 }
 
-/// Perform the libffi call and box the result as a Ruby Value.
+/// Perform the libffi call and return the raw result, normalised to 64 bits.
+///
+/// Kept separate from boxing so the same call can happen on a worker thread,
+/// which must not touch the Ruby heap: the worker produces these bits, and
+/// the interpreter thread turns them into a Value with [`bits_to_value`].
+/// Floating-point returns travel as `f64::to_bits`, everything else as the
+/// value widened to `i64` exactly the way its arm boxed it before.
 ///
 /// SAFETY: the caller must keep the `CArg` storage that `ffi_args` points into
 /// alive until this returns, and `cif` must have been built from the same type
 /// codes the arguments were marshalled with.
-fn call_with_cif(cif: &Cif, func: CodePtr, ffi_args: &[Arg], ret_type_code: i64) -> Result<Value> {
+unsafe fn call_raw(cif: &Cif, func: CodePtr, ffi_args: &[Arg], ret_type_code: i64) -> Result<i64> {
     Ok(match ret_type_code {
+        // For void, call with i64 return and discard.
         TYPE_VOID => {
-            // For void, call with i64 return and discard.
             let _: i64 = unsafe { cif.call(func, &ffi_args) };
-            Value::nil()
+            0
         }
-        TYPE_CHAR => {
-            let v: i8 = unsafe { cif.call(func, &ffi_args) };
-            Value::integer(v as i64)
-        }
-        TYPE_UCHAR => {
-            let v: u8 = unsafe { cif.call(func, &ffi_args) };
-            Value::integer(v as i64)
-        }
-        TYPE_SHORT => {
-            let v: i16 = unsafe { cif.call(func, &ffi_args) };
-            Value::integer(v as i64)
-        }
-        TYPE_USHORT => {
-            let v: u16 = unsafe { cif.call(func, &ffi_args) };
-            Value::integer(v as i64)
-        }
-        TYPE_INT | TYPE_BOOL => {
-            let v: i32 = unsafe { cif.call(func, &ffi_args) };
-            Value::integer(v as i64)
-        }
-        TYPE_UINT => {
-            let v: u32 = unsafe { cif.call(func, &ffi_args) };
-            Value::integer(v as i64)
-        }
-        TYPE_LONG | TYPE_LONG_LONG => {
-            let v: i64 = unsafe { cif.call(func, &ffi_args) };
-            Value::integer(v)
-        }
+        TYPE_CHAR => (unsafe { cif.call::<i8>(func, &ffi_args) }) as i64,
+        TYPE_UCHAR => (unsafe { cif.call::<u8>(func, &ffi_args) }) as i64,
+        TYPE_SHORT => (unsafe { cif.call::<i16>(func, &ffi_args) }) as i64,
+        TYPE_USHORT => (unsafe { cif.call::<u16>(func, &ffi_args) }) as i64,
+        TYPE_INT | TYPE_BOOL => (unsafe { cif.call::<i32>(func, &ffi_args) }) as i64,
+        TYPE_UINT => (unsafe { cif.call::<u32>(func, &ffi_args) }) as i64,
+        TYPE_LONG | TYPE_LONG_LONG => unsafe { cif.call::<i64>(func, &ffi_args) },
         TYPE_VOIDP | TYPE_ULONG | TYPE_ULONG_LONG => {
-            let v: u64 = unsafe { cif.call(func, &ffi_args) };
-            Value::integer(v as i64)
+            unsafe { cif.call::<u64>(func, &ffi_args) as i64 }
         }
-        TYPE_FLOAT => {
-            let v: f32 = unsafe { cif.call(func, &ffi_args) };
-            Value::float(v as f64)
-        }
-        TYPE_DOUBLE => {
-            let v: f64 = unsafe { cif.call(func, &ffi_args) };
-            Value::float(v)
-        }
+        // Widened to f64 here so the bit pattern is the one `Value::float`
+        // would have received either way.
+        TYPE_FLOAT => ((unsafe { cif.call::<f32>(func, &ffi_args) }) as f64).to_bits() as i64,
+        TYPE_DOUBLE => (unsafe { cif.call::<f64>(func, &ffi_args) }).to_bits() as i64,
         _ => {
             return Err(MonorubyErr::runtimeerr(format!(
                 "Fiddle: unsupported return type code {}",
@@ -317,6 +300,38 @@ fn call_with_cif(cif: &Cif, func: CodePtr, ffi_args: &[Arg], ret_type_code: i64)
             )));
         }
     })
+}
+
+/// Box a raw result from [`call_raw`] as the Ruby value its type code means.
+///
+/// `ret_as_string` reads a pointer return back as a String; see the field of
+/// the same name on [`PreparedFn`].
+///
+/// SAFETY: with `ret_as_string`, `bits` must be a pointer that is either NULL
+/// or a live NUL-terminated C string.
+unsafe fn bits_to_value(bits: i64, ret_type_code: i64, ret_as_string: bool) -> Value {
+    if ret_as_string {
+        return unsafe { cstr_to_value(bits as u64) };
+    }
+    match ret_type_code {
+        TYPE_VOID => Value::nil(),
+        TYPE_FLOAT | TYPE_DOUBLE => Value::float(f64::from_bits(bits as u64)),
+        _ => Value::integer(bits),
+    }
+}
+
+/// Call and box in one step, for the ordinary inline path.
+///
+/// SAFETY: as [`call_raw`].
+unsafe fn call_with_cif(
+    cif: &Cif,
+    func: CodePtr,
+    ffi_args: &[Arg],
+    ret_type_code: i64,
+    ret_as_string: bool,
+) -> Result<Value> {
+    let bits = unsafe { call_raw(cif, func, ffi_args, ret_type_code)? };
+    Ok(unsafe { bits_to_value(bits, ret_type_code, ret_as_string) })
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +368,57 @@ struct PreparedFn {
     /// exactly the calls that are already the most common in a real binding
     /// (`sqlite3_column_text`, `sqlite3_column_name`, `sqlite3_errmsg`).
     ret_as_string: bool,
+    /// Run this call on a worker thread instead of inline.
+    ///
+    /// A C function that blocks in the kernel would otherwise freeze the
+    /// whole interpreter: green threads share one OS thread, so nothing else
+    /// runs until it returns. Declaring the call blocking sends it to
+    /// `native_pool` and parks the calling green thread on the completion
+    /// pipe, exactly like `File#flock`.
+    blocking: bool,
+}
+
+/// Flags accepted as `___prepare`'s fourth argument.
+///
+/// A bitmask rather than a run of booleans: these are call-site properties a
+/// binding knows at attach time, and there will be more of them.
+/// Kept in sync with `gem/ffi_c.rb` and `gem/sqlite3/sqlite3_native.rb`.
+const PREPARE_RETURN_STRING: i64 = 1;
+const PREPARE_BLOCKING: i64 = 2;
+const PREPARE_KNOWN_FLAGS: i64 = PREPARE_RETURN_STRING | PREPARE_BLOCKING;
+
+/// A prepared call packaged for a worker thread.
+///
+/// Holds only C-level data: the address of the leaked descriptor and the
+/// already-marshalled arguments. The libffi `Arg` pointer array is built on
+/// the worker, pointing into that thread's own copy of `args`.
+pub(crate) struct FfiWorkerCall {
+    site: *const PreparedFn,
+    args: SmallVec<[CArg; PREPARED_INLINE_ARGS]>,
+}
+
+// SAFETY: `site` addresses a `Box::leak`ed `PreparedFn`, so it outlives every
+// thread, and `ffi_call` only reads the CIF — concurrent calls through one
+// descriptor do not race. `args` is plain C data with no Ruby heap
+// references. A `TYPE_VOIDP` argument may carry a raw pointer into a Ruby
+// String's buffer, which stays valid because the allocator does not move
+// objects and the parked caller's frame keeps the String reachable for the
+// GC (`Executor::mark` walks the whole cfp chain).
+unsafe impl Send for FfiWorkerCall {}
+
+impl FfiWorkerCall {
+    /// Perform the call. Runs on a worker thread — must not touch the Ruby
+    /// heap or any interpreter thread-local.
+    pub(crate) fn run(&self) -> i64 {
+        // SAFETY: see the `Send` justification above.
+        let pf: &PreparedFn = unsafe { &*self.site };
+        let ffi_args: SmallVec<[Arg; PREPARED_INLINE_ARGS]> =
+            self.args.iter().map(|ca| ca.as_libffi_arg()).collect();
+        // SAFETY: `self.args` outlives `ffi_args`, and the CIF was built from
+        // the codes those arguments were marshalled with. The return code was
+        // validated by `___prepare`, so `call_raw` cannot take its error arm.
+        unsafe { call_raw(&pf.cif, pf.ptr, &ffi_args, pf.ret_code).unwrap_or(0) }
+    }
 }
 
 /// Build a Ruby String from a C `char *`, mapping NULL to nil.
@@ -409,9 +475,29 @@ fn fiddle_prepare(
     _: BytecodePtr,
 ) -> Result<Value> {
     let ptr = lfp.arg(0).expect_integer(globals)? as usize;
+    // There is no legitimate call to address 0, and `___dlsym` hands back 0
+    // for a symbol it could not resolve. Catching it here turns a segfault at
+    // the first call into an error at attach time, where the symbol name is
+    // still known.
+    if ptr == 0 {
+        return Err(MonorubyErr::argumenterr(
+            "Fiddle: cannot prepare a call to a NULL function pointer",
+        ));
+    }
     let types_ary = lfp.arg(1).expect_array_ty(globals)?;
     let ret_code = lfp.arg(2).expect_integer(globals)?;
-    let ret_as_string = lfp.try_arg(3).map(|v| v.as_bool()).unwrap_or(false);
+    let flags = match lfp.try_arg(3) {
+        Some(v) => v.expect_integer(globals)?,
+        None => 0,
+    };
+    if flags & !PREPARE_KNOWN_FLAGS != 0 {
+        return Err(MonorubyErr::argumenterr(format!(
+            "Fiddle: unknown prepare flags {}",
+            flags & !PREPARE_KNOWN_FLAGS
+        )));
+    }
+    let ret_as_string = flags & PREPARE_RETURN_STRING != 0;
+    let blocking = flags & PREPARE_BLOCKING != 0;
     // Only a pointer return can be read back as a string, and both facades
     // spell `:string` as VOIDP. Refusing anything else here keeps `___invoke`
     // from having to decide what a "string" of some other width would mean.
@@ -451,6 +537,7 @@ fn fiddle_prepare(
         arg_codes,
         ret_code,
         ret_as_string,
+        blocking,
     });
 
     Ok(Value::integer(Box::leak(prepared) as *mut PreparedFn as i64))
@@ -463,7 +550,7 @@ fn fiddle_prepare(
 /// `PREPARED_INLINE_ARGS` — nothing on the Rust side either.
 #[monoruby_builtin]
 fn fiddle_invoke(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -495,21 +582,33 @@ fn fiddle_invoke(
         };
         c_args.push(value_to_carg(globals, v, ty)?);
     }
+    // A call the binding declared blocking runs on a worker thread while this
+    // green thread parks, so one slow C call does not freeze every other
+    // thread on this interpreter. The round trip costs tens of microseconds
+    // (see `native_pool`), which is why it is opt-in per function rather than
+    // the default.
+    if pf.blocking {
+        let bits = native_pool::run_blocking(
+            vm,
+            globals,
+            native_pool::NativeOp::Ffi(FfiWorkerCall {
+                site: pf as *const PreparedFn,
+                args: c_args,
+            }),
+        )?
+        .ret;
+        // SAFETY: the worker has returned, so the pointer a string return
+        // yields is whatever the C function produced — the same contract the
+        // inline path relies on.
+        return Ok(unsafe { bits_to_value(bits, pf.ret_code, pf.ret_as_string) });
+    }
+
     let ffi_args: SmallVec<[Arg; PREPARED_INLINE_ARGS]> =
         c_args.iter().map(|ca| ca.as_libffi_arg()).collect();
 
-    // A `:string` return is dispatched here rather than through
-    // `call_with_cif` so the pointer never has to be boxed as an Integer and
-    // handed back to Ruby just to be passed straight into `___read_string`.
-    let result = if pf.ret_as_string {
-        // SAFETY: same contract as `call_with_cif` — `c_args` is still alive,
-        // and `ret_as_string` was only accepted for a VOIDP return, so the
-        // CIF really does return a pointer.
-        let p: u64 = unsafe { pf.cif.call(pf.ptr, &ffi_args) };
-        unsafe { cstr_to_value(p) }
-    } else {
-        call_with_cif(&pf.cif, pf.ptr, &ffi_args, pf.ret_code)?
-    };
+    // SAFETY: `c_args` is still alive, and the CIF was built from the same
+    // type codes these arguments were marshalled with.
+    let result = unsafe { call_with_cif(&pf.cif, pf.ptr, &ffi_args, pf.ret_code, pf.ret_as_string)? };
 
     // Keep the CArg storage alive until the call has returned.
     drop(ffi_args);
@@ -1323,9 +1422,10 @@ mod tests {
     fn fiddle_prepared_string_return() {
         run_test_no_result_check(&format!(
             r#"{TYPE_PRELUDE}
+            FLAG_RETURN_STRING = 1
             getenv = Fiddle.___dlsym(LIBC, "getenv")
             two = Fiddle.___prepare(getenv, [TY_VOIDP], TY_VOIDP)
-            one = Fiddle.___prepare(getenv, [TY_VOIDP], TY_VOIDP, true)
+            one = Fiddle.___prepare(getenv, [TY_VOIDP], TY_VOIDP, FLAG_RETURN_STRING)
 
             # A variable that exists: the same String either way. (Compared
             # against the two-call form rather than a literal, so the test
@@ -1343,15 +1443,166 @@ mod tests {
 
             # The flag only means something for a pointer return.
             begin
-              Fiddle.___prepare(getenv, [TY_VOIDP], TY_INT, true)
+              Fiddle.___prepare(getenv, [TY_VOIDP], TY_INT, FLAG_RETURN_STRING)
               raise "expected an ArgumentError"
             rescue ArgumentError
             end
 
-            # Passing false explicitly is the three-argument behaviour: the
-            # raw address comes back, not a String.
-            three = Fiddle.___prepare(getenv, [TY_VOIDP], TY_VOIDP, false)
+            # An empty flag word is the three-argument behaviour: the raw
+            # address comes back, not a String.
+            three = Fiddle.___prepare(getenv, [TY_VOIDP], TY_VOIDP, 0)
             raise "explicit false" unless Fiddle.___invoke(three, "PATH").is_a?(Integer)
+            :ok
+            "#
+        ));
+    }
+
+    // The point of the blocking flag: green threads share one OS thread, so a
+    // C call that blocks inline freezes every one of them. Offloaded, the
+    // others keep running. Measured by how far a busy thread gets while a
+    // 250ms C sleep is in flight -- inline it must not advance at all.
+    #[test]
+    fn fiddle_blocking_yields_to_other_threads() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            FLAG_BLOCKING = 2
+            usleep = Fiddle.___dlsym(LIBC, "usleep")
+            inline   = Fiddle.___prepare(usleep, [TY_INT], TY_INT, 0)
+            offload  = Fiddle.___prepare(usleep, [TY_INT], TY_INT, FLAG_BLOCKING)
+
+            def progress_during(id)
+              counter = 0
+              stop = false
+              bg = Thread.new {{ until stop; counter += 1; Thread.pass; end }}
+              sleep 0.05                     # let the busy thread get going
+              base = counter
+              raise "usleep failed" unless Fiddle.___invoke(id, 250_000) == 0
+              advanced = counter - base
+              stop = true
+              bg.join
+              advanced
+            end
+
+            inline_advanced  = progress_during(inline)
+            offload_advanced = progress_during(offload)
+
+            # Inline, nothing else can run at all. The margins are loose on
+            # purpose -- what matters is one is zero-ish and the other is not.
+            raise "inline call let other threads run (#{{inline_advanced}})" if inline_advanced > 10
+            raise "offloaded call starved other threads (#{{offload_advanced}})" if offload_advanced < 100
+            :ok
+            "#
+        ));
+    }
+
+    // Everything a call can return has to survive the trip through a worker
+    // thread, which hands back raw bits for the interpreter thread to box.
+    #[test]
+    fn fiddle_blocking_return_types() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            TY_FLOAT = 7
+            B = 2      # blocking
+            S = 1      # return string
+
+            i   = Fiddle.___prepare(Fiddle.___dlsym(LIBC, "abs"),      [TY_INT],   TY_INT,   B)
+            l   = Fiddle.___prepare(Fiddle.___dlsym(LIBC, "llabs"),    [TY_LLONG], TY_LLONG, B)
+            d   = Fiddle.___prepare(Fiddle.___dlsym(LIBM, "sqrt"),     [TY_DOUBLE], TY_DOUBLE, B)
+            f   = Fiddle.___prepare(Fiddle.___dlsym(LIBC, "strtof"),   [TY_VOIDP, TY_VOIDP], TY_FLOAT, B)
+            v   = Fiddle.___prepare(Fiddle.___dlsym(LIBC, "free"),     [TY_VOIDP], 0,        B)
+            ptr = Fiddle.___prepare(Fiddle.___dlsym(LIBC, "memcpy"),   [TY_VOIDP, TY_VOIDP, TY_LLONG], TY_VOIDP, B)
+            str = Fiddle.___prepare(Fiddle.___dlsym(LIBC, "strerror"), [TY_INT],   TY_VOIDP, B | S)
+            env = Fiddle.___prepare(Fiddle.___dlsym(LIBC, "getenv"),   [TY_VOIDP], TY_VOIDP, B | S)
+            len = Fiddle.___prepare(Fiddle.___dlsym(LIBC, "strlen"),   [TY_VOIDP], TY_LLONG, B)
+
+            raise "int"    unless Fiddle.___invoke(i, -42) == 42
+            raise "int64"  unless Fiddle.___invoke(l, -2**40) == 2**40
+            raise "bignum" unless Fiddle.___invoke(l, 2**62) == 2**62
+            raise "double" unless (Fiddle.___invoke(d, 1024.0) - 32.0).abs < 1e-9
+            raise "float"  unless (Fiddle.___invoke(f, "2.5", nil) - 2.5).abs < 1e-6
+            raise "void"   unless Fiddle.___invoke(v, Fiddle.___malloc(8)).nil?
+            # A String argument hands over its own buffer; the worker holds
+            # that raw pointer while this frame keeps the String alive.
+            raise "string arg" unless Fiddle.___invoke(len, "hello world") == 11
+
+            src = Fiddle.___malloc(16)
+            dst = Fiddle.___malloc(16)
+            Fiddle.___write_bytes(src, "abcdefgh")
+            raise "pointer return" unless Fiddle.___invoke(ptr, dst, src, 8) == dst
+            raise "pointer content" unless Fiddle.___read_bytes(dst, 8) == "abcdefgh"
+
+            raise "string return" unless Fiddle.___invoke(str, 2).is_a?(String)
+            raise "NULL to nil" unless Fiddle.___invoke(env, "MONORUBY_NO_SUCH_VAR_XYZZY").nil?
+            :ok
+            "#
+        ));
+    }
+
+    // A thread parked on a worker must still be interruptible: the ticket is
+    // discarded and the worker's late result dropped, rather than the thread
+    // being stuck until the C call happens to return.
+    #[test]
+    fn fiddle_blocking_is_interruptible() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            FLAG_BLOCKING = 2
+            slp = Fiddle.___prepare(Fiddle.___dlsym(LIBC, "usleep"), [TY_INT], TY_INT, FLAG_BLOCKING)
+
+            # kill: returns long before the 3s call would have
+            t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            th = Thread.new {{ Fiddle.___invoke(slp, 3_000_000) }}
+            sleep 0.1
+            th.kill
+            th.join
+            elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
+            raise "kill did not interrupt the parked call" if elapsed > 1.5
+
+            # raise: delivered while parked
+            message = nil
+            th2 = Thread.new do
+              begin
+                Fiddle.___invoke(slp, 3_000_000)
+                :not_raised
+              rescue => e
+                message = e.message
+                :raised
+              end
+            end
+            sleep 0.1
+            th2.raise(RuntimeError, "boom")
+            raise "raise was not delivered" unless th2.value == :raised
+            raise "wrong exception: #{{message}}" unless message == "boom"
+
+            # and the interpreter is still usable afterwards
+            raise "call after interrupt" unless Fiddle.___invoke(slp, 1000) == 0
+            :ok
+            "#
+        ));
+    }
+
+    // `___prepare` is the one place that can still reject a bad call site
+    // cheaply, so it validates the flag word and refuses a NULL target --
+    // `___dlsym` returns 0 for a symbol it could not resolve, and calling
+    // that would be a segfault with no clue as to which symbol was missing.
+    #[test]
+    fn fiddle_prepare_rejects_bad_flags_and_null_target() {
+        run_test_no_result_check(&format!(
+            r#"{TYPE_PRELUDE}
+            abs = Fiddle.___dlsym(LIBC, "abs")
+            [64, 8, -1].each do |bad|
+              begin
+                Fiddle.___prepare(abs, [TY_INT], TY_INT, bad)
+                raise "expected an ArgumentError for flags #{{bad}}"
+              rescue ArgumentError
+              end
+            end
+            begin
+              Fiddle.___prepare(0, [TY_INT], TY_INT, 0)
+              raise "expected an ArgumentError for a NULL target"
+            rescue ArgumentError
+            end
+            # the two defined flags, together, are accepted
+            raise "valid flags" unless Fiddle.___prepare(abs, [TY_INT], TY_VOIDP, 1 | 2) != 0
             :ok
             "#
         ));

@@ -20,6 +20,10 @@ require "fiddle"
 module FFI
   # VERSION is set by the ffi gem's lib/ffi/version.rb
 
+  # `Fiddle.___prepare` flags (kept in sync with src/builtins/fiddle.rs).
+  PREPARE_RETURN_STRING = 1
+  PREPARE_BLOCKING      = 2
+
   # =========================================================================
   # Type codes – integer constants matching the Rust backend
   # (src/builtins/fiddle.rs). They follow CRuby's Fiddle convention so that
@@ -699,7 +703,14 @@ module FFI
             # Fold a `:string` return into the descriptor so the char*-to-
             # String copy happens inside the same builtin as the call.
             @returns_string = @return_type.equal?(FFI::Type::STRING)
-            @prepared = Fiddle.___prepare(addr, @type_codes, @ret_code, @returns_string)
+            flags = @returns_string ? PREPARE_RETURN_STRING : 0
+            # `attach_function ..., blocking: true` -- run the call on a worker
+            # thread and park this green thread, so a C function that blocks in
+            # the kernel does not freeze every other thread. Costs tens of
+            # microseconds per call, so it is the binding's decision, never a
+            # default.
+            flags |= PREPARE_BLOCKING if options[:blocking]
+            @prepared = Fiddle.___prepare(addr, @type_codes, @ret_code, flags)
           rescue ArgumentError, RuntimeError
             # The `___call` fallback hands back the raw pointer, so the
             # string conversion goes back to `convert_result`.
