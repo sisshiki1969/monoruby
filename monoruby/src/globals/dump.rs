@@ -278,6 +278,28 @@ fn render_cause(
     };
     match cause {
         DeoptCause::Value(r) => format!("{r:?} = {}", decode(bits)),
+        DeoptCause::ClassGuard(r, expected) => {
+            // Name the class the value actually has, not just the value:
+            // "expected FFI::MemoryPointer, got FFI::Pointer" is the whole
+            // diagnosis for a monomorphic guard that a sibling class walks
+            // into, and reading it off the rendered object is guesswork.
+            let actual = match std::num::NonZeroU64::new(bits) {
+                None => "<null>".to_string(),
+                Some(_) => {
+                    let v = unsafe { std::mem::transmute::<u64, Value>(bits) };
+                    match v.debug_check(&globals.store) {
+                        Some(_) => globals.store.debug_class_name(v.class()),
+                        None => "<not a Value>".to_string(),
+                    }
+                }
+            };
+            format!(
+                "{r:?} = {}, class {} but guard expected {}",
+                decode(bits),
+                actual,
+                globals.store.debug_class_name(expected)
+            )
+        }
         DeoptCause::ValueVsBaked(r, expected) => {
             let mut s = format!(
                 "{r:?} = {}, expected {} (bits={:#x})",
