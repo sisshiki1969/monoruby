@@ -89,6 +89,29 @@ pub(crate) mod malloc_stats {
         let b = bucket(size);
         ALLOC_COUNT[b].fetch_add(1, Ordering::Relaxed);
         ALLOC_BYTES[b].fetch_add(size, Ordering::Relaxed);
+        // Temporary: MONORUBY_ALLOC_TRACE=<bucket> samples one backtrace per
+        // 200k allocations in that size class, to attribute a hot bucket to
+        // its call site. Diagnostic only.
+        if let Some(t) = trace_bucket()
+            && t == b
+        {
+            static N: AtomicUsize = AtomicUsize::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) % 200_000 == 0 {
+                eprintln!(
+                    "### alloc-trace bucket={b} size={size}\n{}",
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
+        }
+    }
+
+    fn trace_bucket() -> Option<usize> {
+        static B: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+        *B.get_or_init(|| {
+            std::env::var("MONORUBY_ALLOC_TRACE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+        })
     }
 
     pub(crate) fn record_dealloc(size: usize) {
