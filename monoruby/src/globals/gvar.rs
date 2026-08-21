@@ -535,6 +535,39 @@ fn write_special_check(
         Ok(v)
     }
 
+    // Every global-variable write funnels through here, and materializing
+    // the name (`get_name` clones the interned String) showed up at ~0.6%
+    // of the activerecord benchmark. Ordinary globals — the overwhelming
+    // majority — are identified by a scan over the interned ids of the 16
+    // special names, so only an actual special write pays for its name.
+    fn special_write_ids() -> &'static [IdentId; 16] {
+        static IDS: std::sync::OnceLock<[IdentId; 16]> = std::sync::OnceLock::new();
+        IDS.get_or_init(|| {
+            [
+                "$?",
+                "$<",
+                "$FILENAME",
+                "$/",
+                "$-0",
+                "$\\",
+                "$,",
+                "$;",
+                "$.",
+                "$stdout",
+                "$stderr",
+                "$VERBOSE",
+                "$-v",
+                "$-w",
+                "$0",
+                "$PROGRAM_NAME",
+            ]
+            .map(IdentId::get_id)
+        })
+    }
+    if !special_write_ids().contains(&name) {
+        return Ok(val);
+    }
+
     let n = name.get_name();
     match n.as_str() {
         // Read-only variables backed by plain storage: `$?` is updated
