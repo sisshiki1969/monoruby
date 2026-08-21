@@ -78,6 +78,18 @@ impl std::fmt::Display for IdentName {
 #[repr(transparent)]
 pub struct IdentId(NonZeroU32);
 
+// `special_gvar_name` indexes SPECIAL_GVARS by id offset; pin the pairing.
+const _: () = {
+    let mut i = 0;
+    while i < IdentId::SPECIAL_GVARS.len() {
+        assert!(
+            IdentId::SPECIAL_GVARS[i].1.0.get()
+                == IdentId::GVAR_CHILD_STATUS.0.get() + i as u32
+        );
+        i += 1;
+    }
+};
+
 impl std::default::Default for IdentId {
     fn default() -> Self {
         Self(NonZeroU32::new(1u32).unwrap())
@@ -250,6 +262,66 @@ impl IdentId {
     pub const INITIALIZE_CLONE: IdentId = id!(77);
     pub const INITIALIZE_DUP: IdentId = id!(78);
     pub const RESPOND_TO_MISSING_: IdentId = id!(79);
+
+    // The special global variables whose assignment `write_special_check`
+    // (globals/gvar.rs) validates or coerces. Deliberately a *consecutive*
+    // block: every global-variable write asks "is this one special?", and
+    // with the block contiguous that is a single range check
+    // ([`IdentId::is_special_gvar`]) instead of a name lookup — no String
+    // is ever materialized for the ordinary-global fast path.
+    pub const GVAR_CHILD_STATUS: IdentId = id!(80); // $?
+    pub const GVAR_ARGF: IdentId = id!(81); // $<
+    pub const GVAR_FILENAME: IdentId = id!(82); // $FILENAME
+    pub const GVAR_IRS: IdentId = id!(83); // $/
+    pub const GVAR_IRS_ALIAS: IdentId = id!(84); // $-0
+    pub const GVAR_ORS: IdentId = id!(85); // $\
+    pub const GVAR_OFS: IdentId = id!(86); // $,
+    pub const GVAR_FS: IdentId = id!(87); // $;
+    pub const GVAR_LINENO: IdentId = id!(88); // $.
+    pub const GVAR_STDOUT: IdentId = id!(89); // $stdout
+    pub const GVAR_STDERR: IdentId = id!(90); // $stderr
+    pub const GVAR_VERBOSE: IdentId = id!(91); // $VERBOSE
+    pub const GVAR_VERBOSE_V: IdentId = id!(92); // $-v
+    pub const GVAR_VERBOSE_W: IdentId = id!(93); // $-w
+    pub const GVAR_PROGRAM_NAME0: IdentId = id!(94); // $0
+    pub const GVAR_PROGRAM_NAME: IdentId = id!(95); // $PROGRAM_NAME
+
+    /// Name ↔ id pairing for the block above — the single source of truth:
+    /// `IdentifierTable::new` interns from it, and [`Self::special_gvar_name`]
+    /// reads a name back without materializing a String. Order must follow
+    /// the ids (checked by the const assertion below).
+    pub(crate) const SPECIAL_GVARS: [(&'static str, IdentId); 16] = [
+        ("$?", Self::GVAR_CHILD_STATUS),
+        ("$<", Self::GVAR_ARGF),
+        ("$FILENAME", Self::GVAR_FILENAME),
+        ("$/", Self::GVAR_IRS),
+        ("$-0", Self::GVAR_IRS_ALIAS),
+        ("$\\", Self::GVAR_ORS),
+        ("$,", Self::GVAR_OFS),
+        ("$;", Self::GVAR_FS),
+        ("$.", Self::GVAR_LINENO),
+        ("$stdout", Self::GVAR_STDOUT),
+        ("$stderr", Self::GVAR_STDERR),
+        ("$VERBOSE", Self::GVAR_VERBOSE),
+        ("$-v", Self::GVAR_VERBOSE_V),
+        ("$-w", Self::GVAR_VERBOSE_W),
+        ("$0", Self::GVAR_PROGRAM_NAME0),
+        ("$PROGRAM_NAME", Self::GVAR_PROGRAM_NAME),
+    ];
+
+    /// Whether this id names one of the special globals above.
+    pub(crate) fn is_special_gvar(self) -> bool {
+        (Self::GVAR_CHILD_STATUS.0.get()..=Self::GVAR_PROGRAM_NAME.0.get())
+            .contains(&self.0.get())
+    }
+
+    /// The name of a special global, as a static str — the ids are
+    /// consecutive, so this is an array index off the block's base.
+    /// Callers must have checked [`Self::is_special_gvar`].
+    pub(crate) fn special_gvar_name(self) -> &'static str {
+        debug_assert!(self.is_special_gvar());
+        Self::SPECIAL_GVARS[(self.0.get() - Self::GVAR_CHILD_STATUS.0.get()) as usize].0
+    }
 }
 
 impl IdentId {
@@ -472,6 +544,9 @@ impl IdentifierTable {
         table.set_id("initialize_clone", IdentId::INITIALIZE_CLONE);
         table.set_id("initialize_dup", IdentId::INITIALIZE_DUP);
         table.set_id("respond_to_missing?", IdentId::RESPOND_TO_MISSING_);
+        for (name, id) in IdentId::SPECIAL_GVARS {
+            table.set_id(name, id);
+        }
         table
     }
 

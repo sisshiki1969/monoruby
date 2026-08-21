@@ -535,14 +535,28 @@ fn write_special_check(
         Ok(v)
     }
 
-    let n = name.get_name();
-    match n.as_str() {
+    // Every global-variable write funnels through here, and materializing
+    // the name (`get_name` clones the interned String) showed up at ~0.6%
+    // of the activerecord benchmark. The specials sit in one consecutive
+    // preset-id block (`IdentId::GVAR_*`), so an ordinary global — the
+    // overwhelming majority — is dismissed by a single range check, and
+    // only an actual special write pays for its name (the arms want it for
+    // their messages).
+    if !name.is_special_gvar() {
+        return Ok(val);
+    }
+
+    // Each arm knows exactly which names it matches, so the display name
+    // comes from the preset table as a &'static str — no String is built
+    // even on the special path.
+    let n = name.special_gvar_name();
+    match name {
         // Read-only variables backed by plain storage: `$?` is updated
         // from Rust via `set_simple` (which bypasses this check), the
         // others have no writer at all. `$!` is read-only in CRuby
         // too, but monoruby's rescue bookkeeping bytecode stores to it
         // through this path, so it cannot be listed.
-        "$?" | "$<" | "$FILENAME" => Err(MonorubyErr::nameerr(format!(
+        IdentId::GVAR_CHILD_STATUS | IdentId::GVAR_ARGF | IdentId::GVAR_FILENAME => Err(MonorubyErr::nameerr(format!(
             "{n} is a read-only variable"
         ))),
         // The input record separator: String or nil, stored as a
@@ -550,7 +564,7 @@ fn write_special_check(
         // (registered in `init_builtin_gvars`), but the alias name
         // still reaches this check, so match it too for the error
         // message's sake.
-        "$/" | "$-0" => {
+        IdentId::GVAR_IRS | IdentId::GVAR_IRS_ALIAS => {
             // Type-check, then warn, then copy — in that order:
             // `__warn_deprecated` runs Ruby, and the fresh frozen copy
             // would live only in a Rust local across it (its cell was
@@ -559,14 +573,14 @@ fn write_special_check(
             if !val.is_nil() && val.is_rstring_inner().is_none() {
                 return Err(MonorubyErr::typeerr(format!("value of {n} must be String")));
             }
-            warn_deprecated_separator(vm, globals, &n, val);
-            frozen_string_or_nil(&n, val)
+            warn_deprecated_separator(vm, globals, n, val);
+            frozen_string_or_nil(n, val)
         }
         // Output record / field separators: String or nil, stored
         // as-is (CRuby does not copy these).
-        "$\\" | "$," => {
+        IdentId::GVAR_ORS | IdentId::GVAR_OFS => {
             if val.is_nil() || val.is_rstring().is_some() {
-                warn_deprecated_separator(vm, globals, &n, val);
+                warn_deprecated_separator(vm, globals, n, val);
                 Ok(val)
             } else {
                 Err(MonorubyErr::typeerr(format!(
@@ -575,9 +589,9 @@ fn write_special_check(
             }
         }
         // The input field separator additionally accepts a Regexp.
-        "$;" => {
+        IdentId::GVAR_FS => {
             if val.is_nil() || val.is_rstring().is_some() || val.is_regex().is_some() {
-                warn_deprecated_separator(vm, globals, &n, val);
+                warn_deprecated_separator(vm, globals, n, val);
                 Ok(val)
             } else {
                 Err(MonorubyErr::typeerr(format!(
@@ -586,10 +600,10 @@ fn write_special_check(
             }
         }
         // `$.` (last input line number) coerces via `#to_int`.
-        "$." => Ok(Value::integer(val.coerce_to_int_i64(vm, globals)?)),
+        IdentId::GVAR_LINENO => Ok(Value::integer(val.coerce_to_int_i64(vm, globals)?)),
         // `$stdout` / `$stderr` accept any object with a `write`
         // method.
-        "$stdout" | "$stderr" => {
+        IdentId::GVAR_STDOUT | IdentId::GVAR_STDERR => {
             if globals
                 .store
                 .check_method_for_class(val.class(), IdentId::get_id("write"))
@@ -605,14 +619,14 @@ fn write_special_check(
         }
         // `$VERBOSE` normalizes any truthy assignment to `true`
         // (nil and false are stored as-is).
-        "$VERBOSE" | "$-v" | "$-w" => Ok(if val.as_bool() {
+        IdentId::GVAR_VERBOSE | IdentId::GVAR_VERBOSE_V | IdentId::GVAR_VERBOSE_W => Ok(if val.as_bool() {
             Value::bool(true)
         } else {
             val
         }),
         // `$0` requires a String — and actually renames the process
         // (CRuby's setproctitle), so `ps` shows the new title.
-        "$0" | "$PROGRAM_NAME" => {
+        IdentId::GVAR_PROGRAM_NAME0 | IdentId::GVAR_PROGRAM_NAME => {
             if let Some(inner) = val.is_rstring_inner() {
                 set_process_title(inner.as_bytes());
                 Ok(val)
@@ -624,7 +638,7 @@ fn write_special_check(
                 ))
             }
         }
-        _ => Ok(val),
+        _ => unreachable!("is_special_gvar admits only the GVAR_* block"),
     }
 }
 

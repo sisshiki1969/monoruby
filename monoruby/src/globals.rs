@@ -956,6 +956,7 @@ impl Globals {
                 eprintln!("free list (last gc):     {}", alloc.free_count());
                 eprintln!("active pages:            {}", alloc.pages_len());
             });
+            alloc::malloc_stats::dump();
         }
         // Materialize an uncaught exception into its Ruby object while
         // the executor is still alive: this runs the implicit `$!`

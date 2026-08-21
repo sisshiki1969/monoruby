@@ -28,19 +28,95 @@ unsafe impl GlobalAlloc for RurubyAlloc {
             let total = MALLOC_AMOUNT.fetch_add(layout.size(), Ordering::SeqCst) + layout.size();
             request_gc_if_malloc_over(total);
         }
-        unsafe { System.alloc(layout) }
+        #[cfg(feature = "gc-log")]
+        malloc_stats::record_alloc(layout.size());
+        #[cfg(feature = "mimalloc")]
+        unsafe {
+            mimalloc::MiMalloc.alloc(layout)
+        }
+        #[cfg(not(feature = "mimalloc"))]
+        unsafe {
+            System.alloc(layout)
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         if layout.size() < MALLOC_TRACK_LIMIT {
             MALLOC_AMOUNT.fetch_sub(layout.size(), Ordering::SeqCst);
         }
-        unsafe { System.dealloc(ptr, layout) }
+        #[cfg(feature = "gc-log")]
+        malloc_stats::record_dealloc(layout.size());
+        #[cfg(feature = "mimalloc")]
+        unsafe {
+            mimalloc::MiMalloc.dealloc(ptr, layout)
+        }
+        #[cfg(not(feature = "mimalloc"))]
+        unsafe {
+            System.dealloc(ptr, layout)
+        }
     }
 }
 
 #[global_allocator]
 pub static GLOBAL_ALLOC: RurubyAlloc = RurubyAlloc;
+
+/// Size-class histogram of everything that passes through the global
+/// allocator (`gc-log` builds only). This is the measurement the payload-
+/// locality work keys off: which buffer sizes churn, and how much of the
+/// traffic a small-size pool (or a wider inline representation) would
+/// absorb. Counter tier — two relaxed atomic adds per alloc/dealloc,
+/// printed once at exit next to the GC profile.
+#[cfg(feature = "gc-log")]
+pub(crate) mod malloc_stats {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Bucket i covers sizes up to `16 << i`; the last bucket is open-ended.
+    pub(crate) const BUCKETS: usize = 13; // 16B .. 32KB, then >32KB
+    static ALLOC_COUNT: [AtomicUsize; BUCKETS] =
+        [const { AtomicUsize::new(0) }; BUCKETS];
+    static ALLOC_BYTES: [AtomicUsize; BUCKETS] =
+        [const { AtomicUsize::new(0) }; BUCKETS];
+    static DEALLOC_COUNT: [AtomicUsize; BUCKETS] =
+        [const { AtomicUsize::new(0) }; BUCKETS];
+
+    fn bucket(size: usize) -> usize {
+        // 0..=16 -> 0, 17..=32 -> 1, ... 16KB+1..=32KB -> 11, larger -> 12
+        let b = (usize::BITS - size.max(1).saturating_sub(1).leading_zeros()) as usize;
+        b.saturating_sub(4).min(BUCKETS - 1)
+    }
+
+    pub(crate) fn record_alloc(size: usize) {
+        let b = bucket(size);
+        ALLOC_COUNT[b].fetch_add(1, Ordering::Relaxed);
+        ALLOC_BYTES[b].fetch_add(size, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_dealloc(size: usize) {
+        DEALLOC_COUNT[bucket(size)].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn dump() {
+        eprintln!("global-allocator size classes (alloc / dealloc / alloc-bytes):");
+        let mut label = 16usize;
+        for i in 0..BUCKETS {
+            let (a, d, by) = (
+                ALLOC_COUNT[i].load(Ordering::Relaxed),
+                DEALLOC_COUNT[i].load(Ordering::Relaxed),
+                ALLOC_BYTES[i].load(Ordering::Relaxed),
+            );
+            if a == 0 && d == 0 {
+                label <<= 1;
+                continue;
+            }
+            if i == BUCKETS - 1 {
+                eprintln!("  >{:>6}B: {:>12} / {:>12} / {:>14}", label >> 1, a, d, by);
+            } else {
+                eprintln!("  {:>7}B: {:>12} / {:>12} / {:>14}", label, a, d, by);
+            }
+            label <<= 1;
+        }
+    }
+}
 
 /// Allocations of at least this size are excluded from `MALLOC_AMOUNT` (and
 /// from the GC trigger). They are one-shot infrastructure reservations, not
