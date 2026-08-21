@@ -30,7 +30,14 @@ unsafe impl GlobalAlloc for RurubyAlloc {
         }
         #[cfg(feature = "gc-log")]
         malloc_stats::record_alloc(layout.size());
-        unsafe { System.alloc(layout) }
+        #[cfg(feature = "mimalloc")]
+        unsafe {
+            mimalloc::MiMalloc.alloc(layout)
+        }
+        #[cfg(not(feature = "mimalloc"))]
+        unsafe {
+            System.alloc(layout)
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
@@ -39,7 +46,14 @@ unsafe impl GlobalAlloc for RurubyAlloc {
         }
         #[cfg(feature = "gc-log")]
         malloc_stats::record_dealloc(layout.size());
-        unsafe { System.dealloc(ptr, layout) }
+        #[cfg(feature = "mimalloc")]
+        unsafe {
+            mimalloc::MiMalloc.dealloc(ptr, layout)
+        }
+        #[cfg(not(feature = "mimalloc"))]
+        unsafe {
+            System.dealloc(ptr, layout)
+        }
     }
 }
 
