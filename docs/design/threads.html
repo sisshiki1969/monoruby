@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-98753dd6.js";
+            window.path_to_searchindex_js = "../searchindex-33ae1818.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -609,12 +609,27 @@ uncaptured フレームは他スレッドから到達不能なのでレジスタ
 <strong>待つべき fd を持たないカーネルブロッキング syscall</strong> はグリーンスレッドの単一 OS
 スレッドをそのままブロックしてしまう。これらだけを別の短命 OS スレッドへ逃がす。</p>
 <ul>
-<li><strong>オフロード対象は 2 つだけ</strong>(<code>NativeOp</code>):
+<li><strong>オフロード対象</strong>(<code>NativeOp</code>):
 <ul>
 <li><code>flock(2)</code> のブロッキング取得(<code>File#flock</code>)。<code>LOCK_NB</code> / <code>LOCK_UN</code> は
 カーネルでブロックしないのでインライン実行。</li>
 <li><strong>FIFO</strong> に対するブロッキング <code>open(2)</code>(相手が開くまでブロックする)。事前に
 <code>stat</code> して FIFO のときだけオフロードし、それ以外の open はインライン。</li>
+<li><strong>blocking 指定された FFI 呼び出し</strong>(<code>NativeOp::Ffi</code>)。上 2 つと違い走るのは
+Ruby プログラムが選んだ任意の C なので、「生データのみ」の規律は fiddle 側で
+担保する: <code>FfiWorkerCall</code> は不死の descriptor のアドレスとマーシャル済み C 引数
+だけを持ち、<code>run</code> は Ruby ヒープに触れない。ワーカーは生の 64bit 結果を返し、
+インタプリタ側スレッドが <code>bits_to_value</code> で box する。
+<ul>
+<li><strong>opt-in</strong>: <code>Fiddle.___prepare</code> の flags(<code>2 = BLOCKING</code>)で宣言する。
+FFI では <code>attach_function ..., blocking: true</code>、sqlite3 ブリッジでは
+<code>attach_function ..., blocking: true</code>。</li>
+<li><strong>本当にブロックする関数だけに付ける</strong>。オフロード往復は idle 時で 60〜110µs
+(thread spawn + park/wake)。CPU 密な green thread がいると再開はタイムスライス
+1 回分待たされる。<strong>行単位で呼ばれる関数に付けてはならない</strong>
+(<code>sqlite3_step</code> を blocking にすると 2000 行の SELECT が ~2ms → ~200ms になる)。</li>
+</ul>
+</li>
 </ul>
 </li>
 <li><strong>プールではない</strong>: <code>submit</code> は操作ごとに <code>std::thread::spawn</code> で<strong>専用の短命 OS
@@ -642,8 +657,13 @@ waiter で共有なので、未充足の waiter は再 park する。</li>
 <li><code>Thread#priority</code> は保存のみ(スケジューリングに影響しない)。<code>native_thread_id</code> は
 実 tid ではなくオブジェクト単位トークン。<code>ThreadGroup</code> / <code>fork</code> との相互作用、
 <code>Thread.ignore_deadlock</code> の実効(検出器の停止)は未実装。</li>
-<li>ネイティブオフロード(§9)は flock / FIFO open のみ。<code>fcntl(F_SETLKW)</code> 等、他の
-カーネルブロッキング操作は未対応(将来 <code>NativeOp</code> を増やす余地)。</li>
+<li>ネイティブオフロード(§9)は flock / FIFO open / blocking 指定の FFI 呼び出しのみ。
+<code>fcntl(F_SETLKW)</code> 等、他のカーネルブロッキング操作は未対応(将来 <code>NativeOp</code> を
+増やす余地)。また <code>submit</code> が操作ごとに thread spawn する(プールではない)ため
+往復が 60〜110µs かかり、頻繁に呼ばれる関数はオフロードできない。実例として
+<code>sqlite3_step</code> は busy_timeout 待ちで長時間ブロックしうるが行単位で呼ばれるため
+blocking にしておらず、その待ちは今も他の green thread を止める。真のワーカー
+プール化がこの制約を外す前提になる。</li>
 <li>真の並列化は別の話(Ractor 型の分離が現アーキテクチャ —
 OS スレッドごとの ALLOC / CODEGEN / SCHEDULER — と整合的)。</li>
 </ol>
