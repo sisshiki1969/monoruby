@@ -250,6 +250,35 @@ impl IdentId {
     pub const INITIALIZE_CLONE: IdentId = id!(77);
     pub const INITIALIZE_DUP: IdentId = id!(78);
     pub const RESPOND_TO_MISSING_: IdentId = id!(79);
+
+    // The special global variables whose assignment `write_special_check`
+    // (globals/gvar.rs) validates or coerces. Deliberately a *consecutive*
+    // block: every global-variable write asks "is this one special?", and
+    // with the block contiguous that is a single range check
+    // ([`IdentId::is_special_gvar`]) instead of a name lookup — no String
+    // is ever materialized for the ordinary-global fast path.
+    pub const GVAR_CHILD_STATUS: IdentId = id!(80); // $?
+    pub const GVAR_ARGF: IdentId = id!(81); // $<
+    pub const GVAR_FILENAME: IdentId = id!(82); // $FILENAME
+    pub const GVAR_IRS: IdentId = id!(83); // $/
+    pub const GVAR_IRS_ALIAS: IdentId = id!(84); // $-0
+    pub const GVAR_ORS: IdentId = id!(85); // $\
+    pub const GVAR_OFS: IdentId = id!(86); // $,
+    pub const GVAR_FS: IdentId = id!(87); // $;
+    pub const GVAR_LINENO: IdentId = id!(88); // $.
+    pub const GVAR_STDOUT: IdentId = id!(89); // $stdout
+    pub const GVAR_STDERR: IdentId = id!(90); // $stderr
+    pub const GVAR_VERBOSE: IdentId = id!(91); // $VERBOSE
+    pub const GVAR_VERBOSE_V: IdentId = id!(92); // $-v
+    pub const GVAR_VERBOSE_W: IdentId = id!(93); // $-w
+    pub const GVAR_PROGRAM_NAME0: IdentId = id!(94); // $0
+    pub const GVAR_PROGRAM_NAME: IdentId = id!(95); // $PROGRAM_NAME
+
+    /// Whether this id names one of the special globals above.
+    pub(crate) fn is_special_gvar(self) -> bool {
+        (Self::GVAR_CHILD_STATUS.0.get()..=Self::GVAR_PROGRAM_NAME.0.get())
+            .contains(&self.0.get())
+    }
 }
 
 impl IdentId {
@@ -472,6 +501,22 @@ impl IdentifierTable {
         table.set_id("initialize_clone", IdentId::INITIALIZE_CLONE);
         table.set_id("initialize_dup", IdentId::INITIALIZE_DUP);
         table.set_id("respond_to_missing?", IdentId::RESPOND_TO_MISSING_);
+        table.set_id("$?", IdentId::GVAR_CHILD_STATUS);
+        table.set_id("$<", IdentId::GVAR_ARGF);
+        table.set_id("$FILENAME", IdentId::GVAR_FILENAME);
+        table.set_id("$/", IdentId::GVAR_IRS);
+        table.set_id("$-0", IdentId::GVAR_IRS_ALIAS);
+        table.set_id("$\\", IdentId::GVAR_ORS);
+        table.set_id("$,", IdentId::GVAR_OFS);
+        table.set_id("$;", IdentId::GVAR_FS);
+        table.set_id("$.", IdentId::GVAR_LINENO);
+        table.set_id("$stdout", IdentId::GVAR_STDOUT);
+        table.set_id("$stderr", IdentId::GVAR_STDERR);
+        table.set_id("$VERBOSE", IdentId::GVAR_VERBOSE);
+        table.set_id("$-v", IdentId::GVAR_VERBOSE_V);
+        table.set_id("$-w", IdentId::GVAR_VERBOSE_W);
+        table.set_id("$0", IdentId::GVAR_PROGRAM_NAME0);
+        table.set_id("$PROGRAM_NAME", IdentId::GVAR_PROGRAM_NAME);
         table
     }
 
