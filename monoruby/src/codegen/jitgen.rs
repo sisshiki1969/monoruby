@@ -311,20 +311,6 @@ impl WriteBack {
         &self.forward_kwrest
     }
 
-    /// Whether replaying this write-back can allocate — boxing a float, or
-    /// materializing a deferred rest `Array` / kwrest `Hash`. Everything
-    /// else is a plain store into a frame slot.
-    ///
-    /// This is what decides whether a chain conversion has to be deferred
-    /// past the `CODEGEN` borrow: an allocation can run a GC, and a GC must
-    /// not happen while the borrow is held. A conversion that cannot
-    /// allocate can simply be applied where it is found. On activerecord
-    /// that is 198,254 of 200,357 conversions (98.95%).
-    pub(crate) fn replay_allocates(&self) -> bool {
-        !self.fpr.is_empty()
-            || !self.forward_rest.is_empty()
-            || !self.forward_kwrest.is_empty()
-    }
 
     fn new(
         fpr: Vec<(FPReg, Vec<SlotId>)>,
@@ -471,10 +457,6 @@ impl ChainReplay {
         &self.wb
     }
 
-    /// See [`WriteBack::replay_allocates`].
-    pub(crate) fn allocates(&self) -> bool {
-        self.wb.replay_allocates()
-    }
 
     pub(crate) fn write_back_all(&self) -> &WriteBack {
         &self.wb
@@ -510,100 +492,6 @@ impl ChainReplay {
         (dst << 32) | advance
     }
 
-    ///
-    /// Replay this suspended caller frame's write-back from Rust
-    /// (`doc/chain_deopt.md` §9.3): box its live floats into its local slots
-    /// and materialize any deferred rest `Array` / kwrest `Hash`, so the
-    /// frame is fully homed before the interpreter (or anything reading it
-    /// through `outer_lfp`) can see it.
-    ///
-    /// Frame layout facts this relies on (see §8 of the doc): every JIT/VM
-    /// frame has `rbp == cfp + BP_CFP`; the call's `FprSave` area lives at
-    /// `callee_rbp + 32 + 8i` (one slot per set bit of `using_fpr`, in bit
-    /// order); spilled `FPReg`s live at `caller_rbp - (base - 24 + 8n)`.
-    ///
-    /// GC safety: each slot store is a whole boxed `Value`, and every slot
-    /// holds a valid (possibly stale) `Value` throughout, so the allocations
-    /// here (boxing, `create_array`, the kwrest `Hash`) can trigger a
-    /// collection at any point.
-    ///
-    /// ### safety
-    /// `callee_cfp` must be a live control frame of the current thread's
-    /// stack whose return address is the call site this replay was
-    /// registered for, and `caller_cfp` its `prev()`.
-    ///
-    unsafe fn replay(&self, callee_cfp: Cfp, caller_cfp: Cfp) {
-        let callee_bp = callee_cfp.frame_bp();
-        let caller_bp = caller_cfp.frame_bp();
-        // The caller frame may have been moved to the heap by the callee;
-        // the cfp's LFP slot is redirected at promotion, so this reads the
-        // live copy (the emitted deopt write-back's r14 does the same).
-        let mut caller_lfp = caller_cfp.lfp();
-        for (fpr, slots) in &self.wb.fpr {
-            let f = if fpr.0 < PHYS_FPR_POOL {
-                // Pool-resident: the call's `FprSave` spilled it to the save
-                // area above the cont frame, one slot per set bit in bit
-                // order.
-                debug_assert!(self.using_fpr[fpr.0]);
-                let i = self.using_fpr[..fpr.0].count_ones();
-                // SAFETY: per the layout facts above, the save area occupies
-                // `callee_bp + 32 ..` and slot `i` belongs to `fpr`.
-                unsafe { *((callee_bp as usize + 32 + 8 * i) as *const f64) }
-            } else {
-                let off = (self.base as i64) - 24 + 8 * ((fpr.0 - PHYS_FPR_POOL) as i64);
-                // SAFETY: the caller frame is suspended on the stack, so its
-                // spill slot still holds the unboxed f64.
-                unsafe { *(((caller_bp as usize as i64) - off) as usize as *const f64) }
-            };
-            let v = Value::float(f);
-            for slot in slots {
-                // SAFETY: `slot` is a register slot of the caller frame.
-                unsafe { caller_lfp.set_register(*slot, Some(v)) };
-            }
-        }
-        for (v, slot) in &self.wb.literal {
-            // SAFETY: as above.
-            unsafe { caller_lfp.set_register(*slot, Some(*v)) };
-        }
-        // `void` nil-fills `LinkMode::V` slots. `get_write_back` — the
-        // constructor every `ChainExitSpec` goes through — hard-codes it
-        // empty, so this is expected to be a no-op; it is replayed anyway
-        // rather than asserted, because the identical "only the GC write-back
-        // populates `void`" argument turned out to be false for
-        // `gen_write_back_for_deopt`, which does receive populated ones.
-        for slot in &self.wb.void {
-            // SAFETY: as above.
-            unsafe { caller_lfp.set_register(*slot, Some(Value::nil())) };
-        }
-        // GP-pool residents exist only under the (unfinished) GP allocator;
-        // shipping builds never record any.
-        debug_assert!(self.wb.gp.is_empty());
-        // D1/K1 run last, so the literal loop above has already written each
-        // deferred `dst` slot (mode `C(nil)`) and the frame stays
-        // GC-consistent across the allocating helper calls. The source slots
-        // live in the frame's *dynamic caller* (the outermost,
-        // non-specialized frame), reached through the rbp the trampoline
-        // frame saved — exactly as the emitted write-back addresses them.
-        for (dst, src, len) in &self.wb.forward_rest {
-            // SAFETY: `caller_bp` is the suspended trampoline frame's rbp;
-            // `[caller_bp]` is the rbp it saved in its prologue.
-            let grand_bp = unsafe { *(caller_bp as *const u64) };
-            let src = ((grand_bp as i64 - rbp_local(*src) as i64) as usize) as *mut Value;
-            let v = runtime::create_array(src, *len as usize);
-            // SAFETY: `dst` is the trampoline frame's rest local.
-            unsafe { caller_lfp.set_register(*dst, Some(v)) };
-        }
-        for (dst, table) in &self.wb.forward_kwrest {
-            // SAFETY: as for `forward_rest`.
-            let grand_bp = unsafe { *(caller_bp as *const u64) };
-            // SAFETY: `lfp == rbp - RBP_LOCAL_FRAME` in every JIT frame.
-            let grand_lfp =
-                unsafe { Lfp::from_ptr((grand_bp as usize - RBP_LOCAL_FRAME as usize) as *mut u8) };
-            let v = runtime::kwrest_hash(table, grand_lfp);
-            // SAFETY: `dst` is the trampoline frame's kwrest local.
-            unsafe { caller_lfp.set_register(*dst, Some(v)) };
-        }
-    }
 }
 
 ///

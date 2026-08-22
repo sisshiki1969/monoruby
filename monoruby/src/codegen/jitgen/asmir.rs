@@ -2471,26 +2471,6 @@ pub(super) enum AsmInst {
         dst: SlotId,
         src: GP,
     },
-    /// fpr(dst) = the f64 at `[rbp + offset + disp]` — a speculated-unboxed
-    /// outer local (doc/chain_deopt.md §5 step 5). `offset` resolves to the
-    /// speculating (or its callee) frame's rbp; `disp` addresses the local's
-    /// f64 home: the call's cont-save slot (`+32+8i`, pool registers) or the
-    /// frame's spill slot (`-(base-24+8n)`).
-    LoadDynVarSpeculatedF {
-        offset: DynVarOffset,
-        disp: i32,
-        dst: FPReg,
-    },
-    /// The f64 at `[rbp + offset + disp]` = fpr(src) — the store half of
-    /// [`AsmInst::LoadDynVarSpeculatedF`]. The value is a proven Float
-    /// (`load_fpr` guarded and unboxed it), so the store keeps the
-    /// speculated local's only invariant: its f64 home holds its current
-    /// value.
-    StoreDynVarSpeculatedF {
-        offset: DynVarOffset,
-        disp: i32,
-        src: FPReg,
-    },
     LoadCVar {
         name: IdentId,
         using_fpr: UsingFpr,
