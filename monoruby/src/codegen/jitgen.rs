@@ -377,7 +377,7 @@ impl ChainExitSpec {
         dst: Option<SlotId>,
     ) -> Self {
         Self {
-            wb: state.get_write_back(),
+            wb: state.get_chain_write_back(),
             using_fpr,
             dst,
             pc: state.pc(),

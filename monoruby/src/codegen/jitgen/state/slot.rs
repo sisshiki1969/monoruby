@@ -1392,6 +1392,19 @@ impl AbstractFrame {
         // longer each need their own flush, and register-only inlines (which make
         // no call and never call this) keep their residents.
         self.flush_gp(ir);
+        // Lazy frame init: the same chokepoint property makes this the one
+        // place that covers *every* path by which control can leave the
+        // compilation unit — sends, yields, inline `__send__`, the
+        // method_missing dispatch, fiber switches, and any runtime helper
+        // that can re-enter Ruby all make a C call, and a chain A→B→C
+        // polling in C scans A's and B's frames. Emit the outstanding home
+        // stores (C constants, dead V temps, F homes → nil) so every slot
+        // of this frame is a valid `Value` while it is suspended. Validity
+        // is monotonic, so per slot this fires once per compile path.
+        let list = self.take_invalid_homes();
+        if !list.is_empty() {
+            ir.push(AsmInst::MaterializeHomes(list.into()));
+        }
         self.using_fpr_offset()
     }
 
@@ -1492,27 +1505,15 @@ impl AbstractFrame {
         WriteBack::new(vec![], literal, void, gp, vec![], vec![])
     }
 
-    /// The write-back a call site registers for chain deopt / GC fixup.
-    ///
-    /// Same as [`Self::get_write_back`] plus the `void` slots: the GC-time
-    /// fixup of a *suspended* lazily-initialized frame (doc/lazy_frame_init.md)
-    /// replays this to make every slot scannable, and `LinkMode::V` temps
-    /// have no valid stack home until something nil-fills them. The chain
-    /// conversion path replays `void` too (it always has — writing nil into
-    /// dead above-sp temps of a frame dropping to the interpreter is
-    /// harmless), so one shape serves both consumers.
-    pub(crate) fn get_chain_write_back(&self) -> WriteBack {
-        let f = |_| true;
-        WriteBack::new(
-            self.wb_fpr(f),
-            self.wb_literal(f),
-            self.wb_void(),
-            self.gp_regfile.dirty_residents(),
-            self.wb_forward_rest(),
-            self.wb_forward_kwrest(),
-        )
-    }
-
+    /// The full write-back for a side exit that leaves this frame *current*
+    /// — deopt, recompile-deopt, error. Includes `void` (nil for `V` slots):
+    /// under lazy frame init a never-written temp holds POISON, and the VM
+    /// the exit resumes in will suspend this frame at ordinary call sites
+    /// where the GC scans every slot. There is no live callee overlapping
+    /// the frame at such an exit (guards fire between calls; an error exit
+    /// runs after the callee returned), so the nil writes are alias-free —
+    /// which is exactly what distinguishes this from
+    /// [`Self::get_chain_write_back`].
     pub(crate) fn get_write_back(&self) -> WriteBack {
         let f = |_| true;
         let fpr = self.wb_fpr(f);
@@ -1524,8 +1525,28 @@ impl AbstractFrame {
         WriteBack::new(
             fpr,
             literal,
-            vec![],
+            self.wb_void(),
             gp,
+            self.wb_forward_rest(),
+            self.wb_forward_kwrest(),
+        )
+    }
+
+    /// The write-back a call site registers for chain deopt
+    /// (`ChainExitSpec`), replayed while the *callee is still live*. `void`
+    /// is deliberately empty: the caller's above-sp region physically hosts
+    /// the callee frame (control words, cont frame, FprSave area, staged
+    /// arguments), so a nil written there would corrupt the running callee.
+    /// The suspended frame's V temps are instead materialized *before* the
+    /// call by the `get_using_fpr` chokepoint, so they already hold nil (or
+    /// a stale valid Value) whenever this replay runs.
+    pub(crate) fn get_chain_write_back(&self) -> WriteBack {
+        let f = |_| true;
+        WriteBack::new(
+            self.wb_fpr(f),
+            self.wb_literal(f),
+            vec![],
+            self.gp_regfile.dirty_residents(),
             self.wb_forward_rest(),
             self.wb_forward_kwrest(),
         )
