@@ -1473,7 +1473,18 @@ impl AbstractFrame {
             let slot = SlotId(i as u16);
             match self.mode(slot) {
                 LinkMode::C(v) => out.push((v, slot)),
-                LinkMode::V | LinkMode::F(_) => out.push((Value::nil(), slot)),
+                LinkMode::V => {
+                    // Writing nil makes this an ordinary nil-valued slot, so
+                    // say so: `V` then means exactly "this stack slot is
+                    // uninitialized", which is what `wb_void` needs it to
+                    // mean. Left as `V`, the slot would be re-nil-filled by
+                    // the `void` list of every subsequent write-back — and in
+                    // `--opt`, where a guard-dense body has a side exit per
+                    // guard, that is a lot of redundant emitted stores.
+                    self.set_mode(slot, LinkMode::C(Value::nil()));
+                    out.push((Value::nil(), slot));
+                }
+                LinkMode::F(_) => out.push((Value::nil(), slot)),
                 _ => {}
             }
         }
@@ -1532,7 +1543,17 @@ impl AbstractFrame {
             let slot = SlotId(i as u16);
             match target.mode(slot) {
                 LinkMode::C(v) => out.push((v, slot)),
-                LinkMode::V | LinkMode::F(_) => out.push((Value::nil(), slot)),
+                LinkMode::V => {
+                    // As in `take_invalid_homes`: nil is now really in the
+                    // slot, so it is `C(nil)`, not an uninitialized `V`.
+                    // (Mutating `self` here is fine — this state is the
+                    // edge's, discarded once the bridge is emitted — but the
+                    // *target* keeps its `V`, which is correct: a sibling
+                    // edge may still owe the store.)
+                    self.set_mode(slot, LinkMode::C(Value::nil()));
+                    out.push((Value::nil(), slot));
+                }
+                LinkMode::F(_) => out.push((Value::nil(), slot)),
                 _ => {}
             }
         }
@@ -1801,9 +1822,16 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     MaybeNone,
     ///
-    /// Void.
+    /// Void: the temp slots above sp.
     ///
-    /// this is used for the temp slots above sp.
+    /// Under lazy frame initialization (doc/lazy_frame_init.md) this also
+    /// carries a physical meaning: **the corresponding stack slot is
+    /// uninitialized** — the JIT prologue writes nothing, so nothing has
+    /// stored a `Value` there yet. Materializing such a slot writes nil and
+    /// moves it to `C(nil)`, so `V` stays an accurate statement about the
+    /// stack rather than becoming a stale label on an already-nil slot.
+    /// `wb_void` — the "make these scannable" list carried by every
+    /// write-back — is exactly the set of slots still in this mode.
     ///
     V,
     ///
