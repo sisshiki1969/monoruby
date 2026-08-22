@@ -913,17 +913,8 @@ impl<'a> JitContext<'a> {
     /// `Codegen::check_bop_redefine`, a separate entry point, and it does
     /// have to convert frames across unit boundaries.
     ///
-    /// Returns how many suspended frames a side exit from here has to
-    /// convert: the specialized frames this same compilation stacked above
-    /// the current one. Zero means no escalation at all.
-    ///
-    /// The bound matters as much as the gate. The walk used to run to the
-    /// end of the control-frame chain, converting frames belonging to other
-    /// compilations — which the argument above says need nothing from us,
-    /// and whose own return addresses are in the table only because *their*
-    /// compiler registered them.
-    pub(super) fn escalate_side_exits(&self) -> u32 {
-        self.current_frame_pos() as u32
+    pub(super) fn escalate_side_exits(&self) -> bool {
+        self.current_frame_pos() > 0
     }
 
     pub(super) fn in_dispatch_arm(&self) -> bool {

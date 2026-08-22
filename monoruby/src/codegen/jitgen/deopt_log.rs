@@ -117,9 +117,9 @@ mod enabled {
     ///
     #[derive(Clone, Copy)]
     pub(crate) enum DeoptExit {
-        Deopt { chain: u32 },
+        Deopt { chain: bool },
         Evict,
-        Recompile { reason: RecompileReason, chain: u32 },
+        Recompile { reason: RecompileReason, chain: bool },
     }
 
     static SITES: RwLock<Vec<DeoptSite>> = RwLock::new(Vec::new());
@@ -145,26 +145,18 @@ mod enabled {
         EXITS.read().unwrap().get(id as usize).copied()
     }
 
-    /// Render the escalation bound: how many suspended frames this exit
-    /// converts before resuming in the interpreter (0 = none).
-    fn chained(chain: u32) -> String {
-        if chain == 0 {
-            String::new()
-        } else {
-            format!(" (chained, <={chain} frames)")
-        }
-    }
-
     impl std::fmt::Display for DeoptExit {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
                 Self::Deopt { chain } => {
-                    write!(f, "deopt{}", chained(*chain))
+                    write!(f, "deopt{}", if *chain { " (chained)" } else { "" })
                 }
                 Self::Evict => write!(f, "evict"),
-                Self::Recompile { reason, chain } => {
-                    write!(f, "recompile[{reason:?}]{}", chained(*chain))
-                }
+                Self::Recompile { reason, chain } => write!(
+                    f,
+                    "recompile[{reason:?}]{}",
+                    if *chain { " (chained)" } else { "" }
+                ),
             }
         }
     }

@@ -166,11 +166,11 @@ impl Codegen {
         }
         #[cfg(feature = "deopt")]
         let mut deopt_table: std::collections::HashMap<
-            (BytecodePtr, WriteBack, u32),
+            (BytecodePtr, WriteBack, bool),
             (DestLabel, u32),
         > = std::collections::HashMap::new();
         #[cfg(not(feature = "deopt"))]
-        let mut deopt_table: std::collections::HashMap<(BytecodePtr, WriteBack, u32), DestLabel> =
+        let mut deopt_table: std::collections::HashMap<(BytecodePtr, WriteBack, bool), DestLabel> =
             std::collections::HashMap::new();
         // Loop-JIT entry sp-bump to undo before any exit resumes the VM.
         let bump = frame.loop_jit_spill_bytes;
@@ -342,7 +342,7 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
-        chain: u32,
+        chain: bool,
     ) {
         self.jit.bind_label(entry);
         // Write back FIRST, while the loop sp-bump still keeps sp below the
@@ -356,8 +356,8 @@ impl Codegen {
         // suspended JIT frame in the caller chain before this frame resumes
         // in the interpreter. After the write-back, so the frame is fully
         // homed in the LFP for the walk.
-        if chain > 0 {
-            self.a64_call_chain_deopt(chain);
+        if chain {
+            self.a64_call_chain_deopt();
         }
         let pc_ptr = pc.as_ptr() as u64;
         let fetch = self.vm_fetch();
@@ -368,15 +368,13 @@ impl Codegen {
         );
     }
 
-    /// `runtime::chain_deopt(vm, max_frames)` — the escalated-side-exit walk,
-    /// bounded to the frames this compilation stacked above the emitting one.
-    /// x19 holds `&mut Executor`; LR is saved around the `blr` like every
-    /// other runtime call emitted into a JIT body.
-    fn a64_call_chain_deopt(&mut self, max_frames: u32) {
+    /// `runtime::chain_deopt(vm)` — the escalated-side-exit walk. x19 holds
+    /// `&mut Executor`; LR is saved around the `blr` like every other runtime
+    /// call emitted into a JIT body.
+    fn a64_call_chain_deopt(&mut self) {
         let f = runtime::chain_deopt as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
-            mov x1, (max_frames as u64);
             str x30, [sp, #-16]!;              // save LR (16-aligned)
             mov x9, (f);
             blr x9;
@@ -401,7 +399,7 @@ impl Codegen {
         entry: DestLabel,
         loop_jit_spill_bytes: usize,
         base: usize,
-        chain: u32,
+        chain: bool,
     ) {
         self.jit.bind_label(entry);
         // Write back before undoing the bump — same spill-clobber reason as
@@ -412,8 +410,8 @@ impl Codegen {
         // (resuming it in the interpreter) or unwind through the suspended
         // callers — either way they must be converted first
         // (`doc/chain_deopt.md` §5 step 4 / §8.4).
-        if chain > 0 {
-            self.a64_call_chain_deopt(chain);
+        if chain {
+            self.a64_call_chain_deopt();
         }
         let pc0 = pc.as_ptr() as u64;
         let raise = self.entry_raise();
@@ -1427,7 +1425,7 @@ impl Codegen {
                     self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
                 }
                 LSideExitKind::Evict => {
-                    self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, 0)
+                    self.a64_gen_deopt(pc, &wb, entry, loop_jit_spill_bytes, base, false)
                 }
                 // A monomorphically-compiled site (e.g. a `BinCmp`) whose
                 // receiver-class guard missed because it went polymorphic.
