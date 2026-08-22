@@ -201,6 +201,18 @@ pub(crate) struct WriteBack {
     forward_kwrest: Vec<(SlotId, Box<[(IdentId, SlotId)]>)>,
 }
 
+impl WriteBack {
+    /// Debug: one-line summary (used by the `MONORUBY_LAZY_LOG` trace).
+    pub(crate) fn debug_summary(&self) -> String {
+        format!(
+            "literal={:?} void={:?} fpr={:?}",
+            self.literal.iter().map(|(_, s)| *s).collect::<Vec<_>>(),
+            self.void,
+            self.fpr.iter().map(|(_, s)| s.clone()).collect::<Vec<_>>(),
+        )
+    }
+}
+
 impl Hash for WriteBack {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         for (fpr, slots) in &self.fpr {
@@ -365,7 +377,7 @@ impl ChainExitSpec {
         dst: Option<SlotId>,
     ) -> Self {
         Self {
-            wb: state.get_chain_write_back(),
+            wb: state.get_write_back(),
             using_fpr,
             dst,
             pc: state.pc(),
@@ -477,11 +489,12 @@ impl ChainReplay {
             // SAFETY: as above.
             unsafe { caller_lfp.set_register(*slot, Some(*v)) };
         }
-        // `void` nil-fills `LinkMode::V` slots. `ChainExitSpec` now records
-        // them (`get_chain_write_back`) so the GC-time fixup of a lazily
-        // initialized suspended frame can make its dead temps scannable;
-        // for the conversion here they are equally welcome — a frame
-        // dropping to the interpreter wants nil in its dead temps anyway.
+        // `void` nil-fills `LinkMode::V` slots. `get_write_back` — the
+        // constructor every `ChainExitSpec` goes through — hard-codes it
+        // empty, so this is expected to be a no-op; it is replayed anyway
+        // rather than asserted, because the identical "only the GC write-back
+        // populates `void`" argument turned out to be false for
+        // `gen_write_back_for_deopt`, which does receive populated ones.
         for slot in &self.wb.void {
             // SAFETY: as above.
             unsafe { caller_lfp.set_register(*slot, Some(Value::nil())) };
@@ -516,56 +529,6 @@ impl ChainReplay {
         }
     }
 
-    ///
-    /// GC pre-mark fixup for a lazily initialized suspended caller frame
-    /// (doc/lazy_frame_init.md): write a valid `Value` into every slot whose
-    /// stack home may never have been stored since frame entry, so the mark
-    /// that follows scans no garbage.
-    ///
-    /// This is `replay`'s little sibling with one hard constraint: it runs
-    /// *inside the collector*, so it must not allocate. Hence
-    ///
-    /// * `literal` slots get their actual constant (packed immediates and
-    ///   already-alive heap pointers — no allocation),
-    /// * `void` temps get nil,
-    /// * `F`-mode homes get **nil**, not the boxed float: boxing can
-    ///   allocate, the f64 holds no heap reference the GC would need, the
-    ///   compiled body never reads an `F` home, and a real conversion later
-    ///   re-boxes from the save/spill slots `replay` reads.
-    /// * `forward_rest` / `forward_kwrest` `dst` slots need nothing: the
-    ///   deferral stores a real nil there at activation (see
-    ///   `get_gc_write_back`), and their `C(nil)` mode is in `literal`
-    ///   anyway.
-    ///
-    /// Idempotent, and never clobbers live data: a slot is only in these
-    /// lists while the compilation unit still owns its value — any slot an
-    /// inner frame could have written through the outer chain was demoted to
-    /// `S` (and materialized) at the block-passing site.
-    ///
-    /// ### safety
-    /// As for [`Self::replay`]: `caller_cfp` must be the suspended caller
-    /// frame of the call site this replay was registered for.
-    ///
-    pub(in crate::codegen) unsafe fn gc_fixup(&self, caller_cfp: Cfp) {
-        // Reads the heap copy if the frame was promoted (the cfp's LFP slot
-        // is redirected at promotion), which is exactly right: that is the
-        // copy the mark walks.
-        let mut caller_lfp = caller_cfp.lfp();
-        for (_, slots) in &self.wb.fpr {
-            for slot in slots {
-                // SAFETY: `slot` is a register slot of the caller frame.
-                unsafe { caller_lfp.set_register(*slot, Some(Value::nil())) };
-            }
-        }
-        for (v, slot) in &self.wb.literal {
-            // SAFETY: as above.
-            unsafe { caller_lfp.set_register(*slot, Some(*v)) };
-        }
-        for slot in &self.wb.void {
-            // SAFETY: as above.
-            unsafe { caller_lfp.set_register(*slot, Some(Value::nil())) };
-        }
-    }
 }
 
 ///

@@ -451,14 +451,6 @@ impl std::default::Default for Executor {
 
 impl alloc::GC<RValue> for Executor {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
-        // Lazy frame initialization (doc/lazy_frame_init.md): before this
-        // executor's frames are scanned, materialize the slots of its
-        // suspended JIT frames that may never have been stored since entry.
-        // Running it here — rather than as a pre-pass in `execute_gc` —
-        // also covers executors only discovered *during* the mark (a Fiber
-        // reached through the heap): the fixup writes plain nils/constants
-        // and never allocates, so it is safe inside the collector.
-        crate::codegen::Codegen::gc_fixup_suspended_frames(self.cfp);
         self.temp_stack.iter().for_each(|v| v.mark(alloc));
         let mut cfp = self.cfp;
         while let Some(inner_cfp) = cfp {

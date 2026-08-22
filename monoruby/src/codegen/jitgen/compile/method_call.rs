@@ -1052,6 +1052,13 @@ impl<'a> JitContext<'a> {
         // `InitMethod` entry poll, so no call-site GC poll is needed.
         state.check_stack(ir);
         let using_fpr = state.get_using_fpr(ir);
+        // Lazy frame init: control leaves this compilation unit — every
+        // still-symbolic home (C constants, dead V temps, F homes) must
+        // hold a valid Value before any deeper unit can reach a GC
+        // safepoint with this frame suspended (chain A→B→C: C's poll
+        // scans A and B). Runs before the callee staging, so the writes
+        // land in a region nothing else owns yet.
+        state.materialize_homes(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
@@ -1785,6 +1792,9 @@ impl AbstractState {
         // e.g. a wrong PPU value broke the vblank-wait loop), so we always flush
         // before the call now.
         let using_fpr = self.get_using_fpr(ir);
+        // Lazy frame init: see the specialized-block site — same rule at
+        // every unit exit.
+        self.materialize_homes(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
@@ -1852,6 +1862,8 @@ impl AbstractState {
         // `InitMethod` entry poll.
         self.check_stack(ir);
         let using_fpr = self.get_using_fpr(ir);
+        // Lazy frame init: unit exit (see the generic-send site).
+        self.materialize_homes(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
@@ -1891,6 +1903,8 @@ impl AbstractState {
         // Stack check only: the block body polls at its entry
         // (`InitMethod` / `vm_init`) on every yield.
         self.check_stack(ir);
+        // Lazy frame init: unit exit (see the generic-send site).
+        self.materialize_homes(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);

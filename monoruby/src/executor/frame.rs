@@ -388,15 +388,27 @@ impl Lfp {
                 // scan gets here. Marking the poison would mean a hole in
                 // that coverage — abort naming the exact frame and slot, so
                 // the hole locates itself.
-                assert_ne!(
-                    v.id(),
-                    POISON_VALUE,
-                    "GC hit a poisoned (uninitialized) frame slot: reg {:?} of {:?}, lfp={:?}, on_stack={}",
-                    r,
-                    meta.func_id(),
-                    self.0.as_ptr(),
-                    self.on_stack(),
-                );
+                if v.id() == POISON_VALUE {
+                    for d in meta.regs() {
+                        eprintln!(
+                            "  slot {:?} = {:#018x}{}",
+                            d,
+                            self.register(d).map(|v| v.id()).unwrap_or(0),
+                            if self.register(d).map(|v| v.id()) == Some(POISON_VALUE) {
+                                "  <- POISON"
+                            } else {
+                                ""
+                            }
+                        );
+                    }
+                    panic!(
+                        "GC hit a poisoned (uninitialized) frame slot: reg {:?} of {:?}, lfp={:?}, on_stack={}",
+                        r,
+                        meta.func_id(),
+                        self.0.as_ptr(),
+                        self.on_stack(),
+                    );
+                }
                 v.mark(alloc);
             }
         }

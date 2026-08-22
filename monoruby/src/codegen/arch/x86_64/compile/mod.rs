@@ -113,6 +113,7 @@ impl Codegen {
             | AsmInst::RecompileDeopt { .. }
             | AsmInst::Call { .. }
             | AsmInst::Init { .. }
+            | AsmInst::MaterializeHomes(..)
             | AsmInst::Preparation
             | AsmInst::FixnumNeg { .. }
             | AsmInst::FixnumBitNot { .. }
@@ -1128,6 +1129,15 @@ impl Codegen {
 
     /// Stack-overflow check. Always succeeds on x86 (the bool result exists for
     /// the aarch64 twin, which bails on an unsupported write-back).
+    /// Lazy frame init: store each constant into its slot's stack home
+    /// (rbp-relative — the frame is on the stack; this runs before any
+    /// call that could promote it).
+    pub(in crate::codegen::jitgen) fn emit_materialize_homes(&mut self, list: &[(Value, SlotId)]) {
+        for (v, slot) in list {
+            self.literal_to_stack(*slot, *v);
+        }
+    }
+
     pub(in crate::codegen::jitgen) fn emit_check_stack(
         &mut self,
         write_back: WriteBack,
@@ -2143,8 +2153,9 @@ impl Codegen {
         &mut self,
         info: FnInitInfo,
         prologue_offset: PrologueOffset,
+        nil_block_arg: Option<u16>,
     ) -> bool {
-        self.init_func(&info, prologue_offset.unwrap_concrete());
+        self.init_func(&info, prologue_offset.unwrap_concrete(), nil_block_arg);
         true
     }
 

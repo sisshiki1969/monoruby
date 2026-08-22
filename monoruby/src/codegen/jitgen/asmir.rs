@@ -1551,6 +1551,12 @@ pub(super) enum AsmInst {
     ///
     Init {
         info: FnInitInfo,
+        /// Lazy frame init: 0-based arg-area index of a block-parameter slot
+        /// that falls inside the prologue fill range (`FnInitInfo.arg_num`
+        /// excludes it while the frame's parameter count includes it — the
+        /// `(...)` forwarding shape). Callers do not reliably write it and no
+        /// write-back models it, so it keeps a genuine nil fill.
+        nil_block_arg: Option<u16>,
         ///
         /// Byte count for the prologue `subq rsp, _`. Emitted as
         /// `PrologueOffset::Hint(current_frame_id)` and rewritten
@@ -1615,6 +1621,13 @@ pub(super) enum AsmInst {
         write_back: WriteBack,
         error: AsmError,
     },
+    ///
+    /// Lazy frame initialization: store `value` into each `slot`'s stack
+    /// home. Emitted before control leaves the compilation unit so every
+    /// suspended frame on the chain scans as valid `Value`s (see
+    /// `take_invalid_homes`).
+    ///
+    MaterializeHomes(Box<[(Value, SlotId)]>),
     ///
     /// Check stack overflow.
     ///

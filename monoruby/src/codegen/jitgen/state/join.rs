@@ -54,6 +54,9 @@ impl AbstractFrame {
         #[cfg(debug_assertions)]
         let pre = self.clone();
         self.invariants.join(&other.invariants);
+        // Lazy frame init: a home is valid after the merge only if both
+        // incoming paths made it valid.
+        self.join_valid_home(&other.slot_state);
         #[cfg(debug_assertions)]
         let mut actions = Vec::new();
         for i in self.all_regs() {

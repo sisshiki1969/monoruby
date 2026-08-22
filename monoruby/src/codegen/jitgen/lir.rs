@@ -957,6 +957,8 @@ pub(in crate::codegen) enum LInst {
         lhs: GP,
         imm: i32,
     },
+    /// Lazy frame init: store each `Value` into its slot's stack home.
+    MaterializeHomes(Box<[(Value, SlotId)]>),
     Ret,
     MethodRet {
         pc: BytecodePtr,
@@ -973,6 +975,8 @@ pub(in crate::codegen) enum LInst {
     Init {
         info: FnInitInfo,
         prologue_offset: PrologueOffset,
+        /// See `AsmInst::Init::nil_block_arg`.
+        nil_block_arg: Option<u16>,
     },
     LoopJitRspBump {
         offset: LoopRspOffset,

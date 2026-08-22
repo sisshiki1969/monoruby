@@ -340,9 +340,19 @@ impl<'a> JitContext<'a> {
             TraceIr::InitMethod(info) => {
                 state.flush_gp(ir);
                 assert!(!self.is_loop());
+                // Lazy frame init: a block-parameter slot beyond
+                // `info.arg_num` (the `(...)` forwarding shape) is written
+                // by no caller path and modeled by no write-back — it keeps
+                // a genuine nil fill, exactly the old prologue's coverage.
+                let nil_block_arg = {
+                    let params = self.store[self.func_id()].params();
+                    let last = params.total_args().wrapping_sub(1);
+                    (params.block_param.is_some() && last >= info.arg_num).then(|| last as u16)
+                };
                 ir.push(AsmInst::Init {
                     info,
                     prologue_offset: PrologueOffset::Hint(self.current_frame_id()),
+                    nil_block_arg,
                 });
                 ir.push(AsmInst::Preparation);
                 // Callee-entry GC/preempt poll, mirroring the VM's

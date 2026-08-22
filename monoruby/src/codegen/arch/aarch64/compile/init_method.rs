@@ -11,6 +11,7 @@ impl Codegen {
         &mut self,
         info: FnInitInfo,
         prologue_offset: PrologueOffset,
+        nil_block_arg: Option<u16>,
     ) -> bool {
         let lfp = GP::R14.a64().0;
         let prologue_bytes = prologue_offset.unwrap_concrete();
@@ -31,6 +32,14 @@ impl Codegen {
                 let off = (info.arg_num + i) as u32 * 8 + LFP_ARG0 as u32;
                 self.a64_frame_store(9, lfp, off);
             }
+        }
+        // A block-parameter slot inside the fill range (`(...)` forwarding):
+        // genuine nil — no caller path writes it, no write-back models it.
+        // Mirrors x86 `init_func`.
+        if let Some(b) = nil_block_arg {
+            monoasm_arm64!(&mut self.jit, mov x9, (NIL_VALUE););
+            let off = b as u32 * 8 + LFP_ARG0 as u32;
+            self.a64_frame_store(9, lfp, off);
         }
         // Destructured block params (`|(a, b)|`): inside the argument
         // area (missed by the loop above) and written only by the

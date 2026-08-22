@@ -1590,6 +1590,15 @@ impl Codegen {
     /// laid out inline but skipped on the common path. Bails (`false`) if the
     /// write-back needs an unsupported feature. `base` is unused on aarch64.
     /// Mirrors x86 `jit_check_stack`.
+    /// Lazy frame init: store each constant into its slot's stack home
+    /// (lfp-relative). Mirrors x86 `emit_materialize_homes`.
+    pub(in crate::codegen::jitgen) fn emit_materialize_homes(&mut self, list: &[(Value, SlotId)]) {
+        let lfp = GP::R14.a64().0; // x22
+        for (v, slot) in list {
+            self.a64_store_imm_to_slot(v.id(), *slot, lfp);
+        }
+    }
+
     pub(in crate::codegen::jitgen) fn emit_check_stack(
         &mut self,
         write_back: WriteBack,

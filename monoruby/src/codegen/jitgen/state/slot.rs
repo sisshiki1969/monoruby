@@ -258,6 +258,16 @@ pub(crate) struct SlotState {
     /// merge despite living in the cloned `SlotState`.
     pub(in crate::codegen::jitgen) gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile,
     local_num: usize,
+    /// Lazy frame initialization (doc/lazy_frame_init.md): per-slot "the
+    /// stack home holds a valid `Value`". Physical validity is monotonic
+    /// within a frame (a slot once stored stays scannable — stale values are
+    /// still values), so this only ever goes `false -> true`; joins
+    /// intersect. Slots start invalid (the prologue writes POISON, not nil);
+    /// `materialize_homes` writes the outstanding ones and flips them before
+    /// control can leave the compilation unit. Tracking is conservative:
+    /// ordinary stores do not update it, so a slot the code wrote anyway may
+    /// get one redundant nil/constant at the next call site — harmless.
+    valid_home: Vec<bool>,
     /// D1/K1 forwarding deferral (transient annotation; see the consumers).
     deferred_forward: Option<DeferredForward>,
     /// §27.3 Stage-2a: the loop-carried float set `L` for the enclosing loop —
@@ -297,16 +307,22 @@ impl SlotState {
             liveness: vec![IsUsed::default(); total_reg_num],
             fpr_alloc: FprAllocator::new(),
             gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile::new(),
+            valid_home: vec![false; total_reg_num],
             local_num,
             deferred_forward: None,
             loop_carried: std::collections::HashSet::new(),
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
+        ctx.valid_home[0] = true; // self: always caller-written
         ctx
     }
 
     pub(super) fn new_loop(cc: &JitContext) -> Self {
-        SlotState::new(cc, LinkMode::default())
+        let mut ctx = SlotState::new(cc, LinkMode::default());
+        // A loop-JIT frame was entered through the VM prologue, which
+        // eagerly nil-fills — every home is valid.
+        ctx.valid_home.fill(true);
+        ctx
     }
 
     pub(super) fn new_method(cc: &JitContext) -> Self {
@@ -316,6 +332,10 @@ impl SlotState {
         }
         for i in cc.args() {
             ctx.set_mode(i, LinkMode::default());
+            // Written by the caller's argument staging (an absent optional
+            // is a scanner-safe `None` 0), or by the prologue's genuine
+            // nil-fill for destructured params.
+            ctx.valid_home[i.0 as usize] = true;
         }
 
         if let JitType::Specialized {
@@ -1411,6 +1431,48 @@ impl AbstractFrame {
                 Some((*dst, table))
             })
             .collect()
+    }
+
+    /// Lazy frame initialization: collect `(value, slot)` stores for every
+    /// slot whose stack home may never have been written since frame entry,
+    /// and mark them valid. Emitted before control leaves the compilation
+    /// unit (send / yield / any transfer that can reach a safepoint with
+    /// this frame suspended), so a GC walking the frame chain A→B→C scans
+    /// only valid `Value`s in every suspended frame regardless of which
+    /// unit polls.
+    ///
+    /// * `C(v)`: the constant itself — the slot stays `C`, only the home
+    ///   becomes real (same semantics as the poll write-back's literals).
+    /// * `V` and `F`: nil. A dead temp wants nil anyway; an `F` home is
+    ///   never read by compiled code (the fpr holds the value, boxing
+    ///   happens on conversion/deopt), and the f64 carries no heap
+    ///   reference, so nil is the correct GC-visible stand-in.
+    /// * `S`/`Sf`: the home already holds a Value; `None`/`MaybeNone`: the
+    ///   home is a scanner-skipped 0 or a caller-written Value. No store,
+    ///   but they count as valid from here on.
+    pub(super) fn take_invalid_homes(&mut self) -> Vec<(Value, SlotId)> {
+        let mut out = Vec::new();
+        for i in 0..self.valid_home.len() {
+            if self.valid_home[i] {
+                continue;
+            }
+            self.valid_home[i] = true;
+            let slot = SlotId(i as u16);
+            match self.mode(slot) {
+                LinkMode::C(v) => out.push((v, slot)),
+                LinkMode::V | LinkMode::F(_) => out.push((Value::nil(), slot)),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Join half of `valid_home`: validity survives a merge only when both
+    /// paths established it.
+    pub(super) fn join_valid_home(&mut self, other: &SlotState) {
+        for (a, b) in self.valid_home.iter_mut().zip(other.valid_home.iter()) {
+            *a &= *b;
+        }
     }
 
     pub(super) fn get_gc_write_back(&self) -> WriteBack {

@@ -176,6 +176,9 @@ impl Codegen {
             }),
             // Stack-overflow check before establishing a callee frame (aarch64
             // bails if the write-back needs an unsupported feature).
+            AsmInst::MaterializeHomes(list) => {
+                self.encode_linst(LInst::MaterializeHomes(list));
+            }
             AsmInst::CheckStack { write_back, error } => {
                 let error = labels[error].clone();
                 self.encode_linst(LInst::CheckStack {
@@ -654,9 +657,11 @@ impl Codegen {
             AsmInst::Init {
                 info,
                 prologue_offset,
+                nil_block_arg,
             } => self.encode_linst(LInst::Init {
                 info,
                 prologue_offset,
+                nil_block_arg,
             }),
             // Per-method ivar-cache prep. The store/frame-dependent heap length
             // is resolved here; the encoder only emits the table-extend guard.
@@ -1602,6 +1607,9 @@ impl Codegen {
             LInst::HandleError { error } => {
                 self.emit_handle_error(&error);
             }
+            LInst::MaterializeHomes(list) => {
+                self.emit_materialize_homes(&list);
+            }
             LInst::CheckStack { write_back, error, base } => {
                 self.emit_check_stack(write_back, &error, base);
             }
@@ -1626,8 +1634,8 @@ impl Codegen {
             LInst::ChainExit { evict, replay } => {
                 self.register_chain_exit(evict, replay);
             }
-            LInst::Init { info, prologue_offset } => {
-                self.emit_init(info, prologue_offset);
+            LInst::Init { info, prologue_offset, nil_block_arg } => {
+                self.emit_init(info, prologue_offset, nil_block_arg);
             }
             LInst::LoopJitRspBump { offset } => {
                 self.emit_loop_jit_rsp_bump(offset);

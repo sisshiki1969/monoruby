@@ -11,7 +11,12 @@ impl Codegen {
     /// no longer consulted here; future spill slots that grow the
     /// frame size feed through `prologue_bytes` automatically.
     ///
-    pub(super) fn init_func(&mut self, fn_info: &FnInitInfo, prologue_bytes: usize) {
+    pub(super) fn init_func(
+        &mut self,
+        fn_info: &FnInitInfo,
+        prologue_bytes: usize,
+        nil_block_arg: Option<u16>,
+    ) {
         let FnInitInfo {
             reg_num, arg_num, ..
         } = *fn_info;
@@ -42,6 +47,14 @@ impl Codegen {
                     movq [rbp - (RBP_LOCAL_FRAME + (arg_num + i) as i32 * 8 + LFP_ARG0)], rax;
                 );
             }
+        }
+        // A block-parameter slot inside the fill range (`(...)` forwarding):
+        // no caller path writes it and no write-back models it — genuine nil,
+        // as the old prologue provided (see `AsmInst::Init::nil_block_arg`).
+        if let Some(b) = nil_block_arg {
+            monoasm!( &mut self.jit,
+                movq [rbp - (RBP_LOCAL_FRAME + b as i32 * 8 + LFP_ARG0)], (NIL_VALUE);
+            );
         }
         // Destructured block params (`|(a, b)|`): their slots are inside
         // the argument area, so the loop above misses them, and no caller
