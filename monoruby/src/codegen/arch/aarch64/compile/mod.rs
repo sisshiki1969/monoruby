@@ -497,6 +497,114 @@ impl Codegen {
     /// local `dst` (`x22`/LFP-relative). `create_array(ptr = &caller[src], len)`.
     /// x9/x10 are lowering scratch here (x10 is used internally by
     /// `a64_addr_sub`/`a64_frame_store` for large offsets).
+    ///
+    /// aarch64 counterpart of `JitModule::gen_chain_replay_stub`: emit this
+    /// call site's chain-deopt conversion once, at compile time.
+    ///
+    /// ### calling convention
+    /// - `x0` — the callee frame's fp (the suspended call's own frame)
+    /// - `x1` — the caller frame's fp (the frame being converted)
+    /// - `x2` — the caller frame's `Lfp`
+    ///
+    /// The three are parked in `x23`-`x25` across the helper calls — not
+    /// `x19`-`x22`, which are the JIT's global registers — and the stub
+    /// saves and restores those three itself along with LR.
+    ///
+    pub(in crate::codegen) fn a64_gen_chain_replay_stub(
+        &mut self,
+        replay: &ChainReplay,
+        cont_stub: CodePtr,
+    ) -> CodePtr {
+        let entry = self.jit.get_current_address();
+        let wb = replay.write_back_all();
+        let base = replay.base();
+        // Park the three arguments where the helper calls cannot clobber
+        // them, and keep LR.
+        monoasm_arm64!(&mut self.jit,
+            stp x23, x24, [sp, #-32]!;
+            stp x25, x30, [sp, #16];
+            mov x23, x0;                       // callee fp
+            mov x24, x1;                       // caller fp
+            mov x25, x2;                       // caller lfp
+        );
+        for (fpr, slots) in wb.fpr_entries() {
+            if slots.is_empty() {
+                continue;
+            }
+            match replay.fpr_save_index(*fpr) {
+                Some(i) => {
+                    let off = 32 + 8 * i as u32;
+                    monoasm_arm64!(&mut self.jit, ldr d0, [x23, #(off)];);
+                }
+                None => {
+                    let off = (base as u32) - 24 + 8 * ((fpr.0 - PHYS_FPR_POOL) as u32);
+                    self.a64_addr_sub(9, 24, off);
+                    monoasm_arm64!(&mut self.jit, ldr d0, [x9];);
+                }
+            }
+            let f64_to_val = self.f64_to_val.clone();
+            monoasm_arm64!(&mut self.jit, bl f64_to_val;); // x0 = Value(f64)
+            for slot in slots {
+                self.a64_frame_store(0, 25, conv(*slot) as u32);
+            }
+        }
+        for (v, slot) in wb.literal_entries() {
+            monoasm_arm64!(&mut self.jit, mov x9, (v.id()););
+            self.a64_frame_store(9, 25, conv(*slot) as u32);
+        }
+        for slot in wb.void_entries() {
+            monoasm_arm64!(&mut self.jit, mov x9, (NIL_VALUE as u64););
+            self.a64_frame_store(9, 25, conv(*slot) as u32);
+        }
+        debug_assert!(wb.gp_is_empty());
+        for (dst, src, len) in wb.forward_rest_entries() {
+            let f = runtime::create_array as *const () as u64;
+            monoasm_arm64!(&mut self.jit, ldr x9, [x24];);
+            self.a64_addr_sub(0, 9, rbp_local(*src) as u32);
+            monoasm_arm64!(&mut self.jit,
+                mov x1, (*len as u64);
+                mov x9, (f);
+                blr x9;
+            );
+            self.a64_frame_store(0, 25, conv(*dst) as u32);
+        }
+        for (dst, table) in wb.forward_kwrest_entries() {
+            let data = self.jit.const_align8();
+            for (name, slot) in table.iter() {
+                self.jit.const_i32(name.get() as i32);
+                self.jit.const_i32(slot.0 as i32);
+            }
+            self.jit.const_i32(0);
+            self.jit.const_i32(0);
+            let f = runtime::correct_rest_kw as *const () as u64;
+            monoasm_arm64!(&mut self.jit, ldr x1, [x24];);
+            self.a64_addr_sub(1, 1, RBP_LOCAL_FRAME as u32);
+            self.jit.get_label_address(&data);
+            monoasm_arm64!(&mut self.jit,
+                adr x0, data;
+                mov x9, (f);
+                blr x9;
+            );
+            self.a64_frame_store(0, 25, conv(*dst) as u32);
+        }
+        // The two frame stores: the per-site continuation word into the
+        // callee's cont-frame pad (CFP+32 == callee_fp - BP_CFP + 32), and
+        // the callee's return address pointed at the shared VM stub.
+        let cont = replay.cont_data();
+        let pad_off = (32 - BP_CFP) as u32;
+        let stub_addr = cont_stub.as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (cont);
+            str x9, [x23, #(pad_off)];
+            mov x9, (stub_addr);
+            str x9, [x23, #(8)];
+            ldp x25, x30, [sp, #16];
+            ldp x23, x24, [sp], #32;
+            ret;
+        );
+        entry
+    }
+
     fn a64_gen_forward_rest_materialize(&mut self, dst: SlotId, src: SlotId, len: u16) {
         let lfp = GP::R14.a64().0; // x22
         let f = runtime::create_array as *const () as u64;
