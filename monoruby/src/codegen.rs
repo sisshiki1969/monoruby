@@ -25,7 +25,7 @@ pub(crate) mod signal_table;
 mod arch;
 
 use self::jitgen::asmir::AsmEvict;
-use self::jitgen::{ChainConversion, ChainReplay};
+use self::jitgen::ChainReplay;
 
 use super::*;
 use crate::bytecodegen::inst::*;
@@ -762,10 +762,11 @@ pub struct Codegen {
     /// continuation stub its per-site `dst`/resume data). Keyed by the
     /// return-address slot of a suspended frame (§3.4), which is all the
     /// walk has to go on.
-    chain_deopt_table: HashMap<CodePtr, ChainReplay>,
-    /// Reusable buffer for [`Self::chain_deopt_into`]; see
-    /// [`Self::take_chain_plan`].
-    chain_plan: Vec<ChainConversion>,
+    /// Return address of a chain-eligible call -> the entry of that site's
+    /// compiled conversion stub (`gen_chain_replay_stub`). The stub encodes
+    /// everything the conversion does, so the walk carries no per-site data
+    /// and never clones a `ChainReplay`.
+    chain_deopt_table: HashMap<CodePtr, CodePtr>,
     /// The shared chain-deopt post-call continuation stub
     /// (`gen_chain_cont_stub`): the single address every converted frame's
     /// return-address slot is pointed at. Emitted with the VM handlers, so
@@ -1177,7 +1178,6 @@ impl Codegen {
             compilation_unit: Vec::new(),
             asm_return_addr_table: HashMap::default(),
             chain_deopt_table: HashMap::default(),
-            chain_plan: Vec::new(),
             chain_cont_stub: entry_panic.clone(),
             alloc_cell: entry_panic.clone(),
             specialized_info: Vec::new(),
@@ -1597,22 +1597,14 @@ impl Codegen {
     /// when the definition just executed actually redefined a basic op —
     /// `set_bop_redefine` arms the flag and this consumes it.
     pub fn check_bop_redefine(cfp: Cfp) {
-        let mut plan = Vec::new();
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             if std::mem::replace(&mut codegen.bop_eviction_pending, false) {
-                codegen.chain_deopt_into(cfp, &mut plan);
+                codegen.chain_deopt_into(cfp);
             }
         });
-        // Applied outside the CODEGEN borrow: the replay half allocates and
-        // can run a GC (see `runtime::chain_deopt`).
-        for conversion in plan {
-            // SAFETY: every planned frame was found suspended on the current
-            // thread's control-frame chain moments ago, and nothing has run
-            // since — no frame has returned.
-            unsafe { conversion.apply() };
-        }
     }
+
 
     /// The basic-op version: bumped by every redefinition, baked into
     /// `AsmInst::CheckBOP` sites so they deopt only on a change made *after*
@@ -1635,7 +1627,18 @@ impl Codegen {
     /// entry and give an unrelated live call site the wrong replay data.
     pub(in crate::codegen) fn register_chain_exit(&mut self, evict: AsmEvict, replay: ChainReplay) {
         let return_addr = *self.asm_return_addr_table.get(&evict).unwrap();
-        self.chain_deopt_table.insert(return_addr, replay);
+        // Compile the conversion now, into the cold page, and remember only
+        // its entry. Emitted on page 1 so it does not split the body being
+        // assembled on page 0.
+        let cont_stub = self.jit.get_label_address(&self.chain_cont_stub);
+        let saved_page = self.jit.get_page();
+        self.jit.select_page(1);
+        #[cfg(target_arch = "x86_64")]
+        let stub = self.gen_chain_replay_stub(&replay, cont_stub);
+        #[cfg(target_arch = "aarch64")]
+        let stub = self.a64_gen_chain_replay_stub(&replay, cont_stub);
+        self.jit.select_page(saved_page);
+        self.chain_deopt_table.insert(return_addr, stub);
     }
 
     ///
@@ -1683,9 +1686,7 @@ impl Codegen {
     /// is expected to reuse — see [`Self::take_chain_plan`]. The plan cannot
     /// simply be applied here: the replay half allocates and can run a GC,
     /// so it has to run outside the `CODEGEN` borrow this method holds.
-    pub(crate) fn chain_deopt_into(&mut self, mut cfp: Cfp, plan: &mut Vec<ChainConversion>) {
-        let stub = self.jit.get_label_address(&self.chain_cont_stub);
-        plan.clear();
+    pub(crate) fn chain_deopt_into(&mut self, mut cfp: Cfp) {
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
             // A frame with a previous control frame was entered by a
@@ -1696,70 +1697,35 @@ impl Codegen {
             // instead (as the pre-chain-deopt eviction walk always did).
             let ret = return_addr.expect("suspended control frame has a null return address");
             if !self.check_vm_address(ret)
-                && let Some(replay) = self.chain_deopt_table.get(&ret)
+                && let Some(site_stub) = self.chain_deopt_table.get(&ret).copied()
             {
                 #[cfg(feature = "chain-deopt-log")]
                 eprintln!("### chain deopt: frame return {ret:?} -> chain conversion");
                 #[cfg(feature = "jit-log")]
-                {
-                    jit_stats::bump(&jit_stats::CHAIN_CONVERSIONS);
-                    if replay.write_back().is_replay_empty() {
-                        jit_stats::bump(&jit_stats::CHAIN_CONV_EMPTY);
-                    }
-                    if replay.write_back().has_unboxed_float() {
-                        jit_stats::bump(&jit_stats::CHAIN_CONV_FLOAT);
-                    }
-                    if replay.write_back().replay_allocates() {
-                        jit_stats::bump(&jit_stats::CHAIN_CONV_ALLOC);
-                    }
-                }
-                if replay.allocates() {
-                    // Deferred: the replay materializes a rest array or a
-                    // kwrest hash, so it allocates and can run a GC, which
-                    // must not happen under the `CODEGEN` borrow this walk
-                    // holds. Clone the replay out and apply it later.
-                    plan.push(ChainConversion::new(cfp, prev_cfp, replay.clone(), stub));
-                } else {
-                    // Applied in place: everything this replay does is a
-                    // store into a suspended frame's slot. No allocation
-                    // means no GC, so nothing has to leave the borrow — and
-                    // 98.95% of conversions on activerecord take this path,
-                    // paying neither the `ChainReplay` clone (a `WriteBack`
-                    // is five vectors) nor a plan entry.
-                    //
-                    // SAFETY: as for `ChainConversion::apply` — the frame was
-                    // found suspended on this thread's control-frame chain
-                    // moments ago and nothing has run since.
-                    unsafe { ChainConversion::apply_borrowed(cfp, prev_cfp, replay, stub) };
+                jit_stats::bump(&jit_stats::CHAIN_CONVERSIONS);
+                // Call the site's compiled conversion. Everything the
+                // conversion does was fixed when the site was compiled, so
+                // there is no per-site data to look at and nothing to clone.
+                // It runs under the `CODEGEN` borrow this walk holds, which
+                // is sound because the stub reaches nothing on `Codegen`: it
+                // reads its three frame pointers and writes frame slots.
+                //
+                // SAFETY: the frames were found suspended on this thread's
+                // control-frame chain moments ago and nothing has run since;
+                // `caller_lfp` comes from the caller's CFP, so a frame
+                // promoted to the heap is followed to its live copy.
+                unsafe {
+                    let f: extern "C" fn(*mut u64, *mut u64, *mut u8) =
+                        std::mem::transmute(site_stub.as_ptr());
+                    f(
+                        cfp.frame_bp(),
+                        prev_cfp.frame_bp(),
+                        prev_cfp.lfp().as_ptr(),
+                    );
                 }
             }
             cfp = prev_cfp;
             return_addr = unsafe { cfp.return_addr() };
-        }
-    }
-
-    /// Lend out the reusable chain-deopt plan buffer. The caller fills it,
-    /// applies it outside the borrow, and hands it back with
-    /// [`Self::return_chain_plan`] so its capacity survives to the next
-    /// escalation.
-    ///
-    /// A fresh `Vec` per call was the largest single source of malloc
-    /// traffic on the activerecord benchmark: escalation runs ~290k times
-    /// per iteration, a `ChainConversion` is ~170 bytes (its `ChainReplay`
-    /// carries a `WriteBack`), and the handful pushed per walk grew the
-    /// vector into the 1 KB size class — 47% of all bytes allocated per
-    /// steady iteration, allocated and freed again every time.
-    pub(crate) fn take_chain_plan(&mut self) -> Vec<ChainConversion> {
-        std::mem::take(&mut self.chain_plan)
-    }
-
-    /// Counterpart of [`Self::take_chain_plan`]. Keeps whichever buffer has
-    /// the larger capacity: a nested escalation (which finds the field
-    /// empty and allocates its own) must not shrink the one it displaced.
-    pub(crate) fn return_chain_plan(&mut self, mut plan: Vec<ChainConversion>) {
-        plan.clear();
-        if plan.capacity() >= self.chain_plan.capacity() {
-            self.chain_plan = plan;
         }
     }
 
