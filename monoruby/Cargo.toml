@@ -40,6 +40,14 @@ gc-verify = []
 # code paths (LoadSpill / StoreSpill, spill-aware AsmInst lowerings,
 # 16-byte spill-region alignment).
 stress-spill-pool = []
+# Lazy frame initialization (doc/lazy_frame_init.md) validator: put the JIT
+# prologue's frame fill back, writing POISON instead of nil, and check for it
+# when the GC scans a frame. A slot that reaches the GC without having been
+# materialized aborts naming its FuncId and slot, so a hole in the write-back
+# coverage locates itself instead of silently marking stack garbage. Pair with
+# `gc-stress` (a collection at every safepoint) to exercise it; the CI
+# gc-stress workflow does.
+frame-poison = []
 # Counters only: `profile` needs `TraceIr::format` for its deopt-site table,
 # not the bytecode dumps `dump-bc` brings.
 profile = ["dump-traceir"]

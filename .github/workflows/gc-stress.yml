@@ -140,7 +140,13 @@ jobs:
           NO_FAIL_FAST: ${{ inputs.no_fail_fast }}
         run: |
           set -o pipefail
-          args=(--features stress-spill-pool,gc-stress)
+          # `frame-poison` restores the JIT prologue's frame fill as a POISON
+          # pattern and checks for it when the GC scans a frame, so a lazily
+          # initialized slot that reaches a collection unmaterialized names
+          # its FuncId and slot (doc/lazy_frame_init.md). Paired with
+          # gc-stress — a collection at every safepoint — this is what
+          # validates the lazy-frame-init write-back coverage.
+          args=(--features stress-spill-pool,gc-stress,frame-poison)
           if [ "$NO_FAIL_FAST" = "true" ]; then
             args+=(--no-fail-fast)
           fi

@@ -382,12 +382,16 @@ impl Lfp {
         let meta = self.meta();
         for r in meta.regs() {
             if let Some(v) = self.register(r) {
-                // Lazy frame initialization (doc/lazy_frame_init.md): the JIT
-                // prologue poisons slots it no longer nil-fills; every one of
-                // them must have been materialized by a write-back before any
-                // scan gets here. Marking the poison would mean a hole in
-                // that coverage — abort naming the exact frame and slot, so
-                // the hole locates itself.
+                // Lazy frame initialization (doc/lazy_frame_init.md): under
+                // `frame-poison` the JIT prologue fills the slots it normally
+                // leaves untouched with POISON, and every one of them must
+                // have been materialized before any scan reaches here.
+                // Marking the poison would mean a hole in that coverage —
+                // abort naming the exact frame and slot, plus the whole frame,
+                // so the hole locates itself. Compiled out by default: the
+                // slots hold whatever the stack held, and the coverage
+                // argument (not a runtime check) is what keeps them valid.
+                #[cfg(feature = "frame-poison")]
                 if v.id() == POISON_VALUE {
                     for d in meta.regs() {
                         eprintln!(

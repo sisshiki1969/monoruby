@@ -17,10 +17,6 @@ impl Codegen {
         prologue_bytes: usize,
         nil_block_arg: Option<u16>,
     ) {
-        let FnInitInfo {
-            reg_num, arg_num, ..
-        } = *fn_info;
-
         monoasm!( &mut self.jit,
             pushq rbp;
             movq rbp, rsp;
@@ -29,23 +25,34 @@ impl Codegen {
 
         let l1 = self.jit.label();
         // Lazy frame initialization (doc/lazy_frame_init.md): non-argument
-        // locals and temps are `C(nil)` / `V` in the abstract state, every
-        // point that can observe them (GC safepoint write-back, the
-        // suspended-frame fixup, deopt, block-site `locals_to_S`)
-        // materializes them, so nothing should ever read this fill. It is
-        // POISON — not nil — during the validation soak: a GC marking it
-        // aborts naming the frame and slot, turning any coverage hole into
-        // a loud, located failure instead of marked stack garbage. The fill
-        // (and the constant) disappear entirely once the soak is clean.
-        let clear_len = reg_num - arg_num;
-        if clear_len > 0 {
-            monoasm!( &mut self.jit,
-                movq rax, (POISON_VALUE);
-            );
-            for i in 0..clear_len {
+        // locals and temps are `C(nil)` / `V` in the abstract state, and
+        // every point that can observe them materializes them first — the
+        // `get_using_fpr` chokepoint before control leaves the compilation
+        // unit, the safepoint write-back, deopt / error exits, block-site
+        // `locals_to_S`. So the prologue writes nothing at all here: this is
+        // the whole point of the optimization, worth ~0.28ns per slot per
+        // call (a 64-local frame's call cost drops 24.2ns -> 6.2ns).
+        //
+        // `frame-poison` puts the fill back as a POISON pattern — never nil,
+        // so a slot that reaches the GC unmaterialized aborts naming its
+        // frame and slot instead of marking stack garbage. That is how the
+        // coverage was validated in the first place; keep it available for
+        // re-validating after changes to the write-back machinery.
+        #[cfg(feature = "frame-poison")]
+        {
+            let FnInitInfo {
+                reg_num, arg_num, ..
+            } = *fn_info;
+            let clear_len = reg_num - arg_num;
+            if clear_len > 0 {
                 monoasm!( &mut self.jit,
-                    movq [rbp - (RBP_LOCAL_FRAME + (arg_num + i) as i32 * 8 + LFP_ARG0)], rax;
+                    movq rax, (POISON_VALUE);
                 );
+                for i in 0..clear_len {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (RBP_LOCAL_FRAME + (arg_num + i) as i32 * 8 + LFP_ARG0)], rax;
+                    );
+                }
             }
         }
         // A block-parameter slot inside the fill range (`(...)` forwarding):

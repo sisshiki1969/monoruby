@@ -1,10 +1,10 @@
 # Lazy frame-slot initialization
 
 JIT メソッドプロローグは従来、引数以外の全スロット(locals + temps)を毎呼び出し
-nil で埋めていた(`reg_num − arg_num` ストア/call、実測 ~0.27ns/スロット)。
-抽象インタプリタは各スロットの初期状態を既に知っている — locals は `C(nil)`、
-temps は `V` — ので、この fill は原理的には不要である。本機構はそれを
-「フレームを観測しうる全ポイントでの実体化」に置き換える。
+nil で埋めていた(`reg_num − arg_num` ストア/call)。抽象インタプリタは各スロットの
+初期状態を既に知っている — locals は `C(nil)`、temps は `V` — ので、この fill は
+原理的に不要である。現在プロローグはこれらのスロットに**何も書かない**。代わりに
+「フレームを観測しうる全ポイントでの実体化」が担保する。
 
 ## 不変条件
 
@@ -60,12 +60,6 @@ hoist は将来の改良。
 
 ## プロローグに残るもの
 
-- **POISON fill**(検証期のみ): nil の代わりに `POISON_VALUE`
-  (`0xDEAD_DEAD_DEAD_DE04`、other-immediate なので何も dereference しない)を
-  書く。`Lfp::mark_contents` が明示比較で検出し、FuncId とスロットを添えて
-  abort する — 被覆の穴は「どこかの GC がスタックごみをマークした」ではなく
-  「自ら名乗る located failure」になる。soak が完全に green になったら
-  fill ごと削除する(それが本最適化の勝ち分)。
 - **destruct スロット**(`|(a, b)|`): 引数領域内にあり、caller は書かず、
   抽象状態は `S`(= どの write-back too 対象外)。本物の nil fill を恒久維持。
 - **`nil_block_arg`**: `(...)` forwarding 形のブロックパラメータスロット。
@@ -84,25 +78,36 @@ hoist は将来の改良。
 3. deopt→VM 後の V temps(method_missing / `__send__` inline / specialized
    decline)— deopt write-back への void 追加で修復。
 
-## Phase 2 の効果(先行測定、x86-64)
+## `frame-poison` — 被覆の検証器
 
-fill と mark 検査をローカルで外した preview ビルドでの back-to-back 測定
-(dead local を持つメソッドの call コスト):
+被覆は「実行時チェック」ではなく上記の議論で担保されるが、書き戻し機構を
+変更したときに再検証できるよう、検証器を feature として残してある。
 
-| dead locals | fill あり (現状) | fill なし (phase 2) |
+`--features frame-poison` でプロローグの fill が復活する。ただし nil ではなく
+`POISON_VALUE`(`0xDEAD_DEAD_DEAD_DE04`、other-immediate なので何も
+dereference しない)を書き、`Lfp::mark_contents` が明示比較で検出して
+FuncId・スロット・フレーム全体を添えて abort する。被覆の穴は「どこかの GC が
+スタックごみをマークした」ではなく「自ら名乗る located failure」になる。
+
+`gc-stress`(全セーフポイントで収集)と併用するのが本来の使い方で、CI の
+gc-stress workflow はこの組み合わせで回る。
+
+なお poison は GC 走査だけでなく**値としての読み出し**も検証している:
+未実体化スロットを nil のつもりで読むコードがあれば POISON という異常値を
+受け取って可視的に壊れるが、全テストが通ったのでそのような読み手は存在しない。
+
+## 効果(x86-64、back-to-back 測定)
+
+dead local を持つメソッドの call コスト:
+
+| dead locals | fill あり | fill なし(現在) |
 |---|---|---|
-| 1  | 6.9 ns | 6.2 ns |
-| 8  | 7.5 ns | 6.1 ns |
-| 16 | 9.6 ns | 6.4 ns |
+| 1  | 6.9 ns | 6.3 ns |
+| 8  | 7.5 ns | 5.8 ns |
+| 16 | 9.6 ns | 6.3 ns |
 | 32 | 14.4 ns | 5.9 ns |
-| 64 | 24.2 ns | 6.2 ns |
+| 64 | 24.2 ns | 6.3 ns |
 
-スロット数比例項(~0.28ns/slot)が完全に消え、call コストはフレーム幅に
-依存しなくなる。optcarrot は checksum 一致・fps 変化なし(fill は
+スロット数比例項(~0.28ns/slot)が消え、**call コストはフレーム幅に依存
+しなくなる**。optcarrot は checksum 一致・fps 変化なし(fill はそこの
 ボトルネックではない)。
-
-## Phase 2(未実施)
-
-gc-stress soak(x86-64 CI + 手動 workflow、aarch64 含む)が継続的に green に
-なった後、`init_func` / `emit_init` の POISON ループと `POISON_VALUE`・
-mark_contents の検査を削除する。destruct / `nil_block_arg` の nil ストアは残る。
