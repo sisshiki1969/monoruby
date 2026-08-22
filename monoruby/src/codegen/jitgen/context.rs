@@ -884,16 +884,37 @@ impl<'a> JitContext<'a> {
     /// `new_error` / `deopt_from_point`) picks it up — rather than relying on
     /// each emitter to remember.
     ///
-    /// Escalation is unconditional: measurement (the former `chain-deopt`
-    /// validation feature, run across the full suite and benchmark set)
-    /// put the walk at ~160ns per escalation and ≤1.6% wall-clock even on
-    /// bedcov's 1.8M-deopt worst case, while blanket escalation is exactly
-    /// the precondition the unboxed-locals speculation (§5 step 5) needs —
-    /// a frame holding an unboxed local must convert its callers on every
-    /// interpreter resume, not only on the Float guard.
+    /// Escalation used to be unconditional. `doc/chain_deopt.md` §6 warned
+    /// against exactly that ("blanket escalation would make today's cheap
+    /// per-frame deopts pay a chain walk ... so gate it per site"), and the
+    /// activerecord measurement put the cost at 1.2M conversions per three
+    /// iterations, 94.7% of them with nothing at all to replay.
+    ///
+    /// Both things escalation buys are confined to a single compilation
+    /// unit, so a side exit in the unit's root frame needs none of it:
+    ///
+    /// * §6's return-state narrowing. A narrowed `ReturnState` is applied
+    ///   only by `def_rax2acc_return`, which only the specialized-compile
+    ///   path reaches; an ordinary send types its result `Guarded::Value`.
+    ///   Type information never crosses a unit boundary, so no caller
+    ///   outside this unit can be holding a tag this frame's deopt would
+    ///   invalidate.
+    /// * §5 step 5's unboxed-locals speculation. §7 scopes it to
+    ///   specialized `iseq_block` frames, so an unboxed local is only ever
+    ///   read across a frame boundary *inside* the unit.
+    ///
+    /// A frame at depth 0 is the unit's root: everything above it was
+    /// entered through a call this compiler did not compile, holding no
+    /// narrowed tag and no unboxed local of ours. Frames deeper than that
+    /// still escalate — the callers they have to convert are the
+    /// specialized frames this same compilation built above them.
+    ///
+    /// Basic-op redefinition is unaffected: it evicts through
+    /// `Codegen::check_bop_redefine`, a separate entry point, and it does
+    /// have to convert frames across unit boundaries.
     ///
     pub(super) fn escalate_side_exits(&self) -> bool {
-        true
+        self.current_frame_pos() > 0
     }
 
     pub(super) fn in_dispatch_arm(&self) -> bool {
