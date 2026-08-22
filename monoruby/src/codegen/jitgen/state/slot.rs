@@ -536,6 +536,20 @@ impl SlotState {
 impl SlotState {
     pub(super) fn set_mode(&mut self, slot: SlotId, mode: LinkMode) {
         let i = slot.0 as usize;
+        // Lazy frame init: `S`/`Sf` *mean* "the value is in the stack home"
+        // — that is the invariant deopt relies on when it reads an `S` slot
+        // back from the frame — so entering either mode is proof the home
+        // now holds a valid `Value`. Recording it here keeps the flag from
+        // going stale on the store -> discard path, where the slot returns
+        // to `V` with a perfectly good value still sitting in its home and
+        // would otherwise be re-nilled by every later write-back.
+        //
+        // `F` and `C` are deliberately not marked: an `F` home is whatever
+        // it was before the fpr took over, and a `C` slot's constant lives
+        // in the instruction stream, not the frame.
+        if matches!(mode, LinkMode::S(_) | LinkMode::Sf(..)) {
+            self.valid_home[i] = true;
+        }
         self.place[i] = mode.placement();
         // Sentinels carry no type; `from_parts` ignores `ty` for them.
         self.ty[i] = match mode {
