@@ -96,6 +96,16 @@ impl AbstractState {
         // any LinkMode::F(VirtFPReg(N)) with N >= self.fpr.len() in
         // `target` can be looked up without panicking.
         self.grow_fpr_to(target.fpr_len());
+        // Lazy frame init: pay this edge's share of the optimistic
+        // `valid_home` join before the placement bridging — the merge point
+        // claims every home a *sibling* edge materialized, so this
+        // predecessor owes the ones it skipped. On a loop's entry edge that
+        // is where the loop body's materialization gets hoisted to; the back
+        // edge owes nothing and emits nothing.
+        let list = self.bridge_invalid_homes(target);
+        if !list.is_empty() {
+            ir.push(AsmInst::MaterializeHomes(list.into()));
+        }
         for slot in self.all_regs() {
             self.bridge(ir, target, slot, pc);
         }

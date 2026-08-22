@@ -46,17 +46,32 @@ GC はセーフポイントでしか走らず(アロケーションは poll word
 ## validity 追跡
 
 `SlotState::valid_home: Vec<bool>`。物理的 validity はフレーム内で単調
-(一度書かれたスロットは stale でも Value のまま)なので false→true のみ、
-join は積(両パスで確立された場合のみ生存)。追跡は保守的で、通常のストア
-emission は bit を更新しない — 次のチョークポイントで冗長な 1 ストアが出るだけ。
+(一度書かれたスロットは stale でも Value のまま)なので false→true のみ。
 初期値: self と全引数スロット(caller が書く。未渡し optional は scanner-safe な
 0)= true、destruct スロット = true(下記)、locals / temps = false。
 loop-JIT フレームは VM プロローグ経由(eager nil 済み)なので全 true。
+追跡は保守的で、通常のストア emission は bit を更新しない — 次のチョーク
+ポイントで冗長な 1 ストアが出るだけ。
 
-既知のコスト特性: ループ頭の join は積なので、ループ本体内のコールサイトは
-「ループ entry 時点で invalid だったスロット」への nil をイテレーション毎に
-再ストアする(静的に 1 回 emit、実行はループ毎)。ループ突入前ブロックへの
-hoist は将来の改良。
+### join は積ではなく和(楽観的)+ エッジ補正
+
+保守的な読みは積(両パスで確立された場合のみ生存)だが、それだと**ループ頭が
+本体の成果を忘れる**: entry エッジは未実体化のまま到達するので merge は
+「invalid」となり、ループ**本体内**のコールサイトが毎イテレーション再ストア
+する。これは置き換えたはずの eager fill より確実に遅い(実測: 32 dead locals +
+8 回転の内側ループを持つメソッドが 57ns → 122ns)。
+
+そこで join は**和**を取り、義務をエッジ側へ移す。`gen_bridge` が各流入エッジで
+`bridge_invalid_homes` を呼び、その前任者に不足している分だけを実体化する
+(値は **target 側の mode** から: `C(v)` は定数、`V`/`F` は nil、`S`/`Sf` は
+bridge 自身が home に書くので不要)。back edge を含む全エッジが `gen_bridge` を
+通るため健全。
+
+さらにループ頭では `set_all_valid_home()` で**全スロットを valid と宣言**する。
+ループ本体は 1 回コンパイルされて何度も走るので、本体内に実体化が落ちること
+自体を禁じる形にした。結果、entry エッジで 1 回だけストアされ、back edge は
+何も負わない。ループ頭の merge が back edge の成果を「証明」するには本体の
+コンパイル完了を待つ必要があり、それは順序的に不可能なので、この宣言が要る。
 
 ## プロローグに残るもの
 
@@ -109,5 +124,21 @@ dead local を持つメソッドの call コスト:
 | 64 | 24.2 ns | 6.3 ns |
 
 スロット数比例項(~0.28ns/slot)が消え、**call コストはフレーム幅に依存
-しなくなる**。optcarrot は checksum 一致・fps 変化なし(fill はそこの
-ボトルネックではない)。
+しなくなる**。
+
+内側ループを持つ形状(メソッド + 8 回転ループ + ループ内 call)では、上記の
+エッジ補正 + ループ頭宣言により master と同等に収まる(32 dead locals で
+master 57ns / 本実装 62ns、0 dead locals では 59ns / 47ns と逆に速い)。
+
+実ベンチはいずれも同等〜わずかに改善:
+
+| bench | master | lazy init |
+|---|---|---|
+| app_fib | 0.23 s | 0.22 s |
+| so_nbody | 0.38 / 0.34 s | 0.33 / 0.33 s |
+| binarytrees | 0.29 s | 0.30 s |
+| quick_sort | 0.85 / 0.77 s | 0.84 / 0.86 s |
+| app_aobench | 7.27 / 7.16 s | 7.16 / 7.23 s |
+| optcarrot | 157.2 / 155.9 / 147.7 fps | 159.3 / 158.9 / 159.2 fps |
+
+optcarrot は checksum 一致(59662)。

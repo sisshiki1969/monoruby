@@ -85,6 +85,11 @@ impl<'a> JitContext<'a> {
             }
 
             let mut target = incoming;
+            // Lazy frame init: a loop head declares every home valid, so no
+            // materialization is ever emitted inside the body (where it would
+            // be paid per iteration). The incoming edges settle the debt —
+            // `gen_bridge` stores on the entry edge, once, before the loop.
+            target.set_all_valid_home();
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
                 let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());
                 if let Some(backedge) = backedge {
