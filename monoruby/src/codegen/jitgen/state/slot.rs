@@ -1679,10 +1679,24 @@ impl AbstractFrame {
             .collect()
     }
 
+    /// The "make these scannable" list: `V` slots whose stack home does
+    /// *not* yet hold a valid `Value`.
+    ///
+    /// `V` is not "never written" — [`Self::clear`] puts a slot back to `V`
+    /// every time it is redefined or discarded, and `sp` moves up and down
+    /// as the unit executes, so `V` slots are neither confined to the
+    /// above-`sp` region nor the whole of it. What actually decides whether
+    /// a nil store is owed is the *physical* predicate `valid_home`: a `V`
+    /// slot that was written earlier in the unit (or materialized at a call
+    /// site) already hosts a stale-but-valid `Value`, which is all the GC
+    /// scanner asks for — and all the resuming VM sees, since a slot the
+    /// JIT discarded is dead in the bytecode's own liveness too (the plain
+    /// VM would likewise leave the stale value in place). Only a home still
+    /// holding the prologue's uninitialized contents needs the store.
     fn wb_void(&self) -> Vec<SlotId> {
         self.all_regs()
             .filter_map(|idx| match self.mode(idx) {
-                LinkMode::V => Some(idx),
+                LinkMode::V if !self.valid_home[idx.0 as usize] => Some(idx),
                 _ => None,
             })
             .collect()

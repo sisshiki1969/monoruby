@@ -42,6 +42,17 @@ GC はセーフポイントでしか走らず(アロケーションは poll word
    コールサイトで suspend し全スロットがスキャンされるため。これらの出口の
    時点で live callee は存在しない(ガードは呼び出しの合間に発火し、error 出口は
    callee の return 後に走る)ので nil 書きはエイリアスフリー。
+
+   ただし `void` に載せるのは **`valid_home` が false の `V` スロットだけ**で
+   ある。`V` は「一度も書いていない」ではない — `clear()` はスロットが再定義・
+   discard されるたびに `V` に戻すし、sp は実行とともに上下するので、`V` 集合は
+   現在の sp より上に限られもしなければ、sp より上を覆いもしない。nil ストアが
+   要るかどうかを決めるのは物理的な述語 `valid_home` のほうで、ユニット内で
+   既に書かれた(あるいはコールサイトで実体化された)`V` スロットの home には
+   stale だが有効な `Value` が入っている。GC スキャナが求めるのはそれだけであり、
+   VM から見ても同じ — JIT が discard したスロットはバイトコード側の liveness
+   でも dead で、素の VM でも stale な値がそのまま残る。実測(`optcarrot --opt`
+   1 回)で `V` 総数 281,861 に対し実際にストアが要るのは 5,504(**98% 減**)。
 4. **`ChainExitSpec`(chain-deopt の suspended-frame replay)**は逆に
    `get_chain_write_back()` = void **抜き**を使う。replay は callee が live な
    まま走り、caller の above-sp 領域は callee フレーム(制御ワード・cont frame・
@@ -181,7 +192,10 @@ optcarrot は checksum 一致(59662)。
 
 1. **`next_sp` を下限にはできない。** `V` スロットの 3.8–14% は `next_sp` より
    下にある。`next_sp .. reg_num` の範囲埋めはそれらを取りこぼし、
-   scannable な home に POISON を残す。
+   scannable な home に POISON を残す。そもそも `V` は `clear()` が付ける状態で
+   あって「未初期化」ではなく、sp は実行とともに上下するので、`V` 集合と
+   sp の間にはどちら向きの包含関係もない(この観察が上の `valid_home` フィルタ
+   につながった)。
 2. **そもそも埋める量が少ない。** 1 出口あたり平均 2.9 スロット。void 集合は
    ほぼ常に連続領域(99.8%)なので `[lo, hi]` の範囲埋め自体は書けるが、
    n≈3 では per-slot ストア(nil は小さい即値なので 1 命令 8 バイト)を
