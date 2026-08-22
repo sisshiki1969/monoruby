@@ -1675,6 +1675,50 @@ impl Codegen {
     /// entered by something that is not a compiled call site, and it holds
     /// no cross-frame state this walk is responsible for.
     ///
+    ///
+    /// GC pre-mark fixup of one executor's control-frame chain
+    /// (doc/lazy_frame_init.md): for every suspended JIT frame, replay the
+    /// non-allocating part of its call site's write-back
+    /// ([`ChainReplay::gc_fixup`]) so lazily initialized slots hold valid
+    /// `Value`s before the mark scans them.
+    ///
+    /// The walk is [`Self::chain_deopt`]'s shape — return address, VM-range
+    /// skip, table hit — but it converts nothing and allocates nothing, so
+    /// it runs to completion under the `CODEGEN` borrow, per marked
+    /// executor. The collector only ever runs at a safepoint with no
+    /// `CODEGEN` borrow live (compilation and the chain replay both release
+    /// it before any Ruby can run), so the borrow here cannot conflict.
+    ///
+    /// Frames whose return address misses the table are left untouched: VM
+    /// and invoker frames are eagerly nil-filled, an already-converted
+    /// frame's return address is the (VM-range) continuation stub, and a
+    /// heap-promoted frame is reached through the redirected LFP while it
+    /// is still on a chain — after it leaves the chain, the capture-guard
+    /// deopt has materialized it in full.
+    ///
+    pub fn gc_fixup_suspended_frames(cfp: Option<Cfp>) {
+        let Some(cfp) = cfp else { return };
+        CODEGEN.with(|codegen| {
+            let codegen = codegen.borrow();
+            let mut cfp = cfp;
+            // SAFETY: `cfp` chains are live frames of an executor being
+            // marked at a safepoint; same contract as `chain_deopt`.
+            let mut return_addr = unsafe { cfp.return_addr() };
+            while let Some(prev_cfp) = cfp.prev() {
+                let ret = return_addr.expect("suspended control frame has a null return address");
+                if !codegen.check_vm_address(ret)
+                    && let Some(replay) = codegen.chain_deopt_table.get(&ret)
+                {
+                    // SAFETY: `prev_cfp` is the suspended caller of the call
+                    // site `ret` keys, found on a live chain moments ago.
+                    unsafe { replay.gc_fixup(prev_cfp) };
+                }
+                cfp = prev_cfp;
+                return_addr = unsafe { cfp.return_addr() };
+            }
+        });
+    }
+
     #[must_use]
     pub(crate) fn chain_deopt(&mut self, mut cfp: Cfp) -> Vec<ChainConversion> {
         let stub = self.jit.get_label_address(&self.chain_cont_stub);

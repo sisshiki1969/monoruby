@@ -32,6 +32,17 @@ pub const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
 
 pub const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 
+/// Poison pattern the JIT method prologue fills lazily-initialized slots
+/// with (doc/lazy_frame_init.md) — the validation stand-in for "no
+/// initialization at all". Bits 2:0 = `100` make it an "other immediate",
+/// so nothing ever dereferences it as a pointer; the GC's frame scan
+/// (`Lfp::mark_contents`) checks for it explicitly and aborts with the
+/// frame and slot, so any hole in the lazy write-back coverage names
+/// itself instead of marking stack garbage. Once the coverage has soaked
+/// clean under gc-stress, the prologue fill is removed entirely and this
+/// pattern goes with it.
+pub const POISON_VALUE: u64 = 0xDEAD_DEAD_DEAD_DE04;
+
 /// Format an f64 value as a String matching CRuby's `Float#to_s` / `Float#inspect` output.
 ///
 /// Uses Rust's `{:?}` formatting (Ryu algorithm, shortest round-trip representation)

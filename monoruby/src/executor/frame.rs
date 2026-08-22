@@ -382,6 +382,21 @@ impl Lfp {
         let meta = self.meta();
         for r in meta.regs() {
             if let Some(v) = self.register(r) {
+                // Lazy frame initialization (doc/lazy_frame_init.md): the JIT
+                // prologue poisons slots it no longer nil-fills; every one of
+                // them must have been materialized by a write-back before any
+                // scan gets here. Marking the poison would mean a hole in
+                // that coverage — abort naming the exact frame and slot, so
+                // the hole locates itself.
+                assert_ne!(
+                    v.id(),
+                    POISON_VALUE,
+                    "GC hit a poisoned (uninitialized) frame slot: reg {:?} of {:?}, lfp={:?}, on_stack={}",
+                    r,
+                    meta.func_id(),
+                    self.0.as_ptr(),
+                    self.on_stack(),
+                );
                 v.mark(alloc);
             }
         }

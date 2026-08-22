@@ -23,28 +23,31 @@ impl Codegen {
         );
 
         let l1 = self.jit.label();
-        // fill nil to non-argument locals and temporary registers.
+        // Lazy frame initialization (doc/lazy_frame_init.md): non-argument
+        // locals and temps are `C(nil)` / `V` in the abstract state, every
+        // point that can observe them (GC safepoint write-back, the
+        // suspended-frame fixup, deopt, block-site `locals_to_S`)
+        // materializes them, so nothing should ever read this fill. It is
+        // POISON — not nil — during the validation soak: a GC marking it
+        // aborts naming the frame and slot, turning any coverage hole into
+        // a loud, located failure instead of marked stack garbage. The fill
+        // (and the constant) disappear entirely once the soak is clean.
         let clear_len = reg_num - arg_num;
-        if clear_len > 2 {
+        if clear_len > 0 {
             monoasm!( &mut self.jit,
-                movq rax, (NIL_VALUE);
+                movq rax, (POISON_VALUE);
             );
             for i in 0..clear_len {
                 monoasm!( &mut self.jit,
                     movq [rbp - (RBP_LOCAL_FRAME + (arg_num + i) as i32 * 8 + LFP_ARG0)], rax;
                 );
             }
-        } else {
-            for i in 0..clear_len {
-                monoasm!( &mut self.jit,
-                    movq [rbp - (RBP_LOCAL_FRAME + (arg_num + i) as i32 * 8 + LFP_ARG0)], (NIL_VALUE);
-                );
-            }
         }
         // Destructured block params (`|(a, b)|`): their slots are inside
         // the argument area, so the loop above misses them, and no caller
-        // writes them — the `expand`s after entry do. Nil-fill them so
-        // the callee-entry GC poll never marks stack garbage.
+        // writes them — the `expand`s after entry do. These stay genuinely
+        // nil-filled (not lazy): their abstract state is `S`, so no
+        // write-back ever materializes them.
         for i in 0..fn_info.destruct_len {
             monoasm!( &mut self.jit,
                 movq [rbp - (RBP_LOCAL_FRAME + (fn_info.destruct_start + i) as i32 * 8 + LFP_ARG0)], (NIL_VALUE);

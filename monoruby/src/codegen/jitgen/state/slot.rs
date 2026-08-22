@@ -1430,6 +1430,27 @@ impl AbstractFrame {
         WriteBack::new(vec![], literal, void, gp, vec![], vec![])
     }
 
+    /// The write-back a call site registers for chain deopt / GC fixup.
+    ///
+    /// Same as [`Self::get_write_back`] plus the `void` slots: the GC-time
+    /// fixup of a *suspended* lazily-initialized frame (doc/lazy_frame_init.md)
+    /// replays this to make every slot scannable, and `LinkMode::V` temps
+    /// have no valid stack home until something nil-fills them. The chain
+    /// conversion path replays `void` too (it always has — writing nil into
+    /// dead above-sp temps of a frame dropping to the interpreter is
+    /// harmless), so one shape serves both consumers.
+    pub(crate) fn get_chain_write_back(&self) -> WriteBack {
+        let f = |_| true;
+        WriteBack::new(
+            self.wb_fpr(f),
+            self.wb_literal(f),
+            self.wb_void(),
+            self.gp_regfile.dirty_residents(),
+            self.wb_forward_rest(),
+            self.wb_forward_kwrest(),
+        )
+    }
+
     pub(crate) fn get_write_back(&self) -> WriteBack {
         let f = |_| true;
         let fpr = self.wb_fpr(f);
