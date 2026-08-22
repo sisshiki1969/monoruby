@@ -763,6 +763,9 @@ pub struct Codegen {
     /// return-address slot of a suspended frame (§3.4), which is all the
     /// walk has to go on.
     chain_deopt_table: HashMap<CodePtr, ChainReplay>,
+    /// Reusable buffer for [`Self::chain_deopt_into`]; see
+    /// [`Self::take_chain_plan`].
+    chain_plan: Vec<ChainConversion>,
     /// The shared chain-deopt post-call continuation stub
     /// (`gen_chain_cont_stub`): the single address every converted frame's
     /// return-address slot is pointed at. Emitted with the VM handlers, so
@@ -1174,6 +1177,7 @@ impl Codegen {
             compilation_unit: Vec::new(),
             asm_return_addr_table: HashMap::default(),
             chain_deopt_table: HashMap::default(),
+            chain_plan: Vec::new(),
             chain_cont_stub: entry_panic.clone(),
             alloc_cell: entry_panic.clone(),
             specialized_info: Vec::new(),
@@ -1593,12 +1597,11 @@ impl Codegen {
     /// when the definition just executed actually redefined a basic op —
     /// `set_bop_redefine` arms the flag and this consumes it.
     pub fn check_bop_redefine(cfp: Cfp) {
-        let plan = CODEGEN.with(|codegen| {
+        let mut plan = Vec::new();
+        CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             if std::mem::replace(&mut codegen.bop_eviction_pending, false) {
-                codegen.chain_deopt(cfp)
-            } else {
-                Vec::new()
+                codegen.chain_deopt_into(cfp, &mut plan);
             }
         });
         // Applied outside the CODEGEN borrow: the replay half allocates and
@@ -1676,9 +1679,13 @@ impl Codegen {
     /// no cross-frame state this walk is responsible for.
     ///
     #[must_use]
-    pub(crate) fn chain_deopt(&mut self, mut cfp: Cfp) -> Vec<ChainConversion> {
+    /// Collect the chain-deopt plan into *plan*, which the caller owns and
+    /// is expected to reuse — see [`Self::take_chain_plan`]. The plan cannot
+    /// simply be applied here: the replay half allocates and can run a GC,
+    /// so it has to run outside the `CODEGEN` borrow this method holds.
+    pub(crate) fn chain_deopt_into(&mut self, mut cfp: Cfp, plan: &mut Vec<ChainConversion>) {
         let stub = self.jit.get_label_address(&self.chain_cont_stub);
-        let mut plan = Vec::new();
+        plan.clear();
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
             // A frame with a previous control frame was entered by a
@@ -1698,7 +1705,31 @@ impl Codegen {
             cfp = prev_cfp;
             return_addr = unsafe { cfp.return_addr() };
         }
-        plan
+    }
+
+    /// Lend out the reusable chain-deopt plan buffer. The caller fills it,
+    /// applies it outside the borrow, and hands it back with
+    /// [`Self::return_chain_plan`] so its capacity survives to the next
+    /// escalation.
+    ///
+    /// A fresh `Vec` per call was the largest single source of malloc
+    /// traffic on the activerecord benchmark: escalation runs ~290k times
+    /// per iteration, a `ChainConversion` is ~170 bytes (its `ChainReplay`
+    /// carries a `WriteBack`), and the handful pushed per walk grew the
+    /// vector into the 1 KB size class — 47% of all bytes allocated per
+    /// steady iteration, allocated and freed again every time.
+    pub(crate) fn take_chain_plan(&mut self) -> Vec<ChainConversion> {
+        std::mem::take(&mut self.chain_plan)
+    }
+
+    /// Counterpart of [`Self::take_chain_plan`]. Keeps whichever buffer has
+    /// the larger capacity: a nested escalation (which finds the field
+    /// empty and allocates its own) must not shrink the one it displaced.
+    pub(crate) fn return_chain_plan(&mut self, mut plan: Vec<ChainConversion>) {
+        plan.clear();
+        if plan.capacity() >= self.chain_plan.capacity() {
+            self.chain_plan = plan;
+        }
     }
 
     /// aarch64 specialized recompile: overwrite the single 4-byte `bl entry`
