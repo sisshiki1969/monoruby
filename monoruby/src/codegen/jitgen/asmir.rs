@@ -170,7 +170,7 @@ pub(crate) struct AsmIr {
     /// JIT frame in the caller chain before the interpreter resumes. Stamped
     /// once from [`JitContext::escalate_side_exits`] so the side-exit
     /// constructors are the single consultation point.
-    escalate_exits: bool,
+    escalate_exits: u32,
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -343,7 +343,7 @@ impl AsmIr {
     pub(super) fn pure_deopt_target(
         &self,
         deopt: AsmDeopt,
-    ) -> Option<(BytecodePtr, &WriteBack, bool)> {
+    ) -> Option<(BytecodePtr, &WriteBack, u32)> {
         if self.side_exit.len() == 1
             && let SideExit::Deoptimize(pc, wb, chain) = &self.side_exit[deopt.0]
         {
@@ -2783,13 +2783,16 @@ impl AsmInst {
 #[derive(Debug)]
 pub enum SideExit {
     Evict(Option<(BytecodePtr, WriteBack)>),
-    /// The trailing `bool` is the **chain-escalation** flag
+    /// The trailing `u32` is the **chain-escalation bound**
     /// (`doc/chain_deopt.md` §5 step 4 / §6), on `Deoptimize` /
-    /// `RecompileDeoptimize` / `Error` alike: the handler calls
-    /// `runtime::chain_deopt` after its write-back, so every suspended JIT
-    /// frame in the caller chain is converted into an interpreter frame
-    /// before this frame resumes in the interpreter (or starts unwinding).
-    Deoptimize(BytecodePtr, WriteBack, bool),
+    /// `RecompileDeoptimize` / `Error` alike: how many suspended frames the
+    /// handler's `runtime::chain_deopt` call converts into interpreter
+    /// frames before this one resumes in the interpreter (or starts
+    /// unwinding). Zero skips the call entirely. The bound is the emitting
+    /// frame's depth in this compilation — the specialized frames stacked
+    /// above it here — because nothing outside the unit holds a narrowed
+    /// return tag or an unboxed local of ours (see `escalate_side_exits`).
+    Deoptimize(BytecodePtr, WriteBack, u32),
     ///
     /// A deopt that, after a small number of misses, recompiles the
     /// target (whole method/loop, or one specialized entry) with the
@@ -2805,9 +2808,9 @@ pub enum SideExit {
         WriteBack,
         RecompileReason,
         RecompileTarget,
-        bool,
+        u32,
     ),
-    Error(BytecodePtr, WriteBack, bool),
+    Error(BytecodePtr, WriteBack, u32),
 }
 
 ///
@@ -2847,10 +2850,10 @@ impl Codegen {
     ) {
         let mut side_exits = SideExitLabels::new();
         #[cfg(feature = "deopt")]
-        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, bool), (DestLabel, u32)> =
+        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, u32), (DestLabel, u32)> =
             HashMap::default();
         #[cfg(not(feature = "deopt"))]
-        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, bool), DestLabel> =
+        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, u32), DestLabel> =
             HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
         let base = frame.base_stack_offset;
