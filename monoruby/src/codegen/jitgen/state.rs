@@ -538,6 +538,23 @@ impl AbstractFrame {
             self.to_S_unguarded(ir, i);
         }
     }
+
+    ///
+    /// Home every unboxed local in its frame slot, keeping the rest of the
+    /// abstract state. See [`SlotState::unbox_to_S`].
+    ///
+    /// This is what a call boundary needs: the callee sees the frame, so an
+    /// `F`/`Sf` local must be boxed there and its xmm handed back, while a
+    /// `C` or `S` local's mode is a fact about the slot and stays true —
+    /// which is what lets the callee read the caller's abstract state
+    /// instead of starting from `S(Value)`.
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn locals_unbox_to_S(&mut self, ir: &mut AsmIr) {
+        for i in self.locals() {
+            self.unbox_to_S(ir, i);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

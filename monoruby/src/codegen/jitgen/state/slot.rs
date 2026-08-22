@@ -986,6 +986,68 @@ impl SlotState {
         spill
     }
 
+    ///
+    ///
+    /// Forget everything known about *slot*: an outer frame's local that a
+    /// callee has just written through `StoreDynVar`. No code is emitted —
+    /// the store itself already homed the value — this only stops the mode
+    /// the slot used to have from being believed afterwards.
+    ///
+    pub(in crate::codegen::jitgen) fn invalidate_slot(&mut self, slot: SlotId) {
+        self.set_mode(slot, LinkMode::S(Guarded::Value));
+    }
+
+    /// Home *slot*'s value in its frame slot, and keep what is known about
+    /// it — the demotion a call boundary needs, as opposed to
+    /// [`Self::to_S_unguarded`]'s.
+    ///
+    /// The callee is handed this frame, so every mode that does *not* keep
+    /// the value in the frame has to write it there first:
+    ///
+    /// * `F` — the fpr held the only copy: box it into the slot and hand
+    ///   the xmm back (the callee starts with an empty pool).
+    /// * `Sf` — the slot already holds the boxed value; only the read-only
+    ///   fpr view is dropped.
+    /// * `C` — the constant lives in the compiler, *not* in the slot, so it
+    ///   is written out. Its mode survives: the slot now holds exactly that
+    ///   constant, and still does after the call unless the callee stores
+    ///   through it (`JitContext::invalidate_outer_slot`).
+    /// * `V` — a temp above sp, nil-filled as `to_S_unguarded` does, so the
+    ///   callee never sees an uninitialized word.
+    /// * `S` — already in the slot; its `Guarded` is a fact about the
+    ///   slot's value and stays true.
+    ///
+    /// The difference from `to_S_unguarded` is only in what is *forgotten*:
+    /// that one rewrites every mode to `S(Guarded::Value)`, this one keeps
+    /// `C` and each slot's `Guarded`, which is what lets the callee read
+    /// the caller's abstract state instead of starting from scratch.
+    ///
+    #[allow(non_snake_case)]
+    pub(in crate::codegen::jitgen) fn unbox_to_S(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        // Same GP-resident caveat as `to_S_unguarded`: re-home a dirty pool
+        // register before the mode change drops it unspilled.
+        if let Some(reg) = self.gp_regfile.dirty_reg_of(slot) {
+            ir.reg2stack(reg, slot);
+        }
+        match self.mode(slot) {
+            LinkMode::F(fpr) => {
+                let guarded = self.guarded(slot);
+                self.clear(slot);
+                self.set_mode(slot, LinkMode::S(guarded));
+                ir.spill(Spill::Fpr(fpr, slot));
+            }
+            LinkMode::Sf(_, _) => {
+                let guarded = self.guarded(slot);
+                self.clear(slot);
+                self.set_mode(slot, LinkMode::S(guarded));
+            }
+            // Written out, but still known to be that constant.
+            LinkMode::C(v) => ir.spill(Spill::Lit(v, slot)),
+            LinkMode::V => ir.spill(Spill::Lit(Value::nil(), slot)),
+            LinkMode::S(_) | LinkMode::MaybeNone | LinkMode::None => {}
+        }
+    }
+
     #[allow(non_snake_case)]
     pub(in crate::codegen::jitgen) fn to_S_unguarded(&mut self, ir: &mut AsmIr, slot: SlotId) {
         // Same GP-resident caveat as `write_back_slot`: re-home the dirty pool

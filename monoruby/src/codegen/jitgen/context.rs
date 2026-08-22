@@ -1276,6 +1276,32 @@ impl<'a> JitContext<'a> {
         Some(i)
     }
 
+    ///
+    /// Record that a `StoreDynVar` has written an unknown value into
+    /// *slot* of the frame *outer* levels out, so nothing downstream keeps
+    /// believing a mode this store just invalidated.
+    ///
+    /// The caller's locals now cross a call boundary with their modes
+    /// intact (`locals_unbox_to_S`), which is only sound if a callee that
+    /// writes one of them says so. A `C` local the callee overwrites, or an
+    /// `S(Guarded::Float)` it stores a String into, would otherwise still
+    /// be read as a constant or as a Float once the call returns.
+    ///
+    /// Conservative on purpose: the slot drops to `S(Guarded::Value)`
+    /// rather than taking the stored value's own mode. Propagating that
+    /// precisely needs the join to span frames as well.
+    ///
+    pub(super) fn invalidate_outer_slot(&mut self, outer: usize, slot: SlotId) {
+        let Some(pos) = self.outer_pos(outer) else {
+            // The chain leaves this compilation: the frame is not one of
+            // ours, so there is no abstract state of ours to invalidate.
+            return;
+        };
+        if let Some(frame) = self.stack_frame[pos].abstract_state.as_mut() {
+            frame.invalidate_slot(slot);
+        }
+    }
+
     pub(super) fn outer_contexts(&self) -> Vec<AbstractFrame> {
         let mut i = self.stack_frame.len() - 1;
         let mut v = vec![];

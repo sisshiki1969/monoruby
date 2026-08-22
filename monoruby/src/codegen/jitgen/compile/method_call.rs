@@ -338,11 +338,12 @@ impl<'a> JitContext<'a> {
         {
             return Err(CompileError);
         }
-        // Every local is written back and demoted to `LinkMode::S` before a
-        // call that passes a block: the block can read or write them through
-        // its outer frame.
+        // A call that passes a block hands the callee this frame, so every
+        // unboxed local is homed in its slot first and its xmm handed back.
+        // `C` and `S` locals keep their modes: they describe the slot, not a
+        // register, so they stay true across the call.
         if callsite.block_fid.is_some() {
-            state.locals_to_S(ir);
+            state.locals_unbox_to_S(ir);
         }
 
         // class version guard
