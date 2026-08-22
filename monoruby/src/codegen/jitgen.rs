@@ -285,6 +285,32 @@ impl WriteBack {
         !self.fpr.is_empty()
     }
 
+    /// Read-only views for the compiled replay stub, which needs the same
+    /// data the interpreted replay walked.
+    pub(crate) fn fpr_entries(&self) -> &[(FPReg, Vec<SlotId>)] {
+        &self.fpr
+    }
+
+    pub(crate) fn literal_entries(&self) -> &[(Value, SlotId)] {
+        &self.literal
+    }
+
+    pub(crate) fn void_entries(&self) -> &[SlotId] {
+        &self.void
+    }
+
+    pub(crate) fn gp_is_empty(&self) -> bool {
+        self.gp.is_empty()
+    }
+
+    pub(crate) fn forward_rest_entries(&self) -> &[(SlotId, SlotId, u16)] {
+        &self.forward_rest
+    }
+
+    pub(crate) fn forward_kwrest_entries(&self) -> &[(SlotId, Box<[(IdentId, SlotId)]>)] {
+        &self.forward_kwrest
+    }
+
     /// Whether replaying this write-back can allocate — boxing a float, or
     /// materializing a deferred rest `Array` / kwrest `Hash`. Everything
     /// else is a plain store into a frame slot.
@@ -448,6 +474,22 @@ impl ChainReplay {
     /// See [`WriteBack::replay_allocates`].
     pub(crate) fn allocates(&self) -> bool {
         self.wb.replay_allocates()
+    }
+
+    pub(crate) fn write_back_all(&self) -> &WriteBack {
+        &self.wb
+    }
+
+    pub(crate) fn base(&self) -> usize {
+        self.base
+    }
+
+    /// Where the call's `FprSave` put a pool-resident `FPReg`: one slot per
+    /// set bit of `using_fpr`, in bit order, from `callee_bp + 32`. `None`
+    /// for a register outside the pool, whose value stayed in the caller's
+    /// own spill slot.
+    pub(crate) fn fpr_save_index(&self, fpr: FPReg) -> Option<usize> {
+        (fpr.0 < PHYS_FPR_POOL).then(|| self.using_fpr[..fpr.0].count_ones())
     }
 
     ///
@@ -1231,7 +1273,7 @@ impl JitModule {
                 movq [rbp - (rbp_local(reg))], (v.id());
             }
         } else {
-            monoasm! { &mut self.jit,
+            monoasm! { self,
                 movq rax, (v.id());
                 movq [rbp - (rbp_local(reg))], rax;
             }
@@ -1385,6 +1427,149 @@ impl JitModule {
             call rax;
             movq [r14 - (conv(dst))], rax;
         }
+    }
+
+    ///
+    /// Emit this call site's chain-deopt conversion as machine code, once,
+    /// at compile time, and return its entry.
+    ///
+    /// This is the compiled form of `ChainReplay::replay` + the two frame
+    /// stores that followed it: everything the conversion does is fixed when
+    /// the site is compiled (which slots, which spill offsets, which
+    /// literals, the continuation word), so a walk that reaches this frame
+    /// has nothing left to decide — it calls here.
+    ///
+    /// ### calling convention
+    /// - `rdi` — the *callee* frame's bp (the suspended call's own frame)
+    /// - `rsi` — the *caller* frame's bp (the frame being converted)
+    /// - `rdx` — the caller frame's `Lfp` (read from its CFP, so a frame
+    ///   promoted to the heap is followed correctly)
+    ///
+    /// Clobbers the C caller-saved set; the walk passes nothing else live.
+    ///
+    #[cfg(target_arch = "x86_64")]
+    pub(in crate::codegen) fn gen_chain_replay_stub(
+        &mut self,
+        replay: &ChainReplay,
+        cont_stub: CodePtr,
+    ) -> CodePtr {
+        let entry = self.jit.get_current_address();
+        let wb = replay.write_back_all();
+        let base = replay.base();
+        // Floats first: each is loaded from wherever the call left it and
+        // boxed, exactly as `ChainReplay::replay` did. A pool-resident
+        // `FPReg` was spilled by the call's `FprSave` into the callee's save
+        // area; the rest sit in the caller's own spill slots.
+        for (fpr, slots) in wb.fpr_entries() {
+            if slots.is_empty() {
+                continue;
+            }
+            let i = replay.fpr_save_index(*fpr);
+            match i {
+                Some(i) => {
+                    let off = 32 + 8 * i as i32;
+                    monoasm! { &mut *self, movq xmm0, [rdi + (off)]; }
+                }
+                None => {
+                    let off = (base as i32) - 24 + 8 * ((fpr.0 - PHYS_FPR_POOL) as i32);
+                    monoasm! { &mut *self, movq xmm0, [rsi - (off)]; }
+                }
+            }
+            // `f64_to_val` can allocate a heap Float, so keep the frame
+            // pointers across it.
+            let f64_to_val = self.f64_to_val.clone();
+            monoasm! { &mut *self,
+                pushq rdi;
+                pushq rsi;
+                pushq rdx;
+                subq  rsp, 8;
+                call  f64_to_val;
+                addq  rsp, 8;
+                popq  rdx;
+                popq  rsi;
+                popq  rdi;
+            }
+            for slot in slots {
+                monoasm! { &mut *self, movq [rdx - (conv(*slot))], rax; }
+            }
+        }
+        for (v, slot) in wb.literal_entries() {
+            monoasm! { &mut self.jit,
+                movq rax, (v.id());
+                movq [rdx - (conv(*slot))], rax;
+            }
+        }
+        for slot in wb.void_entries() {
+            monoasm! { &mut *self,
+                movq rax, (Value::nil().id());
+                movq [rdx - (conv(*slot))], rax;
+            }
+        }
+        debug_assert!(wb.gp_is_empty());
+        // Deferred rest / kwrest last, so the literal stores above have
+        // already homed each deferred `dst` and the frame stays
+        // GC-consistent across the allocating helper calls. The source slots
+        // live in the caller's *own* caller, reached through the bp it
+        // saved — `[rsi]`, matching `gen_forward_rest_materialize`'s `[rbp]`.
+        for (dst, src, len) in wb.forward_rest_entries() {
+            monoasm! { &mut *self,
+                pushq rdi;
+                pushq rsi;
+                pushq rdx;
+                subq  rsp, 8;
+                movq  rcx, [rsi];
+                lea   rdi, [rcx - (rbp_local(*src))];
+                movq  rsi, (*len as usize);
+                movq  rax, (runtime::create_array);
+                call  rax;
+                addq  rsp, 8;
+                popq  rdx;
+                popq  rsi;
+                popq  rdi;
+                movq  [rdx - (conv(*dst))], rax;
+            }
+        }
+        for (dst, table) in wb.forward_kwrest_entries() {
+            // Same table-in-JIT-memory shape as
+            // `gen_forward_kwrest_materialize`, terminated by a zero pair.
+            let data = self.const_align8();
+            for (name, slot) in table.iter() {
+                self.const_i32(name.get() as i32);
+                self.const_i32(slot.0 as i32);
+            }
+            self.const_i32(0);
+            self.const_i32(0);
+            monoasm! { &mut *self,
+                pushq rdi;
+                pushq rsi;
+                pushq rdx;
+                subq  rsp, 8;
+                movq  rsi, [rsi];
+                subq  rsi, (RBP_LOCAL_FRAME);
+                lea   rdi, [rip + data];
+                movq  rax, (runtime::correct_rest_kw);
+                call  rax;
+                addq  rsp, 8;
+                popq  rdx;
+                popq  rsi;
+                popq  rdi;
+                movq  [rdx - (conv(*dst))], rax;
+            }
+        }
+        // The two frame stores the walk used to make itself: the per-site
+        // continuation word into the callee's cont-frame pad (CFP+32 ==
+        // callee_bp - BP_CFP + 32), and the callee's return address (the
+        // slot above its saved bp) pointed at the shared VM stub.
+        let cont = replay.cont_data();
+        let pad_off = 32 - BP_CFP;
+        monoasm! { &mut *self,
+            movq rax, (cont);
+            movq [rdi + (pad_off)], rax;
+            movq rax, (cont_stub.as_ptr() as u64);
+            movq [rdi + 8], rax;
+            ret;
+        }
+        entry
     }
 
     fn gen_forward_rest_materialize(&mut self, dst: SlotId, src: SlotId, len: u16) {
