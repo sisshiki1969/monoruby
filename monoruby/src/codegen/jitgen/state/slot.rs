@@ -1008,10 +1008,10 @@ impl SlotState {
     ///   the xmm back (the callee starts with an empty pool).
     /// * `Sf` — the slot already holds the boxed value; only the read-only
     ///   fpr view is dropped.
-    /// * `C` — the constant lives in the compiler, *not* in the slot, so it
-    ///   is written out. Its mode survives: the slot now holds exactly that
-    ///   constant, and still does after the call unless the callee stores
-    ///   through it (`JitContext::invalidate_outer_slot`).
+    /// * `C` — the constant lives in the compiler, *not* in the slot, so
+    ///   it is written out, and the mode drops to `S(Guarded::Value)`.
+    ///   Keeping it would need every path by which the callee can reach
+    ///   the slot to invalidate it, and only `StoreDynVar` does.
     /// * `V` — a temp above sp, nil-filled as `to_S_unguarded` does, so the
     ///   callee never sees an uninitialized word.
     /// * `S` — already in the slot; its `Guarded` is a fact about the
@@ -1041,8 +1041,16 @@ impl SlotState {
                 self.clear(slot);
                 self.set_mode(slot, LinkMode::S(guarded));
             }
-            // Written out, but still known to be that constant.
-            LinkMode::C(v) => ir.spill(Spill::Lit(v, slot)),
+            // Written out, and forgotten. Keeping `C` across the call
+            // needs every way the callee can reach the slot to say so, and
+            // `store_dynvar` only covers its own `StoreDynVar`: a builtin
+            // that yields, a deeper nest, anything reaching the frame
+            // another way leaves the constant believed and wrong.
+            // `Array#slice_before` produced a wrong answer this way.
+            LinkMode::C(v) => {
+                ir.spill(Spill::Lit(v, slot));
+                self.set_mode(slot, LinkMode::S(Guarded::Value));
+            }
             LinkMode::V => ir.spill(Spill::Lit(Value::nil(), slot)),
             LinkMode::S(_) | LinkMode::MaybeNone | LinkMode::None => {}
         }
