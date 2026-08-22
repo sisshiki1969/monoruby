@@ -89,29 +89,106 @@ pub(crate) mod malloc_stats {
         let b = bucket(size);
         ALLOC_COUNT[b].fetch_add(1, Ordering::Relaxed);
         ALLOC_BYTES[b].fetch_add(size, Ordering::Relaxed);
-        // Temporary: MONORUBY_ALLOC_TRACE=<bucket> samples one backtrace per
-        // 200k allocations in that size class, to attribute a hot bucket to
-        // its call site. Diagnostic only.
+        // Temporary: MONORUBY_ALLOC_TRACE=<bucket> samples call sites for a
+        // size class, to attribute the histogram. Symbolizing here is not an
+        // option — `Backtrace::force_capture` allocates (re-entering this
+        // function) and symbolizing this binary takes long enough to look
+        // like a hang. Instead walk the frame-pointer chain, which
+        // `-Cforce-frame-pointers=yes` guarantees, record raw return
+        // addresses, and resolve them with addr2line after the run.
         if let Some(t) = trace_bucket()
             && t == b
         {
             static N: AtomicUsize = AtomicUsize::new(0);
-            if N.fetch_add(1, Ordering::Relaxed) % 200_000 == 0 {
-                eprintln!(
-                    "### alloc-trace bucket={b} size={size}\n{}",
-                    std::backtrace::Backtrace::force_capture()
-                );
+            if N.fetch_add(1, Ordering::Relaxed) % 20_000 == 0 {
+                record_frames();
             }
         }
     }
 
+    /// Ring of sampled call chains: `TRACE_DEPTH` return addresses each.
+    const TRACE_DEPTH: usize = 6;
+    const TRACE_SLOTS: usize = 64;
+    static TRACE_BUF: [[AtomicUsize; TRACE_DEPTH]; TRACE_SLOTS] =
+        [const { [const { AtomicUsize::new(0) }; TRACE_DEPTH] }; TRACE_SLOTS];
+    static TRACE_USED: AtomicUsize = AtomicUsize::new(0);
+
+    #[cfg(target_arch = "x86_64")]
+    fn record_frames() {
+        let slot = TRACE_USED.fetch_add(1, Ordering::Relaxed);
+        if slot >= TRACE_SLOTS {
+            return;
+        }
+        let mut rbp: usize;
+        // SAFETY: reads the frame-pointer register; the walk below only
+        // dereferences it while it stays plausible (non-null, aligned,
+        // monotonically increasing), so a frameless callee truncates the
+        // chain instead of faulting.
+        unsafe { std::arch::asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack)) };
+        for d in 0..TRACE_DEPTH {
+            if rbp == 0 || rbp % 8 != 0 {
+                break;
+            }
+            // SAFETY: `rbp` points at a saved-rbp/return-address pair in a
+            // live frame of this thread's stack.
+            let (next, ret) = unsafe { (*(rbp as *const usize), *((rbp + 8) as *const usize)) };
+            if next <= rbp {
+                break;
+            }
+            TRACE_BUF[slot][d].store(ret, Ordering::Relaxed);
+            rbp = next;
+        }
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    fn record_frames() {}
+
+    fn dump_traces() {
+        let used = TRACE_USED.load(Ordering::Relaxed).min(TRACE_SLOTS);
+        if used == 0 {
+            return;
+        }
+        // The load base turns runtime addresses into file offsets for
+        // addr2line (the binary is position-independent).
+        let base = std::fs::read_to_string("/proc/self/maps")
+            .ok()
+            .and_then(|m| m.lines().next().map(|l| l.split('-').next().unwrap_or("0").to_string()))
+            .unwrap_or_else(|| "0".to_string());
+        eprintln!("alloc-trace: {used} samples, load base 0x{base}");
+        for slot in 0..used {
+            let chain: Vec<String> = (0..TRACE_DEPTH)
+                .map(|d| format!("{:#x}", TRACE_BUF[slot][d].load(Ordering::Relaxed)))
+                .collect();
+            eprintln!("  {}", chain.join(" "));
+        }
+    }
+
+    /// Read `MONORUBY_ALLOC_TRACE` without allocating.
+    ///
+    /// This runs inside the global allocator, so it must not allocate:
+    /// `std::env::var` returns a `String`, and reaching it through a
+    /// `OnceLock` re-entered the initializer from the very allocation it
+    /// was making and deadlocked the process on its first allocation.
+    /// `getenv` hands back a borrowed C string instead.
     fn trace_bucket() -> Option<usize> {
-        static B: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
-        *B.get_or_init(|| {
-            std::env::var("MONORUBY_ALLOC_TRACE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-        })
+        // 0 = not read yet, 1 = read, no bucket, 2.. = bucket + 2.
+        static B: AtomicUsize = AtomicUsize::new(0);
+        let cached = B.load(Ordering::Relaxed);
+        if cached != 0 {
+            return (cached >= 2).then(|| cached - 2);
+        }
+        // SAFETY: `getenv` returns a pointer into the environment block,
+        // valid until the environment is mutated; it is only read here.
+        let v = unsafe {
+            let p = libc::getenv(c"MONORUBY_ALLOC_TRACE".as_ptr());
+            if p.is_null() {
+                None
+            } else {
+                std::ffi::CStr::from_ptr(p).to_str().ok().and_then(|s| s.parse::<usize>().ok())
+            }
+        };
+        B.store(v.map_or(1, |b| b + 2), Ordering::Relaxed);
+        v
     }
 
     pub(crate) fn record_dealloc(size: usize) {
@@ -119,6 +196,7 @@ pub(crate) mod malloc_stats {
     }
 
     pub(crate) fn dump() {
+        dump_traces();
         eprintln!("global-allocator size classes (alloc / dealloc / alloc-bytes):");
         let mut label = 16usize;
         for i in 0..BUCKETS {
