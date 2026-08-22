@@ -201,18 +201,6 @@ pub(crate) struct WriteBack {
     forward_kwrest: Vec<(SlotId, Box<[(IdentId, SlotId)]>)>,
 }
 
-impl WriteBack {
-    /// Debug: one-line summary (used by the `MONORUBY_LAZY_LOG` trace).
-    pub(crate) fn debug_summary(&self) -> String {
-        format!(
-            "literal={:?} void={:?} fpr={:?}",
-            self.literal.iter().map(|(_, s)| *s).collect::<Vec<_>>(),
-            self.void,
-            self.fpr.iter().map(|(_, s)| s.clone()).collect::<Vec<_>>(),
-        )
-    }
-}
-
 impl Hash for WriteBack {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         for (fpr, slots) in &self.fpr {

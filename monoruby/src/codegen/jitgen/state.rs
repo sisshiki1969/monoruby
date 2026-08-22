@@ -437,19 +437,6 @@ impl AbstractFrame {
     }
 
     ///
-    /// Lazy frame init: emit the outstanding home stores before control
-    /// leaves this compilation unit (send / yield). See
-    /// `SlotState::take_invalid_homes`.
-    pub fn materialize_homes(&mut self, ir: &mut AsmIr) {
-        let list = self.take_invalid_homes();
-        if std::env::var_os("MONORUBY_LAZY_LOG").is_some() {
-            eprintln!("[mat] pc={:?} slots={:?}", self.pc(), list.iter().map(|(_, s)| *s).collect::<Vec<_>>());
-        }
-        if !list.is_empty() {
-            ir.push(AsmInst::MaterializeHomes(list.into()));
-        }
-    }
-
     /// Execute GC.
     ///
     /// ### in
@@ -462,9 +449,6 @@ impl AbstractFrame {
     ///
     pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool) {
         let wb = self.get_gc_write_back();
-        if std::env::var_os("MONORUBY_LAZY_LOG").is_some() {
-            eprintln!("[gcwb] {}", wb.debug_summary());
-        }
         let error = ir.new_error(self);
         ir.exec_gc(wb, error, check_stack);
     }
