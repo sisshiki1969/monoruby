@@ -287,10 +287,13 @@ impl WriteBack {
 
     /// Whether replaying this write-back can allocate — boxing a float, or
     /// materializing a deferred rest `Array` / kwrest `Hash`. Everything
-    /// else is a plain store into a frame slot. If no conversion in a run
-    /// needs this, the whole walk is allocation- and GC-free, which is what
-    /// forces the plan/borrow dance today.
-    #[cfg(feature = "jit-log")]
+    /// else is a plain store into a frame slot.
+    ///
+    /// This is what decides whether a chain conversion has to be deferred
+    /// past the `CODEGEN` borrow: an allocation can run a GC, and a GC must
+    /// not happen while the borrow is held. A conversion that cannot
+    /// allocate can simply be applied where it is found. On activerecord
+    /// that is 198,254 of 200,357 conversions (98.95%).
     pub(crate) fn replay_allocates(&self) -> bool {
         !self.fpr.is_empty()
             || !self.forward_rest.is_empty()
@@ -442,6 +445,11 @@ impl ChainReplay {
         &self.wb
     }
 
+    /// See [`WriteBack::replay_allocates`].
+    pub(crate) fn allocates(&self) -> bool {
+        self.wb.replay_allocates()
+    }
+
     ///
     /// The word the walk stores into the callee frame's cont-frame pad slot
     /// for the shared continuation stub: high 32 bits = `conv(dst)` (`0` =
@@ -591,6 +599,29 @@ impl ChainConversion {
     /// As for [`ChainReplay::replay`]; additionally the callee's `ret` must
     /// not have run yet (it has not — the walk found the frame suspended).
     ///
+    ///
+    /// Convert a frame without taking ownership of its [`ChainReplay`] —
+    /// the in-place form of [`Self::apply`], for a replay that cannot
+    /// allocate and so needs no deferral past the `CODEGEN` borrow.
+    ///
+    /// ### safety
+    /// As for [`Self::apply`].
+    ///
+    pub(crate) unsafe fn apply_borrowed(
+        mut callee_cfp: Cfp,
+        caller_cfp: Cfp,
+        replay: &ChainReplay,
+        stub: CodePtr,
+    ) {
+        debug_assert!(!replay.allocates());
+        // SAFETY: guaranteed by the caller.
+        unsafe {
+            replay.replay(callee_cfp, caller_cfp);
+            callee_cfp.set_cont_frame_data(replay.cont_data());
+            callee_cfp.set_return_addr(stub);
+        }
+    }
+
     pub(crate) unsafe fn apply(self) {
         let Self {
             mut callee_cfp,

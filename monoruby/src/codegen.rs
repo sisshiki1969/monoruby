@@ -1696,7 +1696,7 @@ impl Codegen {
             // instead (as the pre-chain-deopt eviction walk always did).
             let ret = return_addr.expect("suspended control frame has a null return address");
             if !self.check_vm_address(ret)
-                && let Some(replay) = self.chain_deopt_table.get(&ret).cloned()
+                && let Some(replay) = self.chain_deopt_table.get(&ret)
             {
                 #[cfg(feature = "chain-deopt-log")]
                 eprintln!("### chain deopt: frame return {ret:?} -> chain conversion");
@@ -1713,7 +1713,25 @@ impl Codegen {
                         jit_stats::bump(&jit_stats::CHAIN_CONV_ALLOC);
                     }
                 }
-                plan.push(ChainConversion::new(cfp, prev_cfp, replay, stub));
+                if replay.allocates() {
+                    // Deferred: the replay materializes a rest array or a
+                    // kwrest hash, so it allocates and can run a GC, which
+                    // must not happen under the `CODEGEN` borrow this walk
+                    // holds. Clone the replay out and apply it later.
+                    plan.push(ChainConversion::new(cfp, prev_cfp, replay.clone(), stub));
+                } else {
+                    // Applied in place: everything this replay does is a
+                    // store into a suspended frame's slot. No allocation
+                    // means no GC, so nothing has to leave the borrow — and
+                    // 98.95% of conversions on activerecord take this path,
+                    // paying neither the `ChainReplay` clone (a `WriteBack`
+                    // is five vectors) nor a plan entry.
+                    //
+                    // SAFETY: as for `ChainConversion::apply` — the frame was
+                    // found suspended on this thread's control-frame chain
+                    // moments ago and nothing has run since.
+                    unsafe { ChainConversion::apply_borrowed(cfp, prev_cfp, replay, stub) };
+                }
             }
             cfp = prev_cfp;
             return_addr = unsafe { cfp.return_addr() };
