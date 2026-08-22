@@ -1700,6 +1700,16 @@ impl Codegen {
             {
                 #[cfg(feature = "chain-deopt-log")]
                 eprintln!("### chain deopt: frame return {ret:?} -> chain conversion");
+                #[cfg(feature = "jit-log")]
+                {
+                    jit_stats::bump(&jit_stats::CHAIN_CONVERSIONS);
+                    if replay.write_back().is_replay_empty() {
+                        jit_stats::bump(&jit_stats::CHAIN_CONV_EMPTY);
+                    }
+                    if replay.write_back().has_unboxed_float() {
+                        jit_stats::bump(&jit_stats::CHAIN_CONV_FLOAT);
+                    }
+                }
                 plan.push(ChainConversion::new(cfp, prev_cfp, replay, stub));
             }
             cfp = prev_cfp;
@@ -2004,6 +2014,9 @@ pub(crate) mod jit_stats {
     pub static CONST_SALVAGE_VALUECMP: AtomicUsize = AtomicUsize::new(0);
     pub static CONST_SALVAGE_FAIL_STALE: AtomicUsize = AtomicUsize::new(0);
     pub static CONST_SALVAGE_FAIL_CHANGED: AtomicUsize = AtomicUsize::new(0);
+    pub static CHAIN_CONVERSIONS: AtomicUsize = AtomicUsize::new(0);
+    pub static CHAIN_CONV_EMPTY: AtomicUsize = AtomicUsize::new(0);
+    pub static CHAIN_CONV_FLOAT: AtomicUsize = AtomicUsize::new(0);
 
     pub fn bump(c: &AtomicUsize) {
         c.fetch_add(1, Ordering::Relaxed);
@@ -2013,6 +2026,9 @@ pub(crate) mod jit_stats {
         let g = |c: &AtomicUsize| c.load(Ordering::Relaxed);
         eprintln!();
         eprintln!("version / salvage stats:");
+        eprintln!("  chain conversions:                 {}", g(&CHAIN_CONVERSIONS));
+        eprintln!("    replay would be a no-op:         {}", g(&CHAIN_CONV_EMPTY));
+        eprintln!("    carries unboxed floats:          {}", g(&CHAIN_CONV_FLOAT));
         eprintln!("  class_version incs:                {}", g(&CLASS_VER_INC));
         eprintln!("  const_version incs:                {}", g(&CONST_VER_INC));
         eprintln!("  recovery attempts (class guard):   {}", g(&RECOVERY_ATTEMPT));

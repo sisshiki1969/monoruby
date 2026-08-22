@@ -264,6 +264,27 @@ impl std::fmt::Debug for WriteBack {
 }
 
 impl WriteBack {
+    /// Whether a chain-deopt replay of this write-back would do nothing —
+    /// i.e. the suspended frame is already in interpreter-consistent shape
+    /// and only its return address has to be rewritten. Counted under
+    /// `jit-log` to size the "write everything back at cross-unit calls"
+    /// question: if conversions are mostly empty already, the conservative
+    /// spill costs little and removes the replay entirely.
+    #[cfg(feature = "jit-log")]
+    pub(crate) fn is_replay_empty(&self) -> bool {
+        self.fpr.is_empty()
+            && self.literal.is_empty()
+            && self.void.is_empty()
+            && self.gp.is_empty()
+            && self.forward_rest.is_empty()
+            && self.forward_kwrest.is_empty()
+    }
+
+    #[cfg(feature = "jit-log")]
+    pub(crate) fn has_unboxed_float(&self) -> bool {
+        !self.fpr.is_empty()
+    }
+
     fn new(
         fpr: Vec<(FPReg, Vec<SlotId>)>,
         literal: Vec<(Value, SlotId)>,
@@ -404,6 +425,11 @@ pub(crate) struct ChainReplay {
 }
 
 impl ChainReplay {
+    #[cfg(feature = "jit-log")]
+    pub(crate) fn write_back(&self) -> &WriteBack {
+        &self.wb
+    }
+
     ///
     /// The word the walk stores into the callee frame's cont-frame pad slot
     /// for the shared continuation stub: high 32 bits = `conv(dst)` (`0` =
