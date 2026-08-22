@@ -1709,6 +1709,9 @@ impl Codegen {
                     if replay.write_back().has_unboxed_float() {
                         jit_stats::bump(&jit_stats::CHAIN_CONV_FLOAT);
                     }
+                    if replay.write_back().replay_allocates() {
+                        jit_stats::bump(&jit_stats::CHAIN_CONV_ALLOC);
+                    }
                 }
                 plan.push(ChainConversion::new(cfp, prev_cfp, replay, stub));
             }
@@ -2017,6 +2020,7 @@ pub(crate) mod jit_stats {
     pub static CHAIN_CONVERSIONS: AtomicUsize = AtomicUsize::new(0);
     pub static CHAIN_CONV_EMPTY: AtomicUsize = AtomicUsize::new(0);
     pub static CHAIN_CONV_FLOAT: AtomicUsize = AtomicUsize::new(0);
+    pub static CHAIN_CONV_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
     pub fn bump(c: &AtomicUsize) {
         c.fetch_add(1, Ordering::Relaxed);
@@ -2029,6 +2033,7 @@ pub(crate) mod jit_stats {
         eprintln!("  chain conversions:                 {}", g(&CHAIN_CONVERSIONS));
         eprintln!("    replay would be a no-op:         {}", g(&CHAIN_CONV_EMPTY));
         eprintln!("    carries unboxed floats:          {}", g(&CHAIN_CONV_FLOAT));
+        eprintln!("    replay can allocate:             {}", g(&CHAIN_CONV_ALLOC));
         eprintln!("  class_version incs:                {}", g(&CLASS_VER_INC));
         eprintln!("  const_version incs:                {}", g(&CONST_VER_INC));
         eprintln!("  recovery attempts (class guard):   {}", g(&RECOVERY_ATTEMPT));

@@ -285,6 +285,18 @@ impl WriteBack {
         !self.fpr.is_empty()
     }
 
+    /// Whether replaying this write-back can allocate — boxing a float, or
+    /// materializing a deferred rest `Array` / kwrest `Hash`. Everything
+    /// else is a plain store into a frame slot. If no conversion in a run
+    /// needs this, the whole walk is allocation- and GC-free, which is what
+    /// forces the plan/borrow dance today.
+    #[cfg(feature = "jit-log")]
+    pub(crate) fn replay_allocates(&self) -> bool {
+        !self.fpr.is_empty()
+            || !self.forward_rest.is_empty()
+            || !self.forward_kwrest.is_empty()
+    }
+
     fn new(
         fpr: Vec<(FPReg, Vec<SlotId>)>,
         literal: Vec<(Value, SlotId)>,
