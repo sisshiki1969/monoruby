@@ -84,6 +84,23 @@ hoist は将来の改良。
 3. deopt→VM 後の V temps(method_missing / `__send__` inline / specialized
    decline)— deopt write-back への void 追加で修復。
 
+## Phase 2 の効果(先行測定、x86-64)
+
+fill と mark 検査をローカルで外した preview ビルドでの back-to-back 測定
+(dead local を持つメソッドの call コスト):
+
+| dead locals | fill あり (現状) | fill なし (phase 2) |
+|---|---|---|
+| 1  | 6.9 ns | 6.2 ns |
+| 8  | 7.5 ns | 6.1 ns |
+| 16 | 9.6 ns | 6.4 ns |
+| 32 | 14.4 ns | 5.9 ns |
+| 64 | 24.2 ns | 6.2 ns |
+
+スロット数比例項(~0.28ns/slot)が完全に消え、call コストはフレーム幅に
+依存しなくなる。optcarrot は checksum 一致・fps 変化なし(fill は
+ボトルネックではない)。
+
 ## Phase 2(未実施)
 
 gc-stress soak(x86-64 CI + 手動 workflow、aarch64 含む)が継続的に green に
