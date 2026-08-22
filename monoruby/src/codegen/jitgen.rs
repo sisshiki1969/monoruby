@@ -1409,15 +1409,15 @@ impl JitModule {
                 }
             }
             // `f64_to_val` can allocate a heap Float, so keep the frame
-            // pointers across it.
+            // pointers across it. Three pushes leave rsp 16-aligned for the
+            // call: the stub was entered with rsp ≡ 8 (mod 16) and 24 bytes
+            // of pushes bring it back to ≡ 0.
             let f64_to_val = self.f64_to_val.clone();
             monoasm! { &mut *self,
                 pushq rdi;
                 pushq rsi;
                 pushq rdx;
-                subq  rsp, 8;
                 call  f64_to_val;
-                addq  rsp, 8;
                 popq  rdx;
                 popq  rsi;
                 popq  rdi;
@@ -1449,13 +1449,11 @@ impl JitModule {
                 pushq rdi;
                 pushq rsi;
                 pushq rdx;
-                subq  rsp, 8;
                 movq  rcx, [rsi];
                 lea   rdi, [rcx - (rbp_local(*src))];
                 movq  rsi, (*len as usize);
                 movq  rax, (runtime::create_array);
                 call  rax;
-                addq  rsp, 8;
                 popq  rdx;
                 popq  rsi;
                 popq  rdi;
@@ -1476,13 +1474,11 @@ impl JitModule {
                 pushq rdi;
                 pushq rsi;
                 pushq rdx;
-                subq  rsp, 8;
                 movq  rsi, [rsi];
                 subq  rsi, (RBP_LOCAL_FRAME);
                 lea   rdi, [rip + data];
                 movq  rax, (runtime::correct_rest_kw);
                 call  rax;
-                addq  rsp, 8;
                 popq  rdx;
                 popq  rsi;
                 popq  rdi;
