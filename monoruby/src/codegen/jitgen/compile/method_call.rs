@@ -340,8 +340,8 @@ impl<'a> JitContext<'a> {
         }
         // A call that passes a block hands the callee this frame, so every
         // unboxed local is homed in its slot first and its xmm handed back.
-        // `C` and `S` locals keep their modes: they describe the slot, not a
-        // register, so they stay true across the call.
+        // Each slot's `Guarded` survives: it is a fact about the value in
+        // the slot, not about where the value is kept.
         if callsite.block_fid.is_some() {
             state.locals_unbox_to_S(ir);
         }
