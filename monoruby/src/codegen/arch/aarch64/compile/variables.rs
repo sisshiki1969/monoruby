@@ -42,6 +42,41 @@ impl Codegen {
         );
     }
 
+    /// Chain write back: box `fpr` and store it into an outer frame's slot.
+    pub(in crate::codegen::jitgen) fn outer_fpr_to_stack(
+        &mut self,
+        offset: usize,
+        fpr: FPReg,
+        dst: SlotId,
+        base: usize,
+    ) {
+        let e: i64 = offset as i64 - (BP_CFP + CFP_LFP) as i64 - 8 - conv(dst) as i64;
+        let f64_to_val = self.f64_to_val.clone();
+        self.a64_fpr_load(fpr, 0, base); // value -> d0
+        monoasm_arm64!(&mut self.jit,
+            bl f64_to_val;                // x0 = Value(f64)
+            mov x10, (e as u64);
+            add x10, x29, x10;
+            str x0, [x10];
+        );
+    }
+
+    /// Chain write back: store a literal into an outer frame's slot.
+    pub(in crate::codegen::jitgen) fn outer_lit_to_stack(
+        &mut self,
+        offset: usize,
+        v: Value,
+        dst: SlotId,
+    ) {
+        let e: i64 = offset as i64 - (BP_CFP + CFP_LFP) as i64 - 8 - conv(dst) as i64;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (v.id());
+            mov x10, (e as u64);
+            add x10, x29, x10;
+            str x9, [x10];
+        );
+    }
+
     // ---- variable-access primitives (aarch64) -----------------------------
     // gvar/cvar go through a runtime C call; dynvar walks the outer-LFP chain.
     // All bail (`false`) on a live xmm / out-of-range offset (no FP save yet).

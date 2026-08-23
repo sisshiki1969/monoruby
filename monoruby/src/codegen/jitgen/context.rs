@@ -1468,6 +1468,8 @@ impl<'a> JitContext<'a> {
         match inst {
             AsmInst::LoadDynVarSpecialized { offset, .. }
             | AsmInst::StoreDynVarSpecialized { offset, .. }
+            | AsmInst::OuterFprToStack { offset, .. }
+            | AsmInst::OuterLitToStack { offset, .. }
             | AsmInst::MethodRetSpecialized {
                 rbp_offset: offset, ..
             }
