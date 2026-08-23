@@ -127,13 +127,13 @@ impl AbstractState {
 
     ///
     /// Home every unboxed local of *this* frame in its slot, keeping the
-    /// rest of the abstract state — each `C` included.
+    /// rest of the abstract state — each `C` and each `Sf` view included.
     ///
     /// Only for a callee whose every store into this frame the compiler
     /// can see; the bet is confirmed after the fact in `specialized_iseq`.
     ///
     #[allow(non_snake_case)]
-    pub(super) fn locals_unbox_to_S_keeping_const(&mut self, ir: &mut AsmIr) {
+    pub(super) fn locals_unbox_to_S_keeping_claims(&mut self, ir: &mut AsmIr) {
         for i in self.locals() {
             self.unbox_to_S(ir, i, true);
         }

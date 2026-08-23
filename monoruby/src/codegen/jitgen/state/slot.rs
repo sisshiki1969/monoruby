@@ -1097,7 +1097,7 @@ impl SlotState {
         &mut self,
         ir: &mut AsmIr,
         slot: SlotId,
-        keep_const: bool,
+        keep_claims: bool,
     ) {
         // Same GP-resident caveat as `to_S_unguarded`: re-home a dirty pool
         // register before the mode change drops it unspilled.
@@ -1111,6 +1111,16 @@ impl SlotState {
                 self.set_mode(slot, LinkMode::S(guarded));
                 ir.spill(Spill::Fpr(fpr, slot));
             }
+            // `Sf` needs nothing done to it either way: the slot already
+            // holds the boxed value, and the fpr is a read-only view of it.
+            // Whether the *view* survives is `keep_claims` — the call saves
+            // and restores this frame's physical fprs around itself
+            // (`fpr_save_cont` / `fpr_restore_cont`), so the register still
+            // holds this float when we resume. What would invalidate the
+            // view is the callee writing the slot, and that arrives as a
+            // `StoreDynVar` through `widen_outer_slot`, which drops the
+            // whole binding. The same hook `C` rides on.
+            LinkMode::Sf(_, _) if keep_claims => {}
             LinkMode::Sf(_, _) => {
                 let guarded = self.guarded(slot);
                 self.clear(slot);
@@ -1129,7 +1139,7 @@ impl SlotState {
             // at its call site, and a block literal this frame hands out
             // that the callee turns into a Proc is caught by
             // `immediate_evict`'s capture guard.
-            LinkMode::C(_) if keep_const => {}
+            LinkMode::C(_) if keep_claims => {}
             LinkMode::C(v) => self.give_up_const(ir, slot, v),
             LinkMode::V => ir.spill(Spill::Lit(Value::nil(), slot)),
             LinkMode::S(_) | LinkMode::MaybeNone | LinkMode::None => {}
@@ -2079,8 +2089,16 @@ impl AbstractFrame {
         if outer == 0 {
             return self.bridge(ir, target, slot, pc);
         }
+        // An outer frame's fpr is not in a register while we run: the call
+        // that suspended that frame saved its physical fprs
+        // (`fpr_save_cont`) and restores them on the way back. So nothing
+        // here may emit a register operation on one. That leaves exactly
+        // two transitions for a slot holding `Sf` — keep the same binding,
+        // or drop to `S`, which is free because the slot holds the boxed
+        // value — and rules out `F`, whose only copy *is* the register.
+        // `AbstractState::join` is what keeps it to those.
         debug_assert!(
-            !matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _)),
+            !matches!(self.mode(slot), LinkMode::F(_)),
             "outer{outer} {slot:?} holds {:?}",
             self.mode(slot),
         );
@@ -2091,6 +2109,10 @@ impl AbstractFrame {
             (_, LinkMode::V) => self.discard(slot),
             (_, LinkMode::MaybeNone) => self.set_MaybeNone(slot),
             (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
+            (LinkMode::Sf(l, _), LinkMode::Sf(r, _)) if l == r => {}
+            (LinkMode::Sf(_, guarded), LinkMode::S(_)) => {
+                self.set_S_with_guard(slot, guarded.into());
+            }
             (LinkMode::C(v), LinkMode::S(_)) => {
                 self.set_mode(slot, LinkMode::S(Guarded::from_concrete_value(v)));
             }
@@ -2119,15 +2141,22 @@ impl AbstractFrame {
             return false;
         }
         debug_assert!(
-            !matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _)),
+            !matches!(self.mode(slot), LinkMode::F(_)),
             "outer{outer} {slot:?} holds {:?}",
             self.mode(slot),
         );
-        if let LinkMode::C(_) = self.mode(slot) {
-            self.set_mode(slot, LinkMode::S(Guarded::Value));
-            return true;
+        match self.mode(slot) {
+            // The slot holds the boxed value; only the read-only view goes.
+            LinkMode::Sf(_, _) => {
+                self.set_mode(slot, LinkMode::S(Guarded::Value));
+                true
+            }
+            LinkMode::C(_) => {
+                self.set_mode(slot, LinkMode::S(Guarded::Value));
+                true
+            }
+            _ => false,
         }
-        false
     }
 
     ///
