@@ -229,6 +229,23 @@ impl AsmIr {
         self.had_deopt
     }
 
+    ///
+    /// Record that this frame can deopt, without materializing a side exit.
+    ///
+    /// Only for the analysis pass. A guarded transfer record is not emitted
+    /// there (see [`Self::codegen_mode`]), so the `deopt_from_point` that
+    /// would have set the flag never runs — and the flag is not merely
+    /// bookkeeping for the emitted code: `specialized_iseq` reads it to
+    /// decide whether a block-passing call may keep this frame's constants.
+    /// Left unset, the analysis pass predicts a kept constant that the real
+    /// pass gives up, and the loop-entry target it produces then disagrees
+    /// with the back edge the real pass actually reaches.
+    ///
+    pub(in crate::codegen::jitgen) fn note_analysis_deopt(&mut self) {
+        debug_assert!(!self.codegen_mode);
+        self.had_deopt = true;
+    }
+
     pub(super) fn deferred_rest(&self) -> bool {
         self.deferred_rest
     }

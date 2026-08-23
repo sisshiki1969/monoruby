@@ -2170,6 +2170,7 @@ afe017e12ee32ba781bc419214f2db54	"e\\n\\nCopyright (c) 202"	File.binread("../LIC
 afecc303354ce360b53ad03479bdb2f0	2	t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end\n      
 b017ead69b837578afee4295eb840ed7	"#<Class:Time>"	Time.singleton_class.to_s
 b041b0aaea8a7d40b26a35b251c0f897	[[:req, :a], [:nokey]]	def m(a, **nil); end\n            method(:m).parameters\n            
+b050bdfac1ec47f5eeda5dc5e12bd05a	45.0	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 b06f00715b283fa26e9acda37466978d	[1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub]	class MyArray < Array\n              def [](i) = :sub\n            en
 b07897e1515470c5f367e6c838cd3ca3	true	h = {a: 1}.compare_by_identity\n            Marshal.load(Marshal.dum
 b127614a38e6a826e83df4733ad1c138	[true, true]	require "openssl"\n        [OpenSSL::Cipher::CipherError < OpenSSL::Open
