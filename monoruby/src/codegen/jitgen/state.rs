@@ -75,16 +75,6 @@ impl AbstractState {
         AbstractState { frames }
     }
 
-    /// Number of frames of this compilation's chain, innermost included.
-    pub(super) fn depth(&self) -> usize {
-        self.frames.len()
-    }
-
-    /// The frame at *level*, counted from the outermost.
-    pub(super) fn frame_at(&self, level: usize) -> &AbstractFrame {
-        &self.frames[level]
-    }
-
     pub(super) fn set_frames(&mut self, frames: Vec<AbstractFrame>) {
         debug_assert_eq!(frames.len(), self.frames.len());
         self.frames = frames;
