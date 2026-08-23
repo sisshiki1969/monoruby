@@ -4,16 +4,18 @@
 //! caller's frame behind its back, so at a block-passing call every local
 //! the compiler was merely *holding* is written to its slot. Whether the
 //! *claim* survives is another matter, and it survives only when the
-//! compiler can see every store the block makes — which needs all of:
+//! compiler can see every store the block makes:
 //!
-//!  * the callee to be an iseq with an iseq block literal, so the block
-//!    is a candidate for compilation into this same unit;
-//!  * its compile to have inlined every `yield` and to contain no
+//!  * the callee has to be an iseq with an iseq block literal, so the
+//!    block is a candidate for compilation into this same unit;
+//!  * its compile has to have inlined every `yield` and to contain no
 //!    deopt-able side exit, since either lets the block run somewhere the
 //!    compiler is not looking (confirmed after the fact, not predicted);
-//!  * the frame to be this compilation's own. An outer frame gives its
-//!    constants up on the way in: its claim describes one moment, and the
-//!    compilation may be entered from it many times over.
+//!  * a claim the block *inherits* about a frame further out has to
+//!    survive the block being entered again, which is settled by the
+//!    fixpoint of its own re-entry (`converge_block_entry`) — the block
+//!    runs from that frame as many times as the callee yields, and its own
+//!    chain need not contain the loop doing the yielding.
 //!
 //! Each case below returns a wrong answer if one of those is skipped.
 extern crate monoruby;
