@@ -518,6 +518,7 @@ impl Codegen {
         let entry = self.jit.get_current_address();
         let wb = replay.write_back_all();
         let base = replay.base();
+        let f64_to_val_addr = self.jit.get_label_address(&self.f64_to_val).as_ptr() as u64;
         // Park the three arguments where the helper calls cannot clobber
         // them, and keep LR.
         monoasm_arm64!(&mut self.jit,
@@ -542,8 +543,18 @@ impl Codegen {
                     monoasm_arm64!(&mut self.jit, ldr d0, [x9];);
                 }
             }
-            let f64_to_val = self.f64_to_val.clone();
-            monoasm_arm64!(&mut self.jit, bl f64_to_val;); // x0 = Value(f64)
+            // Absolute call, not `bl f64_to_val`. This stub is emitted on
+            // page 1 (see `register_chain_exit`) while the helper sits on
+            // page 0, and the two are separately mapped: `BL` reaches
+            // +/-128MB, so a label-relative branch between them is only
+            // sometimes in range — it took a macOS arm64 run to fall out of
+            // it ("B/BL displacement out of range"). Every other call in
+            // this stub already goes through a register for the same
+            // reason. x86-64's `call` has +/-2GB and does not care.
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (f64_to_val_addr);
+                blr x9;                        // x0 = Value(f64)
+            );
             for slot in slots {
                 self.a64_frame_store(0, 25, conv(*slot) as u32);
             }
