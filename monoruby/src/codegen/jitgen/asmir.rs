@@ -622,14 +622,6 @@ impl AsmIr {
         self.push(AsmInst::LitToStack(v, reg));
     }
 
-    pub fn outer_fpr2stack(&mut self, offset: DynVarOffset, fpr: FPReg, dst: SlotId) {
-        self.push(AsmInst::OuterFprToStack { offset, fpr, dst });
-    }
-
-    pub fn outer_lit2stack(&mut self, offset: DynVarOffset, v: Value, dst: SlotId) {
-        self.push(AsmInst::OuterLitToStack { offset, v, dst });
-    }
-
     pub fn lit2reg(&mut self, v: Value, reg: GP) {
         self.push(AsmInst::LitToReg(v, reg));
     }
@@ -2470,24 +2462,6 @@ pub(super) enum AsmInst {
     StoreDynVar {
         dst: DynVar,
         src: GP,
-    },
-    ///
-    /// Write a value into a slot of an *outer* frame of this compilation —
-    /// the chain-write-back spills. Same addressing as
-    /// [`AsmInst::StoreDynVarSpecialized`] (a `DynVarOffset` resolved
-    /// against the specialized frame chain); the difference is only the
-    /// source, which is a boxed float or a literal rather than a register.
-    ///
-    OuterFprToStack {
-        offset: DynVarOffset,
-        fpr: FPReg,
-        dst: SlotId,
-    },
-    /// See [`AsmInst::OuterFprToStack`].
-    OuterLitToStack {
-        offset: DynVarOffset,
-        v: Value,
-        dst: SlotId,
     },
     /// DynVar(dst) = src
     StoreDynVarSpecialized {
