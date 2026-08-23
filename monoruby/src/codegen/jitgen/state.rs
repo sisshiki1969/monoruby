@@ -47,30 +47,6 @@ impl std::ops::IndexMut<usize> for AbstractState {
 impl AbstractState {
     pub(super) fn new(jitctx: &JitContext) -> Self {
         let mut frames = jitctx.outer_contexts();
-        // An outer frame enters this compilation holding no constant.
-        //
-        // A caller may keep a `C` across the call that handed out its
-        // block, and the slot does hold the value — `unbox_to_S` writes it
-        // out either way — so `S` is the truth, just less of it. What
-        // cannot be carried is the *claim*, because it describes the frame
-        // at one moment and this compilation may run many times from it.
-        //
-        // A block is the plain case. `kill_int` keeps `acc = C(0.0)` over
-        // `n.times { ... }`; the block's chain runs straight from the block
-        // to `kill_int`, since `Integer#times` is a method and so is nobody's
-        // lexical outer — its loop is not in the block's chain at all. There
-        // is therefore no merge anywhere that could tell the block it is
-        // entered six times with six different `acc`s. Believing the
-        // constant, the block's own `if` merge bridged `C(0.0)` back into
-        // the caller's slot on every iteration but one.
-        //
-        // Making that sound needs a fixpoint over the *call* structure, not
-        // the lexical chain. Until then this is where it stops. Nothing is
-        // lost today: `load_dynvar` reads the slot and never folds an outer
-        // constant, and the caller keeps its own claim for its own code.
-        for frame in &mut frames {
-            frame.forget_constants();
-        }
         frames.push(AbstractFrame::new(jitctx));
         AbstractState { frames }
     }

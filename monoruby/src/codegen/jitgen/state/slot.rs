@@ -1004,6 +1004,25 @@ impl SlotState {
     /// [`Self::unbox_to_S`] writes a constant out on the way into every
     /// block-passing call whether or not the claim survives it.
     ///
+    /// Whether any local is still claimed as a compiler-held constant.
+    pub(in crate::codegen::jitgen) fn holds_const(&self) -> bool {
+        self.locals().any(|slot| matches!(self.mode(slot), LinkMode::C(_)))
+    }
+
+    ///
+    /// The locals *other* still claims as constants and this one no longer
+    /// does — what an analysis pass discovered the compilation gives up.
+    ///
+    pub(in crate::codegen::jitgen) fn lost_constants_of(&self, other: &Self) -> Vec<SlotId> {
+        other
+            .locals()
+            .filter(|&slot| {
+                matches!(other.mode(slot), LinkMode::C(_))
+                    && !matches!(self.mode(slot), LinkMode::C(_))
+            })
+            .collect()
+    }
+
     pub(in crate::codegen::jitgen) fn forget_constants(&mut self) {
         for slot in self.locals() {
             if let LinkMode::C(v) = self.mode(slot) {
@@ -2018,16 +2037,14 @@ impl AbstractFrame {
         if outer == 0 {
             return self.bridge(ir, target, slot, pc);
         }
-        // An outer frame carries no placement of its own yet — see
-        // `AbstractState::new` for what a `C` there would take — so the
-        // arms below that act on one are unreachable. They are written out
-        // because they are what lifting that restriction needs; assert the
-        // invariant so lifting it without the rest fails loudly.
+        // An outer frame may hold a `C` — its entry claim is settled by
+        // `converge_block_entry` — but not yet an unboxed float: that needs
+        // a cross-frame fpr allocator, and the loop-entry float machinery
+        // (`liveness_analysis`, `keep_backedge_floats`) still reasons over
+        // the innermost frame alone. The `F`/`Sf` arms below are written
+        // out because they are what lifting that needs; assert until then.
         debug_assert!(
-            matches!(
-                self.mode(slot),
-                LinkMode::S(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None
-            ),
+            !matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _)),
             "outer{outer} {slot:?} holds {:?}",
             self.mode(slot),
         );

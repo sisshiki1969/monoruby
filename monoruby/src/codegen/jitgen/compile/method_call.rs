@@ -1001,6 +1001,9 @@ impl<'a> JitContext<'a> {
         } else {
             JitArgumentInfo::default()
         };
+        self.converge_block_entry(
+            state, iseq, self_class, &args_info, outer, callid,
+        )?;
         let SpecializedCompileResult {
             entry,
             return_state,
@@ -1467,6 +1470,64 @@ pub(super) struct SpecializedCompileResult {
 }
 
 impl<'a> JitContext<'a> {
+    ///
+    /// Settle what the block may believe about its outer frames before
+    /// compiling it, by finding the fixpoint of its own re-entry.
+    ///
+    /// A caller can keep a `C` across the call that hands out its block
+    /// (see `compile_method_call`), so the block's chain may arrive
+    /// claiming one. The claim describes the frame at the moment the block
+    /// was handed over, and the block runs from it as many times as the
+    /// callee yields — `n.times { acc += 2.0 }` enters six times with six
+    /// different `acc`s. Nothing in the block's own chain says so:
+    /// `Integer#times` is a method, so it is nobody's lexical outer and
+    /// its loop is not in that chain at all.
+    ///
+    /// So treat "this block may be entered again" as a back edge from its
+    /// exit to its entry and iterate, exactly as
+    /// [`Self::analyse_backedge_fixpoint`] does for a loop. Each round
+    /// compiles the block into a throwaway context and adopts whatever
+    /// constants that round gave up; the lattice per slot is
+    /// `C -> S(Guarded) -> S(Value)` and giving up is monotone, so it
+    /// settles in a round or two.
+    ///
+    /// Strictly better than dropping every outer constant on the way in: a
+    /// block that only *reads* its caller's locals keeps them folded.
+    ///
+    fn converge_block_entry(
+        &mut self,
+        state: &AbstractState,
+        iseq: ISeqId,
+        self_class: ClassId,
+        args_info: &JitArgumentInfo,
+        outer: usize,
+        callid: CallSiteId,
+    ) -> JitResult<()> {
+        // Nothing to settle unless an outer frame actually claims one.
+        // This is the gate that keeps the extra pass off the common path.
+        if !self.outer_holds_const(outer) {
+            return Ok(());
+        }
+        for _ in 0..5 {
+            let mut probe = self.analysis_clone();
+            let mut probe_state = state.clone();
+            let frame = probe.new_specialized_frame(iseq, Some(outer), args_info.clone(), self_class);
+            // A round that cannot compile tells us nothing about what the
+            // block gives up, and the real compile below will raise the
+            // same error. Stop iterating and let it.
+            if probe.specialized_compile(&mut probe_state, callid, frame).is_err() {
+                return Ok(());
+            }
+            if !self.adopt_outer_widenings(&probe, outer) {
+                return Ok(());
+            }
+        }
+        // Did not settle in five rounds: give the constants up wholesale,
+        // which is where the lattice tops out anyway.
+        self.forget_outer_constants(outer);
+        Ok(())
+    }
+
     fn new_specialized_frame(
         &self,
         iseq_id: ISeqId,
