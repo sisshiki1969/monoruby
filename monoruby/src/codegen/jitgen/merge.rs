@@ -84,6 +84,28 @@ impl<'a> JitContext<'a> {
                 self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;
             }
 
+            // Everything the loop-entry merge does spans the chain — the
+            // fixpoint's back edge is a whole `AbstractState`, `join` and
+            // `equiv` walk every frame, and `gen_bridge_all` bridges every
+            // frame. The three calls below are the exception, and they stay
+            // innermost-only for two different reasons.
+            //
+            // `liveness_analysis`'s `kill_unused` is innermost *by nature*.
+            // It discards the slots this loop does not touch, which is
+            // sound at a merge inside the frame that owns the loop and
+            // nowhere else: an outer frame's local that the loop never
+            // reads is still live in that frame's own continuation.
+            //
+            // The float half — `loop_used_as_float` feeding `use_float`,
+            // and `keep_backedge_floats` — is innermost only until an fpr
+            // can be allocated across frames. `FprAllocator` is per
+            // `SlotState` and its ids are positional (`FPReg(id)` is
+            // `xmm{id+2}` below `PHYS_FPR_POOL`), so two frames each
+            // promoting a slot would both take `FPReg(0)` and both write
+            // `xmm2`. Promoting an outer frame's slot needs one id space
+            // for the whole chain; that is the piece still missing, and it
+            // is the same one that keeps `bridge_at` asserting no outer
+            // `F`/`Sf`.
             let mut target = incoming;
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
                 let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());

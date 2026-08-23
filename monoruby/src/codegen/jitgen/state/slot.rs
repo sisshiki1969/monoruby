@@ -2038,11 +2038,16 @@ impl AbstractFrame {
             return self.bridge(ir, target, slot, pc);
         }
         // An outer frame may hold a `C` — its entry claim is settled by
-        // `converge_block_entry` — but not yet an unboxed float: that needs
-        // a cross-frame fpr allocator, and the loop-entry float machinery
-        // (`liveness_analysis`, `keep_backedge_floats`) still reasons over
-        // the innermost frame alone. The `F`/`Sf` arms below are written
-        // out because they are what lifting that needs; assert until then.
+        // `converge_block_entry` — but not yet an unboxed float.
+        //
+        // `FprAllocator` is per `SlotState` and its ids are positional
+        // (`FPReg(id)` is `xmm{id+2}` below `PHYS_FPR_POOL`), so two frames
+        // each promoting a slot would both take `FPReg(0)` and both write
+        // `xmm2`. An outer `F`/`Sf` needs one id space for the whole chain,
+        // and with it the loop-entry float passes that still reason over
+        // the innermost frame alone (see `incoming_context`). The `F`/`Sf`
+        // arms below are written out because they are what that needs;
+        // assert until it arrives.
         debug_assert!(
             !matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _)),
             "outer{outer} {slot:?} holds {:?}",
