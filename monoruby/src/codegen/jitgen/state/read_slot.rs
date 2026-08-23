@@ -60,6 +60,13 @@ pub(in crate::codegen::jitgen) enum FprLoad {
 }
 
 impl FprLoad {
+    /// Whether [`Self::emit`] would materialize a deopt side exit. Mirrors
+    /// the match below: only `FromStack` is guarded; the rest are literal
+    /// conversions with nothing to check.
+    pub(in crate::codegen::jitgen) fn deopts(self) -> bool {
+        matches!(self, FprLoad::FromStack(_, _))
+    }
+
     /// `deopt` (the program point) is required by the guarded (`FromStack` /
     /// `FromAcc`) variants and ignored by the guard-free ones; the guard-free
     /// `load_fpr_from_C_state` path passes `None`. The side-exit is materialized
@@ -158,6 +165,18 @@ pub(in crate::codegen::jitgen) enum FprFixnumLoad {
 }
 
 impl FprFixnumLoad {
+    /// Whether [`Self::emit`] would materialize a deopt side exit, given
+    /// whether the wrapper holds a program point. Mirrors the match below:
+    /// the `FromStack` arm materializes one whenever the point is `Some`
+    /// (even with `guard` false), and `Numeric` emits with `None`.
+    pub(in crate::codegen::jitgen) fn deopts(self, has_point: bool) -> bool {
+        match self {
+            FprFixnumLoad::None => false,
+            FprFixnumLoad::FromStack(_, _, _) => has_point,
+            FprFixnumLoad::Numeric(_) => false,
+        }
+    }
+
     /// `deopt` (the program point) is `Some` for the guarded `S` arm and
     /// `None` for the guard-free ones. The side-exit is materialized for the
     /// `S` arm whenever the point is `Some` — even if `guard` is false, so
@@ -200,7 +219,10 @@ impl AsmIr {
 
     /// Emit a deopt-carrying unbox-to-float load record (`load_fpr`, always
     /// guarded). A no-op in analysis mode — skipping it also avoids the dead
-    /// `side_exit` growth `deopt_from_point` would cause there.
+    /// `side_exit` growth `deopt_from_point` would cause there. The *fact*
+    /// that the record deopts is still recorded there: it is what
+    /// `specialized_iseq` keys `forget_constants` on, so the two passes have
+    /// to agree on it even when only one of them emits.
     pub(in crate::codegen::jitgen) fn fpr_load(
         &mut self,
         load: FprLoad,
@@ -209,11 +231,14 @@ impl AsmIr {
     ) {
         if self.codegen_mode() {
             load.emit(self, slot, Some(&deopt));
+        } else if load.deopts() {
+            self.note_analysis_deopt();
         }
     }
 
     /// Emit a fixnum unbox-to-float load record (`load_fpr_fixnum`); `deopt` is
-    /// present only for the guarded `S`/`G` arms. A no-op in analysis mode.
+    /// present only for the guarded `S`/`G` arms. A no-op in analysis mode,
+    /// bar the deopt fact — see [`Self::fpr_load`].
     pub(in crate::codegen::jitgen) fn fpr_fixnum_load(
         &mut self,
         load: FprFixnumLoad,
@@ -222,6 +247,8 @@ impl AsmIr {
     ) {
         if self.codegen_mode() {
             load.emit(self, slot, deopt.as_ref());
+        } else if load.deopts(deopt.is_some()) {
+            self.note_analysis_deopt();
         }
     }
 }

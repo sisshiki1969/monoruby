@@ -146,27 +146,25 @@ fn a_block_call_inside_a_loop() {
     );
 }
 
-/// The same with a `while` loop instead of `Integer#times`, which trips a
-/// hole that predates any of this and is not about floats at all: the
-/// caller's argument reaches the loop entry as `C(3)` (folded from the
-/// call site) and reaches the back edge as `S(Value)` (a `forget_constants`
-/// on the path through the block-passing call), and `bridge_at` has no
-/// `S -> C` transition for a frame below the innermost one — it cannot
-/// prove the slot holds the constant the target claims. It panics:
+/// The same with a `while` loop, which used to abort the compiler with
 ///
 /// ```text
 /// unreachable code: %1 S(Value)->C(3)
 /// ```
 ///
-/// This is the third of the three open items `compile_method_call` names
-/// where it decides what a block-passing call may keep ("the bridge must
-/// be able to carry the claim across a merge in a frame *below* this one,
-/// which it cannot"). It reproduces on x86-64 with no stress features and
-/// with the `F -> Sf` boundary change reverted, so it is not arch- or
-/// float-specific; `Integer#times` above escapes it only because the
-/// callee's loop is not in the block's own chain.
+/// `%1` is `n`. It reached the loop entry as `C(3)`, folded from the call
+/// site, and reached the back edge as `S(Value)`, given up by the
+/// `forget_constants` on the path through the block-passing call — and
+/// `bridge` has no `S -> C`, because nothing can prove a slot holds the
+/// constant the target claims.
+///
+/// The disagreement was between the two passes, not between the paths:
+/// the loop-entry target comes from the back-edge fixpoint, which runs in
+/// analysis mode, where a guarded unbox emits nothing and so never set
+/// `had_deopt` — the very flag `specialized_iseq` reads to decide whether
+/// the call may keep the frame's constants. The analysis predicted a kept
+/// `C(3)`; codegen gave it up. See `AsmIr::note_analysis_deopt`.
 #[test]
-#[ignore = "pre-existing: bridge_at has no S -> C for an outer frame"]
 fn a_while_loop_around_a_block_passing_call() {
     run_test_with_prelude(
         r#"
