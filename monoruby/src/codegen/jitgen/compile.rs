@@ -520,6 +520,16 @@ impl<'a> JitContext<'a> {
             TraceIr::LoadDynVar(dst, src) => {
                 state.flush_gp(ir);
                 assert!(!dst.is_self());
+                // The outer frame may still be *holding* this local rather
+                // than keeping it in its slot — nothing writes a `C` out
+                // until the claim is surrendered — so the slot would read
+                // stale. Take the constant instead, which is what carrying
+                // it across the call was for.
+                if let Some(v) = self.dynvar_const(state, &src) {
+                    state.def_C(Some(dst), v);
+                    self.restore_unfrozen(Some(dst));
+                    return Ok(CompileResult::Continue);
+                }
                 self.load_dynvar(state, ir, src);
                 state.def_rax2acc(ir, dst);
                 // LFP-chain walk + loads: transparent.

@@ -184,6 +184,15 @@ impl AbstractState {
         }
     }
 
+    /// The mode *slot* has in the frame *outer* levels out, if that frame
+    /// belongs to this compilation.
+    pub(super) fn outer_mode(&self, outer: usize, slot: SlotId) -> Option<LinkMode> {
+        if outer == 0 || outer >= self.frames.len() {
+            return None;
+        }
+        Some(self.frames[self.frames.len() - 1 - outer].mode(slot))
+    }
+
     pub(super) fn outer_no_capture_guard(&self, outer: usize) -> Option<bool> {
         if outer >= self.frames.len() {
             return None;

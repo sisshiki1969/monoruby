@@ -1379,15 +1379,18 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Whether any frame of that chain still claims a constant.
+    /// How many constants that chain still claims.
     ///
-    pub(super) fn outer_holds_const(&self, outer: usize) -> bool {
-        self.outer_chain_from(outer).into_iter().any(|i| {
-            self.stack_frame[i]
-                .abstract_state
-                .as_ref()
-                .is_some_and(|f| f.holds_const())
-        })
+    pub(super) fn outer_const_count(&self, outer: usize) -> usize {
+        self.outer_chain_from(outer)
+            .into_iter()
+            .map(|i| {
+                self.stack_frame[i]
+                    .abstract_state
+                    .as_ref()
+                    .map_or(0, |f| f.held_constants().len())
+            })
+            .sum()
     }
 
     ///
@@ -1412,15 +1415,6 @@ impl<'a> JitContext<'a> {
             }
         }
         changed
-    }
-
-    /// Drop every constant claim on that chain.
-    pub(super) fn forget_outer_constants(&mut self, outer: usize) {
-        for i in self.outer_chain_from(outer) {
-            if let Some(f) = self.stack_frame[i].abstract_state.as_mut() {
-                f.forget_constants();
-            }
-        }
     }
 
     pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {

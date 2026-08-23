@@ -1023,11 +1023,38 @@ impl SlotState {
             .collect()
     }
 
-    pub(in crate::codegen::jitgen) fn forget_constants(&mut self) {
-        for slot in self.locals() {
-            if let LinkMode::C(v) = self.mode(slot) {
-                self.set_mode(slot, LinkMode::S(Guarded::from_concrete_value(v)));
-            }
+    ///
+    /// Surrender *slot*'s `C` claim, writing the value it stood for into
+    /// the slot.
+    ///
+    /// The write is the point: nothing put the value there while the claim
+    /// held, so a reader that goes to the slot from here on — the
+    /// interpreter after a deopt, a block compiled elsewhere, this frame's
+    /// own later code — has to find it.
+    ///
+    pub(in crate::codegen::jitgen) fn give_up_const(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        v: Value,
+    ) {
+        ir.spill(Spill::Lit(v, slot));
+        self.set_mode(slot, LinkMode::S(Guarded::from_concrete_value(v)));
+    }
+
+    /// Every local this frame is still holding as a constant.
+    pub(in crate::codegen::jitgen) fn held_constants(&self) -> Vec<(SlotId, Value)> {
+        self.locals()
+            .filter_map(|slot| match self.mode(slot) {
+                LinkMode::C(v) => Some((slot, v)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub(in crate::codegen::jitgen) fn forget_constants(&mut self, ir: &mut AsmIr) {
+        for (slot, v) in self.held_constants() {
+            self.give_up_const(ir, slot, v);
         }
     }
 
@@ -1080,18 +1107,21 @@ impl SlotState {
                 self.clear(slot);
                 self.set_mode(slot, LinkMode::S(guarded));
             }
-            // Written out, and forgotten. Keeping `C` across the call
-            // needs every way the callee can reach the slot to say so, and
-            // `store_dynvar` only covers its own `StoreDynVar`: a builtin
-            // that yields, a deeper nest, anything reaching the frame
-            // another way leaves the constant believed and wrong.
-            // `Array#slice_before` produced a wrong answer this way.
-            LinkMode::C(v) => {
-                ir.spill(Spill::Lit(v, slot));
-                if !keep_const {
-                    self.set_mode(slot, LinkMode::S(Guarded::Value));
-                }
-            }
+            // Nothing written: `C` says the compiler holds the value and
+            // the slot need not be read, and that is as true across a
+            // block-passing call as across any other — an ordinary call has
+            // never written it out either. The write happens where the
+            // claim is surrendered instead (`give_up_const`).
+            //
+            // What cannot cope with a slot the value is not in is a
+            // capture, and that is settled before it can happen: a callee
+            // that may capture without a block (`Effect::CAPTURE` /
+            // `Effect::EVAL` — `Proc.new`, `binding`, `eval`, …) is refused
+            // at its call site, and a block literal this frame hands out
+            // that the callee turns into a Proc is caught by
+            // `immediate_evict`'s capture guard.
+            LinkMode::C(_) if keep_const => {}
+            LinkMode::C(v) => self.give_up_const(ir, slot, v),
             LinkMode::V => ir.spill(Spill::Lit(Value::nil(), slot)),
             LinkMode::S(_) | LinkMode::MaybeNone | LinkMode::None => {}
         }

@@ -1380,6 +1380,12 @@ impl<'a> JitContext<'a> {
             Some(self.label())
         };
         let used_patch_point = patch_point;
+        // What this frame is holding as a constant on the way in. The
+        // callee's compile may take some of those claims away — its block
+        // stores into our frame, and `store_dynvar` says so — and a claim
+        // given up has to leave the value in its slot. Note them now, while
+        // we still know what they were.
+        let held = state.held_constants();
         let compiled = self.compile_specialized_func(
             state,
             iseq,
@@ -1390,6 +1396,17 @@ impl<'a> JitContext<'a> {
             callid,
             bmethod_outer.is_some(),
         )?;
+        // The callee is compiled but its call is not emitted yet (that is
+        // `send_specialized`, below), so this is still *before* the call in
+        // the instruction stream — which is the only placement that both
+        // dominates every entry to the block and runs once. Inside the
+        // callee will not do: its `yield` sits in its own loop, so a write
+        // there would reset the caller's local on every iteration.
+        for (slot, v) in held {
+            if !matches!(state.mode(slot), LinkMode::C(_)) {
+                ir.lit2stack(v, slot);
+            }
+        }
         let SpecializedCompileResult {
             entry,
             return_state,
@@ -1426,7 +1443,7 @@ impl<'a> JitContext<'a> {
             // block ran all thirty iterations and accumulated into the
             // caller's `acc`.
             if had_deopt || generic_yield {
-                state.forget_constants();
+                state.forget_constants(ir);
             }
         }
         let evict = ir.new_evict();
@@ -1503,12 +1520,16 @@ impl<'a> JitContext<'a> {
         outer: usize,
         callid: CallSiteId,
     ) -> JitResult<()> {
-        // Nothing to settle unless an outer frame actually claims one.
-        // This is the gate that keeps the extra pass off the common path.
-        if !self.outer_holds_const(outer) {
+        // Each round can only turn a `C` into an `S`, never back, so a round
+        // that changes nothing is the fixpoint and there can be at most one
+        // round per constant before that happens. No constants, no pass —
+        // which is the gate that keeps this off the common path.
+        let bound = self.outer_const_count(outer) + 1;
+        if bound == 1 {
             return Ok(());
         }
-        for _ in 0..5 {
+        let mut rounds = 0;
+        loop {
             let mut probe = self.analysis_clone();
             let mut probe_state = state.clone();
             let frame = probe.new_specialized_frame(iseq, Some(outer), args_info.clone(), self_class);
@@ -1521,11 +1542,9 @@ impl<'a> JitContext<'a> {
             if !self.adopt_outer_widenings(&probe, outer) {
                 return Ok(());
             }
+            rounds += 1;
+            assert!(rounds < bound, "block-entry fixpoint did not settle");
         }
-        // Did not settle in five rounds: give the constants up wholesale,
-        // which is where the lattice tops out anyway.
-        self.forget_outer_constants(outer);
-        Ok(())
     }
 
     fn new_specialized_frame(
