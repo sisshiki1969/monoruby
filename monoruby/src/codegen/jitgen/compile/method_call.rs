@@ -344,6 +344,28 @@ impl<'a> JitContext<'a> {
         // through its own outer chain. Each slot's `Guarded` survives: it
         // is a fact about the value in the slot, not about where the value
         // is kept.
+        //
+        // A `C` does not survive, and the reason is worth recording. `C`
+        // says the slot need not be read at all, which holds only if the
+        // compiler sees every write the block can make — i.e. only if the
+        // block is compiled into this very unit. Three things have to be
+        // true for that, and establishing them here is not enough:
+        //
+        //  * The callee's `yield`s must inline. That is decided inside the
+        //    callee's own compile, not at this call site.
+        //  * The callee's compiled body must be the only thing that runs.
+        //    A deopt-able side exit means execution can leave it for the
+        //    VM, which runs the rest of the callee — the block included —
+        //    with nothing telling us the slot moved. #1140's `Range#each`
+        //    stopped at a side exit before it ever reached its `yield`,
+        //    while at runtime the block ran all thirty iterations and
+        //    accumulated into the caller's `acc`.
+        //  * The bridge must be able to carry the claim across a merge in
+        //    a frame *below* this one, which it cannot: see `bridge_at`.
+        //
+        // The first two are checkable after the fact (the callee's frame
+        // knows whether it inlined every yield and whether it can deopt);
+        // the third is the open one.
         if callsite.block_fid.is_some() {
             state.all_frames_unbox_to_S(self, ir);
         }

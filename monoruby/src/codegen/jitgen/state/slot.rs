@@ -1996,6 +1996,30 @@ impl AbstractFrame {
         if outer == 0 {
             return self.bridge(ir, target, slot, pc);
         }
+        // An outer frame may not carry a placement of its own yet, and the
+        // arms below that would act on one are therefore unreachable. They
+        // are written out because they are what lifting that restriction
+        // needs — but lifting it needs more than them.
+        //
+        // A basic block's view of an outer frame is a *snapshot*, taken
+        // when this compilation cloned the chain, not a merged state. A
+        // block that stores into an outer local updates the context's copy
+        // and its own chain; the enclosing frame's per-block states keep
+        // the old view, and the loop fixpoint (which reasons over the
+        // innermost frame's `SlotState` alone) reintroduces it on the back
+        // edge. Bridging that stale view then writes a dead constant into
+        // the caller's slot on every iteration — `n.times { acc += 2.0 }`
+        // reset its caller's `acc` to `0.0` each time round. So the loop
+        // fixpoint has to span frames before an outer frame may hold
+        // anything but `S`; until then, assert that it does not.
+        debug_assert!(
+            matches!(
+                self.mode(slot),
+                LinkMode::S(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None
+            ),
+            "outer{outer} {slot:?} holds {:?}; the loop fixpoint does not span frames yet",
+            self.mode(slot),
+        );
         match (self.mode(slot), target.mode(slot)) {
             (LinkMode::V, LinkMode::V)
             | (LinkMode::None, LinkMode::None)
