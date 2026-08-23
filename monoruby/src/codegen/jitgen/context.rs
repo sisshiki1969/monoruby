@@ -1302,6 +1302,18 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    ///
+    /// The abstract frames of this compilation's lexical chain, **outermost
+    /// first** — the order [`AbstractState`] keeps them in, so that
+    /// `frames[len - 1 - outer]` is the frame `outer` levels out, agreeing
+    /// with [`Self::outer_pos`].
+    ///
+    /// The walk itself goes inward-out, so it is reversed before returning.
+    /// Without that, `AbstractState::outer_no_capture_guard(1)` answered for
+    /// the *outermost* frame rather than the immediate one as soon as the
+    /// chain was three deep — and that answer gates whether a dynvar access
+    /// may use the static frame-chain offset.
+    ///
     pub(super) fn outer_contexts(&self) -> Vec<AbstractFrame> {
         let mut i = self.stack_frame.len() - 1;
         let mut v = vec![];
@@ -1310,6 +1322,7 @@ impl<'a> JitContext<'a> {
             let scope = self.stack_frame[i].abstract_state.clone().unwrap();
             v.push(scope);
         }
+        v.reverse();
         v
     }
 
