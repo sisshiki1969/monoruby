@@ -644,8 +644,20 @@ impl<'a> JitContext<'a> {
                     return self.compile_yield_specialized(state, ir, callid, &block_info, iseq);
                 }
                 // Not inlined: the block becomes a unit of its own, and
-                // its stores into any frame of *this* unit are invisible
-                // here. `specialized_iseq` needs to know.
+                // whatever it stores it stores where we cannot see it. So
+                // hand the whole lexical chain over in its slots and keep
+                // no claim about any of it, exactly as a call that passes a
+                // block to a callee outside the unit does.
+                //
+                // Belt and braces with the `generic_yield` flag below: the
+                // flag settles what the *caller* may still believe when
+                // this compile returns, which is a different frame from any
+                // in this chain (a `yield` reaches the block given to the
+                // enclosing method, whose home is that method's caller —
+                // and the lexical chain stops at the enclosing method). One
+                // does not cover the other, and neither is worth resting on
+                // a per-case proof.
+                state.all_frames_unbox_to_S(self, ir);
                 self.set_generic_yield();
                 state.compile_yield(ir, &self.store, callid);
             }
