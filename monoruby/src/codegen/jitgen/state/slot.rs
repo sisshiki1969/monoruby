@@ -1074,8 +1074,10 @@ impl SlotState {
     /// The callee is handed this frame, so every mode that does *not* keep
     /// the value in the frame has to write it there first:
     ///
-    /// * `F` — the fpr held the only copy: box it into the slot and hand
-    ///   the xmm back (the callee starts with an empty pool).
+    /// * `F` — the fpr held the only copy, so it is boxed into the slot.
+    ///   Under `keep_claims` the register is not handed back with it: the
+    ///   binding lands on `Sf`, the box in the slot and the float still in
+    ///   the register, which is exactly what `F` plus that store *is*.
     /// * `Sf` — the slot already holds the boxed value; only the read-only
     ///   fpr view is dropped.
     /// * `C` — the constant lives in the compiler, *not* in the slot, so
@@ -1105,6 +1107,26 @@ impl SlotState {
             ir.reg2stack(reg, slot);
         }
         match self.mode(slot) {
+            // The store has to happen either way — the callee can read this
+            // slot and the float is only in the register — but there is no
+            // reason to also forget the register. Boxing an `F` into its
+            // slot leaves both copies live, and a slot with the box on the
+            // stack and the float in an fpr is `Sf`, whose survival across
+            // this call is settled: the call saves and restores the frame's
+            // physical fprs (`fpr_save_cont` / `fpr_restore_cont`), and the
+            // one thing that would invalidate the view — the callee writing
+            // the slot — arrives as a `StoreDynVar` through
+            // `widen_outer_slot`. Dropping to `S` instead made every float
+            // the frame touched after the call decode itself out of the box
+            // the store had just written.
+            //
+            // `SfGuarded::Float` because the value came out of an fpr: the
+            // box the store writes is a `Value::float` (the same reasoning
+            // as `bridge_at`'s `F -> Sf` arm).
+            LinkMode::F(fpr) if keep_claims => {
+                ir.spill(Spill::Fpr(fpr, slot));
+                self.set_Sf(slot, fpr, SfGuarded::Float);
+            }
             LinkMode::F(fpr) => {
                 let guarded = self.guarded(slot);
                 self.clear(slot);
