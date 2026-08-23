@@ -2,17 +2,20 @@
 //!
 //! A block is the one thing at a call site that can store into the
 //! caller's frame behind its back, so at a block-passing call every local
-//! the compiler was merely *holding* — a `LinkMode::C` constant, an
-//! unboxed float in an xmm — is written to its slot and the claim given
-//! up. Only the slot's `Guarded` type survives.
+//! the compiler was merely *holding* is written to its slot. Whether the
+//! *claim* survives is another matter, and it survives only when the
+//! compiler can see every store the block makes — which needs all of:
 //!
-//! Keeping the constant instead is tempting, since the compiler *does*
-//! see a `StoreDynVar` from a block compiled into the same unit. It is
-//! not sound: whether a callee's `yield`s inline is decided inside the
-//! callee's own compile, not at the call site, and a call site that looks
-//! like it will inline the block does not always get one (see #1140's
-//! `Range#each`). These cases are the ones that caught it — each returns
-//! a wrong answer if a constant is believed across the call.
+//!  * the callee to be an iseq with an iseq block literal, so the block
+//!    is a candidate for compilation into this same unit;
+//!  * its compile to have inlined every `yield` and to contain no
+//!    deopt-able side exit, since either lets the block run somewhere the
+//!    compiler is not looking (confirmed after the fact, not predicted);
+//!  * the frame to be this compilation's own. An outer frame gives its
+//!    constants up on the way in: its claim describes one moment, and the
+//!    compilation may be entered from it many times over.
+//!
+//! Each case below returns a wrong answer if one of those is skipped.
 extern crate monoruby;
 use monoruby::tests::*;
 
@@ -186,9 +189,10 @@ fn a_block_call_inside_a_loop() {
 }
 
 /// #1140's shape, reduced: a constant-initialised accumulator written by
-/// a block that a Ruby-level `each` yields to. The `each` compile can
-/// finish without ever inlining that block, so nothing tells the caller
-/// its `acc` moved.
+/// a block that a Ruby-level `each` yields to. The `each` compile stops
+/// at a side exit before it ever reaches the `yield`, so nothing in it
+/// tells the caller its `acc` moved — while at runtime the block runs
+/// every iteration and accumulates into it.
 #[test]
 fn an_accumulator_through_a_ruby_level_each() {
     run_test_once(
@@ -211,6 +215,56 @@ fn an_accumulator_through_a_ruby_level_each() {
         40.times { s += r.calc(30, false) }
         120.times { s += r.calc(30, true) }
         s.round(6)
+        "#,
+    );
+}
+
+/// The block is entered many times with a different value each time, and
+/// nothing in its own chain says so: `Integer#times` is a method, so it
+/// is nobody's lexical outer and its loop is not in the block's chain at
+/// all. Believing the caller's constant, the block's own `if` merge
+/// bridged it back into the caller's slot on every iteration but one —
+/// `[2.0, 2.0, 2.0, 3.0, 2.0, 2.0]` for `[2.0, 4.0, 6.0, 3.0, 5.0, 7.0]`.
+#[test]
+fn a_block_entered_repeatedly_from_a_callee_loop() {
+    run_test(
+        r#"
+        def kill_int(n)
+          acc = 0.0
+          hits = []
+          n.times do |i|
+            acc = 1 if i == 3
+            acc += 2.0
+            hits << acc
+          end
+          hits
+        end
+        r = nil
+        10.times { r = kill_int(6) }
+        r
+        "#,
+    );
+}
+
+/// The same without the branch inside the block, so the only merge that
+/// can reintroduce the stale claim is the callee's own loop head.
+#[test]
+fn a_block_accumulating_across_a_callee_loop() {
+    run_test(
+        r#"
+        def acc_int(n)
+          acc = 0.0
+          n.times { acc += 2.0 }
+          acc
+        end
+        def acc_range(n)
+          acc = 0.0
+          (0...n).each { |i| acc += i }
+          acc
+        end
+        r = nil
+        10.times { r = [acc_int(6), acc_range(6)] }
+        r
         "#,
     );
 }

@@ -367,7 +367,18 @@ impl<'a> JitContext<'a> {
         // knows whether it inlined every yield and whether it can deopt);
         // the third is the open one.
         if callsite.block_fid.is_some() {
-            state.all_frames_unbox_to_S(self, ir);
+            let inlined_block = matches!(self.store[func_id].kind, FuncKind::ISeq(_))
+                && callsite
+                    .block_fid
+                    .and_then(|fid| self.store[fid].is_iseq())
+                    .is_some()
+                && !self.in_dispatch_arm()
+                && state.no_capture_guard();
+            if inlined_block {
+                state.locals_unbox_to_S_keeping_const(ir);
+            } else {
+                state.all_frames_unbox_to_S(self, ir);
+            }
         }
 
         // class version guard
@@ -995,6 +1006,8 @@ impl<'a> JitContext<'a> {
             return_state,
             deferred_rest: _,
             needs_rest_array: _,
+            had_deopt: _,
+            generic_yield: _,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -1379,6 +1392,8 @@ impl<'a> JitContext<'a> {
             return_state,
             deferred_rest,
             needs_rest_array,
+            had_deopt,
+            generic_yield,
         } = compiled;
         // The call site passes a block literal: if the callee heapifies
         // its *own* frame during the call (`Proc.new` / `lambda` /
@@ -1390,6 +1405,26 @@ impl<'a> JitContext<'a> {
         // LFP and `immediate_evict` emits a capture guard.
         if self.store[callid].block_fid.is_some() {
             state.unset_no_capture_guard(self);
+            // The caller kept its constants across this call, betting that
+            // the block would be compiled into this unit — see
+            // `compile_method_call`. Confirm the bet now that the callee's
+            // body is compiled, and give the claims up unless it holds. The
+            // values are in their slots either way (`unbox_to_S` wrote them
+            // on the way in), so this costs no code.
+            //
+            // Two ways it fails. A `yield` that was not inlined runs the
+            // block as a unit of its own, whose stores never reach us. And
+            // a deopt-able side exit means the compiled body is not the
+            // only thing that runs: execution can leave it for the VM,
+            // which runs the rest of the callee — the block included — with
+            // nothing telling us the slot moved. That second one is what
+            // #1140 hit: a `Range#each` whose compile stopped at a side
+            // exit before it ever reached the `yield`, while at runtime the
+            // block ran all thirty iterations and accumulated into the
+            // caller's `acc`.
+            if had_deopt || generic_yield {
+                state.forget_constants();
+            }
         }
         let evict = ir.new_evict();
         state.send_specialized(
@@ -1424,6 +1459,11 @@ pub(super) struct SpecializedCompileResult {
     pub deferred_rest: bool,
     /// D1 veto: some forwarding consume needs the real rest `Array`.
     pub needs_rest_array: bool,
+    /// The compiled subtree contains a deopt-able side exit.
+    pub had_deopt: bool,
+    /// A `yield` in the compiled subtree was not inlined — see
+    /// [`JitStackFrame::generic_yield`].
+    pub generic_yield: bool,
 }
 
 impl<'a> JitContext<'a> {
@@ -1489,6 +1529,7 @@ impl<'a> JitContext<'a> {
         let frame_had_deopt = frame.had_deopt;
         let frame_deferred_rest = frame.deferred_rest;
         let frame_needs_rest_array = frame.needs_rest_array;
+        let frame_generic_yield = frame.generic_yield;
         // `has_exception_handler` taints the return state so the caller
         // doesn't propagate a speculative `Const` past us: the BB graph
         // doesn't include rescue/ensure successors, so the computed
@@ -1553,11 +1594,19 @@ impl<'a> JitContext<'a> {
         if frame_had_deopt {
             self.current_frame_mut().had_deopt = true;
         }
+        // Same one-level propagation: a non-inlined `yield` anywhere under
+        // this call means some block ran outside this unit, which the
+        // caller's own kept constants have to answer for too.
+        if frame_generic_yield {
+            self.current_frame_mut().generic_yield = true;
+        }
         Ok(SpecializedCompileResult {
             entry,
             return_state,
             deferred_rest: frame_deferred_rest,
             needs_rest_array: frame_needs_rest_array,
+            had_deopt: frame_had_deopt,
+            generic_yield: frame_generic_yield,
         })
     }
 

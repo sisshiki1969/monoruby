@@ -491,6 +491,14 @@ pub(super) struct JitStackFrame {
     /// `compile_specialized_func`.
     ///
     pub(super) had_deopt: bool,
+
+    ///
+    /// Some `yield` in this frame was lowered as a generic call rather
+    /// than inlined ([`JitContext::compile_yield_specialized`]), so the
+    /// block it invokes runs as a compilation unit of its own and any
+    /// store it makes into an outer frame is invisible here.
+    ///
+    pub(super) generic_yield: bool,
     /// D1: set when the trampoline forwarding consumer routed `g(...)`
     /// straight from the caller source (elided `f`'s rest Array).
     /// Aggregated from `AsmIr::deferred_rest()` like `had_deopt`,
@@ -623,6 +631,7 @@ impl JitStackFrame {
             // Sentinel — overwritten by [`JitContext::push_frame`].
             specialized_id: SpecializedId(usize::MAX),
             had_deopt: false,
+            generic_yield: false,
             deferred_rest: false,
             needs_rest_array: false,
             speculated_floats: vec![],
@@ -651,6 +660,7 @@ impl JitStackFrame {
             // the codegen resolve pass, so id reuse is safe.
             specialized_id: self.specialized_id,
             had_deopt: self.had_deopt,
+            generic_yield: self.generic_yield,
             deferred_rest: self.deferred_rest,
             needs_rest_array: self.needs_rest_array,
             speculated_floats: self.speculated_floats.clone(),
@@ -1169,6 +1179,19 @@ impl<'a> JitContext<'a> {
     /// *innermost* (this compile's own frame, which the context does not
     /// track while the compile is running).
     ///
+    /// The reverse — publishing this compile's view of the outer frames
+    /// *into* the context on the way down — is not available and must not
+    /// be added back. `abstract_state` is not only what nested compiles
+    /// clone; it is also where a frame's own compile parks its state while
+    /// it waits for one. Writing a nested compile's view of a frame there
+    /// replaces the suspended state that frame will resume from with a
+    /// view taken at a different program point, in a different frame's
+    /// terms — three levels of nested blocks segfaulted in generated code.
+    ///
+    /// Nothing needs it today: what a nested compile has to learn about an
+    /// outer frame is only that a slot was widened, and that arrives
+    /// through `widen_outer_slot`.
+    ///
     fn adopt_outer(&self, state: &mut AbstractState, innermost: AbstractFrame) {
         let mut frames = self.outer_contexts();
         frames.push(innermost);
@@ -1317,6 +1340,11 @@ impl<'a> JitContext<'a> {
     /// frame that owns the slot reads the context copy back when the
     /// nested compile it is waiting on returns.
     ///
+    /// Record that a `yield` in the current frame was not inlined.
+    pub(super) fn set_generic_yield(&mut self) {
+        self.current_frame_mut().generic_yield = true;
+    }
+
     pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {
         let Some(pos) = self.outer_pos(outer) else {
             // The chain leaves this compilation: the frame is not one of

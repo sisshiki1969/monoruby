@@ -47,6 +47,30 @@ impl std::ops::IndexMut<usize> for AbstractState {
 impl AbstractState {
     pub(super) fn new(jitctx: &JitContext) -> Self {
         let mut frames = jitctx.outer_contexts();
+        // An outer frame enters this compilation holding no constant.
+        //
+        // A caller may keep a `C` across the call that handed out its
+        // block, and the slot does hold the value — `unbox_to_S` writes it
+        // out either way — so `S` is the truth, just less of it. What
+        // cannot be carried is the *claim*, because it describes the frame
+        // at one moment and this compilation may run many times from it.
+        //
+        // A block is the plain case. `kill_int` keeps `acc = C(0.0)` over
+        // `n.times { ... }`; the block's chain runs straight from the block
+        // to `kill_int`, since `Integer#times` is a method and so is nobody's
+        // lexical outer — its loop is not in the block's chain at all. There
+        // is therefore no merge anywhere that could tell the block it is
+        // entered six times with six different `acc`s. Believing the
+        // constant, the block's own `if` merge bridged `C(0.0)` back into
+        // the caller's slot on every iteration but one.
+        //
+        // Making that sound needs a fixpoint over the *call* structure, not
+        // the lexical chain. Until then this is where it stops. Nothing is
+        // lost today: `load_dynvar` reads the slot and never folds an outer
+        // constant, and the caller keeps its own claim for its own code.
+        for frame in &mut frames {
+            frame.forget_constants();
+        }
         frames.push(AbstractFrame::new(jitctx));
         AbstractState { frames }
     }
@@ -161,8 +185,22 @@ impl AbstractState {
     }
 
     ///
-    /// [`Self::locals_unbox_to_S`] over *every* frame of this compilation,
-    /// keeping no constant.
+    /// Home every unboxed local of *this* frame in its slot, keeping the
+    /// rest of the abstract state — each `C` included.
+    ///
+    /// Only for a callee whose every store into this frame the compiler
+    /// can see; the bet is confirmed after the fact in `specialized_iseq`.
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn locals_unbox_to_S_keeping_const(&mut self, ir: &mut AsmIr) {
+        for i in self.locals() {
+            self.unbox_to_S(ir, i, true);
+        }
+    }
+
+    ///
+    /// The same over *every* frame of this compilation, keeping no
+    /// constant.
     ///
     /// What a call that hands a block to a callee outside this unit needs.
     /// The block is compiled on its own, so its stores never reach

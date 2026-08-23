@@ -643,6 +643,10 @@ impl<'a> JitContext<'a> {
                 {
                     return self.compile_yield_specialized(state, ir, callid, &block_info, iseq);
                 }
+                // Not inlined: the block becomes a unit of its own, and
+                // its stores into any frame of *this* unit are invisible
+                // here. `specialized_iseq` needs to know.
+                self.set_generic_yield();
                 state.compile_yield(ir, &self.store, callid);
             }
             TraceIr::InlineCache => {

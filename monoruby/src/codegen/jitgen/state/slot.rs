@@ -997,6 +997,21 @@ impl SlotState {
         self.set_mode(slot, LinkMode::S(Guarded::Value));
     }
 
+    ///
+    /// Drop every local's `C` claim to the `S` its slot already holds.
+    ///
+    /// Pure state: the value is in the slot either way, because
+    /// [`Self::unbox_to_S`] writes a constant out on the way into every
+    /// block-passing call whether or not the claim survives it.
+    ///
+    pub(in crate::codegen::jitgen) fn forget_constants(&mut self) {
+        for slot in self.locals() {
+            if let LinkMode::C(v) = self.mode(slot) {
+                self.set_mode(slot, LinkMode::S(Guarded::from_concrete_value(v)));
+            }
+        }
+    }
+
     /// Home *slot*'s value in its frame slot, and keep what is known about
     /// it — the demotion a call boundary needs, as opposed to
     /// [`Self::to_S_unguarded`]'s.
@@ -1023,7 +1038,12 @@ impl SlotState {
     /// the caller's abstract state instead of starting from scratch.
     ///
     #[allow(non_snake_case)]
-    pub(in crate::codegen::jitgen) fn unbox_to_S(&mut self, ir: &mut AsmIr, slot: SlotId) {
+    pub(in crate::codegen::jitgen) fn unbox_to_S(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        keep_const: bool,
+    ) {
         // Same GP-resident caveat as `to_S_unguarded`: re-home a dirty pool
         // register before the mode change drops it unspilled.
         if let Some(reg) = self.gp_regfile.dirty_reg_of(slot) {
@@ -1049,7 +1069,9 @@ impl SlotState {
             // `Array#slice_before` produced a wrong answer this way.
             LinkMode::C(v) => {
                 ir.spill(Spill::Lit(v, slot));
-                self.set_mode(slot, LinkMode::S(Guarded::Value));
+                if !keep_const {
+                    self.set_mode(slot, LinkMode::S(Guarded::Value));
+                }
             }
             LinkMode::V => ir.spill(Spill::Lit(Value::nil(), slot)),
             LinkMode::S(_) | LinkMode::MaybeNone | LinkMode::None => {}
@@ -1996,28 +2018,17 @@ impl AbstractFrame {
         if outer == 0 {
             return self.bridge(ir, target, slot, pc);
         }
-        // An outer frame may not carry a placement of its own yet, and the
-        // arms below that would act on one are therefore unreachable. They
-        // are written out because they are what lifting that restriction
-        // needs — but lifting it needs more than them.
-        //
-        // A basic block's view of an outer frame is a *snapshot*, taken
-        // when this compilation cloned the chain, not a merged state. A
-        // block that stores into an outer local updates the context's copy
-        // and its own chain; the enclosing frame's per-block states keep
-        // the old view, and the loop fixpoint (which reasons over the
-        // innermost frame's `SlotState` alone) reintroduces it on the back
-        // edge. Bridging that stale view then writes a dead constant into
-        // the caller's slot on every iteration — `n.times { acc += 2.0 }`
-        // reset its caller's `acc` to `0.0` each time round. So the loop
-        // fixpoint has to span frames before an outer frame may hold
-        // anything but `S`; until then, assert that it does not.
+        // An outer frame carries no placement of its own yet — see
+        // `AbstractState::new` for what a `C` there would take — so the
+        // arms below that act on one are unreachable. They are written out
+        // because they are what lifting that restriction needs; assert the
+        // invariant so lifting it without the rest fails loudly.
         debug_assert!(
             matches!(
                 self.mode(slot),
                 LinkMode::S(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None
             ),
-            "outer{outer} {slot:?} holds {:?}; the loop fixpoint does not span frames yet",
+            "outer{outer} {slot:?} holds {:?}",
             self.mode(slot),
         );
         match (self.mode(slot), target.mode(slot)) {
@@ -2068,7 +2079,7 @@ impl AbstractFrame {
         offset: Option<&DynVarOffset>,
     ) -> bool {
         if outer == 0 {
-            self.unbox_to_S(ir, slot);
+            self.unbox_to_S(ir, slot, false);
             return false;
         }
         match self.mode(slot) {
