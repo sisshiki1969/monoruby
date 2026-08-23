@@ -75,29 +75,6 @@ impl AbstractState {
     }
 
     ///
-    /// Where each frame's slots sit relative to `rbp`, indexed by distance
-    /// from the innermost frame (which needs none — it is addressed off the
-    /// local-frame pointer as usual).
-    ///
-    /// `None` for a frame whose chain offset is not statically known (it
-    /// may have been heapified); the emitters then fall back to the generic
-    /// `StoreDynVar`, which walks the real chain.
-    ///
-    fn chain_offsets(&self, jitctx: &JitContext) -> Vec<Option<DynVarOffset>> {
-        (0..self.frames.len())
-            .map(|outer| {
-                if outer == 0 {
-                    return None;
-                }
-                jitctx
-                    .outer_specialized_ids(self, outer)
-                    .filter(|(_, _, not_captured)| *not_captured)
-                    .map(|(ids, extra, _)| DynVarOffset::Hint { ids, extra })
-            })
-            .collect()
-    }
-
-    ///
     /// Bridge every frame of this compilation to *target*, not just the
     /// innermost one.
     ///
@@ -105,7 +82,8 @@ impl AbstractState {
     /// local, so an outer slot's mode can differ between two paths into a
     /// merge exactly as an inner one can. Same rules per frame; only the
     /// emitted store differs, since an outer slot is addressed through the
-    /// frame chain.
+    /// frame chain — though beyond the innermost frame that comes to
+    /// nothing emitted; see [`AbstractFrame::bridge_at`].
     ///
     /// Nothing is reported to the context here. A bridge relocates or
     /// materialises a value; it never *changes* one, so it has nothing to
@@ -114,7 +92,6 @@ impl AbstractState {
     ///
     pub(super) fn gen_bridge_all(
         mut self,
-        jitctx: &JitContext,
         ir: &mut AsmIr,
         target: &[SlotState],
         pc: BytecodePtr,
@@ -123,13 +100,11 @@ impl AbstractState {
         eprintln!("      from:{:?}", &self);
         let depth = self.frames.len();
         debug_assert_eq!(depth, target.len());
-        let offsets = self.chain_offsets(jitctx);
         for (level, tgt) in target.iter().enumerate().rev() {
             // `level` counts from the outermost frame; `outer` is the
             // distance from the innermost, which is what the frame-chain
             // addressing takes.
             let outer = depth - 1 - level;
-            let offset = offsets[outer].as_ref();
             let frame = &mut self.frames[level];
             // The target may have allocated more spill slots than us (a
             // sibling branch reached the merge with a wider spill region).
@@ -145,7 +120,7 @@ impl AbstractState {
                 frame.locals()
             };
             for slot in slots {
-                frame.bridge_at(ir, tgt, slot, pc, outer, offset);
+                frame.bridge_at(ir, tgt, slot, pc, outer);
             }
         }
     }
@@ -176,14 +151,12 @@ impl AbstractState {
     #[allow(non_snake_case)]
     pub(super) fn all_frames_unbox_to_S(&mut self, jitctx: &mut JitContext, ir: &mut AsmIr) {
         let depth = self.frames.len();
-        let offsets = self.chain_offsets(jitctx);
         let mut widened = vec![];
         for level in (0..depth).rev() {
             let outer = depth - 1 - level;
-            let offset = offsets[outer].as_ref();
             let frame = &mut self.frames[level];
             for i in frame.locals() {
-                if frame.unbox_to_S_at(ir, i, outer, offset) {
+                if frame.unbox_to_S_at(ir, i, outer) {
                     widened.push((outer, i));
                 }
             }

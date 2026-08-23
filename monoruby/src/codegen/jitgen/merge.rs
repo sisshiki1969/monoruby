@@ -22,7 +22,7 @@ impl<'a> JitContext<'a> {
                 eprintln!("    {mode:?} src:{src_bb:?}");
 
                 let mut ir = AsmIr::new(self);
-                state.gen_bridge_all(self, &mut ir, &target, pc);
+                state.gen_bridge_all(&mut ir, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
                         self.add_outline_bridge(ir, dest, bbid);
@@ -226,7 +226,7 @@ impl<'a> JitContext<'a> {
             eprintln!("    {mode:?} src:{src_bb:?}");
 
             let mut ir = AsmIr::new(self);
-            state.gen_bridge_all(self, &mut ir, &target, pc);
+            state.gen_bridge_all(&mut ir, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {
                     self.add_outline_bridge(ir, dest, bbid);

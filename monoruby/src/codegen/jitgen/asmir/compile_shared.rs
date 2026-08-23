@@ -1075,19 +1075,6 @@ impl Codegen {
                     cg.load_dyn_var_specialized(off, reg);
                 });
             }
-            AsmInst::OuterFprToStack { offset, fpr, dst } => {
-                let off = offset.unwrap_concrete();
-                let base = frame.base_stack_offset;
-                self.lower_via_inline(store, labels, base, move |cg, _, _, _| {
-                    cg.outer_fpr_to_stack(off, fpr, dst, base);
-                });
-            }
-            AsmInst::OuterLitToStack { offset, v, dst } => {
-                let off = offset.unwrap_concrete();
-                self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
-                    cg.outer_lit_to_stack(off, v, dst);
-                });
-            }
             AsmInst::StoreDynVarSpecialized { offset, dst, src } => {
                 let off = offset.unwrap_concrete();
                 self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {

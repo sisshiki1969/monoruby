@@ -255,37 +255,6 @@ impl Codegen {
         );
     }
 
-    /// Chain write back: box `fpr` and store it into an outer frame's slot.
-    /// Same addressing as [`Self::store_dyn_var_specialized`]; the value is
-    /// produced by `f64_to_val` rather than handed in a register.
-    pub(in crate::codegen::jitgen) fn outer_fpr_to_stack(
-        &mut self,
-        offset: usize,
-        fpr: FPReg,
-        dst: SlotId,
-        base: usize,
-    ) {
-        self.load_fpr_into_xmm0(fpr, base);
-        let f64_to_val = self.f64_to_val.clone();
-        monoasm!( &mut self.jit,
-            call f64_to_val;
-            movq [rbp + ((offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(dst) as usize))], rax;
-        );
-    }
-
-    /// Chain write back: store a literal into an outer frame's slot.
-    pub(in crate::codegen::jitgen) fn outer_lit_to_stack(
-        &mut self,
-        offset: usize,
-        v: Value,
-        dst: SlotId,
-    ) {
-        monoasm!( &mut self.jit,
-            movq rax, (v.id());
-            movq [rbp + ((offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(dst) as usize))], rax;
-        );
-    }
-
     fn get_outer(&mut self, outer: usize) {
         monoasm!( &mut self.jit,
             movq rax, [r14];

@@ -2018,13 +2018,17 @@ impl AbstractFrame {
     ///
     /// Bridge one slot of the frame *outer* levels out from the innermost.
     ///
-    /// `outer == 0` is the ordinary [`Self::bridge`]. Beyond that the slot
-    /// lives in a caller's frame, reached through the frame chain rather
-    /// than off the local-frame pointer, so a mode that needs a store
-    /// emits an `Outer*ToStack` — or the generic `StoreDynVar`, when the
-    /// chain offset is not statically known.
+    /// `outer == 0` is the ordinary [`Self::bridge`]. Beyond that there is
+    /// nothing to emit, ever: a frame writes each of its constants to its
+    /// slot on the way into the call that hands out its block
+    /// (`unbox_to_S`), so by the time it *is* an outer frame the value is
+    /// already there and giving the claim up is pure state. Nor can it hold
+    /// an unboxed float — `FprAllocator` is per `SlotState` and its ids are
+    /// positional (`FPReg(id)` is `xmm{id+2}` below `PHYS_FPR_POOL`), so
+    /// two frames each promoting a slot would both take `FPReg(0)` and both
+    /// write `xmm2`; `AbstractState::join` keeps outer frames clear of them
+    /// until there is one id space for the whole chain.
     ///
-///
     pub(super) fn bridge_at(
         &mut self,
         ir: &mut AsmIr,
@@ -2032,22 +2036,10 @@ impl AbstractFrame {
         slot: SlotId,
         pc: BytecodePtr,
         outer: usize,
-        offset: Option<&DynVarOffset>,
     ) {
         if outer == 0 {
             return self.bridge(ir, target, slot, pc);
         }
-        // An outer frame may hold a `C` — its entry claim is settled by
-        // `converge_block_entry` — but not yet an unboxed float.
-        //
-        // `FprAllocator` is per `SlotState` and its ids are positional
-        // (`FPReg(id)` is `xmm{id+2}` below `PHYS_FPR_POOL`), so two frames
-        // each promoting a slot would both take `FPReg(0)` and both write
-        // `xmm2`. An outer `F`/`Sf` needs one id space for the whole chain,
-        // and with it the loop-entry float passes that still reason over
-        // the innermost frame alone (see `incoming_context`). The `F`/`Sf`
-        // arms below are written out because they are what that needs;
-        // assert until it arrives.
         debug_assert!(
             !matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _)),
             "outer{outer} {slot:?} holds {:?}",
@@ -2061,20 +2053,7 @@ impl AbstractFrame {
             (_, LinkMode::MaybeNone) => self.set_MaybeNone(slot),
             (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
             (LinkMode::C(v), LinkMode::S(_)) => {
-                let guarded = Guarded::from_concrete_value(v);
-                self.set_mode(slot, LinkMode::S(guarded));
-                self.outer_lit_store(ir, offset, slot, outer, v);
-            }
-            (LinkMode::F(fpr), LinkMode::S(_)) => {
-                let guarded = self.guarded(slot);
-                self.clear(slot);
-                self.set_mode(slot, LinkMode::S(guarded));
-                let offset =
-                    offset.expect("an outer frame holding `F` needs a static chain offset");
-                ir.outer_fpr2stack(offset.clone(), fpr, slot);
-            }
-            (LinkMode::Sf(_, guarded), LinkMode::S(_)) => {
-                self.set_S_with_guard(slot, guarded.into());
+                self.set_mode(slot, LinkMode::S(Guarded::from_concrete_value(v)));
             }
             (LinkMode::S(_), LinkMode::S(_)) => {
                 // The target guard is the join of every incoming path's, so
@@ -2085,12 +2064,9 @@ impl AbstractFrame {
     }
 
     ///
-    /// [`Self::unbox_to_S`] for a slot of the frame *outer* levels out.
-    ///
-    /// Only `C` has anything to do: an outer frame holds no unboxed float
-    /// yet (see [`AbstractState::join`]), and its temps sit under the
-    /// callee frame and are none of a callee's business. Returns whether
-    /// anything was given up, for the same reason `bridge_at` does.
+    /// [`Self::unbox_to_S`] for a slot of the frame *outer* levels out:
+    /// give the claim up, emitting nothing, for the reason above. Returns
+    /// whether anything was given up.
     ///
     #[allow(non_snake_case)]
     pub(in crate::codegen::jitgen) fn unbox_to_S_at(
@@ -2098,45 +2074,21 @@ impl AbstractFrame {
         ir: &mut AsmIr,
         slot: SlotId,
         outer: usize,
-        offset: Option<&DynVarOffset>,
     ) -> bool {
         if outer == 0 {
             self.unbox_to_S(ir, slot, false);
             return false;
         }
-        match self.mode(slot) {
-            LinkMode::C(v) => {
-                self.outer_lit_store(ir, offset, slot, outer, v);
-                self.set_mode(slot, LinkMode::S(Guarded::Value));
-                true
-            }
-            LinkMode::F(_) | LinkMode::Sf(_, _) => {
-                unreachable!("outer{outer} {slot:?} holds an fpr")
-            }
-            LinkMode::S(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => false,
+        debug_assert!(
+            !matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _)),
+            "outer{outer} {slot:?} holds {:?}",
+            self.mode(slot),
+        );
+        if let LinkMode::C(_) = self.mode(slot) {
+            self.set_mode(slot, LinkMode::S(Guarded::Value));
+            return true;
         }
-    }
-
-    ///
-    /// Store the literal *v* into *slot* of the frame *outer* levels out.
-    ///
-    fn outer_lit_store(
-        &mut self,
-        ir: &mut AsmIr,
-        offset: Option<&DynVarOffset>,
-        slot: SlotId,
-        outer: usize,
-        v: Value,
-    ) {
-        if let Some(offset) = offset {
-            ir.outer_lit2stack(offset.clone(), v, slot);
-        } else {
-            ir.lit2reg(v, GP::Rdi);
-            ir.push(AsmInst::StoreDynVar {
-                dst: DynVar { reg: slot, outer },
-                src: GP::Rdi,
-            });
-        }
+        false
     }
 
     ///
