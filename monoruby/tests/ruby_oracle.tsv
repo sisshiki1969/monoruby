@@ -157,6 +157,7 @@
 0a113daaabe1d4a623096c5f5d1b9ad3	"/home/user/monoruby"	File.expand_path("..")
 0a8fcb3472ef6869da4abdbb99763b0d	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
 0aa2fa3cce375400b399c989bb80cc19	[1, 0, 0, 2, 1, 1, 3, 2, 2, 5, 3, 3, 8, 4, 4, 13, 5, 5, 21, 6, 6, 34, 7, 7, 55, 8, 8, 89, 9, 9, 144, 10, 10, 233, 11, 11, 377, 12, 12, 610, 13, 13, 987, 14, 14, 1597, 15, 15]	e = Enumerator.new do |y|\n            a = b = 1\n            loop do\n   
+0abce90d3ad088b0bf89b96ec125cc4a	[5.25, 0.75, 4.5]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 0abd6eee0fea26b57419ce161524d82a	"Module"	Module.new { using Module.new }.class.to_s
 0abee4f13c81ea36178a7ea1d3967d26	true	Process.getpgid(0) == Process.getpgrp
 0ac4a1a595e5d45cfae6000f22e5b73a	:utterly_undefined_method_name	begin\n              Object.instance_method(:utterly_undefined_metho
@@ -628,6 +629,7 @@
 33151d5f5ddac3016b0004900224a63a	["warning: the block passed to 'UBWarn#unused' may be ignored\\n", "", "", "", "", "warn-bg", "", "", "silent-strict"]	def cap\n          saved = $stderr\n          buf = +""\n          io = Ob
 3320b224735f4ca919ccdcccb8c4e5bd	-450.5353775047145	def calc(i)\n          f = i * 1.1; g = i * 0.9; h = i * 1.3; j = i * 0.
 33428047f1f658e115c637013b4660d7	[["initial", nil], ["after-match", "zzz"], ["creator-after-resume", "oo"]]	"foo" =~ /(o+)/\n            r = []\n            f = Fiber.new do\n   
+3347692ca7320ce3b96875e272dbbe81	[7.5, 18.0]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 3358715ab6d315ac23aff09b3ff0f005	102450.0	class SpecAcc\n          K = 1.25\n          def calc(n, use_k)\n         
 33a37997020cb2a326855e1801974373	"hello\\n"	r, w = IO.pipe\n            t = Thread.new { r.gets }\n            Th
 33b5711e09e6c160215318c1fd17224f	["no error", 5]	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:)
@@ -1108,6 +1110,7 @@
 5b25596f97b36691f45783308ef66569	42	def f(handled:)\n          handled\n        end\n        \n\n        handled
 5b3483f96d997976f0f4974e1d96b628	["y", nil, "MONORUBY_ENV_TEST_DEL2!missing"]	ENV["MONORUBY_ENV_TEST_DEL2"] = "y"\n            a = ENV.delete("MON
 5b44a248a61dc40383d51a96cc748f88	14	[2, 3, 4, 5].inject {|result, item| result + item }
+5b46729462de0ea516438e53f745a399	[4.5, 5.5, 4.75]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 5b723a2cb7483967f04b7359c4f52ccd	[11, 11, 5, 3, 8, nil, nil, nil]	class C; attr_accessor :m; end\n\n        res = []\n        o = C.new\n        o.m =
 5b79cfb335c3c10194e188b3310b2096	["RuntimeError", "msg", false]	root = Fiber.current\n            fiber = Fiber.new { root.transfer;
 5b81f105b406bdc1f8f48edc118fcd74	[{a: 1, b: 2, c: 3}]	def f(*x)\n            x\n        end\n        \n\n            f(a:1, **{b:2
@@ -1816,6 +1819,7 @@
 9654828de246bee535681a18dadb92ac	["before", false]	ENV["MONORUBY_ENV_TEST_REPL2"] = "before"\n            ENV.delete("M
 967087a7b4b8b591af552ea304e4f008	["ensure", 42]	def foo\n              begin\n                eval("return 42")\n     
 9688571ca68b697dbfbba96221a9f286	Foo	class Foo\n              def bar; end\n            end\n            \n\n
+96db95681fd6127207742111ab312ee2	[45.0, 32.5]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 96e3694435312b4930df7a7be3c47ef2	[[nil, nil, 5, nil, nil, nil, nil, nil, nil, nil, 4], A]	class A < Array\n        end\n        \n\n        a = A.new(10)\n        a <
 96fd9678f0dfe97f7c36c920dd7add18	[123456789, 123456789, 123456000, 123456000, 123000000, 500000]	[Time.at(0, 123456789, :nanosecond).nsec, Time.at(0, 123456789, :nsec).nsec, Tim
 970a7c81313ab20891884b7ce441755a	false	c = Class.new do\n              def m; 1; end\n              undef :"
@@ -2260,6 +2264,7 @@ b8a48c3aa1c3407546058fae28da4256	[false, false]	def foo; end\n            def ba
 b8add92dc4f86330682dc9fa57fea596	"[nil, true]"	r, w = IO.pipe\n            pid = fork do\n              r.close\n    
 b8d3738377245420bc2378da58f5f7d9	100	p = Proc.new { 100 }\n            define_method(:foo, p)\n           
 b8d68ef10028da6842a236893e45d2cb	:local_jump	begin\n              Thread.new { return }.value\n              :no_e
+b8e73ca465704ccb728ac104f9385e74	["str", 8]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 b8fdb4f51c8e75670a1418eb17bac041	:ok	pat = "ア".encode(Encoding::EUC_JP)\n            begin\n              
 b93a89bc24fb2ce9a85934322dd7c06b	[[[:rest, :*]], [[:keyrest, :**]], [[:nokey]], [[:rest, :*], [:keyrest, :**], [:block, :&]], [[:rest, :*], [:keyrest, :**], [:block, :&]], [[:req, :_], [:req, :_], [:opt, :_], [:rest, :_], [:keyreq, :_], [:key, :_], [:keyrest, :_], [:block, :_]], [[:req, :a], [:rest, :rest], [:keyreq, :k], [:keyrest, :kw], [:block, :blk]], [[:block, :&]], [[:rest]], [[:req]]]	class C\n              def un_splat(*); end\n              def un_kwr
 b95a04e2a38f61bbd5a709fe2765858d	["US-ASCII"]	"a1b2c".dup.force_encoding("US-ASCII").split(/\\d/).map(&:encoding).map(&:to_s).u
@@ -2325,6 +2330,7 @@ bd72323eccae40b197ebea1283639273	[nil, 42]	a = []\n        a << $std\n        $s
 bd7a26e1f462e26d42e9543689bc3430	3862152.611328125	def calc(n, vals)\n          a = 0.0; b = 1.0; c = 2.0; d = 3.0\n        
 bd9970837b8009b39aca5efafe329d8e	["true", "5", "", "foo"]	[true.to_s, 5.to_s, nil.to_s, :foo.to_s]
 bd9f54fa26238d51503216b560dcfe9d	"M:C"	module M\n          def foo\n            "M:" + super\n          end\n     
+bdd4254f72e55d63b4505c0909c9bd00	[6.5, 17.0]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 bde4f5647e4c5f426e0b6b9de2ad09ab	[[], [:it], [:_1, :_2, :_3], [:it], [], [], []]	[\n              binding.implicit_parameters,\n              proc { i
 bde9a54a7762ba3fd118c904ccaac5c2	[:rescued]	def boom; raise "no"; end\n            def test; [1].map { begin; bo
 bdea9d1c4693119e7bb516fdfdf9210c	:done	r = false\n            t = Thread.new do\n              f = Fiber.new
@@ -2741,6 +2747,7 @@ de387ac8bf934d8f07086b9e2b4a50ed	42	$. = 42; $.
 de3f2322030d1ec856a9f41781bd41a8	[[:amount, :unit], [:amount, :unit]]	M = Data.define(:amount, :unit)\n[M.members, M.new(1, "m").members]
 de45ad555f2bc9cedadc3fa83f510527	:timeout_ok	m = Mutex.new\n            cv = ConditionVariable.new\n            m.
 de521c9dde3d5c4cdfdcda53477a4a7a	[7, 11, [:v, :v=, :w, :w=]]	c = class A\n          def f(x,y)\n            @v = x\n            @w = y\n
+de57150bfa4b34df0976085e285fdbdc	[5.5, 15.0, 33.75, 1]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 de66948e25a28714509d336867317012	""	require 'stringio'\n            old_stderr = $stderr\n            old
 de798d02c5c298e75dec774c3d08450b	["REFINED", "1", "[1]", "REFINED"]	module BopToS\n              refine(Integer) { def to_s; "REFINED"; 
 de8f2a99d0a0ebbc8d17c6ce43050021	["line 1\\nline 2\\n", "a\\nb\\n", "ends\\n", "noend\\n", "1\\n2\\n3\\n", "\\n", ""]	require 'stringio'\n        def cap; $stderr = StringIO.new; yield; s = 
