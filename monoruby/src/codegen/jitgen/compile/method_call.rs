@@ -338,34 +338,46 @@ impl<'a> JitContext<'a> {
         {
             return Err(CompileError);
         }
-        // We must write back all local vars to the stack and set the state to
-        // LinkMode::S when they are possibly accessed or captured from inner
-        // blocks — EXCEPT at a site qualifying for the unboxed-locals
-        // speculation (doc/chain_deopt.md §5 step 5): there the pure-`F`
-        // locals stay unboxed and the specialized blocks in the subtree
-        // access them in this frame's FP save/spill area. Qualification
-        // guarantees the site either reaches `specialized_iseq` (which arms
-        // the speculation around the subtree compile) or folds the call away
-        // entirely (no invocation — nothing observes the locals).
-        let mut spec_set = None;
-        let mut spec_qualified = false;
+        // A call that passes a block hands the callee this frame, so every
+        // unboxed local is homed in its slot first and its xmm handed back
+        // — in every frame of the chain, since the block reaches them all
+        // through its own outer chain. Each slot's `Guarded` survives: it
+        // is a fact about the value in the slot, not about where the value
+        // is kept.
+        //
+        // A `C` does not survive, and the reason is worth recording. `C`
+        // says the slot need not be read at all, which holds only if the
+        // compiler sees every write the block can make — i.e. only if the
+        // block is compiled into this very unit. Three things have to be
+        // true for that, and establishing them here is not enough:
+        //
+        //  * The callee's `yield`s must inline. That is decided inside the
+        //    callee's own compile, not at this call site.
+        //  * The callee's compiled body must be the only thing that runs.
+        //    A deopt-able side exit means execution can leave it for the
+        //    VM, which runs the rest of the callee — the block included —
+        //    with nothing telling us the slot moved. #1140's `Range#each`
+        //    stopped at a side exit before it ever reached its `yield`,
+        //    while at runtime the block ran all thirty iterations and
+        //    accumulated into the caller's `acc`.
+        //  * The bridge must be able to carry the claim across a merge in
+        //    a frame *below* this one, which it cannot: see `bridge_at`.
+        //
+        // The first two are checkable after the fact (the callee's frame
+        // knows whether it inlined every yield and whether it can deopt);
+        // the third is the open one.
         if callsite.block_fid.is_some() {
-            if self.float_speculation_qualifies(callsite, func_id) {
-                spec_qualified = true;
-                let set = state.locals_to_S_keep_F(ir);
-                if !set.is_empty() {
-                    // Keep the pool-resident speculated floats where the
-                    // site's UsingFpr snapshot will find them: a spill
-                    // between here and the call emission would silently
-                    // move a local out of the save-area slot the compiled
-                    // block addresses.
-                    for (_, x) in &set {
-                        state.pin_fpr(*x);
-                    }
-                    spec_set = Some(set);
-                }
+            let inlined_block = matches!(self.store[func_id].kind, FuncKind::ISeq(_))
+                && callsite
+                    .block_fid
+                    .and_then(|fid| self.store[fid].is_iseq())
+                    .is_some()
+                && !self.in_dispatch_arm()
+                && state.no_capture_guard();
+            if inlined_block {
+                state.locals_unbox_to_S_keeping_const(ir);
             } else {
-                state.locals_to_S(ir);
+                state.all_frames_unbox_to_S(self, ir);
             }
         }
 
@@ -653,7 +665,6 @@ impl<'a> JitContext<'a> {
                     && callsite.block_arg.is_none()
                     && self.store.is_simple_call(proc.func_id(), callid)
                 {
-                    debug_assert!(spec_set.is_none());
                     if self.store[proc.func_id()].no_keyword() && !callsite.kw_may_exists() {
                         // The same trivial-body folds as the ISeq arm: a
                         // body that returns a constant (or self) observes
@@ -685,8 +696,6 @@ impl<'a> JitContext<'a> {
                             proc.func_id(),
                             iseq,
                             true,
-                            None,
-                            false,
                             Some(proc.outer_lfp()),
                         );
                     }
@@ -743,8 +752,6 @@ impl<'a> JitContext<'a> {
                     };
                     if folded {
                         // Call elided — the kept-unboxed locals were never
-                        // observable; just drop the speculation pins.
-                        release_speculation_pins(state, &mut spec_set);
                         if forwarded_fold {
                             // Eliding the call *is* the forwarding consume:
                             // no one reads the rest `Array`, so keep the
@@ -798,7 +805,6 @@ impl<'a> JitContext<'a> {
                             )
                         {
                             // Frame-free expansion — same as the fold above.
-                            release_speculation_pins(state, &mut spec_set);
                             if forwarded_fold {
                                 // Same reasoning as the fold above: the
                                 // expansion *is* the forwarding consume, so
@@ -867,27 +873,15 @@ impl<'a> JitContext<'a> {
                         func_id,
                         iseq,
                         specializable,
-                        spec_set,
-                        spec_qualified,
                         None,
                     );
                 }
-                debug_assert!(spec_set.is_none());
                 (func_id, None)
             }
         };
 
         if block_fid.is_some() {
             state.unset_no_capture_guard(self);
-        }
-
-        // A generic dispatch that passes a block hands a handler to code
-        // the unboxed-locals speculation cannot see through (the callee —
-        // a builtin iterator, a proc, a super target — may run the block
-        // generically, i.e. against LFP slots, or materialize it): poison
-        // every armed speculation so its site recompiles unspeculated.
-        if block_fid.is_some() || self.store[callid].block_arg.is_some() {
-            self.poison_float_speculations();
         }
 
         // Behind a class-set guard (or a multi-class dispatch arm) the
@@ -900,32 +894,6 @@ impl<'a> JitContext<'a> {
         Ok(CompileResult::Continue)
     }
 
-    ///
-    /// §7 gating (doc/chain_deopt.md) for the unboxed-locals speculation at
-    /// a block-passing call site: the callee is a plain iseq — so the site
-    /// provably reaches `specialized_iseq` (which arms the speculation) or
-    /// folds the call away (no invocation observes the locals) — and the
-    /// literal block is an iseq that can capture neither its own frame nor,
-    /// through the outer chain, this one. Everything subtler (a nested
-    /// generic block-passing call, a proxy materialization, a no-capture
-    /// invalidation) is caught by the poison hooks during the subtree
-    /// compile and triggers the unspeculated recompile.
-    ///
-    fn float_speculation_qualifies(&self, callsite: &CallSiteInfo, func_id: FuncId) -> bool {
-        if self.in_dispatch_arm() {
-            return false;
-        }
-        let Some(bfid) = callsite.block_fid else {
-            return false;
-        };
-        if !matches!(self.store[func_id].kind, FuncKind::ISeq(_)) {
-            return false;
-        }
-        let Some(biseq) = self.store[bfid].is_iseq() else {
-            return false;
-        };
-        !self.store[bfid].possibly_capture_without_block() && !self.store[biseq].has_block_arg()
-    }
 
     ///
     /// The statically-known positional-argument count of a `...`-forwarding
@@ -1033,11 +1001,16 @@ impl<'a> JitContext<'a> {
         } else {
             JitArgumentInfo::default()
         };
+        self.converge_block_entry(
+            state, iseq, self_class, &args_info, outer, callid,
+        )?;
         let SpecializedCompileResult {
             entry,
             return_state,
             deferred_rest: _,
             needs_rest_array: _,
+            had_deopt: _,
+            generic_yield: _,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -1388,8 +1361,6 @@ impl<'a> JitContext<'a> {
         fid: FuncId,
         iseq: ISeqId,
         specializable: bool,
-        mut spec_set: Option<Vec<(SlotId, crate::codegen::FPReg)>>,
-        spec_qualified: bool,
         // `Some` marks a define_method proc-method callee: the
         // definition-time outer LFP to bake into `SetupMethodFrame`
         // (`None` inside the option is impossible to distinguish from a
@@ -1408,52 +1379,41 @@ impl<'a> JitContext<'a> {
         } else {
             Some(self.label())
         };
-        // Unboxed-locals speculation (doc/chain_deopt.md §5 steps 4–5):
-        // arm the caller's kept-`F` set around the subtree compile so the
-        // specialized blocks inside route their accesses to those locals
-        // through this frame's FP save/spill area. If the subtree turns
-        // out to contain something the speculation cannot see through
-        // (poison), discard it, box the kept locals after all, and
-        // recompile the subtree unspeculated — the orphaned first attempt
-        // is emitted but never referenced.
-        if let Some(set) = &spec_set {
-            self.begin_float_speculation(set.clone(), state.using_fpr_offset());
-        }
-        let capture_events0 = self.capture_events();
-        let mut used_patch_point = patch_point;
-        let mut compiled = self.compile_specialized_func(
+        let used_patch_point = patch_point;
+        // What this frame is holding as a constant on the way in. The
+        // callee's compile may take some of those claims away — its block
+        // stores into our frame, and `store_dynvar` says so — and a claim
+        // given up has to leave the value in its slot. Note them now, while
+        // we still know what they were.
+        let held = state.held_constants();
+        let compiled = self.compile_specialized_func(
             state,
             iseq,
             recv_class,
             used_patch_point,
-            args_info.clone(),
+            args_info,
             None,
             callid,
             bmethod_outer.is_some(),
         )?;
-        if spec_set.is_some() && self.end_float_speculation() {
-            release_speculation_pins(state, &mut spec_set);
-            state.locals_to_S(ir);
-            used_patch_point = patch_point.map(|_| self.label());
-            compiled = self.compile_specialized_func(
-                state,
-                iseq,
-                recv_class,
-                used_patch_point,
-                args_info,
-                None,
-                callid,
-                bmethod_outer.is_some(),
-            )?;
+        // The callee is compiled but its call is not emitted yet (that is
+        // `send_specialized`, below), so this is still *before* the call in
+        // the instruction stream — which is the only placement that both
+        // dominates every entry to the block and runs once. Inside the
+        // callee will not do: its `yield` sits in its own loop, so a write
+        // there would reset the caller's local on every iteration.
+        for (slot, v) in held {
+            if !matches!(state.mode(slot), LinkMode::C(_)) {
+                ir.lit2stack(v, slot);
+            }
         }
-        // A qualified site whose subtree compiled without a single
-        // capture-relevant event provably cannot capture this frame.
-        let clean_speculation = spec_qualified && self.capture_events() == capture_events0;
         let SpecializedCompileResult {
             entry,
             return_state,
             deferred_rest,
             needs_rest_array,
+            had_deopt,
+            generic_yield,
         } = compiled;
         // The call site passes a block literal: if the callee heapifies
         // its *own* frame during the call (`Proc.new` / `lambda` /
@@ -1463,16 +1423,28 @@ impl<'a> JitContext<'a> {
         // generic-send rule (see `compile_method_call`): drop the
         // no-capture invariant so the result store below goes via the
         // LFP and `immediate_evict` emits a capture guard.
-        //
-        // A *cleanly speculated* subtree is the exception: its gating and
-        // poison hooks proved no path in the subtree can materialize a
-        // block handler (a generic block-passing site, a generic yield, or
-        // a proxy materialization would have poisoned it), so the
-        // invariant survives — which is also what lets an enclosing
-        // frame's own speculation nest across this site instead of being
-        // poisoned by the blanket unset.
-        if self.store[callid].block_fid.is_some() && !clean_speculation {
+        if self.store[callid].block_fid.is_some() {
             state.unset_no_capture_guard(self);
+            // The caller kept its constants across this call, betting that
+            // the block would be compiled into this unit — see
+            // `compile_method_call`. Confirm the bet now that the callee's
+            // body is compiled, and give the claims up unless it holds. The
+            // values are in their slots either way (`unbox_to_S` wrote them
+            // on the way in), so this costs no code.
+            //
+            // Two ways it fails. A `yield` that was not inlined runs the
+            // block as a unit of its own, whose stores never reach us. And
+            // a deopt-able side exit means the compiled body is not the
+            // only thing that runs: execution can leave it for the VM,
+            // which runs the rest of the callee — the block included — with
+            // nothing telling us the slot moved. That second one is what
+            // #1140 hit: a `Range#each` whose compile stopped at a side
+            // exit before it ever reached the `yield`, while at runtime the
+            // block ran all thirty iterations and accumulated into the
+            // caller's `acc`.
+            if had_deopt || generic_yield {
+                state.forget_constants(ir);
+            }
         }
         let evict = ir.new_evict();
         state.send_specialized(
@@ -1489,7 +1461,6 @@ impl<'a> JitContext<'a> {
         );
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
-        release_speculation_pins(state, &mut spec_set);
         return Ok(res);
     }
 }
@@ -1498,16 +1469,6 @@ impl<'a> JitContext<'a> {
 /// Drop the fpr pins that held a speculation set's pool floats in place
 /// (see the arming site in `compile_method_call`). Idempotent via `take`.
 ///
-fn release_speculation_pins(
-    state: &mut AbstractState,
-    spec_set: &mut Option<Vec<(SlotId, crate::codegen::FPReg)>>,
-) {
-    if let Some(set) = spec_set.take() {
-        for (_, x) in set {
-            state.unpin_fpr(x);
-        }
-    }
-}
 
 pub(super) struct SpecializedCompileResult {
     pub entry: JitLabel,
@@ -1518,9 +1479,74 @@ pub(super) struct SpecializedCompileResult {
     pub deferred_rest: bool,
     /// D1 veto: some forwarding consume needs the real rest `Array`.
     pub needs_rest_array: bool,
+    /// The compiled subtree contains a deopt-able side exit.
+    pub had_deopt: bool,
+    /// A `yield` in the compiled subtree was not inlined — see
+    /// [`JitStackFrame::generic_yield`].
+    pub generic_yield: bool,
 }
 
 impl<'a> JitContext<'a> {
+    ///
+    /// Settle what the block may believe about its outer frames before
+    /// compiling it, by finding the fixpoint of its own re-entry.
+    ///
+    /// A caller can keep a `C` across the call that hands out its block
+    /// (see `compile_method_call`), so the block's chain may arrive
+    /// claiming one. The claim describes the frame at the moment the block
+    /// was handed over, and the block runs from it as many times as the
+    /// callee yields — `n.times { acc += 2.0 }` enters six times with six
+    /// different `acc`s. Nothing in the block's own chain says so:
+    /// `Integer#times` is a method, so it is nobody's lexical outer and
+    /// its loop is not in that chain at all.
+    ///
+    /// So treat "this block may be entered again" as a back edge from its
+    /// exit to its entry and iterate, exactly as
+    /// [`Self::analyse_backedge_fixpoint`] does for a loop. Each round
+    /// compiles the block into a throwaway context and adopts whatever
+    /// constants that round gave up; the lattice per slot is
+    /// `C -> S(Guarded) -> S(Value)` and giving up is monotone, so it
+    /// settles in a round or two.
+    ///
+    /// Strictly better than dropping every outer constant on the way in: a
+    /// block that only *reads* its caller's locals keeps them folded.
+    ///
+    fn converge_block_entry(
+        &mut self,
+        state: &AbstractState,
+        iseq: ISeqId,
+        self_class: ClassId,
+        args_info: &JitArgumentInfo,
+        outer: usize,
+        callid: CallSiteId,
+    ) -> JitResult<()> {
+        // Each round can only turn a `C` into an `S`, never back, so a round
+        // that changes nothing is the fixpoint and there can be at most one
+        // round per constant before that happens. No constants, no pass —
+        // which is the gate that keeps this off the common path.
+        let bound = self.outer_const_count(outer) + 1;
+        if bound == 1 {
+            return Ok(());
+        }
+        let mut rounds = 0;
+        loop {
+            let mut probe = self.analysis_clone();
+            let mut probe_state = state.clone();
+            let frame = probe.new_specialized_frame(iseq, Some(outer), args_info.clone(), self_class);
+            // A round that cannot compile tells us nothing about what the
+            // block gives up, and the real compile below will raise the
+            // same error. Stop iterating and let it.
+            if probe.specialized_compile(&mut probe_state, callid, frame).is_err() {
+                return Ok(());
+            }
+            if !self.adopt_outer_widenings(&probe, outer) {
+                return Ok(());
+            }
+            rounds += 1;
+            assert!(rounds < bound, "block-entry fixpoint did not settle");
+        }
+    }
+
     fn new_specialized_frame(
         &self,
         iseq_id: ISeqId,
@@ -1583,6 +1609,7 @@ impl<'a> JitContext<'a> {
         let frame_had_deopt = frame.had_deopt;
         let frame_deferred_rest = frame.deferred_rest;
         let frame_needs_rest_array = frame.needs_rest_array;
+        let frame_generic_yield = frame.generic_yield;
         // `has_exception_handler` taints the return state so the caller
         // doesn't propagate a speculative `Const` past us: the BB graph
         // doesn't include rescue/ensure successors, so the computed
@@ -1647,11 +1674,19 @@ impl<'a> JitContext<'a> {
         if frame_had_deopt {
             self.current_frame_mut().had_deopt = true;
         }
+        // Same one-level propagation: a non-inlined `yield` anywhere under
+        // this call means some block ran outside this unit, which the
+        // caller's own kept constants have to answer for too.
+        if frame_generic_yield {
+            self.current_frame_mut().generic_yield = true;
+        }
         Ok(SpecializedCompileResult {
             entry,
             return_state,
             deferred_rest: frame_deferred_rest,
             needs_rest_array: frame_needs_rest_array,
+            had_deopt: frame_had_deopt,
+            generic_yield: frame_generic_yield,
         })
     }
 

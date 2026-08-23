@@ -224,6 +224,18 @@ impl<'a> JitContext<'a> {
         state.set_const_version_guard();
     }
 
+    ///
+    /// The constant the outer frame still claims for *src*, if it claims
+    /// one — in which case the slot has not been written and must not be
+    /// read.
+    ///
+    pub(super) fn dynvar_const(&self, state: &AbstractState, src: &DynVar) -> Option<Value> {
+        match state.outer_mode(src.outer, src.reg)? {
+            LinkMode::C(v) => Some(v),
+            _ => None,
+        }
+    }
+
     pub(super) fn load_dynvar(&self, state: &AbstractState, ir: &mut AsmIr, src: DynVar) {
         if let Some((spec_ids, extra, not_captured)) = self.outer_specialized_ids(state, src.outer)
             && not_captured
@@ -242,12 +254,18 @@ impl<'a> JitContext<'a> {
     }
 
     pub(super) fn store_dynvar(
-        &self,
+        &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
         dst: DynVar,
         src: SlotId,
     ) {
+        // The store invalidates whatever the outer frame's abstract state
+        // claimed about this slot — in both places that track it: the live
+        // chain this compile is reasoning about, and the context's copy,
+        // which is what the *caller* will read back when we are done.
+        self.widen_outer_slot(dst.outer, dst.reg);
+        state.widen_outer_slot(dst.outer, dst.reg);
         let r = GP::Rdi;
         state.load(ir, src, r);
         if let Some((spec_ids, extra, not_captured)) = self.outer_specialized_ids(state, dst.outer)

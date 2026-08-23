@@ -986,6 +986,156 @@ impl SlotState {
         spill
     }
 
+    ///
+    ///
+    /// Forget everything known about *slot*: an outer frame's local that a
+    /// callee has just written through `StoreDynVar`. No code is emitted —
+    /// the store itself already homed the value — this only stops the mode
+    /// the slot used to have from being believed afterwards.
+    ///
+    pub(in crate::codegen::jitgen) fn invalidate_slot(&mut self, slot: SlotId) {
+        self.set_mode(slot, LinkMode::S(Guarded::Value));
+    }
+
+    ///
+    /// Drop every local's `C` claim to the `S` its slot already holds.
+    ///
+    /// Pure state: the value is in the slot either way, because
+    /// [`Self::unbox_to_S`] writes a constant out on the way into every
+    /// block-passing call whether or not the claim survives it.
+    ///
+    /// Whether any local is still claimed as a compiler-held constant.
+    pub(in crate::codegen::jitgen) fn holds_const(&self) -> bool {
+        self.locals().any(|slot| matches!(self.mode(slot), LinkMode::C(_)))
+    }
+
+    ///
+    /// The locals *other* still claims as constants and this one no longer
+    /// does — what an analysis pass discovered the compilation gives up.
+    ///
+    pub(in crate::codegen::jitgen) fn lost_constants_of(&self, other: &Self) -> Vec<SlotId> {
+        other
+            .locals()
+            .filter(|&slot| {
+                matches!(other.mode(slot), LinkMode::C(_))
+                    && !matches!(self.mode(slot), LinkMode::C(_))
+            })
+            .collect()
+    }
+
+    ///
+    /// Surrender *slot*'s `C` claim, writing the value it stood for into
+    /// the slot.
+    ///
+    /// The write is the point: nothing put the value there while the claim
+    /// held, so a reader that goes to the slot from here on — the
+    /// interpreter after a deopt, a block compiled elsewhere, this frame's
+    /// own later code — has to find it.
+    ///
+    /// The slot drops to `Guarded::Value`, not to the type the constant
+    /// happened to have. Every caller of this is giving the claim up
+    /// *because* something it cannot see is about to write the slot, and
+    /// that something is under no obligation to write the same type —
+    /// `Array#slice_before`'s block dropped its last group when the narrow
+    /// guard survived. A merge that decides `C` meets `S` is a different
+    /// question and keeps the type, since the value really is `v` on that
+    /// path (see `bridge_at`).
+    ///
+    pub(in crate::codegen::jitgen) fn give_up_const(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        v: Value,
+    ) {
+        ir.spill(Spill::Lit(v, slot));
+        self.set_mode(slot, LinkMode::S(Guarded::Value));
+    }
+
+    /// Every local this frame is still holding as a constant.
+    pub(in crate::codegen::jitgen) fn held_constants(&self) -> Vec<(SlotId, Value)> {
+        self.locals()
+            .filter_map(|slot| match self.mode(slot) {
+                LinkMode::C(v) => Some((slot, v)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub(in crate::codegen::jitgen) fn forget_constants(&mut self, ir: &mut AsmIr) {
+        for (slot, v) in self.held_constants() {
+            self.give_up_const(ir, slot, v);
+        }
+    }
+
+    /// Home *slot*'s value in its frame slot, and keep what is known about
+    /// it — the demotion a call boundary needs, as opposed to
+    /// [`Self::to_S_unguarded`]'s.
+    ///
+    /// The callee is handed this frame, so every mode that does *not* keep
+    /// the value in the frame has to write it there first:
+    ///
+    /// * `F` — the fpr held the only copy: box it into the slot and hand
+    ///   the xmm back (the callee starts with an empty pool).
+    /// * `Sf` — the slot already holds the boxed value; only the read-only
+    ///   fpr view is dropped.
+    /// * `C` — the constant lives in the compiler, *not* in the slot, so
+    ///   it is written out, and the mode drops to `S(Guarded::Value)`.
+    ///   Keeping it would need every path by which the callee can reach
+    ///   the slot to invalidate it, and only `StoreDynVar` does.
+    /// * `V` — a temp above sp, nil-filled as `to_S_unguarded` does, so the
+    ///   callee never sees an uninitialized word.
+    /// * `S` — already in the slot; its `Guarded` is a fact about the
+    ///   slot's value and stays true.
+    ///
+    /// The difference from `to_S_unguarded` is only in what is *forgotten*:
+    /// that one rewrites every mode to `S(Guarded::Value)`, this one keeps
+    /// `C` and each slot's `Guarded`, which is what lets the callee read
+    /// the caller's abstract state instead of starting from scratch.
+    ///
+    #[allow(non_snake_case)]
+    pub(in crate::codegen::jitgen) fn unbox_to_S(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        keep_const: bool,
+    ) {
+        // Same GP-resident caveat as `to_S_unguarded`: re-home a dirty pool
+        // register before the mode change drops it unspilled.
+        if let Some(reg) = self.gp_regfile.dirty_reg_of(slot) {
+            ir.reg2stack(reg, slot);
+        }
+        match self.mode(slot) {
+            LinkMode::F(fpr) => {
+                let guarded = self.guarded(slot);
+                self.clear(slot);
+                self.set_mode(slot, LinkMode::S(guarded));
+                ir.spill(Spill::Fpr(fpr, slot));
+            }
+            LinkMode::Sf(_, _) => {
+                let guarded = self.guarded(slot);
+                self.clear(slot);
+                self.set_mode(slot, LinkMode::S(guarded));
+            }
+            // Nothing written: `C` says the compiler holds the value and
+            // the slot need not be read, and that is as true across a
+            // block-passing call as across any other — an ordinary call has
+            // never written it out either. The write happens where the
+            // claim is surrendered instead (`give_up_const`).
+            //
+            // What cannot cope with a slot the value is not in is a
+            // capture, and that is settled before it can happen: a callee
+            // that may capture without a block (`Effect::CAPTURE` /
+            // `Effect::EVAL` — `Proc.new`, `binding`, `eval`, …) is refused
+            // at its call site, and a block literal this frame hands out
+            // that the callee turns into a Proc is caught by
+            // `immediate_evict`'s capture guard.
+            LinkMode::C(_) if keep_const => {}
+            LinkMode::C(v) => self.give_up_const(ir, slot, v),
+            LinkMode::V => ir.spill(Spill::Lit(Value::nil(), slot)),
+            LinkMode::S(_) | LinkMode::MaybeNone | LinkMode::None => {}
+        }
+    }
+
     #[allow(non_snake_case)]
     pub(in crate::codegen::jitgen) fn to_S_unguarded(&mut self, ir: &mut AsmIr, slot: SlotId) {
         // Same GP-resident caveat as `write_back_slot`: re-home the dirty pool
@@ -1904,6 +2054,82 @@ impl Guarded {
 }
 
 impl AbstractFrame {
+    ///
+    /// Bridge one slot of the frame *outer* levels out from the innermost.
+    ///
+    /// `outer == 0` is the ordinary [`Self::bridge`]. Beyond that there is
+    /// nothing to emit, ever: a frame writes each of its constants to its
+    /// slot on the way into the call that hands out its block
+    /// (`unbox_to_S`), so by the time it *is* an outer frame the value is
+    /// already there and giving the claim up is pure state. Nor can it hold
+    /// an unboxed float — `FprAllocator` is per `SlotState` and its ids are
+    /// positional (`FPReg(id)` is `xmm{id+2}` below `PHYS_FPR_POOL`), so
+    /// two frames each promoting a slot would both take `FPReg(0)` and both
+    /// write `xmm2`; `AbstractState::join` keeps outer frames clear of them
+    /// until there is one id space for the whole chain.
+    ///
+    pub(super) fn bridge_at(
+        &mut self,
+        ir: &mut AsmIr,
+        target: &SlotState,
+        slot: SlotId,
+        pc: BytecodePtr,
+        outer: usize,
+    ) {
+        if outer == 0 {
+            return self.bridge(ir, target, slot, pc);
+        }
+        debug_assert!(
+            !matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _)),
+            "outer{outer} {slot:?} holds {:?}",
+            self.mode(slot),
+        );
+        match (self.mode(slot), target.mode(slot)) {
+            (LinkMode::V, LinkMode::V)
+            | (LinkMode::None, LinkMode::None)
+            | (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
+            (_, LinkMode::V) => self.discard(slot),
+            (_, LinkMode::MaybeNone) => self.set_MaybeNone(slot),
+            (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
+            (LinkMode::C(v), LinkMode::S(_)) => {
+                self.set_mode(slot, LinkMode::S(Guarded::from_concrete_value(v)));
+            }
+            (LinkMode::S(_), LinkMode::S(_)) => {
+                // The target guard is the join of every incoming path's, so
+                // it is never narrower than ours — nothing to check.
+            }
+            (l, r) => unreachable!("outer{outer} {slot:?} {l:?}->{r:?} {target:?}"),
+        }
+    }
+
+    ///
+    /// [`Self::unbox_to_S`] for a slot of the frame *outer* levels out:
+    /// give the claim up, emitting nothing, for the reason above. Returns
+    /// whether anything was given up.
+    ///
+    #[allow(non_snake_case)]
+    pub(in crate::codegen::jitgen) fn unbox_to_S_at(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        outer: usize,
+    ) -> bool {
+        if outer == 0 {
+            self.unbox_to_S(ir, slot, false);
+            return false;
+        }
+        debug_assert!(
+            !matches!(self.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _)),
+            "outer{outer} {slot:?} holds {:?}",
+            self.mode(slot),
+        );
+        if let LinkMode::C(_) = self.mode(slot) {
+            self.set_mode(slot, LinkMode::S(Guarded::Value));
+            return true;
+        }
+        false
+    }
+
     ///
     /// Generate bridge AsmIr to merge current state with target state.
     ///

@@ -172,8 +172,6 @@ impl Codegen {
             | AsmInst::SpecializedYield { .. }
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
-            | AsmInst::LoadDynVarSpeculatedF { .. }
-            | AsmInst::StoreDynVarSpeculatedF { .. }
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
             | AsmInst::ArrayIndexAssign { .. }

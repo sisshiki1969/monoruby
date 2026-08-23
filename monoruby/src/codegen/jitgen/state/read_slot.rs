@@ -385,28 +385,6 @@ impl AbstractFrame {
         x
     }
 
-    ///
-    /// The source of a store into a speculated-unboxed outer local
-    /// (doc/chain_deopt.md §5 step 4): `Some(fpr)` iff `slot`'s value is a
-    /// *Float* — proven (`F` / `Sf(Float)` / a Float literal) or
-    /// Float-guarded on the stack, in which case `load_fpr`'s guard + unbox
-    /// runs first and its (escalated) deopt fires before the store.
-    /// `None` for anything statically non-Float: the store would break the
-    /// speculation on every execution, so the caller poisons instead.
-    ///
-    /// Note this deliberately does NOT reuse `load_fpr` for arbitrary
-    /// slots: `load_fpr` implements *arithmetic* semantics (a Fixnum
-    /// coerces to f64), while a store must preserve the value — storing
-    /// Integer 1 must kill the speculation, not smuggle 1.0 in.
-    ///
-    pub(crate) fn speculated_store_src(&mut self, ir: &mut AsmIr, slot: SlotId) -> Option<FPReg> {
-        match self.mode(slot) {
-            LinkMode::F(x) | LinkMode::Sf(x, SfGuarded::Float) => Some(x),
-            LinkMode::S(Guarded::Float) => Some(self.load_fpr(ir, slot)),
-            LinkMode::C(v) if v.is_float() => Some(self.load_fpr(ir, slot)),
-            _ => None,
-        }
-    }
 
     ///
     /// Capture the deopt **program point** at the current placement state (item

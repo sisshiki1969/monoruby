@@ -273,6 +273,7 @@
 1459ff5827314d509c8b8a521c715151	"numbered parameter '_1' is not a local variable"	-> { _1; (binding.local_variable_defined?(:_1) rescue $!.message) }.call("x")
 145f017d34cec052f0bac339e5f11695	:OVERRIDDEN	class Symbol; def ===(o); :OVERRIDDEN; end; end; :a === :b
 14c3f9744e9557b5dfbd2e2849630a21	[false, true, [:amount, :unit]]	M = Data.define(:amount, :unit)\n\n            sub = Class.new(Data)\n            [
+1505e61773bc8b519ca7271418be06a6	[12.0, 15.0]	def acc_int(n)\n          acc = 0.0\n          n.times { acc += 2.0 }\n   
 1539e0e610bc4a455a62e283937c5969	"Dave New York #<struct S name=\\"Dave\\", address=\\"New York\\"> #<struct S name=\\"Dave\\", address=\\"New York\\">"	class S < Struct.new(:name, :address)\n        end\n        \n\n        s =
 157fc470dccd4d7e20ac890dbe941be3	[true, false, true, false]	File.open("Cargo.toml") do |f|\n              before = f.close_on_ex
 15846d0b70eb94af22106344f0341f4f	123	class Foo < BasicObject\n              C = 123\n            end\n     
@@ -627,6 +628,7 @@
 33151d5f5ddac3016b0004900224a63a	["warning: the block passed to 'UBWarn#unused' may be ignored\\n", "", "", "", "", "warn-bg", "", "", "silent-strict"]	def cap\n          saved = $stderr\n          buf = +""\n          io = Ob
 3320b224735f4ca919ccdcccb8c4e5bd	-450.5353775047145	def calc(i)\n          f = i * 1.1; g = i * 0.9; h = i * 1.3; j = i * 0.
 33428047f1f658e115c637013b4660d7	[["initial", nil], ["after-match", "zzz"], ["creator-after-resume", "oo"]]	"foo" =~ /(o+)/\n            r = []\n            f = Fiber.new do\n   
+3358715ab6d315ac23aff09b3ff0f005	102450.0	class SpecAcc\n          K = 1.25\n          def calc(n, use_k)\n         
 33a37997020cb2a326855e1801974373	"hello\\n"	r, w = IO.pipe\n            t = Thread.new { r.gets }\n            Th
 33b5711e09e6c160215318c1fd17224f	["no error", 5]	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:)
 33c649868370c10930670813040a0f1c	[45.0, 30.0]	class RS3\n          def half(v) = v * 0.5\n          def sum(arr)\n      
@@ -654,6 +656,7 @@
 355f64ccc41342dde6bb12c04da77410	true	[Process.getpgrp, Process.getpgid(0), Process.getsid].all? { |v| v.is_a?(Integer
 3565c58dca7325f9f598f2c1ae3626b3	true	GC.config.is_a?(Hash)
 356bbf9786b1d2f6d8025e7e3cda3118	[4, [0, 104, 0, 105], [104, 233], "Encoding::UndefinedConversionError"]	path = "/tmp/monoruby_test_iowt_#{Process.pid}_#{rand(100000)}"\n   
+35768788c2eb049dca56e52a4a8fcc7e	["str", 12, 1.5]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 3578263ee9b00b995172d8097fe872a6	["Windows-31J", true, "US-ASCII", "Windows-31J"]	[ /foo/ensuensuens.encoding.to_s,\n                /foo/ensuensuens == /foo/s,\n  
 3586b2a0d44e304e2cc0c8333c54cc78	S	class S\n              def f; end\n            end\n            class 
 35893713489f04b55c3edbf76271232f	true	GC.stat.is_a?(Hash)
@@ -1585,6 +1588,7 @@
 82ff14b74e3eca76717b9af689a3898e	[:foo, [1, 2, 3, 4]]	class C\n          def method_missing(name, *args)\n            [name, ar
 8305358285ffef3eabb5f06f63fe896b	[[[1, 2], [:a, :b]], [[1, nil], [nil, nil]], [[1, 2]], [[1, 2]]]	def drive(a)\n              acc = []\n              a.each_with_yield
 8370c5ed8e43de9e99d7f41038618f1b	[true, true, true, [1, 2]]	Nc = 1\n        module RM1; end\n        RM2 = Class.new\n        msgs = [
+838053b506518776673e7a731351065b	[10, 11, 21]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 83806d03f4525939aff12798777778b6	[ArgumentError, "incompatible encodings: UTF-16LE and UTF-16BE"]	(Regexp.union(Regexp.new("a".encode("UTF-16LE")), Regexp.new("b".encode("UTF-16B
 839e2c6e4a8712955a1f09c759e45e93	[]	Module.new.included_modules
 83a20113cd2d9bf88c262b3b65329020	[[[:s, :t]], [:s], [[:s, :t]]]	hs = {a: 1, b: 2}\n            def hs.each; yield :s, :t; end\n      
@@ -1663,6 +1667,7 @@
 89c218222121411715e9cbdc51498eb5	[21, 28, 35, 42, 49, 56, 63, 70, 77, 84, 91, 98, 105, 112, 119, 126, 133, 140, 147, 154, 161, 168, 175, 182, 189, 196, 203, 210, 217, 224]	def g(a, b, c, d, e, f, g) = [a, b, c, d, e, f, g].sum\n        def f(..
 89cc804a9b06b07941ab2d5dd4a30fc8	true	def `(cmd); $g = cmd.frozen?; end\n        `ab`\n        $g\n        
 89cd6dacc925b6c1f2d159336fe1b843	[:deferred]	def run_masked(timing, blocking = true)\n              klass = Class
+89d1ede2452c93f048eee8cc933030b9	[4, "s"]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 89f7fffd38b177b008b30d0eee379904	[:a, :b]	def m; a = 1; b = 2; binding.local_variables.sort; end; m
 8a1a61b156937416ceb0e77d4253c4bd	[true, false, false, :typeerr]	class C; end\n            o = C.new\n            klasses = [C, String
 8a3f407160682fc555874ca61a253421	:OVERRIDDEN	class Complex; def %(o); :OVERRIDDEN; end; end; Complex(1,2) % Complex(3,4)
@@ -1698,6 +1703,7 @@
 8cf61f75f99a0e9c53f3bf071168dad0	[:foo]	class P\n              def foo; end\n              def bar; end\n     
 8d0d1f75a100d8c5b699b633c2b00f08	[64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, ["Z-0", "Z-1", "Z-2", "Z-3", "Z-4", "Z-5", "Z-6", "Z-7", "Z-8", "Z-9", "-10", "-11", "-12", "-13", "-14", "-15", "-16", "-17", "-18", "-19"], 20, 201]	r = []\n        copies = []\n        20.times do |i|\n            t = "abc
 8d2889917a7f7f98ff652806d0833021	[195]	"\\xC3".dup.force_encoding("UTF-8").reverse.bytes
+8d2e1fd402dd54d459d9920045aa5cd5	[12, 3.5]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 8d3d0ca2dbeed6c68ea827b8891e29e3	[[[130, 160], "Shift_JIS"], [65], [65, 0], [65, 0, 0, 0], [[233], "ISO-8859-1"]]	File.binwrite("/tmp/mr_gc4.txt", [0x82, 0xA0, 0x41].pack("C*"))\n   
 8d3ded30d75b25bfe7b9b6473fe28499	"X"	File.open("Cargo.toml") { |f| IO.new(f.fileno, path: "X", autoclose: false).path
 8d56cf68fe7c6a0dbc65f86b0fdd0789	[true, true, false]	m1 = Module.new\n            m2 = Module.new\n            c = Class.n
@@ -2080,6 +2086,7 @@ aa75159d845bfceeb430dbf3a8147e5a	[1, 2, 3, 5, 6, nil, 42]	def f(a,(b,c),d,(e,f))
 aa9826a02db68be1092571574e433dbe	"bar is true"	foo = false\n        bar = true\n        quu = false\n        \n        cas
 aa9dc49c4157aab8cd435e0906d16a35	true	m = Module.new do\n              module_function\n              defin
 aa9e9d2d059255551ef82b97e189dbf9	0	Time.utc(2000).utc_offset
+aa9ed623ce6b393da6e8302088781719	[42, 1.5, [42, 1.5]]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 aab458ff0c2a03718b6c9b73c90f2db1	:ok	old_stderr = $stderr\n            captured = String.new\n            
 aab9942daadbde6b7f6d2ea8f2774472	[:Receiver, :singleton]	module IEv\n              module ReceiverScope\n                class
 aac724226cfcaf6fac1a6d9fa08ab5f2	0	h = Object.new\n            def h.finalize(id); end\n            Obje
@@ -2726,6 +2733,7 @@ dd6ba415513db8cf6aad7ef750eaedc1	[99, 97, 102, 101, 204, 129]	s = "café".dup\n 
 dd7215ba379fc74d14dd5dd32b95ff3e	"circular causes"	begin\n              begin\n                raise "Error 1"\n         
 dd8750e730148376d88a9f3c0768a481	[true, true, true, true, true, true]	_r, w = IO.pipe\n            [\n              w.wait(:w, 0) == w,\n   
 dd9fdf5bf20e5c51c71f01d1236eba44	Array	class C < Array; end\n(C[1,2] + [3]).class
+dde678d4f6ec4280c7043b73a85391df	[140, [70, 10]]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 ddf316887c271d6578314a6be120991f	[300, 300, 599, 0, 299]	h = { 0 => 0, 1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 7, 8 => 8, 9 
 de101e25e7a853fe0c9708bc2adb754c	true	FileTest.executable?("/bin/sh")
 de380c92af41a21d06d2ec9ba8e97c01	[1, 2, 42]	def f\n          yield [1,2]\n        end\n        \n\n        f { |a,b,c=42
@@ -2962,6 +2970,7 @@ f136d929a1afe530249c3828dc16d2d3	"hi********"	class Foo; def to_str; "*"; end; e
 f137e5150f7ecf2f213388be98ce909f	[1, 2, 3, 4, 5, 6, 7, 8]	class C\n          def initialize\n            @a = 1\n            @b = 2\n
 f1443f24a111ef2b12274668b17f02be	[["TypeError", "exception class/object expected"], ["a.rb:1"], ["single.rb:2"], "Array", "TypeError", ["newmsg", ["b.rb:2"], false], ["StandardError", "[\\"foo\\"]"], ["TypeError", "exception object expected"], ["TypeError", "exception class/object expected"], "StopIteration", ["StopIteration", "m"]]	def t; yield; rescue Exception => e; [e.class.to_s, e.message[0, 60
 f167361721c3652dc52d4b8e72006f82	[1, 3, 5, 7]	(1..7).filter { |x| x.odd? }
+f18ced4d69b03539ee72ed63d73186fb	[3.5, 3.5, [5, 98]]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 f1babbbb29fbb271146a71d94071fa7c	[Module, Module]	module M\n            end\n        \n[M.class, M.singleton_class.super
 f1cb099660b804e23a65b0ec39a9e7c4	[nil, true, true, nil]	a = Signal.trap(:EXIT, proc { })\n            b = Signal.trap('EXIT'
 f1d0da92c682d95eff2dcfbc176360b2	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]	module M\n          def bar; 100; end\n        end\n        class C\n      

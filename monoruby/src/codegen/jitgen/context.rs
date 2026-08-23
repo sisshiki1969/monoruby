@@ -437,7 +437,13 @@ pub(super) struct JitStackFrame {
     ///
     /// Map for target contexts of backward branches.
     ///
-    backedge_map: HashMap<BasicBlockId, SlotState>,
+    /// Loop-entry target state, one `SlotState` per frame of this
+    /// compilation, innermost last — the shape
+    /// [`AbstractState::gen_bridge_all`] bridges every back edge to.
+    /// Outer frames are carried because a block handed out of the unit can
+    /// write their locals, so their modes have to be merged (and written
+    /// back) at the loop head like the innermost frame's.
+    backedge_map: HashMap<BasicBlockId, Vec<SlotState>>,
     ///
     /// Contexts for returning from this frame.
     ///
@@ -485,6 +491,14 @@ pub(super) struct JitStackFrame {
     /// `compile_specialized_func`.
     ///
     pub(super) had_deopt: bool,
+
+    ///
+    /// Some `yield` in this frame was lowered as a generic call rather
+    /// than inlined ([`JitContext::compile_yield_specialized`]), so the
+    /// block it invokes runs as a compilation unit of its own and any
+    /// store it makes into an outer frame is invisible here.
+    ///
+    pub(super) generic_yield: bool,
     /// D1: set when the trampoline forwarding consumer routed `g(...)`
     /// straight from the caller source (elided `f`'s rest Array).
     /// Aggregated from `AsmIr::deferred_rest()` like `had_deopt`,
@@ -617,6 +631,7 @@ impl JitStackFrame {
             // Sentinel — overwritten by [`JitContext::push_frame`].
             specialized_id: SpecializedId(usize::MAX),
             had_deopt: false,
+            generic_yield: false,
             deferred_rest: false,
             needs_rest_array: false,
             speculated_floats: vec![],
@@ -645,6 +660,7 @@ impl JitStackFrame {
             // the codegen resolve pass, so id reuse is safe.
             specialized_id: self.specialized_id,
             had_deopt: self.had_deopt,
+            generic_yield: self.generic_yield,
             deferred_rest: self.deferred_rest,
             needs_rest_array: self.needs_rest_array,
             speculated_floats: self.speculated_floats.clone(),
@@ -841,8 +857,17 @@ impl<'a> JitContext<'a> {
     }
 
     pub(super) fn loop_analysis(&self, pc: BytecodePtr) -> Self {
-        let mut stack_frame = self.stack_frame.clone();
-        stack_frame.last_mut().unwrap().jit_type = JitType::Loop(pc);
+        let mut ctx = self.analysis_clone();
+        ctx.stack_frame.last_mut().unwrap().jit_type = JitType::Loop(pc);
+        ctx
+    }
+
+    ///
+    /// A throwaway copy of this context for an analysis pass: same frames,
+    /// `codegen_mode` off, so the `AsmIr` it produces is never emitted.
+    ///
+    pub(super) fn analysis_clone(&self) -> Self {
+        let stack_frame = self.stack_frame.clone();
         Self {
             store: self.store,
             codegen_mode: false,
@@ -884,16 +909,37 @@ impl<'a> JitContext<'a> {
     /// `new_error` / `deopt_from_point`) picks it up — rather than relying on
     /// each emitter to remember.
     ///
-    /// Escalation is unconditional: measurement (the former `chain-deopt`
-    /// validation feature, run across the full suite and benchmark set)
-    /// put the walk at ~160ns per escalation and ≤1.6% wall-clock even on
-    /// bedcov's 1.8M-deopt worst case, while blanket escalation is exactly
-    /// the precondition the unboxed-locals speculation (§5 step 5) needs —
-    /// a frame holding an unboxed local must convert its callers on every
-    /// interpreter resume, not only on the Float guard.
+    /// Escalation used to be unconditional. `doc/chain_deopt.md` §6 warned
+    /// against exactly that ("blanket escalation would make today's cheap
+    /// per-frame deopts pay a chain walk ... so gate it per site"), and the
+    /// activerecord measurement put the cost at 1.2M conversions per three
+    /// iterations, 94.7% of them with nothing at all to replay.
+    ///
+    /// Both things escalation buys are confined to a single compilation
+    /// unit, so a side exit in the unit's root frame needs none of it:
+    ///
+    /// * §6's return-state narrowing. A narrowed `ReturnState` is applied
+    ///   only by `def_rax2acc_return`, which only the specialized-compile
+    ///   path reaches; an ordinary send types its result `Guarded::Value`.
+    ///   Type information never crosses a unit boundary, so no caller
+    ///   outside this unit can be holding a tag this frame's deopt would
+    ///   invalidate.
+    /// * §5 step 5's unboxed-locals speculation. §7 scopes it to
+    ///   specialized `iseq_block` frames, so an unboxed local is only ever
+    ///   read across a frame boundary *inside* the unit.
+    ///
+    /// A frame at depth 0 is the unit's root: everything above it was
+    /// entered through a call this compiler did not compile, holding no
+    /// narrowed tag and no unboxed local of ours. Frames deeper than that
+    /// still escalate — the callers they have to convert are the
+    /// specialized frames this same compilation built above them.
+    ///
+    /// Basic-op redefinition is unaffected: it evicts through
+    /// `Codegen::check_bop_redefine`, a separate entry point, and it does
+    /// have to convert frames across unit boundaries.
     ///
     pub(super) fn escalate_side_exits(&self) -> bool {
-        true
+        self.current_frame_pos() > 0
     }
 
     pub(super) fn in_dispatch_arm(&self) -> bool {
@@ -1113,7 +1159,7 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn specialized_compile(
         &mut self,
-        state: &mut AbstractFrame,
+        state: &mut AbstractState,
         callid: CallSiteId,
         frame: JitStackFrame,
     ) -> JitResult<JitStackFrame> {
@@ -1121,16 +1167,44 @@ impl<'a> JitContext<'a> {
         let caller = self.current_frame_mut();
         caller.stack_offset += stack_offset;
         caller.callid = Some(callid);
-        let scope = std::mem::take(state);
+        let scope = std::mem::take(&mut **state);
         assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
 
         let frame = self.traceir_to_asmir(frame)?;
 
         let current = self.current_frame_mut();
-        *state = current.abstract_state.take().unwrap();
+        let innermost = current.abstract_state.take().unwrap();
         current.callid = None;
         current.stack_offset -= stack_offset;
+        // Take the chain back. The nested compile could only record what
+        // it did to our outer frames on the context's copies, so re-read
+        // those rather than keep the clones we handed over.
+        self.adopt_outer(state, innermost);
         Ok(frame)
+    }
+
+    ///
+    /// Rebuild *state*'s frame chain from the context's copies, keeping
+    /// *innermost* (this compile's own frame, which the context does not
+    /// track while the compile is running).
+    ///
+    /// The reverse — publishing this compile's view of the outer frames
+    /// *into* the context on the way down — is not available and must not
+    /// be added back. `abstract_state` is not only what nested compiles
+    /// clone; it is also where a frame's own compile parks its state while
+    /// it waits for one. Writing a nested compile's view of a frame there
+    /// replaces the suspended state that frame will resume from with a
+    /// view taken at a different program point, in a different frame's
+    /// terms — three levels of nested blocks segfaulted in generated code.
+    ///
+    /// Nothing needs it today: what a nested compile has to learn about an
+    /// outer frame is only that a slot was widened, and that arrives
+    /// through `widen_outer_slot`.
+    ///
+    fn adopt_outer(&self, state: &mut AbstractState, innermost: AbstractFrame) {
+        let mut frames = self.outer_contexts();
+        frames.push(innermost);
+        state.set_frames(frames);
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
@@ -1255,6 +1329,117 @@ impl<'a> JitContext<'a> {
         Some(i)
     }
 
+    ///
+    /// Record that a `StoreDynVar` has written an unknown value into
+    /// *slot* of the frame *outer* levels out, so nothing downstream keeps
+    /// believing a mode this store just invalidated.
+    ///
+    /// A frame's locals cross a call boundary with their `Guarded` intact
+    /// (`all_frames_unbox_to_S`), which is only sound if a callee that
+    /// writes one of them says so: an `S(Guarded::Float)` a callee stores
+    /// a String into would otherwise still be read as a Float once the
+    /// call returns.
+    ///
+    /// Conservative on purpose: the slot drops to `S(Guarded::Value)`
+    /// rather than taking the stored value's own mode.
+    ///
+    /// This is the context half. The live chain in `AbstractState` is the
+    /// one this compile reasons about and has its own
+    /// [`AbstractState::widen_outer_slot`]; both are written, because the
+    /// frame that owns the slot reads the context copy back when the
+    /// nested compile it is waiting on returns.
+    ///
+    /// Record that a `yield` in the current frame was not inlined.
+    pub(super) fn set_generic_yield(&mut self) {
+        self.current_frame_mut().generic_yield = true;
+    }
+
+    ///
+    /// The stack-frame indices of the lexical chain a frame *outer* levels
+    /// out from the next one to be pushed, immediate outer first.
+    ///
+    /// Takes the distance rather than reading it off the top frame,
+    /// because the caller is about to push a block whose chain is not the
+    /// current top's: a specialized method has `outer: None`, so walking
+    /// from `Integer#times` finds nothing even though the block it is
+    /// about to yield to is lexically inside `kill_int`.
+    ///
+    fn outer_chain_from(&self, outer: usize) -> Vec<usize> {
+        let mut v = vec![];
+        let Some(mut i) = self.stack_frame.len().checked_sub(outer) else {
+            return v;
+        };
+        v.push(i);
+        while let Some(o) = self.stack_frame[i].outer {
+            let Some(next) = i.checked_sub(o) else { return v };
+            i = next;
+            v.push(i);
+        }
+        v
+    }
+
+    ///
+    /// How many constants that chain still claims.
+    ///
+    pub(super) fn outer_const_count(&self, outer: usize) -> usize {
+        self.outer_chain_from(outer)
+            .into_iter()
+            .map(|i| {
+                self.stack_frame[i]
+                    .abstract_state
+                    .as_ref()
+                    .map_or(0, |f| f.held_constants().len())
+            })
+            .sum()
+    }
+
+    ///
+    /// Give up, on that chain, every constant *probe* gave up on its own
+    /// copy of it. Returns whether anything changed.
+    ///
+    pub(super) fn adopt_outer_widenings(&mut self, probe: &Self, outer: usize) -> bool {
+        let mut changed = false;
+        for i in self.outer_chain_from(outer) {
+            let Some(probed) = probe.stack_frame[i].abstract_state.as_ref() else {
+                continue;
+            };
+            let lost: Vec<_> = probed.lost_constants_of(
+                self.stack_frame[i].abstract_state.as_ref().unwrap(),
+            );
+            if !lost.is_empty() {
+                changed = true;
+                let mine = self.stack_frame[i].abstract_state.as_mut().unwrap();
+                for slot in lost {
+                    mine.invalidate_slot(slot);
+                }
+            }
+        }
+        changed
+    }
+
+    pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {
+        let Some(pos) = self.outer_pos(outer) else {
+            // The chain leaves this compilation: the frame is not one of
+            // ours, so there is no abstract state of ours to invalidate.
+            return;
+        };
+        if let Some(frame) = self.stack_frame[pos].abstract_state.as_mut() {
+            frame.invalidate_slot(slot);
+        }
+    }
+
+    ///
+    /// The abstract frames of this compilation's lexical chain, **outermost
+    /// first** — the order [`AbstractState`] keeps them in, so that
+    /// `frames[len - 1 - outer]` is the frame `outer` levels out, agreeing
+    /// with [`Self::outer_pos`].
+    ///
+    /// The walk itself goes inward-out, so it is reversed before returning.
+    /// Without that, `AbstractState::outer_no_capture_guard(1)` answered for
+    /// the *outermost* frame rather than the immediate one as soon as the
+    /// chain was three deep — and that answer gates whether a dynvar access
+    /// may use the static frame-chain offset.
+    ///
     pub(super) fn outer_contexts(&self) -> Vec<AbstractFrame> {
         let mut i = self.stack_frame.len() - 1;
         let mut v = vec![];
@@ -1263,6 +1448,7 @@ impl<'a> JitContext<'a> {
             let scope = self.stack_frame[i].abstract_state.clone().unwrap();
             v.push(scope);
         }
+        v.reverse();
         v
     }
 
@@ -1313,66 +1499,9 @@ impl<'a> JitContext<'a> {
 
     // ===== Unboxed-locals speculation (doc/chain_deopt.md §5 steps 4–5) =====
 
-    ///
-    /// Arm the speculation on the current frame for the duration of one
-    /// qualifying block-passing call's specialized-subtree compile.
-    ///
-    pub(super) fn begin_float_speculation(
-        &mut self,
-        set: Vec<(SlotId, crate::codegen::FPReg)>,
-        using_fpr: UsingFpr,
-    ) {
-        let frame = self.current_frame_mut();
-        debug_assert!(frame.speculated_floats.is_empty());
-        frame.speculated_floats = set;
-        frame.speculated_using_fpr = using_fpr;
-        frame.speculation_poisoned = false;
-    }
 
-    ///
-    /// Disarm the current frame's speculation; returns whether the subtree
-    /// poisoned it (in which case the site recompiles without the set).
-    ///
-    pub(super) fn end_float_speculation(&mut self) -> bool {
-        let frame = self.current_frame_mut();
-        frame.speculated_floats = vec![];
-        std::mem::replace(&mut frame.speculation_poisoned, false)
-    }
 
-    ///
-    /// Poison every armed speculation on the stack. Called from the few
-    /// compile paths that can hand a block (and with it a reference chain
-    /// to a speculating frame) to code the speculation cannot see through:
-    /// a generic block-passing call, a generic yield, and block-handler
-    /// materialization (`BlockArgProxy` / `BlockArg`). Conservative: the
-    /// block involved may be unrelated to any speculating frame, but these
-    /// paths are precisely the ones the qualifying gate assumes absent, so
-    /// hitting one at all means the subtree is not the shape we speculated
-    /// on.
-    ///
-    /// Also bumps the capture-event counter, which qualified block-passing
-    /// sites use to decide whether their compiled subtree stayed clean
-    /// (see `specialized_iseq`'s no-capture-unset decision).
-    ///
-    pub(super) fn poison_float_speculations(&mut self) {
-        self.capture_events += 1;
-        for frame in self.stack_frame.iter_mut() {
-            if !frame.speculated_floats.is_empty() {
-                frame.speculation_poisoned = true;
-            }
-        }
-    }
 
-    ///
-    /// Monotone count of capture-relevant compile events (poison hooks and
-    /// no-capture invalidations). A qualified block-passing site snapshots
-    /// it around its subtree compile: unchanged ⇒ nothing in the subtree
-    /// can capture this frame ⇒ the site keeps the no-capture invariant
-    /// (and an enclosing speculation survives the site).
-    ///
-    pub(super) fn capture_events(&self) -> usize {
-        self.capture_events
-    }
 
     ///
     /// Whether any frame on the compile stack currently has an armed
@@ -1387,60 +1516,6 @@ impl<'a> JitContext<'a> {
             .any(|f| !f.speculated_floats.is_empty())
     }
 
-    ///
-    /// Resolve a dynvar access `(outer, reg)` from the current (block)
-    /// frame against an armed speculation: `Some((offset, disp))` when the
-    /// target local is speculated-unboxed and the access can compile as a
-    /// direct f64 move at `[rbp + offset + disp]` (offset a late-resolved
-    /// [`DynVarOffset`] hint, disp a compile-time byte displacement).
-    ///
-    /// A speculated slot whose fast path cannot be taken (capture no
-    /// longer excluded) poisons the speculation and returns `None`; the
-    /// generic instruction the caller then emits is sound only because the
-    /// site discards this subtree and recompiles unspeculated.
-    ///
-    pub(super) fn speculated_dynvar(
-        &mut self,
-        state: &AbstractState,
-        outer: usize,
-        reg: SlotId,
-    ) -> Option<(super::asmir::DynVarOffset, i32)> {
-        use crate::codegen::PHYS_FPR_POOL;
-        let pos = self.outer_pos(outer)?;
-        let (_, fpr) = self.stack_frame[pos]
-            .speculated_floats
-            .iter()
-            .find(|(s, _)| *s == reg)
-            .copied()?;
-        if state.outer_no_capture_guard(outer) != Some(true) {
-            self.stack_frame[pos].speculation_poisoned = true;
-            return None;
-        }
-        let end = self.stack_frame.len() - 1;
-        let (chain_start, disp) = if fpr.0 < PHYS_FPR_POOL {
-            // Pool-resident: the call's cont-mode save area, addressed off
-            // the *callee* frame's rbp (`[callee_rbp + 32 + 8i]`, §8.1 of
-            // doc/chain_deopt.md); `i` is the register's rank in the
-            // site's UsingFpr snapshot (ascending bit order).
-            let using = &self.stack_frame[pos].speculated_using_fpr;
-            debug_assert!(using[fpr.0]);
-            let rank = (0..fpr.0).filter(|&b| using[b]).count();
-            (pos + 1, 32 + 8 * rank as i32)
-        } else {
-            // Spilled: the speculating frame's own f64 spill slot,
-            // `[rbp - (base - 24 + 8n)]` (`PhysMap::apply_base`).
-            let n = (fpr.0 - PHYS_FPR_POOL) as i32;
-            let base = self.stack_frame[pos].base_stack_offset as i32;
-            (pos, -(base - 24 + 8 * n))
-        };
-        let chain = &self.stack_frame[chain_start..end];
-        let ids = chain.iter().map(|f| f.specialized_id).collect();
-        let extra = chain
-            .iter()
-            .map(|f| f.stack_offset - f.base_stack_offset)
-            .sum();
-        Some((super::asmir::DynVarOffset::Hint { ids, extra }, disp))
-    }
 
     fn check_exception_handler(&self, begin: usize, end: usize) -> bool {
         self.stack_frame[begin..end].iter().any(|f| {
@@ -1532,8 +1607,6 @@ impl<'a> JitContext<'a> {
         match inst {
             AsmInst::LoadDynVarSpecialized { offset, .. }
             | AsmInst::StoreDynVarSpecialized { offset, .. }
-            | AsmInst::LoadDynVarSpeculatedF { offset, .. }
-            | AsmInst::StoreDynVarSpeculatedF { offset, .. }
             | AsmInst::MethodRetSpecialized {
                 rbp_offset: offset, ..
             }
@@ -1833,7 +1906,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().branch_map.remove(&bb)
     }
 
-    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<SlotState> {
+    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<Vec<SlotState>> {
         self.current_frame_mut().backedge_map.remove(&bb)
     }
 
@@ -1920,7 +1993,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Add new backward branch from *src_idx* to *dest* with `state`.
     ///
-    pub(super) fn new_backedge(&mut self, target: SlotState, bb_pos: BasicBlockId) {
+    pub(super) fn new_backedge(&mut self, target: Vec<SlotState>, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.current_frame_mut().backedge_map.insert(bb_pos, target);

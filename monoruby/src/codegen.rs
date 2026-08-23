@@ -25,7 +25,7 @@ pub(crate) mod signal_table;
 mod arch;
 
 use self::jitgen::asmir::AsmEvict;
-use self::jitgen::{ChainConversion, ChainReplay};
+use self::jitgen::ChainReplay;
 
 use super::*;
 use crate::bytecodegen::inst::*;
@@ -762,7 +762,11 @@ pub struct Codegen {
     /// continuation stub its per-site `dst`/resume data). Keyed by the
     /// return-address slot of a suspended frame (§3.4), which is all the
     /// walk has to go on.
-    chain_deopt_table: HashMap<CodePtr, ChainReplay>,
+    /// Return address of a chain-eligible call -> the entry of that site's
+    /// compiled conversion stub (`gen_chain_replay_stub`). The stub encodes
+    /// everything the conversion does, so the walk carries no per-site data
+    /// and never clones a `ChainReplay`.
+    chain_deopt_table: HashMap<CodePtr, CodePtr>,
     /// The shared chain-deopt post-call continuation stub
     /// (`gen_chain_cont_stub`): the single address every converted frame's
     /// return-address slot is pointed at. Emitted with the VM handlers, so
@@ -1593,23 +1597,14 @@ impl Codegen {
     /// when the definition just executed actually redefined a basic op —
     /// `set_bop_redefine` arms the flag and this consumes it.
     pub fn check_bop_redefine(cfp: Cfp) {
-        let plan = CODEGEN.with(|codegen| {
+        CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
             if std::mem::replace(&mut codegen.bop_eviction_pending, false) {
-                codegen.chain_deopt(cfp)
-            } else {
-                Vec::new()
+                codegen.chain_deopt_into(cfp);
             }
         });
-        // Applied outside the CODEGEN borrow: the replay half allocates and
-        // can run a GC (see `runtime::chain_deopt`).
-        for conversion in plan {
-            // SAFETY: every planned frame was found suspended on the current
-            // thread's control-frame chain moments ago, and nothing has run
-            // since — no frame has returned.
-            unsafe { conversion.apply() };
-        }
     }
+
 
     /// The basic-op version: bumped by every redefinition, baked into
     /// `AsmInst::CheckBOP` sites so they deopt only on a change made *after*
@@ -1632,7 +1627,18 @@ impl Codegen {
     /// entry and give an unrelated live call site the wrong replay data.
     pub(in crate::codegen) fn register_chain_exit(&mut self, evict: AsmEvict, replay: ChainReplay) {
         let return_addr = *self.asm_return_addr_table.get(&evict).unwrap();
-        self.chain_deopt_table.insert(return_addr, replay);
+        // Compile the conversion now, into the cold page, and remember only
+        // its entry. Emitted on page 1 so it does not split the body being
+        // assembled on page 0.
+        let cont_stub = self.jit.get_label_address(&self.chain_cont_stub);
+        let saved_page = self.jit.get_page();
+        self.jit.select_page(1);
+        #[cfg(target_arch = "x86_64")]
+        let stub = self.gen_chain_replay_stub(&replay, cont_stub);
+        #[cfg(target_arch = "aarch64")]
+        let stub = self.a64_gen_chain_replay_stub(&replay, cont_stub);
+        self.jit.select_page(saved_page);
+        self.chain_deopt_table.insert(return_addr, stub);
     }
 
     ///
@@ -1676,9 +1682,11 @@ impl Codegen {
     /// no cross-frame state this walk is responsible for.
     ///
     #[must_use]
-    pub(crate) fn chain_deopt(&mut self, mut cfp: Cfp) -> Vec<ChainConversion> {
-        let stub = self.jit.get_label_address(&self.chain_cont_stub);
-        let mut plan = Vec::new();
+    /// Collect the chain-deopt plan into *plan*, which the caller owns and
+    /// is expected to reuse — see [`Self::take_chain_plan`]. The plan cannot
+    /// simply be applied here: the replay half allocates and can run a GC,
+    /// so it has to run outside the `CODEGEN` borrow this method holds.
+    pub(crate) fn chain_deopt_into(&mut self, mut cfp: Cfp) {
         let mut return_addr = unsafe { cfp.return_addr() };
         while let Some(prev_cfp) = cfp.prev() {
             // A frame with a previous control frame was entered by a
@@ -1689,16 +1697,36 @@ impl Codegen {
             // instead (as the pre-chain-deopt eviction walk always did).
             let ret = return_addr.expect("suspended control frame has a null return address");
             if !self.check_vm_address(ret)
-                && let Some(replay) = self.chain_deopt_table.get(&ret).cloned()
+                && let Some(site_stub) = self.chain_deopt_table.get(&ret).copied()
             {
                 #[cfg(feature = "chain-deopt-log")]
                 eprintln!("### chain deopt: frame return {ret:?} -> chain conversion");
-                plan.push(ChainConversion::new(cfp, prev_cfp, replay, stub));
+                #[cfg(feature = "jit-log")]
+                jit_stats::bump(&jit_stats::CHAIN_CONVERSIONS);
+                // Call the site's compiled conversion. Everything the
+                // conversion does was fixed when the site was compiled, so
+                // there is no per-site data to look at and nothing to clone.
+                // It runs under the `CODEGEN` borrow this walk holds, which
+                // is sound because the stub reaches nothing on `Codegen`: it
+                // reads its three frame pointers and writes frame slots.
+                //
+                // SAFETY: the frames were found suspended on this thread's
+                // control-frame chain moments ago and nothing has run since;
+                // `caller_lfp` comes from the caller's CFP, so a frame
+                // promoted to the heap is followed to its live copy.
+                unsafe {
+                    let f: extern "C" fn(*mut u64, *mut u64, *mut u8) =
+                        std::mem::transmute(site_stub.as_ptr());
+                    f(
+                        cfp.frame_bp(),
+                        prev_cfp.frame_bp(),
+                        prev_cfp.lfp().as_ptr(),
+                    );
+                }
             }
             cfp = prev_cfp;
             return_addr = unsafe { cfp.return_addr() };
         }
-        plan
     }
 
     /// aarch64 specialized recompile: overwrite the single 4-byte `bl entry`
@@ -1973,6 +2001,10 @@ pub(crate) mod jit_stats {
     pub static CONST_SALVAGE_VALUECMP: AtomicUsize = AtomicUsize::new(0);
     pub static CONST_SALVAGE_FAIL_STALE: AtomicUsize = AtomicUsize::new(0);
     pub static CONST_SALVAGE_FAIL_CHANGED: AtomicUsize = AtomicUsize::new(0);
+    pub static CHAIN_CONVERSIONS: AtomicUsize = AtomicUsize::new(0);
+    pub static CHAIN_CONV_EMPTY: AtomicUsize = AtomicUsize::new(0);
+    pub static CHAIN_CONV_FLOAT: AtomicUsize = AtomicUsize::new(0);
+    pub static CHAIN_CONV_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
     pub fn bump(c: &AtomicUsize) {
         c.fetch_add(1, Ordering::Relaxed);
@@ -1982,6 +2014,10 @@ pub(crate) mod jit_stats {
         let g = |c: &AtomicUsize| c.load(Ordering::Relaxed);
         eprintln!();
         eprintln!("version / salvage stats:");
+        eprintln!("  chain conversions:                 {}", g(&CHAIN_CONVERSIONS));
+        eprintln!("    replay would be a no-op:         {}", g(&CHAIN_CONV_EMPTY));
+        eprintln!("    carries unboxed floats:          {}", g(&CHAIN_CONV_FLOAT));
+        eprintln!("    replay can allocate:             {}", g(&CHAIN_CONV_ALLOC));
         eprintln!("  class_version incs:                {}", g(&CLASS_VER_INC));
         eprintln!("  const_version incs:                {}", g(&CONST_VER_INC));
         eprintln!("  recovery attempts (class guard):   {}", g(&RECOVERY_ATTEMPT));

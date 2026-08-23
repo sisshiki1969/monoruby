@@ -28,14 +28,9 @@ pub(super) extern "C" fn chain_deopt(vm: &mut Executor) {
     let cfp = vm.cfp();
     #[cfg(feature = "chain-deopt-log")]
     eprintln!("### chain deopt: escalated from {:?}", cfp.lfp().func_id());
-    let plan = CODEGEN.with(|codegen| codegen.borrow_mut().chain_deopt(cfp));
-    for conversion in plan {
-        // SAFETY: every planned frame was found suspended on the current
-        // thread's control-frame chain moments ago, and nothing has run
-        // since — no frame has returned.
-        unsafe { conversion.apply() };
-    }
+    CODEGEN.with(|codegen| codegen.borrow_mut().chain_deopt_into(cfp));
 }
+
 
 /// Detach a shared (copy-on-write) String receiver so the JIT's inline
 /// byte-store fast path can write its buffer in place instead of deopting

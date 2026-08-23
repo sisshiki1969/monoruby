@@ -22,7 +22,7 @@ impl<'a> JitContext<'a> {
                 eprintln!("    {mode:?} src:{src_bb:?}");
 
                 let mut ir = AsmIr::new(self);
-                state.gen_bridge(&mut ir, &target, pc);
+                state.gen_bridge_all(&mut ir, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
                         self.add_outline_bridge(ir, dest, bbid);
@@ -84,6 +84,28 @@ impl<'a> JitContext<'a> {
                 self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;
             }
 
+            // Everything the loop-entry merge does spans the chain — the
+            // fixpoint's back edge is a whole `AbstractState`, `join` and
+            // `equiv` walk every frame, and `gen_bridge_all` bridges every
+            // frame. The three calls below are the exception, and they stay
+            // innermost-only for two different reasons.
+            //
+            // `liveness_analysis`'s `kill_unused` is innermost *by nature*.
+            // It discards the slots this loop does not touch, which is
+            // sound at a merge inside the frame that owns the loop and
+            // nowhere else: an outer frame's local that the loop never
+            // reads is still live in that frame's own continuation.
+            //
+            // The float half — `loop_used_as_float` feeding `use_float`,
+            // and `keep_backedge_floats` — is innermost only until an fpr
+            // can be allocated across frames. `FprAllocator` is per
+            // `SlotState` and its ids are positional (`FPReg(id)` is
+            // `xmm{id+2}` below `PHYS_FPR_POOL`), so two frames each
+            // promoting a slot would both take `FPReg(0)` and both write
+            // `xmm2`. Promoting an outer frame's slot needs one id space
+            // for the whole chain; that is the piece still missing, and it
+            // is the same one that keeps `bridge_at` asserting no outer
+            // `F`/`Sf`.
             let mut target = incoming;
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
                 let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());
@@ -162,7 +184,7 @@ impl<'a> JitContext<'a> {
             // the deopt resume past the fused BinCmp into the bare
             // CondBr, which then reads a stale `%dst` — see #480.
             self.gen_bridges_for_branches(&target, entries, bbid, pc);
-            self.new_backedge(target.slot_state().clone(), bbid);
+            self.new_backedge(target.slot_states(), bbid);
 
             Some(target)
         } else {
@@ -185,12 +207,12 @@ impl<'a> JitContext<'a> {
     ///
     fn gen_bridges_for_branches(
         &mut self,
-        target: &SlotState,
+        target: &AbstractState,
         entries: Vec<BranchEntry>,
         bbid: BasicBlockId,
         pc: BytecodePtr,
     ) {
-        let target = target.clone();
+        let target = target.slot_states();
         #[cfg(feature = "jit-debug")]
         eprintln!("  bridge to:{bbid:?} target:{target:?}");
         for BranchEntry {
@@ -204,7 +226,7 @@ impl<'a> JitContext<'a> {
             eprintln!("    {mode:?} src:{src_bb:?}");
 
             let mut ir = AsmIr::new(self);
-            state.gen_bridge(&mut ir, &target, pc);
+            state.gen_bridge_all(&mut ir, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {
                     self.add_outline_bridge(ir, dest, bbid);
