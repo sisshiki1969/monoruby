@@ -200,8 +200,12 @@ impl JoinAction {
             JoinAction::TryFreshFKeep | JoinAction::TryFreshFElseS => {
                 JoinAction::SetS(Guarded::Float)
             }
-            JoinAction::SetSf(_, guarded)
-            | JoinAction::TryFreshSfElseKeep(_, guarded)
+            // `SetSf` is the arm where both predecessors already agree on
+            // the register, so it binds no new one — the only fpr-shaped
+            // decision an outer frame can act on without a register
+            // operation (see `AbstractFrame::bridge_at`).
+            JoinAction::SetSf(x, guarded) => JoinAction::SetSf(x, guarded),
+            JoinAction::TryFreshSfElseKeep(_, guarded)
             | JoinAction::TryFreshSfElseS(guarded) => JoinAction::SetS(guarded.into()),
             other => other,
         }

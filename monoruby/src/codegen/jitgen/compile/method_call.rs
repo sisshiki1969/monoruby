@@ -375,7 +375,7 @@ impl<'a> JitContext<'a> {
                 && !self.in_dispatch_arm()
                 && state.no_capture_guard();
             if inlined_block {
-                state.locals_unbox_to_S_keeping_const(ir);
+                state.locals_unbox_to_S_keeping_claims(ir);
             } else {
                 state.all_frames_unbox_to_S(self, ir);
             }
