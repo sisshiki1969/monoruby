@@ -514,6 +514,7 @@
 2856d276c472b3b28a51d514662d76c0	"Cargo.toml"	File.open("Cargo.toml") { |f| f.to_path }
 2857ee8562740e3a303e0b419aa33d73	["EUC-JP", true]	(f="/tmp/mono_tpe_#{Process.pid}"; File.write(f, ""); io=File.new(f.encode(Encod
 286b90c6e98dbe079e4a2b613b749cdb	"nil"	Set[1, 2, 3].freeze.flatten!.inspect
+289051905abb74616bfde774be4d9349	32.5	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 2890bbfd125193c6fcb4cb125c9bd264	[999, 999]	$flag = false\n        def maybe_redefine\n          if $flag\n           
 28a4af30262d398c6994aca4ced26997	[true, false, true, false, true, false, true, true, true, false]	class C; end\n            class D < C; end\n            o = C.new\n   
 28b294682b3a75ed931f88b8ec443144	[true, false]	k = Class.new { def ==(o); false; end; def equal?(o); false; end }\n

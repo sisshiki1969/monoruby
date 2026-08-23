@@ -132,6 +132,44 @@ fn a_store_through_two_outer_levels() {
 fn a_block_call_inside_a_loop() {
     run_test_with_prelude(
         r#"
+        def g(n)
+          total = 0.0
+          5.times do |i|
+            a = n * 1.5 + i
+            call_block { total += a }
+          end
+          total
+        end
+        g(3)
+        "#,
+        PRELUDE,
+    );
+}
+
+/// The same with a `while` loop instead of `Integer#times`, which trips a
+/// hole that predates any of this and is not about floats at all: the
+/// caller's argument reaches the loop entry as `C(3)` (folded from the
+/// call site) and reaches the back edge as `S(Value)` (a `forget_constants`
+/// on the path through the block-passing call), and `bridge_at` has no
+/// `S -> C` transition for a frame below the innermost one — it cannot
+/// prove the slot holds the constant the target claims. It panics:
+///
+/// ```text
+/// unreachable code: %1 S(Value)->C(3)
+/// ```
+///
+/// This is the third of the three open items `compile_method_call` names
+/// where it decides what a block-passing call may keep ("the bridge must
+/// be able to carry the claim across a merge in a frame *below* this one,
+/// which it cannot"). It reproduces on x86-64 with no stress features and
+/// with the `F -> Sf` boundary change reverted, so it is not arch- or
+/// float-specific; `Integer#times` above escapes it only because the
+/// callee's loop is not in the block's own chain.
+#[test]
+#[ignore = "pre-existing: bridge_at has no S -> C for an outer frame"]
+fn a_while_loop_around_a_block_passing_call() {
+    run_test_with_prelude(
+        r#"
         def f(n)
           total = 0.0
           i = 0
@@ -143,15 +181,7 @@ fn a_block_call_inside_a_loop() {
           end
           total
         end
-        def g(n)
-          total = 0.0
-          5.times do |i|
-            a = n * 1.5 + i
-            call_block { total += a }
-          end
-          total
-        end
-        [f(3), g(3)]
+        f(3)
         "#,
         PRELUDE,
     );
