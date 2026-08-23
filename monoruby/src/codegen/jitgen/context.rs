@@ -437,7 +437,13 @@ pub(super) struct JitStackFrame {
     ///
     /// Map for target contexts of backward branches.
     ///
-    backedge_map: HashMap<BasicBlockId, SlotState>,
+    /// Loop-entry target state, one `SlotState` per frame of this
+    /// compilation, innermost last — the shape
+    /// [`AbstractState::gen_bridge_all`] bridges every back edge to.
+    /// Outer frames are carried because a block handed out of the unit can
+    /// write their locals, so their modes have to be merged (and written
+    /// back) at the loop head like the innermost frame's.
+    backedge_map: HashMap<BasicBlockId, Vec<SlotState>>,
     ///
     /// Contexts for returning from this frame.
     ///
@@ -1134,7 +1140,7 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn specialized_compile(
         &mut self,
-        state: &mut AbstractFrame,
+        state: &mut AbstractState,
         callid: CallSiteId,
         frame: JitStackFrame,
     ) -> JitResult<JitStackFrame> {
@@ -1142,16 +1148,31 @@ impl<'a> JitContext<'a> {
         let caller = self.current_frame_mut();
         caller.stack_offset += stack_offset;
         caller.callid = Some(callid);
-        let scope = std::mem::take(state);
+        let scope = std::mem::take(&mut **state);
         assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
 
         let frame = self.traceir_to_asmir(frame)?;
 
         let current = self.current_frame_mut();
-        *state = current.abstract_state.take().unwrap();
+        let innermost = current.abstract_state.take().unwrap();
         current.callid = None;
         current.stack_offset -= stack_offset;
+        // Take the chain back. The nested compile could only record what
+        // it did to our outer frames on the context's copies, so re-read
+        // those rather than keep the clones we handed over.
+        self.adopt_outer(state, innermost);
         Ok(frame)
+    }
+
+    ///
+    /// Rebuild *state*'s frame chain from the context's copies, keeping
+    /// *innermost* (this compile's own frame, which the context does not
+    /// track while the compile is running).
+    ///
+    fn adopt_outer(&self, state: &mut AbstractState, innermost: AbstractFrame) {
+        let mut frames = self.outer_contexts();
+        frames.push(innermost);
+        state.set_frames(frames);
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
@@ -1281,17 +1302,22 @@ impl<'a> JitContext<'a> {
     /// *slot* of the frame *outer* levels out, so nothing downstream keeps
     /// believing a mode this store just invalidated.
     ///
-    /// The caller's locals now cross a call boundary with their modes
-    /// intact (`locals_unbox_to_S`), which is only sound if a callee that
-    /// writes one of them says so. A `C` local the callee overwrites, or an
-    /// `S(Guarded::Float)` it stores a String into, would otherwise still
-    /// be read as a constant or as a Float once the call returns.
+    /// A frame's locals cross a call boundary with their `Guarded` intact
+    /// (`all_frames_unbox_to_S`), which is only sound if a callee that
+    /// writes one of them says so: an `S(Guarded::Float)` a callee stores
+    /// a String into would otherwise still be read as a Float once the
+    /// call returns.
     ///
     /// Conservative on purpose: the slot drops to `S(Guarded::Value)`
-    /// rather than taking the stored value's own mode. Propagating that
-    /// precisely needs the join to span frames as well.
+    /// rather than taking the stored value's own mode.
     ///
-    pub(super) fn invalidate_outer_slot(&mut self, outer: usize, slot: SlotId) {
+    /// This is the context half. The live chain in `AbstractState` is the
+    /// one this compile reasons about and has its own
+    /// [`AbstractState::widen_outer_slot`]; both are written, because the
+    /// frame that owns the slot reads the context copy back when the
+    /// nested compile it is waiting on returns.
+    ///
+    pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {
         let Some(pos) = self.outer_pos(outer) else {
             // The chain leaves this compilation: the frame is not one of
             // ours, so there is no abstract state of ours to invalidate.
@@ -1481,6 +1507,8 @@ impl<'a> JitContext<'a> {
         match inst {
             AsmInst::LoadDynVarSpecialized { offset, .. }
             | AsmInst::StoreDynVarSpecialized { offset, .. }
+            | AsmInst::OuterFprToStack { offset, .. }
+            | AsmInst::OuterLitToStack { offset, .. }
             | AsmInst::MethodRetSpecialized {
                 rbp_offset: offset, ..
             }
@@ -1780,7 +1808,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().branch_map.remove(&bb)
     }
 
-    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<SlotState> {
+    pub(super) fn remove_backedge(&mut self, bb: BasicBlockId) -> Option<Vec<SlotState>> {
         self.current_frame_mut().backedge_map.remove(&bb)
     }
 
@@ -1867,7 +1895,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Add new backward branch from *src_idx* to *dest* with `state`.
     ///
-    pub(super) fn new_backedge(&mut self, target: SlotState, bb_pos: BasicBlockId) {
+    pub(super) fn new_backedge(&mut self, target: Vec<SlotState>, bb_pos: BasicBlockId) {
         #[cfg(feature = "jit-debug")]
         eprintln!("   new_backedge:{bb_pos:?} {target:?}");
         self.current_frame_mut().backedge_map.insert(bb_pos, target);

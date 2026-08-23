@@ -249,8 +249,11 @@ impl<'a> JitContext<'a> {
         src: SlotId,
     ) {
         // The store invalidates whatever the outer frame's abstract state
-        // claimed about this slot; see `invalidate_outer_slot`.
-        self.invalidate_outer_slot(dst.outer, dst.reg);
+        // claimed about this slot — in both places that track it: the live
+        // chain this compile is reasoning about, and the context's copy,
+        // which is what the *caller* will read back when we are done.
+        self.widen_outer_slot(dst.outer, dst.reg);
+        state.widen_outer_slot(dst.outer, dst.reg);
         let r = GP::Rdi;
         state.load(ir, src, r);
         if let Some((spec_ids, extra, not_captured)) = self.outer_specialized_ids(state, dst.outer)

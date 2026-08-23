@@ -23,7 +23,7 @@
 //! stack homes before the split, `dst` becomes an unknown `Value`, and every
 //! cached invariant is dropped because any arm may have run arbitrary Ruby.
 //! Each arm then bridges from wherever it happens to have landed
-//! ([`SlotState::gen_bridge`] handles the rest).
+//! ([`AbstractState::gen_bridge_all`] handles the rest).
 //!
 //! Declaring rather than joining costs precision, and only that: `S(Value)` is
 //! the top of the lattice, so every arm can reach it. Two arms that both left
@@ -115,13 +115,13 @@ impl<'a> JitContext<'a> {
         jump: bool,
     ) {
         // The GP-pool residency is a layer *below* the link modes, and
-        // `gen_bridge` does not see it: a slot both states call `S` bridges to
+        // the bridge does not see it: a slot both states call `S` bridges to
         // nothing even when this arm's only copy of its value is parked in a
         // pool register (which is exactly where a call result lands). The
         // merge state inherited an empty file from `declare_merge`, so every
         // arm has to pay its own residents back to their stack homes first.
         arm.flush_gp(ir);
-        arm.gen_bridge(ir, m.target.slot_state(), m.pc);
+        arm.gen_bridge_all(self, ir, &m.target.slot_states(), m.pc);
         if jump {
             ir.push(AsmInst::Br(m.merge));
         }

@@ -51,6 +51,144 @@ impl AbstractState {
         AbstractState { frames }
     }
 
+    /// Number of frames of this compilation's chain, innermost included.
+    pub(super) fn depth(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// The frame at *level*, counted from the outermost.
+    pub(super) fn frame_at(&self, level: usize) -> &AbstractFrame {
+        &self.frames[level]
+    }
+
+    pub(super) fn set_frames(&mut self, frames: Vec<AbstractFrame>) {
+        debug_assert_eq!(frames.len(), self.frames.len());
+        self.frames = frames;
+    }
+
+    ///
+    /// Give up whatever this chain claimed about *slot* of the frame
+    /// *outer* levels out — the live half of
+    /// [`JitContext::widen_outer_slot`].
+    ///
+    pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {
+        if outer > 0 && outer < self.frames.len() {
+            let level = self.frames.len() - 1 - outer;
+            self.frames[level].invalidate_slot(slot);
+        }
+    }
+
+    /// Every frame's `SlotState`, innermost last — the loop-entry shape
+    /// each back edge is bridged to.
+    pub(super) fn slot_states(&self) -> Vec<SlotState> {
+        self.frames.iter().map(|f| f.slot_state().clone()).collect()
+    }
+
+    ///
+    /// Where each frame's slots sit relative to `rbp`, indexed by distance
+    /// from the innermost frame (which needs none — it is addressed off the
+    /// local-frame pointer as usual).
+    ///
+    /// `None` for a frame whose chain offset is not statically known (it
+    /// may have been heapified); the emitters then fall back to the generic
+    /// `StoreDynVar`, which walks the real chain.
+    ///
+    fn chain_offsets(&self, jitctx: &JitContext) -> Vec<Option<DynVarOffset>> {
+        (0..self.frames.len())
+            .map(|outer| {
+                if outer == 0 {
+                    return None;
+                }
+                jitctx
+                    .outer_specialized_ids(self, outer)
+                    .filter(|(_, _, not_captured)| *not_captured)
+                    .map(|(ids, extra, _)| DynVarOffset::Hint { ids, extra })
+            })
+            .collect()
+    }
+
+    ///
+    /// Bridge every frame of this compilation to *target*, not just the
+    /// innermost one.
+    ///
+    /// A block handed out of the unit can store into an outer frame's
+    /// local, so an outer slot's mode can differ between two paths into a
+    /// merge exactly as an inner one can. Same rules per frame; only the
+    /// emitted store differs, since an outer slot is addressed through the
+    /// frame chain.
+    ///
+    /// Nothing is reported to the context here. A bridge relocates or
+    /// materialises a value; it never *changes* one, so it has nothing to
+    /// tell the frame that owns the slot. Only a store the compiler cannot
+    /// see behind does — `store_dynvar` and `all_frames_unbox_to_S`.
+    ///
+    pub(super) fn gen_bridge_all(
+        mut self,
+        jitctx: &JitContext,
+        ir: &mut AsmIr,
+        target: &[SlotState],
+        pc: BytecodePtr,
+    ) {
+        #[cfg(feature = "jit-debug")]
+        eprintln!("      from:{:?}", &self);
+        let depth = self.frames.len();
+        debug_assert_eq!(depth, target.len());
+        let offsets = self.chain_offsets(jitctx);
+        for (level, tgt) in target.iter().enumerate().rev() {
+            // `level` counts from the outermost frame; `outer` is the
+            // distance from the innermost, which is what the frame-chain
+            // addressing takes.
+            let outer = depth - 1 - level;
+            let offset = offsets[outer].as_ref();
+            let frame = &mut self.frames[level];
+            // The target may have allocated more spill slots than us (a
+            // sibling branch reached the merge with a wider spill region).
+            // Grow to match so a `LinkMode::F(VirtFPReg(N))` in `tgt` with
+            // `N` past our length can be looked up without panicking.
+            frame.grow_fpr_to(tgt.fpr_len());
+            // Locals only beyond the innermost frame: an outer frame's
+            // temps lie under the callee frame that sits on top of them,
+            // so a bridge must never write there.
+            let slots = if outer == 0 {
+                frame.all_regs()
+            } else {
+                frame.locals()
+            };
+            for slot in slots {
+                frame.bridge_at(ir, tgt, slot, pc, outer, offset);
+            }
+        }
+    }
+
+    ///
+    /// [`Self::locals_unbox_to_S`] over *every* frame of this compilation,
+    /// keeping no constant.
+    ///
+    /// What a call that hands a block to a callee outside this unit needs.
+    /// The block is compiled on its own, so its stores never reach
+    /// `store_dynvar`'s hook — and it can reach not only this frame but,
+    /// through its own outer chain, every frame further out.
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn all_frames_unbox_to_S(&mut self, jitctx: &mut JitContext, ir: &mut AsmIr) {
+        let depth = self.frames.len();
+        let offsets = self.chain_offsets(jitctx);
+        let mut widened = vec![];
+        for level in (0..depth).rev() {
+            let outer = depth - 1 - level;
+            let offset = offsets[outer].as_ref();
+            let frame = &mut self.frames[level];
+            for i in frame.locals() {
+                if frame.unbox_to_S_at(ir, i, outer, offset) {
+                    widened.push((outer, i));
+                }
+            }
+        }
+        for (outer, slot) in widened {
+            jitctx.widen_outer_slot(outer, slot);
+        }
+    }
+
     pub(super) fn equiv(&self, other: &Self) -> bool {
         self.frames
             .iter()
@@ -84,22 +222,6 @@ impl AbstractState {
         merge_ctx
     }
 
-    ///
-    /// Generate bridge AsmIr to merge current state with target state.
-    ///
-    pub(super) fn gen_bridge(mut self, ir: &mut AsmIr, target: &SlotState, pc: BytecodePtr) {
-        #[cfg(feature = "jit-debug")]
-        eprintln!("      from:{:?}", &self);
-        // The target state may have allocated more spill slots than us
-        // (a sibling branch reached the merge point with a wider spill
-        // region). Grow our fpr vec to match before bridging so that
-        // any LinkMode::F(VirtFPReg(N)) with N >= self.fpr.len() in
-        // `target` can be looked up without panicking.
-        self.grow_fpr_to(target.fpr_len());
-        for slot in self.all_regs() {
-            self.bridge(ir, target, slot, pc);
-        }
-    }
 }
 
 ///
@@ -539,22 +661,6 @@ impl AbstractFrame {
         }
     }
 
-    ///
-    /// Home every unboxed local in its frame slot, keeping the rest of the
-    /// abstract state. See [`SlotState::unbox_to_S`].
-    ///
-    /// This is what a call boundary needs: the callee sees the frame, so an
-    /// `F`/`Sf` local must be boxed there and its xmm handed back, while a
-    /// `C` or `S` local's mode is a fact about the slot and stays true —
-    /// which is what lets the callee read the caller's abstract state
-    /// instead of starting from `S(Value)`.
-    ///
-    #[allow(non_snake_case)]
-    pub(super) fn locals_unbox_to_S(&mut self, ir: &mut AsmIr) {
-        for i in self.locals() {
-            self.unbox_to_S(ir, i);
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

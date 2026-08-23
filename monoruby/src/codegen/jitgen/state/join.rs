@@ -5,8 +5,15 @@ impl AbstractState {
     /// Join abstract states.
     ///
     pub(in crate::codegen::jitgen) fn join(&mut self, other: &AbstractState) {
-        for (lhs, rhs) in self.frames.iter_mut().zip(other.frames.iter()) {
-            lhs.join(rhs);
+        let innermost = self.frames.len() - 1;
+        for (level, (lhs, rhs)) in self.frames.iter_mut().zip(other.frames.iter()).enumerate() {
+            // Only the innermost frame owns fp registers today: a call that
+            // hands out a block spills every live one, so an outer frame
+            // holds nothing unboxed and the merge must not hand it one
+            // either — the two frames' fpr allocators are separate, and an
+            // outer bridge has no way to load a slot into an fpr. Lifting
+            // this is what carrying `F`/`Sf` across the boundary will need.
+            lhs.join_with(rhs, level == innermost);
         }
     }
 }
@@ -43,7 +50,15 @@ impl AbstractFrame {
     ///  *2: if self == other, Const.
     ///
     /// ~~~
-    fn join(&mut self, other: &AbstractFrame) {
+    ///
+    /// `allow_fpr` is false for a frame that must stay free of fp registers
+    /// (every frame but the innermost — see [`AbstractState::join`]). The
+    /// decision stream is unchanged; each action that would place a value
+    /// in an fpr is demoted to the `S` it already falls back to when no
+    /// physical register is free, so the resulting *types* — and hence the
+    /// type-meet shadow check — are the same either way.
+    ///
+    fn join_with(&mut self, other: &AbstractFrame, allow_fpr: bool) {
         // §5 allocator de-fusion, stage 1: record the per-slot `JoinAction`
         // stream as we merge, then (debug) replay it from the pre-merge frame and
         // assert it reproduces the identical placement. This locks the property
@@ -66,7 +81,10 @@ impl AbstractFrame {
             // stream and assign registers + emit edge moves, instead of
             // `apply_join` allocating inline. Behaviour is identical to the old
             // fused per-slot match.
-            let action = self.decide_join(other, i);
+            let mut action = self.decide_join(other, i);
+            if !allow_fpr {
+                action = action.without_fpr();
+            }
             #[cfg(debug_assertions)]
             actions.push((i, action));
             self.apply_join(i, action);
@@ -169,6 +187,25 @@ enum JoinAction {
     TryFreshSfElseS(SfGuarded),
     /// `_ -> S(guarded)`
     SetS(Guarded),
+}
+
+impl JoinAction {
+    ///
+    /// The same decision for a frame that may not hold an fp register:
+    /// every placement that would take one becomes the `S` it already
+    /// degrades to under register pressure.
+    ///
+    fn without_fpr(self) -> Self {
+        match self {
+            JoinAction::TryFreshFKeep | JoinAction::TryFreshFElseS => {
+                JoinAction::SetS(Guarded::Float)
+            }
+            JoinAction::SetSf(_, guarded)
+            | JoinAction::TryFreshSfElseKeep(_, guarded)
+            | JoinAction::TryFreshSfElseS(guarded) => JoinAction::SetS(guarded.into()),
+            other => other,
+        }
+    }
 }
 
 impl AbstractFrame {

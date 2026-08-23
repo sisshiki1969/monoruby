@@ -172,6 +172,8 @@ impl Codegen {
             | AsmInst::SpecializedYield { .. }
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
+            | AsmInst::OuterFprToStack { .. }
+            | AsmInst::OuterLitToStack { .. }
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
             | AsmInst::ArrayIndexAssign { .. }

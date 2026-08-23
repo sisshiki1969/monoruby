@@ -22,7 +22,7 @@ impl<'a> JitContext<'a> {
                 eprintln!("    {mode:?} src:{src_bb:?}");
 
                 let mut ir = AsmIr::new(self);
-                state.gen_bridge(&mut ir, &target, pc);
+                state.gen_bridge_all(self, &mut ir, &target, pc);
                 match mode {
                     BranchMode::Side { dest } => {
                         self.add_outline_bridge(ir, dest, bbid);
@@ -162,7 +162,7 @@ impl<'a> JitContext<'a> {
             // the deopt resume past the fused BinCmp into the bare
             // CondBr, which then reads a stale `%dst` — see #480.
             self.gen_bridges_for_branches(&target, entries, bbid, pc);
-            self.new_backedge(target.slot_state().clone(), bbid);
+            self.new_backedge(target.slot_states(), bbid);
 
             Some(target)
         } else {
@@ -185,12 +185,12 @@ impl<'a> JitContext<'a> {
     ///
     fn gen_bridges_for_branches(
         &mut self,
-        target: &SlotState,
+        target: &AbstractState,
         entries: Vec<BranchEntry>,
         bbid: BasicBlockId,
         pc: BytecodePtr,
     ) {
-        let target = target.clone();
+        let target = target.slot_states();
         #[cfg(feature = "jit-debug")]
         eprintln!("  bridge to:{bbid:?} target:{target:?}");
         for BranchEntry {
@@ -204,7 +204,7 @@ impl<'a> JitContext<'a> {
             eprintln!("    {mode:?} src:{src_bb:?}");
 
             let mut ir = AsmIr::new(self);
-            state.gen_bridge(&mut ir, &target, pc);
+            state.gen_bridge_all(self, &mut ir, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {
                     self.add_outline_bridge(ir, dest, bbid);
