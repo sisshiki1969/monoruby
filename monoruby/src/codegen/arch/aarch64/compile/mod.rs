@@ -588,9 +588,14 @@ impl Codegen {
             self.jit.const_i32(0);
             self.jit.const_i32(0);
             let f = runtime::correct_rest_kw as *const () as u64;
-            monoasm_arm64!(&mut self.jit, ldr x1, [x24];);
-            self.a64_addr_sub(1, 1, RBP_LOCAL_FRAME as u32);
-            self.jit.get_label_address(&data);
+            // Load the caller's fp into a scratch and subtract *out of* it:
+            // `a64_addr_sub` materializes an offset over 4095 into `addr`,
+            // so `addr` doubling as `base` would destroy the base before it
+            // is read. The `forward_rest` loop above has this right; this
+            // one did not, and the debug assertion caught it on a macOS
+            // arm64 run (`forwarded_struct_rest_native`).
+            monoasm_arm64!(&mut self.jit, ldr x9, [x24];);
+            self.a64_addr_sub(1, 9, RBP_LOCAL_FRAME as u32);
             monoasm_arm64!(&mut self.jit,
                 adr x0, data;
                 mov x9, (f);
