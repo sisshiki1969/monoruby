@@ -1032,6 +1032,15 @@ impl SlotState {
     /// interpreter after a deopt, a block compiled elsewhere, this frame's
     /// own later code — has to find it.
     ///
+    /// The slot drops to `Guarded::Value`, not to the type the constant
+    /// happened to have. Every caller of this is giving the claim up
+    /// *because* something it cannot see is about to write the slot, and
+    /// that something is under no obligation to write the same type —
+    /// `Array#slice_before`'s block dropped its last group when the narrow
+    /// guard survived. A merge that decides `C` meets `S` is a different
+    /// question and keeps the type, since the value really is `v` on that
+    /// path (see `bridge_at`).
+    ///
     pub(in crate::codegen::jitgen) fn give_up_const(
         &mut self,
         ir: &mut AsmIr,
@@ -1039,7 +1048,7 @@ impl SlotState {
         v: Value,
     ) {
         ir.spill(Spill::Lit(v, slot));
-        self.set_mode(slot, LinkMode::S(Guarded::from_concrete_value(v)));
+        self.set_mode(slot, LinkMode::S(Guarded::Value));
     }
 
     /// Every local this frame is still holding as a constant.
