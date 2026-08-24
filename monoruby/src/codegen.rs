@@ -553,9 +553,19 @@ impl JitModule {
         (ptr0, size0 as usize, ptr1, size1 as usize)
     }
 
+    /// Patch a compilation unit's class-version snapshot word (the
+    /// `class_version_label` created by `jit_compile`) to *version*,
+    /// re-validating every `GuardClassVersion` in the unit after a
+    /// successful class salvage.
     pub fn set_class_version(&mut self, version: u32, label: &DestLabel) {
         let p = self.jit.get_label_address(label).as_ptr() as *mut u32;
+        // The word is a `const_i32`, so it lives in a *code* page, not the
+        // data page — see `set_const_version` for why that matters here.
+        self.jit.mark_dirty(p as *const u8, 4);
+        // SAFETY: the label names a 4-byte word emitted by `jit_compile`,
+        // just made writable by `mark_dirty`.
         unsafe { *p = version };
+        self.jit.set_executable();
     }
 
     /// Patch a compilation unit's const-version snapshot word (see
@@ -563,9 +573,23 @@ impl JitModule {
     /// `GuardConstVersion` in the unit after a successful const salvage.
     pub fn set_const_version(&mut self, version: u64, label: &DestLabel) {
         let p = self.jit.get_label_address(label).as_ptr() as *mut u64;
-        // SAFETY: the label names an 8-byte data word emitted by
-        // `jit_compile` in the JIT data area, which stays writable.
+        // Both unit snapshot words are `const_i64`/`const_i32` labels, and
+        // monoasm's `resolve_constants` emits those into the *code* page
+        // (only `data_i64`/`data_i32` reach the always-writable data page —
+        // which is where every other patchable word here lives: the global
+        // `class_version` / `const_version`, `poll_flag`, `bop_flags`, the
+        // deopt counters). On Apple Silicon the code pages are `MAP_JIT`
+        // and write-protected for the thread whenever it is not emitting,
+        // which is exactly the case on the salvage path: it runs out of
+        // compiled code. Storing through the raw pointer there is a SIGBUS.
+        // `mark_dirty` flips the pages writable and records the 8 bytes so
+        // the matching `set_executable` re-protects them and flushes only
+        // that range. Both calls are no-ops on x86-64.
+        self.jit.mark_dirty(p as *const u8, 8);
+        // SAFETY: the label names an 8-byte word emitted by `jit_compile`,
+        // just made writable by `mark_dirty`.
         unsafe { *p = version };
+        self.jit.set_executable();
     }
 
     #[cfg(feature = "perf")]

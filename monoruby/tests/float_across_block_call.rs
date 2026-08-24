@@ -165,19 +165,41 @@ fn a_block_call_inside_a_loop() {
 /// the call may keep the frame's constants. The analysis predicted a kept
 /// `C(3)`; codegen gave it up. See `AsmIr::note_analysis_deopt`.
 ///
-/// Compiling it at all then uncovered a *second*, unrelated defect, which
-/// is why one configuration is excluded below: on aarch64 with
-/// `stress-spill-pool` — the pool shrunk to 2, so nearly every fpr is a
-/// spill slot — this segfaults in the compiled code. It is not about the
-/// float claims a block-passing call keeps: it reproduces with the `Sf`
-/// and `F -> Sf` boundary arms both removed, i.e. with the frame keeping
-/// no float across the call at all. x86-64 at either pool size and
-/// aarch64 with the full pool are unaffected, so it is the aarch64 spill
-/// addressing, reachable only now that this shape compiles.
+/// Compiling it at all then uncovered *two* further, unrelated defects,
+/// which is why one configuration is still excluded below.
+///
+/// The first was not about the spill pool at all, and is fixed:
+/// `Codegen::set_class_version` patched a unit's version snapshot word —
+/// a `const_i32`, which monoasm emits into a `MAP_JIT` *code* page, not
+/// the always-writable data page — without flipping the page writable, so
+/// every successful class-version salvage was a SIGBUS on Apple Silicon at
+/// *any* pool size. See `Codegen::set_const_version`'s comment.
+///
+/// The second is real and still open: on aarch64 with `stress-spill-pool`
+/// this segfaults in compiled code. `LoadDynVarSpecialized` addresses the
+/// outer frame at a fixed `[x29 + offset]`, and here that offset is 16
+/// bytes too small, so the block reads the word below the slot it wants.
+/// Measured at the faulting site: the block's `x29` sits 368 bytes below
+/// `f`'s, `a` (4.5) is at `x29 + 280`, and the emitted offset is 264.
+///
+/// What is *ruled out*, so nobody re-walks it:
+/// - the offset does not differ by pool — `resolve_specialized_id_chain`
+///   yields the same 352 at pool 2 and pool 14, and pool 14 measures a
+///   physical 352, so only the layout moves;
+/// - the modelled FP-save (`specialized_compile`'s `using_fpr_offset`) and
+///   the emitted one (`emit_fpr_save`) agree — 45/45 call sites matched;
+/// - `frame_sizes.total` being calibrated for `Init`-prologue frames
+///   (`total - 32`) while a loop-JIT root reserves `total - 16` looks like
+///   the discrepancy, but adding `CONTINUATION_FRAME_SIZE` back for
+///   `is_loop` frames is **not** the fix — with or without excluding the
+///   `MethodRetSpecialized` / `BlockBreakSpecialized` twins it fixes this
+///   case and breaks a `while` loop + block-passing call that has no
+///   redefinition churn (which reaches a loop-JIT chain and is correct
+///   today). So `is_loop` is not the axis that discriminates.
 #[test]
 #[cfg_attr(
     all(target_arch = "aarch64", feature = "stress-spill-pool"),
-    ignore = "separate aarch64 spill-path defect: segfaults in compiled code"
+    ignore = "open aarch64 defect: specialized-dynvar chain offset is 16 short through a loop-JIT root"
 )]
 fn a_while_loop_around_a_block_passing_call() {
     run_test_with_prelude(
