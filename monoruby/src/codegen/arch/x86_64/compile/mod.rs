@@ -2039,7 +2039,14 @@ impl Codegen {
     }
 
     /// Return through the method-return path, resuming the caller at `pc + 1`.
-    pub(in crate::codegen::jitgen) fn emit_method_ret(&mut self, pc: BytecodePtr) {
+    // `_loop_jit_spill_bytes` is deliberately unused, like the other
+    // `entry_raise` exits (`emit_raise` etc.): x86's VM frames are
+    // rbp-relative, so a stale `rsp` at the resume is unobservable.
+    pub(in crate::codegen::jitgen) fn emit_method_ret(
+        &mut self,
+        pc: BytecodePtr,
+        _loop_jit_spill_bytes: usize,
+    ) {
         monoasm! { &mut self.jit,
             movq r13, ((pc + 1).as_ptr());
         };
@@ -2047,7 +2054,11 @@ impl Codegen {
     }
 
     /// Non-local exit through the block-break path, resuming at `pc + 1`.
-    pub(in crate::codegen::jitgen) fn emit_block_break(&mut self, pc: BytecodePtr) {
+    pub(in crate::codegen::jitgen) fn emit_block_break(
+        &mut self,
+        pc: BytecodePtr,
+        _loop_jit_spill_bytes: usize,
+    ) {
         monoasm! { &mut self.jit,
             movq r13, ((pc + 1).as_ptr());
         };
