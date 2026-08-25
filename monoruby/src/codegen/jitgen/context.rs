@@ -1674,8 +1674,8 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn method_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
         // Method specialization is lowered on both arches now, so the caller
-        // chain is encoded for `MethodRetSpecialized` on aarch64 too. (Block
-        // inlining stays x86-only — see `iter_caller_specialized_ids`.)
+        // chain is encoded for `MethodRetSpecialized` on aarch64 too — as is
+        // block inlining, see `iter_caller_specialized_ids`.
         //
         // The chain starts at the HOME method frame itself, so the home may
         // sit anywhere in the unit — including the compile root. The

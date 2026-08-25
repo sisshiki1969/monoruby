@@ -1126,12 +1126,19 @@ impl Codegen {
     /// 16 before dispatching to the handler).
     ///
     /// The codeptr slot at `[PC+8]` is tri-state: `0` = not compiled yet, `1` =
-    /// a disabled sentinel (the compile bailed on an unported AsmInst — never
-    /// retry, just keep interpreting), any other value = the real compiled
-    /// entry. Without the sentinel a bailing hot loop would re-run the (failed,
+    /// a disabled sentinel (the compile did not publish an entry — never retry,
+    /// just keep interpreting), any other value = the real compiled entry.
+    /// Without the sentinel such a hot loop would re-run the (failed,
     /// non-trivial) compile every time the counter crosses the threshold —
     /// thousands of times per call — which is far slower than just interpreting
-    /// it. aarch64-only; x86 effectively never bails so it does not need this.
+    /// it.
+    ///
+    /// aarch64-only, but no longer because of unported instructions: the
+    /// backend lowers every `AsmInst`. What it can still hit is branch range —
+    /// a large loop body can put a `TBZ`/`TBNZ` further from its deopt than
+    /// imm14 (+/-32 KiB) reaches, which panics the emit.
+    /// `compiler::jit_compile_loop` catches that and leaves the codeptr
+    /// unpublished. x86's branches reach far enough that it never needs this.
     pub(in crate::codegen) fn a64_op_loop_start(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let compile = self.jit.label();

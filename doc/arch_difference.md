@@ -1,18 +1,27 @@
 # x86-64 / aarch64 JIT backend differences
 
 A survey of how the two JIT machine-code backends differ today, focused on
-**AsmInst coverage** and **lowering logic**. It is current as of the full
-aarch64 port (`#704`) and the chunked-literal frame-size fix (`#709`).
+**AsmInst coverage** and **lowering logic**. Current as of the loop-JIT entry
+pin (`#1176`).
 
-- x86-64 backend: `monoruby/src/codegen/arch/x86_64/` — `compile/` (split into
-  `mod.rs`, `binary_op.rs`, `method_call.rs`, `variables.rs`, `index.rs`,
-  `builtin.rs`, `defined.rs`, `definition.rs`, `constants.rs`,
-  `init_method.rs`) + `guard.rs`.
-- aarch64 backend: `monoruby/src/codegen/arch/aarch64/` — `compile.rs`
-  (one ~4.8 k-line file) + `guard.rs`.
+The two trees are mirrors of each other — same file names, 20 files and
+~12.1 k lines each:
+
+```
+monoruby/src/codegen/arch/{x86_64,aarch64}/
+    codegen.rs  compile/  guard.rs  invoker.rs  jit_module.rs
+    vmgen.rs    vmgen/    wrapper.rs
+```
+
 - Shared front-end + dispatcher: `monoruby/src/codegen/jitgen/` (TraceIR →
   AsmIR) and `jitgen/asmir/compile_shared.rs` (the arch-neutral AsmInst
   lowering dispatcher).
+
+> Line-number links below are omitted on purpose: both backends have been
+> re-split since this document was first written (`#994` broke the aarch64
+> `compile.rs` / `vmgen.rs` monoliths into the `compile/` and `vmgen/`
+> directories above), and the previous revision's line anchors had all gone
+> stale. Grep for the function names instead.
 
 > **History.** An earlier revision of this document (pre-`#704`) described
 > aarch64 as a *streaming port that bails to the VM* on any instruction shape it
@@ -30,7 +39,7 @@ Both backends consume the **same** arch-neutral `AsmIR` produced by `jitgen`
 (TraceIR → register-allocated AsmIR). They diverge only at the final
 AsmIR → machine-code step, driven by a single shared dispatcher,
 `Codegen::compile_asmir`
-([compile_shared.rs:25](../monoruby/src/codegen/jitgen/asmir/compile_shared.rs#L25)),
+(`jitgen/asmir/compile_shared.rs`),
 which lowers each `AsmInst` by one of two routes:
 
 1. **Shared arm** — the `match` in `compile_asmir` handles the instruction
@@ -39,10 +48,10 @@ which lowers each `AsmInst` by one of two routes:
    `emit_integer_binop`, …). Only the emitted bytes differ per arch.
 2. **Per-arch arm** — the `other =>` fallthrough calls `compile_asmir_arch`,
    the backend-private match
-   ([x86_64/compile/mod.rs:23](../monoruby/src/codegen/arch/x86_64/compile/mod.rs#L23),
-   [aarch64/compile.rs:4730](../monoruby/src/codegen/arch/aarch64/compile.rs#L4730)).
-   On both arches this handles only the *same three* specialized inlined-frame
-   variants (`GuardClassVersionSpecialized`, `RecompileDeoptSpecialized`,
+   (`compile_asmir_arch` in each backend's `compile/mod.rs`).
+   On both arches this handles only the *same five* specialized inlined-frame
+   variants (`LoadCallerSlot`, `GuardClassVersionSpecialized`,
+   `GuardConstVersionSpecialized`, `RecompileDeoptSpecialized`,
    `SetArgumentsForwarded`); everything else is handled by the shared arm.
 
 ### The `bool` return is now vestigial
@@ -53,16 +62,12 @@ the VM" signal. **Today both backends always return `true`:**
 
 - x86-64 is the original fully-featured reference backend; it never declines.
 - aarch64 now lowers everything too — large frame/field/sp offsets are
-  materialized through scratch registers rather than bailing, and the one shape
-  that needed unported caller-relative codegen (the `...`-forwarding *deferral*)
-  is disabled upstream in `forward_rest_deferral` instead of bailing in the
-  backend. See the header comment at
-  [aarch64/compile.rs:1](../monoruby/src/codegen/arch/aarch64/compile.rs#L1):
-  *"Every `AsmInst` and side exit is lowered … aarch64 never bails out of JIT
-  compilation; `compile_asmir`'s `bool` is vestigial."*
+  materialized through scratch registers rather than bailing, and the
+  `...`-forwarding *deferral*, once disabled upstream for aarch64, is lowered
+  there as well (`a64_set_arguments_forwarded_deferred`).
 
-There is no `return false` anywhere in the aarch64 lowering (`compile.rs`,
-`guard.rs`). The driver chain (`gen_asm` / `gen_machine_code` / `jit_compile`)
+There is no `return false` anywhere in the aarch64 lowering (`compile/`,
+`guard.rs`), and `compile_asmir_arch`'s wildcard arm is `unreachable!()`. The driver chain (`gen_asm` / `gen_machine_code` / `jit_compile`)
 no longer acts on the result either; the `bool` is kept only because flipping
 ~150 signatures to `()` is pure churn.
 
@@ -113,7 +118,7 @@ handled, not declined:
   RSP-relative argument stores, block-arg offsets, class-def field offsets** —
   offsets that overflow the field are materialized into a scratch register
   (`mov xN, #imm` + register-offset addressing) instead of bailing. See the
-  `a64_frame_*` / `a64_sp_*` / `a64_rsp_*` helpers in `compile.rs`.
+  `a64_frame_*` / `a64_sp_*` / `a64_addr_*` helpers in `compile/mod.rs`.
 - **RValue heap-field offsets** (inline/heap ivar & struct-slot access) — same
   scratch-materialization treatment.
 - **Float `FloatBinOp` / `FloatUnOp`** — the full `BinOpK` / `UnOpK` set is
@@ -150,29 +155,26 @@ longer exists.
 
 ### 4.1 Class-version-miss recompilation
 
-- **x86-64:** `guard_class_version`
-  ([x86_64/guard.rs:28](../monoruby/src/codegen/arch/x86_64/guard.rs#L28))
-  emits a fast inline version check (page 0) plus an outlined
-  recompile-and-recover slow path (page 1) via `gen_recompile`, distinguishing
-  loop vs. method recompiles via `position` and offering a `with_recovery`
-  jump-back. On a version miss it recompiles the whole method/loop **in place**
-  and resumes.
-- **aarch64:** `a64_guard_class_version`
-  ([aarch64/guard.rs:89](../monoruby/src/codegen/arch/aarch64/guard.rs#L89))
-  emits the inline check and **just deopts on miss** — *"Unlike x86 we do not
-  recompile on miss yet — just deopt."* It ignores the x86 recompile params
-  (`position`, `with_recovery`) it has no recompiler for.
-- **Specialized frames are symmetric:** the specialized class-version guard
-  *does* recompile on both arches. x86 uses `guard_class_version_specialized` /
-  `gen_recompile_specialized`
-  ([x86_64/guard.rs:57](../monoruby/src/codegen/arch/x86_64/guard.rs#L57));
-  aarch64 uses `GuardClassVersionSpecialized` / `RecompileDeoptSpecialized` →
-  `a64_call_recompile_specialized`
-  ([aarch64/compile.rs:4755](../monoruby/src/codegen/arch/aarch64/compile.rs#L4755)),
-  which rewrites the specialized body's `SpecializedCall` `bl`.
+**The guard itself is symmetric now.** Both `guard_class_version` and
+`a64_guard_class_version` compare the global version word against the *unit's
+patchable snapshot word* (the `class_version_label` `jit_compile` creates), so
+a successful salvage re-validates the unit's code in place on either arch by
+storing the current version into that word (`Codegen::set_class_version`). An
+earlier revision of this document quoted an aarch64 comment saying *"we do not
+recompile on miss yet — just deopt"*; that text is gone.
 
-So the gap is specifically the **non-specialized method/loop class-version
-guard**: x86 recompiles, aarch64 deopts.
+What is still x86-only is the **recovery jump-back**: `gen_recompile`'s
+`with_recovery` parameter and `jit_recompile_method_with_recovery` are both
+`#[cfg(target_arch = "x86_64")]`. On x86, a non-specialized class-version miss
+whose salvage succeeds resumes straight back into the compiled body; on aarch64
+the same miss deopts to the VM once and the healed code is entered on the next
+call. Correctness is identical — only the transition cost differs.
+
+**Specialized frames are symmetric:** the specialized class-version guard
+recompiles on both arches. x86 uses `guard_class_version_specialized` /
+`gen_recompile_specialized`; aarch64 uses `GuardClassVersionSpecialized` /
+`RecompileDeoptSpecialized` → `a64_call_recompile_specialized`, which rewrites
+the specialized body's `SpecializedCall` `bl`.
 
 ### 4.2 On-stack eviction (BOP redefinition) — no longer asymmetric
 
@@ -195,13 +197,13 @@ stack alone — no code is patched, on either arch. See `doc/chain_deopt.md`
 
 | Guard                         | x86-64                                                            | aarch64                                                                 |
 | ----------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `guard_class` immediates      | Fixnum/nil/true/false/symbol/float via `testq`/`cmpq`            | Fixnum/nil/true/false/symbol/float via `tbz`/`tbnz`/`cmp` ([guard.rs:14](../monoruby/src/codegen/arch/aarch64/guard.rs#L14)) |
-| `guard_class` heap            | `guard_rvalue` (low-3-bits + class compare)                      | `a64_guard_rvalue` (same logic, `and`/`cbnz`/`ldr w`, [guard.rs:68](../monoruby/src/codegen/arch/aarch64/guard.rs#L68)) |
-| `guard_class2` (BigNum→VM)    | yes — x86-only helper ([guard.rs:177](../monoruby/src/codegen/arch/x86_64/guard.rs#L177)), called from the monomorphic method-entry patch path (`codegen/patch.rs:158`) | not present                                                            |
+| `guard_class` immediates      | Fixnum/nil/true/false/symbol/float via `testq`/`cmpq`            | same set via `tbz`/`tbnz`/`cmp`                                        |
+| `guard_class` heap            | `guard_rvalue` (low-3-bits + class compare)                      | `a64_guard_rvalue` (same logic, `and`/`cbnz`/`ldr w`)                  |
+| `guard_class2` (BigNum→VM)    | yes, from the monomorphic method-entry patch path (`codegen/patch.rs`) | yes — `a64_guard_class2`, from `wrapper.rs`; only `INTEGER_CLASS` differs |
 | `guard_array_ty`              | yes (`ObjTy::ARRAY` at `RVALUE_OFFSET_TY`)                        | yes                                                                    |
 | `guard_capture`               | yes (`branch_if_captured`)                                       | yes                                                                    |
 | `float_to_f64` unbox          | yes (flonum / heap-Float, 0.0 sign-bit trick)                    | yes (mirrored)                                                         |
-| class-version guard           | inline check **+ recompile + recovery** (page split, §4.1)       | inline check, **deopt only** for non-specialized; recompile for specialized frames (§4.1) |
+| class-version guard           | unit snapshot word + **recovery jump-back** (§4.1)                | unit snapshot word, **no recovery** — salvaged miss deopts once (§4.1)  |
 | eviction on BOP redefinition  | arch-neutral chain-deopt walk, no code patching (§4.2)          | identical (§4.2)                                                        |
 
 Both `a64_guard_class` and `a64_guard_rvalue` always emit (they return a `bool`
@@ -236,7 +238,9 @@ rbp-relative, so a call **result** written to an `S` slot after a capturing call
 lands on the dead stack frame and is lost (the VM then reads the stale heap
 copy). With a non-empty GP pool this was masked because results stayed pool-
 resident (`G`) and the deopt re-homed them via the LFP; it surfaces once the
-pool is empty (the aarch64 default, and the x86 `GP_ALLOC_POOL = &[]` config).
+pool is empty, which `GP_ALLOC_POOL = &[]` now makes unconditional on both
+arches (`LinkMode::G` was abolished; `jitgen/gp_alloc.rs` drives GP reuse
+locally instead, identically on both).
 aarch64 never had the bug because *all* its slot stores are already LFP-relative.
 
 The fix is `AsmInst::RegToLfpStack` / `LMem::LfpSlot` (this commit): the result
@@ -248,26 +252,47 @@ identically to `Slot`.
 
 ---
 
+## 5c. Other current asymmetries
+
+Neither a coverage gap nor a guard difference, but worth knowing:
+
+| | x86-64 | aarch64 |
+| --- | --- | --- |
+| **Installing / re-pointing JIT code** | patches branches in place (`apply_jmp_patch_address`, the `patch_point` `call`) | indirect heap slots — `ISeqInfo::jit_slot` and `jit_guard_free_slot` are `#[cfg(target_arch = "aarch64")]` fields — plus `Codegen::patch_call_to_entry`, a single `bl` rewrite under the MAP_JIT writable/executable flip |
+| **Cold-code placement** | cold handlers go on page 1 (`select_page`, ~90 sites) | page 1 is past `B`/`BL` range from page 0, so cold blocks are laid inline (~7 sites). In exchange aarch64 has an optimization x86 has no use for: `AsmIr::as_pure_deopt` / `pure_deopt_target` (`#[cfg(target_arch = "aarch64")]`) emit a deopt-only block's handler *at* the block label, so predecessors branch straight onto the deopt code |
+| **Branch range** | never a constraint | a large loop body can put a `TBZ`/`TBNZ` further from its deopt than imm14 (+/-32 KiB) reaches, which panics the emit. `jit_compile_loop` catches it and leaves the codeptr unpublished; `a64_op_loop_start`'s tri-state slot (`0` / `1` sentinel / codeptr) stops the retry loop |
+| **`RecompileDeopt` error exit** | `error: None` | needs `Some(ir.new_error(state))` — a recompile-time panic surfaces as a Ruby `FatalError` to branch to (`jitgen/compile.rs`) |
+| **GC frame tracing** | `alloc.rs`'s `record_frames` walks `rbp` via inline asm | not implemented (x86-only debug aid) |
+| **Loop-JIT entry `sp`** | `lea rsp, [rbp - depth]` | `sub`+`mov sp` to the same depth | 
+
+The last row is symmetric by design as of `#1176`: both pin the entry to
+`total - PROLOGUE_OVERHEAD` rather than subtracting from the `sp` they inherit,
+because the frame may have been built by either the VM's `init_method` or a JIT
+prologue and only the latter has already reserved the unit's spill region.
+
+---
+
 ## 6. Practical consequences
 
 - **Correctness is equal.** Both backends produce correct results.
 - **Coverage is equal.** Both backends JIT every method/loop the front-end
   produces; aarch64 no longer falls back to the VM for any instruction shape.
-- **Steady-state recompile behavior differs** in two narrow, non-specialized
-  cases (§4): after a class-version change, x86 recompiles the method/loop in
-  place while aarch64 deopts and re-JITs via warm-up counters; and on BOP
-  redefinition, x86 patches the live return path of regular calls while aarch64
-  relies on the inline class-version deopt. Both eventually reach an equivalent
-  JIT-compiled steady state; the difference is the transition cost.
-- **`guard_class2` / BigNum routing** is an x86-only method-entry guard helper
-  (`patch.rs`); aarch64 has no equivalent on that path.
+- **Steady-state recompile behavior differs** in one narrow, non-specialized
+  case (§4.1): after a class-version change whose salvage succeeds, x86 jumps
+  back into the compiled body while aarch64 deopts to the VM once and re-enters
+  the healed code on the next call. Both reach the same steady state; the
+  difference is the transition cost.
+- **A very large loop body may stay interpreted on aarch64** (§5c, branch
+  range). x86 has no such limit.
 
 ### One-line summary
 
-> x86-64 and aarch64 now share the entire AsmIR front-end *and* full AsmInst
+> x86-64 and aarch64 share the entire AsmIR front-end *and* full AsmInst
 > coverage — aarch64 lowers everything (large immediates via scratch
-> registers), so the `bool` bail return is vestigial. The only remaining
-> asymmetries are non-coverage: x86 recompiles-in-place on a **non-specialized**
-> class-version miss where aarch64 deopts to the VM and re-JITs (specialized
-> frames are symmetric); plus the x86-only `guard_class2` BigNum-routing
-> helper. BOP eviction is now the same arch-neutral chain-deopt walk on both.
+> registers), so the `bool` bail return is vestigial. What remains is
+> non-coverage: the x86-only **recovery jump-back** after a salvaged
+> non-specialized class-version miss (§4.1), different **code-installation**
+> mechanisms (branch patching vs indirect slots) and **cold-code placement**
+> (page 1 vs inline, which buys aarch64 the `as_pure_deopt` collapse), and
+> aarch64's **branch-range** ceiling on very large loop bodies (§5c). Guards,
+> BOP eviction, block/method inlining and the GP pool are all symmetric.

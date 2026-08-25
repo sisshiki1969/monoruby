@@ -3018,9 +3018,8 @@ impl Codegen {
         class_version: DestLabel,
     ) -> bool {
         // The specialized (inlined-frame) AsmInst family is lowered here; every
-        // other variant is handled by the shared `compile_asmir` dispatcher.
-        // Anything still reaching the wildcard is not yet ported, so bail and
-        // keep the method VM-interpreted.
+        // other variant is handled by the shared `compile_asmir` dispatcher, so
+        // the wildcard below is `unreachable!()` rather than a bail.
         match inst {
             // Specialized class-version guard: on a version mismatch, recompile
             // the specialized body (rewriting its `SpecializedCall` `bl`) then
