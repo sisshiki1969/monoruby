@@ -958,6 +958,7 @@
 4c3cdf6fdb768ce2061972f6724dd416	42	class Foo\n              def initialize(x)\n                @x = x\n  
 4c6323de719d0ad254c106b3de0e1ff1	99	b = binding\n            b.local_variable_set("bar", 99)\n           
 4c66c29f7a10c99487fbb86f19ded61a	false	File.file?("readme.md")
+4c69a613ea757c9eff914b8a29903a61	[7]	$log = []\n        def m\n          d = 7\n          [1].each do |x|\n     
 4c6f323c0ce3159e2b7f0992372dd514	false	/a/.match("xay".b).nil?
 4c7471c063042fa95b957878dbb97a5a	[true, false]	class C < Object\n        end\n        class S < C\n        end\n\n        o
 4c7947408d26ed45ead6a30d7a7c8c21	[42, 42, 42, 42, 42, 42, 42, 42, 84, 84, 84]	class A\n          attr_accessor :w\n        end\n        a = A.new\n      
@@ -2044,6 +2045,7 @@ a6e76941b428102c2ba4a628d8639080	1000	S = Struct.new(:counter)\n            \n\n
 a6f799b2f3bd4b9cbb9608e44dd52dbc	true	Process.warmup
 a6ffb30dedbdb58fc281fe6682f6497c	[3, :first_store_raises]	class Q\n          def fill(i)\n            @a = i\n            @b = i\n   
 a71e54a7d566380aaed8baaea63868be	99	def make_proc\n          Proc.new { yield }\n        end\n        def get_
+a7842c388edf1fd9f074cafd5774cb4e	23025.0	def g\n          a = 0.0; c = 2.0\n          i = 0\n          while i < 30
 a7bbd186c86ac3ce9091503517f8a4c7	[true, true, false]	class Foo\n              def bar; 1; end\n              alias_method 
 a7d85b5b4b74fdccaa32b812610588e7	true	d = +"foo"\n            h = Hash.new(d)\n            h[:any].equal?(d
 a7dfe3e551ac8402163609fb863ca4e0	["US-ASCII"]	s = "abcabc".dup.force_encoding("US-ASCII")\n              s.scan(
@@ -2315,6 +2317,7 @@ bba413775b9fdc4e5a5520013caecba6	true	Process.getpriority(Process::PRIO_USER, 0)
 bbb536d6446e4acae479f2a76bbc22b8	[false, true, "payload"]	base = "/tmp/monoruby_test_rename_#{Process.pid}_#{rand(100000)}"\n 
 bbc6b60d27eb5cad82b53e233df0c6e8	280	class Object\n          def tag = 7\n        end\n        \n\n        res = 
 bbf39b957f63dc57cf6be6b238e3322a	"HELLO world"	s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0..-7); s
+bbf88be1f5615be8cbe5cfdbb37cd357	[23025.0, 152.0, 300]	$n = 0\n        def g\n          a = 0.0; c = 2.0\n          i = 0\n       
 bc0ccc0a16c986d29598ed69b9038ff8	[false, true, true]	h = {}\n        before = h.compare_by_identity?\n        ret = h.compare_
 bc2025afe3d4e746f87d06a3bac3e3db	[[]]	r = []; Enumerator.new { |y| y.yield }.each { |*a| r << a }; r
 bc2e5f3b4a16256b7dc6b55712d5a785	nil	Encoding.default_internal
@@ -2707,6 +2710,7 @@ da071b966818f27d5bc0ddb0f84eb172	[false, true, true, true, false, true, false, t
 da0f0adcfe40c1b122d44d207d5921fb	[[1, 2], [:scalar, nil], [:pk, :pv], [:s1, :s2], [nil, nil], [4.5, nil]]	def drive(a)\n              acc = []\n              a.each_with_yield
 da20ef8164c16f9d050189c7530ccdda	13	case 4\n        when 0\n          a = 10\n        when 1\n          a = 11\n
 da337801ffb5841d6913419d4806674b	[[1, 2, 3], [1, 2, 3], 1, 3, [1, 3]]	a = [3, 1, 2]\n            [\n              a.sort { |x, y| (x <=> y)
+da4116da4a0b35a76e2faef0a98c7685	[42, 300]	$m = 0\n        def h\n          [1].each do |x|\n            begin\n      
 da424b8ae2f6063fa60766fab8bac34a	false	t = Thread.new { sleep(2**62) }\n            Thread.pass while t.sta
 da5e06d1fe5eed1ee4258f71a99b2332	0	a = "abc".dup.force_encoding("UTF-8")\n              b = "abc".dup
 da64841b8187b9d8951f84703a56f5e9	[true, false]	$x = []\n            path = "/tmp/monoruby_test_mkdir_#{Process.pid}
@@ -2926,6 +2930,7 @@ ec616c74470bcaec129ac19540047a93	["method", "nil", nil, "outer", ["a_file", "10"
 ec6e08886fb1c676139aa0cb92bb4296	["extend_object:C", "hello"]	$res = []\n        module M\n          def self.extend_object(obj)\n      
 ec75362ae6eb794adfccd5ea2fd87a71	["Infinity", "NaN", "Infinity", "-Infinity", true, "-0.314e1", "0.314e1", "0.314e1"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
 ec7990294dac7ac2a637929f23760d95	[42, 42, 42, 42, 42, 42, 42, 42, 100, 100, 100]	class A\n                attr_accessor :w\n            end\n          
+ec83d3346e8c3ed3a4ed389e11834860	1.5	def m2\n          out = 0.0\n          [1].each do |x|\n            f = 1.
 ec84a8df82f97b16fdedf56efbc6ad35	"hello"	path = "/tmp/monoruby_test_filewrite_perm_#{Process.pid}_#{rand(100
 ecb0c2530aa824ca3b58cd269e696cd6	"xy"	def m; /(\\w)(\\w)/ =~ "xy"; -> { $~[0] }.call; end; m
 ecf0e0788d956837326285cb5c6fe318	[[0, 1, 2, 3, 4, 5, 6], 7, 8]	def f(*x,a,b)\n          [x,a,b]\n        end\n        \n\n        f(0,1,2,3
