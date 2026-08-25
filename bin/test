@@ -16,10 +16,11 @@ drop_last3() { awk 'NR>3{print buf[NR%3]} {buf[NR%3]=$0}'; }
 RUBY=(ruby --yjit)
 
 # stress-spill-pool / gc-stress amplify the JIT's spill + GC paths and run on
-# every arch. The GP-register pool allocator is now standard (always compiled);
-# on the AArch64 JIT its pool is empty (`GP_ALLOC_POOL = &[]`), so it is inert
-# there — no pool allocation happens, which sidesteps the macOS-runner
-# `optcarrot --opt` divergence that the (non-empty) aarch64 pool path used to hit.
+# every arch. `GP_ALLOC_POOL` is empty on *both* arches now — GP-pool residence
+# (`LinkMode::G`) was abolished, so no slot is coloured into a physical GP
+# register; the local allocator in `jitgen/gp_alloc.rs` drives GP reuse instead,
+# identically on both. So the spill stress here is the FP file (`PHYS_FPR_POOL`
+# shrunk to 2), which is what `stress-spill-pool` actually changes.
 #
 # `gc-stress` is a true stress mode: the binary starts in `GC.stress` and
 # collects at EVERY safepoint. It is **opt-in** — export GC_STRESS=1 to turn

@@ -6,7 +6,8 @@ impl Codegen {
     /// Inline fixnum binary op. Fixnums are tagged `2n+1`; signed 64-bit
     /// overflow of the tagged arithmetic == fixnum overflow, so we branch to
     /// `deopt` on the V flag. Result is left in `lhs`'s register, mirroring x86
-    /// `integer_binop`. Mul/Div/etc. not yet ported (bail).
+    /// `integer_binop`. Every `BinOpK` is lowered; the `bool` return is
+    /// vestigial (see the crate-level note in `arch/aarch64/compile/mod.rs`).
     pub(super) fn a64_integer_binop(&mut self, lhs: GP, rhs: GP, kind: BinOpK, deopt: &DestLabel) -> bool {
         let l = lhs.a64().0;
         let r = rhs.a64().0;
