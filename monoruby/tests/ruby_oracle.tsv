@@ -2313,6 +2313,7 @@ bba413775b9fdc4e5a5520013caecba6	true	Process.getpriority(Process::PRIO_USER, 0)
 bbb536d6446e4acae479f2a76bbc22b8	[false, true, "payload"]	base = "/tmp/monoruby_test_rename_#{Process.pid}_#{rand(100000)}"\n 
 bbc6b60d27eb5cad82b53e233df0c6e8	280	class Object\n          def tag = 7\n        end\n        \n\n        res = 
 bbf39b957f63dc57cf6be6b238e3322a	"HELLO world"	s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0..-7); s
+bbf88be1f5615be8cbe5cfdbb37cd357	[23025.0, 152.0, 300]	$n = 0\n        def g\n          a = 0.0; c = 2.0\n          i = 0\n       
 bc0ccc0a16c986d29598ed69b9038ff8	[false, true, true]	h = {}\n        before = h.compare_by_identity?\n        ret = h.compare_
 bc2025afe3d4e746f87d06a3bac3e3db	[[]]	r = []; Enumerator.new { |y| y.yield }.each { |*a| r << a }; r
 bc2e5f3b4a16256b7dc6b55712d5a785	nil	Encoding.default_internal
@@ -2704,6 +2705,7 @@ da071b966818f27d5bc0ddb0f84eb172	[false, true, true, true, false, true, false, t
 da0f0adcfe40c1b122d44d207d5921fb	[[1, 2], [:scalar, nil], [:pk, :pv], [:s1, :s2], [nil, nil], [4.5, nil]]	def drive(a)\n              acc = []\n              a.each_with_yield
 da20ef8164c16f9d050189c7530ccdda	13	case 4\n        when 0\n          a = 10\n        when 1\n          a = 11\n
 da337801ffb5841d6913419d4806674b	[[1, 2, 3], [1, 2, 3], 1, 3, [1, 3]]	a = [3, 1, 2]\n            [\n              a.sort { |x, y| (x <=> y)
+da4116da4a0b35a76e2faef0a98c7685	[42, 300]	$m = 0\n        def h\n          [1].each do |x|\n            begin\n      
 da424b8ae2f6063fa60766fab8bac34a	false	t = Thread.new { sleep(2**62) }\n            Thread.pass while t.sta
 da5e06d1fe5eed1ee4258f71a99b2332	0	a = "abc".dup.force_encoding("UTF-8")\n              b = "abc".dup
 da64841b8187b9d8951f84703a56f5e9	[true, false]	$x = []\n            path = "/tmp/monoruby_test_mkdir_#{Process.pid}

@@ -1527,6 +1527,24 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Whether the *current* frame's instruction at `bc_pos` is covered by
+    /// an entry of its iseq's exception table.
+    ///
+    /// The companion to [`Self::check_exception_handler`], which covers only
+    /// the chain's *suspended* frames (each at its in-progress call site) —
+    /// the frame currently being compiled is not in that range, so a
+    /// non-local exit (`MethodRet` / `BlockBreak`) written inside a
+    /// `begin`..`ensure` region asks this before choosing the specialized
+    /// teardown: that teardown is a pure machine-level frame pop, and only
+    /// the generic path's `handle_error` unwind runs the `ensure` bodies
+    /// (and the `$!` restore on leaving a rescue clause). Conservative like
+    /// its companion: any table entry forces the generic path (#1179).
+    ///
+    pub(super) fn in_protected_region(&self, bc_pos: BcIndex) -> bool {
+        self.iseq().get_exception_dest(bc_pos).is_some()
+    }
+
+    ///
     /// Hint variant of stack-offset computation for `LoadDynVar` /
     /// `StoreDynVar`. Returns the chain of [`SpecializedId`]s for
     /// frames `[outer..current)` together with `extra` — the sum

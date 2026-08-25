@@ -908,7 +908,16 @@ impl<'a> JitContext<'a> {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
-                if let Some((spec_ids, extra)) = self.method_caller_specialized_ids() {
+                // A non-local `return` written inside a protected region must
+                // unwind through `handle_error`, which runs this frame's
+                // `ensure` (and restores `$!` when leaving a rescue clause) on
+                // the way out. The specialized teardown is a pure machine-level
+                // frame pop and would skip both. `check_exception_handler`
+                // covers only the *suspended* frames of the chain, so the
+                // exiting instruction's own coverage is checked here (#1179).
+                if !self.in_protected_region(bc_pos)
+                    && let Some((spec_ids, extra)) = self.method_caller_specialized_ids()
+                {
                     ir.push(AsmInst::MethodRetSpecialized {
                         rbp_offset: DynVarOffset::Hint {
                             ids: spec_ids,
@@ -926,7 +935,13 @@ impl<'a> JitContext<'a> {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
                 state.load(ir, ret, GP::Rax);
-                if let Some((spec_ids, extra)) = self.iter_caller_specialized_ids() {
+                // Same as `MethodRet` above: a `break` inside a protected
+                // region relies on `handle_error` to run this frame's `ensure`
+                // during the unwind; the specialized teardown would skip it —
+                // observed as issue #1179's silently-lost `c += 0.5`.
+                if !self.in_protected_region(bc_pos)
+                    && let Some((spec_ids, extra)) = self.iter_caller_specialized_ids()
+                {
                     ir.push(AsmInst::BlockBreakSpecialized {
                         rbp_offset: DynVarOffset::Hint {
                             ids: spec_ids,
