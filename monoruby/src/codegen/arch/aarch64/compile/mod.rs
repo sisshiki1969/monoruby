@@ -2536,7 +2536,7 @@ impl Codegen {
         &mut self,
         class_version: DestLabel,
         position: Option<BytecodePtr>,
-        _with_recovery: bool,
+        with_recovery: bool,
         deopt: DestLabel,
     ) {
         // On a class-version miss, recompile (loop → `jit_recompile_loop`,
@@ -2546,20 +2546,31 @@ impl Codegen {
         // is stranded in the interpreter for the rest of the process after any
         // unrelated method definition. Mirrors x86 `guard_class_version` and the
         // aarch64 `GuardClassVersionSpecialized` twin; no counter — the
-        // recompile bakes in the new version, so the guard won't re-fire. The
-        // cheap x86 `with_recovery` path (an in-place inline-cache re-bake that
-        // resumes in JIT without recompiling) is not ported —
-        // `jit_recompile_method_with_recovery` is x86-only — so `_with_recovery`
-        // is ignored and this always full-recompiles. On a recompile panic the
-        // helper leaves a FatalError set and x0 == 0; we still branch to the
-        // deopt, which resumes at the guarded call where the interpreter
-        // propagates the fatal (matching the specialized twin).
+        // recompile bakes in the new version, so the guard won't re-fire.
+        //
+        // With `with_recovery` (a method-entry guard, `position == None`) the
+        // miss goes through `jit_recompile_method_with_recovery`, whose
+        // salvage arm re-validates the unit's assumptions and re-stamps its
+        // version word without recompiling; on that arm (x0 == 2) control
+        // jumps straight back to the guarded fall-through and the invocation
+        // continues in compiled code — the x86 `with_recovery` jump-back.
+        // Otherwise (recompiled, x0 == 1; or a recompile panic, x0 == 0 with
+        // a FatalError set on vm) fall to the deopt, where the interpreter
+        // resumes — or propagates the fatal — exactly as before.
         let miss = self.jit.label();
         let done = self.jit.label();
         self.a64_guard_class_version(&class_version, &miss); // version mismatch -> miss
         monoasm_arm64!(&mut self.jit, b done;); // match -> continue in JIT
         self.jit.bind_label(miss);
-        self.a64_call_recompile(position, RecompileReason::ClassVersionGuardFailed);
+        if with_recovery && position.is_none() {
+            self.a64_call_recompile_with_recovery(RecompileReason::ClassVersionGuardFailed);
+            monoasm_arm64!(&mut self.jit,
+                cmp x0, #2;
+            );
+            self.jit.bcond_label(monoasm::Cond::Eq, &done); // salvaged -> resume in place
+        } else {
+            self.a64_call_recompile(position, RecompileReason::ClassVersionGuardFailed);
+        }
         monoasm_arm64!(&mut self.jit, b deopt;); // recompiled -> resume via deopt
         self.jit.bind_label(done);
     }
