@@ -1278,17 +1278,18 @@ impl PrologueOffset {
 }
 
 ///
-/// Bytes the Loop JIT entry should subtract from `rsp` (and the
-/// matching side-exit handler should add back). Only the bytes that
-/// the JIT itself owns — the invoker / interpreter prologue is left
-/// untouched, so this captures the JIT-managed spill slots that sit
-/// on top of the surrounding interpreter frame.
+/// How far below `rbp`/`x29` the Loop JIT entry should pin `rsp`/`sp`:
+/// the frame's local area, `total - PROLOGUE_OVERHEAD`.
 ///
-/// Pass 1 emits `Hint(id)` — the current frame's [`SpecializedId`].
-/// The pre-codegen resolve pass derives the byte count as
-/// `stack_offset - base_stack_offset` of that frame, so any future
-/// VirtFPReg spill space added to the frame's recorded size flows
-/// through to the JIT-emitted bump automatically.
+/// It is an *absolute* depth rather than a delta because the entry
+/// cannot trust the `sp` it inherits: a loop body is reached by
+/// `loop_start` from either producer of a Ruby frame, and the two do not
+/// reserve the same thing (see `Codegen::emit_loop_jit_rsp_bump`).
+///
+/// Pass 1 emits `Hint(id)` — the current frame's [`SpecializedId`]. The
+/// pre-codegen resolve pass reads that frame's recorded `total`, so
+/// VirtFPReg spill space added to the frame's size flows through to the
+/// pinned depth automatically.
 ///
 #[derive(Debug, Clone)]
 pub(crate) enum LoopRspOffset {
