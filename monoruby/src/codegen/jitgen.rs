@@ -1570,12 +1570,18 @@ impl Codegen {
         // box a code pointer back to the VM). See the deopt-bridge
         // analysis in doc/regalloc_separation.md §39.
         self.gen_write_back_for_deopt(wb, base);
-        // Now undo the rsp bump that Loop JIT applied at its entry (see
-        // `AsmInst::LoopJitRspBump`). Method / specialized JITs restore
-        // rsp implicitly via their `leave; ret` epilogue, so the
-        // adjustment is Loop-specific. `loop_jit_spill_bytes` is `0` for
-        // non-Loop frames or Loop frames without spill, matching the
-        // entry-side `subq rsp, _` exactly.
+        // Now release the spill region that Loop JIT entry pinned rsp
+        // below (see `AsmInst::LoopJitRspBump`). Method / specialized
+        // JITs restore rsp implicitly via their `leave; ret` epilogue, so
+        // the adjustment is Loop-specific. `loop_jit_spill_bytes` is `0`
+        // for non-Loop frames or Loop frames without spill.
+        //
+        // This is not the inverse of the entry, which pins an absolute
+        // depth rather than subtracting: adding the spill region back to
+        // `rbp - (total - PROLOGUE_OVERHEAD)` lands at
+        // `rbp - (base - PROLOGUE_OVERHEAD)` — the local area the VM's
+        // `init_method` reserves — whichever producer built the frame.
+        // Deliberate: the VM resumes here, and that is its own depth.
         if loop_jit_spill_bytes > 0 {
             monoasm!( &mut self.jit,
                 addq rsp, (loop_jit_spill_bytes as i32);

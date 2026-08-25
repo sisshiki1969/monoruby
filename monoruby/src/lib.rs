@@ -106,7 +106,7 @@ const FIBER_STACK_BUDGET: usize = 64 * 1024;
 const CONTINUATION_FRAME_SIZE: usize = 16;
 /// How much of a JIT frame's recorded `total` sits *above* its local area:
 /// the continuation frame plus the 16 bytes of iseq bookkeeping that
-/// [`ISeqInfo::stack_offset`] adds on top of the `FnInitInfo::stack_offset`
+/// `ISeqInfo::stack_offset` adds on top of the `FnInitInfo::stack_offset`
 /// the VM's `init_method` actually reserves. So a frame's local area is
 /// `total - PROLOGUE_OVERHEAD` — what `AsmInst::Init` reserves, and the depth
 /// the loop-JIT entry pins `sp`/`rsp` to.

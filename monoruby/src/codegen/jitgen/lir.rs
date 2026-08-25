@@ -976,10 +976,6 @@ pub(in crate::codegen) enum LInst {
     },
     LoopJitRspBump {
         offset: LoopRspOffset,
-        /// The frame's `base_stack_offset`. aarch64 pins `sp` to this
-        /// frame's canonical depth instead of subtracting from the `sp` it
-        /// inherits; x86-64 ignores it. See `emit_loop_jit_rsp_bump`.
-        base: usize,
     },
     BlockArgProxy {
         ret: SlotId,

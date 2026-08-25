@@ -318,14 +318,20 @@ impl Codegen {
         }
     }
 
-    /// Undo the loop-JIT entry sp-bump (`emit_loop_jit_rsp_bump`) before
-    /// resuming the interpreter. Unlike x86 — whose VM frame is rbp-relative,
-    /// so a stale sp is harmless — the aarch64 VM sets up callee frames
-    /// sp-relative, so every loop-JIT exit that resumes the VM (deopt, error,
-    /// raise, retry, redo) must restore sp first. `bytes` is
-    /// `frame.loop_jit_spill_bytes` (0 for a non-loop frame or a loop without
-    /// spill); large bumps go through `a64_sp_add` (mirroring the entry
-    /// `a64_sp_sub`).
+    /// Release the spill region the loop-JIT entry pinned sp below
+    /// (`emit_loop_jit_rsp_bump`) before resuming the interpreter. Unlike x86
+    /// — whose VM frame is rbp-relative, so a stale sp is harmless — the
+    /// aarch64 VM sets up callee frames sp-relative, so every loop-JIT exit
+    /// that resumes the VM (deopt, error, raise, retry, redo) must restore sp
+    /// first. `bytes` is `frame.loop_jit_spill_bytes` (0 for a non-loop frame
+    /// or a loop without spill).
+    ///
+    /// Not the inverse of the entry, which pins an absolute depth rather than
+    /// subtracting: adding the spill region back to
+    /// `x29 - (total - PROLOGUE_OVERHEAD)` lands at
+    /// `x29 - (base - PROLOGUE_OVERHEAD)` — the local area the VM's
+    /// `init_method` reserves — whichever producer built the frame.
+    /// Deliberate: the VM resumes here, and that is its own depth.
     fn a64_undo_loop_rsp_bump(&mut self, bytes: usize) {
         if bytes > 0 {
             self.a64_sp_add(bytes as u32);
@@ -2609,9 +2615,7 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(
         &mut self,
         offset: LoopRspOffset,
-        base: usize,
     ) -> bool {
-        let bytes = offset.unwrap_concrete();
         // This body is reached by `loop_start` from *either* producer of a
         // Ruby frame, and inherits that frame's `sp`. The two do not reserve
         // the same thing: the VM's `init_method` reserves the iseq's
@@ -2619,18 +2623,18 @@ impl Codegen {
         // nothing of spill slots, while an `AsmInst::Init` prologue reserves
         // `total - PROLOGUE_OVERHEAD` — the same area *plus this unit's
         // spill region*, since the region is part of `total`. Subtracting
-        // `total - base` from what we inherit therefore counts the spill
-        // region twice on the JIT-prologue path, landing `total - base`
+        // `total - base` from what we inherit would therefore count the
+        // spill region twice on the JIT-prologue path, landing that much
         // deeper than on the VM path.
         //
         // Pin `sp` to the frame's canonical depth instead, so both producers
         // agree: `total - PROLOGUE_OVERHEAD`, exactly what the prologue
-        // reserves. The frames this body then builds below `sp` stay where
-        // the compile assumed, which is what the fixed `x29`-relative
-        // offsets addressing them (`LoadDynVarSpecialized`, the spill slots)
-        // require. `x29` is dependable here — `x29 - lfp` is invariant
-        // across entries.
-        let below = base - PROLOGUE_OVERHEAD + bytes;
+        // reserves, which is what `offset` carries. The frames this body
+        // then builds below `sp` stay where the compile assumed, which is
+        // what the fixed `x29`-relative offsets addressing them
+        // (`LoadDynVarSpecialized`, the spill slots) require. `x29` is
+        // dependable here — `x29 - lfp` is invariant across entries.
+        let below = offset.unwrap_concrete();
         self.a64_addr_sub(10, 29, below as u32);
         monoasm_arm64!(&mut self.jit, mov sp, x10;);
         true

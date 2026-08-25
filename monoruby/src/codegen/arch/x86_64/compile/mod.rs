@@ -2185,23 +2185,20 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(
         &mut self,
         offset: LoopRspOffset,
-        base: usize,
     ) -> bool {
-        let bytes = offset.unwrap_concrete();
         // Pin rather than subtract, for the same reason aarch64 does: this
         // body is reached from *either* producer of a frame — the VM's
-        // `init_method`, which reserves `base - PROLOGUE_OVERHEAD` and knows
+        // `init_method`, which reserves the iseq's local area and knows
         // nothing of spill slots, or a JIT prologue, which reserves that
-        // plus this unit's spill region — so subtracting `total - base` from
-        // the inherited `rsp` counts the spill region twice on the prologue
-        // path.
+        // plus this unit's spill region — so subtracting from the inherited
+        // `rsp` would count the spill region twice on the prologue path.
         //
         // x86 is insensitive to the *addressing* consequences (its frames
         // are rbp-relative, so a body at the wrong depth still reads its own
         // slots correctly), but the inlined frames it builds below `rsp` do
         // move, and `resolve_specialized_id_chain`'s rbp-to-rbp distances
         // are fixed at compile time.
-        let below = base - PROLOGUE_OVERHEAD + bytes;
+        let below = offset.unwrap_concrete();
         monoasm! { &mut self.jit, lea rsp, [rbp - (below as i32)]; }
         true
     }

@@ -1650,10 +1650,15 @@ impl<'a> JitContext<'a> {
             AsmInst::LoopJitRspBump { offset } => {
                 if let LoopRspOffset::Hint(id) = offset {
                     let sizes = self.frame_sizes_or_panic(*id);
-                    // Loop JIT lives inside an invoker-owned
-                    // prologue, so the JIT-managed bump is exactly
-                    // the spill region grown on top of `base`.
-                    *offset = LoopRspOffset::Concrete(sizes.total - sizes.base);
+                    // The depth to pin `rsp`/`sp` to, not a delta: the
+                    // frame this body runs in may have been built by
+                    // either producer, and only one of them reserved
+                    // this unit's spill region (see
+                    // `Codegen::emit_loop_jit_rsp_bump`). Both reach the
+                    // same local area, which is the one rule
+                    // `resolve_specialized_id_chain` relies on.
+                    debug_assert!(sizes.total >= PROLOGUE_OVERHEAD);
+                    *offset = LoopRspOffset::Concrete(sizes.total - PROLOGUE_OVERHEAD);
                 }
             }
             _ => {}
