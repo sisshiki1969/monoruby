@@ -660,7 +660,7 @@ impl Codegen {
     /// `entry_raise` passes PC straight to `handle_error` without the x86 `-16`
     /// fixup, so a `pc + 1` here would leave `handle_error`'s exception-table
     /// lookup off by one and skip the `ensure` body protecting the `return`.
-    fn a64_method_ret(&mut self, pc: BytecodePtr) {
+    fn a64_method_ret(&mut self, pc: BytecodePtr, loop_jit_spill_bytes: usize) {
         let pc0 = pc.as_ptr() as u64;
         let f = runtime::err_method_return as *const () as u64;
         let raise = self.entry_raise();
@@ -671,6 +671,17 @@ impl Codegen {
             mov x1, x20;      // globals
             mov x9, (f);
             blr x9;
+        );
+        // Release the loop-JIT spill region before resuming the VM, like
+        // every other exit that leaves through `entry_raise` (`emit_raise`,
+        // retry/redo/ensure_end). After the `blr` — the runtime call may
+        // push below sp, and undoing first would let those pushes overwrite
+        // the spill slots (`a64_gen_deopt`'s ordering, regalloc_separation
+        // §39). `entry_raise`'s no-handler path restores sp from x29 anyway;
+        // this matters for its `goto` path, which resumes the VM with sp
+        // untouched.
+        self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
+        monoasm_arm64!(&mut self.jit,
             b raise;
         );
     }
@@ -684,7 +695,7 @@ impl Codegen {
     /// aarch64's `entry_raise` hands PC to `handle_error` without the x86 `-16`
     /// fixup, so storing `pc` (the value x86 reaches via `pc + 1` then `-16`)
     /// keeps the exception-table lookup aligned with the raising instruction.
-    fn a64_block_break(&mut self, pc: BytecodePtr) {
+    fn a64_block_break(&mut self, pc: BytecodePtr, loop_jit_spill_bytes: usize) {
         let pc0 = pc.as_ptr() as u64;
         let f = runtime::err_block_break as *const () as u64;
         let raise = self.entry_raise();
@@ -695,6 +706,11 @@ impl Codegen {
             mov x1, x20;      // globals
             mov x9, (f);
             blr x9;
+        );
+        // Same ordering as `a64_method_ret`: undo after the runtime call,
+        // before `b raise`.
+        self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
+        monoasm_arm64!(&mut self.jit,
             b raise;
         );
     }
@@ -2483,13 +2499,21 @@ impl Codegen {
     }
 
     /// Return through the method-return path, resuming the caller at `pc + 1`.
-    pub(in crate::codegen::jitgen) fn emit_method_ret(&mut self, pc: BytecodePtr) {
-        self.a64_method_ret(pc);
+    pub(in crate::codegen::jitgen) fn emit_method_ret(
+        &mut self,
+        pc: BytecodePtr,
+        loop_jit_spill_bytes: usize,
+    ) {
+        self.a64_method_ret(pc, loop_jit_spill_bytes);
     }
 
     /// Non-local exit through the block-break path (a `break` out of a block).
-    pub(in crate::codegen::jitgen) fn emit_block_break(&mut self, pc: BytecodePtr) {
-        self.a64_block_break(pc);
+    pub(in crate::codegen::jitgen) fn emit_block_break(
+        &mut self,
+        pc: BytecodePtr,
+        loop_jit_spill_bytes: usize,
+    ) {
+        self.a64_block_break(pc, loop_jit_spill_bytes);
     }
 
     /// Store the call-site pc into the outgoing cont-frame slot

@@ -522,8 +522,14 @@ impl Codegen {
             // method-return path; `BlockBreak` does the same through the
             // block-break path (a non-local `break` out of a block).
             AsmInst::Ret => self.encode_linst(LInst::Ret),
-            AsmInst::MethodRet(pc) => self.encode_linst(LInst::MethodRet { pc }),
-            AsmInst::BlockBreak(pc) => self.encode_linst(LInst::BlockBreak { pc }),
+            AsmInst::MethodRet(pc) => self.encode_linst(LInst::MethodRet {
+                pc,
+                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
+            }),
+            AsmInst::BlockBreak(pc) => self.encode_linst(LInst::BlockBreak {
+                pc,
+                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
+            }),
             // Emits nothing; registers this call's return address -> replay
             // data so `Codegen::chain_deopt` can convert a frame suspended
             // here from its return-address slot alone (`doc/chain_deopt.md`
@@ -1600,11 +1606,11 @@ impl Codegen {
             LInst::Ret => {
                 self.emit_ret();
             }
-            LInst::MethodRet { pc } => {
-                self.emit_method_ret(pc);
+            LInst::MethodRet { pc, loop_jit_spill_bytes } => {
+                self.emit_method_ret(pc, loop_jit_spill_bytes);
             }
-            LInst::BlockBreak { pc } => {
-                self.emit_block_break(pc);
+            LInst::BlockBreak { pc, loop_jit_spill_bytes } => {
+                self.emit_block_break(pc, loop_jit_spill_bytes);
             }
             LInst::ChainExit { evict, replay } => {
                 self.register_chain_exit(evict, replay);
