@@ -960,9 +960,17 @@ pub(in crate::codegen) enum LInst {
     Ret,
     MethodRet {
         pc: BytecodePtr,
+        /// The frame's loop-JIT spill region, released before resuming the
+        /// VM — like every other exit that leaves through `entry_raise`
+        /// (`Raise` / `Retry` / `Redo` / `EnsureEnd`). aarch64 needs it
+        /// because its VM builds callee frames sp-relative; x86-64 ignores
+        /// it (rbp-relative VM frames, a stale `rsp` is unobservable).
+        loop_jit_spill_bytes: usize,
     },
     BlockBreak {
         pc: BytecodePtr,
+        /// See [`LInst::MethodRet::loop_jit_spill_bytes`].
+        loop_jit_spill_bytes: usize,
     },
     /// Register `evict`'s already-recorded call return address as the key for
     /// `replay` in the runtime chain-deopt table. Emits no machine code.

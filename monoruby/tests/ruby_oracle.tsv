@@ -504,6 +504,7 @@
 27bbd9728c02599e57c39a078921ec2f	["X", "X"]	$/ = "X"; r = [$/, $-0]; $/ = "\\n"; r
 27e09cfb8d3e196da639bfe49a480262	"----hi----"	class Foo; def to_str; "-"; end; end\n            "hi".center(10, Fo
 27fffd6b30a640af5c225b8f9b0b1edb	[false, [:a, :b]]	S = Struct.new(:a, :b, keyword_init: false)\n            \n\n         
+280a0903d95ccdf58909745441b59564	665703.140625	def f\n          [1].each do |x|\n            a = 0.5; b = 1.5; c = 2.5; 
 2813eaf79f8e7054ca4fc122c2c44ce9	[[:singleton_method_added, [:method_missing]], [:singleton_method_added, [:foo]]]	$result = []\n        class C\n          class << self\n            undef_
 2817d91ed55d25899a6cafb76ddebc3d	"hi"	class Foo\n              def hi\n                "hi"\n              e
 28212edb8e5f6d2cf627a2eff37d1fb2	["7", "11"]	def crsl_foo\n          begin\n            raise "oops"\n          rescue\n
@@ -673,6 +674,7 @@
 362197c8ba0c107c5b63c4c8b7e930e6	false	t = Thread.new { IO.select(nil, nil, nil, 2**62) }\n            Thre
 366101f3454d9c3ba104d799233170e4	14	class Foo\n              def with_block; yield 7; end\n            en
 367c0b57251ec6d8861445efce15a4a2	[3, 4, 5]	class MyNum; def to_int; 2; end; end\nn = MyNum.new\n[1,2,3,4,5].drop(n)
+369964a9ab023c59c6982e160cd552b5	10770.0	def g\n          a = 0.0; b = 1.0; c = 2.0; d = 3.0\n          i = 0\n    
 36e28f3b4bad007127519f2712f4d570	[39, :receiver_class, "constant", "nil", :receiver_class, "class variable access from toplevel"]	$r = []\n        m = Module.new\n        $r << m.class_eval("@@cv1 = 39; 
 36ef6bae649b437bac48a49db4df0dd2	[false, false, false]	a = "\\xff".dup.force_encoding("UTF-8")\n              b = "\\xff".d
 36f30f53930311aedc7940de7a521902	true	FileTest.writable?("/tmp")
@@ -2565,6 +2567,7 @@ cea4ac40f2ed783a751cc211c9f49b2c	["seed", 4, true, true]	def eapp(s, e, n)\n    
 ceb00f8b8ea6a7e9a44636698f8e1014	[0, 123, 321, "TypeError"]	res = [$.]\n        $. = 123.5\n        res << $.\n        obj = Object.ne
 cec2e4a4735508727ba059b9404b5c1e	[true, true]	klass = Class.new do\n          def self.allocate\n            raise "all
 ced5712f3f56898e6479ddda935644e9	5	class C\n            end\n            c = C.new\n            def c.f; 
+cf06b2d035c13e7fd3e3fafa28934cb8	1219026.0	def g\n          a = 0.0; b = 1.0; c = 2.0; d = 3.0\n          i = 0\n    
 cf154d83dbefe1d87cac17d0b188f7dd	[5, 8, 6, 9, 7, 10, 8, 11, 9, 12, 10, 13, 11, 14, 12, 15, 13, 16, 14, 17, 15, 18]	def f(x,y)\n            yield x,y\n          end\n          \n          r
 cf1d7ef2fb786f57a3cf9e0f019f1486	true	Regexp.private_instance_methods.include?(:initialize)
 cf347485acd73ea7a73489e5f1fbd249	"ASCII-8BIT"	("hello %s" % 195.chr).encoding.to_s
