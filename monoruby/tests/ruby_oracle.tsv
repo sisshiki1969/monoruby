@@ -421,6 +421,7 @@
 20246e0e0b12cd595e31cd7c277fa443	{life: 42}	fiber = Fiber.new(storage: {life: 42}) do\n              Thread.new 
 20354b8af635160a503c14b0bc910c4d	["pack length too big", "pack length too big", "pack length too big", "pack length too big", ["b"]]	r = []\n            [["@99999999999999999999999999", :unpack],\n     
 205e65e2298e3b75f7ddf8cf3f3495c6	[false, true, "z", :nme]	res = []\n        30.times { res << ("abc" !~ /b/) << ("abc" !~ /z/) << 
+2063bfa810947588ebf2d2b7ff4741a3	[45450, 302]	def g\n          a = 0; c = 2\n          i = 0\n          while i < 300\n  
 206652bec5b6b36846721ea87b2a4280	[true, true, true, true]	b = binding\n        sl = b.source_location\n        [sl.is_a?(Array), sl
 207dfdc3a331dc3a9bd12c35a3e92870	["pv\\n", "pv2\\n", "pv3\\n", "/tmp\\n", "/tmp\\n", true, "ISO-8859-1", ["UTF-8", "ISO-8859-1"]]	r = []\n            IO.popen([{"PV" => "pv"}, "sh", "-c", "echo $PV"
 209dfca7e20d5b08fbea7e352067e47e	1	begin\n          abort("test")\n        rescue SystemExit => e\n          
@@ -2044,6 +2045,7 @@ a6e76941b428102c2ba4a628d8639080	1000	S = Struct.new(:counter)\n            \n\n
 a6f799b2f3bd4b9cbb9608e44dd52dbc	true	Process.warmup
 a6ffb30dedbdb58fc281fe6682f6497c	[3, :first_store_raises]	class Q\n          def fill(i)\n            @a = i\n            @b = i\n   
 a71e54a7d566380aaed8baaea63868be	99	def make_proc\n          Proc.new { yield }\n        end\n        def get_
+a7842c388edf1fd9f074cafd5774cb4e	23025.0	def g\n          a = 0.0; c = 2.0\n          i = 0\n          while i < 30
 a7bbd186c86ac3ce9091503517f8a4c7	[true, true, false]	class Foo\n              def bar; 1; end\n              alias_method 
 a7d85b5b4b74fdccaa32b812610588e7	true	d = +"foo"\n            h = Hash.new(d)\n            h[:any].equal?(d
 a7dfe3e551ac8402163609fb863ca4e0	["US-ASCII"]	s = "abcabc".dup.force_encoding("US-ASCII")\n              s.scan(
@@ -2387,6 +2389,7 @@ c09d6cb41615f95536118d7f2c2d3ac5	"UTF-8"	-> { e = __ENCODING__; e.name }.call
 c0bd20c1f72134f81f9605cb0369bad4	["hello", "helloworld", "helloworld"]	path = "/tmp/mr_buf_rw.txt"\n            res = []\n            f = Fi
 c0ccecf51a28d34a9407d29cd759ff8a	[:f, :f]	class C; def f; 1; end; end\n            \n\n            m = C.new.met
 c0d486ae823c1add3b9717cbf806e267	54	[2, 3, 4, 5].inject(0) {|result, item| result + item ** 2 }
+c0da8cb417f12c88e38ff252f456992d	300	$n = 0\n        def g\n          i = 0\n          while i < 300\n          
 c0ddaa891fb7a63e6690683fe1ec0f3d	[["a"], ["abc"], ["1"]]	[/\\p{Word}/.match("a").to_a, /\\p{Alpha}+/.match("abc").to_a, /\\p{^L}/.match("1")
 c0f28d6a8eec92ebb24ada71d093ae08	[:from_proc, :nope]	class FwdH\n          def check = block_given? ? yield : :nope\n        e
 c0f4d9f562f9dd0bd39e836e62a9886e	[:rescued]	def boom; raise "no"; end\n            def test; [1].map { begin; bo

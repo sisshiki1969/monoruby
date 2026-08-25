@@ -1517,6 +1517,16 @@ impl<'a> JitContext<'a> {
     }
 
 
+    /// Whether *pc* (an absolute bytecode address of the frame currently
+    /// being compiled) sits inside one of that frame's exception-handler
+    /// regions. The non-local exits use it to refuse the specialized
+    /// static-teardown lowering, which cannot run handler bodies.
+    fn pc_in_handler_region(&self, pc: BytecodePtr) -> bool {
+        let iseq = self.iseq();
+        let idx = iseq.get_pc_index(Some(pc));
+        iseq.get_exception_dest(idx).is_some()
+    }
+
     fn check_exception_handler(&self, begin: usize, end: usize) -> bool {
         self.stack_frame[begin..end].iter().any(|f| {
             let iseq_id = f.iseq_id();
@@ -1672,7 +1682,22 @@ impl<'a> JitContext<'a> {
     /// captured at AsmIr emission time — see
     /// [`Self::outer_specialized_ids`] for the rationale.
     ///
-    pub(super) fn method_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
+    pub(super) fn method_caller_specialized_ids(
+        &self,
+        pc: BytecodePtr,
+    ) -> Option<(Vec<SpecializedId>, usize)> {
+        // The static teardown leaves every frame between here and the home
+        // without ever consulting an exception table — including *this*
+        // one. A `return` written inside a begin/ensure must run the
+        // ensure body on the way out (`handle_error` does, via
+        // `defer_unwind`), so when the return site itself sits in a
+        // handler region the only correct lowering is the non-specialized
+        // `MethodRet` -> `err_method_return` path. `check_exception_handler`
+        // below covers the *suspended* frames (by their call-site pc), but
+        // not the frame the instruction is in.
+        if self.pc_in_handler_region(pc) {
+            return None;
+        }
         // Method specialization is lowered on both arches now, so the caller
         // chain is encoded for `MethodRetSpecialized` on aarch64 too — as is
         // block inlining, see `iter_caller_specialized_ids`.
@@ -1711,7 +1736,19 @@ impl<'a> JitContext<'a> {
     /// and the current frame. Returns `(ids, extra)` — see
     /// [`Self::method_caller_specialized_ids`].
     ///
-    pub(super) fn iter_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
+    pub(super) fn iter_caller_specialized_ids(
+        &self,
+        pc: BytecodePtr,
+    ) -> Option<(Vec<SpecializedId>, usize)> {
+        // Same current-frame test as `method_caller_specialized_ids`: a
+        // `break` inside a begin/ensure must run this frame's ensure on
+        // the way out, which only the non-specialized `BlockBreak` ->
+        // `err_block_break` -> `handle_error` path does. Without it the
+        // static teardown skipped the ensure entirely (issue #1179: every
+        // post-OSR `break` lost its `ensure` write).
+        if self.pc_in_handler_region(pc) {
+            return None;
+        }
         // Block inlining is lowered on aarch64 now, so `break` out of an inlined
         // block can encode its caller chain for `BlockBreakSpecialized` too.
         let caller = self.iter_caller_pos()?;

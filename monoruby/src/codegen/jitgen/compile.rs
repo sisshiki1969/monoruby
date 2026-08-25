@@ -907,8 +907,8 @@ impl<'a> JitContext<'a> {
             TraceIr::MethodRet(ret) => {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
-                state.load(ir, ret, GP::Rax);
-                if let Some((spec_ids, extra)) = self.method_caller_specialized_ids() {
+                if let Some((spec_ids, extra)) = self.method_caller_specialized_ids(pc) {
+                    state.load(ir, ret, GP::Rax);
                     ir.push(AsmInst::MethodRetSpecialized {
                         rbp_offset: DynVarOffset::Hint {
                             ids: spec_ids,
@@ -916,6 +916,14 @@ impl<'a> JitContext<'a> {
                         },
                     });
                 } else {
+                    // The non-specialized path goes through `handle_error`,
+                    // which may resume *this* frame in the interpreter (an
+                    // ensure body protecting the `return`) — so every local
+                    // must be materialized in its slot first, exactly like
+                    // `Raise`. The specialized teardown above never resumes
+                    // the frame and skips this.
+                    state.locals_to_S(ir);
+                    state.load(ir, ret, GP::Rax);
                     ir.push(AsmInst::MethodRet(pc));
                 }
                 let result = state.as_return(ret);
@@ -925,8 +933,8 @@ impl<'a> JitContext<'a> {
             TraceIr::BlockBreak(ret) => {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
-                state.load(ir, ret, GP::Rax);
-                if let Some((spec_ids, extra)) = self.iter_caller_specialized_ids() {
+                if let Some((spec_ids, extra)) = self.iter_caller_specialized_ids(pc) {
+                    state.load(ir, ret, GP::Rax);
                     ir.push(AsmInst::BlockBreakSpecialized {
                         rbp_offset: DynVarOffset::Hint {
                             ids: spec_ids,
@@ -934,6 +942,10 @@ impl<'a> JitContext<'a> {
                         },
                     });
                 } else {
+                    // Same as `MethodRet`: `handle_error` may resume this
+                    // frame at its ensure body, which reads the slots.
+                    state.locals_to_S(ir);
+                    state.load(ir, ret, GP::Rax);
                     ir.push(AsmInst::BlockBreak(pc));
                 }
                 let result = state.as_return(ret);

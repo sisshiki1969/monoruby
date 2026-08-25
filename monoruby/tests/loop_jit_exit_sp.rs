@@ -98,23 +98,21 @@ fn block_break_out_of_a_loop_jit_unit() {
     );
 }
 
-/// A pre-existing JIT divergence found while building the shapes above,
-/// recorded so it is not lost — filed as issue #1179; removing the
-/// `#[ignore]` below turns this into its regression test once fixed.
-/// **Not** the sp-undo defect: it reproduces
-/// identically before and after that fix, at both FPR pool sizes, and
-/// `--no-jit` agrees with CRuby.
-///
-/// When a `break` unwinds through an `ensure` that writes an *outer*
-/// local (`c += 0.5` below, a dynvar of the loop-JIT frame), the write
-/// happens in the VM — but the loop unit keeps reading its own stale view
-/// of `c` for the remaining iterations. Measured: monoruby 22975.5 vs
-/// CRuby 23025.0 — short by exactly 0.5 x the 99 iterations after the
-/// `break`, i.e. the breaking iteration's `ensure` increment never
-/// reached the loop's view. Same family as the block-passing-call float
-/// staleness (#1172/#1173), but through the non-local-exit path.
+/// Issue #1179's original shape. The first analysis ("the ensure's write
+/// happens in the VM but the loop unit reads a stale view") was wrong:
+/// counting the `ensure` executions showed the ensure **never ran** for a
+/// post-OSR `break`. The break site sat inside a begin/ensure, but
+/// `iter_caller_specialized_ids` only checked the *suspended* frames of
+/// the chain for handler regions — never the frame the `break` itself is
+/// in — so the loop unit compiled the exit as `BlockBreakSpecialized`, a
+/// static teardown that consults no exception table. Every `break` taken
+/// from the compiled loop skipped its `ensure` (measured on a
+/// break-every-iteration variant: 99 of 300 ensures ran — exactly the
+/// pre-OSR interpreted ones). Fixed by `pc_in_handler_region`: a
+/// non-local exit inside a handler region refuses the specialized
+/// lowering and goes through `err_block_break` -> `handle_error`, which
+/// runs the ensure.
 #[test]
-#[ignore = "issue #1179: an ensure run by `break` writes an outer local the loop unit then reads stale"]
 fn break_running_an_ensure_that_writes_an_outer_local() {
     run_test(
         r#"
@@ -133,6 +131,64 @@ fn break_running_an_ensure_that_writes_an_outer_local() {
             i += 1
           end
           a
+        end
+        g
+        "#,
+    );
+}
+
+/// The sharpest form of issue #1179: `break` on *every* iteration, with
+/// the `ensure` counting its own executions through a global. Before the
+/// fix only the pre-OSR (interpreted) iterations ran their ensure — 99 of
+/// 300 — because every `break` compiled into the loop unit took the
+/// specialized static teardown past the exception table.
+#[test]
+fn every_break_runs_its_ensure() {
+    run_test(
+        r#"
+        $n = 0
+        def g
+          i = 0
+          while i < 300
+            [1].each do |x|
+              begin
+                break if true
+              ensure
+                $n += 1
+              end
+            end
+            i += 1
+          end
+          $n
+        end
+        g
+        "#,
+    );
+}
+
+/// The integer variant: rules out any float/register-file involvement —
+/// integer locals are always slot-resident (the GP pool is empty), and
+/// the deficit was identical, which is what disproved the stale-view
+/// analysis and pointed at the ensure never running.
+#[test]
+fn break_ensure_writing_an_outer_integer() {
+    run_test(
+        r#"
+        def g
+          a = 0; c = 2
+          i = 0
+          while i < 300
+            [1].each do |x|
+              begin
+                a += c
+                break if i == 200
+              ensure
+                c += 1
+              end
+            end
+            i += 1
+          end
+          [a, c]
         end
         g
         "#,
