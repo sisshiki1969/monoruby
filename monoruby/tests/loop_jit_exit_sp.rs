@@ -99,7 +99,9 @@ fn block_break_out_of_a_loop_jit_unit() {
 }
 
 /// A pre-existing JIT divergence found while building the shapes above,
-/// recorded so it is not lost. **Not** the sp-undo defect: it reproduces
+/// recorded so it is not lost — filed as issue #1179; removing the
+/// `#[ignore]` below turns this into its regression test once fixed.
+/// **Not** the sp-undo defect: it reproduces
 /// identically before and after that fix, at both FPR pool sizes, and
 /// `--no-jit` agrees with CRuby.
 ///
@@ -112,7 +114,7 @@ fn block_break_out_of_a_loop_jit_unit() {
 /// reached the loop's view. Same family as the block-passing-call float
 /// staleness (#1172/#1173), but through the non-local-exit path.
 #[test]
-#[ignore = "pre-existing JIT divergence: an ensure run by `break` writes an outer local the loop unit then reads stale"]
+#[ignore = "issue #1179: an ensure run by `break` writes an outer local the loop unit then reads stale"]
 fn break_running_an_ensure_that_writes_an_outer_local() {
     run_test(
         r#"
