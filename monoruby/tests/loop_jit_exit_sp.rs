@@ -98,23 +98,21 @@ fn block_break_out_of_a_loop_jit_unit() {
     );
 }
 
-/// A pre-existing JIT divergence found while building the shapes above,
-/// recorded so it is not lost — filed as issue #1179; removing the
-/// `#[ignore]` below turns this into its regression test once fixed.
-/// **Not** the sp-undo defect: it reproduces
-/// identically before and after that fix, at both FPR pool sizes, and
-/// `--no-jit` agrees with CRuby.
+/// The JIT divergence found while building the shapes above, filed as
+/// issue #1179 and since fixed — this is its regression test (the
+/// `#[ignore]` this carried while open is dropped). **Not** the sp-undo
+/// defect: it reproduced identically before and after that fix, at both
+/// FPR pool sizes, and `--no-jit` agreed with CRuby.
 ///
-/// When a `break` unwinds through an `ensure` that writes an *outer*
-/// local (`c += 0.5` below, a dynvar of the loop-JIT frame), the write
-/// happens in the VM — but the loop unit keeps reading its own stale view
-/// of `c` for the remaining iterations. Measured: monoruby 22975.5 vs
-/// CRuby 23025.0 — short by exactly 0.5 x the 99 iterations after the
-/// `break`, i.e. the breaking iteration's `ensure` increment never
-/// reached the loop's view. Same family as the block-passing-call float
-/// staleness (#1172/#1173), but through the non-local-exit path.
+/// The record above attributed the lost `c += 0.5` to a stale view (the
+/// #1172/#1173 family); probes said otherwise — the breaking iteration's
+/// `ensure` never ran at all. The `break` inside the block's own
+/// `begin`..`ensure` still lowered to `BlockBreakSpecialized`, a pure
+/// machine-level teardown that never enters `handle_error`, because the
+/// specialization check covered only the chain's *suspended* frames, not
+/// the exiting instruction's own coverage. See
+/// `JitContext::in_protected_region` and `tests/nonlocal_exit_ensure.rs`.
 #[test]
-#[ignore = "issue #1179: an ensure run by `break` writes an outer local the loop unit then reads stale"]
 fn break_running_an_ensure_that_writes_an_outer_local() {
     run_test(
         r#"

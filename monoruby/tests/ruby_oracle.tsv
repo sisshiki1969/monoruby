@@ -2045,6 +2045,7 @@ a6e76941b428102c2ba4a628d8639080	1000	S = Struct.new(:counter)\n            \n\n
 a6f799b2f3bd4b9cbb9608e44dd52dbc	true	Process.warmup
 a6ffb30dedbdb58fc281fe6682f6497c	[3, :first_store_raises]	class Q\n          def fill(i)\n            @a = i\n            @b = i\n   
 a71e54a7d566380aaed8baaea63868be	99	def make_proc\n          Proc.new { yield }\n        end\n        def get_
+a7842c388edf1fd9f074cafd5774cb4e	23025.0	def g\n          a = 0.0; c = 2.0\n          i = 0\n          while i < 30
 a7bbd186c86ac3ce9091503517f8a4c7	[true, true, false]	class Foo\n              def bar; 1; end\n              alias_method 
 a7d85b5b4b74fdccaa32b812610588e7	true	d = +"foo"\n            h = Hash.new(d)\n            h[:any].equal?(d
 a7dfe3e551ac8402163609fb863ca4e0	["US-ASCII"]	s = "abcabc".dup.force_encoding("US-ASCII")\n              s.scan(
