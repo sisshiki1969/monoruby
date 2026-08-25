@@ -956,6 +956,7 @@
 4c3cdf6fdb768ce2061972f6724dd416	42	class Foo\n              def initialize(x)\n                @x = x\n  
 4c6323de719d0ad254c106b3de0e1ff1	99	b = binding\n            b.local_variable_set("bar", 99)\n           
 4c66c29f7a10c99487fbb86f19ded61a	false	File.file?("readme.md")
+4c69a613ea757c9eff914b8a29903a61	[7]	$log = []\n        def m\n          d = 7\n          [1].each do |x|\n     
 4c6f323c0ce3159e2b7f0992372dd514	false	/a/.match("xay".b).nil?
 4c7471c063042fa95b957878dbb97a5a	[true, false]	class C < Object\n        end\n        class S < C\n        end\n\n        o
 4c7947408d26ed45ead6a30d7a7c8c21	[42, 42, 42, 42, 42, 42, 42, 42, 84, 84, 84]	class A\n          attr_accessor :w\n        end\n        a = A.new\n      
@@ -2925,6 +2926,7 @@ ec616c74470bcaec129ac19540047a93	["method", "nil", nil, "outer", ["a_file", "10"
 ec6e08886fb1c676139aa0cb92bb4296	["extend_object:C", "hello"]	$res = []\n        module M\n          def self.extend_object(obj)\n      
 ec75362ae6eb794adfccd5ea2fd87a71	["Infinity", "NaN", "Infinity", "-Infinity", true, "-0.314e1", "0.314e1", "0.314e1"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
 ec7990294dac7ac2a637929f23760d95	[42, 42, 42, 42, 42, 42, 42, 42, 100, 100, 100]	class A\n                attr_accessor :w\n            end\n          
+ec83d3346e8c3ed3a4ed389e11834860	1.5	def m2\n          out = 0.0\n          [1].each do |x|\n            f = 1.
 ec84a8df82f97b16fdedf56efbc6ad35	"hello"	path = "/tmp/monoruby_test_filewrite_perm_#{Process.pid}_#{rand(100
 ecb0c2530aa824ca3b58cd269e696cd6	"xy"	def m; /(\\w)(\\w)/ =~ "xy"; -> { $~[0] }.call; end; m
 ecf0e0788d956837326285cb5c6fe318	[[0, 1, 2, 3, 4, 5, 6], 7, 8]	def f(*x,a,b)\n          [x,a,b]\n        end\n        \n\n        f(0,1,2,3

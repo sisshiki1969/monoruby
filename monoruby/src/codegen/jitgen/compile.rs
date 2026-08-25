@@ -907,7 +907,6 @@ impl<'a> JitContext<'a> {
             TraceIr::MethodRet(ret) => {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
-                state.load(ir, ret, GP::Rax);
                 // A non-local `return` written inside a protected region must
                 // unwind through `handle_error`, which runs this frame's
                 // `ensure` (and restores `$!` when leaving a rescue clause) on
@@ -915,9 +914,22 @@ impl<'a> JitContext<'a> {
                 // frame pop and would skip both. `check_exception_handler`
                 // covers only the *suspended* frames of the chain, so the
                 // exiting instruction's own coverage is checked here (#1179).
-                if !self.in_protected_region(bc_pos)
-                    && let Some((spec_ids, extra)) = self.method_caller_specialized_ids()
-                {
+                let specialized = (!self.in_protected_region(bc_pos))
+                    .then(|| self.method_caller_specialized_ids())
+                    .flatten();
+                if specialized.is_none() {
+                    // Mirror `Raise`: when this frame's own `ensure` covers
+                    // the exit, `handle_error` sends the VM into it straight
+                    // from `entry_raise` — *before* any error side exit has
+                    // run, i.e. before the chain-deopt walk has materialized
+                    // anything — so this frame's locals must be slot-true
+                    // now. (An `ensure` in an *intermediate* frame is safe
+                    // without this: it only runs after that frame's own side
+                    // exit wrote back and escalated.)
+                    state.locals_to_S(ir);
+                }
+                state.load(ir, ret, GP::Rax);
+                if let Some((spec_ids, extra)) = specialized {
                     ir.push(AsmInst::MethodRetSpecialized {
                         rbp_offset: DynVarOffset::Hint {
                             ids: spec_ids,
@@ -934,14 +946,21 @@ impl<'a> JitContext<'a> {
             TraceIr::BlockBreak(ret) => {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
-                state.load(ir, ret, GP::Rax);
                 // Same as `MethodRet` above: a `break` inside a protected
                 // region relies on `handle_error` to run this frame's `ensure`
                 // during the unwind; the specialized teardown would skip it —
-                // observed as issue #1179's silently-lost `c += 0.5`.
-                if !self.in_protected_region(bc_pos)
-                    && let Some((spec_ids, extra)) = self.iter_caller_specialized_ids()
-                {
+                // observed as issue #1179's silently-lost `c += 0.5`. And on
+                // the generic path this frame's locals must be slot-true
+                // before the raise, for the same pre-escalation-`ensure`
+                // reason as in `MethodRet`.
+                let specialized = (!self.in_protected_region(bc_pos))
+                    .then(|| self.iter_caller_specialized_ids())
+                    .flatten();
+                if specialized.is_none() {
+                    state.locals_to_S(ir);
+                }
+                state.load(ir, ret, GP::Rax);
+                if let Some((spec_ids, extra)) = specialized {
                     ir.push(AsmInst::BlockBreakSpecialized {
                         rbp_offset: DynVarOffset::Hint {
                             ids: spec_ids,
