@@ -163,12 +163,15 @@ storing the current version into that word (`Codegen::set_class_version`). An
 earlier revision of this document quoted an aarch64 comment saying *"we do not
 recompile on miss yet — just deopt"*; that text is gone.
 
-What is still x86-only is the **recovery jump-back**: `gen_recompile`'s
-`with_recovery` parameter and `jit_recompile_method_with_recovery` are both
-`#[cfg(target_arch = "x86_64")]`. On x86, a non-specialized class-version miss
-whose salvage succeeds resumes straight back into the compiled body; on aarch64
-the same miss deopts to the VM once and the healed code is entered on the next
-call. Correctness is identical — only the transition cost differs.
+The **recovery jump-back** is ported too: both arches now have a
+`jit_recompile_method_with_recovery` (the aarch64 one returns a tri-state —
+salvaged / recompiled / recompile-panicked — since aarch64 surfaces a
+recompile panic as a Ruby `FatalError`, which x86 does not). On either arch a
+non-specialized class-version miss whose salvage succeeds jumps straight back
+into the compiled body; only a genuine change pays the deopt. The aarch64
+call helper saves the full x86 `save_registers` equivalent (x1-x8 + d2-d7;
+d8-d15/x19-x28 are callee-saved under AAPCS64, and x0 is the return register
+and dead at a guard, like rax on x86).
 
 **Specialized frames are symmetric:** the specialized class-version guard
 recompiles on both arches. x86 uses `guard_class_version_specialized` /
@@ -203,7 +206,7 @@ stack alone — no code is patched, on either arch. See `doc/chain_deopt.md`
 | `guard_array_ty`              | yes (`ObjTy::ARRAY` at `RVALUE_OFFSET_TY`)                        | yes                                                                    |
 | `guard_capture`               | yes (`branch_if_captured`)                                       | yes                                                                    |
 | `float_to_f64` unbox          | yes (flonum / heap-Float, 0.0 sign-bit trick)                    | yes (mirrored)                                                         |
-| class-version guard           | unit snapshot word + **recovery jump-back** (§4.1)                | unit snapshot word, **no recovery** — salvaged miss deopts once (§4.1)  |
+| class-version guard           | unit snapshot word + recovery jump-back (§4.1)                    | same — recovery jump-back ported (§4.1)                                 |
 | eviction on BOP redefinition  | arch-neutral chain-deopt walk, no code patching (§4.2)          | identical (§4.2)                                                        |
 
 Both `a64_guard_class` and `a64_guard_rvalue` always emit (they return a `bool`
@@ -277,11 +280,9 @@ prologue and only the latter has already reserved the unit's spill region.
 - **Correctness is equal.** Both backends produce correct results.
 - **Coverage is equal.** Both backends JIT every method/loop the front-end
   produces; aarch64 no longer falls back to the VM for any instruction shape.
-- **Steady-state recompile behavior differs** in one narrow, non-specialized
-  case (§4.1): after a class-version change whose salvage succeeds, x86 jumps
-  back into the compiled body while aarch64 deopts to the VM once and re-enters
-  the healed code on the next call. Both reach the same steady state; the
-  difference is the transition cost.
+- **Recompile behavior is symmetric** (§4.1): a salvaged class-version miss
+  resumes compiled code in place on both arches; a genuine change recompiles
+  and pays one deopt.
 - **A very large loop body may stay interpreted on aarch64** (§5c, branch
   range). x86 has no such limit.
 
@@ -290,9 +291,8 @@ prologue and only the latter has already reserved the unit's spill region.
 > x86-64 and aarch64 share the entire AsmIR front-end *and* full AsmInst
 > coverage — aarch64 lowers everything (large immediates via scratch
 > registers), so the `bool` bail return is vestigial. What remains is
-> non-coverage: the x86-only **recovery jump-back** after a salvaged
-> non-specialized class-version miss (§4.1), different **code-installation**
-> mechanisms (branch patching vs indirect slots) and **cold-code placement**
-> (page 1 vs inline, which buys aarch64 the `as_pure_deopt` collapse), and
-> aarch64's **branch-range** ceiling on very large loop bodies (§5c). Guards,
+> non-coverage: different **code-installation** mechanisms (branch patching
+> vs indirect slots) and **cold-code placement** (page 1 vs inline, which
+> buys aarch64 the `as_pure_deopt` collapse), and aarch64's **branch-range**
+> ceiling on very large loop bodies (§5c). Guards, the recovery jump-back,
 > BOP eviction, block/method inlining and the GP pool are all symmetric.
