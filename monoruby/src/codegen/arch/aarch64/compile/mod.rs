@@ -2604,10 +2604,35 @@ impl Codegen {
         off <= 32760 && off % 8 == 0
     }
 
-    /// Loop-JIT entry stack bump (large bumps go through `a64_sp_sub`).
-    pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(&mut self, offset: LoopRspOffset) -> bool {
+    /// Loop-JIT entry stack setup: pin `sp` to this frame's canonical depth
+    /// (`a64_addr_sub` materializes an out-of-immediate-range offset).
+    pub(in crate::codegen::jitgen) fn emit_loop_jit_rsp_bump(
+        &mut self,
+        offset: LoopRspOffset,
+        base: usize,
+    ) -> bool {
         let bytes = offset.unwrap_concrete();
-        self.a64_sp_sub(bytes as u32);
+        // This body is reached by `loop_start` from *either* producer of a
+        // Ruby frame, and inherits that frame's `sp`. The two do not reserve
+        // the same thing: the VM's `init_method` reserves the iseq's
+        // `FnInitInfo::stack_offset` (`base - PROLOGUE_OVERHEAD`) and knows
+        // nothing of spill slots, while an `AsmInst::Init` prologue reserves
+        // `total - PROLOGUE_OVERHEAD` — the same area *plus this unit's
+        // spill region*, since the region is part of `total`. Subtracting
+        // `total - base` from what we inherit therefore counts the spill
+        // region twice on the JIT-prologue path, landing `total - base`
+        // deeper than on the VM path.
+        //
+        // Pin `sp` to the frame's canonical depth instead, so both producers
+        // agree: `total - PROLOGUE_OVERHEAD`, exactly what the prologue
+        // reserves. The frames this body then builds below `sp` stay where
+        // the compile assumed, which is what the fixed `x29`-relative
+        // offsets addressing them (`LoadDynVarSpecialized`, the spill slots)
+        // require. `x29` is dependable here — `x29 - lfp` is invariant
+        // across entries.
+        let below = base - PROLOGUE_OVERHEAD + bytes;
+        self.a64_addr_sub(10, 29, below as u32);
+        monoasm_arm64!(&mut self.jit, mov sp, x10;);
         true
     }
 

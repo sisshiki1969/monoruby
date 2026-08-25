@@ -818,7 +818,10 @@ impl Codegen {
             }),
             // Loop-JIT entry stack bump (aarch64 bails on a frame larger than
             // the 12-bit sub-sp immediate).
-            AsmInst::LoopJitRspBump { offset } => self.encode_linst(LInst::LoopJitRspBump { offset }),
+            AsmInst::LoopJitRspBump { offset } => self.encode_linst(LInst::LoopJitRspBump {
+                offset,
+                base: frame.base_stack_offset,
+            }),
             // Inline argument-setup stores into the callee frame, at a
             // (raw) rsp-relative offset the encoder legalizes per arch.
             AsmInst::RegToRSPOffset(r, ofs) => self.encode_linst(LInst::Store {
@@ -1610,8 +1613,8 @@ impl Codegen {
             LInst::Init { info, prologue_offset } => {
                 self.emit_init(info, prologue_offset);
             }
-            LInst::LoopJitRspBump { offset } => {
-                self.emit_loop_jit_rsp_bump(offset);
+            LInst::LoopJitRspBump { offset, base } => {
+                self.emit_loop_jit_rsp_bump(offset, base);
             }
             LInst::BlockArgProxy { ret, outer } => {
                 self.emit_block_arg_proxy(ret, outer);

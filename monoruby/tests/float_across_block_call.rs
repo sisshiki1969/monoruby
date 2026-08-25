@@ -165,8 +165,8 @@ fn a_block_call_inside_a_loop() {
 /// the call may keep the frame's constants. The analysis predicted a kept
 /// `C(3)`; codegen gave it up. See `AsmIr::note_analysis_deopt`.
 ///
-/// Compiling it at all then uncovered *two* further, unrelated defects,
-/// which is why one configuration is still excluded below.
+/// Compiling it at all then uncovered two further, unrelated defects,
+/// both since fixed.
 ///
 /// The first was not about the spill pool at all, and is fixed:
 /// `Codegen::set_class_version` patched a unit's version snapshot word —
@@ -175,32 +175,49 @@ fn a_block_call_inside_a_loop() {
 /// every successful class-version salvage was a SIGBUS on Apple Silicon at
 /// *any* pool size. See `Codegen::set_const_version`'s comment.
 ///
-/// The second is real and still open: on aarch64 with `stress-spill-pool`
-/// this segfaults in compiled code. `LoadDynVarSpecialized` addresses the
-/// outer frame at a fixed `[x29 + offset]`, and here that offset is 16
-/// bytes too small, so the block reads the word below the slot it wants.
-/// Measured at the faulting site: the block's `x29` sits 368 bytes below
-/// `f`'s, `a` (4.5) is at `x29 + 280`, and the emitted offset is 264.
+/// The second was a frame-layout disagreement, now fixed. On aarch64 with
+/// `stress-spill-pool` this segfaulted in the `[x29 + offset]` load that
+/// `LoadDynVarSpecialized` emits for the block's `a` — but the offset was
+/// right: breaking on that one instruction and walking the frame chain on
+/// every execution, 288 of 289 hits measured exactly the emitted 352, and
+/// the odd one measured 368, with the same call chain and byte-identical
+/// `bl` targets. It was `sp` that moved, not the offset.
 ///
-/// What is *ruled out*, so nobody re-walks it:
-/// - the offset does not differ by pool — `resolve_specialized_id_chain`
-///   yields the same 352 at pool 2 and pool 14, and pool 14 measures a
-///   physical 352, so only the layout moves;
-/// - the modelled FP-save (`specialized_compile`'s `using_fpr_offset`) and
-///   the emitted one (`emit_fpr_save`) agree — 45/45 call sites matched;
-/// - `frame_sizes.total` being calibrated for `Init`-prologue frames
-///   (`total - 32`) while a loop-JIT root reserves `total - 16` looks like
-///   the discrepancy, but adding `CONTINUATION_FRAME_SIZE` back for
-///   `is_loop` frames is **not** the fix — with or without excluding the
-///   `MethodRetSpecialized` / `BlockBreakSpecialized` twins it fixes this
-///   case and breaks a `while` loop + block-passing call that has no
-///   redefinition churn (which reaches a loop-JIT chain and is correct
-///   today). So `is_loop` is not the axis that discriminates.
+/// Breaking instead on `a64_op_loop_start`'s `br x10` found one and the
+/// same compiled loop entered at *two* depths — `x29 - sp` of 144 and of
+/// 160, with `x29 - lfp` an invariant 24 — which is the loop-JIT entry
+/// counting this unit's spill region twice on one of its two entry paths.
+/// `LoopJitRspBump` subtracts `total - base` (the spill region) from the
+/// `sp` it inherits. From a VM frame that is right: `init_method` reserves
+/// the bytecode's `FnInitInfo::stack_offset * 16` and knows nothing of
+/// spill slots. From a JIT-prologue frame it is not: that prologue
+/// reserves `total - PROLOGUE_OVERHEAD`, which already *includes* the
+/// spill region. Both kinds of frame reach a `loop_start`, so the same
+/// body ran at two depths, `spill_bytes` apart — 16 at pool 2, 0 at pool
+/// 14, hence the pool dependence. The inlined specialized frames it builds
+/// below `sp` moved with it, while the `x29`-relative offsets addressing
+/// them are fixed at compile time.
+///
+/// The fix is to pin `sp` to the frame's canonical depth, `total -
+/// PROLOGUE_OVERHEAD`, rather than subtracting from what it inherits, so
+/// both producers agree on the depth the compile assumed.
+///
+/// An earlier attempt instead *raised* every frame to `total -
+/// CONTINUATION_FRAME_SIZE`, on the premise that `init_method` reserves
+/// `iseq.stack_offset()`. It does not: `ISeqInfo::stack_offset()` is the
+/// bytecode operand's expression plus a further 16, so the prologue's
+/// `total - PROLOGUE_OVERHEAD` already matched the VM. Raising it broke
+/// that match and needed a compensating `+ 16` per frame in
+/// `resolve_specialized_id_chain`, which then over-counted for every
+/// loop-JIT root a chain crossed — on x86-64 that surfaced as a nil `i`
+/// read out of `Array#repeated_combination`'s outer frame
+/// (`builtins::array::tests::sort`).
+///
+/// Still open, and unrelated to this test (it has no explicit `return` or
+/// `break`): `a64_method_ret` and `a64_block_break` `b raise` without
+/// restoring `sp`, unlike every sibling exit, which all take
+/// `loop_jit_spill_bytes`.
 #[test]
-#[cfg_attr(
-    all(target_arch = "aarch64", feature = "stress-spill-pool"),
-    ignore = "open aarch64 defect: specialized-dynvar chain offset is 16 short through a loop-JIT root"
-)]
 fn a_while_loop_around_a_block_passing_call() {
     run_test_with_prelude(
         r#"

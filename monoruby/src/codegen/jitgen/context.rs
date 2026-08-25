@@ -1553,8 +1553,18 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Resolve a `DynVarOffset::Hint` chain by summing the recorded
-    /// frame `total` sizes. Used by [`Self::resolve_dyn_var_offsets`].
+    /// Resolve a `DynVarOffset::Hint` chain: the distance from the current
+    /// frame's `rbp`/`x29` out to the target frame's, summed frame by
+    /// frame. Used by [`Self::resolve_dyn_var_offsets`].
+    ///
+    /// Each frame in the chain contributes its local area
+    /// (`total - PROLOGUE_OVERHEAD`) plus what an inlined callee consumes to
+    /// establish a frame on top of it, and the caller adds the `extra` (the
+    /// `FprSave` areas live at the call). Every frame kind reaches that one
+    /// local area: it is what the `Init` prologue reserves, and what the
+    /// loop-JIT entry pins `sp`/`rsp` to — see `emit_loop_jit_rsp_bump`,
+    /// whose two producers would otherwise disagree by this unit's spill
+    /// region.
     ///
     pub(super) fn resolve_specialized_id_chain(&self, ids: &[SpecializedId]) -> usize {
         ids.iter()
@@ -1623,12 +1633,17 @@ impl<'a> JitContext<'a> {
             } => {
                 if let PrologueOffset::Hint(id) = prologue_offset {
                     let sizes = self.frame_sizes_or_panic(*id);
-                    // The recorded `total` includes the iseq's
-                    // bookkeeping `+ 16` and the `CONTINUATION_FRAME_SIZE`
-                    // (= 16). The prologue subtracts only the locals area,
-                    // so subtract the 32-byte overhead. Spill slots that
-                    // grow `total` flow through automatically.
-                    let prologue_bytes = sizes.total - (CONTINUATION_FRAME_SIZE + 16);
+                    // Reserve exactly what the VM's `init_method` reserves
+                    // for the same iseq, plus this compile's spill region.
+                    //
+                    // The VM reserves the bytecode operand,
+                    // `FnInitInfo::stack_offset * 16`. Note that this is
+                    // *not* `ISeqInfo::stack_offset()`, which is the same
+                    // expression plus a further 16 — so the VM's reservation
+                    // is `base_stack_offset - PROLOGUE_OVERHEAD`, and adding
+                    // the spill region (the rest of `total`) gives
+                    // `total - PROLOGUE_OVERHEAD`.
+                    let prologue_bytes = sizes.total - PROLOGUE_OVERHEAD;
                     *prologue_offset = PrologueOffset::Concrete(prologue_bytes);
                 }
             }
