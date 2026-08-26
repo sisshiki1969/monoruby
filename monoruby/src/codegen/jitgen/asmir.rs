@@ -74,6 +74,17 @@ pub(crate) struct SideExitLabels {
     exit_id: Vec<u32>,
     #[cfg(feature = "deopt")]
     created_at: Vec<Option<&'static std::panic::Location<'static>>>,
+    /// aarch64: parallel to `labels` — the index of each handler in the
+    /// frame's `pending_side_exits` accumulator, recorded by `gen_asm` right
+    /// after `push`. Lets [`Self::raw_deopt`] note *which* handler a lowering
+    /// just referenced.
+    #[cfg(target_arch = "aarch64")]
+    pending_idx: Vec<usize>,
+    /// aarch64: pending indices referenced since the last drain by the
+    /// thunk pass (`Codegen::a64_thunk_side_exits`). Interior-mutable
+    /// because `raw_deopt` runs under a shared borrow.
+    #[cfg(target_arch = "aarch64")]
+    touched: std::cell::RefCell<Vec<usize>>,
 }
 
 impl SideExitLabels {
@@ -99,6 +110,10 @@ impl SideExitLabels {
             exit_id: vec![],
             #[cfg(feature = "deopt")]
             created_at: vec![],
+            #[cfg(target_arch = "aarch64")]
+            pending_idx: vec![],
+            #[cfg(target_arch = "aarch64")]
+            touched: std::cell::RefCell::new(vec![]),
         }
     }
 
@@ -127,7 +142,23 @@ impl SideExitLabels {
     /// [`DeoptCause`].
     ///
     pub(crate) fn raw_deopt(&self, index: AsmDeopt) -> &DestLabel {
+        #[cfg(target_arch = "aarch64")]
+        self.touched.borrow_mut().push(self.pending_idx[index.0]);
         &self.labels[index.0]
+    }
+
+    /// aarch64: record the accumulator index of the handler just pushed —
+    /// see the `pending_idx` field.
+    #[cfg(target_arch = "aarch64")]
+    pub(in crate::codegen) fn note_pending_idx(&mut self, idx: usize) {
+        self.pending_idx.push(idx);
+        debug_assert_eq!(self.pending_idx.len(), self.labels.len());
+    }
+
+    /// aarch64: drain the handler indices referenced since the last call.
+    #[cfg(target_arch = "aarch64")]
+    pub(in crate::codegen) fn take_touched(&self) -> Vec<usize> {
+        std::mem::take(&mut *self.touched.borrow_mut())
     }
 
     #[cfg(feature = "deopt")]
@@ -143,6 +174,10 @@ impl std::ops::Index<AsmError> for SideExitLabels {
     type Output = DestLabel;
 
     fn index(&self, index: AsmError) -> &Self::Output {
+        // Every fetch is a (potential) reference — record it for the
+        // aarch64 thunk pass, like `raw_deopt`.
+        #[cfg(target_arch = "aarch64")]
+        self.touched.borrow_mut().push(self.pending_idx[index.0]);
         &self.labels[index.0]
     }
 }
@@ -151,6 +186,8 @@ impl std::ops::Index<AsmEvict> for SideExitLabels {
     type Output = DestLabel;
 
     fn index(&self, index: AsmEvict) -> &Self::Output {
+        #[cfg(target_arch = "aarch64")]
+        self.touched.borrow_mut().push(self.pending_idx[index.0]);
         &self.labels[index.0]
     }
 }
@@ -281,6 +318,12 @@ impl AsmIr {
         if self.codegen_mode {
             self.inst.push(inst);
         }
+    }
+
+    /// Number of `AsmInst`s in the stream — the frame-size estimate the
+    /// aarch64 branch-relaxation decision reads (`Codegen::far_branch_mode`).
+    pub(super) fn inst_len(&self) -> usize {
+        self.inst.len()
     }
 
     pub(super) fn inst_iter_mut(&mut self) -> std::slice::IterMut<'_, AsmInst> {

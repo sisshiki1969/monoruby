@@ -747,6 +747,30 @@ impl Codegen {
 
         let mut ir_vec = frame.detach_ir();
 
+        // aarch64 branch relaxation (see `Codegen::far_branch_mode`): decide
+        // from the frame's total AsmIr instruction count whether a BB-edge
+        // Imm19/Adr reference could exceed its ±1 MiB reach. 64 bytes per
+        // AsmInst is a generous per-instruction bound, so 8192 instructions
+        // stays comfortably inside 1 MiB even doubled by the long forms;
+        // anything larger emits BB edges in long form. The flag is saved and
+        // restored around this frame because `gen_machine_code` recursed into
+        // the inlined callees above — each frame decides for itself.
+        #[cfg(target_arch = "aarch64")]
+        let far_branch_saved = {
+            let total: usize = ir_vec.iter().map(|(_, ir)| ir.inst_len()).sum::<usize>()
+                + frame
+                    .iter_outline_bridges_mut()
+                    .map(|(ir, _, _)| ir.inst_len())
+                    .sum::<usize>()
+                + frame
+                    .iter_inline_bridges_mut()
+                    .map(|(ir, _)| ir.inst_len())
+                    .sum::<usize>();
+            let saved = self.far_branch_mode;
+            self.far_branch_mode = total > 8192;
+            saved
+        };
+
         // §21 — AsmIR optimization seam (Path 2). `inst` is the ordered,
         // replayable instruction stream; this is the arch-neutral layer where
         // peephole/optimization passes run, between AsmIR construction
@@ -852,6 +876,11 @@ impl Codegen {
         // decides.
         #[cfg(target_arch = "aarch64")]
         self.a64_drain_side_exits(&mut frame, !had_outline_bridges && fallthrough_in);
+        #[cfg(target_arch = "aarch64")]
+        {
+            self.a64_patch_jump_tables();
+            self.far_branch_mode = far_branch_saved;
+        }
         #[cfg(not(target_arch = "aarch64"))]
         let _ = had_outline_bridges;
 

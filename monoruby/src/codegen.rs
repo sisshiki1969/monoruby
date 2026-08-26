@@ -877,6 +877,23 @@ pub struct Codegen {
     pub(crate) switch_to_scheduler: extern "C" fn(*mut Executor, Value) -> Option<Value>,
     pub(crate) scheduler_resume: extern "C" fn(*mut Executor, u64) -> Option<Value>,
     pub(crate) startup_flag: bool,
+    /// aarch64 branch relaxation: set while emitting a frame so large that
+    /// an Imm19 (`b.cond`/`cbz`, ±1 MiB) or Adr (±1 MiB) reference between
+    /// basic blocks might not reach. BB-edge branches then emit their long
+    /// form (inverted short branch over an unconditional `b`, ±128 MiB) and
+    /// `OptCase` inlines its jump table next to the `adr`. Normal frames
+    /// never pay anything. Saved/restored around `gen_machine_code`'s
+    /// recursion into inlined callees (the flag is per frame).
+    #[cfg(target_arch = "aarch64")]
+    pub(in crate::codegen) far_branch_mode: bool,
+    /// aarch64 far frames: inline `OptCase` jump tables to patch at the end
+    /// of the current frame — `(table start, dests)`. In `far_branch_mode`
+    /// the const-area table may be past `adr`'s ±1 MiB, so the table is
+    /// laid inline (nop-reserved) and its entries written once the dest
+    /// labels — same-frame BB labels, all bound by then — resolve. Emptied
+    /// by `a64_patch_jump_tables` before the frame ends.
+    #[cfg(target_arch = "aarch64")]
+    pub(in crate::codegen) pending_jump_tables: Vec<(DestLabel, Box<[DestLabel]>)>,
     /// Set by [`Self::set_bop_redefine`], consumed by the next
     /// [`Self::check_bop_redefine`]. On-stack eviction has to happen for the
     /// definition that *made* a basic op stale, not for every definition that
@@ -1228,6 +1245,10 @@ impl Codegen {
             switch_to_scheduler,
             scheduler_resume,
             startup_flag: false,
+            #[cfg(target_arch = "aarch64")]
+            far_branch_mode: false,
+            #[cfg(target_arch = "aarch64")]
+            pending_jump_tables: Vec::new(),
             bop_eviction_pending: false,
             lir_buf: None,
             #[cfg(any(feature = "jit-log", feature = "jit-debug"))]

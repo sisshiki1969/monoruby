@@ -1064,26 +1064,55 @@ impl Codegen {
         else_dest: DestLabel,
         branch_dests: Box<[DestLabel]>,
     ) {
-        let jump_table = self.jit.const_align8();
-        for dest_label in branch_dests.iter() {
-            self.jit.abs_address(dest_label.clone());
-        }
+        // In a far frame (see `Codegen::far_branch_mode`) the const-area
+        // table may end up past `adr`'s ±1 MiB reach (constants are emitted
+        // at finalize, after the whole body), so inline the table right
+        // here instead — this op ends the block with an indirect `br`, so
+        // the table sits in dead space behind it and `adr` spans a few
+        // instructions at most. The compares also switch to the relaxed
+        // BB-edge form.
+        let inline_table = self.far_branch_mode;
+        let jump_table = if inline_table {
+            self.jit.label()
+        } else {
+            let table = self.jit.const_align8();
+            for dest_label in branch_dests.iter() {
+                self.jit.abs_address(dest_label.clone());
+            }
+            table
+        };
         let cond = GP::Rdi.a64().0; // x4
         monoasm_arm64!(&mut self.jit,
             asr x(cond), x(cond), #1;   // untag fixnum: x4 = n
             cmp x(cond), #(max as u32);
         );
-        self.jit.bcond_label(monoasm::Cond::Gt, &else_dest); // n > max -> else
+        self.a64_bcond_bb(monoasm::Cond::Gt, &else_dest); // n > max -> else
         monoasm_arm64!(&mut self.jit,
             cmp x(cond), #(min as u32);
         );
-        self.jit.bcond_label(monoasm::Cond::Lt, &else_dest); // n < min -> else
+        self.a64_bcond_bb(monoasm::Cond::Lt, &else_dest); // n < min -> else
         monoasm_arm64!(&mut self.jit,
             sub x(cond), x(cond), #(min as u32);     // index = n - min
             adr x10, jump_table;                     // table base (PC-relative)
             ldr x10, [x10, x(cond), lsl #3];         // table[n - min]
             br x10;
         );
+        if inline_table {
+            // `abs_address` queues its quad for the *const* area (emitted at
+            // finalize, at the page's end) — useless for an inline table. So
+            // reserve the table bytes here with nops and record the dests;
+            // `a64_patch_jump_tables` writes the absolute addresses at the
+            // end of this frame, when the dest labels (same-frame BB labels)
+            // are all bound.
+            if self.jit.get_current() % 8 != 0 {
+                monoasm_arm64!(&mut self.jit, nop;);
+            }
+            self.jit.bind_label(jump_table.clone());
+            for _ in 0..(branch_dests.len() * 2) {
+                monoasm_arm64!(&mut self.jit, nop;);
+            }
+            self.pending_jump_tables.push((jump_table, branch_dests));
+        }
     }
 
     /// Record `return_addr` — the address the callee will `ret` to — under

@@ -266,6 +266,11 @@ pub(super) struct AsmInfo {
     /// aarch64: code position of the last side-exit island (or the frame
     /// start), the base the hot-run length is measured from.
     pub(in crate::codegen) side_exit_watermark: usize,
+    /// aarch64: indices into `pending_side_exits` whose labels have been
+    /// referenced since their last thunk — the only ones a thunk island has
+    /// to bind (binding all of them made the island itself outgrow the
+    /// `TBZ` reach on handler-heavy frames).
+    pub(in crate::codegen) touched_side_exits: std::collections::HashSet<usize>,
 }
 
 impl AsmInfo {
@@ -291,6 +296,7 @@ impl AsmInfo {
             start_codepos: 0,
             pending_side_exits: Vec::new(),
             side_exit_watermark: 0,
+            touched_side_exits: std::collections::HashSet::default(),
         }
     }
 
@@ -637,6 +643,7 @@ impl JitStackFrame {
                 start_codepos: 0,
                 pending_side_exits: Vec::new(),
                 side_exit_watermark: 0,
+                touched_side_exits: std::collections::HashSet::default(),
             },
             outer,
             callid: None,

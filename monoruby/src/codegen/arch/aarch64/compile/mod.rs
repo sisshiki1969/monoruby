@@ -98,13 +98,16 @@ fn a64_float_cond_for_cmp(kind: CmpKind, brkind: BrKind) -> monoasm::Cond {
 }
 
 
-/// Hot-run length (bytes) that forces a mid-stream side-exit island. Half
-/// the `TBZ`/`TBNZ` imm14 reach (±32 KiB): the guards emitted *after* the
-/// island still have to span their own distance to the next island plus
-/// that island's body, and handler bodies are small (a write-back plus a
-/// tail branch), so 16 KiB keeps every direct tbz comfortably in range
-/// without a range-extension thunk.
-const SIDE_EXIT_DRAIN_THRESHOLD: usize = 16 * 1024;
+/// Hot-run length (bytes) that forces a mid-stream side-exit thunk island.
+/// The invariant is that a reference to a still-unbound handler label is
+/// never further than the `TBZ`/`TBNZ` imm14 reach (±32 KiB) from where the
+/// label gets bound. References live at or after `side_exit_watermark`; a
+/// thunk island binds only the labels referenced since then (`touched`),
+/// so its size is at most 8 bytes per referencing instruction — bounded by
+/// the hot run itself. With an 8 KiB trigger the worst case is
+/// 8 KiB (run) + 16 KiB (island of one two-word thunk per instruction)
+/// ≈ 24 KiB, comfortably inside imm14.
+const SIDE_EXIT_DRAIN_THRESHOLD: usize = 8 * 1024;
 
 impl Codegen {
     /// Emit the frame's accumulated side-exit handlers as one outlined
@@ -133,13 +136,20 @@ impl Codegen {
         // re-thunks its own remainder whenever the run since the watermark
         // grows past the threshold — same trick as the mid-block pass, one
         // extra taken `b` per crossing, cold path only.
-        let mut pending: std::collections::VecDeque<_> =
-            std::mem::take(&mut frame.pending_side_exits).into();
-        while let Some(inst) = pending.pop_front() {
+        let mut pending: Vec<Option<LInst>> = std::mem::take(&mut frame.pending_side_exits)
+            .into_iter()
+            .map(Some)
+            .collect();
+        for i in 0..pending.len() {
             if self.jit.get_current() - frame.side_exit_watermark > SIDE_EXIT_DRAIN_THRESHOLD {
-                for inst in pending.iter_mut() {
-                    let LInst::SideExit { entry, .. } = inst else {
-                        unreachable!("pending_side_exits holds only LInst::SideExit");
+                // The island is outgrowing the range invariant; re-thunk the
+                // *referenced* remainder (same selection as the mid-stream
+                // pass) so their outstanding references resolve here, and
+                // let the bodies keep flowing below.
+                for idx in std::mem::take(&mut frame.touched_side_exits) {
+                    let Some(LInst::SideExit { entry, .. }) = pending[idx].as_mut() else {
+                        // Already emitted below — its label was bound then.
+                        continue;
                     };
                     let succ = self.jit.label();
                     self.jit.bind_label(entry.clone());
@@ -148,12 +158,64 @@ impl Codegen {
                 }
                 frame.side_exit_watermark = self.jit.get_current();
             }
+            let inst = pending[i].take().unwrap();
             self.encode_linst(inst);
         }
         if fallthrough_in {
             self.jit.bind_label(skip);
         }
         frame.side_exit_watermark = self.jit.get_current();
+    }
+
+    /// Write the absolute dest addresses into the frame's inline `OptCase`
+    /// jump tables (see `emit_opt_case`'s far arm). Runs at the frame's end,
+    /// when every dest — a same-frame BB label — is bound; the JIT region is
+    /// still writable (we are mid-compile), and `mark_dirty` records the
+    /// bytes for the I-cache flush at the next `set_executable`.
+    pub(in crate::codegen::jitgen) fn a64_patch_jump_tables(&mut self) {
+        for (table, dests) in std::mem::take(&mut self.pending_jump_tables) {
+            let base = self.jit.get_label_address(&table).as_ptr() as *mut u64;
+            for (i, dest) in dests.iter().enumerate() {
+                let addr = self.jit.get_label_address(dest).as_ptr() as u64;
+                let slot = unsafe { base.add(i) };
+                self.jit.mark_dirty(slot as *const u8, 8);
+                // SAFETY: `slot` is inside the nop-reserved table this frame
+                // emitted, still writable during compilation.
+                unsafe { slot.write(addr) };
+            }
+        }
+    }
+
+    /// BB-edge conditional branch, branch-relaxed: the short Imm19 form
+    /// (±1 MiB) normally, or — in `far_branch_mode`, i.e. a frame so large
+    /// the target may be out of Imm19 reach — the *same* condition taken to
+    /// a local trampoline that continues with an unconditional `b`
+    /// (±128 MiB). The condition is deliberately NOT inverted: several of
+    /// these branches follow an `fcmp`, where each condition encodes its
+    /// own NaN (unordered) behaviour — e.g. `gt` is "greater AND ordered"
+    /// while `le` is "less-equal OR unordered" — so a mechanical inversion
+    /// flips which way an unordered compare branches. Keeping the condition
+    /// costs the not-taken path one extra `b` in far mode only.
+    ///
+    /// Only BB-edge branches route through here; side-exit references are
+    /// bounded by the island watermark (`a64_thunk_side_exits`) and stay
+    /// short.
+    pub(in crate::codegen::jitgen) fn a64_bcond_bb(
+        &mut self,
+        cond: monoasm::Cond,
+        target: &DestLabel,
+    ) {
+        if self.far_branch_mode {
+            let taken = self.jit.label();
+            let skip = self.jit.label();
+            self.jit.bcond_label(cond, &taken);
+            monoasm_arm64!(&mut self.jit, b skip;);
+            self.jit.bind_label(taken);
+            monoasm_arm64!(&mut self.jit, b target;);
+            self.jit.bind_label(skip);
+        } else {
+            self.jit.bcond_label(cond, target);
+        }
     }
 
     /// Range-extension thunks (mid-block): when the hot run since the last
@@ -172,14 +234,20 @@ impl Codegen {
         labels: &mut SideExitLabels,
         links: &[(usize, usize)],
     ) {
-        if frame.pending_side_exits.is_empty() {
+        frame.touched_side_exits.extend(labels.take_touched());
+        if frame.touched_side_exits.is_empty() {
             frame.side_exit_watermark = self.jit.get_current();
             return;
         }
         let skip = self.jit.label();
         monoasm_arm64!(&mut self.jit, b skip;);
-        for inst in frame.pending_side_exits.iter_mut() {
-            let LInst::SideExit { entry, .. } = inst else {
+        // Bind only the labels actually referenced since their last thunk:
+        // a handler-heavy frame accumulates tens of thousands of pending
+        // handlers, and binding them all made the island itself outgrow the
+        // imm14 reach. A label with no new reference has nothing measuring
+        // a distance to it and can wait for the final island.
+        for idx in std::mem::take(&mut frame.touched_side_exits) {
+            let LInst::SideExit { entry, .. } = &mut frame.pending_side_exits[idx] else {
                 unreachable!("pending_side_exits holds only LInst::SideExit");
             };
             let succ = self.jit.label();
@@ -187,6 +255,8 @@ impl Codegen {
             monoasm_arm64!(&mut self.jit, b succ;);
             *entry = succ;
         }
+        // Re-point the current block's entries at the (possibly fresh)
+        // successor labels so later references measure from here.
         for (pending_idx, label_idx) in links {
             let LInst::SideExit { entry, .. } = &frame.pending_side_exits[*pending_idx] else {
                 unreachable!();
@@ -405,6 +475,12 @@ impl Codegen {
                 #[cfg(feature = "deopt")]
                 created_at,
             );
+            // `links` records (pending, labels) index pairs in push order;
+            // mirror the pending index onto the labels side too, so
+            // `raw_deopt` can note which handler a lowering referenced
+            // (the thunk pass binds only those).
+            let (pending_idx, _) = links.last().copied().unwrap();
+            labels.note_pending_idx(pending_idx);
         }
         frame.pending_side_exits.extend(lir.into_insts());
 
@@ -425,6 +501,9 @@ impl Codegen {
             let exit = frame.resolve_bb_label(&mut self.jit, exit);
             monoasm_arm64!(&mut self.jit, b exit;);
         }
+        // Carry this block's outstanding references over to the frame set —
+        // the next thunk (possibly in a later block) must bind them.
+        frame.touched_side_exits.extend(labels.take_touched());
     }
 
     /// Release the spill region the loop-JIT entry pinned sp below
@@ -1216,7 +1295,7 @@ impl Codegen {
                     LCond::Gt => monoasm::Cond::Gt,
                     LCond::Ge => monoasm::Cond::Ge,
                 };
-                self.jit.bcond_label(c, &target);
+                self.a64_bcond_bb(c, &target);
             }
             // Ruby-truthiness branch: `orr 0x10` folds nil(0x04)/false(0x14) to
             // FALSE_VALUE; truthy (!= FALSE) takes Ne, falsy takes Eq.
@@ -1232,16 +1311,25 @@ impl Codegen {
                 } else {
                     monoasm::Cond::Ne
                 };
-                self.jit.bcond_label(cond, &target);
+                self.a64_bcond_bb(cond, &target);
             }
             LInst::BranchIfNil { target } => {
                 let rax = GP::Rax.a64().0;
                 monoasm_arm64!(&mut self.jit, cmp x(rax), #(NIL_VALUE as u32););
-                self.jit.bcond_label(monoasm::Cond::Eq, &target);
+                self.a64_bcond_bb(monoasm::Cond::Eq, &target);
             }
             LInst::BranchIfNonzero { target } => {
                 let rax = GP::Rax.a64().0;
-                monoasm_arm64!(&mut self.jit, cbnz x(rax), target;);
+                if self.far_branch_mode {
+                    let skip = self.jit.label();
+                    monoasm_arm64!(&mut self.jit,
+                        cbz x(rax), skip;
+                        b target;
+                    );
+                    self.jit.bind_label(skip);
+                } else {
+                    monoasm_arm64!(&mut self.jit, cbnz x(rax), target;);
+                }
             }
             // GC write barrier (aarch64 takes the parent register explicitly).
             LInst::WriteBarrier { parent, value } => {
@@ -1266,7 +1354,20 @@ impl Codegen {
             // here — the ops stay distinct so the distinction survives if
             // aarch64 grows the recorder.
             LInst::BrClassNe { reg, class, target } => {
-                self.a64_guard_class(reg, class, &target);
+                if self.far_branch_mode {
+                    // `a64_guard_class` may reference its fail label with a
+                    // `tbz` (Test14, ±32 KiB); in a far frame route the miss
+                    // through a local veneer.
+                    let miss = self.jit.label();
+                    let hit = self.jit.label();
+                    self.a64_guard_class(reg, class, &miss);
+                    monoasm_arm64!(&mut self.jit, b hit;);
+                    self.jit.bind_label(miss);
+                    monoasm_arm64!(&mut self.jit, b target;);
+                    self.jit.bind_label(hit);
+                } else {
+                    self.a64_guard_class(reg, class, &target);
+                }
             }
             // Class-set guard: membership chain built from the single-class
             // guard — each class's check falls through on match (branch to
@@ -1289,6 +1390,13 @@ impl Codegen {
                             b ok;
                         );
                         self.jit.bind_label(next);
+                    } else if self.far_branch_mode {
+                        // See `BrClassNe`: veneer the far miss.
+                        let miss = self.jit.label();
+                        self.a64_guard_class(reg, *class, &miss);
+                        monoasm_arm64!(&mut self.jit, b ok;);
+                        self.jit.bind_label(miss);
+                        monoasm_arm64!(&mut self.jit, b target;);
                     } else {
                         self.a64_guard_class(reg, *class, &target);
                     }
@@ -1603,7 +1711,7 @@ impl Codegen {
                 let rp = self.a64_fpr_read(rhs, 1, base);
                 monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
                 let cond = a64_float_cond_for_cmp(kind, brkind);
-                self.jit.bcond_label(cond, &dest);
+                self.a64_bcond_bb(cond, &dest);
             }
             // ---- FP pool save/restore + FP C-calls ---------------------------
             LInst::FprSave { using_fpr, cont } => {
