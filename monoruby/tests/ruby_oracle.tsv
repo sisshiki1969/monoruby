@@ -648,6 +648,7 @@
 345a39619ec82fcc2a065326ea5fa6b0	[:a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d, :a, :b, :c, :d]	def c(x)\n              case x\n              when 1 then :a\n        
 346c3ccb2630b081d1268d76b216f8cf	{amount: 4, unit: "km"}	M = Data.define(:amount, :unit)\nm = M.new(42, "km"); m.with(amount: 4).to_h
 3470de4e4871882a3fbb89a9ee3709e3	["MyArr2", [1, 2]]	class MyArr2 < Array; end\n            r = Marshal.load(Marshal.dump
+34773bd7d6db99036167ac66da4a57ad	899500	add = (0...9000).map { |k| "a = a + #{k % 7 + 1}" }.join("\\n")\n        
 347cffbb4c975e8f7aba48cffa253e3a	"a-b"	path = "/tmp/monoruby_test_io_open_#{Process.pid}_#{rand(100000)}"\n
 3491bb9ea3ef0d8e8dc6e9d966784850	[true, true, false]	klass = Class.new\n            Class.new do\n              klass.send
 349f590d26b1d8c968d1a0e8cbacad45	"Hash"	(GC.compact if GC.respond_to?(:compact)).class.to_s
@@ -1664,6 +1665,7 @@
 88b402e7fdaa8b2f9583d10a43b30b83	[true, false, true, false, true]	class C\n          def pub_method; end\n          private\n          def p
 88b74eaedd70ab6521c45c598a99a423	:OVERRIDDEN	class Float; def <=(o); :OVERRIDDEN; end; end; 3.0 <= 4.0
 88babe728a4927abe5d2e25cd6b25a80	:OVERRIDDEN	class TrueClass; def ==(o); :OVERRIDDEN; end; end; true == true
+88bd39fde3bf31060646706246e601d5	[7199000, true]	add = (0...9000).map { |k| "a = a + #{k % 7 + 1}" }.join("\\n")\n        
 88c361bca62c3fbea0462a14aedadf27	[15, 11, 3, [77, 2], [:key, :key, :side, :side]]	class C\n          def initialize; @h = {}; @w = nil; end\n          def 
 88d4180cc8261b799934c513e7ea401c	13	def f(a,b)\n          a + b\n        end\n        f(5,7)\n        f(4,9)\n  
 88f8e9f112097e82f8a521e470848673	["<1>", "'x'"]	module AncInner\n              refine(Integer) { def wrap; "<#{to_s}
@@ -2668,6 +2670,7 @@ d6b954fc5289ea6d95ff086bc292725e	[1, 2, 3]	class A < Array; end\nA[1, 2, 3]
 d6bfe4296b93f2e640133c89a4ab8e47	false	def g; proc{ 1 }; end; g == g
 d6c0eb29e576b66ef1234e2d00a6f0b7	[[1, 0], [2, 1]]	r = []; [1, 2].each.with_index(nil) { |v, i| r << [v, i] }; r
 d6fd88af713f62b2a7bf0032d40dad05	6	def inner(&)\n          yield 1, 2, 3\n        end\n\n        def middle(&)
+d705cb7de3a9fef3b407db97ac6df6e0	14402200	add = (0...9000).map { |k| "a = a + #{k % 7 + 1}" }.join("\\n")\n        
 d70bea4dbbc6846f998b44f536138c16	[60, true, true, "AAA", "A"]	def bapp(s, n)\n          i = 0\n          while i < n\n            s << 6
 d711a3f5a6c7df97c22c300e85978f40	nil	m = method(:gets)\n        m.source_location\n        
 d7156f31d5e84b048bcf0448feec0463	[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, :nome]	class Priv\n              def initialize = (@a = [1, 2, 3])\n        
