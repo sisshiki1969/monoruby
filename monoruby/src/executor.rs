@@ -1615,6 +1615,61 @@ impl Executor {
     }
 
     ///
+    /// [`Self::finish_ensure`] for a compiled `EnsureEnd` whose region has
+    /// JIT-spliced non-local exits (`doc`: issue #1185). Classifies the
+    /// deferred unwind so the compiled code can take its specialized
+    /// teardown instead of re-raising:
+    ///
+    /// - `0`: nothing pending — continue on the normal path.
+    /// - `1`: an error is pending (`ensure` body raised, superseding any
+    ///   deferral; or the deferral is not one the compiled teardown can
+    ///   deliver) — the caller re-enters `entry_raise`.
+    /// - `2`: a spliced `break` — `val` is the break value; the caller runs
+    ///   its `BlockBreakSpecialized` teardown.
+    /// - `3`: a spliced non-local `return` targeting this frame's outermost
+    ///   method frame — `val` is the return value; the caller runs its
+    ///   `MethodRetSpecialized` teardown.
+    ///
+    /// The compiled `EnsureEnd` sees a deferral only when compiled code
+    /// parked it (the splice): a VM-parked deferral means the frame is
+    /// being *interpreted* through the handler, whose `EnsureEnd` is the VM
+    /// opcode. The kind checks below are therefore belt-and-braces — any
+    /// unexpected deferral re-raises through the generic machinery, which
+    /// handles every kind.
+    ///
+    pub(crate) fn finish_ensure_spliced(&mut self, lfp: Lfp) -> (u64, Value) {
+        let top_is_mine = matches!(self.deferred_unwind.last(), Some((l, _)) if *l == lfp);
+        if self.exception.is_some() {
+            // The ensure body raised its own error: it supersedes the
+            // deferred exit (CRuby semantics), exactly as `finish_ensure`.
+            if top_is_mine {
+                self.deferred_unwind.pop();
+            }
+            return (1, Value::nil());
+        }
+        if !top_is_mine {
+            return (0, Value::nil());
+        }
+        let (_, err) = self.deferred_unwind.pop().unwrap();
+        match err.kind() {
+            MonorubyErrKind::BlockBreak(val, _, outer) if Some(*outer) == lfp.outer() => {
+                (2, *val)
+            }
+            // The static teardown returns from this frame's outermost
+            // method frame; a deferred return targeting anything else
+            // (e.g. the block was promoted to a lambda after compile)
+            // must go through the generic unwind.
+            MonorubyErrKind::MethodReturn(val, target) if *target == lfp.outermost().0 => {
+                (3, *val)
+            }
+            _ => {
+                self.set_error(err);
+                (1, Value::nil())
+            }
+        }
+    }
+
+    ///
     /// Drop a deferred unwind belonging to frame *lfp* when the frame is
     /// being left by a different control-flow path (its `EnsureEnd` will
     /// not run to consume it). No-op when the top entry is for another

@@ -1048,9 +1048,21 @@ impl Codegen {
                 pc,
                 loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
             }),
-            AsmInst::EnsureEnd => self.encode_linst(LInst::EnsureEnd {
+            AsmInst::EnsureEnd {
+                pc,
+                spliced_break,
+                spliced_ret,
+            } => self.encode_linst(LInst::EnsureEnd {
+                pc,
                 loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
+                spliced_break: spliced_break.map(|o| o.unwrap_concrete()),
+                spliced_ret: spliced_ret.map(|o| o.unwrap_concrete()),
             }),
+            // A spliced non-local exit defers its unwind and falls through to
+            // the branch into the shared `ensure` body (#1185).
+            AsmInst::DeferSplicedExit { kind, pc } => {
+                self.encode_linst(LInst::DeferSplicedExit { kind, pc })
+            }
             // Generic `yield` (block target resolved at runtime). aarch64 builds
             // the block frame and calls the funcdata indirectly; both arches
             // record the block call's return address under `evict` for the
@@ -1642,8 +1654,11 @@ impl Codegen {
             LInst::Redo { pc, loop_jit_spill_bytes } => {
                 self.emit_redo(pc, loop_jit_spill_bytes);
             }
-            LInst::EnsureEnd { loop_jit_spill_bytes } => {
-                self.emit_ensure_end(loop_jit_spill_bytes);
+            LInst::EnsureEnd { pc, loop_jit_spill_bytes, spliced_break, spliced_ret } => {
+                self.emit_ensure_end(pc, loop_jit_spill_bytes, spliced_break, spliced_ret);
+            }
+            LInst::DeferSplicedExit { kind, pc } => {
+                self.emit_defer_spliced_exit(kind, pc);
             }
             LInst::Yield { callid, simple, error, evict } => {
                 self.emit_yield(callid, simple, &error, evict);

@@ -3075,21 +3075,110 @@ impl Codegen {
     /// End of an `ensure` clause — runtime::ensure_end(vm) returns a nonzero
     /// value when a pending exception must keep propagating (→ entry_raise);
     /// zero means fall through to the normal continuation.
-    pub(in crate::codegen::jitgen) fn emit_ensure_end(&mut self, loop_jit_spill_bytes: usize) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_ensure_end(
+        &mut self,
+        pc: BytecodePtr,
+        loop_jit_spill_bytes: usize,
+        spliced_break: Option<usize>,
+        spliced_ret: Option<usize>,
+    ) -> bool {
         let raise = self.entry_raise();
         let cont = self.jit.label();
-        let f = runtime::ensure_end as *const () as u64;
+        let pc0 = pc.as_ptr() as u64;
+        if spliced_break.is_none() && spliced_ret.is_none() {
+            let f = runtime::ensure_end as *const () as u64;
+            monoasm_arm64!(&mut self.jit,
+                mov x0, x19;             // vm
+                str x30, [sp, #-16]!;
+                mov x9, (f);
+                blr x9;                  // x0 = 0 (continue) / nonzero (re-raise)
+                ldr x30, [sp], #16;
+                cbz x0, cont;            // continue: stay in the (still-bumped) loop body
+            );
+            // Re-raise path resumes the VM, so undo the loop sp-bump first,
+            // and set PC so `handle_error`'s table lookup is aligned.
+            self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
+            monoasm_arm64!(&mut self.jit,
+                mov x21, (pc0);
+                b raise;
+                cont:
+            );
+            return true;
+        }
+        // Spliced form (#1185) — mirrors x86 `emit_ensure_end`: the runtime
+        // dispatch classifies the deferred unwind (x0 = code, x1 = value);
+        // codes 2/3 run the same teardown as `BlockBreakSpecialized` /
+        // `MethodRetSpecialized` with the value moved into the accumulator
+        // first, everything else re-raises. Spliced regions live in
+        // specialized inlined frames (`try_splice_exit` refuses loop roots),
+        // whose `loop_jit_spill_bytes` is 0, so no sp-bump undo is owed on
+        // any arm here — but keep the undo on the re-raise path anyway to
+        // stay exactly equivalent to the plain form.
+        let reraise = self.jit.label();
+        let f = runtime::ensure_end_spliced as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;             // vm
             str x30, [sp, #-16]!;
             mov x9, (f);
-            blr x9;                  // x0 = 0 (continue) / nonzero (re-raise)
+            blr x9;                  // x0 = code, x1 = value
             ldr x30, [sp], #16;
-            cbz x0, cont;            // continue: stay in the (still-bumped) loop body
+            cbz x0, cont;
+            cmp x0, #1;
         );
-        // Re-raise path resumes the VM, so undo the loop sp-bump first.
+        self.jit.bcond_label(monoasm::Cond::Eq, &reraise);
+        if let Some(off) = spliced_break {
+            let skip = self.jit.label();
+            monoasm_arm64!(&mut self.jit, cmp x0, #2;);
+            self.jit.bcond_label(monoasm::Cond::Ne, &skip);
+            monoasm_arm64!(&mut self.jit, mov x0, x1;); // value -> accumulator
+            self.method_return_specialized(off);
+            self.jit.bind_label(skip);
+        }
+        if let Some(off) = spliced_ret {
+            let skip = self.jit.label();
+            monoasm_arm64!(&mut self.jit, cmp x0, #3;);
+            self.jit.bcond_label(monoasm::Cond::Ne, &skip);
+            monoasm_arm64!(&mut self.jit, mov x0, x1;);
+            self.method_return_specialized(off);
+            self.jit.bind_label(skip);
+        }
+        self.jit.bind_label(reraise);
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
         monoasm_arm64!(&mut self.jit,
+            mov x21, (pc0);
+            b raise;
+            cont:
+        );
+        true
+    }
+
+    /// A JIT-spliced non-local exit (#1185): build and defer the exit's
+    /// unwind (value in the `GP::Rdx`-mapped register) so the following
+    /// compiled branch enters the shared `ensure` body directly. A
+    /// degenerate outcome raises generically from the exit's own pc.
+    /// Mirrors x86 `emit_defer_spliced_exit`.
+    pub(in crate::codegen::jitgen) fn emit_defer_spliced_exit(
+        &mut self,
+        kind: SplicedExitKind,
+        pc: BytecodePtr,
+    ) -> bool {
+        let raise = self.entry_raise();
+        let f = match kind {
+            SplicedExitKind::Break => runtime::defer_block_break as *const () as u64,
+            SplicedExitKind::MethodReturn => runtime::defer_method_return as *const () as u64,
+        };
+        let val = GP::Rdx.a64().0;
+        let cont = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            mov x2, x(val);          // value
+            mov x0, x19;             // vm
+            mov x1, x20;             // globals
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                  // 0 = deferred / nonzero = error in-flight
+            ldr x30, [sp], #16;
+            cbz x0, cont;
+            mov x21, (pc.as_ptr() as u64);
             b raise;
             cont:
         );

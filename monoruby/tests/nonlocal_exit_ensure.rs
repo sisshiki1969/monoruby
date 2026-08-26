@@ -139,3 +139,133 @@ fn a_return_through_an_ensure_in_a_block() {
         "#,
     );
 }
+
+/// From here down: the JIT-spliced exits of issue #1185. A `break` /
+/// non-local `return` inside its own frame's `begin`..`ensure` defers its
+/// unwind and jumps into the shared `ensure` body — ordinary compiled code
+/// — whose `EnsureEnd` delivers it through the specialized teardown
+/// (`Executor::finish_ensure_spliced`). These shapes pin the dispatch and
+/// its guard rails.
+///
+/// The spliced `break` delivers its value to the receiving call, and the
+/// `ensure` (a compiled, state-visible store now) still runs.
+#[test]
+fn a_spliced_break_delivers_its_value() {
+    run_test(
+        r#"
+        def a4
+          v = [1, 2, 3].each do |i|
+            begin
+              break i * 100 if i == 2
+            ensure
+              $keep = i
+            end
+          end
+          [v, $keep]
+        end
+        r = nil
+        300.times { r = a4 }
+        r
+        "#,
+    );
+}
+
+/// The spliced non-local `return` returns the value from the home method.
+#[test]
+fn a_spliced_return_delivers_its_value() {
+    run_test(
+        r#"
+        def a5
+          [5].each do |i|
+            begin
+              return i + 37 if i == 5
+            ensure
+              $keep2 = i
+            end
+          end
+          0
+        end
+        r = nil
+        300.times { r = [a5, $keep2] }
+        r
+        "#,
+    );
+}
+
+/// An `ensure` body that raises supersedes the deferred exit (CRuby: a
+/// `raise` in an `ensure` overrides the in-flight `break`) — the dispatch's
+/// code-1 arm, which re-enters the generic machinery.
+#[test]
+fn an_ensure_raising_over_a_spliced_break() {
+    run_test(
+        r#"
+        def a1
+          x = 0
+          [1].each do |i|
+            begin
+              break if i == 1
+            ensure
+              x += 1
+              raise "boom" if x == 1
+            end
+          end
+          99
+        rescue => e
+          "rescued:" + e.message
+        end
+        r = nil
+        300.times { r = a1 }
+        r
+        "#,
+    );
+}
+
+/// A `break` *inside* the `ensure` body replaces the deferred one (CRuby
+/// override semantics). The splice refuses such a body — its teardown
+/// would leak the parked deferral — so this goes through the generic
+/// unwind, whose `handle_error` discards and redirects correctly.
+#[test]
+fn a_break_inside_the_ensure_overrides_the_deferred_one() {
+    run_test(
+        r#"
+        def a2
+          [1].each do |i|
+            begin
+              break 10 if i == 1
+            ensure
+              break 20
+            end
+          end
+        end
+        r = nil
+        300.times { r = a2 }
+        r
+        "#,
+    );
+}
+
+/// A real `rescue` alongside the `ensure` (not taken by the break): the
+/// spliced exit must still run only the `ensure`.
+#[test]
+fn a_spliced_break_with_a_rescue_present() {
+    run_test(
+        r#"
+        def a6
+          z = 0
+          [1].each do |i|
+            begin
+              break if i == 1
+            rescue
+              z = -1
+            ensure
+              z += 5
+            end
+          end
+          z
+        end
+        r = nil
+        300.times { r = a6 }
+        r
+        "#,
+    );
+}

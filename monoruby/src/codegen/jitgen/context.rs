@@ -547,6 +547,14 @@ pub(super) struct JitStackFrame {
     /// speculation.
     ///
     pub(super) speculation_poisoned: bool,
+    ///
+    /// `ensure` regions of this frame with JIT-spliced non-local exits
+    /// (issue #1185), keyed by the region's `EnsureEnd` bc index. The
+    /// value records which exit kinds spliced into it, so the `EnsureEnd`
+    /// arm knows which specialized-teardown dispatch arms to emit.
+    /// `(break, method_return)`.
+    ///
+    pub(super) spliced_ensures: HashMap<BcIndex, (bool, bool)>,
 }
 
 impl std::fmt::Debug for JitStackFrame {
@@ -650,6 +658,7 @@ impl JitStackFrame {
             speculated_floats: vec![],
             speculated_using_fpr: UsingFpr::default(),
             speculation_poisoned: false,
+            spliced_ensures: HashMap::default(),
         }
     }
 
@@ -679,6 +688,7 @@ impl JitStackFrame {
             speculated_floats: self.speculated_floats.clone(),
             speculated_using_fpr: self.speculated_using_fpr,
             speculation_poisoned: self.speculation_poisoned,
+            spliced_ensures: self.spliced_ensures.clone(),
         }
     }
 
@@ -1089,7 +1099,7 @@ impl<'a> JitContext<'a> {
     }
 
     // handling frame
-    fn current_frame(&self) -> &JitStackFrame {
+    pub(super) fn current_frame(&self) -> &JitStackFrame {
         self.stack_frame.last().unwrap()
     }
 
@@ -1558,6 +1568,98 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Try to arrange a JIT-spliced non-local exit (issue #1185): a
+    /// `break` / non-local `return` written inside its own frame's
+    /// `begin`..`ensure` region can *defer* its unwind and jump straight
+    /// into the shared `ensure` body — which is ordinary, already-compiled
+    /// code of this frame — whose `EnsureEnd` then delivers it through the
+    /// specialized teardown. That models the unwind edge in the CFG (the
+    /// `ensure`'s writes become visible to the abstract interpreter) and
+    /// skips the whole generic unwind / chain-deopt / VM stint.
+    ///
+    /// Returns the `ensure` body's entry block on success, after recording
+    /// the region's `EnsureEnd` in the frame's [`JitStackFrame::spliced_ensures`]
+    /// registry. `None` refuses (stage 1 is deliberately narrow) and the
+    /// caller falls back to the generic lowering, which handles every case.
+    ///
+    pub(super) fn try_splice_exit(
+        &mut self,
+        bc_pos: BcIndex,
+        kind: SplicedExitKind,
+    ) -> Option<BasicBlockId> {
+        // A dispatch arm compiles straight-line per-class code at one call
+        // site; it must not spawn branch entries into the frame's CFG.
+        if self.in_dispatch_arm() {
+            return None;
+        }
+        // A loop-rooted frame compiles only the loop's basic blocks, and
+        // the shared `ensure` body may lie outside that range. (The common
+        // case — an exit in a specialized inlined frame — compiles the
+        // whole iseq.)
+        if matches!(self.jit_type(), JitType::Loop(_)) {
+            return None;
+        }
+        // The specialized teardown must exist: an in-unit chain with no
+        // handler in any *suspended* frame. (The current frame's own
+        // handler is the very thing being spliced.)
+        match kind {
+            SplicedExitKind::Break => self.iter_caller_specialized_ids()?,
+            SplicedExitKind::MethodReturn => self.method_caller_specialized_ids()?,
+        };
+        let iseq = self.iseq();
+        // Exactly one covering region, and it has an `ensure`.
+        let ensure_pc = iseq.single_covering_ensure(bc_pos)?;
+        // The shared `ensure` copy practically always heads a basic block
+        // (rescue clauses branch to it; without rescue it coincides with
+        // the `else` join) — but refuse rather than assume.
+        let dest_bb = iseq.bb_info.is_bb_head(ensure_pc)?;
+        // Pair the body with its `EnsureEnd` by forward scan.
+        let mut end = None;
+        // Bound the scan by the sp table (one entry per instruction).
+        let limit = iseq.sp_table_len().min(ensure_pc.to_usize() + 1024);
+        let mut i = ensure_pc;
+        while i.to_usize() < limit {
+            match TraceIr::from_pc(iseq.get_pc(i), self.store) {
+                TraceIr::EnsureEnd => {
+                    end = Some(i);
+                    break;
+                }
+                // The spliced deferral is consumed only by the region's
+                // `EnsureEnd` (or discarded by `handle_error` on a raise).
+                // An exit that leaves the frame *without* raising — a `next`
+                // (`Ret`), another `break` / non-local `return`, `retry` /
+                // `redo` — would tear the frame down with the deferral still
+                // parked, leaking a stale per-lfp entry. The VM path runs
+                // these under `handle_error`, which discards; the compiled
+                // teardowns do not. Refuse the splice for such a body.
+                TraceIr::Ret(..)
+                | TraceIr::MethodRet(..)
+                | TraceIr::BlockBreak(..)
+                | TraceIr::Retry
+                | TraceIr::Redo => return None,
+                _ => {}
+            }
+            i = i + 1;
+        }
+        let end = end?;
+        // A nested handler inside the body would put its own `EnsureEnd`
+        // between the two and break the pairing; refuse.
+        if iseq.any_handler_intersects(ensure_pc..end) {
+            return None;
+        }
+        let entry = self
+            .current_frame_mut()
+            .spliced_ensures
+            .entry(end)
+            .or_insert((false, false));
+        match kind {
+            SplicedExitKind::Break => entry.0 = true,
+            SplicedExitKind::MethodReturn => entry.1 = true,
+        }
+        Some(dest_bb)
+    }
+
+    ///
     /// Hint variant of stack-offset computation for `LoadDynVar` /
     /// `StoreDynVar`. Returns the chain of [`SpecializedId`]s for
     /// frames `[outer..current)` together with `extra` — the sum
@@ -1676,6 +1778,18 @@ impl<'a> JitContext<'a> {
                     // `total - PROLOGUE_OVERHEAD`.
                     let prologue_bytes = sizes.total - PROLOGUE_OVERHEAD;
                     *prologue_offset = PrologueOffset::Concrete(prologue_bytes);
+                }
+            }
+            AsmInst::EnsureEnd {
+                spliced_break,
+                spliced_ret,
+                ..
+            } => {
+                for off in [spliced_break, spliced_ret].into_iter().flatten() {
+                    if let DynVarOffset::Hint { ids, extra } = off {
+                        let resolved = self.resolve_specialized_id_chain(ids) + *extra;
+                        *off = DynVarOffset::Concrete(resolved);
+                    }
                 }
             }
             AsmInst::LoopJitRspBump { offset } => {
