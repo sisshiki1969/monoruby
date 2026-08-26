@@ -1243,6 +1243,20 @@ impl AsmIr {
 /// `Concrete(sum(map[id]) + extra)`. Code generation asserts
 /// `Concrete(_)` and panics on a stray `Hint`.
 ///
+///
+/// Which non-local exit a JIT splice (issue #1185) is deferring across its
+/// own frame's `ensure` body.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SplicedExitKind {
+    /// `break` out of a block — delivered by `BlockBreakSpecialized`'s
+    /// teardown at the region's `EnsureEnd`.
+    Break,
+    /// Non-local `return` out of a block — delivered by
+    /// `MethodRetSpecialized`'s teardown at the region's `EnsureEnd`.
+    MethodReturn,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum DynVarOffset {
     Hint {
@@ -1512,7 +1526,29 @@ pub(super) enum AsmInst {
     Raise,
     Retry(BytecodePtr),
     Redo(BytecodePtr),
-    EnsureEnd,
+    EnsureEnd {
+        /// The `EnsureEnd` instruction's own pc, for the re-raise path's
+        /// exception-table lookup in `handle_error`.
+        pc: BytecodePtr,
+        /// When this region has JIT-spliced non-local exits (issue #1185),
+        /// the teardown chain offsets the dispatch delivers through:
+        /// a spliced `break`'s `BlockBreakSpecialized`-equivalent offset,
+        /// and a spliced `return`'s `MethodRetSpecialized`-equivalent one.
+        /// Both `None` keeps the plain two-way (continue / re-raise) form.
+        spliced_break: Option<DynVarOffset>,
+        spliced_ret: Option<DynVarOffset>,
+    },
+    ///
+    /// A JIT-spliced non-local exit (issue #1185): build and *defer* the
+    /// break / method-return error for the value in rax, so the compiled
+    /// jump that follows (emitted by the driver's `Branch` handling) can
+    /// enter the shared `ensure` body directly. When the error degenerates
+    /// (e.g. `LocalJumpError`), fall back to the generic raise from `pc`.
+    ///
+    DeferSplicedExit {
+        kind: SplicedExitKind,
+        pc: BytecodePtr,
+    },
     ///
     /// Conditional branch
     ///

@@ -907,13 +907,37 @@ impl<'a> JitContext<'a> {
             TraceIr::MethodRet(ret) => {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
+                // A non-local `return` inside its own frame's protected region
+                // can be *spliced* (#1185): defer the unwind and jump into the
+                // shared `ensure` body — ordinary compiled code of this frame —
+                // whose `EnsureEnd` delivers it through the specialized
+                // teardown. The region's `ensure` then runs compiled and
+                // state-visible instead of interpreted mid-unwind.
+                if let Some(dest_bb) = self.try_splice_exit(bc_pos, SplicedExitKind::MethodReturn) {
+                    // The degenerate fallback inside `DeferSplicedExit` raises
+                    // generically from this pc, so home the locals exactly as
+                    // the generic arm below does.
+                    state.locals_to_S(ir);
+                    state.load(ir, ret, GP::Rdx);
+                    ir.push(AsmInst::DeferSplicedExit {
+                        kind: SplicedExitKind::MethodReturn,
+                        pc,
+                    });
+                    // Enter the `ensure` body with the temp level its join
+                    // expects.
+                    let dest_sp = self.iseq().get_sp(self.iseq().bb_info[dest_bb].begin);
+                    state.set_next_sp(dest_sp);
+                    state.clear_above_next_sp();
+                    return Ok(CompileResult::Branch(dest_bb));
+                }
                 // A non-local `return` written inside a protected region must
-                // unwind through `handle_error`, which runs this frame's
-                // `ensure` (and restores `$!` when leaving a rescue clause) on
-                // the way out. The specialized teardown is a pure machine-level
-                // frame pop and would skip both. `check_exception_handler`
-                // covers only the *suspended* frames of the chain, so the
-                // exiting instruction's own coverage is checked here (#1179).
+                // otherwise unwind through `handle_error`, which runs this
+                // frame's `ensure` (and restores `$!` when leaving a rescue
+                // clause) on the way out. The specialized teardown is a pure
+                // machine-level frame pop and would skip both.
+                // `check_exception_handler` covers only the *suspended* frames
+                // of the chain, so the exiting instruction's own coverage is
+                // checked here (#1179).
                 let specialized = (!self.in_protected_region(bc_pos))
                     .then(|| self.method_caller_specialized_ids())
                     .flatten();
@@ -946,13 +970,26 @@ impl<'a> JitContext<'a> {
             TraceIr::BlockBreak(ret) => {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
-                // Same as `MethodRet` above: a `break` inside a protected
-                // region relies on `handle_error` to run this frame's `ensure`
-                // during the unwind; the specialized teardown would skip it —
-                // observed as issue #1179's silently-lost `c += 0.5`. And on
-                // the generic path this frame's locals must be slot-true
-                // before the raise, for the same pre-escalation-`ensure`
-                // reason as in `MethodRet`.
+                // Splice first — see `MethodRet` above (#1185).
+                if let Some(dest_bb) = self.try_splice_exit(bc_pos, SplicedExitKind::Break) {
+                    state.locals_to_S(ir);
+                    state.load(ir, ret, GP::Rdx);
+                    ir.push(AsmInst::DeferSplicedExit {
+                        kind: SplicedExitKind::Break,
+                        pc,
+                    });
+                    let dest_sp = self.iseq().get_sp(self.iseq().bb_info[dest_bb].begin);
+                    state.set_next_sp(dest_sp);
+                    state.clear_above_next_sp();
+                    return Ok(CompileResult::Branch(dest_bb));
+                }
+                // Otherwise: a `break` inside a protected region relies on
+                // `handle_error` to run this frame's `ensure` during the
+                // unwind; the specialized teardown would skip it — observed as
+                // issue #1179's silently-lost `c += 0.5`. And on the generic
+                // path this frame's locals must be slot-true before the raise,
+                // for the same pre-escalation-`ensure` reason as in
+                // `MethodRet`.
                 let specialized = (!self.in_protected_region(bc_pos))
                     .then(|| self.iter_caller_specialized_ids())
                     .flatten();
@@ -997,7 +1034,41 @@ impl<'a> JitContext<'a> {
             TraceIr::EnsureEnd => {
                 state.flush_gp(ir);
                 state.locals_to_S(ir);
-                ir.push(AsmInst::EnsureEnd);
+                // When exits spliced into this region (#1185), emit the
+                // specialized-teardown dispatch arms for the recorded kinds,
+                // and register the exit edges they create exactly as the plain
+                // specialized exits would. The chains are the same ones
+                // `try_splice_exit` verified; if they are unexpectedly gone,
+                // the un-emitted arm is covered by the runtime dispatch's
+                // re-raise fallback.
+                let spliced = self.current_frame().spliced_ensures.get(&bc_pos).copied();
+                let (spliced_break, spliced_ret) = match spliced {
+                    Some((brk, mret)) => {
+                        let brk_off = brk
+                            .then(|| self.iter_caller_specialized_ids())
+                            .flatten()
+                            .map(|(ids, extra)| DynVarOffset::Hint { ids, extra });
+                        let ret_off = mret
+                            .then(|| self.method_caller_specialized_ids())
+                            .flatten()
+                            .map(|(ids, extra)| DynVarOffset::Hint { ids, extra });
+                        if brk_off.is_some() {
+                            self.unset_return_context_side_effect_guard();
+                            self.new_break(state.as_return_any());
+                        }
+                        if ret_off.is_some() {
+                            self.unset_return_context_side_effect_guard();
+                            self.new_method_return(state.as_return_any());
+                        }
+                        (brk_off, ret_off)
+                    }
+                    None => (None, None),
+                };
+                ir.push(AsmInst::EnsureEnd {
+                    pc,
+                    spliced_break,
+                    spliced_ret,
+                });
             }
             TraceIr::Br(disp) => {
                 state.flush_gp(ir);

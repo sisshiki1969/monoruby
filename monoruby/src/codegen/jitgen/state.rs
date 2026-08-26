@@ -341,6 +341,16 @@ impl AbstractFrame {
         }
     }
 
+    /// A return state with no compile-time claim about the value — for an
+    /// exit whose value is produced at runtime (a spliced `EnsureEnd`
+    /// delivering a deferred `break` / `return`, issue #1185).
+    pub(super) fn as_return_any(&self) -> ReturnState {
+        ReturnState {
+            ret: ReturnValue::Value,
+            invariants: self.invariants.clone(),
+        }
+    }
+
     pub(crate) fn def_rax2acc(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
         self.def_reg2acc(ir, GP::Rax, dst);
     }

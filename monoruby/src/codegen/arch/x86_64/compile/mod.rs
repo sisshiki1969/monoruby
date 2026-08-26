@@ -162,7 +162,8 @@ impl Codegen {
             | AsmInst::Raise
             | AsmInst::Retry(..)
             | AsmInst::Redo(..)
-            | AsmInst::EnsureEnd
+            | AsmInst::EnsureEnd { .. }
+            | AsmInst::DeferSplicedExit { .. }
             | AsmInst::Yield { .. }
             | AsmInst::MethodRetSpecialized { .. }
             | AsmInst::BlockBreakSpecialized { .. }
@@ -2637,15 +2638,101 @@ impl Codegen {
 
     pub(in crate::codegen::jitgen) fn emit_ensure_end(
         &mut self,
+        pc: BytecodePtr,
         _loop_jit_spill_bytes: usize,
+        spliced_break: Option<usize>,
+        spliced_ret: Option<usize>,
     ) -> bool {
         let raise = self.entry_raise();
+        if spliced_break.is_none() && spliced_ret.is_none() {
+            let cont = self.jit.label();
+            monoasm! { &mut self.jit,
+                movq rdi, rbx;
+                movq rax, (runtime::ensure_end);
+                call rax;
+                testq rax, rax;
+                jz   cont;
+                movq r13, (pc.as_ptr());
+                jmp  raise;
+            cont:
+            };
+            return true;
+        }
+        // Spliced form (#1185): the runtime dispatch classifies the deferred
+        // unwind — rax = code (0 continue / 1 re-raise / 2 spliced break /
+        // 3 spliced return), rdx = the delivered value. The teardown arms are
+        // the same machine sequence as `BlockBreakSpecialized` /
+        // `MethodRetSpecialized`, with the value moved into rax first. A code
+        // whose arm was not emitted falls through to the re-raise, whose
+        // `entry_raise` surfaces the (error-less) state as a fatal — by
+        // construction the runtime only returns codes for kinds this unit
+        // spliced.
+        let cont = self.jit.label();
+        let reraise = self.jit.label();
         monoasm! { &mut self.jit,
             movq rdi, rbx;
-            movq rax, (runtime::ensure_end);
+            movq rax, (runtime::ensure_end_spliced);
             call rax;
             testq rax, rax;
-            jne  raise;
+            jz   cont;
+            cmpq rax, 1;
+            jeq  reraise;
+        };
+        if let Some(off) = spliced_break {
+            let skip = self.jit.label();
+            monoasm! { &mut self.jit,
+                cmpq rax, 2;
+                jne  skip;
+                movq rax, rdx;
+            };
+            self.method_return_specialized(off);
+            self.jit.bind_label(skip);
+        }
+        if let Some(off) = spliced_ret {
+            let skip = self.jit.label();
+            monoasm! { &mut self.jit,
+                cmpq rax, 3;
+                jne  skip;
+                movq rax, rdx;
+            };
+            self.method_return_specialized(off);
+            self.jit.bind_label(skip);
+        }
+        monoasm! { &mut self.jit,
+        reraise:
+            movq r13, (pc.as_ptr());
+            jmp  raise;
+        cont:
+        };
+        true
+    }
+
+    /// A JIT-spliced non-local exit (#1185): build and defer the exit's
+    /// unwind (value in rdx) so the following compiled branch enters the
+    /// shared `ensure` body directly. A degenerate outcome (the runtime
+    /// helper returns non-zero, error left in-flight) raises generically
+    /// from the exit's own pc.
+    pub(in crate::codegen::jitgen) fn emit_defer_spliced_exit(
+        &mut self,
+        kind: SplicedExitKind,
+        pc: BytecodePtr,
+    ) -> bool {
+        let raise = self.entry_raise();
+        let f = match kind {
+            SplicedExitKind::Break => runtime::defer_block_break as *const u8,
+            SplicedExitKind::MethodReturn => runtime::defer_method_return as *const u8,
+        };
+        let cont = self.jit.label();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rax, (f);
+            call rax;
+            testq rax, rax;
+            jz   cont;
+            movq r13, (pc.as_ptr());
+            jmp  raise;
+        cont:
         };
         true
     }

@@ -2439,6 +2439,82 @@ pub(super) extern "C" fn ensure_end(vm: &mut Executor) -> usize {
     vm.finish_ensure(lfp).into()
 }
 
+///
+/// The two-word result of [`ensure_end_spliced`]: `code` in rax/x0, `val`
+/// in rdx/x1 (the same pair-return convention as `handle_error`'s
+/// `ErrorReturn`). See [`Executor::finish_ensure_spliced`] for the codes.
+///
+#[repr(C)]
+pub(in crate::codegen) struct EnsureEndDispatch {
+    code: u64,
+    val: Value,
+}
+
+///
+/// Compiled-`EnsureEnd` helper for a region with JIT-spliced non-local
+/// exits (issue #1185): like [`ensure_end`], but classifies a deferred
+/// spliced `break` / `return` so the compiled code can run its specialized
+/// teardown instead of re-raising through the generic unwind.
+///
+pub(super) extern "C" fn ensure_end_spliced(vm: &mut Executor) -> EnsureEndDispatch {
+    let lfp = vm.cfp().lfp();
+    let (code, val) = vm.finish_ensure_spliced(lfp);
+    EnsureEndDispatch { code, val }
+}
+
+///
+/// JIT splice of a `break` written inside its own frame's protected
+/// region (issue #1185): build the break error exactly as
+/// [`err_block_break`] would, then *defer* it for this frame — the
+/// compiled code jumps straight into the shared `ensure` body, whose
+/// `EnsureEnd` ([`ensure_end_spliced`]) delivers the break through the
+/// specialized teardown. Returns 0 on success; non-zero when the error
+/// degenerated (e.g. `LocalJumpError` for a proc-escaped block), in which
+/// case the error is left in-flight and the caller must raise generically
+/// from the exit's own pc.
+///
+pub(super) extern "C" fn defer_block_break(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+) -> usize {
+    err_block_break(vm, globals, val);
+    if matches!(
+        vm.exception().map(|e| e.kind()),
+        Some(MonorubyErrKind::BlockBreak(..))
+    ) {
+        let lfp = vm.cfp().lfp();
+        vm.defer_unwind(lfp);
+        0
+    } else {
+        1
+    }
+}
+
+///
+/// The non-local-`return` twin of [`defer_block_break`]: build the
+/// method-return error as [`err_method_return`] would and defer it. The
+/// degenerate outcomes (`LocalJumpError` across a thread barrier or a
+/// class body) stay in-flight and return non-zero for the generic raise.
+///
+pub(super) extern "C" fn defer_method_return(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+) -> usize {
+    err_method_return(vm, globals, val);
+    if matches!(
+        vm.exception().map(|e| e.kind()),
+        Some(MonorubyErrKind::MethodReturn(..))
+    ) {
+        let lfp = vm.cfp().lfp();
+        vm.defer_unwind(lfp);
+        0
+    } else {
+        1
+    }
+}
+
 pub(super) extern "C" fn raise_err(vm: &mut Executor, err_val: Value) {
     match err_val.is_exception() {
         Some(ex) => vm.set_error(MonorubyErr::new_from_exception(ex).with_original(err_val)),

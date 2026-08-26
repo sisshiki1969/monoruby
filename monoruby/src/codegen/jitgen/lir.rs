@@ -985,6 +985,13 @@ pub(in crate::codegen) enum LInst {
     LoopJitRspBump {
         offset: LoopRspOffset,
     },
+    /// Defer a spliced non-local exit's unwind before jumping into the
+    /// shared `ensure` body (#1185). The value rides in `GP::Rdx`; the
+    /// degenerate outcome raises generically from `pc`.
+    DeferSplicedExit {
+        kind: SplicedExitKind,
+        pc: BytecodePtr,
+    },
     BlockArgProxy {
         ret: SlotId,
         outer: usize,
@@ -1020,7 +1027,15 @@ pub(in crate::codegen) enum LInst {
         loop_jit_spill_bytes: usize,
     },
     EnsureEnd {
+        /// The instruction's own pc, set before the re-raise path enters
+        /// `entry_raise` so `handle_error`'s table lookup is aligned.
+        pc: BytecodePtr,
         loop_jit_spill_bytes: usize,
+        /// Resolved teardown chain offsets for JIT-spliced exits landing at
+        /// this `EnsureEnd` (#1185); both `None` keeps the plain two-way
+        /// (continue / re-raise) form.
+        spliced_break: Option<usize>,
+        spliced_ret: Option<usize>,
     },
     Yield {
         callid: CallSiteId,

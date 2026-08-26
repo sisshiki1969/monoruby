@@ -689,6 +689,12 @@ impl ISeqInfo {
         self.sp[i.to_usize()]
     }
 
+    /// Number of instructions, via the per-instruction sp table (available
+    /// in every build, unlike `bytecode_len`).
+    pub(crate) fn sp_table_len(&self) -> usize {
+        self.sp.len()
+    }
+
     pub(crate) fn get_bb(&self, bc_pos: BcIndex) -> BasicBlockId {
         self.bb_info.is_bb_head(bc_pos).unwrap()
     }
@@ -719,6 +725,42 @@ impl ISeqInfo {
                 }
             })
             .nth(0)
+    }
+
+    ///
+    /// The `ensure` destination for a JIT-spliced non-local exit at *pc*
+    /// (issue #1185): `Some(ensure_pc)` iff **exactly one** exception-table
+    /// entry covers *pc* and it has an `ensure`. More than one covering
+    /// entry means nested protected regions — a spliced exit would have to
+    /// chain through every `ensure`, which the stage-1 splice refuses (the
+    /// generic unwind handles it).
+    ///
+    pub(crate) fn single_covering_ensure(&self, pc: BcIndex) -> Option<BcIndex> {
+        let mut covering = self
+            .exception_map
+            .iter()
+            .filter(|entry| entry.range.contains(&pc));
+        let first = covering.next()?;
+        if covering.next().is_some() {
+            return None;
+        }
+        first.ensure_pc
+    }
+
+    ///
+    /// Whether any exception-table entry's protected range or handler
+    /// destination falls strictly inside `range`. Used by the splice to
+    /// require a nested-region-free `ensure` body: a nested `begin` inside
+    /// the shared `ensure` copy would put its own `EnsureEnd` between the
+    /// body entry and the region's `EnsureEnd`, breaking the forward scan
+    /// that pairs the two.
+    ///
+    pub(crate) fn any_handler_intersects(&self, range: std::ops::Range<BcIndex>) -> bool {
+        self.exception_map.iter().any(|entry| {
+            range.contains(&entry.range.start)
+                || entry.rescue_pc.is_some_and(|p| range.contains(&p))
+                || entry.ensure_pc.is_some_and(|p| range.contains(&p) && p != range.start)
+        })
     }
 
     pub(crate) fn exception_push(

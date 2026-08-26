@@ -467,6 +467,7 @@
 24ac5154b60f3f04786ba9edf76cd37f	"HELLO, WORLD!"	"Hello, World!".upcase
 24b3c2a7f0690e6d1eb054021202ed43	:OVERRIDDEN	class TrueClass; def ===(o); :OVERRIDDEN; end; end; true === true
 24b74847655014f460c36e43e73312e8	7	class C\n          define_method(:add) { |a, b| a + b }\n        end\n    
+24e97acf1f40103919be34d2f73353dd	5	def a6\n          z = 0\n          [1].each do |i|\n            begin\n    
 24ede66710b2716183990244c9ec7ce2	-3.0	class Float; alias __orig :-@; def -@; __orig; end; end; -(3.0)
 250640ebb28cec0f360f71495d32f526	[227, 65, 66, 227, 129, 132]	s = "\\xe3\\x81\\x82\\xe3\\x81\\x84".force_encoding("ASCII-8BIT")\n       
 251463e9ea3898eef34264e66a5b59f3	["ok Foo", "ok Bar", "ok Foo", "ok Bar"]	module Foo\n          def a\n            'ok Foo'\n          end\n        e
@@ -1586,6 +1587,7 @@
 823f7b6229174b0da18f59b5a5c7cca0	[1, 2, "constant"]	module QTopA; X = 1; module Inner; Y = 2; end; end\n            [QTo
 82447060301c9a64b3ac42318f460e62	[1, 2, 3]	class C\n          def foo(*x)\n            x\n          end\n        end\n 
 8256e9068f6e136c99b87f2f7f97fdb8	[[ArgumentError, "negative signal name: -HUP"], "negative signal name: -INT"]	[(begin; Signal.trap("-HUP") {}; rescue => e; [e.class, e.message]; end), (begin
+829f48ebfbc6e4030ced77aaec24c37b	[200, 2]	def a4\n          v = [1, 2, 3].each do |i|\n            begin\n          
 82abda467be3a95b2f6d81fbf7dfb3da	"a:a b:{x: 100, y: 200}"	def f(a, b)\n          "a:#{a} b:#{b}"\n        end\n        \n\n        f("
 82afafb55f0b808c4e046dd1d983831d	["ASCII-8BIT", "US-ASCII", "US-ASCII"]	[/\\xc2\\xa1/n.encoding.to_s, /abc/n.encoding.to_s, /\\x7f/n.encoding.to_s]
 82c9966b62ff6ac43f8a7ad749c3fa16	1	p = proc {\n          a = 10\n        }\n        a = 1\n        p.call\n    
@@ -2173,6 +2175,7 @@ afc664b3664dbfb2235fee8c114e24dc	["a\\n", "b\\n", "c"]	path = "/tmp/monoruby_io_
 afe017e12ee32ba781bc419214f2db54	"e\\n\\nCopyright (c) 202"	File.binread("../LICENSE-MIT", 20, 10)
 afecc303354ce360b53ad03479bdb2f0	2	t = Time.utc(1970, 1, 1, 0, 0, 0); def t.succ; self + 1; end\n      
 b017ead69b837578afee4295eb840ed7	"#<Class:Time>"	Time.singleton_class.to_s
+b0210a3ee0e2cc726743dd177d2617fa	"rescued:boom"	def a1\n          x = 0\n          [1].each do |i|\n            begin\n    
 b041b0aaea8a7d40b26a35b251c0f897	[[:req, :a], [:nokey]]	def m(a, **nil); end\n            method(:m).parameters\n            
 b050bdfac1ec47f5eeda5dc5e12bd05a	45.0	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 b06f00715b283fa26e9acda37466978d	[1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub, 1, 8, :sub]	class MyArray < Array\n              def [](i) = :sub\n            en
@@ -2372,6 +2375,7 @@ bfbe34cf61fcca55c3ea92c6839bb454	1	IO.popen(["false"]) { |io| io.read }\n       
 bfdcfc70fda8f2b3db9a8020171aae4b	"AB"	[65, 66].pack("C C")
 bfe630e757e308e4abdf4d36bdcd4969	0	/(?<z>foo)/ =~ "foofoo"
 bffb45c1c4c4bfb1f18ef0093606fbaa	"/tmp"	File.realpath("tmp", "/")
+c00d90d46d88d991d6b335b49097a639	20	def a2\n          [1].each do |i|\n            begin\n              break 
 c01cf4efc12251b52e9bc2c5c0c2d6ec	["x42y", "42", "nil", "é42ü", "x42!", false, false, "template42mut", "template42", "UTF-8", 3, true, "x43y", "43", "nil", "é43ü", "x43!", false, false, "template43mut", "template43", "UTF-8", 3, true, "x44y", "44", "nil", "é44ü", "x44!", false, false, "template44mut", "template44", "UTF-8", 3, true, "x45y", "45", "nil", "é45ü", "x45!", false, false, "template45mut", "template45", "UTF-8", 3, true, "x46y", "46", "nil", "é46ü", "x46!", false, false, "template46mut", "template46", "UTF-8", 3, true, "x47y", "47", "nil", "é47ü", "x47!", false, false, "template47mut", "template47", "UTF-8", 3, true, "x48y", "48", "nil", "é48ü", "x48!", false, false, "template48mut", "template48", "UTF-8", 3, true, "x49y", "49", "nil", "é49ü", "x49!", false, false, "template49mut", "template49", "UTF-8", 3, true, "x50y", "50", "nil", "é50ü", "x50!", false, false, "template50mut", "template50", "UTF-8", 3, true, "x51y", "51", "nil", "é51ü", "x51!", false, false, "template51mut", "template51", "UTF-8", 3, true, "x52y", "52", "nil", "é52ü", "x52!", false, false, "template52mut", "template52", "UTF-8", 3, true, "x53y", "53", "nil", "é53ü", "x53!", false, false, "template53mut", "template53", "UTF-8", 3, true, "x54y", "54", "nil", "é54ü", "x54!", false, false, "template54mut", "template54", "UTF-8", 3, true, "x55y", "55", "nil", "é55ü", "x55!", false, false, "template55mut", "template55", "UTF-8", 3, true, "x56y", "56", "nil", "é56ü", "x56!", false, false, "template56mut", "template56", "UTF-8", 3, true, "x57y", "57", "nil", "é57ü", "x57!", false, false, "template57mut", "template57", "UTF-8", 3, true, "x58y", "58", "nil", "é58ü", "x58!", false, false, "template58mut", "template58", "UTF-8", 3, true, "x59y", "59", "nil", "é59ü", "x59!", false, false, "template59mut", "template59", "UTF-8", 3, true, "x60y", "60", "nil", "é60ü", "x60!", false, false, "template60mut", "template60", "UTF-8", 3, true, "x61y", "61", "nil", "é61ü", "x61!", false, false, "template61mut", "template61", "UTF-8", 3, true]	r = []\n        20.times do |i|\n            a = 42 + i\n            r << 
 c02bfb68f21771671d9a8ba7a101c48d	99	class C; def to_int; 99; end; end; o = C.new\nInteger(o)
 c02dd9efb46f0fbc32fc6404c32838a8	[4, 8, 101, 58, 24, 77, 97, 114, 115, 104, 97, 108, 83, 105, 110, 103, 108, 101, 116, 111, 110, 69, 120, 116, 111, 58, 11, 79, 98, 106, 101, 99, 116, 0]	module MarshalSingletonExt; def hi; end; end\n            o = Object
@@ -2922,6 +2926,7 @@ ebe0ff80bc75796e6952268415562c02	79758732	a = 0\n        20.times do |x|\n      
 ec17cc112d34937041f056e2b23a6485	[10, 20, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.val
 ec3412505f146b21a6888012a86820f2	[true, ["1", "2"]]	r = ENV.merge!("MONORUBY_ENV_TEST_M1" => "1",\n                     
 ec3b6db701fd7dc4a8aef71dcf7cdc12	[[[1, nil], nil], [[1, nil], nil], [:args, :block], [[1, nil, 2], nil], [1, 2], [[1, 2], nil]]	def m(*args, &block); [args, block]; end\n        res = []\n        args 
+ec4622bb1fc139438ae329ef3155baea	[42, 5]	def a5\n          [5].each do |i|\n            begin\n              return
 ec4849e638b2a7db1b2adfd4bf8183c9	[[1, nil, nil], []]	S = Struct.new(:a, :b, :c)\n            \n\n            s = S.new(1)\n 
 ec4d377c4801643f31efc8302cd3d528	[true, TypeError, ArgumentError]	(h=ENV.to_h{|k,v| [k.to_sym, v.length]}; a=h.keys.all?{|x| x.is_a?(Symbol)}; b=(
 ec4dde8b7008f35b2cfd35d0cd16f7e3	[true, true]	a = 1356\n            id = a.object_id\n            \n\n            [id
