@@ -257,6 +257,15 @@ pub(super) struct AsmInfo {
     /// Start position of the machine code in `JitMemory`.
     ///
     pub(super) start_codepos: usize,
+    /// aarch64: side-exit handler `LInst`s accumulated by `gen_asm` and
+    /// emitted in one outlined island — at the frame's end, or mid-stream
+    /// when the hot run since the last island approaches the `TBZ`/`TBNZ`
+    /// imm14 range (see `a64_drain_side_exits`). Unused on x86-64, which
+    /// outlines its handlers to the cold page instead.
+    pub(in crate::codegen) pending_side_exits: Vec<crate::codegen::jitgen::lir::LInst>,
+    /// aarch64: code position of the last side-exit island (or the frame
+    /// start), the base the hot-run length is measured from.
+    pub(in crate::codegen) side_exit_watermark: usize,
 }
 
 impl AsmInfo {
@@ -280,6 +289,8 @@ impl AsmInfo {
             ivar_heap_accessed: false,
             sourcemap: vec![],
             start_codepos: 0,
+            pending_side_exits: Vec::new(),
+            side_exit_watermark: 0,
         }
     }
 
@@ -616,6 +627,8 @@ impl JitStackFrame {
                 base_stack_offset: 0,
                 sourcemap: vec![],
                 start_codepos: 0,
+                pending_side_exits: Vec::new(),
+                side_exit_watermark: 0,
             },
             outer,
             callid: None,

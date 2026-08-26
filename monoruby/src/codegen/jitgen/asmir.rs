@@ -77,6 +77,21 @@ pub(crate) struct SideExitLabels {
 }
 
 impl SideExitLabels {
+    /// aarch64 range-extension support: point entry *idx* at the handler's
+    /// thunk-chain successor (see `Codegen::a64_thunk_side_exits`). Index
+    /// addressing, not label equality — `DestLabel`'s `PartialEq` compares
+    /// the shared `LabelInfo`, under which two distinct unresolved labels
+    /// are equal.
+    #[cfg(target_arch = "aarch64")]
+    pub(in crate::codegen) fn set(&mut self, idx: usize, label: DestLabel) {
+        self.labels[idx] = label;
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub(in crate::codegen) fn len(&self) -> usize {
+        self.labels.len()
+    }
+
     fn new() -> Self {
         Self {
             labels: vec![],

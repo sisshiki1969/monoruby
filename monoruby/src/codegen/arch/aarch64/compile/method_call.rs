@@ -1182,6 +1182,53 @@ impl Codegen {
         );
     }
 
+    /// Call `jit_recompile_method_with_recovery` for a class-version-guard
+    /// miss, leaving its tri-state (2 salvaged / 1 recompiled / 0 panic) in
+    /// x0.
+    ///
+    /// Unlike [`Self::a64_call_recompile`] — whose save set (d2-d7, x5-x8)
+    /// only feeds the deopt write-back that always follows — this returns
+    /// to *compiled* code on the salvage arm, so every abstract scratch the
+    /// guard site may hold live must survive the call: the x86 twin's
+    /// `save_registers` set (caller-saved except rax) maps here to x1-x8
+    /// plus d2-d7. d8-d15 and x19-x28 are callee-saved under AAPCS64, and
+    /// x0 (`Rax`) is the return register and, as on x86, dead at a guard.
+    pub(super) fn a64_call_recompile_with_recovery(&mut self, reason: RecompileReason) {
+        let f = crate::codegen::compiler::jit_recompile_method_with_recovery as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            sub sp, sp, #(112);
+            str d2, [sp, #(0)];
+            str d3, [sp, #(8)];
+            str d4, [sp, #(16)];
+            str d5, [sp, #(24)];
+            str d6, [sp, #(32)];
+            str d7, [sp, #(40)];
+            stp x1, x2, [sp, #(48)];
+            stp x3, x4, [sp, #(64)];
+            stp x5, x6, [sp, #(80)];
+            stp x7, x8, [sp, #(96)];
+            mov x0, x19;                  // vm (Executor)
+            mov x1, x20;                  // globals
+            mov x2, x22;                  // lfp
+            mov x3, (reason as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                       // x0: 2 salvaged / 1 recompiled / 0 panic
+            ldr x30, [sp], #16;
+            ldr d2, [sp, #(0)];
+            ldr d3, [sp, #(8)];
+            ldr d4, [sp, #(16)];
+            ldr d5, [sp, #(24)];
+            ldr d6, [sp, #(32)];
+            ldr d7, [sp, #(40)];
+            ldp x1, x2, [sp, #(48)];
+            ldp x3, x4, [sp, #(64)];
+            ldp x5, x6, [sp, #(80)];
+            ldp x7, x8, [sp, #(96)];
+            add sp, sp, #(112);
+        );
+    }
+
     ///
     /// Salvage-only miss handler for a constant-version guard
     /// (`ConstMiss::Salvage`) — the aarch64 counterpart of

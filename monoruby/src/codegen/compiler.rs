@@ -1004,6 +1004,49 @@ pub(in crate::codegen) extern "C" fn jit_recompile_method(
     Some(Value::nil())
 }
 
+/// aarch64 twin of the x86 `jit_recompile_method_with_recovery`: the
+/// class-version-guard miss handler that distinguishes a successful salvage
+/// from a full recompile, so the emitted guard can resume compiled code in
+/// place instead of paying a deopt-to-VM for the rest of the invocation.
+///
+/// Returns a tri-state (the x86 version's `u64` grown by the panic case,
+/// which x86 does not surface):
+/// - `2` — salvaged: every assumption re-validated, the unit's version word
+///   re-stamped. The caller jumps straight back to the guarded fall-through.
+/// - `1` — recompiled (or the recompile found real changes): deopt once and
+///   enter the new code on the next call, as before.
+/// - `0` — the recompile panicked; a Ruby `FatalError` is set on `vm` and
+///   the caller deopts, where the interpreter propagates it (same contract
+///   as [`jit_recompile_method`]).
+#[cfg(target_arch = "aarch64")]
+pub(in crate::codegen) extern "C" fn jit_recompile_method_with_recovery(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    reason: RecompileReason,
+) -> u64 {
+    #[cfg(feature = "jit-log")]
+    crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::RECOVERY_ATTEMPT);
+    if globals.store.update_inline_cache(lfp) {
+        #[cfg(feature = "jit-log")]
+        crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_OK);
+        return 2;
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CODEGEN.with(|codegen| {
+            codegen.borrow_mut().recompile_method(globals, lfp, reason);
+        });
+    }));
+    if result.is_err() {
+        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+        vm.set_error(MonorubyErr::fatal(
+            "internal error: JIT method recompilation panicked.",
+        ));
+        return 0;
+    }
+    1
+}
+
 /// aarch64 loop recompile, called from the `RecompileDeopt` lowering
 /// (`arch/aarch64/compile.rs`) when `position` is the loop pc. Re-runs `compile_partial`
 /// for the loop body and rewrites the loop's codeptr at `[pc + 8]`, so the next

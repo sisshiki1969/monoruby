@@ -740,6 +740,7 @@ impl Codegen {
         // disassembly only; correctness-neutral). Set unconditionally so both
         // arches agree.
         frame.start_codepos = self.jit.get_current();
+        frame.side_exit_watermark = self.jit.get_current();
 
         #[cfg(all(feature = "perf", target_arch = "x86_64"))]
         let pair = self.get_address_pair();
@@ -829,6 +830,7 @@ impl Codegen {
         // *outlined* cold code, never fallen into) and ends in an
         // unconditional `b exit`, so neither it nor its successor is
         // fall-through reachable.
+        let had_outline_bridges = !outline_bridges.is_empty();
         for (ir, entry, exit) in outline_bridges {
             let entry = frame.resolve_label(&mut self.jit, entry);
             self.gen_asm(
@@ -841,6 +843,17 @@ impl Codegen {
                 false,
             );
         }
+
+        // aarch64: emit the frame's remaining side-exit handlers as the
+        // final outlined island (see `a64_drain_side_exits`; x86 outlines
+        // its handlers to the cold page inside its own `gen_asm`). An
+        // outline bridge always ends in `b exit`, so after any bridge the
+        // island cannot be fallen into; otherwise the last main block
+        // decides.
+        #[cfg(target_arch = "aarch64")]
+        self.a64_drain_side_exits(&mut frame, !had_outline_bridges && fallthrough_in);
+        #[cfg(not(target_arch = "aarch64"))]
+        let _ = had_outline_bridges;
 
         if !frame.is_specialized() {
             self.specialized_base = self.specialized_info.len();

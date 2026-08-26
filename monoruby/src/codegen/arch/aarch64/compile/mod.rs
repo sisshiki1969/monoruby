@@ -98,7 +98,104 @@ fn a64_float_cond_for_cmp(kind: CmpKind, brkind: BrKind) -> monoasm::Cond {
 }
 
 
+/// Hot-run length (bytes) that forces a mid-stream side-exit island. Half
+/// the `TBZ`/`TBNZ` imm14 reach (±32 KiB): the guards emitted *after* the
+/// island still have to span their own distance to the next island plus
+/// that island's body, and handler bodies are small (a write-back plus a
+/// tail branch), so 16 KiB keeps every direct tbz comfortably in range
+/// without a range-extension thunk.
+const SIDE_EXIT_DRAIN_THRESHOLD: usize = 16 * 1024;
+
 impl Codegen {
+    /// Emit the frame's accumulated side-exit handlers as one outlined
+    /// island and reset the hot-run watermark. `fallthrough_in` guards the
+    /// island with a `b skip` when the preceding code can fall into it;
+    /// a frame-final island after an unconditional terminator skips that.
+    pub(in crate::codegen::jitgen) fn a64_drain_side_exits(
+        &mut self,
+        frame: &mut AsmInfo,
+        fallthrough_in: bool,
+    ) {
+        if frame.pending_side_exits.is_empty() {
+            frame.side_exit_watermark = self.jit.get_current();
+            return;
+        }
+        let skip = self.jit.label();
+        if fallthrough_in {
+            monoasm_arm64!(&mut self.jit, b skip;);
+        }
+        // The island itself counts against the range invariant: every
+        // reference to a still-unbound handler label sits at or after
+        // `side_exit_watermark`, and a handler bound more than the
+        // `TBZ`/`TBNZ` reach past it would fail its relocation. Handler
+        // bodies are a write-back plus a tail branch, but a frame can
+        // accumulate hundreds of them (optcarrot `--opt`), so a big island
+        // re-thunks its own remainder whenever the run since the watermark
+        // grows past the threshold — same trick as the mid-block pass, one
+        // extra taken `b` per crossing, cold path only.
+        let mut pending: std::collections::VecDeque<_> =
+            std::mem::take(&mut frame.pending_side_exits).into();
+        while let Some(inst) = pending.pop_front() {
+            if self.jit.get_current() - frame.side_exit_watermark > SIDE_EXIT_DRAIN_THRESHOLD {
+                for inst in pending.iter_mut() {
+                    let LInst::SideExit { entry, .. } = inst else {
+                        unreachable!("pending_side_exits holds only LInst::SideExit");
+                    };
+                    let succ = self.jit.label();
+                    self.jit.bind_label(entry.clone());
+                    monoasm_arm64!(&mut self.jit, b succ;);
+                    *entry = succ;
+                }
+                frame.side_exit_watermark = self.jit.get_current();
+            }
+            self.encode_linst(inst);
+        }
+        if fallthrough_in {
+            self.jit.bind_label(skip);
+        }
+        frame.side_exit_watermark = self.jit.get_current();
+    }
+
+    /// Range-extension thunks (mid-block): when the hot run since the last
+    /// island approaches the `TBZ`/`TBNZ` imm14 reach, bind every pending
+    /// handler label *here* to a one-instruction `b successor` thunk and
+    /// carry the handler body forward under the fresh successor label. The
+    /// guards already emitted resolve to the thunk (short range); guards
+    /// still to come are re-pointed at the successor via the recorded
+    /// `links`, so their distance is measured from this island, not the
+    /// frame start. Only the *taken* (cold) path pays — one extra `b` per
+    /// island crossed — which is what distinguishes this from the inverted
+    /// tbz->tbnz+b scheme that taxed the hot path.
+    pub(in crate::codegen::jitgen) fn a64_thunk_side_exits(
+        &mut self,
+        frame: &mut AsmInfo,
+        labels: &mut SideExitLabels,
+        links: &[(usize, usize)],
+    ) {
+        if frame.pending_side_exits.is_empty() {
+            frame.side_exit_watermark = self.jit.get_current();
+            return;
+        }
+        let skip = self.jit.label();
+        monoasm_arm64!(&mut self.jit, b skip;);
+        for inst in frame.pending_side_exits.iter_mut() {
+            let LInst::SideExit { entry, .. } = inst else {
+                unreachable!("pending_side_exits holds only LInst::SideExit");
+            };
+            let succ = self.jit.label();
+            self.jit.bind_label(entry.clone());
+            monoasm_arm64!(&mut self.jit, b succ;);
+            *entry = succ;
+        }
+        for (pending_idx, label_idx) in links {
+            let LInst::SideExit { entry, .. } = &frame.pending_side_exits[*pending_idx] else {
+                unreachable!();
+            };
+            labels.set(*label_idx, entry.clone());
+        }
+        self.jit.bind_label(skip);
+        frame.side_exit_watermark = self.jit.get_current();
+    }
 
     /// Lower one block's `AsmIr`. `entry` (if any) is bound first; `exit` (if
     /// any) appends an unconditional branch to that basic block at the end.
@@ -114,10 +211,10 @@ impl Codegen {
         exit: Option<BasicBlockId>,
         class_version: DestLabel,
         // Is this block reachable by fall-through from the code emitted just
-        // before it? See `gen_machine_code`. When `false`, the body label binds
-        // *after* the handlers and is the only way in, so the `b skip` that
-        // jumps over the handlers is dead and we omit it.
-        fallthrough_in: bool,
+        // before it? See `gen_machine_code`. Unused since the handlers moved
+        // to outlined islands (`pending_side_exits`) — kept so the per-arch
+        // `gen_asm` signatures stay identical.
+        _fallthrough_in: bool,
     ) {
         // Pure-deopt block (e.g. a loop's natural exit): its whole body is
         // `[Label(bb), Deopt(d)]`, i.e. a bare jump to its deopt handler. Emit
@@ -146,32 +243,27 @@ impl Codegen {
             return;
         }
 
-        // Generate the block's side-exit (deopt/evict/error) handlers. They are
-        // cold, so we lay them out here but jump over them (`b skip`); guards in
-        // the main body branch *back* to them (short-range b.cond). aarch64 has
-        // no separate cold page in this path, but `b` reaches them either way.
+        // Collect the block's side-exit (deopt/evict/error) handlers. They
+        // are cold: instead of laying them inline before the block (the old
+        // scheme, which cut the hot path into islands and paid a `b skip`
+        // per fall-through block), they accumulate on the frame
+        // (`pending_side_exits`) and are emitted as one outlined island —
+        // at the frame's end, or mid-stream when the hot run since the last
+        // island approaches the `TBZ`/`TBNZ` imm14 reach (guards branch to
+        // the handlers *forward*, and fixnum guards use tbz/tbnz, ±32 KiB).
+        // See `a64_drain_side_exits`. Labels are created eagerly for the
+        // body to reference; only their binding is deferred.
         let mut labels = SideExitLabels::new();
-        let skip = if ir.side_exit.is_empty() {
-            None
-        } else {
-            Some(self.jit.label())
-        };
-        // Only guard against fall-through into the handlers when the block can
-        // actually be entered that way; a block reached solely by branches to
-        // its (post-handler) body label needs no `b skip`.
-        if let Some(skip) = &skip
-            && fallthrough_in
-        {
-            monoasm_arm64!(&mut self.jit, b skip;);
-        }
         #[cfg(feature = "deopt")]
         let mut deopt_table: std::collections::HashMap<
             (BytecodePtr, WriteBack, bool),
-            (DestLabel, u32),
+            (DestLabel, u32, usize),
         > = std::collections::HashMap::new();
         #[cfg(not(feature = "deopt"))]
-        let mut deopt_table: std::collections::HashMap<(BytecodePtr, WriteBack, bool), DestLabel> =
-            std::collections::HashMap::new();
+        let mut deopt_table: std::collections::HashMap<
+            (BytecodePtr, WriteBack, bool),
+            (DestLabel, usize),
+        > = std::collections::HashMap::new();
         // Loop-JIT entry sp-bump to undo before any exit resumes the VM.
         let bump = frame.loop_jit_spill_bytes;
         // §9 (9a, first brick): reify the side-exit handler block into a
@@ -181,6 +273,15 @@ impl Codegen {
         // and is byte-identical. Labels are still created eagerly for the body to
         // reference; the drain is the seam the future phys-alloc pass slots into.
         let mut lir = Lir::new();
+        // `(pending index, labels index)` pairs for this block: which entry
+        // of `labels` names which accumulated handler. The range-extension
+        // thunk pass (`a64_thunk_side_exits`) re-points both ends by index —
+        // `DestLabel` has no identity comparison (its `PartialEq` goes
+        // through the shared `LabelInfo`, under which distinct unresolved
+        // labels are equal), so the correspondence is recorded here, where
+        // it is known.
+        let mut links: Vec<(usize, usize)> = vec![];
+        let pending_base = frame.pending_side_exits.len();
         #[cfg(feature = "deopt")]
         let mut created_at_iter = ir.created_at.into_iter();
         for side_exit in ir.side_exit {
@@ -209,6 +310,7 @@ impl Codegen {
                         #[cfg(feature = "deopt")]
                         exit_id,
                     });
+                    links.push((pending_base + lir.len() - 1, labels.len()));
                     label
                 }
                 SideExit::Deoptimize(pc, wb, chain) => {
@@ -219,9 +321,10 @@ impl Codegen {
                             exit_id = entry.1;
                         }
                         #[cfg(feature = "deopt")]
-                        let label = entry.0.clone();
+                        let (label, pending_idx) = (entry.0.clone(), entry.2);
                         #[cfg(not(feature = "deopt"))]
-                        let label = entry.clone();
+                        let (label, pending_idx) = entry.clone();
+                        links.push((pending_idx, labels.len()));
                         label
                     } else {
                         let label = self.jit.label();
@@ -241,10 +344,12 @@ impl Codegen {
                             #[cfg(feature = "deopt")]
                             exit_id,
                         });
+                        let pending_idx = pending_base + lir.len() - 1;
                         #[cfg(feature = "deopt")]
-                        deopt_table.insert(key, (label.clone(), exit_id));
+                        deopt_table.insert(key, (label.clone(), exit_id, pending_idx));
                         #[cfg(not(feature = "deopt"))]
-                        deopt_table.insert(key, label.clone());
+                        deopt_table.insert(key, (label.clone(), pending_idx));
+                        links.push((pending_idx, labels.len()));
                         label
                     }
                 }
@@ -270,6 +375,7 @@ impl Codegen {
                         #[cfg(feature = "deopt")]
                         exit_id,
                     });
+                    links.push((pending_base + lir.len() - 1, labels.len()));
                     label
                 }
                 SideExit::Error(pc, wb, chain) => {
@@ -284,6 +390,7 @@ impl Codegen {
                         #[cfg(feature = "deopt")]
                         exit_id,
                     });
+                    links.push((pending_base + lir.len() - 1, labels.len()));
                     label
                 }
                 // Evict(None) is a placeholder always overwritten with
@@ -299,18 +406,20 @@ impl Codegen {
                 created_at,
             );
         }
-        for inst in lir.into_insts() {
-            self.encode_linst(inst);
-        }
-        if let Some(skip) = &skip {
-            self.jit.bind_label(skip.clone());
-        }
+        frame.pending_side_exits.extend(lir.into_insts());
 
         if let Some(entry) = &entry {
             self.jit.bind_label(entry.clone());
         }
         for inst in ir.inst {
             self.compile_asmir(store, frame, &labels, inst, class_version.clone());
+            // Range-extension check, per instruction: a single block can be
+            // arbitrarily large (optcarrot `--opt` generates multi-thousand-
+            // instruction bodies), so the hot-run length is watched inside
+            // the block, not just between blocks.
+            if self.jit.get_current() - frame.side_exit_watermark > SIDE_EXIT_DRAIN_THRESHOLD {
+                self.a64_thunk_side_exits(frame, &mut labels, &links);
+            }
         }
         if let Some(exit) = exit {
             let exit = frame.resolve_bb_label(&mut self.jit, exit);
@@ -2536,7 +2645,7 @@ impl Codegen {
         &mut self,
         class_version: DestLabel,
         position: Option<BytecodePtr>,
-        _with_recovery: bool,
+        with_recovery: bool,
         deopt: DestLabel,
     ) {
         // On a class-version miss, recompile (loop → `jit_recompile_loop`,
@@ -2546,20 +2655,31 @@ impl Codegen {
         // is stranded in the interpreter for the rest of the process after any
         // unrelated method definition. Mirrors x86 `guard_class_version` and the
         // aarch64 `GuardClassVersionSpecialized` twin; no counter — the
-        // recompile bakes in the new version, so the guard won't re-fire. The
-        // cheap x86 `with_recovery` path (an in-place inline-cache re-bake that
-        // resumes in JIT without recompiling) is not ported —
-        // `jit_recompile_method_with_recovery` is x86-only — so `_with_recovery`
-        // is ignored and this always full-recompiles. On a recompile panic the
-        // helper leaves a FatalError set and x0 == 0; we still branch to the
-        // deopt, which resumes at the guarded call where the interpreter
-        // propagates the fatal (matching the specialized twin).
+        // recompile bakes in the new version, so the guard won't re-fire.
+        //
+        // With `with_recovery` (a method-entry guard, `position == None`) the
+        // miss goes through `jit_recompile_method_with_recovery`, whose
+        // salvage arm re-validates the unit's assumptions and re-stamps its
+        // version word without recompiling; on that arm (x0 == 2) control
+        // jumps straight back to the guarded fall-through and the invocation
+        // continues in compiled code — the x86 `with_recovery` jump-back.
+        // Otherwise (recompiled, x0 == 1; or a recompile panic, x0 == 0 with
+        // a FatalError set on vm) fall to the deopt, where the interpreter
+        // resumes — or propagates the fatal — exactly as before.
         let miss = self.jit.label();
         let done = self.jit.label();
         self.a64_guard_class_version(&class_version, &miss); // version mismatch -> miss
         monoasm_arm64!(&mut self.jit, b done;); // match -> continue in JIT
         self.jit.bind_label(miss);
-        self.a64_call_recompile(position, RecompileReason::ClassVersionGuardFailed);
+        if with_recovery && position.is_none() {
+            self.a64_call_recompile_with_recovery(RecompileReason::ClassVersionGuardFailed);
+            monoasm_arm64!(&mut self.jit,
+                cmp x0, #2;
+            );
+            self.jit.bcond_label(monoasm::Cond::Eq, &done); // salvaged -> resume in place
+        } else {
+            self.a64_call_recompile(position, RecompileReason::ClassVersionGuardFailed);
+        }
         monoasm_arm64!(&mut self.jit, b deopt;); // recompiled -> resume via deopt
         self.jit.bind_label(done);
     }
