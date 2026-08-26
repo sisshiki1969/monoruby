@@ -1631,6 +1631,7 @@
 8634204d0d711f3c760e95c063499f29	["superclass must be an instance of Class (given an instance of Integer)", "superclass must be an instance of Class (given an instance of Integer)", "superclass must be an instance of Class (given an instance of String)", "superclass must be an instance of Class (given an instance of String)", "superclass must be an instance of Class (given an instance of Symbol)", "superclass must be an instance of Class (given an instance of Symbol)", "superclass must be an instance of Class (given an instance of Module)", "superclass must be an instance of Class (given an instance of Module)", "can't make subclass of singleton class", "can't make subclass of singleton class"]	res = []\n        [42, "s", :sym, Module.new, Object.new.singleton_class
 86a4d6ced3f4342dfd6b853b74858c93	[[1, 2, {}, 1], [18, 2, {c: 4, z: 6}, 2], [1, 2, {z: 7, 5 => 2}, 3]]	def f(a:1,b:2,**c,&block)\n          [a, b, c, block.call]\n        end\n 
 86addf8e26db6827d46f956b835833d8	[true, true, true, true, true, true, true, true, true, true, true, true, true, {a: 2}, {a: 2, b: 3, c: 3}]	require 'stringio'\n            def cap; $stderr = StringIO.new; yie
+86c85a886f92af3f3937458b7014a715	[23, [200, 2]]	def a3\n          s = 0\n          [1, 2].each do |i|\n            begin\n 
 86cc33f4ca22bf932070781d16fd754e	0	Time.utc(2000,1,1,0,0,0).subsec
 86d934731c116eb5dc06a1f26530d093	1267650600228229401496703205376	Integer(2.0 ** 100)
 86fe1bb2c2a5fd5c1014bbd1bf5febd8	"foo12"	class Foo\n              def foo(x, y)\n                "foo" + x.to_
@@ -1870,6 +1871,7 @@
 9a22f6dc0c7579d2bfa1447443b56f1f	[42, "nil"]	def bar\n              begin\n                raise "err"\n           
 9a380b66d043485e0a0a37c95be6a53e	["LoadError", "nonexistent_file_that_does_not_exist_12345"]	begin\n              require "nonexistent_file_that_does_not_exist_1
 9a6e41140cc5bce63cf4551de96c121c	[{a: 1, b: "x"}, 1, nil]	Fiber[:a] = 1\n            Fiber[:b] = "x"\n            [Fiber.curren
+9a7c12c16e1ba0fafa05ddfb9e353d1b	[7, 3]	def leaky\n          [1].each { return 9 }\n        ensure\n          retu
 9a932583042db11061d16bd05d100137	[1, 2, 3, 10, 11, 12, 13, 14]	a = [1, 2, 3]\n            seen = []\n            i = 0\n            a
 9a97b6b5000a38e4f4599c6abc8d1d0f	2	c = Class.new\n            c.class_variable_set(:@@x, 1)\n           
 9a9ee2b7febbe6ac3308d40b167ee24f	[:bar, [1, 2], 42]	class Foo\n              def method_missing(name, *args, &blk)\n     
@@ -2940,6 +2942,7 @@ ec84a8df82f97b16fdedf56efbc6ad35	"hello"	path = "/tmp/monoruby_test_filewrite_pe
 ecb0c2530aa824ca3b58cd269e696cd6	"xy"	def m; /(\\w)(\\w)/ =~ "xy"; -> { $~[0] }.call; end; m
 ecf0e0788d956837326285cb5c6fe318	[[0, 1, 2, 3, 4, 5, 6], 7, 8]	def f(*x,a,b)\n          [x,a,b]\n        end\n        \n\n        f(0,1,2,3
 ed06e4b3aaaf57db436613d3ad55b04a	[["EUC-JP"], ["ISO-8859-1"], ["ISO-8859-1"], ["ISO-8859-1"], ["UTF-8"]]	(d="/tmp/mono_de_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/a", ""); a=Dir.
+ed0e20c8bb4c374081ab10bd2a0e9853	[31375, [200, 2]]	$flag = true\n        def osr\n          [1].each { return 5 }\n        en
 ed1b9d1127bc95203a639e5a1aec8a0c	false	(0x8000_0000_0000_0000 + 39) == (0x8000_0000_0000_0000 + 39 + 0.0)
 ed21697a03332cf5034e4574459d9bdf	[:ok, [:x, :y]]	A = Struct.new(nil, :x, :y)\n            \n\n            [A.name.nil? 
 ed2d1c8786b057689885f97c2f7a6f93	[(5+2i), (-3+2i), "-1-2i", "-1-2i", ["R+0i", "3+4i"], "1.0+2i", "2+0.0i", "1+0.0i"]	class R < Numeric\n              def real?; true; end\n              

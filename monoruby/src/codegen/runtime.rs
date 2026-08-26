@@ -2440,6 +2440,20 @@ pub(super) extern "C" fn ensure_end(vm: &mut Executor) -> usize {
 }
 
 ///
+/// `Ret`-path hook (issue #1186): the returning frame owns the parked
+/// deferral (the caller compared `Executor::deferred_top_lfp` against the
+/// frame's LFP before calling), so discard it — a local exit written
+/// inside an `ensure` handler (`next`, `return`-in-`ensure`) overrides
+/// the deferred unwind (CRuby semantics), and the entry must not outlive
+/// its frame: a stale entry would misfire on whatever frame later
+/// recycles the same stack address.
+///
+pub(super) extern "C" fn discard_deferred_on_ret(vm: &mut Executor) {
+    let lfp = vm.cfp().lfp();
+    vm.discard_deferred_unwind(lfp);
+}
+
+///
 /// The two-word result of [`ensure_end_spliced`]: `code` in rax/x0, `val`
 /// in rdx/x1 (the same pair-return convention as `handle_error`'s
 /// `ErrorReturn`). See [`Executor::finish_ensure_spliced`] for the codes.

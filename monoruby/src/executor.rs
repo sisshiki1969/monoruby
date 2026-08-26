@@ -161,6 +161,8 @@ const SVAR_LASTLINE: usize = 1;
 
 pub(crate) const EXECUTOR_CFP: i64 = std::mem::offset_of!(Executor, cfp) as _;
 pub(crate) const EXECUTOR_RSP_SAVE: i64 = std::mem::offset_of!(Executor, rsp_save) as _;
+pub(crate) const EXECUTOR_DEFERRED_TOP: i64 =
+    std::mem::offset_of!(Executor, deferred_top_lfp) as _;
 pub(crate) const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
 pub(crate) const EXECUTOR_STACK_LIMIT: i64 = std::mem::offset_of!(Executor, stack_limit) as _;
 /// Scratch words a deopt trampoline fills in before branching to its
@@ -364,6 +366,16 @@ pub struct Executor {
     /// frame (a fresh deferral for a frame that already has one means the
     /// previous inner-ensure unwind was bypassed and is abandoned).
     deferred_unwind: Vec<(Lfp, MonorubyErr)>,
+    ///
+    /// Mirror of `deferred_unwind.last()`'s frame, kept in a plain
+    /// 8-byte word (`None` == 0) so the `Ret` paths — the VM opcode and
+    /// the JIT epilogue of a handler-carrying iseq — can test "does the
+    /// returning frame own a parked deferral?" with one load + compare
+    /// instead of touching the `Vec`. Re-synced by every mutation of
+    /// `deferred_unwind` (issue #1186: a deferral must not outlive its
+    /// frame — a frame that returns without raising discards its own).
+    ///
+    deferred_top_lfp: Option<Lfp>,
     /// The `Fiber` object whose body is currently executing on this
     /// `Executor`, or `None` for a thread's root context (which falls back
     /// to the per-thread root Fiber object). Exposed as `Fiber.current` so
@@ -435,6 +447,7 @@ impl std::default::Default for Executor {
             exception: None,
             errinfo: Value::nil(),
             deferred_unwind: vec![],
+            deferred_top_lfp: None,
             current_fiber: None,
             resuming_fiber: None,
             return_to: None,
@@ -1587,6 +1600,13 @@ impl Executor {
             }
         }
         self.deferred_unwind.push((lfp, err));
+        self.sync_deferred_top();
+    }
+
+    /// Re-sync the [`Self::deferred_top_lfp`] mirror after any mutation of
+    /// `deferred_unwind`.
+    fn sync_deferred_top(&mut self) {
+        self.deferred_top_lfp = self.deferred_unwind.last().map(|(l, _)| *l);
     }
 
     ///
@@ -1602,11 +1622,13 @@ impl Executor {
         if self.exception.is_some() {
             if top_is_mine {
                 self.deferred_unwind.pop();
+                self.sync_deferred_top();
             }
             return true;
         }
         if top_is_mine {
             let (_, err) = self.deferred_unwind.pop().unwrap();
+            self.sync_deferred_top();
             // `exception` is `None` here, so the `set_error` guard holds.
             self.set_error(err);
             return true;
@@ -1644,6 +1666,7 @@ impl Executor {
             // deferred exit (CRuby semantics), exactly as `finish_ensure`.
             if top_is_mine {
                 self.deferred_unwind.pop();
+                self.sync_deferred_top();
             }
             return (1, Value::nil());
         }
@@ -1651,6 +1674,7 @@ impl Executor {
             return (0, Value::nil());
         }
         let (_, err) = self.deferred_unwind.pop().unwrap();
+        self.sync_deferred_top();
         match err.kind() {
             MonorubyErrKind::BlockBreak(val, _, outer) if Some(*outer) == lfp.outer() => {
                 (2, *val)
@@ -1679,6 +1703,7 @@ impl Executor {
         if let Some((top_lfp, _)) = self.deferred_unwind.last() {
             if *top_lfp == lfp {
                 self.deferred_unwind.pop();
+                self.sync_deferred_top();
             }
         }
     }
