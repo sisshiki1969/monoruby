@@ -1649,7 +1649,22 @@ impl Codegen {
     /// movq rax,[r15]; epilogue`).
     pub(in crate::codegen) fn a64_op_ret(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
+        let no_defer = self.jit.label();
+        let f = runtime::discard_deferred_on_ret as *const () as u64;
+        // Same as the x86 twin: a frame returning normally while it owns
+        // the parked deferral (`next` / `return` inside its `ensure`
+        // handler) overrides the deferred unwind — discard it, or the
+        // stale per-lfp entry misfires on a recycled frame (#1186). x30 is
+        // dead here (the epilogue below reloads it), so the call needs no
+        // save.
         monoasm_arm64!(&mut self.jit,
+            ldr x10, [x19, #(EXECUTOR_DEFERRED_TOP as u32)];
+            cmp x10, x(LFP.0);
+            b.ne no_defer;
+            mov x0, x19;
+            mov x9, (f);
+            blr x9;
+            no_defer:
             ldrh x10, [x(PC.0), #(4)];  // slot index
             neg x10, x10;
             add x11, x(LFP.0), x10, lsl #(3);

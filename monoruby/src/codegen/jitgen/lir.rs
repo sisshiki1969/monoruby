@@ -957,7 +957,11 @@ pub(in crate::codegen) enum LInst {
         lhs: GP,
         imm: i32,
     },
-    Ret,
+    Ret {
+        /// Emit the parked-deferral discard gate (#1186): only for a
+        /// handler-carrying iseq, whose frame can own one at its `Ret`.
+        check_deferred: bool,
+    },
     MethodRet {
         pc: BytecodePtr,
         /// The frame's loop-JIT spill region, released before resuming the

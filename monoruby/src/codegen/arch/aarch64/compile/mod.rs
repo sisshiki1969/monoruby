@@ -2599,7 +2599,24 @@ impl Codegen {
 
     /// Method epilogue: the result is already in x0; tear down the frame and
     /// return (matches the VM's `a64_op_ret`: `mov sp,x29; ldp; ret`).
-    pub(in crate::codegen::jitgen) fn emit_ret(&mut self) {
+    pub(in crate::codegen::jitgen) fn emit_ret(&mut self, check_deferred: bool) {
+        // Mirror of x86 `emit_ret`'s #1186 gate; x0 (the return value) is
+        // saved around the call, x30 is dead (the epilogue reloads it).
+        if check_deferred {
+            let no_defer = self.jit.label();
+            let f = runtime::discard_deferred_on_ret as *const () as u64;
+            monoasm_arm64!(&mut self.jit,
+                ldr x10, [x19, #(EXECUTOR_DEFERRED_TOP as u32)];
+                cmp x10, x22;
+                b.ne no_defer;
+                str x0, [sp, #-16]!;
+                mov x0, x19;
+                mov x9, (f);
+                blr x9;
+                ldr x0, [sp], #16;
+                no_defer:
+            );
+        }
         monoasm_arm64!(&mut self.jit,
             mov sp, x29;
             ldp x29, x30, [sp], #16;

@@ -223,6 +223,22 @@ impl Codegen {
 
         //BcOp::Ret
         let ret = self.jit.get_current_address();
+        // A frame returning normally while it owns the parked deferral
+        // (`next` / `return` written inside its `ensure` handler) overrides
+        // the deferred unwind — discard it, or the stale per-lfp entry
+        // misfires on whatever frame recycles this stack address (#1186).
+        // One load + compare on the hot path; the call is all but never
+        // taken.
+        let no_defer = self.jit.label();
+        monoasm! { &mut self.jit,
+            movq rax, [rbx + (EXECUTOR_DEFERRED_TOP)];
+            cmpq rax, r14;
+            jne  no_defer;
+            movq rdi, rbx;
+            movq rax, (runtime::discard_deferred_on_ret);
+            call rax;
+        no_defer:
+        };
         self.fetch_addr_r15();
         monoasm! { &mut self.jit,
             movq rax, [r15];

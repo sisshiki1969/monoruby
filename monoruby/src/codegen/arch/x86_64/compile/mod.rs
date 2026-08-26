@@ -2035,7 +2035,27 @@ impl Codegen {
     }
 
     /// Method epilogue: tear down the frame and return.
-    pub(in crate::codegen::jitgen) fn emit_ret(&mut self) {
+    pub(in crate::codegen::jitgen) fn emit_ret(&mut self, check_deferred: bool) {
+        // See the VM `Ret` opcode's twin gate (#1186): a frame returning
+        // normally while owning the parked deferral (reachable in compiled
+        // code via an OSR'd loop inside an `ensure` handler executing a
+        // local `return`) must discard it. Emitted only for
+        // handler-carrying iseqs; the call preserves rax (the return
+        // value) around itself.
+        if check_deferred {
+            let no_defer = self.jit.label();
+            monoasm! { &mut self.jit,
+                movq rdi, [rbx + (EXECUTOR_DEFERRED_TOP)];
+                cmpq rdi, r14;
+                jne  no_defer;
+                pushq rax;
+                movq rdi, rbx;
+                movq rax, (runtime::discard_deferred_on_ret);
+                call rax;
+                popq rax;
+            no_defer:
+            };
+        }
         self.epilogue();
     }
 

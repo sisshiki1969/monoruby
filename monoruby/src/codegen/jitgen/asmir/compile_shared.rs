@@ -521,7 +521,13 @@ impl Codegen {
             // `MethodRet` sets the resume PC then returns through the
             // method-return path; `BlockBreak` does the same through the
             // block-break path (a non-local `break` out of a block).
-            AsmInst::Ret => self.encode_linst(LInst::Ret),
+            AsmInst::Ret => self.encode_linst(LInst::Ret {
+                // Only a handler-carrying iseq can ever own a parked
+                // deferral at its own `Ret` (#1186) — e.g. an OSR'd loop
+                // inside an `ensure` handler returning while the deferral
+                // is parked. Handler-free iseqs pay nothing.
+                check_deferred: store[frame.iseq_id].has_exception_handler(),
+            }),
             AsmInst::MethodRet(pc) => self.encode_linst(LInst::MethodRet {
                 pc,
                 loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
@@ -1615,8 +1621,8 @@ impl Codegen {
             LInst::IntegerCmpImm { kind, lhs, imm } => {
                 self.emit_integer_cmp_imm(kind, lhs, imm);
             }
-            LInst::Ret => {
-                self.emit_ret();
+            LInst::Ret { check_deferred } => {
+                self.emit_ret(check_deferred);
             }
             LInst::MethodRet { pc, loop_jit_spill_bytes } => {
                 self.emit_method_ret(pc, loop_jit_spill_bytes);
