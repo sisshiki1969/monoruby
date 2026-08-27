@@ -434,6 +434,7 @@
 21715255d5b7d1640238dce91ff9244f	1	case 9\n        when 0,4,8\n          0\n        when 1,5,9\n          1\n  
 21978a61b3437a37e4576edf77547099	1	def nil.foo; 1; end\n            nil.foo\n            
 21c9333fc83d8b5a0cca96f269070205	["1", "2", "3"]	def forward(&b); [1,2,3].map(&b); end\n              forward(&:to_
+21eb0e9527b038ca28ca7c0660efdabb	8.0	def t3\n          a = 1.0\n          [5].each { a += 2.5; a *= 2.0 }\n    
 21f8e47a45fd8696940d39593814b503	["hello", "world"]	require "stringio"\n\n            res = []\n            ret = StringIO.open("hello"
 21ff5a76d37a266f84d3f0dce8947ed7	[:bar, [], {a: 1, b: 2}]	class C\n          def method_missing(name, *args, **kwargs)\n           
 220d3fe1c05b2950f05bfe53024be3aa	[false, false]	m = Mutex.new\n            cv = ConditionVariable.new\n            t 
@@ -853,6 +854,7 @@
 454539e2b45442d94b7989495b4563ef	["UTF-8", [227, 129, 130]]	File.binwrite("/tmp/mr_gc2.txt", [164, 162].pack("C*"))\n           
 454e2e87849398aff023ffd47ce0568a	"hello"	c = Class.new\n            c.class_exec do\n              def hello\n 
 4578bd5fa7148d23a652a1a92eb517df	false	Enumerator.new { |y| y << caller.empty? }.first
+457f6a743618e9a691a1720e9d5b31b0	[1575.0276087749185, 6.073454154620117]	def call_block\n          yield\n        end\n        def f(n)\n          a
 45c219e430e29dc7ecd467638b65c70b	[true, true, true]	pid = spawn("true")\n            t = Process.detach(pid)\n           
 45c9b7ea3cba52cd428385897c67b953	[true, false, false, false, true, false, true, false, true, false]	S = Struct.new(:a, :b)\n        T = Struct.new(:a, :b)\n        \n\n       
 45ca7b6809a873de22eb68bc015aef5c	["abc", "abcd"]	s = +"abc"; t = s.dup; t << "d"; [s, t]
@@ -1915,6 +1917,7 @@
 9d3a8273d76bab638959e38cd8c0a68c	[[:woke], true]	r = []\n            t = Thread.new { sleep 0.05; r << :woke }\n      
 9d4ee118279609a4658649ce219050c0	"a:1 b:{x: 100, y: 200} c:"	def f\n          yield 1,x:100,y:200\n        end\n        \n\n        f do 
 9d6d362d02ec388b6d9235b807fc78d2	5	class C\n              private def f; 5; end\n              def g; f;
+9d83806180901caed6f54effcdcb82d5	[1375.093536, 8.124106059241]	def t1\n          a = 1.5\n          s = 0.0\n          i = 0\n          wh
 9d90ba7627480755e747fc4a1045f51e	[2, 1]	[1, 2, 3].each.with_index { |v, i| break [v, i] if i == 1 }
 9dad3fcfbb4f15771bbac751e3869047	42	module A\n          module B\n            module C\n              VAL = 42
 9dbc194b1b0f6de59813ff04a2e9663a	[20, 20, 100, 2, 2]	Bar = 100\n            class Foo\n              autoload :Bar, "./c"\n
@@ -2209,6 +2212,7 @@ b2d8d3b6539361a8364045da7cfbfa9e	false	a=Object.new; a.instance_variable_set("@i
 b2ec3518315b390f605929160559793b	6	eval("1 + 2 + 3")\n        
 b316ba0b3d3db4c006c0ecfa80fb0c6a	[227, 129, 130, 55]	eval(%Q{# encoding: ascii-8bit\\nx = 7\\n"\\\\u3042\\#{x}".bytes})
 b3426882a7540443a327be9a9da66f26	[10, 20, 30]	res = []\n        [10, 20, 30].each do\n            res << it\n        end
+b37435debc202e7b4697b162437ea121	[23025.0, 152.0]	def t4\n          a = 0.0; c = 2.0\n          i = 0\n          while i < 3
 b37a18c27e0a579600146a5c3a6aea5e	[:wait_readable, "hello"]	r, w = IO.pipe\n            a = r.read_nonblock(1, exception: false)
 b37c44d8c2e41bb2c540d40ee9f7ad20	[11, 220, 11, 220, 11, 220, 220, 11, 220, 11, 220]	class S\n              def g\n                x = 0\n                f
 b38e37a07c9700ce3f2acd61ef3076fa	[1, true]	base = "/tmp/monoruby_test_lutime_#{Process.pid}_#{rand(100000)}"\n 
@@ -2823,6 +2827,7 @@ e2aabc9156279396c43d9f464d256920	[-1, 1]	a = [0xFF].pack("C").force_encoding("UT
 e2b38a39e691cb690c90a70e6ffc1baf	["inner", "outer", "nil"]	log = []\n            begin\n              raise "outer"\n            
 e2c2808fdcfd4ffc06759284fa444bc6	[:a, :b]	S = Struct.new(:a, :b)\nClass.new(S).members
 e2f1f22033c587332b6550fbf0ad525b	42	__ENCODING__; 42
+e2f631ba3fe2cfe362b742fe8ef597f9	[700.012271, 2.699313]	def t2\n          a = 2.0\n          s = 0.0\n          i = 0\n          wh
 e2f7855c9efc89267cc4efaf17ca2b83	[true, true]	[Thread.current == Thread.main, Thread.current.alive?]
 e30802fc039d0a7dafc2afa6978a2fd8	[true, true]	stop = false\n            t = Thread.new { stop = true }\n           
 e3153e08936de555d02588b7435ba4c8	nil	begin\n              raise "err"\n            rescue\n            end\n

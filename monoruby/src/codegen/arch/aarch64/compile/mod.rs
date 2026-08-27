@@ -3277,6 +3277,26 @@ impl Codegen {
         true
     }
 
+    /// Stage 1' write-through — mirror of x86 `emit_store_outer_fpr_home_f`:
+    /// raw f64 of `src` to `[x29 + disp]` (an outer frame's `Sf` home),
+    /// elided when `None`. d0 carries the value (reserved scratch), x10
+    /// the materialized address.
+    pub(in crate::codegen::jitgen) fn emit_store_outer_fpr_home_f(
+        &mut self,
+        src: FPReg,
+        disp: Option<i64>,
+        base: usize,
+    ) -> bool {
+        let Some(disp) = disp else { return true };
+        self.a64_fpr_load(src, 0, base); // value -> d0 (pool fmov or spill load)
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (disp as u64);
+            add x10, x29, x10;
+            str d0, [x10];
+        );
+        true
+    }
+
     /// A JIT-spliced non-local exit (#1185): build and defer the exit's
     /// unwind (value in the `GP::Rdx`-mapped register) so the following
     /// compiled branch enters the shared `ensure` body directly. A

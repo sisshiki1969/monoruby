@@ -1095,6 +1095,14 @@ impl Codegen {
                 });
             }
             // Outer-scope local access at a pre-resolved frame offset.
+            AsmInst::StoreOuterFprHomeF { src, home } => {
+                let disp = home.unwrap_concrete();
+                self.encode_linst(LInst::StoreOuterFprHomeF {
+                    src,
+                    disp,
+                    base: frame.base_stack_offset,
+                })
+            }
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
                 let off = offset.unwrap_concrete();
                 self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
@@ -1665,6 +1673,9 @@ impl Codegen {
             }
             LInst::DeferSplicedExit { kind, pc } => {
                 self.emit_defer_spliced_exit(kind, pc);
+            }
+            LInst::StoreOuterFprHomeF { src, disp, base } => {
+                self.emit_store_outer_fpr_home_f(src, disp, base);
             }
             LInst::Yield { callid, simple, error, evict } => {
                 self.emit_yield(callid, simple, &error, evict);

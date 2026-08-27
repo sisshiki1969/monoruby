@@ -260,15 +260,48 @@ impl<'a> JitContext<'a> {
         dst: DynVar,
         src: SlotId,
     ) {
-        // The store invalidates whatever the outer frame's abstract state
-        // claimed about this slot — in both places that track it: the live
-        // chain this compile is reasoning about, and the context's copy,
-        // which is what the *caller* will read back when we are done.
-        self.widen_outer_slot(dst.outer, dst.reg);
-        state.widen_outer_slot(dst.outer, dst.reg);
+        let outer_spec = self.outer_specialized_ids(state, dst.outer);
+        // Write-through keep (outer-F roadmap, stage 1'): when the outer
+        // frame still holds a Float-guarded `Sf` view of the target and
+        // the stored value is provably a float in one of this frame's
+        // fprs, refresh the view's raw-f64 home alongside the boxed slot
+        // store and *keep* the binding instead of widening it — the
+        // owner's `fpr_restore_cont` then reloads the current value and
+        // its continuation reads the float without re-unboxing. Sound
+        // under the same umbrella as the kept constants: on any deopt
+        // under the call the owner's compiled continuation never runs
+        // (chain escalation), and the salvage re-entry case is confirmed
+        // after the fact by `drain_kept_outer_views`. The slot store
+        // below stays authoritative either way.
+        let keep = match &outer_spec {
+            Some((ids, extra, true)) => self
+                .outer_parked_sf_float(dst.outer, dst.reg)
+                .and_then(|afpr| {
+                    let bfpr = match state.mode(src) {
+                        LinkMode::F(fpr) => Some(fpr),
+                        LinkMode::Sf(fpr, crate::codegen::jitgen::state::SfGuarded::Float) => {
+                            Some(fpr)
+                        }
+                        _ => None,
+                    }?;
+                    let home =
+                        self.keep_outer_sf_view(ids.clone(), *extra, dst.outer, dst.reg, afpr)?;
+                    Some((bfpr, home))
+                }),
+            _ => None,
+        };
+        if keep.is_none() {
+            // The store invalidates whatever the outer frame's abstract
+            // state claimed about this slot — in both places that track
+            // it: the live chain this compile is reasoning about, and the
+            // context's copy, which is what the *caller* will read back
+            // when we are done.
+            self.widen_outer_slot(dst.outer, dst.reg);
+            state.widen_outer_slot(dst.outer, dst.reg);
+        }
         let r = GP::Rdi;
         state.load(ir, src, r);
-        if let Some((spec_ids, extra, not_captured)) = self.outer_specialized_ids(state, dst.outer)
+        if let Some((spec_ids, extra, not_captured)) = outer_spec
             && not_captured
         {
             assert!(not_captured);
@@ -281,7 +314,11 @@ impl<'a> JitContext<'a> {
                 src: r,
             });
         } else {
+            debug_assert!(keep.is_none());
             ir.push(AsmInst::StoreDynVar { dst, src: r });
+        }
+        if let Some((bfpr, home)) = keep {
+            ir.push(AsmInst::StoreOuterFprHomeF { src: bfpr, home });
         }
     }
 }

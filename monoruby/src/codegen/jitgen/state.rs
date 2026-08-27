@@ -10,7 +10,7 @@ mod slot;
 use liveness::IsUsed;
 pub(super) use liveness::Liveness;
 pub(super) use read_slot::DeoptPoint;
-use slot::SfGuarded;
+pub(in crate::codegen::jitgen) use slot::SfGuarded;
 pub(super) use slot::{Guarded, LinkMode, SlotState};
 
 #[derive(Debug, Clone)]
@@ -61,6 +61,13 @@ impl AbstractState {
     /// *outer* levels out — the live half of
     /// [`JitContext::widen_outer_slot`].
     ///
+    /// Widen the innermost frame's `slot` to `S` (stage 1' drain: the
+    /// boxed slot store made the slot current, so `S` is sound).
+    #[coverage(off)] // only called from the dormant drain — see `drain_kept_outer_views`
+    pub(super) fn invalidate_innermost(&mut self, slot: SlotId) {
+        self.frames.last_mut().unwrap().invalidate_slot(slot);
+    }
+
     pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {
         if outer > 0 && outer < self.frames.len() {
             let level = self.frames.len() - 1 - outer;

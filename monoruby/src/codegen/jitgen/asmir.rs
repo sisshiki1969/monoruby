@@ -1300,6 +1300,46 @@ pub(crate) enum SplicedExitKind {
     MethodReturn,
 }
 
+///
+/// Where an *outer* frame's `Sf` float view lives while the current frame
+/// runs — the raw-f64 home a write-through store refreshes (outer-F
+/// roadmap, stage 1'). A pool-resident fpr was saved into the owner's
+/// in-progress call-site FP save area; a spilled one stayed in the
+/// owner's own spill slot. Emitted as `Hint` (the callee's save layout is
+/// recorded only when the call site is emitted, after this instruction);
+/// the pre-codegen resolve pass turns it into a single rbp-relative
+/// displacement — or `Concrete(None)` when the binding was widened after
+/// emission (the recorded layout no longer saves the fpr), which elides
+/// the now-dead store.
+///
+#[derive(Debug, Clone)]
+pub(crate) enum OuterFprHome {
+    Hint {
+        /// Chain to the owner frame's rbp (same encoding as [`DynVarOffset`]).
+        ids: Vec<super::context::SpecializedId>,
+        extra: usize,
+        /// The owner frame (`ids[0]`), for the frame-size lookup.
+        owner: super::context::SpecializedId,
+        /// The owner's direct-callee instance — the call site whose FP
+        /// save area holds the owner's pool registers.
+        callee: super::context::SpecializedId,
+        /// The owner-file fpr whose home is refreshed.
+        fpr: crate::codegen::FPReg,
+    },
+    Concrete(Option<i64>),
+}
+
+impl OuterFprHome {
+    pub(crate) fn unwrap_concrete(&self) -> Option<i64> {
+        match self {
+            OuterFprHome::Concrete(o) => *o,
+            OuterFprHome::Hint { .. } => panic!(
+                "OuterFprHome::Hint reached code generation — resolve pass did not run"
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum DynVarOffset {
     Hint {
@@ -2562,6 +2602,18 @@ pub(super) enum AsmInst {
         src: DynVar,
     },
     /// rax = DynVar(src)
+    ///
+    /// Write-through refresh (outer-F roadmap, stage 1'): store the raw
+    /// f64 in `src` (a current-frame fpr) into an outer frame's `Sf`
+    /// home, so the owner's kept register view is current when its
+    /// `fpr_restore_cont` reloads it after this call chain returns. The
+    /// boxed slot store (`StoreDynVarSpecialized`) stays authoritative
+    /// and precedes this.
+    ///
+    StoreOuterFprHomeF {
+        src: FPReg,
+        home: OuterFprHome,
+    },
     LoadDynVarSpecialized {
         /// Machine stack offset in bytes. Emitted as a
         /// `DynVarOffset::Hint(...)` chain by Pass 1; the pre-codegen
@@ -2782,6 +2834,7 @@ impl AsmInst {
             Self::F64ToFpr(_, x) => vec![*x],
             Self::I64ToBoth(_, _, x) => vec![*x],
             Self::FprToStack(x, _) => vec![*x],
+            Self::StoreOuterFprHomeF { src, .. } => vec![*src],
             Self::FixnumToFpr(_, x) => vec![*x],
             Self::FloatToFpr(_, x, _) => vec![*x],
             Self::CFunc_F_F { src, dst, .. } => vec![*src, *dst],
