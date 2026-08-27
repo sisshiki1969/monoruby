@@ -172,6 +172,7 @@ impl Codegen {
             | AsmInst::SpecializedCall { .. }
             | AsmInst::SpecializedYield { .. }
             | AsmInst::LoadDynVarSpecialized { .. }
+            | AsmInst::StoreOuterFprHomeF { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
@@ -2724,6 +2725,30 @@ impl Codegen {
             jmp  raise;
         cont:
         };
+        true
+    }
+
+    /// Stage 1' write-through: store the raw f64 in `src` (this frame's
+    /// fpr, pool or spill) to `[rbp + disp]` — an outer frame's `Sf`
+    /// home. `None` elides the store (the binding was widened after
+    /// emission). Goes through rax: a plain 8-byte copy, no boxing.
+    pub(in crate::codegen::jitgen) fn emit_store_outer_fpr_home_f(
+        &mut self,
+        src: FPReg,
+        disp: Option<i64>,
+        base: usize,
+    ) -> bool {
+        let Some(disp) = disp else { return true };
+        let disp = i32::try_from(disp).expect("outer fpr home displacement out of i32 range");
+        match PhysMap::new(base).resolve(src) {
+            FPRegLoc::Xmm(p) => monoasm! { &mut self.jit,
+                movq [rbp + (disp)], xmm(p);
+            },
+            FPRegLoc::Spill(off) => monoasm! { &mut self.jit,
+                movq rax, [rbp - (off)];
+                movq [rbp + (disp)], rax;
+            },
+        }
         true
     }
 

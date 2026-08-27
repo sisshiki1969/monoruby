@@ -1011,6 +1011,7 @@ impl<'a> JitContext<'a> {
             needs_rest_array: _,
             had_deopt: _,
             generic_yield: _,
+            spec_id,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -1025,6 +1026,9 @@ impl<'a> JitContext<'a> {
         // `InitMethod` entry poll, so no call-site GC poll is needed.
         state.check_stack(ir);
         let using_fpr = state.get_using_fpr(ir);
+        // Stage 1': the resolve pass places write-through refreshes into
+        // this site's save area by this record.
+        self.record_call_site_fpr_save(spec_id, using_fpr);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);
@@ -1414,6 +1418,7 @@ impl<'a> JitContext<'a> {
             needs_rest_array,
             had_deopt,
             generic_yield,
+            spec_id,
         } = compiled;
         // The call site passes a block literal: if the callee heapifies
         // its *own* frame during the call (`Proc.new` / `lambda` /
@@ -1447,6 +1452,10 @@ impl<'a> JitContext<'a> {
             }
         }
         let evict = ir.new_evict();
+        // Snapshot the save set here (it is what `fpr_save_cont` below
+        // will emit) and record it for the resolve pass — stage 1'.
+        let using_fpr = state.get_using_fpr(ir);
+        self.record_call_site_fpr_save(spec_id, using_fpr);
         state.send_specialized(
             ir,
             &self.store,
@@ -1458,6 +1467,7 @@ impl<'a> JitContext<'a> {
             deferred_rest,
             needs_rest_array,
             bmethod_outer,
+            using_fpr,
         );
         let res = state.def_rax2acc_return(ir, dst, return_state);
         state.immediate_evict(ir, evict);
@@ -1481,6 +1491,9 @@ pub(super) struct SpecializedCompileResult {
     pub needs_rest_array: bool,
     /// The compiled subtree contains a deopt-able side exit.
     pub had_deopt: bool,
+    /// The compiled callee instance, keying its call site's recorded FP
+    /// save layout (stage 1' write-through).
+    pub spec_id: context::SpecializedId,
     /// A `yield` in the compiled subtree was not inlined — see
     /// [`JitStackFrame::generic_yield`].
     pub generic_yield: bool,
@@ -1595,6 +1608,10 @@ impl<'a> JitContext<'a> {
             frame.set_bmethod_home();
         }
 
+        // Stage 1' bet-confirmation mark: write-through keeps recorded by
+        // this call's subtree are drained below if the subtree turns out
+        // to contain a deopt-able exit or a generic yield.
+        let kept_mark = self.kept_outer_views_mark();
         let mut frame = self.specialized_compile(state, callid, frame)?;
         // we must unset no_capture_guard for all state frames if no_capture_guard of the current frame became false.
         if !state.no_capture_guard() {
@@ -1606,6 +1623,7 @@ impl<'a> JitContext<'a> {
         let return_state = return_context.remove(&pos);
         self.merge_return_context(return_context);
         // Capture before `frame.asm_info` is moved below.
+        let spec_id = frame.asm_info.specialized_id;
         let frame_had_deopt = frame.had_deopt;
         let frame_deferred_rest = frame.deferred_rest;
         let frame_needs_rest_array = frame.needs_rest_array;
@@ -1680,6 +1698,21 @@ impl<'a> JitContext<'a> {
         if frame_generic_yield {
             self.current_frame_mut().generic_yield = true;
         }
+        // Stage 1' bet confirmation. Unlike the kept constants below,
+        // `had_deopt` does NOT surrender a write-through keep: the claim
+        // is consumed only by the owner's *compiled* continuation, and —
+        // exactly as the return-state comment further down establishes —
+        // that continuation never runs on a deopt path (side-exit
+        // escalation is unconditional, §8.6; the salvage re-entries
+        // resume compiled in place, so every store on a path that reaches
+        // the continuation performed its write-through). The boxed slot
+        // store is emitted on every path either way, so the VM always
+        // reads truth. `generic_yield` is kept as a belt: an out-of-unit
+        // block's runtime stores bypass the compile-time widen hooks.
+        if frame_generic_yield {
+            self.drain_kept_outer_views(kept_mark, state);
+        }
+        let _ = kept_mark;
         Ok(SpecializedCompileResult {
             entry,
             return_state,
@@ -1687,6 +1720,7 @@ impl<'a> JitContext<'a> {
             needs_rest_array: frame_needs_rest_array,
             had_deopt: frame_had_deopt,
             generic_yield: frame_generic_yield,
+            spec_id,
         })
     }
 
@@ -1878,6 +1912,10 @@ impl AbstractState {
         deferred_rest: bool,
         needs_rest_array: bool,
         bmethod_outer: Option<Option<Lfp>>,
+        // The caller-computed `get_using_fpr` snapshot, taken there so it
+        // can also be recorded for the resolve pass (stage 1' — the
+        // recorded set must be exactly what `fpr_save_cont` emits).
+        using_fpr: UsingFpr,
     ) {
         // D1: skip the caller-side `create_array` only when at least
         // one forwarding consume was source-routed AND no forwarding
@@ -1886,7 +1924,6 @@ impl AbstractState {
         // Stack check only: the specialized callee body compiles its own
         // `InitMethod` entry poll.
         self.check_stack(ir);
-        let using_fpr = self.get_using_fpr(ir);
         // stack pointer adjustment
         // -using_fpr.offset()
         ir.fpr_save_cont(using_fpr);

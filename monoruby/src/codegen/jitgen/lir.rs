@@ -989,6 +989,16 @@ pub(in crate::codegen) enum LInst {
     LoopJitRspBump {
         offset: LoopRspOffset,
     },
+    /// Write-through refresh of an outer frame's `Sf` float home
+    /// (outer-F roadmap, stage 1'): a raw-f64 store of `src` to
+    /// `[rbp + disp]`; `None` elides it (the binding was widened after
+    /// emission).
+    StoreOuterFprHomeF {
+        src: FPReg,
+        disp: Option<i64>,
+        /// The emitting frame's `base_stack_offset`, for resolving `src`.
+        base: usize,
+    },
     /// Defer a spliced non-local exit's unwind before jumping into the
     /// shared `ensure` body (#1185). The value rides in `GP::Rdx`; the
     /// degenerate outcome raises generically from `pc`.

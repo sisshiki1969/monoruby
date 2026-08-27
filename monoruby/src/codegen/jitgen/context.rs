@@ -854,6 +854,20 @@ pub(crate) struct JitContext<'a> {
     /// prologues, `total - base` resolves Loop-JIT rsp bumps.
     ///
     specialized_frame_sizes: HashMap<SpecializedId, FrameSizes>,
+    ///
+    /// The final `UsingFpr` each specialized call site saved (keyed by the
+    /// *callee instance*), recorded when the call is emitted. The resolve
+    /// pass reads it to place a write-through refresh
+    /// (`AsmInst::StoreOuterFprHomeF`) into the owner's save area.
+    call_site_fpr_saves: HashMap<SpecializedId, UsingFpr>,
+    ///
+    /// Outer-frame `Sf` views kept alive by write-through stores
+    /// (stage 1'), as `(stack position, slot)`. A specialized call whose
+    /// subtree had a deopt-able exit or a generic yield drains its marks
+    /// and re-widens them — the same bet-confirmation the kept constants
+    /// go through (#1140), for the same reason: a salvage re-entry runs
+    /// compiled continuations without a chain conversion.
+    kept_outer_views: Vec<(usize, SlotId)>,
 }
 
 impl<'a> JitContext<'a> {
@@ -883,6 +897,8 @@ impl<'a> JitContext<'a> {
             stack_frame,
             next_specialized_id: 0,
             specialized_frame_sizes: HashMap::default(),
+            call_site_fpr_saves: HashMap::default(),
+            kept_outer_views: vec![],
         }
     }
 
@@ -902,6 +918,8 @@ impl<'a> JitContext<'a> {
             store: self.store,
             codegen_mode: false,
             fused_skip: None,
+            call_site_fpr_saves: HashMap::default(),
+            kept_outer_views: vec![],
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
             capture_events: 0,
@@ -1693,6 +1711,89 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Record the `UsingFpr` a specialized call site's `fpr_save_cont`
+    /// will save, keyed by the callee instance (stage 1' write-through).
+    ///
+    pub(super) fn record_call_site_fpr_save(&mut self, callee: SpecializedId, using: UsingFpr) {
+        self.call_site_fpr_saves.insert(callee, using);
+    }
+
+    ///
+    /// The *parked* mode an outer frame holds for `slot`: `Some(fpr)` iff
+    /// it is a Float-guarded `Sf` view — the only shape the write-through
+    /// keep applies to.
+    ///
+    pub(super) fn outer_parked_sf_float(&self, outer: usize, slot: SlotId) -> Option<crate::codegen::FPReg> {
+        let pos = self.outer_pos(outer)?;
+        let st = self.stack_frame[pos].abstract_state.as_ref()?;
+        match st.mode(slot) {
+            LinkMode::Sf(fpr, crate::codegen::jitgen::state::SfGuarded::Float) => Some(fpr),
+            _ => None,
+        }
+    }
+
+    ///
+    /// Build the [`OuterFprHome`] hint for a write-through refresh of the
+    /// frame `outer` levels out, and record the kept view for the
+    /// bet-confirmation drain.
+    ///
+    pub(super) fn keep_outer_sf_view(
+        &mut self,
+        ids: Vec<SpecializedId>,
+        extra: usize,
+        outer: usize,
+        slot: SlotId,
+        fpr: crate::codegen::FPReg,
+    ) -> Option<OuterFprHome> {
+        let pos = self.outer_pos(outer)?;
+        let owner = self.stack_frame[pos].specialized_id;
+        let callee = self.stack_frame.get(pos + 1)?.specialized_id;
+        self.kept_outer_views.push((pos, slot));
+        Some(OuterFprHome::Hint {
+            ids,
+            extra,
+            owner,
+            callee,
+            fpr,
+        })
+    }
+
+    /// Mark for [`Self::drain_kept_outer_views`].
+    pub(super) fn kept_outer_views_mark(&self) -> usize {
+        self.kept_outer_views.len()
+    }
+
+    ///
+    /// Bet-confirmation for the write-through keeps a call's subtree made
+    /// (stage 1'): the subtree had a deopt-able exit or a generic yield,
+    /// so a salvage re-entry can run its compiled remainder — or the VM
+    /// can run it outright — writing the kept slots with nothing
+    /// refreshing the raw homes. Re-widen every view the subtree kept:
+    /// the boxed slot stores were emitted either way, so the slots are
+    /// current and `S` is sound; the emitted refreshes go dead (their
+    /// resolve keeps the store — it targets the owner's save area or
+    /// spill slot, both dead once nothing reads the view).
+    ///
+    pub(super) fn drain_kept_outer_views(&mut self, mark: usize, state: &mut AbstractState) {
+        let current = self.stack_frame.len() - 1;
+        for (pos, slot) in self.kept_outer_views.split_off(mark) {
+            if pos > current {
+                // The target frame was popped with its subtree; its state
+                // died with it.
+                continue;
+            }
+            if pos == current {
+                state.invalidate_innermost(slot);
+            } else {
+                if let Some(frame) = self.stack_frame[pos].abstract_state.as_mut() {
+                    frame.invalidate_slot(slot);
+                }
+                state.widen_outer_slot(current - pos, slot);
+            }
+        }
+    }
+
+    ///
     /// Resolve a `DynVarOffset::Hint` chain: the distance from the current
     /// frame's `rbp`/`x29` out to the target frame's, summed frame by
     /// frame. Used by [`Self::resolve_dyn_var_offsets`].
@@ -1797,6 +1898,47 @@ impl<'a> JitContext<'a> {
                         let resolved = self.resolve_specialized_id_chain(ids) + *extra;
                         *off = DynVarOffset::Concrete(resolved);
                     }
+                }
+            }
+            AsmInst::StoreOuterFprHomeF { home, .. } => {
+                if let OuterFprHome::Hint {
+                    ids,
+                    extra,
+                    owner,
+                    callee,
+                    fpr,
+                } = home
+                {
+                    let sigma = (self.resolve_specialized_id_chain(ids) + *extra) as i64;
+                    let disp = if fpr.0 < crate::codegen::PHYS_FPR_POOL {
+                        // Pool-resident: the home is the owner's call-site
+                        // save slot — present only if the emitted save still
+                        // covers the fpr (a later widen may have shrunk the
+                        // set; the refresh is then dead and elided).
+                        match self.call_site_fpr_saves.get(callee) {
+                            Some(using) if using[fpr.0] => {
+                                let rank = using[..fpr.0].count_ones() as i64;
+                                let sizes = self.frame_sizes_or_panic(*owner);
+                                Some(
+                                    sigma
+                                        - (sizes.total as i64 - PROLOGUE_OVERHEAD as i64)
+                                        - using.offset() as i64
+                                        + 8 * rank,
+                                )
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        // Spilled: the home is the owner's own spill slot,
+                        // valid regardless of the save set.
+                        let sizes = self.frame_sizes_or_panic(*owner);
+                        Some(
+                            sigma
+                                - (sizes.base as i64 - 24
+                                    + 8 * (fpr.0 - crate::codegen::PHYS_FPR_POOL) as i64),
+                        )
+                    };
+                    *home = OuterFprHome::Concrete(disp);
                 }
             }
             AsmInst::LoopJitRspBump { offset } => {
