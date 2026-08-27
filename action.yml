@@ -6,6 +6,11 @@
 #     - uses: sisshiki1969/monoruby@v3.0.1   # or @master for the latest
 #     - run: monoruby my_script.rb
 #
+# With the `rubyspec: 'true'` input the action also prepares a ruby/spec
+# workspace (clones spec/ruby + spec/mspec and copies this repo's spec/tags
+# into the tag locations mspec resolves), ready for
+# `spec/mspec/bin/mspec ci --target monoruby spec/ruby/...`.
+#
 # Install strategy, in order:
 #
 # 1. Prebuilt release asset — when the action ref is a release tag (v*), try
@@ -60,6 +65,15 @@ inputs:
       caches (e.g. after a runner image change).
     required: false
     default: "v1"
+  rubyspec:
+    description: >
+      Also set up a ruby/spec workspace for running the Ruby specs against
+      the installed monoruby: clone ruby/spec into spec/ruby and ruby/mspec
+      into spec/mspec (both in $GITHUB_WORKSPACE), and copy this repo's
+      spec/tags into the tag locations mspec resolves. Used by conformance
+      trackers such as rubyspec-stats; off by default.
+    required: false
+    default: "false"
 
 outputs:
   prebuilt:
@@ -220,3 +234,29 @@ runs:
         monoruby -e 'puts RUBY_DESCRIPTION'
         echo "monoruby-version=$(monoruby --version)" >> "$GITHUB_OUTPUT"
         echo "ruby-version=$(monoruby -e 'puts RUBY_VERSION')" >> "$GITHUB_OUTPUT"
+
+    # The tags come from the action's own checkout ($GITHUB_ACTION_PATH holds
+    # this repo at the action ref), so they stay in step with the monoruby
+    # version the consumer selected — no extra clone needed.
+    #
+    # Tag lookup depends on whether an mspec config file is loaded. mspec
+    # searches config[:path] = ['.', 'spec'] for `default.mspec` — in this
+    # workspace layout NEITHER exists (ruby/spec's own default.mspec sits at
+    # spec/ruby/default.mspec, which is not searched), so mspec falls back to
+    # its built-in pattern `[[%r(spec/), 'spec/tags/'], [/_spec.rb$/, '_tags.txt']]`:
+    # `spec/ruby/core/file/flock_spec.rb` -> `spec/tags/ruby/core/file/flock_tags.txt`.
+    # Copy into BOTH locations so the tags keep working even if a config file
+    # ever becomes loadable and switches the mapping to ruby/spec's
+    # `[%r(core/), 'tags/core/']` style (spec/ruby/tags/...).
+    - name: Set up ruby/spec workspace
+      if: inputs.rubyspec == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        git clone --depth 1 https://github.com/ruby/spec.git spec/ruby
+        git clone --depth 1 https://github.com/ruby/mspec.git spec/mspec
+        mkdir -p spec/tags/ruby spec/ruby/tags
+        if [ -d "$GITHUB_ACTION_PATH/spec/tags" ]; then
+          cp -R "$GITHUB_ACTION_PATH/spec/tags/." spec/tags/ruby/
+          cp -R "$GITHUB_ACTION_PATH/spec/tags/." spec/ruby/tags/
+        fi
