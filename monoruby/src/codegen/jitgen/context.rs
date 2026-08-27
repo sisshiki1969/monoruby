@@ -1774,6 +1774,12 @@ impl<'a> JitContext<'a> {
     /// resolve keeps the store — it targets the owner's save area or
     /// spill slot, both dead once nothing reads the view).
     ///
+    // Dormant by construction today, verified by probe: a compiled
+    // generic `yield` cannot currently appear *inside* a specialized
+    // subtree — a call site passing `&blk` refuses specialization, and
+    // the given-block resolver only fails at a unit root, which is not a
+    // subtree. The belt exists for the day the specializer widens.
+    #[coverage(off)]
     pub(super) fn drain_kept_outer_views(&mut self, mark: usize, state: &mut AbstractState) {
         let current = self.stack_frame.len() - 1;
         for (pos, slot) in self.kept_outer_views.split_off(mark) {

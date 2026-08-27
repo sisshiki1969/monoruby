@@ -63,6 +63,7 @@ impl AbstractState {
     ///
     /// Widen the innermost frame's `slot` to `S` (stage 1' drain: the
     /// boxed slot store made the slot current, so `S` is sound).
+    #[coverage(off)] // only called from the dormant drain — see `drain_kept_outer_views`
     pub(super) fn invalidate_innermost(&mut self, slot: SlotId) {
         self.frames.last_mut().unwrap().invalidate_slot(slot);
     }
