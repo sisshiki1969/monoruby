@@ -1302,6 +1302,7 @@
 695e21e95a722ab6137b89c61da5089c	42	def f\n          42\n        end\n        \n\n        f\n        
 6969aaf807e98c28a5dfa52dd28504f9	[255]	s = "".b\n            s.append_as_bytes(-1)\n            s.bytes\n    
 698060c4130b662b0ebfb2120f8893ce	[true, true, true]	l = ->(x){ x }; [l == l, l == l.dup, l == l.clone]
+699028423d045d31672d5edf0e00bdc5	[2.0244847182067076, 2.0244847182067076]	def call_block\n          yield\n        end\n        def c5(a0)\n         
 69ad25699413b1fe63f62bc829f927dc	[{}, {x: 10}]	f = Fiber.new(storage: {life: 42}) { Fiber[:life] = nil; Fiber.curr
 69b168e7d0ad487fc9118309039d2192	"HELLOworld"	s = "hello world"; s.bytesplice(0..-6, "HELLO"); s
 69c5968b4eb20ac66bb1a05cf40e9cd8	[:dup, :clone]	class CH\n                 attr_accessor :tag\n                 def initialize_dup

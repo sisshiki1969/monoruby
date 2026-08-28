@@ -635,3 +635,32 @@ fn a_zero_trip_times_loop_stays_correct() {
         "#,
     );
 }
+
+/// The alias-consult shape codecov flagged as uncovered: the copy-through
+/// in `a_home_read_copied_through_as_a_value` used a *literal* invariant,
+/// which const-folds before any home read exists. Route the float through
+/// an argument and keep it written by the block (so the owner holds a
+/// kept `Sf` view): the `b = a` copy then reads `a` as a home-aliased
+/// bare `F` and materializes the Value through the alias load
+/// (`GpLoad::DynVarAlias`), not a re-box — probe-verified.
+#[test]
+fn a_kept_float_copied_through_uses_the_home_alias() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def c5(a0)
+          a = a0
+          b = 0.0
+          i = 0
+          while i < 300
+            call_block { a = a * 1.001; b = a }
+            i += 1
+          end
+          [a, b]
+        end
+        c5(1.5)
+        "#,
+    );
+}
