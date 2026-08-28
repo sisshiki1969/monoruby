@@ -1009,9 +1009,18 @@ impl<'a> JitContext<'a> {
         } else {
             JitArgumentInfo::default()
         };
-        self.converge_block_entry(
-            state, iseq, self_class, &args_info, outer, callid,
-        )?;
+        // No pre-convergence of the block's outer claims is needed here:
+        // "this block may be entered again" is a real back edge of some
+        // loop in the trace chain, and the chain-wide joins handle it.
+        // A yield inside the compiling unit's own loop demotes the outer
+        // `C`s at that loop's backedge join (`analyse_backedge_fixpoint`
+        // joins every frame of the chain); straight-line repeated yields
+        // thread the widen through the live chain from one to the next;
+        // and a yield that re-enters through a loop *outside* the chain
+        // can only be a generic yield, where the caller's
+        // `forget_constants` bet-confirmation drops every claim. The old
+        // `converge_block_entry` probe fixpoint approximated exactly
+        // those joins from before the chain spanned the whole trace.
         let SpecializedCompileResult {
             entry,
             return_state,
@@ -1508,66 +1517,6 @@ pub(super) struct SpecializedCompileResult {
 }
 
 impl<'a> JitContext<'a> {
-    ///
-    /// Settle what the block may believe about its outer frames before
-    /// compiling it, by finding the fixpoint of its own re-entry.
-    ///
-    /// A caller can keep a `C` across the call that hands out its block
-    /// (see `compile_method_call`), so the block's chain may arrive
-    /// claiming one. The claim describes the frame at the moment the block
-    /// was handed over, and the block runs from it as many times as the
-    /// callee yields — `n.times { acc += 2.0 }` enters six times with six
-    /// different `acc`s. Nothing in the block's own chain says so:
-    /// `Integer#times` is a method, so it is nobody's lexical outer and
-    /// its loop is not in that chain at all.
-    ///
-    /// So treat "this block may be entered again" as a back edge from its
-    /// exit to its entry and iterate, exactly as
-    /// [`Self::analyse_backedge_fixpoint`] does for a loop. Each round
-    /// compiles the block into a throwaway context and adopts whatever
-    /// constants that round gave up; the lattice per slot is
-    /// `C -> S(Guarded) -> S(Value)` and giving up is monotone, so it
-    /// settles in a round or two.
-    ///
-    /// Strictly better than dropping every outer constant on the way in: a
-    /// block that only *reads* its caller's locals keeps them folded.
-    ///
-    fn converge_block_entry(
-        &mut self,
-        state: &AbstractState,
-        iseq: ISeqId,
-        self_class: ClassId,
-        args_info: &JitArgumentInfo,
-        outer: usize,
-        callid: CallSiteId,
-    ) -> JitResult<()> {
-        // Each round can only turn a `C` into an `S`, never back, so a round
-        // that changes nothing is the fixpoint and there can be at most one
-        // round per constant before that happens. No constants, no pass —
-        // which is the gate that keeps this off the common path.
-        let bound = self.outer_const_count(outer) + 1;
-        if bound == 1 {
-            return Ok(());
-        }
-        let mut rounds = 0;
-        loop {
-            let mut probe = self.analysis_clone();
-            let mut probe_state = state.clone();
-            let frame = probe.new_specialized_frame(iseq, Some(outer), args_info.clone(), self_class);
-            // A round that cannot compile tells us nothing about what the
-            // block gives up, and the real compile below will raise the
-            // same error. Stop iterating and let it.
-            if probe.specialized_compile(&mut probe_state, callid, frame).is_err() {
-                return Ok(());
-            }
-            if !self.adopt_outer_widenings(&probe, outer) {
-                return Ok(());
-            }
-            rounds += 1;
-            assert!(rounds < bound, "block-entry fixpoint did not settle");
-        }
-    }
-
     fn new_specialized_frame(
         &self,
         iseq_id: ISeqId,

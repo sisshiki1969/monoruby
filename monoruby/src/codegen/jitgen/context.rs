@@ -1478,68 +1478,6 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().generic_yield = true;
     }
 
-    ///
-    /// The stack-frame indices of the lexical chain a frame *outer* levels
-    /// out from the next one to be pushed, immediate outer first.
-    ///
-    /// Takes the distance rather than reading it off the top frame,
-    /// because the caller is about to push a block whose chain is not the
-    /// current top's: a specialized method has `outer: None`, so walking
-    /// from `Integer#times` finds nothing even though the block it is
-    /// about to yield to is lexically inside `kill_int`.
-    ///
-    fn outer_chain_from(&self, outer: usize) -> Vec<usize> {
-        let mut v = vec![];
-        let Some(mut i) = self.stack_frame.len().checked_sub(outer) else {
-            return v;
-        };
-        v.push(i);
-        while let Some(o) = self.stack_frame[i].outer {
-            let Some(next) = i.checked_sub(o) else { return v };
-            i = next;
-            v.push(i);
-        }
-        v
-    }
-
-    ///
-    /// How many constants that chain still claims.
-    ///
-    pub(super) fn outer_const_count(&self, outer: usize) -> usize {
-        self.outer_chain_from(outer)
-            .into_iter()
-            .map(|i| {
-                self.stack_frame[i]
-                    .abstract_state
-                    .as_ref()
-                    .map_or(0, |f| f.held_constants().len())
-            })
-            .sum()
-    }
-
-    ///
-    /// Give up, on that chain, every constant *probe* gave up on its own
-    /// copy of it. Returns whether anything changed.
-    ///
-    pub(super) fn adopt_outer_widenings(&mut self, probe: &Self, outer: usize) -> bool {
-        let mut changed = false;
-        for i in self.outer_chain_from(outer) {
-            let Some(probed) = probe.stack_frame[i].abstract_state.as_ref() else {
-                continue;
-            };
-            let lost: Vec<_> = probed.lost_constants_of(
-                self.stack_frame[i].abstract_state.as_ref().unwrap(),
-            );
-            if !lost.is_empty() {
-                changed = true;
-                let mine = self.stack_frame[i].abstract_state.as_mut().unwrap();
-                for slot in lost {
-                    mine.invalidate_slot(slot);
-                }
-            }
-        }
-        changed
-    }
 
     ///
     /// Stage-C loop adoption: everything an adoption decision needs to

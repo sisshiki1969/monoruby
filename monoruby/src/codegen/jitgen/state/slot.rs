@@ -1234,20 +1234,6 @@ impl SlotState {
     }
 
     ///
-    /// The locals *other* still claims as constants and this one no longer
-    /// does — what an analysis pass discovered the compilation gives up.
-    ///
-    pub(in crate::codegen::jitgen) fn lost_constants_of(&self, other: &Self) -> Vec<SlotId> {
-        other
-            .locals()
-            .filter(|&slot| {
-                matches!(other.mode(slot), LinkMode::C(_))
-                    && !matches!(self.mode(slot), LinkMode::C(_))
-            })
-            .collect()
-    }
-
-    ///
     /// Surrender *slot*'s `C` claim, writing the value it stood for into
     /// the slot.
     ///
