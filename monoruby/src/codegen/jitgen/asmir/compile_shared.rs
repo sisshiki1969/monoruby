@@ -1114,6 +1114,17 @@ impl Codegen {
                     base: frame.base_stack_offset,
                 })
             }
+            AsmInst::GuardFloatToOuterHomeF { home, deopt } => {
+                let disp = home.unwrap_concrete().expect(
+                    "adopted outer home is always a spill slot — its resolve is unconditional",
+                );
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
+                self.encode_linst(LInst::GuardFloatToOuterHomeF {
+                    src: GP::Rdi,
+                    disp,
+                    deopt,
+                });
+            }
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
                 let off = offset.unwrap_concrete();
                 self.lower_via_inline(store, labels, frame.base_stack_offset, move |cg, _, _, _| {
@@ -1690,6 +1701,9 @@ impl Codegen {
             }
             LInst::LoadOuterFprHomeF { dst, disp, base } => {
                 self.emit_load_outer_fpr_home_f(dst, disp, base);
+            }
+            LInst::GuardFloatToOuterHomeF { src, disp, deopt } => {
+                self.emit_guard_float_to_outer_home_f(src, disp, &deopt);
             }
             LInst::Yield { callid, simple, error, evict } => {
                 self.emit_yield(callid, simple, &error, evict);

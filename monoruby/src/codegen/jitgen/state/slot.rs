@@ -1056,11 +1056,23 @@ impl SlotState {
         }
     }
 
-    pub(super) fn subtree_float_read(&self, slot: SlotId) -> bool {
+    pub(in crate::codegen::jitgen) fn subtree_float_read(&self, slot: SlotId) -> bool {
         self.subtree_float_read
             .get(slot.0 as usize)
             .copied()
             .unwrap_or(false)
+    }
+
+    ///
+    /// Stage-C loop adoption: every slot of this frame some inlined
+    /// callee read as a raw f64.
+    ///
+    pub(in crate::codegen::jitgen) fn subtree_float_read_slots(&self) -> Vec<SlotId> {
+        self.subtree_float_read
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| b.then_some(SlotId(i as u16)))
+            .collect()
     }
 
     ///

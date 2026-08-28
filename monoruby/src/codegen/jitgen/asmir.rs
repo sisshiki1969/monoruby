@@ -2641,6 +2641,18 @@ pub(super) enum AsmInst {
         dst: FPReg,
         home: OuterFprHome,
     },
+    ///
+    /// Stage-C loop adoption, the entry-edge init: the boxed Value in
+    /// `GP::Rdi` (loaded from the owner's slot by a preceding
+    /// `LoadDynVarSpecialized`) is guarded to be a Float (deopt
+    /// otherwise), unboxed, and its raw f64 stored to the owner's spill
+    /// home. Establishes the adopted `Sf(Float)` view on every path into
+    /// the loop head, so the body's home reads are covered.
+    ///
+    GuardFloatToOuterHomeF {
+        home: OuterFprHome,
+        deopt: AsmDeopt,
+    },
     LoadDynVarSpecialized {
         /// Machine stack offset in bytes. Emitted as a
         /// `DynVarOffset::Hint(...)` chain by Pass 1; the pre-codegen
@@ -2881,6 +2893,15 @@ impl AsmInst {
                     v.push(*fpr);
                 }
                 v
+            }
+            // Same over-reservation as the two above: the adopted home's
+            // id must size the owner's spill region.
+            Self::GuardFloatToOuterHomeF { home, .. } => {
+                if let OuterFprHome::Hint { fpr, .. } = home {
+                    vec![*fpr]
+                } else {
+                    vec![]
+                }
             }
             Self::FixnumToFpr(_, x) => vec![*x],
             Self::FloatToFpr(_, x, _) => vec![*x],

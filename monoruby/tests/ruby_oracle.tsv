@@ -1478,6 +1478,7 @@
 77f33491c631e48bf3b64ecae0803bc2	{0 => 1, 1 => 2}	S = Struct.new(:x, :y, :z)\n        s = S.new(1, 2, 3)\n        \ns.decons
 780000579ca44d3089a6235cecf1a5d8	"hit"	if /(?<w>foo)/ =~ "foofoo" then "hit" else "miss" end
 78082c42730aab237d42ab24975965e6	[nil, 99, 97, 116, 112]	File.open("Cargo.toml") do |f|\n              f.getbyte\n            
+783e46afd56e32eae6e26f0806d7688a	259.5522608117453	def call_block\n          yield\n        end\n        def d1(k, j)\n       
 7862b5af18cc17717c5063cd4c3df41d	[10, 3, "nil", 9]	x = 10\n        [1, 2, 3].each { |i; x| x = i * 100 }\n        a = nil\n  
 788c3b7f7d26d8ce64421732d85d9f4f	[9, 8, [7, 6], [5, 4], 3, 2, 2, 1, {}, nil]	f = ->(a, b = 1, *c, (*d, (e)), f: 2, g:, h:, **k, &l) do\n          [a,
 78a9147b5bb75312ad6a700a83ce8209	["can't create instance of singleton class", "can't create instance of singleton class", "ok", true]	o = Object.new\n        msgs = []\n        begin; o.singleton_class.new; 
@@ -1927,6 +1928,7 @@
 9d37ece3c95f6ed41dcee850e24bab6b	[25, 15, 100, 4, 2, 32, 15, 6, 12, 16, 32]	class C\n          attr_accessor :v\n        end\n        \n\n        c = C.
 9d3a8273d76bab638959e38cd8c0a68c	[[:woke], true]	r = []\n            t = Thread.new { sleep 0.05; r << :woke }\n      
 9d4ee118279609a4658649ce219050c0	"a:1 b:{x: 100, y: 200} c:"	def f\n          yield 1,x:100,y:200\n        end\n        \n\n        f do 
+9d5aaad03082eda28c8c766f59c81e33	[1269.5, 7]	def call_block\n          yield\n        end\n        def d3\n          k =
 9d6d362d02ec388b6d9235b807fc78d2	5	class C\n              private def f; 5; end\n              def g; f;
 9d83806180901caed6f54effcdcb82d5	[1375.093536, 8.124106059241]	def t1\n          a = 1.5\n          s = 0.0\n          i = 0\n          wh
 9d90ba7627480755e747fc4a1045f51e	[2, 1]	[1, 2, 3].each.with_index { |v, i| break [v, i] if i == 1 }
@@ -2830,6 +2832,7 @@ e1d0e1049ee5298bcdc5c96d04a37dd7	[false, false, true]	res = [$DEBUG, $-d]\n     
 e1dc59a25b246ef8aaa68515e60ea4a0	true	Process.getrlimit(Process::RLIMIT_STACK).is_a?(Array)
 e1e049bcd24042f78171ca96d4da9c05	false	class Foo\n              def bar; end\n            end\n            \n\n
 e216ce1e2b8ed4cd8ceaebfdb111d6fc	"US-ASCII"	("abc %s".dup.force_encoding("US-ASCII") % "x").encoding.to_s
+e221d27f16787b87dfe9fecfc65c5962	[600.0, 150.0]	def call_block\n          yield\n        end\n        def d2(k)\n          
 e226e478267e4a855c4aa2949e8e83a5	30	def add(x, y); x + y; end\n            m = method(:add)\n            
 e238574f11e692d806b7fdb19277fb61	[[:req, :x], [:opt, :y], [:rest, :rest], [:block, :blk]]	class Foo\n              def bar(x, y=1, *rest, &blk); end\n         
 e23cd2e86c80f810b83266eaf89e4c58	"abcdef"	r, w = IO.pipe\n            t = Thread.new { r.read(6) }\n           
@@ -2911,6 +2914,7 @@ e8bf25bb3eb8bcdf2410ac76264f9ea4	[1, 2]	Enumerator.new { |y| y << 1 << 2 }.to_a
 e8e220b680848457259609fb951e4dbd	["ensure in f", "ensure in g", 42]	def g\n          begin\n            yield\n          ensure\n            $r
 e8ea755b0d3d65aee46f4cca2a396948	["/root", ArgumentError, true, nil, [Errno::EBADF, "Bad file descriptor - fchdir"], true]	(a=Dir.home("root"); b=(begin; Dir.home("no_such_user_zzq"); rescue => e; e.clas
 e8f73c5ee545fe5b71d1c667d8bec38b	[3, [:gt, :gt]]	class Gt\n              attr_reader :calls\n              def initial
+e8fff433024d62ecc658476201cd2358	[0.0, 750.0]	def call_block\n          yield\n        end\n        def d4(n)\n          
 e90638f8f74350ab109848abe99b3ee9	:from_emit	def emit(tag); throw tag, :from_emit; end\n            catch(:x) { e
 e95108f8dbf4714b38e0e2eeaeef2060	["one x\\n", "two x\\n", 2, 2, "one x\\ntwo x\\n\\n\\n\\nthree\\nfour\\n", "one x\\ntwo x\\n\\n", "three\\nfour\\n", nil, "one x", "\\nt", "one ", "", "x\\n", "one x", "two x", "one ", "\\ntwo x\\n\\n\\n\\nthree\\nfour\\n", "three\\n", "one x", "one x\\n", :eof, "one", " x\\n", :range, :tyerr, "one x\\n", "o", 26, [[230, 156, 157], [230, 151, 165]]]	require "tempfile"\n            t = Tempfile.new("mrb_gets")\n       
 e9579fc0c8b362d6be81fff6d2f5180c	[[1], false]	r = []\n            t = Thread.new { r << 1; Thread.exit; r << 2 }\n 

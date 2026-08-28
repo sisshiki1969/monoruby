@@ -174,6 +174,7 @@ impl Codegen {
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreOuterFprHomeF { .. }
             | AsmInst::LoadOuterFprHomeF { .. }
+            | AsmInst::GuardFloatToOuterHomeF { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
@@ -2757,6 +2758,26 @@ impl Codegen {
             },
         }
         true
+    }
+
+    /// Stage-C loop-entry init: guard that the Value in `src` is a Float
+    /// (jump to `deopt` otherwise, offending value in rdi), unbox it into
+    /// xmm0, and store the raw f64 to `[rbp + disp]` — the adopted outer
+    /// view's spill home.
+    ///
+    /// ### destroy
+    /// - rax, rdi, xmm0
+    pub(in crate::codegen::jitgen) fn emit_guard_float_to_outer_home_f(
+        &mut self,
+        src: GP,
+        disp: i64,
+        deopt: &DestLabel,
+    ) {
+        let disp = i32::try_from(disp).expect("outer home displacement out of i32 range");
+        self.float_to_f64(src, 0, deopt);
+        monoasm! { &mut self.jit,
+            movq [rbp + (disp)], xmm0;
+        }
     }
 
     /// Stage 3a home read: raw f64 from `[rbp + disp]` into `dst` (this

@@ -3324,6 +3324,56 @@ impl Codegen {
         true
     }
 
+    /// Stage-C loop-entry init — mirror of x86
+    /// `emit_guard_float_to_outer_home_f`: guard the Value in `src` to be
+    /// a Float (branch to `deopt` otherwise, offending value in the
+    /// `GP::Rdi`-mapped register), decode it into d0 (same decode as
+    /// `LInst::FloatToFpr`), and store the raw f64 to `[x29 + disp]`.
+    pub(in crate::codegen::jitgen) fn emit_guard_float_to_outer_home_f(
+        &mut self,
+        src: GP,
+        disp: i64,
+        deopt: &DestLabel,
+    ) -> bool {
+        let r = src.a64().0;
+        let rdi = GP::Rdi.a64().0;
+        let heap = self.jit.label();
+        let exit = self.jit.label();
+        let miss = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            tbnz x(r), #(0), miss;    // fixnum -> deopt (expected a Float)
+            tbz x(r), #(1), heap;     // not flonum -> heap Float
+            // flonum: handle 0.0, else decode.
+            fmov d0, xzr;
+            mov x9, (FLOAT_ZERO);
+            cmp x(r), x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            asr x9, x(r), #(63);      // sign: all-1s / all-0s
+            add x9, x9, #(2);         // 2 - signbit  (1 or 2)
+            lsr x10, x(r), #(2);
+            lsl x10, x10, #(2);       // reg & ~3
+            orr x10, x10, x9;
+            ror x10, x10, #(3);       // rotate_right 3
+            fmov d0, x10;
+            b exit;
+            miss:
+            mov x(rdi), x(r);
+            b deopt;
+            heap:
+        );
+        self.a64_guard_rvalue(r, FLOAT_CLASS, deopt);
+        monoasm_arm64!(&mut self.jit,
+            ldr d0, [x(r), #(RVALUE_OFFSET_KIND as u32)];
+            exit:
+            mov x10, (disp as u64);
+            add x10, x29, x10;
+            str d0, [x10];
+        );
+        true
+    }
+
     /// A JIT-spliced non-local exit (#1185): build and defer the exit's
     /// unwind (value in the `GP::Rdx`-mapped register) so the following
     /// compiled branch enters the shared `ensure` body directly. A

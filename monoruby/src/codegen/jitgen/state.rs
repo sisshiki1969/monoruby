@@ -174,6 +174,11 @@ impl AbstractState {
     ///
     #[allow(non_snake_case)]
     pub(super) fn all_frames_unbox_to_S(&mut self, jitctx: &mut JitContext, ir: &mut AsmIr) {
+        // Stage-C loop adoption: a block leaves the unit here — its
+        // runtime stores bypass every compile-time widen hook, and its
+        // lexical chain can reach frames this state chain does not
+        // (a forwarded block's home). No outer view adopts across this.
+        jitctx.set_outer_claim_barrier();
         let depth = self.frames.len();
         let mut widened = vec![];
         for level in (0..depth).rev() {

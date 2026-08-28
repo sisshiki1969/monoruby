@@ -1008,6 +1008,14 @@ pub(in crate::codegen) enum LInst {
         disp: i64,
         base: usize,
     },
+    /// Stage-C loop-entry init: guard the Value in `src` to be a Float
+    /// (deopt otherwise), unbox it, and store the raw f64 to
+    /// `[rbp + disp]` — the adopted outer view's spill home.
+    GuardFloatToOuterHomeF {
+        src: GP,
+        disp: i64,
+        deopt: DestLabel,
+    },
     /// Defer a spliced non-local exit's unwind before jumping into the
     /// shared `ensure` body (#1185). The value rides in `GP::Rdx`; the
     /// degenerate outcome raises generically from `pc`.

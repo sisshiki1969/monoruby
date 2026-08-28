@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen::jitgen::context::SpecializedId;
 use state::SfGuarded;
 
 impl<'a> JitContext<'a> {
@@ -224,13 +225,24 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-debug")]
             eprintln!("  target:  {:?}\n", target.slot_state());
 
+            // Stage-C loop adoption: the outer-frame slots the loop's
+            // inlined subtree reads as raw f64s (recorded by the fixpoint
+            // above) adopt a spill-homed `Sf(Float)` on their *parked*
+            // owners — the same claim a stage-2 dominating store creates,
+            // established instead by an init on every entry edge below
+            // (chain load, Float guard, unbox, store to the home), and
+            // reverted when the compile leaves the loop. The live state
+            // is untouched: the claim's only consumers are the parked
+            // consultations (`outer_parked_sf_float`) inside the body.
+            let outer_inits = self.adopt_outer_loop_views(bbid, loop_end);
+
             // `bridge` adds `+1` to the deopt resume PC so it lands on
             // the first body instruction (skipping LoopStart, which
             // would re-enter the JIT and infinite-loop). Pass `pc` (=
             // LoopStart's PC) directly; an extra `+1` here would push
             // the deopt resume past the fused BinCmp into the bare
             // CondBr, which then reads a stale `%dst` — see #480.
-            self.gen_bridges_for_branches(&target, entries, bbid, pc);
+            self.gen_bridges_for_branches(&target, entries, bbid, pc, &outer_inits);
             self.new_backedge(target.slot_states(), bbid);
 
             Some(target)
@@ -239,7 +251,7 @@ impl<'a> JitContext<'a> {
             eprintln!("\n===gen_merge {bbid:?}");
 
             let target = AbstractState::join_entries(&entries);
-            self.gen_bridges_for_branches(&target, entries, bbid, pc);
+            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[]);
 
             Some(target)
         };
@@ -258,6 +270,7 @@ impl<'a> JitContext<'a> {
         entries: Vec<BranchEntry>,
         bbid: BasicBlockId,
         pc: BytecodePtr,
+        outer_inits: &[(Vec<SpecializedId>, usize, SlotId, OuterFprHome)],
     ) {
         let target = target.slot_states();
         #[cfg(feature = "jit-debug")]
@@ -273,6 +286,26 @@ impl<'a> JitContext<'a> {
             eprintln!("    {mode:?} src:{src_bb:?}");
 
             let mut ir = AsmIr::new(self);
+            // Stage-C loop adoption: establish each adopted outer view on
+            // this entry edge — load the owner's boxed slot through the
+            // chain, guard it a Float (a miss deopts to the loop head's
+            // first body instruction with this entry's write-back, like
+            // any entry-bridge guard), and unbox into the spill home.
+            for (ids, extra, slot, home) in outer_inits {
+                ir.push(AsmInst::LoadDynVarSpecialized {
+                    offset: DynVarOffset::Hint {
+                        ids: ids.clone(),
+                        extra: *extra,
+                    },
+                    reg: *slot,
+                });
+                ir.reg_move(GP::Rax, GP::Rdi);
+                let deopt = ir.new_deopt_with_pc(&state, pc + 1);
+                ir.push(AsmInst::GuardFloatToOuterHomeF {
+                    home: home.clone(),
+                    deopt,
+                });
+            }
             state.gen_bridge_all(&mut ir, &target, pc);
             match mode {
                 BranchMode::Side { dest } => {

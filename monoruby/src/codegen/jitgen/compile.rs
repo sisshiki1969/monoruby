@@ -60,6 +60,10 @@ impl<'a> JitContext<'a> {
         for bbid in bb_begin..=bb_end {
             let ir = self.compile_basic_block(bbid, bbid == bb_end)?;
             self.push_ir(Some(bbid), ir);
+            // Stage-C loop adoption: leaving a loop re-widens the outer
+            // views it adopted — the entry bridges dominate the body and
+            // nothing after it.
+            self.revert_adopted_outer_views(bbid);
         }
 
         self.backedge_branches();

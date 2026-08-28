@@ -537,3 +537,101 @@ fn a_nested_call_kills_the_alias() {
         "#,
     );
 }
+
+/// Stage C: the loop head sits in an inlined callee (Integer#times) while
+/// the floats live in the calling method — the invariants adopt a
+/// spill-homed view on the caller's parked frame at the loop entry, and
+/// the inner block's reads become home reads. The accumulation diverges
+/// loudly if the entry init ever leaves the home stale.
+#[test]
+fn a_times_loop_adopts_the_callers_invariant_floats() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def d1(k, j)
+          s = 0.0
+          300.times do
+            call_block { s = s * j + k }
+          end
+          s
+        end
+        r = nil
+        30.times { r = d1(1.001, 0.999) }
+        r
+        "#,
+    );
+}
+
+/// Stage C with a non-float entering the adopted slot: the entry init's
+/// Float guard deopts and the loop completes on the slot path.
+#[test]
+fn a_times_loop_adoption_guard_deopts_on_a_non_float() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def d2(k)
+          s = 0.0
+          300.times do
+            call_block { s = s + k.to_f }
+          end
+          s
+        end
+        r = nil
+        30.times { r = [d2(2), d2(0.5)] }
+        r
+        "#,
+    );
+}
+
+/// Stage C with a mid-loop type flip: the body stores an Integer into
+/// the read slot, so the analysis walk's widen excludes it from adoption
+/// (an adopted home would be stale on the next iteration).
+#[test]
+fn a_times_loop_type_flip_excludes_the_slot() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def d3
+          k = 1.5
+          s = 0.0
+          300.times do |i|
+            call_block { s = s + k.to_f; k = 7 if i == 150 }
+          end
+          [s.round(6), k]
+        end
+        r = nil
+        30.times { r = d3 }
+        r
+        "#,
+    );
+}
+
+/// Stage C with a zero-trip loop: the entry init still runs (every path
+/// into the loop head passes it) and the home is simply never read.
+#[test]
+fn a_zero_trip_times_loop_stays_correct() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def d4(n)
+          k = 2.5
+          s = 0.0
+          n.times do
+            call_block { s = s + k }
+          end
+          s
+        end
+        r = nil
+        30.times { r = [d4(0), d4(300)] }
+        r
+        "#,
+    );
+}
