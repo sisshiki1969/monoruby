@@ -3283,17 +3283,27 @@ impl Codegen {
     /// the materialized address.
     pub(in crate::codegen::jitgen) fn emit_store_outer_fpr_home_f(
         &mut self,
-        src: FPReg,
+        src: OuterFprSrc,
         disp: Option<i64>,
         base: usize,
     ) -> bool {
         let Some(disp) = disp else { return true };
-        self.a64_fpr_load(src, 0, base); // value -> d0 (pool fmov or spill load)
         monoasm_arm64!(&mut self.jit,
             mov x10, (disp as u64);
             add x10, x29, x10;
-            str d0, [x10];
         );
+        match src {
+            OuterFprSrc::Fpr(src) => {
+                self.a64_fpr_load(src, 0, base); // value -> d0 (pool fmov or spill load)
+                monoasm_arm64!(&mut self.jit, str d0, [x10];);
+            }
+            OuterFprSrc::Imm(bits) => {
+                monoasm_arm64!(&mut self.jit,
+                    mov x11, (bits);
+                    str x11, [x10];
+                );
+            }
+        }
         true
     }
 

@@ -753,6 +753,18 @@ impl SlotState {
     }
 
     ///
+    /// Stage 2 outer promotion: allocate a fresh spill-resident fpr as the
+    /// raw-f64 home of *slot* and bind it `Sf(Float)`. Force-spill (never a
+    /// pool register): the home must survive arbitrarily many callee
+    /// frames, and a spill slot of this frame does so unconditionally.
+    ///
+    pub(in crate::codegen::jitgen) fn alloc_spill_home(&mut self, slot: SlotId) -> FPReg {
+        let fpr = self.fpr_alloc.push_spill();
+        self.set_Sf(slot, fpr, SfGuarded::Float);
+        fpr
+    }
+
+    ///
     /// F/Sf -> Sf
     ///
     #[allow(non_snake_case)]

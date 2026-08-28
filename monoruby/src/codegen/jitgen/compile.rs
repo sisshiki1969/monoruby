@@ -537,7 +537,7 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::StoreDynVar(dst, src) => {
                 state.flush_gp(ir);
-                self.store_dynvar(state, ir, dst, src);
+                self.store_dynvar(state, ir, dst, src, bc_pos);
                 state.unset_side_effect_guard();
                 // Writes an *outer*-frame slot (the Float-guard miss is a
                 // trace exit); this frame's slots and their proofs are

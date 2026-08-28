@@ -1312,6 +1312,19 @@ pub(crate) enum SplicedExitKind {
 /// emission (the recorded layout no longer saves the fpr), which elides
 /// the now-dead store.
 ///
+///
+/// The raw-f64 value a [`AsmInst::StoreOuterFprHomeF`] writes: a
+/// current-frame fpr, or an immediate (a const-folded Float store — e.g.
+/// `x = n * 0.5` with a monomorphic `n` folds to `C`, so there is no fpr
+/// to read).
+///
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum OuterFprSrc {
+    Fpr(crate::codegen::FPReg),
+    /// `f64::to_bits` of the folded value.
+    Imm(u64),
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum OuterFprHome {
     Hint {
@@ -2611,7 +2624,7 @@ pub(super) enum AsmInst {
     /// and precedes this.
     ///
     StoreOuterFprHomeF {
-        src: FPReg,
+        src: OuterFprSrc,
         home: OuterFprHome,
     },
     LoadDynVarSpecialized {
@@ -2834,7 +2847,20 @@ impl AsmInst {
             Self::F64ToFpr(_, x) => vec![*x],
             Self::I64ToBoth(_, _, x) => vec![*x],
             Self::FprToStack(x, _) => vec![*x],
-            Self::StoreOuterFprHomeF { src, .. } => vec![*src],
+            // The home fpr rides along so the recursive `max_virt_fpreg_id`
+            // scan sizes the *owner's* spill region for a stage-2 promoted
+            // home (the scan attributes every id in a subtree to each
+            // enclosing frame — over-reservation by design).
+            Self::StoreOuterFprHomeF { src, home } => {
+                let mut v = match src {
+                    OuterFprSrc::Fpr(f) => vec![*f],
+                    OuterFprSrc::Imm(_) => vec![],
+                };
+                if let OuterFprHome::Hint { fpr, .. } = home {
+                    v.push(*fpr);
+                }
+                v
+            }
             Self::FixnumToFpr(_, x) => vec![*x],
             Self::FloatToFpr(_, x, _) => vec![*x],
             Self::CFunc_F_F { src, dst, .. } => vec![*src, *dst],

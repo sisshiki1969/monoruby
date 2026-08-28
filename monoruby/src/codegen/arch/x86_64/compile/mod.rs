@@ -2734,18 +2734,24 @@ impl Codegen {
     /// emission). Goes through rax: a plain 8-byte copy, no boxing.
     pub(in crate::codegen::jitgen) fn emit_store_outer_fpr_home_f(
         &mut self,
-        src: FPReg,
+        src: OuterFprSrc,
         disp: Option<i64>,
         base: usize,
     ) -> bool {
         let Some(disp) = disp else { return true };
         let disp = i32::try_from(disp).expect("outer fpr home displacement out of i32 range");
-        match PhysMap::new(base).resolve(src) {
-            FPRegLoc::Xmm(p) => monoasm! { &mut self.jit,
-                movq [rbp + (disp)], xmm(p);
+        match src {
+            OuterFprSrc::Fpr(src) => match PhysMap::new(base).resolve(src) {
+                FPRegLoc::Xmm(p) => monoasm! { &mut self.jit,
+                    movq [rbp + (disp)], xmm(p);
+                },
+                FPRegLoc::Spill(off) => monoasm! { &mut self.jit,
+                    movq rax, [rbp - (off)];
+                    movq [rbp + (disp)], rax;
+                },
             },
-            FPRegLoc::Spill(off) => monoasm! { &mut self.jit,
-                movq rax, [rbp - (off)];
+            OuterFprSrc::Imm(bits) => monoasm! { &mut self.jit,
+                movq rax, (bits);
                 movq [rbp + (disp)], rax;
             },
         }
