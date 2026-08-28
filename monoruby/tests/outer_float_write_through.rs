@@ -137,3 +137,118 @@ fn reads_after_writes_inside_the_block() {
         "#,
     );
 }
+
+/// From here down: stage 2 — `S -> Sf` *promotion*. A float store from
+/// the inlined block into an outer slot the owner never held as a float
+/// allocates a fresh spill home in the owner's file and promotes the
+/// binding, when the store dominates the whole call subtree (the store
+/// in its frame's entry block, every intermediate frame suspended in its
+/// own entry block — `JitContext::try_promote_outer_sf`).
+///
+/// First touch through a direct-yield chain: the owner consumes the
+/// promoted view with no guard and no unbox.
+#[test]
+fn a_first_touch_promotion_through_a_direct_yield() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p1(n)
+          x = nil
+          call_block { x = n * 1.5 }
+          s = 0.0
+          300.times { s += x }
+          [s, x]
+        end
+        p1(3)
+        "#,
+    );
+}
+
+/// Zero-trip refusal: `[].each` never runs the block, and `Array#each`'s
+/// `yield` sits inside its `while` — not the entry block — so the
+/// promotion is refused and the nil flows through untouched.
+#[test]
+fn a_zero_trip_block_refuses_promotion() {
+    run_test(
+        r#"
+        def p2
+          x = nil
+          [].each { x = 9.9 }
+          x.nil?
+        end
+        r = nil
+        300.times { r = p2 }
+        r
+        "#,
+    );
+}
+
+/// Promotion then keep: the first store promotes, the loop's stores hit
+/// the stage-1' refresh path on the same home.
+#[test]
+fn a_promotion_followed_by_kept_refreshes() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p4(n)
+          x = nil
+          call_block { x = n * 1.5 }
+          i = 0; s = 0.0
+          while i < 300
+            call_block { x *= 1.001 }
+            s += x
+            i += 1
+          end
+          [s.round(6), x.round(6)]
+        end
+        p4(2)
+        "#,
+    );
+}
+
+/// Two dominating levels, with the stored value const-folded (`n * 0.5`
+/// under a monomorphic `n` compiles to `C`), exercising the
+/// immediate-form home store.
+#[test]
+fn a_two_level_promotion_of_a_folded_constant() {
+    run_test(
+        r#"
+        def hop
+          yield
+        end
+        def p5(n)
+          x = nil
+          hop { hop { x = n * 0.5 } }
+          x * 4.0
+        end
+        r = 0
+        300.times { r = p5(7) }
+        r
+        "#,
+    );
+}
+
+/// A store guarded by a condition inside the block lands in a later
+/// basic block — refused, and the both-paths shape stays correct.
+#[test]
+fn a_conditional_store_refuses_promotion() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p6(n)
+          x = nil
+          call_block { x = n * 2.5 if n > 1 }
+          x.nil? ? -1.0 : x + 1.0
+        end
+        r = []
+        300.times { r = [p6(3), p6(0)] }
+        r
+        "#,
+    );
+}

@@ -994,7 +994,7 @@ pub(in crate::codegen) enum LInst {
     /// `[rbp + disp]`; `None` elides it (the binding was widened after
     /// emission).
     StoreOuterFprHomeF {
-        src: FPReg,
+        src: OuterFprSrc,
         disp: Option<i64>,
         /// The emitting frame's `base_stack_offset`, for resolving `src`.
         base: usize,

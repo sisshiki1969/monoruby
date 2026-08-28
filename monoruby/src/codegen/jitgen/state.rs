@@ -61,6 +61,22 @@ impl AbstractState {
     /// *outer* levels out — the live half of
     /// [`JitContext::widen_outer_slot`].
     ///
+    ///
+    /// Stage 2: mirror an outer-frame `S -> Sf` promotion into the live
+    /// chain (the context's parked copy was promoted by the caller). The
+    /// clone's file may be shorter than the parked one it diverged from —
+    /// grow it so the id resolves; the merge machinery already reconciles
+    /// differing lengths between sibling clones (`grow_fpr_to`).
+    ///
+    pub(super) fn promote_outer_sf(&mut self, outer: usize, slot: SlotId, fpr: FPReg) {
+        if outer > 0 && outer < self.frames.len() {
+            let level = self.frames.len() - 1 - outer;
+            let frame = &mut self.frames[level];
+            frame.grow_fpr_to(fpr.0 + 1);
+            frame.set_Sf(slot, fpr, SfGuarded::Float);
+        }
+    }
+
     /// Widen the innermost frame's `slot` to `S` (stage 1' drain: the
     /// boxed slot store made the slot current, so `S` is sound).
     #[coverage(off)] // only called from the dormant drain — see `drain_kept_outer_views`

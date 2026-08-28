@@ -259,6 +259,7 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         dst: DynVar,
         src: SlotId,
+        bc_pos: BcIndex,
     ) {
         let outer_spec = self.outer_specialized_ids(state, dst.outer);
         // Write-through keep (outer-F roadmap, stage 1'): when the outer
@@ -274,20 +275,36 @@ impl<'a> JitContext<'a> {
         // after the fact by `drain_kept_outer_views`. The slot store
         // below stays authoritative either way.
         let keep = match &outer_spec {
-            Some((ids, extra, true)) => self
-                .outer_parked_sf_float(dst.outer, dst.reg)
-                .and_then(|afpr| {
-                    let bfpr = match state.mode(src) {
-                        LinkMode::F(fpr) => Some(fpr),
-                        LinkMode::Sf(fpr, crate::codegen::jitgen::state::SfGuarded::Float) => {
-                            Some(fpr)
-                        }
-                        _ => None,
-                    }?;
-                    let home =
-                        self.keep_outer_sf_view(ids.clone(), *extra, dst.outer, dst.reg, afpr)?;
-                    Some((bfpr, home))
-                }),
+            Some((ids, extra, true)) => {
+                let fsrc = match state.mode(src) {
+                    LinkMode::F(fpr) => Some(OuterFprSrc::Fpr(fpr)),
+                    LinkMode::Sf(fpr, crate::codegen::jitgen::state::SfGuarded::Float) => {
+                        Some(OuterFprSrc::Fpr(fpr))
+                    }
+                    // A const-folded Float store (`x = n * 0.5` with a
+                    // monomorphic `n`) has no fpr — write the bits.
+                    LinkMode::C(v) => v.try_float().map(|f| OuterFprSrc::Imm(f.to_bits())),
+                    _ => None,
+                };
+                fsrc.and_then(|fsrc| {
+                    if let Some(afpr) = self.outer_parked_sf_float(dst.outer, dst.reg) {
+                        // Stage 1': the owner already holds a Float `Sf`
+                        // view — refresh its existing home.
+                        let home = self
+                            .keep_outer_sf_view(ids.clone(), *extra, dst.outer, dst.reg, afpr)?;
+                        Some((fsrc, home))
+                    } else {
+                        // Stage 2: the owner holds only `S` — promote it to
+                        // `Sf` with a fresh spill home, when this store
+                        // dominates the whole call subtree (see
+                        // `try_promote_outer_sf`).
+                        let (_, home) = self.try_promote_outer_sf(
+                            state, ids, *extra, dst.outer, dst.reg, bc_pos,
+                        )?;
+                        Some((fsrc, home))
+                    }
+                })
+            }
             _ => None,
         };
         if keep.is_none() {
@@ -317,8 +334,8 @@ impl<'a> JitContext<'a> {
             debug_assert!(keep.is_none());
             ir.push(AsmInst::StoreDynVar { dst, src: r });
         }
-        if let Some((bfpr, home)) = keep {
-            ir.push(AsmInst::StoreOuterFprHomeF { src: bfpr, home });
+        if let Some((fsrc, home)) = keep {
+            ir.push(AsmInst::StoreOuterFprHomeF { src: fsrc, home });
         }
     }
 }

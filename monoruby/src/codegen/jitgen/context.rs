@@ -1758,6 +1758,80 @@ impl<'a> JitContext<'a> {
         })
     }
 
+    ///
+    /// Stage 2: try to *promote* an outer frame's plain-`S` slot to
+    /// `Sf(Float)` at a float store from the current (inlined) frame,
+    /// allocating a fresh spill-resident home in the owner's file. The
+    /// physical store into that home rides the same
+    /// [`AsmInst::StoreOuterFprHomeF`] as the stage-1' keep, resolved
+    /// through the hint's spill branch (no save-set involvement).
+    ///
+    /// Soundness needs the store to dominate every *normal* exit of the
+    /// whole call subtree — the owner's continuation consumes the claim
+    /// path-insensitively, and a path on which the store did not run
+    /// leaves the home garbage. The check is the recursive
+    /// dominating-prefix condition:
+    ///
+    /// - the store sits in the current frame's **entry basic block**
+    ///   (everything there executes on every entry of the frame — a
+    ///   conditional or loop-guarded position lands in a later block);
+    /// - every intermediate frame of the chain is suspended (at its
+    ///   in-progress call) inside **its own** entry block, so reaching
+    ///   that frame implies reaching the store.
+    ///
+    /// This correctly refuses zero-trip shapes: `[].each { x = 1.5 }`
+    /// never runs the block, and `Array#each`'s `yield` sits inside its
+    /// `while`, i.e. not in the entry block. Direct-yield chains
+    /// (`def call_block; yield; end`, `tap`) pass.
+    ///
+    /// Deopt/raise paths need no dominance: the owner's compiled
+    /// continuation never runs on them (the stage-1' escalation
+    /// argument), and the boxed slot store keeps slot-level truth on
+    /// every path either way.
+    ///
+    pub(super) fn try_promote_outer_sf(
+        &mut self,
+        state: &mut AbstractState,
+        ids: &[SpecializedId],
+        extra: usize,
+        outer: usize,
+        slot: SlotId,
+        bc_pos: BcIndex,
+    ) -> Option<(crate::codegen::FPReg, OuterFprHome)> {
+        if !Self::in_entry_block(self.iseq(), bc_pos) {
+            return None;
+        }
+        let pos = self.outer_pos(outer)?;
+        for f in &self.stack_frame[pos + 1..self.stack_frame.len() - 1] {
+            let callid = f.callid?;
+            let fiseq = &self.store[f.iseq_id()];
+            if !Self::in_entry_block(fiseq, self.store[callid].bc_pos) {
+                return None;
+            }
+        }
+        {
+            let parked = self.stack_frame[pos].abstract_state.as_ref()?;
+            let m = parked.mode(slot);
+            if !matches!(parked.mode(slot), LinkMode::S(_)) {
+                return None;
+            }
+        }
+        let fpr = self.stack_frame[pos]
+            .abstract_state
+            .as_mut()
+            .unwrap()
+            .alloc_spill_home(slot);
+        state.promote_outer_sf(outer, slot, fpr);
+        let home = self.keep_outer_sf_view(ids.to_vec(), extra, outer, slot, fpr)?;
+        Some((fpr, home))
+    }
+
+    /// Whether *pos* lies in the entry basic block of *iseq* — the block
+    /// every activation of the frame executes from its first instruction.
+    fn in_entry_block(iseq: &ISeqInfo, pos: BcIndex) -> bool {
+        iseq.bb_info.get_bb_id(pos) == iseq.bb_info.get_bb_id(BcIndex::from(0))
+    }
+
     /// Mark for [`Self::drain_kept_outer_views`].
     pub(super) fn kept_outer_views_mark(&self) -> usize {
         self.kept_outer_views.len()
