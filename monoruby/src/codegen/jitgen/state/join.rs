@@ -23,6 +23,11 @@ impl Liveness {
         for (i, is_used) in self.enumerate() {
             is_used.join(state.is_used(SlotId(i as u16)));
         }
+        let n = state.slot_state().slots_len();
+        for i in 0..n {
+            let slot = SlotId(i as u16);
+            self.join_subtree_float_read(slot, state.subtree_float_read(slot));
+        }
     }
 }
 
@@ -91,6 +96,11 @@ impl AbstractFrame {
         }
         #[cfg(debug_assertions)]
         self.verify_join_replay(other, pre, &actions);
+        // Stage-A use propagation: merge the correctness-neutral hint
+        // fields. Provenance survives a merge only when both paths agree;
+        // a queued float-read report on either path is still evidence, so
+        // the pending queues concatenate.
+        self.join_subtree_read_meta(other);
     }
 
     ///

@@ -355,3 +355,106 @@ fn a_home_read_degrades_after_a_type_flip() {
         "#,
     );
 }
+
+/// Stage-A use propagation: a loop-invariant float the owner never
+/// touches, consumed by the block every iteration. No store means no
+/// back-edge `Sf` placement; the subtree-read signal alone must adopt
+/// the slot at the loop entry, and the block's reads become home reads
+/// (the accumulated product diverges loudly if the hoisted unbox ever
+/// reads a stale home).
+#[test]
+fn a_pure_read_invariant_float_adopts_at_the_loop_entry() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p1
+          k = 1.001
+          j = 0.999
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { s = s * j + k }
+            i += 1
+          end
+          s
+        end
+        p1
+        "#,
+    );
+}
+
+/// The subtree-read adoption must not fire for a slot that is not a
+/// float at the loop entry: the entry bridge's guard deopts once and
+/// the loop still completes correctly on the slot path.
+#[test]
+fn a_non_float_pure_read_stays_correct() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p2(k)
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { s = s + k.to_f }
+            i += 1
+          end
+          s
+        end
+        [p2(2), p2(0.5)]
+        "#,
+    );
+}
+
+/// A pure read through two lexical levels: the invariant lives two
+/// frames out from the reading block.
+#[test]
+fn a_pure_read_two_outer_levels() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p3
+          k = 1.25
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { call_block { s = s * 0.5 + k } }
+            i += 1
+          end
+          s
+        end
+        p3
+        "#,
+    );
+}
+
+/// The invariant is redefined mid-loop by the owner: the provenance-fed
+/// adoption must track the new value (the entry state re-guards each
+/// entry; the body redefinition flows around the back edge).
+#[test]
+fn a_pure_read_with_an_owner_redefinition() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p4
+          k = 1.001
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { s = s * 0.99 + k }
+            k = 2.5 if i == 150
+            i += 1
+          end
+          [s, k]
+        end
+        p4
+        "#,
+    );
+}

@@ -175,8 +175,33 @@ impl<'a> JitContext<'a> {
                             (be.is_float_typed(i) && loop_float.contains(&i))
                                 || matches!(be.mode(i), LinkMode::F(_))
                         };
-                        let adopt_sf =
-                            |i| matches!(be.mode(i), LinkMode::Sf(_, SfGuarded::Float));
+                        // Stage-A use propagation: an inlined callee's
+                        // raw-f64 read of an owner slot is float-use
+                        // evidence the owner-side liveness cannot see (the
+                        // owner's own body never touches the slot). A
+                        // read-only outer float — a loop-invariant scale
+                        // factor the block consumes each iteration — leaves
+                        // no store behind, so no `Sf(Float)` placement
+                        // survives to the back edge and the placement arm
+                        // above has nothing to adopt; the slot would stay
+                        // `S` and the block would guard+unbox it every
+                        // iteration. Adopt such slots (subtree-read, still
+                        // `S` at the back edge) as `Sf` too: the entry
+                        // bridge is the same guard+unbox the *first*
+                        // iteration paid anyway, hoisted out of the loop,
+                        // and the block's reads become home reads. The
+                        // signal rides outside `IsUsed` and this is its
+                        // only consumer, so the long-tuned `use_float` /
+                        // `F`-adoption policies are untouched (folding it
+                        // into the type lattice measurably regressed
+                        // so_mandelbrot, whose `for` bodies are blocks).
+                        let subtree_read: std::collections::HashSet<SlotId> =
+                            liveness.subtree_float_reads().collect();
+                        let adopt_sf = |i| {
+                            matches!(be.mode(i), LinkMode::Sf(_, SfGuarded::Float))
+                                || (subtree_read.contains(&i)
+                                    && matches!(be.mode(i), LinkMode::S(_)))
+                        };
                         target.keep_backedge_floats(adopt, adopt_sf, promotable);
                     }
                 }

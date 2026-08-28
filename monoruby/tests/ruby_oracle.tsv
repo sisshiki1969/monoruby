@@ -185,6 +185,7 @@
 0be41d9bd7e1cc54941270e279653ac8	true	class StrPlusSub < String; end; (StrPlusSub.new("a") + "b").instance_of?(String)
 0beb46074e1eb509fdd14935b30258dd	[1, 2, 3]	a = [1, 2, 3]\n            a.shuffle\n            a\n            
 0c1d024a77553ba059ad52023369c614	[false, false]	t = Thread.new { loop {} }\n            sleep 0.05\n            t.kil
+0c212589acd72c8069cfd7db7ba46930	[211.560074274065, 2.5]	def call_block\n          yield\n        end\n        def p4\n          k =
 0c31062b279dfc18d7d2c88b1de29087	[:pro1, :pro2]	c = Class.new do\n              def pub; end\n              protected
 0c59e4ca52f8b258d616906a2685e60a	[999, 999]	$flag = false\n        def maybe_redefine\n          if $flag\n           
 0c59ef50cf993e559eee5d6f90c6a39e	[1, 1, 8, [2, 3, 4], 1, 2, 4, nil, 9, 9, 8, [9, 3, 4], 0, 2, 4, nil, 9, 3, 8, [9, 3, 4], 1, 2, 4, nil, 9, 4, 8, [9, 2, 4], 2, 2, 4, nil, 9, 5, 8, [9, 2, 3], 3, 2, 4, nil, 9, 6, 8, [9, 2, 3], 4, 2, 4, nil, 9, 7, 8, [9, 2, 3], 5, 2, 4, nil, 9, 8, 8, [9, 2, 3], 6, 2, 4, nil, 9, 9, 7, [9, 2, 3], 7, 2, 4, nil, 9, 9, 7, [9, 2, 3], 8, 2, 4, nil, 9, 2, 7, [9, 2, 3], 9, 2, 4, nil, 9, 3, 7, [9, 10, 3], 10, 2, 4, nil, 9, 4, 7, [9, 10, 11], 11, 2, 4, nil, 9, 5, 7, [9, 10, 11], 12, 2, 4, nil, 9, 6, 7, [9, 10, 11], 13, 2, 4, nil, 9, 7, 7, [9, 10, 11], 14, 2, 4, nil, 9, 9, 15, [9, 10, 11], 15, 2, 4, nil, 9, 9, 15, [9, 10, 11], 16, 2, 4, nil, 9, 10, 15, [9, 10, 11], 17, 2, 4, nil, 9, 11, 15, [9, 18, 11], 18, 2, 4, nil, 9, 12, 15, [9, 18, 19], 19, 2, 4, nil, 9, 13, 15, [9, 18, 19], 20, 2, 4, nil, 9, 14, 15, [9, 18, 19], 21, 2, 4, nil, 9, 15, 15, [9, 18, 19], 22, 2, 4, nil, 9, 9, 23, [9, 18, 19], 23, 2, 4, nil, 9, 9, 23, [9, 18, 19], 24, 2, 4, nil, 9, 18, 23, [9, 18, 19], 25, 2, 4, nil, 9, 19, 23, [9, 26, 19], 26, 2, 4, nil, 9, 20, 23, [9, 26, 27], 27, 2, 4, nil, 9, 21, 23, [9, 26, 27], 28, 2, 4, nil, [9, 9, 26, 27, 28, 29, 22, 23], {a: 29, "b" => 2, 3 => 4}]	def drive\n              a = [1, 2, 3, 4, 5, 6, 7, 8]\n              
@@ -758,6 +759,7 @@
 3d5aaee333bdf3c4bc36ded91dcd0aaf	[1, :nme]	class TrueClass; def only_true713; 1; end; end\n        res = []\n       
 3d5adde3fb0edf69c5646dd0efeadc07	["PSubC", :dup, :clone]	class PSubC < Proc\n                 def initialize_dup(o); super; @tag = :dup; e
 3d825ed681f4d3904854e2642bf813b4	A	class A; end\n            Class.new(A).superclass\n            
+3d87b9096253d3620333a296cee8e5f7	2.5	def call_block\n          yield\n        end\n        def p3\n          k =
 3d97f043dbc63d648bc8c08d3cd03cda	Array	class C < Array; end\n(C[1,2] | [3]).class
 3d9c37b87faf349ecb67571fb23a24e7	[[1, 2], 3]	->((*a, b)) { [a, b] }.call([1, 2, 3])
 3dbebf67556767ed46ca1b15b5c6014b	0	("" <=> "".dup.force_encoding("ISO-2022-JP"))\n            
@@ -811,6 +813,7 @@
 4239507f8b8c670abb722bea0b9c254e	"missing keyword: :x"	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; define_me
 423a27c97cfa628fc4d17c0da8f6bb0a	[true, "hi"]	class ReSubB < Regexp; end; r = ReSubB.new("hi"); [r.is_a?(ReSubB), r.source]
 4253be14d49d0c5b2ccb81f0dcb1bbe4	[1, 2, 1, 2, 1, 2]	class C; def to_int; 3; end; end; o = C.new\n[1, 2] * o
+425b61a03225b5ce7f0f589b005a085b	[600.0, 150.0]	def call_block\n          yield\n        end\n        def p2(k)\n          
 42636ead6d6f845d215efab6f85556c8	[ArgumentError, "mid"]	o = Object.new\n            def o.each; yield 1; raise ArgumentError
 42753250b48e0448fddf03ae492426cd	["Exception", "RuntimeError", "m"]	[Exception.exception("z").class.name, RuntimeError.exception.messag
 4275f26c470c052644fed1d14d2bba17	2000	def __deep(n) = n == 0 ? 0 : 1 + __deep(n - 1); __deep(2000)
@@ -2807,6 +2810,7 @@ e0430993ff49221b4ff142a12a2d9ee6	[1, [:gt, :lt, :gt, :lt]]	class C\n            
 e051ec7a15469fca9105c948f78c2f26	[[:v], 50]	$nlr_log = []\n        def nlr_mid\n          yield\n        ensure\n      
 e093793f4006c99f09965c6fde38e86b	42	class Foo\n          def initialize\n            @x = 42\n          end\n  
 e09c62f66a3c3f3ed8999368ae421637	[true, [Errno::ENOENT, "No such file or directory @ rb_check_realpath_internal - /no_such_dir_zzq/x"], Errno::ELOOP, Errno::ELOOP]	(d="/tmp/mono_rp_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/file", ""); a=(
+e0a574583b5fc83f8c4cabc65c564a05	259.5522608117453	def call_block\n          yield\n        end\n        def p1\n          k =
 e0aaed5b5073da72fc373f05fb574de1	true	S = Struct.new(:a, :b)\n            \n\n            S.new(1, 2).hash !
 e0ae1b5209fe6fb6e963db3c6c00894e	"UTF-8"	e = "".force_encoding("EUC-JP"); "#{""}#{e}#{"x"}".encoding.to_s
 e0c2bb61aa5c5d76757d6084b37a58e5	[:a, :b, nil]	class K\n              def initialize(n); @n = n; end\n              

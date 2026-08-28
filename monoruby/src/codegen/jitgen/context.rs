@@ -1465,6 +1465,23 @@ impl<'a> JitContext<'a> {
         changed
     }
 
+    ///
+    /// Stage-A use propagation: an inlined callee consumed the value it
+    /// read from the slot *outer* levels out as a raw f64. Land the mark
+    /// on the owner's parked frame — the same channel `widen_outer_slot`
+    /// uses — so it survives `adopt_outer` and reaches the owner's
+    /// back-edge `Liveness` harvest, where the loop-entry `Sf` adoption
+    /// (the `adopt_sf` arm's subtree-read disjunct) can act on it.
+    ///
+    pub(super) fn mark_outer_float_read(&mut self, outer: usize, slot: SlotId) {
+        let Some(pos) = self.outer_pos(outer) else {
+            return;
+        };
+        if let Some(frame) = self.stack_frame[pos].abstract_state.as_mut() {
+            frame.mark_subtree_float_read(slot);
+        }
+    }
+
     pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {
         let Some(pos) = self.outer_pos(outer) else {
             // The chain leaves this compilation: the frame is not one of

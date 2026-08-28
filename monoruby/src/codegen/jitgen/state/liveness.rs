@@ -1,7 +1,16 @@
 use super::*;
 
 #[derive(Clone, Default)]
-pub(in crate::codegen::jitgen) struct Liveness(Vec<IsUsed>);
+pub(in crate::codegen::jitgen) struct Liveness(
+    Vec<IsUsed>,
+    /// Stage-A use propagation: per-slot flag — an inlined callee read the
+    /// slot through the frame chain and consumed it as a raw f64. Kept
+    /// apart from `IsUsed` on purpose: the type/kill lattice drives the
+    /// long-tuned owner-side policies (`use_float`, the `F` adoption), and
+    /// this signal must not perturb them — it feeds only the `Sf`
+    /// adoption arm at the loop entry (`subtree_float_reads`).
+    Vec<bool>,
+);
 
 impl std::fmt::Debug for Liveness {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -21,7 +30,31 @@ impl std::fmt::Debug for Liveness {
 
 impl Liveness {
     pub(in crate::codegen::jitgen) fn new(total_reg_num: usize) -> Self {
-        Self(vec![IsUsed::default(); total_reg_num])
+        Self(
+            vec![IsUsed::default(); total_reg_num],
+            vec![false; total_reg_num],
+        )
+    }
+
+    ///
+    /// Slots whose float use was reported *by an inlined callee* reading
+    /// them through the frame chain (stage-A use propagation): the owner's
+    /// own body never touches such a slot, so without this the loop-entry
+    /// adoption cannot tell it from a genuinely unused one.
+    ///
+    pub(in crate::codegen::jitgen) fn subtree_float_reads(
+        &self,
+    ) -> impl Iterator<Item = SlotId> {
+        self.1
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| b.then_some(SlotId(i as u16)))
+    }
+
+    pub(super) fn join_subtree_float_read(&mut self, slot: SlotId, read: bool) {
+        if let Some(b) = self.1.get_mut(slot.0 as usize) {
+            *b |= read;
+        }
     }
 
     ///

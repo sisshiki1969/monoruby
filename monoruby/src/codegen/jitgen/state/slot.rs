@@ -269,6 +269,27 @@ pub(crate) struct SlotState {
     /// loop-carried `Sf` resident; empty (no effect) on the default path.
     #[cfg_attr(not(feature = "phys-loop-aware"), allow(dead_code))]
     loop_carried: std::collections::HashSet<SlotId>,
+    /// Stage-A use propagation: per-slot provenance — the slot's current
+    /// value came from a `LoadDynVar` of the frame `outer` levels out,
+    /// slot `src`. Recorded by the `LoadDynVar` lowering, cleared on
+    /// redefinition ([`Self::discard`]); a mode transition that keeps the
+    /// value (write-back, unguarded demotion) keeps it. Consulted when the
+    /// slot is consumed as a raw f64 ([`Self::use_as_float`]), which
+    /// queues the pair on `pending_outer_float_reads`. A correctness-
+    /// neutral hint: it only feeds the loop-entry float-adoption policy.
+    dynvar_src: Vec<Option<(u16, SlotId)>>,
+    /// Float-consumed dynvar reads not yet reported to the `JitContext`
+    /// (the frame itself cannot reach the outer frames' parked states).
+    /// Drained at the next `compile_instruction` boundary into
+    /// `JitContext::mark_outer_float_read`.
+    pending_outer_float_reads: Vec<(u16, SlotId)>,
+    /// Stage-A use propagation, the owner-side landing spot: an inlined
+    /// callee read this slot through the frame chain and consumed it as a
+    /// raw f64. Deliberately *not* folded into `IsUsed` — the type/kill
+    /// lattice drives the long-tuned owner-side float policies, and this
+    /// signal feeds only the loop-entry `Sf` adoption
+    /// (`Liveness::subtree_float_reads`).
+    subtree_float_read: Vec<bool>,
 }
 
 impl std::fmt::Debug for SlotState {
@@ -300,6 +321,9 @@ impl SlotState {
             local_num,
             deferred_forward: None,
             loop_carried: std::collections::HashSet::new(),
+            dynvar_src: vec![None; total_reg_num],
+            pending_outer_float_reads: vec![],
+            subtree_float_read: vec![false; total_reg_num],
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -653,6 +677,9 @@ impl SlotState {
             }
             self.clear(slot);
             self.is_used_mut(slot).kill();
+            // A redefinition ends the dynvar provenance — the new value did
+            // not come through the frame chain.
+            self.dynvar_src[slot.0 as usize] = None;
         }
     }
 
@@ -939,11 +966,85 @@ impl SlotState {
 
     /// used as f64 with no conversion
     pub(super) fn use_as_float(&mut self, slot: SlotId) {
+        // Stage-A use propagation: a raw-f64 consumption of a value that
+        // arrived through `LoadDynVar` is float-use evidence *about the
+        // owner's slot* — queue it for the next `compile_instruction`
+        // boundary, where the `JitContext` can reach the owner's parked
+        // frame ([`JitContext::mark_outer_float_read`]).
+        if let Some(src) = self.dynvar_src[slot.0 as usize] {
+            self.pending_outer_float_reads.push(src);
+        }
         self.is_used_mut(slot).use_as_float();
     }
 
     pub(super) fn use_as_value(&mut self, slot: SlotId) {
         self.is_used_mut(slot).use_as_non_float();
+    }
+
+    ///
+    /// Stage-A use propagation: record that *slot*'s current value came
+    /// from a `LoadDynVar` of the frame *outer* levels out, slot *src*.
+    ///
+    pub(in crate::codegen::jitgen) fn set_dynvar_src(
+        &mut self,
+        slot: SlotId,
+        outer: usize,
+        src: SlotId,
+    ) {
+        if let Ok(outer) = u16::try_from(outer) {
+            self.dynvar_src[slot.0 as usize] = Some((outer, src));
+        }
+    }
+
+    ///
+    /// Stage-A use propagation: hand over the float-consumed dynvar reads
+    /// queued since the last drain.
+    ///
+    pub(in crate::codegen::jitgen) fn take_pending_outer_float_reads(
+        &mut self,
+    ) -> Vec<(u16, SlotId)> {
+        std::mem::take(&mut self.pending_outer_float_reads)
+    }
+
+    ///
+    /// Stage-A use propagation: the callee-side mark landing on this
+    /// (parked owner) frame — the subtree-read flag the loop-entry `Sf`
+    /// adoption reads via [`Liveness::subtree_float_reads`]. `IsUsed` is
+    /// deliberately left untouched (see the field comment).
+    ///
+    pub(in crate::codegen::jitgen) fn mark_subtree_float_read(&mut self, slot: SlotId) {
+        if let Some(b) = self.subtree_float_read.get_mut(slot.0 as usize) {
+            *b = true;
+        }
+    }
+
+    pub(super) fn subtree_float_read(&self, slot: SlotId) -> bool {
+        self.subtree_float_read
+            .get(slot.0 as usize)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    ///
+    /// Stage-A use propagation: merge the hint fields at a path join —
+    /// provenance is kept only where both paths agree, pending reports and
+    /// landed subtree-read marks from either path remain evidence.
+    ///
+    pub(super) fn join_subtree_read_meta(&mut self, other: &SlotState) {
+        for (l, r) in self.dynvar_src.iter_mut().zip(other.dynvar_src.iter()) {
+            if *l != *r {
+                *l = None;
+            }
+        }
+        self.pending_outer_float_reads
+            .extend(other.pending_outer_float_reads.iter().copied());
+        for (l, r) in self
+            .subtree_float_read
+            .iter_mut()
+            .zip(other.subtree_float_read.iter())
+        {
+            *l |= *r;
+        }
     }
 
     ///

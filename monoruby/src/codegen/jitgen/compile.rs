@@ -283,6 +283,13 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         assert!(state.no_capture_guard());
+        // Stage-A use propagation: land the float-consumed dynvar reads the
+        // previous instruction queued on the owner frames' parked states,
+        // while this frame's `outer` distances are still the ones the reads
+        // were recorded under.
+        for (outer, slot) in state.take_pending_outer_float_reads() {
+            self.mark_outer_float_read(outer as usize, slot);
+        }
         // A fusing arm (e.g. `try_fuse_array_minmax`) already emitted this
         // instruction's work together with its predecessor's.
         if self.fused_skip == Some(bc_pos) {
@@ -551,8 +558,14 @@ impl<'a> JitContext<'a> {
                     self.restore_unfrozen(Some(dst));
                     return Ok(CompileResult::Continue);
                 }
+                let (src_outer, src_reg) = (src.outer, src.reg);
                 self.load_dynvar(state, ir, src);
                 state.def_rax2acc(ir, dst);
+                // Stage-A use propagation: remember where the value came
+                // from — a later raw-f64 consumption of *dst* is float-use
+                // evidence about the owner's slot (`use_as_float` queues
+                // it, the `compile_instruction` boundary lands it).
+                state.set_dynvar_src(dst, src_outer, src_reg);
                 // LFP-chain walk + loads: transparent.
                 self.restore_unfrozen(Some(dst));
             }
