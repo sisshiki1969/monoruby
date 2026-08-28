@@ -830,6 +830,17 @@ impl SlotState {
     }
 
     ///
+    /// Reserve a spill-resident home id in this (the owner's) file
+    /// without binding any slot — for a promotion whose binding lives on
+    /// the live chain only (the loop-entry adoption). The file is the
+    /// single id space for the owner, so the reservation keeps the
+    /// owner's own later allocations from colliding with the home.
+    ///
+    pub(in crate::codegen::jitgen) fn reserve_spill_home(&mut self) -> FPReg {
+        self.fpr_alloc.push_spill()
+    }
+
+    ///
     /// F/Sf -> Sf
     ///
     #[allow(non_snake_case)]
@@ -1288,6 +1299,16 @@ impl SlotState {
     ///   resume; a pool-resident id cannot appear here (promotions into a
     ///   suspended frame are spill-homed by construction).
     pub(in crate::codegen::jitgen) fn overlay_kept_constants(&mut self, other: &SlotState) {
+        // Monotone hint bits ride along: the subtree float-read marks the
+        // callee landed on its copies of this frame must reach the loop
+        // analyses of the resumed compile.
+        for (l, r) in self
+            .subtree_float_read
+            .iter_mut()
+            .zip(other.subtree_float_read.iter())
+        {
+            *l |= *r;
+        }
         for slot in self.locals() {
             match (self.mode(slot), other.mode(slot)) {
                 (LinkMode::S(_), LinkMode::C(v)) => {

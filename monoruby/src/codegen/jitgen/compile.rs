@@ -77,10 +77,6 @@ impl<'a> JitContext<'a> {
         for bbid in bb_begin..=bb_end {
             let ir = self.compile_basic_block(bbid, bbid == bb_end)?;
             self.push_ir(Some(bbid), ir);
-            // Stage-C loop adoption: leaving a loop re-widens the outer
-            // views it adopted — the entry bridges dominate the body and
-            // nothing after it.
-            self.revert_adopted_outer_views(bbid);
         }
 
         self.backedge_branches();
@@ -309,7 +305,7 @@ impl<'a> JitContext<'a> {
         // while this frame's `outer` distances are still the ones the reads
         // were recorded under.
         for (outer, slot) in state.take_pending_outer_float_reads() {
-            self.mark_outer_float_read(outer as usize, slot);
+            state.mark_outer_float_read(outer as usize, slot);
         }
         // A fusing arm (e.g. `try_fuse_array_minmax`) already emitted this
         // instruction's work together with its predecessor's.

@@ -10,12 +10,13 @@ impl<'a> JitContext<'a> {
         for x in 0..10 {
             #[cfg(feature = "jit-debug")]
             eprintln!("########## analyse iteration[{x}]");
-            let (liveness, backedge, outer_reads) =
+            let (liveness, backedge, vetoes) =
                 self.analyse_loop(loop_start, loop_end, state.clone())?;
-            // Stage-C loop adoption: park what the walk saw of the outer
-            // frames for the loop-entry merge (overwritten per iteration —
-            // the marks are stable, each walk starts from the same clone).
-            self.record_loop_outer_reads(loop_start, outer_reads);
+            // Stage-C loop adoption: park the walk's vetoes for the
+            // loop-entry merge (overwritten per iteration). The float-read
+            // marks themselves ride the analysed states and are read off
+            // the back edge there.
+            self.record_loop_adoption_vetoes(loop_start, vetoes);
             if let Some(backedge) = backedge {
                 if let Some(be) = self.loop_backedge(loop_start)
                     && be.equiv(&backedge)
@@ -68,7 +69,7 @@ impl<'a> JitContext<'a> {
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
         mut state: AbstractState,
-    ) -> JitResult<(Liveness, Option<AbstractState>, Vec<(usize, SlotId)>)> {
+    ) -> JitResult<(Liveness, Option<AbstractState>, (bool, Vec<(usize, SlotId)>))> {
         let pc = self.iseq().get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc);
         let mut liveness = Liveness::new(ctx.total_reg_num());
@@ -106,12 +107,11 @@ impl<'a> JitContext<'a> {
                 ))
         );
 
-        // Stage-C loop adoption: the subtree float-read marks the walk
-        // landed on the *clone's* parked outer frames — exported here,
-        // since the clone dies with this function.
-        let outer_reads = ctx.export_subtree_outer_reads(self);
+        // Stage-C loop adoption: what the walk learned that would veto
+        // adopting an outer view (the marks themselves ride the states).
+        let vetoes = ctx.export_loop_adoption_vetoes(self);
 
-        Ok((liveness, backedge, outer_reads))
+        Ok((liveness, backedge, vetoes))
     }
 
     fn analyse_basic_block(

@@ -107,6 +107,10 @@ impl AbstractState {
         frame.set_Sf(slot, fpr, SfGuarded::Float);
     }
 
+    pub(super) fn depth(&self) -> usize {
+        self.frames.len()
+    }
+
     pub(super) fn innermost_clone(&self) -> AbstractFrame {
         self.frames.last().unwrap().clone()
     }
@@ -149,6 +153,18 @@ impl AbstractState {
     #[coverage(off)] // only called from the dormant drain — see `drain_kept_outer_views`
     pub(super) fn invalidate_innermost(&mut self, slot: SlotId) {
         self.frames.last_mut().unwrap().invalidate_slot(slot);
+    }
+
+    ///
+    /// Stage-A use propagation, state side: land a raw-f64 read of the
+    /// slot *outer* lexical levels out on the owner frame's mark bits.
+    /// The marks then travel exactly like any other monotone hint —
+    /// through joins (ORed), return chains, and the resume overlay.
+    ///
+    pub(super) fn mark_outer_float_read(&mut self, outer: usize, slot: SlotId) {
+        if let Some(level) = self.outer_level(outer) {
+            self.frames[level].mark_subtree_float_read(slot);
+        }
     }
 
     pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {
