@@ -1007,6 +1007,7 @@
 4edbac695b5ed45b538971de1ca0ed2c	[true, true, true, false]	f = File.open("Cargo.toml")\n            begin\n              [f.binm
 4edf4d45c190ed9014d06dda3424cfb3	[200, true]	parents = Array.new(200) { [] }\n            5.times { GC.start }\n  
 4ef654f58c91b7b93cc8ea7d3a1d2da8	[false, false, false, true, false]	class MEqStrTrue; def to_str; "x"; end; def ==(o); true; end; end\n 
+4f1c2d7762a92ed3167ebc5a07dca6fc	520.0	def w3(f)\n          30.times do |i|\n            return f * i if i > 25\n
 4f93aca4bf1af1b5c4055cb5ae6b15f5	[nil, false]	t = Thread.new { sleep }\n            r = t.join(0.05)\n            t
 4fa66bde865d8b29ac7a73525c13a9c4	true	path = "/tmp/monoruby_io_dc_#{Process.pid}_#{rand(100000)}"\n       
 4fbfb4f6588f47b184c44eb72d8611a5	[File, true, [Errno::EINVAL, "Invalid argument"], File]	(f="/tmp/mono_nb_#{Process.pid}"; fh=File.new(f, "w") { raise "block called" }; 
@@ -1580,6 +1581,7 @@
 804bf123f4d6e236bd9c3800e5582083	1	Inner = Struct.new(:b)\n        Outer = Struct.new(:a)\n        o = Outer
 805e377322d362957ff65c2466591c45	"ENV"	ENV.to_s
 8069191a22d0b6b29811cbab5a50dd8e	[:@@a, :@@b]	c = Class.new\n            c.class_variable_set(:@@a, 1)\n           
+80694153577b5ef2bfce1ce46a269f70	45.13752031683784	def w2(arr, f)\n          t = 0.0\n          60.times do\n            arr.
 809281e76b95d635f181be9aa9c1cf05	[1, [], true]	S = Struct.new(:x) do\n              FLAGS = { foo: 1 }\n            
 8098133adc30ffe32c8d9dbe5ae12a78	[1, 2, [3, 4, 5, 6], 7]	def f(x,y,*z,a)\n            [x,y,z,a]\n        end\n        \n\n        f(1
 80baa197387e4aa5b6889e7c3b340c5a	[:initialize_dup, :initialize_copy]	$called = []\n            class Foo\n              def initialize_dup
@@ -3093,6 +3095,7 @@ f6a5ba1237d7cfc8990854f9a869a012	true	Thread.current.equal?(Thread.current)
 f6b2f5848e7295cbc532e6f89aae0054	[true, true, true, true, true]	(a=(File.method(:unlink)==File.method(:delete)); b=(File.method(:empty?)==File.m
 f6b8ba5c363ede98f3ac55cfd3ae8594	[[:keyreq, :a], [:keyreq, :b]]	def only_req_kw(a:, b:); end\n            method(:only_req_kw).param
 f6bd187bbf5507071844189b94dc4434	[[false, false, true, true, true], [false, true, false, true, false], [true, true, false, false, true]]	vals = [1, 2.5, 3, 4.5]\n            def lt(a, b) = a < b\n          
+f6ca9431f5e1b1c8321943b6c4623112	1553.125	def raiser = raise "x"\n        def w1(a, b)\n          s = 0.0\n         
 f6cc6145b95584bf04b9e5b0c112640c	[:a, :b, :block, :x, :z]	a = 1\n        b = 2\n        def f(x, &block)\n          z = nil\n        
 f6cef84e94a43a487f077dc59578c5a8	[:blk, :none]	class FwdC\n          attr_reader :tag\n          def initialize\n        
 f6d5b89b275d33f1f12c12094375b18a	[400, 320, "UTF-8", false, true, "séé"]	def app_mb(s, n)\n          i = 0\n          while i < n\n            s <<

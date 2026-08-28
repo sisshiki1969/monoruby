@@ -664,3 +664,71 @@ fn a_kept_float_copied_through_uses_the_home_alias() {
         "#,
     );
 }
+
+/// The no-return-path fallback resume (join unification): a specialized
+/// callee that compiles no plain `Ret` — every path raises — leaves the
+/// caller's continuation unreachable on compiled paths, and the resume
+/// state is rebuilt from the call's entry chain re-widened by the
+/// callee-era widen log. Keep floats live across the call so the rebuilt
+/// chain's claims are actually consumed downstream — probe-verified to
+/// take the fallback branch.
+#[test]
+fn a_raising_callee_resumes_from_the_entry_chain() {
+    run_test(
+        r#"
+        def raiser = raise "x"
+        def w1(a, b)
+          s = 0.0
+          50.times do |i|
+            x = a * 1.5 + b
+            begin
+              raiser
+            rescue
+              s += x + i
+            end
+            s += x * 0.5
+          end
+          s
+        end
+        w1(1.25, 2.5)
+        "#,
+    );
+}
+
+/// Same fallback, `break` flavor: the block's only exit is a `break`, so
+/// the inlined block compiles no plain `Ret` either.
+#[test]
+fn an_all_break_block_resumes_from_the_entry_chain() {
+    run_test(
+        r#"
+        def w2(arr, f)
+          t = 0.0
+          60.times do
+            arr.each { |x| t += f; break }
+            t *= 1.0001
+          end
+          t
+        end
+        w2([1], 0.75)
+        "#,
+    );
+}
+
+/// Same fallback, non-local-return flavor: the block returns out of the
+/// enclosing method.
+#[test]
+fn a_non_local_return_resumes_from_the_entry_chain() {
+    run_test(
+        r#"
+        def w3(f)
+          30.times do |i|
+            return f * i if i > 25
+          end
+          0.0
+        end
+        r = 0.0
+        40.times { r += w3(0.5) }
+        r
+        "#,
+    );
+}
