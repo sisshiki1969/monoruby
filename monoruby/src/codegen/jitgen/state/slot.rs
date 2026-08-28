@@ -1274,15 +1274,32 @@ impl SlotState {
             .collect()
     }
 
-    /// Resume overlay: adopt *other*'s (the return-path join's) kept `C`
-    /// claims where this frame holds a plain `S`. Sound because every
-    /// resuming path either still holds the claim (the constant is true
-    /// and its surrender, when it comes, will write it) or surrendered it
-    /// with the deferred write emitted on that path's return segment.
+    /// Resume overlay: adopt the return-path join's claims where this
+    /// (parked) frame holds a plain `S`.
+    ///
+    /// * A kept `C` — sound because every resuming path either still
+    ///   holds the claim (the constant is true and its surrender, when it
+    ///   comes, will write it) or surrendered it with the deferred write
+    ///   emitted on that path's return segment.
+    /// * A spill-homed `Sf(Float)` — sound because `Sf` claims the slot
+    ///   current (it is, on every path — a widen would have met the join
+    ///   to `S`) and the raw-f64 home current likewise. This is what lets
+    ///   a state-only placement promotion under the call survive the
+    ///   resume; a pool-resident id cannot appear here (promotions into a
+    ///   suspended frame are spill-homed by construction).
     pub(in crate::codegen::jitgen) fn overlay_kept_constants(&mut self, other: &SlotState) {
         for slot in self.locals() {
-            if let (LinkMode::S(_), LinkMode::C(v)) = (self.mode(slot), other.mode(slot)) {
-                self.set_mode(slot, LinkMode::C(v));
+            match (self.mode(slot), other.mode(slot)) {
+                (LinkMode::S(_), LinkMode::C(v)) => {
+                    self.set_mode(slot, LinkMode::C(v));
+                }
+                (LinkMode::S(_), LinkMode::Sf(fpr, SfGuarded::Float))
+                    if fpr.0 >= crate::codegen::PHYS_FPR_POOL =>
+                {
+                    self.grow_fpr_to(fpr.0 + 1);
+                    self.set_Sf(slot, fpr, SfGuarded::Float);
+                }
+                _ => {}
             }
         }
     }
@@ -2366,6 +2383,15 @@ impl AbstractFrame {
             (LinkMode::Sf(l, _), LinkMode::Sf(r, _)) if l == r => {}
             (LinkMode::Sf(_, guarded), LinkMode::S(_)) => {
                 self.set_S_with_guard(slot, guarded.into());
+            }
+            // Loop-entry adoption of an outer view (stage C, state-side):
+            // the target's `Sf` home is established by the entry init the
+            // merge emits on this same edge, so the bridge itself is pure
+            // state. The adoption gate guarantees the slot is current
+            // (`S`, never a kept `C`) on every entry path.
+            (LinkMode::S(_), LinkMode::Sf(fpr, guarded)) => {
+                self.grow_fpr_to(fpr.0 + 1);
+                self.set_Sf(slot, fpr, guarded);
             }
             (LinkMode::C(v), LinkMode::S(_)) => {
                 self.set_mode(slot, LinkMode::S(Guarded::from_concrete_value(v)));

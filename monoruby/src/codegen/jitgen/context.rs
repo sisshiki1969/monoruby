@@ -1695,6 +1695,8 @@ impl<'a> JitContext<'a> {
         &mut self,
         entry_bb: BasicBlockId,
         loop_end: BasicBlockId,
+        target: &mut AbstractState,
+        entries: &[BranchEntry],
     ) -> Vec<(Vec<SpecializedId>, usize, SlotId, OuterFprHome)> {
         let mut inits = vec![];
         if !self.codegen_mode() {
@@ -1719,6 +1721,17 @@ impl<'a> JitContext<'a> {
             if !matches!(parked.mode(slot), LinkMode::S(_)) || !parked.no_capture_guard() {
                 continue;
             }
+            // The read decisions consult the *live* chain (B3b), so the
+            // adoption must land there too — and the entry init loads the
+            // owner's slot, so every entry path must have it current
+            // (`S`/`Sf`; a kept `C` may be unwritten).
+            if !matches!(target[pos].mode(slot), LinkMode::S(_))
+                || !entries
+                    .iter()
+                    .all(|e| matches!(e.state[pos].mode(slot), LinkMode::S(_) | LinkMode::Sf(_, _)))
+            {
+                continue;
+            }
             let fpr = self.stack_frame[pos]
                 .abstract_state
                 .as_mut()
@@ -1735,6 +1748,10 @@ impl<'a> JitContext<'a> {
                 continue;
             };
             let (ids, extra) = self.specialized_ids_at_pos(pos);
+            // Mirror into the live loop-entry state (the parked file stays
+            // the single allocator for the owner's spill homes, exactly as
+            // stage 2's store-driven promotion does).
+            target.set_outer_sf_at(pos, slot, fpr);
             self.current_frame_mut()
                 .adopted_outer_views
                 .push((loop_end, pos, slot));
@@ -2076,20 +2093,6 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn record_call_site_fpr_save(&mut self, callee: SpecializedId, using: UsingFpr) {
         self.call_site_fpr_saves.insert(callee, using);
-    }
-
-    ///
-    /// The *parked* mode an outer frame holds for `slot`: `Some(fpr)` iff
-    /// it is a Float-guarded `Sf` view — the only shape the write-through
-    /// keep applies to.
-    ///
-    pub(super) fn outer_parked_sf_float(&self, outer: usize, slot: SlotId) -> Option<crate::codegen::FPReg> {
-        let pos = self.outer_pos(outer)?;
-        let st = self.stack_frame[pos].abstract_state.as_ref()?;
-        match st.mode(slot) {
-            LinkMode::Sf(fpr, crate::codegen::jitgen::state::SfGuarded::Float) => Some(fpr),
-            _ => None,
-        }
     }
 
     ///

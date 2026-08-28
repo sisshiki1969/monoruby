@@ -287,7 +287,7 @@ impl<'a> JitContext<'a> {
                     _ => None,
                 };
                 fsrc.and_then(|fsrc| {
-                    if let Some(afpr) = self.outer_parked_sf_float(dst.outer, dst.reg) {
+                    if let Some(afpr) = state.outer_sf_float(dst.outer, dst.reg) {
                         // Stage 1': the owner already holds a Float `Sf`
                         // view — refresh its existing home.
                         let home = self

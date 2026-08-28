@@ -84,6 +84,16 @@ impl AbstractState {
             .overlay_kept_constants(joined);
     }
 
+    ///
+    /// Position-addressed twin of [`Self::promote_outer_sf`], for the
+    /// loop-entry adoption whose owner is found by trace position.
+    ///
+    pub(super) fn set_outer_sf_at(&mut self, pos: usize, slot: SlotId, fpr: FPReg) {
+        let frame = &mut self.frames[pos];
+        frame.grow_fpr_to(fpr.0 + 1);
+        frame.set_Sf(slot, fpr, SfGuarded::Float);
+    }
+
     pub(super) fn innermost_clone(&self) -> AbstractFrame {
         self.frames.last().unwrap().clone()
     }
@@ -262,6 +272,19 @@ impl AbstractState {
 
     /// The mode *slot* has in the frame *outer* levels out, if that frame
     /// belongs to this compilation.
+    ///
+    /// The live chain's Float-guarded `Sf` view of the slot *outer*
+    /// lexical levels out, if it holds one — the path-sensitive
+    /// replacement for the parked-copy consultation (B3b): an `Sf` here
+    /// means every path into this program point kept the home current.
+    ///
+    pub(super) fn outer_sf_float(&self, outer: usize, slot: SlotId) -> Option<FPReg> {
+        match self.outer_mode(outer, slot)? {
+            LinkMode::Sf(fpr, SfGuarded::Float) => Some(fpr),
+            _ => None,
+        }
+    }
+
     pub(super) fn outer_mode(&self, outer: usize, slot: SlotId) -> Option<LinkMode> {
         if outer == 0 {
             return None;

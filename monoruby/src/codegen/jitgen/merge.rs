@@ -233,8 +233,8 @@ impl<'a> JitContext<'a> {
             // (chain load, Float guard, unbox, store to the home), and
             // reverted when the compile leaves the loop. The live state
             // is untouched: the claim's only consumers are the parked
-            // consultations (`outer_parked_sf_float`) inside the body.
-            let outer_inits = self.adopt_outer_loop_views(bbid, loop_end);
+            // consultations (`AbstractState::outer_sf_float`) inside the body.
+            let outer_inits = self.adopt_outer_loop_views(bbid, loop_end, &mut target, &entries);
 
             // `bridge` adds `+1` to the deopt resume PC so it lands on
             // the first body instruction (skipping LoopStart, which

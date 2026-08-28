@@ -20,6 +20,12 @@ impl<'a> JitContext<'a> {
     pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> JitResult<JitStackFrame> {
         self.push_frame(frame);
 
+        // Handing the callee the caller's *live* chain here instead of the
+        // parked clones (the natural next unification step) measurably
+        // regressed the hot inlined-nest shapes (+22% on the times-loop
+        // benchmarks) — the path-sensitive claims steer some nested
+        // compile decisions worse. Deferred until that is understood; the
+        // parked mirror keeps every promotion visible to nested chains.
         let state = AbstractState::new(&self);
         let iseq = self.iseq();
         let (bb_begin, bb_end) = if let Some(pc) = self.position() {
@@ -556,7 +562,7 @@ impl<'a> JitContext<'a> {
                 // boundaries); after that a Value use falls back to the
                 // ordinary `F` re-box, which is always sound.
                 if let Some((ids, extra, true)) = self.outer_specialized_ids(state, src.outer)
-                    && let Some(afpr) = self.outer_parked_sf_float(src.outer, src.reg)
+                    && let Some(afpr) = state.outer_sf_float(src.outer, src.reg)
                 {
                     let alias = crate::codegen::jitgen::state::DynVarAliasLoad {
                         ids: ids.clone(),
