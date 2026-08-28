@@ -274,12 +274,51 @@ impl AbstractState {
 
     pub(super) fn unset_no_capture_guard(&mut self, jitctx: &mut JitContext) {
         jitctx.unset_outer_no_capture_guard();
-        self.unset_all_no_capture_guard();
+        self.unset_lexical_no_capture_guard();
     }
 
-    pub(super) fn unset_all_no_capture_guard(&mut self) {
-        for frame in &mut self.frames {
-            frame.unset_no_capture_guard();
+    ///
+    /// Drop the no-capture invariant on the frames a capture born here
+    /// can actually reach: this frame and its *lexical* ancestors (the
+    /// handed block's home chain) — the state-side twin of
+    /// [`JitContext::unset_outer_no_capture_guard`]'s walk. Unsetting
+    /// every trace frame instead (the old blanket) poisoned suspended
+    /// method callers a capture cannot touch, and — since only the
+    /// innermost is ever re-proved by its own guards — permanently
+    /// degraded the live chain's invariants relative to the parked
+    /// copies, which is what broke the specialized dynvar addressing
+    /// when nested compiles started reading the live chain.
+    ///
+    ///
+    /// The re-proving twin of [`Self::unset_lexical_no_capture_guard`]:
+    /// after a capture guard passes, this frame *and its lexical
+    /// ancestors* are proven un-captured — the guard's meta check covers
+    /// ancestor promotions too (an ancestor's `move_frame_to_heap`
+    /// tombstones the frame, see `branch_if_captured`), which is exactly
+    /// the property the specialized rbp-relative outer access needs.
+    /// Re-proving only the innermost (the old behavior) left the live
+    /// chain's outer flags permanently false after the conservative
+    /// per-call unset, killing the specialized addressing in loop bodies.
+    ///
+    pub(super) fn set_lexical_no_capture_guard(&mut self) {
+        let mut level = self.frames.len() - 1;
+        loop {
+            self.frames[level].set_no_capture_guard();
+            match self.frames[level].lexical_outer() {
+                Some(o) if level >= o => level -= o,
+                _ => break,
+            }
+        }
+    }
+
+    pub(super) fn unset_lexical_no_capture_guard(&mut self) {
+        let mut level = self.frames.len() - 1;
+        loop {
+            self.frames[level].unset_no_capture_guard();
+            match self.frames[level].lexical_outer() {
+                Some(o) if level >= o => level -= o,
+                _ => break,
+            }
         }
     }
 
@@ -418,19 +457,6 @@ impl AbstractFrame {
 
     pub(in crate::codegen::jitgen) fn next_sp(&self) -> SlotId {
         self.next_sp
-    }
-
-    ///
-    /// Own-timeline bookkeeping restoration (the entry-chain twin of the
-    /// resume asymmetry): the live chain's outer invariants degrade
-    /// monotonically (every block-literal call conservatively unsets
-    /// no-capture on every frame, and only the innermost is re-proved by
-    /// its guards), while the parked copy carries the guarded truth for
-    /// the frame as suspended. A chain handed to a nested compile takes
-    /// its slot claims from the live path and its invariants from parked.
-    ///
-    pub(super) fn restore_invariants_from(&mut self, parked: &AbstractFrame) {
-        self.invariants = parked.invariants.clone();
     }
 
     pub(super) fn no_capture_guard(&self) -> bool {

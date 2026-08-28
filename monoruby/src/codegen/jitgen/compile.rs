@@ -94,9 +94,7 @@ impl<'a> JitContext<'a> {
         #[cfg(feature = "emit-cfg")]
         dump_cfg::dump_cfg(&self.store, self.iseq_id(), bb_begin, bb_end);
 
-        let popped = self.pop_frame();
-        self.dump_inst_counts_probe(&popped);
-        Ok(popped)
+        Ok(self.pop_frame())
     }
 
     fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> JitResult<AsmIr> {

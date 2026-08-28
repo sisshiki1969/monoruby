@@ -1621,9 +1621,12 @@ impl<'a> JitContext<'a> {
         // to contain a deopt-able exit or a generic yield.
         let kept_mark = self.kept_outer_views_mark();
         let mut frame = self.specialized_compile(state, callid, frame)?;
-        // we must unset no_capture_guard for all state frames if no_capture_guard of the current frame became false.
+        // The resume chain already carries the callee's compile-time
+        // capture verdicts per frame; if the resumed frame's own flag
+        // dropped, propagate along its lexical chain (the frames a
+        // capture through it can reach), not to unrelated trace frames.
         if !state.no_capture_guard() {
-            state.unset_all_no_capture_guard();
+            state.unset_lexical_no_capture_guard();
         }
 
         let pos = self.current_frame_pos();
@@ -2052,7 +2055,9 @@ impl AbstractState {
         if !self.no_capture_guard() {
             let deopt = ir.new_deopt_with_pc(self, next_pc);
             ir.guard_capture(deopt);
-            self.set_no_capture_guard();
+            // The guard's meta check also catches ancestor promotions (the
+            // tombstone bit), so it re-proves the whole lexical chain.
+            self.set_lexical_no_capture_guard();
         }
     }
 
