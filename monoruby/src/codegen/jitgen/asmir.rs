@@ -2627,6 +2627,20 @@ pub(super) enum AsmInst {
         src: OuterFprSrc,
         home: OuterFprHome,
     },
+    ///
+    /// Stage 3a: read the raw f64 of an outer frame's Float-guarded `Sf`
+    /// view straight from its home — the owner's call-site save slot for
+    /// a pool-resident fpr, its spill slot otherwise — into a fresh `F`
+    /// of the reading frame. No slot load, no Float guard, no unbox: the
+    /// `Sf(Float)` binding at the read point guarantees the type, and the
+    /// home is current on every path that reaches the read (a widen
+    /// leaves the fpr's reverse-map entry, so the call-site save always
+    /// covers a referenced pool home).
+    ///
+    LoadOuterFprHomeF {
+        dst: FPReg,
+        home: OuterFprHome,
+    },
     LoadDynVarSpecialized {
         /// Machine stack offset in bytes. Emitted as a
         /// `DynVarOffset::Hint(...)` chain by Pass 1; the pre-codegen
@@ -2856,6 +2870,13 @@ impl AsmInst {
                     OuterFprSrc::Fpr(f) => vec![*f],
                     OuterFprSrc::Imm(_) => vec![],
                 };
+                if let OuterFprHome::Hint { fpr, .. } = home {
+                    v.push(*fpr);
+                }
+                v
+            }
+            Self::LoadOuterFprHomeF { dst, home } => {
+                let mut v = vec![*dst];
                 if let OuterFprHome::Hint { fpr, .. } = home {
                     v.push(*fpr);
                 }

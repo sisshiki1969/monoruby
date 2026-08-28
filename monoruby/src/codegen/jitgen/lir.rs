@@ -999,6 +999,15 @@ pub(in crate::codegen) enum LInst {
         /// The emitting frame's `base_stack_offset`, for resolving `src`.
         base: usize,
     },
+    /// Stage 3a home read: raw f64 from `[rbp + disp]` into `dst` (a
+    /// current-frame fpr). Unlike the store, the displacement is
+    /// unconditional — an elided home would leave `dst` undefined, and
+    /// the reverse-map invariant makes the elision case unreachable.
+    LoadOuterFprHomeF {
+        dst: FPReg,
+        disp: i64,
+        base: usize,
+    },
     /// Defer a spliced non-local exit's unwind before jumping into the
     /// shared `ensure` body (#1185). The value rides in `GP::Rdx`; the
     /// degenerate outcome raises generically from `pc`.

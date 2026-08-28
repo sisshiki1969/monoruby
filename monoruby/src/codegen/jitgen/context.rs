@@ -1746,9 +1746,27 @@ impl<'a> JitContext<'a> {
         fpr: crate::codegen::FPReg,
     ) -> Option<OuterFprHome> {
         let pos = self.outer_pos(outer)?;
+        self.kept_outer_views.push((pos, slot));
+        self.outer_fpr_home_hint(ids, extra, outer, fpr)
+    }
+
+    ///
+    /// Build the [`OuterFprHome`] hint for the frame `outer` levels out —
+    /// without recording a kept view. A home *read* (stage 3a) records
+    /// nothing: its validity is a fact about the paths reaching it (the
+    /// `Sf(Float)` binding at the read point), not a claim the owner's
+    /// continuation consumes.
+    ///
+    pub(super) fn outer_fpr_home_hint(
+        &self,
+        ids: Vec<SpecializedId>,
+        extra: usize,
+        outer: usize,
+        fpr: crate::codegen::FPReg,
+    ) -> Option<OuterFprHome> {
+        let pos = self.outer_pos(outer)?;
         let owner = self.stack_frame[pos].specialized_id;
         let callee = self.stack_frame.get(pos + 1)?.specialized_id;
-        self.kept_outer_views.push((pos, slot));
         Some(OuterFprHome::Hint {
             ids,
             extra,
@@ -1980,7 +1998,8 @@ impl<'a> JitContext<'a> {
                     }
                 }
             }
-            AsmInst::StoreOuterFprHomeF { home, .. } => {
+            AsmInst::StoreOuterFprHomeF { home, .. }
+            | AsmInst::LoadOuterFprHomeF { home, .. } => {
                 if let OuterFprHome::Hint {
                     ids,
                     extra,

@@ -3307,6 +3307,23 @@ impl Codegen {
         true
     }
 
+    /// Stage 3a home read — mirror of x86 `emit_load_outer_fpr_home_f`:
+    /// raw f64 from `[x29 + disp]` into `dst` via the d0 scratch.
+    pub(in crate::codegen::jitgen) fn emit_load_outer_fpr_home_f(
+        &mut self,
+        dst: FPReg,
+        disp: i64,
+        base: usize,
+    ) -> bool {
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (disp as u64);
+            add x10, x29, x10;
+            ldr d0, [x10];
+        );
+        self.a64_fpr_save(dst, 0, base); // d0 -> dst (pool fmov or spill store)
+        true
+    }
+
     /// A JIT-spliced non-local exit (#1185): build and defer the exit's
     /// unwind (value in the `GP::Rdx`-mapped register) so the following
     /// compiled branch enters the shared `ensure` body directly. A

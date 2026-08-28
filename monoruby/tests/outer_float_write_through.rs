@@ -252,3 +252,106 @@ fn a_conditional_store_refuses_promotion() {
         "#,
     );
 }
+
+/// From here down: stage 3a — home-directed *reads*. A block's read of
+/// an outer Float-guarded `Sf` slot loads the raw f64 straight from its
+/// home (the owner's call-site save slot or spill slot) into a fresh `F`
+/// of the reading frame (`AsmInst::LoadOuterFprHomeF`): no slot load, no
+/// Float guard, no unbox. The read relies only on the binding at its own
+/// program point, so it records nothing and needs no drain.
+///
+/// The full round trip: the block reads and writes the kept float every
+/// iteration; with home reads and write-through keeps the loop's floats
+/// stay unboxed except the one authoritative slot store per write.
+#[test]
+fn a_block_reading_and_writing_the_kept_float() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def q1(n)
+          a = n * 1.5
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { a = a * 1.001 + 0.5 }
+            s += a
+            i += 1
+          end
+          [s.round(6), a.round(6)]
+        end
+        q1(3)
+        "#,
+    );
+}
+
+/// A later block home-reads a view the *promotion* (stage 2) created —
+/// the owner never unboxed x itself, yet both blocks work on raw f64s.
+#[test]
+fn a_home_read_of_a_promoted_view() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def q2(n)
+          x = nil
+          call_block { x = n * 2.5 }
+          t = 0.0
+          call_block { t = x + 1.0 }
+          [x, t]
+        end
+        r = nil
+        300.times { r = q2(4) }
+        r
+        "#,
+    );
+}
+
+/// The block consumes the float as a *Value* (`to_s`): the home read
+/// defines an `F` in the block's frame, and the ordinary F-boxing
+/// machinery takes it from there.
+#[test]
+fn a_home_read_consumed_as_a_value() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def q3(n)
+          a = n * 1.5
+          s = ""
+          call_block { s = a.to_s }
+          [a, s]
+        end
+        r = nil
+        300.times { r = q3(2) }
+        r
+        "#,
+    );
+}
+
+/// After a type flip widens the binding, reads degrade to the slot path
+/// and stay correct.
+#[test]
+fn a_home_read_degrades_after_a_type_flip() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def q4
+          a = 1.5
+          v = nil
+          i = 0
+          while i < 300
+            call_block { a = 7 if i == 150; v = a.to_f + 0.25 }
+            i += 1
+          end
+          [a, v]
+        end
+        q4
+        "#,
+    );
+}

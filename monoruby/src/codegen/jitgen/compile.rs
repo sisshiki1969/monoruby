@@ -530,6 +530,20 @@ impl<'a> JitContext<'a> {
                     self.restore_unfrozen(Some(dst));
                     return Ok(CompileResult::Continue);
                 }
+                // Stage 3a: the outer frame holds a Float-guarded `Sf`
+                // view of this local — read the raw f64 straight from its
+                // home into a fresh `F` of this frame: no slot load, no
+                // Float guard (the binding at this point guarantees the
+                // type on every path reaching the read), no unbox.
+                if let Some((ids, extra, true)) = self.outer_specialized_ids(state, src.outer)
+                    && let Some(afpr) = self.outer_parked_sf_float(src.outer, src.reg)
+                    && let Some(home) = self.outer_fpr_home_hint(ids, extra, src.outer, afpr)
+                {
+                    let dfpr = state.def_F(dst);
+                    ir.push(AsmInst::LoadOuterFprHomeF { dst: dfpr, home });
+                    self.restore_unfrozen(Some(dst));
+                    return Ok(CompileResult::Continue);
+                }
                 self.load_dynvar(state, ir, src);
                 state.def_rax2acc(ir, dst);
                 // LFP-chain walk + loads: transparent.

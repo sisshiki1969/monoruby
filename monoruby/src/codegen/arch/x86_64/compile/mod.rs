@@ -173,6 +173,7 @@ impl Codegen {
             | AsmInst::SpecializedYield { .. }
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreOuterFprHomeF { .. }
+            | AsmInst::LoadOuterFprHomeF { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
@@ -2753,6 +2754,27 @@ impl Codegen {
             OuterFprSrc::Imm(bits) => monoasm! { &mut self.jit,
                 movq rax, (bits);
                 movq [rbp + (disp)], rax;
+            },
+        }
+        true
+    }
+
+    /// Stage 3a home read: raw f64 from `[rbp + disp]` into `dst` (this
+    /// frame's fpr, pool or spill). Twin of `emit_store_outer_fpr_home_f`.
+    pub(in crate::codegen::jitgen) fn emit_load_outer_fpr_home_f(
+        &mut self,
+        dst: FPReg,
+        disp: i64,
+        base: usize,
+    ) -> bool {
+        let disp = i32::try_from(disp).expect("outer fpr home displacement out of i32 range");
+        match PhysMap::new(base).resolve(dst) {
+            FPRegLoc::Xmm(p) => monoasm! { &mut self.jit,
+                movq xmm(p), [rbp + (disp)];
+            },
+            FPRegLoc::Spill(off) => monoasm! { &mut self.jit,
+                movq rax, [rbp + (disp)];
+                movq [rbp - (off)], rax;
             },
         }
         true
