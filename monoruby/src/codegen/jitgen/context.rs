@@ -1274,6 +1274,18 @@ impl<'a> JitContext<'a> {
         // Take the chain back. The nested compile could only record what
         // it did to our outer frames on the context's copies, so re-read
         // those rather than keep the clones we handed over.
+        //
+        // Resuming from the *join of the callee's return-path chains*
+        // instead (the natural next unification step) is measurably
+        // unsound today: a return snapshot preserves the caller's kept-`C`
+        // claims path-sensitively, while the kept-constant bet machinery
+        // (`forget_constants` emitting the deferred literal writes, the
+        // `specialized_iseq` confirmation) is built around the parked
+        // copy's path-insensitive widens — a resumed `C` whose slot only
+        // some paths wrote reads stale (Integer#downto resumed `C(0)`
+        // where the parked copy held `S(Value)`; Array#permutation then
+        // read nil). Making that resume sound means making the kept-`C`
+        // discipline per return path first.
         self.adopt_outer(state, innermost);
         Ok(frame)
     }
@@ -1297,7 +1309,7 @@ impl<'a> JitContext<'a> {
     /// through `widen_outer_slot`.
     ///
     fn adopt_outer(&self, state: &mut AbstractState, innermost: AbstractFrame) {
-        let mut frames = self.outer_contexts();
+        let mut frames = self.trace_contexts();
         frames.push(innermost);
         state.set_frames(frames);
     }
@@ -1732,6 +1744,25 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    ///
+    /// Position-addressed twin of [`Self::widen_outer_slot`], for callers
+    /// that walk the trace chain (whose positions align with
+    /// `stack_frame`) rather than a lexical distance.
+    ///
+    pub(super) fn widen_outer_at_pos(&mut self, pos: usize, slot: SlotId) {
+        if pos + 1 >= self.stack_frame.len() {
+            return;
+        }
+        if let Some(frame) = self
+            .stack_frame
+            .get_mut(pos)
+            .and_then(|f| f.abstract_state.as_mut())
+        {
+            frame.invalidate_slot(slot);
+        }
+        self.widened_outer_log.push((pos, slot));
+    }
+
     pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {
         let Some(pos) = self.outer_pos(outer) else {
             // The chain leaves this compilation: the frame is not one of
@@ -1758,6 +1789,32 @@ impl<'a> JitContext<'a> {
     /// chain was three deep — and that answer gates whether a dynvar access
     /// may use the static frame-chain offset.
     ///
+    ///
+    /// The abstract frames of the **whole trace** (every suspended frame of
+    /// this compilation, outermost first, 1:1 with `stack_frame`), each
+    /// annotated with its lexical link — join unification, step B2: the
+    /// state chain mirrors the specialization stack, so suspended method
+    /// callers and lexical outer scopes are the same kind of entry and the
+    /// merge machinery (join / equiv / bridge, which already walk every
+    /// frame) covers both. Lexical (dynvar) addressing walks the per-frame
+    /// links, exactly as [`Self::outer_pos`] walks `stack_frame`.
+    ///
+    pub(super) fn trace_contexts(&self) -> Vec<AbstractFrame> {
+        let end = self.stack_frame.len() - 1;
+        (0..end)
+            .map(|pos| {
+                let mut f = self.stack_frame[pos].abstract_state.clone().unwrap();
+                f.set_lexical_outer(self.stack_frame[pos].outer);
+                f
+            })
+            .collect()
+    }
+
+    pub(super) fn current_frame_lexical_outer(&self) -> Option<usize> {
+        self.stack_frame.last().unwrap().outer
+    }
+
+    #[allow(dead_code)]
     pub(super) fn outer_contexts(&self) -> Vec<AbstractFrame> {
         let mut i = self.stack_frame.len() - 1;
         let mut v = vec![];

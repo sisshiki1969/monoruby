@@ -2332,17 +2332,18 @@ impl AbstractFrame {
         // An outer frame's fpr is not in a register while we run: the call
         // that suspended that frame saved its physical fprs
         // (`fpr_save_cont`) and restores them on the way back. So nothing
-        // here may emit a register operation on one. That leaves exactly
-        // two transitions for a slot holding `Sf` — keep the same binding,
-        // or drop to `S`, which is free because the slot holds the boxed
-        // value — and rules out `F`, whose only copy *is* the register.
-        // `AbstractState::join` is what keeps it to those.
-        debug_assert!(
-            !matches!(self.mode(slot), LinkMode::F(_)),
-            "outer{outer} {slot:?} holds {:?}",
-            self.mode(slot),
-        );
+        // here may emit a register operation on one. A suspended frame's
+        // placements are path-invariant unless a chain store widened them
+        // (`AbstractState::join` keeps identical placements and meets
+        // differing ones to `S`), so every arm here is either a no-op or a
+        // pure state demotion — including a *method* caller's `F`, whose
+        // slot is stale but whose value sits untouched in the call-site
+        // save area, unreachable by anything this compile runs (a frame a
+        // handed-out block could reach was homed at its own call site).
         match (self.mode(slot), target.mode(slot)) {
+            (LinkMode::F(l), LinkMode::F(r)) if l == r => {
+                return;
+            }
             (LinkMode::V, LinkMode::V)
             | (LinkMode::None, LinkMode::None)
             | (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
@@ -2380,11 +2381,6 @@ impl AbstractFrame {
             self.unbox_to_S(ir, slot, false);
             return false;
         }
-        debug_assert!(
-            !matches!(self.mode(slot), LinkMode::F(_)),
-            "outer{outer} {slot:?} holds {:?}",
-            self.mode(slot),
-        );
         match self.mode(slot) {
             // The slot holds the boxed value; only the read-only view goes.
             LinkMode::Sf(_, _) => {
@@ -2395,6 +2391,12 @@ impl AbstractFrame {
                 self.set_mode(slot, LinkMode::S(Guarded::Value));
                 true
             }
+            // A suspended *method* caller can hold `F` across its call (the
+            // value lives in its call-site save area). The block handed out
+            // here cannot reach that frame — every frame a block's lexical
+            // chain crosses was homed at its own block-handing call site —
+            // so the stale slot is never read and the binding stays.
+            LinkMode::F(_) => false,
             _ => false,
         }
     }
