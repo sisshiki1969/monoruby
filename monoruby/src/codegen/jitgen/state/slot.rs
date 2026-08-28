@@ -722,21 +722,34 @@ impl SlotState {
     /// from the analysis-pass allocation — the first step of making the analysis
     /// pass allocation-free.
     ///
+    /// `adopt_sf(i)` selects the slots that re-adopt **`Sf`** instead: the
+    /// back-edge placement is `Sf(Float)`, i.e. the slot is *current* on
+    /// every path around the loop (the last write boxed it — an owner
+    /// unbox, or an inlined block's write-through keep). Adopting `F`
+    /// there would declare the slot stale, forcing every block-passing
+    /// call site in the body to re-box it each iteration; `Sf` keeps the
+    /// claim, so the call sites emit nothing and the back-edge bridge is
+    /// an fpr move at worst. The entry is unboxed once at the pre-header
+    /// by the `S -> Sf` bridge (guard + unbox, no store — the slot
+    /// already holds the boxed value).
     pub(in crate::codegen::jitgen) fn keep_backedge_floats(
         &mut self,
         adopt: impl Fn(SlotId) -> bool,
+        adopt_sf: impl Fn(SlotId) -> bool,
         promotable: impl Fn(SlotId) -> bool,
     ) {
         for i in self.all_regs() {
-            if adopt(i)
-                && matches!(self.mode(i), LinkMode::S(_) | LinkMode::Sf(_, _))
-                && promotable(i)
-            {
-                // `try_set_new_F` (no phase-2 spill): only specialize to `F` when
-                // a physical fpr is actually free. Spilling a *speculative*
-                // loop-entry promotion into a `VirtFPReg` is not worth it and is
-                // exercised wrongly under register pressure (the `stress-spill-pool`
-                // path); leave the slot boxed in that case.
+            if !promotable(i) {
+                continue;
+            }
+            // `try_set_new_F` / `try_set_new_Sf` (no phase-2 spill): only
+            // specialize when a physical fpr is actually free. Spilling a
+            // *speculative* loop-entry promotion into a `VirtFPReg` is not
+            // worth it and is exercised wrongly under register pressure (the
+            // `stress-spill-pool` path); leave the slot boxed in that case.
+            if adopt_sf(i) && matches!(self.mode(i), LinkMode::S(_)) {
+                self.try_set_new_Sf(i, SfGuarded::Float);
+            } else if adopt(i) && matches!(self.mode(i), LinkMode::S(_) | LinkMode::Sf(_, _)) {
                 self.try_set_new_F(i);
             }
         }

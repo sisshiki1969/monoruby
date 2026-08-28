@@ -1,4 +1,5 @@
 use super::*;
+use state::SfGuarded;
 
 impl<'a> JitContext<'a> {
     ///
@@ -151,11 +152,32 @@ impl<'a> JitContext<'a> {
                         // (the mandelbrot regression — the type signal misses
                         // copy-aliased carried floats). So adopt the union,
                         // keeping it ⊇ the placement-based greedy set.
+                        //
+                        // The `Sf(Float)` placement fallback (`adopt_sf`) is
+                        // the subtree-crossing use signal: the fixpoint walk
+                        // *descends into inlined blocks*, and a block that
+                        // stores a float into an owner slot every iteration
+                        // leaves that verdict behind as the outer promotion's
+                        // `Sf(Float)` at the back edge (`try_promote_outer_sf`)
+                        // — likewise an owner-side unbox the loop never
+                        // invalidates. The owner-side liveness cannot see a
+                        // block-only use — the owner's own body never touches
+                        // the slot — so without it a float carried only
+                        // through the block collapses to `S` here and
+                        // re-promotes every iteration, and the block's home
+                        // reads never see a parked `Sf`. Such slots re-adopt
+                        // `Sf`, not `F`: the back-edge `Sf` says the slot is
+                        // current on every path around the loop, and an `F`
+                        // adoption's "slot stale" fiction would make every
+                        // block-passing call site in the body re-box it each
+                        // iteration (see `keep_backedge_floats`).
                         let adopt = |i| {
                             (be.is_float_typed(i) && loop_float.contains(&i))
                                 || matches!(be.mode(i), LinkMode::F(_))
                         };
-                        target.keep_backedge_floats(adopt, promotable);
+                        let adopt_sf =
+                            |i| matches!(be.mode(i), LinkMode::Sf(_, SfGuarded::Float));
+                        target.keep_backedge_floats(adopt, adopt_sf, promotable);
                     }
                 }
                 // §27.3 Stage-2a: record the loop-carried float set `L` (slots
