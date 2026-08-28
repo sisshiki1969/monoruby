@@ -581,7 +581,7 @@ impl Codegen {
             refinements,
             vec![],
         );
-        let mut frame = ctx.traceir_to_asmir(frame)?;
+        let mut frame = ctx.traceir_to_asmir(frame, None)?;
         let specialized_info = SpecializedCodeInfo::from(&frame);
 
         // Now that every frame's `stack_offset` has been finalised

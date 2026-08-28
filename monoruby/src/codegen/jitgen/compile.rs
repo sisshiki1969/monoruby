@@ -17,10 +17,27 @@ mod pic;
 mod variables;
 
 impl<'a> JitContext<'a> {
-    pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> JitResult<JitStackFrame> {
+    pub(super) fn traceir_to_asmir(
+        &mut self,
+        frame: JitStackFrame,
+        entry_chain: Option<Vec<AbstractFrame>>,
+    ) -> JitResult<JitStackFrame> {
         self.push_frame(frame);
 
-        let state = AbstractState::new(&self);
+        // A nested compile's view of the suspended frames is the caller's
+        // *live* chain at the call — the path this call sits on — with
+        // each suspended frame's invariants restored from its parked copy
+        // (`restore_invariants_from`: the live outer invariants only
+        // ratchet down, every block-literal call conservatively unsetting
+        // no-capture on every frame with only the innermost re-proved by
+        // its guards; handing the degraded flags to the callee silently
+        // turned the specialized dynvar addressing — and with it the
+        // home-read machinery — back into generic chain walks, +22% on
+        // the times-loop shapes until the restoration).
+        let state = match entry_chain {
+            Some(chain) => AbstractState::with_chain(&self, chain),
+            None => AbstractState::new(&self),
+        };
         let iseq = self.iseq();
         let (bb_begin, bb_end) = if let Some(pc) = self.position() {
             let start_pos = iseq.get_pc_index(Some(pc));
@@ -60,10 +77,6 @@ impl<'a> JitContext<'a> {
         for bbid in bb_begin..=bb_end {
             let ir = self.compile_basic_block(bbid, bbid == bb_end)?;
             self.push_ir(Some(bbid), ir);
-            // Stage-C loop adoption: leaving a loop re-widens the outer
-            // views it adopted — the entry bridges dominate the body and
-            // nothing after it.
-            self.revert_adopted_outer_views(bbid);
         }
 
         self.backedge_branches();
@@ -292,7 +305,7 @@ impl<'a> JitContext<'a> {
         // while this frame's `outer` distances are still the ones the reads
         // were recorded under.
         for (outer, slot) in state.take_pending_outer_float_reads() {
-            self.mark_outer_float_read(outer as usize, slot);
+            state.mark_outer_float_read(outer as usize, slot);
         }
         // A fusing arm (e.g. `try_fuse_array_minmax`) already emitted this
         // instruction's work together with its predecessor's.
@@ -556,7 +569,7 @@ impl<'a> JitContext<'a> {
                 // boundaries); after that a Value use falls back to the
                 // ordinary `F` re-box, which is always sound.
                 if let Some((ids, extra, true)) = self.outer_specialized_ids(state, src.outer)
-                    && let Some(afpr) = self.outer_parked_sf_float(src.outer, src.reg)
+                    && let Some(afpr) = state.outer_sf_float(src.outer, src.reg)
                 {
                     let alias = crate::codegen::jitgen::state::DynVarAliasLoad {
                         ids: ids.clone(),
@@ -950,8 +963,22 @@ impl<'a> JitContext<'a> {
 
             TraceIr::Ret(ret) => {
                 assert!(state.no_capture_guard());
-                state.load(ir, ret, GP::Rax);
-                ir.push(AsmInst::Ret);
+                // Join unification: in a specialized (inlined) frame, a
+                // plain `Ret` is one incoming edge of the caller's
+                // continuation merge. The value load and the `ret` are
+                // emitted per edge behind `seg`, prefixed by the bridge
+                // that reconciles this path's chain with the join of all
+                // return paths — including the deferred literal write a
+                // surrendered kept-`C` claim owes
+                // (`build_return_segments`).
+                let bbid = self.iseq().bb_info.get_bb_id(bc_pos);
+                let seg = self.label();
+                if self.record_return_edge(seg, state, ret, bbid) {
+                    ir.push(AsmInst::Br(seg));
+                } else {
+                    state.load(ir, ret, GP::Rax);
+                    ir.push(AsmInst::Ret);
+                }
                 let result = state.as_return(ret);
                 state.discard_temps();
                 return Ok(CompileResult::Return(result));

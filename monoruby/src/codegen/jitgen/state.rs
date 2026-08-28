@@ -46,6 +46,19 @@ impl std::ops::IndexMut<usize> for AbstractState {
 }
 
 impl AbstractState {
+    /// Nested compile entry from the caller's live chain (B3a, gated).
+    pub(super) fn with_chain(jitctx: &JitContext, chain: Vec<AbstractFrame>) -> Self {
+        let mut frames = chain;
+        let mut current = AbstractFrame::new(jitctx);
+        current.set_lexical_outer(jitctx.current_frame_lexical_outer());
+        frames.push(current);
+        AbstractState { frames }
+    }
+
+    pub(super) fn frames_cloned(&self) -> Vec<AbstractFrame> {
+        self.frames.clone()
+    }
+
     pub(super) fn new(jitctx: &JitContext) -> Self {
         // Join unification, step B2: the chain spans the whole trace
         // (every suspended frame, 1:1 with the specialization stack), not
@@ -71,6 +84,52 @@ impl AbstractState {
             level = level.checked_sub(self.frames[level].lexical_outer()?)?;
         }
         Some(level)
+    }
+
+    ///
+    /// Adopt the join-validated kept-`C` claims onto the innermost frame
+    /// (the resume overlay — see `specialized_compile`).
+    ///
+    pub(super) fn overlay_kept_constants_innermost(&mut self, joined: &SlotState) {
+        self.frames
+            .last_mut()
+            .unwrap()
+            .overlay_kept_constants(joined);
+    }
+
+    ///
+    /// Position-addressed twin of [`Self::promote_outer_sf`], for the
+    /// loop-entry adoption whose owner is found by trace position.
+    ///
+    pub(super) fn set_outer_sf_at(&mut self, pos: usize, slot: SlotId, fpr: FPReg) {
+        let frame = &mut self.frames[pos];
+        frame.grow_fpr_to(fpr.0 + 1);
+        frame.set_Sf(slot, fpr, SfGuarded::Float);
+    }
+
+    pub(super) fn depth(&self) -> usize {
+        self.frames.len()
+    }
+
+    ///
+    /// Position-addressed widen, for replaying a `widened_outer_log`
+    /// delta onto a chain (the no-return-path fallback in
+    /// `specialized_compile`). Positions past the chain's end are
+    /// frames that no longer exist — ignored.
+    ///
+    pub(super) fn invalidate_at(&mut self, pos: usize, slot: SlotId) {
+        if let Some(frame) = self.frames.get_mut(pos) {
+            frame.invalidate_slot(slot);
+        }
+    }
+
+    pub(super) fn innermost_clone(&self) -> AbstractFrame {
+        self.frames.last().unwrap().clone()
+    }
+
+    pub(super) fn chain_prefix(&self, pos: usize) -> Vec<AbstractFrame> {
+        debug_assert!(pos < self.frames.len());
+        self.frames[..=pos].to_vec()
     }
 
     pub(super) fn set_frames(&mut self, frames: Vec<AbstractFrame>) {
@@ -106,6 +165,18 @@ impl AbstractState {
     #[coverage(off)] // only called from the dormant drain — see `drain_kept_outer_views`
     pub(super) fn invalidate_innermost(&mut self, slot: SlotId) {
         self.frames.last_mut().unwrap().invalidate_slot(slot);
+    }
+
+    ///
+    /// Stage-A use propagation, state side: land a raw-f64 read of the
+    /// slot *outer* lexical levels out on the owner frame's mark bits.
+    /// The marks then travel exactly like any other monotone hint —
+    /// through joins (ORed), return chains, and the resume overlay.
+    ///
+    pub(super) fn mark_outer_float_read(&mut self, outer: usize, slot: SlotId) {
+        if let Some(level) = self.outer_level(outer) {
+            self.frames[level].mark_subtree_float_read(slot);
+        }
     }
 
     pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {
@@ -231,17 +302,69 @@ impl AbstractState {
 
     pub(super) fn unset_no_capture_guard(&mut self, jitctx: &mut JitContext) {
         jitctx.unset_outer_no_capture_guard();
-        self.unset_all_no_capture_guard();
+        self.unset_lexical_no_capture_guard();
     }
 
-    pub(super) fn unset_all_no_capture_guard(&mut self) {
-        for frame in &mut self.frames {
-            frame.unset_no_capture_guard();
+    ///
+    /// Drop the no-capture invariant on the frames a capture born here
+    /// can actually reach: this frame and its *lexical* ancestors (the
+    /// handed block's home chain) — the state-side twin of
+    /// [`JitContext::unset_outer_no_capture_guard`]'s walk. Unsetting
+    /// every trace frame instead (the old blanket) poisoned suspended
+    /// method callers a capture cannot touch, and — since only the
+    /// innermost is ever re-proved by its own guards — permanently
+    /// degraded the live chain's invariants relative to the parked
+    /// copies, which is what broke the specialized dynvar addressing
+    /// when nested compiles started reading the live chain.
+    ///
+    ///
+    /// The re-proving twin of [`Self::unset_lexical_no_capture_guard`]:
+    /// after a capture guard passes, this frame *and its lexical
+    /// ancestors* are proven un-captured — the guard's meta check covers
+    /// ancestor promotions too (an ancestor's `move_frame_to_heap`
+    /// tombstones the frame, see `branch_if_captured`), which is exactly
+    /// the property the specialized rbp-relative outer access needs.
+    /// Re-proving only the innermost (the old behavior) left the live
+    /// chain's outer flags permanently false after the conservative
+    /// per-call unset, killing the specialized addressing in loop bodies.
+    ///
+    pub(super) fn set_lexical_no_capture_guard(&mut self) {
+        let mut level = self.frames.len() - 1;
+        loop {
+            self.frames[level].set_no_capture_guard();
+            match self.frames[level].lexical_outer() {
+                Some(o) if level >= o => level -= o,
+                _ => break,
+            }
+        }
+    }
+
+    pub(super) fn unset_lexical_no_capture_guard(&mut self) {
+        let mut level = self.frames.len() - 1;
+        loop {
+            self.frames[level].unset_no_capture_guard();
+            match self.frames[level].lexical_outer() {
+                Some(o) if level >= o => level -= o,
+                _ => break,
+            }
         }
     }
 
     /// The mode *slot* has in the frame *outer* levels out, if that frame
     /// belongs to this compilation.
+    ///
+    /// The live chain's Float-guarded `Sf` view of the slot *outer*
+    /// lexical levels out, if it holds one — the path-sensitive
+    /// replacement for the parked-copy consultation (B3b): an `Sf` here
+    /// means every path into this program point kept the home current.
+    ///
+    pub(super) fn outer_sf_float(&self, outer: usize, slot: SlotId) -> Option<FPReg> {
+        match self.outer_mode(outer, slot)? {
+            LinkMode::Sf(fpr, SfGuarded::Float) => Some(fpr),
+            _ => None,
+        }
+    }
+
     pub(super) fn outer_mode(&self, outer: usize, slot: SlotId) -> Option<LinkMode> {
         if outer == 0 {
             return None;

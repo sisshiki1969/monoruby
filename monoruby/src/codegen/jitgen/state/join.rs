@@ -63,6 +63,11 @@ impl AbstractFrame {
     /// physical register is free, so the resulting *types* — and hence the
     /// type-meet shadow check — are the same either way.
     ///
+    /// Allocation-free framewise join for resume chains (B2b).
+    pub(in crate::codegen::jitgen) fn join_no_alloc(&mut self, other: &AbstractFrame) {
+        self.join_with(other, false);
+    }
+
     fn join_with(&mut self, other: &AbstractFrame, allow_fpr: bool) {
         // §5 allocator de-fusion, stage 1: record the per-slot `JoinAction`
         // stream as we merge, then (debug) replay it from the pre-merge frame and

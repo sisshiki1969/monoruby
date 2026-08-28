@@ -82,6 +82,7 @@ impl<'a> JitContext<'a> {
             // value the loop carries stays in its pool register across the
             // back-edge instead of round-tripping its stack home each iteration.
             let incoming = AbstractState::join_entries(&entries);
+            let target_incoming = incoming.clone();
             if !no_calc_backedge {
                 self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;
             }
@@ -226,15 +227,19 @@ impl<'a> JitContext<'a> {
             eprintln!("  target:  {:?}\n", target.slot_state());
 
             // Stage-C loop adoption: the outer-frame slots the loop's
-            // inlined subtree reads as raw f64s (recorded by the fixpoint
-            // above) adopt a spill-homed `Sf(Float)` on their *parked*
-            // owners — the same claim a stage-2 dominating store creates,
-            // established instead by an init on every entry edge below
-            // (chain load, Float guard, unbox, store to the home), and
-            // reverted when the compile leaves the loop. The live state
-            // is untouched: the claim's only consumers are the parked
-            // consultations (`outer_parked_sf_float`) inside the body.
-            let outer_inits = self.adopt_outer_loop_views(bbid, loop_end);
+            // inlined subtree reads as raw f64s (marks read off the back
+            // edge's state, vetoes from the fixpoint above) adopt a
+            // spill-homed `Sf(Float)` on the live loop-entry state — the
+            // same claim a stage-2 dominating store creates, established
+            // instead by an init on every entry edge below (chain load,
+            // Float guard, unbox, store to the home). The claim's scope
+            // is handled by the joins themselves: a path bypassing the
+            // head meets it back to `S`.
+            let outer_inits = if let Some(be_state) = self.loop_backedge(bbid).cloned() {
+                self.adopt_outer_loop_views(bbid, &mut target, &entries, &be_state, &target_incoming)
+            } else {
+                vec![]
+            };
 
             // `bridge` adds `+1` to the deopt resume PC so it lands on
             // the first body instruction (skipping LoopStart, which

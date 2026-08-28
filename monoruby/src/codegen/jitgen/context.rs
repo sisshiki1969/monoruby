@@ -425,6 +425,15 @@ pub(super) struct JitStackFrame {
     ///
     /// Snapshot of `AbstractScopeState`` when the child method is called.
     ///
+    /// Publishing a nested compile's view of this frame *into* this field
+    /// is not available and must not be added back: this is where the
+    /// frame's own compile parks the state it will resume from, and
+    /// overwriting it with a view taken at a different program point, in
+    /// a different frame's terms, resumed garbage — three levels of
+    /// nested blocks segfaulted in generated code. What a nested compile
+    /// has to tell an outer frame is only that a slot was widened, and
+    /// that arrives through `widen_outer_slot` / `widen_outer_at_pos`.
+    ///
     abstract_state: Option<AbstractFrame>,
 
     ///
@@ -449,16 +458,17 @@ pub(super) struct JitStackFrame {
     /// (whose own context clone would otherwise take the marks to its
     /// grave). Consumed once by the loop-entry merge.
     ///
-    loop_outer_reads: HashMap<BasicBlockId, Vec<(usize, SlotId)>>,
+    loop_outer_reads: HashMap<BasicBlockId, (bool, Vec<(usize, SlotId)>)>,
     ///
-    /// Stage-C loop adoption: the outer views adopted for a loop
-    /// currently being compiled, keyed by the loop's *last* basic block
-    /// — `(loop_end, stack position, slot)`. Reverted (re-widened on
-    /// the parked frame) as soon as the compile leaves the loop: the
-    /// entry bridges establish the home on every path through the loop
-    /// head, which dominates the body but nothing after it.
+    /// Kept-claim surrender per return path (join unification): one entry
+    /// per plain `Ret` this frame compiled, recorded so the caller's
+    /// resume can join the return-path chains and emit, on each path, the
+    /// bridge that reconciles it with the join — including the deferred
+    /// literal writes a surrendered `C` claim owes. `(segment label,
+    /// chain prefix at the return, the returning frame's own state, the
+    /// returned slot, the return's basic block)`.
     ///
-    adopted_outer_views: Vec<(BasicBlockId, usize, SlotId)>,
+    return_edges: Vec<(JitLabel, Vec<AbstractFrame>, AbstractFrame, SlotId, BasicBlockId)>,
     ///
     /// Nested loop count.
     ///
@@ -668,7 +678,7 @@ impl JitStackFrame {
             is_not_block,
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
-            adopted_outer_views: vec![],
+            return_edges: vec![],
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -697,7 +707,7 @@ impl JitStackFrame {
             is_not_block: self.is_not_block,
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
-            adopted_outer_views: vec![],
+            return_edges: vec![],
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -1259,59 +1269,66 @@ impl<'a> JitContext<'a> {
         // frame chain, so no alias survives a specialized call either.
         state.clear_dynvar_aliases();
         let stack_offset = state.using_fpr_offset().offset();
+        // The live chain's invariants are maintained lexically (see
+        // `unset_lexical_no_capture_guard`), so the entry chain is simply
+        // this path's live frames.
+        let entry_chain = state.frames_cloned();
+        // For the no-return-path fallback below: the entry chain again,
+        // and where the widen log stood when the callee's compile began.
+        let fallback_chain = entry_chain.clone();
+        let widen_mark = self.widened_outer_log.len();
         let caller = self.current_frame_mut();
         caller.stack_offset += stack_offset;
         caller.callid = Some(callid);
         let scope = std::mem::take(&mut **state);
         assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
 
-        let frame = self.traceir_to_asmir(frame)?;
+        let mut frame = self.traceir_to_asmir(frame, Some(entry_chain))?;
 
+        // Every plain `Ret` in the callee branched to a return segment;
+        // build them (and the join of the return-path chains) now, while
+        // the call-site stack bump is still applied.
+        let resume = self.build_return_segments(&mut frame);
         let current = self.current_frame_mut();
         let innermost = current.abstract_state.take().unwrap();
         current.callid = None;
         current.stack_offset -= stack_offset;
-        // Take the chain back. The nested compile could only record what
-        // it did to our outer frames on the context's copies, so re-read
-        // those rather than keep the clones we handed over.
-        //
-        // Resuming from the *join of the callee's return-path chains*
-        // instead (the natural next unification step) is measurably
-        // unsound today: a return snapshot preserves the caller's kept-`C`
-        // claims path-sensitively, while the kept-constant bet machinery
-        // (`forget_constants` emitting the deferred literal writes, the
-        // `specialized_iseq` confirmation) is built around the parked
-        // copy's path-insensitive widens — a resumed `C` whose slot only
-        // some paths wrote reads stale (Integer#downto resumed `C(0)`
-        // where the parked copy held `S(Value)`; Array#permutation then
-        // read nil). Making that resume sound means making the kept-`C`
-        // discipline per return path first.
-        self.adopt_outer(state, innermost);
+        if let Some(mut chain) = resume {
+            // Resume from the join of the callee's compiled return paths —
+            // with one asymmetry the first attempt's bisection taught us.
+            // The *resuming* frame's own bookkeeping beyond slot modes
+            // (pc, liveness, hints) belongs to its own compile timeline:
+            // replacing the whole frame with the callee's view of it broke
+            // real code, so that level keeps the parked frame and adopts
+            // only the slot claims the join validated — today the kept-`C`
+            // constants (every resuming path either still holds the claim
+            // or emitted its surrender write on its return segment, so a
+            // kept `C` is true and a demoted slot is current). The outer
+            // levels take the joined chains whole: their own-timeline
+            // bookkeeping is not consumed here — each becomes "the
+            // resuming level" only at its own caller's resume, where this
+            // same rule applies.
+            let joined_caller = chain.last().unwrap().clone();
+            *chain.last_mut().unwrap() = innermost;
+            state.set_frames(chain);
+            state.overlay_kept_constants_innermost(joined_caller.slot_state());
+        } else {
+            // No compiled return path: the caller's continuation is
+            // unreachable on compiled paths. Resume from this path's own
+            // entry chain, re-widened by everything the callee's compile
+            // widened (the log delta — position-addressed, and positions
+            // below the caller's are stable across the call). Any claim
+            // the placeholder still carries is vacuous — no execution
+            // arrives here — and every later merge's claims are
+            // established by its *reachable* entries' bridges.
+            let mut chain = fallback_chain;
+            *chain.last_mut().unwrap() = innermost;
+            state.set_frames(chain);
+            for (pos, slot) in self.widened_outer_log[widen_mark..].to_vec() {
+                state.invalidate_at(pos, slot);
+            }
+        }
         Ok(frame)
-    }
-
-    ///
-    /// Rebuild *state*'s frame chain from the context's copies, keeping
-    /// *innermost* (this compile's own frame, which the context does not
-    /// track while the compile is running).
-    ///
-    /// The reverse — publishing this compile's view of the outer frames
-    /// *into* the context on the way down — is not available and must not
-    /// be added back. `abstract_state` is not only what nested compiles
-    /// clone; it is also where a frame's own compile parks its state while
-    /// it waits for one. Writing a nested compile's view of a frame there
-    /// replaces the suspended state that frame will resume from with a
-    /// view taken at a different program point, in a different frame's
-    /// terms — three levels of nested blocks segfaulted in generated code.
-    ///
-    /// Nothing needs it today: what a nested compile has to learn about an
-    /// outer frame is only that a slot was widened, and that arrives
-    /// through `widen_outer_slot`.
-    ///
-    fn adopt_outer(&self, state: &mut AbstractState, innermost: AbstractFrame) {
-        let mut frames = self.trace_contexts();
-        frames.push(innermost);
-        state.set_frames(frames);
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
@@ -1461,85 +1478,6 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().generic_yield = true;
     }
 
-    ///
-    /// The stack-frame indices of the lexical chain a frame *outer* levels
-    /// out from the next one to be pushed, immediate outer first.
-    ///
-    /// Takes the distance rather than reading it off the top frame,
-    /// because the caller is about to push a block whose chain is not the
-    /// current top's: a specialized method has `outer: None`, so walking
-    /// from `Integer#times` finds nothing even though the block it is
-    /// about to yield to is lexically inside `kill_int`.
-    ///
-    fn outer_chain_from(&self, outer: usize) -> Vec<usize> {
-        let mut v = vec![];
-        let Some(mut i) = self.stack_frame.len().checked_sub(outer) else {
-            return v;
-        };
-        v.push(i);
-        while let Some(o) = self.stack_frame[i].outer {
-            let Some(next) = i.checked_sub(o) else { return v };
-            i = next;
-            v.push(i);
-        }
-        v
-    }
-
-    ///
-    /// How many constants that chain still claims.
-    ///
-    pub(super) fn outer_const_count(&self, outer: usize) -> usize {
-        self.outer_chain_from(outer)
-            .into_iter()
-            .map(|i| {
-                self.stack_frame[i]
-                    .abstract_state
-                    .as_ref()
-                    .map_or(0, |f| f.held_constants().len())
-            })
-            .sum()
-    }
-
-    ///
-    /// Give up, on that chain, every constant *probe* gave up on its own
-    /// copy of it. Returns whether anything changed.
-    ///
-    pub(super) fn adopt_outer_widenings(&mut self, probe: &Self, outer: usize) -> bool {
-        let mut changed = false;
-        for i in self.outer_chain_from(outer) {
-            let Some(probed) = probe.stack_frame[i].abstract_state.as_ref() else {
-                continue;
-            };
-            let lost: Vec<_> = probed.lost_constants_of(
-                self.stack_frame[i].abstract_state.as_ref().unwrap(),
-            );
-            if !lost.is_empty() {
-                changed = true;
-                let mine = self.stack_frame[i].abstract_state.as_mut().unwrap();
-                for slot in lost {
-                    mine.invalidate_slot(slot);
-                }
-            }
-        }
-        changed
-    }
-
-    ///
-    /// Stage-A use propagation: an inlined callee consumed the value it
-    /// read from the slot *outer* levels out as a raw f64. Land the mark
-    /// on the owner's parked frame — the same channel `widen_outer_slot`
-    /// uses — so it survives `adopt_outer` and reaches the owner's
-    /// back-edge `Liveness` harvest, where the loop-entry `Sf` adoption
-    /// (the `adopt_sf` arm's subtree-read disjunct) can act on it.
-    ///
-    pub(super) fn mark_outer_float_read(&mut self, outer: usize, slot: SlotId) {
-        let Some(pos) = self.outer_pos(outer) else {
-            return;
-        };
-        if let Some(frame) = self.stack_frame[pos].abstract_state.as_mut() {
-            frame.mark_subtree_float_read(slot);
-        }
-    }
 
     ///
     /// Stage-C loop adoption: everything an adoption decision needs to
@@ -1547,14 +1485,6 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn set_outer_claim_barrier(&mut self) {
         self.outer_claim_barrier = true;
-    }
-
-    pub(super) fn outer_claim_barrier(&self) -> bool {
-        self.outer_claim_barrier
-    }
-
-    pub(super) fn widened_outer_log(&self) -> &[(usize, SlotId)] {
-        &self.widened_outer_log
     }
 
     ///
@@ -1598,150 +1528,106 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Stage-C loop adoption, the analysis-side export: *self* is the
-    /// throwaway analysis clone after one `analyse_loop` walk, *base* the
-    /// context it was cloned from. Returns the `(stack position, slot)`
-    /// pairs the walk newly marked as subtree float reads on the parked
-    /// outer frames — the marks would otherwise die with the clone —
-    /// minus everything the walk disqualified: nothing at all if the
-    /// body raised the claim barrier or lowered a generic yield, and no
-    /// pair an outer widen reached.
+    /// Stage-C loop adoption, the analysis-side export: after one
+    /// `analyse_loop` walk on this throwaway clone, report what
+    /// disqualifies adoption — `poisoned` when the body raised the claim
+    /// barrier or lowered a generic yield (adopt nothing), plus every
+    /// `(stack position, slot)` an outer widen reached (a store the
+    /// write-through could not keep — an adopted home would be stale on
+    /// the next iteration). The float-read *marks* themselves now travel
+    /// on the states (`AbstractState::mark_outer_float_read`) and are
+    /// read off the back edge at the merge.
     ///
-    pub(super) fn export_subtree_outer_reads(&self, base: &JitContext) -> Vec<(usize, SlotId)> {
-        if self.outer_claim_barrier {
-            return vec![];
-        }
+    pub(super) fn export_loop_adoption_vetoes(
+        &self,
+        base: &JitContext,
+    ) -> (bool, Vec<(usize, SlotId)>) {
         let gy = |c: &JitContext| c.stack_frame.last().is_some_and(|f| f.generic_yield);
-        if gy(self) && !gy(base) {
-            return vec![];
-        }
-        let mut v = vec![];
-        for pos in 0..self.stack_frame.len().saturating_sub(1) {
-            let Some(now) = self.stack_frame[pos].abstract_state.as_ref() else {
-                continue;
-            };
-            let before = base
-                .stack_frame
-                .get(pos)
-                .and_then(|f| f.abstract_state.as_ref());
-            for slot in now.subtree_float_read_slots() {
-                if before.is_some_and(|b| b.subtree_float_read(slot)) {
-                    continue;
-                }
-                if self.widened_outer_log.contains(&(pos, slot)) {
-                    continue;
-                }
-                v.push((pos, slot));
-            }
-        }
-        v
+        let poisoned = self.outer_claim_barrier || (gy(self) && !gy(base));
+        (poisoned, self.widened_outer_log.clone())
     }
 
-    pub(super) fn record_loop_outer_reads(
+    pub(super) fn record_loop_adoption_vetoes(
         &mut self,
         entry_bb: BasicBlockId,
-        reads: Vec<(usize, SlotId)>,
+        vetoes: (bool, Vec<(usize, SlotId)>),
     ) {
         self.current_frame_mut()
             .loop_outer_reads
-            .insert(entry_bb, reads);
+            .insert(entry_bb, vetoes);
     }
 
     ///
     /// Stage-C loop adoption, the decision itself (called from the
     /// loop-entry merge, codegen pass only): for every outer-frame slot
-    /// the loop's subtree read as a raw f64 and that is still a plain
-    /// `S` on its (parked) owner, allocate a spill-resident raw-f64 home
-    /// in the owner's file and bind the slot `Sf(Float)` there — the
-    /// same promotion a stage-2 dominating store performs, driven by the
-    /// loop-entry bridges instead: the caller emits, on **every** entry
-    /// edge of the loop head, a chain load of the boxed slot, a Float
-    /// guard, and an unbox into the home, so the claim holds on every
-    /// path through the head — which dominates the whole loop body,
-    /// where all its consumers (the blocks' home reads, stage 3a/B)
-    /// live. The adoption is *scoped to the loop*: the claim is reverted
-    /// when the compile leaves the loop ([`Self::revert_adopted_outer_views`]),
-    /// so no path that bypassed the head can observe it.
-    ///
-    /// Returns, per adopted slot, what the entry-edge init needs:
-    /// the chain offset of the boxed slot and the home.
+    /// the loop's subtree read as a raw f64 — read straight off the back
+    /// edge's state marks, minus the analysis's vetoes — and that is
+    /// still a plain `S`, reserve a spill-resident raw-f64 home in the
+    /// owner's file and bind the slot `Sf(Float)` *on the live loop-entry
+    /// state*. The entry edges establish the home (chain load, Float
+    /// guard, unbox, store); the claim's scope is handled by the joins
+    /// themselves — a path that bypassed the head meets it back to `S`.
+    /// The owner's (parked) file only reserves the id, keeping the
+    /// owner's own later allocations from colliding with the home.
     ///
     pub(super) fn adopt_outer_loop_views(
         &mut self,
         entry_bb: BasicBlockId,
-        loop_end: BasicBlockId,
+        target: &mut AbstractState,
+        entries: &[BranchEntry],
+        backedge: &AbstractState,
+        incoming: &AbstractState,
     ) -> Vec<(Vec<SpecializedId>, usize, SlotId, OuterFprHome)> {
         let mut inits = vec![];
         if !self.codegen_mode() {
             return inits;
         }
-        let Some(reads) = self
-            .current_frame_mut()
-            .loop_outer_reads
-            .remove(&entry_bb)
+        let Some((poisoned, widened)) = self.current_frame_mut().loop_outer_reads.remove(&entry_bb)
         else {
             return inits;
         };
-        for (pos, slot) in reads {
-            if pos + 1 >= self.stack_frame.len() {
-                continue;
+        if poisoned {
+            return inits;
+        }
+        // The loop-scoped subtree reads: marked on the back edge's outer
+        // frames but not yet at the loop entry.
+        let depth = backedge.depth();
+        for pos in 0..depth.saturating_sub(1) {
+            for slot in backedge[pos].subtree_float_read_slots() {
+                if incoming.depth() > pos && incoming[pos].subtree_float_read(slot) {
+                    continue;
+                }
+                if widened.contains(&(pos, slot)) {
+                    continue;
+                }
+                if pos + 1 >= self.stack_frame.len() {
+                    continue;
+                }
+                // Chain addressing must be valid for the owner, the slot
+                // still a plain boxed `S` at the entry, and current
+                // (`S`/`Sf`, never a kept `C`) on every entry path — the
+                // init loads it.
+                if !target[pos].no_capture_guard()
+                    || !matches!(target[pos].mode(slot), LinkMode::S(_))
+                    || !entries.iter().all(|e| {
+                        matches!(e.state[pos].mode(slot), LinkMode::S(_) | LinkMode::Sf(_, _))
+                    })
+                {
+                    continue;
+                }
+                let Some(parked) = self.stack_frame[pos].abstract_state.as_mut() else {
+                    continue;
+                };
+                let fpr = parked.reserve_spill_home();
+                let Some(home) = self.outer_fpr_home_hint_at_pos(pos, fpr) else {
+                    continue;
+                };
+                let (ids, extra) = self.specialized_ids_at_pos(pos);
+                target.set_outer_sf_at(pos, slot, fpr);
+                inits.push((ids, extra, slot, home));
             }
-            let Some(parked) = self.stack_frame[pos].abstract_state.as_ref() else {
-                continue;
-            };
-            // Only a plain boxed slot adopts, and only while the static
-            // chain addressing is valid for the owner.
-            if !matches!(parked.mode(slot), LinkMode::S(_)) || !parked.no_capture_guard() {
-                continue;
-            }
-            let fpr = self.stack_frame[pos]
-                .abstract_state
-                .as_mut()
-                .unwrap()
-                .alloc_spill_home(slot);
-            let Some(home) = self.outer_fpr_home_hint_at_pos(pos, fpr) else {
-                // No hint — undo the claim (the spill id stays allocated,
-                // which only costs the owner 8 bytes of frame).
-                self.stack_frame[pos]
-                    .abstract_state
-                    .as_mut()
-                    .unwrap()
-                    .invalidate_slot(slot);
-                continue;
-            };
-            let (ids, extra) = self.specialized_ids_at_pos(pos);
-            self.current_frame_mut()
-                .adopted_outer_views
-                .push((loop_end, pos, slot));
-            inits.push((ids, extra, slot, home));
         }
         inits
-    }
-
-    ///
-    /// Stage-C loop adoption: the compile has finished the loop whose
-    /// last basic block is *bbid* — re-widen every view it adopted, so
-    /// nothing after the loop (where the entry bridges no longer
-    /// dominate) consumes the claim.
-    ///
-    pub(super) fn revert_adopted_outer_views(&mut self, bbid: BasicBlockId) {
-        let views = &mut self.current_frame_mut().adopted_outer_views;
-        if views.is_empty() {
-            return;
-        }
-        let (done, rest): (Vec<_>, Vec<_>) = std::mem::take(views)
-            .into_iter()
-            .partition(|(end, _, _)| *end == bbid);
-        self.current_frame_mut().adopted_outer_views = rest;
-        for (_, pos, slot) in done {
-            if let Some(frame) = self
-                .stack_frame
-                .get_mut(pos)
-                .and_then(|f| f.abstract_state.as_mut())
-            {
-                frame.invalidate_slot(slot);
-            }
-        }
     }
 
     ///
@@ -1812,19 +1698,6 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn current_frame_lexical_outer(&self) -> Option<usize> {
         self.stack_frame.last().unwrap().outer
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn outer_contexts(&self) -> Vec<AbstractFrame> {
-        let mut i = self.stack_frame.len() - 1;
-        let mut v = vec![];
-        while let Some(outer) = self.stack_frame[i].outer {
-            i -= outer;
-            let scope = self.stack_frame[i].abstract_state.clone().unwrap();
-            v.push(scope);
-        }
-        v.reverse();
-        v
     }
 
     fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
@@ -2054,20 +1927,6 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// The *parked* mode an outer frame holds for `slot`: `Some(fpr)` iff
-    /// it is a Float-guarded `Sf` view — the only shape the write-through
-    /// keep applies to.
-    ///
-    pub(super) fn outer_parked_sf_float(&self, outer: usize, slot: SlotId) -> Option<crate::codegen::FPReg> {
-        let pos = self.outer_pos(outer)?;
-        let st = self.stack_frame[pos].abstract_state.as_ref()?;
-        match st.mode(slot) {
-            LinkMode::Sf(fpr, crate::codegen::jitgen::state::SfGuarded::Float) => Some(fpr),
-            _ => None,
-        }
-    }
-
-    ///
     /// Build the [`OuterFprHome`] hint for a write-through refresh of the
     /// frame `outer` levels out, and record the kept view for the
     /// bet-confirmation drain.
@@ -2164,7 +2023,6 @@ impl<'a> JitContext<'a> {
         }
         {
             let parked = self.stack_frame[pos].abstract_state.as_ref()?;
-            let m = parked.mode(slot);
             if !matches!(parked.mode(slot), LinkMode::S(_)) {
                 return None;
             }
@@ -2218,9 +2076,11 @@ impl<'a> JitContext<'a> {
             if pos == current {
                 state.invalidate_innermost(slot);
             } else {
-                if let Some(frame) = self.stack_frame[pos].abstract_state.as_mut() {
-                    frame.invalidate_slot(slot);
-                }
+                // Through the logging widen: the no-return-path fallback
+                // in `specialized_compile` replays the log delta onto its
+                // entry-chain copies, which this drain would otherwise
+                // bypass.
+                self.widen_outer_at_pos(pos, slot);
                 state.widen_outer_slot(current - pos, slot);
             }
         }
@@ -2760,6 +2620,124 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// The id chain + live bump for addressing the frame at stack
+    /// position *pos* from the just-popped callee's rbp: every frame
+    /// from *pos* through the caller inclusive. Must run while the
+    /// caller's call-site bump (`stack_offset += using`) is still
+    /// applied, i.e. before `specialized_compile` restores it.
+    ///
+    fn ids_spanning_from_callee(&self, pos: usize) -> (Vec<SpecializedId>, usize) {
+        let end = self.stack_frame.len();
+        let chain = &self.stack_frame[pos..end];
+        let ids = chain.iter().map(|f| f.specialized_id).collect();
+        let extra = chain
+            .iter()
+            .map(|f| f.stack_offset - f.base_stack_offset)
+            .sum();
+        (ids, extra)
+    }
+
+    ///
+    /// Join unification: the caller's continuation is a merge point and
+    /// the callee's plain returns are its incoming edges. Compute the
+    /// join of the return-path chains, and emit one outline segment per
+    /// edge — the bridge reconciling that path with the join (a
+    /// surrendered kept-`C` claim owes its deferred literal write here,
+    /// chain-addressed into the owner's slot), then the value load and
+    /// the `ret`. Returns the join, which is what the caller resumes
+    /// from. `None` when the callee has no plain return path (the
+    /// compiled continuation is unreachable; the caller falls back to
+    /// the parked rebuild as a conservative placeholder).
+    ///
+    /// Runs after the callee frame is popped but before the caller's
+    /// call-site stack bump is restored (the segments' chain addressing
+    /// captures the live bump, like every other dynvar hint emitted
+    /// under the call).
+    ///
+    fn build_return_segments(
+        &mut self,
+        frame: &mut JitStackFrame,
+    ) -> Option<Vec<AbstractFrame>> {
+        let edges = std::mem::take(&mut frame.return_edges);
+        if edges.is_empty() {
+            return None;
+        }
+        let mut target: Vec<AbstractFrame> = edges[0].1.clone();
+        for (_, chain, ..) in edges.iter().skip(1) {
+            debug_assert_eq!(target.len(), chain.len());
+            for (t, e) in target.iter_mut().zip(chain.iter()) {
+                t.join_no_alloc(e);
+            }
+        }
+        for (seg, chain, mut inner, ret_slot, bbid) in edges {
+            let mut ir = AsmIr::new(self);
+            for (lvl, (ef, tf)) in chain.iter().zip(target.iter()).enumerate() {
+                let mut ids_extra: Option<(Vec<SpecializedId>, usize)> = None;
+                for slot in ef.slot_state().locals() {
+                    match (ef.mode(slot), tf.mode(slot)) {
+                        (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
+                        // The join surrendered this path's kept `C`: the
+                        // deferred literal write happens on this edge, so
+                        // the resumed `S` reads a current slot.
+                        (LinkMode::C(v), _) => {
+                            let (ids, extra) = ids_extra
+                                .get_or_insert_with(|| self.ids_spanning_from_callee(lvl))
+                                .clone();
+                            ir.lit2reg(v, GP::Rax);
+                            ir.push(AsmInst::StoreDynVarSpecialized {
+                                offset: DynVarOffset::Hint { ids, extra },
+                                dst: slot,
+                                src: GP::Rax,
+                            });
+                        }
+                        // A suspended frame's `F` is path-invariant (its
+                        // only copy sits in a call-site save area nothing
+                        // here can address); the join must have kept it.
+                        (LinkMode::F(l), tfm) => {
+                            debug_assert!(
+                                matches!(tfm, LinkMode::F(r) if l == r),
+                                "return-edge F diverged: lvl{lvl} {slot:?} {l:?} vs {tfm:?}"
+                            );
+                        }
+                        // Everything else is a pure state demotion (the
+                        // slot already holds the value) or identical.
+                        _ => {}
+                    }
+                }
+            }
+            inner.load(&mut ir, ret_slot, GP::Rax);
+            ir.push(AsmInst::Ret);
+            frame.outline_bridges.push((ir, seg, bbid));
+        }
+        Some(target)
+    }
+
+    ///
+    /// Record a plain `Ret` as a resume edge: the caller's continuation is
+    /// a merge point and this is one of its incoming edges. The actual
+    /// value load and `ret` are emitted later, per edge, behind `seg`,
+    /// prefixed with the bridge that reconciles this path's chain with the
+    /// join of all return paths (`build_return_segments`).
+    ///
+    pub(super) fn record_return_edge(
+        &mut self,
+        seg: JitLabel,
+        state: &AbstractState,
+        ret_slot: SlotId,
+        bbid: BasicBlockId,
+    ) -> bool {
+        let Some(pos) = self.caller_pos() else {
+            return false;
+        };
+        let chain = state.chain_prefix(pos);
+        let inner = state.innermost_clone();
+        self.current_frame_mut()
+            .return_edges
+            .push((seg, chain, inner, ret_slot, bbid));
+        true
+    }
+
+    ///
     /// Add new return branch with `state`.
     ///
     pub(super) fn new_method_return(&mut self, ret: ReturnState) {
@@ -2769,6 +2747,7 @@ impl<'a> JitContext<'a> {
             self.push_return_context(pos, ret);
         }
     }
+
 
     ///
     /// Add new return branch with `state`.
@@ -2780,6 +2759,7 @@ impl<'a> JitContext<'a> {
             self.push_return_context(pos, ret);
         }
     }
+
 
     pub(super) fn push_ir(&mut self, bb: Option<BasicBlockId>, ir: AsmIr) {
         let frame = self.current_frame_mut();

@@ -471,7 +471,7 @@ impl SlotState {
         }
     }
 
-    pub(super) fn locals(&self) -> std::ops::Range<SlotId> {
+    pub(in crate::codegen::jitgen) fn locals(&self) -> std::ops::Range<SlotId> {
         SlotId(1)..self.temp_start()
     }
 
@@ -827,6 +827,17 @@ impl SlotState {
         let fpr = self.fpr_alloc.push_spill();
         self.set_Sf(slot, fpr, SfGuarded::Float);
         fpr
+    }
+
+    ///
+    /// Reserve a spill-resident home id in this (the owner's) file
+    /// without binding any slot — for a promotion whose binding lives on
+    /// the live chain only (the loop-entry adoption). The file is the
+    /// single id space for the owner, so the reservation keeps the
+    /// owner's own later allocations from colliding with the home.
+    ///
+    pub(in crate::codegen::jitgen) fn reserve_spill_home(&mut self) -> FPReg {
+        self.fpr_alloc.push_spill()
     }
 
     ///
@@ -1223,20 +1234,6 @@ impl SlotState {
     }
 
     ///
-    /// The locals *other* still claims as constants and this one no longer
-    /// does — what an analysis pass discovered the compilation gives up.
-    ///
-    pub(in crate::codegen::jitgen) fn lost_constants_of(&self, other: &Self) -> Vec<SlotId> {
-        other
-            .locals()
-            .filter(|&slot| {
-                matches!(other.mode(slot), LinkMode::C(_))
-                    && !matches!(self.mode(slot), LinkMode::C(_))
-            })
-            .collect()
-    }
-
-    ///
     /// Surrender *slot*'s `C` claim, writing the value it stood for into
     /// the slot.
     ///
@@ -1272,6 +1269,46 @@ impl SlotState {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Resume overlay: adopt the return-path join's claims where this
+    /// (parked) frame holds a plain `S`.
+    ///
+    /// * A kept `C` — sound because every resuming path either still
+    ///   holds the claim (the constant is true and its surrender, when it
+    ///   comes, will write it) or surrendered it with the deferred write
+    ///   emitted on that path's return segment.
+    /// * A spill-homed `Sf(Float)` — sound because `Sf` claims the slot
+    ///   current (it is, on every path — a widen would have met the join
+    ///   to `S`) and the raw-f64 home current likewise. This is what lets
+    ///   a state-only placement promotion under the call survive the
+    ///   resume; a pool-resident id cannot appear here (promotions into a
+    ///   suspended frame are spill-homed by construction).
+    pub(in crate::codegen::jitgen) fn overlay_kept_constants(&mut self, other: &SlotState) {
+        // Monotone hint bits ride along: the subtree float-read marks the
+        // callee landed on its copies of this frame must reach the loop
+        // analyses of the resumed compile.
+        for (l, r) in self
+            .subtree_float_read
+            .iter_mut()
+            .zip(other.subtree_float_read.iter())
+        {
+            *l |= *r;
+        }
+        for slot in self.locals() {
+            match (self.mode(slot), other.mode(slot)) {
+                (LinkMode::S(_), LinkMode::C(v)) => {
+                    self.set_mode(slot, LinkMode::C(v));
+                }
+                (LinkMode::S(_), LinkMode::Sf(fpr, SfGuarded::Float))
+                    if fpr.0 >= crate::codegen::PHYS_FPR_POOL =>
+                {
+                    self.grow_fpr_to(fpr.0 + 1);
+                    self.set_Sf(slot, fpr, SfGuarded::Float);
+                }
+                _ => {}
+            }
+        }
     }
 
     pub(in crate::codegen::jitgen) fn forget_constants(&mut self, ir: &mut AsmIr) {
@@ -2353,6 +2390,15 @@ impl AbstractFrame {
             (LinkMode::Sf(l, _), LinkMode::Sf(r, _)) if l == r => {}
             (LinkMode::Sf(_, guarded), LinkMode::S(_)) => {
                 self.set_S_with_guard(slot, guarded.into());
+            }
+            // Loop-entry adoption of an outer view (stage C, state-side):
+            // the target's `Sf` home is established by the entry init the
+            // merge emits on this same edge, so the bridge itself is pure
+            // state. The adoption gate guarantees the slot is current
+            // (`S`, never a kept `C`) on every entry path.
+            (LinkMode::S(_), LinkMode::Sf(fpr, guarded)) => {
+                self.grow_fpr_to(fpr.0 + 1);
+                self.set_Sf(slot, fpr, guarded);
             }
             (LinkMode::C(v), LinkMode::S(_)) => {
                 self.set_mode(slot, LinkMode::S(Guarded::from_concrete_value(v)));
