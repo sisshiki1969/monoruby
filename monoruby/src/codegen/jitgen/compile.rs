@@ -60,6 +60,10 @@ impl<'a> JitContext<'a> {
         for bbid in bb_begin..=bb_end {
             let ir = self.compile_basic_block(bbid, bbid == bb_end)?;
             self.push_ir(Some(bbid), ir);
+            // Stage-C loop adoption: leaving a loop re-widens the outer
+            // views it adopted — the entry bridges dominate the body and
+            // nothing after it.
+            self.revert_adopted_outer_views(bbid);
         }
 
         self.backedge_branches();
@@ -283,6 +287,13 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         assert!(state.no_capture_guard());
+        // Stage-A use propagation: land the float-consumed dynvar reads the
+        // previous instruction queued on the owner frames' parked states,
+        // while this frame's `outer` distances are still the ones the reads
+        // were recorded under.
+        for (outer, slot) in state.take_pending_outer_float_reads() {
+            self.mark_outer_float_read(outer as usize, slot);
+        }
         // A fusing arm (e.g. `try_fuse_array_minmax`) already emitted this
         // instruction's work together with its predecessor's.
         if self.fused_skip == Some(bc_pos) {
@@ -530,14 +541,55 @@ impl<'a> JitContext<'a> {
                     self.restore_unfrozen(Some(dst));
                     return Ok(CompileResult::Continue);
                 }
+                // Stage 3a/B: the outer frame holds a Float-guarded `Sf`
+                // view of this local — read the raw f64 straight from the
+                // view's home into a bare `F` of this frame: no slot load,
+                // no guard, no unbox. The eager boxed copy the first cut
+                // paid for (defining `Sf`, because a bare `F`'s Value use
+                // re-boxed the copy-through pattern `zr, zi = tr, ti`) is
+                // replaced by a *home alias* (stage B): the owner's slot
+                // still holds the boxed twin, so a Value use loads it from
+                // there — same cost as the eager copy, paid only when a
+                // Value use actually occurs, and a pure-float read pays a
+                // single load. The alias dies at anything that could
+                // rewrite the owner's slot (chain stores, call
+                // boundaries); after that a Value use falls back to the
+                // ordinary `F` re-box, which is always sound.
+                if let Some((ids, extra, true)) = self.outer_specialized_ids(state, src.outer)
+                    && let Some(afpr) = self.outer_parked_sf_float(src.outer, src.reg)
+                {
+                    let alias = crate::codegen::jitgen::state::DynVarAliasLoad {
+                        ids: ids.clone(),
+                        extra,
+                        reg: src.reg,
+                    };
+                    if let Some(home) = self.outer_fpr_home_hint(ids, extra, src.outer, afpr) {
+                        let dfpr = state.def_F_new(dst);
+                        ir.push(AsmInst::LoadOuterFprHomeF { dst: dfpr, home });
+                        state.set_dynvar_alias(dst, alias);
+                        self.restore_unfrozen(Some(dst));
+                        return Ok(CompileResult::Continue);
+                    }
+                }
+                let (src_outer, src_reg) = (src.outer, src.reg);
                 self.load_dynvar(state, ir, src);
                 state.def_rax2acc(ir, dst);
+                // Stage-A use propagation: remember where the value came
+                // from — a later raw-f64 consumption of *dst* is float-use
+                // evidence about the owner's slot (`use_as_float` queues
+                // it, the `compile_instruction` boundary lands it).
+                state.set_dynvar_src(dst, src_outer, src_reg);
                 // LFP-chain walk + loads: transparent.
                 self.restore_unfrozen(Some(dst));
             }
             TraceIr::StoreDynVar(dst, src) => {
                 state.flush_gp(ir);
                 self.store_dynvar(state, ir, dst, src, bc_pos);
+                // Stage-B home-aliased reads: the store may have rewritten
+                // any owner slot an alias points at. (`store_dynvar`'s own
+                // `load` of the stored value consulted the aliases first,
+                // which is sound — that load precedes the store.)
+                state.clear_dynvar_aliases();
                 state.unset_side_effect_guard();
                 // Writes an *outer*-frame slot (the Float-guard miss is a
                 // trace exit); this frame's slots and their proofs are

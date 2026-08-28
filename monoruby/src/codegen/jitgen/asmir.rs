@@ -2627,6 +2627,32 @@ pub(super) enum AsmInst {
         src: OuterFprSrc,
         home: OuterFprHome,
     },
+    ///
+    /// Stage 3a: read the raw f64 of an outer frame's Float-guarded `Sf`
+    /// view straight from its home — the owner's call-site save slot for
+    /// a pool-resident fpr, its spill slot otherwise — into a fresh `F`
+    /// of the reading frame. No slot load, no Float guard, no unbox: the
+    /// `Sf(Float)` binding at the read point guarantees the type, and the
+    /// home is current on every path that reaches the read (a widen
+    /// leaves the fpr's reverse-map entry, so the call-site save always
+    /// covers a referenced pool home).
+    ///
+    LoadOuterFprHomeF {
+        dst: FPReg,
+        home: OuterFprHome,
+    },
+    ///
+    /// Stage-C loop adoption, the entry-edge init: the boxed Value in
+    /// `GP::Rdi` (loaded from the owner's slot by a preceding
+    /// `LoadDynVarSpecialized`) is guarded to be a Float (deopt
+    /// otherwise), unboxed, and its raw f64 stored to the owner's spill
+    /// home. Establishes the adopted `Sf(Float)` view on every path into
+    /// the loop head, so the body's home reads are covered.
+    ///
+    GuardFloatToOuterHomeF {
+        home: OuterFprHome,
+        deopt: AsmDeopt,
+    },
     LoadDynVarSpecialized {
         /// Machine stack offset in bytes. Emitted as a
         /// `DynVarOffset::Hint(...)` chain by Pass 1; the pre-codegen
@@ -2860,6 +2886,22 @@ impl AsmInst {
                     v.push(*fpr);
                 }
                 v
+            }
+            Self::LoadOuterFprHomeF { dst, home } => {
+                let mut v = vec![*dst];
+                if let OuterFprHome::Hint { fpr, .. } = home {
+                    v.push(*fpr);
+                }
+                v
+            }
+            // Same over-reservation as the two above: the adopted home's
+            // id must size the owner's spill region.
+            Self::GuardFloatToOuterHomeF { home, .. } => {
+                if let OuterFprHome::Hint { fpr, .. } = home {
+                    vec![*fpr]
+                } else {
+                    vec![]
+                }
             }
             Self::FixnumToFpr(_, x) => vec![*x],
             Self::FloatToFpr(_, x, _) => vec![*x],

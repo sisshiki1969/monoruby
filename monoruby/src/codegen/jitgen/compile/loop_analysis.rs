@@ -10,7 +10,12 @@ impl<'a> JitContext<'a> {
         for x in 0..10 {
             #[cfg(feature = "jit-debug")]
             eprintln!("########## analyse iteration[{x}]");
-            let (liveness, backedge) = self.analyse_loop(loop_start, loop_end, state.clone())?;
+            let (liveness, backedge, outer_reads) =
+                self.analyse_loop(loop_start, loop_end, state.clone())?;
+            // Stage-C loop adoption: park what the walk saw of the outer
+            // frames for the loop-entry merge (overwritten per iteration —
+            // the marks are stable, each walk starts from the same clone).
+            self.record_loop_outer_reads(loop_start, outer_reads);
             if let Some(backedge) = backedge {
                 if let Some(be) = self.loop_backedge(loop_start)
                     && be.equiv(&backedge)
@@ -63,7 +68,7 @@ impl<'a> JitContext<'a> {
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
         mut state: AbstractState,
-    ) -> JitResult<(Liveness, Option<AbstractState>)> {
+    ) -> JitResult<(Liveness, Option<AbstractState>, Vec<(usize, SlotId)>)> {
         let pc = self.iseq().get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc);
         let mut liveness = Liveness::new(ctx.total_reg_num());
@@ -101,7 +106,12 @@ impl<'a> JitContext<'a> {
                 ))
         );
 
-        Ok((liveness, backedge))
+        // Stage-C loop adoption: the subtree float-read marks the walk
+        // landed on the *clone's* parked outer frames — exported here,
+        // since the clone dies with this function.
+        let outer_reads = ctx.export_subtree_outer_reads(self);
+
+        Ok((liveness, backedge, outer_reads))
     }
 
     fn analyse_basic_block(

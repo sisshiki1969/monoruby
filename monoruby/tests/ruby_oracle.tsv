@@ -185,6 +185,7 @@
 0be41d9bd7e1cc54941270e279653ac8	true	class StrPlusSub < String; end; (StrPlusSub.new("a") + "b").instance_of?(String)
 0beb46074e1eb509fdd14935b30258dd	[1, 2, 3]	a = [1, 2, 3]\n            a.shuffle\n            a\n            
 0c1d024a77553ba059ad52023369c614	[false, false]	t = Thread.new { loop {} }\n            sleep 0.05\n            t.kil
+0c212589acd72c8069cfd7db7ba46930	[211.560074274065, 2.5]	def call_block\n          yield\n        end\n        def p4\n          k =
 0c31062b279dfc18d7d2c88b1de29087	[:pro1, :pro2]	c = Class.new do\n              def pub; end\n              protected
 0c59e4ca52f8b258d616906a2685e60a	[999, 999]	$flag = false\n        def maybe_redefine\n          if $flag\n           
 0c59ef50cf993e559eee5d6f90c6a39e	[1, 1, 8, [2, 3, 4], 1, 2, 4, nil, 9, 9, 8, [9, 3, 4], 0, 2, 4, nil, 9, 3, 8, [9, 3, 4], 1, 2, 4, nil, 9, 4, 8, [9, 2, 4], 2, 2, 4, nil, 9, 5, 8, [9, 2, 3], 3, 2, 4, nil, 9, 6, 8, [9, 2, 3], 4, 2, 4, nil, 9, 7, 8, [9, 2, 3], 5, 2, 4, nil, 9, 8, 8, [9, 2, 3], 6, 2, 4, nil, 9, 9, 7, [9, 2, 3], 7, 2, 4, nil, 9, 9, 7, [9, 2, 3], 8, 2, 4, nil, 9, 2, 7, [9, 2, 3], 9, 2, 4, nil, 9, 3, 7, [9, 10, 3], 10, 2, 4, nil, 9, 4, 7, [9, 10, 11], 11, 2, 4, nil, 9, 5, 7, [9, 10, 11], 12, 2, 4, nil, 9, 6, 7, [9, 10, 11], 13, 2, 4, nil, 9, 7, 7, [9, 10, 11], 14, 2, 4, nil, 9, 9, 15, [9, 10, 11], 15, 2, 4, nil, 9, 9, 15, [9, 10, 11], 16, 2, 4, nil, 9, 10, 15, [9, 10, 11], 17, 2, 4, nil, 9, 11, 15, [9, 18, 11], 18, 2, 4, nil, 9, 12, 15, [9, 18, 19], 19, 2, 4, nil, 9, 13, 15, [9, 18, 19], 20, 2, 4, nil, 9, 14, 15, [9, 18, 19], 21, 2, 4, nil, 9, 15, 15, [9, 18, 19], 22, 2, 4, nil, 9, 9, 23, [9, 18, 19], 23, 2, 4, nil, 9, 9, 23, [9, 18, 19], 24, 2, 4, nil, 9, 18, 23, [9, 18, 19], 25, 2, 4, nil, 9, 19, 23, [9, 26, 19], 26, 2, 4, nil, 9, 20, 23, [9, 26, 27], 27, 2, 4, nil, 9, 21, 23, [9, 26, 27], 28, 2, 4, nil, [9, 9, 26, 27, 28, 29, 22, 23], {a: 29, "b" => 2, 3 => 4}]	def drive\n              a = [1, 2, 3, 4, 5, 6, 7, 8]\n              
@@ -708,6 +709,7 @@
 38eccaa13be24490261f4daaad9d3296	[:match, :nomatch, :match, "hell"]	$_ = "hello"\n        res = []\n        res << (/ell/ ? :match : :nomatch
 38f643aa5bcc2f78ba48b486bb393e15	15	(1..5).inject {|result, item| result + item }
 38fadfa8ec11940a56e2acf40f7eb4f0	"pq"	r, w = IO.pipe\n            t = Thread.new { r.readpartial(10) }\n   
+3911d4e3b194ca8126d292f9fa444f4c	[301.5, [1.5, 98.5, 195.5, 292.5]]	def call_block\n          yield\n        end\n        def c2\n          k =
 3960bad4527e209ac4eef6f17972f4c6	[true, [1, 2, 3]]	class C; def foo(a, b, cc); [a, b, cc]; end; end\n            cu = C
 3962b2ffd2b48bcb5feb55745b8b6b37	[[40, 50], [40, 50]]	[1, 2].map { [4, 5].map { it * 10 } }
 39740411375592c29d3f5adde2165332	[[10, 20], [0, 10, 20, 9], 1, true, 2, 1, true, 1, true, :type_error]	def m(*a) = a\n        class Obj\n          def initialize(v) = @v = v\n  
@@ -758,6 +760,7 @@
 3d5aaee333bdf3c4bc36ded91dcd0aaf	[1, :nme]	class TrueClass; def only_true713; 1; end; end\n        res = []\n       
 3d5adde3fb0edf69c5646dd0efeadc07	["PSubC", :dup, :clone]	class PSubC < Proc\n                 def initialize_dup(o); super; @tag = :dup; e
 3d825ed681f4d3904854e2642bf813b4	A	class A; end\n            Class.new(A).superclass\n            
+3d87b9096253d3620333a296cee8e5f7	2.5	def call_block\n          yield\n        end\n        def p3\n          k =
 3d97f043dbc63d648bc8c08d3cd03cda	Array	class C < Array; end\n(C[1,2] | [3]).class
 3d9c37b87faf349ecb67571fb23a24e7	[[1, 2], 3]	->((*a, b)) { [a, b] }.call([1, 2, 3])
 3dbebf67556767ed46ca1b15b5c6014b	0	("" <=> "".dup.force_encoding("ISO-2022-JP"))\n            
@@ -811,6 +814,7 @@
 4239507f8b8c670abb722bea0b9c254e	"missing keyword: :x"	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; define_me
 423a27c97cfa628fc4d17c0da8f6bb0a	[true, "hi"]	class ReSubB < Regexp; end; r = ReSubB.new("hi"); [r.is_a?(ReSubB), r.source]
 4253be14d49d0c5b2ccb81f0dcb1bbe4	[1, 2, 1, 2, 1, 2]	class C; def to_int; 3; end; end; o = C.new\n[1, 2] * o
+425b61a03225b5ce7f0f589b005a085b	[600.0, 150.0]	def call_block\n          yield\n        end\n        def p2(k)\n          
 42636ead6d6f845d215efab6f85556c8	[ArgumentError, "mid"]	o = Object.new\n            def o.each; yield 1; raise ArgumentError
 42753250b48e0448fddf03ae492426cd	["Exception", "RuntimeError", "m"]	[Exception.exception("z").class.name, RuntimeError.exception.messag
 4275f26c470c052644fed1d14d2bba17	2000	def __deep(n) = n == 0 ? 0 : 1 + __deep(n - 1); __deep(2000)
@@ -1165,6 +1169,7 @@
 5e3e2c62315ae652d5e2d1f51a03f0ae	170850	class C\n          a = 42\n          define_method :foo do |x|\n          
 5e6c79ceefd1d93ee41e1edb47425d9b	true	# Linux-only: the macOS CI runner's CRuby dies on this\n            
 5e810d05537bd3deab6aa664f97b9554	["1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "1|[2, 3, 4]", "9|[]"]	def g(a, *r) = "#{a}|#{r.inspect}"\n        def f(...) = g(...)\n        
+5e83e59ecc42cfd76b686a0eb9931f6b	[3.0, "3.0"]	def call_block\n          yield\n        end\n        def q3(n)\n          
 5e90b0f7b0ac6601255109439bd5f631	[[1, 5], [2, 6]]	r = []; [1, 2].each.with_index(5) { |v, i| r << [v, i] }; r
 5ebedc689b393f6ba2135c7bd7ab5949	[:foo, :foo, nil]	$res = []\n        def foo\n            __method__\n        end\n        al
 5ed6efbc5d69e7f5d1858a2ae2807c9a	[nil, "error"]	h = { one: nil }\n        [h.fetch(:one), h.fetch(:two, "error")]\n      
@@ -1213,6 +1218,7 @@
 623c780251b09b2380a85de8d8651972	[true, true, true]	File.write("/tmp/mr_enc2.txt", "")\n            Encoding.default_int
 625ae98b945176f640a4b3585c1acc5f	[:from_rescue, [:ens]]	$log = []\n            def m\n              raise "x"\n            res
 62825865a591b21dbb6b9d05adb0c05a	["echo hello", true]	def `(cmd); [cmd, cmd.frozen?]; end\n        `echo hello`\n        
+628eaa8bccd2d8c621e49bd30049c6ce	[301.5, [1.5, 98.5, 195.5, 292.5]]	def call_block\n          yield\n        end\n        def bump\n          y
 62abd44369ee4b6cc7e6dbf66a868f1d	[[nil, nil, nil], [1, nil, nil], [1, 2, nil], [1, 2, 3]]	S = Struct.new(:a, :b, :c)\n            \n\n            [S.new.to_a, S
 62caa309e31dac2a3bb4c9e5ed060cf8	[false, "elefant", 4]	S = Struct.new(:name, :legs, keyword_init: false)\n            \n\n   
 62d15ca21ed1dd74ca65f3735e8b6c5a	false	File.writable?("nonexistent_file_xyz")
@@ -1296,6 +1302,7 @@
 695e21e95a722ab6137b89c61da5089c	42	def f\n          42\n        end\n        \n\n        f\n        
 6969aaf807e98c28a5dfa52dd28504f9	[255]	s = "".b\n            s.append_as_bytes(-1)\n            s.bytes\n    
 698060c4130b662b0ebfb2120f8893ce	[true, true, true]	l = ->(x){ x }; [l == l, l == l.dup, l == l.clone]
+699028423d045d31672d5edf0e00bdc5	[2.0244847182067076, 2.0244847182067076]	def call_block\n          yield\n        end\n        def c5(a0)\n         
 69ad25699413b1fe63f62bc829f927dc	[{}, {x: 10}]	f = Fiber.new(storage: {life: 42}) { Fiber[:life] = nil; Fiber.curr
 69b168e7d0ad487fc9118309039d2192	"HELLOworld"	s = "hello world"; s.bytesplice(0..-6, "HELLO"); s
 69c5968b4eb20ac66bb1a05cf40e9cd8	[:dup, :clone]	class CH\n                 attr_accessor :tag\n                 def initialize_dup
@@ -1356,6 +1363,7 @@
 6f48a4a001fdd1b6d3fd9bc7a12ae5fe	[true, "directory"]	[File.stat("/tmp").directory?, File.stat("/tmp").ftype]
 6f6180f86272a5e7760efeac4c2a956e	"abcああ"	"abc".ljust(5, "あ")
 6f89c5db7683986a9e61229515e918a3	"[] {a: 42, 100 => 100, c: 5}"	class C\n          def foo(*x, **y)\n            $res << x.inspect + " " 
+6f9a21b16eccd94c397c19f2c70977ab	[450.0, 1.5]	def call_block\n          yield\n        end\n        def c1\n          k =
 6f9e3eb9473b85b89a35086c448b5d42	true	obj = Object.new\n            begin; obj.nope_method; rescue NoMetho
 6fb70e1ac677ec5293ce90caf3afcdf5	true	Time.utc(2000,1,1,0,0,0,500000).subsec > 0
 6fd7a2503b2b0d8020435a1135d8760a	["extended:Bar"]	$res = []\n        module Foo\n          def self.extended(base)\n        
@@ -1471,6 +1479,7 @@
 77f33491c631e48bf3b64ecae0803bc2	{0 => 1, 1 => 2}	S = Struct.new(:x, :y, :z)\n        s = S.new(1, 2, 3)\n        \ns.decons
 780000579ca44d3089a6235cecf1a5d8	"hit"	if /(?<w>foo)/ =~ "foofoo" then "hit" else "miss" end
 78082c42730aab237d42ab24975965e6	[nil, 99, 97, 116, 112]	File.open("Cargo.toml") do |f|\n              f.getbyte\n            
+783e46afd56e32eae6e26f0806d7688a	259.5522608117453	def call_block\n          yield\n        end\n        def d1(k, j)\n       
 7862b5af18cc17717c5063cd4c3df41d	[10, 3, "nil", 9]	x = 10\n        [1, 2, 3].each { |i; x| x = i * 100 }\n        a = nil\n  
 788c3b7f7d26d8ce64421732d85d9f4f	[9, 8, [7, 6], [5, 4], 3, 2, 2, 1, {}, nil]	f = ->(a, b = 1, *c, (*d, (e)), f: 2, g:, h:, **k, &l) do\n          [a,
 78a9147b5bb75312ad6a700a83ce8209	["can't create instance of singleton class", "can't create instance of singleton class", "ok", true]	o = Object.new\n        msgs = []\n        begin; o.singleton_class.new; 
@@ -1920,6 +1929,7 @@
 9d37ece3c95f6ed41dcee850e24bab6b	[25, 15, 100, 4, 2, 32, 15, 6, 12, 16, 32]	class C\n          attr_accessor :v\n        end\n        \n\n        c = C.
 9d3a8273d76bab638959e38cd8c0a68c	[[:woke], true]	r = []\n            t = Thread.new { sleep 0.05; r << :woke }\n      
 9d4ee118279609a4658649ce219050c0	"a:1 b:{x: 100, y: 200} c:"	def f\n          yield 1,x:100,y:200\n        end\n        \n\n        f do 
+9d5aaad03082eda28c8c766f59c81e33	[1269.5, 7]	def call_block\n          yield\n        end\n        def d3\n          k =
 9d6d362d02ec388b6d9235b807fc78d2	5	class C\n              private def f; 5; end\n              def g; f;
 9d83806180901caed6f54effcdcb82d5	[1375.093536, 8.124106059241]	def t1\n          a = 1.5\n          s = 0.0\n          i = 0\n          wh
 9d90ba7627480755e747fc4a1045f51e	[2, 1]	[1, 2, 3].each.with_index { |v, i| break [v, i] if i == 1 }
@@ -2137,6 +2147,7 @@ abf60dabe0438d35647d189c45c8647a	["sleep", false]	t = Thread.new { IO.select(nil
 abfb1548c35bf7bc7b09797fe26223cb	[1, 2]	class Array; def []=(i, v); nil; end; end\n            a = [1, 2]\n  
 abff45e2e4ccefb2ed9daaa747abd7e9	[false, true, "ASCII-8BIT", "US-ASCII", "US-ASCII", true, true, nil, "UTF-16", nil, ".bak", nil, "no implicit conversion of Integer into String"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
 ac05813546d64cee5c65087151515f0e	2	class C\n              class_variable_set(:@@a, 1)\n              cla
+ac1cd090922e2d287c49175ec16f5e26	[10.0, 11.0]	def call_block\n          yield\n        end\n        def q2(n)\n          
 ac297a4af1959cc67e21eec34a53aea8	"nil"	def t; end; (private).inspect
 ac3fd0f0d8305e489381e6ee6e5c07bd	[100, 100, 4950]	a=1\n            x=0\n            b=while a<2500 do\n            if a=
 ac462de061f87c41bfe50ec870af58fd	[false, true]	io = IO.popen("cat", "r+")\n            begin\n              io.close
@@ -2323,6 +2334,7 @@ bb19f6171b9db4e6cae6dfe8c8c41cc8	true	c = Complex(1, 2); Complex(c).equal?(c)
 bb1ce69cddb8eef987fcca8c5854bd7f	[1, nil]	p = Proc.new { |a, b| [a, b] }\n            Class.new do\n           
 bb25f681814e00a730286dbf4fff8b3b	[:m, 1, C]	class C\n        end\n        \n\n        a = 1\n        C.class_eval %Q{\n  
 bb3259c8518859b67fd8d6ebce8a469b	[122, 195, 97]	"a\\xC3z".dup.force_encoding("UTF-8").reverse.bytes
+bb3cdd327fefc9a5e26b6cd23c95ac9e	[7, 7.25]	def call_block\n          yield\n        end\n        def q4\n          a =
 bb4676ea48e5e84be75e86137b7ccbf0	[[104, 101, 108, 108, 111, 226, 130, 12, 43, 172], "ASCII-8BIT"]	s = "hello".b\n            s.append_as_bytes("\\xE2\\x82", 12, 43, "\\x
 bb5498e7dcf365fa231082e385a52382	[42, 7, :nme]	class NestOuter\n              def build; def built; 42; end; end\n  
 bb7dc7125b3d11eacda38a33f25683d7	["global-variable", "global-variable", "global-variable", "global-variable", "global-variable"]	[defined?($/), defined?($\\), defined?($,), defined?($;), defined?($.)]
@@ -2804,6 +2816,7 @@ e0430993ff49221b4ff142a12a2d9ee6	[1, [:gt, :lt, :gt, :lt]]	class C\n            
 e051ec7a15469fca9105c948f78c2f26	[[:v], 50]	$nlr_log = []\n        def nlr_mid\n          yield\n        ensure\n      
 e093793f4006c99f09965c6fde38e86b	42	class Foo\n          def initialize\n            @x = 42\n          end\n  
 e09c62f66a3c3f3ed8999368ae421637	[true, [Errno::ENOENT, "No such file or directory @ rb_check_realpath_internal - /no_such_dir_zzq/x"], Errno::ELOOP, Errno::ELOOP]	(d="/tmp/mono_rp_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/file", ""); a=(
+e0a574583b5fc83f8c4cabc65c564a05	259.5522608117453	def call_block\n          yield\n        end\n        def p1\n          k =
 e0aaed5b5073da72fc373f05fb574de1	true	S = Struct.new(:a, :b)\n            \n\n            S.new(1, 2).hash !
 e0ae1b5209fe6fb6e963db3c6c00894e	"UTF-8"	e = "".force_encoding("EUC-JP"); "#{""}#{e}#{"x"}".encoding.to_s
 e0c2bb61aa5c5d76757d6084b37a58e5	[:a, :b, nil]	class K\n              def initialize(n); @n = n; end\n              
@@ -2820,6 +2833,7 @@ e1d0e1049ee5298bcdc5c96d04a37dd7	[false, false, true]	res = [$DEBUG, $-d]\n     
 e1dc59a25b246ef8aaa68515e60ea4a0	true	Process.getrlimit(Process::RLIMIT_STACK).is_a?(Array)
 e1e049bcd24042f78171ca96d4da9c05	false	class Foo\n              def bar; end\n            end\n            \n\n
 e216ce1e2b8ed4cd8ceaebfdb111d6fc	"US-ASCII"	("abc %s".dup.force_encoding("US-ASCII") % "x").encoding.to_s
+e221d27f16787b87dfe9fecfc65c5962	[600.0, 150.0]	def call_block\n          yield\n        end\n        def d2(k)\n          
 e226e478267e4a855c4aa2949e8e83a5	30	def add(x, y); x + y; end\n            m = method(:add)\n            
 e238574f11e692d806b7fdb19277fb61	[[:req, :x], [:opt, :y], [:rest, :rest], [:block, :blk]]	class Foo\n              def bar(x, y=1, *rest, &blk); end\n         
 e23cd2e86c80f810b83266eaf89e4c58	"abcdef"	r, w = IO.pipe\n            t = Thread.new { r.read(6) }\n           
@@ -2901,6 +2915,7 @@ e8bf25bb3eb8bcdf2410ac76264f9ea4	[1, 2]	Enumerator.new { |y| y << 1 << 2 }.to_a
 e8e220b680848457259609fb951e4dbd	["ensure in f", "ensure in g", 42]	def g\n          begin\n            yield\n          ensure\n            $r
 e8ea755b0d3d65aee46f4cca2a396948	["/root", ArgumentError, true, nil, [Errno::EBADF, "Bad file descriptor - fchdir"], true]	(a=Dir.home("root"); b=(begin; Dir.home("no_such_user_zzq"); rescue => e; e.clas
 e8f73c5ee545fe5b71d1c667d8bec38b	[3, [:gt, :gt]]	class Gt\n              attr_reader :calls\n              def initial
+e8fff433024d62ecc658476201cd2358	[0.0, 750.0]	def call_block\n          yield\n        end\n        def d4(n)\n          
 e90638f8f74350ab109848abe99b3ee9	:from_emit	def emit(tag); throw tag, :from_emit; end\n            catch(:x) { e
 e95108f8dbf4714b38e0e2eeaeef2060	["one x\\n", "two x\\n", 2, 2, "one x\\ntwo x\\n\\n\\n\\nthree\\nfour\\n", "one x\\ntwo x\\n\\n", "three\\nfour\\n", nil, "one x", "\\nt", "one ", "", "x\\n", "one x", "two x", "one ", "\\ntwo x\\n\\n\\n\\nthree\\nfour\\n", "three\\n", "one x", "one x\\n", :eof, "one", " x\\n", :range, :tyerr, "one x\\n", "o", 26, [[230, 156, 157], [230, 151, 165]]]	require "tempfile"\n            t = Tempfile.new("mrb_gets")\n       
 e9579fc0c8b362d6be81fff6d2f5180c	[[1], false]	r = []\n            t = Thread.new { r << 1; Thread.exit; r << 2 }\n 
@@ -2939,6 +2954,7 @@ ebcfc8794f2afa816e895c8221e183c1	["1|[2]", "1|[{k: 9, m: 8}]", "1|[2]", "1|[{k: 
 ebdbcc9624aa7a388b946aa43e54b139	[4611686018427388000, 4611686018427387903, -4611686018427388100, 4611686018427387799, 4611686018427388001, 4611686018427387904, -4611686018427388101, 4611686018427387800, 4611686018427388002, 4611686018427387905, -4611686018427388102, 4611686018427387801, 4611686018427388003, 4611686018427387906, -4611686018427388103, 4611686018427387802, 4611686018427388004, 4611686018427387907, -4611686018427388104, 4611686018427387803, 4611686018427388005, 4611686018427387908, -4611686018427388105, 4611686018427387804, 4611686018427388006, 4611686018427387909, -4611686018427388106, 4611686018427387805, 4611686018427388007, 4611686018427387910, -4611686018427388107, 4611686018427387806, 4611686018427388008, 4611686018427387911, -4611686018427388108, 4611686018427387807, 4611686018427388009, 4611686018427387912, -4611686018427388109, 4611686018427387808, 4611686018427388010, 4611686018427387913, -4611686018427388110, 4611686018427387809, 4611686018427388011, 4611686018427387914, -4611686018427388111, 4611686018427387810, 4611686018427388012, 4611686018427387915, -4611686018427388112, 4611686018427387811, 4611686018427388013, 4611686018427387916, -4611686018427388113, 4611686018427387812, 4611686018427388014, 4611686018427387917, -4611686018427388114, 4611686018427387813, 4611686018427388015, 4611686018427387918, -4611686018427388115, 4611686018427387814, 4611686018427388016, 4611686018427387919, -4611686018427388116, 4611686018427387815, 4611686018427388017, 4611686018427387920, -4611686018427388117, 4611686018427387816, 4611686018427388018, 4611686018427387921, -4611686018427388118, 4611686018427387817, 4611686018427388019, 4611686018427387922, -4611686018427388119, 4611686018427387818, 4611686018427388020, 4611686018427387923, -4611686018427388120, 4611686018427387819, 4611686018427388021, 4611686018427387924, -4611686018427388121, 4611686018427387820, 4611686018427388022, 4611686018427387925, -4611686018427388122, 4611686018427387821, 4611686018427388023, 4611686018427387926, -4611686018427388123, 4611686018427387822, 4611686018427388024, 4611686018427387927, -4611686018427388124, 4611686018427387823, 4611686018427388025, 4611686018427387928, -4611686018427388125, 4611686018427387824, 4611686018427388026, 4611686018427387929, -4611686018427388126, 4611686018427387825, 4611686018427388027, 4611686018427387930, -4611686018427388127, 4611686018427387826, 4611686018427388028, 4611686018427387931, -4611686018427388128, 4611686018427387827, 4611686018427388029, 4611686018427387932, -4611686018427388129, 4611686018427387828]	def drive\n              res = []\n              i = 4611686018427387
 ebe0ff80bc75796e6952268415562c02	79758732	a = 0\n        20.times do |x|\n          20.times do |y|\n            20.
 ec17cc112d34937041f056e2b23a6485	[10, 20, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.val
+ec27165b82461101f5103076c1eb33dc	[26578.09525, 180.901694]	def call_block\n          yield\n        end\n        def q1(n)\n          
 ec3412505f146b21a6888012a86820f2	[true, ["1", "2"]]	r = ENV.merge!("MONORUBY_ENV_TEST_M1" => "1",\n                     
 ec3b6db701fd7dc4a8aef71dcf7cdc12	[[[1, nil], nil], [[1, nil], nil], [:args, :block], [[1, nil, 2], nil], [1, 2], [[1, 2], nil]]	def m(*args, &block); [args, block]; end\n        res = []\n        args 
 ec4622bb1fc139438ae329ef3155baea	[42, 5]	def a5\n          [5].each do |i|\n            begin\n              return

@@ -269,6 +269,48 @@ pub(crate) struct SlotState {
     /// loop-carried `Sf` resident; empty (no effect) on the default path.
     #[cfg_attr(not(feature = "phys-loop-aware"), allow(dead_code))]
     loop_carried: std::collections::HashSet<SlotId>,
+    /// Stage-A use propagation: per-slot provenance — the slot's current
+    /// value came from a `LoadDynVar` of the frame `outer` levels out,
+    /// slot `src`. Recorded by the `LoadDynVar` lowering, cleared on
+    /// redefinition ([`Self::discard`]); a mode transition that keeps the
+    /// value (write-back, unguarded demotion) keeps it. Consulted when the
+    /// slot is consumed as a raw f64 ([`Self::use_as_float`]), which
+    /// queues the pair on `pending_outer_float_reads`. A correctness-
+    /// neutral hint: it only feeds the loop-entry float-adoption policy.
+    dynvar_src: Vec<Option<(u16, SlotId)>>,
+    /// Float-consumed dynvar reads not yet reported to the `JitContext`
+    /// (the frame itself cannot reach the outer frames' parked states).
+    /// Drained at the next `compile_instruction` boundary into
+    /// `JitContext::mark_outer_float_read`.
+    pending_outer_float_reads: Vec<(u16, SlotId)>,
+    /// Stage-A use propagation, the owner-side landing spot: an inlined
+    /// callee read this slot through the frame chain and consumed it as a
+    /// raw f64. Deliberately *not* folded into `IsUsed` — the type/kill
+    /// lattice drives the long-tuned owner-side float policies, and this
+    /// signal feeds only the loop-entry `Sf` adoption
+    /// (`Liveness::subtree_float_reads`).
+    subtree_float_read: Vec<bool>,
+    /// Stage-B home-aliased reads: for a slot holding a bare-`F` home read
+    /// of an outer float, the recipe for loading the *boxed* twin straight
+    /// from the owner's slot (which still holds the value the home read
+    /// took) instead of re-boxing the fpr. Valid only while nothing can
+    /// have rewritten the owner's slot: killed at every store through the
+    /// frame chain and at every call boundary (`clear_dynvar_aliases`),
+    /// and dropped with the binding on any mode transition ([`Self::clear`]).
+    dynvar_alias: Vec<Option<DynVarAliasLoad>>,
+}
+
+///
+/// Stage-B home-aliased reads: the deferred boxed-twin load — the same
+/// chain-resolved static frame offset `LoadDynVarSpecialized` uses,
+/// captured at the read so the consult site (deep in the state machinery,
+/// with no `JitContext` at hand) can emit it verbatim.
+///
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::codegen::jitgen) struct DynVarAliasLoad {
+    pub(in crate::codegen::jitgen) ids: Vec<crate::codegen::jitgen::context::SpecializedId>,
+    pub(in crate::codegen::jitgen) extra: usize,
+    pub(in crate::codegen::jitgen) reg: SlotId,
 }
 
 impl std::fmt::Debug for SlotState {
@@ -300,6 +342,10 @@ impl SlotState {
             local_num,
             deferred_forward: None,
             loop_carried: std::collections::HashSet::new(),
+            dynvar_src: vec![None; total_reg_num],
+            pending_outer_float_reads: vec![],
+            subtree_float_read: vec![false; total_reg_num],
+            dynvar_alias: vec![None; total_reg_num],
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -628,6 +674,9 @@ impl SlotState {
         // `fpr_remove` for the fpr file). The binop that *creates* a resident
         // rebinds it after this `clear`, so the cache stays correct.
         self.gp_regfile.invalidate(slot);
+        // Any transition away from the aliased-`F` binding ends the alias;
+        // the consult site takes it *before* transitioning.
+        self.dynvar_alias[slot.0 as usize] = None;
         match self.mode(slot) {
             LinkMode::Sf(fpr, _) | LinkMode::F(fpr) => {
                 assert!(self.fpr(fpr).contains(&slot));
@@ -653,6 +702,9 @@ impl SlotState {
             }
             self.clear(slot);
             self.is_used_mut(slot).kill();
+            // A redefinition ends the dynvar provenance — the new value did
+            // not come through the frame chain.
+            self.dynvar_src[slot.0 as usize] = None;
         }
     }
 
@@ -722,21 +774,34 @@ impl SlotState {
     /// from the analysis-pass allocation — the first step of making the analysis
     /// pass allocation-free.
     ///
+    /// `adopt_sf(i)` selects the slots that re-adopt **`Sf`** instead: the
+    /// back-edge placement is `Sf(Float)`, i.e. the slot is *current* on
+    /// every path around the loop (the last write boxed it — an owner
+    /// unbox, or an inlined block's write-through keep). Adopting `F`
+    /// there would declare the slot stale, forcing every block-passing
+    /// call site in the body to re-box it each iteration; `Sf` keeps the
+    /// claim, so the call sites emit nothing and the back-edge bridge is
+    /// an fpr move at worst. The entry is unboxed once at the pre-header
+    /// by the `S -> Sf` bridge (guard + unbox, no store — the slot
+    /// already holds the boxed value).
     pub(in crate::codegen::jitgen) fn keep_backedge_floats(
         &mut self,
         adopt: impl Fn(SlotId) -> bool,
+        adopt_sf: impl Fn(SlotId) -> bool,
         promotable: impl Fn(SlotId) -> bool,
     ) {
         for i in self.all_regs() {
-            if adopt(i)
-                && matches!(self.mode(i), LinkMode::S(_) | LinkMode::Sf(_, _))
-                && promotable(i)
-            {
-                // `try_set_new_F` (no phase-2 spill): only specialize to `F` when
-                // a physical fpr is actually free. Spilling a *speculative*
-                // loop-entry promotion into a `VirtFPReg` is not worth it and is
-                // exercised wrongly under register pressure (the `stress-spill-pool`
-                // path); leave the slot boxed in that case.
+            if !promotable(i) {
+                continue;
+            }
+            // `try_set_new_F` / `try_set_new_Sf` (no phase-2 spill): only
+            // specialize when a physical fpr is actually free. Spilling a
+            // *speculative* loop-entry promotion into a `VirtFPReg` is not
+            // worth it and is exercised wrongly under register pressure (the
+            // `stress-spill-pool` path); leave the slot boxed in that case.
+            if adopt_sf(i) && matches!(self.mode(i), LinkMode::S(_)) {
+                self.try_set_new_Sf(i, SfGuarded::Float);
+            } else if adopt(i) && matches!(self.mode(i), LinkMode::S(_) | LinkMode::Sf(_, _)) {
                 self.try_set_new_F(i);
             }
         }
@@ -894,6 +959,19 @@ impl SlotState {
     }
 
     ///
+    /// Define *slot* as a bare `F` in a fresh fpr (stage-B home read: the
+    /// raw f64 arrives by `LoadOuterFprHomeF`; the slot's own stack home
+    /// is left stale on purpose).
+    ///
+    #[allow(non_snake_case)]
+    pub(crate) fn def_F_new(&mut self, slot: SlotId) -> FPReg {
+        let fpr = self.alloc_fpr();
+        self.discard(slot);
+        self.set_F(slot, fpr);
+        fpr
+    }
+
+    ///
     /// Link *slot* to a concrete flonum value *i*.
     ///
     #[allow(non_snake_case)]
@@ -926,11 +1004,134 @@ impl SlotState {
 
     /// used as f64 with no conversion
     pub(super) fn use_as_float(&mut self, slot: SlotId) {
+        // Stage-A use propagation: a raw-f64 consumption of a value that
+        // arrived through `LoadDynVar` is float-use evidence *about the
+        // owner's slot* — queue it for the next `compile_instruction`
+        // boundary, where the `JitContext` can reach the owner's parked
+        // frame ([`JitContext::mark_outer_float_read`]).
+        if let Some(src) = self.dynvar_src[slot.0 as usize] {
+            self.pending_outer_float_reads.push(src);
+        }
         self.is_used_mut(slot).use_as_float();
     }
 
     pub(super) fn use_as_value(&mut self, slot: SlotId) {
         self.is_used_mut(slot).use_as_non_float();
+    }
+
+    ///
+    /// Stage-A use propagation: record that *slot*'s current value came
+    /// from a `LoadDynVar` of the frame *outer* levels out, slot *src*.
+    ///
+    pub(in crate::codegen::jitgen) fn set_dynvar_src(
+        &mut self,
+        slot: SlotId,
+        outer: usize,
+        src: SlotId,
+    ) {
+        if let Ok(outer) = u16::try_from(outer) {
+            self.dynvar_src[slot.0 as usize] = Some((outer, src));
+        }
+    }
+
+    ///
+    /// Stage-A use propagation: hand over the float-consumed dynvar reads
+    /// queued since the last drain.
+    ///
+    pub(in crate::codegen::jitgen) fn take_pending_outer_float_reads(
+        &mut self,
+    ) -> Vec<(u16, SlotId)> {
+        std::mem::take(&mut self.pending_outer_float_reads)
+    }
+
+    ///
+    /// Stage-A use propagation: the callee-side mark landing on this
+    /// (parked owner) frame — the subtree-read flag the loop-entry `Sf`
+    /// adoption reads via [`Liveness::subtree_float_reads`]. `IsUsed` is
+    /// deliberately left untouched (see the field comment).
+    ///
+    pub(in crate::codegen::jitgen) fn mark_subtree_float_read(&mut self, slot: SlotId) {
+        if let Some(b) = self.subtree_float_read.get_mut(slot.0 as usize) {
+            *b = true;
+        }
+    }
+
+    pub(in crate::codegen::jitgen) fn subtree_float_read(&self, slot: SlotId) -> bool {
+        self.subtree_float_read
+            .get(slot.0 as usize)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    ///
+    /// Stage-C loop adoption: every slot of this frame some inlined
+    /// callee read as a raw f64.
+    ///
+    pub(in crate::codegen::jitgen) fn subtree_float_read_slots(&self) -> Vec<SlotId> {
+        self.subtree_float_read
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| b.then_some(SlotId(i as u16)))
+            .collect()
+    }
+
+    ///
+    /// Stage-B home-aliased reads: attach the boxed-twin recipe to a fresh
+    /// bare-`F` home read of an outer float.
+    ///
+    pub(in crate::codegen::jitgen) fn set_dynvar_alias(
+        &mut self,
+        slot: SlotId,
+        alias: DynVarAliasLoad,
+    ) {
+        self.dynvar_alias[slot.0 as usize] = Some(alias);
+    }
+
+    ///
+    /// Stage-B home-aliased reads: consume the alias at its consult site
+    /// (the `F` boxed-use arm), before the `F -> Sf` transition clears it.
+    ///
+    pub(super) fn take_dynvar_alias(&mut self, slot: SlotId) -> Option<DynVarAliasLoad> {
+        self.dynvar_alias[slot.0 as usize].take()
+    }
+
+    ///
+    /// Stage-B home-aliased reads: a store through the frame chain or a
+    /// call boundary may rewrite any owner slot, so every alias dies.
+    ///
+    pub(in crate::codegen::jitgen) fn clear_dynvar_aliases(&mut self) {
+        for a in &mut self.dynvar_alias {
+            *a = None;
+        }
+    }
+
+    ///
+    /// Stage-A use propagation: merge the hint fields at a path join —
+    /// provenance is kept only where both paths agree, pending reports and
+    /// landed subtree-read marks from either path remain evidence.
+    ///
+    pub(super) fn join_subtree_read_meta(&mut self, other: &SlotState) {
+        for (l, r) in self.dynvar_src.iter_mut().zip(other.dynvar_src.iter()) {
+            if *l != *r {
+                *l = None;
+            }
+        }
+        self.pending_outer_float_reads
+            .extend(other.pending_outer_float_reads.iter().copied());
+        for (l, r) in self
+            .subtree_float_read
+            .iter_mut()
+            .zip(other.subtree_float_read.iter())
+        {
+            *l |= *r;
+        }
+        // An alias is a per-path fact about the owner's slot content; it
+        // survives a merge only when both paths carry the identical claim.
+        for (l, r) in self.dynvar_alias.iter_mut().zip(other.dynvar_alias.iter()) {
+            if l.as_ref() != r.as_ref() {
+                *l = None;
+            }
+        }
     }
 
     ///
@@ -1566,6 +1767,11 @@ impl AbstractFrame {
         // longer each need their own flush, and register-only inlines (which make
         // no call and never call this) keep their residents.
         self.flush_gp(ir);
+        // Stage-B home-aliased reads: whatever this snapshot precedes can
+        // re-enter Ruby, which can store through the frame chain — no alias
+        // survives a call boundary. (Specialized calls kill them in
+        // `specialized_compile`.)
+        self.clear_dynvar_aliases();
         self.using_fpr_offset()
     }
 
@@ -2126,17 +2332,18 @@ impl AbstractFrame {
         // An outer frame's fpr is not in a register while we run: the call
         // that suspended that frame saved its physical fprs
         // (`fpr_save_cont`) and restores them on the way back. So nothing
-        // here may emit a register operation on one. That leaves exactly
-        // two transitions for a slot holding `Sf` — keep the same binding,
-        // or drop to `S`, which is free because the slot holds the boxed
-        // value — and rules out `F`, whose only copy *is* the register.
-        // `AbstractState::join` is what keeps it to those.
-        debug_assert!(
-            !matches!(self.mode(slot), LinkMode::F(_)),
-            "outer{outer} {slot:?} holds {:?}",
-            self.mode(slot),
-        );
+        // here may emit a register operation on one. A suspended frame's
+        // placements are path-invariant unless a chain store widened them
+        // (`AbstractState::join` keeps identical placements and meets
+        // differing ones to `S`), so every arm here is either a no-op or a
+        // pure state demotion — including a *method* caller's `F`, whose
+        // slot is stale but whose value sits untouched in the call-site
+        // save area, unreachable by anything this compile runs (a frame a
+        // handed-out block could reach was homed at its own call site).
         match (self.mode(slot), target.mode(slot)) {
+            (LinkMode::F(l), LinkMode::F(r)) if l == r => {
+                return;
+            }
             (LinkMode::V, LinkMode::V)
             | (LinkMode::None, LinkMode::None)
             | (LinkMode::MaybeNone, LinkMode::MaybeNone) => {}
@@ -2174,11 +2381,6 @@ impl AbstractFrame {
             self.unbox_to_S(ir, slot, false);
             return false;
         }
-        debug_assert!(
-            !matches!(self.mode(slot), LinkMode::F(_)),
-            "outer{outer} {slot:?} holds {:?}",
-            self.mode(slot),
-        );
         match self.mode(slot) {
             // The slot holds the boxed value; only the read-only view goes.
             LinkMode::Sf(_, _) => {
@@ -2189,6 +2391,12 @@ impl AbstractFrame {
                 self.set_mode(slot, LinkMode::S(Guarded::Value));
                 true
             }
+            // A suspended *method* caller can hold `F` across its call (the
+            // value lives in its call-site save area). The block handed out
+            // here cannot reach that frame — every frame a block's lexical
+            // chain crosses was homed at its own block-handing call site —
+            // so the stale slot is never read and the binding stays.
+            LinkMode::F(_) => false,
             _ => false,
         }
     }

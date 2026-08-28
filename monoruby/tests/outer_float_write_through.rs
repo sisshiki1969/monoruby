@@ -252,3 +252,415 @@ fn a_conditional_store_refuses_promotion() {
         "#,
     );
 }
+
+/// From here down: stage 3a — home-directed *reads*. A block's read of
+/// an outer Float-guarded `Sf` slot loads the raw f64 straight from its
+/// home (the owner's call-site save slot or spill slot) into a fresh `F`
+/// of the reading frame (`AsmInst::LoadOuterFprHomeF`): no slot load, no
+/// Float guard, no unbox. The read relies only on the binding at its own
+/// program point, so it records nothing and needs no drain.
+///
+/// The full round trip: the block reads and writes the kept float every
+/// iteration; with home reads and write-through keeps the loop's floats
+/// stay unboxed except the one authoritative slot store per write.
+#[test]
+fn a_block_reading_and_writing_the_kept_float() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def q1(n)
+          a = n * 1.5
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { a = a * 1.001 + 0.5 }
+            s += a
+            i += 1
+          end
+          [s.round(6), a.round(6)]
+        end
+        q1(3)
+        "#,
+    );
+}
+
+/// A later block home-reads a view the *promotion* (stage 2) created —
+/// the owner never unboxed x itself, yet both blocks work on raw f64s.
+#[test]
+fn a_home_read_of_a_promoted_view() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def q2(n)
+          x = nil
+          call_block { x = n * 2.5 }
+          t = 0.0
+          call_block { t = x + 1.0 }
+          [x, t]
+        end
+        r = nil
+        300.times { r = q2(4) }
+        r
+        "#,
+    );
+}
+
+/// The block consumes the float as a *Value* (`to_s`): the home read
+/// defines an `F` in the block's frame, and the ordinary F-boxing
+/// machinery takes it from there.
+#[test]
+fn a_home_read_consumed_as_a_value() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def q3(n)
+          a = n * 1.5
+          s = ""
+          call_block { s = a.to_s }
+          [a, s]
+        end
+        r = nil
+        300.times { r = q3(2) }
+        r
+        "#,
+    );
+}
+
+/// After a type flip widens the binding, reads degrade to the slot path
+/// and stay correct.
+#[test]
+fn a_home_read_degrades_after_a_type_flip() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def q4
+          a = 1.5
+          v = nil
+          i = 0
+          while i < 300
+            call_block { a = 7 if i == 150; v = a.to_f + 0.25 }
+            i += 1
+          end
+          [a, v]
+        end
+        q4
+        "#,
+    );
+}
+
+/// Stage-A use propagation: a loop-invariant float the owner never
+/// touches, consumed by the block every iteration. No store means no
+/// back-edge `Sf` placement; the subtree-read signal alone must adopt
+/// the slot at the loop entry, and the block's reads become home reads
+/// (the accumulated product diverges loudly if the hoisted unbox ever
+/// reads a stale home).
+#[test]
+fn a_pure_read_invariant_float_adopts_at_the_loop_entry() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p1
+          k = 1.001
+          j = 0.999
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { s = s * j + k }
+            i += 1
+          end
+          s
+        end
+        p1
+        "#,
+    );
+}
+
+/// The subtree-read adoption must not fire for a slot that is not a
+/// float at the loop entry: the entry bridge's guard deopts once and
+/// the loop still completes correctly on the slot path.
+#[test]
+fn a_non_float_pure_read_stays_correct() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p2(k)
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { s = s + k.to_f }
+            i += 1
+          end
+          s
+        end
+        [p2(2), p2(0.5)]
+        "#,
+    );
+}
+
+/// A pure read through two lexical levels: the invariant lives two
+/// frames out from the reading block.
+#[test]
+fn a_pure_read_two_outer_levels() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p3
+          k = 1.25
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { call_block { s = s * 0.5 + k } }
+            i += 1
+          end
+          s
+        end
+        p3
+        "#,
+    );
+}
+
+/// The invariant is redefined mid-loop by the owner: the provenance-fed
+/// adoption must track the new value (the entry state re-guards each
+/// entry; the body redefinition flows around the back edge).
+#[test]
+fn a_pure_read_with_an_owner_redefinition() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def p4
+          k = 1.001
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { s = s * 0.99 + k }
+            k = 2.5 if i == 150
+            i += 1
+          end
+          [s, k]
+        end
+        p4
+        "#,
+    );
+}
+
+/// Stage-B home alias: a copy-through Value use of a bare-`F` home read
+/// (`v = k` stores the read straight back through the chain) must load
+/// the boxed twin from the owner's slot, not a stale re-box.
+#[test]
+fn a_home_read_copied_through_as_a_value() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def c1
+          k = 1.5
+          v = nil
+          u = 0.0
+          i = 0
+          while i < 300
+            call_block { v = k; u = u + v }
+            i += 1
+          end
+          [u, v]
+        end
+        c1
+        "#,
+    );
+}
+
+/// Stage-B home alias invalidation: a chain store between the read and
+/// its Value use rewrites the owner's slot, so the use must re-box the
+/// fpr (the old value), never consult the dead alias (the new value).
+#[test]
+fn a_chain_store_kills_the_alias_before_the_value_use() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def c2
+          k = 1.5
+          out = []
+          i = 0
+          while i < 300
+            call_block { old = k; k = k + 1.0; out << old if i % 97 == 0 }
+            i += 1
+          end
+          [k, out]
+        end
+        c2
+        "#,
+    );
+}
+
+/// Stage-B home alias invalidation at a call boundary: a nested call
+/// between the read and the use can store through the chain from a
+/// deeper frame; the use after the call must not consult the alias.
+#[test]
+fn a_nested_call_kills_the_alias() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def bump
+          yield
+        end
+        def c3
+          k = 1.5
+          out = []
+          i = 0
+          while i < 300
+            call_block { old = k; bump { k = k + 1.0 }; out << old if i % 97 == 0 }
+            i += 1
+          end
+          [k, out]
+        end
+        c3
+        "#,
+    );
+}
+
+/// Stage C: the loop head sits in an inlined callee (Integer#times) while
+/// the floats live in the calling method — the invariants adopt a
+/// spill-homed view on the caller's parked frame at the loop entry, and
+/// the inner block's reads become home reads. The accumulation diverges
+/// loudly if the entry init ever leaves the home stale.
+#[test]
+fn a_times_loop_adopts_the_callers_invariant_floats() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def d1(k, j)
+          s = 0.0
+          300.times do
+            call_block { s = s * j + k }
+          end
+          s
+        end
+        r = nil
+        30.times { r = d1(1.001, 0.999) }
+        r
+        "#,
+    );
+}
+
+/// Stage C with a non-float entering the adopted slot: the entry init's
+/// Float guard deopts and the loop completes on the slot path.
+#[test]
+fn a_times_loop_adoption_guard_deopts_on_a_non_float() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def d2(k)
+          s = 0.0
+          300.times do
+            call_block { s = s + k.to_f }
+          end
+          s
+        end
+        r = nil
+        30.times { r = [d2(2), d2(0.5)] }
+        r
+        "#,
+    );
+}
+
+/// Stage C with a mid-loop type flip: the body stores an Integer into
+/// the read slot, so the analysis walk's widen excludes it from adoption
+/// (an adopted home would be stale on the next iteration).
+#[test]
+fn a_times_loop_type_flip_excludes_the_slot() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def d3
+          k = 1.5
+          s = 0.0
+          300.times do |i|
+            call_block { s = s + k.to_f; k = 7 if i == 150 }
+          end
+          [s.round(6), k]
+        end
+        r = nil
+        30.times { r = d3 }
+        r
+        "#,
+    );
+}
+
+/// Stage C with a zero-trip loop: the entry init still runs (every path
+/// into the loop head passes it) and the home is simply never read.
+#[test]
+fn a_zero_trip_times_loop_stays_correct() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def d4(n)
+          k = 2.5
+          s = 0.0
+          n.times do
+            call_block { s = s + k }
+          end
+          s
+        end
+        r = nil
+        30.times { r = [d4(0), d4(300)] }
+        r
+        "#,
+    );
+}
+
+/// The alias-consult shape codecov flagged as uncovered: the copy-through
+/// in `a_home_read_copied_through_as_a_value` used a *literal* invariant,
+/// which const-folds before any home read exists. Route the float through
+/// an argument and keep it written by the block (so the owner holds a
+/// kept `Sf` view): the `b = a` copy then reads `a` as a home-aliased
+/// bare `F` and materializes the Value through the alias load
+/// (`GpLoad::DynVarAlias`), not a re-box — probe-verified.
+#[test]
+fn a_kept_float_copied_through_uses_the_home_alias() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def c5(a0)
+          a = a0
+          b = 0.0
+          i = 0
+          while i < 300
+            call_block { a = a * 1.001; b = a }
+            i += 1
+          end
+          [a, b]
+        end
+        c5(1.5)
+        "#,
+    );
+}

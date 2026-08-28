@@ -56,6 +56,14 @@ impl<'a> JitContext<'a> {
         cache: MethodCache,
     ) -> JitResult<CompileResult> {
         let callsite = &self.store[callid];
+        // Stage-C loop adoption: an explicit `&blk` (or `(...)`
+        // forwarding) hands a block whose lexical home may lie outside
+        // this frame's state chain to a callee that can run it
+        // generically — a store channel no compile-time widen hook
+        // covers. No outer view adopts across such a site.
+        if callsite.block_arg.is_some() || callsite.forwarding {
+            self.set_outer_claim_barrier();
+        }
         let recv_class = state.class(callsite.recv);
         // A frame-dependent `super` site (the method body occupies several
         // positions in the receiver's ancestor chain, or is a define_method

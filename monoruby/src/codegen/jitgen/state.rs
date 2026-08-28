@@ -11,6 +11,7 @@ use liveness::IsUsed;
 pub(super) use liveness::Liveness;
 pub(super) use read_slot::DeoptPoint;
 pub(in crate::codegen::jitgen) use slot::SfGuarded;
+pub(in crate::codegen::jitgen) use slot::DynVarAliasLoad;
 pub(super) use slot::{Guarded, LinkMode, SlotState};
 
 #[derive(Debug, Clone)]
@@ -46,9 +47,30 @@ impl std::ops::IndexMut<usize> for AbstractState {
 
 impl AbstractState {
     pub(super) fn new(jitctx: &JitContext) -> Self {
-        let mut frames = jitctx.outer_contexts();
-        frames.push(AbstractFrame::new(jitctx));
+        // Join unification, step B2: the chain spans the whole trace
+        // (every suspended frame, 1:1 with the specialization stack), not
+        // just the lexical ancestors. Lexical (dynvar) addressing walks
+        // the per-frame links; the merge machinery walks every frame
+        // either way.
+        let mut frames = jitctx.trace_contexts();
+        let mut current = AbstractFrame::new(jitctx);
+        current.set_lexical_outer(jitctx.current_frame_lexical_outer());
+        frames.push(current);
         AbstractState { frames }
+    }
+
+    ///
+    /// The index of the frame *outer* lexical levels out from the
+    /// innermost, following the per-frame lexical links — the state-side
+    /// twin of [`JitContext::outer_pos`]. `outer == 0` is the innermost
+    /// frame itself; a link leaving the chain answers `None`.
+    ///
+    fn outer_level(&self, outer: usize) -> Option<usize> {
+        let mut level = self.frames.len().checked_sub(1)?;
+        for _ in 0..outer {
+            level = level.checked_sub(self.frames[level].lexical_outer()?)?;
+        }
+        Some(level)
     }
 
     pub(super) fn set_frames(&mut self, frames: Vec<AbstractFrame>) {
@@ -69,8 +91,10 @@ impl AbstractState {
     /// differing lengths between sibling clones (`grow_fpr_to`).
     ///
     pub(super) fn promote_outer_sf(&mut self, outer: usize, slot: SlotId, fpr: FPReg) {
-        if outer > 0 && outer < self.frames.len() {
-            let level = self.frames.len() - 1 - outer;
+        if outer == 0 {
+            return;
+        }
+        if let Some(level) = self.outer_level(outer) {
             let frame = &mut self.frames[level];
             frame.grow_fpr_to(fpr.0 + 1);
             frame.set_Sf(slot, fpr, SfGuarded::Float);
@@ -85,8 +109,10 @@ impl AbstractState {
     }
 
     pub(super) fn widen_outer_slot(&mut self, outer: usize, slot: SlotId) {
-        if outer > 0 && outer < self.frames.len() {
-            let level = self.frames.len() - 1 - outer;
+        if outer == 0 {
+            return;
+        }
+        if let Some(level) = self.outer_level(outer) {
             self.frames[level].invalidate_slot(slot);
         }
     }
@@ -173,6 +199,11 @@ impl AbstractState {
     ///
     #[allow(non_snake_case)]
     pub(super) fn all_frames_unbox_to_S(&mut self, jitctx: &mut JitContext, ir: &mut AsmIr) {
+        // Stage-C loop adoption: a block leaves the unit here — its
+        // runtime stores bypass every compile-time widen hook, and its
+        // lexical chain can reach frames this state chain does not
+        // (a forwarded block's home). No outer view adopts across this.
+        jitctx.set_outer_claim_barrier();
         let depth = self.frames.len();
         let mut widened = vec![];
         for level in (0..depth).rev() {
@@ -180,12 +211,14 @@ impl AbstractState {
             let frame = &mut self.frames[level];
             for i in frame.locals() {
                 if frame.unbox_to_S_at(ir, i, outer) {
-                    widened.push((outer, i));
+                    widened.push((level, i));
                 }
             }
         }
-        for (outer, slot) in widened {
-            jitctx.widen_outer_slot(outer, slot);
+        // The chain's positions align with the context's `stack_frame`
+        // (join unification, step B2), so the report is positional.
+        for (pos, slot) in widened {
+            jitctx.widen_outer_at_pos(pos, slot);
         }
     }
 
@@ -210,17 +243,14 @@ impl AbstractState {
     /// The mode *slot* has in the frame *outer* levels out, if that frame
     /// belongs to this compilation.
     pub(super) fn outer_mode(&self, outer: usize, slot: SlotId) -> Option<LinkMode> {
-        if outer == 0 || outer >= self.frames.len() {
+        if outer == 0 {
             return None;
         }
-        Some(self.frames[self.frames.len() - 1 - outer].mode(slot))
+        Some(self.frames[self.outer_level(outer)?].mode(slot))
     }
 
     pub(super) fn outer_no_capture_guard(&self, outer: usize) -> Option<bool> {
-        if outer >= self.frames.len() {
-            return None;
-        }
-        Some(self.frames[self.frames.len() - 1 - outer].no_capture_guard())
+        Some(self.frames[self.outer_level(outer)?].no_capture_guard())
     }
 
     pub(super) fn join_entries(entries: &[BranchEntry]) -> Self {
@@ -246,6 +276,13 @@ pub(crate) struct AbstractFrame {
     next_sp: SlotId,
     /// assumptions
     invariants: Invariants,
+    /// Chain-relative distance to this frame's *lexical* parent within
+    /// the state chain (`None` for a method / the chain root) — the
+    /// state-side twin of `JitStackFrame::outer`, set when the frame
+    /// enters a chain. Dynvar addressing walks these links instead of
+    /// assuming the chain holds only lexical ancestors, which is what
+    /// lets the chain grow to the whole trace (join unification).
+    lexical_outer: Option<usize>,
 }
 
 impl std::ops::Deref for AbstractFrame {
@@ -272,6 +309,7 @@ impl AbstractFrame {
                     slot_state: SlotState::new_method(cc),
                     next_sp,
                     invariants: Invariants::new_entry(cc),
+                    lexical_outer: None,
                 }
             }
             JitType::Loop(_) => AbstractFrame {
@@ -279,6 +317,7 @@ impl AbstractFrame {
                 slot_state: SlotState::new_loop(cc),
                 next_sp,
                 invariants: Invariants::new_loop(),
+                lexical_outer: None,
             },
             JitType::Specialized { .. } => {
                 let pc = cc.get_pc(BcIndex::default());
@@ -287,6 +326,7 @@ impl AbstractFrame {
                     slot_state: SlotState::new_method(cc),
                     next_sp,
                     invariants: Invariants::new_specialized(cc),
+                    lexical_outer: None,
                 }
             }
         }
@@ -298,6 +338,14 @@ impl AbstractFrame {
 
     pub(in crate::codegen::jitgen) fn slot_state(&self) -> &SlotState {
         &self.slot_state
+    }
+
+    pub(super) fn lexical_outer(&self) -> Option<usize> {
+        self.lexical_outer
+    }
+
+    pub(super) fn set_lexical_outer(&mut self, link: Option<usize>) {
+        self.lexical_outer = link;
     }
 
     pub(super) fn pc(&self) -> BytecodePtr {
