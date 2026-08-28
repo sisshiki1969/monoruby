@@ -111,6 +111,18 @@ impl AbstractState {
         self.frames.len()
     }
 
+    ///
+    /// Position-addressed widen, for replaying a `widened_outer_log`
+    /// delta onto a chain (the no-return-path fallback in
+    /// `specialized_compile`). Positions past the chain's end are
+    /// frames that no longer exist — ignored.
+    ///
+    pub(super) fn invalidate_at(&mut self, pos: usize, slot: SlotId) {
+        if let Some(frame) = self.frames.get_mut(pos) {
+            frame.invalidate_slot(slot);
+        }
+    }
+
     pub(super) fn innermost_clone(&self) -> AbstractFrame {
         self.frames.last().unwrap().clone()
     }

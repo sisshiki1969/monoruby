@@ -425,6 +425,15 @@ pub(super) struct JitStackFrame {
     ///
     /// Snapshot of `AbstractScopeState`` when the child method is called.
     ///
+    /// Publishing a nested compile's view of this frame *into* this field
+    /// is not available and must not be added back: this is where the
+    /// frame's own compile parks the state it will resume from, and
+    /// overwriting it with a view taken at a different program point, in
+    /// a different frame's terms, resumed garbage — three levels of
+    /// nested blocks segfaulted in generated code. What a nested compile
+    /// has to tell an outer frame is only that a slot was widened, and
+    /// that arrives through `widen_outer_slot` / `widen_outer_at_pos`.
+    ///
     abstract_state: Option<AbstractFrame>,
 
     ///
@@ -1264,6 +1273,10 @@ impl<'a> JitContext<'a> {
         // `unset_lexical_no_capture_guard`), so the entry chain is simply
         // this path's live frames.
         let entry_chain = state.frames_cloned();
+        // For the no-return-path fallback below: the entry chain again,
+        // and where the widen log stood when the callee's compile began.
+        let fallback_chain = entry_chain.clone();
+        let widen_mark = self.widened_outer_log.len();
         let caller = self.current_frame_mut();
         caller.stack_offset += stack_offset;
         caller.callid = Some(callid);
@@ -1301,35 +1314,21 @@ impl<'a> JitContext<'a> {
             state.overlay_kept_constants_innermost(joined_caller.slot_state());
         } else {
             // No compiled return path: the caller's continuation is
-            // unreachable on compiled paths; rebuild from the parked
-            // copies as a conservative placeholder.
-            self.adopt_outer(state, innermost);
+            // unreachable on compiled paths. Resume from this path's own
+            // entry chain, re-widened by everything the callee's compile
+            // widened (the log delta — position-addressed, and positions
+            // below the caller's are stable across the call). Any claim
+            // the placeholder still carries is vacuous — no execution
+            // arrives here — and every later merge's claims are
+            // established by its *reachable* entries' bridges.
+            let mut chain = fallback_chain;
+            *chain.last_mut().unwrap() = innermost;
+            state.set_frames(chain);
+            for (pos, slot) in self.widened_outer_log[widen_mark..].to_vec() {
+                state.invalidate_at(pos, slot);
+            }
         }
         Ok(frame)
-    }
-
-    ///
-    /// Rebuild *state*'s frame chain from the context's copies, keeping
-    /// *innermost* (this compile's own frame, which the context does not
-    /// track while the compile is running).
-    ///
-    /// The reverse — publishing this compile's view of the outer frames
-    /// *into* the context on the way down — is not available and must not
-    /// be added back. `abstract_state` is not only what nested compiles
-    /// clone; it is also where a frame's own compile parks its state while
-    /// it waits for one. Writing a nested compile's view of a frame there
-    /// replaces the suspended state that frame will resume from with a
-    /// view taken at a different program point, in a different frame's
-    /// terms — three levels of nested blocks segfaulted in generated code.
-    ///
-    /// Nothing needs it today: what a nested compile has to learn about an
-    /// outer frame is only that a slot was widened, and that arrives
-    /// through `widen_outer_slot`.
-    ///
-    fn adopt_outer(&self, state: &mut AbstractState, innermost: AbstractFrame) {
-        let mut frames = self.trace_contexts();
-        frames.push(innermost);
-        state.set_frames(frames);
     }
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
@@ -1550,14 +1549,6 @@ impl<'a> JitContext<'a> {
         self.outer_claim_barrier = true;
     }
 
-    pub(super) fn outer_claim_barrier(&self) -> bool {
-        self.outer_claim_barrier
-    }
-
-    pub(super) fn widened_outer_log(&self) -> &[(usize, SlotId)] {
-        &self.widened_outer_log
-    }
-
     ///
     /// Stage-C loop adoption: the id chain + live bump for addressing the
     /// frame at stack position *pos* from the current frame — the
@@ -1769,19 +1760,6 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn current_frame_lexical_outer(&self) -> Option<usize> {
         self.stack_frame.last().unwrap().outer
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn outer_contexts(&self) -> Vec<AbstractFrame> {
-        let mut i = self.stack_frame.len() - 1;
-        let mut v = vec![];
-        while let Some(outer) = self.stack_frame[i].outer {
-            i -= outer;
-            let scope = self.stack_frame[i].abstract_state.clone().unwrap();
-            v.push(scope);
-        }
-        v.reverse();
-        v
     }
 
     fn current_method_frame(&self) -> Option<(&JitStackFrame, usize)> {
@@ -2107,7 +2085,6 @@ impl<'a> JitContext<'a> {
         }
         {
             let parked = self.stack_frame[pos].abstract_state.as_ref()?;
-            let m = parked.mode(slot);
             if !matches!(parked.mode(slot), LinkMode::S(_)) {
                 return None;
             }
@@ -2161,9 +2138,11 @@ impl<'a> JitContext<'a> {
             if pos == current {
                 state.invalidate_innermost(slot);
             } else {
-                if let Some(frame) = self.stack_frame[pos].abstract_state.as_mut() {
-                    frame.invalidate_slot(slot);
-                }
+                // Through the logging widen: the no-return-path fallback
+                // in `specialized_compile` replays the log delta onto its
+                // entry-chain copies, which this drain would otherwise
+                // bypass.
+                self.widen_outer_at_pos(pos, slot);
                 state.widen_outer_slot(current - pos, slot);
             }
         }
