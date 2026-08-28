@@ -46,6 +46,19 @@ impl std::ops::IndexMut<usize> for AbstractState {
 }
 
 impl AbstractState {
+    /// Nested compile entry from the caller's live chain (B3a, gated).
+    pub(super) fn with_chain(jitctx: &JitContext, chain: Vec<AbstractFrame>) -> Self {
+        let mut frames = chain;
+        let mut current = AbstractFrame::new(jitctx);
+        current.set_lexical_outer(jitctx.current_frame_lexical_outer());
+        frames.push(current);
+        AbstractState { frames }
+    }
+
+    pub(super) fn frames_cloned(&self) -> Vec<AbstractFrame> {
+        self.frames.clone()
+    }
+
     pub(super) fn new(jitctx: &JitContext) -> Self {
         // Join unification, step B2: the chain spans the whole trace
         // (every suspended frame, 1:1 with the specialization stack), not
@@ -405,6 +418,19 @@ impl AbstractFrame {
 
     pub(in crate::codegen::jitgen) fn next_sp(&self) -> SlotId {
         self.next_sp
+    }
+
+    ///
+    /// Own-timeline bookkeeping restoration (the entry-chain twin of the
+    /// resume asymmetry): the live chain's outer invariants degrade
+    /// monotonically (every block-literal call conservatively unsets
+    /// no-capture on every frame, and only the innermost is re-proved by
+    /// its guards), while the parked copy carries the guarded truth for
+    /// the frame as suspended. A chain handed to a nested compile takes
+    /// its slot claims from the live path and its invariants from parked.
+    ///
+    pub(super) fn restore_invariants_from(&mut self, parked: &AbstractFrame) {
+        self.invariants = parked.invariants.clone();
     }
 
     pub(super) fn no_capture_guard(&self) -> bool {

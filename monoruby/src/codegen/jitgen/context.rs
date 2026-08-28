@@ -1254,6 +1254,40 @@ impl<'a> JitContext<'a> {
         frame
     }
 
+    pub(super) fn dump_inst_counts_probe(&self, frame: &JitStackFrame) {
+        if std::env::var_os("INST_COUNT").is_none() {
+            return;
+        }
+        let main: usize = frame.asm_info.ir.iter().map(|(_, ir)| ir.inst_len()).sum();
+        let outline: usize = frame
+            .asm_info
+            .outline_bridges
+            .iter()
+            .map(|(ir, _, _)| ir.inst_len())
+            .sum();
+        let inline: usize = frame
+            .asm_info
+            .inline_bridges
+            .values()
+            .map(|(ir, _)| ir.inst_len())
+            .sum();
+        let name = self
+            .store
+            .func_description(self.store[frame.asm_info.iseq_id].func_id());
+        eprintln!("INSTC {name} main={main} outline={outline} inline={inline} cg={}", self.codegen_mode);
+        if let Some(filter) = std::env::var_os("INST_DUMP")
+            && name.contains(filter.to_str().unwrap_or(""))
+        {
+            for (bb, ir) in frame.asm_info.ir.iter() {
+                eprintln!("  -- {bb:?}");
+                for inst in ir.inst_iter() {
+                    let d = format!("{inst:?}");
+                    eprintln!("    {}", &d[..d.len().min(90)]);
+                }
+            }
+        }
+    }
+
     pub(super) fn current_frame_id(&self) -> SpecializedId {
         self.current_frame().specialized_id
     }
@@ -1271,13 +1305,28 @@ impl<'a> JitContext<'a> {
         // frame chain, so no alias survives a specialized call either.
         state.clear_dynvar_aliases();
         let stack_offset = state.using_fpr_offset().offset();
+        let entry_chain = {
+            let mut chain = state.frames_cloned();
+            // Slot claims travel on the live path; invariants come from
+            // each suspended frame's parked copy (see
+            // `restore_invariants_from`). The caller's own frame (last)
+            // needs nothing: its invariants are continuously re-proved by
+            // its own compile.
+            let last = chain.len() - 1;
+            for (pos, f) in chain.iter_mut().enumerate().take(last) {
+                if let Some(parked) = self.stack_frame[pos].abstract_state.as_ref() {
+                    f.restore_invariants_from(parked);
+                }
+            }
+            chain
+        };
         let caller = self.current_frame_mut();
         caller.stack_offset += stack_offset;
         caller.callid = Some(callid);
         let scope = std::mem::take(&mut **state);
         assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
 
-        let mut frame = self.traceir_to_asmir(frame)?;
+        let mut frame = self.traceir_to_asmir(frame, Some(entry_chain))?;
 
         // Every plain `Ret` in the callee branched to a return segment;
         // build them (and the join of the return-path chains) now, while

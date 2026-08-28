@@ -17,16 +17,27 @@ mod pic;
 mod variables;
 
 impl<'a> JitContext<'a> {
-    pub(super) fn traceir_to_asmir(&mut self, frame: JitStackFrame) -> JitResult<JitStackFrame> {
+    pub(super) fn traceir_to_asmir(
+        &mut self,
+        frame: JitStackFrame,
+        entry_chain: Option<Vec<AbstractFrame>>,
+    ) -> JitResult<JitStackFrame> {
         self.push_frame(frame);
 
-        // Handing the callee the caller's *live* chain here instead of the
-        // parked clones (the natural next unification step) measurably
-        // regressed the hot inlined-nest shapes (+22% on the times-loop
-        // benchmarks) — the path-sensitive claims steer some nested
-        // compile decisions worse. Deferred until that is understood; the
-        // parked mirror keeps every promotion visible to nested chains.
-        let state = AbstractState::new(&self);
+        // A nested compile's view of the suspended frames is the caller's
+        // *live* chain at the call — the path this call sits on — with
+        // each suspended frame's invariants restored from its parked copy
+        // (`restore_invariants_from`: the live outer invariants only
+        // ratchet down, every block-literal call conservatively unsetting
+        // no-capture on every frame with only the innermost re-proved by
+        // its guards; handing the degraded flags to the callee silently
+        // turned the specialized dynvar addressing — and with it the
+        // home-read machinery — back into generic chain walks, +22% on
+        // the times-loop shapes until the restoration).
+        let state = match entry_chain {
+            Some(chain) => AbstractState::with_chain(&self, chain),
+            None => AbstractState::new(&self),
+        };
         let iseq = self.iseq();
         let (bb_begin, bb_end) = if let Some(pc) = self.position() {
             let start_pos = iseq.get_pc_index(Some(pc));
@@ -83,7 +94,9 @@ impl<'a> JitContext<'a> {
         #[cfg(feature = "emit-cfg")]
         dump_cfg::dump_cfg(&self.store, self.iseq_id(), bb_begin, bb_end);
 
-        Ok(self.pop_frame())
+        let popped = self.pop_frame();
+        self.dump_inst_counts_probe(&popped);
+        Ok(popped)
     }
 
     fn compile_basic_block(&mut self, bbid: BasicBlockId, last: bool) -> JitResult<AsmIr> {
