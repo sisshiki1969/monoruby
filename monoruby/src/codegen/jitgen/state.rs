@@ -11,6 +11,7 @@ use liveness::IsUsed;
 pub(super) use liveness::Liveness;
 pub(super) use read_slot::DeoptPoint;
 pub(in crate::codegen::jitgen) use slot::SfGuarded;
+pub(in crate::codegen::jitgen) use slot::DynVarAliasLoad;
 pub(super) use slot::{Guarded, LinkMode, SlotState};
 
 #[derive(Debug, Clone)]

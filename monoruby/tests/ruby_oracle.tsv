@@ -709,6 +709,7 @@
 38eccaa13be24490261f4daaad9d3296	[:match, :nomatch, :match, "hell"]	$_ = "hello"\n        res = []\n        res << (/ell/ ? :match : :nomatch
 38f643aa5bcc2f78ba48b486bb393e15	15	(1..5).inject {|result, item| result + item }
 38fadfa8ec11940a56e2acf40f7eb4f0	"pq"	r, w = IO.pipe\n            t = Thread.new { r.readpartial(10) }\n   
+3911d4e3b194ca8126d292f9fa444f4c	[301.5, [1.5, 98.5, 195.5, 292.5]]	def call_block\n          yield\n        end\n        def c2\n          k =
 3960bad4527e209ac4eef6f17972f4c6	[true, [1, 2, 3]]	class C; def foo(a, b, cc); [a, b, cc]; end; end\n            cu = C
 3962b2ffd2b48bcb5feb55745b8b6b37	[[40, 50], [40, 50]]	[1, 2].map { [4, 5].map { it * 10 } }
 39740411375592c29d3f5adde2165332	[[10, 20], [0, 10, 20, 9], 1, true, 2, 1, true, 1, true, :type_error]	def m(*a) = a\n        class Obj\n          def initialize(v) = @v = v\n  
@@ -1217,6 +1218,7 @@
 623c780251b09b2380a85de8d8651972	[true, true, true]	File.write("/tmp/mr_enc2.txt", "")\n            Encoding.default_int
 625ae98b945176f640a4b3585c1acc5f	[:from_rescue, [:ens]]	$log = []\n            def m\n              raise "x"\n            res
 62825865a591b21dbb6b9d05adb0c05a	["echo hello", true]	def `(cmd); [cmd, cmd.frozen?]; end\n        `echo hello`\n        
+628eaa8bccd2d8c621e49bd30049c6ce	[301.5, [1.5, 98.5, 195.5, 292.5]]	def call_block\n          yield\n        end\n        def bump\n          y
 62abd44369ee4b6cc7e6dbf66a868f1d	[[nil, nil, nil], [1, nil, nil], [1, 2, nil], [1, 2, 3]]	S = Struct.new(:a, :b, :c)\n            \n\n            [S.new.to_a, S
 62caa309e31dac2a3bb4c9e5ed060cf8	[false, "elefant", 4]	S = Struct.new(:name, :legs, keyword_init: false)\n            \n\n   
 62d15ca21ed1dd74ca65f3735e8b6c5a	false	File.writable?("nonexistent_file_xyz")
@@ -1360,6 +1362,7 @@
 6f48a4a001fdd1b6d3fd9bc7a12ae5fe	[true, "directory"]	[File.stat("/tmp").directory?, File.stat("/tmp").ftype]
 6f6180f86272a5e7760efeac4c2a956e	"abcああ"	"abc".ljust(5, "あ")
 6f89c5db7683986a9e61229515e918a3	"[] {a: 42, 100 => 100, c: 5}"	class C\n          def foo(*x, **y)\n            $res << x.inspect + " " 
+6f9a21b16eccd94c397c19f2c70977ab	[450.0, 1.5]	def call_block\n          yield\n        end\n        def c1\n          k =
 6f9e3eb9473b85b89a35086c448b5d42	true	obj = Object.new\n            begin; obj.nope_method; rescue NoMetho
 6fb70e1ac677ec5293ce90caf3afcdf5	true	Time.utc(2000,1,1,0,0,0,500000).subsec > 0
 6fd7a2503b2b0d8020435a1135d8760a	["extended:Bar"]	$res = []\n        module Foo\n          def self.extended(base)\n        

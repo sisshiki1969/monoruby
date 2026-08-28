@@ -1211,6 +1211,9 @@ impl<'a> JitContext<'a> {
         callid: CallSiteId,
         frame: JitStackFrame,
     ) -> JitResult<JitStackFrame> {
+        // Stage-B home-aliased reads: the callee can store through the
+        // frame chain, so no alias survives a specialized call either.
+        state.clear_dynvar_aliases();
         let stack_offset = state.using_fpr_offset().offset();
         let caller = self.current_frame_mut();
         caller.stack_offset += stack_offset;

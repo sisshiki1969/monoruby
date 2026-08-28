@@ -290,6 +290,27 @@ pub(crate) struct SlotState {
     /// signal feeds only the loop-entry `Sf` adoption
     /// (`Liveness::subtree_float_reads`).
     subtree_float_read: Vec<bool>,
+    /// Stage-B home-aliased reads: for a slot holding a bare-`F` home read
+    /// of an outer float, the recipe for loading the *boxed* twin straight
+    /// from the owner's slot (which still holds the value the home read
+    /// took) instead of re-boxing the fpr. Valid only while nothing can
+    /// have rewritten the owner's slot: killed at every store through the
+    /// frame chain and at every call boundary (`clear_dynvar_aliases`),
+    /// and dropped with the binding on any mode transition ([`Self::clear`]).
+    dynvar_alias: Vec<Option<DynVarAliasLoad>>,
+}
+
+///
+/// Stage-B home-aliased reads: the deferred boxed-twin load — the same
+/// chain-resolved static frame offset `LoadDynVarSpecialized` uses,
+/// captured at the read so the consult site (deep in the state machinery,
+/// with no `JitContext` at hand) can emit it verbatim.
+///
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::codegen::jitgen) struct DynVarAliasLoad {
+    pub(in crate::codegen::jitgen) ids: Vec<crate::codegen::jitgen::context::SpecializedId>,
+    pub(in crate::codegen::jitgen) extra: usize,
+    pub(in crate::codegen::jitgen) reg: SlotId,
 }
 
 impl std::fmt::Debug for SlotState {
@@ -324,6 +345,7 @@ impl SlotState {
             dynvar_src: vec![None; total_reg_num],
             pending_outer_float_reads: vec![],
             subtree_float_read: vec![false; total_reg_num],
+            dynvar_alias: vec![None; total_reg_num],
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -652,6 +674,9 @@ impl SlotState {
         // `fpr_remove` for the fpr file). The binop that *creates* a resident
         // rebinds it after this `clear`, so the cache stays correct.
         self.gp_regfile.invalidate(slot);
+        // Any transition away from the aliased-`F` binding ends the alias;
+        // the consult site takes it *before* transitioning.
+        self.dynvar_alias[slot.0 as usize] = None;
         match self.mode(slot) {
             LinkMode::Sf(fpr, _) | LinkMode::F(fpr) => {
                 assert!(self.fpr(fpr).contains(&slot));
@@ -934,6 +959,19 @@ impl SlotState {
     }
 
     ///
+    /// Define *slot* as a bare `F` in a fresh fpr (stage-B home read: the
+    /// raw f64 arrives by `LoadOuterFprHomeF`; the slot's own stack home
+    /// is left stale on purpose).
+    ///
+    #[allow(non_snake_case)]
+    pub(crate) fn def_F_new(&mut self, slot: SlotId) -> FPReg {
+        let fpr = self.alloc_fpr();
+        self.discard(slot);
+        self.set_F(slot, fpr);
+        fpr
+    }
+
+    ///
     /// Link *slot* to a concrete flonum value *i*.
     ///
     #[allow(non_snake_case)]
@@ -1026,6 +1064,36 @@ impl SlotState {
     }
 
     ///
+    /// Stage-B home-aliased reads: attach the boxed-twin recipe to a fresh
+    /// bare-`F` home read of an outer float.
+    ///
+    pub(in crate::codegen::jitgen) fn set_dynvar_alias(
+        &mut self,
+        slot: SlotId,
+        alias: DynVarAliasLoad,
+    ) {
+        self.dynvar_alias[slot.0 as usize] = Some(alias);
+    }
+
+    ///
+    /// Stage-B home-aliased reads: consume the alias at its consult site
+    /// (the `F` boxed-use arm), before the `F -> Sf` transition clears it.
+    ///
+    pub(super) fn take_dynvar_alias(&mut self, slot: SlotId) -> Option<DynVarAliasLoad> {
+        self.dynvar_alias[slot.0 as usize].take()
+    }
+
+    ///
+    /// Stage-B home-aliased reads: a store through the frame chain or a
+    /// call boundary may rewrite any owner slot, so every alias dies.
+    ///
+    pub(in crate::codegen::jitgen) fn clear_dynvar_aliases(&mut self) {
+        for a in &mut self.dynvar_alias {
+            *a = None;
+        }
+    }
+
+    ///
     /// Stage-A use propagation: merge the hint fields at a path join —
     /// provenance is kept only where both paths agree, pending reports and
     /// landed subtree-read marks from either path remain evidence.
@@ -1044,6 +1112,13 @@ impl SlotState {
             .zip(other.subtree_float_read.iter())
         {
             *l |= *r;
+        }
+        // An alias is a per-path fact about the owner's slot content; it
+        // survives a merge only when both paths carry the identical claim.
+        for (l, r) in self.dynvar_alias.iter_mut().zip(other.dynvar_alias.iter()) {
+            if l.as_ref() != r.as_ref() {
+                *l = None;
+            }
         }
     }
 
@@ -1680,6 +1755,11 @@ impl AbstractFrame {
         // longer each need their own flush, and register-only inlines (which make
         // no call and never call this) keep their residents.
         self.flush_gp(ir);
+        // Stage-B home-aliased reads: whatever this snapshot precedes can
+        // re-enter Ruby, which can store through the frame chain — no alias
+        // survives a call boundary. (Specialized calls kill them in
+        // `specialized_compile`.)
+        self.clear_dynvar_aliases();
         self.using_fpr_offset()
     }
 

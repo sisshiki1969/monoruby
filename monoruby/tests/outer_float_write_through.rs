@@ -458,3 +458,82 @@ fn a_pure_read_with_an_owner_redefinition() {
         "#,
     );
 }
+
+/// Stage-B home alias: a copy-through Value use of a bare-`F` home read
+/// (`v = k` stores the read straight back through the chain) must load
+/// the boxed twin from the owner's slot, not a stale re-box.
+#[test]
+fn a_home_read_copied_through_as_a_value() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def c1
+          k = 1.5
+          v = nil
+          u = 0.0
+          i = 0
+          while i < 300
+            call_block { v = k; u = u + v }
+            i += 1
+          end
+          [u, v]
+        end
+        c1
+        "#,
+    );
+}
+
+/// Stage-B home alias invalidation: a chain store between the read and
+/// its Value use rewrites the owner's slot, so the use must re-box the
+/// fpr (the old value), never consult the dead alias (the new value).
+#[test]
+fn a_chain_store_kills_the_alias_before_the_value_use() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def c2
+          k = 1.5
+          out = []
+          i = 0
+          while i < 300
+            call_block { old = k; k = k + 1.0; out << old if i % 97 == 0 }
+            i += 1
+          end
+          [k, out]
+        end
+        c2
+        "#,
+    );
+}
+
+/// Stage-B home alias invalidation at a call boundary: a nested call
+/// between the read and the use can store through the chain from a
+/// deeper frame; the use after the call must not consult the alias.
+#[test]
+fn a_nested_call_kills_the_alias() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def bump
+          yield
+        end
+        def c3
+          k = 1.5
+          out = []
+          i = 0
+          while i < 300
+            call_block { old = k; bump { k = k + 1.0 }; out << old if i % 97 == 0 }
+            i += 1
+          end
+          [k, out]
+        end
+        c3
+        "#,
+    );
+}

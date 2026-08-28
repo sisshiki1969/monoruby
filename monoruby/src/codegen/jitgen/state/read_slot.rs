@@ -105,11 +105,18 @@ impl FprLoad {
 /// records, the *what* is decided by the analysis half (`load_state`) and
 /// emitted by the codegen half via [`GpLoad::emit`].
 ///
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(in crate::codegen::jitgen) enum GpLoad {
     /// `F` slot: box the fpr to its stack home (leaving the boxed value in rax),
     /// then move rax into `dst`. `fpr2stack(fpr, slot); reg_move(rax, dst)`.
     FprBox(FPReg, SlotId, GP),
+    /// Stage-B home-aliased `F` slot: the boxed twin still sits untouched
+    /// in the owner's slot, so load it from there (one chain-resolved
+    /// static-offset load into rax, exactly `LoadDynVarSpecialized`),
+    /// write it to this slot's home — the same `F -> Sf` upgrade the
+    /// `FprBox` arm performs — and move it into `dst`. No re-boxing, and
+    /// no flonum-encodability branch.
+    DynVarAlias(super::slot::DynVarAliasLoad, SlotId, GP),
     /// `lit2reg(value, dst)`
     Lit(Value, GP),
     /// `stack2reg(slot, dst)`
@@ -125,6 +132,17 @@ impl GpLoad {
         match self {
             GpLoad::FprBox(fpr, slot, dst) => {
                 ir.fpr2stack(fpr, slot);
+                ir.reg_move(GP::Rax, dst);
+            }
+            GpLoad::DynVarAlias(alias, slot, dst) => {
+                ir.push(AsmInst::LoadDynVarSpecialized {
+                    offset: DynVarOffset::Hint {
+                        ids: alias.ids,
+                        extra: alias.extra,
+                    },
+                    reg: alias.reg,
+                });
+                ir.reg2stack(GP::Rax, slot);
                 ir.reg_move(GP::Rax, dst);
             }
             GpLoad::Lit(v, dst) => ir.lit2reg(v, dst),
@@ -277,9 +295,16 @@ impl AbstractFrame {
         self.use_as_value(slot);
         match self.mode(slot) {
             LinkMode::F(fpr) => {
-                // F -> Sf
-                self.set_Sf_float(slot, fpr);
-                GpLoad::FprBox(fpr, slot, dst)
+                // F -> Sf. A home-aliased read's boxed twin is still in the
+                // owner's slot — load it from there instead of re-boxing
+                // (take the alias first; the transition's `clear` drops it).
+                if let Some(alias) = self.take_dynvar_alias(slot) {
+                    self.set_Sf_float(slot, fpr);
+                    GpLoad::DynVarAlias(alias, slot, dst)
+                } else {
+                    self.set_Sf_float(slot, fpr);
+                    GpLoad::FprBox(fpr, slot, dst)
+                }
             }
             LinkMode::C(v) => GpLoad::Lit(v, dst),
             LinkMode::Sf(_, _) | LinkMode::S(_) => {
