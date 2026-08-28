@@ -471,7 +471,7 @@ impl SlotState {
         }
     }
 
-    pub(super) fn locals(&self) -> std::ops::Range<SlotId> {
+    pub(in crate::codegen::jitgen) fn locals(&self) -> std::ops::Range<SlotId> {
         SlotId(1)..self.temp_start()
     }
 
@@ -1272,6 +1272,19 @@ impl SlotState {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Resume overlay: adopt *other*'s (the return-path join's) kept `C`
+    /// claims where this frame holds a plain `S`. Sound because every
+    /// resuming path either still holds the claim (the constant is true
+    /// and its surrender, when it comes, will write it) or surrendered it
+    /// with the deferred write emitted on that path's return segment.
+    pub(in crate::codegen::jitgen) fn overlay_kept_constants(&mut self, other: &SlotState) {
+        for slot in self.locals() {
+            if let (LinkMode::S(_), LinkMode::C(v)) = (self.mode(slot), other.mode(slot)) {
+                self.set_mode(slot, LinkMode::C(v));
+            }
+        }
     }
 
     pub(in crate::codegen::jitgen) fn forget_constants(&mut self, ir: &mut AsmIr) {

@@ -73,6 +73,26 @@ impl AbstractState {
         Some(level)
     }
 
+    ///
+    /// Adopt the join-validated kept-`C` claims onto the innermost frame
+    /// (the resume overlay — see `specialized_compile`).
+    ///
+    pub(super) fn overlay_kept_constants_innermost(&mut self, joined: &SlotState) {
+        self.frames
+            .last_mut()
+            .unwrap()
+            .overlay_kept_constants(joined);
+    }
+
+    pub(super) fn innermost_clone(&self) -> AbstractFrame {
+        self.frames.last().unwrap().clone()
+    }
+
+    pub(super) fn chain_prefix(&self, pos: usize) -> Vec<AbstractFrame> {
+        debug_assert!(pos < self.frames.len());
+        self.frames[..=pos].to_vec()
+    }
+
     pub(super) fn set_frames(&mut self, frames: Vec<AbstractFrame>) {
         debug_assert_eq!(frames.len(), self.frames.len());
         self.frames = frames;

@@ -460,6 +460,16 @@ pub(super) struct JitStackFrame {
     ///
     adopted_outer_views: Vec<(BasicBlockId, usize, SlotId)>,
     ///
+    /// Kept-claim surrender per return path (join unification): one entry
+    /// per plain `Ret` this frame compiled, recorded so the caller's
+    /// resume can join the return-path chains and emit, on each path, the
+    /// bridge that reconciles it with the join — including the deferred
+    /// literal writes a surrendered `C` claim owes. `(segment label,
+    /// chain prefix at the return, the returning frame's own state, the
+    /// returned slot, the return's basic block)`.
+    ///
+    return_edges: Vec<(JitLabel, Vec<AbstractFrame>, AbstractFrame, SlotId, BasicBlockId)>,
+    ///
     /// Nested loop count.
     ///
     loop_count: usize,
@@ -669,6 +679,7 @@ impl JitStackFrame {
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
             adopted_outer_views: vec![],
+            return_edges: vec![],
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -698,6 +709,7 @@ impl JitStackFrame {
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
             adopted_outer_views: vec![],
+            return_edges: vec![],
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -1265,28 +1277,41 @@ impl<'a> JitContext<'a> {
         let scope = std::mem::take(&mut **state);
         assert!(std::mem::replace(&mut caller.abstract_state, Some(scope)).is_none());
 
-        let frame = self.traceir_to_asmir(frame)?;
+        let mut frame = self.traceir_to_asmir(frame)?;
 
+        // Every plain `Ret` in the callee branched to a return segment;
+        // build them (and the join of the return-path chains) now, while
+        // the call-site stack bump is still applied.
+        let resume = self.build_return_segments(&mut frame);
         let current = self.current_frame_mut();
         let innermost = current.abstract_state.take().unwrap();
         current.callid = None;
         current.stack_offset -= stack_offset;
-        // Take the chain back. The nested compile could only record what
-        // it did to our outer frames on the context's copies, so re-read
-        // those rather than keep the clones we handed over.
-        //
-        // Resuming from the *join of the callee's return-path chains*
-        // instead (the natural next unification step) is measurably
-        // unsound today: a return snapshot preserves the caller's kept-`C`
-        // claims path-sensitively, while the kept-constant bet machinery
-        // (`forget_constants` emitting the deferred literal writes, the
-        // `specialized_iseq` confirmation) is built around the parked
-        // copy's path-insensitive widens — a resumed `C` whose slot only
-        // some paths wrote reads stale (Integer#downto resumed `C(0)`
-        // where the parked copy held `S(Value)`; Array#permutation then
-        // read nil). Making that resume sound means making the kept-`C`
-        // discipline per return path first.
-        self.adopt_outer(state, innermost);
+        if let Some(mut chain) = resume {
+            // Resume from the join of the callee's compiled return paths —
+            // with one asymmetry the first attempt's bisection taught us.
+            // The *resuming* frame's own bookkeeping beyond slot modes
+            // (pc, liveness, hints) belongs to its own compile timeline:
+            // replacing the whole frame with the callee's view of it broke
+            // real code, so that level keeps the parked frame and adopts
+            // only the slot claims the join validated — today the kept-`C`
+            // constants (every resuming path either still holds the claim
+            // or emitted its surrender write on its return segment, so a
+            // kept `C` is true and a demoted slot is current). The outer
+            // levels take the joined chains whole: their own-timeline
+            // bookkeeping is not consumed here — each becomes "the
+            // resuming level" only at its own caller's resume, where this
+            // same rule applies.
+            let joined_caller = chain.last().unwrap().clone();
+            *chain.last_mut().unwrap() = innermost;
+            state.set_frames(chain);
+            state.overlay_kept_constants_innermost(joined_caller.slot_state());
+        } else {
+            // No compiled return path: the caller's continuation is
+            // unreachable on compiled paths; rebuild from the parked
+            // copies as a conservative placeholder.
+            self.adopt_outer(state, innermost);
+        }
         Ok(frame)
     }
 
@@ -2760,6 +2785,124 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// The id chain + live bump for addressing the frame at stack
+    /// position *pos* from the just-popped callee's rbp: every frame
+    /// from *pos* through the caller inclusive. Must run while the
+    /// caller's call-site bump (`stack_offset += using`) is still
+    /// applied, i.e. before `specialized_compile` restores it.
+    ///
+    fn ids_spanning_from_callee(&self, pos: usize) -> (Vec<SpecializedId>, usize) {
+        let end = self.stack_frame.len();
+        let chain = &self.stack_frame[pos..end];
+        let ids = chain.iter().map(|f| f.specialized_id).collect();
+        let extra = chain
+            .iter()
+            .map(|f| f.stack_offset - f.base_stack_offset)
+            .sum();
+        (ids, extra)
+    }
+
+    ///
+    /// Join unification: the caller's continuation is a merge point and
+    /// the callee's plain returns are its incoming edges. Compute the
+    /// join of the return-path chains, and emit one outline segment per
+    /// edge — the bridge reconciling that path with the join (a
+    /// surrendered kept-`C` claim owes its deferred literal write here,
+    /// chain-addressed into the owner's slot), then the value load and
+    /// the `ret`. Returns the join, which is what the caller resumes
+    /// from. `None` when the callee has no plain return path (the
+    /// compiled continuation is unreachable; the caller falls back to
+    /// the parked rebuild as a conservative placeholder).
+    ///
+    /// Runs after the callee frame is popped but before the caller's
+    /// call-site stack bump is restored (the segments' chain addressing
+    /// captures the live bump, like every other dynvar hint emitted
+    /// under the call).
+    ///
+    fn build_return_segments(
+        &mut self,
+        frame: &mut JitStackFrame,
+    ) -> Option<Vec<AbstractFrame>> {
+        let edges = std::mem::take(&mut frame.return_edges);
+        if edges.is_empty() {
+            return None;
+        }
+        let mut target: Vec<AbstractFrame> = edges[0].1.clone();
+        for (_, chain, ..) in edges.iter().skip(1) {
+            debug_assert_eq!(target.len(), chain.len());
+            for (t, e) in target.iter_mut().zip(chain.iter()) {
+                t.join_no_alloc(e);
+            }
+        }
+        for (seg, chain, mut inner, ret_slot, bbid) in edges {
+            let mut ir = AsmIr::new(self);
+            for (lvl, (ef, tf)) in chain.iter().zip(target.iter()).enumerate() {
+                let mut ids_extra: Option<(Vec<SpecializedId>, usize)> = None;
+                for slot in ef.slot_state().locals() {
+                    match (ef.mode(slot), tf.mode(slot)) {
+                        (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
+                        // The join surrendered this path's kept `C`: the
+                        // deferred literal write happens on this edge, so
+                        // the resumed `S` reads a current slot.
+                        (LinkMode::C(v), _) => {
+                            let (ids, extra) = ids_extra
+                                .get_or_insert_with(|| self.ids_spanning_from_callee(lvl))
+                                .clone();
+                            ir.lit2reg(v, GP::Rax);
+                            ir.push(AsmInst::StoreDynVarSpecialized {
+                                offset: DynVarOffset::Hint { ids, extra },
+                                dst: slot,
+                                src: GP::Rax,
+                            });
+                        }
+                        // A suspended frame's `F` is path-invariant (its
+                        // only copy sits in a call-site save area nothing
+                        // here can address); the join must have kept it.
+                        (LinkMode::F(l), tfm) => {
+                            debug_assert!(
+                                matches!(tfm, LinkMode::F(r) if l == r),
+                                "return-edge F diverged: lvl{lvl} {slot:?} {l:?} vs {tfm:?}"
+                            );
+                        }
+                        // Everything else is a pure state demotion (the
+                        // slot already holds the value) or identical.
+                        _ => {}
+                    }
+                }
+            }
+            inner.load(&mut ir, ret_slot, GP::Rax);
+            ir.push(AsmInst::Ret);
+            frame.outline_bridges.push((ir, seg, bbid));
+        }
+        Some(target)
+    }
+
+    ///
+    /// Record a plain `Ret` as a resume edge: the caller's continuation is
+    /// a merge point and this is one of its incoming edges. The actual
+    /// value load and `ret` are emitted later, per edge, behind `seg`,
+    /// prefixed with the bridge that reconciles this path's chain with the
+    /// join of all return paths (`build_return_segments`).
+    ///
+    pub(super) fn record_return_edge(
+        &mut self,
+        seg: JitLabel,
+        state: &AbstractState,
+        ret_slot: SlotId,
+        bbid: BasicBlockId,
+    ) -> bool {
+        let Some(pos) = self.caller_pos() else {
+            return false;
+        };
+        let chain = state.chain_prefix(pos);
+        let inner = state.innermost_clone();
+        self.current_frame_mut()
+            .return_edges
+            .push((seg, chain, inner, ret_slot, bbid));
+        true
+    }
+
+    ///
     /// Add new return branch with `state`.
     ///
     pub(super) fn new_method_return(&mut self, ret: ReturnState) {
@@ -2769,6 +2912,7 @@ impl<'a> JitContext<'a> {
             self.push_return_context(pos, ret);
         }
     }
+
 
     ///
     /// Add new return branch with `state`.
@@ -2780,6 +2924,7 @@ impl<'a> JitContext<'a> {
             self.push_return_context(pos, ret);
         }
     }
+
 
     pub(super) fn push_ir(&mut self, bb: Option<BasicBlockId>, ir: AsmIr) {
         let frame = self.current_frame_mut();

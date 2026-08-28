@@ -950,8 +950,22 @@ impl<'a> JitContext<'a> {
 
             TraceIr::Ret(ret) => {
                 assert!(state.no_capture_guard());
-                state.load(ir, ret, GP::Rax);
-                ir.push(AsmInst::Ret);
+                // Join unification: in a specialized (inlined) frame, a
+                // plain `Ret` is one incoming edge of the caller's
+                // continuation merge. The value load and the `ret` are
+                // emitted per edge behind `seg`, prefixed by the bridge
+                // that reconciles this path's chain with the join of all
+                // return paths — including the deferred literal write a
+                // surrendered kept-`C` claim owes
+                // (`build_return_segments`).
+                let bbid = self.iseq().bb_info.get_bb_id(bc_pos);
+                let seg = self.label();
+                if self.record_return_edge(seg, state, ret, bbid) {
+                    ir.push(AsmInst::Br(seg));
+                } else {
+                    state.load(ir, ret, GP::Rax);
+                    ir.push(AsmInst::Ret);
+                }
                 let result = state.as_return(ret);
                 state.discard_temps();
                 return Ok(CompileResult::Return(result));
