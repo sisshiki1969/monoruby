@@ -2453,20 +2453,22 @@ impl AbstractFrame {
             // ...while demoting a deferred `F(h)` to anything slot-current
             // boxes the home into the owner's slot through the chain — the
             // write-side surrender, mirrored per edge like the kept-`C`
-            // literal write.
-            (LinkMode::F(l), LinkMode::Sf(r, g))
-                if l == r && l.0 >= crate::codegen::PHYS_FPR_POOL =>
-            {
-                let ok = sur.emit_box(ir, level, l, slot);
-                debug_assert!(ok, "no chain addressing for a suspended frame at {level}");
-                self.set_Sf(slot, l, g);
-            }
-            (LinkMode::F(l), LinkMode::S(_))
+            // literal write. Boxing *is* the `F(h) -> Sf(h, Float)`
+            // transition (the home stays bound, the slot becomes current),
+            // so this arm emits the surrender, records exactly that, and
+            // re-enters for the remaining `Sf -> target` step — the
+            // ordinary arms below, which every kind of slot-current target
+            // already handles: `Sf -> S` drops the view, a same-home
+            // `Sf -> Sf` is a no-op, and a *different* home stays the
+            // `unreachable!` it was. Re-entry terminates: the second pass
+            // starts from `Sf`, and no `Sf` arm re-enters.
+            (LinkMode::F(l), LinkMode::Sf(_, _) | LinkMode::S(_))
                 if l.0 >= crate::codegen::PHYS_FPR_POOL =>
             {
                 let ok = sur.emit_box(ir, level, l, slot);
                 debug_assert!(ok, "no chain addressing for a suspended frame at {level}");
-                self.set_S_with_guard(slot, Guarded::Float);
+                self.set_Sf(slot, l, SfGuarded::Float);
+                self.bridge_at(ir, target, slot, pc, outer, sur, level);
             }
             (LinkMode::V, LinkMode::V)
             | (LinkMode::None, LinkMode::None)
