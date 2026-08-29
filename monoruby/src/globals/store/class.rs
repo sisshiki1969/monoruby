@@ -796,7 +796,7 @@ impl ClassInfo {
     pub(in crate::globals) fn remove_constant(&mut self, name: IdentId) -> Option<Value> {
         let removed = self.constants.remove(&name).map(|state| match state.kind {
             ConstStateKind::Loaded(v) => v,
-            ConstStateKind::Autoload(_) => Value::nil(),
+            ConstStateKind::Autoload(_) | ConstStateKind::LazyToplevelBinding => Value::nil(),
         });
         if removed.is_some() {
             self.constant_locations.remove(&name);

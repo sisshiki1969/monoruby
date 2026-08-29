@@ -204,14 +204,32 @@ impl<'a> JitContext<'a> {
                                 || (subtree_read.contains(&i)
                                     && matches!(be.mode(i), LinkMode::S(_)))
                         };
-                        // Stage 1'': a spill-home view at the back edge is
-                        // store-driven (only `try_promote_outer_sf` and the
-                        // deferring store create one) — adopt it as
-                        // `F(home)` so the deferral holds across the whole
-                        // loop. See `keep_backedge_floats`.
-                        let adopt_deferred = |i| match be.mode(i) {
+                        // Stage 1'': adopt a back-edge *home* view as
+                        // `F(home)`, so a deferral the loop's subtree
+                        // established holds across the whole loop. See
+                        // `keep_backedge_floats`.
+                        //
+                        // The id must be one the home ledger issued —
+                        // `h >= PHYS_FPR_POOL` says only "spill-resident",
+                        // and the ordinary allocator spills into the same
+                        // file whenever the pool runs out. Adopting one of
+                        // *those* force-binds a loop-carried float to a
+                        // spill id at the head, which is exactly the
+                        // speculative promotion the arms below refuse
+                        // under pressure (`try_set_new_F`); with
+                        // `stress-spill-pool` (a pool of 2) it mislabeled
+                        // ordinary floats and miscompiled nested float
+                        // loops — so_mandelbrot's own, among others.
+                        // Innermost frame: `keep_backedge_floats` is
+                        // innermost-only (see above).
+                        let homes = self
+                            .outer_pos(0)
+                            .map(|pos| self.spill_home_ids_at(pos))
+                            .unwrap_or_default();
+                        let adopt_deferred = move |i| match be.mode(i) {
                             LinkMode::Sf(h, SfGuarded::Float) | LinkMode::F(h)
-                                if h.0 >= crate::codegen::PHYS_FPR_POOL =>
+                                if h.0 >= crate::codegen::PHYS_FPR_POOL
+                                    && homes.contains(&h.0) =>
                             {
                                 Some(h)
                             }
