@@ -456,6 +456,7 @@
 23868e074ac73bfea9c45758469abb55	["0.15e3", "0.15e-1", "0.123e3"]	require "rubygems"\n        require "bigdecimal"\n        res = []\n      
 238dac5c14eb1e5ebc188a5c3d5178b0	[true, true, true, true, "instance of IO needed", nil]	require "stringio"\n\n            res = []\n            # (obj, level) — Integer 2n
 239549c97fe9daba196ffabee457a2e2	[Encoding::UndefinedConversionError, [97, 63, 98]]	(a=(begin; "→".encode("IBM437"); rescue Encoding::UndefinedConversionError => e;
+23a0218d69caec2b834ff308ccc59f36	[1.6576735465811328, [1.5014999999999998, 1.5503002457376653, 1.6006865480747698, 1.6543631658861948]]	def call_block\n          yield\n        end\n        def w3(q)\n          
 23b5c46bdfbd2a1aa2005c0fb1a745ec	[[0, :a, 2], [0, 1, :a, :b, :c, :d, 6, 7, 8, 9], [0, :a, :b, :c, :d, :e, :f, 7, 8, 9], [0, 1, 2], [0, 1, 2, 3, 4, 5, :a, :b, :c, :d], [0, 1, 2, 3, 4, :a, :b, :c, :d, 9], [:a, :b, 4, 5, 6, 7, 8, 9], [:a, :b, :c, :d, :e, :f, 4, 5, 6, 7, 8, 9], [0, 1, 2, 3, 4, 5, 6, 7, :a, :b, :c, :d], [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, :a, :b, :c, :d], [0, 1, 42, 6, 7, 8, 9], [0, 1, :x, :y, :z, :w, 6, 7, 8, 9], [0, 1, nil, 6, 7, 8, 9], [0, 1, 0, 1, 2, 3, 4, 5, 6, 7, 6, 7], [:a, :b, :c, :d], IndexError, FrozenError, [0, :a, :b, :c, 4, 5, 6, 7, 8, 9], [0, :a], [0, :a, :b, 3, 4, 5, 6, 7, 8, 9], [0, :a, :b, 3, 4, 5, 6, 7, 8, 9], [0, 1, :a, :b, 6, 7, 8, 9], ArgumentError, IndexError]	class ToAry; def to_ary = [:x, :y, :z, :w]; end\n        def sl0(a, i, v
 23bc3351ce47d94e083999fe38415774	["old+new", "fresh"]	ENV["MONORUBY_ENV_TEST_BLK"] = "old"\n            ENV.merge!("MONORU
 23e6b8b59d2037e9f3b0bae2a98f7d40	true	FileTest.readable?("/bin/sh")
@@ -565,6 +566,7 @@
 2b510e03b79828da0942ba4c9373ce3d	["wrong number of arguments (given 1, expected 2+)", true]	def rq(a, b, *c); end\n            m1 = begin; rq(1); rescue Argumen
 2b5b6ab6b8da93e6db6006879fa273a5	6	x = "wor"; "hello world" =~ /#{x}ld/
 2b64130006b71bbb74c8bb727d06d0ed	[[10, 20, 30], [10, 20, 30]]	class E\n              def initialize(a); @a = a; end\n              
+2b6c13f023cd91b33099b2a063fca4c3	129.64648392195028	def call_block\n          yield\n        end\n        def w1(a, b)\n       
 2b80e35e675c69b12c235aeda04b3512	[true, true, true, false, false, false]	class Object\n              def tp1; 1; end\n              protected 
 2b87eaf9abc9671b3f0ed0a3582bc372	[100, 100, 42]	$res = []\n        class C\n        \tdef f\n        \t\t100\n      
 2b92ff3de3e79725a67adfb4ee7eddd7	1	c = Class.new\n            c.const_set(:FOO, 1)\n            c.send(:
@@ -634,6 +636,7 @@
 32c2b7533445abe2c786addc24166b66	"3/4"	Rational(0.75).to_s
 32dc2c8ce60f570a592f91cf451f6746	99	class C\n          X = 99\n        end\n        \nC.class_eval("X")
 32f8a3ccb6465782cb76e9906981206c	777	class C\n          private\n          def secret; 777; end\n        end\n  
+330c0d9b8d65fb03e7e8ec58a22e4a99	[300.00029999999936, 1.0]	def call_block\n          yield\n        end\n        def w2\n          a =
 3311ccd4cb9cd7e5df6df18d7421cb90	nil	Exception.new.backtrace_locations
 33151d5f5ddac3016b0004900224a63a	["warning: the block passed to 'UBWarn#unused' may be ignored\\n", "", "", "", "", "warn-bg", "", "", "silent-strict"]	def cap\n          saved = $stderr\n          buf = +""\n          io = Ob
 3320b224735f4ca919ccdcccb8c4e5bd	-450.5353775047145	def calc(i)\n          f = i * 1.1; g = i * 0.9; h = i * 1.3; j = i * 0.
@@ -1024,6 +1027,7 @@
 50dc75cab4d7c00e25ec748ffac45bee	"[C2, M, C1, M, Object, Kernel, BasicObject]"	module M\n            end\n            class C1\n            end\n     
 50f9e525cff9a725780f19b016aaa8f9	[-2.0, -2.0, 8.0, 999]	$flag = false\n        def fmaybe\n          Integer.class_eval("def +(o)
 5103d830753ac483d2d4c39e44bc03b5	[0, 0, nil]	["‌" =~ /[[:word:]]/, "‍" =~ /[[:word:]]/, "‌" =~ /\\w/]
+511247f2a3b645da0c49c9876a105a9e	[1.687070598505588, 300]	def call_block\n          yield\n        end\n        def w6\n          s =
 5153f5263b097f08fb57811bdbdc5aaa	[true, true, true, false, true, true, true, false, false, false, false]	class A\n          def method1; end\n          protected\n          def pr
 5174f3c6fa3195d1fbd047639e4a904d	[[true, {data: 42}], ["async", "ctx"], [[[true, ["both"]], [false, []]], true, "both", false]]	r = []\n            de = Class.new(StandardError) { attr_reader :dat
 51be01e0d292ac0d9c77567390f1d11f	["Bbar", "B[239, 191, 189]", "Bdbar", "Btbar", Encoding::UndefinedConversionError, [ArgumentError, "too big fallback string"], TypeError, Encoding::UndefinedConversionError]	(r=[]; r << "B�".encode(Encoding::US_ASCII, fallback: { "�" => "bar" }); r << "B
@@ -1272,6 +1276,7 @@
 66d3a720ccfcd8a4c65aa4a7264f96c3	nil	um = Integer.instance_method(:to_s)\n        um.source_location\n        
 66de5b13ad3146aa31137d2a2a57cbda	[1, 2, 3, 4, 9]	t = Process::Tms.new(1, 2, 3, 4)\n            u = Process::Tms.new\n 
 66ffaa1b0f890b32d4446740cc7383f4	["Struct::MStructA", 1, "two"]	Struct.new("MStructA", :a, :b)\n            \n\n            s = Struct
+670c773e2073e18117a7165d0039c444	[0.5621431308531042, 2.282033618166754]	def call_block\n          yield\n        end\n        def w4(q)\n          
 676948299cc86ad51d988c8190977471	:OVERRIDDEN	class Float; def -(o); :OVERRIDDEN; end; end; 3.0 - 4.0
 676a91e7312a022bcb4dc087ee24de72	["super", nil]	class S\n              def f\n                defined?(super)\n       
 67825914c378828613082b33f1dd81d4	[45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45]	j = 42\n        a = []\n        f = ->(x){x + j}\n        for i in 0..30\n 
@@ -2683,6 +2688,7 @@ d580dc9cae27404632621b762b7de5a8	""	f = File.open("/dev/null")\n            f.re
 d596c9980b2a827151179a99b5e3af5e	{"amount" => 1}	M = Data.define(:amount, :unit)\nM.new(1, "m").deconstruct_keys(["amount"])
 d5af874066319ba603a85fd17d84867b	[1, true, 15, false]	pid = fork { sleep 5 }\n            count = Process.kill("TERM", pid
 d5df22aa40370195aea7d6fbeed48540	[true, 0, false, 1]	IO.popen(["true"]) { |io| io.read }\n            a = [$?.exited?, $?
+d5e09e5c474b635d3ec99416426e1f5d	[15.0, 20.5]	def call_block\n          yield\n        end\n        def w5(arr)\n        
 d5eb36d331547e68e65b5e236315bb2c	false	File.exist?("../LICENCE-MIT")
 d5ec889974c38262d62062c5b088a2ff	"ASCII-8BIT"	"abc".b.reverse.encoding.to_s
 d5f2b019270b0aa4e77071d07cc78f9c	"secret"	class Foo\n          private\n          def secret; "secret"; end\n       

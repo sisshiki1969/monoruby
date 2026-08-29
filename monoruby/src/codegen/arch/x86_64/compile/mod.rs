@@ -175,6 +175,7 @@ impl Codegen {
             | AsmInst::StoreOuterFprHomeF { .. }
             | AsmInst::LoadOuterFprHomeF { .. }
             | AsmInst::GuardFloatToOuterHomeF { .. }
+            | AsmInst::BoxOuterHomeToDynVar { .. }
             | AsmInst::StoreDynVarSpecialized { .. }
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
@@ -2778,6 +2779,28 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq [rbp + (disp)], xmm0;
         }
+    }
+
+    /// Stage 1'' surrender write: raw f64 at `[rbp + disp]` (the owner's
+    /// spill home) into xmm0, boxed via `f64_to_val`, and stored to the
+    /// owner's slot through the chain (same addressing as
+    /// `store_dyn_var_specialized`).
+    ///
+    /// ### destroy
+    /// - rax, rcx, xmm0
+    pub(in crate::codegen::jitgen) fn emit_box_outer_home_to_dynvar(
+        &mut self,
+        disp: i64,
+        offset: usize,
+        reg: SlotId,
+    ) {
+        let disp = i32::try_from(disp).expect("outer home displacement out of i32 range");
+        let f64_to_val = self.f64_to_val.clone();
+        monoasm! { &mut self.jit,
+            movq xmm0, [rbp + (disp)];
+            call f64_to_val;
+        }
+        self.store_dyn_var_specialized(offset, reg, GP::Rax);
     }
 
     /// Stage 3a home read: raw f64 from `[rbp + disp]` into `dst` (this

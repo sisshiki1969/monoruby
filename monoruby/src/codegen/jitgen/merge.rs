@@ -24,7 +24,7 @@ impl<'a> JitContext<'a> {
                 eprintln!("    {mode:?} src:{src_bb:?}");
 
                 let mut ir = AsmIr::new(self);
-                state.gen_bridge_all(&mut ir, &target, pc);
+                state.gen_bridge_all(&mut ir, &target, pc, &self.chain_surrender_table());
                 match mode {
                     BranchMode::Side { dest } => {
                         self.add_outline_bridge(ir, dest, bbid);
@@ -204,7 +204,20 @@ impl<'a> JitContext<'a> {
                                 || (subtree_read.contains(&i)
                                     && matches!(be.mode(i), LinkMode::S(_)))
                         };
-                        target.keep_backedge_floats(adopt, adopt_sf, promotable);
+                        // Stage 1'': a spill-home view at the back edge is
+                        // store-driven (only `try_promote_outer_sf` and the
+                        // deferring store create one) — adopt it as
+                        // `F(home)` so the deferral holds across the whole
+                        // loop. See `keep_backedge_floats`.
+                        let adopt_deferred = |i| match be.mode(i) {
+                            LinkMode::Sf(h, SfGuarded::Float) | LinkMode::F(h)
+                                if h.0 >= crate::codegen::PHYS_FPR_POOL =>
+                            {
+                                Some(h)
+                            }
+                            _ => None,
+                        };
+                        target.keep_backedge_floats(adopt, adopt_sf, adopt_deferred, promotable);
                     }
                 }
                 // §27.3 Stage-2a: record the loop-carried float set `L` (slots
@@ -311,7 +324,7 @@ impl<'a> JitContext<'a> {
                     deopt,
                 });
             }
-            state.gen_bridge_all(&mut ir, &target, pc);
+            state.gen_bridge_all(&mut ir, &target, pc, &self.chain_surrender_table());
             match mode {
                 BranchMode::Side { dest } => {
                     self.add_outline_bridge(ir, dest, bbid);

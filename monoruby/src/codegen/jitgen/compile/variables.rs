@@ -274,6 +274,7 @@ impl<'a> JitContext<'a> {
         // (chain escalation), and the salvage re-entry case is confirmed
         // after the fact by `drain_kept_outer_views`. The slot store
         // below stays authoritative either way.
+        let mut deferred = false;
         let keep = match &outer_spec {
             Some((ids, extra, true)) => {
                 let fsrc = match state.mode(src) {
@@ -287,12 +288,55 @@ impl<'a> JitContext<'a> {
                     _ => None,
                 };
                 fsrc.and_then(|fsrc| {
-                    if let Some(afpr) = state.outer_sf_float(dst.outer, dst.reg) {
-                        // Stage 1': the owner already holds a Float `Sf`
-                        // view — refresh its existing home.
+                    if let Some(afpr) = state.outer_float_home(dst.outer, dst.reg) {
+                        // Stage 1'' (deferred boxing): a *spill* home is
+                        // addressable from everywhere that may need the
+                        // boxed value later — the surrender bridges, the
+                        // claim barrier, and the deopt write-backs (an
+                        // `F(spill)` entry boxes from its slot natively).
+                        // Weaken the owner to `F(home)` and skip the boxed
+                        // slot store: the per-iteration cost of the store
+                        // becomes one raw movq. Only for an owner already
+                        // holding a *spill* home (a stage-2 promotion in
+                        // this subtree, or the loop-entry `F(home)`
+                        // adoption). A pool `Sf` keeps the stage-1' boxed
+                        // store: migrating it to a fresh spill mid-callee
+                        // was tried, and on shapes where the claim dies at
+                        // every return join (a conditional store) it
+                        // churns the owner through `S -> Sf(pool)`
+                        // re-establishment bridges every iteration — the
+                        // occupied-pool tmp path of that bridge is exactly
+                        // the fragile-under-pressure code the loop
+                        // adoption exists to avoid.
+                        let hfpr = afpr;
+                        if hfpr.0 < crate::codegen::PHYS_FPR_POOL {
+                            let home = self.keep_outer_sf_view(
+                                ids.clone(),
+                                *extra,
+                                dst.outer,
+                                dst.reg,
+                                hfpr,
+                            )?;
+                            return Some((fsrc, home));
+                        }
                         let home = self
-                            .keep_outer_sf_view(ids.clone(), *extra, dst.outer, dst.reg, afpr)?;
-                        Some((fsrc, home))
+                            .keep_outer_sf_view(ids.clone(), *extra, dst.outer, dst.reg, hfpr)?;
+                        deferred = true;
+                        // The live chain carries the claim; the *parked*
+                        // copy — the owner's conservative resume base —
+                        // is widened like any other store: if the claim
+                        // survives every return path, the resume overlay
+                        // re-adopts the joined `F(home)`; if it dies at a
+                        // join, the surrender write on the losing edges
+                        // made the slot current and the owner resumes at
+                        // plain `S`. Leaving the parked view in place
+                        // instead resumed the owner believing its pool
+                        // register still held the value this store just
+                        // changed.
+                        self.widen_outer_slot(dst.outer, dst.reg);
+                        state.defer_outer_boxing_to(dst.outer, dst.reg, hfpr);
+                        ir.push(AsmInst::StoreOuterFprHomeF { src: fsrc, home });
+                        return None; // fully handled — `deferred` skips the rest
                     } else {
                         // Stage 2: the owner holds only `S` — promote it to
                         // `Sf` with a fresh spill home, when this store
@@ -307,6 +351,12 @@ impl<'a> JitContext<'a> {
             }
             _ => None,
         };
+        if deferred {
+            // Stage 1'': the home refresh above is the whole store — the
+            // claim (owner `F(home)`) says so, and every path that has to
+            // give it up boxes from the home there.
+            return;
+        }
         if keep.is_none() {
             // The store invalidates whatever the outer frame's abstract
             // state claimed about this slot — in both places that track

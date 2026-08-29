@@ -569,17 +569,25 @@ impl<'a> JitContext<'a> {
                 // boundaries); after that a Value use falls back to the
                 // ordinary `F` re-box, which is always sound.
                 if let Some((ids, extra, true)) = self.outer_specialized_ids(state, src.outer)
-                    && let Some(afpr) = state.outer_sf_float(src.outer, src.reg)
+                    && let Some(afpr) = state.outer_float_home(src.outer, src.reg)
                 {
-                    let alias = crate::codegen::jitgen::state::DynVarAliasLoad {
-                        ids: ids.clone(),
-                        extra,
-                        reg: src.reg,
-                    };
+                    // Stage B's slot-reading alias only under `Sf` — a
+                    // stage-1'' deferred `F(home)` leaves the owner's slot
+                    // stale, so a Value use must re-box from the raw f64,
+                    // never load the slot.
+                    let alias = state
+                        .outer_sf_float(src.outer, src.reg)
+                        .map(|_| crate::codegen::jitgen::state::DynVarAliasLoad {
+                            ids: ids.clone(),
+                            extra,
+                            reg: src.reg,
+                        });
                     if let Some(home) = self.outer_fpr_home_hint(ids, extra, src.outer, afpr) {
                         let dfpr = state.def_F_new(dst);
                         ir.push(AsmInst::LoadOuterFprHomeF { dst: dfpr, home });
-                        state.set_dynvar_alias(dst, alias);
+                        if let Some(alias) = alias {
+                            state.set_dynvar_alias(dst, alias);
+                        }
                         self.restore_unfrozen(Some(dst));
                         return Ok(CompileResult::Continue);
                     }

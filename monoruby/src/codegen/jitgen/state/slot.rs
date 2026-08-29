@@ -802,10 +802,28 @@ impl SlotState {
         &mut self,
         adopt: impl Fn(SlotId) -> bool,
         adopt_sf: impl Fn(SlotId) -> bool,
+        adopt_deferred: impl Fn(SlotId) -> Option<FPReg>,
         promotable: impl Fn(SlotId) -> bool,
     ) {
         for i in self.all_regs() {
             if !promotable(i) {
+                continue;
+            }
+            // Stage 1'': the back edge carries a spill-home view of a
+            // slot the loop's subtree *stores* each iteration (the home
+            // came from a store-driven promotion). Adopt `F(home)`
+            // directly — slot stale, home authoritative: the entry
+            // bridge's one guard+unbox establishes the home, the body's
+            // deferring stores refresh it in place, and the back edge
+            // meets `F(h) ⊔ F(h)` with nothing emitted. Adopting an `Sf`
+            // here instead (the pre-deferral behavior) declares the slot
+            // current, which the codegen pass's deferring store then
+            // breaks — re-boxing at the back edge every iteration.
+            if let Some(h) = adopt_deferred(i)
+                && matches!(self.mode(i), LinkMode::S(_))
+            {
+                self.grow_fpr_to(h.0 + 1);
+                self.set_F(i, h);
                 continue;
             }
             // `try_set_new_F` / `try_set_new_Sf` (no phase-2 spill): only
@@ -1297,6 +1315,19 @@ impl SlotState {
                     self.grow_fpr_to(fpr.0 + 1);
                     self.set_Sf(slot, fpr, SfGuarded::Float);
                 }
+                // Stage 1'': the subtree deferred this slot's boxing —
+                // every resuming path either kept the home current (the
+                // claim) or boxed it into the slot on its return segment,
+                // so adopting the joined `F(spill home)` is exactly as
+                // sound as the kept `C` above. The parked mode may be `S`
+                // (the claim began as a stage-2 promotion in the subtree)
+                // or the pre-call `Sf` (the deferral upgraded it).
+                (LinkMode::S(_) | LinkMode::Sf(_, _), LinkMode::F(fpr))
+                    if fpr.0 >= crate::codegen::PHYS_FPR_POOL =>
+                {
+                    self.grow_fpr_to(fpr.0 + 1);
+                    self.set_F(slot, fpr);
+                }
                 _ => {}
             }
         }
@@ -1365,8 +1396,30 @@ impl SlotState {
             // box the store writes is a `Value::float` (the same reasoning
             // as `bridge_at`'s `F -> Sf` arm).
             LinkMode::F(fpr) if keep_claims => {
-                ir.spill(Spill::Fpr(fpr, slot));
-                self.set_Sf(slot, fpr, SfGuarded::Float);
+                // Stage 1'': a spill-resident float's slot may stay stale
+                // across a specialized call. The callee reads the value
+                // through the chain claim (a home read of the spill slot),
+                // a store refreshes the same slot, and any deopt under the
+                // call boxes it from there via the call site's write-back
+                // — boxing here would re-pay, at every call, the store the
+                // deferral removed.
+                if fpr.0 >= PHYS_FPR_POOL {
+                    return;
+                }
+                // A pool `F`'s only copy would sit in the call-site save
+                // area, which neither the callee's chain reads nor the
+                // exits can address. Boxing it here (the old behavior)
+                // costs an `f64_to_val` per call, per iteration in a loop;
+                // moving the raw f64 to a fresh spill slot instead costs
+                // one store and turns the claim into the addressable
+                // `F(spill)` above — the callee reads and refreshes it in
+                // place, and the boxed value is materialized only where a
+                // path actually gives the claim up.
+                let h = self.fpr_alloc.push_spill();
+                self.fpr_remove(slot, fpr);
+                self.fpr_add(slot, h);
+                self.set_mode(slot, LinkMode::F(h));
+                ir.fpr_move(fpr, h);
             }
             LinkMode::F(fpr) => {
                 let guarded = self.guarded(slot);
@@ -1997,6 +2050,21 @@ pub(in crate::codegen::jitgen) enum Placement {
 /// instead of pushing `AsmInst`, and the lowering pass replays them via
 /// [`Spill::emit`].
 ///
+///
+/// What [`SlotState::unbox_to_S_at`] did to an outer-frame claim at the
+/// block-handout barrier.
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::codegen::jitgen) enum OuterBarrier {
+    /// Nothing given up (no claim, or an unreachable method-caller `F`).
+    Kept,
+    /// A slot-current claim dropped — report the widen, emit nothing.
+    Widened,
+    /// A stage-1'' deferred home dropped — the caller emits the
+    /// box-from-home surrender write, then reports the widen.
+    BoxHome(FPReg),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::codegen::jitgen) enum Spill {
     None,
@@ -2353,6 +2421,8 @@ impl AbstractFrame {
         slot: SlotId,
         pc: BytecodePtr,
         outer: usize,
+        sur: &crate::codegen::jitgen::state::ChainSurrender,
+        level: usize,
     ) {
         if outer == 0 {
             return self.bridge(ir, target, slot, pc);
@@ -2371,6 +2441,32 @@ impl AbstractFrame {
         match (self.mode(slot), target.mode(slot)) {
             (LinkMode::F(l), LinkMode::F(r)) if l == r => {
                 return;
+            }
+            // Stage 1'' deferred boxing. Weakening `Sf(h)` to the target's
+            // deferred `F(h)` is pure state (both claim the home current;
+            // the slot-current half is dropped)...
+            (LinkMode::Sf(l, _), LinkMode::F(r))
+                if l == r && l.0 >= crate::codegen::PHYS_FPR_POOL =>
+            {
+                self.set_F(slot, l);
+            }
+            // ...while demoting a deferred `F(h)` to anything slot-current
+            // boxes the home into the owner's slot through the chain — the
+            // write-side surrender, mirrored per edge like the kept-`C`
+            // literal write.
+            (LinkMode::F(l), LinkMode::Sf(r, g))
+                if l == r && l.0 >= crate::codegen::PHYS_FPR_POOL =>
+            {
+                let ok = sur.emit_box(ir, level, l, slot);
+                debug_assert!(ok, "no chain addressing for a suspended frame at {level}");
+                self.set_Sf(slot, l, g);
+            }
+            (LinkMode::F(l), LinkMode::S(_))
+                if l.0 >= crate::codegen::PHYS_FPR_POOL =>
+            {
+                let ok = sur.emit_box(ir, level, l, slot);
+                debug_assert!(ok, "no chain addressing for a suspended frame at {level}");
+                self.set_S_with_guard(slot, Guarded::Float);
             }
             (LinkMode::V, LinkMode::V)
             | (LinkMode::None, LinkMode::None)
@@ -2404,8 +2500,11 @@ impl AbstractFrame {
 
     ///
     /// [`Self::unbox_to_S`] for a slot of the frame *outer* levels out:
-    /// give the claim up, emitting nothing, for the reason above. Returns
-    /// whether anything was given up.
+    /// give the claim up, for the reason above. Most claims go with
+    /// nothing emitted; a stage-1'' deferred `F(spill home)` — whose slot
+    /// is genuinely stale — reports [`OuterBarrier::BoxHome`] so the
+    /// caller ([`AbstractState::all_frames_unbox_to_S`]) can emit the
+    /// box-from-home surrender write through the chain.
     ///
     #[allow(non_snake_case)]
     pub(in crate::codegen::jitgen) fn unbox_to_S_at(
@@ -2413,28 +2512,36 @@ impl AbstractFrame {
         ir: &mut AsmIr,
         slot: SlotId,
         outer: usize,
-    ) -> bool {
+    ) -> OuterBarrier {
         if outer == 0 {
             self.unbox_to_S(ir, slot, false);
-            return false;
+            return OuterBarrier::Kept;
         }
         match self.mode(slot) {
             // The slot holds the boxed value; only the read-only view goes.
             LinkMode::Sf(_, _) => {
                 self.set_mode(slot, LinkMode::S(Guarded::Value));
-                true
+                OuterBarrier::Widened
             }
             LinkMode::C(_) => {
                 self.set_mode(slot, LinkMode::S(Guarded::Value));
-                true
+                OuterBarrier::Widened
             }
-            // A suspended *method* caller can hold `F` across its call (the
-            // value lives in its call-site save area). The block handed out
-            // here cannot reach that frame — every frame a block's lexical
-            // chain crosses was homed at its own block-handing call site —
-            // so the stale slot is never read and the binding stays.
-            LinkMode::F(_) => false,
-            _ => false,
+            // Stage 1'': a deferred-boxing home — the slot is stale, and
+            // the block handed out here can reach it, so the barrier must
+            // materialize the boxed value before the call.
+            LinkMode::F(fpr) if fpr.0 >= PHYS_FPR_POOL => {
+                self.set_mode(slot, LinkMode::S(Guarded::Float));
+                OuterBarrier::BoxHome(fpr)
+            }
+            // A suspended *method* caller can hold a pool `F` across its
+            // call (the value lives in its call-site save area). The block
+            // handed out here cannot reach that frame — every frame a
+            // block's lexical chain crosses was homed at its own
+            // block-handing call site — so the stale slot is never read
+            // and the binding stays.
+            LinkMode::F(_) => OuterBarrier::Kept,
+            _ => OuterBarrier::Kept,
         }
     }
 

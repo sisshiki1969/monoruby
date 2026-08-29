@@ -2653,6 +2653,23 @@ pub(super) enum AsmInst {
         home: OuterFprHome,
         deopt: AsmDeopt,
     },
+    ///
+    /// Stage 1'' (deferred outer boxing), the surrender write: the frame
+    /// *pos* levels down holds a deferred `F(spill home)` claim this path
+    /// is giving up — load the raw f64 from the home, box it
+    /// (`f64_to_val`), and store the Value into the owner's slot through
+    /// the chain. The claim's dual of the kept-`C` surrender: emitted on
+    /// exactly the paths where the join demotes the claim, so every
+    /// resuming path arrives with the slot current.
+    ///
+    /// ### destroy
+    /// - rax, rcx (x86-64) / x0, x9, x10 (aarch64), xmm0/d0
+    ///
+    BoxOuterHomeToDynVar {
+        home: OuterFprHome,
+        offset: DynVarOffset,
+        reg: SlotId,
+    },
     LoadDynVarSpecialized {
         /// Machine stack offset in bytes. Emitted as a
         /// `DynVarOffset::Hint(...)` chain by Pass 1; the pre-codegen
@@ -2896,7 +2913,8 @@ impl AsmInst {
             }
             // Same over-reservation as the two above: the adopted home's
             // id must size the owner's spill region.
-            Self::GuardFloatToOuterHomeF { home, .. } => {
+            Self::GuardFloatToOuterHomeF { home, .. }
+            | Self::BoxOuterHomeToDynVar { home, .. } => {
                 if let OuterFprHome::Hint { fpr, .. } = home {
                     vec![*fpr]
                 } else {
