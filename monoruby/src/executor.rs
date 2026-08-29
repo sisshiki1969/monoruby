@@ -3664,7 +3664,21 @@ impl Executor {
         args: &[Value],
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
-        self.invoke_method_inner_vis(globals, symbol, recv, args, bh, None, false)
+        self.dispatch_symbol_proc_kw(globals, symbol, recv, args, bh, None)
+    }
+
+    /// [`Self::dispatch_symbol_proc`] with keyword arguments — `Proc#call`
+    /// on a symbol proc forwards the keywords it was given.
+    pub(crate) fn dispatch_symbol_proc_kw(
+        &mut self,
+        globals: &mut Globals,
+        symbol: IdentId,
+        recv: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw: Option<Hashmap>,
+    ) -> Result<Value> {
+        self.invoke_method_inner_vis(globals, symbol, recv, args, bh, kw, false)
     }
 
     // NOTE: there is deliberately no generic Rust-side safepoint helper
