@@ -580,26 +580,10 @@ pub(crate) fn symbol_to_proc_body(
     let recv = lfp.arg(0);
     let rest_val = lfp.arg(1);
     let rest_array = rest_val.as_array();
-    let rest: Vec<Value> = rest_array.iter().cloned().collect();
-    // public_send semantics: reject private and protected methods.
-    let class_id = recv.class();
-    if let Some(entry) = globals.check_method_for_class(class_id, symbol) {
-        match entry.visibility() {
-            Visibility::Private => {
-                return Err(MonorubyErr::private_method_called(
-                    globals, symbol, recv,
-                ));
-            }
-            Visibility::Protected => {
-                return Err(MonorubyErr::protected_method_called(
-                    globals, symbol, recv,
-                ));
-            }
-            _ => {}
-        }
-    }
     let bh = lfp.block();
-    vm.invoke_method_inner(globals, symbol, recv, &rest, bh, None)
+    // The rest array is rooted by this frame, and the collector does not
+    // move objects, so the dispatch can read the arguments in place.
+    vm.dispatch_symbol_proc(globals, symbol, recv, &rest_array[..], bh)
 }
 
 ///

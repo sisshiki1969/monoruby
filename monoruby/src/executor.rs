@@ -3604,6 +3604,17 @@ impl Executor {
         data: &ProcData,
         args: &[Value],
     ) -> Result<Value> {
+        // `&:sym` — dispatch the named method straight at `args[0]`.
+        // Going through the generic path instead means a block frame for
+        // `symbol_to_proc_body` plus, because that body takes `*rest`, a
+        // rest `Array` allocated for every element, which for the shape
+        // this exists to serve (`ary.map(&:to_s)`) is the whole cost.
+        if data.func_id() == Some(SYMBOL_TO_PROC_BODY_FUNCID)
+            && let Some(outer) = data.outer()
+            && let Some(symbol) = outer.self_val().try_symbol()
+        {
+            return self.invoke_symbol_proc(globals, symbol, args, None);
+        }
         (globals.invokers.block)(
             self,
             globals,
@@ -3614,6 +3625,46 @@ impl Executor {
             None,
         )
         .ok_or_else(|| self.take_error())
+    }
+
+    ///
+    /// The body of a `Symbol#to_proc` proc, called directly: `args[0]`
+    /// receives `symbol`, the rest are its arguments. Same visibility
+    /// rule as `public_send` (which is what `&:sym` documents), and the
+    /// same answer as running `symbol_to_proc_body` — only without the
+    /// frame and the rest array that body's `*rest` parameter forces.
+    ///
+    pub(crate) fn invoke_symbol_proc(
+        &mut self,
+        globals: &mut Globals,
+        symbol: IdentId,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+    ) -> Result<Value> {
+        let Some((recv, rest)) = args.split_first() else {
+            return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
+        };
+        self.dispatch_symbol_proc(globals, symbol, *recv, rest, bh)
+    }
+
+    ///
+    /// `recv.public_send(symbol, *args, &bh)` — the one dispatch behind
+    /// `&:sym`, shared by the block-call fast path above and by
+    /// `symbol_to_proc_body` (the general entry, reached when the proc is
+    /// called as an object). `is_func_call = false` is what makes it
+    /// *public*_send: it restricts the lookup to public methods, which is
+    /// one lookup rather than a visibility probe followed by a second,
+    /// unrestricted one.
+    ///
+    pub(crate) fn dispatch_symbol_proc(
+        &mut self,
+        globals: &mut Globals,
+        symbol: IdentId,
+        recv: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+    ) -> Result<Value> {
+        self.invoke_method_inner_vis(globals, symbol, recv, args, bh, None, false)
     }
 
     // NOTE: there is deliberately no generic Rust-side safepoint helper
@@ -3958,7 +4009,7 @@ impl Executor {
     /// back to method dispatch or raise.
     fn resolve_block_target(
         &self,
-        globals: &Globals,
+        globals: &mut Globals,
         cfp: Cfp,
         bh: BlockHandler,
     ) -> Option<(Lfp, FuncId)> {
@@ -3971,10 +4022,11 @@ impl Executor {
             Some((cfp.lfp(), fid))
         } else if let Some(proc) = bh.try_proc() {
             proc.outer_lfp().map(|outer| (outer, proc.func_id()))
-        } else if bh.try_symbol().is_some() {
-            let fid = SYMBOL_TO_PROC_BODY_FUNCID;
-            let outer = Lfp::heap_frame(bh.0, globals[fid].meta());
-            Some((outer, fid))
+        } else if let Some(symbol) = bh.try_symbol() {
+            // The frame is per-symbol and immutable (`self` is the
+            // symbol, nothing else), so it is built once and shared —
+            // this resolution runs on every yield.
+            Some((globals.symbol_proc_frame(symbol), SYMBOL_TO_PROC_BODY_FUNCID))
         } else {
             None
         }
