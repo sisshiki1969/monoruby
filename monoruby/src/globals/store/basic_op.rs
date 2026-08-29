@@ -82,6 +82,17 @@ pub(crate) const BASIC_OP_DEFS: &[(ClassId, &str)] = &[
     (TRUE_CLASS, "==="),
     (FALSE_CLASS, "=="),
     (FALSE_CLASS, "==="),
+    // ---- ordering: `Executor::compare_values_inner` (executor/op.rs)
+    // answers `<=>` for these classes without a lookup — the numeric arms
+    // compare through `RV`, and `Array#sort` / `#max` / `#min` and every
+    // other `Comparable`-style builtin that goes through it inherits the
+    // fast path. `Array#sort`'s homogeneous specialization
+    // (`Executor::sort`) rests on the same pairs.
+    (INTEGER_CLASS, "<=>"),
+    (FLOAT_CLASS, "<=>"),
+    (STRING_CLASS, "<=>"),
+    (SYMBOL_CLASS, "<=>"),
+    (NIL_CLASS, "<=>"),
     // ---- unary: `neg_value` / `pos_value` / `bitnot_value` (Integer,
     // Float, Complex) and `not_value`, whose truthiness answer covers every
     // immediate plus String and Complex — a heap object of any other class
@@ -303,6 +314,11 @@ mod tests {
             ("Complex", "%(o)", "Complex(1,2) % Complex(3,4)"),
             ("Complex", "-@", "-(Complex(1,2))"),
             ("Complex", "!", "!(Complex(1,2))"),
+            ("Integer", "<=>(o)", "1 <=> 2"),
+            ("Float", "<=>(o)", "1.0 <=> 2.0"),
+            ("String", "<=>(o)", r#""a" <=> "b""#),
+            ("Symbol", "<=>(o)", ":a <=> :b"),
+            ("NilClass", "<=>(o)", "nil <=> nil"),
             ("Array", "[](i)", "[1,2][0]"),
             ("Hash", "[](k)", "({1=>2})[1]"),
         ];
@@ -320,6 +336,38 @@ mod tests {
                 "class {class}; def {header}; :OVERRIDDEN; end; end; {expr}"
             ));
         }
+    }
+
+    /// The `<=>` pairs license more than the operator itself: every
+    /// builtin that orders values goes through
+    /// `Executor::compare_values_inner`, and `Array#sort` additionally
+    /// specializes a homogeneous array (`sort_homogeneous`). A
+    /// redefinition has to reach both — before the pairs were tracked,
+    /// `[3,1,2].sort` kept comparing fixnums directly and returned a
+    /// sorted array where CRuby raises (the redefined `<=>` returns a
+    /// Symbol, which is not a valid comparison result).
+    #[test]
+    fn sort_honors_redefined_cmp() {
+        run_test_once(
+            r#"
+            class Integer; def <=>(o); :OVERRIDDEN; end; end
+            begin
+              [3, 1, 2].sort
+            rescue => e
+              e.class
+            end
+            "#,
+        );
+        run_test_once(
+            r#"
+            class String; def <=>(o); :OVERRIDDEN; end; end
+            begin
+              ["c", "a", "b"].sort
+            rescue => e
+              e.class
+            end
+            "#,
+        );
     }
 
     /// `Array#[]=` is in the table but cannot be observed through the
