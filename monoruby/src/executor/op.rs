@@ -850,20 +850,25 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<Option<std::cmp::Ordering>> {
-        let res = if let Some(i) = self
-            .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs], None, None)?
-            .try_fixnum()
-        {
-            match i {
-                -1 => Some(std::cmp::Ordering::Less),
-                0 => Some(std::cmp::Ordering::Equal),
-                1 => Some(std::cmp::Ordering::Greater),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        Ok(res)
+        let res = self.invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs], None, None)?;
+        if res.is_nil() {
+            return Ok(None);
+        }
+        // `rb_cmpint` reads the *sign*, so a comparator returning ±5 (or a
+        // Bignum, or anything that can compare itself with 0) orders just
+        // as one returning ±1 does. Reading only -1/0/1 made
+        // `[W.new(2), W.new(1)].sort` raise where CRuby sorts, whenever
+        // `W#<=>` returned a difference rather than a unit.
+        //
+        // `cmpint` reports "not comparable" as the same `cmperr` the
+        // callers of this function build from `None`, so its error is
+        // theirs; anything else it raises (from dispatching `res <=> 0`)
+        // propagates as it should.
+        match self.cmpint(globals, res, lhs, rhs) {
+            Ok(ord) => Ok(Some(ord)),
+            Err(err) if matches!(err.kind(), MonorubyErrKind::Arguments) => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 }
 
