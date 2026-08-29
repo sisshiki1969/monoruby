@@ -121,7 +121,7 @@ impl<'a> JitContext<'a> {
         // merge state inherited an empty file from `declare_merge`, so every
         // arm has to pay its own residents back to their stack homes first.
         arm.flush_gp(ir);
-        arm.gen_bridge_all(ir, &m.target.slot_states(), m.pc);
+        arm.gen_bridge_all(ir, &m.target.slot_states(), m.pc, &self.chain_surrender_table());
         if jump {
             ir.push(AsmInst::Br(m.merge));
         }

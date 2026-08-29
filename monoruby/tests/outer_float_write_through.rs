@@ -732,3 +732,303 @@ fn a_non_local_return_resumes_from_the_entry_chain() {
         "#,
     );
 }
+
+/// Stage 1'' (deferred outer boxing), the canonical shape: the block
+/// stores a float into the caller's slot every iteration. The owner's
+/// claim rides as `F(spill home)` — slot stale, home authoritative — so
+/// the per-iteration cost is one raw store; boxing happens once, where
+/// the value is finally consumed as a Value.
+#[test]
+fn a_deferred_store_boxes_only_at_the_loop_exit() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w1(a, b)
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { s = s * a + b }
+            i += 1
+          end
+          s
+        end
+        w1(0.999, 0.5)
+        "#,
+    );
+}
+
+/// Two deferred slots, read and written by the block each iteration —
+/// the home reads and refreshes must stay consistent with each other.
+#[test]
+fn two_deferred_slots_read_and_written_by_the_block() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w2
+          a = 1.0
+          s = 0.0
+          i = 0
+          while i < 300
+            call_block { s += a * 1.000001; a = a * 0.9999999 + 0.0000001 }
+            i += 1
+          end
+          [s, a]
+        end
+        w2
+        "#,
+    );
+}
+
+/// A conditional store inside the block: one path defers, the other
+/// leaves the pre-store claim — the join demotes and the F-side edge
+/// must box the home into the slot (the surrender bridge).
+#[test]
+fn a_conditional_deferred_store_surrenders_on_the_other_path() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w3(q)
+          s = 1.5
+          r = []
+          i = 0
+          while i < 300
+            call_block { s = s * q if i % 3 == 0 }
+            r << s if i % 97 == 0
+            i += 1
+          end
+          [s, r]
+        end
+        w3(1.001)
+        "#,
+    );
+}
+
+/// The claim barrier: after deferring stores, the loop hands a block to
+/// a generic callee — the barrier must box the home into the slot
+/// before the call, since the outgoing block's runtime reads bypass
+/// every compile-time claim.
+#[test]
+fn a_generic_call_materializes_the_deferred_home() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w4(q)
+          s = 0.25
+          t = 0.0
+          i = 0
+          while i < 300
+            call_block { s = s * q + 0.001 }
+            [s].each { |x| t += x } if i % 50 == 0
+            i += 1
+          end
+          [s, t]
+        end
+        w4(1.0001)
+        "#,
+    );
+}
+
+/// Deopt under a deferred claim: the store's operand type flips
+/// mid-run, so the guard deopts while the owner's slot is stale — the
+/// evict write-back must box the value from the spill home before the
+/// interpreter resumes.
+#[test]
+fn a_type_flip_deopt_boxes_from_the_deferred_home() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w5(arr)
+          s = 0.5
+          arr.each do |v|
+            call_block { s = s + v }
+          end
+          s
+        end
+        r = []
+        40.times { r << w5([0.5] * 40) }
+        r << w5([0.25] * 30 + [7])
+        [r.last, r.first]
+        "#,
+    );
+}
+
+/// A break out of the deferring block: the non-local exit leaves the
+/// compiled return paths, so the claim must reach the slot through the
+/// deopt/exit machinery, never read stale.
+#[test]
+fn a_break_under_a_deferred_claim_stays_consistent() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w6
+          s = 1.25
+          i = 0
+          while i < 300
+            call_block { s = s * 1.001; break if s > 2.0 }
+            i += 1
+          end
+          [s, i]
+        end
+        w6
+        "#,
+    );
+}
+
+/// A promote-then-defer pair inside one block, with the second store
+/// conditional: the unconditional store promotes the owner to the
+/// slot-current `Sf(home)` (no loop head adopts it — the owner is
+/// method-compiled), the deferring arm weakens it to `F(home)`, and the
+/// if-merge meets the two claims over the same spill home — keeping the
+/// home and weakening the `Sf` edge in place, with no box on either.
+#[test]
+fn a_conditional_second_store_meets_the_promoted_view() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w7(s, flag)
+          call_block do
+            s = s * 1.001
+            if flag
+              s = s + 0.5
+            end
+            s
+          end
+          s
+        end
+        r = 0.0
+        50.times { |i| r += w7(1.5 + r * 0.001, i % 2 == 0) }
+        r
+        "#,
+    );
+}
+
+/// The mirrored arm order (a reading arm laid out first): the merge
+/// still keeps the shared spill home whichever edge fixes the target.
+#[test]
+fn a_conditional_store_in_the_else_arm_meets_the_promoted_view() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w8(s, flag)
+          t = 0.0
+          call_block do
+            s = s * 1.001
+            if flag
+              t = s + 0.25
+            else
+              s = s + 0.5
+            end
+            s
+          end
+          [s, t]
+        end
+        r = 0.0
+        50.times { |i| r += w8(1.5 + r * 0.001, i % 2 == 0)[0] }
+        r
+        "#,
+    );
+}
+
+/// Two stores to the same slot in one block body: the first store
+/// promotes the owner to a spill-homed `Sf`, and the second defers from
+/// that `Sf` — the upgrade arm that drops only the slot-current half.
+#[test]
+fn a_second_store_defers_from_the_promoted_view() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w9
+          s = 1.5
+          i = 0
+          while i < 300
+            call_block do
+              s = s * 1.001
+              s = s + 0.0005
+            end
+            i += 1
+          end
+          s
+        end
+        w9
+        "#,
+    );
+}
+
+/// A promoted-then-deferred claim where one return segment leaves via
+/// `next` still holding `F(home)` and the fallthrough re-widens the slot
+/// with an integer: the return join demotes to plain `S`, and the
+/// deferring segment boxes the home through the chain on its own edge.
+#[test]
+fn an_early_next_surrenders_per_return_segment() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w10(s, flag)
+          call_block do
+            s = s * 1.001
+            s = s + 0.5
+            if flag
+              next 1
+            end
+            s = 0
+            2
+          end
+          s
+        end
+        r = 0
+        50.times { |i| r = [w10(1.5 + i * 0.001, i % 3 != 0), r].first }
+        r
+        "#,
+    );
+}
+
+/// A suspended *method* caller holding a bare pool float across its call:
+/// the barrier walk for a block handed out deeper in the chain must keep
+/// that binding (the frame is unreachable from the block), not box it.
+#[test]
+fn a_pool_float_in_a_suspended_method_frame_survives_a_barrier() {
+    run_test(
+        r#"
+        def leaf
+          a = [1, 2]
+          a.each { |x| a }
+          a.size
+        end
+        def mid
+          leaf + 1
+        end
+        def w11
+          x = 0.5
+          y = x * 2.0
+          i = 0
+          r = 0
+          while i < 300
+            r = mid
+            i += 1
+          end
+          [x, y, r]
+        end
+        w11
+        "#,
+    );
+}

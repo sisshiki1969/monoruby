@@ -1016,6 +1016,14 @@ pub(in crate::codegen) enum LInst {
         disp: i64,
         deopt: DestLabel,
     },
+    /// Stage 1'' surrender write: load the raw f64 at `[rbp + disp]`
+    /// (the owner's spill home), box it via `f64_to_val`, and store the
+    /// Value to the owner's slot at the pre-resolved chain offset.
+    BoxOuterHomeToDynVar {
+        disp: i64,
+        offset: usize,
+        reg: SlotId,
+    },
     /// Defer a spliced non-local exit's unwind before jumping into the
     /// shared `ensure` body (#1185). The value rides in `GP::Rdx`; the
     /// degenerate outcome raises generically from `pc`.

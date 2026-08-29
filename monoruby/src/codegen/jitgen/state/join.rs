@@ -92,7 +92,33 @@ impl AbstractFrame {
             // `apply_join` allocating inline. Behaviour is identical to the old
             // fused per-slot match.
             let mut action = self.decide_join(other, i);
-            if !allow_fpr {
+            if allow_fpr {
+                // Stage 1'', the loop-boundary meet: when one side holds a
+                // *spill-home* `F` and the other a Float view in a
+                // different register, prefer the spill home. The bridge on
+                // the non-F side is then a register move into the home
+                // (once, on that edge); the generic meet would instead
+                // pick the register view and make the F side box at every
+                // arrival — for a loop back edge, a `f64_to_val` per
+                // iteration, the exact cost the deferral removes.
+                action = match (self.mode(i), other.mode(i)) {
+                    (LinkMode::F(x), LinkMode::Sf(y, SfGuarded::Float))
+                    | (LinkMode::Sf(y, SfGuarded::Float), LinkMode::F(x))
+                    | (LinkMode::F(x), LinkMode::F(y))
+                        if x != y && x.0 >= PHYS_FPR_POOL =>
+                    {
+                        JoinAction::SetF(x)
+                    }
+                    (LinkMode::F(y), LinkMode::F(x))
+                        if x != y && y.0 < PHYS_FPR_POOL && x.0 >= PHYS_FPR_POOL =>
+                    {
+                        JoinAction::SetF(x)
+                    }
+                    _ => action,
+                };
+            } else {
+                // `SetF` (the stage-1'' spill-home meet) passes through:
+                // it binds no new register, exactly like `SetSf`.
                 action = action.without_fpr();
             }
             #[cfg(debug_assertions)]
@@ -202,6 +228,11 @@ enum JoinAction {
     TryFreshSfElseS(SfGuarded),
     /// `_ -> S(guarded)`
     SetS(Guarded),
+    /// rebind to `F(x)` with the current fpr `x` — the suspended-frame
+    /// meet of a deferred-boxing claim (stage 1''): `F(h)` against
+    /// `Sf(h, Float)` or `F(h)` weakens the slot-current half and keeps
+    /// the home, emitting nothing (the home is current on both sides).
+    SetF(FPReg),
 }
 
 impl JoinAction {
@@ -248,6 +279,19 @@ impl AbstractFrame {
                 }
             }
             (LinkMode::F(_), LinkMode::C(r)) if r.is_float() => Nop,
+            // Stage 1'' deferred boxing: `F(h)` against the same *spill*
+            // home's `Sf` meets to `F(h)` — the home (the spill slot) is
+            // the canonical copy on both sides, and only the slot-current
+            // half is dropped. Emitting nothing on either edge. The
+            // generic arm below would meet to `Sf`, forcing the F side to
+            // box at every loop boundary — the cost the deferral exists
+            // to remove.
+            (LinkMode::F(x), LinkMode::Sf(y, SfGuarded::Float))
+            | (LinkMode::Sf(x, SfGuarded::Float), LinkMode::F(y))
+                if x == y && x.0 >= PHYS_FPR_POOL =>
+            {
+                SetF(x)
+            }
             (LinkMode::F(x), LinkMode::Sf(_, _))
             | (LinkMode::Sf(x, _), LinkMode::Sf(_, _) | LinkMode::F(_)) => {
                 let mut guarded = match self.mode(i) {
@@ -316,6 +360,13 @@ impl AbstractFrame {
                 }
             }
             JoinAction::SetS(guarded) => self.set_S_with_guard(i, guarded),
+            JoinAction::SetF(x) => {
+                // The fpr may be bound only on the *other* side (a spill
+                // id this branch never allocated) — grow the file so the
+                // rebind resolves; the reverse map stays exact.
+                self.grow_fpr_to(x.0 + 1);
+                self.set_F(i, x);
+            }
         }
     }
 }

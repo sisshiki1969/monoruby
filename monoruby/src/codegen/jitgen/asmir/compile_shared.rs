@@ -1114,6 +1114,13 @@ impl Codegen {
                     base: frame.base_stack_offset,
                 })
             }
+            AsmInst::BoxOuterHomeToDynVar { home, offset, reg } => {
+                let disp = home.unwrap_concrete().expect(
+                    "deferred outer home is always a spill slot — its resolve is unconditional",
+                );
+                let offset = offset.unwrap_concrete();
+                self.encode_linst(LInst::BoxOuterHomeToDynVar { disp, offset, reg });
+            }
             AsmInst::GuardFloatToOuterHomeF { home, deopt } => {
                 let disp = home.unwrap_concrete().expect(
                     "adopted outer home is always a spill slot — its resolve is unconditional",
@@ -1704,6 +1711,9 @@ impl Codegen {
             }
             LInst::GuardFloatToOuterHomeF { src, disp, deopt } => {
                 self.emit_guard_float_to_outer_home_f(src, disp, &deopt);
+            }
+            LInst::BoxOuterHomeToDynVar { disp, offset, reg } => {
+                self.emit_box_outer_home_to_dynvar(disp, offset, reg);
             }
             LInst::Yield { callid, simple, error, evict } => {
                 self.emit_yield(callid, simple, &error, evict);

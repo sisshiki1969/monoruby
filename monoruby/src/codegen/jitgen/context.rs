@@ -1475,7 +1475,7 @@ impl<'a> JitContext<'a> {
         len.checked_sub(1)?.checked_sub(outer)
     }
 
-    fn outer_pos(&self, outer: usize) -> Option<usize> {
+    pub(super) fn outer_pos(&self, outer: usize) -> Option<usize> {
         let mut i = self.stack_frame.len() - 1;
         for _ in 0..outer {
             i -= self.stack_frame[i].outer?;
@@ -1524,7 +1524,7 @@ impl<'a> JitContext<'a> {
     /// loop-entry init whose owner is reachable through a *block's*
     /// lexical chain but not the (method) frame the loop head sits in.
     ///
-    fn specialized_ids_at_pos(&self, pos: usize) -> (Vec<SpecializedId>, usize) {
+    pub(super) fn specialized_ids_at_pos(&self, pos: usize) -> (Vec<SpecializedId>, usize) {
         let end = self.stack_frame.len() - 1;
         let chain = &self.stack_frame[pos..end];
         let ids = chain.iter().map(|f| f.specialized_id).collect();
@@ -1540,7 +1540,7 @@ impl<'a> JitContext<'a> {
     /// stack position *pos* — the pos-addressed sibling of
     /// [`Self::outer_fpr_home_hint`].
     ///
-    fn outer_fpr_home_hint_at_pos(
+    pub(super) fn outer_fpr_home_hint_at_pos(
         &self,
         pos: usize,
         fpr: crate::codegen::FPReg,
@@ -1596,7 +1596,7 @@ impl<'a> JitContext<'a> {
     /// has live; the caller then binds the id on the live chain (which
     /// grows the file past it).
     ///
-    fn alloc_spill_home_at(&mut self, pos: usize, live_len: usize) -> crate::codegen::FPReg {
+    pub(super) fn alloc_spill_home_at(&mut self, pos: usize, live_len: usize) -> crate::codegen::FPReg {
         let frame = &mut self.stack_frame[pos];
         let id = frame.spill_home_watermark.max(live_len);
         frame.spill_home_watermark = id + 1;
@@ -2234,6 +2234,25 @@ impl<'a> JitContext<'a> {
                     }
                 }
             }
+            AsmInst::BoxOuterHomeToDynVar { home, offset, .. } => {
+                if let DynVarOffset::Hint { ids, extra } = offset {
+                    let resolved = self.resolve_specialized_id_chain(ids) + *extra;
+                    *offset = DynVarOffset::Concrete(resolved);
+                }
+                if let OuterFprHome::Hint {
+                    ids, extra, owner, fpr, ..
+                } = home
+                {
+                    debug_assert!(fpr.0 >= crate::codegen::PHYS_FPR_POOL);
+                    let sigma = (self.resolve_specialized_id_chain(ids) + *extra) as i64;
+                    let sizes = self.frame_sizes_or_panic(*owner);
+                    *home = OuterFprHome::Concrete(Some(
+                        sigma
+                            - (sizes.base as i64 - 24
+                                + 8 * (fpr.0 - crate::codegen::PHYS_FPR_POOL) as i64),
+                    ));
+                }
+            }
             AsmInst::StoreOuterFprHomeF { home, .. }
             | AsmInst::LoadOuterFprHomeF { home, .. }
             | AsmInst::GuardFloatToOuterHomeF { home, .. } => {
@@ -2695,6 +2714,28 @@ impl<'a> JitContext<'a> {
     /// captures the live bump, like every other dynvar hint emitted
     /// under the call).
     ///
+    ///
+    /// Per-level chain addressing for the bridge-time stage-1'' surrender
+    /// writes ([`AbstractFrame::bridge_at`]'s deferred-`F` demotion arms):
+    /// for every suspended level, the specialized-id chain that addresses
+    /// its frame from the innermost, plus its unit id (the spill-home
+    /// owner). `None` for the innermost frame (its own bridges box
+    /// through the ordinary own-frame arms).
+    ///
+    pub(super) fn chain_surrender_table(&self) -> crate::codegen::jitgen::state::ChainSurrender {
+        let len = self.stack_frame.len();
+        let per_level = (0..len)
+            .map(|level| {
+                if level + 1 >= len {
+                    return None;
+                }
+                let (ids, extra) = self.specialized_ids_at_pos(level);
+                Some((ids, extra, self.stack_frame[level].specialized_id))
+            })
+            .collect();
+        crate::codegen::jitgen::state::ChainSurrender { per_level }
+    }
+
     fn build_return_segments(
         &mut self,
         frame: &mut JitStackFrame,
@@ -2731,9 +2772,36 @@ impl<'a> JitContext<'a> {
                                 src: GP::Rax,
                             });
                         }
-                        // A suspended frame's `F` is path-invariant (its
-                        // only copy sits in a call-site save area nothing
-                        // here can address); the join must have kept it.
+                        // Stage 1'': this path's deferred-boxing home was
+                        // demoted by the join — box it into the owner's
+                        // slot on this edge, the write-side twin of the
+                        // kept-`C` surrender above.
+                        (LinkMode::F(l), tfm)
+                            if l.0 >= crate::codegen::PHYS_FPR_POOL
+                                && !matches!(tfm, LinkMode::F(r) if l == r) =>
+                        {
+                            let (ids, extra) = ids_extra
+                                .get_or_insert_with(|| self.ids_spanning_from_callee(lvl))
+                                .clone();
+                            let owner = self.stack_frame[lvl].specialized_id;
+                            ir.push(AsmInst::BoxOuterHomeToDynVar {
+                                home: OuterFprHome::Hint {
+                                    ids: ids.clone(),
+                                    extra,
+                                    owner,
+                                    // Unused for a spill home (only the
+                                    // pool save-set branch reads it).
+                                    callee: owner,
+                                    fpr: l,
+                                },
+                                offset: DynVarOffset::Hint { ids, extra },
+                                reg: slot,
+                            });
+                        }
+                        // A suspended pool `F` is path-invariant (its only
+                        // copy sits in a call-site save area nothing here
+                        // can address); the join must have kept it. A kept
+                        // spill `F` matches the join by the arm above.
                         (LinkMode::F(l), tfm) => {
                             debug_assert!(
                                 matches!(tfm, LinkMode::F(r) if l == r),

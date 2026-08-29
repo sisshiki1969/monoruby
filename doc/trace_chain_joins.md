@@ -137,30 +137,34 @@ constant claims (`outer_const_count`, `adopt_outer_widenings`,
 
 `JitStackFrame.abstract_state` — the frame a compile parks when it
 suspends for a nested compile — is no longer a truth channel for
-cross-frame claims. What remains:
+cross-frame claims. Its one remaining job is **the suspended frame's own
+resume record**: the caller level resumes from it (§3), and subtree
+events that must reach that record do so under strict monotone rules —
+widens (`widen_outer_at_pos`, dual-written with the live chain and
+logged) and capture unsets.
 
-- **The suspended frame's own resume record.** The caller level resumes
-  from it (§3). Subtree events that must reach that record do so under
-  strict monotone rules: widens (`widen_outer_at_pos`, dual-written with
-  the live chain and logged), capture unsets, and the stage-2 `Sf`
-  promotion binding.
-- **The spill-home id space.** A frame's spill-resident FPR ids must be
-  unique across its whole life — its own compile segments and every
-  claim a nested compile makes while it is suspended — and the parked
-  file's allocator is that single id space. Loop-entry adoption reserves
-  ids there without binding (`reserve_spill_home`); stage-2 promotion
-  allocates and binds (`alloc_spill_home`).
-- **The stage-2 gate** (`try_promote_outer_sf` requires the owner's
-  parked mode to still be a plain `S`).
+The two roles that outlived the join unification were retired by the
+**frame-global home ledger** (`JitStackFrame::spill_home_watermark`). A
+persistent raw-f64 home id is a physical resource — a stack slot in the
+owner's frame, baked into callee code as an address — not a per-path
+belief, so its id space cannot live in the per-path-cloned state; the
+parked copy had provided it by accident of being one-per-frame. The
+ledger is context-side (one per frame, never cloned per branch; analysis
+clones inherit the mark and their bumps die with them), promotions and
+adoptions issue `max(ledger, the allocating path's file length)` and
+bind on the live chain only, the stage-2 gate reads the live chain, and
+on resume every frame's file is grown to its ledger mark. That growth —
+together with capping the allocator's vacant-pick and demote-victim
+phases at the physical pool — closes a reuse hazard the parked scheme
+left open: spill-resident values are not saved across calls, and callee
+code that established a home keeps writing it at runtime, so a home id
+that went vacant must never be re-issued to a transient.
 
 Never publish a nested compile's view of a frame *into* its parked slot:
 that replaces the state the suspended frame will resume from with a view
 taken at a different program point, in a different frame's terms — three
 levels of nested blocks segfaulted in generated code when this was
-tried. Retiring the remaining allocator/gate roles would need an
-allocator that lives outside the frame's state (with a resume-time sync
-into the owner's own allocator); that is allocator engineering, distinct
-from the join semantics this document records.
+tried.
 
 ## 8. Rejected alternatives
 
@@ -184,3 +188,20 @@ from the join semantics this document records.
   capture guard (with its tombstone check, §4) already covers ancestor
   promotions, so stage-C adoption gates on the invariant rather than
   poisoning the whole loop.
+- **Dead outer-home store elimination.** A whole-tree use scan at
+  resolve time (collect every home the finished compile reads — chain
+  reads, the owner's own references, exit write-backs — and elide
+  `StoreOuterFprHomeF`s to homes read nowhere) was built and probed,
+  and found no targets: a store to a *constant* never exists (the
+  kept-`C` machinery folds the claim and surrenders per return path,
+  §2), and every surviving non-constant home had migrated to a **pool**
+  register by codegen time — the owner, once resumed as the innermost
+  frame, re-places `Sf(spill)` claims into the pool at its own merges
+  (`allow_fpr`), and pool-home refreshes already ride the save-set
+  channel, whose shrunk-set case elides them. This held even under
+  `stress-spill-pool` (67 spill promotions, zero spill stores emitted,
+  across the outer-float suite). Pool-home dead-store analysis would
+  need binding-sensitive (per-store, flow-sensitive) liveness — pool
+  ids are reused constantly, so id-level liveness says nothing — and
+  was not pursued. The machinery was reverted; this note is what it
+  bought.

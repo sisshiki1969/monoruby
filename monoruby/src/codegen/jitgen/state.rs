@@ -226,6 +226,7 @@ impl AbstractState {
         ir: &mut AsmIr,
         target: &[SlotState],
         pc: BytecodePtr,
+        sur: &ChainSurrender,
     ) {
         #[cfg(feature = "jit-debug")]
         eprintln!("      from:{:?}", &self);
@@ -251,7 +252,7 @@ impl AbstractState {
                 frame.locals()
             };
             for slot in slots {
-                frame.bridge_at(ir, tgt, slot, pc, outer);
+                frame.bridge_at(ir, tgt, slot, pc, outer, sur, level);
             }
         }
     }
@@ -290,10 +291,30 @@ impl AbstractState {
         let mut widened = vec![];
         for level in (0..depth).rev() {
             let outer = depth - 1 - level;
-            let frame = &mut self.frames[level];
-            for i in frame.locals() {
-                if frame.unbox_to_S_at(ir, i, outer) {
-                    widened.push((level, i));
+            for i in self.frames[level].locals() {
+                match self.frames[level].unbox_to_S_at(ir, i, outer) {
+                    crate::codegen::jitgen::state::slot::OuterBarrier::Kept => {}
+                    crate::codegen::jitgen::state::slot::OuterBarrier::Widened => {
+                        widened.push((level, i));
+                    }
+                    crate::codegen::jitgen::state::slot::OuterBarrier::BoxHome(fpr) => {
+                        // Stage 1'': the deferred home's slot is stale and
+                        // the outgoing block can read it — box the home
+                        // into the slot through the chain, on this (the
+                        // only) path into the call. Addressing is still
+                        // valid here: the claim was created under the
+                        // no-capture invariant, and this site's own unset
+                        // happens after the barrier.
+                        let (ids, extra) = jitctx.specialized_ids_at_pos(level);
+                        if let Some(home) = jitctx.outer_fpr_home_hint_at_pos(level, fpr) {
+                            ir.push(crate::codegen::jitgen::asmir::AsmInst::BoxOuterHomeToDynVar {
+                                home,
+                                offset: crate::codegen::jitgen::DynVarOffset::Hint { ids, extra },
+                                reg: i,
+                            });
+                        }
+                        widened.push((level, i));
+                    }
                 }
             }
         }
@@ -376,6 +397,48 @@ impl AbstractState {
         }
     }
 
+    ///
+    /// The live chain's raw-f64 home of the slot *outer* lexical levels
+    /// out, if it holds one — `Sf(Float)` (home and slot both current) or
+    /// a stage-1'' deferred `F(spill home)` (home current, slot stale).
+    /// Either licenses a home-directed read; only `Sf` licenses the
+    /// slot-reading alias (stage B).
+    ///
+    pub(super) fn outer_float_home(&self, outer: usize, slot: SlotId) -> Option<FPReg> {
+        match self.outer_mode(outer, slot)? {
+            LinkMode::Sf(fpr, SfGuarded::Float) => Some(fpr),
+            LinkMode::F(fpr) if fpr.0 >= crate::codegen::PHYS_FPR_POOL => Some(fpr),
+            _ => None,
+        }
+    }
+
+    ///
+    /// Stage 1'' — defer the boxing of a float store into the frame
+    /// *outer* levels out: the owner's `Sf(spill home)` weakens to
+    /// `F(home)` (home authoritative, slot stale). The caller emits only
+    /// the raw home refresh; the boxed slot store moves to the surrender
+    /// paths (return-join demotions, the claim barrier) and the deopt
+    /// write-backs (an `F` entry boxes from its spill slot natively).
+    ///
+    pub(super) fn defer_outer_boxing_to(&mut self, outer: usize, slot: SlotId, hfpr: FPReg) {
+        debug_assert!(hfpr.0 >= crate::codegen::PHYS_FPR_POOL);
+        if let Some(level) = self.outer_level(outer) {
+            let frame = &mut self.frames[level];
+            match frame.mode(slot) {
+                // Already deferred to this home by an earlier store.
+                LinkMode::F(fpr) if fpr == hfpr => {}
+                // Upgrade (spill `Sf` keeps its home) or migrate (a pool
+                // view moves to the fresh ledger home the caller's store
+                // initializes).
+                LinkMode::Sf(_, SfGuarded::Float) | LinkMode::F(_) => {
+                    frame.grow_fpr_to(hfpr.0 + 1);
+                    frame.set_F(slot, hfpr);
+                }
+                m => debug_assert!(false, "defer_outer_boxing_to on {m:?}"),
+            }
+        }
+    }
+
     pub(super) fn outer_mode(&self, outer: usize, slot: SlotId) -> Option<LinkMode> {
         if outer == 0 {
             return None;
@@ -417,6 +480,54 @@ pub(crate) struct AbstractFrame {
     /// assuming the chain holds only lexical ancestors, which is what
     /// lets the chain grow to the whole trace (join unification).
     lexical_outer: Option<usize>,
+}
+
+///
+/// Per-level chain addressing for bridge-time stage-1'' surrender writes
+/// — built by [`JitContext::chain_surrender_table`], consumed by
+/// [`AbstractFrame::bridge_at`]'s deferred-`F` demotion arms.
+///
+pub(super) struct ChainSurrender {
+    /// `(ids, extra, owner unit)` per chain level; `None` for the
+    /// innermost frame.
+    pub(super) per_level: Vec<Option<(Vec<crate::codegen::jitgen::context::SpecializedId>, usize, crate::codegen::jitgen::context::SpecializedId)>>,
+}
+
+impl ChainSurrender {
+    ///
+    /// Emit the box-from-home surrender write for the deferred `F(spill)`
+    /// claim of *slot* on the frame at chain position *level*. Returns
+    /// false when the table has no addressing for that level (never the
+    /// case for a genuinely suspended frame).
+    ///
+    pub(super) fn emit_box(
+        &self,
+        ir: &mut AsmIr,
+        level: usize,
+        fpr: FPReg,
+        slot: SlotId,
+    ) -> bool {
+        let Some(Some((ids, extra, owner))) = self.per_level.get(level) else {
+            return false;
+        };
+        ir.push(crate::codegen::jitgen::asmir::AsmInst::BoxOuterHomeToDynVar {
+            home: crate::codegen::jitgen::OuterFprHome::Hint {
+                ids: ids.clone(),
+                extra: *extra,
+                owner: *owner,
+                // Unused for a spill home (only the pool save-set branch
+                // reads it at resolve).
+                callee: *owner,
+                fpr,
+            },
+            offset: crate::codegen::jitgen::DynVarOffset::Hint {
+                ids: ids.clone(),
+                extra: *extra,
+            },
+            reg: slot,
+        });
+        true
+    }
 }
 
 impl std::ops::Deref for AbstractFrame {

@@ -3307,6 +3307,29 @@ impl Codegen {
         true
     }
 
+    /// Stage 1'' surrender write — mirror of x86
+    /// `emit_box_outer_home_to_dynvar`: raw f64 at `[x29 + disp]` into d0,
+    /// boxed via `f64_to_val` (absolute call, same page-split reasoning as
+    /// `a64_gen_chain_replay_stub`), and stored to the owner's slot
+    /// through the chain.
+    pub(in crate::codegen::jitgen) fn emit_box_outer_home_to_dynvar(
+        &mut self,
+        disp: i64,
+        offset: usize,
+        reg: SlotId,
+    ) -> bool {
+        let f64_to_val_addr = self.jit.get_label_address(&self.f64_to_val).as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x10, (disp as u64);
+            add x10, x29, x10;
+            ldr d0, [x10];
+            mov x9, (f64_to_val_addr);
+            blr x9;              // x0 = Value
+        );
+        self.store_dyn_var_specialized(offset, reg, GP::Rax);
+        true
+    }
+
     /// Stage 3a home read — mirror of x86 `emit_load_outer_fpr_home_f`:
     /// raw f64 from `[x29 + disp]` into `dst` via the d0 scratch.
     pub(in crate::codegen::jitgen) fn emit_load_outer_fpr_home_f(
