@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-dda0ede1.js";
+            window.path_to_searchindex_js = "../searchindex-4abb301b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-e1173681.js"></script>
@@ -177,245 +177,361 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="jit-最適化方針-argument-forwarding-def-fa--g-end"><a class="header" href="#jit-最適化方針-argument-forwarding-def-fa--g-end">JIT 最適化方針: Argument Forwarding (<code>def f(a, ...) g(...) end</code>)</a></h1>
-<p>本書は argument forwarding（<code>...</code>）を JIT で最適化するための実装方針を、
-現行コードの該当箇所に紐づけて記述する。原則・段階分け・deopt 安全性
-（呼び出し元が特に注意を要求した点）を中心にまとめる。</p>
-<h2 id="1-現状のコスト構造"><a class="header" href="#1-現状のコスト構造">1. 現状のコスト構造</a></h2>
-<p><code>...</code> は <code>ParamKind::Forwarding</code>（<code>ruruby-parse/src/node.rs:263</code>）として
-パースされ、<code>monoruby/src/globals/store.rs:943-952</code> で</p>
+                        <h1 id="argument-forwarding-def-fa--g-end-の最適化"><a class="header" href="#argument-forwarding-def-fa--g-end-の最適化">Argument Forwarding (<code>def f(a, ...) g(...) end</code>) の最適化</a></h1>
+<p>本書は argument forwarding（<code>...</code>）の最適化について、設計方針と実装済みの
+機構を現行コードに紐づけて記述する設計記録である。原則・段階分け・deopt
+安全性を中心にまとめる。</p>
+<p>行番号は変動しやすいため、参照は原則としてファイル名＋関数名で示す。</p>
+<h2 id="1-素朴に実装した場合のコスト構造"><a class="header" href="#1-素朴に実装した場合のコスト構造">1. 素朴に実装した場合のコスト構造</a></h2>
+<p><code>...</code> は prism から <code>ParamKind::Forwarding</code>（<code>ast/node.rs</code>）として取り込まれ、
+<code>globals/store.rs</code> の <code>ParamKind::Forwarding</code> アームで</p>
 <ul>
 <li>合成 <strong>rest</strong> スロット</li>
 <li>合成 <strong>kw_rest</strong> スロット（<code>SlotId(1 + args_names.len())</code>）</li>
 <li>匿名 <strong>block</strong> パラメータ</li>
 </ul>
-<p>へ脱糖される（<code>ParamsInfo::forwarding = true</code>、<code>globals/store/iseq.rs:608</code>）。</p>
-<p><code>g(...)</code> 呼び出しは <code>bytecodegen/method_call/arguments.rs:70-140</code> の
-<code>handle_forward</code> が、</p>
+<p>へ脱糖される（<code>ParamsInfo::forwarding = true</code>、<code>globals/store/iseq.rs</code>）。</p>
+<p><code>g(...)</code> 呼び出しは <code>bytecodegen/method_call/arguments.rs</code> の <code>handle_forward</code>
+が、</p>
 <ul>
 <li><code>splat_pos</code> に mother の rest を指す位置（純転送は <code>(pos_start, 1, vec![0])</code>、
 先頭引数つきは <code>splat_pos.push(len)</code> で末尾）、</li>
 <li><code>hash_splat_pos = [kw_rest]</code>、</li>
-<li><code>BlockArgProxy</code>（<code>inst.rs:120</code>、エンコード <code>encode.rs:374-378</code>）</li>
+<li><code>BlockArgProxy</code>（<code>bytecodegen/inst.rs</code>、エンコードは <code>bytecodegen/encode.rs</code>）</li>
 </ul>
 <p>を持つ <code>CallSite { forwarding: true }</code> を生成する。</p>
-<p>実行時コストは 2 箇所:</p>
+<p>素朴な実装の実行時コストは 2 箇所:</p>
 <ol>
-<li><strong>caller → <code>f</code></strong>: <code>set_callee_frame_arguments</code>
-(<code>codegen/runtime/args.rs:134-216</code>)。<code>a</code> を超える位置引数を rest
-<strong>Array</strong> に確保し、余剰 keyword を kw_rest <strong>Hash</strong> に確保する
-(<code>fill_positional_args</code> <code>args.rs:354-372</code>)。</li>
-<li><strong><code>f</code> → <code>g(...)</code></strong>: <code>is_simple_call</code>（<code>globals/store/function.rs:1241</code>）が
-<code>has_splat()</code> により偽 → JIT は specialize 不可で
-<code>AsmInst::SetArguments</code>（<code>codegen/jitgen/compile/method_call.rs:992</code>、
-lowering <code>asmir/compile.rs:332</code>）→ <code>jit_generic_set_arguments</code> の
-汎用パスへ落ちる。</li>
+<li><strong>caller → <code>f</code></strong>: <code>set_callee_frame_arguments</code>（<code>codegen/runtime/args.rs</code>）。
+<code>a</code> を超える位置引数を rest <strong>Array</strong> に確保し、余剰 keyword を kw_rest
+<strong>Hash</strong> に確保する（<code>fill_positional_args</code>）。</li>
+<li><strong><code>f</code> → <code>g(...)</code></strong>: <code>is_simple_call</code>（<code>globals/store/function.rs</code>）が
+<code>has_splat()</code> により偽 → JIT は specialize 不可で <code>AsmInst::SetArguments</code>
+→ <code>jit_generic_set_arguments</code> の汎用パス（<code>CallSiteInfo</code> の実行時再解釈）
+へ落ちる。</li>
 </ol>
-<p>純 <code>g(...)</code>（<code>args.rs:183-188</code>、<code>pos_args==1 &amp;&amp; splat_pos==[0]</code>）は
-rest Array をそのまま <code>fill_positional_args1</code> に渡すため中間 <code>Vec</code> は
-出ない。先頭引数つき <code>g(x, ...)</code> は <code>args.rs:189-207</code> の汎用 splat 分岐で
-呼び出し毎に <code>Vec&lt;Value&gt;</code> を確保する。</p>
 <h2 id="2-核心的観察--forwarding-は不透明パイプ"><a class="header" href="#2-核心的観察--forwarding-は不透明パイプ">2. 核心的観察 — forwarding は不透明パイプ</a></h2>
-<p>Ruby では <code>...</code> は名前を持てず、<code>f</code> のコードから rest/kw_rest/block を
-観測する手段が一切ない。唯一の読み手は <code>handle_forward</code> 生成の転送先
+<p>Ruby では <code>...</code> は名前を持てず、<code>f</code> のコードから rest/kw_rest/block を観測
+する手段が一切ない。唯一の読み手は <code>handle_forward</code> が生成した転送先
 callsite と <code>BlockArgProxy</code> だけ。したがって <code>f</code> が確保する rest Array /
 kw Hash は次を<strong>除き</strong> Ruby から決して観測されない:</p>
 <ul>
 <li><code>f</code> がインタプリタへ <strong>deopt</strong>（呼出規約上 rest/kw_rest スロットに実体を期待）</li>
-<li>フレームが capture される（<code>binding</code>、外側 proc 等。
-<code>possibly_capture_without_block</code> / <code>branch_if_captured</code> が既存ガード）</li>
+<li>フレームが capture される（<code>binding</code>、<code>eval</code>、外側 proc、zsuper 等）</li>
 </ul>
 <p>これは JIT が float を XMM に保持し deopt 時のみ stack へ書き戻す
-<strong>WriteBack</strong>（<code>doc/jit_architecture.md:188-197</code>）と同型の
-「遅延実体化（lazy materialization）」問題である。</p>
-<h2 id="3-段階的実装計画"><a class="header" href="#3-段階的実装計画">3. 段階的実装計画</a></h2>
-<h3 id="increment-1--fg-呼び出しの-specializearray-は温存実装済み--required-only-g先頭引数対応"><a class="header" href="#increment-1--fg-呼び出しの-specializearray-は温存実装済み--required-only-g先頭引数対応">Increment 1 — f→g 呼び出しの specialize（Array は温存）【実装済み — required-only g、先頭引数対応】</a></h3>
-<p>実装済みスコープ: forwarding <code>g(x.., ...)</code>（<code>callsite.forwarding</code>
-かつ <strong>末尾単一 splat</strong> <code>splat_pos==[pos_num-1]</code>、先頭 <code>lead_num = pos_num-1</code> 個の通常引数 + <code>...</code> rest）で、<code>g</code> が iseq かつ
-<strong>required 引数のみ</strong>（<code>no_keyword &amp;&amp; !is_rest &amp;&amp; opt_num==0 &amp;&amp; post_num==0</code>）かつ <code>req_num()+1 &gt;= pos_num</code>（= <code>req_num &gt;= lead_num</code>）
-の場合。純転送 <code>g(...)</code> は <code>lead_num==0</code> の特殊形として同経路に内包。
-<code>AsmInst::SetArgumentsForwarded</code>（<code>asmir.rs</code>、lowering は
-<code>asmir/compile/method_call.rs::jit_set_arguments_forwarded</code>、
-<code>object_send_splat_arg0</code> / <code>object_send_handle_arguments</code> の実証済み
-パターンを範とする）を <code>compile/method_call.rs::set_arguments</code> の
-非 simple 分岐に追加。</p>
-<p>asm（書込み前ガード → ミスは無ロールバックでフォールバック）:
-self を <code>LFP_SELF</code> へ → <code>lead_num</code> 個の先頭引数を frame slot
-<code>args+i</code> から callee slot <code>i</code> へ unroll コピー → <code>args+lead_num</code> の
-<code>...</code> Array を読み tag/<code>RVALUE_OFFSET_TY==ARRAY</code> 検査 →
-<code>RVALUE_OFFSET_ARY_CAPA</code>/<code>HEAP_LEN</code>/<code>INLINE</code>/<code>HEAP_PTR</code> で len と
-要素基底取得（inline/heap 両対応）→ <strong>長さガード
-<code>cmpq len,(expected_len)</code></strong>（<code>expected_len = req_num - lead_num</code>、
-即値）→ forwarded kw_rest が非 nil なら脱出 → callee slot
-<code>lead_num..</code> へ src 昇順 / dst 降順の 2 ポインタコピー → 成功
-sentinel <code>rax=NIL_VALUE</code>（<code>handle_error</code> は <code>testq rax,rax; jeq</code>）。
-ガードミスは page1 <code>fallback:</code> で既存 <code>jit_set_arguments</code>
-（<code>jit_generic_set_arguments</code>）にバイト一致委譲。Array 温存ゆえ
-deopt は自明に安全。</p>
-<p>検証: Ruby 4.0.4 比較ハーネスで forwarding 20/20 グリーン。
-新規ケース: pure（inline≤5 / heap&gt;5（<code>ARRAY_INLINE_CAPA=5</code>）/
-0-arity）、arity 不一致→ArgumentError 等価、kw 転送→フォールバック、
-block 透過、3 段連鎖＋値コピー不変、先頭引数（lead=1 / multi+heap /
-空 rest / lead 過多→ゲート却下 ArgumentError 等価 / block＋ミス）。
-ゲート発火（純: lead=0、先頭: lead=1）を JIT 実コンパイル下で計装
-確認。gc-stress 緑。フルスイープで環境性失敗集合に対し新規退行ゼロ。</p>
-<h4 id="optpostrest-を持つ-gruntime-ヘルパ方式実装済み"><a class="header" href="#optpostrest-を持つ-gruntime-ヘルパ方式実装済み">opt/post/rest を持つ <code>g</code>（runtime ヘルパ方式）【実装済み】</a></h4>
-<p>rest 付き <code>g</code>（<code>def g(a,*r)</code> 等）は <code>*rest</code> 配列の新規確保が CRuby
-セマンティクス上不可避で、Increment 2（SmallVec 化）後の汎用パス比
-の利得は限界的、かつ手書きアロケーション asm は GC/ライトバリア絡み
-で破壊リスクが高い。よって <strong>専用 runtime ヘルパ</strong>方式を採用:</p>
+<strong>WriteBack</strong>（<code>codegen/jitgen.rs::gen_write_back_for_deopt</code>、<code>doc/jit.md</code>）と
+同型の「遅延実体化（lazy materialization）」問題である。実装はこの観察を
+両ティアで別々に具体化している:</p>
 <ul>
-<li>新 <code>runtime::jit_forwarded_set_arguments</code>（<code>jit_generic_set_arguments</code>
-と同シグネチャ）。forwarding 形状（末尾単一 splat、<code>lead = pos_num-1</code>）が静的に既知なので、<strong>転送 kw が空</strong>の常套ケースは
-汎用 <code>set_callee_frame_arguments</code> の <code>splat_pos</code> 走査・余剰 kw <code>ex</code>
-機構をスキップして positional buffer を直接構築し
-<code>fill_positional_args1</code>（req/opt/rest/post を正しく処理）へ。
-kw が実際に転送される稀ケースは実証済み汎用関数へ委譲し、
-微妙な kw→rest セマンティクスをバイト一致で保つ。</li>
-<li><code>AsmInst::SetArgumentsForwardedHelper</code> の lowering は
-<code>jit_set_arguments</code> と同一の実証済み asm 形状（レジスタ設定・
-rsp 調整・エラー処理）で <strong>call 先のみ差し替え</strong>。手書き asm
-ループ・アロケーションは一切追加せず asm リスクは増えない。</li>
-<li>ゲート: required-only 分岐の後段に
-<code>forwarding &amp;&amp; splat_pos==[pos_num-1] &amp;&amp; is_iseq &amp;&amp; no_keyword</code>。
-required-only（確保ゼロ inline）が先取り、rest/opt/post が本経路、
-kw パラメータ持ち callee は汎用据置。</li>
+<li><strong>JIT ティア</strong> — D1/K1 転送遅延（§3.4）。specialize されたトランポリンの
+rest/kwrest 確保を省き、呼び出し元フレームのスロット窓から直接読む。</li>
+<li><strong>VM/汎用ティア</strong> — lazy <code>(...)</code> 呼出規約（§3.6）。rest スロットに
+<code>Fixnum(callid)</code> マーカーを置き、転送時に元 caller のスロットを直読みする。</li>
 </ul>
-<p>検証: forwarding 26/26（新規 6: pure rest / rest-only＋先頭 /
-opt+post+rest / kw 転送→委譲 / block 透過 / 連鎖＋rest 変異不変）。
-ヘルパ発火を実 JIT 下で pure(pos_num=1)・先頭(pos_num=2) ともに
-計装確認・結果厳密一致。gc-stress 緑。フルスイープ退行ゼロ。</p>
-<h3 id="increment-4--super-暗黙転送単一-splat-任意位置実装済み"><a class="header" href="#increment-4--super-暗黙転送単一-splat-任意位置実装済み">Increment 4 — <code>super</code> 暗黙転送（単一 splat 任意位置）【実装済み】</a></h3>
-<p><code>jit_check_super</code>（<code>compile.rs:894</code>）が super 先 FuncId をコンパイル
-時解決し、<code>handle_super_forward</code>（<code>arguments.rs:142-213</code>）は
-<code>forwarding=true</code> の CallSite を生成するため、super も同じ
-<code>set_arguments</code> 経路に乗る。計装調査の結果:</p>
-<ul>
-<li><code>def m(a,b); super; end</code>（splat なし）→ 既に <code>is_simple</code> 特化済み。</li>
-<li><code>def m(a,*r); super; end</code>（rest 末尾、<code>sp=[1]=[pn-1]</code>）→ Increment 1
-系で既に specialize 済み。</li>
-<li><code>def m(a,*r,z); super; end</code>（<strong>rest の後ろに post</strong>、<code>sp=[1]≠[pn-1]</code>）
-→ 従来は汎用パス。<strong>未特化はこの形</strong>だった。</li>
-</ul>
-<p>ヘルパゲートを <code>splat_pos==[pos_num-1]</code> から
-<code>splat_pos.len()==1</code>（任意位置の単一 splat）へ一般化し、
-<code>jit_forwarded_set_arguments</code> の fast path を
-<code>sp=splat_pos[0]</code> として <strong>lead[0..sp] ++ splat配列 ++ post[sp+1..]</strong>
-（汎用 splat 分岐とバイト一致の順序）を直接構築するよう一般化。
-zero-alloc inline 路は trailing+required-only のまま据置（post を
-跨ぐ asm は複雑化＝リスクのため安全なヘルパへ誘導）。<strong>asm/AsmInst
-変更なし</strong>（ヘルパは callsite から <code>splat_pos</code> を読むのみ）。</p>
-<p>検証: forwarding 31/31（新規 5: super rest+post / rest 末尾 /
-opt+rest+post / splat 無し透過 / block 透過）。rest+post super が
-従来 GENERIC → 本変更で HELPER 経路へ移行を実 JIT 計装確認、
-結果 CRuby 一致。gc-stress 緑。フルスイープ退行ゼロ。</p>
-<p>未対応（フォールバック据置）:
-kw パラメータを持つ callee への転送/<code>super</code>（汎用据置）。</p>
-<hr>
-<p>（以下は当初計画の原文）</p>
-<p>最も低リスク。<code>f</code> の caller が確保した rest Array を<strong>温存</strong>したまま、
-<code>g(...)</code> 呼び出しのみを最適化する。Array が実在するため deopt は
-インタプリタが実 Array を普通に使うだけで安全（新規の heap 実体化不要）。</p>
-<ul>
-<li>述語追加（<code>globals/store/function.rs</code> 付近）: <code>callsite.forwarding</code>
-かつ callee が iseq、転送束ねが「末尾単一 splat（= rest Array）+
-forwarded kw_rest + proxy block」の形であることを判定。</li>
-<li><code>compile/method_call.rs::set_arguments</code>（871-995）の非 simple 分岐
-（989 の <code>else</code>）に、上記形のときだけ通る専用 lowering を追加。
-既存 simple/汎用パスはバイト一致で不変に保つ（blast radius 限定）。</li>
-<li>専用 lowering: rest Array 長を実行時に読み、観測値 <code>N</code> に対する
-<strong>長さガード</strong>（<code>GuardArrayTy</code> 系 <code>asmir.rs:932,367</code> を範とする新ガード）
-を張り、一致時は simple 充填路（<code>fetch_for_callee</code> /
-<code>fetch_rest_for_callee</code>、<code>state/read_slot.rs:195-244</code>）で
-Array 要素を <code>g</code> フレームへ直接 mov。不一致は <strong>deopt</strong>
-（実 Array が在るのでインタプリタ復帰は自明に正しい）。</li>
-<li>これにより <code>g</code> の specialize / inline（<code>specialized_iseq</code>、
-<code>method_call.rs:254-272</code>）が forwarding 越しに可能になる。</li>
-<li>単相 forwarding（<code>def log(...); real(...); end</code> 等、常に同 arity）で
-長さガードはほぼ当たり、deopt スラッシュは起きない。</li>
-</ul>
-<p>検証: 純/先頭引数つきの positional forwarding（本環境で検証可能）、
-長さ不一致を強制する deopt テスト、<code>--features deopt</code>。</p>
-<h3 id="increment-2--mixed-経路の-vec-排除実装済み"><a class="header" href="#increment-2--mixed-経路の-vec-排除実装済み">Increment 2 — mixed 経路の <code>Vec</code> 排除【実装済み】</a></h3>
-<p><code>set_callee_frame_arguments</code> の汎用 splat 分岐（<code>args.rs:189-</code> 付近）は
-forwarding（<code>g(x, ...)</code> / <code>super(x, ...)</code>）等で呼び出し毎に
-<code>Vec&lt;Value&gt;</code> をヒープ確保していた。これを <code>smallvec::SmallVec&lt;[Value; 8]&gt;</code>
-に置換し、引数列が短い通常ケースでヒープ確保を消去（巨大引数列のみ
-heap へスピル）。分配ロジック（<code>fill_positional_args1</code>）は不変で共有、
-x86 非依存・低 blast radius。Ruby 4.0.4 比較ハーネスで
-forwarding スイート全 8 件＋<code>method_call</code> 全 64 件グリーンを確認。</p>
-<h3 id="increment-3--f-側-rest-array--kw-hash-の確保省略要-deopt-実体化"><a class="header" href="#increment-3--f-側-rest-array--kw-hash-の確保省略要-deopt-実体化">Increment 3 — f 側 rest Array / kw Hash の確保省略（要 deopt 実体化）</a></h3>
-<p>最大の利得かつ最大のリスク。<code>f</code> が forwarding-transparent
-（<code>forwarding() &amp;&amp; 非capture</code>）な JIT パスで rest Array / kw Hash の
-確保を発行せず、抽象状態に新 <code>LinkMode</code>（<code>ForwardRest{src_base,src_len}</code> /
-<code>ForwardKw{..}</code>、<code>jitgen/state.rs</code>・<code>context.rs</code>）として記録。転送元
-（caller 引数領域）を pin し、<code>f</code> 内の全転送 callsite を跨いで維持する。</p>
-<p><strong>Deopt 安全性（呼出元が注意を要求した点）</strong>:</p>
-<ul>
-<li>(D1) <code>f</code> 内 deopt: 各側方退出で pin 済み転送元から rest Array /
-kw Hash を<strong>新規確保して rest/kw_rest スロットへ書き戻し</strong>、block を
-復元する遅延実体化を <code>WriteBack</code>（<code>doc/jit_architecture.md:191</code>）へ
-追加。float spill-on-deopt と同枠組み、生成物が heap obj になる差のみ。
-<code>*rest</code> 意味通り「毎回新 Array」で意味論も整合。</li>
-<li>(D2) <code>g(...)</code> 直前/呼出ガード失敗: <code>set_arguments</code> は既に
-<code>reg_sub Rsp</code> → 充填 → <code>reg_add Rsp</code> 順。pin 転送元を呼出確定まで
-上書きしない順序を守り、ガード失敗時も束ね再構築可能に保つ。</li>
-<li>(D3) 多重転送 <code>def f(...); g(...); h(...); end</code>: pin を最初の転送で
-解放せず最終転送 or deopt まで維持。</li>
-</ul>
-<h3 id="increment-4--super-暗黙転送block-透過"><a class="header" href="#increment-4--super-暗黙転送block-透過">Increment 4 — <code>super</code> 暗黙転送・block 透過</a></h3>
-<p><code>handle_super_forward</code>（<code>arguments.rs:142-213</code>）。block 転送が
-<code>move_frame_to_heap</code> を誘発する specialize 拒否（<code>method_call.rs:72-86</code>、
-<code>has_block_arg()</code>）と最も込み入って干渉するため最後に。block は
-<code>LFP_BLOCK</code> に既存、透過専用パスを用意して解決する。</p>
-<h2 id="4-フォールバック条件現行-eager-パス据置"><a class="header" href="#4-フォールバック条件現行-eager-パス据置">4. フォールバック条件（現行 eager パス据置）</a></h2>
-<ul>
-<li><code>f</code> が <code>binding</code> / フレーム capture / <code>possibly_capture_without_block</code></li>
-<li><code>g</code> が単相に未解決（megamorphic / 未キャッシュ）</li>
-<li><code>single_arg_expand</code>（block-style callee）対象の転送</li>
-<li>本書が扱わない束ね形（複数 splat、<code>ex</code> あり 等）</li>
-</ul>
-<h2 id="5-変更ファイル一覧"><a class="header" href="#5-変更ファイル一覧">5. 変更ファイル一覧</a></h2>
+<h2 id="3-実装状況"><a class="header" href="#3-実装状況">3. 実装状況</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>箇所</th><th>内容</th><th>Increment</th></tr>
+<tr><th>#</th><th>内容</th><th>状態</th></tr>
 </thead>
 <tbody>
-<tr><td><code>globals/store/function.rs</code></td><td>forwarding-shape 述語</td><td>1</td></tr>
-<tr><td><code>codegen/jitgen/compile/method_call.rs::set_arguments</code></td><td>forwarding 専用 lowering</td><td>1</td></tr>
-<tr><td><code>codegen/jitgen/asmir.rs</code> / <code>asmir/compile.rs</code></td><td>長さガード asm 命令</td><td>1</td></tr>
-<tr><td><code>codegen/runtime/args.rs</code></td><td>mixed <code>Vec</code> 排除</td><td>2</td></tr>
-<tr><td><code>codegen/jitgen/state.rs</code> / <code>context.rs</code></td><td><code>LinkMode::ForwardRest/ForwardKw</code>、pin 管理</td><td>3</td></tr>
-<tr><td><code>codegen/jitgen/asmir/compile/init_method.rs</code> ＋ prologue</td><td>確保抑止・束ね記録</td><td>3</td></tr>
-<tr><td><code>codegen/jitgen/deoptimize.rs</code>（<code>WriteBack</code>）</td><td>遅延実体化</td><td>3</td></tr>
-<tr><td><code>bytecodegen/method_call/arguments.rs</code></td><td><code>super</code> 透過調整</td><td>4</td></tr>
+<tr><td>1</td><td><code>f→g</code> の specialize（eager: 実 Array に対する長さガード + インライン充填）</td><td>実装済み</td></tr>
+<tr><td>1.5</td><td>opt/post/rest 持ち callee 向け専用 runtime ヘルパ</td><td>実装済み</td></tr>
+<tr><td>2</td><td>mixed 経路の <code>Vec</code> 排除（<code>SmallVec</code> 化）</td><td>実装済み</td></tr>
+<tr><td>3</td><td>D1/K1: <code>f</code> 側 rest Array / kw Hash の確保省略（deopt 実体化つき）</td><td>実装済み</td></tr>
+<tr><td>4</td><td><code>super</code> 暗黙転送（単一 splat 任意位置）</td><td>実装済み</td></tr>
+<tr><td>5</td><td>VM/汎用ティアの lazy <code>(...)</code> 呼出規約</td><td>実装済み</td></tr>
+<tr><td>6</td><td>転送を跨いだ trivial fold / frameless 展開</td><td>実装済み</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="6-検証戦略"><a class="header" href="#6-検証戦略">6. 検証戦略</a></h2>
+<p><code>f → g</code> の引数設定は <code>codegen/jitgen/compile/method_call.rs::set_arguments</code>
+の 4 段階層に集約されている:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>段</th><th>条件</th><th>生成 AsmInst</th><th>コスト</th></tr>
+</thead>
+<tbody>
+<tr><td>A</td><td>D1 source-routed（§3.4 が発火）</td><td><code>SetArgumentsForwarded { deferred_src: Some(..) }</code></td><td>ガード・フォールバック無し、確保ゼロ</td></tr>
+<tr><td>B</td><td>eager（<code>g</code> は required(+opt) のみ、末尾単一 splat）</td><td><code>SetArgumentsForwarded { deferred_src: None }</code></td><td>長さガード + miss 時フォールバック</td></tr>
+<tr><td>C</td><td><code>g</code> が opt/post/rest 持ち、単一 splat が任意位置（<code>super</code> 含む）</td><td><code>SetArgumentsForwardedHelper</code></td><td>専用ヘルパ（汎用再解釈をスキップ）</td></tr>
+<tr><td>D</td><td>上記外（named kw を持つ callee など）</td><td><code>SetArguments</code></td><td>従来の汎用パス</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="30-前提-forwarding-callee-は常に-specialize"><a class="header" href="#30-前提-forwarding-callee-は常に-specialize">3.0 前提: forwarding callee は常に specialize</a></h3>
+<p><code>compile_method_call</code>（<code>compile/method_call.rs</code>）は <code>params().forwarding()</code> な
+callee を <code>is_C_immediate</code> ヒューリスティックから除外し、<strong>無条件に
+specialize</strong> する。トランポリン本体を同一コンパイル単位に取り込まない限り
+§3.4 以降の跨ぎ最適化が成立しないため。</p>
+<h3 id="31-increment-1--fg-呼び出しの-specializearray-は温存"><a class="header" href="#31-increment-1--fg-呼び出しの-specializearray-は温存">3.1 Increment 1 — <code>f→g</code> 呼び出しの specialize（Array は温存）</a></h3>
+<p>対象: forwarding <code>g(x.., ...)</code>（<code>callsite.forwarding</code> かつ<strong>末尾単一 splat</strong>
+<code>splat_pos == [pos_num-1]</code>、先頭 <code>lead_num = pos_num-1</code> 個の通常引数 +
+<code>...</code> rest）で、<code>g</code> の positional が required(+optional) のみの場合。純転送
+<code>g(...)</code> は <code>lead_num == 0</code> の特殊形として同経路に内包。</p>
+<p><code>AsmInst::SetArgumentsForwarded</code> の lowering は
+<code>arch/x86_64/compile/method_call.rs::jit_set_arguments_forwarded</code> /
+<code>arch/aarch64/compile/…</code>。asm は<strong>書込み前ガード → ミスは無ロールバックで
+フォールバック</strong>という形:</p>
+<p>self を <code>LFP_SELF</code> へ → <code>lead_num</code> 個の先頭引数を frame slot <code>args+i</code> から
+callee slot <code>i</code> へ unroll コピー → <code>args+lead_num</code> の <code>...</code> Array を読み
+tag / <code>RVALUE_OFFSET_TY == ARRAY</code> 検査 → <code>RVALUE_OFFSET_ARY_CAPA</code> /
+<code>HEAP_LEN</code> / <code>INLINE</code> / <code>HEAP_PTR</code> で len と要素基底取得（inline/heap 両対応）
+→ <strong>長さガード</strong>（<code>expected_len</code> は即値）→ 転送 kw_rest が非 nil なら脱出 →
+callee slot <code>lead_num..</code> へ src 昇順 / dst 降順の 2 ポインタコピー → 成功
+sentinel <code>rax = NIL_VALUE</code>。ガードミスは page1 の <code>fallback:</code> で既存
+<code>jit_set_arguments</code>（<code>jit_generic_set_arguments</code>）へバイト一致委譲。</p>
+<p>Array を温存するため deopt は自明に安全（インタプリタは実 Array を普通に
+使うだけ）。</p>
+<p>なお非 forwarding の素の末尾 splat（<code>g(x.., *ary)</code>）にも同じ lowering を
+適用するアームがある（<code>item_check(*node)</code> 形の再帰が該当）。</p>
+<h3 id="32-increment-15--optpostrest-を持つ-gruntime-ヘルパ方式"><a class="header" href="#32-increment-15--optpostrest-を持つ-gruntime-ヘルパ方式">3.2 Increment 1.5 — opt/post/rest を持つ <code>g</code>（runtime ヘルパ方式）</a></h3>
+<p>rest 付き <code>g</code>（<code>def g(a,*r)</code> 等）は <code>*rest</code> 配列の新規確保が CRuby セマン
+ティクス上不可避で、手書きアロケーション asm は GC / ライトバリア絡みで
+破壊リスクが高い。よって<strong>専用 runtime ヘルパ</strong>方式:</p>
 <ul>
-<li><code>run_test</code> で forwarding 形状マトリクス + deopt 強制版（型変化ガード /
-BOP 再定義 / block 経由）を回し遅延実体化を踏ませる。</li>
-<li><code>--features deopt</code> と <code>*rest</code> 同一性（呼出毎 fresh）テスト。</li>
-<li><code>--features gc-log</code> でホットパスの Array/Hash 確保ゼロをベンチ確認。</li>
-<li>注: Ruby 3.4↔3.3 の Hash inspect 差（<code>build.rs</code> <code>MIN_RUBY_VERSION=(4,0)</code>）
-のため keyword を印字する比較は Ruby 4.0 環境で行うこと。positional
-転送は Ruby 3.3 環境でも検証可能。</li>
+<li><code>runtime::jit_forwarded_set_arguments</code>（<code>jit_generic_set_arguments</code> と同
+シグネチャ）。forwarding 形状（単一 splat、<code>lead = sp</code>）が静的に既知なの
+で、<strong>転送 kw が空</strong>の常套ケースは汎用 <code>set_callee_frame_arguments</code> の
+<code>splat_pos</code> 走査・余剰 kw 機構をスキップして positional buffer を直接構築
+し <code>fill_positional_args1</code>（req/opt/rest/post を正しく処理）へ渡す。kw が
+実際に転送される稀ケースは実証済み汎用関数へ委譲し、微妙な kw→rest セマン
+ティクスをバイト一致で保つ。</li>
+<li><code>AsmInst::SetArgumentsForwardedHelper</code> の lowering は <code>jit_set_arguments</code>
+と同一の asm 形状（レジスタ設定・rsp 調整・エラー処理）で<strong>call 先のみ
+差し替え</strong>。手書き asm ループ・アロケーションは追加しない。</li>
 </ul>
-<h2 id="7-検証環境の構築ネットワーク制限下"><a class="header" href="#7-検証環境の構築ネットワーク制限下">7. 検証環境の構築（ネットワーク制限下）</a></h2>
-<p>CRuby 比較ハーネスは Ruby ≥4.0 を要求するが、apt/cache.ruby-lang.org は
-遮断される一方 github.com は到達可能。再現手順:</p>
-<ol>
-<li><code>git clone --depth 1 --branch ruby_4_0 https://github.com/ruby/ruby.git</code></li>
-<li><code>./autogen.sh &amp;&amp; ./configure --prefix=/usr/local --disable-install-doc</code></li>
-<li><code>make -j$(nproc)</code> → <code>make install-local</code>
-（<code>make install</code> は bundled gems 取得で失敗するため <code>install-local</code>）</li>
-<li>bundled/default gems 未取得のため <code>export RUBYOPT=--disable-gems</code></li>
-<li><code>ruby -e 'puts RUBY_VERSION' &gt; ~/.monoruby/ruby_version</code>、
-<code>ruby -e 'puts($:)' &gt; ~/.monoruby/library_path</code>、<code>touch monoruby/build.rs</code></li>
-</ol>
-<p>これで <code>cargo test</code> の CRuby 比較が Ruby 4.0.4 で機能する。</p>
+<h3 id="33-increment-2--mixed-経路の-vec-排除"><a class="header" href="#33-increment-2--mixed-経路の-vec-排除">3.3 Increment 2 — mixed 経路の <code>Vec</code> 排除</a></h3>
+<p><code>set_callee_frame_arguments</code> の汎用 splat 分岐は <code>g(x, ...)</code> / <code>super(x, ...)</code>
+等で呼び出し毎に <code>Vec&lt;Value&gt;</code> をヒープ確保していた。これを
+<code>smallvec::SmallVec&lt;[Value; 8]&gt;</code> に置換し、引数列が短い通常ケースでヒープ
+確保を消去（巨大引数列のみ heap へスピル）。分配ロジック
+（<code>fill_positional_args1</code>）は不変で共有。</p>
+<h3 id="34-increment-3--d1k1-f-側-rest-array--kw-hash-の確保省略"><a class="header" href="#34-increment-3--d1k1-f-側-rest-array--kw-hash-の確保省略">3.4 Increment 3 — D1/K1: <code>f</code> 側 rest Array / kw Hash の確保省略</a></h3>
+<p>当初計画で「最大の利得かつ最大のリスク」としていた遅延実体化。現行実装は
+新しい <code>LinkMode</code> を導入せず、<strong>抽象状態の注釈（<code>DeferredForward</code>）+ 生成側
+の拒否権</strong>という形に落ちている。</p>
+<h4 id="ゲート"><a class="header" href="#ゲート">ゲート</a></h4>
+<p><strong>構造ゲート</strong> — <code>Store::forwarding_trampoline_rest</code>（<code>store/function.rs</code>）:
+<code>f</code> が<em>純転送トランポリン</em>（<code>def f(...) = g(...)</code>）であること。すなわち
+req/opt/post が 0、rest あり、<code>params().forwarding()</code>、かつ<strong>本体が単一基本
+ブロック</strong>（join が遅延スロットを観測し得ない）。転送呼び出しの個数は無制限
+— 各 consume が source-route するか拒否権を行使するかのどちらかなので、
+任意個数・混在でも安全。</p>
+<p><strong>呼び出し側ゲート</strong> — <code>JitContext::forward_rest_deferral</code>（<code>jitgen/context.rs</code>）:
+自フレームが specialize 済みであること、mother の callsite が
+<code>is_simple_call</code>、<code>hash_splat_pos</code> と <code>block_arg</code> が無いこと。リテラル
+keyword があれば K1 として rest と<strong>一括で</strong>遅延する。結果は</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>DeferredForward { rest_local, src, len, kw }
+<span class="boring">}</span></code></pre>
+<p>で、<code>src</code>/<code>len</code> は<strong>呼び出し元フレームの引数スロット窓</strong>（caller の
+レジスタ番号）。<code>f</code> は自前の rbp を確立している（<code>init_func</code> の
+<code>pushq rbp; movq rbp, rsp</code>）ので、直接の物理呼び出し元の rbp は <code>f</code> が
+<code>[rbp]</code> に退避した値であり、source は <code>[caller_rbp - rbp_local(src + i)]</code>
+に居る。トランポリンの入れ子で「遅延済み source をさらに遅延する」ことは
+起きない — 親自身の転送 callsite は splat を持つため <code>is_simple_call</code> に
+落ちるからである。</p>
+<h4 id="注釈--linkmode-は変えない"><a class="header" href="#注釈--linkmode-は変えない">注釈 — LinkMode は変えない</a></h4>
+<p><code>AbstractState</code>（<code>jitgen/state/slot.rs</code>）はフレーム入口で <code>deferred_forward</code>
+を置くだけで、rest スロットの <code>LinkMode</code> は baseline の <code>S</code> のまま残す。
+遅延が発火すれば caller 側の <code>set_arguments</code> が実 <code>nil</code> を物理的に書き
+（GC 安全）、発火しなければ caller が普通に Array を作ってそのスロットに
+入る。<code>C(nil)</code> にしないので、後者で書き戻しが実 Array を壊すことがない。</p>
+<h4 id="consumerf-内の各転送"><a class="header" href="#consumerf-内の各転送">consumer（<code>f</code> 内の各転送）</a></h4>
+<p><code>set_arguments</code> の A 段が <code>AbstractState::deferred_rest_src()</code> を引き、
+<code>req &lt;= lead+len</code>、post 無し、余剰は明示 <code>*rest</code> が吸収、転送 <code>**kwrest</code> は
+nil、という条件で<strong>充填レイアウトがコンパイル時定数</strong>と示せたときだけ
+<code>ir.set_deferred_rest()</code> を立てて caller 窓から直接読む。示せない場合は
+<code>ir.set_needs_rest_array()</code> で<strong>拒否権</strong>を行使する（配列パス／ヘルパ／
+汎用／native callee のすべてが拒否権を行使する）。</p>
+<p>callee フレームの静的レイアウトは
+<code>FuncInfo::forwarded_deferred_layout</code> → <code>ForwardedLayout { from_src, none_fill, rest, kw_rest }</code>。先頭引数は必ず req/opt に消費される
+（<code>reqopt &gt;= lead_num</code>）ので、<code>*rest</code> に入る値は caller の source 窓の
+<strong>連続した末尾</strong>になり、<code>create_array</code> 一発で呼び出し元フレームから直接
+構築できる（中間バッファ無し）。埋まらない optional スロットには <code>None</code>
+（0）が入り、callee プロローグの <code>CheckLocal</code> が既定値式を走らせる。</p>
+<h4 id="producercaller-側"><a class="header" href="#producercaller-側">producer（caller 側）</a></h4>
+<p><code>send_specialized</code> が <code>defer_rest = deferred_rest &amp;&amp; !needs_rest_array</code> を
+計算する。すなわち<strong>1 つ以上の consume が source-route され、かつどの
+consume も実 Array を要求しない</strong>ときだけ <code>set_arguments</code> の rest 充填が
+<code>create_array</code> を省略し、代わりに</p>
+<ul>
+<li>rest スロットへ実 <code>nil</code> を格納（GC 安全）、</li>
+<li><code>write_back_range</code> で <strong>source 窓をスピルしてメモリ常駐化</strong>
+（routed read と deopt 実体化の両方がメモリを読むため）</li>
+</ul>
+<p>を行う。<code>**kwrest</code> 側は <code>TraceIr::CheckKwRest</code> の空 Hash 生成
+（<code>jitgen/compile.rs</code>）も省略され nil のまま。nil の hash-splat は全ての
+consume 経路で「keyword なし」として扱われるので普遍的に安全。</p>
+<h4 id="k1--リテラル-keyword-の同時遅延"><a class="header" href="#k1--リテラル-keyword-の同時遅延">K1 — リテラル keyword の同時遅延</a></h4>
+<p><code>X.new(a, k: 1)</code> のように mother が<strong>リテラル keyword</strong> を渡す場合、
+<code>DeferredForward::kw = (kwrest_local, kw_pos, names)</code> として kw も遅延する。
+<code>kw_forward_route</code>（<code>compile/method_call.rs</code>）が callee の宣言 keyword と
+静的に突き合わせ、<code>route[i]</code> = callee kw パラメータ <code>i</code> を満たす caller
+スロット（省略可能 keyword が無ければ <code>None</code> → 0 埋めで既定値が走る）を返す。
+必須 keyword が埋まらない、<code>**kwrest</code> を持つ callee、名前が合わない、と
+いった場合は route 不成立で汎用へ。rest と kw は<strong>一括で</strong>遅延するか一括で
+諦めるかのどちらかである（caller 側のスキップは 1 つのフラグが両方を覆う
+ため）。</p>
+<h4 id="deopt-安全性"><a class="header" href="#deopt-安全性">deopt 安全性</a></h4>
+<ul>
+<li><strong>(D1) <code>f</code> 内 deopt</strong>: <code>WriteBack</code> に <code>forward_rest</code> / <code>forward_kwrest</code>
+エントリが載り、<code>gen_write_back_for_deopt</code> がリテラル書き戻しの<strong>後</strong>に
+<code>gen_forward_rest_materialize</code>（<code>create_array</code>）と
+<code>gen_forward_kwrest_materialize</code>（<code>runtime::correct_rest_kw</code>）を走らせて
+実体をスロットへ書く。呼び出し元 rbp は <code>[rbp]</code> から復元。順序を後ろに
+置くことで、確保を伴う呼び出しの最中もフレームが GC 整合を保つ
+（未書き込みの遅延スロットは caller が入れた <code>nil</code> を保持している）。
+aarch64 版は <code>arch/aarch64/compile/mod.rs::a64_gen_forward_rest_materialize</code>。</li>
+<li><strong>(D2) 呼出ガード失敗</strong>: A 段は「レイアウトが定数」というゲートを通って
+いるので長さガードもフォールバックも持たない（失敗し得ない）。B 段の
+ガードはすべて callee フレーム書込み前にあり、ミスは無ロールバックで
+汎用へ。</li>
+<li><strong>(D3) 多重転送</strong>: 注釈は最初の転送で消さない。すべての consume と
+side exit が同じ注釈を参照する（拒否権も注釈が生きている間だけ意味を
+持つ）。</li>
+</ul>
+<p><code>*rest</code> の意味論（毎回新しい Array）とも整合する — 実体化は常に新規確保。</p>
+<h3 id="35-increment-4--super-暗黙転送単一-splat-任意位置"><a class="header" href="#35-increment-4--super-暗黙転送単一-splat-任意位置">3.5 Increment 4 — <code>super</code> 暗黙転送（単一 splat 任意位置）</a></h3>
+<p><code>jit_check_super</code> が super 先 FuncId をコンパイル時解決し、
+<code>handle_super_forward</code>（<code>bytecodegen/method_call/arguments.rs</code>）は
+<code>forwarding=true</code> の CallSite を生成するため、super も同じ <code>set_arguments</code>
+経路に乗る。</p>
+<ul>
+<li><code>def m(a,b); super; end</code>（splat なし）→ 既に <code>is_simple</code> 特化済み。</li>
+<li><code>def m(a,*r); super; end</code>（rest 末尾、<code>sp == pn-1</code>）→ Increment 1 系。</li>
+<li><code>def m(a,*r,z); super; end</code>（<strong>rest の後ろに post</strong>、<code>sp != pn-1</code>）→
+ヘルパゲートを <code>splat_pos.len() == 1</code>（任意位置の単一 splat）へ一般化し、
+<code>jit_forwarded_set_arguments</code> の fast path が
+<strong>lead[0..sp] ++ splat配列 ++ post[sp+1..]</strong>（汎用 splat 分岐とバイト一致の
+順序）を直接構築する。</li>
+</ul>
+<p>zero-alloc の inline 路は trailing + required-only のまま据え置き（post を
+跨ぐ asm は複雑化＝リスクのため安全なヘルパへ誘導）。</p>
+<h3 id="36-vm汎用ティア--lazy--呼出規約"><a class="header" href="#36-vm汎用ティア--lazy--呼出規約">3.6 VM/汎用ティア — lazy <code>(...)</code> 呼出規約</a></h3>
+<p>JIT が specialize しない経路（インタプリタ実行、汎用 <code>set_arguments</code>）でも
+rest Array を作らずに済ませる規約。<code>codegen/runtime/args.rs</code>。</p>
+<p><strong>ゲート</strong> — <code>Store::lazy_forwarding_rest</code>: 構造ゲート
+（<code>forwarding_trampoline_rest</code>）に加え、<code>ISeqInfo::forwarding_no_escape</code> が
+真であること。後者は <code>bytecodegen/encode.rs::forwarding_no_escape</code> が
+バイトコード列から前計算する述語で、</p>
+<ul>
+<li><code>super</code>（zsuper はメソッドフレームの<strong>全</strong>パラメータスロットを読む）</li>
+<li><code>yield</code></li>
+<li>ブロックリテラル（<code>callsite.block_fid</code>。ブロック本体に zsuper があると
+外側チェーン経由で親のスロットを読む）</li>
+<li>保守的に <code>defined?(super)</code> / <code>defined?(yield)</code></li>
+</ul>
+<p>のいずれかを含む本体を失格にする。結果は <code>ISeqInfo::lazy_forwarding_rest</code>
+にキャッシュされ、実行時は単なるフィールドロードになる。</p>
+<p><strong>エントリ</strong> — <code>set_frame_arguments</code>: 呼び出し側が平坦（splat / kw /
+hash_splat なし）なら、rest Array を作らず callee の rest スロットへ
+<code>Fixnum(callid)</code> <strong>マーカー</strong>を、<code>**kwrest</code> へ nil を書いて終わり。</p>
+<p><strong>解決</strong> — <code>resolve_lazy_forwarding</code>: 転送 callsite の splat スロットが
+マーカーなら、<code>lazy_marker_source</code> が cfp チェーンを辿って元 caller の
+フレームと callsite を特定し、その引数スロットを直読みして
+<code>lazy_forward_fill</code> で callee フレームを直接埋める（<code>lead ++ 元の引数列 ++ post</code> の順は実体化パスとバイト一致）。fast gate を外れる形
+（keyword を取る callee、block 形 callee、<code>g(*a, ...)</code> のような追加 splat）は
+<code>materialize_lazy_at_callsite</code> が<strong>その場で実 Array を作り</strong>、トランポリンの
+rest スロットと splat 引数スロットの両方に書いてから実証済みの汎用機構へ
+渡す。</p>
+<p><strong>マーカーの誤認防止</strong>: splat スロットの <code>Fixnum</code> がマーカーであるのは
+「呼び出しフレーム自身が lazy 資格を持つ」場合に限る。<code>def m(*r); r = 7; super; end</code> のような再代入済み名前付き rest も splat スロットに Fixnum を
+置くが、そのフレームは lazy 資格を持たないので通常のスカラ包み込みに落ちる。
+加えてマーカーは<strong>末尾</strong> splat にしか居ない（<code>...</code> は末尾必須）ので
+<code>trailing</code> 判定も課している。</p>
+<p><strong>エスケープ</strong>: 文字列 <code>eval</code>（<code>globals.rs</code>）と <code>Kernel#binding</code>
+（<code>builtins/kernel.rs</code>）は、コンパイル対象フレームから cfp チェーンを辿って
+<code>materialize_lazy_forwarding</code> で全マーカーを実体化してから進む。lazy な
+フレームはブロックリテラルを含み得ない（＝Proc として生き延びない）ので、
+cfp チェーンの走査で必要な範囲を尽くせる。</p>
+<h3 id="37-転送を跨いだ上位最適化"><a class="header" href="#37-転送を跨いだ上位最適化">3.7 転送を跨いだ上位最適化</a></h3>
+<p>D1 注釈があると転送後の位置引数の個数が静的に確定する
+（<code>forwarded_trivial_pos_num</code>）。これにより <code>is_simple_call</code> が門前払いする
+forwarding callsite に対しても、</p>
+<ul>
+<li><strong>trivial method fold</strong>（<code>ISeqHint::ConstReturn</code> / <code>SelfReturn</code>）— 呼び出し
+自体が消える。call を消すこと自体が転送の consume なので、<code>ir.set_deferred_rest()</code>
+を立てて caller 側スキップを維持する（さもないと誰も見ない Array を作る）。</li>
+<li><strong>frameless な ivar ストア展開</strong>（<code>compile/frameless.rs::ivar_store_body</code>）—
+<code>ArgSlot::Caller</code> / <code>AsmInst::LoadCallerSlot</code> で呼び出し元スロットを直読み
+して <code>@a = a</code> 相当のストアを caller の命令として展開する。</li>
+</ul>
+<p>が効く。Ruby レベルの <code>Class#new</code> は <code>o.__builtin_initialize__(...)</code>
+（<code>bypass_visibility</code> 付きの forwarding call）という<em>まさにこの形</em>なので、
+<code>X.new(a, b)</code> が <strong>allocate + ivar ストア 2 本</strong>にまで落ちる。これが実利上
+最大の効果である。</p>
+<h2 id="4-フォールバック条件汎用パス据置"><a class="header" href="#4-フォールバック条件汎用パス据置">4. フォールバック条件（汎用パス据置）</a></h2>
+<ul>
+<li><strong>named keyword パラメータを持つ callee</strong> への転送 / <code>super</code>
+（K1 の静的ルーティングが成立する場合を除く）</li>
+<li><code>f</code> が <code>binding</code> / <code>eval</code> / フレーム capture を含む（lazy 規約は
+<code>forwarding_no_escape</code> で、JIT は capture ガードで排除）</li>
+<li>複数 splat（<code>g(*a, ...)</code>）</li>
+<li><strong>ruby2_keywords</strong>: 呼び出し側が keyword 構文を持たない転送
+（<code>ruby2_keywords def t(*args); super; end</code> や、委譲ブロックの
+<code>target(*args, **kwargs)</code>）。フラグ付き末尾 Hash の keyword 昇格
+（<code>r2k_promote</code>）を fast path が実装していないため、汎用パス必須。</li>
+<li><code>single_arg_expand</code>（block 形 callee）対象の転送</li>
+<li><code>g</code> が単相に未解決（megamorphic / 未キャッシュ）</li>
+</ul>
+<h2 id="5-主な実装箇所"><a class="header" href="#5-主な実装箇所">5. 主な実装箇所</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>箇所</th><th>内容</th></tr>
+</thead>
+<tbody>
+<tr><td><code>globals/store.rs</code>（<code>ParamKind::Forwarding</code>）</td><td><code>...</code> の脱糖</td></tr>
+<tr><td><code>bytecodegen/method_call/arguments.rs</code></td><td><code>handle_forward</code> / <code>handle_super_forward</code></td></tr>
+<tr><td><code>bytecodegen/encode.rs::forwarding_no_escape</code></td><td>lazy 規約の本体側ゲート（前計算）</td></tr>
+<tr><td><code>globals/store/function.rs</code></td><td><code>is_simple_call</code> / <code>forwarding_trampoline_rest</code> / <code>lazy_forwarding_rest</code> / <code>forwarded_deferred_layout</code></td></tr>
+<tr><td><code>codegen/jitgen/context.rs::forward_rest_deferral</code></td><td>D1/K1 の呼び出し側ゲート、<code>DeferredForward</code></td></tr>
+<tr><td><code>codegen/jitgen/state/slot.rs</code></td><td>遅延注釈と <code>deferred_rest_src</code></td></tr>
+<tr><td><code>codegen/jitgen/compile/method_call.rs::set_arguments</code></td><td>4 段の分岐、<code>kw_forward_route</code>、拒否権</td></tr>
+<tr><td><code>codegen/jitgen/compile/method_call.rs::send_specialized</code></td><td><code>defer_rest</code> の確定（producer）</td></tr>
+<tr><td><code>codegen/jitgen/compile.rs</code>（<code>CheckKwRest</code>）</td><td>空 Hash 生成の省略</td></tr>
+<tr><td><code>codegen/jitgen/asmir.rs</code></td><td><code>SetArgumentsForwarded</code> / <code>…Helper</code> / <code>LoadCallerSlot</code></td></tr>
+<tr><td><code>arch/{x86_64,aarch64}/compile/…</code></td><td>上記の lowering、deopt 実体化</td></tr>
+<tr><td><code>codegen/jitgen.rs::gen_write_back_for_deopt</code></td><td><code>forward_rest</code> / <code>forward_kwrest</code> の実体化</td></tr>
+<tr><td><code>codegen/runtime/args.rs</code></td><td>専用ヘルパ、lazy 規約（マーカー / 解決 / 実体化）、<code>SmallVec</code> 化</td></tr>
+<tr><td><code>globals.rs</code>（eval）・<code>builtins/kernel.rs</code>（binding）</td><td>マーカーの強制実体化</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="6-検証"><a class="header" href="#6-検証">6. 検証</a></h2>
+<ul>
+<li><code>monoruby/tests/method_call.rs</code> — <code>forwarding1..3</code> / <code>forwarding_super</code> /
+<code>anonymous_block_forwarding1..4</code> / <code>anonymous_rest_forwarding</code> /
+<code>forwarding_specialized_*</code>（inline / heap / zero-arity / arity 不一致
+フォールバック / kwargs フォールバック / block 透過）/ <code>forwarding_leading_*</code>。</li>
+<li><code>monoruby/tests/kwargs_forward.rs</code> — K1（<code>X.new(...)</code> 形のリテラル keyword）。</li>
+<li><code>monoruby/tests/forwarded_block_yield.rs</code> — block 透過・<code>break</code>・非局所
+<code>return</code>・二段ホップ。</li>
+<li><code>monoruby/tests/ruby2_keywords.rs</code> — 汎用パス据置の担保。</li>
+<li><code>codegen/jitgen/compile/method_call.rs</code> のインラインテスト —
+<code>forwarded_opt_callee</code> / <code>forwarded_rest_callee</code> /
+<code>forwarded_struct_rest_native</code> / <code>trivial_forwarded_fold_and_redefine</code> /
+<code>deferred_construction_deopt</code>（遅延中の deopt で実体化を踏む）。</li>
+<li><code>codegen/runtime/args.rs</code> のインラインテスト — <code>lazy_forwarding</code> /
+<code>lazy_forwarding_escape</code>（<code>binding</code>/<code>eval</code> によるマーカー実体化）/
+<code>lazy_forwarding_class_new</code>。</li>
+<li>経路の発火確認は <code>--features jit-log,emit-asm</code>、確保ゼロの確認は
+<code>--features gc-log</code>、遅延実体化の踏み込みは <code>--features deopt</code> で行う。</li>
+<li>GC 絡みの回帰は <code>GC_STRESS=1</code>（手動 <code>gc-stress</code> ワークフロー）で確認する。
+遅延スロットは常に物理的な <code>nil</code> を保持し、source 窓は cfp チェーン上の
+caller フレームにあるので、両者ともスキャン対象である。</li>
+</ul>
+<h3 id="参照-ruby-について"><a class="header" href="#参照-ruby-について">参照 Ruby について</a></h3>
+<p>単一コードのテストヘルパは <code>monoruby/tests/ruby_oracle.tsv</code> のスナップショット
+オラクルを再生し、ミス時のみ実 <code>ruby</code> を起動する（<code>CLAUDE.md</code> 参照）。keyword を
+印字する比較は vendored pin（現在 4.0.2）に一致する CRuby が必要で、
+<code>MONORUBY_TEST_ORACLE=ruby</code> で全件を実 Ruby に対して取り直せる。positional
+転送のみのケースは古い Ruby でも検証できる。</p>
 
                     </main>
 
