@@ -598,19 +598,26 @@ impl Executor {
                 executor.load_gems(globals);
             }
         }
-        // TOPLEVEL_BINDING: a Binding over an empty, outer-less heap frame
-        // on the main object. The main script is executed *inside* this
-        // binding (`exec_main_script`), which is what gives it CRuby's
-        // semantics: empty while `-r` requires run, then exactly the main
-        // script's locals — live, and shared with dynamically-set Binding
-        // variables. Created here (not in startup.rb) so no startup locals
-        // leak into its scope chain.
+        // TOPLEVEL_BINDING: registered as a *lazy* constant — defined
+        // (it lists in `Object.constants` and answers `const_defined?`)
+        // but not built until something reads it. The first read builds
+        // it over the main script's own frame, promoted to the heap
+        // (`materialize_toplevel_binding`), which keeps CRuby's
+        // semantics: empty while `-r` requires run, then exactly the
+        // main script's locals — live, and shared with dynamically-set
+        // Binding variables. Building it eagerly instead would force
+        // the main script to run *inside* that binding's heap frame,
+        // and a heap ("captured") frame disables the loop JIT for the
+        // whole top level (`branch_if_captured`) — top-level hot loops
+        // then run interpreted. Registered here (not in startup.rb) so
+        // no startup locals leak into its scope chain.
         {
             let res = crate::parser::parse_program("", "(toplevel)")?;
             let fid = bytecodegen::bytecode_compile_script(globals, res)?;
-            let lfp = Lfp::heap_frame(globals.main_object, globals.store[fid].meta());
-            let binding = Value::new_binding(lfp, None);
-            globals.set_constant_by_str(OBJECT_CLASS, "TOPLEVEL_BINDING", binding);
+            globals.store.set_empty_toplevel_fid(fid);
+            globals
+                .store
+                .set_constant_lazy_toplevel_binding(OBJECT_CLASS, toplevel_binding_id());
         }
         // Clear stale $! that may have been set during startup/gem loading.
         executor.set_errinfo(Value::nil());
@@ -816,7 +823,64 @@ impl Executor {
     }
 }
 
+///
+/// Interned name of the `TOPLEVEL_BINDING` constant.
+///
+fn toplevel_binding_id() -> IdentId {
+    IdentId::get_id("TOPLEVEL_BINDING")
+}
+
 impl Executor {
+    ///
+    /// Build the `TOPLEVEL_BINDING` object on its first read, and store
+    /// it in the constant slot that until now held
+    /// [`ConstStateKind::LazyToplevelBinding`].
+    ///
+    /// The binding is taken over the *main script's* frame when that
+    /// frame is on the current call chain — promoting it to the heap
+    /// exactly as `Kernel#binding` would, so the binding and the
+    /// running script share one set of locals. Delaying this is the
+    /// whole point: until someone asks, the main script keeps a plain
+    /// stack frame, and its loops stay JIT-compilable.
+    ///
+    /// With no main script frame in reach — a `-r` require running
+    /// before the script starts, an in-process embedding, a read from a
+    /// thread — the binding gets a fresh empty frame on the main
+    /// object, which is what CRuby exposes at that point too (the
+    /// script's locals do not exist yet).
+    ///
+    fn materialize_toplevel_binding(&mut self, globals: &mut Globals) -> Value {
+        let lfp = self
+            .main_script_lfp(globals)
+            .map(|lfp| lfp.move_frame_to_heap())
+            .unwrap_or_else(|| {
+                let fid = globals
+                    .store
+                    .empty_toplevel_fid()
+                    .expect("empty toplevel body is compiled in `Executor::init`");
+                Lfp::heap_frame(globals.main_object, globals.store[fid].meta())
+            });
+        let binding = Value::new_binding(lfp, None);
+        globals.set_constant(OBJECT_CLASS, toplevel_binding_id(), binding);
+        binding
+    }
+
+    ///
+    /// The frame of the main script's toplevel body, if it is running
+    /// on this executor's call chain.
+    ///
+    fn main_script_lfp(&self, globals: &Globals) -> Option<Lfp> {
+        let main_fid = globals.store.main_script_fid()?;
+        let mut cfp = self.cfp?;
+        loop {
+            let lfp = cfp.lfp();
+            if lfp.func_id() == main_fid {
+                return Some(lfp);
+            }
+            cfp = cfp.prev()?;
+        }
+    }
+
     pub fn exec_script(
         &mut self,
         globals: &mut Globals,
@@ -824,6 +888,53 @@ impl Executor {
         path: &std::path::Path,
     ) -> Result<Value> {
         self.exec_script_inner(globals, code, path, false)
+    }
+
+    ///
+    /// Run the main script as a plain toplevel body — the fast path,
+    /// whose frame lives on the stack and whose loops the JIT can
+    /// therefore compile.
+    ///
+    /// Returns `Ok(Err(()))` *without running anything* when the
+    /// compiled script names `TOPLEVEL_BINDING` anywhere in its own
+    /// source (a mention inside a block counts — a thread body, an
+    /// `at_exit` handler). Such a script has to run inside the binding
+    /// instead: those two read it at a point where this frame may no
+    /// longer be reachable — a thread runs on its own call chain, an
+    /// `at_exit` handler runs after the toplevel frame is gone — and a
+    /// binding built then would not see the script's locals. Any
+    /// *other* code reaching `TOPLEVEL_BINDING` (a required library, an
+    /// `eval`) does so while this frame is running, and gets a binding
+    /// built over it on the spot (`materialize_toplevel_binding`).
+    ///
+    /// The scan reads the constant sites this compilation recorded, so
+    /// it sees exactly the literal `TOPLEVEL_BINDING` references the
+    /// script compiled — no more (a comment does not count), no less
+    /// (a reference nested in a block or a `def` does).
+    ///
+    fn try_exec_main_script_plain(
+        &mut self,
+        globals: &mut Globals,
+        code: &[u8],
+        path: &std::path::Path,
+    ) -> Result<std::result::Result<Value, ()>> {
+        let res = crate::parser::parse_program(code.to_vec(), path)?;
+        let data_offset = res.data_offset;
+        let const_site_start = globals.store.const_site_len();
+        let fid = bytecodegen::bytecode_compile_script(globals, res)?;
+        if globals
+            .store
+            .names_constant_since(const_site_start, toplevel_binding_id())
+        {
+            // Compiled code is inert until it runs (`def` and class
+            // bodies execute, they do not merely compile), so dropping
+            // this one on the floor changes nothing but memory.
+            return Ok(Err(()));
+        }
+        self.define_data(globals, path, data_offset);
+        globals.store.set_main_script_fid(fid);
+        self.flush_compile_warnings(globals);
+        self.eval_toplevel(globals, fid).map(Ok)
     }
 
     ///
@@ -839,18 +950,33 @@ impl Executor {
         code: impl Into<Vec<u8>>,
         path: &std::path::Path,
     ) -> Result<Value> {
-        // Execute inside TOPLEVEL_BINDING (see `Executor::init`), so the
-        // binding exposes the main script's locals. Falls back to a plain
-        // toplevel run when the constant is unavailable
-        // (MONORUBY_SKIP_STARTUP bring-up).
+        // Normally the main script runs as a plain toplevel body, on a
+        // stack frame the JIT can compile loops in. Only when
+        // TOPLEVEL_BINDING has *already been built* — something read it
+        // while a `-r` require ran, before we got here — must the script
+        // execute inside that binding, so its locals are the ones the
+        // binding already handed out. A still-lazy (or absent, under
+        // MONORUBY_SKIP_STARTUP) constant takes the plain path; a later
+        // first read builds the binding over this script's own frame
+        // (`materialize_toplevel_binding`).
+        let code: Vec<u8> = code.into();
         let binding = globals
             .store
-            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("TOPLEVEL_BINDING"))
+            .get_constant_noautoload(OBJECT_CLASS, toplevel_binding_id())
             .and_then(crate::value::rvalue::Binding::try_new);
-        let Some(binding) = binding else {
-            return self.exec_script_inner(globals, code, path, true);
+        let binding = match binding {
+            Some(binding) => binding,
+            None => match self.try_exec_main_script_plain(globals, &code, path)? {
+                Ok(res) => return Ok(res),
+                // The script names TOPLEVEL_BINDING itself: build the
+                // binding and run inside it, below.
+                Err(()) => {
+                    let v = self.materialize_toplevel_binding(globals);
+                    crate::value::rvalue::Binding::try_new(v)
+                        .expect("materialized TOPLEVEL_BINDING is a Binding")
+                }
+            },
         };
-        let code: Vec<u8> = code.into();
         let data_offset = globals.compile_main_script_binding(
             code,
             path.to_string_lossy().into_owned(),
@@ -939,6 +1065,11 @@ impl Executor {
             self.define_data(globals, path, res.data_offset);
         }
         let fid = bytecodegen::bytecode_compile_script(globals, res)?;
+        if is_main {
+            // Label its frames `<main>`, and let a first read of
+            // TOPLEVEL_BINDING find this frame to build over.
+            globals.store.set_main_script_fid(fid);
+        }
         self.flush_compile_warnings(globals);
         self.eval_toplevel(globals, fid)
     }

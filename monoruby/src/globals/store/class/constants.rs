@@ -38,6 +38,14 @@ pub(crate) struct ConstState {
 pub(crate) enum ConstStateKind {
     Loaded(Value),
     Autoload(AutoloadEntry),
+    /// `TOPLEVEL_BINDING`, not built yet. The constant is *defined*
+    /// (it lists in `Module#constants` and answers `const_defined?`)
+    /// but holds no `Binding` until something reads it: building one
+    /// eagerly would mean the main script has to run inside that
+    /// binding's heap frame, and a heap ("captured") frame turns the
+    /// loop JIT off for the whole top level — see
+    /// `Executor::materialize_toplevel_binding`.
+    LazyToplevelBinding,
 }
 
 /// Per-constant autoload registration plus its load-state. Mirrors
@@ -101,10 +109,18 @@ impl ConstState {
         }
     }
 
+    pub(crate) fn lazy_toplevel_binding() -> Self {
+        Self {
+            kind: ConstStateKind::LazyToplevelBinding,
+            visibility: ConstVisibility::Public,
+            deprecated: false,
+        }
+    }
+
     pub(crate) fn loaded_value(&self) -> Option<Value> {
         match self.kind {
             ConstStateKind::Loaded(v) => Some(v),
-            ConstStateKind::Autoload(_) => None,
+            ConstStateKind::Autoload(_) | ConstStateKind::LazyToplevelBinding => None,
         }
     }
 
@@ -157,6 +173,17 @@ fn singleton_attached_class(classes: &ClassInfoTable, mut class_id: ClassId) -> 
 }
 
 impl ClassInfoTable {
+    ///
+    /// Register `name` as a not-yet-built `TOPLEVEL_BINDING`
+    /// ([`ConstStateKind::LazyToplevelBinding`]). Overwrites nothing:
+    /// this runs once, during `Executor::init`.
+    ///
+    pub(crate) fn set_constant_lazy_toplevel_binding(&mut self, class_id: ClassId, name: IdentId) {
+        self[class_id]
+            .constants
+            .insert(name, ConstState::lazy_toplevel_binding());
+    }
+
     pub(crate) fn set_constant_autoload(
         &mut self,
         class_id: ClassId,
@@ -182,6 +209,11 @@ impl ClassInfoTable {
                         entry.state = AutoloadState::Idle;
                     }
                 }
+                // `autoload :TOPLEVEL_BINDING, path` — the name is
+                // already defined (it just has not been built yet), so
+                // registering an autoload over it is the no-op the
+                // `Loaded` arm above performs.
+                ConstStateKind::LazyToplevelBinding => {}
             },
             None => {
                 self[class_id]
@@ -289,8 +321,11 @@ impl ClassInfoTable {
             ConstStateKind::Loaded(v) => Some(*v),
             // Caller asked for a no-autoload lookup; pending-autoload
             // entries don't have a value to hand out without triggering
-            // the load, so behave as "not yet defined".
-            ConstStateKind::Autoload(_) => None,
+            // the load, so behave as "not yet defined". A lazy
+            // `TOPLEVEL_BINDING` is the same deal: building it is a
+            // side effect (it promotes the main script's frame), so a
+            // non-triggering read reports "no value yet".
+            ConstStateKind::Autoload(_) | ConstStateKind::LazyToplevelBinding => None,
         }
     }
 

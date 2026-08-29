@@ -149,6 +149,18 @@ pub struct Store {
     /// the "any refinement exists" gate. See `globals/store/refinement.rs`
     /// and `doc/refinements.md` §6.
     refinements: RefinementTable,
+    /// `FuncId` of the *main script*'s toplevel body, once compiled.
+    /// Distinguishes it from a `require`d file's toplevel (both are
+    /// `new_main` bodies stamped `IdentId::_MAIN`): backtraces label
+    /// this one `<main>` rather than `<top (required)>`, and a first
+    /// read of `TOPLEVEL_BINDING` looks for this frame to build the
+    /// binding over (`Executor::materialize_toplevel_binding`).
+    main_script_fid: Option<FuncId>,
+    /// `FuncId` of an empty toplevel body, compiled once at startup.
+    /// Supplies the `Meta` for the outer-less heap frame a
+    /// `TOPLEVEL_BINDING` gets when it is read while no main script
+    /// frame is running (during a `-r` require, or from a thread).
+    empty_toplevel_fid: Option<FuncId>,
 }
 
 impl std::ops::Deref for Store {
@@ -272,7 +284,47 @@ impl Store {
             compile_warnings: vec![],
             frozen_str_pool: HashMap::default(),
             refinements: RefinementTable::new(),
+            main_script_fid: None,
+            empty_toplevel_fid: None,
         }
+    }
+
+    ///
+    /// Record the *main script*'s toplevel body (see the field docs).
+    ///
+    pub(crate) fn set_main_script_fid(&mut self, fid: FuncId) {
+        self.main_script_fid = Some(fid);
+    }
+
+    pub(crate) fn main_script_fid(&self) -> Option<FuncId> {
+        self.main_script_fid
+    }
+
+    ///
+    /// Number of constant sites recorded so far. Paired with
+    /// [`Self::names_constant_since`] to ask what a just-finished
+    /// compilation referenced.
+    ///
+    pub(crate) fn const_site_len(&self) -> usize {
+        self.constsite_info.len()
+    }
+
+    ///
+    /// Does any constant site recorded since *start* name *name*
+    /// (as the constant itself or as a qualifier)?
+    ///
+    pub(crate) fn names_constant_since(&self, start: usize, name: IdentId) -> bool {
+        self.constsite_info[start.min(self.constsite_info.len())..]
+            .iter()
+            .any(|site| site.name == name || site.prefix.contains(&name))
+    }
+
+    pub(crate) fn set_empty_toplevel_fid(&mut self, fid: FuncId) {
+        self.empty_toplevel_fid = Some(fid);
+    }
+
+    pub(crate) fn empty_toplevel_fid(&self) -> Option<FuncId> {
+        self.empty_toplevel_fid
     }
 
     ///
@@ -654,10 +706,18 @@ impl Store {
                 // (`IdentId::_MAIN`). The main script renders through the
                 // `_MAIN`-stamped block above; a non-block `/main` is a
                 // required/loaded file's toplevel — CRuby's
-                // `<top (required)>`.
+                // `<top (required)>` — unless it is the main script's
+                // own body, which CRuby labels `<main>` (the main
+                // script no longer runs inside TOPLEVEL_BINDING, so it
+                // is a plain toplevel like any required file and only
+                // the recorded fid tells them apart).
                 let name = iseq.name();
                 if name == "/main" {
-                    "<top (required)>".to_string()
+                    if self.main_script_fid() == Some(func_id) {
+                        "<main>".to_string()
+                    } else {
+                        "<top (required)>".to_string()
+                    }
                 } else {
                     name
                 }

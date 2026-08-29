@@ -30,6 +30,7 @@ Two things to know before reading:
 | [`exception_handling.md`](exception_handling.md) | EN | reference | Raise, unwind, catch and report, and where monoruby is deliberately lazier than CRuby (backtraces are not formatted until asked for). |
 | [`cref.md`](cref.md) | EN | reference | The lexical state that is not local variables: default definee, constant scopes, `Module.nesting`, visibility toggles. Contrasts CRuby's per-frame CREF with monoruby's stack. |
 | [`refinements.md`](refinements.md) | EN | design record | What refinements do to method resolution, why every cache in the tree was keyed without the caller's scope, and the interned-set design that adds them without costing a refinement-free program anything. |
+| [`toplevel_binding.md`](toplevel_binding.md) | EN | design record | Why the main script stopped running inside `TOPLEVEL_BINDING` — a binding's heap frame is a *captured* frame, and captured frames never reach the loop JIT — and when the binding is built instead. |
 
 ## Codegen and IR
 

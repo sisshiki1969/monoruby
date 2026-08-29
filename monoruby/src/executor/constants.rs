@@ -43,6 +43,11 @@ impl Executor {
                     }
                     return Ok(Some(v));
                 }
+                // First read of `TOPLEVEL_BINDING`: build it now, over
+                // the main script's frame if that frame is running.
+                ConstStateKind::LazyToplevelBinding => {
+                    return Ok(Some(self.materialize_toplevel_binding(globals)));
+                }
                 ConstStateKind::Autoload(entry) => match entry.state {
                     // Same-thread re-entry while the autoload's own
                     // require is in flight: behave as "not yet
@@ -115,6 +120,10 @@ impl Executor {
             None => Ok(None),
             Some(state) => match &state.kind {
                 ConstStateKind::Loaded(v) => Ok(Some(*v)),
+                // Only an autoload slot reaches here (this is the
+                // post-`require` re-read of the slot the load was
+                // triggered for).
+                ConstStateKind::LazyToplevelBinding => Ok(None),
                 ConstStateKind::Autoload(_) => {
                     // CRuby's verbose mode (`$VERBOSE = true`) emits
                     // `warning: Expected <file> to define
@@ -448,7 +457,10 @@ impl Executor {
         match globals.store.get_constant(class_id, name) {
             None => false,
             Some(state) => match &state.kind {
-                ConstStateKind::Loaded(_) => true,
+                // A not-yet-built `TOPLEVEL_BINDING` is defined —
+                // `defined?` / `const_defined?` must say so without
+                // building it, exactly as they do for an idle autoload.
+                ConstStateKind::Loaded(_) | ConstStateKind::LazyToplevelBinding => true,
                 ConstStateKind::Autoload(entry) => match entry.state {
                     AutoloadState::Idle => true,
                     AutoloadState::Loading => false,

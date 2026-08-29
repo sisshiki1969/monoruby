@@ -116,3 +116,105 @@ fn toplevel_return_terminates_main_script() {
     );
     let _ = std::fs::remove_file(script);
 }
+
+/// The main script runs on a plain (stack) frame, so its hot loops are
+/// JIT-compilable — `TOPLEVEL_BINDING` is not built until something
+/// reads it. A read from *other* code (here a required library, through
+/// a dynamic `const_get` the compile-time scan cannot see) builds it
+/// over the running script's frame, so it still exposes that script's
+/// live locals.
+#[test]
+fn toplevel_binding_materializes_over_a_running_main_script() {
+    let lib = write_temp(
+        "monoruby_main_tb_lazy_lib.rb",
+        "def peek\n\
+        \x20 b = Object.const_get(:TOPLEVEL_BINDING)\n\
+        \x20 [b.local_variables.sort, b.local_variable_get(:q)]\n\
+         end\n",
+    );
+    let script = write_temp(
+        "monoruby_main_tb_lazy.rb",
+        &format!(
+            "require_relative '{}'\n\
+             q = 42\n\
+             i = 0\n\
+             i += 1 while i < 200\n\
+             p peek\n\
+             p eval('q + i', Object.const_get(:TOPLEVEL_BINDING))\n",
+            lib.file_stem().unwrap().to_string_lossy()
+        ),
+    );
+    let out = stdout_of(monoruby().arg(&script));
+    assert_eq!(out, "[[:i, :q], 42]\n242\n");
+    let _ = std::fs::remove_file(script);
+    let _ = std::fs::remove_file(lib);
+}
+
+/// A script that names `TOPLEVEL_BINDING` itself runs inside the
+/// binding, because the two places that read it there — a thread body
+/// and an `at_exit` handler — do so where the script's own frame is not
+/// reachable (another call chain; after the toplevel frame is gone).
+/// Both must still see the script's locals.
+#[test]
+fn toplevel_binding_named_by_the_script_survives_thread_and_at_exit() {
+    let script = write_temp(
+        "monoruby_main_tb_named.rb",
+        "z = 7\n\
+         at_exit { p TOPLEVEL_BINDING.local_variable_get(:z) }\n\
+         Thread.new { p TOPLEVEL_BINDING.local_variables.sort }.join\n",
+    );
+    let out = stdout_of(monoruby().arg(&script));
+    assert_eq!(out, "[:z]\n7\n");
+    let _ = std::fs::remove_file(script);
+}
+
+/// Backtraces label the main script's own frames `<main>` (a required
+/// file's toplevel stays `<top (required)>`), on either path.
+#[test]
+fn main_script_frames_are_labeled_main() {
+    let script = write_temp(
+        "monoruby_main_label.rb",
+        "def boom = raise('x')\n\
+         begin\n\
+        \x20 boom\n\
+         rescue => e\n\
+        \x20 puts e.backtrace.map { |l| l.sub(/\\A.*:\\d+:in /, '') }\n\
+         end\n",
+    );
+    let out = stdout_of(monoruby().arg(&script));
+    assert_eq!(out, "'Object#boom'\n'<main>'\n");
+    let _ = std::fs::remove_file(script);
+
+    // Same script, but naming TOPLEVEL_BINDING so it runs inside the
+    // binding: the label must not change.
+    let script = write_temp(
+        "monoruby_main_label_bound.rb",
+        "TOPLEVEL_BINDING\n\
+         def boom = raise('x')\n\
+         begin\n\
+        \x20 boom\n\
+         rescue => e\n\
+        \x20 puts e.backtrace.map { |l| l.sub(/\\A.*:\\d+:in /, '') }\n\
+         end\n",
+    );
+    let out = stdout_of(monoruby().arg(&script));
+    assert_eq!(out, "'Object#boom'\n'<main>'\n");
+    let _ = std::fs::remove_file(script);
+}
+
+/// `TOPLEVEL_BINDING` is a *defined* constant before anything reads it:
+/// it lists in `Object.constants`, answers `const_defined?`/`defined?`,
+/// and is not an autoload.
+#[test]
+fn toplevel_binding_is_defined_before_it_is_built() {
+    let script = write_temp(
+        "monoruby_main_tb_defined.rb",
+        "p Object.const_defined?(:TOPLEVEL_BINDING)\n\
+         p Object.constants.include?(:TOPLEVEL_BINDING)\n\
+         p defined?(TOPLEVEL_BINDING)\n\
+         p Object.autoload?(:TOPLEVEL_BINDING)\n",
+    );
+    let out = stdout_of(monoruby().arg(&script));
+    assert_eq!(out, "true\ntrue\n\"constant\"\nnil\n");
+    let _ = std::fs::remove_file(script);
+}

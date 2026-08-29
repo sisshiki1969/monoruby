@@ -820,7 +820,12 @@ pub(super) fn autoload_query_on(
                         ));
                     }
                 },
-                ConstStateKind::Loaded(_) => return Ok(Value::nil()),
+                // A loaded constant, and a `TOPLEVEL_BINDING` that
+                // has not been built yet, both have no autoload to
+                // report.
+                ConstStateKind::Loaded(_) | ConstStateKind::LazyToplevelBinding => {
+                    return Ok(Value::nil());
+                }
             }
         }
         if !inherit {
