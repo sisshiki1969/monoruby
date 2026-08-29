@@ -548,7 +548,10 @@ fn string_cmp(
 /// is `-1` (CRuby orders by `rb_enc_index`). For 7-bit ASCII content
 /// across distinct encodings the result stays 0 — encoding only
 /// breaks the tie when the strings carry non-ASCII bytes.
-fn string_byte_then_encoding_cmp(lhs: &RStringInner, rhs: &RStringInner) -> std::cmp::Ordering {
+pub(crate) fn string_byte_then_encoding_cmp(
+    lhs: &RStringInner,
+    rhs: &RStringInner,
+) -> std::cmp::Ordering {
     let ord = lhs.cmp(rhs);
     if ord != std::cmp::Ordering::Equal {
         return ord;

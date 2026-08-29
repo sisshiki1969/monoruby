@@ -381,6 +381,7 @@
 1c55df1a2ab9f2b7ce881cce3520b3da	["File::Stat", 8, true, false, true, true, true, true, true, "file", false, 8, true, true, true, true, true]	path = "/tmp/monoruby_test_stat_#{Process.pid}_#{rand(100000)}"\n   
 1c6926fa6e1462140ee74bc77342fcc8	[nil, :nme, true]	module PrivC\n              class Sec; end\n              private_con
 1c6d7d2ee7c5c48ff5b7040293a055f2	[42, 42, 2]	module BopPlus\n              refine(Integer) { def +(o); 42; end }\n
+1c8836b5348269f0d7f2540ee1f50475	:OVERRIDDEN	class NilClass; def <=>(o); :OVERRIDDEN; end; end; nil <=> nil
 1c925daf4080da92af318381f15467e0	[[[:a, 100], [:b, 100], [:c, 100]], :a, :b2, :c, :d]	class Aa; def tag = :a; end\n            class Bb; def tag = :b; end
 1c979897435ff61b3d8ac16af24e1019	[3, 5, 7, nil, 7, 42, 101, :new, {a: 101, b: :new}]	res = []\n        a = 1; a += 2; res << a\n        b = nil; b ||= 5; res 
 1ca7fb21e8495566f40650238bdfc1f6	[false, true, false, true, false, true, false, true, true, false, false, true, true, true, false, true, false, false]	class C\n            include Comparable\n            attr_accessor :x\n 
@@ -1032,6 +1033,7 @@
 50f9e525cff9a725780f19b016aaa8f9	[-2.0, -2.0, 8.0, 999]	$flag = false\n        def fmaybe\n          Integer.class_eval("def +(o)
 5103d830753ac483d2d4c39e44bc03b5	[0, 0, nil]	["‌" =~ /[[:word:]]/, "‍" =~ /[[:word:]]/, "‌" =~ /\\w/]
 511247f2a3b645da0c49c9876a105a9e	[1.687070598505588, 300]	def call_block\n          yield\n        end\n        def w6\n          s =
+5125ae5b4839d2d086156969d67bcc50	ArgumentError	class String; def <=>(o); :OVERRIDDEN; end; end\n            begin\n 
 5153f5263b097f08fb57811bdbdc5aaa	[true, true, true, false, true, true, true, false, false, false, false]	class A\n          def method1; end\n          protected\n          def pr
 5174f3c6fa3195d1fbd047639e4a904d	[[true, {data: 42}], ["async", "ctx"], [[[true, ["both"]], [false, []]], true, "both", false]]	r = []\n            de = Class.new(StandardError) { attr_reader :dat
 51be01e0d292ac0d9c77567390f1d11f	["Bbar", "B[239, 191, 189]", "Bdbar", "Btbar", Encoding::UndefinedConversionError, [ArgumentError, "too big fallback string"], TypeError, Encoding::UndefinedConversionError]	(r=[]; r << "B�".encode(Encoding::US_ASCII, fallback: { "�" => "bar" }); r << "B
@@ -1219,6 +1221,7 @@
 6181677ef04f4ef6305c1971b5503690	true	class MyStr\n              def to_str\n                "hel"\n        
 618dbff5bb318c45c0cbcadad310f756	"pow 3"	class Foo\n              def **(other)\n                "pow #{other}
 61999c6ea193c221146e7ca8536ca661	[1, 0, 7, 8, false, true, false, "File", true, true, "A", "B"]	require 'tmpdir'\n            f1 = File.join(Dir.tmpdir, "argf_t1_#{
+61c0d3358404d8b3ec51225d2fe11ce4	ArgumentError	class Integer; def <=>(o); :OVERRIDDEN; end; end\n            begin\n
 61d6a9b0085afd6c0cbfefe4fc3fe618	[true, true, true, Hash]	klass = Class.new(Hash)\n            [\n              klass[].instanc
 61fdd1242a66df09095c5df145f21012	12	def m(n); eval("BEGIN {return n*3}"); end; m(4)
 6201f6ca2228419027d2e3763e300a6c	:OVERRIDDEN	class Float; def !=(o); :OVERRIDDEN; end; end; 3.0 != 4.0
@@ -1455,6 +1458,7 @@
 74fde25cc190396a4f3751c20850e35f	["SyntaxError", "SyntaxError", "SyntaxError", "SyntaxError", "SyntaxError", "nil"]	res = []\n        obj = Object.new\n        ["class << obj; yield; end",\n
 7535124d760c4c0a785e8ea480beec65	[nil, nil]	r, w = IO.pipe; v = [r.path, w.path]; r.close; w.close; v
 757079451a7218940c5e1548dbf8b7b7	[[:source_buffer_empty, nil, nil, nil, nil], nil, :invalid_byte_sequence, [:invalid_byte_sequence, "UTF-8", "ISO-8859-1", "\\xF1", "a"], Encoding::InvalidByteSequenceError, ["\\xF1", "a", false], :finished, [:finished, nil, nil, nil, nil], nil, :invalid_byte_sequence, ["ef", "abcef"], "d", "", :finished, ["", "abcef"], :invalid_byte_sequence, [:invalid_byte_sequence, [85, 84, 70, 45, 49, 54, 76, 69], [85, 84, 70, 45, 56], [0, 216], [97, 0]], [97, 0], :incomplete_input, [:incomplete_input, "EUC-JP", "UTF-8", "\\xA4", ""], Encoding::InvalidByteSequenceError, true]	(r=[]; ec=Encoding::Converter.new("utf-8","iso-8859-1"); r << ec.primitive_errin
+758a54c7fdfade5f5c9dafad6da98f87	:OVERRIDDEN	class String; def <=>(o); :OVERRIDDEN; end; end; "a" <=> "b"
 7594ef08c00240ce6aa9cc4c8da38186	[UncaughtThrowError, :abc, "uncaught throw :abc"]	begin\n          throw :abc\n        rescue UncaughtThrowError => e\n     
 75aa5279b9de5e0524d3833ce166ea1c	:assigned	class Object\n          def self.const_missing(c); c; end\n        end\n  
 75b113d3b79894812ec54346427be988	[[255], [233], [128], [65], [128], [RangeError, "256 out of char range"], [RangeError, "256 out of char range"], [RangeError, "1286 out of char range"], [65], [177], [130, 160], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [65], [142, 177], [164, 162], [143, 161, 161], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [ArgumentError, "invalid character"], [130, 160], [164, 162], "A", ""]	def c(enc, v)\n              begin\n                ("%c".dup.force_e
@@ -1480,6 +1484,7 @@
 7766681c09761e7b66d6fdb86feb1bae	[3.2, 1.6, 238.18399999999997, -267770.88, 924.0, -1124.0]	def f(d1, d2, x, y, s, c, p)\n          px = x - 100.0\n          py = y 
 7783137d4cd2c70faf7f01584872ab95	"\\x04\\bo:\\bBar\\b:\\n@nameI\\"\\nhello\\x06:\\x06ET:\\v@valuei/:\\v@items[\\bi\\x06i\\ai\\b"	class Bar\n              def initialize\n                @name = "hel
 778b89eb473f320143b57466fe6c623b	2	[1, 2, 3].each.with_object(:m) { |v, m| break v if v == 2 }
+7790f406d9357f3c834f0766360e44ab	:OVERRIDDEN	class Symbol; def <=>(o); :OVERRIDDEN; end; end; :a <=> :b
 77a7dafab8914bfd337708beb97921b8	[9223372036854774900, 900, 9223372036854774901, 899, 9223372036854774902, 898, 9223372036854774903, 897, 9223372036854774904, 896, 9223372036854774905, 895, 9223372036854774906, 894, 9223372036854774907, 893, 9223372036854774908, 892, 9223372036854774909, 891, 9223372036854774910, 890, 9223372036854774911, 889, 9223372036854774912, 888, 9223372036854774913, 887, 9223372036854774914, 886, 9223372036854774915, 885, 9223372036854774916, 884, 9223372036854774917, 883, 9223372036854774918, 882, 9223372036854774919, 881, 9223372036854774920, 880, 9223372036854774921, 879, 9223372036854774922, 878, 9223372036854774923, 877, 9223372036854774924, 876, 9223372036854774925, 875, 9223372036854774926, 874, 9223372036854774927, 873, 9223372036854774928, 872, 9223372036854774929, 871]	def drive\n              res = []\n              a = 3\n              
 77b00e5257cfe366d9ad6a60194785e2	[true, false, true, false]	x = 1\n            b = binding\n            [\n              b.local_v
 77be5f23f43f53c251e9965e79fe7154	true	class MyStr\n              def to_str\n                "llo"\n        
@@ -1532,6 +1537,7 @@
 7b7f468fd7e708b03afd14b1c5882f15	"hELLO, wORLD!"	"Hello, World!".swapcase
 7bac2eab198ba99ba15061f668fa67ce	[0, "nil", "nil"]	o = Object.new\n        [o <=> o, (o <=> Object.new).inspect, (o <=> 3.1
 7bd487fc3bae8a806a0ddc5f0394215f	[true, false]	m = Mutex.new\n            slept = false\n            t = Thread.new 
+7bf72e6eb4c2c593bd81eb7b98dcafb0	:OVERRIDDEN	class Integer; def <=>(o); :OVERRIDDEN; end; end; 1 <=> 2
 7bfe1905c8cfcd84d8d0ad738c459253	[1, 2, 3, 4, 1, 2]	def f(x,y,a:100,b:200,c:300,d:400)\n              [a,b,c,d,x,y]\n    
 7c1f60d60806a84dcf3a11a88bdef692	TypeError	("a" =~ "b" rescue $!.class)
 7c28dee19aa27309293f956968134d84	"HELLOd"	s = "hello world"; s.bytesplice(0...-1, "HELLO"); s
@@ -1669,6 +1675,7 @@
 87305cab4ce459da4f12b255d2e568a4	true	class Coercible\n              def ==(other); true; end\n            
 873209a668c450584c681b28f3af09f3	7.0	class Float; alias __orig :+; def +(o); __orig(o); end; end; 3.0 + 4.0
 8741050c3a5bc835bcab3cb04b928f9d	"UTF-8"	x = __ENCODING__; x.name
+8741625fdbc8da3229cd34249811a2ea	:OVERRIDDEN	class Float; def <=>(o); :OVERRIDDEN; end; end; 1.0 <=> 2.0
 875df8f0024d1eac090bc7a8e80f17a3	[6, 9, 0, 9, true, false, 9223372036854774000, 8, 16, 0, 12, true, false, 9223372036854774002, 10, 25, 0, 15, true, false, 9223372036854774004, 12, 36, 0, 18, true, false, 9223372036854774006, 14, 49, 0, 21, true, false, 9223372036854774008, 16, 64, 0, 24, true, false, 9223372036854774010, 18, 81, 0, 27, true, false, 9223372036854774012, 20, 100, 0, 30, true, false, 9223372036854774014, 22, 121, 0, 33, true, false, 9223372036854774016, 24, 144, 0, 36, true, false, 9223372036854774018, 26, 169, 0, 39, true, false, 9223372036854774020, 28, 196, 0, 42, true, false, 9223372036854774022, 30, 225, 0, 45, true, false, 9223372036854774024, 32, 256, 0, 48, true, false, 9223372036854774026, 34, 289, 0, 51, true, false, 9223372036854774028, 36, 324, 0, 54, true, false, 9223372036854774030, 38, 361, 0, 57, true, false, 9223372036854774032, 40, 400, 0, 60, true, false, 9223372036854774034, 42, 441, 0, 63, true, false, 9223372036854774036, 44, 484, 0, 66, true, false, 9223372036854774038, 46, 529, 0, 69, true, false, 9223372036854774040, 48, 576, 0, 72, true, false, 9223372036854774042, 50, 625, 0, 75, true, false, 9223372036854774044, 52, 676, 0, 78, true, false, 9223372036854774046, 54, 729, 0, 81, true, false, 9223372036854774048, 56, 784, 0, 84, true, false, 9223372036854774050, 58, 841, 0, 87, true, false, 9223372036854774052, 60, 900, 0, 90, true, false, 9223372036854774054, 62, 961, 0, 93, true, false, 9223372036854774056, 64, 1024, 0, 96, true, false, 9223372036854774058]	def drive\n              res = []\n              j = 0\n              
 876de098296efcddcfbefb47ad345e9d	[1, 0]	module M5; C = nil; end\n        x = 0; y = 0\n        begin\n          (x
 8794978b94a718366bd0ea968a26e48c	"u"	ENV.update("MONORUBY_ENV_TEST_UP" => "u")\n            v = ENV["MONO

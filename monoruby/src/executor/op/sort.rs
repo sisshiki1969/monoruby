@@ -35,6 +35,9 @@ impl Executor {
         vec: &mut [Value],
         buf: *mut Value,
     ) -> Result<()> {
+        if sort_homogeneous(globals, vec) {
+            return Ok(());
+        }
         let is_less = |a: Value, b: Value| {
             let ord = Executor::compare_values(self, globals, a, b)?;
             Result::Ok(ord == std::cmp::Ordering::Less)
@@ -95,6 +98,129 @@ impl Executor {
         };
         Ok(i.cmp(&0))
     }
+}
+
+
+///
+/// Sort *vec* in place without running any Ruby, when every element is of
+/// one class whose `<=>` answer is fixed (`BASIC_OP_DEFS` licenses the
+/// pairs, and a redefinition of one is checked here). Returns whether it
+/// did.
+///
+/// This is the shape `Array#sort` / `Hash#sort` actually meet — an array
+/// of numbers, or of strings — and the point is not just skipping the
+/// dispatch (`compare_values_inner` already answers those pairs itself)
+/// but skipping the *comparator plumbing*: a `Result`-returning closure
+/// through a generic merge sort, versus a direct key comparison the
+/// compiler can inline into a pattern-defeating quicksort. Ruby's sort is
+/// not stable, so an unstable sort is a valid answer.
+///
+/// A mixed array, a `Float` (whose `NaN` must still raise through the
+/// comparator), or a class with a redefined `<=>` all fall through to the
+/// general path.
+///
+fn sort_homogeneous(globals: &Globals, vec: &mut [Value]) -> bool {
+    if vec.len() < 2 {
+        return true;
+    }
+    let redefined = |class: ClassId| {
+        globals.store.basic_op_redefined()
+            && globals.store.basic_op_redefined_for(class, IdentId::_CMP)
+    };
+    if vec.iter().all(|v| v.is_fixnum()) {
+        if redefined(INTEGER_CLASS) {
+            return false;
+        }
+        // SAFETY of the unwraps: every element was just proven a fixnum.
+        vec.sort_unstable_by_key(|v| v.try_fixnum().unwrap());
+        return true;
+    }
+    if vec.iter().all(|v| v.is_rstring_inner().is_some()) {
+        if redefined(STRING_CLASS) {
+            return false;
+        }
+        vec.sort_unstable_by(|a, b| {
+            crate::builtins::string::string_byte_then_encoding_cmp(
+                a.is_rstring_inner().unwrap(),
+                b.is_rstring_inner().unwrap(),
+            )
+        });
+        return true;
+    }
+    // A `NaN` has no ordering, and CRuby raises on the comparison rather
+    // than sorting around it — leave any array holding one to the general
+    // path, whose comparator reports the failure.
+    if vec
+        .iter()
+        .all(|v| v.try_float().is_some_and(|f| !f.is_nan()))
+    {
+        if redefined(FLOAT_CLASS) {
+            return false;
+        }
+        vec.sort_unstable_by(|a, b| {
+            a.try_float()
+                .unwrap()
+                .partial_cmp(&b.try_float().unwrap())
+                .expect("NaN was excluded above")
+        });
+        return true;
+    }
+    false
+}
+
+///
+/// [`sort_homogeneous`] for a *sort_by*-shaped sort: the values being
+/// ordered are the keys, and what gets permuted is `indices` into them.
+/// Returns whether it sorted.
+///
+pub(crate) fn sort_indices_by_homogeneous_keys(
+    globals: &Globals,
+    keys: &[Value],
+    indices: &mut [usize],
+) -> bool {
+    if indices.len() < 2 {
+        return true;
+    }
+    let redefined = |class: ClassId| {
+        globals.store.basic_op_redefined()
+            && globals.store.basic_op_redefined_for(class, IdentId::_CMP)
+    };
+    if keys.iter().all(|v| v.is_fixnum()) {
+        if redefined(INTEGER_CLASS) {
+            return false;
+        }
+        indices.sort_unstable_by_key(|&i| keys[i].try_fixnum().unwrap());
+        return true;
+    }
+    if keys.iter().all(|v| v.is_rstring_inner().is_some()) {
+        if redefined(STRING_CLASS) {
+            return false;
+        }
+        indices.sort_unstable_by(|&a, &b| {
+            crate::builtins::string::string_byte_then_encoding_cmp(
+                keys[a].is_rstring_inner().unwrap(),
+                keys[b].is_rstring_inner().unwrap(),
+            )
+        });
+        return true;
+    }
+    if keys
+        .iter()
+        .all(|v| v.try_float().is_some_and(|f| !f.is_nan()))
+    {
+        if redefined(FLOAT_CLASS) {
+            return false;
+        }
+        indices.sort_unstable_by(|&a, &b| {
+            keys[a]
+                .try_float()
+                .unwrap()
+                .partial_cmp(&keys[b].try_float().unwrap())
+                .expect("NaN was excluded above")
+        });
+        return true;
+    }
+    false
 }
 
 ///
