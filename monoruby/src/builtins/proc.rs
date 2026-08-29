@@ -332,33 +332,20 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // block passed to Proc#call is forwarded to the invoked method. The
     // regular invoke_proc/block_invoker path currently drops block handlers.
     if proc.func_id() == SYMBOL_TO_PROC_BODY_FUNCID {
-        let symbol = proc.self_val();
-        let symbol_id = symbol
+        let symbol_id = proc
+            .self_val()
             .try_symbol()
             .expect("symbol-to-proc outer self is not a Symbol");
         let args_val = lfp.arg(0);
         let args = args_val.as_array();
-        if args.is_empty() {
+        let Some((recv, rest)) = args.split_first() else {
             return Err(MonorubyErr::argumenterr("no receiver given"));
-        }
-        let recv = args[0];
-        let rest: Vec<Value> = args[1..].to_vec();
-        let class_id = recv.class();
-        if let Some(entry) = globals.check_method_for_class(class_id, symbol_id) {
-            match entry.visibility() {
-                Visibility::Private => {
-                    return Err(MonorubyErr::private_method_called(globals, symbol_id, recv));
-                }
-                Visibility::Protected => {
-                    return Err(MonorubyErr::protected_method_called(
-                        globals, symbol_id, recv,
-                    ));
-                }
-                _ => {}
-            }
-        }
+        };
         let bh = lfp.block();
-        return vm.invoke_method_inner(globals, symbol_id, recv, &rest, bh, kw);
+        // Same dispatch as a yield to this proc — one public-restricted
+        // lookup, and the arguments read in place (the array is rooted by
+        // this frame, and the collector does not move objects).
+        return vm.dispatch_symbol_proc_kw(globals, symbol_id, *recv, rest, bh, kw);
     }
     let bh = lfp.block();
     vm.invoke_proc_with_block(globals, &proc, &lfp.arg(0).as_array(), bh, kw)
