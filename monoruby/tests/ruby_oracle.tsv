@@ -644,6 +644,7 @@
 33428047f1f658e115c637013b4660d7	[["initial", nil], ["after-match", "zzz"], ["creator-after-resume", "oo"]]	"foo" =~ /(o+)/\n            r = []\n            f = Fiber.new do\n   
 3347692ca7320ce3b96875e272dbbe81	[7.5, 18.0]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 3358715ab6d315ac23aff09b3ff0f005	102450.0	class SpecAcc\n          K = 1.25\n          def calc(n, use_k)\n         
+33606d9f9d185d3cae67e71162c0ade3	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]	def row\n          res = []\n          x = 0\n          while x < 45\n     
 33a37997020cb2a326855e1801974373	"hello\\n"	r, w = IO.pipe\n            t = Thread.new { r.gets }\n            Th
 33b5711e09e6c160215318c1fd17224f	["no error", 5]	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:)
 33c649868370c10930670813040a0f1c	[45.0, 30.0]	class RS3\n          def half(v) = v * 0.5\n          def sum(arr)\n      
@@ -868,6 +869,7 @@
 454e2e87849398aff023ffd47ce0568a	"hello"	c = Class.new\n            c.class_exec do\n              def hello\n 
 4578bd5fa7148d23a652a1a92eb517df	false	Enumerator.new { |y| y << caller.empty? }.first
 457f6a743618e9a691a1720e9d5b31b0	[1575.0276087749185, 6.073454154620117]	def call_block\n          yield\n        end\n        def f(n)\n          a
+4590827ce0f8f39bce38419577946094	[[1, true], [1, true], [1, true], [1, true], [1, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true]]	def row\n          res = []\n          x = 0\n          while x < 60\n     
 45c219e430e29dc7ecd467638b65c70b	[true, true, true]	pid = spawn("true")\n            t = Process.detach(pid)\n           
 45c9b7ea3cba52cd428385897c67b953	[true, false, false, false, true, false, true, false, true, false]	S = Struct.new(:a, :b)\n        T = Struct.new(:a, :b)\n        \n\n       
 45ca7b6809a873de22eb68bc015aef5c	["abc", "abcd"]	s = +"abc"; t = s.dup; t << "d"; [s, t]

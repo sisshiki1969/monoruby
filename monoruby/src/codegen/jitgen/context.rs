@@ -486,6 +486,17 @@ pub(super) struct JitStackFrame {
     ///
     spill_home_watermark: usize,
     ///
+    /// The ids that ledger actually issued as homes, as opposed to the
+    /// ordinary allocator's spills, which share this file and this id
+    /// space. `FPReg(id) >= PHYS_FPR_POOL` says only "spill-resident":
+    /// under register pressure the plain allocator spills too, so it is
+    /// not the predicate for "this is a home". The loop-entry adoption
+    /// needs the exact set, since it force-binds the id at the loop head
+    /// (`keep_backedge_floats`' `adopt_deferred`) instead of asking the
+    /// allocator for one.
+    ///
+    spill_home_ids: std::collections::HashSet<usize>,
+    ///
     /// Nested loop count.
     ///
     loop_count: usize,
@@ -696,6 +707,7 @@ impl JitStackFrame {
             loop_outer_reads: HashMap::default(),
             return_edges: vec![],
             spill_home_watermark: 0,
+            spill_home_ids: std::collections::HashSet::default(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -729,6 +741,7 @@ impl JitStackFrame {
             // live mark keeps their ids consistent with what codegen
             // will issue, and the clone's bumps die with it.
             spill_home_watermark: self.spill_home_watermark,
+            spill_home_ids: self.spill_home_ids.clone(),
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -1600,7 +1613,16 @@ impl<'a> JitContext<'a> {
         let frame = &mut self.stack_frame[pos];
         let id = frame.spill_home_watermark.max(live_len);
         frame.spill_home_watermark = id + 1;
+        frame.spill_home_ids.insert(id);
         crate::codegen::FPReg(id)
+    }
+
+    ///
+    /// The home ids the ledger issued in the frame at *pos* (see
+    /// [`JitStackFrame::spill_home_ids`]).
+    ///
+    pub(super) fn spill_home_ids_at(&self, pos: usize) -> std::collections::HashSet<usize> {
+        self.stack_frame[pos].spill_home_ids.clone()
     }
 
     ///
