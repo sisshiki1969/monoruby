@@ -542,6 +542,7 @@
 295ad12a1384e7957740bbfc0e7fc6d3	"1,2,3"	class C; def to_str; ","; end; end; o = C.new\n[1, 2, 3] * o
 296560b4ebd046b6c59327975bb90459	"[2.5, 1.0]"	1.0.coerce("2.5").inspect
 296cb9b677550e04208e94ca484931e0	false	(1 << 100) == Float::NAN
+296cf73e0640c371c2684d2cd90d9e7b	[[3, 3, 5], ["ONE", "TWO", "THREE"], [3, 3, 5], 3, 4]	a = ["one", "two", "three"]\n        first = a.map(&:size)\n        GC.st
 2979daa28cf9e1607e9067bfb20e90ba	true	def p2\n          x = nil\n          [].each { x = 9.9 }\n          x.nil?
 2987a50b02c4a3d9e5927d0cf054efc5	[true, true, false, true, false]	[\n              SystemExit.new.success?,\n              SystemExit.n
 29a4782bad89b05e2a89fbdc04ec694a	[[1, :d, [], 1, nil], [1, 2, [3, 4], 1, nil], [1, 2, [], 9, nil], [1, :d, [], 1, :blk], [10, 20, [30], 1, nil], [5, 6, [7], 2, nil]]	def t(a, b = :d, *r, k: 1, &blk); [a, b, r, k, blk ? blk.call : nil

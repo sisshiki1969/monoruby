@@ -259,6 +259,15 @@ pub(crate) struct Invokers {
 pub struct Globals {
     /// main object (`self`` of toplevel).
     pub main_object: Value,
+    /// One `Symbol#to_proc` outer frame per symbol, built on demand.
+    ///
+    /// A `&:sym` block handler is resolved to `(outer_lfp, func_id)` on
+    /// *every* yield (`Executor::resolve_block_target`), and the frame it
+    /// needs holds nothing but the symbol as `self` — immutable, and the
+    /// same for every resolution of that symbol. Building a fresh one
+    /// each time put a heap-frame allocation on every element of
+    /// `ary.map(&:to_s)`.
+    symbol_proc_frames: HashMap<IdentId, Lfp>,
     /// function and class info.
     pub store: Store,
     /// global variables and special variables.
@@ -382,9 +391,28 @@ impl std::ops::DerefMut for Globals {
     }
 }
 
+impl Globals {
+    ///
+    /// The shared `Symbol#to_proc` outer frame for *symbol* (see
+    /// [`Globals::symbol_proc_frames`]), built on first use.
+    ///
+    pub(crate) fn symbol_proc_frame(&mut self, symbol: IdentId) -> Lfp {
+        if let Some(lfp) = self.symbol_proc_frames.get(&symbol) {
+            return *lfp;
+        }
+        let meta = self.store[SYMBOL_TO_PROC_BODY_FUNCID].meta();
+        let lfp = Lfp::heap_frame(Value::symbol(symbol), meta);
+        self.symbol_proc_frames.insert(symbol, lfp);
+        lfp
+    }
+}
+
 impl alloc::GC<RValue> for Globals {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         self.main_object.mark(alloc);
+        for lfp in self.symbol_proc_frames.values() {
+            lfp.mark(alloc);
+        }
         self.load_path.mark(alloc);
         self.loaded_features.mark(alloc);
         self.store.mark(alloc);
@@ -588,6 +616,7 @@ impl Globals {
 
         let mut globals = Self {
             main_object,
+            symbol_proc_frames: HashMap::default(),
             store: Store::new(),
             gvars: GvarTable::new(),
             special_gvars: SpecialGvars::default(),
