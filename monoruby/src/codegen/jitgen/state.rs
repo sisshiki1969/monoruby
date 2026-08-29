@@ -78,7 +78,7 @@ impl AbstractState {
     /// twin of [`JitContext::outer_pos`]. `outer == 0` is the innermost
     /// frame itself; a link leaving the chain answers `None`.
     ///
-    fn outer_level(&self, outer: usize) -> Option<usize> {
+    pub(super) fn outer_level(&self, outer: usize) -> Option<usize> {
         let mut level = self.frames.len().checked_sub(1)?;
         for _ in 0..outer {
             level = level.checked_sub(self.frames[level].lexical_outer()?)?;
@@ -109,6 +109,17 @@ impl AbstractState {
 
     pub(super) fn depth(&self) -> usize {
         self.frames.len()
+    }
+
+    ///
+    /// Grow the file of the frame at chain position *pos* to *len* —
+    /// the resume-time sync with the frame's home ledger
+    /// (`JitStackFrame::spill_home_watermark`): every id the ledger has
+    /// issued stays reserved in the file, so a home whose claim was
+    /// dropped at a join is never re-issued to a transient.
+    ///
+    pub(super) fn grow_frame_fpr_to(&mut self, pos: usize, len: usize) {
+        self.frames[pos].grow_fpr_to(len);
     }
 
     ///
@@ -143,11 +154,11 @@ impl AbstractState {
     /// [`JitContext::widen_outer_slot`].
     ///
     ///
-    /// Stage 2: mirror an outer-frame `S -> Sf` promotion into the live
-    /// chain (the context's parked copy was promoted by the caller). The
-    /// clone's file may be shorter than the parked one it diverged from —
-    /// grow it so the id resolves; the merge machinery already reconciles
-    /// differing lengths between sibling clones (`grow_fpr_to`).
+    /// Stage 2: bind an outer-frame `S -> Sf` promotion on the live
+    /// chain. The id comes from the owner's frame-global ledger and may
+    /// lie past this file's length — grow it so the id resolves; the
+    /// merge machinery already reconciles differing lengths between
+    /// sibling clones (`grow_fpr_to`).
     ///
     pub(super) fn promote_outer_sf(&mut self, outer: usize, slot: SlotId, fpr: FPReg) {
         if outer == 0 {

@@ -470,6 +470,22 @@ pub(super) struct JitStackFrame {
     ///
     return_edges: Vec<(JitLabel, Vec<AbstractFrame>, AbstractFrame, SlotId, BasicBlockId)>,
     ///
+    /// The frame-global ledger of persistent spill-home ids: one past the
+    /// highest id ever issued as a raw-f64 *home* in this frame's file
+    /// (stage-2 promotions and loop-entry adoptions, both made while the
+    /// frame is suspended). Context-side — a `JitStackFrame` exists once
+    /// per frame and is never cloned per branch — because a home id is a
+    /// physical resource (a stack slot in the frame, baked into callee
+    /// code as an address), not a per-path belief: two branches handing
+    /// out the same id to different homes could never be repaired by a
+    /// join. Issued ids stay reserved for the life of the frame: on
+    /// resume the frame's file is grown to this mark, so a home whose
+    /// claim was dropped at a join is never re-issued to a transient —
+    /// spill-resident values are not saved across calls, and the callee
+    /// code that established the home still writes it at runtime.
+    ///
+    spill_home_watermark: usize,
+    ///
     /// Nested loop count.
     ///
     loop_count: usize,
@@ -679,6 +695,7 @@ impl JitStackFrame {
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
             return_edges: vec![],
+            spill_home_watermark: 0,
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -708,6 +725,10 @@ impl JitStackFrame {
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
             return_edges: vec![],
+            // Analysis walks allocate home ids too; starting from the
+            // live mark keeps their ids consistent with what codegen
+            // will issue, and the clone's bumps die with it.
+            spill_home_watermark: self.spill_home_watermark,
             loop_count: 0,
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
@@ -1328,6 +1349,15 @@ impl<'a> JitContext<'a> {
                 state.invalidate_at(pos, slot);
             }
         }
+        // Sync every frame's file with its home ledger: ids issued while
+        // the frame was suspended stay reserved even when the claim they
+        // carried was dropped at a join — the callee code that
+        // established such a home still writes it at runtime, so a
+        // transient re-issued into it would be clobbered across the next
+        // call (spill-resident values are not saved at call boundaries).
+        for pos in 0..self.stack_frame.len() {
+            state.grow_frame_fpr_to(pos, self.stack_frame[pos].spill_home_watermark);
+        }
         Ok(frame)
     }
 
@@ -1558,6 +1588,22 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Issue a persistent spill-home id for the frame at stack position
+    /// *pos*, from its frame-global ledger (see
+    /// [`JitStackFrame::spill_home_watermark`]). *live_len* is the
+    /// allocating path's current view of that frame's file length —
+    /// taking the max keeps the id clear of every transient the path
+    /// has live; the caller then binds the id on the live chain (which
+    /// grows the file past it).
+    ///
+    fn alloc_spill_home_at(&mut self, pos: usize, live_len: usize) -> crate::codegen::FPReg {
+        let frame = &mut self.stack_frame[pos];
+        let id = frame.spill_home_watermark.max(live_len);
+        frame.spill_home_watermark = id + 1;
+        crate::codegen::FPReg(id)
+    }
+
+    ///
     /// Stage-C loop adoption, the decision itself (called from the
     /// loop-entry merge, codegen pass only): for every outer-frame slot
     /// the loop's subtree read as a raw f64 — read straight off the back
@@ -1567,8 +1613,9 @@ impl<'a> JitContext<'a> {
     /// state*. The entry edges establish the home (chain load, Float
     /// guard, unbox, store); the claim's scope is handled by the joins
     /// themselves — a path that bypassed the head meets it back to `S`.
-    /// The owner's (parked) file only reserves the id, keeping the
-    /// owner's own later allocations from colliding with the home.
+    /// The id comes from the owner's frame-global ledger
+    /// ([`JitStackFrame::spill_home_watermark`]), which keeps it clear
+    /// of the owner's own allocations for the life of the frame.
     ///
     pub(super) fn adopt_outer_loop_views(
         &mut self,
@@ -1615,10 +1662,7 @@ impl<'a> JitContext<'a> {
                 {
                     continue;
                 }
-                let Some(parked) = self.stack_frame[pos].abstract_state.as_mut() else {
-                    continue;
-                };
-                let fpr = parked.reserve_spill_home();
+                let fpr = self.alloc_spill_home_at(pos, target[pos].fpr_len());
                 let Some(home) = self.outer_fpr_home_hint_at_pos(pos, fpr) else {
                     continue;
                 };
@@ -2021,17 +2065,14 @@ impl<'a> JitContext<'a> {
                 return None;
             }
         }
-        {
-            let parked = self.stack_frame[pos].abstract_state.as_ref()?;
-            if !matches!(parked.mode(slot), LinkMode::S(_)) {
-                return None;
-            }
+        // Only a plain boxed slot promotes — checked on the live chain,
+        // the same truth the read decisions consult (a sibling call's
+        // earlier promotion arrives here through the threaded chain).
+        let level = state.outer_level(outer)?;
+        if !matches!(state[level].mode(slot), LinkMode::S(_)) {
+            return None;
         }
-        let fpr = self.stack_frame[pos]
-            .abstract_state
-            .as_mut()
-            .unwrap()
-            .alloc_spill_home(slot);
+        let fpr = self.alloc_spill_home_at(pos, state[level].fpr_len());
         state.promote_outer_sf(outer, slot, fpr);
         let home = self.keep_outer_sf_view(ids.to_vec(), extra, outer, slot, fpr)?;
         Some((fpr, home))
