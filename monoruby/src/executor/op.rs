@@ -794,6 +794,20 @@ impl Executor {
         rhs: Value,
     ) -> Result<Option<std::cmp::Ordering>> {
         use std::cmp::Ordering;
+        // The arms below answer `<=>` for the immediate/String classes
+        // without a lookup, which is only sound while nobody replaced the
+        // builtin — the `(class, "<=>")` pairs in `BASIC_OP_DEFS` are what
+        // license it. A redefinition anywhere arms the flag; only then is
+        // the receiver's own pair worth checking. (Before this check
+        // `[3,1,2].sort` kept comparing fixnums directly through a
+        // redefined `Integer#<=>`, where CRuby raises.)
+        if globals.store.basic_op_redefined()
+            && globals
+                .store
+                .basic_op_redefined_for(lhs.class(), IdentId::_CMP)
+        {
+            return Ok(self.dispatch_cmp(globals, lhs, rhs)?);
+        }
         let res = match (lhs.unpack(), rhs.unpack()) {
             (RV::Nil, RV::Nil) => Some(Ordering::Equal),
             (RV::Nil, _) => None,
@@ -815,21 +829,39 @@ impl Executor {
             }
             (RV::Float(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
             (RV::Float(_), _) => None,
-            _ => {
-                if let Some(i) = self
-                    .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs], None, None)?
-                    .try_fixnum()
-                {
-                    match i {
-                        -1 => Some(std::cmp::Ordering::Less),
-                        0 => Some(std::cmp::Ordering::Equal),
-                        1 => Some(std::cmp::Ordering::Greater),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
+            // `String#<=>` is a byte compare with an encoding tie-break —
+            // no Ruby code runs for a String pair, so answering it here
+            // saves the dispatch every comparison of a string sort paid.
+            (RV::String(lhs), RV::String(rhs)) => {
+                Some(crate::builtins::string::string_byte_then_encoding_cmp(lhs, rhs))
             }
+            _ => return Ok(self.dispatch_cmp(globals, lhs, rhs)?),
+        };
+        Ok(res)
+    }
+
+    ///
+    /// `lhs <=> rhs` through a real dispatch, with CRuby's `rb_cmpint`
+    /// reading of the result (anything but -1/0/1 is "not comparable").
+    ///
+    fn dispatch_cmp(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Option<std::cmp::Ordering>> {
+        let res = if let Some(i) = self
+            .invoke_method_inner(globals, IdentId::_CMP, lhs, &[rhs], None, None)?
+            .try_fixnum()
+        {
+            match i {
+                -1 => Some(std::cmp::Ordering::Less),
+                0 => Some(std::cmp::Ordering::Equal),
+                1 => Some(std::cmp::Ordering::Greater),
+                _ => None,
+            }
+        } else {
+            None
         };
         Ok(res)
     }

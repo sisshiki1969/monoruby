@@ -42,7 +42,7 @@ mod regexp;
 mod set;
 mod socket;
 pub(crate) mod spawn;
-mod string;
+pub(crate) mod string;
 pub(crate) mod struct_class;
 mod data_class;
 mod symbol;

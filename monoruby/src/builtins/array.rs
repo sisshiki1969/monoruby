@@ -2706,21 +2706,28 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
             // we do not drop the scope holding the underlying Values.
             let keys: Vec<Value> = (0..n).map(|i| vm.temp_at(base + i * 2)).collect();
             let mut indices: Vec<usize> = (0..n).collect();
-            let mut err = None;
-            indices.sort_by(|&a, &b| {
-                if err.is_some() {
-                    return std::cmp::Ordering::Equal;
-                }
-                match Executor::compare_values(vm, globals, keys[a], keys[b]) {
-                    Ok(o) => o,
-                    Err(e) => {
-                        err = Some(e);
-                        std::cmp::Ordering::Equal
+            // Keys of one ordered class — the usual `sort_by { |x| x.foo }`
+            // — order without running Ruby, and without the
+            // error-capturing comparator closure.
+            if !crate::executor::op::sort_indices_by_homogeneous_keys(
+                globals, &keys, &mut indices,
+            ) {
+                let mut err = None;
+                indices.sort_by(|&a, &b| {
+                    if err.is_some() {
+                        return std::cmp::Ordering::Equal;
                     }
+                    match Executor::compare_values(vm, globals, keys[a], keys[b]) {
+                        Ok(o) => o,
+                        Err(e) => {
+                            err = Some(e);
+                            std::cmp::Ordering::Equal
+                        }
+                    }
+                });
+                if let Some(e) = err {
+                    return Err(e);
                 }
-            });
-            if let Some(e) = err {
-                return Err(e);
             }
             // Read elems back in sorted order from the temp_stack (still
             // rooted) and write them to the receiver.
@@ -2798,21 +2805,28 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             let n = (vm.temp_len() - base) / 2;
             let keys: Vec<Value> = (0..n).map(|i| vm.temp_at(base + i * 2)).collect();
             let mut indices: Vec<usize> = (0..n).collect();
-            let mut err = None;
-            indices.sort_by(|&a, &b| {
-                if err.is_some() {
-                    return std::cmp::Ordering::Equal;
-                }
-                match Executor::compare_values(vm, globals, keys[a], keys[b]) {
-                    Ok(o) => o,
-                    Err(e) => {
-                        err = Some(e);
-                        std::cmp::Ordering::Equal
+            // Keys of one ordered class — the usual `sort_by { |x| x.foo }`
+            // — order without running Ruby, and without the
+            // error-capturing comparator closure.
+            if !crate::executor::op::sort_indices_by_homogeneous_keys(
+                globals, &keys, &mut indices,
+            ) {
+                let mut err = None;
+                indices.sort_by(|&a, &b| {
+                    if err.is_some() {
+                        return std::cmp::Ordering::Equal;
                     }
+                    match Executor::compare_values(vm, globals, keys[a], keys[b]) {
+                        Ok(o) => o,
+                        Err(e) => {
+                            err = Some(e);
+                            std::cmp::Ordering::Equal
+                        }
+                    }
+                });
+                if let Some(e) = err {
+                    return Err(e);
                 }
-            });
-            if let Some(e) = err {
-                return Err(e);
             }
             let sorted_elems: Vec<Value> = indices
                 .iter()
