@@ -62,3 +62,22 @@ fn proc_compose_passes_block_to_first() {
         "#,
     );
 }
+
+/// `&:sym` shares one outer frame per symbol (`Globals::symbol_proc_frame`)
+/// instead of building one per yield. The frame is reachable only from that
+/// cache, so a collection between two uses of the same symbol proc must not
+/// reclaim it — and two different symbols must not share one.
+#[test]
+fn symbol_proc_frames_survive_gc_and_stay_per_symbol() {
+    run_test(
+        r##"
+        a = ["one", "two", "three"]
+        first = a.map(&:size)
+        GC.start
+        second = a.map(&:upcase)
+        GC.start
+        third = a.map(&:size)
+        [first, second, third, [1, 2].inject(&:+), :size.to_proc.call("abcd")]
+        "##,
+    );
+}
