@@ -55,9 +55,19 @@ mod alloc_policy {
         /// path (it is the original Phase-0 scan).
         ///
         fn pick_vacant(&self, state: &SlotState) -> Option<FPReg> {
-            (0..state.fpr_alloc.len()).map(FPReg).find(|&fpr| {
-                !state.fpr_alloc.is_pinned(fpr) && state.fpr_alloc.is_vacant(fpr)
-            })
+            // Pool registers only, per this phase's contract ("vacant
+            // phys"). A vacant *spill* id must not be re-issued: it may
+            // be a persistent raw-f64 home whose binding this path does
+            // not carry (issued from the frame's home ledger while the
+            // frame was suspended, or dropped at a join) — and homes are
+            // written by callee code at runtime, while spill-resident
+            // values are not saved across calls. Retired transient spill
+            // ids are also skipped; that only costs frame bytes.
+            (0..state.fpr_alloc.len().min(PHYS_FPR_POOL))
+                .map(FPReg)
+                .find(|&fpr| {
+                    !state.fpr_alloc.is_pinned(fpr) && state.fpr_alloc.is_vacant(fpr)
+                })
         }
 
         ///
@@ -99,7 +109,11 @@ mod alloc_policy {
         // the stack is canonical. The default `victim_rank` is the pool index, so
         // `min_by_key` selects the same register the prior `for 0..len { return
         // first }` scan did.
-        let victim = (0..state.fpr_alloc.len())
+        // Pool registers only, like phase 0: "freeing" a spill id gains
+        // nothing over a fresh phase-2 spill (both are stack slots), and
+        // demoting a spill-resident raw-f64 *home* would re-issue an id
+        // that callee code still writes at runtime.
+        let victim = (0..state.fpr_alloc.len().min(PHYS_FPR_POOL))
             .map(FPReg)
             .filter(|&fpr| !state.fpr_alloc.is_pinned(fpr) && !state.fpr_alloc.is_vacant(fpr))
             .filter(|&fpr| {
@@ -606,7 +620,7 @@ impl SlotState {
     /// Used by `gen_bridge` so the source state can grow its own
     /// `fpr` vec up to the target's width before merge bridging.
     ///
-    pub(super) fn fpr_len(&self) -> usize {
+    pub(in crate::codegen::jitgen) fn fpr_len(&self) -> usize {
         self.fpr_alloc.len()
     }
 
@@ -815,29 +829,6 @@ impl SlotState {
         self.clear(slot);
         self.set_mode(slot, LinkMode::F(fpr));
         self.fpr_add(slot, fpr);
-    }
-
-    ///
-    /// Stage 2 outer promotion: allocate a fresh spill-resident fpr as the
-    /// raw-f64 home of *slot* and bind it `Sf(Float)`. Force-spill (never a
-    /// pool register): the home must survive arbitrarily many callee
-    /// frames, and a spill slot of this frame does so unconditionally.
-    ///
-    pub(in crate::codegen::jitgen) fn alloc_spill_home(&mut self, slot: SlotId) -> FPReg {
-        let fpr = self.fpr_alloc.push_spill();
-        self.set_Sf(slot, fpr, SfGuarded::Float);
-        fpr
-    }
-
-    ///
-    /// Reserve a spill-resident home id in this (the owner's) file
-    /// without binding any slot — for a promotion whose binding lives on
-    /// the live chain only (the loop-entry adoption). The file is the
-    /// single id space for the owner, so the reservation keeps the
-    /// owner's own later allocations from colliding with the home.
-    ///
-    pub(in crate::codegen::jitgen) fn reserve_spill_home(&mut self) -> FPReg {
-        self.fpr_alloc.push_spill()
     }
 
     ///
