@@ -76,6 +76,7 @@
 051c6c1a4febd93666a6dd7af8fec314	true	Class.new.method_defined?(:hash)\n            
 052141b09b61ede8409ccea5658c7508	[true, true]	minor = GC.stat(:minor_gc_count)\n            GC.start(full_mark: fa
 0529c3b994259a346f88054c03aff90d	[[Encoding::InvalidByteSequenceError, "\\"\\\\xF1\\" followed by \\"a\\" on UTF-8"], [:invalid_byte_sequence, "UTF-8", "ISO-8859-1", "\\xF1", "a"], Encoding::InvalidByteSequenceError, Encoding::UndefinedConversionError, true, "", [Encoding::InvalidByteSequenceError, "incomplete \\"\\\\xA4\\" on EUC-JP"], [:incomplete_input, "EUC-JP", "UTF-8", "\\xA4", ""], [["US-ASCII", "UTF-8"]], [["US-ASCII", "UTF-8"], ["UTF-8", "Big5"]], "crlf_newline", "crlf_newline", nil]	(t=lambda{|&b| begin; b.call; rescue Exception => e; [e.class, e.message]; end};
+053e5f5a9063fc97e841e63ef86bad82	2.0505489999999997	def call_block\n          yield\n        end\n        def w10(s, flag)\n   
 055f890657b797cbf39b10ff47a602e6	"hello"	class Bar\n              class_variable_set(:@@val, "hello")\n       
 059105186c8c7fcaa5b946c1c71b007a	"hello\\n"	r, w = IO.pipe\n            t = Thread.new { r.gets }\n            w.
 05950871938fb64822a955fd038dac97	["included:C"]	$res = []\n        module M\n          def self.included(base)\n          
@@ -843,6 +844,7 @@
 4433d71bfa1c5cc6691d2dd71800fbe7	[:range, :range, :type]	h = { a: 1, b: 2 }\n            if h.respond_to?(:__key_at)\n        
 443bfeb84d9c2d708f478b4cd0860091	[true, true, false]	r, w = IO.pipe\n            a = [r.close_on_exec?, w.close_on_exec?]
 44528032436bdb6e6e366e913d073a06	"v1\\n"	r, w = IO.pipe\n            Process.wait Process.spawn({"SPAWN_T1" =
+4452ae427b2a0862038f7f2a87830617	89.76394847667156	def call_block\n          yield\n        end\n        def w7(s, flag)\n    
 44559a35406b5a8f1093bcfc268a7dd5	false	File.readable?("nonexistent_file_xyz")
 445fbc5889648d57a0f017eb770cb3aa	[["#<Method:", "#<Method:"], ["#<Method:", "#<Method:"], ["#<Method:", "#<Method:"], ["#<Method:", "#<Method:"], ["#<Method:", "#<Method:"], ["#<Method:", "#<Method:"], ["#<Method:", "#<Method:"], ["#<Method:", "#<Method:"], ["#<Method:", "#<Method:"], ["#<Method:", "#<Method:"], ["#<Method:", "#<Method:"], ["#<UnboundMethod:", "#<UnboundMethod:"], ["#<UnboundMethod:", "#<UnboundMethod:"], ["#<Method:", "#<Method:"]]	module MS\n              module MyMod; def bar; :bar; end; end\n     
 4469cd34806e00d8575f88a69f15e60f	"run"	Thread.current.status
@@ -1342,6 +1344,7 @@
 6c891eca2cb89ba2ef5d9d75c6d8f60f	[20, 20]	def m\n              binding\n            end\n            b1 = m\n    
 6c8f517d749d2dbedcad192eb4098b30	42	module Foo\n                def self.bar; 42; end\n                pr
 6d02db687943a63ad711b5395a933b96	"str"	class C; def to_s; "s"; end; def to_str; "str"; end; end\n[C.new].join
+6d2e4ef244e863673fbdfe58804dce19	[1.7426207497071933, 2.2426207497071933]	def call_block\n          yield\n        end\n        def w7\n          s =
 6d4221cf12759db4700deb70a10b88df	["can't modify frozen Class: #<Class:#<Class:0xX>>", "can't modify frozen Object: #<Object:0xX>"]	res = []\n        c = Class.new\n        sc = c.singleton_class\n        s
 6d4635412b101da73e8aca3b2253868a	nil	m = Module.new\n            m.set_temporary_name("temp")\n           
 6d824bfa55f3dea9e0838ce24c5e5937	[false, true, "SyWMkJRvgNMi", "aff08813c4e4323a", "JfTBauuA", 8, 9, true, true, 36]	before = Random.respond_to?(:alphanumeric)\n        require "random/form
@@ -2216,6 +2219,7 @@ b15052c5abbd93a1a9004be3b57beb9c	[:foo, :bar]	$res = []\n            obj = Objec
 b18169111f27cd344540accc05f616fe	nil	File.open("Cargo.toml") { |f| IO.new(f.fileno, autoclose: false).path }
 b18a80835134d8dffe61ec8e951213f0	["あcba", "あcba", true]	s = "abcあ".dup\n              t = s.reverse!\n              [s, t, 
 b196364f0e469cc01f39c67211d6218a	["abcdef", "abcdef", "abc", ["abcdef", "UTF-8"], "abcdef"]	File.write("/tmp/mr_cr5.txt", "abcdef")\n            r = []\n        
+b1b2cec0e935228e81e569ed82b71df3	2.1993129576089645	def call_block\n          yield\n        end\n        def w9\n          s =
 b1e42cb82ca28ab492397ec61bd6e2b5	[159600, 79800, 159600, 79800]	def osr_mul(n); s = 0; i = 0; while i < n; s = s + (i * 2); i = i + 1; 
 b1e841a013941b44c006b4154587a777	[{a: 1, b: 2}, nil]	T = Struct.new(:a, :b)\n            \n\n            s = T.new({a: 1, b
 b1e95110d8ea3a01a8392d5fcde03380	[true, "nil"]	begin\n              raise RuntimeError, "x"\n            rescue Runt
@@ -2558,6 +2562,7 @@ ca52734c6644d5ea8d449f149120fcc2	[3, -1, :nme]	res = []\n            res << (1 +
 ca6aea137215ef3580ab386ef7dcb37d	[[1, 2], [1, 2]]	def f(a,b,*)\n              [a,b]\n            end\n        \n\n        
 ca79e057f33cc52f3f630ba69bc2c841	42	x = 42\n            binding.local_variable_get("x")\n            
 ca8e2478f764162473914c7004640057	[10, 20, 30, 40, 50, 60, 70, 80, 1, 2, 3, 4, 5, 6, 7, 8]	class S\n                def initialize\n                    @a = 10\n
+ca928535f52567b7ee925c29e111ffe1	89.75113055617776	def call_block\n          yield\n        end\n        def w8(s, flag)\n    
 caa5a428511c21ba4721bdcbbcf8f21e	true	Random.srand(42)\n        a = Random.rand\n        a.is_a?(Float) && a >=
 cacaf13ae02371850924314a3901d3fb	[[9]]	class C\n                 def initialize; @log = []; end\n                 def []=
 cae47d49ae46af5b3807106c9e781864	"BYE"	s = "hello world"; s.bytesplice(0..-1, "BYE"); s
@@ -2676,6 +2681,7 @@ d4349d852cf60f39c3e6adcdc9ab0313	[:bar, [{a: 1, b: 2}]]	class Foo\n             
 d4446ffb96e085f7f76798c18cf331c5	:OVERRIDDEN	class Integer; def >=(o); :OVERRIDDEN; end; end; 3 >= 4
 d4718d9b7f7a7afcf1379197ca836a9a	[IO, true, [ArgumentError, "wrong number of arguments (given 3, expected 1..2)"], [ArgumentError, "wrong number of arguments (given 3, expected 1..2)"], [ArgumentError, "mode specified twice"], [ArgumentError, "invalid access mode "], [Errno::EINVAL, "Invalid argument"], [TypeError, "no implicit conversion of String into Integer"], [TypeError, "no implicit conversion of IO into Integer"], Errno::EBADF, :mode_kw, :int_mode, :toint_kw, ["UTF-8", "ISO-8859-1"], ["UTF-8", "ISO-8859-1"], ["UTF-8", "nil"], "nil", [ArgumentError, "encoding specified twice"], [true, "ASCII-8BIT"], [true, "ASCII-8BIT"], "ISO-8859-1", "ISO-8859-1", [ArgumentError, "binmode specified twice"], [ArgumentError, "both textmode and binmode specified"], [ArgumentError, "both textmode and binmode specified"], [ArgumentError, "both textmode and binmode specified"], false, 3, false, true, IO, :blockval, true, [ArgumentError, "boom"]]	require "tempfile"\n            t = Tempfile.new("mrb_ionew")\n      
 d48868180accf425c1cce5bbb37022fc	:OVERRIDDEN	class FalseClass; def ==(o); :OVERRIDDEN; end; end; false == false
+d49c8d4441da431d63717840fad0ac31	[0.5, 1.0, 3]	def leaf\n          a = [1, 2]\n          a.each { |x| a }\n          a.si
 d4b11df043d7e94411357a9fb1a4b7b9	true	"hello".index(/z/); $~.nil?
 d4b1bfe9eda9533ed079348cdba23ae4	"abcaあ"	"あ".rjust(5, "abc")
 d4e0ae9c56a69c0c332580eb22172e11	[[1, 2, 0], 999]	$flag = false\n        class KwNode\n          attr_reader :v\n          d
@@ -2861,6 +2867,7 @@ e3153e08936de555d02588b7435ba4c8	nil	begin\n              raise "err"\n         
 e358ab5ec7cd3f4599432855b55c2865	[[:ensure_ran], "reraised"]	$log = []\n            def m\n              raise "orig"\n            
 e383349a267c6ca9fda59d2f6df0e56c	[81, true]	require "stringio"\n            old = $stderr\n            begin\n    
 e39fd220262a3610b4d7b6874ada52af	[2.5, 3.0]	class RS1\n          def initialize = (@flag = true)\n          attr_writ
+e3c66bc50ce61dc70f16392dc5d5f22a	[1.6576735465811328, 200]	def call_block\n          yield\n        end\n        def w10\n          s 
 e3d5014354546675123f59bdf2d1daca	104	Const=4\n            Const+=100\n            a = Const\n        \n\n    
 e3dc251c39edf8fca9953b41f0868749	"self"	begin\n              Fiber.current.raise "self"\n            rescue =
 e403909aa1128050ff094c7e45c920db	["1234567890", "12345", "45678", "ASCII-8BIT", "", "ASCII-8BIT", nil, "67890", "1234567890", "ISO-8859-1", "EUC-JP", "US-ASCII", "UTF-8"]	File.write("/tmp/mr_cr.txt", "1234567890")\n            r = []\n     
@@ -2925,6 +2932,7 @@ e8ea755b0d3d65aee46f4cca2a396948	["/root", ArgumentError, true, nil, [Errno::EBA
 e8f73c5ee545fe5b71d1c667d8bec38b	[3, [:gt, :gt]]	class Gt\n              attr_reader :calls\n              def initial
 e8fff433024d62ecc658476201cd2358	[0.0, 750.0]	def call_block\n          yield\n        end\n        def d4(n)\n          
 e90638f8f74350ab109848abe99b3ee9	:from_emit	def emit(tag); throw tag, :from_emit; end\n            catch(:x) { e
+e91f61ddda46d6fb8af4dd6bdef5212a	35.03	def call_block\n          yield\n        end\n        def w8(flag)\n       
 e95108f8dbf4714b38e0e2eeaeef2060	["one x\\n", "two x\\n", 2, 2, "one x\\ntwo x\\n\\n\\n\\nthree\\nfour\\n", "one x\\ntwo x\\n\\n", "three\\nfour\\n", nil, "one x", "\\nt", "one ", "", "x\\n", "one x", "two x", "one ", "\\ntwo x\\n\\n\\n\\nthree\\nfour\\n", "three\\n", "one x", "one x\\n", :eof, "one", " x\\n", :range, :tyerr, "one x\\n", "o", 26, [[230, 156, 157], [230, 151, 165]]]	require "tempfile"\n            t = Tempfile.new("mrb_gets")\n       
 e9579fc0c8b362d6be81fff6d2f5180c	[[1], false]	r = []\n            t = Thread.new { r << 1; Thread.exit; r << 2 }\n 
 e96050e4165f7c4908cc9b521cc96f1c	[255, 49]	"\\xFF#{1}".bytes
@@ -2979,6 +2987,7 @@ ec84a8df82f97b16fdedf56efbc6ad35	"hello"	path = "/tmp/monoruby_test_filewrite_pe
 ecb0c2530aa824ca3b58cd269e696cd6	"xy"	def m; /(\\w)(\\w)/ =~ "xy"; -> { $~[0] }.call; end; m
 ecf0e0788d956837326285cb5c6fe318	[[0, 1, 2, 3, 4, 5, 6], 7, 8]	def f(*x,a,b)\n          [x,a,b]\n        end\n        \n\n        f(0,1,2,3
 ed06e4b3aaaf57db436613d3ad55b04a	[["EUC-JP"], ["ISO-8859-1"], ["ISO-8859-1"], ["ISO-8859-1"], ["UTF-8"]]	(d="/tmp/mono_de_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/a", ""); a=Dir.
+ed0a174c8759c88d0048f799de692008	[2.0244847182067076, 200]	def call_block\n          yield\n        end\n        def w10\n          s 
 ed0e20c8bb4c374081ab10bd2a0e9853	[31375, [200, 2]]	$flag = true\n        def osr\n          [1].each { return 5 }\n        en
 ed1b9d1127bc95203a639e5a1aec8a0c	false	(0x8000_0000_0000_0000 + 39) == (0x8000_0000_0000_0000 + 39 + 0.0)
 ed21697a03332cf5034e4574459d9bdf	[:ok, [:x, :y]]	A = Struct.new(nil, :x, :y)\n            \n\n            [A.name.nil? 
@@ -3162,6 +3171,7 @@ fb19b9db3ad873510aed81f16b1dbcd9	["ISO-8859-1", "UTF-8"]	(d="/tmp/mono_rpe_あ_#
 fb34f21f962af0c522442f03bd1d5c04	["ab", "ab"]	$/ = "cde"; s = +"abcde"; r = s.chomp!; $/ = "\\n"; [r, s]
 fb39dbdb558be25e38526a8809edbaac	3	->((*, a)) { a }.call([1, 2, 3])
 fb5ca5680002838248335aca3324daec	[true, true]	f = File.open("Cargo.toml")\n            begin\n              [f.set_
+fb6ad4fe010b6af46750af131edde489	[1.7426207497071933, 2.2408798698373564]	def call_block\n          yield\n        end\n        def w8\n          s =
 fb7515015bb0bb626fed9f090adde701	["elefant", 4]	S = Struct.new(:name, :legs, keyword_init: true)\n            \n\n    
 fb83f0f3c5d9a742d3d64fea1049e98f	"abc"	"abc".ljust(3)
 fb85b2dce678ed41a0929ae0e5b0932c	"Kernel"	Kernel.eval("self").to_s
@@ -3191,6 +3201,7 @@ fd3802cafa2a8bb073e7a7b5d24fb307	1	case 9\n        when 0,4,8\n          0\n    
 fd3ef4cb297b9a0b3056de6c29187e1b	[[0, 1], [2, 3, 4], [100, 200], [1, 2], [3, 4, 5], [100, 200], [2, 3], [4, 5, 6], [100, 200], [3, 4], [5, 6, 7], [100, 200], [4, 5], [6, 7, 8], [100, 200], [5, 6], [7, 8, 9], [100, 200], [6, 7], [8, 9, 10], [100, 200], [7, 8], [9, 10, 11], [100, 200], [8, 9], [10, 11, 12], [100, 200], [9, 10], [11, 12, 13], [100, 200], [10, 11], [12, 13, 14], [100, 200], [11, 12], [13, 14, 15], [100, 200], [12, 13], [14, 15, 16], [100, 200], [13, 14], [15, 16, 17], [100, 200], [14, 15], [16, 17, 18], [100, 200], [15, 16], [17, 18, 19], [100, 200], [16, 17], [18, 19, 20], [100, 200], [17, 18], [19, 20, 21], [100, 200], [18, 19], [20, 21, 22], [100, 200], [19, 20], [21, 22, 23], [100, 200], [20, 21], [22, 23, 24], [100, 200], [21, 22], [23, 24, 25], [100, 200], [22, 23], [24, 25, 26], [100, 200], [23, 24], [25, 26, 27], [100, 200], [24, 25], [26, 27, 28], [100, 200], [25, 26], [27, 28, 29], [100, 200], [26, 27], [28, 29, 30], [100, 200], [27, 28], [29, 30, 31], [100, 200], [28, 29], [30, 31, 32], [100, 200], [29, 30], [31, 32, 33], [100, 200], [30, 31], [32, 33, 34], [100, 200], [31, 32], [33, 34, 35], [100, 200], [32, 33], [34, 35, 36], [100, 200], [33, 34], [35, 36, 37], [100, 200], [34, 35], [36, 37, 38], [100, 200], [35, 36], [37, 38, 39], [100, 200], [36, 37], [38, 39, 40], [100, 200], [37, 38], [39, 40, 41], [100, 200], [38, 39], [40, 41, 42], [100, 200], [39, 40], [41, 42, 43], [100, 200], [40, 41], [42, 43, 44], [100, 200], [41, 42], [43, 44, 45], [100, 200], [42, 43], [44, 45, 46], [100, 200], [43, 44], [45, 46, 47], [100, 200], [44, 45], [46, 47, 48], [100, 200], [45, 46], [47, 48, 49], [100, 200], [46, 47], [48, 49, 50], [100, 200], [47, 48], [49, 50, 51], [100, 200], [48, 49], [50, 51, 52], [100, 200], [49, 50], [51, 52, 53], [100, 200]]	def run\n              out = []\n              50.times do |k|\n      
 fd568c0534228d89142ef4754da5cd21	[A, C]	class Recorder\n          RECORDS = []\n        end\n\n        module X\n   
 fd67bec60fd8f1e0e4e27bcd0a3675a3	[100, 200]	def f(&p)\n            g(&p)\n        end\n                \n        def g(
+fd7909da8862ced4ea8f2370dfcf4c11	35.03	def call_block\n          yield\n        end\n        def w7(flag)\n       
 fd92e81c5b7963a2b9abc4898533c1c0	1320	class Object\n          def cgf_probe\n            a = [1, 2]\n           
 fde9c01977b03195091b314bb13afc2f	true	old_stderr = $stderr\n            captured = String.new\n            
 fe1d12a770bcd49e6528c05052a7fe89	[[42], [7]]	$log = []\n            def g(x) = 42\n            def f(...) = g(...)

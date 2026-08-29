@@ -885,3 +885,150 @@ fn a_break_under_a_deferred_claim_stays_consistent() {
         "#,
     );
 }
+
+/// A promote-then-defer pair inside one block, with the second store
+/// conditional: the unconditional store promotes the owner to the
+/// slot-current `Sf(home)` (no loop head adopts it — the owner is
+/// method-compiled), the deferring arm weakens it to `F(home)`, and the
+/// if-merge meets the two claims over the same spill home — keeping the
+/// home and weakening the `Sf` edge in place, with no box on either.
+#[test]
+fn a_conditional_second_store_meets_the_promoted_view() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w7(s, flag)
+          call_block do
+            s = s * 1.001
+            if flag
+              s = s + 0.5
+            end
+            s
+          end
+          s
+        end
+        r = 0.0
+        50.times { |i| r += w7(1.5 + r * 0.001, i % 2 == 0) }
+        r
+        "#,
+    );
+}
+
+/// The mirrored arm order (a reading arm laid out first): the merge
+/// still keeps the shared spill home whichever edge fixes the target.
+#[test]
+fn a_conditional_store_in_the_else_arm_meets_the_promoted_view() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w8(s, flag)
+          t = 0.0
+          call_block do
+            s = s * 1.001
+            if flag
+              t = s + 0.25
+            else
+              s = s + 0.5
+            end
+            s
+          end
+          [s, t]
+        end
+        r = 0.0
+        50.times { |i| r += w8(1.5 + r * 0.001, i % 2 == 0)[0] }
+        r
+        "#,
+    );
+}
+
+/// Two stores to the same slot in one block body: the first store
+/// promotes the owner to a spill-homed `Sf`, and the second defers from
+/// that `Sf` — the upgrade arm that drops only the slot-current half.
+#[test]
+fn a_second_store_defers_from_the_promoted_view() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w9
+          s = 1.5
+          i = 0
+          while i < 300
+            call_block do
+              s = s * 1.001
+              s = s + 0.0005
+            end
+            i += 1
+          end
+          s
+        end
+        w9
+        "#,
+    );
+}
+
+/// A promoted-then-deferred claim where one return segment leaves via
+/// `next` still holding `F(home)` and the fallthrough re-widens the slot
+/// with an integer: the return join demotes to plain `S`, and the
+/// deferring segment boxes the home through the chain on its own edge.
+#[test]
+fn an_early_next_surrenders_per_return_segment() {
+    run_test(
+        r#"
+        def call_block
+          yield
+        end
+        def w10(s, flag)
+          call_block do
+            s = s * 1.001
+            s = s + 0.5
+            if flag
+              next 1
+            end
+            s = 0
+            2
+          end
+          s
+        end
+        r = 0
+        50.times { |i| r = [w10(1.5 + i * 0.001, i % 3 != 0), r].first }
+        r
+        "#,
+    );
+}
+
+/// A suspended *method* caller holding a bare pool float across its call:
+/// the barrier walk for a block handed out deeper in the chain must keep
+/// that binding (the frame is unreachable from the block), not box it.
+#[test]
+fn a_pool_float_in_a_suspended_method_frame_survives_a_barrier() {
+    run_test(
+        r#"
+        def leaf
+          a = [1, 2]
+          a.each { |x| a }
+          a.size
+        end
+        def mid
+          leaf + 1
+        end
+        def w11
+          x = 0.5
+          y = x * 2.0
+          i = 0
+          r = 0
+          while i < 300
+            r = mid
+            i += 1
+          end
+          [x, y, r]
+        end
+        w11
+        "#,
+    );
+}
