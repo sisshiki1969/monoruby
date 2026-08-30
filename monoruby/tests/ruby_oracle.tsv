@@ -996,6 +996,7 @@
 4c1c6f6c3f836877abf737896a925b9d	[true, true, true]	S = Struct.new(:a, :b, :c)\n            \n\n            s = S.new(1, 2
 4c2abed4507b2755e1ec53fe8226c80f	[true, true, :done, :finished]	(a=loop.instance_of?(Enumerator); b=(loop.size == Float::INFINITY); sub=Class.ne
 4c3cdf6fdb768ce2061972f6724dd416	42	class Foo\n              def initialize(x)\n                @x = x\n  
+4c417c7d5c4ca0cfc5e0182ee4cb0ce0	[true, true, true, true, true, true, true, "[[...]]", "{x: {...}}"]	a = []\n        a << a\n        b = []\n        b << b\n        h = {}\n    
 4c6323de719d0ad254c106b3de0e1ff1	99	b = binding\n            b.local_variable_set("bar", 99)\n           
 4c66c29f7a10c99487fbb86f19ded61a	false	File.file?("readme.md")
 4c69a613ea757c9eff914b8a29903a61	[7]	$log = []\n        def m\n          d = 7\n          [1].each do |x|\n     
@@ -1107,6 +1108,7 @@
 5674c6743eb1f8cb3c5480370147f096	[10, 20]	class A\n          def initialize(x)\n            @x = x\n          end\n  
 5682fe3035100385f60effc866827604	[false, false]	def foo; end\n            def bar; end\n            public [:foo, :ba
 569d1753aae6166485a592748257a963	[[[:a, 1], [:b, 2], [:c, 3]]]	class C\n          def f(**kw)\n            $res << kw.sort\n          end
+56af07030ff71ab320bc5fad3b4906c4	[false, false, false, false, false, false, false, false, false, true, true, false, true, false, false, true, false, false, false, false]	require "set"\n        S1 = Struct.new(:x)\n        S2 = Struct.new(:x)\n 
 56b85c950efd2cb0bd3500751c39686e	[2.4676811938123496e+176, -1.8507608953592623e+176]	def f(n)\n          x = 0.0\n          y = 1.0\n          i = 0\n          
 56bcba9795510ae298d1929763e4b300	100	foo = false\n        bar = true\n        quu = false\n        \n        cas
 56be47cd692556e12f7876ff5251e406	[[10, 100, 10, 100, 20, 200, 30, 300], [1, -1, 2, -2]]	r = []\n        c = {}\n        [1, 2, 3].each do |i|\n          begin\n   
@@ -1746,6 +1748,7 @@
 88d4180cc8261b799934c513e7ea401c	13	def f(a,b)\n          a + b\n        end\n        f(5,7)\n        f(4,9)\n  
 88f8e9f112097e82f8a521e470848673	["<1>", "'x'"]	module AncInner\n              refine(Integer) { def wrap; "<#{to_s}
 88fba5d2266fa4ee0bba24a92af6c067	[[], 1]	->((*a, b)) { [a, b] }.call([1])
+890a5b6de0ff467859398b23a4f4c43a	[true, true, true, true, true, true, true, true, true, true, true, true]	require "set"\n        class Never\n          def ==(o) = false\n         
 8933c621a2a4cce4cee3e798523d76cd	1050	LCS_K2 = 7\n        def lcs_hot2\n          s = 0\n          i = 0\n       
 898daf8bc776af90627957e0256ba48d	[0, 0, 0, 0, 0, 0, 0, 0, 0, 76, 31, 0, 78, 6, 0, 31, 27, 28, 14, 78, 20, 84, 5, 0, 26, 15, 0, 25, 6, 84, 29, 83, 11, 9, 85, 25, 83, 6, 9, 27, 24, 69, 13, 27, 29]	def bxor!(a, b)\n          l = a.bytesize\n          lb = b.bytesize\n    
 89a90f1ae033d44d7cd236ed88be4129	:bar	class Foo\n              def bar; end\n            end\n            \n\n
@@ -2518,6 +2521,7 @@ c2d97a349b86a09c5fd224aef7dda8c9	["unknown keywords: :b, :c", "unknown keyword: 
 c2ddc4b987960c63ecfe548001121a15	501	def f; 1; end\n            a = 0; i = 0\n            while i < 20000\n
 c2f1188cf58009e1f4929f6667b6493e	["C", "M"]	module M\n            end\n            class S\n            end\n      
 c3423608f46c2ab24a0a71094cd5ae93	[1, 2, 1, 2]	class MyNum; def to_int; 2; end; end\nn = MyNum.new\nres = []; [1,2].cycle(n) { |x
+c36b1e25498098fb5ed62d696afcb18a	[true, true, true, true, true, true, true, true]	class Never\n          def ==(o) = false\n          def eql?(o) = false\n 
 c371620ea2df438989e85db786cb3351	[true, true]	GC.config(rgengc_allow_full_mark: false)\n            begin\n        
 c374efe593f3736150bcf4d3b491c4f6	:te2	ar = Object.new; def ar.to_ary; 5; end; begin; [1].product(ar); rescue TypeError
 c395a855a07a1b6fc115ed058695bea2	"İSTANBUL"	"istanbul".upcase(:turkic)

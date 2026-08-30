@@ -630,6 +630,11 @@ fn symmetric_difference(
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let other = lfp.arg(0);
+    // A Set equals itself without a membership probe per element, which is
+    // where `Set#==` starts in CRuby too.
+    if lfp.self_val().id() == other.id() {
+        return Ok(Value::bool(true));
+    }
     if !is_set(other, &globals.store) {
         return Ok(Value::bool(false));
     }

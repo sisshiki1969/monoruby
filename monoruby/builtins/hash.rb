@@ -281,6 +281,12 @@ class Hash
     h
   end
 
+  # Kept in Ruby on purpose. A Rust `dig` used to be registered here and
+  # was shadowed by this one; reviving it measured *slower* (0.133s vs
+  # 0.118s for three levels x 300k, CRuby 0.037s), because this body is
+  # JIT-compiled and inlined while a builtin is an opaque native call that
+  # allocates a rest Array per level. Without the JIT the Rust one does
+  # win (0.158s vs 0.245s), which is what made the swap look attractive.
   def dig(key, *rest)
     val = self[key]
     return val if rest.empty? || val.nil?
