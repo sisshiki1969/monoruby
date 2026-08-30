@@ -529,6 +529,11 @@ pub(super) fn qualified_real_class_name(store: &Store, class_id: ClassId) -> Opt
 pub(super) fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
+    // A Struct equals itself without comparing a member, as in
+    // `rb_struct_equal`.
+    if self_val.id() == other.id() {
+        return Ok(Value::bool(true));
+    }
     if self_val.class() != other.class() {
         return Ok(Value::bool(false));
     }
@@ -574,6 +579,11 @@ pub(super) fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 pub(super) fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
+    // A Struct equals itself without comparing a member, as in
+    // `rb_struct_equal`.
+    if self_val.id() == other.id() {
+        return Ok(Value::bool(true));
+    }
     if self_val.class() != other.class() {
         return Ok(Value::bool(false));
     }

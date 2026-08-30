@@ -1103,6 +1103,10 @@ fn pop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let arg = lfp.arg(0);
+    // Identity first, as in `==` below.
+    if self_val.id() == arg.id() {
+        return Ok(Value::bool(true));
+    }
     let lhs = self_val.as_array();
     let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs
@@ -1137,6 +1141,11 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let arg = lfp.arg(0);
+    // An Array equals itself without any element being looked at, which is
+    // where `rb_ary_equal` starts too.
+    if self_val.id() == arg.id() {
+        return Ok(Value::bool(true));
+    }
     let lhs = self_val.as_array();
     let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs

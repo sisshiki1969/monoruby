@@ -211,7 +211,6 @@ pub(super) fn init(globals: &mut Globals) {
         0,
     );
     globals.define_builtin_func_rest(HASH_CLASS, "values_at", values_at);
-    globals.define_builtin_func_rest(HASH_CLASS, "dig", dig);
     globals.define_builtin_func(HASH_CLASS, "to_h", to_h, 0);
 
     let mut env_map = RubyMap::default();
@@ -673,6 +672,13 @@ fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let rhs_v = lfp.arg(0);
+    // A Hash equals itself, whatever it holds — `rb_hash_equal` answers
+    // that before looking at a single entry, and it is not only a
+    // shortcut: `h = { x: Float::NAN }; h == h` is true in CRuby, and was
+    // false here.
+    if self_val.id() == rhs_v.id() {
+        return Ok(Value::bool(true));
+    }
     let lhs = self_val.as_hash();
     let rhs = if let Some(rhs) = rhs_v.try_hash_ty() {
         rhs
@@ -690,8 +696,11 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     }
     crate::value::exec_recursive_paired(self_val.id(), rhs_v.id(), || {
         for (k, lhs_value) in lhs.iter() {
+            // `rb_equal` per value, identity included: that is what makes
+            // `{ x: Float::NAN } == { x: Float::NAN }` true, since both
+            // hold the same NaN.
             if let Some(rhs_value) = rhs.get(k, vm, globals)?
-                && vm.eq_values_bool(globals, lhs_value, rhs_value)?
+                && vm.rb_equal(globals, lhs_value, rhs_value)?
             {
                 continue;
             } else {
@@ -714,6 +723,10 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let rhs_v = lfp.arg(0);
+    // Identity first, as in `==` above.
+    if self_val.id() == rhs_v.id() {
+        return Ok(Value::bool(true));
+    }
     let lhs = self_val.as_hash();
     let rhs = if let Some(rhs) = rhs_v.try_hash_ty() {
         rhs
@@ -735,6 +748,11 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             let Some(rhs_value) = rhs.get(k, vm, globals)? else {
                 return Ok(Value::bool(false));
             };
+            // `rb_eql` checks identity before dispatching, so a value that
+            // is not `eql?` to itself (a NaN) still matches itself.
+            if lhs_value.id() == rhs_value.id() {
+                continue;
+            }
             let result = vm.invoke_method_inner(
                 globals,
                 eql_id,
@@ -2349,32 +2367,6 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         res.push(v);
     }
     Ok(Value::array_from_vec(res))
-}
-
-/// ### Hash#dig
-#[monoruby_builtin]
-fn dig(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let args = lfp.arg(0).as_array();
-    if args.is_empty() {
-        return Err(MonorubyErr::argumenterr(
-            "wrong number of arguments (given 0, expected 1+)",
-        ));
-    }
-    let hash = lfp.self_val().as_hash();
-    let first_key = args[0];
-    let mut val = if let Some(v) = hash.get(first_key, vm, globals)? {
-        v
-    } else {
-        return Ok(Value::nil());
-    };
-    for i in 1..args.len() {
-        if val.is_nil() {
-            return Ok(Value::nil());
-        }
-        val =
-            vm.invoke_method_inner(globals, IdentId::get_id("dig"), val, &[args[i]], None, None)?;
-    }
-    Ok(val)
 }
 
 /// ### Hash#to_h
