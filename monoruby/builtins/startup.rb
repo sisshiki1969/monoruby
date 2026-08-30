@@ -253,6 +253,20 @@ RbConfig::CONFIG['sitearch']   = RUBY_PLATFORM
 RbConfig::CONFIG['target']     = "#{__host_cpu}-pc-#{__host_os}"
 RbConfig::CONFIG['host']       = "#{__host_cpu}-pc-#{__host_os}"
 
+# `DLEXT` / `SOEXT` come from the same x86_64-linux snapshot, so they
+# report `so` on every host. On macOS CRuby reports `bundle` / `dylib`,
+# and anything that builds a native library's filename out of them —
+# a gem `Fiddle.dlopen`ing its own extension, an mkmf-style probe —
+# looks for a name that never exists there.
+if __host_os == 'darwin'
+  RbConfig::CONFIG['DLEXT'] = 'bundle'
+  RbConfig::CONFIG['SOEXT'] = 'dylib'
+  if defined?(RbConfig::MAKEFILE_CONFIG)
+    RbConfig::MAKEFILE_CONFIG['DLEXT'] = 'bundle'
+    RbConfig::MAKEFILE_CONFIG['SOEXT'] = 'dylib'
+  end
+end
+
 
 # ARGF is implemented in Rust (builtins/argf.rs); only the
 # Enumerable mix-in has to wait until the module exists.

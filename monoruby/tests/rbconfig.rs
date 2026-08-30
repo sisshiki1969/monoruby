@@ -29,3 +29,26 @@ fn rbconfig_prefix_falls_back_to_install_root() {
          Ruby is configured, got: {prefix:?}"
     );
 }
+
+// `DLEXT` / `SOEXT` come out of the vendored x86_64-linux `rbconfig.rb`
+// snapshot, so without the startup override they report `so` on every
+// host. Anything that builds a native library's filename out of them —
+// a gem `Fiddle.dlopen`ing its own extension, an mkmf-style probe — then
+// looks on macOS for a name that only exists on Linux.
+#[test]
+fn rbconfig_native_suffixes_match_the_host() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
+        .arg("--disable=gems")
+        .arg("-e")
+        .arg(r#"print [RbConfig::CONFIG["DLEXT"], RbConfig::CONFIG["SOEXT"]].join(",")"#)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let got = String::from_utf8_lossy(&out.stdout);
+    let expected = if cfg!(target_os = "macos") {
+        "bundle,dylib"
+    } else {
+        "so,so"
+    };
+    assert_eq!(got, expected, "DLEXT,SOEXT for this host");
+}
