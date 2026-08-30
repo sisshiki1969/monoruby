@@ -286,6 +286,20 @@ class Range
   end
   alias member? include?
 
+  # An Integer range without a block is an arithmetic series, which
+  # `__builtin_sum` answers in closed form instead of adding up every term
+  # through Enumerable#sum — the difference between O(1) and O(size), and
+  # between an answer and no answer at all for a range like (1..10**20).
+  # It returns nil when the shape does not apply (non-Integer endpoints or
+  # init), which is never a real sum, so anything else falls back here.
+  def sum(init = 0)
+    unless block_given?
+      res = __builtin_sum(init)
+      return res unless res.nil?
+    end
+    super
+  end
+
   # The n argument of min(n)/max(n): #to_int conversion + validation.
   def __minmax_n(n)
     unless n.is_a?(Integer)

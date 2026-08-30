@@ -19,6 +19,7 @@
 011e3a767663769a41763822af96c4c2	"foo"	def m\n              a = 42\n              1.times { /(?<a>foo)/ =~ "
 01285d5502da85e38cd005e70dcfe4ac	["hello Fred", "bye Fred"]	def get_binding(str)\n            binding\n        end\n        str = "hel
 013365e50f318e63be4522e4d94c3ff4	nil	puts 100\n        
+0139110b899540a213795ab6a404e305	"b"	class String; def <=>(o) = (o.length - length); end\n["b", "a", "c"].max
 0142f6a78c90261818a919df5e34508a	true	define_method(:boom) { :bam }\n            Object.method_defined?(:b
 01443549f3178fa419efc8dfabeb3d03	[1, 4, 5]	class MyAry; def to_ary; [4,5]; end; end\nobj = MyAry.new\na = [1]; a.concat(obj);
 0157b6a817ac1fed2a62196ed525d722	["a.rb:1: Some runtime error (RuntimeError)\\n\\tfrom b.rb:2\\n", "Traceback (most recent call last):\\n\\t1: from b.rb:2\\na.rb:1: Some runtime error (RuntimeError)\\n", "a.rb:1: \\e[1mSome runtime error (\\e[1;4mRuntimeError\\e[m\\e[1m)\\e[m\\n\\tfrom b.rb:2\\n", "\\e[1mTraceback\\e[m (most recent call last):\\n\\t1: from b.rb:2\\na.rb:1: \\e[1mSome runtime error (\\e[1;4mRuntimeError\\e[m\\e[1m)\\e[m\\n"]	e = RuntimeError.new("Some runtime error")\n        e.set_backtrace(["a.
@@ -323,7 +324,9 @@
 181190488544c9b5c85380245eaff93b	["B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 1|[2, 3, 4]", "B->A 9|[]"]	class A\n          def m(a, *r) = "A #{a}|#{r.inspect}"\n        end\n    
 1821c10c6ad04de6330183a77e1e0216	["Binding", 41, 42, 41]	x = 41\n            b = binding\n            b2 = b.dup\n            b
 182caa69fa07777b5c852ab6d6cd523b	[:@b]	class Foo\n              def initialize\n                @a = 1\n     
+1838df795bd9fd01b3bfa47259229043	1.0	class Float; def <=>(o) = (o.to_f - to_f); end\n[3.0, 1.0, 2.0].max
 185001d9a1904b3f91e65a1932e2bf0b	[11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11]	def g(a) = yield(a * 2)\n        def f(...) = g(...)\n        \n\n        $
+18507817da0f9cab02fe974f7701f74a	[[3.0, 2.0, 1.0], 3.0, 1.0, [3.0, 1.0], [1.7976931348623157e+308, 1.0]]	class Float; def <=>(o) = (o.to_f - to_f); end\n        [[3.0, 1.0, 2.0]
 186a15eac97b7392435d31cc9d7e59de	70	class Coercible\n              def to_proc\n                proc { |x
 18a7283ed1dcb3c87a0a51c2be6ebeca	[111, 111]	def add_fold; 5 + 3; end\n        def add_dyn(a, b); a + b; end\n        
 18b3f31c36b0241cca4cd3e50f3ef25a	"hi world"	class Foo\n              def hello(x); "hi #{x}"; end\n            en
@@ -548,6 +551,7 @@
 29a4782bad89b05e2a89fbdc04ec694a	[[1, :d, [], 1, nil], [1, 2, [3, 4], 1, nil], [1, 2, [], 9, nil], [1, :d, [], 1, :blk], [10, 20, [30], 1, nil], [5, 6, [7], 2, nil]]	def t(a, b = :d, *r, k: 1, &blk); [a, b, r, k, blk ? blk.call : nil
 29be5fcdba7ed7a8c6ca8dadda30fdde	["Xtail-line\\nXpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad", ["tail", "line", "padpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad"], "T-line\\npadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad", "Ytail-line\\nYpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad", "if @c  tail-line\\n  padpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadend\\n"]	s = "HEADER-LINE\\nmiddle\\ntail-line\\n" + "pad" * 20\n        s =~ /middl
 29c1437316aed84311f490aa6a4532d1	["C", "B", "A", "M3", "M2", "M1"]	module M1; end\n        module M2\n          include M1\n        end\n     
+2a0125843d4ab599f9e3f4ec2c1ca1c3	["b", "b"]	class String; def <=>(o) = (o.length - length); end\n["b", "a", "c"].minmax
 2a04e0b26f5843b7982d5765e50f29cf	[[:c1, :c2], [:c1, :c2]]	class S\n              def s; end\n            end\n            class 
 2a054f41f0ebb76b11549882f920add6	[]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.val
 2a25d512f1f2e7b492c0615e3eebe7e4	[:hi, true, false, :hi, true, false]	module CrefMixin\n          BLK = proc do\n            module DefinedInBl
@@ -657,6 +661,7 @@
 33cc5f4be417d616ecd8eb208e890c90	[3, 3, 4]	def f(x, y = x, z = y + 1); [x, y, z]; end; f(3)
 33cd8b36724499dce5c02aaf1ed6ba18	nil	$LOAD_PATH.resolve_feature_path("zzzz")
 33d265b1410d2d73366d85d5914634a0	:bar	class Foo\n              def bar; end\n            end\n            \n\n
+33d815d902d4f407cf435eb0d28d1208	3	class Integer; def <=>(o) = (o.to_i - to_i); end\n[3, 1, 2].min
 33f240174e1b4ed412a41494df988007	true	rng = Random.new(42)\n        a = rng.rand(0.0)\n        a.is_a?(Float) &
 3412cc41d6de3781c63ffde8aa5321ad	3	class MyNum; def to_int; 2; end; end\nn = MyNum.new\n[1,2,3,4,5].fetch(n)
 34185ec344beed72368ad045d6e8444c	[false, false]	require "tempfile"\n            t = Tempfile.new("mrb_sec")\n        
@@ -787,6 +792,7 @@
 3ea714d00ab18c02ddeeeac4648d3d50	"hello\\n"	io = IO.popen("echo hello")\n            s = io.read\n            io.
 3ec757fa265aa412b3b36ba1f96c0f14	["1234", "567", true, "12345", "1234567890", 2, "12XY567890", true]	path = "/tmp/monoruby_io_prw_#{Process.pid}_#{rand(100000)}"\n      
 3edda3e10e05dd7d22ab125a3f3fc747	[true, true, true, true, true, true, true, true, true, true, true, true, true, true]	GC.start\n            s = GC.stat\n            [\n              s[:hea
+3ee5dc8ce5dbe36171c4972cfc8a4911	[3.0, 1.0]	class Float; def <=>(o) = (o.to_f - to_f); end\n[3.0, 1.0, 2.0].minmax
 3f05b99cbc38adbfbc473b701ac03671	[:solo, :solo, 42]	obj = Object.new\n            def obj.solo; 42; end\n            m = 
 3f11838333fcfd0c716211da92e940b8	[[1, 2], [true, nil], [true, nil], [42, nil], [0, 1, 2], [1, 2], [true, nil], [1, [2]]]	class Ary;  def to_ary; [1, 2]; end; end\n        class Nily; def to_ary
 3f1b46f2be220ff7e899b8081439a046	true	"abc".force_encoding("ISO-8859-16").encoding == Encoding::ISO_8859_16
@@ -1350,6 +1356,7 @@
 6bab7203c03f2793f901298b3357f169	true	"abc".force_encoding("ISO-8859-5").encoding == Encoding::ISO_8859_5
 6bc256a131cd947b4c256d4afa639789	["y", Encoding::ConverterNotFoundError, Encoding::ConverterNotFoundError, [254, 255, 0, 97, 0, 10, 0, 98], "UTF-16", [[254, 255, 0, 97, 0, 10, 0, 98]], true, Encoding::ConverterNotFoundError]	(a="\\x79".dup.force_encoding(Encoding::BINARY).encode(Encoding::Emacs_Mule); b=(
 6c331f471496111694ecb08afb04cab9	[1, 2, 3]	v = []\n            t = Thread.new { v << 1; sleep; v << 3 }\n       
+6c6bac9e1206b463f412a2b2d96f020e	[3, 1]	class Integer; def <=>(o) = (o.to_i - to_i); end\n[3, 1, 2].minmax
 6c8169ed67889ab883af159b5e32ee14	[[:reader_splat, 2, :struct_reader_arg, 3], 3]	class AccCov\n          attr_reader :x\n          attr_writer :y\n        
 6c858418f8d579a73265ea125ceceeeb	1.5	class C; def to_f; 1.5; end; end; o = C.new\nFloat(o)
 6c891eca2cb89ba2ef5d9d75c6d8f60f	[20, 20]	def m\n              binding\n            end\n            b1 = m\n    
@@ -1380,6 +1387,7 @@
 6f24de5d11a542e7e8ae8c08bd85f5b7	[true, TypeError, IOError, Errno::ENOENT, Time]	(f="/tmp/mono_ep_#{Process.pid}"; File.write(f,"abc"); base=Object.new; def base
 6f2c032bb56f206798d710670edd906e	"Ruby on Railsd"	a = "Ruby"\n            a << " on Rails"\n            a << 100\n      
 6f3586689788165519257e6a0519ec54	"false"	require "tmpdir"\n            Dir.mktmpdir do |d|\n              out 
+6f412c98f8a121e54dda47768d00dcc0	[[1.5, 2.5, 3.5], [-1.7976931348623157e+308, 1.0, 1.7976931348623157e+308], -1.7976931348623157e+308, 1.7976931348623157e+308]	class Wide\n          attr_reader :v\n          def initialize(v) = @v = 
 6f48a4a001fdd1b6d3fd9bc7a12ae5fe	[true, "directory"]	[File.stat("/tmp").directory?, File.stat("/tmp").ftype]
 6f6180f86272a5e7760efeac4c2a956e	"abcああ"	"abc".ljust(5, "あ")
 6f89c5db7683986a9e61229515e918a3	"[] {a: 42, 100 => 100, c: 5}"	class C\n          def foo(*x, **y)\n            $res << x.inspect + " " 
@@ -1907,6 +1915,7 @@
 99bb34801d29ed3f9e2aa19ad41e3e16	true	proc{ 1 + 1 }.hash.is_a?(Integer)
 99c86d200493ccc2ea42e7d9e6990a3e	true	r, w = IO.pipe\n            begin\n              writers = IO.select(
 99c9a2df91f9cf9273cac10f6bf9fdd4	[[2, 4, 6], 6, 6, 42]	module BopLeak\n              refine(Integer) { def +(o); 42; end }\n
+99cf4152d5e0d0caa19da467722dd24b	"b"	class String; def <=>(o) = (o.length - length); end\n["b", "a", "c"].min
 99cfc04650144986127f45b7743e69aa	[900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900]	class A\n          def m(a, *r) = yield(a + r.sum)\n        end\n        c
 99d9f00bc752fd756d973756cc553768	:OVERRIDDEN	class Hash; def [](k); :OVERRIDDEN; end; end; ({1=>2})[1]
 99ecbfe1c60911aafcec1d108ca89493	[false, true, true]	path = "/tmp/monoruby_io_eof_#{Process.pid}_#{rand(100000)}"\n      
@@ -2311,6 +2320,7 @@ b7091d188869013ccaa15480c8f7b154	["Block isn't given.", "Block is given."]	def c
 b72e139f9584a1a1c990a63100a2e98c	[["NoMemoryError", nil, true], ["ScriptError", nil, true], ["SecurityError", nil, true], ["SignalException", nil, true], ["SystemStackError", nil, true], ["LoadError", nil, true], ["SyntaxError", nil, true], ["NotImplementedError", nil, true]]	[\n              NoMemoryError, ScriptError, SecurityError, SignalEx
 b76b635413644a9ee6cb10accbfe88d1	false	class Float; alias __orig :>=; def >=(o); __orig(o); end; end; 3.0 >= 4.0
 b76d6e4320dd94711348a48796e6ef33	[42, 100]	$res = []\n        class S\n          class C\n            def f\n         
+b7b526853ed3aa9d81b2dda6dbba1cf2	1	class Integer; def <=>(o) = (o.to_i - to_i); end\n[3, 1, 2].max
 b7b791ae9b8a5b32ebb0e713566b57b5	[:foo, [1], {x: 10, y: 20}]	class C\n          def method_missing(name, *args, **kwargs)\n           
 b7cb35744fdfaa984b6e9aa7ca2b4447	[4000, 3999]	n = 0; a = [n, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
 b7d68f9088d3f3aed2ab62dc9d949be5	[true, true]	class Foo\n              def bar; 42; end\n            end\n          
@@ -2503,6 +2513,7 @@ c541a3e07294eab4a4d213c945171c7a	[[99, 198, 99.0], [Sub, 99], [99, 100, 101], [n
 c55e6248eb41c6e540c40b61f2e992ed	420	class C\n          def f\n            x = 0\n            10.times { x += y
 c56c19f790a407710bd65fa095a58592	[3, 3]	from = 1\n        to = 2\n        [(from..to ? 3 : 4), (from...to ? 3 : 4
 c57f3073a34696e272a4c621e59717cf	false	"a".index(/a/); $~.nil?
+c5a28c5f978023ef4ce7e9a6bcff4faf	[ArgumentError, "comparison of String with 0 failed"]	class Str\n          def <=>(o) = "not a number"\n        end\n        beg
 c5a9ac24fee6ccfc26954a34f012d3d1	"UTF-8"	"\\xFF#{1}".encoding.to_s
 c5f5ea4d7ccb33511960c242704f06f0	[[195], [169], 3, [195, 169], [195]]	s = "\\303\\251\\303".dup.force_encoding(Encoding::Windows_31J)\n               m = 
 c60883d6df2480fbe9ec2ae4e169130c	[200, 300, 250, 60, 200, 300, 250, 60]	class S\n            def f(x, y, a:10, b:20)\n                $res << x\n
@@ -2904,6 +2915,7 @@ e4a701808e3a93ca91d9df6170eb2110	[["NestA::NestB", "NestA"], ["NestA::NestB", "N
 e4b07dfb345d9091378925364fd0c790	[8, [1, 3, 5], 50, 3, 10]	def first_even(a); a.each { |x| break x if x % 2 == 0 }; end\n        de
 e4c3805b5eda733c2c3b305a068dc955	"Cargo.toml"	File.open("Cargo.toml") { |f| f.path }
 e4e344de107f90e3a04f591c1d83fb9a	nil	Inner = Struct.new(:b)\n        Outer = Struct.new(:a)\n        o = Outer
+e4e47b16c304d24fa7f1fd62c39e35e0	3.0	class Float; def <=>(o) = (o.to_f - to_f); end\n[3.0, 1.0, 2.0].min
 e4f68a2f5af719f7806b8131e1468888	[1, 2, 3]	def f(x,y,z=42)\n            [x,y,z]\n        end\n        \n\n        f(1,2
 e5006c1032b8867e3476898f3a7987dd	"not match (?-mix:regex)"	class Foo\n              def !~(other)\n                "not match #{
 e5100caa80d4f4b7d03f697cc77e1758	1	(0x8000_0000_0000_0000 + 39) <=> (0x8000_0000_0000_0000 + 39 + 0.0)

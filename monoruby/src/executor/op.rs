@@ -780,11 +780,11 @@ impl Executor {
         rhs: Value,
     ) -> Result<std::cmp::Ordering> {
         self.compare_values_inner(globals, lhs, rhs)?
-            .ok_or_else(|| {
-                let lhs = lhs.get_real_class_name(&globals.store);
-                let rhs = rhs.to_s(&globals.store);
-                MonorubyErr::argumenterr(format!("comparison of {lhs} with {rhs} failed"))
-            })
+            // `cmperr` is CRuby's `rb_cmperr`, which names the argument by
+            // class unless it is an immediate or a Float: `[1, "a"].min`
+            // reports "comparison of String with 1 failed", not the
+            // argument's `to_s` (which read as an unquoted `a`).
+            .ok_or_else(|| cmperr(&globals.store, lhs, rhs))
     }
 
     pub(crate) fn compare_values_inner(
@@ -860,15 +860,14 @@ impl Executor {
         // `[W.new(2), W.new(1)].sort` raise where CRuby sorts, whenever
         // `W#<=>` returned a difference rather than a unit.
         //
-        // `cmpint` reports "not comparable" as the same `cmperr` the
-        // callers of this function build from `None`, so its error is
-        // theirs; anything else it raises (from dispatching `res <=> 0`)
-        // propagates as it should.
-        match self.cmpint(globals, res, lhs, rhs) {
-            Ok(ord) => Ok(Some(ord)),
-            Err(err) if matches!(err.kind(), MonorubyErrKind::Arguments) => Ok(None),
-            Err(err) => Err(err),
-        }
+        // A `nil` answer — the "these two are not comparable" one, which
+        // `<=>` reports as `nil` rather than by raising — was returned
+        // above, so anything `cmpint` raises while reading the sign of a
+        // non-`nil` result is a real error and propagates. CRuby does the
+        // same: a comparator returning a String raises from the `res > 0`
+        // inside `rb_cmpint` ("comparison of String with 0 failed"), and
+        // that error is what the caller sees.
+        Ok(Some(self.cmpint(globals, res, lhs, rhs)?))
     }
 }
 
