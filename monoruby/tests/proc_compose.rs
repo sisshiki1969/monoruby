@@ -81,3 +81,53 @@ fn symbol_proc_frames_survive_gc_and_stay_per_symbol() {
         "##,
     );
 }
+
+/// `Symbol#to_proc` answers one Proc per symbol, as CRuby does, so the
+/// object identity is observable: state put on the proc through one
+/// `to_proc` is there through the next, and two symbols stay apart.
+#[test]
+fn symbol_to_proc_is_one_proc_per_symbol() {
+    run_test(
+        r##"
+        p1 = :to_s.to_proc
+        [p1.equal?(:to_s.to_proc), p1 == :to_s.to_proc,
+         p1.equal?(:to_i.to_proc), p1 == :to_i.to_proc,
+         :to_s.to_proc.call(12), [1, 2].map(&:to_s),
+         :to_s.to_proc.arity, :to_s.to_proc.lambda?,
+         :to_s.to_proc.source_location]
+        "##,
+    );
+    // Mutating the shared proc is visible through the next `to_proc` —
+    // run once, since the mutation outlives the snippet.
+    run_test_once(
+        r##"
+        p1 = :to_s.to_proc
+        p1.instance_variable_set(:@tag, :seen)
+        tag = :to_s.to_proc.instance_variable_get(:@tag)
+        p1.freeze
+        [tag, :to_s.to_proc.frozen?, :to_s.to_proc.call(12), :to_i.to_proc.frozen?]
+        "##,
+    );
+    // The cache holds the only reference to the Proc, so a collection
+    // between two uses must not reclaim it.
+    run_test(
+        r##"
+        p1 = :size.to_proc.call("abcd")
+        GC.start
+        p2 = :size.to_proc.call("ab")
+        GC.start
+        [p1, p2, :size.to_proc.equal?(:size.to_proc)]
+        "##,
+    );
+    // A symbol proc has no Ruby frame to bind to, and its one frame is
+    // shared — CRuby calls it a C-level proc and raises.
+    run_test(
+        r##"
+        begin
+          :to_s.to_proc.binding
+        rescue => e
+          [e.class, e.message]
+        end
+        "##,
+    );
+}

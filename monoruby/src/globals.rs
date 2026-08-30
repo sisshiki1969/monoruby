@@ -268,6 +268,13 @@ pub struct Globals {
     /// each time put a heap-frame allocation on every element of
     /// `ary.map(&:to_s)`.
     symbol_proc_frames: HashMap<IdentId, Lfp>,
+    /// One `Symbol#to_proc` *Proc* per symbol, over that symbol's frame.
+    ///
+    /// CRuby caches these too — `:x.to_proc.equal?(:x.to_proc)` is true —
+    /// so this is compatibility as much as speed: a `Proc` frozen, or
+    /// given an instance variable, through one `to_proc` is the same
+    /// object the next one returns.
+    symbol_procs: HashMap<IdentId, Value>,
     /// function and class info.
     pub store: Store,
     /// global variables and special variables.
@@ -405,6 +412,27 @@ impl Globals {
         self.symbol_proc_frames.insert(symbol, lfp);
         lfp
     }
+
+    ///
+    /// The shared `Symbol#to_proc` Proc for *symbol* (see
+    /// [`Globals::symbol_procs`]), built on first use over that symbol's
+    /// shared frame.
+    ///
+    /// `pc` is the call site of the `to_proc` that built it. A symbol proc
+    /// has no Ruby source — `source_location` is `nil` and `Proc#binding`
+    /// raises, as in CRuby — so the one recorded here is never read back
+    /// as this proc's own position, and the first caller's is as good as
+    /// any later one's.
+    ///
+    pub(crate) fn symbol_proc(&mut self, symbol: IdentId, pc: BytecodePtr) -> Value {
+        if let Some(proc) = self.symbol_procs.get(&symbol) {
+            return *proc;
+        }
+        let outer_lfp = self.symbol_proc_frame(symbol);
+        let proc = Proc::from_outer(outer_lfp, SYMBOL_TO_PROC_BODY_FUNCID, pc).into();
+        self.symbol_procs.insert(symbol, proc);
+        proc
+    }
 }
 
 impl alloc::GC<RValue> for Globals {
@@ -412,6 +440,9 @@ impl alloc::GC<RValue> for Globals {
         self.main_object.mark(alloc);
         for lfp in self.symbol_proc_frames.values() {
             lfp.mark(alloc);
+        }
+        for proc in self.symbol_procs.values() {
+            proc.mark(alloc);
         }
         self.load_path.mark(alloc);
         self.loaded_features.mark(alloc);
@@ -617,6 +648,7 @@ impl Globals {
         let mut globals = Self {
             main_object,
             symbol_proc_frames: HashMap::default(),
+            symbol_procs: HashMap::default(),
             store: Store::new(),
             gvars: GvarTable::new(),
             special_gvars: SpecialGvars::default(),

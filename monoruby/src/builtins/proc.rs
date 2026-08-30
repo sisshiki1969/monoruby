@@ -443,8 +443,14 @@ fn to_s(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 #[monoruby_builtin]
 fn binding_(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
-    // Curry procs have no Ruby-level binding (CRuby raises ArgumentError).
-    if proc.func_id() == PROC_CURRY_BODY_FUNCID {
+    // Curry and symbol procs have no Ruby-level binding (CRuby raises
+    // ArgumentError for both — they are C-level procs there). The symbol
+    // one matters beyond compatibility: its frame is shared by every
+    // `:sym.to_proc`, so a Binding onto it would hand out a handle to
+    // state the next `to_proc` returns as well.
+    if proc.func_id() == PROC_CURRY_BODY_FUNCID
+        || proc.func_id() == SYMBOL_TO_PROC_BODY_FUNCID
+    {
         return Err(MonorubyErr::argumenterr("Can't create Binding from C level Proc"));
     }
     // For a Method#to_proc proc, the outer self is the Method object;

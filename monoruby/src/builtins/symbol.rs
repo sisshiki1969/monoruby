@@ -142,11 +142,9 @@ fn sym_to_proc(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let body_fid = SYMBOL_TO_PROC_BODY_FUNCID;
-    let outer_lfp = Lfp::heap_frame(self_val, globals[body_fid].meta());
-    let proc = Proc::from_outer(outer_lfp, body_fid, pc);
-    Ok(proc.into())
+    // One Proc per symbol, over that symbol's one frame: `to_proc` on a
+    // symbol answers the same object every time, as CRuby's does.
+    Ok(globals.symbol_proc(lfp.self_val().as_symbol(), pc))
 }
 
 /// Convert the receiver Symbol to its `String` `Value` by invoking
