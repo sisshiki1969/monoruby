@@ -487,9 +487,20 @@ jobs:
 
             mkdir -p "$GH_PAGES_DIR/$SUBDIR/data"
 
-            if [ ! -f "$GH_PAGES_DIR/$SUBDIR/data/history.csv" ]; then
-              echo "timestamp,commit,benchmark,monoruby_ms,yjit_ms,ratio,monoruby_failed,yjit_failed,monoruby_reason,yjit_reason" \
-                > "$GH_PAGES_DIR/$SUBDIR/data/history.csv"
+            local CSV="$GH_PAGES_DIR/$SUBDIR/data/history.csv"
+            local HEADER="timestamp,commit,benchmark,monoruby_ms,yjit_ms,ratio,monoruby_failed,yjit_failed,monoruby_reason,yjit_reason"
+
+            if [ ! -f "$CSV" ]; then
+              echo "$HEADER" > "$CSV"
+            elif [ "$(head -n 1 "$CSV")" != "$HEADER" ]; then
+              # The header was only ever written when the file was created,
+              # so the live file still names its columns after the original
+              # iterations/sec schema (`monoruby_ips,yjit_ips,ratio`) even
+              # though every row since has been the 10-column ms schema.
+              # Rewrite just line 1 so the names match the data.
+              { echo "$HEADER"; tail -n +2 "$CSV"; } > "$CSV.new"
+              mv "$CSV.new" "$CSV"
+              echo "history.csv: refreshed stale header for $SUBDIR"
             fi
 
             ruby "$GITHUB_WORKSPACE/.github/scripts/append_history.rb" \
