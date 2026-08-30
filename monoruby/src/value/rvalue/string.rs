@@ -837,6 +837,26 @@ pub const STRING_CR_OFFSET: usize =
 pub const STRING_TY_OFFSET: usize =
     super::RVALUE_OFFSET_KIND + std::mem::offset_of!(RStringInner, ty);
 
+/// The largest encoding tag the JIT's inline `String#<<` may append a
+/// raw byte into: `Ascii8` (0), `Utf8` (1), `UsAscii` (2). In these
+/// three a 7-bit codepoint *is* its byte; in UTF-16 / UTF-32 it is two
+/// or four, and the encodings past `UsAscii` have multibyte sequences
+/// the fast path does not know how to build, so they take the helper.
+/// (The high-byte case narrows further to `Ascii8` — see
+/// `emit_string_shl`.)
+pub const STRING_TY_MAX_INLINE_SHL: u8 = Encoding::UsAscii.tag();
+
+impl Encoding {
+    /// The `repr(u8)` discriminant, as the JIT reads it out of
+    /// [`STRING_TY_OFFSET`].
+    pub const fn tag(self) -> u8 {
+        // SAFETY: `Encoding` is `#[repr(u8)]`, so its first byte is the
+        // discriminant and reading it through a pointer cast is the
+        // documented way to obtain one from a value with fields.
+        unsafe { *(&self as *const Self as *const u8) }
+    }
+}
+
 impl std::ops::Deref for RStringInner {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
@@ -2599,6 +2619,34 @@ fn ensure_shared_root(parent: &mut Value) -> (Value, *const u8) {
 #[cfg(test)]
 mod encoding_tests {
     use super::*;
+
+    /// The JIT's inline `String#<<` compares the encoding tag against a
+    /// numeric bound, so the three encodings a raw byte append is sound
+    /// in must stay the *first* three variants, in this order. Adding a
+    /// variant among them without moving the bound would let a UTF-16
+    /// receiver take the byte path.
+    #[test]
+    fn inline_shl_encoding_tags_are_pinned() {
+        assert_eq!(0, Encoding::Ascii8.tag());
+        assert_eq!(1, Encoding::Utf8.tag());
+        assert_eq!(2, Encoding::UsAscii.tag());
+        assert_eq!(STRING_TY_MAX_INLINE_SHL, Encoding::UsAscii.tag());
+        // Everything the fast path must refuse sorts above the bound.
+        for enc in [
+            Encoding::Utf16Le,
+            Encoding::Utf16Be,
+            Encoding::Utf32Le,
+            Encoding::Utf32Be,
+            Encoding::Iso8859(1),
+            Encoding::EucJp,
+            Encoding::Sjis(0),
+            Encoding::Iso2022Jp,
+            Encoding::Other(0),
+            Encoding::NamedByte(0),
+        ] {
+            assert!(enc.tag() > STRING_TY_MAX_INLINE_SHL, "{enc:?}");
+        }
+    }
 
     #[test]
     fn try_from_str_normalises_separators_and_aliases() {

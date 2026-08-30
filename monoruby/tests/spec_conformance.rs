@@ -3,7 +3,9 @@
 //! swallowed every error, two index conversions that raised the wrong
 //! class, a codepoint appended without asking the encoding, a `concat`
 //! that read its arguments as it went, a `warn(uplevel:)` that counted
-//! block frames out, and a redefined basic operation that said nothing.
+//! block frames out, a redefined basic operation that said nothing, one
+//! replaced through a mixin that nothing noticed at all, and an
+//! `include` that landed above a `prepend`.
 
 extern crate monoruby;
 use monoruby::tests::*;
@@ -240,16 +242,45 @@ fn shovelling_a_codepoint_respects_the_encoding() {
         s << 0xB1
         s << 0x8140
         res << [s.encoding.to_s, s.bytes]
-        # BINARY takes any byte.
+        # BINARY takes any byte, and so does a byte-oriented encoding
+        # monoruby has no codec for.
         n = "".b
         n << 0
         n << 255
         res << [n.encoding.to_s, n.bytes]
+        i = "".encode(Encoding::ISO_8859_1)
+        i << 0x41
+        i << 0xFF
+        res << [i.encoding.to_s, i.bytes]
+        # The fixed-width Unicode forms encode code units, and refuse a
+        # lone surrogate.
+        [Encoding::UTF_16LE, Encoding::UTF_16BE,
+         Encoding::UTF_32LE, Encoding::UTF_32BE].each do |enc|
+          [0x41, 0x203D, 0x10348].each do |cp|
+            t = "".encode(enc)
+            t << cp
+            res << [enc.to_s, cp, t.bytes]
+          end
+          begin
+            "".encode(enc) << 0xD800
+            res << :no_error
+          rescue RangeError => ex
+            res << [enc.to_s, ex.message]
+          end
+        end
         [["".encode(Encoding::US_ASCII), 256],
          ["".encode(Encoding::US_ASCII), -1],
          ["".encode(Encoding::EUC_JP), 0x81],
          ["".encode(Encoding::EUC_JP), 0xA100],
          ["".encode(Encoding::Windows_31J), 0x80],
+         # Past the widest sequence the encoding has at all, the message
+         # is "out of char range" rather than "invalid codepoint".
+         ["".encode(Encoding::Windows_31J), 0x10000],
+         ["".encode(Encoding::EUC_JP), 0x100_0000],
+         ["".encode(Encoding::ISO_8859_1), 256],
+         ["".encode(Encoding::ISO_8859_5), 0x1234],
+         ["".encode(Encoding::UTF_16LE), 0xDFFF],
+         ["".encode(Encoding::UTF_32BE), 0x110000],
          ["".b, 256],
          ["".encode(Encoding::UTF_8), 0x110000],
          ["", 2 ** 64]].each do |str, cp|
@@ -364,6 +395,115 @@ fn redefining_a_basic_op_warns_when_asked() {
           end
         end
         res
+        "##,
+    );
+}
+
+/// A basic operation replaced through a *mixin* has to retire the fast
+/// paths, the same as reopening the class does. The table records the
+/// pair as `(Integer, :+)`, but the definition lands in the module, so
+/// neither the definition-into-a-module case nor the mix-a-module-in
+/// case had anything to mark it — and both tiers kept firing the
+/// builtin.
+#[test]
+fn a_mixin_can_replace_a_basic_op() {
+    // The module is mixed in first and gains the method afterwards.
+    run_test_once(
+        r##"
+        module Later; end
+        class Integer
+          prepend Later
+        end
+        before = 1 + 2
+        Later.module_eval do
+          def +(o)
+            $called = true
+            super(o)
+          end
+        end
+        [before, 1 + 2, $called]
+        "##,
+    );
+    // ... and the other way round: the module already carries it when
+    // it is spliced in.
+    run_test_once(
+        r##"
+        module Already
+          def *(o)
+            $times = true
+            super(o)
+          end
+        end
+        before = 3 * 4
+        class Integer
+          prepend Already
+        end
+        [before, 3 * 4, $times]
+        "##,
+    );
+    // A hot loop that compiled against the builtin has to come off it
+    // too.
+    run_test_once(
+        r##"
+        module Hot; end
+        class Integer
+          prepend Hot
+        end
+        def total(n)
+          s = 0
+          i = 0
+          while i < n
+            s = s + i
+            i += 1
+          end
+          s
+        end
+        before = total(1000)
+        Hot.module_eval { def +(o) = super(o) * 2 }
+        [before, total(4)]
+        "##,
+    );
+}
+
+/// `include` splices below the class's own methods; only `prepend`
+/// inserts at the head. With something already prepended, the class's
+/// own table lives at its origin iclass, and the include has to start
+/// there — starting at the head put the included module ahead of both
+/// the prepends and the class itself.
+#[test]
+fn include_lands_below_a_prepend() {
+    run_test(
+        r##"
+        module Pre
+          def who = [:pre, super]
+        end
+        module Inc
+          def who = :inc
+          def only_here = :from_inc
+        end
+        class Base
+          def who = :base
+        end
+        class Base
+          prepend Pre
+          include Inc
+        end
+        obj = Base.new
+        [Base.ancestors.take(4).map(&:to_s), obj.who, obj.only_here,
+         Base.instance_method(:who).owner.to_s]
+        "##,
+    );
+    // The same on a class whose own method is a builtin, and with the
+    // include arriving before the prepend.
+    run_test(
+        r##"
+        module A1; def to_s = "a1"; end
+        module A2; def to_s = "a2"; end
+        class Thing
+          include A1
+          prepend A2
+        end
+        [Thing.ancestors.take(4).map(&:to_s), Thing.new.to_s]
         "##,
     );
 }

@@ -962,18 +962,12 @@ impl Executor {
         if pairs.is_empty() {
             return Ok(());
         }
+        // Nothing is ever queued before `arm_basic_ops`, which runs once
+        // `builtins/*.rb` — `__warn_performance` among them — has
+        // loaded, so the helper is always there by the time a pair
+        // arrives.
         let main = globals.main_object;
-        if globals
-            .store
-            .check_method(main, IdentId::get_id("__warn_performance"))
-            .is_none()
-        {
-            return Ok(());
-        }
-        let prefix = match &loc {
-            Some(loc) => format!("{loc}: "),
-            None => String::new(),
-        };
+        let prefix = loc.map_or_else(String::new, |loc| format!("{loc}: "));
         for (class_id, name) in pairs {
             let class_name = globals.store.get_class_name(class_id);
             let msg = format!(

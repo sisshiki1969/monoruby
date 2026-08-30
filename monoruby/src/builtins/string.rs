@@ -810,8 +810,14 @@ fn shl_inner(
             let encoded = c.encode_utf8(&mut buf);
             self_.extend_from_slice_checked(encoded.as_bytes())?;
         } else {
-            let bytes = codepoint_bytes(enc, ch).ok_or_else(|| {
-                MonorubyErr::rangeerr(format!("invalid codepoint 0x{ch:X} in {}", enc.name()))
+            let bytes = codepoint_bytes(enc, ch).map_err(|e| match e {
+                CodepointErr::Invalid => MonorubyErr::rangeerr(format!(
+                    "invalid codepoint 0x{ch:X} in {}",
+                    enc.name()
+                )),
+                CodepointErr::OutOfRange => {
+                    MonorubyErr::char_out_of_range(&globals.store, other_v)
+                }
             })?;
             self_.extend_from_slice_checked(&bytes)?;
         }
@@ -828,17 +834,33 @@ fn shl_inner(
     Ok(self_.into())
 }
 
-/// The byte sequence a codepoint has in `enc`, or `None` when the
-/// encoding cannot name it — CRuby's `rb_enc_codelen` + `rb_enc_mbcput`,
-/// which is what makes `"".encode(Encoding::EUC_JP) << 0x81` a
-/// `RangeError` rather than a stray lead byte.
+/// Why an encoding has no byte sequence for a codepoint. CRuby draws
+/// the same distinction in `rb_enc_uint_chr`: onigmo answers either
+/// "not a code point of this encoding" or "wider than anything this
+/// encoding encodes", and the two get different messages.
+enum CodepointErr {
+    /// The encoding has sequences, just not this one —
+    /// `"invalid codepoint 0x%X in %s"`.
+    Invalid,
+    /// Past the widest sequence the encoding has at all —
+    /// `"%u out of char range"`.
+    OutOfRange,
+}
+
+/// The byte sequence a codepoint has in `enc` — CRuby's
+/// `rb_enc_codelen` + `rb_enc_mbcput`, which is what makes
+/// `"".encode(Encoding::EUC_JP) << 0x81` a `RangeError` rather than a
+/// stray lead byte.
 ///
 /// UTF-8 and the two ASCII encodings are handled by their caller; the
 /// rest divide into the fixed-width Unicode forms, the two Japanese
 /// multibyte encodings monoruby decodes natively, and the byte-oriented
 /// remainder (ISO-8859-N and the name-preserved encodings with no
-/// codec), where a codepoint is simply a byte.
-fn codepoint_bytes(enc: Encoding, cp: u32) -> Option<Vec<u8>> {
+/// codec), where a codepoint is simply a byte. That last group is where
+/// monoruby and CRuby can still disagree: onigmo knows Big5 and GBK are
+/// multibyte and calls `0x100` an invalid codepoint, while monoruby,
+/// having no codec for them, reports it as out of char range.
+fn codepoint_bytes(enc: Encoding, cp: u32) -> std::result::Result<Vec<u8>, CodepointErr> {
     let surrogate = (0xD800..=0xDFFF).contains(&cp);
     match enc {
         Encoding::Utf8 | Encoding::UsAscii | Encoding::Ascii8 => unreachable!(),
@@ -850,26 +872,27 @@ fn codepoint_bytes(enc: Encoding, cp: u32) -> Option<Vec<u8>> {
                 let c = cp - 0x10000;
                 vec![(0xD800 + (c >> 10)) as u16, (0xDC00 + (c & 0x3FF)) as u16]
             } else {
-                return None;
+                // Every refusal here is a codepoint Unicode itself does
+                // not have, which onigmo reports as invalid rather than
+                // as too wide.
+                return Err(CodepointErr::Invalid);
             };
-            Some(
-                units
-                    .into_iter()
-                    .flat_map(|u| {
-                        if big {
-                            u.to_be_bytes()
-                        } else {
-                            u.to_le_bytes()
-                        }
-                    })
-                    .collect(),
-            )
+            Ok(units
+                .into_iter()
+                .flat_map(|u| {
+                    if big {
+                        u.to_be_bytes()
+                    } else {
+                        u.to_le_bytes()
+                    }
+                })
+                .collect())
         }
         Encoding::Utf32Le | Encoding::Utf32Be => {
             if cp > 0x10FFFF || surrogate {
-                return None;
+                return Err(CodepointErr::Invalid);
             }
-            Some(if enc == Encoding::Utf32Be {
+            Ok(if enc == Encoding::Utf32Be {
                 cp.to_be_bytes().to_vec()
             } else {
                 cp.to_le_bytes().to_vec()
@@ -878,26 +901,31 @@ fn codepoint_bytes(enc: Encoding, cp: u32) -> Option<Vec<u8>> {
         // EUC-JP: single-byte ASCII, the 0x8E half-width-kana pair, the
         // two-byte JIS X 0208 plane, and the three-byte 0x8F plane.
         Encoding::EucJp => {
+            if cp > 0xFF_FFFF {
+                return Err(CodepointErr::OutOfRange);
+            }
             let ok = if cp <= 0x7F {
                 true
             } else if cp <= 0xFFFF {
                 let (hi, lo) = ((cp >> 8) as u8, cp as u8);
                 (hi == 0x8E && (0xA1..=0xDF).contains(&lo))
                     || ((0xA1..=0xFE).contains(&hi) && (0xA1..=0xFE).contains(&lo))
-            } else if cp <= 0xFF_FFFF {
+            } else {
                 let (b0, b1, b2) = ((cp >> 16) as u8, (cp >> 8) as u8, cp as u8);
                 b0 == 0x8F && (0xA1..=0xFE).contains(&b1) && (0xA1..=0xFE).contains(&b2)
-            } else {
-                false
             };
             ok.then(|| big_endian_bytes(cp))
+                .ok_or(CodepointErr::Invalid)
         }
         // Shift_JIS: single-byte ASCII and half-width kana, plus the
         // two-byte lead/trail pairs.
         Encoding::Sjis(_) => {
+            if cp > 0xFFFF {
+                return Err(CodepointErr::OutOfRange);
+            }
             let ok = if cp <= 0x7F || (0xA1..=0xDF).contains(&cp) {
                 true
-            } else if (0x100..=0xFFFF).contains(&cp) {
+            } else if cp >= 0x100 {
                 let (hi, lo) = ((cp >> 8) as u8, cp as u8);
                 ((0x81..=0x9F).contains(&hi) || (0xE0..=0xFC).contains(&hi))
                     && ((0x40..=0x7E).contains(&lo) || (0x80..=0xFC).contains(&lo))
@@ -905,22 +933,25 @@ fn codepoint_bytes(enc: Encoding, cp: u32) -> Option<Vec<u8>> {
                 false
             };
             ok.then(|| big_endian_bytes(cp))
+                .ok_or(CodepointErr::Invalid)
         }
-        _ => (cp <= 0xFF).then(|| vec![cp as u8]),
+        _ => (cp <= 0xFF)
+            .then(|| vec![cp as u8])
+            .ok_or(CodepointErr::OutOfRange),
     }
 }
 
 /// The minimal big-endian byte form of a multibyte codepoint — for the
-/// encodings whose "codepoint" *is* its byte sequence.
+/// encodings whose "codepoint" *is* its byte sequence. Both callers have
+/// already refused anything past three bytes (EUC-JP's `0x8F` plane is
+/// the widest sequence either names).
 fn big_endian_bytes(cp: u32) -> Vec<u8> {
     if cp <= 0xFF {
         vec![cp as u8]
     } else if cp <= 0xFFFF {
         vec![(cp >> 8) as u8, cp as u8]
-    } else if cp <= 0xFF_FFFF {
-        vec![(cp >> 16) as u8, (cp >> 8) as u8, cp as u8]
     } else {
-        cp.to_be_bytes().to_vec()
+        vec![(cp >> 16) as u8, (cp >> 8) as u8, cp as u8]
     }
 }
 

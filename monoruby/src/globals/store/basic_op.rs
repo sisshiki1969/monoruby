@@ -202,6 +202,21 @@ impl BasicOpTable {
         self.names.contains(&name)
     }
 
+    /// The classes this table pairs `name` with. A definition that lands
+    /// in a *module* names no class, so the invalidation has to start
+    /// from the operator and ask which classes could be mixing the
+    /// module in — see `Store::check_mixed_in_basic_op`.
+    pub(crate) fn classes_for_name(&self, name: IdentId) -> Vec<ClassId> {
+        if !self.armed {
+            return Vec::new();
+        }
+        self.set
+            .iter()
+            .filter(|(_, n)| *n == name)
+            .map(|(class_id, _)| *class_id)
+            .collect()
+    }
+
     /// Record that `class_id#name` was replaced outright.
     pub(crate) fn mark_redefined(&mut self, class_id: ClassId, name: IdentId) {
         self.redefined = true;

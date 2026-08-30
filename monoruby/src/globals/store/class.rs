@@ -2438,6 +2438,60 @@ impl Store {
             self.set_bop_redefine(class_id, name);
         }
         self.check_refined_basic_op(class_id, name);
+        self.check_mixed_in_basic_op(class_id, name);
+    }
+
+    ///
+    /// A method landing in a *module* replaces the basic operation of
+    /// every class that has mixed the module in: `module M; def +(o);
+    /// end; end` with `Integer.prepend M` displaces `Integer#+` as
+    /// surely as reopening `Integer` would, but the pair the table
+    /// records names the class, not the module, so nothing marked it
+    /// and both tiers kept firing the builtin.
+    ///
+    /// Only a name that appears somewhere in `BASIC_OP_DEFS` gets past
+    /// the first test, so the ancestry walk runs for `+`, `<<`, `==`, …
+    /// and over the handful of classes the table pairs that name with.
+    ///
+    fn check_mixed_in_basic_op(&mut self, module_id: ClassId, name: IdentId) {
+        if !self.basic_ops.is_basic_op_name(name) {
+            return;
+        }
+        for class_id in self.basic_ops.classes_for_name(name) {
+            // The `class_id == module_id` case is the ordinary
+            // redefinition `insert_method` already handled.
+            if class_id != module_id && self.class_in_ancestors(class_id, module_id) {
+                self.set_bop_redefine(class_id, name);
+            }
+        }
+    }
+
+    ///
+    /// The other half of [`Self::check_mixed_in_basic_op`]: mixing a
+    /// module in can replace a basic operation with *no definition
+    /// running at all*, when the module already carried the method
+    /// (`module M; def +(o); end; end` and only then `Integer.prepend
+    /// M`). Called after the chain has been spliced, so the ancestry
+    /// test sees the new position.
+    ///
+    /// Walks the mixed-in module's own chain — a module may itself have
+    /// prepends and includes, and any of them can be what defines the
+    /// operator.
+    ///
+    pub(crate) fn check_mixin_basic_ops(&mut self, module: Module) {
+        let mut names = vec![];
+        let mut cur = Some(module);
+        while let Some(m) = cur {
+            for name in self[m.id()].methods.keys() {
+                if self.basic_ops.is_basic_op_name(*name) {
+                    names.push(*name);
+                }
+            }
+            cur = m.superclass();
+        }
+        for name in names {
+            self.check_mixed_in_basic_op(module.id(), name);
+        }
     }
 
     ///
