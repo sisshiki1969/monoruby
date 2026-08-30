@@ -3678,7 +3678,51 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw: Option<Hashmap>,
     ) -> Result<Value> {
+        // `&:sym` is a *call site*, and like every other call site it
+        // deserves an inline cache: `ary.map(&:to_s)` asks for one symbol
+        // on one class per element, and the lookup was what made it cost
+        // an explicit `public_send` per element rather than a plain call.
+        if let Some(func_id) = self.symbol_proc_method(globals, symbol, recv) {
+            return self.invoke_func_inner(globals, func_id, recv, args, bh, kw);
+        }
         self.invoke_method_inner_vis(globals, symbol, recv, args, bh, kw, false)
+    }
+
+    ///
+    /// The public method `symbol` names on `recv`, from the one-entry
+    /// cache in `Globals` or resolved and recorded there.
+    ///
+    /// `None` whenever the plain path must run instead: a receiver whose
+    /// `symbol` is private, protected or absent (the errors and the
+    /// `method_missing` fallback are `invoke_method_inner_vis`'s to
+    /// produce, and are not worth caching), or an active refinement, which
+    /// makes the resolution depend on the calling scope rather than on the
+    /// receiver's class alone.
+    ///
+    fn symbol_proc_method(
+        &mut self,
+        globals: &mut Globals,
+        symbol: IdentId,
+        recv: Value,
+    ) -> Option<FuncId> {
+        if globals.store.refinements().is_active() {
+            return None;
+        }
+        // The *real* class, not `class_for_ic`: the latter answers
+        // `BOOL_CLASS` for both `true` and `false`, and `find_method` falls
+        // back to a per-class lookup when the two resolve differently — so
+        // a shared key could hand `false` the method it resolved for
+        // `true`.
+        let class_id = recv.class();
+        let class_version = Globals::class_version();
+        if let Some(func_id) = globals.cached_symbol_method(symbol, class_id, class_version) {
+            return Some(func_id);
+        }
+        // `is_func_call = false` is what makes this `public_send`: the
+        // same restricted lookup the uncached path performs.
+        let func_id = self.find_method(globals, recv, symbol, false).ok()?;
+        globals.cache_symbol_method(symbol, class_id, class_version, func_id);
+        Some(func_id)
     }
 
     // NOTE: there is deliberately no generic Rust-side safepoint helper
