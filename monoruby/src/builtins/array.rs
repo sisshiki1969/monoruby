@@ -30,6 +30,10 @@ pub(super) fn init(globals: &mut Globals) {
     // suite), and a future pre-load `Array.new(n)` fails loudly through
     // `Object#initialize`'s arity check rather than silently diverging.
     // Native legs of the Ruby `initialize` (private, `__`-prefixed).
+    // `rb_equal` for the Ruby-level searches in builtins/array.rb
+    // (`rindex`, `assoc`, `rassoc`), which need the identity step a bare
+    // `==` does not have.
+    globals.define_private_builtin_func(ARRAY_CLASS, "__rb_equal", rb_equal_, 2);
     globals.define_private_builtin_func(ARRAY_CLASS, "__init_fill", init_fill, 2);
     globals.define_private_builtin_func(ARRAY_CLASS, "__init_from", init_from, 1);
     globals.define_private_builtin_func(ARRAY_CLASS, "__size_to_int", size_to_int, 1);
@@ -479,10 +483,14 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         let mut count = 0;
         let ary = lfp.self_val();
+        // `rb_equal(element, argument)`, like `include?` — element as the
+        // receiver, and an element that *is* the argument counted whatever
+        // its `==` says.
+        let mut search = executor::op::EqSearch::new(globals, arg0);
         let mut i = 0;
         while i < ary.as_array().len() {
             let elem = ary.as_array()[i];
-            if vm.invoke_eq(globals, arg0, elem)? {
+            if vm.rb_equal_search(globals, &mut search, elem)? {
                 count += 1;
             }
             i += 1;
@@ -3638,15 +3646,31 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// - include?(val) -> bool
 ///
+/// `rb_equal(element, needle)` for the Ruby-level searches: `element ==
+/// needle`, except that an element which *is* the needle is equal however
+/// its `==` answers. Private; see the registration above.
+///
+#[monoruby_builtin]
+fn rb_equal_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(vm.rb_equal(globals, lfp.arg(0), lfp.arg(1))?))
+}
+
+///
+/// #### Array#include?
+///
+/// - include?(val) -> bool
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/include=3f.html]
 #[monoruby_builtin]
 fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let rhs = lfp.arg(0);
+    let mut search = executor::op::EqSearch::new(globals, lfp.arg(0));
     let mut i = 0;
+    // The length is re-read every step: an element's `==` runs Ruby, which
+    // may resize the receiver.
     while i < self_val.as_array().len() {
-        let lhs = self_val.as_array()[i];
-        if vm.eq_values_bool(globals, lhs, rhs)? {
+        let elem = self_val.as_array()[i];
+        if vm.rb_equal_search(globals, &mut search, elem)? {
             return Ok(Value::bool(true));
         };
         i += 1;
@@ -4803,9 +4827,10 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let recv = lfp.self_val();
     let mut ary = recv.as_array();
     let arg0 = lfp.arg(0);
+    let mut search = executor::op::EqSearch::new(globals, arg0);
     let mut has_match = false;
     for i in 0..ary.len() {
-        if vm.eq_values_bool(globals, ary[i], arg0)? {
+        if vm.rb_equal_search(globals, &mut search, ary[i])? {
             has_match = true;
             break;
         }
@@ -4818,7 +4843,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         };
     }
     recv.ensure_not_frozen(&globals.store)?;
-    let f = |v: &Value| Ok(!vm.eq_values_bool(globals, *v, arg0)?);
+    let f = |v: &Value| Ok(!vm.rb_equal_search(globals, &mut search, *v)?);
     Ok(ary.retain(f)?.unwrap_or(Value::nil()))
 }
 
@@ -4869,14 +4894,15 @@ fn find_index(
         if lfp.block().is_some() {
             vm.ruby_warn_caller(globals, "warning: given block not used")?;
         }
-        let func_id = vm.find_method(globals, arg0, IdentId::_EQ, false)?;
+        // `rb_equal(element, argument)` — the *element* is the receiver of
+        // `==`, as in CRuby. This used to look `==` up on the argument and
+        // call it the other way round, which answers differently for any
+        // asymmetric `==`.
+        let mut search = executor::op::EqSearch::new(globals, arg0);
         let mut i = 0;
         while i < self_val.as_array().len() {
-            let v = self_val.as_array()[i];
-            if vm
-                .invoke_func_inner(globals, func_id, arg0, &[v], None, None)?
-                .as_bool()
-            {
+            let elem = self_val.as_array()[i];
+            if vm.rb_equal_search(globals, &mut search, elem)? {
                 return Ok(Value::integer(i as i64));
             }
             i += 1;

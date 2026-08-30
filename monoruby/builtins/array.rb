@@ -499,7 +499,9 @@ class Array
           i = self.size - 1
           next
         end
-        return i if self[i] == val
+        # rb_equal, not a bare `==`: an element that *is* `val` is found
+        # however its `==` answers (CRuby's identity step).
+        return i if __rb_equal(self[i], val)
         i -= 1
       end
       return nil
@@ -522,10 +524,10 @@ class Array
   def assoc(key)
     each do |elem|
       if elem.is_a?(Array)
-        return elem if elem.size > 0 && elem[0] == key
+        return elem if elem.size > 0 && __rb_equal(elem[0], key)
       elsif elem.respond_to?(:to_ary)
         ary = elem.to_ary
-        return ary if ary.is_a?(Array) && ary.size > 0 && ary[0] == key
+        return ary if ary.is_a?(Array) && ary.size > 0 && __rb_equal(ary[0], key)
       end
     end
     nil
@@ -534,10 +536,10 @@ class Array
   def rassoc(key)
     each do |elem|
       if elem.is_a?(Array)
-        return elem if elem.size > 1 && elem[1] == key
+        return elem if elem.size > 1 && __rb_equal(elem[1], key)
       elsif elem.respond_to?(:to_ary)
         ary = elem.to_ary
-        return ary if ary.is_a?(Array) && ary.size > 1 && ary[1] == key
+        return ary if ary.is_a?(Array) && ary.size > 1 && __rb_equal(ary[1], key)
       end
     end
     nil
