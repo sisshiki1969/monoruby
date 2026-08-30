@@ -60,19 +60,76 @@ impl Codegen {
     /// addresses) and no `select_page` (the clear block is laid out inline).
     /// Does not deopt — it zeroes the 4 cache entries' `method`/`fid` words so a
     /// stale `IdentId -> FuncId` binding can't survive a redefinition.
-    fn check_version_with_cache(&mut self, cache_addr: u64) {
-        // Per-callsite version stamp. Heap-leaked (like the wrapper's jit_slot)
-        // so its absolute address bakes into the stub — aarch64 has no
-        // RIP-relative addressing, and a fresh JIT-data label is not yet
-        // resolved at emit time (only `class_version_label`, allocated at
-        // startup, is).
+    ///
+    /// Call `method_missing` for a call site whose method does not exist,
+    /// through the same runtime helper the VM uses. x86 twin:
+    /// `method_missing_call`; the reasoning is in
+    /// `JitContext::compile_method_missing`.
+    ///
+    /// ### out
+    /// - x0: the call's result
+    ///
+    pub(crate) fn method_missing_call(
+        &mut self,
+        recv: SlotId,
+        callid: CallSiteId,
+        using_fpr: UsingFpr,
+        error: &DestLabel,
+    ) {
+        let lfp = GP::R14.a64().0;
+        self.emit_fpr_save(using_fpr, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                       // vm
+            mov x1, x20;                       // globals
+        );
+        self.a64_frame_load(2, lfp, conv(recv) as u32); // x2 = receiver
+        monoasm_arm64!(&mut self.jit,
+            mov x3, x22;                       // this frame's LFP
+            mov x4, (callid.get() as u64);     // CallSiteId
+            str x30, [sp, #-16]!;
+            mov x9, (crate::codegen::runtime::invoke_method_missing as *const () as u64);
+            blr x9;                            // x0 = Option<Value>
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        self.emit_handle_error(error);
+    }
+
+    ///
+    /// Retire the per-call-site symbol cache when its answers no longer
+    /// apply: on a class-version change, and on a change of *receiver
+    /// class* — the cache maps a name to a `FuncId`, which is only that
+    /// class's answer. x86 twin: `check_version_with_cache`, which carries
+    /// the full note.
+    ///
+    fn check_version_with_cache(&mut self, cache_addr: u64, recv: SlotId) {
+        // Per-callsite version and receiver-class stamps. Heap-leaked (like
+        // the wrapper's jit_slot) so their absolute addresses bake into the
+        // stub — aarch64 has no RIP-relative addressing, and a fresh
+        // JIT-data label is not yet resolved at emit time (only
+        // `class_version_label`, allocated at startup, is).
         let cv_addr = Box::into_raw(Box::new(-1i32)) as u64;
+        // 0 is never a valid ClassId, so an untouched cache misses.
+        let cc_addr = Box::into_raw(Box::new(0i32)) as u64;
         let gv_addr = self
             .jit
             .get_label_address(&self.class_version_label())
             .as_ptr() as u64;
+        let get_class = self.get_class.clone();
+        let lfp = GP::R14.a64().0;
         let clear = self.jit.label();
         let exit = self.jit.label();
+        self.a64_frame_load(0, lfp, conv(recv) as u32); // x0 = receiver
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            bl get_class;            // x0 = receiver's ClassId
+            ldr x30, [sp], #16;
+            mov x13, x0;             // x13: receiver class, kept across the check
+            mov x9, (cc_addr);
+            ldr w11, [x9];           // cached class stamp
+            cmp w13, w11;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &clear);
         monoasm_arm64!(&mut self.jit,
             mov x9, (gv_addr);
             ldr w10, [x9];           // global class version
@@ -81,11 +138,15 @@ impl Codegen {
             cmp w10, w11;
         );
         self.jit.bcond_label(monoasm::Cond::Ne, &clear);
-        monoasm_arm64!(&mut self.jit, b exit;); // match -> keep the cache
+        monoasm_arm64!(&mut self.jit, b exit;); // both match -> keep the cache
         self.jit.bind_label(clear);
         monoasm_arm64!(&mut self.jit,
+            mov x9, (gv_addr);
+            ldr w10, [x9];
             mov x9, (cv_addr);
             str w10, [x9];           // re-stamp the cached version
+            mov x9, (cc_addr);
+            str w13, [x9];           // re-stamp the cached receiver class
             mov x9, (cache_addr);
             mov x12, #0;
             str x12, [x9];           // zero each entry's method+fid word
@@ -145,7 +206,21 @@ impl Codegen {
     /// `handle_error`. aarch64: no `select_page`, so the cold blocks are inline;
     /// `csel` replaces `cmovltq`. Regs: x11 IdentId, x12 cur, x13 min, x14/x15/x9
     /// scratch.
-    fn object_send_inner(&mut self, recv: SlotId, cache_addr: u64, error: &DestLabel) {
+    ///
+    /// Resolve the `send` target name (x11) to a `FuncId` in x0, through
+    /// the per-call-site symbol cache.
+    ///
+    /// A name that resolves to nothing branches to *missing* rather than
+    /// raising: that is a `method_missing` call, which this inline path
+    /// cannot build. x86 twin: `object_send_inner`.
+    ///
+    fn object_send_inner(
+        &mut self,
+        recv: SlotId,
+        cache_addr: u64,
+        missing: &DestLabel,
+        error: &DestLabel,
+    ) {
         let lfp = GP::R14.a64().0;
         let not_symbol = self.jit.label();
         let l1 = self.jit.label();
@@ -218,7 +293,10 @@ impl Codegen {
             blr x9;                                   // x0 = Option<FuncId>
             ldr x30, [sp], #16;
             ldp x11, x12, [sp], #16;
-            cbz x0, exit;                             // None -> error (handle_error)
+        );
+        // None -> not a method: `method_missing`, not an error.
+        self.jit.cbz_label(monoasm::GReg(0), missing);
+        monoasm_arm64!(&mut self.jit,
             str w0, [x12, #(CACHE_FID as u32)];
             str w11, [x12, #(CACHE_METHOD as u32)];
             mov x9, #1;
@@ -361,7 +439,12 @@ impl Codegen {
         // fresh JIT-data label is not resolved at emit time on aarch64.
         assert_eq!(std::mem::size_of::<Cache>(), 64);
         let cache_addr = Box::into_raw(Box::new([0u64; 8])) as u64;
-        self.check_version_with_cache(cache_addr);
+        // Where an unresolvable name goes: `send` to a method that does
+        // not exist is `method_missing`, not an error, and this inline
+        // path cannot express that call — see `object_send_missing`.
+        let missing = self.jit.label();
+        let done = self.jit.label();
+        self.check_version_with_cache(cache_addr, recv);
         self.emit_fpr_save(using_fpr, false);
         // resolve arg0 -> FuncId in x0
         if no_splat {
@@ -377,11 +460,11 @@ impl Codegen {
                 );
             } else {
                 self.a64_frame_load(11, lfp, conv(args) as u32); // x11 = arg0
-                self.object_send_inner(recv, cache_addr, error);
+                self.object_send_inner(recv, cache_addr, &missing, error);
             }
         } else {
             self.object_send_splat_arg0(args, error);
-            self.object_send_inner(recv, cache_addr, error);
+            self.object_send_inner(recv, cache_addr, &missing, error);
         }
         self.emit_handle_error(error);
         // FuncId (x0) -> &FuncData in x26 (callee-saved, survives the arg C-calls
@@ -429,6 +512,27 @@ impl Codegen {
             sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
             ldr x22, [x10];
         );
+        self.jit.b_label(&done);
+
+        // The name resolved to nothing: hand the whole call to the
+        // general dispatch, which falls back to `method_missing`. There
+        // is no cold page on aarch64 (single-page layout), so this sits
+        // inline, branched around, and rejoins at `done` with the result
+        // in x0 — the same place the inlined call leaves it.
+        self.jit.bind_label(missing);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                              // vm
+            mov x1, x20;                              // globals
+            mov x2, (callid.get() as u64);            // CallSiteId
+            mov x3, x11;                              // the resolved IdentId
+            mov x4, x22;                              // caller LFP
+            str x30, [sp, #-16]!;
+            mov x9, (crate::codegen::runtime::object_send_missing as *const () as u64);
+            blr x9;                                   // x0 = Option<Value>
+            ldr x30, [sp], #16;
+        );
+
+        self.jit.bind_label(done);
         self.emit_fpr_restore(using_fpr, false);
         self.emit_handle_error(error);
     }
