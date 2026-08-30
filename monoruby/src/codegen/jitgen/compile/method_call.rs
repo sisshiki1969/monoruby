@@ -1474,6 +1474,9 @@ impl<'a> JitContext<'a> {
         // given up has to leave the value in its slot. Note them now, while
         // we still know what they were.
         let held = state.held_constants();
+        // The same, for the float locals whose boxed slot store the
+        // block-handing `unbox_to_S` deferred to a spill home.
+        let deferred_homes = state.deferred_float_homes();
         let compiled = self.compile_specialized_func(
             state,
             iseq,
@@ -1533,6 +1536,12 @@ impl<'a> JitContext<'a> {
             // caller's `acc`.
             if had_deopt || generic_yield {
                 state.forget_constants(ir);
+                // A deferred float home is the same bet in the other
+                // representation: the block reaching us from the VM reads
+                // the *slot*, which the deferral left stale. Box it here,
+                // on the one path into the call, exactly like the
+                // constants above.
+                state.home_deferred_floats(ir, &deferred_homes, generic_yield);
             }
         }
         let evict = ir.new_evict();

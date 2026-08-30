@@ -1280,6 +1280,65 @@ impl SlotState {
             .collect()
     }
 
+    ///
+    /// Every local whose boxed slot store `unbox_to_S` deferred to a
+    /// spill home — the raw f64 is current in the home and the slot is
+    /// stale. Only the `keep_claims` arm creates these, so this is read
+    /// at exactly one place: the block-handing call site's
+    /// bet-confirmation (`specialized_iseq`).
+    ///
+    pub(in crate::codegen::jitgen) fn deferred_float_homes(&self) -> Vec<(SlotId, FPReg)> {
+        self.locals()
+            .filter_map(|slot| match self.mode(slot) {
+                LinkMode::F(fpr) if fpr.0 >= PHYS_FPR_POOL => Some((slot, fpr)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    ///
+    /// Make the slot of each still-deferred home current again, on the
+    /// one path into a block-handing call whose bet failed.
+    ///
+    /// The read twin of `forget_constants`. A `C` claim says the slot
+    /// need not be read; a deferred home says the same about a float, and
+    /// both are false the moment the block can run outside this unit — it
+    /// reads the caller's local through its outer chain, off the stack
+    /// slot, which the deferral left holding whatever was there before
+    /// (`nil`, for a local whose only write was the deferred store).
+    ///
+    /// The binding itself survives unless *widen*, because the callee's
+    /// already-emitted stores write the *home*: dropping it would make
+    /// the continuation read a slot the compiled block never refreshes,
+    /// losing every `a += ...` the block performed. A deopt under the
+    /// call cannot read a stale slot either — chain escalation means the
+    /// continuation never runs compiled, and the deopt write-back boxes
+    /// the home. *widen* is for the generic-yield case, where the block
+    /// is not compiled here at all: its stores land in the slot, so the
+    /// continuation has to read the slot too.
+    ///
+    pub(in crate::codegen::jitgen) fn home_deferred_floats(
+        &mut self,
+        ir: &mut AsmIr,
+        deferred: &[(SlotId, FPReg)],
+        widen: bool,
+    ) {
+        for &(slot, fpr) in deferred {
+            // A path inside the callee's compile may already have widened
+            // the slot (a `StoreDynVar` the compiler saw), in which case
+            // the store that widened it made the slot current.
+            if self.mode(slot) != LinkMode::F(fpr) {
+                continue;
+            }
+            ir.spill(Spill::Fpr(fpr, slot));
+            if widen {
+                let guarded = self.guarded(slot);
+                self.clear(slot);
+                self.set_mode(slot, LinkMode::S(guarded));
+            }
+        }
+    }
+
     /// Resume overlay: adopt the return-path join's claims where this
     /// (parked) frame holds a plain `S`.
     ///
