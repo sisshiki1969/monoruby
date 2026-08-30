@@ -25,6 +25,7 @@
 0157b6a817ac1fed2a62196ed525d722	["a.rb:1: Some runtime error (RuntimeError)\\n\\tfrom b.rb:2\\n", "Traceback (most recent call last):\\n\\t1: from b.rb:2\\na.rb:1: Some runtime error (RuntimeError)\\n", "a.rb:1: \\e[1mSome runtime error (\\e[1;4mRuntimeError\\e[m\\e[1m)\\e[m\\n\\tfrom b.rb:2\\n", "\\e[1mTraceback\\e[m (most recent call last):\\n\\t1: from b.rb:2\\na.rb:1: \\e[1mSome runtime error (\\e[1;4mRuntimeError\\e[m\\e[1m)\\e[m\\n"]	e = RuntimeError.new("Some runtime error")\n        e.set_backtrace(["a.
 015b75d45254c81989823601f22bc528	[[12, 14, 2, 4], 1180591620717411303425, 3.5]	class W\n              def initialize(v) = (@v = v)\n              de
 015d950e92f84266477f809be2d52ad7	"my_temp"	m = Module.new\n            m.set_temporary_name("my_temp")\n        
+0171d3d1dadc5d8c428346719275e015	[nil, "already", "converted", "can't convert Object to String (Object#to_str gives Integer)", "boom"]	no_to_str = Object.new\n        bad = Object.new\n        def bad.to_str 
 0181411f6f14be38811bc49fd1ac2c8f	[false, true, true, false, false, false, false]	[!true, !false, !nil, !0, !"", ![], !:sym]\n        
 0198f55071323ce6b7b0f303a1e8dd25	"abc"	"abc\\n".chomp
 019bf093e71a4a7e2b8d464eb4c68b93	true	path = "/tmp/monoruby_test_trunc_neg_#{Process.pid}_#{rand(100000)}
@@ -251,6 +252,7 @@
 1163f0f0f85a4d8121a577678e218640	[3]	module M\n              def a; 1; end\n              def b; 2; end\n  
 1164b6b299a8e58d705998fdc148adbf	1	def f(a = ($x = 1)); 1; end\n        f\n        $x\n        
 118eb5e68bd673de068374bd75347ed3	:OVERRIDDEN	class Float; def %(o); :OVERRIDDEN; end; end; 3.0 % 4.0
+11960ed2de38b87ae0166549e9b0f8a6	["expected true or false as exception: 0", "expected true or false as exception: 0", "expected true or false as exception: 0", "expected true or false as exception: 0", "expected true or false as highlight: 0", "expected true or false as highlight: 0", "expected true or false as exception: \\"false\\"", "expected true or false as exception: \\"false\\"", "expected true or false as exception: \\"false\\"", "expected true or false as exception: \\"false\\"", "expected true or false as highlight: \\"false\\"", "expected true or false as highlight: \\"false\\"", "expected true or false as exception: nil", "expected true or false as exception: nil", "expected true or false as exception: nil", "expected true or false as exception: nil", :no_error, :no_error, "expected true or false as exception: :sym", "expected true or false as exception: :sym", "expected true or false as exception: :sym", "expected true or false as exception: :sym", "expected true or false as highlight: :sym", "expected true or false as highlight: :sym"]	res = []\n        [0, "false", nil, :sym].each do |bad|\n          [-> { 
 11bda11ec7cbf263e9f52074954288f6	"../"	class MyPath\n          def to_path\n            "../"\n          end\n    
 11cc75ade577235c4ddea752c1daddb7	[[0, 4, 8]]	def cljc_leaf\n          ls = caller(0, 3).map { |s| s[/:(\\d+):/, 1].to_
 11d8f66614d6ef25a5a6c863d202cdb1	14	f = ->{ it * 2 }; f.call(7)
@@ -450,6 +452,7 @@
 21eb0e9527b038ca28ca7c0660efdabb	8.0	def t3\n          a = 1.0\n          [5].each { a += 2.5; a *= 2.0 }\n    
 21f8e47a45fd8696940d39593814b503	["hello", "world"]	require "stringio"\n\n            res = []\n            ret = StringIO.open("hello"
 21ff5a76d37a266f84d3f0dce8947ed7	[:bar, [], {a: 1, b: 2}]	class C\n          def method_missing(name, *args, **kwargs)\n           
+220ad000bc5dd56df76087fc6f604dfd	["", "on\\n", "plain\\n", ["ArgumentError", "unknown category: no_such_category"], ["TypeError", "wrong argument type String (expected Symbol)"]]	require "stringio"\n        def capture\n          old = $stderr\n        
 220d3fe1c05b2950f05bfe53024be3aa	[false, false]	m = Mutex.new\n            cv = ConditionVariable.new\n            t 
 2240d723f5d81acbdb40781797ea9222	[1, "12", 1]	[ /abc/ =~ "xabc", /\\d+/.match("a12b")[0], ("héllo" =~ /é/) ]
 22421076f8f454c7c15a47288a0294eb	0.25	Rational(3, 4) - 0.5
@@ -1016,6 +1019,7 @@
 4d59acc812858b13ef3ed51f02730d3b	[]	begin\n          Object.new.no_such_method\n        rescue NoMethodError 
 4d5c5ebc315582c724d99bfe750271af	"M1"	module M1\n              def f; "M1"; end\n            end\n          
 4d68f852fba127b042c84037069425b0	[{1 => "a", 2 => "BB", 3 => "CC", 4 => "DD"}, {1 => "a", 2 => "BB", 3 => "CC", 4 => "DD"}, {1 => "a", 2 => "BB", 3 => "CC", 4 => "DD"}]	foo = {1 => 'a', 2 => 'b', 3 => 'c'}\n            bar = {2 => 'B', 3
+4d69cab42d83cfeccb2535bb314d3a42	[["RangeError", "bignum too big to convert into 'long'"], ["RangeError", "bignum too big to convert into 'long'"], ["RangeError", "bignum too big to convert into 'long'"], ["RangeError", "bignum too big to convert into 'long'"], ["RangeError", "bignum too big to convert into 'long'"]]	big = 2 ** 64\n        probes = [-> { "hello"[big] }, -> { "hello"[big, 
 4da42d690f4ae363c784e239d269ee3e	true	class C\n        end\n        C === C.new
 4db6500a830cf8b2a99b743dc6b5a94d	["global-variable", "a"]	"mis-matched" =~ /s(-)m(.)/; [defined?($+), $+]
 4dc4d26946a9b8df8a8ab0edf49e3a8d	["constant", "constant", "constant", nil, nil, "constant"]	module CovM\n              CONST = 1\n              module Inner; DEE
@@ -1470,6 +1474,7 @@
 734dfdfc3af46f6004a0860570e0da99	[[]]	def m; [1].map { it; binding.local_variables }; end; m
 7386de8954a7dcef530043ef4769c016	[Hash, true, 2]	sub = Class.new(Hash)\n            o = sub.new\n            o.compare
 738f2f4bac99511afc9b7dcf74088974	[2, ["Array", "String"], [:a, :b]]	m = Module.new do\n              refine(String) { def a; end }\n     
+7396b5aa607d5d08d2073403563762bb	[[["RangeError", "-6...-6 out of range"], ["RangeError", "-6...-6 out of range"], ["IndexError", "index -6 out of string"]], "xxllo", "hHElo", "hlo", "x"]	probes = [-> { "hello".bytesplice(-6...-6, "xxx") },\n                  
 73a81654219a984861a6f71fa1797a2e	[[true, "123456"], "123", [true, "1234567890", "UTF-8"], ["", ""], [nil, ""], :frozen, [true, "1234"], "ISO-8859-1"]	require "tempfile"\n            t = Tempfile.new("mrb_readbuf")\n    
 73b5b9f7068d2f4d7eb3c69976ab650d	1	class C\n              @@x = 1\n            end\n        
 73c9dec5b896221d19b6233b9db54621	[:rescued, "caught"]	f = Fiber.new do\n              begin\n                Fiber.yield :a
@@ -1521,6 +1526,7 @@
 775d8635fb7fe113ade374c0179881a4	"world"	m = Module.new do |mod|\n              mod.define_method(:hello) { "
 776068fb5a75af967139c99ca72fd131	3.14	class C; def to_f; 3.14; end; end; o = C.new\nFloat(o)
 7766681c09761e7b66d6fdb86feb1bae	[3.2, 1.6, 238.18399999999997, -267770.88, 924.0, -1124.0]	def f(d1, d2, x, y, s, c, p)\n          px = x - 100.0\n          py = y 
+777776d6fbd2c713fb0526b5cd6aebc1	["expected true or false as exception: 1", "expected true or false as exception: \\"true\\""]	res = []\n        [1, "true"].each do |bad|\n          begin\n            
 7783137d4cd2c70faf7f01584872ab95	"\\x04\\bo:\\bBar\\b:\\n@nameI\\"\\nhello\\x06:\\x06ET:\\v@valuei/:\\v@items[\\bi\\x06i\\ai\\b"	class Bar\n              def initialize\n                @name = "hel
 778b89eb473f320143b57466fe6c623b	2	[1, 2, 3].each.with_object(:m) { |v, m| break v if v == 2 }
 7790f406d9357f3c834f0766360e44ab	:OVERRIDDEN	class Symbol; def <=>(o); :OVERRIDDEN; end; end; :a <=> :b
@@ -2884,6 +2890,7 @@ df48934b67ebb92f6a00864d45d57fbe	["b\\n", "c\\n", "stdin-data", "stdin-data", "s
 df69cc830a2b224352a7c2847dff058f	["No such file or directory - foo", "Permission denied - bar", "File exists"]	[\n              Errno::ENOENT.new("foo").message,\n              Err
 df7866f8d86250d33d1042272df589b6	["US-ASCII", 44, true]	def app_us(buf, n)\n          i = 0\n          while i < n\n            bu
 df85e93711d6910d9235fee67c3b3ad4	[1, 2, 42, 55, 3, 4, []]	def f(x,y,a=42,b=55,*z,c,d)\n            [x,y,a,b,c,d,z]\n        end\n   
+df98012da3173104ccfb56f7f5d32caa	[1, nil, 1.5, nil, (1/1), nil, (1+0i), nil, 1, 1.5, "x (StandardError)", "\\e[1mx (\\e[1;4mStandardError\\e[m\\e[1m)\\e[m", "x (StandardError)"]	[Integer("1", exception: true), Integer("z", exception: false),\n       
 df9ef4247e8eb28799b29a3c0ceae30e	"US-ASCII"	"abc".dup.force_encoding("US-ASCII").gsub(/b/, "x").encoding.to_s
 dfa6493490a950a4a97d2766f58d2dd5	7	p = Proc.new { |x, y| x + y }\n            define_method(:bar, p)\n  
 dfb8f5dd8fef254047d34541fb3b1231	229	class C\n                def f(x,y,z,a:1000)\n                    x+y

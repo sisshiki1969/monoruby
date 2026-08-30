@@ -959,7 +959,11 @@ impl MonorubyErr {
     ) -> MonorubyErr {
         let class = v.get_real_class_name(store);
         MonorubyErr::typeerr(format!(
-            "can't convert {class} into {target} ({class}#{method} gives {})",
+            // CRuby words this one "to", not "into": the "into" form is
+            // for an object with no conversion method at all, while this
+            // is a conversion that ran and answered the wrong type
+            // (`conversion_mismatch`).
+            "can't convert {class} to {target} ({class}#{method} gives {})",
             result.get_real_class_name(store),
         ))
     }

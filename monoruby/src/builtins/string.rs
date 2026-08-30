@@ -290,10 +290,16 @@ fn string_try_convert(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    match lfp.arg(0).coerce_to_rstring(vm, globals) {
-        Ok(rstring) => Ok(rstring.into()),
-        Err(_) => Ok(Value::nil()),
+    let arg = lfp.arg(0);
+    // `rb_check_string_type` answers `nil` only for an object that has no
+    // `#to_str` at all. Once there is one, its result is converted for
+    // real: a non-String answer is the TypeError naming both classes, and
+    // an exception raised inside it propagates. Swallowing every error
+    // here turned both of those into `nil`.
+    if arg.is_rstring().is_none() && globals.check_method(arg, IdentId::TO_STR).is_none() {
+        return Ok(Value::nil());
     }
+    Ok(arg.coerce_to_rstring(vm, globals)?.into())
 }
 
 ///
@@ -1136,9 +1142,13 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         // Try to_int coercion first, then to_str
         let arg0 = lfp.arg(0);
-        if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
-            let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
-            if let RV::Fixnum(i) = result.unpack() {
+        if globals.check_method(arg0, IdentId::TO_INT).is_some() {
+            // Through the shared coercion, so a `#to_int` that answers a
+            // non-Integer raises CRuby's mismatch TypeError and one that
+            // answers a Bignum raises RangeError — falling through to
+            // `#to_str` reported "no implicit conversion" for both.
+            let i = arg0.coerce_to_int_i64(vm, globals)?;
+            {
                 let index = match lhs.conv_char_index(i) {
                     Some(i) => i,
                     None => return Ok(Value::nil()),
@@ -1184,6 +1194,13 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     return Ok(Value::nil());
                 }
             }
+        }
+        // An Integer that is not a Fixnum reached here because it does
+        // not fit a machine word — that is a RangeError ("bignum too big
+        // to convert into 'long'"), which is what the coercion raises,
+        // not a conversion error about its class.
+        if arg0.is_integer() {
+            arg0.coerce_to_int_i64(vm, globals)?;
         }
         Err(MonorubyErr::no_implicit_conversion(
             globals,
@@ -4674,7 +4691,16 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let (start, splice_len) = if let Some(range) = lfp.arg(0).is_range() {
         let rstart = range.start().coerce_to_int_i64(vm, globals)?;
         let rend = range.end().coerce_to_int_i64(vm, globals)?;
-        let start = conv_byte_index_for_splice(rstart, byte_len)?;
+        // The Range form reports an out-of-range left boundary the way
+        // `rb_range_beg_len` does under `bytesplice` — a RangeError
+        // naming the range — where the (index, length) form raises the
+        // IndexError `conv_byte_index_for_splice` builds.
+        let start = conv_byte_index_for_splice(rstart, byte_len).map_err(|_| {
+            MonorubyErr::rangeerr(format!(
+                "{} out of range",
+                lfp.arg(0).inspect(&globals.store)
+            ))
+        })?;
         let end = if rend >= 0 {
             let e = if range.exclude_end() {
                 rend as usize
@@ -4738,7 +4764,15 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             })?;
             let src_start = src_range.start().coerce_to_int_i64(vm, globals)?;
             let src_end = src_range.end().coerce_to_int_i64(vm, globals)?;
-            let src_start = conv_byte_index_for_splice(src_start, str_byte_len)?;
+            // Same as the receiver's range above: an out-of-range left
+            // boundary is a RangeError naming the range.
+            let src_start_i = src_start;
+            let src_start = conv_byte_index_for_splice(src_start_i, str_byte_len).map_err(|_| {
+                MonorubyErr::rangeerr(format!(
+                    "{} out of range",
+                    lfp.arg(str_arg_idx + 1).inspect(&globals.store)
+                ))
+            })?;
             let src_end_val = if src_end >= 0 {
                 let e = if src_range.exclude_end() {
                     src_end as usize
