@@ -1,4 +1,11 @@
 class String
+  # CRuby's String is Comparable, and `between?` / `clamp` come from it —
+  # they were simply missing here. The ordering operators stay native
+  # (builtins/string.rs): a method defined on the class wins over the
+  # module's, so including this adds the two methods without moving
+  # `<` / `<=` / `>` / `>=` onto the slower `<=>`-based path.
+  include Comparable
+
   def to_s
     self
   end

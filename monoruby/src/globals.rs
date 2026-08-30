@@ -275,6 +275,11 @@ pub struct Globals {
     /// given an instance variable, through one `to_proc` is the same
     /// object the next one returns.
     symbol_procs: HashMap<IdentId, Value>,
+    /// The last method a `&:sym` dispatch resolved — a one-entry inline
+    /// cache, since that is the shape the dispatch meets: `ary.map(&:to_s)`
+    /// asks for the same symbol on the same class for every element, and
+    /// looked it up every time. See [`Globals::cached_symbol_method`].
+    symbol_proc_cache: Option<SymbolProcCache>,
     /// function and class info.
     pub store: Store,
     /// global variables and special variables.
@@ -385,6 +390,18 @@ pub struct Globals {
     dumped_bc: usize,
 }
 
+///
+/// One resolved `&:sym` dispatch: `symbol` called on an instance of
+/// `class_id` resolved to `func_id`, while the class version was
+/// `class_version`.
+///
+struct SymbolProcCache {
+    symbol: IdentId,
+    class_id: ClassId,
+    class_version: u32,
+    func_id: FuncId,
+}
+
 impl std::ops::Deref for Globals {
     type Target = Store;
     fn deref(&self) -> &Self::Target {
@@ -424,6 +441,43 @@ impl Globals {
     /// as this proc's own position, and the first caller's is as good as
     /// any later one's.
     ///
+    ///
+    /// The method `symbol` resolves to on `class_id`, from the one-entry
+    /// cache — or `None`, leaving the caller to resolve it.
+    ///
+    /// The entry is keyed by the class *and* the class version, so a
+    /// definition, a removal or a visibility change anywhere retires it
+    /// (each of those bumps the version).
+    ///
+    pub(crate) fn cached_symbol_method(
+        &self,
+        symbol: IdentId,
+        class_id: ClassId,
+        class_version: u32,
+    ) -> Option<FuncId> {
+        let cache = self.symbol_proc_cache.as_ref()?;
+        (cache.symbol == symbol && cache.class_id == class_id && cache.class_version == class_version)
+            .then_some(cache.func_id)
+    }
+
+    ///
+    /// Record a `&:sym` resolution for [`Globals::cached_symbol_method`].
+    ///
+    pub(crate) fn cache_symbol_method(
+        &mut self,
+        symbol: IdentId,
+        class_id: ClassId,
+        class_version: u32,
+        func_id: FuncId,
+    ) {
+        self.symbol_proc_cache = Some(SymbolProcCache {
+            symbol,
+            class_id,
+            class_version,
+            func_id,
+        });
+    }
+
     pub(crate) fn symbol_proc(&mut self, symbol: IdentId, pc: BytecodePtr) -> Value {
         if let Some(proc) = self.symbol_procs.get(&symbol) {
             return *proc;
@@ -649,6 +703,7 @@ impl Globals {
             main_object,
             symbol_proc_frames: HashMap::default(),
             symbol_procs: HashMap::default(),
+            symbol_proc_cache: None,
             store: Store::new(),
             gvars: GvarTable::new(),
             special_gvars: SpecialGvars::default(),
