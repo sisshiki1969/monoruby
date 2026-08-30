@@ -1300,6 +1300,63 @@ pub(crate) extern "C" fn opt_case(
     globals.store[callid].find(idx)
 }
 
+///
+/// `send` / `__send__` when the inlined resolution found no such method.
+///
+/// The inlined `send` (`Codegen::object_send_inline`) can only *call* a
+/// method that exists: it resolves the name to a `FuncId` and builds the
+/// callee frame itself. A missing name is not an error there — CRuby, the
+/// `send` builtin, and monoruby's own interpreter all fall back to
+/// `method_missing` — so the inline path hands the call here instead of
+/// raising, and this rebuilds it from the caller's frame and dispatches
+/// it the general way, which has that fallback.
+///
+/// Reached only for a call site the inline generator accepted: simple
+/// positional arguments, or the single-splat `send(*ary)` form.
+///
+pub(super) extern "C" fn object_send_missing(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    lfp: Lfp,
+) -> Option<Value> {
+    // The failed lookup left its NoMethodError behind; the dispatch below
+    // raises its own if there is no `method_missing` after all.
+    vm.discard_error();
+    let cs = &globals.store[callid];
+    let (recv, args_slot, pos_num, single_splat) =
+        (cs.recv, cs.args, cs.pos_num, cs.object_send_single_splat());
+    let bh = cs.block_handler(lfp);
+    let Some(receiver) = lfp.register(recv) else {
+        return None;
+    };
+    // SAFETY: `args_slot` / `pos_num` come from the call site being
+    // executed, so they name live registers of this very frame.
+    let mut args = unsafe { lfp.args_to_vec(args_slot, pos_num) };
+    if single_splat {
+        // `recv.send(*ary)`: the one argument is the array, and the
+        // method name is its first element.
+        let Some(splatted) = args.first().and_then(|v| v.try_array_ty()) else {
+            return None;
+        };
+        args = splatted.to_vec();
+    }
+    if args.is_empty() {
+        vm.set_error(MonorubyErr::argumenterr("no method name given."));
+        return None;
+    }
+    let name = match args[0].expect_symbol_or_string(globals) {
+        Ok(name) => name,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    vm.invoke_method_inner(globals, name, receiver, &args[1..], bh, None)
+        .map_err(|err| vm.set_error(err))
+        .ok()
+}
+
 pub(crate) extern "C" fn invoke_method_missing(
     vm: &mut Executor,
     globals: &mut Globals,

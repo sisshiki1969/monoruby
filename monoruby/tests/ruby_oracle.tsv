@@ -212,6 +212,7 @@
 0e54a426c81dbbf91db0373ac6572904	["qy", "sx", 2]	def sapp(s, a)\n          s.<<(*a)\n        end\n        def papp(o)\n     
 0e56d42fa329cec66eaa8a31dadafef0	[true, true]	def m; proc{|x| x}; end; p = m; [p.dup.eql?(p), p.dup.hash == p.hash]
 0e58e78424730044c7b8bdc310bb26e6	["Fri Dec 12 ", "Fri Dec 12 ", "Fri", "Dec", "12", 4, ["Fri", "Dec", "12"], ["Fri Dec 12 ", "Dec"], "Fri Dec 12 ", true, 11, "", "1975 14:39", 11, 0, "Fri"]	require "strscan"\n        s = StringScanner.new("Fri Dec 12 1975 14:39"
+0eb451479b9e3deffa5ff499cb00893c	[:private_answer]	class P\n          def method_missing(name, *args) = :missed\n          p
 0ed19825320ad4f01be8637520de3fe5	[[0, 0, 0], [0, 1, 0], [1, 0, 0], [1, 1, 0], [2, 0, 0], [2, 1, 0]]	res = []\n        3.times do |i|\n          2.times do |j|\n            1.
 0ed9e8d09d16c423c6e622570359536f	[["MONORUBY_ENV_TEST_ASSOC", "yes"], nil]	ENV["MONORUBY_ENV_TEST_ASSOC"] = "yes"\n            r = ENV.assoc("M
 0ee21d2dc9f1c2268555d29eb775b9a4	["ArgumentError", "boom"]	begin\n              begin\n                raise ArgumentError, "boo
@@ -888,6 +889,7 @@
 4578bd5fa7148d23a652a1a92eb517df	false	Enumerator.new { |y| y << caller.empty? }.first
 457f6a743618e9a691a1720e9d5b31b0	[1575.0276087749185, 6.073454154620117]	def call_block\n          yield\n        end\n        def f(n)\n          a
 4590827ce0f8f39bce38419577946094	[[1, true], [1, true], [1, true], [1, true], [1, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true], [2, true]]	def row\n          res = []\n          x = 0\n          while x < 60\n     
+459af0ef6a434f9f83be184be79da2d5	[[:mm, :whatever, [], nil], [:mm, :whatever, [1, 2], nil], [:mm, :whatever, [], :from_block], [:mm, :whatever, [3], nil], [:mm, :whatever_str, [], nil]]	class MM\n          def method_missing(name, *args, &blk) = [:mm, name, 
 45c219e430e29dc7ecd467638b65c70b	[true, true, true]	pid = spawn("true")\n            t = Process.detach(pid)\n           
 45c9b7ea3cba52cd428385897c67b953	[true, false, false, false, true, false, true, false, true, false]	S = Struct.new(:a, :b)\n        T = Struct.new(:a, :b)\n        \n\n       
 45ca7b6809a873de22eb68bc015aef5c	["abc", "abcd"]	s = +"abc"; t = s.dup; t << "d"; [s, t]
@@ -1426,6 +1428,7 @@
 70bdfd5e68a7d505347fcfb446cf1af5	[1, 1, true, false]	o = Object.new\n        o.instance_variable_set(:@a, 1)\n        s = Obje
 70d61ef5f4ed6c1e8f4e23f26222ad7d	"mm:hello:[]"	class Foo\n              private\n              def method_missing(na
 70e58b5b7dbd4dc37d12b0b873604fa6	[:my_is_a?, :is_a?, true]	class C\n              define_method(:my_is_a?, Kernel.instance_meth
+70f7acec9f0acd89dac21a550187070f	[[:a_one, 0], [:a_two, 0], [:b_one, 0], [:b_two, 0]]	class A\n          def one(x) = [:a_one, x]\n          def two(x) = [:a_t
 710af167780333af253a35d1dc8b0346	[20008, "head", "tail", 20000]	path = "/tmp/mr_buf_big.txt"\n            f = File.open(path, "w")\n 
 711aa5cc92164813c06e40b326f626bd	["Bonjour", "Bonjour", "Bonjour", "Guten Tag"]	class F\n          def hello\n            "Bonjour"\n          end\n       
 712dca9ea514253684ee241cb0842ccb	7	def f(a)\n          a\n        end\n        f(7)\n        
@@ -1438,6 +1441,7 @@
 71c24f8639e7747006e674bc0fbf4547	256	def f(x)\n          x * 2\n        end\n        def g(x)\n          x + 2\n 
 71d85b9646b325d57ec9e46b0c5bd105	"hello"	class Foo; def to_str; "hello"; end; end\n            String.new(Foo
 71f4d67c2c270e965eaade7505c22804	[20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 0]	def count(n)\n              i = 0\n              c = 0\n              
+7223f396f3e66e954bb3f1b4f21a88a0	[[:a, :one, [0]], [:a, :two, [0]], [:a, :real, [0]], [:b, :one, [0]], [:b, :two, [0]], [:b_real, 0], [:a, :one, [1]], [:a, :two, [1]], [:a, :real, [1]], [:b, :one, [1]], [:b, :two, [1]], [:b_real, 1]]	class A\n          def method_missing(name, *args) = [:a, name, args]\n  
 7235ebfc85831c502397c3cbb35ce813	Foo	class Foo\n              def bar; end\n            end\n            \n\n
 723ea63495140106ebdfae5448e3e464	80	class C\n          def f(a, b)\n            a + b\n          end\n        e
 7252f1c8ab400b2d14e205f52ce07f84	["warned", "silent", "warned", "silent", "warned", "warned"]	require "stringio"\n        res = []\n        capture = proc do |verbose,
@@ -3046,6 +3050,7 @@ ed1b9d1127bc95203a639e5a1aec8a0c	false	(0x8000_0000_0000_0000 + 39) == (0x8000_0
 ed21697a03332cf5034e4574459d9bdf	[:ok, [:x, :y]]	A = Struct.new(nil, :x, :y)\n            \n\n            [A.name.nil? 
 ed2d1c8786b057689885f97c2f7a6f93	[(5+2i), (-3+2i), "-1-2i", "-1-2i", ["R+0i", "3+4i"], "1.0+2i", "2+0.0i", "1+0.0i"]	class R < Numeric\n              def real?; true; end\n              
 ed336c80176b4b3f5030b6fb67c77122	[:foo, :foo=, :bar]	c = Class.new\n            r1 = c.send(:attr, :foo, true)\n          
+ed3e322982b97f4c2ef84659d72693bc	"undefined method 'no_such_method_here' for an instance of Object"	o = Object.new\n        raised = nil\n        i = 0\n        while i < 60\n
 ed70b3c2874dc48238a111c40621917a	[true, [".", "..", "x"], nil, [Errno::EBADF, "Bad file descriptor - closedir"], TypeError]	(d="/tmp/mono_ff_#{Process.pid}"; Dir.mkdir(d); File.write("#{d}/x", ""); dir=Di
 ed7e2764b0810a82bc9f23ba3fff72a7	[nil, [:a, :b]]	S = Struct.new(:a, :b, keyword_init: nil)\n            \n\n           
 ed8c3ce68eb282255788408da9a12b8a	"UTF-8"	Encoding.default_internal = Encoding::UTF_8\n              res = E

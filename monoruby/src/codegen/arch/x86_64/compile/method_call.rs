@@ -479,8 +479,13 @@ impl Codegen {
             ..
         } = store[callid];
         let cache = self.jit.data(std::mem::size_of::<Cache>());
+        // Where an unresolvable name goes: `send` to a method that does
+        // not exist is `method_missing`, not an error, and this inline
+        // path cannot express that call — see `object_send_missing`.
+        let missing = self.jit.label();
+        let done = self.jit.label();
 
-        self.check_version_with_cache(&cache);
+        self.check_version_with_cache(&cache, recv);
 
         self.fpr_save(using_fpr);
         if no_splat {
@@ -495,11 +500,11 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     movq rcx, [rbp - (rbp_local(args))];
                 }
-                self.object_send_inner(recv, cache, &error);
+                self.object_send_inner(recv, cache, &missing, &error);
             }
         } else {
             self.object_send_splat_arg0(args, &error);
-            self.object_send_inner(recv, cache, &error);
+            self.object_send_inner(recv, cache, &missing, &error);
         }
         self.handle_error(&error);
         monoasm! { &mut self.jit,
@@ -533,16 +538,62 @@ impl Codegen {
             self.handle_error(&error);
         }
         self.call_funcdata();
+        monoasm! { &mut self.jit,
+        done:
+        }
         self.fpr_restore(using_fpr);
         self.handle_error(&error);
+
+        // The name resolved to nothing: hand the whole call to the
+        // general dispatch, which falls back to `method_missing`. Cold,
+        // so it lives on page 1 and rejoins at `done` with the result in
+        // rax — the same place the inlined call leaves it.
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        missing:
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (callid.get());
+            movq rcx, r14;
+            movq rax, (runtime::object_send_missing);
+            call rax;
+            jmp  done;
+        }
+        self.jit.select_page(0);
     }
 
-    fn check_version_with_cache(&mut self, cache: &DestLabel) {
+    ///
+    /// Retire the per-call-site symbol cache when its answers no longer
+    /// apply — before anything reads it.
+    ///
+    /// Two things invalidate it. A *class version* change, because a
+    /// definition anywhere may have moved the name; and a change of
+    /// *receiver class*, because the cache maps a name to a `FuncId`, and
+    /// that is only ever one class's answer. The second check was missing:
+    /// a `send` site that saw two classes kept the first one's entries and
+    /// called its method on the other's receiver — `b.send(:m)` running
+    /// `A#m` with `self` a `B`.
+    ///
+    /// A polymorphic site therefore clears and re-resolves as the receiver
+    /// class alternates; correctness first, and the shape this cache exists
+    /// for (one receiver class, many names) is untouched.
+    ///
+    fn check_version_with_cache(&mut self, cache: &DestLabel, recv: SlotId) {
         let cached_version = self.jit.data_i32(-1);
+        // 0 is never a valid ClassId, so an untouched cache misses.
+        let cached_class = self.jit.data_i32(0);
         let global_version = self.class_version_label();
         let clear_cache = self.jit.label();
         let exit = self.jit.label();
+        let get_class = self.get_class.clone();
         monoasm! {&mut self.jit,
+            movq rdi, [rbp - (rbp_local(recv))];
+            call get_class;
+            // rcx: receiver's ClassId. Free here — arg0 is loaded into it
+            // only after this check.
+            movl rcx, rax;
+            cmpl rcx, [rip + cached_class];
+            jne  clear_cache;
             movl rax, [rip + global_version];
             cmpl rax, [rip + cached_version];
             jne  clear_cache;
@@ -552,6 +603,8 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm! {&mut self.jit,
         clear_cache:
+            movl [rip + cached_class], rcx;
+            movl rax, [rip + global_version];
             movl [rip + cached_version], rax;
             xorq rax, rax;
             lea  rdi, [rip + cache];
@@ -871,7 +924,21 @@ impl Codegen {
     /// ### out
     /// - rax: Some(FuncId)
     ///
-    fn object_send_inner(&mut self, recv: SlotId, cache: DestLabel, error: &DestLabel) {
+    ///
+    /// Resolve the `send` target name (in rcx) to a `FuncId` in rax,
+    /// through the per-call-site symbol cache.
+    ///
+    /// A name that resolves to nothing branches to *missing* rather than
+    /// raising: that is a `method_missing` call, which this inline path
+    /// cannot build.
+    ///
+    fn object_send_inner(
+        &mut self,
+        recv: SlotId,
+        cache: DestLabel,
+        missing: &DestLabel,
+        error: &DestLabel,
+    ) {
         let not_symbol = self.jit.label();
         let l1 = self.jit.label();
         let found = self.jit.label();
@@ -943,7 +1010,7 @@ impl Codegen {
             // rax: Option<FuncId>
             movl rax, rax;
             testq rax, rax;
-            jz   exit;
+            jz   missing;
             movl [rdi + (CACHE_FID)], rax;
             movl [rdi + (CACHE_METHOD)], rcx;
             movq [rdi + (CACHE_COUNTER)], 1;
