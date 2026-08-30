@@ -29,6 +29,31 @@
   .controls { display: flex; flex-wrap: wrap; gap: 1.5em; align-items: center; margin: 0.5em 0 1em; font-size: 0.9em; }
   .controls select { font-size: 1em; padding: 0.2em 0.4em; }
   .control-yratio { color: #555; }
+  /* One card per benchmark; three across at the page's max width. */
+  .chart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1.1em;
+  }
+  .chart-card {
+    border: 1px solid #e6e6e6;
+    border-radius: 6px;
+    padding: 0.5em 0.7em 0.7em;
+  }
+  .chart-card.target { border-color: #1565c0; box-shadow: 0 0 0 2px rgba(21,101,192,0.15); }
+  .chart-card h3 {
+    margin: 0 0 0.35em;
+    font-size: 0.95em;
+    font-weight: 600;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5em;
+  }
+  .chart-card h3 a { text-decoration: none; }
+  .chart-card h3 a:hover { text-decoration: underline; }
+  .chart-card .latest { font-weight: 400; font-size: 0.85em; color: #666; white-space: nowrap; }
+  .chart-box { position: relative; height: 190px; }
 </style>
 </head>
 <body>
@@ -51,6 +76,32 @@
   <h2>Latest snapshot</h2>
   <div id="latestMeta" class="meta"></div>
   <div id="latestBarWrap" style="position: relative;"><canvas id="latestBar"></canvas></div>
+  <div id="empty" class="empty" hidden>No benchmark data yet. The next master push will populate this page.</div>
+</section>
+
+<section>
+  <h2>Per-benchmark history</h2>
+  <p class="meta">
+    monoruby and YJIT per-commit history, one chart per benchmark. Only successful
+    measurements are plotted; benchmarks that never produced a result on both sides
+    are omitted entirely.
+  </p>
+  <div class="controls">
+    <label class="control-yratio">
+      <input type="checkbox" id="historyYRatio" checked>
+      show YJIT / monoruby ratio instead of raw ms
+    </label>
+    <span id="historyCount" class="meta"></span>
+  </div>
+  <div id="historyGrid" class="chart-grid"></div>
+  <div id="historyEmpty" class="empty" hidden>No history yet.</div>
+</section>
+
+<section>
+  <h2>Latest snapshot — numbers</h2>
+  <p class="meta">
+    The same snapshot as the bar chart above, as exact figures.
+  </p>
   <table id="latestTable">
     <thead>
       <tr>
@@ -64,23 +115,6 @@
     </thead>
     <tbody></tbody>
   </table>
-  <div id="empty" class="empty" hidden>No benchmark data yet. The next master push will populate this page.</div>
-</section>
-
-<section>
-  <h2>Per-benchmark history</h2>
-  <p class="meta">
-    monoruby and YJIT per-commit history. Successful rows only — failures are skipped.
-  </p>
-  <div class="controls">
-    <label>Benchmark: <select id="historySelect"></select></label>
-    <label class="control-yratio">
-      <input type="checkbox" id="historyYRatio" checked>
-      show YJIT / monoruby ratio instead of raw ms
-    </label>
-  </div>
-  <div id="historyWrap" style="position: relative; height: 360px;"><canvas id="historyChart"></canvas></div>
-  <div id="historyEmpty" class="empty" hidden>No history yet for this benchmark.</div>
 </section>
 
 <script>
@@ -113,16 +147,11 @@ async function loadJson(path) {
     + (tos.monoruby ? " (timeouts: monoruby " + tos.monoruby + "s, yjit " + tos.yjit + "s)" : "");
   document.getElementById("latestMeta").textContent = meta;
 
-  const okBars = benches.filter(b => !b.monoruby_failed && !b.yjit_failed);
-  const maxRatio = okBars.reduce((m, b) =>
-    (b.ratio && b.ratio > m) ? b.ratio : m, 1.5);
-
-  // Symmetric log2 bounds: center 1.0, extend to the nearest power-of-2
-  // that covers the data in both directions.  e.g. maxRatio=3 → exp=2,
-  // logMax=4, logMin=0.25 → ticks: 0.25, 0.5, 1, 2, 4
-  const exp = Math.ceil(Math.log2(Math.max(maxRatio, 2)));
-  const logMax = Math.pow(2, exp);
-  const logMin = 1 / logMax;
+  // Fixed linear axis: 0 on the left, 4× (monoruby four times faster) on
+  // the right, with the red parity line at 1×. A fixed range keeps bar
+  // lengths comparable between snapshots; the rare bar past 4× is clipped
+  // at the right edge and its exact value stays in the tooltip and table.
+  const X_MAX = 4;
 
   const barColor = b => {
     const r = b.ratio || 0;
@@ -201,24 +230,16 @@ async function loadJson(path) {
       maintainAspectRatio: false,
       scales: {
         x: {
-          type: "logarithmic",
           position: "top",
-          min: logMin,
-          max: logMax,
+          min: 0,
+          max: X_MAX,
           title: {
             display: true,
             text: "relative speed (× YJIT, higher = monoruby faster, 1× = parity)",
             align: "center",
           },
           grid: { color: "rgba(0,0,0,0.08)" },
-          afterBuildTicks(axis) {
-            const ticks = [];
-            for (let e = -exp; e <= exp; e++) {
-              ticks.push({ value: Math.pow(2, e) });
-            }
-            axis.ticks = ticks;
-          },
-          ticks: { callback: v => v + "×" },
+          ticks: { stepSize: 0.5, callback: v => v + "×" },
         },
         y: { ticks: { autoSkip: false, font: { size: 13 }, color: "#1565c0" } },
       },
@@ -359,84 +380,133 @@ function parseCsv(text) {
     }))
     .filter(r => r.benchmark);
 
-  const benchNames = [...new Set(rows.map(r => r.benchmark))].sort();
-  if (!benchNames.length) return;
+  const grid         = document.getElementById("historyGrid");
+  const historyEmpty = document.getElementById("historyEmpty");
+  const countLabel   = document.getElementById("historyCount");
+  const yRatioBox    = document.getElementById("historyYRatio");
 
-  const sel = document.getElementById("historySelect");
-  for (const name of benchNames) {
-    const opt = document.createElement("option");
-    opt.value = name; opt.textContent = name;
-    sel.appendChild(opt);
+  // Group by benchmark, oldest commit first.
+  const byName = new Map();
+  for (const r of rows) {
+    if (!byName.has(r.benchmark)) byName.set(r.benchmark, []);
+    byName.get(r.benchmark).push(r);
+  }
+  for (const arr of byName.values()) {
+    arr.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   }
 
-  // Sync the selection with the URL hash so a link can deep-link to a
-  // specific benchmark, and so reloads remember the user's choice.
-  const initial = decodeURIComponent((location.hash || "").replace(/^#bench=/, ""));
-  if (benchNames.includes(initial)) sel.value = initial;
-  else sel.value = benchNames[0];
+  // A row counts only when both sides produced a finite time; a benchmark
+  // that never managed that (crash / timeout on every run) gets no card.
+  const usable = r =>
+    r.monoruby_ms != null && isFinite(r.monoruby_ms) &&
+    r.yjit_ms     != null && isFinite(r.yjit_ms);
 
-  const historyEmpty = document.getElementById("historyEmpty");
-  const yRatioCheckbox = document.getElementById("historyYRatio");
+  const names = [...byName.keys()]
+    .filter(n => byName.get(n).some(usable))
+    .sort();
 
-  let chart;
-  function draw() {
-    const name = sel.value;
-    const showRatio = yRatioCheckbox.checked;
+  historyEmpty.hidden = names.length > 0;
+  if (!names.length) return;
+  countLabel.textContent = names.length + " benchmarks";
 
-    // Filter depends on what we're plotting: ratio needs ratio != null,
-    // raw ms needs both ms values non-null.
-    const points = rows
-      .filter(r => {
-        if (r.benchmark !== name) return false;
-        return showRatio
-          ? r.ratio != null && isFinite(r.ratio)
-          : r.monoruby_ms != null && isFinite(r.monoruby_ms) &&
-            r.yjit_ms    != null && isFinite(r.yjit_ms);
-      })
-      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  // Bold red line at ratio = 1 (parity), the horizontal twin of the bar
+  // chart's reference line. Only installed on ratio-mode charts.
+  const parityLinePlugin = {
+    id: "parityLine",
+    afterDatasetsDraw(chart) {
+      const { ctx, scales: { y: ys }, chartArea } = chart;
+      const yPos = ys.getPixelForValue(1);
+      if (!isFinite(yPos) || yPos < chartArea.top || yPos > chartArea.bottom) return;
+      ctx.save();
+      ctx.strokeStyle = "#c62828";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(chartArea.left, yPos);
+      ctx.lineTo(chartArea.right, yPos);
+      ctx.stroke();
+      ctx.restore();
+    },
+  };
 
-    historyEmpty.hidden = points.length > 0;
-    if (!points.length) { if (chart) { chart.destroy(); chart = null; } return; }
+  const charts   = new Map();  // name -> Chart (only for cards drawn so far)
+  const cards    = new Map();  // name -> { card, canvas, latest }
+  const shortDay = ts => (ts || "").slice(0, 10);
+
+  function build(name) {
+    const card = document.createElement("div");
+    card.className = "chart-card";
+    card.id = "bench-" + name;
+
+    const h3 = document.createElement("h3");
+    const link = document.createElement("a");
+    link.href = "https://github.com/Shopify/yjit-bench/tree/main/benchmarks/" + name;
+    link.textContent = name;
+    link.target = "_blank";
+    const latest = document.createElement("span");
+    latest.className = "latest";
+    h3.appendChild(link);
+    h3.appendChild(latest);
+
+    const box = document.createElement("div");
+    box.className = "chart-box";
+    const canvas = document.createElement("canvas");
+    box.appendChild(canvas);
+
+    card.appendChild(h3);
+    card.appendChild(box);
+    grid.appendChild(card);
+    cards.set(name, { card, canvas, latest });
+  }
+
+  function render(name) {
+    const showRatio = yRatioBox.checked;
+    const entry = cards.get(name);
+    const points = byName.get(name).filter(usable);
+
+    // Latest measured ratio, shown next to the title.
+    const last = points[points.length - 1];
+    entry.latest.textContent = showRatio
+      ? (last.ratio != null && isFinite(last.ratio) ? last.ratio.toFixed(2) + "×" : "")
+      : last.monoruby_ms.toFixed(1) + " / " + last.yjit_ms.toFixed(1) + " ms";
 
     const labels  = points.map(p => p.timestamp);
     const commits = points.map(p => p.commit);
 
-    const yTitle = showRatio
-      ? "relative speed (× YJIT, higher = monoruby faster)"
-      : "time (ms, lower is better)";
-    const yAxisOpts = {
-      min: 0,
-      title: { display: true, text: yTitle },
-    };
-
     const datasets = showRatio
       ? [{
           label: "YJIT / monoruby",
-          data: points.map(p => p.ratio),
+          data: points.map(p =>
+            p.ratio != null && isFinite(p.ratio) ? p.ratio : p.yjit_ms / p.monoruby_ms),
           borderColor: "#2e7d32",
           backgroundColor: "rgba(46,125,50,0.15)",
           tension: 0.15,
           fill: true,
-          pointRadius: 3,
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHoverRadius: 4,
         }]
       : [
           {
-            label: "monoruby (ms)",
+            label: "monoruby",
             data: points.map(p => p.monoruby_ms),
             borderColor: "#1565c0",
             backgroundColor: "rgba(21,101,192,0.10)",
             tension: 0.15,
             fill: false,
-            pointRadius: 3,
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 4,
           },
           {
-            label: "YJIT (ms)",
+            label: "YJIT",
             data: points.map(p => p.yjit_ms),
             borderColor: "#ef6c00",
             backgroundColor: "rgba(239,108,0,0.10)",
             tension: 0.15,
             fill: false,
-            pointRadius: 3,
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 4,
           },
         ];
 
@@ -445,12 +515,33 @@ function parseCsv(text) {
       data: { labels, datasets },
       options: {
         maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: "index", intersect: false },
         scales: {
-          x: { ticks: { autoSkip: true, maxTicksLimit: 12 } },
-          y: yAxisOpts,
+          x: {
+            ticks: {
+              autoSkip: true,
+              maxTicksLimit: 4,
+              maxRotation: 0,
+              font: { size: 10 },
+              callback(v) { return shortDay(this.getLabelForValue(v)); },
+            },
+            grid: { display: false },
+          },
+          y: {
+            min: 0,
+            ticks: { font: { size: 10 } },
+            title: {
+              display: true,
+              font: { size: 10 },
+              text: showRatio ? "× YJIT (higher = faster)" : "ms (lower = faster)",
+            },
+          },
         },
         plugins: {
-          legend: { display: true, position: "top", align: "end" },
+          legend: showRatio
+            ? { display: false }
+            : { display: true, position: "top", align: "end", labels: { boxWidth: 10, font: { size: 10 } } },
           tooltip: {
             callbacks: {
               title: items => {
@@ -461,19 +552,40 @@ function parseCsv(text) {
           },
         },
       },
+      plugins: showRatio ? [parityLinePlugin] : [],
     };
 
-    if (chart) chart.destroy();
-    chart = new Chart(document.getElementById("historyChart"), cfg);
+    const existing = charts.get(name);
+    if (existing) existing.destroy();
+    charts.set(name, new Chart(entry.canvas, cfg));
   }
 
-  sel.addEventListener("change", () => {
-    history.replaceState(null, "", "#bench=" + encodeURIComponent(sel.value));
-    draw();
-  });
-  yRatioCheckbox.addEventListener("change", draw);
+  names.forEach(build);
 
-  draw();
+  // ~75 charts at once is heavy, so a card is only instantiated once it
+  // scrolls near the viewport. A toggle redraws just the live ones; the
+  // rest pick up the current mode when they are first drawn.
+  const observer = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      const name = e.target.id.replace(/^bench-/, "");
+      if (!charts.has(name)) render(name);
+      observer.unobserve(e.target);
+    }
+  }, { rootMargin: "300px 0px" });
+  for (const { card } of cards.values()) observer.observe(card);
+
+  yRatioBox.addEventListener("change", () => {
+    for (const name of charts.keys()) render(name);
+  });
+
+  // `#bench=<name>` still deep-links: scroll that card into view and mark it.
+  const target = decodeURIComponent((location.hash || "").replace(/^#bench=/, ""));
+  if (cards.has(target)) {
+    const { card } = cards.get(target);
+    card.classList.add("target");
+    card.scrollIntoView({ block: "center" });
+  }
 })();
 </script>
 </body>
