@@ -790,19 +790,30 @@ fn shl_inner(
             Ok(ch) => ch,
             Err(_) => return Err(MonorubyErr::char_out_of_range(&globals.store, other_v)),
         };
-        if self_.encoding().is_utf8_compatible() {
+        let enc = self_.encoding();
+        if enc == Encoding::UsAscii || enc == Encoding::Ascii8 {
+            // CRuby (`rb_str_concat`) special-cases the two ASCII
+            // encodings: a codepoint is a byte, and past 0xFF there is
+            // no byte to append at all. US-ASCII is additionally
+            // *extended to ASCII-8BIT* for a byte it cannot name.
+            if ch > 0xFF {
+                return Err(MonorubyErr::char_out_of_range(&globals.store, other_v));
+            }
+            if ch > 0x7F && enc == Encoding::UsAscii {
+                self_.set_encoding(Encoding::Ascii8);
+            }
+            self_.extend_from_slice_checked(&[ch as u8])?;
+        } else if enc == Encoding::Utf8 {
             let c = char::from_u32(ch)
                 .ok_or_else(|| MonorubyErr::char_out_of_range(&globals.store, other_v))?;
             let mut buf = [0u8; 4];
             let encoded = c.encode_utf8(&mut buf);
             self_.extend_from_slice_checked(encoded.as_bytes())?;
         } else {
-            // ASCII-8BIT: append raw byte(s)
-            if let Ok(b) = u8::try_from(ch) {
-                self_.extend_from_slice_checked(&[b])?;
-            } else {
-                return Err(MonorubyErr::char_out_of_range(&globals.store, other_v));
-            }
+            let bytes = codepoint_bytes(enc, ch).ok_or_else(|| {
+                MonorubyErr::rangeerr(format!("invalid codepoint 0x{ch:X} in {}", enc.name()))
+            })?;
+            self_.extend_from_slice_checked(&bytes)?;
         }
     } else {
         // Try to_str coercion. `#to_str` runs Ruby code: the JIT inliner
@@ -815,6 +826,102 @@ fn shl_inner(
         self_.extend(&coerced, &globals.store)?;
     }
     Ok(self_.into())
+}
+
+/// The byte sequence a codepoint has in `enc`, or `None` when the
+/// encoding cannot name it — CRuby's `rb_enc_codelen` + `rb_enc_mbcput`,
+/// which is what makes `"".encode(Encoding::EUC_JP) << 0x81` a
+/// `RangeError` rather than a stray lead byte.
+///
+/// UTF-8 and the two ASCII encodings are handled by their caller; the
+/// rest divide into the fixed-width Unicode forms, the two Japanese
+/// multibyte encodings monoruby decodes natively, and the byte-oriented
+/// remainder (ISO-8859-N and the name-preserved encodings with no
+/// codec), where a codepoint is simply a byte.
+fn codepoint_bytes(enc: Encoding, cp: u32) -> Option<Vec<u8>> {
+    let surrogate = (0xD800..=0xDFFF).contains(&cp);
+    match enc {
+        Encoding::Utf8 | Encoding::UsAscii | Encoding::Ascii8 => unreachable!(),
+        Encoding::Utf16Le | Encoding::Utf16Be => {
+            let big = enc == Encoding::Utf16Be;
+            let units: Vec<u16> = if cp <= 0xFFFF && !surrogate {
+                vec![cp as u16]
+            } else if (0x10000..=0x10FFFF).contains(&cp) {
+                let c = cp - 0x10000;
+                vec![(0xD800 + (c >> 10)) as u16, (0xDC00 + (c & 0x3FF)) as u16]
+            } else {
+                return None;
+            };
+            Some(
+                units
+                    .into_iter()
+                    .flat_map(|u| {
+                        if big {
+                            u.to_be_bytes()
+                        } else {
+                            u.to_le_bytes()
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        Encoding::Utf32Le | Encoding::Utf32Be => {
+            if cp > 0x10FFFF || surrogate {
+                return None;
+            }
+            Some(if enc == Encoding::Utf32Be {
+                cp.to_be_bytes().to_vec()
+            } else {
+                cp.to_le_bytes().to_vec()
+            })
+        }
+        // EUC-JP: single-byte ASCII, the 0x8E half-width-kana pair, the
+        // two-byte JIS X 0208 plane, and the three-byte 0x8F plane.
+        Encoding::EucJp => {
+            let ok = if cp <= 0x7F {
+                true
+            } else if cp <= 0xFFFF {
+                let (hi, lo) = ((cp >> 8) as u8, cp as u8);
+                (hi == 0x8E && (0xA1..=0xDF).contains(&lo))
+                    || ((0xA1..=0xFE).contains(&hi) && (0xA1..=0xFE).contains(&lo))
+            } else if cp <= 0xFF_FFFF {
+                let (b0, b1, b2) = ((cp >> 16) as u8, (cp >> 8) as u8, cp as u8);
+                b0 == 0x8F && (0xA1..=0xFE).contains(&b1) && (0xA1..=0xFE).contains(&b2)
+            } else {
+                false
+            };
+            ok.then(|| big_endian_bytes(cp))
+        }
+        // Shift_JIS: single-byte ASCII and half-width kana, plus the
+        // two-byte lead/trail pairs.
+        Encoding::Sjis(_) => {
+            let ok = if cp <= 0x7F || (0xA1..=0xDF).contains(&cp) {
+                true
+            } else if (0x100..=0xFFFF).contains(&cp) {
+                let (hi, lo) = ((cp >> 8) as u8, cp as u8);
+                ((0x81..=0x9F).contains(&hi) || (0xE0..=0xFC).contains(&hi))
+                    && ((0x40..=0x7E).contains(&lo) || (0x80..=0xFC).contains(&lo))
+            } else {
+                false
+            };
+            ok.then(|| big_endian_bytes(cp))
+        }
+        _ => (cp <= 0xFF).then(|| vec![cp as u8]),
+    }
+}
+
+/// The minimal big-endian byte form of a multibyte codepoint — for the
+/// encodings whose "codepoint" *is* its byte sequence.
+fn big_endian_bytes(cp: u32) -> Vec<u8> {
+    if cp <= 0xFF {
+        vec![cp as u8]
+    } else if cp <= 0xFFFF {
+        vec![(cp >> 8) as u8, cp as u8]
+    } else if cp <= 0xFF_FFFF {
+        vec![(cp >> 16) as u8, (cp >> 8) as u8, cp as u8]
+    } else {
+        cp.to_be_bytes().to_vec()
+    }
 }
 
 /// `String#<<` for the JIT inliner: the builtin's full semantics behind a

@@ -1,7 +1,9 @@
 //! Conformance details ruby/spec's `core` suite caught: keywords
 //! documented as booleans that were read as truthy, a `try_convert` that
-//! swallowed every error, and two index conversions that raised the wrong
-//! class.
+//! swallowed every error, two index conversions that raised the wrong
+//! class, a codepoint appended without asking the encoding, a `concat`
+//! that read its arguments as it went, a `warn(uplevel:)` that counted
+//! block frames out, and a redefined basic operation that said nothing.
 
 extern crate monoruby;
 use monoruby::tests::*;
@@ -147,6 +149,38 @@ fn out_of_range_indices_raise_range_error() {
     run_test_error(r#""hello"[Object.new]"#);
 }
 
+/// A `#to_hash` / `#to_i` / `#to_str` that answers the wrong class is
+/// reported with CRuby's wording — "can't convert X to Y (X#m gives Z)",
+/// not "into".
+#[test]
+fn conversion_mismatch_says_to_not_into() {
+    run_test(
+        r##"
+        bad = Object.new
+        def bad.to_hash = 42
+        def bad.to_str = 1.0
+        def bad.to_ary = :sym
+        # `Integer()` reaches `#to_str` before `#to_i`, so the `to_i`
+        # mismatch needs an object with no `to_str` to be seen at all.
+        int = Object.new
+        def int.to_i = "x"
+        probes = [-> { Hash.try_convert(bad) },
+                  -> { {}.merge(bad) },
+                  -> { {a: 1}.update(bad) },
+                  -> { Integer(int) },
+                  -> { String.try_convert(bad) },
+                  -> { Array.try_convert(bad) }]
+        probes.map do |p|
+          begin
+            p.call
+          rescue TypeError => e
+            e.message
+          end
+        end
+        "##,
+    );
+}
+
 /// `String#bytesplice` distinguishes its two argument shapes: a Range
 /// boundary out of range is a RangeError naming the range, while the
 /// (index, length) form keeps IndexError.
@@ -167,6 +201,169 @@ fn bytesplice_range_boundaries() {
         # The shapes that are in range still splice.
         [errs, "hello".bytesplice(0..1, "xx"), "hello".bytesplice(1..2, "HELLO", 0..1),
          "hello".bytesplice(1..2, "HELLO", -5...-5), "hello".bytesplice(0...10, "x")]
+        "##,
+    );
+}
+
+/// `String#<<` with an Integer appends a *codepoint in the receiver's
+/// encoding*, which is three different things: US-ASCII widens to
+/// BINARY for a byte it cannot name, UTF-8 encodes, and a byte-oriented
+/// or multibyte encoding refuses a codepoint it has no sequence for.
+#[test]
+fn shovelling_a_codepoint_respects_the_encoding() {
+    run_test(
+        r##"
+        res = []
+        # US-ASCII: 7-bit stays, 128..255 widens to BINARY, past that is
+        # out of char range.
+        a = "".encode(Encoding::US_ASCII)
+        a << 65
+        res << [a.encoding.to_s, a.bytes]
+        a << 128
+        res << [a.encoding.to_s, a.bytes]
+        b = "".encode(Encoding::US_ASCII)
+        b << 255
+        res << [b.encoding.to_s, b.bytes]
+        # UTF-8 encodes the codepoint.
+        u = "".encode(Encoding::UTF_8)
+        u << 0x203D
+        res << [u.encoding.to_s, u.bytes]
+        # EUC-JP: a lone lead byte is not a codepoint; the two-byte
+        # plane is.
+        e = "".encode(Encoding::EUC_JP)
+        e << 0x41
+        e << 0xA1A1
+        res << [e.encoding.to_s, e.bytes]
+        # Shift_JIS: ASCII, half-width kana, and a two-byte pair.
+        s = "".encode(Encoding::Windows_31J)
+        s << 0x41
+        s << 0xB1
+        s << 0x8140
+        res << [s.encoding.to_s, s.bytes]
+        # BINARY takes any byte.
+        n = "".b
+        n << 0
+        n << 255
+        res << [n.encoding.to_s, n.bytes]
+        [["".encode(Encoding::US_ASCII), 256],
+         ["".encode(Encoding::US_ASCII), -1],
+         ["".encode(Encoding::EUC_JP), 0x81],
+         ["".encode(Encoding::EUC_JP), 0xA100],
+         ["".encode(Encoding::Windows_31J), 0x80],
+         ["".b, 256],
+         ["".encode(Encoding::UTF_8), 0x110000],
+         ["", 2 ** 64]].each do |str, cp|
+          begin
+            str << cp
+            res << :no_error
+          rescue RangeError => ex
+            res << [ex.class.to_s, ex.message]
+          end
+        end
+        res
+        "##,
+    );
+}
+
+/// `String#concat` with more than one argument gathers the parts first,
+/// so an argument that *is* the receiver contributes what it held on
+/// entry — `rb_str_concat_multi`. The single-argument and no-argument
+/// shapes still go straight through.
+#[test]
+fn concat_snapshots_its_arguments() {
+    run_test(
+        r##"
+        a = +"hello"
+        a.concat a, a
+        b = +"hello"
+        b.concat b
+        c = +"hello "
+        d = +"x"
+        [a, b, c.concat("wo", "", "rld"), d.concat.equal?(d), d,
+         (+"").concat(33, 0x203D), (+"ab").concat("c", 100)]
+        "##,
+    );
+}
+
+/// `warn(uplevel:)` counts frames from the caller of `warn`, and only
+/// then walks past a core-library frame. A block or lambda frame is a
+/// frame like any other — counting it out was what put
+/// `Enumerable#inject`'s "given block not used" on the wrong line.
+#[test]
+fn warn_uplevel_counts_block_frames() {
+    run_test_once(
+        r##"
+        require "stringio"
+        def capture
+          old = $stderr
+          $stderr = StringIO.new
+          yield
+          $stderr.string.gsub(__FILE__, "FILE")
+        ensure
+          $stderr = old
+        end
+        $VERBOSE = true
+        class Numerous
+          include Enumerable
+          def initialize(*a) = @a = a
+          def each(&b) = @a.each(&b)
+        end
+        def invoke(p) = p.call
+        # The warning belongs to the lambda body, not to `invoke`.
+        from_enumerable = -> { Numerous.new(1, 2, 3).inject(10, :-) { raise "unused" } }
+        from_array = -> { [1, 2, 3].inject(10, :-) { raise "unused" } }
+        res = []
+        res << capture { res << invoke(from_enumerable) }
+        res << capture { res << invoke(from_array) }
+        # An explicit uplevel from a plain method chain is unchanged, and
+        # one past the top of the stack still gets the bare prefix.
+        def warner = warn("plain", uplevel: 1)
+        def deep = warn("deep", uplevel: 99)
+        res << capture { warner }
+        res << capture { deep }
+        res
+        "##,
+    );
+}
+
+/// Redefining a basic operation emits CRuby's `:performance` warning —
+/// silent unless `Warning[:performance]` is on, and routed through
+/// `Warning.warn` so an override sees it.
+#[test]
+fn redefining_a_basic_op_warns_when_asked() {
+    run_test_once(
+        r##"
+        require "stringio"
+        def capture
+          old = $stderr
+          $stderr = StringIO.new
+          yield
+          $stderr.string.gsub(__FILE__, "FILE")
+        ensure
+          $stderr = old
+        end
+        res = []
+        # Off by default.
+        res << capture do
+          class Integer
+            def *(o) = 1
+          end
+        end
+        Warning[:performance] = true
+        res << capture do
+          class Integer
+            def +(o) = 1
+          end
+        end
+        # `define_method` counts too, and the message names the class.
+        res << capture { Integer.define_method(:-) { |o| 2 } }
+        # A method that is not a basic operation says nothing.
+        res << capture do
+          class Integer
+            def not_an_op = 1
+          end
+        end
+        res
         "##,
     );
 }

@@ -156,6 +156,14 @@ pub(crate) struct BasicOpTable {
     /// `JitContext::assume_basic_op`. The VM's assembly guard has no call
     /// site to ask about and stays coarse.
     refined_set: HashSet<(ClassId, IdentId)>,
+    /// Pairs replaced since the last drain, awaiting CRuby's
+    /// `:performance` warning ("Redefining 'Integer#+' disables
+    /// interpreter and JIT optimizations"). Marking happens deep inside
+    /// `Store`, which has no executor to run `Warning.warn` with, so the
+    /// pair waits here until `Executor::invoke_method_added` — the one
+    /// place every `def` / `define_method` / `alias` / `attr_*` passes
+    /// through with both in hand.
+    pending_warnings: Vec<(ClassId, IdentId)>,
 }
 
 impl BasicOpTable {
@@ -174,6 +182,7 @@ impl BasicOpTable {
             redefined_set: HashSet::default(),
             globally_redefined_set: HashSet::default(),
             refined_set: HashSet::default(),
+            pending_warnings: Vec::new(),
         }
     }
 
@@ -198,6 +207,7 @@ impl BasicOpTable {
         self.redefined = true;
         self.redefined_set.insert((class_id, name));
         self.globally_redefined_set.insert((class_id, name));
+        self.pending_warnings.push((class_id, name));
     }
 
     /// Record that `class_id#name` was replaced *by a refinement*. Same
@@ -227,6 +237,13 @@ impl BasicOpTable {
     /// Whether this exact pair has been replaced.
     pub(crate) fn redefined_pair(&self, class_id: ClassId, name: IdentId) -> bool {
         self.redefined && self.redefined_set.contains(&(class_id, name))
+    }
+
+    /// Take the pairs replaced since the last call, for the
+    /// `:performance` warning. Empty in every program that leaves the
+    /// builtins alone.
+    pub(crate) fn take_pending_warnings(&mut self) -> Vec<(ClassId, IdentId)> {
+        std::mem::take(&mut self.pending_warnings)
     }
 }
 

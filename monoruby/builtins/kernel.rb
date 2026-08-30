@@ -87,13 +87,18 @@ module Kernel
     unless uplevel.nil?
       uplevel = __to_int(uplevel)
       raise ArgumentError, "negative level (#{uplevel})" if uplevel < 0
-      # Frames from core-library methods written in Ruby (`<internal:...>`
-      # paths) are skipped when counting uplevel, as CRuby does since
-      # Bug #20968 — a warning attributed to an internal frame is useless.
+      # `uplevel` counts frames from the caller of `warn` — including
+      # the core-library frames written in Ruby, since a builtin here is
+      # a C function in CRuby and its `uplevel: 1` means "my caller".
+      # Only once the level has been counted out does an internal
+      # (`<internal:...>`) frame get skipped, as CRuby does since
+      # Bug #20968: a warning attributed to an internal frame is
+      # useless, so the walk continues outward to the first user frame.
       locs = caller_locations(1)
       if locs
-        locs = locs.reject { |l| l.path&.start_with?("<internal:") }
-        loc = locs[uplevel]
+        i = uplevel
+        i += 1 while (l = locs[i]) && l.path&.start_with?("<internal:")
+        loc = locs[i]
       end
       # An uplevel beyond the stack still gets the bare "warning: "
       # prefix (CRuby).
@@ -136,6 +141,13 @@ module Kernel
     warn(msg, category: :deprecated)
   end
   module_function :__warn_deprecated
+
+  # Internal: `rb_category_warn(RB_WARN_CATEGORY_PERFORMANCE, ...)`.
+  # Silent unless `Warning[:performance]` is on; not gated on $VERBOSE.
+  def __warn_performance(msg)
+    warn(msg, category: :performance)
+  end
+  module_function :__warn_performance
 
   # Internal: the prism lowerer desugars a top-level `return <arg>`
   # into a call to this helper followed by the return, so the warning
