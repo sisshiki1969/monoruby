@@ -29,6 +29,9 @@ fn send_to_a_missing_method_reaches_method_missing() {
           res << m.__send__(:whatever, 1, 2)
           res << m.send(:whatever) { :from_block }
           res << m.send(*[:whatever, 3])
+          # A splat of something that is not an Array: the value is the
+          # name, with no arguments after it.
+          res << m.send(*:whatever)
           res << m.send("whatever_str")
           i += 1
         end

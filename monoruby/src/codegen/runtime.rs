@@ -1318,6 +1318,7 @@ pub(super) extern "C" fn object_send_missing(
     vm: &mut Executor,
     globals: &mut Globals,
     callid: CallSiteId,
+    name: IdentId,
     lfp: Lfp,
 ) -> Option<Value> {
     // The failed lookup left its NoMethodError behind; the dispatch below
@@ -1327,32 +1328,22 @@ pub(super) extern "C" fn object_send_missing(
     let (recv, args_slot, pos_num, single_splat) =
         (cs.recv, cs.args, cs.pos_num, cs.object_send_single_splat());
     let bh = cs.block_handler(lfp);
-    let Some(receiver) = lfp.register(recv) else {
-        return None;
-    };
-    // SAFETY: `args_slot` / `pos_num` come from the call site being
-    // executed, so they name live registers of this very frame.
+    // SAFETY: the slots come from the call site being executed, so they
+    // name live registers of this very frame.
+    let receiver = lfp.register(recv).unwrap();
     let mut args = unsafe { lfp.args_to_vec(args_slot, pos_num) };
     if single_splat {
-        // `recv.send(*ary)`: the one argument is the array, and the
-        // method name is its first element.
-        let Some(splatted) = args.first().and_then(|v| v.try_array_ty()) else {
-            return None;
+        // `recv.send(*x)`: `x` is the whole argument list when it is an
+        // Array, and the name by itself otherwise — the two shapes
+        // `object_send_splat_arg0` read the name out of.
+        args = match args[0].try_array_ty() {
+            Some(ary) => ary.to_vec(),
+            None => vec![args[0]],
         };
-        args = splatted.to_vec();
     }
-    if args.is_empty() {
-        vm.set_error(MonorubyErr::argumenterr("no method name given."));
-        return None;
-    }
-    let name = match args[0].expect_symbol_or_string(globals) {
-        Ok(name) => name,
-        Err(err) => {
-            vm.set_error(err);
-            return None;
-        }
-    };
-    vm.invoke_method_inner(globals, name, receiver, &args[1..], bh, None)
+    // Argument 0 is the name, which the caller resolved and handed over.
+    let args = args.get(1..).unwrap_or_default().to_vec();
+    vm.invoke_method_inner(globals, name, receiver, &args, bh, None)
         .map_err(|err| vm.set_error(err))
         .ok()
 }

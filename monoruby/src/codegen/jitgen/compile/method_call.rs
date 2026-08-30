@@ -97,6 +97,19 @@ impl<'a> JitContext<'a> {
             // the receiver class is known.
             if let Some((func_id, visibility)) = self.jit_check_call(recv_class, callsite.name) {
                 (recv_class, func_id, visibility)
+            } else if callsite.name.is_some() && recv_class != BOOL_CLASS {
+                // The class is known and it does not have the method: this
+                // call is `method_missing`, now and until a definition
+                // moves the class version. Asking for a recompile instead
+                // never converged — the recompile re-resolves the same
+                // missing name and asks again.
+                //
+                // `BOOL_CLASS` is not such a class: it is the shared
+                // inline-cache identity of `true` and `false`, and a
+                // lookup on it answers only while *both* resolve the name
+                // to one method. `true.to_s` and `false.to_s` do not, so
+                // its `None` means "ask per class", not "no such method".
+                return self.compile_method_missing(state, ir, recv_class, callid);
             } else {
                 return Ok(CompileResult::Recompile(RecompileReason::MethodNotFound));
             }
@@ -125,14 +138,16 @@ impl<'a> JitContext<'a> {
                     }
                 }
                 // The VM resolved this call to `method_missing` and the cached
-                // class version is still current. The JIT has no lowering for a
-                // method_missing dispatch, so plain-deopt to the VM here instead
-                // of requesting a recompile. A recompile would re-read the null
-                // fid → `NotCached` → recompile again, never stabilizing — the
-                // recompile-thrash that makes method_missing-heavy hot loops
-                // ~100x slower than the interpreter.
-                MethodCache::MethodMissing { version, .. } if version == self.class_version() => {
-                    return Ok(CompileResult::Deopt);
+                // class version is still current, so compile the dispatch —
+                // see `compile_method_missing`. A named call site only: a
+                // `super` with no super method (`name.is_none()`) reads the
+                // running method's name out of the frame, which is the VM's
+                // job.
+                MethodCache::MethodMissing {
+                    recv_class,
+                    version,
+                } if version == self.class_version() && callsite.name.is_some() => {
+                    return self.compile_method_missing(state, ir, recv_class, callid);
                 }
                 // No cache, or a stale method_missing cache (the resolution may
                 // have changed): fall back to the recompile-once path, which
@@ -295,6 +310,58 @@ impl<'a> JitContext<'a> {
     /// visibility gate below costs no extra lookup.
     ///
     #[cfg_attr(target_arch = "aarch64", allow(unused_variables))]
+    ///
+    /// Compile a call site whose method does not exist: the `method_missing`
+    /// dispatch, called the way the VM calls it.
+    ///
+    /// Not a lowering of `method_missing` itself — the arguments it wants
+    /// are this call site's with the name prepended, which the compiled
+    /// argument marshalling has no shape for. What it removes is the
+    /// *deopt*: this used to be `CompileResult::Deopt`, so a compiled loop
+    /// left the JIT and re-entered it once per call — 49,901 side exits in
+    /// a 50,000-iteration loop, which made the JIT ~7x slower than
+    /// monoruby's own interpreter on `method_missing`-heavy code (an
+    /// earlier version was worse still: it asked for a recompile, which
+    /// re-read the null fid and asked again, never stabilizing). Calling
+    /// `runtime::invoke_method_missing` in place leaves the dispatch itself
+    /// exactly where it was and keeps the frame.
+    ///
+    /// Two guards make it sound, and both are already the ones an ordinary
+    /// call emits: the class version (any definition retires the code) and
+    /// the receiver class (another class may well have the method). The
+    /// helper resolves `method_missing` itself, so nothing about *it* is
+    /// baked in here.
+    ///
+    fn compile_method_missing(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        recv_class: ClassId,
+        callid: CallSiteId,
+    ) -> JitResult<CompileResult> {
+        let callsite = &self.store[callid];
+        let (recv, dst) = (callsite.recv, callsite.dst);
+
+        self.guard_class_version(state, ir, true);
+        let deopt = ir.new_deopt(state);
+        state.load(ir, recv, GP::Rdi);
+        state.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
+
+        // The helper reads the receiver, the arguments, the keywords and a
+        // block argument out of this frame, so every one of them has to be
+        // in its slot.
+        let callsite = self.store[callid].clone();
+        state.write_back_recv_and_callargs(ir, &callsite);
+        let using_fpr = state.get_using_fpr(ir);
+        let error = ir.new_error(state);
+        ir.inline(move |r#gen, _, labels, _| {
+            let error = &labels[error];
+            r#gen.method_missing_call(recv, callid, using_fpr, error);
+        });
+        state.def_reg2acc(ir, GP::Rax, dst);
+        Ok(CompileResult::Continue)
+    }
+
     pub(super) fn compile_method_call(
         &mut self,
         state: &mut AbstractState,

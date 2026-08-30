@@ -551,15 +551,47 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm! { &mut self.jit,
         missing:
+            // rcx already holds the resolved IdentId — the name the
+            // helper would otherwise have to read and convert again.
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (callid.get());
-            movq rcx, r14;
+            movq r8, r14;
             movq rax, (runtime::object_send_missing);
             call rax;
             jmp  done;
         }
         self.jit.select_page(0);
+    }
+
+    ///
+    /// Call `method_missing` for a call site whose method does not exist,
+    /// through the same runtime helper the VM uses — see
+    /// `JitContext::compile_method_missing` for why the dispatch is not
+    /// compiled further than this.
+    ///
+    /// ### out
+    /// - rax: the call's result
+    ///
+    pub(crate) fn method_missing_call(
+        &mut self,
+        recv: SlotId,
+        callid: CallSiteId,
+        using_fpr: UsingFpr,
+        error: &DestLabel,
+    ) {
+        self.fpr_save(using_fpr);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;                        // vm
+            movq rsi, r12;                        // globals
+            movq rdx, [rbp - (rbp_local(recv))];  // receiver
+            movq rcx, r14;                        // this frame's LFP
+            movl r8, (callid.get());              // CallSiteId
+            movq rax, (runtime::invoke_method_missing);
+            call rax;
+        }
+        self.fpr_restore(using_fpr);
+        self.handle_error(error);
     }
 
     ///

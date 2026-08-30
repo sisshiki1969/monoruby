@@ -61,6 +61,41 @@ impl Codegen {
     /// Does not deopt — it zeroes the 4 cache entries' `method`/`fid` words so a
     /// stale `IdentId -> FuncId` binding can't survive a redefinition.
     ///
+    /// Call `method_missing` for a call site whose method does not exist,
+    /// through the same runtime helper the VM uses. x86 twin:
+    /// `method_missing_call`; the reasoning is in
+    /// `JitContext::compile_method_missing`.
+    ///
+    /// ### out
+    /// - x0: the call's result
+    ///
+    pub(crate) fn method_missing_call(
+        &mut self,
+        recv: SlotId,
+        callid: CallSiteId,
+        using_fpr: UsingFpr,
+        error: &DestLabel,
+    ) {
+        let lfp = GP::R14.a64().0;
+        self.emit_fpr_save(using_fpr, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                       // vm
+            mov x1, x20;                       // globals
+        );
+        self.a64_frame_load(2, lfp, conv(recv) as u32); // x2 = receiver
+        monoasm_arm64!(&mut self.jit,
+            mov x3, x22;                       // this frame's LFP
+            mov x4, (callid.get() as u64);     // CallSiteId
+            str x30, [sp, #-16]!;
+            mov x9, (crate::codegen::runtime::invoke_method_missing as *const () as u64);
+            blr x9;                            // x0 = Option<Value>
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        self.emit_handle_error(error);
+    }
+
+    ///
     /// Retire the per-call-site symbol cache when its answers no longer
     /// apply: on a class-version change, and on a change of *receiver
     /// class* — the cache maps a name to a `FuncId`, which is only that
@@ -489,7 +524,8 @@ impl Codegen {
             mov x0, x19;                              // vm
             mov x1, x20;                              // globals
             mov x2, (callid.get() as u64);            // CallSiteId
-            mov x3, x22;                              // caller LFP
+            mov x3, x11;                              // the resolved IdentId
+            mov x4, x22;                              // caller LFP
             str x30, [sp, #-16]!;
             mov x9, (crate::codegen::runtime::object_send_missing as *const () as u64);
             blr x9;                                   // x0 = Option<Value>
