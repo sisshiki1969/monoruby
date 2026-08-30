@@ -355,30 +355,38 @@ function parseCsvRow(line) {
 }
 
 function parseCsv(text) {
-  const lines = text.replace(/\r/g, "").trim().split("\n");
-  if (lines.length < 2) return [];
-  const headers = parseCsvRow(lines[0]);
-  return lines.slice(1).map(line => {
-    const fields = parseCsvRow(line);
-    const obj = {};
-    headers.forEach((h, i) => obj[h] = fields[i]);
-    return obj;
-  });
+  return text.replace(/\r/g, "").trim().split("\n").map(parseCsvRow);
 }
 
 (async () => {
   const res = await fetch("data/history.csv?t=" + Date.now());
   if (!res.ok) return;
+  // Read the rows by position, not by header name: the published
+  // history.csv still carries the header the very first run wrote
+  // (`monoruby_ips,yjit_ips,ratio`), because the publish step only emits
+  // a header when the file does not exist yet. Column *order* has been
+  // stable throughout — timestamp, commit, benchmark, monoruby, yjit,
+  // ratio — so position is the reliable key.
+  //
+  // The seven oldest rows (one 2026-05-06 run) are 6-field rows holding
+  // iterations/sec rather than milliseconds; a run hours later replaced
+  // them with the current schema, so they are dropped instead of being
+  // plotted in the wrong unit.
+  const num = s => {
+    const v = parseFloat(s);
+    return isFinite(v) ? v : null;
+  };
   const rows = parseCsv(await res.text())
-    .map(r => ({
-      timestamp:    r.timestamp,
-      commit:       r.commit,
-      benchmark:    r.benchmark,
-      monoruby_ms:  r.monoruby_ms === "" ? null : parseFloat(r.monoruby_ms),
-      yjit_ms:      r.yjit_ms     === "" ? null : parseFloat(r.yjit_ms),
-      ratio:        r.ratio       === "" ? null : parseFloat(r.ratio),
-    }))
-    .filter(r => r.benchmark);
+    .slice(1)
+    .filter(f => f.length >= 8 && f[2])
+    .map(f => ({
+      timestamp:   f[0],
+      commit:      f[1],
+      benchmark:   f[2],
+      monoruby_ms: num(f[3]),
+      yjit_ms:     num(f[4]),
+      ratio:       num(f[5]),
+    }));
 
   const grid         = document.getElementById("historyGrid");
   const historyEmpty = document.getElementById("historyEmpty");
