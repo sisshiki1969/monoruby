@@ -267,15 +267,20 @@ module Fiddle
     RTLD_NODELETE = 4096
 
     def initialize(library = nil, flags = RTLD_LAZY)
-      @library = library
-      @handle  = Fiddle.___dlopen(library, flags)
+      @library  = library
+      # A virtual library (see `Fiddle.register_virtual_library`) has no
+      # file behind it, so there is nothing to `dlopen`; the resolver
+      # stands in for `dlsym`.
+      @resolver = library && Fiddle.virtual_library_resolver(library)
+      return if @resolver
+      @handle = Fiddle.___dlopen(library, flags)
       if @handle.nil? || @handle == 0
         raise Fiddle::DLError, "dlopen failed: #{library.inspect}"
       end
     end
 
     def [](name)
-      ptr = Fiddle.___dlsym(@handle, name.to_s)
+      ptr = __resolve(name)
       if ptr.nil? || ptr == 0
         raise Fiddle::DLError, "unknown symbol \"#{name}\""
       end
@@ -284,7 +289,7 @@ module Fiddle
     alias sym []
 
     def sym?(name)
-      ptr = Fiddle.___dlsym(@handle, name.to_s)
+      ptr = __resolve(name)
       (ptr.nil? || ptr == 0) ? nil : ptr
     end
 
@@ -293,7 +298,14 @@ module Fiddle
     end
 
     def to_i
-      @handle
+      @handle || 0
+    end
+
+    private
+
+    def __resolve(name)
+      return @resolver.call(name.to_s) if @resolver
+      Fiddle.___dlsym(@handle, name.to_s)
     end
   end
 
@@ -424,6 +436,40 @@ module Fiddle
 
   def self.dlopen(library, flags = Fiddle::Handle::RTLD_LAZY)
     Fiddle::Handle.new(library, flags)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Virtual libraries
+  # ---------------------------------------------------------------------------
+  #
+  # monoruby replaces several C-extension gems with pure-Ruby stubs, so
+  # the `.so` / `.bundle` those gems would have installed is not on disk
+  # here. Code that only uses the gem's Ruby API never notices. Code that
+  # reaches past it — `dlopen`ing the extension itself to call a symbol
+  # the Ruby API never exposed — gets a `DLError` for a file that, from
+  # its point of view, has to exist.
+  #
+  # A stub can stand in for its native half by claiming the path the
+  # extension would have had. *resolver* is handed a symbol name and
+  # returns its address, or `nil` for "this library does not export
+  # that" — a stub is expected to answer only for symbols the real
+  # extension had, so a caller probing with `sym?` still learns the
+  # truth. `Handle.new` then serves the path without touching the
+  # filesystem.
+  #
+  @virtual_libraries = {}
+
+  def self.register_virtual_library(path, &resolver)
+    (@virtual_libraries ||= {})[File.expand_path(path.to_s)] = resolver
+    path
+  end
+
+  def self.virtual_library_resolver(path)
+    (@virtual_libraries ||= {})[File.expand_path(path.to_s)]
+  rescue StandardError
+    # `expand_path` on something that is not path-like (a Handle being
+    # re-wrapped, say) — not a virtual library.
+    nil
   end
 
   def self.malloc(size)

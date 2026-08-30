@@ -1756,3 +1756,8 @@ end
 require "gosu/swig_patches"
 require "gosu/patches"
 require "gosu/compat"
+
+# Stand in for the gem's native `gosu.<dlext>` for callers that dlopen it
+# directly (keyboard grab, and anything else Gosu never put on the Ruby
+# side). Last, so `Gosu::VERSION` and `Gosu::SDL2` are both in place.
+require "gosu/native_shim"
