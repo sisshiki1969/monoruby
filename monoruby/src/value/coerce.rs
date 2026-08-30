@@ -371,7 +371,7 @@ impl Value {
                 return Ok(h);
             }
             return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} into Hash ({}#to_hash gives {})",
+                "can't convert {} to Hash ({}#to_hash gives {})",
                 self.get_real_class_name(globals),
                 self.get_real_class_name(globals),
                 result.get_real_class_name(globals),

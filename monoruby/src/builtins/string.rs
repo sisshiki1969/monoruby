@@ -290,10 +290,16 @@ fn string_try_convert(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    match lfp.arg(0).coerce_to_rstring(vm, globals) {
-        Ok(rstring) => Ok(rstring.into()),
-        Err(_) => Ok(Value::nil()),
+    let arg = lfp.arg(0);
+    // `rb_check_string_type` answers `nil` only for an object that has no
+    // `#to_str` at all. Once there is one, its result is converted for
+    // real: a non-String answer is the TypeError naming both classes, and
+    // an exception raised inside it propagates. Swallowing every error
+    // here turned both of those into `nil`.
+    if arg.is_rstring().is_none() && globals.check_method(arg, IdentId::TO_STR).is_none() {
+        return Ok(Value::nil());
     }
+    Ok(arg.coerce_to_rstring(vm, globals)?.into())
 }
 
 ///
@@ -784,19 +790,36 @@ fn shl_inner(
             Ok(ch) => ch,
             Err(_) => return Err(MonorubyErr::char_out_of_range(&globals.store, other_v)),
         };
-        if self_.encoding().is_utf8_compatible() {
+        let enc = self_.encoding();
+        if enc == Encoding::UsAscii || enc == Encoding::Ascii8 {
+            // CRuby (`rb_str_concat`) special-cases the two ASCII
+            // encodings: a codepoint is a byte, and past 0xFF there is
+            // no byte to append at all. US-ASCII is additionally
+            // *extended to ASCII-8BIT* for a byte it cannot name.
+            if ch > 0xFF {
+                return Err(MonorubyErr::char_out_of_range(&globals.store, other_v));
+            }
+            if ch > 0x7F && enc == Encoding::UsAscii {
+                self_.set_encoding(Encoding::Ascii8);
+            }
+            self_.extend_from_slice_checked(&[ch as u8])?;
+        } else if enc == Encoding::Utf8 {
             let c = char::from_u32(ch)
                 .ok_or_else(|| MonorubyErr::char_out_of_range(&globals.store, other_v))?;
             let mut buf = [0u8; 4];
             let encoded = c.encode_utf8(&mut buf);
             self_.extend_from_slice_checked(encoded.as_bytes())?;
         } else {
-            // ASCII-8BIT: append raw byte(s)
-            if let Ok(b) = u8::try_from(ch) {
-                self_.extend_from_slice_checked(&[b])?;
-            } else {
-                return Err(MonorubyErr::char_out_of_range(&globals.store, other_v));
-            }
+            let bytes = codepoint_bytes(enc, ch).map_err(|e| match e {
+                CodepointErr::Invalid => MonorubyErr::rangeerr(format!(
+                    "invalid codepoint 0x{ch:X} in {}",
+                    enc.name()
+                )),
+                CodepointErr::OutOfRange => {
+                    MonorubyErr::char_out_of_range(&globals.store, other_v)
+                }
+            })?;
+            self_.extend_from_slice_checked(&bytes)?;
         }
     } else {
         // Try to_str coercion. `#to_str` runs Ruby code: the JIT inliner
@@ -809,6 +832,127 @@ fn shl_inner(
         self_.extend(&coerced, &globals.store)?;
     }
     Ok(self_.into())
+}
+
+/// Why an encoding has no byte sequence for a codepoint. CRuby draws
+/// the same distinction in `rb_enc_uint_chr`: onigmo answers either
+/// "not a code point of this encoding" or "wider than anything this
+/// encoding encodes", and the two get different messages.
+enum CodepointErr {
+    /// The encoding has sequences, just not this one —
+    /// `"invalid codepoint 0x%X in %s"`.
+    Invalid,
+    /// Past the widest sequence the encoding has at all —
+    /// `"%u out of char range"`.
+    OutOfRange,
+}
+
+/// The byte sequence a codepoint has in `enc` — CRuby's
+/// `rb_enc_codelen` + `rb_enc_mbcput`, which is what makes
+/// `"".encode(Encoding::EUC_JP) << 0x81` a `RangeError` rather than a
+/// stray lead byte.
+///
+/// UTF-8 and the two ASCII encodings are handled by their caller; the
+/// rest divide into the fixed-width Unicode forms, the two Japanese
+/// multibyte encodings monoruby decodes natively, and the byte-oriented
+/// remainder (ISO-8859-N and the name-preserved encodings with no
+/// codec), where a codepoint is simply a byte. That last group is where
+/// monoruby and CRuby can still disagree: onigmo knows Big5 and GBK are
+/// multibyte and calls `0x100` an invalid codepoint, while monoruby,
+/// having no codec for them, reports it as out of char range.
+fn codepoint_bytes(enc: Encoding, cp: u32) -> std::result::Result<Vec<u8>, CodepointErr> {
+    let surrogate = (0xD800..=0xDFFF).contains(&cp);
+    match enc {
+        Encoding::Utf8 | Encoding::UsAscii | Encoding::Ascii8 => unreachable!(),
+        Encoding::Utf16Le | Encoding::Utf16Be => {
+            let big = enc == Encoding::Utf16Be;
+            let units: Vec<u16> = if cp <= 0xFFFF && !surrogate {
+                vec![cp as u16]
+            } else if (0x10000..=0x10FFFF).contains(&cp) {
+                let c = cp - 0x10000;
+                vec![(0xD800 + (c >> 10)) as u16, (0xDC00 + (c & 0x3FF)) as u16]
+            } else {
+                // Every refusal here is a codepoint Unicode itself does
+                // not have, which onigmo reports as invalid rather than
+                // as too wide.
+                return Err(CodepointErr::Invalid);
+            };
+            Ok(units
+                .into_iter()
+                .flat_map(|u| {
+                    if big {
+                        u.to_be_bytes()
+                    } else {
+                        u.to_le_bytes()
+                    }
+                })
+                .collect())
+        }
+        Encoding::Utf32Le | Encoding::Utf32Be => {
+            if cp > 0x10FFFF || surrogate {
+                return Err(CodepointErr::Invalid);
+            }
+            Ok(if enc == Encoding::Utf32Be {
+                cp.to_be_bytes().to_vec()
+            } else {
+                cp.to_le_bytes().to_vec()
+            })
+        }
+        // EUC-JP: single-byte ASCII, the 0x8E half-width-kana pair, the
+        // two-byte JIS X 0208 plane, and the three-byte 0x8F plane.
+        Encoding::EucJp => {
+            if cp > 0xFF_FFFF {
+                return Err(CodepointErr::OutOfRange);
+            }
+            let ok = if cp <= 0x7F {
+                true
+            } else if cp <= 0xFFFF {
+                let (hi, lo) = ((cp >> 8) as u8, cp as u8);
+                (hi == 0x8E && (0xA1..=0xDF).contains(&lo))
+                    || ((0xA1..=0xFE).contains(&hi) && (0xA1..=0xFE).contains(&lo))
+            } else {
+                let (b0, b1, b2) = ((cp >> 16) as u8, (cp >> 8) as u8, cp as u8);
+                b0 == 0x8F && (0xA1..=0xFE).contains(&b1) && (0xA1..=0xFE).contains(&b2)
+            };
+            ok.then(|| big_endian_bytes(cp))
+                .ok_or(CodepointErr::Invalid)
+        }
+        // Shift_JIS: single-byte ASCII and half-width kana, plus the
+        // two-byte lead/trail pairs.
+        Encoding::Sjis(_) => {
+            if cp > 0xFFFF {
+                return Err(CodepointErr::OutOfRange);
+            }
+            let ok = if cp <= 0x7F || (0xA1..=0xDF).contains(&cp) {
+                true
+            } else if cp >= 0x100 {
+                let (hi, lo) = ((cp >> 8) as u8, cp as u8);
+                ((0x81..=0x9F).contains(&hi) || (0xE0..=0xFC).contains(&hi))
+                    && ((0x40..=0x7E).contains(&lo) || (0x80..=0xFC).contains(&lo))
+            } else {
+                false
+            };
+            ok.then(|| big_endian_bytes(cp))
+                .ok_or(CodepointErr::Invalid)
+        }
+        _ => (cp <= 0xFF)
+            .then(|| vec![cp as u8])
+            .ok_or(CodepointErr::OutOfRange),
+    }
+}
+
+/// The minimal big-endian byte form of a multibyte codepoint — for the
+/// encodings whose "codepoint" *is* its byte sequence. Both callers have
+/// already refused anything past three bytes (EUC-JP's `0x8F` plane is
+/// the widest sequence either names).
+fn big_endian_bytes(cp: u32) -> Vec<u8> {
+    if cp <= 0xFF {
+        vec![cp as u8]
+    } else if cp <= 0xFFFF {
+        vec![(cp >> 8) as u8, cp as u8]
+    } else {
+        vec![(cp >> 16) as u8, (cp >> 8) as u8, cp as u8]
+    }
 }
 
 /// `String#<<` for the JIT inliner: the builtin's full semantics behind a
@@ -1136,9 +1280,13 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         // Try to_int coercion first, then to_str
         let arg0 = lfp.arg(0);
-        if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
-            let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
-            if let RV::Fixnum(i) = result.unpack() {
+        if globals.check_method(arg0, IdentId::TO_INT).is_some() {
+            // Through the shared coercion, so a `#to_int` that answers a
+            // non-Integer raises CRuby's mismatch TypeError and one that
+            // answers a Bignum raises RangeError — falling through to
+            // `#to_str` reported "no implicit conversion" for both.
+            let i = arg0.coerce_to_int_i64(vm, globals)?;
+            {
                 let index = match lhs.conv_char_index(i) {
                     Some(i) => i,
                     None => return Ok(Value::nil()),
@@ -1184,6 +1332,13 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     return Ok(Value::nil());
                 }
             }
+        }
+        // An Integer that is not a Fixnum reached here because it does
+        // not fit a machine word — that is a RangeError ("bignum too big
+        // to convert into 'long'"), which is what the coercion raises,
+        // not a conversion error about its class.
+        if arg0.is_integer() {
+            arg0.coerce_to_int_i64(vm, globals)?;
         }
         Err(MonorubyErr::no_implicit_conversion(
             globals,
@@ -4674,7 +4829,16 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let (start, splice_len) = if let Some(range) = lfp.arg(0).is_range() {
         let rstart = range.start().coerce_to_int_i64(vm, globals)?;
         let rend = range.end().coerce_to_int_i64(vm, globals)?;
-        let start = conv_byte_index_for_splice(rstart, byte_len)?;
+        // The Range form reports an out-of-range left boundary the way
+        // `rb_range_beg_len` does under `bytesplice` — a RangeError
+        // naming the range — where the (index, length) form raises the
+        // IndexError `conv_byte_index_for_splice` builds.
+        let start = conv_byte_index_for_splice(rstart, byte_len).map_err(|_| {
+            MonorubyErr::rangeerr(format!(
+                "{} out of range",
+                lfp.arg(0).inspect(&globals.store)
+            ))
+        })?;
         let end = if rend >= 0 {
             let e = if range.exclude_end() {
                 rend as usize
@@ -4738,7 +4902,15 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             })?;
             let src_start = src_range.start().coerce_to_int_i64(vm, globals)?;
             let src_end = src_range.end().coerce_to_int_i64(vm, globals)?;
-            let src_start = conv_byte_index_for_splice(src_start, str_byte_len)?;
+            // Same as the receiver's range above: an out-of-range left
+            // boundary is a RangeError naming the range.
+            let src_start_i = src_start;
+            let src_start = conv_byte_index_for_splice(src_start_i, str_byte_len).map_err(|_| {
+                MonorubyErr::rangeerr(format!(
+                    "{} out of range",
+                    lfp.arg(str_arg_idx + 1).inspect(&globals.store)
+                ))
+            })?;
             let src_end_val = if src_end >= 0 {
                 let e = if src_range.exclude_end() {
                     src_end as usize

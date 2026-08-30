@@ -2629,6 +2629,24 @@ impl Executor {
         name: IdentId,
         func_id: Option<FuncId>,
     ) -> Result<()> {
+        // CRuby reports a redefined basic operation before running the
+        // hook, at the line of the definition that replaced it. This is
+        // the one place every `def` / `define_method` / `alias` /
+        // `attr_*` passes through with an executor in hand, which is
+        // what running `Warning.warn` needs — see
+        // `Executor::warn_redefined_basic_ops`.
+        let def_loc = func_id
+            .and_then(|func_id| globals.store[func_id].is_iseq())
+            .map(|iseq| {
+                let info = &globals.store[iseq];
+                format!(
+                    "{}:{}",
+                    info.sourceinfo.file_name(),
+                    info.sourceinfo.get_line(&info.loc)
+                )
+            })
+            .or_else(|| self.nearest_caller_location(&globals.store));
+        self.warn_redefined_basic_ops(globals, def_loc)?;
         let module = globals.store[class_id].get_module();
         let (hook, receiver) = if let Some(original_obj) = module.is_singleton() {
             (IdentId::SINGLETON_METHOD_ADDED, original_obj)

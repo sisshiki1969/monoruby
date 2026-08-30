@@ -506,6 +506,13 @@ impl Store {
         self.basic_ops.redefined()
     }
 
+    /// The basic ops replaced since the last call, for CRuby's
+    /// `:performance` warning. See
+    /// [`Executor::warn_redefined_basic_ops`].
+    pub(crate) fn take_basic_op_warnings(&mut self) -> Vec<(ClassId, IdentId)> {
+        self.basic_ops.take_pending_warnings()
+    }
+
     /// Whether `class_id#name` is one of the [`BASIC_OP_DEFS`] pairs — i.e.
     /// whether redefining it is *tracked*, so a body that inlined it
     /// guard-free gets evicted. A pair outside the table is never marked

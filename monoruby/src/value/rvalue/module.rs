@@ -74,7 +74,18 @@ impl Module {
                 return Ok(());
             }
         }
-        let mut base = *self;
+        // `include` splices *below* the class's own methods. Once
+        // something has been prepended, the class's own table lives at
+        // its origin iclass and the head is only the prepend-most
+        // position, so the walk starts at the origin — otherwise
+        // `Integer.prepend M` followed by `Integer.include N` puts N
+        // ahead of both M and Integer (CRuby: `[M, Integer, N, …]`).
+        // `prepend` is the case that does insert at the head.
+        let mut base = if for_prepend {
+            *self
+        } else {
+            self.origin().unwrap_or(*self)
+        };
         loop {
             // For prepend: only treat the module as already-an-ancestor
             // if it's in the prepend region (between head and origin).

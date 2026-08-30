@@ -1936,6 +1936,25 @@ fn gvar_trace_name(globals: &mut Globals, v: Value) -> Result<IdentId> {
 ///
 /// - Integer(arg, [NOT SUPPORTED] base = 0, [NOT SUPPORTED] exception: true) -> Integer | nil
 ///
+
+///
+/// CRuby's `rb_bool_expected`: a keyword documented as a boolean takes
+/// exactly `true` or `false`. A truthiness test would quietly accept
+/// `0` and `"false"` — both of which CRuby rejects, naming the value.
+///
+/// `nil` is spelled out per keyword: `Integer(1, exception: nil)` is an
+/// error, while `system("true", exception: nil)` is the default.
+///
+fn bool_expected(store: &Store, name: &str, v: Value) -> Result<bool> {
+    match v.unpack() {
+        RV::Bool(b) => Ok(b),
+        _ => Err(MonorubyErr::argumenterr(format!(
+            "expected true or false as {name}: {}",
+            v.inspect(store)
+        ))),
+    }
+}
+
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/Integer.html]
 #[monoruby_builtin]
 fn kernel_integer(
@@ -1945,7 +1964,10 @@ fn kernel_integer(
     _: BytecodePtr,
 ) -> Result<Value> {
     // `exception:` keyword is stored after the positional max (2).
-    let exception = lfp.try_arg(2).map_or(true, |v| v.as_bool());
+    let exception = match lfp.try_arg(2) {
+        Some(v) => bool_expected(&globals.store, "exception", v)?,
+        None => true,
+    };
     match kernel_integer_inner(vm, globals, lfp) {
         Ok(v) => Ok(v),
         Err(e) => {
@@ -2055,7 +2077,7 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
             RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
             _ => {
                 return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} into Integer ({}#to_i gives {})",
+                    "can't convert {} to Integer ({}#to_i gives {})",
                     arg0.get_real_class_name(globals),
                     arg0.get_real_class_name(globals),
                     result.get_real_class_name(globals),
@@ -2354,7 +2376,10 @@ fn kernel_float(
     _: BytecodePtr,
 ) -> Result<Value> {
     // `exception:` keyword is stored after the positional max (1).
-    let exception = lfp.try_arg(1).map_or(true, |v| v.as_bool());
+    let exception = match lfp.try_arg(1) {
+        Some(v) => bool_expected(&globals.store, "exception", v)?,
+        None => true,
+    };
     match kernel_float_inner(vm, globals, lfp) {
         Ok(v) => Ok(v),
         Err(e) => {
@@ -2414,7 +2439,10 @@ fn kernel_complex(
     _: BytecodePtr,
 ) -> Result<Value> {
     // `exception:` keyword is stored after the positional max (2).
-    let exception = lfp.try_arg(2).map_or(true, |v| v.as_bool());
+    let exception = match lfp.try_arg(2) {
+        Some(v) => bool_expected(&globals.store, "exception", v)?,
+        None => true,
+    };
     let arg0 = lfp.arg(0);
     let arg1 = lfp.try_arg(1);
 
@@ -2802,7 +2830,10 @@ fn kernel_rational(
     _: BytecodePtr,
 ) -> Result<Value> {
     // `exception:` keyword is stored after the positional max (2).
-    let exception = lfp.try_arg(2).map_or(true, |v| v.as_bool());
+    let exception = match lfp.try_arg(2) {
+        Some(v) => bool_expected(&globals.store, "exception", v)?,
+        None => true,
+    };
     match kernel_rational_inner(vm, globals, lfp) {
         Ok(v) => Ok(v),
         Err(e) => {
@@ -3498,7 +3529,12 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     use std::process::Command;
     let arg0 = lfp.arg(0);
     // `exception: true` turns the nil/false results into raises (CRuby).
-    let exception = lfp.try_arg(2).is_some_and(|v| v.as_bool());
+    // `system` differs from the conversion methods: a `nil` here is the
+    // default (no exception), not an error.
+    let exception = match lfp.try_arg(2) {
+        Some(v) if !v.is_nil() => bool_expected(&globals.store, "exception", v)?,
+        _ => false,
+    };
     let cmd_str = arg0.coerce_to_str(vm, globals)?;
     let (program, mut args) = prepare_command_arg(&cmd_str);
     if let Some(arg1) = lfp.try_arg(1) {

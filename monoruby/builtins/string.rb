@@ -24,8 +24,21 @@ class String
   end
 
   def concat(*args)
-    args.each do |arg|
-      self << arg
+    # `rb_str_concat_multi`: with more than one argument the parts are
+    # gathered into a buffer first and appended in one go, so an
+    # argument that *is* the receiver contributes the value it had on
+    # entry — `str.concat str, str` triples it rather than quadrupling
+    # it. The buffer carries the receiver's encoding so a codepoint
+    # argument is interpreted as it would have been against `self`.
+    if args.size > 1
+      buf = +""
+      buf.force_encoding(encoding)
+      args.each do |arg|
+        buf << arg
+      end
+      self << buf
+    elsif args.size == 1
+      self << args[0]
     end
     self
   end

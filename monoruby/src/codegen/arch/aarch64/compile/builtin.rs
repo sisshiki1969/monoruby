@@ -221,6 +221,16 @@ impl Codegen {
                 cmp x2, #(0xff);
             );
             self.jit.bcond_label(monoasm::Cond::Hi, &fallback);
+            // A raw single-byte append only answers where a 7-bit
+            // codepoint *is* its byte: ASCII-8BIT / UTF-8 / US-ASCII.
+            // In UTF-16 and UTF-32 it is two or four bytes, and the
+            // multibyte encodings past US-ASCII build sequences the
+            // fast path does not know.
+            monoasm_arm64!(&mut self.jit,
+                ldrb w0, [x4, #(crate::rvalue::STRING_TY_OFFSET as u32)];
+                cmp x0, #(crate::rvalue::STRING_TY_MAX_INLINE_SHL as u64);
+            );
+            self.jit.bcond_label(monoasm::Cond::Hi, &fallback);
             monoasm_arm64!(&mut self.jit,
                 cmp x2, #(0x7f);
             );

@@ -944,6 +944,48 @@ impl Executor {
         Ok(())
     }
 
+    /// Emit CRuby's `:performance` warning for every basic operation
+    /// redefined since the last call — "Redefining 'Integer#+' disables
+    /// interpreter and JIT optimizations" (`rb_free_method_entry` /
+    /// `rb_vm_check_redefinition_opt_method`). Like CRuby it goes
+    /// through `Warning.warn`, so it is silent unless
+    /// `Warning[:performance]` is on and an override sees it.
+    ///
+    /// `loc` is the `"file:line"` of the definition that did it; without
+    /// one the message goes out bare, as `warn` does past the stack top.
+    pub(crate) fn warn_redefined_basic_ops(
+        &mut self,
+        globals: &mut Globals,
+        loc: Option<String>,
+    ) -> Result<()> {
+        let pairs = globals.store.take_basic_op_warnings();
+        if pairs.is_empty() {
+            return Ok(());
+        }
+        // Nothing is ever queued before `arm_basic_ops`, which runs once
+        // `builtins/*.rb` — `__warn_performance` among them — has
+        // loaded, so the helper is always there by the time a pair
+        // arrives.
+        let main = globals.main_object;
+        let prefix = loc.map_or_else(String::new, |loc| format!("{loc}: "));
+        for (class_id, name) in pairs {
+            let class_name = globals.store.get_class_name(class_id);
+            let msg = format!(
+                "{prefix}warning: Redefining '{class_name}#{name}' disables interpreter and JIT optimizations"
+            );
+            let msg_val = Value::string(msg);
+            self.invoke_method_inner(
+                globals,
+                IdentId::get_id("__warn_performance"),
+                main,
+                &[msg_val],
+                None,
+                None,
+            )?;
+        }
+        Ok(())
+    }
+
     ///
     /// The `"file:line"` of the nearest Ruby (iseq) caller of the current
     /// native builtin frame.

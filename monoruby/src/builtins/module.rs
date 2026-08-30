@@ -2059,6 +2059,10 @@ fn append_features(
     base.as_val().ensure_not_frozen(&globals.store)?;
     let include_module = lfp.self_val().expect_module(globals)?;
     base.include_module(include_module)?;
+    // The module may already carry a basic operation (`module M; def
+    // +(o); end; end` and only then `Integer.include M`), which no
+    // definition will run to mark.
+    globals.store.check_mixin_basic_ops(include_module);
     Ok(lfp.self_val())
 }
 
@@ -2167,6 +2171,9 @@ fn prepend_features(
     globals
         .store
         .propagate_prepend_to_subclasses(base.id(), prepend_module);
+    // See `append_features`: a module that already defines a basic
+    // operation replaces it the moment it is spliced in.
+    globals.store.check_mixin_basic_ops(prepend_module);
     Ok(lfp.self_val())
 }
 

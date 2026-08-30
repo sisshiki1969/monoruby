@@ -236,6 +236,13 @@ impl Codegen {
                 // byte range 0..=255 (unsigned compare catches negatives)
                 cmpq rdx, (0xff);
                 ja   fallback;
+                // A raw single-byte append only answers where a 7-bit
+                // codepoint *is* its byte: ASCII-8BIT / UTF-8 /
+                // US-ASCII. In UTF-16 and UTF-32 it is two or four
+                // bytes, and the multibyte encodings past US-ASCII
+                // build sequences the fast path does not know.
+                cmpb [rdi + (crate::rvalue::STRING_TY_OFFSET)], (crate::rvalue::STRING_TY_MAX_INLINE_SHL);
+                ja   fallback;
                 cmpq rdx, (0x7f);
                 jle  enc_ok;
                 // high byte: raw append only into ASCII-8BIT (Ascii8 == 0)

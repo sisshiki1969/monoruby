@@ -68,6 +68,16 @@ class Exception
 
   # Whether the uncaught-exception report would be written to a tty —
   # the default for `full_message`'s :highlight option.
+  # `highlight:` is a strict boolean in CRuby — anything but `true`,
+  # `false` or `nil` is an ArgumentError naming the value. `nil` means
+  # "not given", so each caller applies its own default.
+  def self.__check_highlight(highlight)
+    unless highlight == true || highlight == false || highlight.nil?
+      raise ArgumentError, "expected true or false as highlight: #{highlight.inspect}"
+    end
+    highlight
+  end
+
   def self.to_tty?
     $stderr.equal?(STDERR) && STDERR.tty?
   rescue NoMethodError
@@ -82,6 +92,7 @@ class Exception
     # uncaught-error report. All keyword arguments except :order are
     # forwarded to #detailed_message, with :highlight resolved to its
     # default first.
+    highlight = Exception.__check_highlight(highlight)
     highlight = Exception.to_tty? if highlight.nil?
     msg = nil
     if respond_to?(:detailed_message)
@@ -136,6 +147,7 @@ class Exception
   # decorate the message with the class name; empty-message and
   # anonymous-class cases have special forms.
   def detailed_message(highlight: false, **)
+    highlight = Exception.__check_highlight(highlight) || false
     msg = message.to_s
     cls = self.class
     if msg.empty?
