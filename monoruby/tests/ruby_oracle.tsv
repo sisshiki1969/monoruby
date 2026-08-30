@@ -274,6 +274,7 @@
 13c09eba52c55ecec3e82b015d3b4f59	[true, true, true]	C = Class.new\n            D = Class.new(C)\n            \n[C.new.clas
 13e499657f84b7c697664ba59ec4b9f4	[true, false, ArgumentError, false, true]	(o=Object.new; a=o.clone(freeze: true).frozen?; b=(x="s".freeze; x.clone(freeze:
 13edcd86f2bff4fcc4b3b29c5635e9f9	"RUBZ"	succ = proc { |s| s.succ }; upcase = proc { |s| s.upcase }; (succ << upcase).cal
+1407b0c899f10c0ed45b96b8b0aa9529	[true, true, false, false, "12", ["1", "2"], -2, true, nil]	p1 = :to_s.to_proc\n        [p1.equal?(:to_s.to_proc), p1 == :to_s.to_pr
 1408dc4e7fb001b397ca65a58a5bb60b	["XXX", "secret"]	class Foo\n          def initialize data\n            @key = data\n       
 142812ded02a16064ed8507c23bc2193	[true, [true, "Addrinfo", "127.0.0.1"]]	require "socket"\n            require "tmpdir"\n            path = Fi
 1438ba7f43337b0f331290b81cfaafb1	true	Random.srand(42)\n        a = Random.random_number\n        b = Random.ra
@@ -547,6 +548,7 @@
 296cb9b677550e04208e94ca484931e0	false	(1 << 100) == Float::NAN
 296cf73e0640c371c2684d2cd90d9e7b	[[3, 3, 5], ["ONE", "TWO", "THREE"], [3, 3, 5], 3, 4]	a = ["one", "two", "three"]\n        first = a.map(&:size)\n        GC.st
 2979daa28cf9e1607e9067bfb20e90ba	true	def p2\n          x = nil\n          [].each { x = 9.9 }\n          x.nil?
+2980a6aca8adce9ffc5525158053d81d	[4, 2, true]	p1 = :size.to_proc.call("abcd")\n        GC.start\n        p2 = :size.to_
 2987a50b02c4a3d9e5927d0cf054efc5	[true, true, false, true, false]	[\n              SystemExit.new.success?,\n              SystemExit.n
 29a4782bad89b05e2a89fbdc04ec694a	[[1, :d, [], 1, nil], [1, 2, [3, 4], 1, nil], [1, 2, [], 9, nil], [1, :d, [], 1, :blk], [10, 20, [30], 1, nil], [5, 6, [7], 2, nil]]	def t(a, b = :d, *r, k: 1, &blk); [a, b, r, k, blk ? blk.call : nil
 29be5fcdba7ed7a8c6ca8dadda30fdde	["Xtail-line\\nXpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad", ["tail", "line", "padpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad"], "T-line\\npadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad", "Ytail-line\\nYpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpad", "if @c  tail-line\\n  padpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadpadend\\n"]	s = "HEADER-LINE\\nmiddle\\ntail-line\\n" + "pad" * 20\n        s =~ /middl
@@ -1063,6 +1065,7 @@
 532f5d7ba05f7843743de0b52969bba8	["PSubB", :x, 2, 9]	class PSubB < Proc; def initialize(a, b); @a = a; @b = b; end; attr_reader :a, :
 5344f32f5c73af78489308d9a5575a7d	[["TypeError", "1 is not a symbol nor a string"], ["TypeError", "1 is not a symbol nor a string"], ["TypeError", "1 is not a symbol nor a string"]]	def try; yield; rescue => e; [e.class.to_s, e.message]; end\n       
 536366d9b0b405f788174be1f1a39cb3	[true, true, true, "\\e[1mx (\\e[1;4mRuntimeError\\e[m\\e[1m)\\e[m\\n\\e[1my\\e[m"]	res = []\n        begin\n          begin\n            raise "the cause"\n  
+538fe09e5b06e4ccde36d8fd223d3558	[ArgumentError, "Can't create Binding from C level Proc"]	begin\n          :to_s.to_proc.binding\n        rescue => e\n          [e.
 53a0e18814663d90c976b6d913746bc6	[true, :blocked_ok, :locked, :done]	require 'tmpdir'\n            path = File.join(Dir.tmpdir, "mrb_floc
 53c684da33e546973dbfb03625ab4bc6	"Outer::Inner"	module Outer\n          class Inner\n            def self.name_test\n     
 53d9651dadebd1d49dd5ea2484441652	["hello ", "world", ""]	"hello world" =~ /world/\n            [$`, $&, $']\n            
@@ -1899,6 +1902,7 @@
 9839ce942dc6ceffe4fdfca27b091194	{amount: 42, unit: "km"}	M = Data.define(:amount, :unit)\nM.new(42, "km", **{}).to_h
 9839f0f17947005555bee6338f175943	318.75	obj = Object.new\n        acc = 0.0\n        i = 0\n        while i < 30\n 
 98411750aed4bab667c24946e33e5cb0	[100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]	$a = []\n            C = 100\n            \n            for i in 0..19
+9861856cd9d5f34b618738bf16e9b44c	[:seen, true, "12", false]	p1 = :to_s.to_proc\n        p1.instance_variable_set(:@tag, :seen)\n     
 988c0b8f8c44428ac627b741f329756c	100	# Ret\n            begin\n              100\n            end\n        
 98996233bfa191027494af2f2287502c	[:inner, :early, :late]	def m1\n          obj = Object.new\n          class << obj\n            re
 98bdea24e737b24b5b5e21db74beb80e	[true, 0]	pid = fork { exit 0 }\n            ret = Process.wait(pid)\n         
