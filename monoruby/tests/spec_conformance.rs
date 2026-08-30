@@ -232,9 +232,13 @@ fn shovelling_a_codepoint_respects_the_encoding() {
         res << [u.encoding.to_s, u.bytes]
         # EUC-JP: a lone lead byte is not a codepoint; the two-byte
         # plane is.
+        # EUC-JP: ASCII, the 0x8E half-width-kana pair, the two-byte
+        # JIS X 0208 plane, and the three-byte 0x8F plane.
         e = "".encode(Encoding::EUC_JP)
         e << 0x41
+        e << 0x8EA1
         e << 0xA1A1
+        e << 0x8FA1A1
         res << [e.encoding.to_s, e.bytes]
         # Shift_JIS: ASCII, half-width kana, and a two-byte pair.
         s = "".encode(Encoding::Windows_31J)
@@ -271,7 +275,9 @@ fn shovelling_a_codepoint_respects_the_encoding() {
         [["".encode(Encoding::US_ASCII), 256],
          ["".encode(Encoding::US_ASCII), -1],
          ["".encode(Encoding::EUC_JP), 0x81],
+         ["".encode(Encoding::EUC_JP), 0x8EFF],
          ["".encode(Encoding::EUC_JP), 0xA100],
+         ["".encode(Encoding::EUC_JP), 0x8F41A1],
          ["".encode(Encoding::Windows_31J), 0x80],
          # Past the widest sequence the encoding has at all, the message
          # is "out of char range" rather than "invalid codepoint".
