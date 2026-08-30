@@ -1,5 +1,6 @@
 use super::*;
 use jitgen::{AbstractState, JitContext};
+use num::BigInt;
 
 //
 // Range class
@@ -49,6 +50,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(RANGE_CLASS, "__builtin_min", min, 0);
     globals.define_builtin_func(RANGE_CLASS, "__builtin_max", max, 0);
     globals.define_builtin_func(RANGE_CLASS, "count", count, 0);
+    // Reached from `Range#sum` (builtins/range.rb), which owns the
+    // block / fallback decision.
+    globals.define_builtin_func(RANGE_CLASS, "__builtin_sum", int_sum, 1);
     globals.define_builtin_func(RANGE_CLASS, "minmax", minmax, 0);
 }
 
@@ -933,6 +937,89 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 }
 
 ///
+/// An Integer `Value` (Fixnum or Bignum) as one of the two, or `None` for
+/// anything else.
+///
+enum IntVal {
+    Fix(i64),
+    Big(BigInt),
+}
+
+fn int_val(v: Value) -> Option<IntVal> {
+    match v.unpack() {
+        RV::Fixnum(i) => Some(IntVal::Fix(i)),
+        RV::BigInt(b) => Some(IntVal::Big(b.clone())),
+        _ => None,
+    }
+}
+
+impl IntVal {
+    fn to_bigint(&self) -> BigInt {
+        match self {
+            Self::Fix(i) => BigInt::from(*i),
+            Self::Big(b) => b.clone(),
+        }
+    }
+}
+
+///
+/// ### Range#sum — the Integer closed form
+///
+/// The arithmetic series `init + beg + (beg+1) + ... + end`, computed as
+/// `init + (beg + end) * (end - beg + 1) / 2` instead of iterating, which
+/// is what CRuby's `int_range_sum` does.
+///
+/// Called only from `Range#sum` in builtins/range.rb, and only when no
+/// block was given. `nil` means the shape did not apply — the endpoints or
+/// `init` are not all Integers — and tells the caller to fall back to
+/// `Enumerable#sum`. That is never a real result here: a sum of Integers
+/// is an Integer, and an empty range answers `init`, which this path is
+/// only reached with when it is one too.
+///
+/// Beyond the speed, this is what makes `(1..10**20).sum` answer at all:
+/// summing term by term never finishes.
+///
+#[monoruby_builtin]
+fn int_sum(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let range = self_.as_range();
+    let (Some(beg), Some(end), Some(init)) = (
+        int_val(range.start()),
+        int_val(range.end()),
+        int_val(lfp.arg(0)),
+    ) else {
+        return Ok(Value::nil());
+    };
+    let excl = range.exclude_end();
+    // Fixnums are i63, so `beg + end` and `end - beg + 1` each fit in i64
+    // and their product in i128 — no overflow check needed, and the
+    // division by 2 is exact because one of the two factors is even.
+    if let (IntVal::Fix(beg), IntVal::Fix(end), IntVal::Fix(init)) = (&beg, &end, &init) {
+        let (beg, mut end, init) = (*beg as i128, *end as i128, *init as i128);
+        if excl {
+            end -= 1;
+        }
+        if end < beg {
+            return Ok(Value::integer(init as i64));
+        }
+        let sum = init + (beg + end) * (end - beg + 1) / 2;
+        return Ok(match i64::try_from(sum) {
+            Ok(i) => Value::integer(i),
+            Err(_) => Value::bigint(BigInt::from(sum)),
+        });
+    }
+    let (beg, mut end, init) = (beg.to_bigint(), end.to_bigint(), init.to_bigint());
+    if excl {
+        end -= 1u32;
+    }
+    if end < beg {
+        return Ok(Value::bigint(init));
+    }
+    let sum = init + (&beg + &end) * (&end - &beg + 1u32) / 2u32;
+    Ok(Value::bigint(sum))
+}
+
+///
 /// ### Range#minmax
 ///
 /// - minmax -> [object, object]
@@ -1562,6 +1649,43 @@ mod tests {
             (1..5).max {|a, b| z }
             "#,
         );
+    }
+
+    #[test]
+    fn sum() {
+        run_tests(&[
+            // The closed form: inclusive / exclusive, empty, negative,
+            // single element, and an Integer init.
+            "(1..10).sum",
+            "(1...10).sum",
+            "(1..1).sum",
+            "(1...1).sum",
+            "(10..1).sum",
+            "(10...1).sum",
+            "(-5..5).sum",
+            "(-10..-5).sum",
+            "(1..10).sum(100)",
+            "(10..1).sum(100)",
+            "(1..10).sum(-100)",
+            // Results and endpoints past Fixnum range.
+            "(1..10**10).sum",
+            "(1...10**10).sum",
+            "(10**20..10**20 + 2).sum",
+            "(1..10**20).sum",
+            "(-10**20..10**20).sum",
+            "(1..10).sum(10**30)",
+            // Shapes that fall back to Enumerable#sum: a block, and
+            // endpoints that are not both Integers.
+            "(1..10).sum { |x| x * 2 }",
+            "(1..10).sum(100) { |x| x * 2 }",
+            r#"("a".."e").sum("")"#,
+            "(1..10).step(2).sum",
+        ]);
+        // A Float range has no `succ` to iterate, so once the closed form
+        // declines it, Enumerable#sum raises — with or without a block,
+        // exactly as CRuby does.
+        run_test_error("(1.0..3.0).sum");
+        run_test_error("(1.0..3.0).sum { |x| x }");
     }
 
     #[test]

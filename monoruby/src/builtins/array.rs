@@ -106,8 +106,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "fetch", fetch, 1, 2, false);
     globals.define_builtin_func(ARRAY_CLASS, "take", take, 1);
     globals.define_builtin_func_with(ARRAY_CLASS, "sum", sum, 0, 1, false);
-    globals.define_builtin_func(ARRAY_CLASS, "min", min, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "max", max, 0);
+    globals.define_builtin_func_with(ARRAY_CLASS, "min", min, 0, 1, false);
+    globals.define_builtin_func_with(ARRAY_CLASS, "max", max, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "minmax", minmax, 0);
     globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select", "find_all"], filter, 0);
@@ -2441,16 +2441,155 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 }
 
 ///
+/// The `n` of `min(n)` / `max(n)`: `#to_int` conversion and validation,
+/// matching CRuby's messages (and `Range#__minmax_n` in builtins/range.rb,
+/// the Ruby-side twin of this).
+///
+fn minmax_n(vm: &mut Executor, globals: &mut Globals, n: Value) -> Result<usize> {
+    let n = n.coerce_to_int_i64(vm, globals)?;
+    if n < 0 {
+        // CRuby words this one per class: `Array#min` says "negative size
+        // (-1)", `Range#min` "negative array size (or size too big)".
+        return Err(MonorubyErr::argumenterr(format!("negative size ({n})")));
+    }
+    Ok(n as usize)
+}
+
+///
+/// The `min(n)` / `max(n)` forms: the `n` smallest (ascending) or largest
+/// (descending) elements.
+///
+/// Sorting the whole receiver is more work than CRuby's partial selection,
+/// but it reuses the one sort — including its homogeneous fast path and its
+/// GC-rooted merge buffer — and these forms are called for a *ranking*, on
+/// arrays small enough that the sort is not the cost. The receiver itself is
+/// never touched: the sort runs on a fresh copy.
+///
+fn min_max_n(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    n: Value,
+    take_max: bool,
+) -> Result<Value> {
+    let n = minmax_n(vm, globals, n)?;
+    // The copy is freshly allocated and not yet reachable from any GC root,
+    // and the comparator block can collect — root it for the sort, exactly
+    // as `Array#sort` does with its own copy.
+    let copy = Array::new_from_vec(lfp.self_val().as_array().to_vec());
+    let sorted = vm.with_temp_scope(|vm| {
+        vm.temp_push(copy.into());
+        sort_inner(vm, globals, lfp, copy)
+    })?;
+    let sorted = sorted.as_array();
+    let n = n.min(sorted.len());
+    let res: Vec<Value> = if take_max {
+        sorted[sorted.len() - n..].iter().rev().copied().collect()
+    } else {
+        sorted[..n].to_vec()
+    };
+    Ok(Value::array_from_vec(res))
+}
+
+///
+/// The `min` / `max` / `minmax` scan over a homogeneous receiver: one pass
+/// in Rust, no `compare_values` dispatch per element. `None` when the
+/// elements are not of one class with a known `<=>`.
+///
+/// Ties keep the earliest element, which is what the general path does
+/// (it replaces only on a *strict* improvement) and what CRuby does.
+///
+fn min_max_homogeneous(globals: &Globals, ary: &[Value]) -> Option<(Value, Value)> {
+    use executor::op::{HomogeneousOrd, cmp_redefined, homogeneous_ord};
+    // Numbers are the shape `min`/`max` actually meet, and for those the
+    // key *is* the ordering — so instead of classifying the receiver in one
+    // pass and scanning it in another, extract and compare in a single
+    // fused pass that gives up at the first element of another class. The
+    // first element says which key to try, so nothing is wasted on an
+    // array that has neither shape.
+    if ary[0].is_fixnum() && !cmp_redefined(globals, INTEGER_CLASS) {
+        if let Some(res) = min_max_by_key(ary, |v| v.try_fixnum()) {
+            return Some(res);
+        }
+    }
+    // A `NaN` key is left out, which drops the whole array to the general
+    // path — CRuby raises on the comparison rather than ordering around it.
+    if ary[0].try_float().is_some() && !cmp_redefined(globals, FLOAT_CLASS) {
+        if let Some(res) = min_max_by_key(ary, |v| v.try_float().filter(|f| !f.is_nan())) {
+            return Some(res);
+        }
+    }
+    // Strings order by a comparison, not by an extractable key, so they
+    // keep the classify-then-scan shape.
+    match homogeneous_ord(globals, ary)? {
+        HomogeneousOrd::String => {
+            let (mut min, mut max) = (ary[0], ary[0]);
+            // SAFETY of the unwraps: `homogeneous_ord` proved every element
+            // is a String.
+            let cmp = |a: Value, b: Value| {
+                crate::builtins::string::string_byte_then_encoding_cmp(
+                    a.is_rstring_inner().unwrap(),
+                    b.is_rstring_inner().unwrap(),
+                )
+            };
+            for &v in &ary[1..] {
+                if cmp(v, min) == std::cmp::Ordering::Less {
+                    min = v;
+                } else if cmp(v, max) == std::cmp::Ordering::Greater {
+                    max = v;
+                }
+            }
+            Some((min, max))
+        }
+        // Both key shapes were tried above; reaching here means the
+        // redefinition check turned one down.
+        HomogeneousOrd::Fixnum | HomogeneousOrd::Float => None,
+    }
+}
+
+///
+/// One pass over a non-empty `ary`, keeping the elements with the smallest
+/// and largest key — and, on a tie, the earlier one. `None` as soon as an
+/// element has no key, with nothing else read.
+///
+fn min_max_by_key<K: PartialOrd>(
+    ary: &[Value],
+    key: impl Fn(Value) -> Option<K>,
+) -> Option<(Value, Value)> {
+    let (mut min, mut max) = (ary[0], ary[0]);
+    let mut min_k = key(min)?;
+    let mut max_k = key(max)?;
+    for &v in &ary[1..] {
+        let k = key(v)?;
+        if k < min_k {
+            min_k = k;
+            min = v;
+        } else if k > max_k {
+            max_k = k;
+            max = v;
+        }
+    }
+    Some((min, max))
+}
+
+///
 /// ### Array#min
 ///
 /// - min -> object | nil
 /// - min {|a, b| ... } -> object | nil
-/// - [NOT SUPPORTED] min(n) -> Array
-/// - [NOT SUPPORTED] min(n) {|a, b| ... } -> Array
+/// - min(n) -> Array
+/// - min(n) {|a, b| ... } -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/min.html]
 #[monoruby_builtin]
 pub(crate) fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // An explicit `nil` for `n` means "no n" — `[3,1,2].min(nil)` is 1,
+    // not a TypeError.
+    if let Some(n) = lfp.try_arg(0)
+        && !n.is_nil()
+    {
+        return min_max_n(vm, globals, lfp, n, false);
+    }
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::nil());
@@ -2466,9 +2605,15 @@ pub(crate) fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         }
         Ok(min)
     } else {
+        if let Some((min, _)) = min_max_homogeneous(globals, &ary) {
+            return Ok(min);
+        }
         let mut min = ary[0];
         for v in &ary[1..] {
-            if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
+            // The element is the receiver of `<=>`, as in CRuby, so an
+            // incomparable pair is reported the way CRuby reports it:
+            // `[1, "a"].min` names the String, not the Integer.
+            if vm.compare_values(globals, *v, min)? == std::cmp::Ordering::Less {
                 min = *v;
             }
         }
@@ -2481,12 +2626,17 @@ pub(crate) fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 ///
 /// - max -> object | nil
 /// - max {|a, b| ... } -> object | nil
-/// - [NOT SUPPORTED] max(n) -> Array
-/// - [NOT SUPPORTED] max(n) {|a, b| ... } -> Array
+/// - max(n) -> Array
+/// - max(n) {|a, b| ... } -> Array
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
 #[monoruby_builtin]
 pub(crate) fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    if let Some(n) = lfp.try_arg(0)
+        && !n.is_nil()
+    {
+        return min_max_n(vm, globals, lfp, n, true);
+    }
     let ary = lfp.self_val().as_array();
     if ary.len() == 0 {
         return Ok(Value::nil());
@@ -2502,9 +2652,13 @@ pub(crate) fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         }
         Ok(max)
     } else {
+        if let Some((_, max)) = min_max_homogeneous(globals, &ary) {
+            return Ok(max);
+        }
         let mut max = ary[0];
         for v in &ary[1..] {
-            if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
+            // Element as receiver, as in `min` above.
+            if vm.compare_values(globals, *v, max)? == std::cmp::Ordering::Greater {
                 max = *v;
             }
         }
@@ -2539,22 +2693,8 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 max = *v;
             }
         }
-    } else if let Some(first_i) = ary[0].try_fixnum()
-        && ary.iter().all(|v| v.try_fixnum().is_some())
-    {
-        // All-Fixnum fast path: tight i64 loop, no Ruby-level dispatch.
-        let mut min_i = first_i;
-        let mut max_i = first_i;
-        for v in &ary[1..] {
-            // SAFETY: pre-checked above that every element is a Fixnum.
-            let x = unsafe { v.try_fixnum().unwrap_unchecked() };
-            if x < min_i {
-                min_i = x;
-            } else if x > max_i {
-                max_i = x;
-            }
-        }
-        return Ok(Value::array2(Value::integer(min_i), Value::integer(max_i)));
+    } else if let Some((min, max)) = min_max_homogeneous(globals, &ary) {
+        return Ok(Value::array2(min, max));
     } else {
         for v in &ary[1..] {
             if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
@@ -7841,6 +7981,104 @@ mod tests {
         ]);
         // error for out-of-range without block
         run_test_error("[10, 20, 30].fetch_values(0, 5)");
+    }
+
+    #[test]
+    fn min_max_homogeneous_fast_path() {
+        run_tests(&[
+            // Each class the fast path takes, and each it declines.
+            "[3, 1, 2].min",
+            "[3, 1, 2].max",
+            "[3, 1, 2].minmax",
+            "[3.5, 1.5, 2.5].min",
+            "[3.5, 1.5, 2.5].max",
+            "[3.5, 1.5, 2.5].minmax",
+            r#"["b", "a", "c"].min"#,
+            r#"["b", "a", "c"].max"#,
+            r#"["b", "a", "c"].minmax"#,
+            // Declined: mixed numerics (still ordered, by the general path),
+            // a Bignum, a Symbol, one element, none.
+            "[1, 2.5, 0].min",
+            "[1, 2.5, 0].max",
+            "[10**20, 1].min",
+            "[10**20, 1].max",
+            "[:b, :a].min",
+            "[:b, :a].minmax",
+            "[7].min",
+            "[7].minmax",
+            "[].min",
+            "[].max",
+            "[].minmax",
+            // Ties keep the first equal element, which `equal?` can see.
+            r#"a = "x"; b = "x"; [a, b].min.equal?(a)"#,
+            r#"a = "x"; b = "x"; [a, b].max.equal?(a)"#,
+        ]);
+        // A NaN has no ordering: the general path raises, as CRuby does,
+        // rather than the fast path ordering around it.
+        run_test_error("[3.0, Float::NAN, 2.0].min");
+        run_test_error("[3.0, Float::NAN, 2.0].max");
+        run_test_error("[3.0, Float::NAN].minmax");
+        // Incomparable elements raise, and name the operands CRuby's way.
+        run_test_error(r#"[1, "a"].min"#);
+        run_test_error(r#"[1, "a"].max"#);
+        run_test_error(r#"[1, "a"].minmax"#);
+    }
+
+    #[test]
+    fn min_max_redefined_cmp() {
+        // A redefined `<=>` takes the receiver off the fast path — every
+        // one of min / max / minmax must go through the redefinition.
+        for m in ["min", "max", "minmax"] {
+            run_test_with_prelude(
+                &format!("[3, 1, 2].{m}"),
+                "class Integer; def <=>(o) = (o.to_i - to_i); end",
+            );
+            run_test_with_prelude(
+                &format!("[3.0, 1.0, 2.0].{m}"),
+                "class Float; def <=>(o) = (o.to_f - to_f); end",
+            );
+            run_test_with_prelude(
+                &format!(r#"["b", "a", "c"].{m}"#),
+                "class String; def <=>(o) = (o.length - length); end",
+            );
+        }
+    }
+
+    #[test]
+    fn min_max_n() {
+        run_tests(&[
+            "[3, 1, 2].min(2)",
+            "[3, 1, 2].max(2)",
+            // n at and past the edges, and the no-op forms.
+            "[3, 1, 2].min(0)",
+            "[3, 1, 2].max(0)",
+            "[3, 1, 2].min(99)",
+            "[3, 1, 2].max(99)",
+            "[].min(2)",
+            "[].max(2)",
+            // An explicit nil for n means "no n", not a TypeError.
+            "[3, 1, 2].min(nil)",
+            "[3, 1, 2].max(nil)",
+            "[3, 1, 2].min(nil) {|a, b| b <=> a}",
+            // n is #to_int-converted.
+            "[3, 1, 2].min(2.0)",
+            r#"[3, 1, 2].min(Object.new.tap {|o| def o.to_int = 2 })"#,
+            // With a comparator block, and over the other element types.
+            "[3, 1, 2].min(2) {|a, b| b <=> a}",
+            "[3, 1, 2].max(2) {|a, b| b <=> a}",
+            r#"["b", "a", "c"].min(2)"#,
+            r#"["b", "a", "c"].max(2)"#,
+            "[3.5, 1.5, 2.5].min(2)",
+            "[3.5, 1.5, 2.5].max(2)",
+            // The receiver is not reordered by the ranking.
+            "a = [3, 1, 2]; a.min(2); a",
+            "a = [3, 1, 2]; a.max(2); a",
+        ]);
+        run_test_error("[3, 1, 2].min(-1)");
+        run_test_error("[3, 1, 2].max(-2)");
+        run_test_error(r#"[3, 1, 2].min("a")"#);
+        run_test_error("[3, 1, 2].min(2**70)");
+        run_test_error(r#"[1, "a"].min(2)"#);
     }
 
     #[test]

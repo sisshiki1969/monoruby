@@ -109,6 +109,53 @@ fn user_comparator_is_read_by_sign() {
     );
 }
 
+/// The sign of a *non-Integer* comparator result is read the way
+/// `rb_cmpint` reads it — `res > 0`, then `res < 0` — never by asking
+/// `res <=> 0`.
+///
+/// Asking `<=>` re-enters the redefinition when the comparator returns an
+/// instance of the very class the program redefined `<=>` on, which read
+/// the sign backwards; and it has no Integer to convert a Float result to,
+/// so a difference as large as `Float::MAX` raised RangeError where CRuby
+/// simply sees a positive number.
+#[test]
+fn comparator_result_sign_is_read_without_cmp() {
+    run_test_once(
+        r#"
+        class Float; def <=>(o) = (o.to_f - to_f); end
+        [[3.0, 1.0, 2.0].sort, [3.0, 1.0].min, [3.0, 1.0].max,
+         [3.0, 1.0].minmax, [Float::MAX, 1.0].sort]
+        "#,
+    );
+    run_test(
+        r#"
+        class Wide
+          attr_reader :v
+          def initialize(v) = @v = v
+          # A Float difference, one of them past every Integer conversion.
+          def <=>(o) = (v - o.v).to_f
+        end
+        huge = [Wide.new(Float::MAX), Wide.new(1.0), Wide.new(-Float::MAX)]
+        by_float = [Wide.new(2.5), Wide.new(1.5), Wide.new(3.5)].sort.map(&:v)
+        [by_float, huge.sort.map(&:v), huge.min.v, huge.max.v]
+        "#,
+    );
+    // A comparator whose result answers neither `>` nor `<` against 0 is
+    // the incomparable case, reported as CRuby reports it.
+    run_test(
+        r#"
+        class Str
+          def <=>(o) = "not a number"
+        end
+        begin
+          [Str.new, Str.new].sort
+        rescue => e
+          [e.class, e.message]
+        end
+        "#,
+    );
+}
+
 /// The `sort_by` family declines the same way `sort` does, and must then
 /// report through the general comparator — including in the destructive
 /// form, whose fallback writes the receiver back.
