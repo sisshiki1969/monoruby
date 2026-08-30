@@ -54,6 +54,158 @@ pub extern "C" fn i64_to_value(i: i64) -> Value {
     Value::integer(i)
 }
 
+///
+/// A needle for a linear `rb_equal` search (`Array#include?`, `#index`,
+/// `#count`, `#delete`), prepared once so the scan itself can skip work.
+///
+/// The scan always answers "same object" from the bits. What this adds is
+/// the rest of the answer for the needle classes worth naming: for an
+/// Integer, a Symbol, `nil`, `true` or `false`, an element of that same
+/// class with different bits is *unequal*, and for a String the contents
+/// settle it either way. Neither needs an `==` to run. That is the whole
+/// of `[1, 2, 3].include?(9)` and `%w[a b].include?("b")`, which otherwise
+/// dispatch once per element.
+///
+/// `None` means every element goes through the dispatch, which is also
+/// what a redefined `==` on the needle's class produces: `BASIC_OP_DEFS`
+/// tracks these pairs, so the redefinition is visible here.
+///
+pub(crate) struct EqSearch {
+    needle: Value,
+    decided: Option<EqDecided>,
+    /// Monomorphic cache of `==` for the elements that do reach a
+    /// dispatch: an array is nearly always of one class, so the lookup is
+    /// done for the first such element and reused while that class — and
+    /// the class version the lookup was valid at — still holds.
+    ///
+    /// `Array#index` used to hoist one lookup out of the loop by asking
+    /// the *argument* for its `==`, which is the wrong receiver; this
+    /// keeps the saving with the right one.
+    cached_eq: Option<(ClassId, u32, ResolvedEq)>,
+}
+
+///
+/// What `==` resolved to for one element class.
+///
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ResolvedEq {
+    /// The inherited `BasicObject#==`, which *is* the identity test the
+    /// scan already made — so an element of this class that is not the
+    /// needle is unequal, and the call can be skipped entirely. This is
+    /// the ordinary object: a class that defines no `==` of its own.
+    Identity,
+    /// A real `==` to call.
+    Method(FuncId),
+}
+
+///
+/// The class of element an [`EqSearch`] can rule out from the bits alone.
+///
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EqDecided {
+    /// Two Fixnums are equal exactly when their bits are. (A Float
+    /// element is *not* decided — `1 == 1.0` is true — so it dispatches.)
+    Fixnum,
+    /// Two Symbols likewise.
+    Symbol,
+    /// `nil` / `true` / `false`, each equal only to itself.
+    NilBool,
+    /// Two Strings compare by content, and by encoding compatibility —
+    /// the answer `String#==` itself gives, reached here without the
+    /// dispatch.
+    String,
+}
+
+impl EqSearch {
+    pub(crate) fn new(globals: &Globals, needle: Value) -> Self {
+        let eq_redefined = |class: ClassId| {
+            globals.store.basic_op_redefined()
+                && globals.store.basic_op_redefined_for(class, IdentId::_EQ)
+        };
+        let decided = if needle.is_fixnum() {
+            (!eq_redefined(INTEGER_CLASS)).then_some(EqDecided::Fixnum)
+        } else if needle.try_symbol().is_some() {
+            (!eq_redefined(SYMBOL_CLASS)).then_some(EqDecided::Symbol)
+        } else if is_nil_or_bool(needle) {
+            // Three classes answer for this one shape, so all three have
+            // to still be the builtin.
+            (!eq_redefined(NIL_CLASS) && !eq_redefined(TRUE_CLASS) && !eq_redefined(FALSE_CLASS))
+                .then_some(EqDecided::NilBool)
+        } else if needle.is_rstring_inner().is_some() && needle.class() == STRING_CLASS {
+            // A String *subclass* is left out: its `==` is the builtin
+            // only until the subclass defines one, which this check does
+            // not track.
+            (!eq_redefined(STRING_CLASS)).then_some(EqDecided::String)
+        } else {
+            None
+        };
+        Self {
+            needle,
+            decided,
+            cached_eq: None,
+        }
+    }
+
+    ///
+    /// The answer for `elem`, when the needle's class decides it — the
+    /// identity test having already failed, so the immediate classes
+    /// answer `false` and only a String has content left to compare.
+    ///
+    #[inline]
+    fn decide(&self, elem: Value) -> Option<bool> {
+        match self.decided {
+            Some(EqDecided::Fixnum) => elem.is_fixnum().then_some(false),
+            Some(EqDecided::Symbol) => elem.try_symbol().is_some().then_some(false),
+            Some(EqDecided::NilBool) => is_nil_or_bool(elem).then_some(false),
+            Some(EqDecided::String) => {
+                // Only an exact String: a subclass may define its own
+                // `==`, and CRuby runs it (`SubString.new("z") == "q"` is
+                // whatever the subclass says). Such an element falls
+                // through to the dispatch below, which resolves it.
+                if elem.class() != STRING_CLASS {
+                    return None;
+                }
+                let needle = self.needle.is_rstring_inner()?;
+                let elem = elem.is_rstring_inner()?;
+                // `String#==`: same bytes *and* compatible encodings.
+                Some(elem.eq(needle) && elem.compatible_encoding(needle).is_some())
+            }
+            None => None,
+        }
+    }
+}
+
+fn is_nil_or_bool(v: Value) -> bool {
+    let bits = v.id();
+    v.is_nil() || bits == TRUE_VALUE || bits == FALSE_VALUE
+}
+
+///
+/// The class to look `==` up on for an element that `eq_values_vis_raw`
+/// does *not* answer from its own arms, or `None` for one it does.
+///
+/// Purely a routing question — either answer is correct, since the two
+/// paths agree — so the arms listed here need only track
+/// `eq_values_vis_raw` closely enough to be worth caching for.
+///
+fn dispatched_eq_class(elem: Value) -> Option<ClassId> {
+    if elem.is_packed_value() {
+        // nil / booleans / Integer / Float / Symbol as immediates.
+        return None;
+    }
+    let class = elem.class();
+    // The heap ones: a Bignum, a boxed Float, a String.
+    (class != INTEGER_CLASS && class != FLOAT_CLASS && class != STRING_CLASS).then_some(class)
+}
+
+/// The `FuncId` of the inherited `BasicObject#==` — the identity test.
+fn basic_object_eq(globals: &Globals) -> Option<FuncId> {
+    globals
+        .store
+        .check_method_for_class(BASIC_OBJECT_CLASS, IdentId::_EQ)
+        .and_then(|entry| entry.func_id())
+}
+
 macro_rules! cmp_values {
     (($op:ident, $op_str:expr)) => {
         paste! {
@@ -311,6 +463,94 @@ impl Executor {
         rhs: Value,
     ) -> Result<bool> {
         Ok(self.eq_values(globals, lhs, rhs)?.as_bool())
+    }
+
+    ///
+    /// CRuby's `rb_equal`: an object is equal to *itself* without `==`
+    /// being asked at all, and only otherwise is `elem == needle`
+    /// dispatched.
+    ///
+    /// The identity step is not an optimization — it is observable, and
+    /// its absence was a bug. `Array#include?` and friends go through
+    /// `rb_equal`, so an element that *is* the argument is found however
+    /// its `==` answers: a class whose `==` returns false is still found
+    /// in an array holding it, and `n = Float::NAN; [n].include?(n)` is
+    /// true even though `n == n` is false. Both answered wrongly here.
+    ///
+    /// Operand order matters as much: the *element* is the receiver.
+    ///
+    pub(crate) fn rb_equal(
+        &mut self,
+        globals: &mut Globals,
+        elem: Value,
+        needle: Value,
+    ) -> Result<bool> {
+        if elem.id() == needle.id() {
+            return Ok(true);
+        }
+        self.eq_values_bool(globals, elem, needle)
+    }
+
+    ///
+    /// [`Executor::rb_equal`] against a needle prepared by
+    /// [`EqSearch::new`], for a linear search: the same answer, with no
+    /// dispatch for the elements the needle's class decides by itself.
+    ///
+    #[inline]
+    pub(crate) fn rb_equal_search(
+        &mut self,
+        globals: &mut Globals,
+        search: &mut EqSearch,
+        elem: Value,
+    ) -> Result<bool> {
+        if elem.id() == search.needle.id() {
+            return Ok(true);
+        }
+        if let Some(answer) = search.decide(elem) {
+            // The needle's class settles it against this element, with no
+            // `==` to run.
+            return Ok(answer);
+        }
+        // Kept out of line so the two tests above — the whole of a scan
+        // over one class — inline into the caller's loop.
+        self.rb_equal_search_slow(globals, search, elem)
+    }
+
+    fn rb_equal_search_slow(
+        &mut self,
+        globals: &mut Globals,
+        search: &mut EqSearch,
+        elem: Value,
+    ) -> Result<bool> {
+        let Some(class) = dispatched_eq_class(elem) else {
+            // A class `eq_values_bool` answers from its own arms, with no
+            // lookup and no frame — cheaper than any dispatch.
+            return self.eq_values_bool(globals, elem, search.needle);
+        };
+        let version = Globals::class_version();
+        let resolved = match search.cached_eq {
+            Some((cached_class, cached_version, resolved))
+                if cached_class == class && cached_version == version =>
+            {
+                resolved
+            }
+            _ => {
+                let func_id = self.find_method(globals, elem, IdentId::_EQ, true)?;
+                let resolved = if Some(func_id) == basic_object_eq(globals) {
+                    ResolvedEq::Identity
+                } else {
+                    ResolvedEq::Method(func_id)
+                };
+                search.cached_eq = Some((class, version, resolved));
+                resolved
+            }
+        };
+        match resolved {
+            ResolvedEq::Identity => Ok(false),
+            ResolvedEq::Method(func_id) => Ok(self
+                .invoke_func_inner(globals, func_id, elem, &[search.needle], None, None)?
+                .as_bool()),
+        }
     }
 
     ///

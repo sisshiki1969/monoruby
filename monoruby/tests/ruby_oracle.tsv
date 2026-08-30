@@ -495,6 +495,7 @@
 25f0534564d801243342b23debebc6f2	[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19], true, [0, 1, 2, 3, 4, 5, 6], [[0, "s0"], [1, "s1"], [2, "s2"], [3, "s3"], [4, "s4"], [5, "s5"]], [0, 1, 2], FrozenError]	def app(a, v) = a << v\n        def app_blk(a, v, &b) = a.<<(v, &b)\n    
 25f7204942eba1042f12b5429463ecc6	1	Rational(0.5).numerator
 260aadbc1eafcac4daf5a56eb84558cd	true	$/.frozen?
+260b6583e5dde4f43cbcd1c33fb20174	[true, false, 1, nil, 1, 2, 1, true, false, 1, 0, 0, 2, 1, 1, false, true, false, 0, 2, 2, "a", false, nil, 0]	ints = [1, 2, 3]\n        syms = [:a, :b]\n        flags = [nil, true, fa
 2635fffd46a3e17a2174ca9ccb6fc7a3	["-", "A"]	module UsingA\n              refine(String) { def tag; "A"; end }\n  
 264b0263d3d2c06bbb4abdb266123919	[:missing_constant, "test message"]	e = NameError.new("test message", :missing_constant)\n            [e
 266e77b9e0f7c96253fed71dffed0fc7	:type_error	class BadAry\n          def to_ary; 42; end\n        end\n        begin\n  
@@ -803,6 +804,7 @@
 3f6f1c23deee61068ec39f5295c45a16	[[], [:f]]	class S\n              def f; end\n            end\n            class 
 3f839e4337603d2011e09f2f712091a4	[:bar, :foo]	class A\n              def foo; end\n              def bar; end\n     
 3f92dae4c5bb5d0850bb428a743f7317	[4, 5]	r = []\n        10.times { |i| r << i if (i == 4)...(i == 5) }\n        r
+3fb8c0c6f9028a8a1d17e01958b4d1f5	[0, true, 2, 0, true, 1, 0, 0, nil]	class Always\n          def ==(o) = true\n        end\n        class Only1
 3fcbc9935b035dee352be56a30398754	"world"	IO.popen("echo world") { |io| io.read.chomp }\n            
 3fef9f42692341177896868638c71b46	[["v1", "v2"], [nil, nil, "new"]]	ENV["MONORUBY_ENV_TEST_MN1"] = "v1"\n            ENV["MONORUBY_ENV_T
 3ff02e23d910a4fb58eb4a1180f7d75c	"\\\\u{61}"	Regexp.new(/\\u{61}/).source
@@ -1095,6 +1097,7 @@
 5625d0e94e4d1bc9b84e2742fce64c08	true	class Foo\n              def initialize\n                @a = 1\n     
 565141a1ed8e896232b365303c5ac4d4	:OVERRIDDEN	class Integer; def ===(o); :OVERRIDDEN; end; end; 3 === 4
 56568fdc7f4e0b46c94d29cb9def4ec2	["renudged-to-main", 0]	r, w = IO.pipe\n            pid = fork do\n              r.close\n    
+5667fbe0e0218a0e00101f5832e7fa6e	[2, 1, true, 2, nil]	class Yes\n          def ==(o) = true\n        end\n        class No\n     
 5674c6743eb1f8cb3c5480370147f096	[10, 20]	class A\n          def initialize(x)\n            @x = x\n          end\n  
 5682fe3035100385f60effc866827604	[false, false]	def foo; end\n            def bar; end\n            public [:foo, :ba
 569d1753aae6166485a592748257a963	[[[:a, 1], [:b, 2], [:c, 3]]]	class C\n          def f(**kw)\n            $res << kw.sort\n          end
@@ -1335,6 +1338,7 @@
 69b168e7d0ad487fc9118309039d2192	"HELLOworld"	s = "hello world"; s.bytesplice(0..-6, "HELLO"); s
 69c5968b4eb20ac66bb1a05cf40e9cd8	[:dup, :clone]	class CH\n                 attr_accessor :tag\n                 def initialize_dup
 69d8601366cb9c364194ec7f9a90b959	25200	o = Object.new; def o.to_int; 7*3600; end\n               Time.new(2000,1,1,0,0,0
+69e5aa480a677f8260e98b949407011b	[0, true, 2]	class Integer; def ==(o) = true; end\n        [[1, 2].index(9), [1, 2].i
 69f49ce287605942316b64a3f0b0f5f9	12	class S\n          def f(x,y,z)\n            x + y + z\n          end\n    
 6a0c184b3e4f1cbf73f4c3924d6f92e6	1	x = 1 until x\n            x\n        
 6a0e2ea7d7a981bac74e9d7198383c7a	[1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995, 1001, 993, 1001, 1073742823, 1073742824, -1073740824, 995]	def drive\n              res = []\n              x = 1000\n           
@@ -1346,6 +1350,7 @@
 6a746985c7bc6408f83085340479fbf6	[1.0, NaN]	[1.0, 0.0 / 0.0]
 6a8c9e9a6d23a92d8a98ff382b620742	[["", 0], ["", 1], ["", 2], ["", 2], ["", 2], ["", 1], ["", 0], nil, nil, "b", true, false, true, false]	r = []\n        [0, 1, 2, 3, 9, -1, -2, -3].each do |i|\n            m = 
 6aafe015c3410b6ae65d66f8f67d1dd5	["boom", nil, [:done, "TypeError"], "b199"]	class T; attr_accessor :e; end\n\n        res = []\n        t = T.new\n        begin
+6ab691ea9d97f4c04bf963dc81c69487	[true, 0, 2, true, 0, 1, 1, true, 0, 1, 0, NaN]	class Never\n          def ==(o) = false\n        end\n        n = Never.n
 6adba7a52d188043ac47d2a6ceae5508	42	class C\n              def bar\n                42\n              end\n
 6aff68386825a6831642fe95c7e580e7	:raised	r = nil\n            100.times do\n              begin\n              
 6b0b243416e0d106d617e4ad489ecdf7	42	class C\n          attr_writer :x\n          def get_x; @x; end\n        e
@@ -1438,6 +1443,7 @@
 728b693008cde91b8e668b5188312960	"stream closed in another thread"	require "socket"\n            s = TCPServer.new("127.0.0.1", 0)\n    
 72974cf937f6e974bf3d810fa2d06cb0	15	SystemExit.new(15, "woo").status\n        
 729af1cd6bd675bb594030ffacbd8561	[true, "fifo"]	path = "/tmp/monoruby_test_mkfifo_#{Process.pid}_#{rand(100000)}"\n 
+72adb4f9d1509cf9e728948040205592	[0, true]	class String; def ==(o) = true; end\n        [["a", "b"].index("z"), ["a
 72c671a8d35d91c187dcae14e7d6acfa	true	"abc".force_encoding("ISO-8859-15").encoding == Encoding::ISO_8859_15
 72e5566a1bbca4743ca6172eaaed27c4	["hello", nil]	ENV["MONORUBY_ENV_TEST_BASIC"] = "hello"\n            v = ENV["MONOR
 72f2a3b4b542af05e8ddd39460142cfe	"through"	r, w = IO.pipe\n            w.write("through")\n            res = r.r
@@ -1490,6 +1496,7 @@
 76d3c5429fdfa8af5370245762d7d60e	7	inc = proc { |n| n + 1 }; mul = proc { |n, m| n * m }; (inc << mul).call(2, 3)
 76d509e8caeda190c6d7f40c93ccd441	["can't convert nil into Rational", "can't convert nil into Rational", nil, "3/4", "3/2", "can't convert 1+2i into Rational", "7/1"]	[\n              (begin; Rational(nil); rescue TypeError => e; e.mes
 76e48600c83896fad83372ad16b233b6	[2, 1, ["dup", "dup"]]	h = {}.compare_by_identity\n        a = "dup"\n        h[a] = 1\n        h
+76eb6b35bb134acea1b9c5fdfc968f0f	[1, 1, 0, 0, false, true, true, false, 1, true, true]	class SubStr < String\n          def ==(o) = true\n        end\n        [[
 76f23d253bc9500bc54883b3fca2396f	[Array, :rb, true, true]	res = $LOAD_PATH.resolve_feature_path("pp")\n              [res.cl
 76f39b244a1c5e6d61a888dd4e103f5b	:OVERRIDDEN	class Float; def ===(o); :OVERRIDDEN; end; end; 3.0 === 4.0
 770025e2293750c0989f11bccedf3d21	"US-ASCII"	"abc".dup.force_encoding("US-ASCII").sub(/a/) { "Z" }.encoding.to_s
@@ -2068,6 +2075,7 @@ a4149a238fc4b1eb2b5d83d5a3a1df6e	[1, [2, 3, 4], 5]	->((a, *b, c)) { [a, b, c] }.
 a41897885873df2832ff2e4ca224faf4	true	class Foo\n              def initialize\n                @a = 1\n     
 a438a5b6095e3a044e9fc3a4b29764a8	[false, true, true, false, false, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false, true]	class StrMock\n          def to_str; "abc"; end\n          def ==(o); o =
 a46413028c2e82be019705a623976977	[1, 2, [], 4, 5, 3, 12]	def f\n          yield [1,2,3,4,5]\n        end\n        \n\n        f { |a,
+a46cded2c6b6ee08a3f22bc6e16ba8d2	[1, [2, 3], 1, nil, :none, ["y"]]	class Never\n          def ==(o) = false\n        end\n        n = Never.n
 a4739bf8ad36ba60eb568b2316e72ec9	[99, false]	c = Class.new\n            c.class_variable_set(:@@x, 99)\n          
 a4748dc92361b8ec397bdcc7a0edea32	[4000, [0, 0, nil, nil, nil, 3999, nil]]	h = { 0 => [0, 0, nil, nil, nil, 0, nil], 1 => [0, 0, nil, nil, nil, 1, nil], 2 
 a476fbd8b3d5aa7065ffc4804ce4f8f2	[0, 3, true]	f = File.open("Cargo.toml")\n            begin\n              [f.syss
@@ -2662,6 +2670,7 @@ cffe2bea88b632377cf81196a0f5adbc	:OVERRIDDEN	class Integer; def %(o); :OVERRIDDE
 d005def98ec838cc7d6f37a7bdf0aaa0	[1, 2, 42, 12]	def f(x,y,z=42,w=12)\n            [x,y,z,w]\n        end\n        \n\n      
 d00a59254916621fa57745491676e04c	[true, false]	m = Module.new\n            m.freeze\n            ok = false\n        
 d01f7af924363a6dde43e88de3de59d1	nil	"hello".byteindex("x")
+d03f3da52be16a5382075d9aea65e40c	[0, true]	class Symbol; def ==(o) = true; end\n        [[:a, :b].index(:z), [:a, :
 d044b1d1eedcdda6f15b67ec84350344	4	"hello".byteindex("o")
 d05976bbfb14033f00937939ab90a32c	36000000	class Lib; def twice(n); n + n; end; end\n        $lib = Lib.new\n       
 d07ee4e87e21212dcf67ec14eaa4fbbc	Object	include Math\n        
@@ -2819,6 +2828,7 @@ dca1fe10428b94607119699e4536affd	77	module Foo\n          def self.Bar; yield; e
 dcb299cee36b3bcad2f0615af4c007af	true	File.exist?("../LICENSE-MIT")
 dcc86ed827f6b6845b9c7cf7a78c4c2f	"ababxababa"	"x".center(10, "ab")
 dce9ecd5cb55866eac9f8003fbb5343b	"UTF-8"	/#{"あ"}/.encoding.to_s
+dcf8f9800ca36fc1d761f06b3e651f75	[true, false, true, 0, false, false, false, false]	[["abc".b].include?("abc"),\n         ["あ".encode("UTF-8")].include?("あ"
 dcfeee4a0f36c226b961d97eee897e9b	true	(require "stringio"; old=$VERBOSE; $VERBOSE=true; s1=StringIO.new; $stderr=s1; f
 dd3c071c4a6f6953708de611a7d532e1	true	d = Dir.new("/tmp")\n            begin\n              fd = d.fileno\n 
 dd59ae7dd4e6777883a269edec790eb4	[[195], 2]	s = "\\303\\251\\303".dup.force_encoding(Encoding::Windows_31J)\n               m = 
@@ -3204,6 +3214,7 @@ fac9bf918d6cefc7590454e6cac04dc2	"abc"	"abc".ljust(-5)
 faf2d0672d70ae819b5f4e530350f3ce	[["a\\n", "b\\n", "c\\n"], ["ISO-8859-1"], ["a\\nb\\nc\\n"], ["a\\n", "b\\n", "c\\n"], "EUC-JP", [["a\\n", "ISO-8859-1"], ["b\\n", "ISO-8859-1"], ["c\\n", "ISO-8859-1"]], ["UTF-16LE"]]	File.write("/tmp/mr_rlf.txt", "a\\nb\\nc\\n")\n            r = []\n     
 fafb2306f5998b1a5d3fd37189e39235	"hello"	class HasToS; def to_s; "hello"; end; end\n            sprintf("%s",
 fb19b9db3ad873510aed81f16b1dbcd9	["ISO-8859-1", "UTF-8"]	(d="/tmp/mono_rpe_あ_#{Process.pid}"; Dir.mkdir(d); a=File.realpath(".".encode(En
+fb27a658425b604c46ae6e1895b2637d	[0, true]	class NilClass; def ==(o) = true; end\n        [[nil, 1].index(false), [
 fb34f21f962af0c522442f03bd1d5c04	["ab", "ab"]	$/ = "cde"; s = +"abcde"; r = s.chomp!; $/ = "\\n"; [r, s]
 fb39dbdb558be25e38526a8809edbaac	3	->((*, a)) { a }.call([1, 2, 3])
 fb5ca5680002838248335aca3324daec	[true, true]	f = File.open("Cargo.toml")\n            begin\n              [f.set_
