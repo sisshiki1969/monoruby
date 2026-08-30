@@ -76,19 +76,6 @@
   <h2>Latest snapshot</h2>
   <div id="latestMeta" class="meta"></div>
   <div id="latestBarWrap" style="position: relative;"><canvas id="latestBar"></canvas></div>
-  <table id="latestTable">
-    <thead>
-      <tr>
-        <th>Benchmark</th>
-        <th>monoruby (ms)</th>
-        <th>YJIT (ms)</th>
-        <th>YJIT / monoruby</th>
-        <th>monoruby reason</th>
-        <th>yjit reason</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
   <div id="empty" class="empty" hidden>No benchmark data yet. The next master push will populate this page.</div>
 </section>
 
@@ -108,6 +95,26 @@
   </div>
   <div id="historyGrid" class="chart-grid"></div>
   <div id="historyEmpty" class="empty" hidden>No history yet.</div>
+</section>
+
+<section>
+  <h2>Latest snapshot — numbers</h2>
+  <p class="meta">
+    The same snapshot as the bar chart above, as exact figures.
+  </p>
+  <table id="latestTable">
+    <thead>
+      <tr>
+        <th>Benchmark</th>
+        <th>monoruby (ms)</th>
+        <th>YJIT (ms)</th>
+        <th>YJIT / monoruby</th>
+        <th>monoruby reason</th>
+        <th>yjit reason</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
 </section>
 
 <script>
