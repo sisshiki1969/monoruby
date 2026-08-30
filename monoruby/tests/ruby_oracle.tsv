@@ -2079,6 +2079,7 @@ a32e5a59e048d15bbb352b6fdb7e1699	[0, 0.0, 6, 8.5, 15.25, "abc"]	[[].sum, [].sum(
 a32ecda935b7e94450e788b8832e13a4	[3, 1, 5, 3]	class C\n            include Comparable\n            attr_accessor :x\n 
 a331276eee9103e6d3857063f69777b4	[:foo, :bar]	$res = []\n            class C\n              def self.singleton_meth
 a34c4e369e6d5139f06cb9ce6026b999	42	class C\n          def self.class_method\n            42\n          end\n  
+a359b845a5de697d94d846bfda30d830	14614	class C\n          def initialize\n            @a = [0.0, 1.0, 2.0]\n     
 a3618f8ad00f6c37b513a42900293bee	[[233], "Windows-1250", [234, 247, 241], "Ω≈±", [240, 210, 201, 215, 197, 212], "Привет", [146, 165, 225, 226], "абв"]	(a="é".encode("Windows-1250").bytes; b="é".encode("Windows-1250").encoding.name;
 a3921c92237d852a5bc1ad370ba61b79	["Enumerator::Yielder", true]	y = nil\n            Enumerator.new { |yy| y = yy; yy.yield 1 }.firs
 a3baab6cd54895307ab33a2e43c7a755	true	rng = Random.new(42)\n        a = rng.rand(100)\n        a.is_a?(Integer)

@@ -256,3 +256,41 @@ fn a_float_untouched_by_the_block() {
         PRELUDE,
     );
 }
+
+/// The float lives only in a *spill* home across the call, so the boxed
+/// slot store is deferred — and then a side exit inside the callee hands
+/// the rest of it, the `yield` included, back to the VM. The block reads
+/// the caller's local off the slot the deferral left unwritten, and sees
+/// the `nil` the frame was set up with.
+///
+/// Reported from a JIT-compiled DOOM renderer as
+/// `comparison of Float with NilClass failed` (`sprite_scale` read as
+/// `nil` inside a `reverse_each` block).
+#[test]
+fn a_deferred_home_read_after_a_side_exit() {
+    run_test_once(
+        r#"
+        class C
+          def initialize
+            @a = [0.0, 1.0, 2.0]
+            @hit = 0
+          end
+          def poison(v) = @a[1] = v
+          def f(d)
+            s = 160.0 / d
+            @a.each do |x|
+              @hit += 1 if !x.nil? && x < s
+            end
+            @hit
+          end
+        end
+        c = C.new
+        res = 0
+        5000.times do |i|
+          c.poison(i % 97 == 96 ? nil : (i % 17).to_f)
+          res = c.f(2.0 + (i % 13))
+        end
+        res
+        "#,
+    );
+}
