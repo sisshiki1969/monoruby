@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-4abb301b.js";
+            window.path_to_searchindex_js = "searchindex-7840c045.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-e1173681.js"></script>
@@ -4691,7 +4691,7 @@ specialized calls only, and relied on the inline class-version deopt for the
 rest.</p>
 <p>Both halves are gone. Every call/yield site on both arches now records its
 return address (<code>set_deopt_with_return_addr</code>) purely as a <em>key</em>, and BOP
-redefinition runs the arch-neutral chain-deopt walk (<code>Codegen::chain_deopt</code>),
+redefinition runs the arch-neutral chain-deopt walk (<code>Codegen::chain_deopt_into</code>),
 which converts each suspended JIT frame into an interpreter frame from the
 stack alone — no code is patched, on either arch. See <code>doc/chain_deopt.md</code>
 §10.</p>
