@@ -5,7 +5,7 @@
 This site is monoruby's documentation: how to build and run it, how it performs, and how it works inside.
 
 - The **Getting Started** section covers [installing and building](installation.md) monoruby, and the [build options and test workflow](development.md) used when developing it.
-- The **Performance and Compatibility** section is where the live dashboards are explained: [Benchmark](benchmarks.md) for speed against CRuby+YJIT, [Compatibility](compatibility.md) for ruby/spec conformance.
+- The **Performance and Compatibility** section is where the live dashboards are explained: [Benchmark](benchmarks.md) for speed against CRuby+YJIT, [Compatibility](compatibility.md) for ruby/spec conformance. The [Changelog](changelog.md) sits alongside them.
 - The **Architecture** section contains overview pages: start with the [Architecture Overview](architecture-overview.md).
 - The **Design Documents** section renders the full design documents from the repository's [`doc/`](https://github.com/sisshiki1969/monoruby/tree/master/doc) directory (some are written in Japanese, as marked).
 

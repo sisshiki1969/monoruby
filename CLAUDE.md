@@ -259,19 +259,31 @@ The `Executor` struct is the bytecode interpreter. Key fields:
 - `cfp: Option<Cfp>` — current control frame pointer
 - `rsp_save` — native stack save for fiber switching
 
-Stack frame offsets (from `executor.rs`):
+Stack frame offsets (from `executor.rs`). Local-frame slots are addressed at
+**negative** offsets from `lfp`, control-frame slots at positive offsets from
+`cfp`:
 
-- `LFP_OUTER` (`+0`), `LFP_META` (`+8`), `LFP_BLOCK` (`+16`), `LFP_SELF` (`+24`), `LFP_ARG0` (`+32`)
+- `LFP_OUTER` (`0`), `LFP_META` (`8`), `LFP_SVAR` (`16`), `LFP_BLOCK` (`24`),
+  `LFP_SELF` (`32`), `LFP_ARG0` (`40`) — so `lfp - LFP_SELF` is `self`, which
+  is also register slot `%0`, and a method's first parameter is `%1`
+- `CFP_LFP` (`8`), `BP_CFP` (`8`), `RSP_CFP` (`24`), `RSP_LOCAL_FRAME` (`40`)
 
-Global registers in JIT-compiled code (x86-64; the aarch64 backend uses an
-equivalent fixed register assignment in `codegen/arch/aarch64/`):
-| Register | Holds |
-|----------|-------|
-| `rbx` | `&mut Executor` |
-| `r12` | `&mut Globals` |
-| `r13` | Program counter |
-| `r14` | Local frame pointer (LFP) |
-| `r15` | Accumulator |
+`LFP_SVAR` holds the frame-local `$~` / `$_` container (`0` = not yet
+allocated); only a method-introducing frame owns one, blocks walk the outer
+chain to the LEP. See `doc/stack_frame.md` for the full picture.
+
+Global registers (x86-64; the aarch64 backend uses an equivalent fixed
+register assignment in `codegen/arch/aarch64/`):
+| Register | aarch64 | Holds |
+|----------|---------|-------|
+| `rbx` | `x19` | `&mut Executor` |
+| `r12` | `x20` | `&mut Globals` |
+| `r13` | `x21` | Program counter |
+| `r14` | `x22` | Local frame pointer (LFP) |
+| `r15` | `x23` | Accumulator — **VM tier only** |
+
+JIT-compiled code keeps no fixed accumulator: `GP_ALLOC_POOL` is empty and
+`jitgen/gp_alloc.rs` allocates GP registers per basic block.
 
 ### JIT Compiler (`codegen/`)
 

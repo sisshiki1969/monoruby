@@ -4,11 +4,11 @@ This page describes how monoruby lays out call frames and processes method argum
 
 Each Ruby-level call pushes three contiguous regions on the native stack (growing downward):
 
-- **Continuation frame** — the caller's saved `lfp`, `pc`, return address, and `rbp`. The saved call-site pc is also what powers lazy backtraces, `Kernel#caller`, and `super` resolution.
-- **Control frame (CFP)** — `prev cfp` and `lfp`; the executor's `cfp` chain links all active frames.
-- **Local frame (LFP)** — the Ruby-visible part: `outer` (for blocks: the enclosing frame), `meta`, `block`, `self`, then the argument/local slots `arg0, arg1, …`.
+- **Continuation frame** — the saved `rbp`, the return address, the caller's suspended `pc`, and a pad word. The saved call-site pc is what powers lazy backtraces, `Kernel#caller`, and `super` resolution; the pad is unread on the normal return path and is reused by chain deopt as the converted call's continuation word.
+- **Control frame (CFP)** — `prev cfp` and `lfp`; the executor's `cfp` chain links all active frames. Every frame establishes `bp == cfp + 8` in its prologue, so the machine frame pointer is recoverable from the CFP alone.
+- **Local frame (LFP)** — the Ruby-visible part, addressed at negative offsets from `lfp`: `outer` (for blocks, the enclosing frame), `meta` (a packed word of `FuncId`, `reg_num`, arg mode and flags), `svar` (frame-local `$~` / `$_`, lazily allocated), `block`, `self`, then the argument/local slots `arg0, arg1, …`. `self` is register slot `%0`, so a method's first parameter is `%1`.
 
-The bytecode interpreter and JIT code share a fixed register ABI on x86-64 (the aarch64 backend uses an equivalent assignment): `rbx` = `&mut Executor`, `r12` = `&mut Globals`, `r13` = pc, `r14` = lfp.
+The bytecode interpreter and JIT code share a fixed register ABI on x86-64 (the aarch64 backend uses an equivalent assignment): `rbx` = `&mut Executor`, `r12` = `&mut Globals`, `r13` = pc, `r14` = lfp, `r15` = accumulator. The accumulator is a VM-tier register — JIT'ed code keeps no fixed accumulator and allocates general-purpose registers per basic block instead.
 
 Frames captured by blocks, Procs, or Bindings are **promoted to the heap lazily** — only when the capture actually escapes — and heap frames are reclaimed by the GC once unreachable.
 
