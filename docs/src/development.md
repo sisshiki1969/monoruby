@@ -439,3 +439,22 @@ lists, so an unlisted document is copied and then silently dropped.
 bash docs/build.sh          # output in docs/book/
 mdbook serve docs           # live preview
 ```
+
+### The changelog and the README
+
+[`docs/src/changelog.md`](changelog.md) is the single source of truth for the
+monthly changelog. The README shows only the two newest month sections,
+copied verbatim between its `<!-- BEGIN LATEST-MONTHS -->` /
+`<!-- END LATEST-MONTHS -->` markers — that block is generated, so edit the
+changelog and regenerate rather than editing the README:
+
+```sh
+bin/sync-changelog-readme           # rewrite the README block
+bin/sync-changelog-readme --check   # exit 1 if the two have drifted
+```
+
+A scheduled Routine runs on the 1st of each month: it summarizes the previous
+month's merged PRs into a new `### <Month> <Year>` section at the top of the
+changelog's current `## <year>` group, runs the sync script, and pushes both
+files. Pushing `docs/src/changelog.md` also re-triggers `docs.yml`, so the
+published book picks the new month up in the same run.

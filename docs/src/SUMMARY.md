@@ -11,6 +11,7 @@
 
 - [Benchmark](benchmarks.md)
 - [Compatibility](compatibility.md)
+- [Changelog](changelog.md)
 
 # Architecture
 
